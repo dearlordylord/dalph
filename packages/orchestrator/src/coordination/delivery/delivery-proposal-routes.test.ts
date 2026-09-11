@@ -60,11 +60,18 @@ import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import {
+  AuthoritativePlannedAttemptWorktreeObserved,
+  AuthoritativeTargetLineageObserved,
+  AuthoritativeTaskClaimAcquired,
+  AuthoritativeTaskClaimObserved,
   observeTaskClaimThrough,
   releaseTaskClaimThrough,
   WorkflowInterpreter,
   WorkflowTrace
 } from "../../workflow/interpretation/interpreter.js"
+import { AuthoritativeTaskClaimReleased } from "../../workflow/protocols/task-claim-release/protocol.js"
+import { AuthoritativeTaskWorktreeReady } from "../../workflow/protocols/worktree-reconciliation/protocol.js"
+import { TaskAttemptPlanRecordAcknowledged } from "../../workflow/protocols/task-attempt-planning/record.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
@@ -267,17 +274,19 @@ const executePlannedAttemptTransition = (...args: Parameters<typeof executePlann
   Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
     const journal = yield* InRunJournal
+    const accepted = yield* AcceptedJournalReader
     const observer = PassivePlannedAttemptObserver.of({
       attach: (input) =>
         executor
           .observe(plannedAttemptExecutorCorrelation(input.plannedAttempt), passiveLifecycleObservationPurpose)
-          .pipe(Effect.flatMap(input.publishCurrent))
+          .pipe(Effect.flatMap(input.publishCurrent), Effect.provideService(AcceptedJournalReader, accepted))
     })
     const publication = PassivePlannedAttemptProjectionPublication.of({
       publish: () => Effect.die("the one-shot route fixture emits no later lifecycle changes"),
       publishWithPermit: (permit, plannedAttempt, projection) =>
         publishPlannedAttemptExecutorProjectionResultWithPermit(permit, plannedAttempt, projection).pipe(
-          Effect.provideService(InRunJournal, journal)
+          Effect.provideService(InRunJournal, journal),
+          Effect.provideService(AcceptedJournalReader, accepted)
         )
     })
     return yield* executePlannedAttemptTransitionRaw(...args).pipe(
@@ -369,10 +378,12 @@ const finalityFocusedObservation = makeFocusedTaskCompletionFactsObserved(
   finalityFocusedOperation,
   finalityFocusedFacts
 )
-const finalityFocusedEvent = taskTrackerFactsObservedEvent(
-  finalityFocusedOperation.operationId,
-  finalityFocusedObservation
-)
+const finalityFocusedEvent = {
+  _tag: "TaskTrackerFactsObserved",
+  observation: finalityFocusedObservation,
+  operationId: finalityFocusedOperation.operationId,
+  version: workflowJournalEventVersion
+} satisfies TaskTrackerFactsObservedEvent
 const integrationFinalityFixture = {
   ...sourceIntegrationFinalityFixture,
   claim: promotedFinalityHistory.claim,
@@ -510,7 +521,7 @@ const inertPlannedAttemptExecutor = PlannedAttemptExecutor.of({
 interface LiveJournalHarness {
   readonly accepted: AcceptedJournalReader["Service"]
   readonly journal: InRunJournal["Service"]
-  readonly records: Effect.Effect<ReadonlyArray<JournalRecord>>
+  readonly records: ReturnType<InRunJournal["Service"]["read"]>
 }
 
 const makeLiveJournalHarness = Effect.fn("DeliveryProposalRoutesTest.makeLiveJournalHarness")(function* (
@@ -2724,7 +2735,7 @@ describe("delivery proposal route matrix", () => {
       const confirmationOperation = makeCompletionTaskFactsObservationOperation(
         request,
         integrationFinalityFixture.target,
-        CompletionTaskFocusedReadPurpose.cases.Confirmation({
+        CompletionTaskFocusedReadPurpose.cases.Confirmation.make({
           attemptOrdinal: completionAttempt.attemptOrdinal,
           confirmationOrdinal: CompletionTaskConfirmationReadOrdinal.make(1)
         })
@@ -4857,7 +4868,12 @@ describe("delivery proposal route matrix", () => {
 
   effectIt.effect("cancels continuation authorization when a terminal choice wins before its append", () =>
     Effect.gen(function* () {
-      const fixture = continuationAuthorizationRecords()
+      const changedSpecification = makeTaskWorkSpecification({
+        body: "Stop this implementation after observing changed work.",
+        taskId,
+        title: "Changed continuation work"
+      })
+      const fixture = continuationAuthorizationRecords({ currentSpecification: changedSpecification })
       const transition = RunnableFrontierTransition.ResumePlannedAttemptExecutorWorkAfterCurrentFacts({
         acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(2) },
         plannedAttempt,
@@ -4870,8 +4886,6 @@ describe("delivery proposal route matrix", () => {
       const harness = yield* makeLiveJournalHarness(fixture.records)
       const releasedPositions = yield* Ref.make<ReadonlyArray<PlannedAttemptExecutorCorrelation>>([])
       const resumeContacts = yield* Ref.make(0)
-      const authorizationAppendEntered = yield* Deferred.make<void>()
-      const allowAuthorizationAppend = yield* Deferred.make<void>()
       const terminalEntered = yield* Deferred.make<void>()
       const finishTerminal = yield* Deferred.make<void>()
       const requestId = AttemptChoiceRequestId.make({ nonce: "continuation-race-stop", runId })
@@ -4880,27 +4894,28 @@ describe("delivery proposal route matrix", () => {
         initiatedBy: { _tag: "Operator" },
         occurrenceClassification: "InitiatedAction",
         requestId,
-        subject: { observedTaskRevision: TaskRevision.make("continuation-race-observed-revision"), plannedAttempt },
+        subject: { observedTaskRevision: changedSpecification.fingerprint, plannedAttempt },
         version: workflowJournalEventVersion
-      })
-      const journal = InRunJournal.of({
-        append: (requestedRunId, key, event) =>
-          event._tag === "PlannedAttemptContinuationAuthorized"
-            ? Deferred.succeed(authorizationAppendEntered, undefined).pipe(
-                Effect.andThen(Deferred.await(allowAuthorizationAppend)),
-                Effect.andThen(harness.journal.append(requestedRunId, key, event))
-              )
-            : harness.journal.append(requestedRunId, key, event),
-        read: harness.journal.read
       })
       const controller = yield* makePlannedAttemptProtocolController()
       const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+      const terminal = yield* controller
+        .withTerminalPermit(correlation, () =>
+          harness.journal
+            .append(runId, attemptChoiceAppliedRecordKey(requestId), choice)
+            .pipe(
+              Effect.andThen(Deferred.succeed(terminalEntered, undefined)),
+              Effect.andThen(Deferred.await(finishTerminal))
+            )
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(terminalEntered)
       const execution = yield* executePlannedAttemptTransition({ _tag: "IdentityFreeAction", proposal }, transition, {
         ...inertLease,
         releasePlannedAttemptPosition: (released) => Ref.update(releasedPositions, (current) => [...current, released]),
         withPlannedAttemptProtocol: (exactCorrelation, effect) => controller.withPermit(exactCorrelation, effect)
       }).pipe(
-        (effect) => provideLiveJournal(effect, harness, journal),
+        (effect) => provideLiveJournal(effect, harness),
         Effect.provideService(
           PlannedAttemptExecutor,
           PlannedAttemptExecutor.of({
@@ -4913,20 +4928,6 @@ describe("delivery proposal route matrix", () => {
         ),
         Effect.forkChild
       )
-      yield* Deferred.await(authorizationAppendEntered)
-
-      const terminal = yield* controller
-        .withTerminalPermit(correlation, () =>
-          harness.journal
-            .append(runId, attemptChoiceAppliedRecordKey(requestId), choice)
-            .pipe(
-              Effect.andThen(Deferred.succeed(terminalEntered, undefined)),
-              Effect.andThen(Deferred.await(finishTerminal))
-            )
-        )
-        .pipe(Effect.forkChild)
-      yield* Deferred.await(terminalEntered)
-      yield* Deferred.succeed(allowAuthorizationAppend, undefined)
       yield* Deferred.succeed(finishTerminal, undefined)
       const result = yield* Fiber.join(execution)
       yield* Fiber.join(terminal)
@@ -4945,104 +4946,43 @@ describe("delivery proposal route matrix", () => {
     })
   )
 
-  effectIt.effect("lets a terminal choice win after continuation authorization but before Resume intent", () =>
-    Effect.gen(function* () {
-      const fixture = continuationAuthorizationRecords()
-      const transition = RunnableFrontierTransition.ResumePlannedAttemptExecutorWorkAfterCurrentFacts({
-        acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(2) },
-        plannedAttempt,
-        witness: fixture.witness
-      })
-      const proposal = proposalsFor(transition).proposals[0]
-      if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
-        return yield* Effect.die("missing post-authorization continuation proposal")
-      }
-      const harness = yield* makeLiveJournalHarness(fixture.records)
-      const authorizationAppended = yield* Deferred.make<void>()
-      const allowAuthorizationReturn = yield* Deferred.make<void>()
-      const resumeContacts = yield* Ref.make(0)
-      const executingReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-        correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
-      })
-      const choiceRequestId = AttemptChoiceRequestId.make({ nonce: "continuation-race-after-authorization", runId })
-      const choice = AttemptChoiceAppliedEvent.make({
-        choice: "StopTaskImplementation",
-        initiatedBy: { _tag: "Operator" },
-        occurrenceClassification: "InitiatedAction",
-        requestId: choiceRequestId,
-        subject: {
-          observedTaskRevision: TaskRevision.make("continuation-race-after-authorization-revision"),
-          plannedAttempt
-        },
-        version: workflowJournalEventVersion
-      })
-      const baseJournal = harness.journal
-      const journal = InRunJournal.of({
-        append: (requestedRunId, key, event) =>
-          baseJournal
-            .append(requestedRunId, key, event)
-            .pipe(
-              Effect.flatMap((record) =>
-                event._tag === "PlannedAttemptContinuationAuthorized"
-                  ? Deferred.succeed(authorizationAppended, undefined).pipe(
-                      Effect.andThen(Deferred.await(allowAuthorizationReturn)),
-                      Effect.as(record)
-                    )
-                  : Effect.succeed(record)
-              )
-            ),
-        read: baseJournal.read
-      })
-      const controller = yield* makePlannedAttemptProtocolController()
-      const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-      const execution = yield* executePlannedAttemptTransition({ _tag: "IdentityFreeAction", proposal }, transition, {
-        ...inertLease,
-        withPlannedAttemptProtocol: (exactCorrelation, effect) => controller.withPermit(exactCorrelation, effect)
-      }).pipe(
-        (effect) => provideLiveJournal(effect, harness, journal),
-        Effect.provideService(
-          PlannedAttemptExecutor,
-          PlannedAttemptExecutor.of({
-            observe: () => Effect.die("post-authorization race must not observe executor state"),
-            requestSuspension: () => Effect.die("post-authorization race must not suspend executor state"),
-            begin: () => Effect.die("post-authorization race must not begin executor state"),
-            resume: () => Ref.update(resumeContacts, (count) => count + 1).pipe(Effect.as(executingReport))
-          })
-        ),
-        Effect.forkChild
-      )
-      yield* Deferred.await(authorizationAppended)
-
-      const terminal = yield* controller
-        .withTerminalPermit(correlation, () =>
-          baseJournal.append(runId, attemptChoiceAppliedRecordKey(choiceRequestId), choice)
-        )
-        .pipe(Effect.forkChild)
-      yield* Effect.yieldNow
-      yield* Deferred.succeed(allowAuthorizationReturn, undefined)
-      const result = yield* Fiber.join(execution).pipe(Effect.result)
-      yield* Fiber.join(terminal)
-
-      expect(result._tag).toBe("Failure")
-      if (result._tag === "Failure") {
-        expect(result.failure).toMatchObject({ _tag: "PlannedAttemptExecutorResumeInvalidatedByTerminalChoice" })
-      }
-      expect(yield* Ref.get(resumeContacts)).toBe(0)
-      const finalRecords = yield* harness.records
-      const authorization = finalRecords.find(({ event }) => event._tag === "PlannedAttemptContinuationAuthorized")
-      const appliedChoice = finalRecords.find(({ event }) => event._tag === "AttemptChoiceApplied")
-      expect(authorization).toBeDefined()
-      expect(appliedChoice).toBeDefined()
-      if (authorization !== undefined && appliedChoice !== undefined) {
-        expect(appliedChoice.position).toBeGreaterThan(authorization.position)
-      }
-      expect(
-        finalRecords.some(
-          ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Resume"
-        )
-      ).toBe(false)
+  it("rejects a malformed terminal choice after continuation authorization before Resume intent", () => {
+    const fixture = continuationAuthorizationRecords()
+    const authorization = PlannedAttemptContinuationAuthorizedEvent.make({
+      plannedAttempt,
+      version: workflowJournalEventVersion,
+      witness: fixture.witness
     })
-  )
+    const requestId = AttemptChoiceRequestId.make({ nonce: "continuation-after-authorization", runId })
+    const choice = AttemptChoiceAppliedEvent.make({
+      choice: "StopTaskImplementation",
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      requestId,
+      subject: { observedTaskRevision: TaskRevision.make("continuation-after-authorization-revision"), plannedAttempt },
+      version: workflowJournalEventVersion
+    })
+    const records = [
+      ...fixture.records,
+      {
+        event: authorization,
+        key: plannedAttemptContinuationAuthorizedRecordKey(plannedAttempt.attemptId, fixture.witness),
+        position: JournalPosition.make(fixture.records.length + 1),
+        runId
+      },
+      {
+        event: choice,
+        key: attemptChoiceAppliedRecordKey(requestId),
+        position: JournalPosition.make(fixture.records.length + 2),
+        runId
+      }
+    ]
+
+    expect(reduceWorkflowJournalHistory(runId, records)).toMatchObject({ _tag: "InvalidWorkflowJournalHistory" })
+    expect(
+      records.some(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Resume")
+    ).toBe(false)
+  })
 
   effectIt.effect("never contacts Resume for invalid or superseded continuation authority", () =>
     Effect.gen(function* () {
@@ -5121,11 +5061,28 @@ describe("delivery proposal route matrix", () => {
 
       for (const testCase of cases) {
         const fixture = continuationAuthorizationRecords(testCase.options)
-        if (testCase.options?.foreignPlanWitness !== undefined) {
-          expect(
-            evaluatePlannedAttemptContinuationAuthorization(fixture.records, plannedAttempt, fixture.witness),
-            testCase.name
-          ).toMatchObject({ _tag: "Rejected", reason: "WrongAttemptWitness", witness: testCase.expected })
+        const reduced = reduceWorkflowJournalHistory(runId, fixture.records)
+        if (reduced._tag === "InvalidWorkflowJournalHistory") {
+          const evaluation = evaluatePlannedAttemptContinuationAuthorization(
+            fixture.records,
+            plannedAttempt,
+            fixture.witness
+          )
+          if (testCase.options?.unsettledCommand === true) {
+            expect(evaluation, testCase.name).toMatchObject({
+              _tag: "Rejected",
+              reason: "StaleWitness",
+              witness: "AcceptedSafeExecutorReport"
+            })
+          } else if (testCase.expected === "Stale") {
+            expect(evaluation, testCase.name).toMatchObject({ _tag: "Stale" })
+          } else {
+            expect(evaluation, testCase.name).toMatchObject({
+              _tag: "Rejected",
+              reason: "WrongAttemptWitness",
+              witness: testCase.expected
+            })
+          }
           continue
         }
         const transition = RunnableFrontierTransition.ResumePlannedAttemptExecutorWorkAfterCurrentFacts({
@@ -5330,18 +5287,41 @@ describe("delivery proposal route matrix", () => {
     Effect.gen(function* () {
       const calls = yield* Ref.make<ReadonlyArray<string>>([])
       const harness = yield* makeLiveJournalHarness(acceptedExecutingHistory.records)
-      const record = (name: string) =>
-        Ref.update(calls, (current) => [...current, name]).pipe(Effect.as(undefined as never))
+      const record = <A>(name: string, value: A) =>
+        Ref.update(calls, (current) => [...current, name]).pipe(Effect.as(value))
+      const projected = projectTrackerSnapshot({ revision: "adapter-routes", tasks: [] })
+      if (projected._tag === "Invalid") return yield* Effect.die("adapter graph fixture is invalid")
+      const exactWorktree = PlannedWorktreeReady.make({
+        baseSha: plannedAttempt.baseSha,
+        branch: plannedAttempt.branch,
+        headSha: plannedAttempt.baseSha,
+        worktree: plannedAttempt.worktree
+      })
+      const exactLineage = TargetLineageObservation.make({
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: plannedAttempt.baseSha,
+        targetHeadSha: plannedAttempt.baseSha
+      })
+      const placeholderRelease = makeTaskClaimReleaseOperation({
+        authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
+        predecessorOperationIds: [activeClaim.operationId],
+        release: { claim: activeClaim, operationId: OperationId.make("adapter-interpreter-release") }
+      }).release
       const interpreter = WorkflowInterpreter.of({
-        acquireTaskClaim: () => record("acquireTaskClaim"),
-        readTaskClaim: () => record("readTaskClaim"),
-        readTaskWorktree: () => record("readTaskWorktree"),
-        readTargetLineage: () => record("readTargetLineage"),
-        readTrackerGraph: () => record("readTrackerGraph"),
-        readTaskWorkSpecification: () => record("readTaskWorkSpecification"),
-        reconcileTaskWorktree: () => record("reconcileTaskWorktree"),
-        recordTaskAttemptPlan: () => record("recordTaskAttemptPlan"),
-        releaseTaskClaim: () => record("releaseTaskClaim")
+        acquireTaskClaim: () => record("acquireTaskClaim", AuthoritativeTaskClaimAcquired.make({ claim: activeClaim })),
+        readTaskClaim: () => record("readTaskClaim", AuthoritativeTaskClaimObserved.make({ observation: activeClaim })),
+        readTaskWorktree: () =>
+          record("readTaskWorktree", AuthoritativePlannedAttemptWorktreeObserved.make({ observation: exactWorktree })),
+        readTargetLineage: () =>
+          record("readTargetLineage", AuthoritativeTargetLineageObserved.make({ observation: exactLineage })),
+        readTrackerGraph: () => record("readTrackerGraph", projected.snapshot),
+        readTaskWorkSpecification: () => record("readTaskWorkSpecification", specification),
+        reconcileTaskWorktree: () =>
+          record("reconcileTaskWorktree", AuthoritativeTaskWorktreeReady.make({ proof: exactWorktree })),
+        recordTaskAttemptPlan: () =>
+          record("recordTaskAttemptPlan", TaskAttemptPlanRecordAcknowledged.make({ plannedAttempt })),
+        releaseTaskClaim: () =>
+          record("releaseTaskClaim", AuthoritativeTaskClaimReleased.make({ release: placeholderRelease }))
       })
       const withAdapterServices = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         effect.pipe(
