@@ -273,9 +273,12 @@ it("reports the same terminating-record issue when an accepted terminated prefix
   expect(successor).toBeDefined()
   if (successor === undefined) return
 
-  expect(advanceWorkflowJournalHistory(prior, successor)).toEqual(
-    reduceWorkflowJournalHistory(runId, [...terminated, successor])
-  )
+  const rejected = advanceWorkflowJournalHistory(prior, successor)
+  const replay = reduceWorkflowJournalHistory(runId, [...terminated, successor])
+  expect(rejected._tag).toBe("InvalidWorkflowJournalHistory")
+  expect(replay._tag).toBe("InvalidWorkflowJournalHistory")
+  if (rejected._tag !== "InvalidWorkflowJournalHistory" || replay._tag !== "InvalidWorkflowJournalHistory") return
+  expect(rejected.issues).toEqual(replay.issues)
 })
 
 it("rejects Run termination without a prior beginning", () => {

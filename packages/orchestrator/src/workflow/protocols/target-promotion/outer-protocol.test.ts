@@ -19,9 +19,10 @@ import { acceptedResultFixture } from "../../../../test/support/evidence.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
 import { observeJournalRecordSequenceOperations } from "../../../workflow-journal/record-sequence.js"
-import { InRunJournal, JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
+import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
+import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
@@ -162,9 +163,9 @@ const runFor = (
     Effect.provide(Layer.mergeAll(journalLayer(records), gitLayer(service.compareAndSet, service.read)))
   )
 
-it.effect("rereads accepted history after intent before contacting Git and rejects a missing qualification", () =>
+it.effect("rejects an unqualified intent during the live Journal append before contacting Git", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const accepted = yield* AcceptedJournalReader
     const calls = yield* Ref.make<ReadonlyArray<string>>([])
     let materializations = 0
@@ -175,11 +176,6 @@ it.effect("rereads accepted history after intent before contacting Git and rejec
         })
       ),
       (stop) => Effect.sync(stop)
-    )
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("promotion-wrapper"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
     const failure = yield* runAcceptedTargetPromotion(qualifiedCandidate).pipe(
       Effect.provideService(
@@ -211,9 +207,23 @@ it.effect("rereads accepted history after intent before contacting Git and rejec
       Effect.flip
     )
     expect(failure).toMatchObject({ _tag: "JournalHistoryInvalid" })
-    expect(yield* Ref.get(calls)).toEqual(["read:accepted", "append:TargetPromotionIntended", "read:accepted"])
+    expect(yield* Ref.get(calls)).toEqual(["read:accepted", "append:TargetPromotionIntended"])
     expect(materializations).toBe(0)
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(
+    Effect.provide(
+      liveJournalTestLayer({
+        records: [
+          makeWorkflowRunBeganRecord(
+            runId,
+            FixtureTarget.make("promotion-wrapper"),
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+          )
+        ],
+        runId,
+        target: FixtureTarget.make("promotion-wrapper")
+      })
+    )
+  )
 )
 
 it.effect("promotes exact M once and records its Integrator correlation and ancestry", () =>

@@ -22,8 +22,8 @@ import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import { intentRecordKey, outcomeRecordKey } from "../../../workflow-journal/record-key.js"
 import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
-import { JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import type { JournalRecord } from "../../../workflow-journal/store.js"
+import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 import {
   PostPromotionBlockerCandidateAncestryObservation,
   PostPromotionBlockerCandidateAncestryObservedEvent,
@@ -366,18 +366,13 @@ describe("post-promotion blocker ancestry chronology", () => {
     expect(
       await Effect.runPromise(
         Effect.gen(function* () {
-          const journal = yield* JournalStore
-          const began = boundaryRecords[0]
-          if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("fixture lacks Run beginning")
-          yield* journal.beginRun(fixture.runId, fixture.target, began.event.initialControlPolicy)
-          for (const record of boundaryRecords.slice(1)) {
-            if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
-              return yield* Effect.die("fixture contains an unexpected Run lifecycle record")
-            }
-            yield* journal.append(fixture.runId, record.key, record.event)
-          }
           return yield* readPostPromotionBlockerCandidateAncestry(boundaryAuthorization)
-        }).pipe(Effect.provideService(TargetPromotionGit, unusedGit), Effect.provide(memoryJournalTestLayer))
+        }).pipe(
+          Effect.provideService(TargetPromotionGit, unusedGit),
+          Effect.provide(
+            liveJournalTestLayer({ records: boundaryRecords, runId: fixture.runId, target: fixture.target })
+          )
+        )
       )
     ).toEqual(boundaryOutcome.observation)
 
