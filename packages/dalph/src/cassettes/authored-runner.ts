@@ -31,6 +31,7 @@ import {
 } from "@dalph/contracts"
 import {
   ApplicationExitShell,
+  AcceptedJournalReader,
   ApplyIntegrationQuarantineDirectionRequest,
   AuthoritativeTaskWorktreeReady,
   type AttemptChoiceApplicationResult,
@@ -151,6 +152,8 @@ import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
 import { controlledTrackerAuthorityLayer } from "./authored-tracker-authority.js"
 
 export interface AuthoredScenarioCassetteRun {
+  /** The exact process-local accepted reader backed by the Journal that executed this authored Run. */
+  readonly acceptedJournalReader: AcceptedJournalReader["Service"]
   readonly activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType>
   readonly cassette: ScenarioCassette
   readonly deliveryFrames: ReadonlyArray<AuthoredDeliveryFrame>
@@ -3019,6 +3022,7 @@ const runAuthoredScenarioCassetteWith = (request: {
             )
           })
         ).pipe(Effect.provide(processContext))
+        return Context.get(applicationContext, AcceptedJournalReader)
       })
       const runAcrossActivations = Effect.gen(function* () {
         const firstActivationOrdinal = AuthoredRunActivationOrdinal.make(1)
@@ -3095,7 +3099,12 @@ const runAuthoredScenarioCassetteWith = (request: {
         for (let settleTurn = 0; settleTurn < authoredSettlementYieldTurns; settleTurn += 1) yield* Effect.yieldNow
         const coordinatorExitAtAssertions = coordinator.pollUnsafe()
         yield* Fiber.interrupt(coordinator)
-        return { activationOrdinals, coordinatorExitAtAssertions, records: yield* sharedJournal.read(runId) }
+        return {
+          acceptedJournalReader: Context.get(applicationProcess.context, AcceptedJournalReader),
+          activationOrdinals,
+          coordinatorExitAtAssertions,
+          records: yield* sharedJournal.read(runId)
+        }
       })
       const runReactivationOwnerStory = Effect.gen(function* () {
         const firstActivationOrdinal = AuthoredRunActivationOrdinal.make(1)
@@ -3108,9 +3117,10 @@ const runAuthoredScenarioCassetteWith = (request: {
             "the authored current-first reactivation story requires one coordinator process death"
           )
         }
-        yield* runThroughProductionReactivationOwner
+        const acceptedJournalReader = yield* runThroughProductionReactivationOwner
         const activationCount = yield* Ref.get(latestRuntimeActivationOrdinal)
         return {
+          acceptedJournalReader,
           activationOrdinals: Array.from({ length: activationCount }, (_, index) =>
             AuthoredRunActivationOrdinal.make(index + 1)
           ),
@@ -3118,16 +3128,26 @@ const runAuthoredScenarioCassetteWith = (request: {
           records: yield* sharedJournal.read(runId)
         }
       })
-      const runSingleActivation = Effect.gen(function* () {
+      const runSingleActivation = Effect.fn("AuthoredCassette.runSingleActivation")(function* (
+        acceptedJournalReader: AcceptedJournalReader["Service"]
+      ) {
         const activationOrdinal = AuthoredRunActivationOrdinal.make(1)
         const activationOrdinals: Array<AuthoredRunActivationOrdinalType> = [activationOrdinal]
         yield* activateRun(activationOrdinal)
-        return { activationOrdinals, coordinatorExitAtAssertions: undefined, records: yield* sharedJournal.read(runId) }
+        return {
+          acceptedJournalReader,
+          activationOrdinals,
+          coordinatorExitAtAssertions: undefined,
+          records: yield* sharedJournal.read(runId)
+        }
       })
       const standardCoordinatorExecution = Effect.gen(function* () {
         if (coordinatorLifecycleBoundaryCount > 0) return yield* runAcrossActivations
         const { application } = yield* makeApplicationProcess
-        return yield* runSingleActivation.pipe(Effect.provide(application))
+        const applicationContext = yield* Layer.build(application)
+        return yield* runSingleActivation(Context.get(applicationContext, AcceptedJournalReader)).pipe(
+          Effect.provide(applicationContext)
+        )
       })
       const processProvidedCoordinatorExecution = Effect.gen(function* () {
         if (currentFirstRunReactivationOwnerStory) return yield* runReactivationOwnerStory
@@ -3139,7 +3159,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           Effect.provideService(DeliveryRuntimeObservationObserver, runtimeObservationObserver)
         )
       )
-      const { activationOrdinals, coordinatorExitAtAssertions, records } = execution
+      const { acceptedJournalReader, activationOrdinals, coordinatorExitAtAssertions, records } = execution
       /* v8 ignore next -- @preserve Later authored activations return after their declared final read; action failures are asserted by the direct protocol cassette. */
       if (coordinatorExitAtAssertions !== undefined && Exit.isFailure(coordinatorExitAtAssertions)) {
         return yield* Effect.failCause(coordinatorExitAtAssertions.cause)
@@ -3160,6 +3180,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         return yield* Effect.forEach(records, ({ position }) => reader.readAt(TraceCursor.make({ position, runId })))
       }).pipe(Effect.provide(TraceReaderLayer.pipe(Layer.provide(journalLayer))))
       return {
+        acceptedJournalReader,
         activationOrdinals,
         cassette,
         deliveryFrames,

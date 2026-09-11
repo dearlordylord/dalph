@@ -4156,13 +4156,13 @@ it.effect(
           .toSorted()
           .join("+")
       )
-      const expectedFrontiers = ["A", "B+C", "B+C+X", "D+X", "E+F", "H+I", "G", ""]
+      const expectedFrontiers = ["A", "B+C", "B+C+X", "D+X", "E+F+X", "H+I", "G", ""]
       let previousFrontier = lastItemIndex
       const frontierPositions = expectedFrontiers.map((frontier) => {
         previousFrontier = eligibleSets.indexOf(frontier, previousFrontier + 1)
         return previousFrontier
       })
-      const expectedOverlaps = ["B+C", "C", "X", "D", "E+F", "F", "H+I", "I", "G"]
+      const expectedOverlaps = ["B+C", "C", "X", "D+X", "E+X", "F+X", "H+I", "I", "G"]
       let previousOverlap = lastItemIndex
       const overlapPositions = expectedOverlaps.map((overlap) => {
         previousOverlap = heldSets.indexOf(overlap, previousOverlap + 1)
@@ -4236,7 +4236,7 @@ it.effect(
         run.records.flatMap(({ event }) =>
           event._tag === "IntegrationFinalitySettled" ? [event.claim.plannedAttempt.taskId] : []
         )
-      ).toEqual(["A", "B", "C", "X", "D", "E", "F", "H", "I", "G"])
+      ).toEqual(["A", "B", "C", "D", "E", "F", "X", "H", "I", "G"])
       expect(
         run.records.some(
           ({ event }) =>
