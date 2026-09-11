@@ -751,14 +751,15 @@ E, F, X, H, I, and G. The maintainer accepted this controlled legal execution on
 it is not a universal production ordering. No terminal executor report is used
 as a substitute for tracker success or delivery settlement.
 
-The later complete tracker read after X and D settle proves both successful and
-exposes E and F. Those tasks begin together; E reports `ExecutorWorkTerminal`
-first while F remains visibly held, then F reports `ExecutorWorkTerminal`. The
-later successful tracker observation exposes
-H and I, which likewise begin together and release their positions in separate
-publications. G remains blocked until a later tracker observation proves H, I,
-and X successful. G then begins and reports through the same ordinary executor
-protocol. A final complete tracker read produces an empty eligible frontier.
+The later complete tracker read after D settles proves D successful and exposes
+E and F while X remains held. Those tasks use the other capacity position in
+turn: E reports `ExecutorWorkTerminal`, then F begins and reports
+`ExecutorWorkTerminal`. X reports and settles only after F. The later successful
+tracker observation exposes H and I, which begin together and release their
+positions in separate publications. G remains blocked until a later tracker
+observation proves H, I, and X successful. G then begins and reports through the
+same ordinary executor protocol. A final complete tracker read produces an empty
+eligible frontier.
 
 The Lab shows this rolling consumption on the production-observed graph rather
 than making each pair look like one atomic batch. A represented task uses

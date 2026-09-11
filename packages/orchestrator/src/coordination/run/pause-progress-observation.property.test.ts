@@ -25,10 +25,8 @@ import { OperationId } from "../../workflow/identity.js"
 import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
-import {
-  IntegrationResponsibilityIdentity,
-  makeIntegrationTargetResourceController
-} from "../admission/integration-target-resource.js"
+import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
+import { IntegrationResponsibilityIdentity } from "../../workflow/protocols/integration-admission/responsibility.js"
 import { makeFreshTaskAdmissionTestBasis } from "../../../test/support/fresh-task-admission.js"
 import { makeDeliveryReflection } from "../delivery/relations.js"
 import {

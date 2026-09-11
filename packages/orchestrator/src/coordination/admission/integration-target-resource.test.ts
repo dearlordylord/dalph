@@ -5,11 +5,12 @@ import { GitRepositoryLocator, IntegrationTarget, IntegrationTargetRef, RunId } 
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
   acquireStartedIntegrationTarget,
-  integrationResponsibilityIdentity,
+  IntegrationResponsibilityTargetMismatch,
   IntegrationTargetResourceUnavailable,
   makeIntegrationTargetResourceController,
   releaseStartedIntegrationTarget
 } from "./integration-target-resource.js"
+import { integrationResponsibilityIdentity } from "../../workflow/protocols/integration-admission/responsibility.js"
 import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
 
@@ -85,6 +86,43 @@ it.effect("publishes exact active ownership only while its target permit is runn
 
     yield* controller.releaseAll
     expect((yield* controller.snapshot).heldResponsibilities).toEqual([])
+  })
+)
+
+it.effect("binds one exact responsibility to only its originally acquired target", () =>
+  Effect.gen(function* () {
+    const controller = yield* makeIntegrationTargetResourceController()
+    const acquired = resourceResponsibility("/bound.git", 8, "bound-run")
+    const wrongTarget = { ...acquired, integrationTarget: target("/other.git") }
+
+    yield* controller.acquire(acquired)
+    yield* controller.acquire(acquired)
+    yield* controller.publishAcceptedOwnership(acquired)
+
+    expect(yield* Effect.flip(controller.acquire(wrongTarget))).toEqual(
+      new IntegrationResponsibilityTargetMismatch({
+        acquiredTarget: acquired.integrationTarget,
+        identity: integrationResponsibilityIdentity(acquired),
+        requestedTarget: wrongTarget.integrationTarget
+      })
+    )
+    expect(yield* controller.isHeld(acquired)).toBe(true)
+    expect(yield* controller.isHeld(wrongTarget)).toBe(false)
+  })
+)
+
+it.effect("does not release accepted ownership through the right identity and wrong target", () =>
+  Effect.gen(function* () {
+    const controller = yield* makeIntegrationTargetResourceController()
+    const acquired = resourceResponsibility("/release-bound.git", 9, "release-bound-run")
+    const wrongTarget = { ...acquired, integrationTarget: target("/wrong-release.git") }
+
+    yield* controller.acquire(acquired)
+    yield* controller.publishAcceptedOwnership(acquired)
+    yield* controller.release(wrongTarget)
+
+    expect(yield* controller.isHeld(acquired)).toBe(true)
+    expect((yield* controller.snapshot).heldResponsibilities).toEqual([integrationResponsibilityIdentity(acquired)])
   })
 )
 

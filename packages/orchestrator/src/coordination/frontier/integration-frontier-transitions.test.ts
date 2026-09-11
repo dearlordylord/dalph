@@ -94,7 +94,7 @@ import { deriveStartedIntegrationFrontier } from "./integration-frontier-transit
 import { RunnableFrontierTransition } from "./frontier.js"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
 import type { CurrentTaskClaimAuthority } from "./task-claim-authority.js"
-import { IntegrationResponsibilityIdentity } from "../admission/integration-target-resource.js"
+import { IntegrationResponsibilityIdentity } from "../../workflow/protocols/integration-admission/responsibility.js"
 
 const sha = (value: string): GitCommitSha => GitCommitSha.make(value.repeat(40))
 

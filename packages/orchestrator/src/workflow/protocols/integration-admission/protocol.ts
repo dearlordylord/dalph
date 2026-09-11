@@ -43,7 +43,12 @@ import {
 } from "../integration-finality/events.js"
 import { EvidenceReference, EvidenceStore, EvidenceStoreFailure } from "../evidence-store.js"
 
-export { StartedIntegrationResponsibility } from "./responsibility.js"
+export {
+  IntegrationResponsibilityIdentity,
+  integrationResponsibilityIdentity,
+  integrationResponsibilityIdentityKey,
+  StartedIntegrationResponsibility
+} from "./responsibility.js"
 
 /**
  * Exists only before the exact integration-start occurrence. It is derived

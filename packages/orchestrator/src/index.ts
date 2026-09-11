@@ -158,7 +158,7 @@ export * from "./coordination/application-exit/lifecycle.js"
 export * from "./coordination/application-exit/executor-drain.js"
 export * from "./coordination/application-exit/application-shell.js"
 export {
-  IntegrationResponsibilityIdentity,
+  IntegrationResponsibilityTargetMismatch,
   IntegrationTargetResourceUnavailable,
   acquireStartedIntegrationTarget,
   makeIntegrationTargetResourceController,
@@ -166,6 +166,7 @@ export {
   type IntegrationTargetResourceController,
   type IntegrationTargetResourceSnapshot
 } from "./coordination/admission/integration-target-resource.js"
+export { IntegrationResponsibilityIdentity } from "./workflow/protocols/integration-admission/responsibility.js"
 export {
   SelectedTransitionFingerprint,
   SelectedTransitionIdentity

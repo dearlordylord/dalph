@@ -9,7 +9,7 @@ import {
   type StartedIntegrationResponsibility
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import { FrontierExplanation, type RunnableFrontier, RunnableFrontierTransition } from "./frontier.js"
-import type { IntegrationResponsibilityIdentity } from "../admission/integration-target-resource.js"
+import type { IntegrationResponsibilityIdentity } from "../../workflow/protocols/integration-admission/responsibility.js"
 import type { CurrentTaskClaimAuthority } from "./task-claim-authority.js"
 import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import type { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"

@@ -27,10 +27,8 @@ import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeFreshTaskAdmissionTestBasis } from "../../../test/support/fresh-task-admission.js"
-import {
-  IntegrationResponsibilityIdentity,
-  makeIntegrationTargetResourceController
-} from "../admission/integration-target-resource.js"
+import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
+import { IntegrationResponsibilityIdentity } from "../../workflow/protocols/integration-admission/responsibility.js"
 import {
   DeliveryProposalId,
   DeliveryProposalOrdinal,
