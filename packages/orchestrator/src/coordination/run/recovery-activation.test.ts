@@ -794,6 +794,9 @@ const liveProjectionFor = <E, R>(
       const seededThrough = seed.at(-1)?.position ?? JournalPosition.make(0)
       for (const record of records) {
         if (record.position <= seededThrough) continue
+        if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+          return yield* Effect.die("live recovery fixture successors must be ordinary in-Run events")
+        }
         yield* journal.append(record.runId, record.key, record.event)
       }
       return yield* projection.readDeliveryProjection
