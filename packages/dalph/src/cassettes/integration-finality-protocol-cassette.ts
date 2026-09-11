@@ -64,18 +64,32 @@ interface PreparedFinality {
 }
 
 type FinalityPremiseSource = ReadonlyArray<JournalRecord> | AcceptedJournalPrefix
+const lastElementOffset = -1
 
-const premiseRecordsForKind = <K extends JournalRecord["event"]["_tag"]>(source: FinalityPremiseSource, kind: K) => {
-  if (!("runId" in source)) return source.filter(({ event }) => event._tag === kind)
+type JournalRecordForKind<K extends JournalRecord["event"]["_tag"]> = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: K }>
+}
+
+const journalRecordHasKind = <K extends JournalRecord["event"]["_tag"]>(
+  record: JournalRecord,
+  kind: K
+): record is JournalRecordForKind<K> => record.event._tag === kind
+
+const premiseRecordsForKind = <K extends JournalRecord["event"]["_tag"]>(
+  source: FinalityPremiseSource,
+  kind: K
+): ReadonlyArray<JournalRecordForKind<K>> => {
+  if (!("runId" in source))
+    return source.filter((record): record is JournalRecordForKind<K> => journalRecordHasKind(record, kind))
   const records = acceptedJournalRecordsForKind(source, kind)
   return Array.from({ length: records.length }, (_, index) => journalRecordAt(records, index)).flatMap((record) =>
-    record === undefined ? [] : [record]
+    record === undefined || !journalRecordHasKind(record, kind) ? [] : [record]
   )
 }
 
 const promotedPlanFor = (records: FinalityPremiseSource) => {
-  const promotion = premiseRecordsForKind(records, "TargetPromotionObservedSuccess").findLast(() => true)?.event
-  if (promotion?._tag !== "TargetPromotionObservedSuccess") return undefined
+  const promotion = premiseRecordsForKind(records, "TargetPromotionObservedSuccess").at(lastElementOffset)?.event
+  if (promotion === undefined) return undefined
   const promotedAttempt = promotion.correlation.qualifiedCandidate.run.session.plannedAttempt
   const planned = [
     ...premiseRecordsForKind(records, "TaskAttemptPlanned"),
