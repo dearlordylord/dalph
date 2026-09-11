@@ -1,6 +1,6 @@
 import type { RunId } from "@dalph/contracts"
 import { HashMap } from "effect"
-import type { JournalPartition, JournalPosition, JournalRecordKey } from "../identity.js"
+import type { JournalPosition, JournalRecordKey } from "../identity.js"
 import type { JournalRecord } from "../store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 
@@ -9,13 +9,24 @@ import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
  * row in one Run partition through an exact position. It is neither durable
  * workflow state nor reusable after that connection's ownership interval.
  */
-export interface SqliteStorageCheckpoint {
+interface SqliteStorageCheckpointFields {
   readonly decodedThrough: JournalPosition | undefined
-  readonly partition: JournalPartition
   readonly recordsByKey: HashMap.HashMap<JournalRecordKey, SqliteStorageRecordEvidence>
   readonly runId: RunId
+}
+
+export interface SqliteHotStorageCheckpoint extends SqliteStorageCheckpointFields {
+  readonly partition: "Hot"
   readonly terminalPosition: JournalPosition | undefined
 }
+
+export interface SqliteColdStorageCheckpoint extends SqliteStorageCheckpointFields {
+  readonly decodedThrough: JournalPosition
+  readonly partition: "Cold"
+  readonly terminalPosition: JournalPosition
+}
+
+export type SqliteStorageCheckpoint = SqliteHotStorageCheckpoint | SqliteColdStorageCheckpoint
 
 /** Exact persisted content and position established while building a checkpoint. */
 interface SqliteStorageRecordEvidence {
@@ -29,9 +40,9 @@ export interface SqlitePartitionSnapshot {
 }
 
 export const appendSqliteStorageCheckpoint = (
-  checkpoint: SqliteStorageCheckpoint,
+  checkpoint: SqliteHotStorageCheckpoint,
   record: JournalRecord
-): SqliteStorageCheckpoint => ({
+): SqliteHotStorageCheckpoint => ({
   decodedThrough: record.position,
   partition: checkpoint.partition,
   recordsByKey: HashMap.set(checkpoint.recordsByKey, record.key, { event: record.event, position: record.position }),

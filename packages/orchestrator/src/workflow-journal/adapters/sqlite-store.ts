@@ -27,7 +27,11 @@ import { classifyJournalMethodFailure, classifyJournalStorageFailure } from "./s
 import { acquireExclusiveJournalWriter, migrateJournal } from "./sqlite-store-migration.js"
 import { makeSqliteJournalQueries } from "./sqlite-store-queries.js"
 import { makeSqliteTerminalHistoryRetirement } from "./sqlite-store-retirement.js"
-import { appendSqliteStorageCheckpoint, type SqliteStorageCheckpoint } from "./sqlite-storage-checkpoint.js"
+import {
+  appendSqliteStorageCheckpoint,
+  type SqliteHotStorageCheckpoint,
+  type SqliteStorageCheckpoint
+} from "./sqlite-storage-checkpoint.js"
 
 interface SqliteJournalStoreConfig {
   readonly filename: JournalDatabaseLocator
@@ -53,20 +57,27 @@ interface SqliteJournalTestConfig extends SqliteJournalStoreConfig {
   readonly onAppendKeyLookup?: (runId: RunId, key: JournalRecordKey) => Effect.Effect<void>
 }
 
-const appendCheckpointError = (checkpoint: SqliteStorageCheckpoint, runId: RunId) => {
-  if (checkpoint.terminalPosition !== undefined) {
-    return new WorkflowRunAlreadyTerminated({ runId, terminatedAt: checkpoint.terminalPosition })
-  }
-  /* v8 ignore next -- @preserve a decoded Cold snapshot must contain a terminal record. */
+type SqliteAppendCheckpointDecision =
+  | { readonly _tag: "Appendable"; readonly checkpoint: SqliteHotStorageCheckpoint }
+  | { readonly _tag: "Rejected"; readonly error: WorkflowRunAlreadyTerminated }
+
+const decideSqliteAppendCheckpoint = (
+  checkpoint: SqliteStorageCheckpoint,
+  runId: RunId
+): SqliteAppendCheckpointDecision => {
   if (checkpoint.partition === "Cold") {
-    return new JournalHistoryCorruption({
-      detail: "cold partition contains nonterminal history",
-      operation: "JournalStore.append",
-      partition: "Cold",
-      runId
-    })
+    return {
+      _tag: "Rejected",
+      error: new WorkflowRunAlreadyTerminated({ runId, terminatedAt: checkpoint.terminalPosition })
+    }
   }
-  return undefined
+  if (checkpoint.terminalPosition !== undefined) {
+    return {
+      _tag: "Rejected",
+      error: new WorkflowRunAlreadyTerminated({ runId, terminatedAt: checkpoint.terminalPosition })
+    }
+  }
+  return { _tag: "Appendable", checkpoint }
 }
 
 /** The append transaction's typed outcome before it crosses the SQLite insert boundary. */
@@ -116,7 +127,15 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
         yield* migrateJournal(sql, testConfig?.afterColdTableCreated)
         yield* acquireExclusiveJournalWriter(sql)
         const queries = makeSqliteJournalQueries(sql, testConfig?.beforeReadLoad, testConfig?.onPartitionRowsQueried)
-        const { hasPartitionRows, insertLifecycleRecord, loadRunRecords, loadRunSnapshot, scanPartition } = queries
+        const {
+          hasPartitionRows,
+          insertLifecycleRecord,
+          loadRunRecords,
+          loadRunSnapshot,
+          loadRunSnapshotForPartition,
+          locateRunPartition,
+          scanPartition
+        } = queries
         const serialization = yield* Semaphore.make(1)
         const checkpoints = yield* Ref.make(HashMap.empty<RunId, SqliteStorageCheckpoint>())
         const invalidate = (runId: RunId) => Ref.update(checkpoints, HashMap.remove(runId))
@@ -128,13 +147,10 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
           runId: RunId,
           operation: Parameters<typeof loadRunSnapshot>[1]
         ) {
-          const hot = yield* hasPartitionRows("Hot", runId, operation)
-          const cold = yield* hasPartitionRows("Cold", runId, operation)
-          if (hot && cold) return yield* new JournalPartitionContradiction({ runId })
-          const partition = cold ? "Cold" : "Hot"
+          const partition = yield* locateRunPartition(runId, operation)
           const current = HashMap.get(yield* Ref.get(checkpoints), runId)
           if (Option.isSome(current) && current.value.partition === partition) return current.value
-          return (yield* loadRunSnapshot(runId, operation)).checkpoint
+          return (yield* loadRunSnapshotForPartition(partition, runId, operation)).checkpoint
         })
 
         const beginRun = Effect.fn("JournalStore.Sqlite.beginRun")(function* (
@@ -169,12 +185,13 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
           return yield* serialization.withPermit(
             Effect.gen(function* () {
               const checkpoint = yield* loadCurrentSnapshot(runId, "JournalStore.append")
-              const checkpointFailure = appendCheckpointError(checkpoint, runId)
-              if (checkpointFailure !== undefined) return yield* checkpointFailure
+              const checkpointDecision = decideSqliteAppendCheckpoint(checkpoint, runId)
+              if (checkpointDecision._tag === "Rejected") return yield* checkpointDecision.error
+              const appendableCheckpoint = checkpointDecision.checkpoint
               if (testConfig?.onAppendKeyLookup !== undefined) yield* testConfig.onAppendKeyLookup(runId, key)
-              const decision = decideSqliteAppend(checkpoint, runId, key, event)
+              const decision = decideSqliteAppend(appendableCheckpoint, runId, key, event)
               if (decision._tag === "Contradiction") return yield* decision.error
-              if (decision._tag === "Replay") return { checkpoint, record: decision.record }
+              if (decision._tag === "Replay") return { checkpoint: appendableCheckpoint, record: decision.record }
               const { position } = decision
               yield* sql`
             INSERT INTO journal_records (
@@ -185,7 +202,7 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
           `
               if (testConfig?.onAppendInserted !== undefined) yield* testConfig.onAppendInserted(runId)
               const record = { event, key, position, runId } satisfies JournalRecord
-              return { checkpoint: appendSqliteStorageCheckpoint(checkpoint, record), record }
+              return { checkpoint: appendSqliteStorageCheckpoint(appendableCheckpoint, record), record }
             }).pipe(
               sql.withTransaction,
               Effect.tap(() => testConfig?.afterAppendCommit?.() ?? Effect.void),
