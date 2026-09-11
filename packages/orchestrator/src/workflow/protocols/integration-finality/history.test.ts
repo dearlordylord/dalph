@@ -459,6 +459,42 @@ it("keeps exact replacement prerequisites bounded after 64 and 256 unrelated acc
   expect(visits[1]).toBe(visits[0])
 })
 
+it("validates one completion request without materializing task or promotion history", () => {
+  const visits = [64, 256].map((size) => {
+    const noise = Array.from({ length: size }, (_, index) =>
+      record(index + 1, fixture.graphRecordEvent, `history:completion-request-noise:${index}`)
+    )
+    const relevant = validFinalityRecords()
+      .slice(0, 7)
+      .map((current, index) => ({ ...current, position: JournalPosition.make(size + index + 1) }))
+    const completionIntent = relevant.at(-1)
+    if (completionIntent?.event._tag !== "CompletionTaskIntended") {
+      return expect.fail("fixture must end at completion intent")
+    }
+    const evidence = journalEvidenceFrom([...noise, ...relevant])
+    const operations: Array<string> = []
+    const stop = observeJournalRecordSequenceOperations((operation) => operations.push(operation._tag))
+    const semantics: Array<string> = []
+    try {
+      validateIntegrationFinalityHistoryRecord(
+        completionIntent,
+        fixture.runId,
+        evidence,
+        makeIntegrationFinalityHistoryIndexes(),
+        (detail) => semantics.push(detail),
+        (detail) => semantics.push(detail)
+      )
+    } finally {
+      stop()
+    }
+    expect(semantics).toEqual([])
+    expect(operations).not.toContain("HistoricalMaterialization")
+    return operations.length
+  })
+  expect(visits[0]).toBeGreaterThan(0)
+  expect(visits[1]).toBe(visits[0])
+})
+
 it("uses one exact settled-claim lookup after 64 and 256 unrelated replacement settlements", () => {
   const visits = [64, 256].map((size) => {
     const records = validFinalityRecords()
