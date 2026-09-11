@@ -19,6 +19,8 @@ import { taskTrackerReadIntent } from "../registry/event.js"
 import { completionTaskIntentRecordKey, intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import { memoryJournalTestLayer } from "../../workflow-journal/adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
+import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
+import { acceptedJournalPrefixFromValidatedHistory } from "../../workflow-journal/accepted-prefix.js"
 import { reduceWorkflowJournalHistory } from "../../coordination/reconstruction/history.js"
 import type { TaskTrackerFactsReadUnavailable } from "./observation.js"
 import {
@@ -878,7 +880,16 @@ it("a lost post-success graph response authorizes no dependant and resumes only 
       releaseTaskClaim: () => Effect.die("unused")
     })
   )
-  const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.provide(journal))
+  const accepted = Layer.succeed(
+    AcceptedJournalReader,
+    AcceptedJournalReader.of({
+      readAccepted: (readRunId) =>
+        Ref.get(records).pipe(Effect.map((current) => acceptedJournalPrefixFromValidatedHistory(readRunId, current)))
+    })
+  )
+  const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(
+    Layer.provide(Layer.merge(journal, accepted))
+  )
 
   const result = await Effect.gen(function* () {
     const interpreter = yield* WorkflowInterpreter

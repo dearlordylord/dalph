@@ -40,6 +40,8 @@ import { sqliteJournalStoreLayer } from "./adapters/sqlite-store.js"
 import { JournalDatabaseLocator } from "./identity.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
 import { InRunJournal, JournalStore } from "./store.js"
+import { AcceptedJournalReader } from "./accepted-reader.js"
+import { acceptedJournalPrefixFromValidatedHistory } from "./accepted-prefix.js"
 
 const unused = () => Effect.die("unused")
 const testInterpreter = (
@@ -162,7 +164,21 @@ it.effect("reopens persisted Git read intent in a fresh application and records 
             )
           )
           const application = journaledWorkflowInterpreterLayer(runId, provider).pipe(
-            Layer.provide(Layer.succeed(InRunJournal, InRunJournal.of({ append: journal.append, read: journal.read })))
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.succeed(InRunJournal, InRunJournal.of({ append: journal.append, read: journal.read })),
+                Layer.succeed(
+                  AcceptedJournalReader,
+                  AcceptedJournalReader.of({
+                    readAccepted: (readRunId) =>
+                      journal.read(readRunId).pipe(
+                        Effect.orDie,
+                        Effect.map((records) => acceptedJournalPrefixFromValidatedHistory(readRunId, records))
+                      )
+                  })
+                )
+              )
+            )
           )
           const interpreter = Context.get(yield* Layer.build(application), WorkflowInterpreter)
           const lifecycle = yield* makeApplicationExitLifecycle()
@@ -205,7 +221,21 @@ it.effect("reopens persisted Git read intent in a fresh application and records 
             )
           )
           const application = journaledWorkflowInterpreterLayer(runId, provider).pipe(
-            Layer.provide(Layer.succeed(InRunJournal, InRunJournal.of({ append: journal.append, read: journal.read })))
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.succeed(InRunJournal, InRunJournal.of({ append: journal.append, read: journal.read })),
+                Layer.succeed(
+                  AcceptedJournalReader,
+                  AcceptedJournalReader.of({
+                    readAccepted: (readRunId) =>
+                      journal.read(readRunId).pipe(
+                        Effect.orDie,
+                        Effect.map((records) => acceptedJournalPrefixFromValidatedHistory(readRunId, records))
+                      )
+                  })
+                )
+              )
+            )
           )
           const interpreter = Context.get(yield* Layer.build(application), WorkflowInterpreter)
           const lifecycle = yield* makeApplicationExitLifecycle()
