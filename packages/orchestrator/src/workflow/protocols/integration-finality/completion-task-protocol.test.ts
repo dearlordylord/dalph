@@ -1,27 +1,30 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { AcceptedResult, AcceptedResultEvidenceManifest, GitCommitSha, TaskId, TaskRevision } from "@dalph/contracts"
+import { AcceptedResult, AcceptedResultEvidenceManifest, GitCommitSha, makeTaskWorkSpecification, TaskId, TaskRevision } from "@dalph/contracts"
 import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { UnclaimedTask } from "../../../authorities/task-tracker/claim-mutation.js"
-import { InRunJournal, type JournalRecord, JournalStorageUnavailable } from "../../../workflow-journal/store.js"
 import {
-  completionClaimReplacedRecordKey,
+  InRunJournal,
+  JournalHistoryInvalid,
+  type JournalRecord,
+  JournalStorageUnavailable
+} from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import {
   completionTaskIntentRecordKey,
   intentRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { OperationId } from "../../identity.js"
-import { makeCompletionTaskFactsObservationOperation } from "../../registry/operation.js"
-import { taskTrackerReadIntent } from "../../registry/event.js"
-import { IntegratorRunQualifiedCandidate } from "../integrator/events.js"
 import {
-  TargetPromotionGit,
-  TargetPromotionGitReadFailure,
-  targetPromotionCorrelationFor
-} from "../target-promotion/events.js"
+  makeCompletionTaskFactsObservationOperation,
+  makeTrackerGraphObservationOperation
+} from "../../registry/operation.js"
+import { taskTrackerReadIntent } from "../../registry/event.js"
+import { TargetPromotionGit, TargetPromotionGitReadFailure } from "../target-promotion/events.js"
 import { memoryEvidenceStoreLayer, EvidenceStore, EvidenceStoreFailure } from "../evidence-store.js"
 import {
   CompletionTaskAcknowledgement,
@@ -29,10 +32,10 @@ import {
   type CompletionClaimObservation,
   CompletionTaskAuthorizationReadOrdinal,
   CompletionTaskCandidateAncestryObservedEvent,
+  CompletionTaskCandidateAncestryReadIntendedEvent,
   CompletionTaskConfirmationReadOrdinal,
   type CompletionTaskBoundaryService,
   CompletionTaskClaim,
-  CompletionClaimReplacedEvent,
   CompletionTaskIntendedEvent,
   CompletionTaskRequestFailure,
   CompletionTaskRequestLookupFailure,
@@ -41,11 +44,20 @@ import {
   CompletionTaskFocusedReadPurpose,
   ForeignCompletionClaim,
   FocusedTaskCompletionReadFailure,
-  completionClaimReplacementOperationIdFor,
   completionTaskRequestFor
 } from "./events.js"
 import { completionTaskCandidateAncestryReadOperationIdFor } from "./completion-task-operation-identity.js"
-import { integrationFinalityFixture as fixture } from "./fixtures.js"
+import { integrationFinalityFixture as sourceFixture } from "./fixtures.js"
+import { integratorCorrelationFor } from "../integrator/session.js"
+import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
+import { makePromotedIntegrationHistory } from "../../../../test/support/promoted-integration-history.js"
+import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
+import {
+  makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskCompletionFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../task-tracker-facts/observation.js"
+import { describeJournalEvent } from "../../registry/event-descriptor.js"
 import {
   CompletionTaskAuthorization,
   CompletionTaskAuthorizationConflict,
@@ -71,6 +83,139 @@ import { TaskTrackerMutationThrottled } from "../../../authorities/task-tracker/
 const encode = (value: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(value))
 const unfinishedPrerequisiteTaskId = TaskId.make("integration-finality-unfinished-prerequisite")
 
+const taskSpecification = makeTaskWorkSpecification({
+  body: "Exercise exact completion boundaries after a real accepted integration prefix.",
+  taskId: sourceFixture.taskId,
+  title: "Completion boundary fixture"
+})
+const makeHistory = (acceptedResult: AcceptedResult) => {
+  const accepted = makeAcceptedIntegrationHistory({
+    acceptedResult,
+    activeClaim: sourceFixture.activeClaim,
+    integrationTarget: sourceFixture.integrationTarget,
+    plannedAttempt: { ...sourceFixture.plannedAttempt, taskRevision: taskSpecification.fingerprint },
+    runId: sourceFixture.runId,
+    targetHeadSha: sourceFixture.qualifiedCandidate.run.session.expectedTargetHead,
+    taskSpecification,
+    trackerTarget: sourceFixture.target
+  })
+  const promoted = makePromotedIntegrationHistory({
+    candidateCommit: sourceFixture.qualifiedCandidate.candidateCommit,
+    candidateText: sourceFixture.qualifiedCandidate.candidateText,
+    originalClaim: accepted.activeClaim,
+    records: accepted.records,
+    session: integratorCorrelationFor(accepted)
+  })
+  return { accepted, promoted }
+}
+
+const defaultHistory = makeHistory(sourceFixture.qualifiedCandidate.run.session.acceptedResult)
+const accepted = defaultHistory.accepted
+const promoted = defaultHistory.promoted
+const fixture = {
+  ...sourceFixture,
+  claim: promoted.claim,
+  completionRequest: promoted.completionRequest,
+  plannedAttempt: accepted.plannedAttempt,
+  promotionCorrelation: promoted.promotionCorrelation,
+  qualifiedCandidate: promoted.qualifiedCandidate
+}
+
+const acceptedPrefix = (runId: typeof fixture.runId, records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
+  Ref.get(records).pipe(
+    Effect.flatMap((current) => {
+      const reduction = reduceWorkflowJournalHistory(runId, current)
+      if (reduction._tag === "ValidWorkflowJournalHistory") return Effect.succeed(reduction.prefix)
+      const issue = reduction.issues[0]
+      return Effect.fail(
+        new JournalHistoryInvalid({
+          detail: issue === undefined ? "journal history is invalid" : JSON.stringify(issue),
+          position: issue !== undefined && "position" in issue ? issue.position : JournalPosition.make(1),
+          runId
+        })
+      )
+    })
+  )
+
+const appendFixtureRecord = (records: Ref.Ref<ReadonlyArray<JournalRecord>>, event: JournalRecord["event"]) =>
+  Ref.update(records, (current) => [
+    ...current,
+    {
+      event,
+      key: describeJournalEvent(event).expectedKey,
+      position: JournalPosition.make(current.length + 1),
+      runId: fixture.runId
+    }
+  ])
+
+const appendAuthorizationFixture = Effect.fn("CompletionTaskProtocolTest.appendAuthorizationFixture")(function* (
+  records: Ref.Ref<ReadonlyArray<JournalRecord>>,
+  request: ReturnType<typeof completionTaskRequestFor>,
+  ordinal: CompletionTaskRequestOrdinal,
+  focusedClaim: CompletionClaimObservation,
+  lifecycle: "CompletedSuccessfully" | "Open" | "TerminalWithoutSuccess"
+) {
+  const prior = yield* Ref.get(records)
+  const authorizationOrdinal = CompletionTaskAuthorizationReadOrdinal.make(
+    prior.filter(
+      ({ event }) =>
+        event._tag === "TaskTrackerReadIntentRecorded" &&
+        event.operation._tag === "ReadCompletionTaskFacts" &&
+        event.operation.request.operationId === request.operationId &&
+        event.operation.purpose._tag === "Authorization" &&
+        event.operation.purpose.attemptOrdinal === ordinal
+    ).length + 1
+  )
+  const purpose = CompletionTaskFocusedReadPurpose.cases.Authorization.make({
+    attemptOrdinal: ordinal,
+    authorizationOrdinal
+  })
+  const focusedOperation = makeCompletionTaskFactsObservationOperation(request, fixture.target, purpose)
+  const focusedFacts = {
+    ...authorization.focusedFacts,
+    currentClaim: focusedClaim,
+    lifecycle,
+    operationId: focusedOperation.operationId
+  }
+  yield* appendFixtureRecord(records, taskTrackerReadIntent(focusedOperation))
+  yield* appendFixtureRecord(
+    records,
+    taskTrackerFactsObservedEvent(
+      focusedOperation.operationId,
+      makeFocusedTaskCompletionFactsObserved(focusedOperation, focusedFacts)
+    )
+  )
+  const ancestryOperationId = completionTaskCandidateAncestryReadOperationIdFor(request, purpose)
+  yield* appendFixtureRecord(
+    records,
+    CompletionTaskCandidateAncestryReadIntendedEvent.make({
+      attemptOrdinal: ordinal,
+      operationId: ancestryOperationId,
+      request,
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* appendFixtureRecord(
+    records,
+    CompletionTaskCandidateAncestryObservedEvent.make({
+      attemptOrdinal: ordinal,
+      observation: {
+        _tag: "CandidateCurrent",
+        currentHeadSha: request.claim.promotionCorrelation.qualifiedCandidate.candidateCommit
+      },
+      operationId: ancestryOperationId,
+      request,
+      version: workflowJournalEventVersion
+    })
+  )
+  return CompletionTaskAuthorization.make({
+    candidateAncestry: "Current",
+    focusedFacts,
+    gitReadOperationId: ancestryOperationId,
+    target: fixture.target
+  })
+})
+
 const completionEvidenceRequest = (
   acceptedCommit = fixture.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult.commit
 ) =>
@@ -88,40 +233,40 @@ const completionEvidenceRequest = (
       )
     )
     const acceptedResult = AcceptedResult.make({ commit: acceptedCommit, evidenceManifest })
-    const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
-      ...fixture.qualifiedCandidate,
-      run: {
-        ...fixture.qualifiedCandidate.run,
-        session: { ...fixture.qualifiedCandidate.run.session, acceptedResult }
-      },
-      directParents: [fixture.qualifiedCandidate.directParents[0], acceptedCommit]
-    })
-    const promotionCorrelation = targetPromotionCorrelationFor(qualifiedCandidate)
-    return completionTaskRequestFor(
-      CompletionTaskClaim.make({
-        originalClaim: fixture.activeClaim,
-        plannedAttempt: fixture.plannedAttempt,
-        promotionCorrelation
-      })
-    )
+    const history = makeHistory(acceptedResult)
+    return { history, request: history.promoted.completionRequest }
   })
 
-const journalLayer = (records: Ref.Ref<ReadonlyArray<JournalRecord>>, chronology: Ref.Ref<ReadonlyArray<string>>) =>
-  Layer.succeed(
-    InRunJournal,
-    InRunJournal.of({
-      append: (runId, key, event) =>
-        Effect.gen(function* () {
-          yield* Ref.update(chronology, (current) => [...current, event._tag])
-          return yield* Ref.modify(records, (current) => {
-            const existing = current.find((record) => record.key === key)
-            if (existing !== undefined) return [Effect.succeed(existing), current] as const
-            const appended: JournalRecord = { event, key, position: JournalPosition.make(current.length + 1), runId }
-            return [Effect.succeed(appended), [...current, appended]] as const
-          }).pipe(Effect.flatten)
-        }),
-      read: () => Ref.get(records)
-    })
+const journalLayer = (
+  records: Ref.Ref<ReadonlyArray<JournalRecord>>,
+  chronology: Ref.Ref<ReadonlyArray<string>>
+) =>
+  Layer.merge(
+    Layer.succeed(
+      InRunJournal,
+      InRunJournal.of({
+        append: (runId, key, event) =>
+          Effect.gen(function* () {
+            yield* Ref.update(chronology, (current) => [...current, event._tag])
+            return yield* Ref.modify(records, (current) => {
+              const existing = current.find((record) => record.key === key)
+              if (existing !== undefined) return [Effect.succeed(existing), current] as const
+              const appended: JournalRecord = {
+                event,
+                key,
+                position: JournalPosition.make(current.length + 1),
+                runId
+              }
+              return [Effect.succeed(appended), [...current, appended]] as const
+            }).pipe(Effect.flatten)
+          }),
+        read: () => Ref.get(records)
+      })
+    ),
+    Layer.succeed(
+      AcceptedJournalReader,
+      AcceptedJournalReader.of({ readAccepted: (runId) => acceptedPrefix(runId, records) })
+    )
   )
 
 const journalLayerThatDiesBefore = (
@@ -129,36 +274,55 @@ const journalLayerThatDiesBefore = (
   chronology: Ref.Ref<ReadonlyArray<string>>,
   shouldDie: (event: JournalRecord["event"]) => boolean
 ) =>
-  Layer.succeed(
-    InRunJournal,
-    InRunJournal.of({
-      append: (runId, key, event) =>
-        shouldDie(event)
-          ? Effect.die(`controlled coordinator death before ${event._tag}`)
-          : Effect.gen(function* () {
-              yield* Ref.update(chronology, (current) => [...current, event._tag])
-              return yield* Ref.modify(records, (current) => {
-                const existing = current.find((record) => record.key === key)
-                if (existing !== undefined) return [existing, current] as const
-                const appended: JournalRecord = {
-                  event,
-                  key,
-                  position: JournalPosition.make(current.length + 1),
-                  runId
-                }
-                return [appended, [...current, appended]] as const
-              })
-            }),
-      read: () => Ref.get(records)
-    })
+  Layer.merge(
+    Layer.succeed(
+      InRunJournal,
+      InRunJournal.of({
+        append: (runId, key, event) =>
+          shouldDie(event)
+            ? Effect.die(`controlled coordinator death before ${event._tag}`)
+            : Effect.gen(function* () {
+                yield* Ref.update(chronology, (current) => [...current, event._tag])
+                return yield* Ref.modify(records, (current) => {
+                  const existing = current.find((record) => record.key === key)
+                  if (existing !== undefined) return [existing, current] as const
+                  const appended: JournalRecord = {
+                    event,
+                    key,
+                    position: JournalPosition.make(current.length + 1),
+                    runId
+                  }
+                  return [appended, [...current, appended]] as const
+                })
+              }),
+        read: () => Ref.get(records)
+      })
+    ),
+    Layer.succeed(
+      AcceptedJournalReader,
+      AcceptedJournalReader.of({ readAccepted: (runId) => acceptedPrefix(runId, records) })
+    )
   )
 
+const firstAuthorizationPurpose = CompletionTaskFocusedReadPurpose.cases.Authorization.make({
+  attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
+  authorizationOrdinal: CompletionTaskAuthorizationReadOrdinal.make(1)
+})
+const firstAuthorizationOperation = makeCompletionTaskFactsObservationOperation(
+  fixture.completionRequest,
+  fixture.target,
+  firstAuthorizationPurpose
+)
+const firstAncestryOperationId = completionTaskCandidateAncestryReadOperationIdFor(
+  fixture.completionRequest,
+  firstAuthorizationPurpose
+)
 const authorization = CompletionTaskAuthorization.make({
   candidateAncestry: "Current",
   focusedFacts: {
     currentClaim: fixture.claim,
     lifecycle: "Open",
-    operationId: fixture.claim.originalClaim.operationId,
+    operationId: firstAuthorizationOperation.operationId,
     target: fixture.target,
     targetMembership: "Member",
     taskId: fixture.taskId,
@@ -166,9 +330,25 @@ const authorization = CompletionTaskAuthorization.make({
     trackerRevision: fixture.trackerRevision,
     unfinishedPrerequisiteTaskIds: []
   },
-  gitReadOperationId: OperationId.make(String(fixture.claim.promotionCorrelation.requestId)),
+  gitReadOperationId: firstAncestryOperationId,
   target: fixture.target
 })
+
+const readyAuthorizationFixture = (
+  records: Ref.Ref<ReadonlyArray<JournalRecord>>,
+  request: ReturnType<typeof completionTaskRequestFor>,
+  ordinal: CompletionTaskRequestOrdinal,
+  result: CompletionTaskAuthorization = authorization
+) =>
+  appendAuthorizationFixture(
+    records,
+    request,
+    ordinal,
+    result.focusedFacts.currentClaim,
+    result.focusedFacts.lifecycle
+  ).pipe(
+    Effect.map(() => CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization: result }))
+  )
 
 const nonExactCurrentClaimExamples: ReadonlyArray<{
   readonly claim: CompletionClaimObservation
@@ -193,7 +373,7 @@ const nonExactCurrentClaimExamples: ReadonlyArray<{
 
 it.effect("rereads accepted-result and Integrator-returned evidence before task completion", () =>
   Effect.gen(function* () {
-    const request = yield* completionEvidenceRequest()
+    const { request } = yield* completionEvidenceRequest()
     const store = yield* EvidenceStore
     const reads = yield* Ref.make(0)
     const countingStore = EvidenceStore.of({
@@ -212,7 +392,7 @@ it.effect("rereads accepted-result and Integrator-returned evidence before task 
 
 it.effect("malformed, missing, and foreign accepted-result evidence stop before tracker completion mutation", () =>
   Effect.gen(function* () {
-    const valid = yield* completionEvidenceRequest()
+    const { history: validHistory, request: valid } = yield* completionEvidenceRequest()
     const store = yield* EvidenceStore
     const completionCalls = yield* Ref.make(0)
     const boundary: CompletionTaskBoundaryService = {
@@ -294,7 +474,7 @@ it.effect("malformed, missing, and foreign accepted-result evidence stop before 
     ] as const
 
     for (const current of cases) {
-      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...validHistory.promoted.replacedRecords])
       const chronology = yield* Ref.make<ReadonlyArray<string>>([])
       const evidence = EvidenceStore.of({ put: store.put, read: current.read })
       const failure = yield* runCompletionTaskProtocol(boundary, valid, fixture.target, (ordinal) =>
@@ -319,12 +499,27 @@ it.effect("owns journal-read and focused-read authorization failures", () =>
       detail: "controlled journal outage",
       operation: "JournalStore.read"
     })
-    const unreadableJournal = Layer.succeed(
-      InRunJournal,
-      InRunJournal.of({
-        append: () => Effect.die("journal read must fail before append"),
-        read: () => Effect.fail(unavailable)
-      })
+    const unreadableJournal = Layer.merge(
+      Layer.succeed(
+        InRunJournal,
+        InRunJournal.of({
+          append: () => Effect.die("journal read must fail before append"),
+          read: () => Effect.fail(unavailable)
+        })
+      ),
+      Layer.succeed(
+        AcceptedJournalReader,
+        AcceptedJournalReader.of({
+          readAccepted: (runId) =>
+            Effect.fail(
+              new JournalHistoryInvalid({
+                detail: "controlled accepted-prefix outage",
+                position: JournalPosition.make(1),
+                runId
+              })
+            )
+        })
+      )
     )
     const unusedBoundary: CompletionTaskBoundaryService = {
       completeTask: () => Effect.die("authorization failure must stop before completion"),
@@ -340,7 +535,7 @@ it.effect("owns journal-read and focused-read authorization failures", () =>
       ).pipe(Effect.provide(unreadableJournal), Effect.flip)
     ).toMatchObject({ reason: "CurrentFactsJournalUnavailable" })
 
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...defaultHistory.promoted.replacedRecords])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const focusedUnavailable: CompletionTaskBoundaryService = {
       ...unusedBoundary,
@@ -356,7 +551,7 @@ it.effect("owns journal-read and focused-read authorization failures", () =>
       ).pipe(Effect.provide(journalLayer(records, chronology)), Effect.flip)
     ).toMatchObject({ reason: "FocusedFactsUnavailable" })
 
-    const conflictRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const conflictRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([...defaultHistory.promoted.replacedRecords])
     const conflictChronology = yield* Ref.make<ReadonlyArray<string>>([])
     const mismatchedOperationBoundary: CompletionTaskBoundaryService = {
       ...unusedBoundary,
@@ -381,6 +576,7 @@ it.effect("owns journal-read and focused-read authorization failures", () =>
     })
     const ancestryOperationId = completionTaskCandidateAncestryReadOperationIdFor(request, ancestryPurpose)
     const ancestryRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+      ...defaultHistory.promoted.replacedRecords,
       {
         event: CompletionTaskCandidateAncestryObservedEvent.make({
           attemptOrdinal: CompletionTaskRequestOrdinal.make(2),
@@ -393,7 +589,7 @@ it.effect("owns journal-read and focused-read authorization failures", () =>
           version: workflowJournalEventVersion
         }),
         key: intentRecordKey(OperationId.make("contradictory-candidate-ancestry-outcome")),
-        position: JournalPosition.make(1),
+        position: JournalPosition.make(defaultHistory.promoted.replacedRecords.length + 1),
         runId: request.claim.plannedAttempt.runId
       }
     ])
@@ -410,7 +606,7 @@ it.effect("owns journal-read and focused-read authorization failures", () =>
         fixture.target,
         CompletionTaskRequestOrdinal.make(1)
       ).pipe(Effect.provide(journalLayer(ancestryRecords, ancestryChronology)), Effect.flip)
-    ).toMatchObject({ reason: "RequestIdentityContradiction" })
+    ).toMatchObject({ reason: "CurrentFactsJournalUnavailable" })
   }).pipe(
     Effect.provideService(
       TargetPromotionGit,
@@ -427,7 +623,7 @@ it.effect("owns journal-read and focused-read authorization failures", () =>
 it.effect("reuses unresolved focused-read intents after restart", () =>
   Effect.gen(function* () {
     const request = completionTaskRequestFor(fixture.claim)
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...defaultHistory.promoted.replacedRecords])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const attemptOrdinal = CompletionTaskRequestOrdinal.make(1)
     const authorizationPurpose = CompletionTaskFocusedReadPurpose.cases.Authorization.make({
@@ -449,15 +645,21 @@ it.effect("reuses unresolved focused-read intents after restart", () =>
         )
       }
 
-      yield* Ref.update(records, (current) => [
-        ...current,
-        {
-          event: { ...fixture.graphRecordEvent, operationId: OperationId.make("unrelated-complete-graph-observation") },
-          key: intentRecordKey(OperationId.make("unrelated-complete-graph-record")),
-          position: JournalPosition.make(current.length + 1),
-          runId: request.claim.plannedAttempt.runId
-        }
-      ])
+      const unrelatedGraphOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("unrelated-complete-graph-read"),
+        fixture.target,
+        [],
+        [fixture.taskId]
+      )
+      yield* appendFixtureRecord(records, taskTrackerReadIntent(unrelatedGraphOperation))
+      yield* appendFixtureRecord(
+        records,
+        taskTrackerFactsObservedEvent(
+          unrelatedGraphOperation.operationId,
+          makeCompleteTaskTrackerFactsObserved(unrelatedGraphOperation, fixture.graphSnapshot)
+        )
+      )
 
       expect(yield* nextCompletionAuthorizationPurpose(request, attemptOrdinal)).toEqual(authorizationPurpose)
       expect(yield* nextCompletionConfirmationPurpose(request, attemptOrdinal)).toEqual(confirmationPurpose)
@@ -467,15 +669,18 @@ it.effect("reuses unresolved focused-read intents after restart", () =>
         fixture.target,
         authorizationPurpose
       )
-      yield* Ref.update(records, (current) => [
-        ...current,
-        {
-          event: { ...fixture.graphRecordEvent, operationId: authorizationOperation.operationId },
-          key: intentRecordKey(OperationId.make("non-focused-observation-under-focused-operation")),
-          position: JournalPosition.make(current.length + 1),
-          runId: request.claim.plannedAttempt.runId
-        }
-      ])
+      const nonFocusedOutcome = {
+        event: { ...fixture.graphRecordEvent, operationId: authorizationOperation.operationId },
+        key: intentRecordKey(OperationId.make("non-focused-observation-under-focused-operation")),
+        position: JournalPosition.make((yield* Ref.get(records)).length + 1),
+        runId: request.claim.plannedAttempt.runId
+      }
+      expect(
+        reduceWorkflowJournalHistory(request.claim.plannedAttempt.runId, [
+          ...(yield* Ref.get(records)),
+          nonFocusedOutcome
+        ])
+      ).toMatchObject({ _tag: "InvalidWorkflowJournalHistory" })
       const boundary: CompletionTaskBoundaryService = {
         completeTask: () => Effect.die("focused read replay never completes the task"),
         readCompletionRequest: () => Effect.die("focused read replay never looks up Q"),
@@ -499,7 +704,8 @@ const protocolHarness = (
   } = {}
 ) =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const suffixStart = defaultHistory.promoted.replacedRecords.length
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...defaultHistory.promoted.replacedRecords])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const calls = yield* Ref.make(0)
     const completionOperationIds = yield* Ref.make<ReadonlyArray<OperationId>>([])
@@ -557,10 +763,20 @@ const protocolHarness = (
     }
     const request = completionTaskRequestFor(fixture.claim)
     const run = (currentRequest: typeof request) =>
-      runCompletionTaskProtocol(boundary, currentRequest, fixture.target, () =>
-        Ref.update(chronology, (current) => [...current, "Authorization.read"]).pipe(
-          Effect.as(CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization }))
-        )
+      runCompletionTaskProtocol(boundary, currentRequest, fixture.target, (ordinal) =>
+        Effect.gen(function* () {
+          yield* Ref.update(chronology, (current) => [...current, "Authorization.read"])
+          const currentAuthorization = yield* appendAuthorizationFixture(
+            records,
+            currentRequest,
+            ordinal,
+            currentRequest.claim,
+            "Open"
+          )
+          return CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({
+            authorization: currentAuthorization
+          })
+        })
       ).pipe(Effect.provide(journalLayer(records, chronology)), Effect.result)
     const firstOutcome = yield* run(request)
     const restart = (lifecycle: NonNullable<typeof options.reactivationFocusedLifecycle>) =>
@@ -585,7 +801,7 @@ const protocolHarness = (
       lookupCalls: yield* Ref.get(lookupCalls),
       firstOutcome,
       outcome,
-      records: yield* Ref.get(records)
+      records: (yield* Ref.get(records)).slice(suffixStart)
     }
   })
 
@@ -629,6 +845,10 @@ it.effect("completion task throttling bypasses Unknown reconciliation and the bo
     expect(result.calls).toBe(1)
     expect(result.lookupCalls).toBe(0)
     expect(result.records.map(({ event }) => event._tag)).toEqual([
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
+      "CompletionTaskCandidateAncestryReadIntended",
+      "CompletionTaskCandidateAncestryObserved",
       "CompletionTaskIntended",
       "CompletionTaskAttemptIntended"
     ])
@@ -666,7 +886,7 @@ it.effect("restart reads owning completion facts before a later mutation with th
 it.effect("reports a task-local terminal-without-success confirmation as a conflict", () =>
   Effect.gen(function* () {
     const request = completionTaskRequestFor(fixture.claim)
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...defaultHistory.promoted.replacedRecords])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const boundary: CompletionTaskBoundaryService = {
       completeTask: () => Effect.die("confirmation never repeats completion"),
@@ -712,7 +932,7 @@ it.effect("restart keeps an applied request ambiguous until focused success is o
 it.effect("rejects a mismatched tracker acknowledgement after the numbered call", () =>
   Effect.gen(function* () {
     const request = completionTaskRequestFor(fixture.claim)
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...defaultHistory.promoted.replacedRecords])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const boundary: CompletionTaskBoundaryService = {
       completeTask: () =>
@@ -725,8 +945,8 @@ it.effect("rejects a mismatched tracker acknowledgement after the numbered call"
       readCompletionRequest: () => Effect.die("acknowledgement mismatch never performs lookup"),
       readFocusedTaskCompletion: () => Effect.die("the injected authorization owns this test")
     }
-    const failure = yield* runCompletionTaskProtocol(boundary, request, fixture.target, () =>
-      Effect.succeed(CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization }))
+    const failure = yield* runCompletionTaskProtocol(boundary, request, fixture.target, (ordinal) =>
+      readyAuthorizationFixture(records, request, ordinal)
     ).pipe(Effect.provide(journalLayer(records, chronology)), Effect.flip)
 
     expect(failure).toBeInstanceOf(CompletionTaskPreconditionConflict)
@@ -737,7 +957,7 @@ it.effect("rejects a mismatched tracker acknowledgement after the numbered call"
 it.effect("rejects stale authorization before the tracker completion boundary", () =>
   Effect.gen(function* () {
     const request = completionTaskRequestFor(fixture.claim)
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...defaultHistory.promoted.replacedRecords])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const boundary: CompletionTaskBoundaryService = {
       completeTask: () => Effect.die("stale authorization must not contact the tracker"),
@@ -748,8 +968,8 @@ it.effect("rejects stale authorization before the tracker completion boundary", 
       ...authorization,
       focusedFacts: { ...authorization.focusedFacts, unfinishedPrerequisiteTaskIds: [unfinishedPrerequisiteTaskId] }
     })
-    const failure = yield* runCompletionTaskProtocol(boundary, request, fixture.target, () =>
-      Effect.succeed(CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization: stale }))
+    const failure = yield* runCompletionTaskProtocol(boundary, request, fixture.target, (ordinal) =>
+      readyAuthorizationFixture(records, request, ordinal, stale)
     ).pipe(Effect.provide(journalLayer(records, chronology)), Effect.flip)
 
     expect(failure).toBeInstanceOf(CompletionTaskPreconditionConflict)
@@ -759,8 +979,8 @@ it.effect("rejects stale authorization before the tracker completion boundary", 
 
 it.effect("records current tracker facts and Git ancestry before completing exact A", () =>
   Effect.gen(function* () {
-    const request = yield* completionEvidenceRequest()
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const { history, request } = yield* completionEvidenceRequest()
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...history.promoted.replacedRecords])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const boundary: CompletionTaskBoundaryService = {
       completeTask: (received) =>
@@ -808,8 +1028,8 @@ it.effect("records current tracker facts and Git ancestry before completing exac
 
 it.effect("restart records a newer current authorization cycle before the call intent", () =>
   Effect.gen(function* () {
-    const request = yield* completionEvidenceRequest()
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const { history, request } = yield* completionEvidenceRequest()
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...history.promoted.replacedRecords])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const focusedCalls = yield* Ref.make(0)
     const gitCalls = yield* Ref.make(0)
@@ -866,8 +1086,8 @@ it.effect("restart records a newer current authorization cycle before the call i
 
 it.effect("restart repeats both current authorization reads after only the focused outcome was durable", () =>
   Effect.gen(function* () {
-    const request = yield* completionEvidenceRequest()
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const { history, request } = yield* completionEvidenceRequest()
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...history.promoted.replacedRecords])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const focusedCalls = yield* Ref.make(0)
     const gitCalls = yield* Ref.make(0)
@@ -917,7 +1137,7 @@ it.effect("restart repeats both current authorization reads after only the focus
 it.effect("restart replays one exact focused or Git authorization outcome without repeating its boundary read", () =>
   Effect.gen(function* () {
     const request = completionTaskRequestFor(fixture.claim)
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...defaultHistory.promoted.replacedRecords])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const focusedCalls = yield* Ref.make(0)
     const gitCalls = yield* Ref.make(0)
@@ -964,7 +1184,7 @@ it.effect("restart replays one exact focused or Git authorization outcome withou
 it.effect("rejects a focused boundary result correlated to another operation", () =>
   Effect.gen(function* () {
     const request = completionTaskRequestFor(fixture.claim)
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...defaultHistory.promoted.replacedRecords])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const purpose = CompletionTaskFocusedReadPurpose.cases.Authorization.make({
       attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
@@ -991,8 +1211,8 @@ it.effect("rejects a focused boundary result correlated to another operation", (
 
 it.effect("rejects current authorization when Git no longer contains the promoted candidate", () =>
   Effect.gen(function* () {
-    const request = yield* completionEvidenceRequest()
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const { history, request } = yield* completionEvidenceRequest()
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...history.promoted.replacedRecords])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const boundary: CompletionTaskBoundaryService = {
       completeTask: () => Effect.die("stale candidate authorization never completes the task"),
@@ -1026,8 +1246,8 @@ it.effect("rejects current authorization when Git no longer contains the promote
 
 it.effect("waits when Git cannot read current candidate ancestry", () =>
   Effect.gen(function* () {
-    const request = yield* completionEvidenceRequest()
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const { history, request } = yield* completionEvidenceRequest()
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...history.promoted.replacedRecords])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const boundary: CompletionTaskBoundaryService = {
       completeTask: () => Effect.die("unavailable Git never completes the task"),
@@ -1151,7 +1371,7 @@ it.effect("does not retry ambiguous completion merely because A currently appear
 it.effect("normalizes an unavailable exact-request lookup into an unreadable ambiguity wait", () =>
   Effect.gen(function* () {
     const request = completionTaskRequestFor(fixture.claim)
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...defaultHistory.promoted.replacedRecords])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const boundary: CompletionTaskBoundaryService = {
       completeTask: () =>
@@ -1162,8 +1382,8 @@ it.effect("normalizes an unavailable exact-request lookup into an unreadable amb
     }
 
     expect(
-      yield* runCompletionTaskProtocol(boundary, request, fixture.target, () =>
-        Effect.succeed(CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization }))
+      yield* runCompletionTaskProtocol(boundary, request, fixture.target, (ordinal) =>
+        readyAuthorizationFixture(records, request, ordinal)
       ).pipe(Effect.provide(journalLayer(records, chronology)), Effect.flip)
     ).toMatchObject({
       _tag: "IntegrationFinality.CompletionTaskAmbiguousWait",
@@ -1183,7 +1403,7 @@ it.effect("does not retry from NotApplied evidence about another completion requ
       }
     })
     const foreignRequest = completionTaskRequestFor(foreignClaim)
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...defaultHistory.promoted.replacedRecords])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const calls = yield* Ref.make(0)
     const boundary: CompletionTaskBoundaryService = {
@@ -1199,8 +1419,8 @@ it.effect("does not retry from NotApplied evidence about another completion requ
     }
 
     expect(
-      yield* runCompletionTaskProtocol(boundary, request, fixture.target, () =>
-        Effect.succeed(CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization }))
+      yield* runCompletionTaskProtocol(boundary, request, fixture.target, (ordinal) =>
+        readyAuthorizationFixture(records, request, ordinal)
       ).pipe(Effect.provide(journalLayer(records, chronology)), Effect.flip)
     ).toMatchObject({
       _tag: "IntegrationFinality.CompletionTaskPreconditionConflict",
@@ -1217,7 +1437,7 @@ it.effect("does not retry from NotApplied evidence about another completion requ
 it.effect("restart resumes lookup after a durable open confirmation without rereading A", () =>
   Effect.gen(function* () {
     const request = completionTaskRequestFor(fixture.claim)
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...defaultHistory.promoted.replacedRecords])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const focusedCalls = yield* Ref.make(0)
     const lookupCalls = yield* Ref.make(0)
@@ -1243,28 +1463,38 @@ it.effect("restart resumes lookup after a durable open confirmation without rere
       readFocusedTaskCompletion: ({ operationId }) =>
         Ref.update(focusedCalls, (count) => count + 1).pipe(Effect.as({ ...authorization.focusedFacts, operationId }))
     }
-    const crashingJournal = Layer.succeed(
-      InRunJournal,
-      InRunJournal.of({
-        append: (runId, key, event) =>
-          event._tag === "CompletionTaskRequestLookupIntended"
-            ? Effect.die("coordinator died before the lookup intent append")
-            : Ref.modify(records, (current) => {
-                const existing = current.find((record) => record.key === key)
-                if (existing !== undefined) return [Effect.succeed(existing), current] as const
-                const appended: JournalRecord = {
-                  event,
-                  key,
-                  position: JournalPosition.make(current.length + 1),
-                  runId
-                }
-                return [Effect.succeed(appended), [...current, appended]] as const
-              }).pipe(Effect.flatten),
-        read: () => Ref.get(records)
-      })
+    const crashingJournal = Layer.merge(
+      Layer.succeed(
+        InRunJournal,
+        InRunJournal.of({
+          append: (runId, key, event) =>
+            event._tag === "CompletionTaskRequestLookupIntended"
+              ? Effect.die("coordinator died before the lookup intent append")
+              : Ref.modify(records, (current) => {
+                  const existing = current.find((record) => record.key === key)
+                  if (existing !== undefined) return [Effect.succeed(existing), current] as const
+                  const appended: JournalRecord = {
+                    event,
+                    key,
+                    position: JournalPosition.make(current.length + 1),
+                    runId
+                  }
+                  return [Effect.succeed(appended), [...current, appended]] as const
+                }).pipe(Effect.flatten),
+          read: () => Ref.get(records)
+        })
+      ),
+      Layer.succeed(
+        AcceptedJournalReader,
+        AcceptedJournalReader.of({ readAccepted: (runId) => acceptedPrefix(runId, records) })
+      )
     )
-    const run = runCompletionTaskProtocol(boundary, request, fixture.target, () =>
-      Effect.succeed(CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization }))
+    const run = runCompletionTaskProtocol(boundary, request, fixture.target, (ordinal) =>
+      appendAuthorizationFixture(records, request, ordinal, request.claim, "Open").pipe(
+        Effect.map((currentAuthorization) =>
+          CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization: currentAuthorization })
+        )
+      )
     )
     const firstExit = yield* run.pipe(Effect.provide(crashingJournal), Effect.exit)
     expect(firstExit._tag).toBe("Failure")
@@ -1285,7 +1515,7 @@ it.effect("restart confirms success after a durable rejection or lost response c
   Effect.gen(function* () {
     for (const outcome of ["DefinitelyNotApplied", "Unknown"] as const) {
       const request = completionTaskRequestFor(fixture.claim)
-      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...defaultHistory.promoted.replacedRecords])
       const chronology = yield* Ref.make<ReadonlyArray<string>>([])
       const boundary: CompletionTaskBoundaryService = {
         completeTask: () =>
@@ -1300,8 +1530,12 @@ it.effect("restart confirms success after a durable rejection or lost response c
         readFocusedTaskCompletion: ({ operationId }) =>
           Effect.succeed({ ...authorization.focusedFacts, lifecycle: "CompletedSuccessfully", operationId })
       }
-      const run = runCompletionTaskProtocol(boundary, request, fixture.target, () =>
-        Effect.succeed(CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization }))
+      const run = runCompletionTaskProtocol(boundary, request, fixture.target, (ordinal) =>
+        appendAuthorizationFixture(records, request, ordinal, request.claim, "Open").pipe(
+          Effect.map((currentAuthorization) =>
+            CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization: currentAuthorization })
+          )
+        )
       )
       const first = yield* run.pipe(
         Effect.provide(
@@ -1309,7 +1543,9 @@ it.effect("restart confirms success after a durable rejection or lost response c
             records,
             chronology,
             (event) =>
-              event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadCompletionTaskFacts"
+              event._tag === "TaskTrackerReadIntentRecorded" &&
+              event.operation._tag === "ReadCompletionTaskFacts" &&
+              event.operation.purpose._tag === "Confirmation"
           )
         ),
         Effect.exit
@@ -1325,7 +1561,7 @@ it.effect("restart confirms success after a durable rejection or lost response c
 it.effect("restart advances only after a durable NotApplied lookup", () =>
   Effect.gen(function* () {
     const request = completionTaskRequestFor(fixture.claim)
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...defaultHistory.promoted.replacedRecords])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const calls = yield* Ref.make(0)
     const boundary: CompletionTaskBoundaryService = {
@@ -1343,8 +1579,12 @@ it.effect("restart advances only after a durable NotApplied lookup", () =>
       readFocusedTaskCompletion: ({ operationId }) =>
         Effect.succeed({ ...authorization.focusedFacts, lifecycle: "Open", operationId })
     }
-    const run = runCompletionTaskProtocol(boundary, request, fixture.target, () =>
-      Effect.succeed(CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization }))
+    const run = runCompletionTaskProtocol(boundary, request, fixture.target, (ordinal) =>
+      appendAuthorizationFixture(records, request, ordinal, request.claim, "Open").pipe(
+        Effect.map((currentAuthorization) =>
+          CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization: currentAuthorization })
+        )
+      )
     )
     const first = yield* run.pipe(
       Effect.provide(
@@ -1391,7 +1631,7 @@ it.effect("does not reread A on restart without a newer accepted graph", () =>
 it.effect("restart honors the unresolved call intent before sending the next completion request", () =>
   Effect.gen(function* () {
     const request = completionTaskRequestFor(fixture.claim)
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([...defaultHistory.promoted.replacedRecords])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const calls = yield* Ref.make(0)
     const completionOutcomes = yield* Ref.make<ReadonlyArray<"Applied" | "Unknown">>(["Unknown", "Applied"])
@@ -1432,10 +1672,20 @@ it.effect("restart honors the unresolved call intent before sending the next com
             : { ...authorization.focusedFacts, operationId }
         })
     }
-    const run = runCompletionTaskProtocol(boundary, request, fixture.target, () =>
-      Ref.update(chronology, (current) => [...current, "Authorization.read"]).pipe(
-        Effect.as(CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization }))
-      )
+    const run = runCompletionTaskProtocol(boundary, request, fixture.target, (ordinal) =>
+      Effect.gen(function* () {
+        yield* Ref.update(chronology, (current) => [...current, "Authorization.read"])
+        const currentAuthorization = yield* appendAuthorizationFixture(
+          records,
+          request,
+          ordinal,
+          request.claim,
+          "Open"
+        )
+        return CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({
+          authorization: currentAuthorization
+        })
+      })
     ).pipe(Effect.provide(journalLayer(records, chronology)), Effect.result)
     expect((yield* run)._tag).toBe("Failure")
     const restartBeginsAt = (yield* Ref.get(chronology)).length
@@ -1471,22 +1721,12 @@ it.effect("accepts a tracker client's successful completion after Q without anot
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const calls = yield* Ref.make(0)
     const intent = CompletionTaskIntendedEvent.make({ request, version: workflowJournalEventVersion })
-    const replacementOperationId = completionClaimReplacementOperationIdFor(fixture.claim)
     const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      {
-        event: CompletionClaimReplacedEvent.make({
-          claim: fixture.claim,
-          operationId: replacementOperationId,
-          version: workflowJournalEventVersion
-        }),
-        key: completionClaimReplacedRecordKey(replacementOperationId),
-        position: JournalPosition.make(1),
-        runId: fixture.runId
-      },
+      ...defaultHistory.promoted.replacedRecords,
       {
         event: intent,
         key: completionTaskIntentRecordKey(request),
-        position: JournalPosition.make(2),
+        position: JournalPosition.make(defaultHistory.promoted.replacedRecords.length + 1),
         runId: fixture.runId
       }
     ])
@@ -1545,22 +1785,12 @@ it.effect("restart authorization rejects completed lifecycle without the exact c
   Effect.gen(function* () {
     const request = completionTaskRequestFor(fixture.claim)
     for (const { claim, expectedReason, label } of nonExactCurrentClaimExamples) {
-      const replacementOperationId = completionClaimReplacementOperationIdFor(fixture.claim)
       const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-        {
-          event: CompletionClaimReplacedEvent.make({
-            claim: fixture.claim,
-            operationId: replacementOperationId,
-            version: workflowJournalEventVersion
-          }),
-          key: completionClaimReplacedRecordKey(replacementOperationId),
-          position: JournalPosition.make(1),
-          runId: fixture.runId
-        },
+        ...defaultHistory.promoted.replacedRecords,
         {
           event: CompletionTaskIntendedEvent.make({ request, version: workflowJournalEventVersion }),
           key: completionTaskIntentRecordKey(request),
-          position: JournalPosition.make(2),
+          position: JournalPosition.make(defaultHistory.promoted.replacedRecords.length + 1),
           runId: fixture.runId
         }
       ])
@@ -1603,7 +1833,6 @@ it.effect("restart authorization rejects completed lifecycle without the exact c
 it.effect("rejects changed focused task facts before another tracker completion mutation", () =>
   Effect.gen(function* () {
     const request = completionTaskRequestFor(fixture.claim)
-    const replacementOperationId = completionClaimReplacementOperationIdFor(fixture.claim)
     const cases: ReadonlyArray<{
       readonly expectedReason: "TaskIdentityOrRevisionChanged" | "TaskNotInTarget"
       readonly facts: typeof authorization.focusedFacts
@@ -1631,20 +1860,11 @@ it.effect("rejects changed focused task facts before another tracker completion 
       const completionCalls = yield* Ref.make(0)
       const chronology = yield* Ref.make<ReadonlyArray<string>>([])
       const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-        {
-          event: CompletionClaimReplacedEvent.make({
-            claim: fixture.claim,
-            operationId: replacementOperationId,
-            version: workflowJournalEventVersion
-          }),
-          key: completionClaimReplacedRecordKey(replacementOperationId),
-          position: JournalPosition.make(1),
-          runId: fixture.runId
-        },
+        ...defaultHistory.promoted.replacedRecords,
         {
           event: CompletionTaskIntendedEvent.make({ request, version: workflowJournalEventVersion }),
           key: completionTaskIntentRecordKey(request),
-          position: JournalPosition.make(2),
+          position: JournalPosition.make(defaultHistory.promoted.replacedRecords.length + 1),
           runId: fixture.runId
         }
       ])

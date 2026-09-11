@@ -28,7 +28,6 @@ import { taskTrackerObservationMatchesRead } from "../../task-tracker-facts/obse
 import { recordedTaskAttemptPlanFor } from "../task-attempt-planning/journal-evidence.js"
 import {
   isJournalRecordEvidence,
-  firstJournalRecordOfKind,
   journalEvidenceBefore,
   journalRecordByKey,
   journalRecordByPosition,
@@ -791,40 +790,6 @@ const recordCompletionTaskIssue = (
   if (issue?.kind === "Semantic") recordSemanticIssue(issue.detail)
 }
 
-const completionTaskHistoryTaskId = (
-  event: WorkflowJournalEvent
-): CompletionTaskClaim["plannedAttempt"]["taskId"] | undefined => {
-  if (
-    event._tag === "PostPromotionBlockerCandidateAncestryReadIntended" ||
-    event._tag === "PostPromotionBlockerCandidateAncestryObserved"
-  ) {
-    return event.authorization.claim.plannedAttempt.taskId
-  }
-  if (event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadCompletionTaskFacts") {
-    return event.operation.request.claim.plannedAttempt.taskId
-  }
-  if (event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskCompletionFacts") {
-    return event.observation.request.claim.plannedAttempt.taskId
-  }
-  if ("request" in event && "claim" in event.request) return event.request.claim.plannedAttempt.taskId
-  return undefined
-}
-
-const completionTaskHistoryRecords = (
-  records: JournalHistorySource,
-  event: WorkflowJournalEvent
-): ReadonlyArray<JournalRecord> => {
-  if (!isJournalRecordEvidence(records)) return records
-  const taskId = completionTaskHistoryTaskId(event)
-  if (taskId === undefined) return []
-  const taskRecords = Array.from(journalRecordsForTask(records, taskId))
-  const runBeginning = firstJournalRecordOfKind(records, "WorkflowRunBegan")
-  const promotions = journalRecordsOfKind(records, "TargetPromotionObservedSuccess")
-  return [...(runBeginning === undefined ? [] : [runBeginning]), ...taskRecords, ...promotions]
-    .filter((candidate, index, candidates) => candidates.findIndex(({ key }) => key === candidate.key) === index)
-    .sort((left, right) => left.position - right.position)
-}
-
 const invalidReplacementHistory = (
   record: JournalRecord,
   records: JournalHistorySource,
@@ -892,7 +857,7 @@ export const validateIntegrationFinalityHistoryRecord = (
   recordSemanticIssue: (detail: string) => void
 ): IntegrationFinalityHistoryIndexes => {
   recordCompletionTaskIssue(
-    invalidCompletionTaskHistory(record, completionTaskHistoryRecords(records, record.event), runId),
+    invalidCompletionTaskHistory(record, records, runId),
     recordIdentityIssue,
     recordSemanticIssue
   )
