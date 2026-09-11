@@ -14,9 +14,6 @@ import {
 } from "../../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
 import {
-  completionClaimReplacedRecordKey,
-  completionTaskCandidateAncestryObservedRecordKey,
-  completionTaskCandidateAncestryReadIntentRecordKey,
   completionTaskIntentRecordKey,
   intentRecordKey
 } from "../../../workflow-journal/record-key.js"
@@ -27,12 +24,7 @@ import {
   makeTrackerGraphObservationOperation
 } from "../../registry/operation.js"
 import { taskTrackerReadIntent } from "../../registry/event.js"
-import { IntegratorRunQualifiedCandidate } from "../integrator/events.js"
-import {
-  TargetPromotionGit,
-  TargetPromotionGitReadFailure,
-  targetPromotionCorrelationFor
-} from "../target-promotion/events.js"
+import { TargetPromotionGit, TargetPromotionGitReadFailure } from "../target-promotion/events.js"
 import { memoryEvidenceStoreLayer, EvidenceStore, EvidenceStoreFailure } from "../evidence-store.js"
 import {
   CompletionTaskAcknowledgement,
@@ -44,7 +36,6 @@ import {
   CompletionTaskConfirmationReadOrdinal,
   type CompletionTaskBoundaryService,
   CompletionTaskClaim,
-  CompletionClaimReplacedEvent,
   CompletionTaskIntendedEvent,
   CompletionTaskRequestFailure,
   CompletionTaskRequestLookupFailure,
@@ -53,7 +44,6 @@ import {
   CompletionTaskFocusedReadPurpose,
   ForeignCompletionClaim,
   FocusedTaskCompletionReadFailure,
-  completionClaimReplacementOperationIdFor,
   completionTaskRequestFor
 } from "./events.js"
 import { completionTaskCandidateAncestryReadOperationIdFor } from "./completion-task-operation-identity.js"
@@ -519,7 +509,16 @@ it.effect("owns journal-read and focused-read authorization failures", () =>
       ),
       Layer.succeed(
         AcceptedJournalReader,
-        AcceptedJournalReader.of({ readAccepted: () => Effect.fail(unavailable) })
+        AcceptedJournalReader.of({
+          readAccepted: (runId) =>
+            Effect.fail(
+              new JournalHistoryInvalid({
+                detail: "controlled accepted-prefix outage",
+                position: JournalPosition.make(1),
+                runId
+              })
+            )
+        })
       )
     )
     const unusedBoundary: CompletionTaskBoundaryService = {
