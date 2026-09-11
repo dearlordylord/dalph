@@ -34,6 +34,8 @@ import {
   memoryEvidenceStoreLayer,
   OperationId,
   JournalDatabaseLocator,
+  journalLayer as productionJournalLayer,
+  reduceWorkflowJournalHistory,
   sqliteJournalTestLayer,
   type GitCommandService
 } from "@dalph/orchestrator"
@@ -59,15 +61,12 @@ import { definePlannedAttemptExecutorConformanceSuite } from "../../../orchestra
 import { plannedAttemptExecutorContract } from "../../../orchestrator/test/contracts/planned-attempt-executor-contract.js"
 import { beginPlannedAttemptExecutorWork } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/guarded-protocol.js"
 import { plannedAttemptProtocolControllerLayer } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
-import { memoryJournalTestLayer } from "../../../orchestrator/src/workflow-journal/adapters/memory-store.js"
-import { InRunJournal, JournalStore } from "../../../orchestrator/src/workflow-journal/store.js"
-import { intentRecordKey, outcomeRecordKey } from "../../../orchestrator/src/workflow-journal/record-key.js"
-import { makeTaskWorkSpecificationObservationOperation } from "../../../orchestrator/src/workflow/registry/operation.js"
-import { taskTrackerReadIntent } from "../../../orchestrator/src/workflow/registry/event.js"
 import {
-  makeFocusedTaskWorkSpecificationFactsObserved,
-  taskTrackerFactsObservedEvent
-} from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
+  memoryJournalStoreLayerFromPartitionRecords,
+  memoryJournalTestLayer
+} from "../../../orchestrator/src/workflow-journal/adapters/memory-store.js"
+import { InRunJournal, JournalStore } from "../../../orchestrator/src/workflow-journal/store.js"
+import { makeExecutingAttemptHistory } from "../../../orchestrator/test/support/executing-attempt-history.js"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
 import {
   CodexAppServerFailure,
@@ -156,6 +155,39 @@ const conformanceRequest = PlannedAttemptExecutorRequest.make({
 })
 const conformanceCorrelation = plannedAttemptExecutorCorrelation(conformanceAttempt)
 const conformanceFinalResponse = JSON.stringify({ commit: head, correlation: conformanceCorrelation })
+
+const restartActiveClaim = ActiveTaskClaim.make({
+  operationId: OperationId.make("issue-350-codex-restart-claim"),
+  owner: ClaimOwner.make("dalph:issue-350-codex-restart"),
+  taskId: attempt.taskId,
+  token: ClaimToken.make("issue-350-codex-restart-token")
+})
+
+const plannedAttemptPrefix = (trackerTarget: ReturnType<typeof FixtureTarget.make>) => {
+  const history = makeExecutingAttemptHistory({
+    activeClaim: restartActiveClaim,
+    plannedAttempt: attempt,
+    runId: attempt.runId,
+    taskSpecification: specification,
+    trackerTarget
+  })
+  const responsibilityPosition = history.records.findIndex(
+    ({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+  )
+  return history.records.slice(0, responsibilityPosition)
+}
+
+const plannedAttemptJournalLayer = (trackerTarget: ReturnType<typeof FixtureTarget.make>) => {
+  const records = plannedAttemptPrefix(trackerTarget)
+  const initial = reduceWorkflowJournalHistory(attempt.runId, records)
+  if (initial._tag === "InvalidWorkflowJournalHistory") {
+    return Effect.runSync(Effect.die(`planned-attempt fixture history is invalid: ${JSON.stringify(initial.issues)}`))
+  }
+  const storage = memoryJournalStoreLayerFromPartitionRecords({ hot: records })
+  return Layer.unwrap(
+    JournalStore.pipe(Effect.map((journal) => productionJournalLayer(attempt.runId, trackerTarget, initial, journal)))
+  ).pipe(Layer.provideMerge(storage))
+}
 
 // eslint-disable-next-line functional/no-mixed-types -- The controlled fixture intentionally groups immutable observations and test controls.
 type Harness = {
@@ -2412,27 +2444,9 @@ it.effect("restarts the production workflow after durable association and finish
     undefined,
     store
   )
+  const trackerTarget = FixtureTarget.make("issue-341")
   return Effect.gen(function* () {
-    const journal = yield* JournalStore
-    const specificationRead = makeTaskWorkSpecificationObservationOperation(
-      OperationId.make("issue-341-original-specification"),
-      FixtureTarget.make("issue-341"),
-      attempt.taskId,
-      []
-    )
-    yield* journal.append(
-      attempt.runId,
-      intentRecordKey(specificationRead.operationId),
-      taskTrackerReadIntent(specificationRead)
-    )
-    yield* journal.append(
-      attempt.runId,
-      outcomeRecordKey(specificationRead.operationId),
-      taskTrackerFactsObservedEvent(
-        specificationRead.operationId,
-        makeFocusedTaskWorkSpecificationFactsObserved(specificationRead, specification)
-      )
-    )
+    const journal = yield* InRunJournal
     const activate = () =>
       beginPlannedAttemptExecutorWork(attempt).pipe(
         Effect.provide(plannedAttemptProtocolControllerLayer),
@@ -2490,7 +2504,7 @@ it.effect("restarts the production workflow after durable association and finish
         .filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandResponseObserved")
         .map(({ event }) => event)
     ).toMatchObject([{ commandOrdinal: 1, report: { _tag: "ExecutorWorkExecuting", correlation } }])
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(plannedAttemptJournalLayer(trackerTarget)))
 })
 
 for (const change of [
@@ -2704,53 +2718,57 @@ for (const storage of ["memory", "sqlite-and-private-files"] as const) {
             ? Layer.succeed(JournalStore, memoryJournal)
             : sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(`${directory}/journal.sqlite`) })
         const privateLayer = storage === "memory" ? Layer.succeed(CodexAttemptStore, harness.store) : durableLayer
+        const trackerTarget = FixtureTarget.make("issue-342")
         const activation = (seed = false) =>
           Effect.gen(function* () {
             const journal = yield* JournalStore
             const store = wrapStore(yield* CodexAttemptStore)
             if (seed) {
-              const read = makeTaskWorkSpecificationObservationOperation(
-                OperationId.make("issue-342-specification"),
-                FixtureTarget.make("issue-342"),
-                attempt.taskId,
-                []
-              )
-              yield* journal.append(attempt.runId, intentRecordKey(read.operationId), taskTrackerReadIntent(read))
-              yield* journal.append(
-                attempt.runId,
-                outcomeRecordKey(read.operationId),
-                taskTrackerFactsObservedEvent(
-                  read.operationId,
-                  makeFocusedTaskWorkSpecificationFactsObserved(read, specification)
+              const seedRecords = plannedAttemptPrefix(trackerTarget)
+              const beginning = seedRecords[0]
+              if (beginning?.event._tag !== "WorkflowRunBegan") {
+                return yield* Effect.die("restart fixture requires a workflow beginning")
+              }
+              yield* journal.beginRun(attempt.runId, trackerTarget, beginning.event.initialControlPolicy)
+              for (const record of seedRecords.slice(1)) {
+                yield* journal.append(attempt.runId, record.key, record.event)
+              }
+            }
+            const initial = reduceWorkflowJournalHistory(attempt.runId, yield* journal.read(attempt.runId))
+            if (initial._tag === "InvalidWorkflowJournalHistory") {
+              return yield* Effect.die(`restart fixture history is invalid: ${JSON.stringify(initial.issues)}`)
+            }
+            return yield* Effect.gen(function* () {
+              const acceptedJournal = yield* InRunJournal
+              const runJournal = InRunJournal.of({
+                read: acceptedJournal.read,
+                append: (runId, key, event) =>
+                  Effect.gen(function* () {
+                    const proof =
+                      event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+                      event.observation._tag === "ExecutorBeginNotCrossed"
+                    if (proof) yield* crash("before-proof-observation")
+                    const record = yield* acceptedJournal.append(runId, key, event)
+                    if (proof) yield* crash("after-proof-observation")
+                    return record
+                  })
+              })
+              return yield* beginPlannedAttemptExecutorWork(attempt).pipe(
+                Effect.provideService(InRunJournal, runJournal),
+                Effect.provide(plannedAttemptProtocolControllerLayer),
+                Effect.provide(
+                  layerFor(
+                    { ...harness, app },
+                    defaultGitCommand,
+                    memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer)),
+                    undefined,
+                    store
+                  ),
+                  { local: true }
                 )
               )
-            }
-            const runJournal = InRunJournal.of({
-              read: journal.read,
-              append: (runId, key, event) =>
-                Effect.gen(function* () {
-                  const proof =
-                    event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-                    event.observation._tag === "ExecutorBeginNotCrossed"
-                  if (proof) yield* crash("before-proof-observation")
-                  const record = yield* journal.append(runId, key, event)
-                  if (proof) yield* crash("after-proof-observation")
-                  return record
-                })
-            })
-            return yield* beginPlannedAttemptExecutorWork(attempt).pipe(
-              Effect.provideService(InRunJournal, runJournal),
-              Effect.provide(plannedAttemptProtocolControllerLayer),
-              Effect.provide(
-                layerFor(
-                  { ...harness, app },
-                  defaultGitCommand,
-                  memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer)),
-                  undefined,
-                  store
-                ),
-                { local: true }
-              )
+            }).pipe(
+              Effect.provide(productionJournalLayer(attempt.runId, trackerTarget, initial, journal), { local: true })
             )
           }).pipe(Effect.provide(journalLayer, { local: true }), Effect.provide(privateLayer, { local: true }))
         expect((yield* activation(true).pipe(Effect.exit))._tag).toBe("Failure")

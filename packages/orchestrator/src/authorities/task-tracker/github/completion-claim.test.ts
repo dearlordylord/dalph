@@ -1,20 +1,13 @@
 import { NodeCrypto } from "@effect/platform-node"
-import { PlannedTaskAttempt, TaskId } from "@dalph/contracts"
+import { makeTaskWorkSpecification, PlannedTaskAttempt, TaskId } from "@dalph/contracts"
 import { expect, it } from "@effect/vitest"
 import { Crypto, Effect, Layer, PlatformError, Ref, Schema } from "effect"
 import { ActiveTaskClaim, isExactTaskClaim } from "../claim-mutation.js"
 import { completionClaimBoundaryContract } from "../../../../test/contracts/completion-claim-boundary-contract.js"
 import { ClaimOwner, ClaimToken } from "../claim.js"
 import { TaskTrackerMutationThrottled } from "../mutation-throttling.js"
-import { JournalPosition } from "../../../workflow-journal/identity.js"
-import { InRunJournal, JournalRecord } from "../../../workflow-journal/store.js"
-import { targetPromotionObservedSuccessRecordKey } from "../../../workflow-journal/record-key.js"
+import { InRunJournal } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../../workflow/identity.js"
-import { IntegratorRunQualifiedCandidate } from "../../../workflow/protocols/integrator/events.js"
-import {
-  TargetPromotionObservedSuccessEvent,
-  targetPromotionCorrelationFor
-} from "../../../workflow/protocols/target-promotion/events.js"
 import {
   CompletionClaimBoundary,
   CompletionClaimDeletionFailure,
@@ -48,33 +41,56 @@ import {
 } from "./completion-claim.js"
 import { githubTaskClaimLabelDigestFor } from "./claim-label-identity.js"
 import { githubGraphqlTestClient } from "./graphql-client.test-fixture.js"
+import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
+import { makePromotedIntegrationHistory } from "../../../../test/support/promoted-integration-history.js"
+import { integratorCorrelationFor } from "../../../workflow/protocols/integrator/session.js"
+import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 
 const repositoryNodeId = GithubRepositoryNodeId.make("completion-repository-node")
 const issueNodeId = GithubIssueNodeId.make("completion-issue-node")
 const taskId = githubTaskIdFor(repositoryNodeId, issueNodeId)
 
 const prepareForTaskId = (taskId: TaskId) => {
-  const plannedAttempt = PlannedTaskAttempt.make({ ...integrationFinalityFixture.plannedAttempt, taskId })
-  const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
-    ...integrationFinalityFixture.qualifiedCandidate,
-    run: {
-      ...integrationFinalityFixture.qualifiedCandidate.run,
-      session: { ...integrationFinalityFixture.qualifiedCandidate.run.session, plannedAttempt }
-    }
+  const taskSpecification = makeTaskWorkSpecification({
+    body: `Complete GitHub task ${taskId}`,
+    taskId,
+    title: `Complete GitHub task ${taskId}`
   })
-  const promotionCorrelation = targetPromotionCorrelationFor(qualifiedCandidate)
+  const plannedAttempt = PlannedTaskAttempt.make({
+    ...integrationFinalityFixture.plannedAttempt,
+    taskId,
+    taskRevision: taskSpecification.fingerprint
+  })
   const activeClaim = ActiveTaskClaim.make({
     operationId: OperationId.make("completion-active-claim"),
     owner: ClaimOwner.make("dalph:completion-owner"),
     taskId,
     token: ClaimToken.make("completion-active-token")
   })
-  const claim = CompletionTaskClaim.make({ originalClaim: activeClaim, plannedAttempt, promotionCorrelation })
-  const promotionSuccess = TargetPromotionObservedSuccessEvent.make({
-    ...integrationFinalityFixture.promotionSuccess,
-    correlation: promotionCorrelation
+  const accepted = makeAcceptedIntegrationHistory({
+    acceptedResult: integrationFinalityFixture.qualifiedCandidate.run.session.acceptedResult,
+    activeClaim,
+    integrationTarget: integrationFinalityFixture.integrationTarget,
+    plannedAttempt,
+    runId: plannedAttempt.runId,
+    targetHeadSha: integrationFinalityFixture.qualifiedCandidate.run.session.expectedTargetHead,
+    taskSpecification,
+    trackerTarget: integrationFinalityFixture.target
   })
-  return { activeClaim, claim, plannedAttempt, promotionSuccess }
+  const promoted = makePromotedIntegrationHistory({
+    candidateCommit: integrationFinalityFixture.qualifiedCandidate.candidateCommit,
+    candidateText: integrationFinalityFixture.qualifiedCandidate.candidateText,
+    originalClaim: activeClaim,
+    records: accepted.records,
+    session: integratorCorrelationFor(accepted)
+  })
+  return {
+    activeClaim,
+    claim: promoted.claim,
+    plannedAttempt,
+    promotionRecords: promoted.promotedRecords,
+    promotionSuccess: promoted.promotionSuccess
+  }
 }
 
 const prepared = prepareForTaskId(taskId)
@@ -235,26 +251,12 @@ completionClaimBoundaryContract({
   successObservation: preparedSuccessObservation
 })
 
-const journalForPromotion = Effect.fn("GithubCompletionClaimTest.journalForPromotion")(function* () {
-  const initial = JournalRecord.make({
-    event: prepared.promotionSuccess,
-    key: targetPromotionObservedSuccessRecordKey(prepared.claim.promotionCorrelation.requestId),
-    position: JournalPosition.make(1),
-    runId: prepared.plannedAttempt.runId
+const journalForPromotion = () =>
+  liveJournalTestLayer({
+    records: prepared.promotionRecords,
+    runId: prepared.plannedAttempt.runId,
+    target: integrationFinalityFixture.target
   })
-  const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([initial])
-  const service = InRunJournal.of({
-    append: (runId, key, event) =>
-      Ref.modify(records, (current) => {
-        const existing = current.find((record) => record.key === key)
-        if (existing !== undefined) return [Effect.succeed(existing), current] as const
-        const record = JournalRecord.make({ event, key, position: JournalPosition.make(current.length + 1), runId })
-        return [Effect.succeed(record), [...current, record]] as const
-      }).pipe(Effect.flatten),
-    read: () => Ref.get(records)
-  })
-  return { records, service }
-})
 
 it.effect("creates one expected completion fingerprint beside the exact active claim", () =>
   Effect.gen(function* () {
@@ -756,14 +758,15 @@ it.effect("stops after one throttled completion-claim create and preserves its o
 it.effect("reuses the exact GitHub completion claim after its create response is lost", () =>
   Effect.gen(function* () {
     const harness = yield* makeHarness({ loseFirstCreateResponse: true })
-    const journal = yield* journalForPromotion()
-    const result = yield* Effect.gen(function* () {
+    const { records, result } = yield* Effect.gen(function* () {
       const boundary = yield* CompletionClaimBoundary
-      return yield* runCompletionClaimReplacementProtocol(
+      const result = yield* runCompletionClaimReplacementProtocol(
         boundary,
         completionClaimReplacementRequestFor(prepared.claim)
-      ).pipe(Effect.provideService(InRunJournal, journal.service))
-    }).pipe(Effect.provide(harness.layer))
+      )
+      const journal = yield* InRunJournal
+      return { records: yield* journal.read(prepared.plannedAttempt.runId), result }
+    }).pipe(Effect.provide(journalForPromotion()), Effect.provide(harness.layer))
 
     expect(result.claim).toEqual(prepared.claim)
     const calls = yield* Ref.get(harness.calls)
@@ -775,7 +778,7 @@ it.effect("reuses the exact GitHub completion claim after its create response is
       "FindClaimLabel",
       "FindClaimLabel"
     ])
-    expect((yield* Ref.get(journal.records)).map(({ event }) => event._tag)).toEqual([
+    expect(records.slice(prepared.promotionRecords.length - 1).map(({ event }) => event._tag)).toEqual([
       "TargetPromotionObservedSuccess",
       "CompletionClaimReplacementIntended",
       "CompletionClaimReplacementAttemptIntended",
@@ -806,14 +809,13 @@ it.effect("fails closed on foreign stale malformed or conflicting completion evi
     ] as const
     for (const [name, completionDescription] of descriptions) {
       const harness = yield* makeHarness({ completionDescription })
-      const journal = yield* journalForPromotion()
       const failure = yield* Effect.gen(function* () {
         const boundary = yield* CompletionClaimBoundary
         return yield* runCompletionClaimReplacementProtocol(
           boundary,
           completionClaimReplacementRequestFor(prepared.claim)
-        ).pipe(Effect.provideService(InRunJournal, journal.service), Effect.flip)
-      }).pipe(Effect.provide(harness.layer))
+        ).pipe(Effect.flip)
+      }).pipe(Effect.provide(journalForPromotion()), Effect.provide(harness.layer))
       expect(failure, name).toBeInstanceOf(CompletionClaimOwnershipConflict)
       expect(
         (yield* Ref.get(harness.calls)).filter((call) => call._tag === "CreateClaimLabel"),
@@ -822,14 +824,13 @@ it.effect("fails closed on foreign stale malformed or conflicting completion evi
     }
 
     const malformedHarness = yield* makeHarness({ completionDescription: "unsupported-completion-description" })
-    const malformedJournal = yield* journalForPromotion()
     const malformed = yield* Effect.gen(function* () {
       const boundary = yield* CompletionClaimBoundary
       return yield* runCompletionClaimReplacementProtocol(
         boundary,
         completionClaimReplacementRequestFor(prepared.claim)
-      ).pipe(Effect.provideService(InRunJournal, malformedJournal.service), Effect.flip)
-    }).pipe(Effect.provide(malformedHarness.layer))
+      ).pipe(Effect.flip)
+    }).pipe(Effect.provide(journalForPromotion()), Effect.provide(malformedHarness.layer))
     expect(malformed).toBeInstanceOf(CompletionClaimReadFailure)
     expect((yield* Ref.get(malformedHarness.calls)).filter((call) => call._tag === "CreateClaimLabel")).toHaveLength(0)
 
@@ -841,7 +842,6 @@ it.effect("fails closed on foreign stale malformed or conflicting completion evi
       activeDescription: activeDescriptionFor(foreignActive),
       completionDescription: `1|sha256|${exactFingerprint}`
     })
-    const foreignActiveJournal = yield* journalForPromotion()
     const foreignActiveFailure = yield* Effect.gen(function* () {
       const boundary = yield* CompletionClaimBoundary
       const observation = yield* boundary.readTaskClaim(completionClaimReadRequestFor(prepared.claim))
@@ -852,8 +852,8 @@ it.effect("fails closed on foreign stale malformed or conflicting completion evi
       return yield* runCompletionClaimReplacementProtocol(
         boundary,
         completionClaimReplacementRequestFor(prepared.claim)
-      ).pipe(Effect.provideService(InRunJournal, foreignActiveJournal.service), Effect.flip)
-    }).pipe(Effect.provide(foreignActiveHarness.layer))
+      ).pipe(Effect.flip)
+    }).pipe(Effect.provide(journalForPromotion()), Effect.provide(foreignActiveHarness.layer))
     expect(foreignActiveFailure).toBeInstanceOf(CompletionClaimOwnershipConflict)
     expect(
       (yield* Ref.get(foreignActiveHarness.calls)).filter((call) => call._tag === "CreateClaimLabel")
