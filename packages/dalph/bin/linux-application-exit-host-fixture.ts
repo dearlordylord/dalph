@@ -141,14 +141,19 @@ const runningRecords = (fixtureAttempt: ReturnType<typeof makeFixturePlannedAtte
     token: ClaimToken.make("linux-host-claim-token")
   })
   const claimOperation = makeTaskClaimAcquisitionOperation({
-    acquisition: TaskClaimAcquisition.make(activeClaim),
+    acquisition: TaskClaimAcquisition.make({
+      operationId: activeClaim.operationId,
+      owner: activeClaim.owner,
+      taskId: activeClaim.taskId,
+      token: activeClaim.token
+    }),
     predecessorOperationIds: []
   })
   const graphOperation = makeTrackerGraphObservationOperation(
     { _tag: "WorkflowEstablishment" },
     OperationId.make("linux-host-graph"),
     target,
-    [claimOperation.operationId],
+    [claimOperation.acquisition.operationId],
     [plannedAttempt.taskId]
   )
   const projected = projectTrackerSnapshot({
@@ -186,6 +191,8 @@ const runningRecords = (fixtureAttempt: ReturnType<typeof makeFixturePlannedAtte
   const events: ReadonlyArray<JournalRecord["event"]> = [
     WorkflowRunBeganEvent.make({
       initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
       target,
       version
     }),
@@ -217,13 +224,16 @@ const runningRecords = (fixtureAttempt: ReturnType<typeof makeFixturePlannedAtte
     PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version }),
     PlannedAttemptExecutorCommandIntendedEvent.make({
       command: "Begin",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
       ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
       plannedAttempt,
       version
     }),
     PlannedAttemptExecutorCommandResponseObservedEvent.make({
-      command: "Begin",
-      ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+      commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt,
       report,
       version
     }),
