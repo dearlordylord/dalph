@@ -27,7 +27,6 @@ import { classifyJournalMethodFailure, classifyJournalStorageFailure } from "./s
 import { acquireExclusiveJournalWriter, migrateJournal } from "./sqlite-store-migration.js"
 import { makeSqliteJournalQueries } from "./sqlite-store-queries.js"
 import { makeSqliteTerminalHistoryRetirement } from "./sqlite-store-retirement.js"
-import { unpublishedAcceptedJournalReaderTestLayer } from "../test-accepted-reader.js"
 
 interface SqliteJournalStoreConfig {
   readonly filename: JournalDatabaseLocator
@@ -236,9 +235,7 @@ export const sqliteJournalStoreLayer = (config: SqliteJournalStoreConfig) => sql
 
 /** Complete test-only composition whose appends are not published through Journal. */
 export const sqliteJournalTestLayer = (config: SqliteJournalTestConfig) =>
-  Layer.merge(unpublishedInRunJournalTestLayer, unpublishedAcceptedJournalReaderTestLayer).pipe(
-    Layer.provideMerge(sqliteJournalStoreLayerInternal(config, config))
-  )
+  unpublishedInRunJournalTestLayer.pipe(Layer.provideMerge(sqliteJournalStoreLayerInternal(config, config)))
 
 export const journalDatabaseLocatorConfig = Config.schema(JournalDatabaseLocator, "DALPH_JOURNAL_DATABASE")
 
