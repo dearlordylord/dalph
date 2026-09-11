@@ -48,6 +48,7 @@ interface EvidenceIndexes {
   readonly recordsByOperation: HashMap.HashMap<OperationId, JournalRecordSequence>
   readonly byPromotionRequest: HashMap.HashMap<TargetPromotionRequestId, JournalRecordSequence>
   readonly byIntegratorSession: HashMap.HashMap<IntegratorSessionId, JournalRecordSequence>
+  readonly byRestartRead: HashMap.HashMap<string, JournalRecordSequence>
 }
 
 const indexesByEvidence = new WeakMap<JournalRecordEvidence, EvidenceIndexes>()
@@ -75,7 +76,8 @@ export const emptyJournalEvidence = (): JournalRecordEvidence =>
     operations: HashMap.empty(),
     recordsByOperation: HashMap.empty(),
     byPromotionRequest: HashMap.empty(),
-    byIntegratorSession: HashMap.empty()
+    byIntegratorSession: HashMap.empty(),
+    byRestartRead: HashMap.empty()
   })
 
 const operationOf = ({ event }: JournalRecord): WorkflowOperation | undefined =>
@@ -116,6 +118,15 @@ const integratorSessionIdsOf = (record: JournalRecord): ReadonlySet<IntegratorSe
   if ("predecessor" in event && "sessionId" in event.predecessor) ids.add(event.predecessor.sessionId)
   if ("successor" in event && "sessionId" in event.successor) ids.add(event.successor.sessionId)
   return ids
+}
+
+const restartReadKeyOf = (record: JournalRecord): string | undefined => {
+  const event = record.event
+  if (event._tag !== "TaskTrackerReadIntentRecorded" && event._tag !== "GitReadIntentRecorded") return undefined
+  const matched = /^attempt-restart:([^:]+):(claim|graph|specification|target-lineage|worktree):after:/.exec(
+    event.operation.operationId
+  )
+  return matched === null ? undefined : `${matched[1]}:${matched[2]}`
 }
 
 const graphObservationTaskIds = (record: JournalRecord, indexes: EvidenceIndexes | undefined): ReadonlySet<TaskId> => {
@@ -266,6 +277,17 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
     const priorSession = Option.getOrElse(HashMap.get(byIntegratorSession, sessionId), emptyJournalRecords)
     byIntegratorSession = HashMap.set(byIntegratorSession, sessionId, appendJournalRecord(priorSession, record))
   }
+  const restartReadKey = restartReadKeyOf(record)
+  const byRestartRead = restartReadKey === undefined
+    ? indexes.byRestartRead
+    : HashMap.set(
+        indexes.byRestartRead,
+        restartReadKey,
+        appendJournalRecord(
+          Option.getOrElse(HashMap.get(indexes.byRestartRead, restartReadKey), emptyJournalRecords),
+          record
+        )
+      )
   return evidence(appendJournalRecord(prior.records, record), {
     byKey: HashMap.has(indexes.byKey, record.key) ? indexes.byKey : HashMap.set(indexes.byKey, record.key, record),
     byKind: HashMap.set(indexes.byKind, record.event._tag, appendJournalRecord(ofKind, record)),
@@ -287,7 +309,8 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
           ),
     recordsByOperation,
     byPromotionRequest,
-    byIntegratorSession
+    byIntegratorSession,
+    byRestartRead
   })
 }
 
@@ -470,6 +493,20 @@ export const journalRecordsForIntegratorSession = (
       )
     : source.filter((record) => integratorSessionIdsOf(record).has(sessionId))
 
+export const journalRestartReadIntents = (
+  source: JournalHistorySource,
+  nonce: string,
+  phase: "claim" | "graph" | "specification" | "target-lineage" | "worktree"
+): Iterable<JournalRecord> => {
+  const key = `${encodeURIComponent(nonce)}:${phase}`
+  return isJournalRecordEvidence(source)
+    ? indexedRecords(
+        source,
+        Option.getOrElse(HashMap.get(indexesFor(source).byRestartRead, key), emptyJournalRecords)
+      )
+    : source.filter((record) => restartReadKeyOf(record) === key)
+}
+
 /** Full accepted prefixes can reuse the exact indexed kind sequence. */
 export const journalEvidenceKindSequence = (
   source: JournalRecordEvidence,
@@ -591,6 +628,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     indexes.recordsByOperation,
     indexes.byPromotionRequest,
     indexes.byIntegratorSession,
+    indexes.byRestartRead,
     inspectJournalRecordStorage(source.records),
     ...Array.from(HashMap.values(indexes.byKind), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byAttempt), inspectJournalRecordStorage),
@@ -607,6 +645,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     ...Array.from(HashMap.values(indexes.operations), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.recordsByOperation), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byPromotionRequest), inspectJournalRecordStorage),
-    ...Array.from(HashMap.values(indexes.byIntegratorSession), inspectJournalRecordStorage)
+    ...Array.from(HashMap.values(indexes.byIntegratorSession), inspectJournalRecordStorage),
+    ...Array.from(HashMap.values(indexes.byRestartRead), inspectJournalRecordStorage)
   ]
 }
