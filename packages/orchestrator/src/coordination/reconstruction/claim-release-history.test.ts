@@ -5,6 +5,7 @@ import { ActiveTaskClaim, TaskClaimRelease } from "../../authorities/task-tracke
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
+import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
 import { OperationId } from "../../workflow/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { TaskClaimReleasedEvent } from "../../workflow/registry/event.js"
@@ -27,10 +28,13 @@ const releasedRecord = {
 } satisfies JournalRecord
 
 it("reports a released claim that has no earlier exact intent", () => {
-  expect(invalidTaskClaimRelease(releasedRecord, [releasedRecord])).toBe(
-    `released task claim contradicts operation ${release.operationId}`
-  )
-  const details: Array<string> = []
-  validateTaskClaimRelease(releasedRecord, [releasedRecord], (detail) => details.push(detail))
-  expect(details).toEqual([`released task claim contradicts operation ${release.operationId}`])
+  const records = [releasedRecord]
+  for (const source of [records, journalEvidenceFrom(records)]) {
+    expect(invalidTaskClaimRelease(releasedRecord, source)).toBe(
+      `released task claim contradicts operation ${release.operationId}`
+    )
+    const details: Array<string> = []
+    validateTaskClaimRelease(releasedRecord, source, (detail) => details.push(detail))
+    expect(details).toEqual([`released task claim contradicts operation ${release.operationId}`])
+  }
 })
