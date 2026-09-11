@@ -23,7 +23,10 @@ import {
 } from "../../workflow/task-tracker-facts/observation.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
-import { materializeJournalRecords } from "../../workflow-journal/record-sequence.js"
+import {
+  materializeJournalRecords,
+  observeJournalRecordSequenceOperations
+} from "../../workflow-journal/record-sequence.js"
 import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import {
   JournalHistoryInvalid,
@@ -136,14 +139,22 @@ it.effect("publishes GraphNotEstablished first and an accepted complete graph at
 
     yield* Deferred.await(subscriberAttached)
     yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
-    yield* journal.append(
-      runId,
-      outcomeRecordKey(operation.operationId),
-      taskTrackerFactsObservedEvent(
-        operation.operationId,
-        makeCompleteTaskTrackerFactsObserved(operation, graph("g1", ["A"]))
+    let materializations = 0
+    const stop = observeJournalRecordSequenceOperations((sequenceOperation) => {
+      if (sequenceOperation._tag === "HistoricalMaterialization") materializations += 1
+    })
+    try {
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(operation.operationId),
+        taskTrackerFactsObservedEvent(
+          operation.operationId,
+          makeCompleteTaskTrackerFactsObserved(operation, graph("g1", ["A"]))
+        )
       )
-    )
+    } finally {
+      stop()
+    }
 
     const values = Array.from(yield* Fiber.join(observed))
     expect(values.map(({ _tag }) => _tag)).toEqual(["GraphNotEstablished", "GraphNotEstablished", "GraphEstablished"])
@@ -156,6 +167,7 @@ it.effect("publishes GraphNotEstablished first and an accepted complete graph at
       expect(currentGraph.observation.contentIdentity).toBe(currentGraph.observation.snapshot.revision)
     }
     expect((yield* journal.state.get).position).toBe(3)
+    expect(materializations).toBe(0)
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
