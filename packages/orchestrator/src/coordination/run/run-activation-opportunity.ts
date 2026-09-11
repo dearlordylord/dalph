@@ -1,6 +1,7 @@
 import { AttemptId, RunId } from "@dalph/contracts"
 import { Chunk, Schema } from "effect"
 import { currentAcceptedPlannedAttemptExecutorLifecycleFor } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
+import { journalRetainedExecutorResponsibilitySubjects } from "../../workflow-journal/record-evidence.js"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
 
 /** The two process-local triggers that can request a refresh of Running work. */
@@ -79,21 +80,18 @@ export const activeWorkAuthorityRefreshSubjectsFor = makeActiveWorkAuthorityRefr
 /**
  * Selects every exact unfinished attempt whose current accepted lifecycle
  * report in a validated journal prefix is `ExecutorWorkExecuting`.
- * Responsibility reconstruction has already removed historical and
- * superseded plans; an exact response or projection still awaiting lifecycle
- * acceptance grants no refresh authority. The caller supplies the prefix read
- * at the activation boundary, so later publications cannot enter this
- * immutable subject set.
+ * The retained-responsibility projection has already removed terminal,
+ * replaced, and abandoned plans; retained Safe or ambiguous responsibility
+ * still grants no refresh authority. The caller supplies the prefix read at
+ * the activation boundary, so later publications cannot enter this immutable
+ * subject set.
  */
 export const activeWorkAuthorityRefreshSubjectsForRunState = (
-  runState: Pick<ReconstructedRunState, "runId" | "responsibility" | "workflowHistory">
+  runState: Pick<ReconstructedRunState, "runId" | "workflowHistory">
 ): ActiveWorkAuthorityRefreshSubjects => {
   const acceptedHistory = runState.workflowHistory.evidence
   return activeWorkAuthorityRefreshSubjectsFor(
-    runState.responsibility.entries.flatMap((entry) => {
-      if (entry._tag !== "PlannedAttemptExecutorWorkResponsibility") return []
-      const { plannedAttempt } = entry
-      if (plannedAttempt.runId !== runState.runId) return []
+    journalRetainedExecutorResponsibilitySubjects(acceptedHistory, runState.runId).flatMap(({ plannedAttempt }) => {
       return currentAcceptedPlannedAttemptExecutorLifecycleFor(acceptedHistory, plannedAttempt)
         ._tag === "Executing"
         ? [{ runId: plannedAttempt.runId, attemptId: plannedAttempt.attemptId }]
