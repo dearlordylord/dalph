@@ -16,6 +16,7 @@ import { deliveryActionCompleted, deliveryActionDeferred } from "./delivery-acti
 import type { DeliveryActionExecutionLease, MaterializedDeliveryAction } from "./delivery-action-executor.js"
 import { IntegratorBoundaryUnavailable } from "./integrator-boundary.js"
 import { InRunJournal } from "../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import { appendIntegratorSuccessorSessionIfNeeded } from "../../workflow/protocols/integrator/successor-session.js"
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
@@ -99,7 +100,7 @@ export const fixIntegratorSuccessorSession = Effect.fn("DeliveryAction.fixIntegr
   transition: FixIntegratorSuccessorSession
 ) {
   const journal = yield* InRunJournal
-  const records = yield* journal.read(transition.responsibility.plannedAttempt.runId)
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(transition.responsibility.plannedAttempt.runId)
   yield* appendIntegratorSuccessorSessionIfNeeded(journal, transition.input, records)
   return deliveryActionCompleted(action.proposal.id)
 })

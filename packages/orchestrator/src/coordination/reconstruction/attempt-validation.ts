@@ -53,6 +53,9 @@ import {
   journalRecordsForTask,
   journalRecordsOfKind,
   journalRecordByKey,
+  journalStopRequestDispositionAt,
+  lastJournalRecordForAttemptKind,
+  lastJournalRecordForTaskKind,
   type JournalRecordEvidence,
   type JournalHistorySource
 } from "../../workflow-journal/record-evidence.js"
@@ -413,6 +416,19 @@ const stoppedReleaseOutcomeMatchesRequest = (
   return authority !== undefined && sameAttemptChoiceRequestId(authority.requestId, requestId)
 }
 
+/** Accepted chronology has at most one of each terminal fact; raw diagnostics retain every malformed occurrence in order. */
+const stopDispositionCandidates = (
+  prior: JournalHistorySource,
+  requestId: Extract<WorkflowJournalEvent, { readonly _tag: "AttemptChoiceApplied" }>["requestId"],
+  taskId: TaskId
+): Iterable<JournalRecord> => {
+  if (!isJournalRecordEvidence(prior)) return journalRecordsForTask(prior, taskId)
+  const disposition = journalStopRequestDispositionAt(prior, requestId)
+  return [disposition.releaseIntent, disposition.releaseOutcome, disposition.noRelease].filter(
+    (candidate): candidate is JournalRecord => candidate !== undefined
+  )
+}
+
 const proofEvidenceFor = (
   prior: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
@@ -507,7 +523,7 @@ export const validateAttemptStop = (
       }
       const validateNoReleaseObservation = () => {
         const latestReleaseIntent = findLast(
-          journalRecordsForTask(prior, event.subject.plannedAttempt.taskId),
+          stopDispositionCandidates(prior, event.requestId, event.subject.plannedAttempt.taskId),
           ({ event: priorEvent, position }) =>
             position > abandonment.position &&
             priorEvent._tag === "TaskClaimReleaseIntended" &&
@@ -571,7 +587,7 @@ export const validateAttemptStop = (
       }
       validateNoReleaseObservation()
       const priorTerminalDisposition = findFirst(
-        journalRecordsForTask(prior, event.subject.plannedAttempt.taskId),
+        stopDispositionCandidates(prior, event.requestId, event.subject.plannedAttempt.taskId),
         ({ event: priorEvent, position }) =>
           position > abandonment.position &&
           ((priorEvent._tag === "StoppedAttemptClaimNoReleaseObserved" &&
@@ -615,7 +631,7 @@ export const validateAttemptStop = (
         const validateReleaseUniqueness = () => {
           if (
             hasMatching(
-              journalRecordsForTask(prior, event.operation.release.claim.taskId),
+              stopDispositionCandidates(prior, authority.requestId, event.operation.release.claim.taskId),
               ({ event: priorEvent, position }) =>
                 position > abandonment.position &&
                 priorEvent._tag === "TaskClaimReleaseIntended" &&
@@ -632,7 +648,7 @@ export const validateAttemptStop = (
           }
           if (
             hasMatching(
-              journalRecordsForTask(prior, event.operation.release.claim.taskId),
+              stopDispositionCandidates(prior, authority.requestId, event.operation.release.claim.taskId),
               ({ event: priorEvent, position }) =>
                 position > abandonment.position &&
                 ((priorEvent._tag === "StoppedAttemptClaimNoReleaseObserved" &&
@@ -692,7 +708,9 @@ export const validateAttemptStop = (
         validateReleaseObservation()
       } else {
         const abandonedClaim = findLast(
-          journalRecordsForTask(prior, event.operation.release.claim.taskId),
+          isJournalRecordEvidence(prior)
+            ? journalRecordsForOperationId(prior, event.operation.release.claim.operationId)
+            : journalRecordsForTask(prior, event.operation.release.claim.taskId),
           ({ event: priorEvent }) =>
             priorEvent._tag === "AttemptImplementationAbandoned" &&
             isExactTaskClaim(priorEvent.expectedClaim, event.operation.release.claim)
@@ -727,7 +745,7 @@ export const validateAttemptStop = (
           return
         }
         const priorTerminalDisposition = findFirst(
-          journalRecordsForTask(prior, event.release.claim.taskId),
+          stopDispositionCandidates(prior, authority.requestId, event.release.claim.taskId),
           ({ event: priorEvent, position }) =>
             position > abandonment.position &&
             ((priorEvent._tag === "StoppedAttemptClaimNoReleaseObserved" &&
@@ -1346,7 +1364,7 @@ const replacementClaimIsExact = (
 export const replacementResourceConflict = (
   event: WorkflowJournalEvent,
   plannedAttempt: PlannedTaskAttempt,
-  witness: PlannedAttemptReplacementRecord["event"]["witness"]
+  witness: Pick<PlannedAttemptReplacementRecord["event"]["witness"], "expectedClaim">
 ): boolean => {
   if (event._tag === "TaskClaimReacquisitionDirected") {
     return event.subject.runId === plannedAttempt.runId && event.subject.taskId === plannedAttempt.taskId
@@ -1366,16 +1384,28 @@ export const replacementResourceConflict = (
   )
 }
 
-const replacementPreservesPriorResources = (
+export const replacementPreservesPriorResources = (
   prior: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
-  witness: PlannedAttemptReplacementRecord["event"]["witness"],
+  witness: Pick<PlannedAttemptReplacementRecord["event"]["witness"], "expectedClaim">,
   applicationPosition: JournalPosition
-): boolean =>
-  !hasMatching(journalRecordsForTask(prior, plannedAttempt.taskId), ({ event, position }) => {
+): boolean => {
+  const conflicts = ({ event, position }: JournalRecord) => {
     if (position <= applicationPosition) return false
     return replacementResourceConflict(event, plannedAttempt, witness)
-  })
+  }
+  if (!isJournalRecordEvidence(prior)) return !hasMatching(journalRecordsForTask(prior, plannedAttempt.taskId), conflicts)
+  // Every accepted occurrence of these kinds belongs to the exact run/task or immutable attempt.
+  // The last occurrence therefore answers whether any such mutation followed the Restart application.
+  const latestMutations = [
+    lastJournalRecordForTaskKind(prior, plannedAttempt.taskId, "TaskClaimReacquisitionDirected"),
+    lastJournalRecordForTaskKind(prior, plannedAttempt.taskId, "TaskClaimAcquisitionIntended"),
+    lastJournalRecordForAttemptKind(prior, plannedAttempt.attemptId, "TaskWorktreeReconciliationIntended")
+  ]
+  if (latestMutations.some((record) => record !== undefined && conflicts(record))) return false
+  // Exact acquisition identity, not a generated release-operation name, correlates the retained claim's disposition.
+  return !hasMatching(journalRecordsForOperationId(prior, witness.expectedClaim.operationId), conflicts)
+}
 
 const replacementWorktreeIsExact = (
   prior: JournalHistorySource,

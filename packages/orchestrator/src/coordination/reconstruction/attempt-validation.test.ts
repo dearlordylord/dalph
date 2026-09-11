@@ -12,22 +12,30 @@ import {
 } from "@dalph/contracts"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { attemptChoiceAppliedRecordKey, attemptStoppageIntentRecordKey } from "../../workflow-journal/record-key.js"
-import { journalEvidenceFrom, type JournalHistorySource } from "../../workflow-journal/record-evidence.js"
+import { journalEvidenceBefore, journalEvidenceFrom, type JournalHistorySource } from "../../workflow-journal/record-evidence.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   AttemptChoiceAppliedEvent,
   AttemptChoiceRequestId,
+  AttemptImplementationAbandonedEvent,
   AttemptStoppageIntendedEvent
 } from "../../workflow/protocols/attempt-choice/events.js"
 import { emptyIndexes } from "./history-kernel-state.js"
 import type { WorkflowJournalHistoryIssue } from "./history-result.js"
-import { validateAttemptChoice, validateAttemptStop } from "./attempt-validation.js"
+import { replacementPreservesPriorResources, validateAttemptChoice, validateAttemptStop } from "./attempt-validation.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
+import { OperationId } from "../../workflow/identity.js"
+import { makeTaskClaimReleaseOperation } from "../../workflow/registry/operation.js"
+import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
+import { TaskClaimReleaseIntendedEvent, TaskClaimReleasedEvent } from "../../workflow/registry/event.js"
+import { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 
 const runId = RunId.make("attempt-validation-hot-cold")
 const plannedAttempt = PlannedTaskAttempt.make({
@@ -55,6 +63,72 @@ const record: JournalRecord = {
   position: JournalPosition.make(1),
   runId
 }
+
+it.each([64, 256])("bounds Stop disposition validation after %i unrelated same-task releases", (size) => {
+  const claim = ActiveTaskClaim.make({
+    operationId: OperationId.make("stop-original-claim"),
+    owner: ClaimOwner.make("dalph"),
+    taskId: plannedAttempt.taskId,
+    token: ClaimToken.make("stop-original-token")
+  })
+  const releaseIntent = (nonce: string) => TaskClaimReleaseIntendedEvent.make({
+    operation: makeTaskClaimReleaseOperation({
+      release: { claim, operationId: OperationId.make(`alternate-release-${nonce}`) },
+      predecessorOperationIds: [claim.operationId, OperationId.make("missing-focused-read")],
+      authority: {
+        _tag: "StoppedAttemptClaimReleaseAuthority",
+        observationOperationId: OperationId.make("missing-focused-read"),
+        requestId: AttemptChoiceRequestId.make({ runId, nonce })
+      }
+    }),
+    version: workflowJournalEventVersion
+  })
+  const ownIntent = releaseIntent(requestId.nonce)
+  const events = [
+    AttemptChoiceAppliedEvent.make({ ...choice, choice: "StopTaskImplementation" }),
+    AttemptImplementationAbandonedEvent.make({
+      expectedClaim: claim,
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      proof: { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+      requestId,
+      subject: choice.subject,
+      version: workflowJournalEventVersion
+    }),
+    ...Array.from({ length: size }, (_, offset) => releaseIntent(`unrelated-${offset}`)),
+    ownIntent,
+    TaskClaimReleasedEvent.make({ release: ownIntent.operation.release, version: workflowJournalEventVersion })
+  ]
+  const records = events.map((event, offset): JournalRecord => ({
+    event, key: describeJournalEvent(event).expectedKey, position: JournalPosition.make(offset + 1), runId
+  }))
+  const candidate: JournalRecord = {
+    event: ownIntent,
+    key: describeJournalEvent(ownIntent).expectedKey,
+    position: JournalPosition.make(records.length + 1),
+    runId
+  }
+  // This pure validator seam deliberately diagnoses an incomplete chronology; it does not manufacture Accepted.
+  const expected = new Array<WorkflowJournalHistoryIssue>()
+  validateAttemptStop(candidate, runId, records, emptyIndexes(), expected)
+  const evidence = journalEvidenceFrom(records)
+  const actual = new Array<WorkflowJournalHistoryIssue>()
+  let visits = 0
+  const stop = observeJournalRecordSequenceOperations((operation) => {
+    expect(operation._tag).toBe("IndexedRecordVisit")
+    visits += 1
+  })
+  try {
+    validateAttemptStop(candidate, runId, evidence, emptyIndexes(), actual)
+  } finally {
+    stop()
+  }
+  expect(actual).toEqual(expected)
+  expect(actual.map((issue) => "detail" in issue ? issue.detail : issue._tag)).toContain(
+    "stopped-attempt claim disposition is already terminal"
+  )
+  expect(visits).toBeLessThanOrEqual(16)
+})
 
 it.each([64, 256])("bounds checking a new direction after %i same-attempt Continue records", (size) => {
   const began = makeWorkflowRunBeganRecord(
@@ -90,11 +164,127 @@ it.each([64, 256])("bounds checking a new direction after %i same-attempt Contin
   expect(visits).toBe(4)
 })
 
+it.each([64, 256])("bounds exact abandoned-claim lookup after %i unrelated same-task abandonments", (size) => {
+  const claim = ActiveTaskClaim.make({
+    operationId: OperationId.make("still-retained-claim"),
+    owner: ClaimOwner.make("dalph"),
+    taskId: plannedAttempt.taskId,
+    token: ClaimToken.make("still-retained-token")
+  })
+  const records = Array.from({ length: size }, (_, offset): JournalRecord => {
+    const event = AttemptImplementationAbandonedEvent.make({
+      expectedClaim: ActiveTaskClaim.make({
+        ...claim,
+        operationId: OperationId.make(`other-abandoned-claim-${offset}`),
+        token: ClaimToken.make(`other-abandoned-token-${offset}`)
+      }),
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      proof: { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+      requestId: AttemptChoiceRequestId.make({ runId, nonce: `other-abandonment-${offset}` }),
+      subject: choice.subject,
+      version: workflowJournalEventVersion
+    })
+    return { event, key: describeJournalEvent(event).expectedKey, position: JournalPosition.make(offset + 1), runId }
+  })
+  const event = TaskClaimReleaseIntendedEvent.make({
+    operation: makeTaskClaimReleaseOperation({
+      release: { claim, operationId: OperationId.make("retained-claim-release") },
+      predecessorOperationIds: [claim.operationId],
+      authority: { _tag: "WorkflowClaimReleaseAuthority" }
+    }),
+    version: workflowJournalEventVersion
+  })
+  const candidate: JournalRecord = {
+    event, key: describeJournalEvent(event).expectedKey, position: JournalPosition.make(size + 1), runId
+  }
+  const evidence = journalEvidenceFrom(records)
+  const issues = new Array<WorkflowJournalHistoryIssue>()
+  let visits = 0
+  const stop = observeJournalRecordSequenceOperations((operation) => {
+    expect(operation._tag).toBe("IndexedRecordVisit")
+    visits += 1
+  })
+  try {
+    validateAttemptStop(candidate, runId, evidence, emptyIndexes(), issues)
+  } finally {
+    stop()
+  }
+  expect(issues).toEqual([])
+  expect(visits).toBe(1)
+  const abandonment = AttemptImplementationAbandonedEvent.make({
+    expectedClaim: claim,
+    initiatedBy: { _tag: "DalphCoordinator" },
+    occurrenceClassification: "InitiatedAction",
+    proof: { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+    requestId,
+    subject: choice.subject,
+    version: workflowJournalEventVersion
+  })
+  const withOwnAbandonment = [...records, {
+    event: abandonment,
+    key: describeJournalEvent(abandonment).expectedKey,
+    position: JournalPosition.make(size + 1),
+    runId
+  }]
+  const afterAbandonment = { ...candidate, position: JournalPosition.make(size + 2) }
+  const coldIssues = new Array<WorkflowJournalHistoryIssue>()
+  const indexedIssues = new Array<WorkflowJournalHistoryIssue>()
+  validateAttemptStop(afterAbandonment, runId, withOwnAbandonment, emptyIndexes(), coldIssues)
+  validateAttemptStop(afterAbandonment, runId, journalEvidenceFrom(withOwnAbandonment), emptyIndexes(), indexedIssues)
+  expect(indexedIssues).toEqual(coldIssues)
+  expect(indexedIssues.map((issue) => "detail" in issue ? issue.detail : issue._tag)).toEqual([
+    "an abandoned attempt claim release requires explicit stopped-attempt authority"
+  ])
+})
+
 const validate = (source: JournalHistorySource): ReadonlyArray<WorkflowJournalHistoryIssue> => {
   const issues = new Array<WorkflowJournalHistoryIssue>()
   validateAttemptChoice(record, runId, source, emptyIndexes(), issues)
   return issues
 }
+
+it.each([64, 256])("bounds replacement claim preservation after %i unrelated same-task releases", (size) => {
+  const expectedClaim = ActiveTaskClaim.make({
+    operationId: OperationId.make("replacement-retained-claim"),
+    owner: ClaimOwner.make("dalph"),
+    taskId: plannedAttempt.taskId,
+    token: ClaimToken.make("replacement-retained-token")
+  })
+  const records = Array.from({ length: size + 1 }, (_, offset): JournalRecord => {
+    const claim = offset === size ? expectedClaim : ActiveTaskClaim.make({
+      ...expectedClaim,
+      operationId: OperationId.make(`unrelated-acquisition-${offset}`),
+      token: ClaimToken.make(`unrelated-acquisition-token-${offset}`)
+    })
+    const event = TaskClaimReleaseIntendedEvent.make({
+      operation: makeTaskClaimReleaseOperation({
+        release: { claim, operationId: OperationId.make(`arbitrary-release-operation-${offset}`) },
+        predecessorOperationIds: [claim.operationId],
+        authority: { _tag: "WorkflowClaimReleaseAuthority" }
+      }),
+      version: workflowJournalEventVersion
+    })
+    return { event, key: describeJournalEvent(event).expectedKey, position: JournalPosition.make(offset + 1), runId }
+  })
+  const evidence = journalEvidenceFrom(records)
+  const beforeOwnRelease = journalEvidenceBefore(evidence, size + 1)
+  const witness = { expectedClaim }
+  let visits = 0
+  const stop = observeJournalRecordSequenceOperations((operation) => {
+    expect(operation._tag).toBe("IndexedRecordVisit")
+    visits += 1
+  })
+  try {
+    expect(replacementPreservesPriorResources(beforeOwnRelease, plannedAttempt, witness, JournalPosition.make(1))).toBe(true)
+    expect(replacementPreservesPriorResources(evidence, plannedAttempt, witness, JournalPosition.make(1))).toBe(false)
+  } finally {
+    stop()
+  }
+  expect(visits).toBeLessThanOrEqual(8)
+  expect(replacementPreservesPriorResources(records.slice(0, size), plannedAttempt, witness, JournalPosition.make(1))).toBe(true)
+  expect(replacementPreservesPriorResources(records, plannedAttempt, witness, JournalPosition.make(1))).toBe(false)
+})
 
 it("reports the same ordered attempt-choice authority issues from cold records and indexed live evidence", () => {
   const records = [record]

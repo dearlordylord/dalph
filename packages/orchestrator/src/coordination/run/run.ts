@@ -25,6 +25,7 @@ import type {
   WorkflowRunTargetMismatch
 } from "../../workflow-journal/store.js"
 import type { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
+import type { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import { Journal, type JournalInitialHistoryInvalid } from "../delivery/journal.js"
 import { delivery } from "../delivery/delivery.js"
 import { deliveryRuntimeFrom } from "../delivery/delivery-runtime-adapter.js"
@@ -92,6 +93,7 @@ export interface AcceptedRunReactivationObservers {
 }
 
 export type JournaledRunServices =
+  | AcceptedJournalReader
   | Journal
   | AttemptChoiceControl
   | ControlDirectionApplication

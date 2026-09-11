@@ -29,6 +29,8 @@ import {
 } from "../../workflow/interpretation/interpreter.js"
 import { makeTrackerGraphObservationOperation, type TrackerGraphReadCause } from "../../workflow/registry/operation.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
+import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
+import { acceptedJournalPrefixFromValidatedHistory } from "../../workflow-journal/accepted-prefix.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
@@ -81,18 +83,19 @@ import {
 } from "../delivery/relations.js"
 import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import { runStabilizedDelivery } from "./run-stabilization.js"
+import { pendingActiveRefreshG2OperationFor } from "./recovery-activation.js"
 import {
   activeWorkAuthorityRefreshForOwner,
   activeWorkAuthorityRefreshSubjectsFor
 } from "./run-activation-opportunity.js"
 import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { type ApplicationExitLifecycleService, makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
-import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
+import { taskTrackerReadIntent, WorkflowRunBeganEvent } from "../../workflow/registry/event.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
-import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
+import { intentRecordKey, outcomeRecordKey, workflowRunBeganRecordKey } from "../../workflow-journal/record-key.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import { makePreparedBeginFixture, preparedBeginProposalsOf } from "../../../test/support/prepared-begin-proposal.js"
 const runId = RunId.make("run-stabilization")
@@ -217,6 +220,12 @@ const supportWithoutResources = Layer.mergeAll(
     })
   ),
   Layer.succeed(
+    AcceptedJournalReader,
+    AcceptedJournalReader.of({
+      readAccepted: (requestedRunId) => Effect.succeed(acceptedJournalPrefixFromValidatedHistory(requestedRunId, []))
+    })
+  ),
+  Layer.succeed(
     InRunJournal,
     InRunJournal.of({
       append: () => Effect.die("stabilization tests do not append directly through the Run journal"),
@@ -270,6 +279,12 @@ const appendableJournalFor = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
         return [Effect.succeed(appended), [...current, appended]] as const
       }).pipe(Effect.flatten),
     read: () => Ref.get(records)
+  })
+
+const acceptedJournalFor = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
+  AcceptedJournalReader.of({
+    readAccepted: (requestedRunId) =>
+      Ref.get(records).pipe(Effect.map((current) => acceptedJournalPrefixFromValidatedHistory(requestedRunId, current)))
   })
 
 const freshGraphReadProposal = (
@@ -637,7 +652,14 @@ const causeOrderedActiveRefresh = (capacityBlocked: boolean) =>
       })
       const journaledInterpreter = yield* WorkflowInterpreter.pipe(
         Effect.provide(
-          journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.provide(Layer.succeed(InRunJournal, journal)))
+          journaledWorkflowInterpreterLayer(runId, provider).pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.succeed(AcceptedJournalReader, acceptedJournalFor(records)),
+                Layer.succeed(InRunJournal, journal)
+              )
+            )
+          )
         )
       )
       const observingInterpreter = WorkflowInterpreter.of({
@@ -671,7 +693,9 @@ const causeOrderedActiveRefresh = (capacityBlocked: boolean) =>
           )
       })
 
-      yield* observingInterpreter.readTrackerGraph(g1Operation)
+      yield* observingInterpreter
+        .readTrackerGraph(g1Operation)
+        .pipe(Effect.provideService(AcceptedJournalReader, acceptedJournalFor(records)))
       const running = yield* runStabilizedDelivery(
         target,
         runId,
@@ -679,6 +703,7 @@ const causeOrderedActiveRefresh = (capacityBlocked: boolean) =>
         activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId }]))
       ).pipe(
         Effect.provide(support),
+        Effect.provideService(AcceptedJournalReader, acceptedJournalFor(records)),
         Effect.provideService(InRunJournal, journal),
         Effect.provideService(WorkflowInterpreter, observingInterpreter),
         Effect.provideService(
@@ -831,9 +856,21 @@ it.effect("replays an intent-only G2 after a crash without allocating a second i
       const g1 = graph(g1Operation.operationId, 2, contents, g1Operation.cause)
       const g1Records: ReadonlyArray<JournalRecord> = [
         {
+          event: WorkflowRunBeganEvent.make({
+            initialControlPolicy: { taskExecutionCapacity: capacity },
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            target,
+            version: workflowJournalEventVersion
+          }),
+          key: workflowRunBeganRecordKey,
+          position: JournalPosition.make(1),
+          runId
+        },
+        {
           event: taskTrackerReadIntent(g1Operation),
           key: intentRecordKey(g1Operation.operationId),
-          position: JournalPosition.make(1),
+          position: JournalPosition.make(2),
           runId
         },
         {
@@ -895,6 +932,7 @@ it.effect("replays an intent-only G2 after a crash without allocating a second i
       )
       const firstAttempt = yield* runStabilizedDelivery(target, runId, signalOf(state), opportunity).pipe(
         Effect.provide(supportWithResourcesWithoutAllocator),
+        Effect.provideService(AcceptedJournalReader, acceptedJournalFor(records)),
         Effect.provideService(InRunJournal, journal),
         Effect.provideService(OperationIdAllocator, allocator),
         Effect.provideService(
@@ -915,6 +953,13 @@ it.effect("replays an intent-only G2 after a crash without allocating a second i
           event.operation.operationId === OperationId.make("g2-crash-fresh-0")
       )
       expect(replayableActiveIntent).toBeDefined()
+      const acceptedAfterCrash = acceptedJournalPrefixFromValidatedHistory(runId, afterCrash)
+      expect(
+        pendingActiveRefreshG2OperationFor(acceptedAfterCrash, runId, target, {
+          operationId: g1Operation.operationId,
+          recordedAt: g1.observation.recordedAt
+        })
+      ).toEqual(replayableActiveIntent?.event.operation)
       expect(
         afterCrash
           .filter(({ event }) => event._tag === "TaskTrackerReadIntentRecorded")
@@ -931,6 +976,7 @@ it.effect("replays an intent-only G2 after a crash without allocating a second i
 
       yield* runStabilizedDelivery(target, runId, signalOf(state), opportunity).pipe(
         Effect.provide(supportWithResourcesWithoutAllocator),
+        Effect.provideService(AcceptedJournalReader, acceptedJournalFor(records)),
         Effect.provideService(InRunJournal, journal),
         Effect.provideService(OperationIdAllocator, allocator),
         Effect.provideService(
@@ -1114,6 +1160,13 @@ it.effect("reopens ordinary delivery only from exact settled executor lifecycle 
               supportWithResourcesWithoutAllocator,
               deterministicOperationIdAllocatorLayer(`lifecycle-reopen-${lifecycleCase.name}`)
             )
+          ),
+          Effect.provideService(
+            AcceptedJournalReader,
+            AcceptedJournalReader.of({
+              readAccepted: (requestedRunId) =>
+                Effect.succeed(acceptedJournalPrefixFromValidatedHistory(requestedRunId, lifecycleCase.records))
+            })
           ),
           Effect.provideService(InRunJournal, journal),
           Effect.provideService(

@@ -24,6 +24,8 @@ import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { InRunJournal, JournalStorageUnavailable } from "../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
+import { acceptedJournalPrefixFromValidatedHistory } from "../../workflow-journal/accepted-prefix.js"
 import { executeFreshPlannedAttempt } from "./planned-attempt-delivery-action-adapter.js"
 import {
   PassivePlannedAttemptObserver,
@@ -87,6 +89,10 @@ const providePassiveObservation = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     )
   )
 
+const emptyAcceptedJournal = AcceptedJournalReader.of({
+  readAccepted: () => Effect.succeed(acceptedJournalPrefixFromValidatedHistory(runId, []))
+})
+
 it.effect("does not bind or enter the executor when responsibility append fails", () =>
   Effect.gen(function* () {
     const transition = RunnableFrontierTransition.BeginPlannedAttemptExecutorWork({ plannedAttempt })
@@ -141,6 +147,7 @@ it.effect("does not bind or enter the executor when responsibility append fails"
     const failure = yield* Effect.flip(
       executeFreshPlannedAttempt({ _tag: "IdentityFreeAction", proposal }, proposal.route, lease).pipe(
         Effect.provideService(InRunJournal, journal),
+        Effect.provideService(AcceptedJournalReader, emptyAcceptedJournal),
         Effect.provideService(PlannedAttemptExecutor, inertExecutor),
         providePassiveObservation
       )
@@ -209,6 +216,7 @@ it.effect("does not enter the executor when binding follows a successful respons
     const failure = yield* Effect.exit(
       executeFreshPlannedAttempt({ _tag: "IdentityFreeAction", proposal }, proposal.route, lease).pipe(
         Effect.provideService(InRunJournal, journal),
+        Effect.provideService(AcceptedJournalReader, emptyAcceptedJournal),
         Effect.provideService(PlannedAttemptExecutor, inertExecutor),
         providePassiveObservation
       )

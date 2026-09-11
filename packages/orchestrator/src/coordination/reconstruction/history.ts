@@ -10,7 +10,7 @@ import {
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
-import { HashMap, HashSet, Iterable, Option } from "effect"
+import { Effect, HashMap, HashSet, Iterable, Option, Schema } from "effect"
 import {
   firstJournalRecordOfKind,
   lastJournalRecordOfKind,
@@ -110,7 +110,14 @@ export interface KernelValidatedWorkflowJournalHistory {
   readonly prefix: AcceptedJournalPrefix
 }
 /** An internal caller bypassed nominal construction; replay must not conceal the programming defect. */
-class JournalKernelInvariantDefect extends Error {}
+class JournalKernelInvariantDefect extends Schema.TaggedError<JournalKernelInvariantDefect>()(
+  "JournalKernelInvariantDefect",
+  { detail: Schema.String }
+) {
+  override get message(): string {
+    return this.detail
+  }
+}
 
 const acceptedWorkflowHistory = (prefix: AcceptedJournalPrefix): AcceptedReconstructedWorkflowHistory => ({
   evidence: prefix
@@ -1003,9 +1010,13 @@ export const advanceWorkflowJournalHistory = (
   prior: ValidWorkflowJournalHistory,
   record: JournalRecord
 ): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
-  const kernel = prior[ValidatedKernelStateTypeId]
-  if (kernel === undefined)
-    throw new JournalKernelInvariantDefect("validated journal history lacks its private kernel state")
+  const kernel = Option.getOrElse(Option.fromUndefinedOr(prior[ValidatedKernelStateTypeId]), () =>
+    Effect.runSync(
+      Effect.die(
+        new JournalKernelInvariantDefect({ detail: "validated journal history lacks its private kernel state" })
+      )
+    )
+  )
   const { indexes, unfinished } = kernel
   const replay = () =>
     reduceWorkflowJournalHistory(prior.runId, [...materializeJournalRecords(prior.prefix.records), record])

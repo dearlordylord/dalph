@@ -79,11 +79,10 @@ const keysOf = ({ event }: JournalRecord): ReadonlyArray<string> => {
   if (event._tag === "GitReadIntentRecorded") {
     const operation = event.operation
     if (operation._tag === "ReadTaskWorktree") return [attemptKey(operation.plannedAttempt, operation._tag)]
-    if (operation._tag === "ReadTargetLineage")
-      return [
-        attemptKey(operation.plannedAttempt, operation._tag),
-        attemptKey(operation.plannedAttempt, operation._tag, operation.integrationTarget)
-      ]
+    return [
+      attemptKey(operation.plannedAttempt, operation._tag),
+      attemptKey(operation.plannedAttempt, operation._tag, operation.integrationTarget)
+    ]
   }
   return []
 }

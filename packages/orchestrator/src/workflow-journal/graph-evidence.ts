@@ -176,7 +176,7 @@ export const lastGraphObservationAt = (
   }
 ): JournalRecord | undefined => {
   const roots = rootsOf(evidence)
-  const { target, plannedAttempt } = query
+  const { plannedAttempt, target } = query
   const records =
     plannedAttempt === undefined
       ? target === undefined

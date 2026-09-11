@@ -92,7 +92,12 @@ const decisionFor = (step: FreshWorkflowStepType): FreshWorkflowDecision => ({
         : continued(step.task.id, step.predecessorOperationId)
 })
 
+const observedOperationIdsByPrefix = new WeakMap<object, ReadonlySet<OperationId>>()
+const completeGraphObservationIdsByPrefix = new WeakMap<object, ReadonlySet<OperationId>>()
+
 const observedOperationIds = (records: JournalHistorySource): ReadonlySet<OperationId> => {
+  const cached = observedOperationIdsByPrefix.get(records)
+  if (cached !== undefined) return cached
   const observed = new Set<OperationId>()
   for (const { event } of journalRecordsOfKind(records, "TaskTrackerFactsObserved")) {
     if (event._tag === "TaskTrackerFactsObserved") observed.add(event.operationId)
@@ -100,20 +105,27 @@ const observedOperationIds = (records: JournalHistorySource): ReadonlySet<Operat
   for (const { event } of journalRecordsOfKind(records, "TaskWorktreeReady")) {
     if (event._tag === "TaskWorktreeReady") observed.add(event.operationId)
   }
+  observedOperationIdsByPrefix.set(records, observed)
   return observed
 }
 
 /** Only a complete current graph outcome can authorize a claim; a typed read failure merely settles its read. */
-const completeGraphObservationIds = (records: JournalHistorySource): ReadonlySet<OperationId> =>
-  new Set(
-    Array.from(journalRecordsOfKind(records, "TaskTrackerFactsObserved")).flatMap(({ event }) =>
+const completeGraphObservationIds = (records: JournalHistorySource): ReadonlySet<OperationId> => {
+  const cached = completeGraphObservationIdsByPrefix.get(records)
+  if (cached !== undefined) return cached
+  const observed = new Set<OperationId>()
+  for (const { event } of journalRecordsOfKind(records, "TaskTrackerFactsObserved")) {
+    if (
       event._tag === "TaskTrackerFactsObserved" &&
       (event.observation._tag === "CompleteTaskTrackerFacts" ||
         event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
-        ? [event.operationId]
-        : []
-    )
-  )
+    ) {
+      observed.add(event.operationId)
+    }
+  }
+  completeGraphObservationIdsByPrefix.set(records, observed)
+  return observed
+}
 
 const plannedSpecificationFor = (
   records: JournalHistorySource,
@@ -489,7 +501,7 @@ const freshWorkflowEligibilityContext = (
   recoveredAttemptIds: ReadonlySet<AttemptId>,
   immutableRunTarget: TrackerTarget
 ) => {
-  const records = frame.workflowHistory.evidence
+  const records: JournalHistorySource = frame.workflowHistory.evidence
   return {
     completeGraphObserved: completeGraphObservationIds(records),
     immutableRunTargetKey: taskTrackerTargetKey(immutableRunTarget),

@@ -20,7 +20,7 @@ import {
   targetPromotionRunIdOf
 } from "./events.js"
 import { TargetPromotionResultContradiction } from "./errors.js"
-import { TargetPromotionPendingRetry, TargetPromotionState } from "./state.js"
+import type { TargetPromotionState } from "./state.js"
 import {
   decideFailedTargetPromotionRead,
   decideSuccessfulTargetPromotionRead,
@@ -456,21 +456,11 @@ export const makeTargetPromotionTransitions = <E, R>(readEvidence: CurrentTarget
 }
 
 export const {
-  recordTargetPromotionIntent,
-  authorizeTargetPromotionProgress,
   authorizeOrRecordTargetPromotionProgress,
+  authorizeTargetPromotionProgress,
   observeTargetPromotionRead,
   recordTargetPromotionAttemptIntent,
+  recordTargetPromotionIntent,
   sendTargetPromotionAttempt,
   settleTargetPromotionAttempt
 } = makeTargetPromotionTransitions(readAcceptedTargetPromotionEvidence)
-
-export const pendingTargetPromotionAfter = (
-  attempt: TargetPromotionAmbiguousAttempt | TargetPromotionIntendedAttempt
-): TargetPromotionState =>
-  TargetPromotionState.cases.PromotionPending.make({
-    correlation: attempt.correlation,
-    retry: TargetPromotionPendingRetry.cases.NeedReconciliationRead.make({
-      afterAttemptOrdinal: attempt.attemptOrdinal
-    })
-  })
