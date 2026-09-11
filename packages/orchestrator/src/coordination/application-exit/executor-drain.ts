@@ -5,7 +5,7 @@ import {
 } from "@dalph/contracts"
 import { Data, Effect } from "effect"
 import { Journal } from "../delivery/journal.js"
-import type { JournalRecord } from "../../workflow-journal/store.js"
+import type { JournalHistorySource } from "../../workflow-journal/record-evidence.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import { ApplicationExitDrainFailure } from "./application-shell.js"
 import { ApplicationExitDiagnostic, decideExecutorPosition } from "./lifecycle-decision.js"
@@ -34,7 +34,7 @@ const latestArrayElementOffset = -1
  * executor, operation, or replacement-attempt identity.
  */
 export const executingAttemptsForApplicationExit = (state: {
-  readonly records: ReadonlyArray<JournalRecord>
+  readonly records: JournalHistorySource
   readonly responsibilities: ReadonlyArray<WorkflowResponsibilityEntry>
 }): ReadonlyArray<ExecutingAttemptForApplicationExit> =>
   state.responsibilities.flatMap((responsibility): ReadonlyArray<ExecutingAttemptForApplicationExit> => {
@@ -74,7 +74,7 @@ export const suspendExecutingExecutorWorkForApplicationExit = Effect.fn(
     Effect.mapError((error) => new ApplicationExitDrainFailure({ diagnostics: [diagnosticFor(error)] }))
   )
   const attempts = executingAttemptsForApplicationExit({
-    records: state.records,
+    records: state.prefix,
     responsibilities: state.reconstructed.responsibility.entries
   })
   return yield* suspendApplicationExitAttempts(attempts)

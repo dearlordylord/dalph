@@ -3,11 +3,13 @@ import { Deferred, Effect, Layer, Option, Ref, Schema, Semaphore, Stream, Subscr
 import * as Cause from "effect/Cause"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { deriveIntegrationAdmission } from "../../workflow/protocols/integration-admission/protocol.js"
-import type { JournalRecord } from "../../workflow-journal/store.js"
+import type { JournalHistorySource } from "../../workflow-journal/record-evidence.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
-import { makeFreshTaskAdmissionBasis } from "../admission/fresh-task-admission.js"
-import { projectFreshTaskAdmission } from "../admission/fresh-task-admission-projection.js"
+import {
+  makeFreshTaskAdmissionBasis,
+  projectFreshTaskAdmissionFromAccepted
+} from "../admission/fresh-task-admission.js"
 import {
   runnableTransitionTaskId,
   transitionTrackerGraphRequirement,
@@ -93,7 +95,7 @@ const eligibleRecoveredTransitions = (
 const exactDeliveryEvidenceOf = (
   frame: CurrentDeliveryFrame | undefined,
   projection: RecoveredDeliveryProjection,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ): ReadonlyArray<TicketDeliveryEvidence> => {
   if (frame === undefined) {
     const responsibilityEvidence =
@@ -137,7 +139,7 @@ const activeRefreshNeedsCurrentGraph = (
         entry._tag === "PlannedAttemptExecutorWorkResponsibility" &&
         entry.plannedAttempt.attemptId === attemptId &&
         entry.plannedAttempt.runId === runId &&
-        latestUnsettledPlannedAttemptExecutorCommand(journal.records, entry.plannedAttempt) !== undefined
+        latestUnsettledPlannedAttemptExecutorCommand(journal.prefix, entry.plannedAttempt) !== undefined
     )
   )
 }
@@ -159,7 +161,7 @@ const ordinaryContinuationNeedsCurrentGraph = (
   recovered.some(
     (transition) =>
       transition._tag === "ObservePlannedAttemptContinuationGraph" &&
-      hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(journal.records, transition.plannedAttempt)
+      hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(journal.prefix, transition.plannedAttempt)
   )
 
 const trackerGraphProposalsOf = (
@@ -230,7 +232,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     const fresh = freshEvaluation.decisions
     const freshTaskIds = new Set(fresh.map(({ transition }) => runnableTransitionTaskId(transition)))
     const freshTaskCandidates = freshEvaluation.frontier
-    const freshAdmission = projectFreshTaskAdmission(runId, journal.records)
+    const freshAdmission = projectFreshTaskAdmissionFromAccepted(runId, journal.prefix, journal.reconstructed)
     if (freshAdmission._tag === "FreshTaskAdmissionProjectionInvalid") return yield* freshAdmission
     const admittedFreshResult = freshContinuationDecisionsOf(
       fresh,
@@ -253,7 +255,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     const ordinaryCurrentGraphRequired = ordinaryContinuationNeedsCurrentGraph(journal, opportunity, recovered)
     const currentGraphRequired = activeCurrentGraphRequired || ordinaryCurrentGraphRequired
     const transitions = [...recovered, ...admittedFresh.map(({ transition }) => transition)]
-    const records = journal.records
+    const records = journal.prefix
     const integrationResponsibilities = deriveIntegrationAdmission(records).responsibilities
     const proposalContributions = deliveryProposalsOf({
       acceptedAt: journal.position,
