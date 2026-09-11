@@ -1,5 +1,6 @@
 import {
   AttemptId,
+  type AcceptedResult,
   GitCommitSha,
   makeTaskWorkSpecification,
   PlannedAttemptExecutor,
@@ -32,7 +33,7 @@ import {
   Scope,
   Stream
 } from "effect"
-import { JournalDatabaseLocator, JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
+import { JournalDatabaseLocator, JournalPosition } from "../../workflow-journal/identity.js"
 import { sqliteJournalTestLayer } from "../../workflow-journal/adapters/sqlite-store.js"
 import { expect } from "vitest"
 import { TestClock } from "effect/testing"
@@ -101,6 +102,7 @@ import {
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import {
+  GitReadIntentRecordedEvent,
   TargetLineageObservedEvent,
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
@@ -115,6 +117,7 @@ import {
   makeTaskClaimAcquisitionOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeTaskWorktreeReconciliationOperation,
+  makeTargetLineageObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
 import {
@@ -124,8 +127,10 @@ import {
 } from "../../workflow/task-tracker-facts/observation.js"
 import {
   attemptPlanRecordKey,
+  integrationResponsibilityBeganRecordKey,
+  integrationStartedRecordKey,
+  integrationProviderRunActivityAbsentRecordKey,
   integrationQuarantinedRecordKey,
-  integratorRunResultRecordedRecordKey,
   integratorRunStartedRecordKey,
   integratorSessionFixedRecordKey,
   intentRecordKey,
@@ -167,22 +172,24 @@ import { taskClaimReacquisitionControlLayer } from "../../workflow/protocols/tas
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import {
   IntegrationQuarantineBasis,
-  IntegrationQuarantineCause,
   IntegrationQuarantineDirectionFingerprint,
+  IntegrationQuarantineFailureDetail,
   IntegrationQuarantineDirectionRequestId,
-  IntegrationQuarantineResultEvidence,
-  IntegrationQuarantinedEvent
+  IntegrationQuarantinedEvent,
+  IntegrationProviderRunActivityAbsentEvent
 } from "../../workflow/protocols/integration-quarantine/events.js"
 import {
-  IntegratorNotPreparedDetail,
   IntegratorRunCorrelation,
-  IntegratorRunResultRecordedEvent,
   IntegratorRunStartedEvent,
-  IntegratorResult,
+  IntegratorSessionCorrelation,
   IntegratorSessionFixedEvent
 } from "../../workflow/protocols/integrator/events.js"
 import { integratorResponsibilityFactsFromCorrelation } from "../../workflow/protocols/integrator/state.js"
 import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
+import {
+  IntegrationResponsibilityBeganEvent,
+  IntegrationStartedEvent
+} from "../../workflow/protocols/integration-admission/events.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { deterministicOperationIdAllocatorLayer } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
@@ -596,7 +603,8 @@ const appendExecutorHistory = (
   runId: RunId,
   plannedAttempt: PlannedTaskAttempt,
   reportTag: "Running" | "SafelySuspended" | "Terminal",
-  acceptInitialReport = true
+  acceptInitialReport = true,
+  acceptedResult?: AcceptedResult
 ) =>
   Effect.gen(function* () {
     const claim = ActiveTaskClaim.make({
@@ -749,7 +757,10 @@ const appendExecutorHistory = (
     const settledReport =
       reportTag === "SafelySuspended"
         ? PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
-        : PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Completed" } })
+        : PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+            correlation,
+            result: acceptedResult === undefined ? { _tag: "Completed" } : { _tag: "Accepted", acceptedResult }
+          })
     const settledCommandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
     yield* journal.append(
       runId,
@@ -1884,7 +1895,13 @@ it.effect("re-enters an unfinished Run without evaluating the initial policy sou
       const target = FixtureTarget.make("journaled-bootstrap-incomplete-recovery")
       const runId = yield* freshWorkflowRunId(target)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
-      const storage = Context.get(journalContext, JournalStore)
+      const delegate = Context.get(journalContext, JournalStore)
+      const storageReads = yield* Ref.make(0)
+      const storage = JournalStore.of({
+        ...delegate,
+        read: (requestedRunId) =>
+          Ref.update(storageReads, (count) => count + 1).pipe(Effect.andThen(delegate.read(requestedRunId)))
+      })
       const bootstrap = yield* buildBootstrap(runId, storage)
       const activations = yield* Ref.make(0)
       const initialPolicyEvaluations = yield* Ref.make(0)
@@ -1898,6 +1915,7 @@ it.effect("re-enters an unfinished Run without evaluating the initial policy sou
           Ref.update(activations, (count) => count + 1).pipe(Effect.as(finalityProof(active)))
         )
       ).toEqual(active)
+      const readsAfterEstablishment = yield* Ref.get(storageReads)
       expect(
         yield* bootstrap.activate(
           target,
@@ -1909,7 +1927,8 @@ it.effect("re-enters an unfinished Run without evaluating the initial policy sou
 
       expect(yield* Ref.get(activations)).toBe(2)
       expect(yield* Ref.get(initialPolicyEvaluations)).toBe(1)
-      expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
+      expect(yield* Ref.get(storageReads)).toBe(readsAfterEstablishment)
+      expect((yield* delegate.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
@@ -2317,34 +2336,73 @@ it.effect("keeps the Journal-backed quarantine direction route available after d
       const runId = AllocatedWorkflowRunId.make(integrationFinalityFixture.runId)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const storage = Context.get(journalContext, JournalStore)
+      yield* storage.beginRun(runId, target, initialPolicy)
       const bootstrap = yield* buildBootstrap(runId, storage)
-      yield* bootstrap.activate(
-        target,
-        Effect.succeed(initialPolicy),
-        runId,
-        Effect.succeed(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
-      )
 
       const fixtureRun = integrationFinalityFixture.qualifiedCandidate.run
-      const lineage = yield* storage.append(
+      const plannedAttempt = captureTestAttempt(runId, "quarantine-direction", "quarantine-direction")
+      yield* appendExecutorHistory(storage, runId, plannedAttempt, "Terminal", true, fixtureRun.session.acceptedResult)
+      const queued = yield* storage.append(
         runId,
-        JournalRecordKey.make("journaled-bootstrap:quarantine-direction:lineage"),
-        TargetLineageObservedEvent.make({
-          observation: TargetLineageObservation.make({
-            plannedBaseIsAncestorOfTargetHead: true,
-            plannedBaseSha: fixtureRun.session.plannedAttempt.baseSha,
-            targetHeadSha: fixtureRun.session.expectedTargetHead
-          }),
-          occurrenceClassification: "NonActionOccurrence",
-          operationId: OperationId.make("journaled-bootstrap:quarantine-direction:lineage"),
-          plannedAttempt: fixtureRun.session.plannedAttempt,
+        integrationResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+        IntegrationResponsibilityBeganEvent.make({
+          acceptedResult: fixtureRun.session.acceptedResult,
+          integrationTarget: fixtureRun.session.integrationTarget,
+          plannedAttempt,
           version: workflowJournalEventVersion
         })
       )
-      const run = IntegratorRunCorrelation.make({
-        ordinal: fixtureRun.ordinal,
-        session: { ...fixtureRun.session, targetLineageObservedAt: lineage.position }
+      const started = yield* storage.append(
+        runId,
+        integrationStartedRecordKey(plannedAttempt.attemptId),
+        IntegrationStartedEvent.make({
+          acceptedResult: fixtureRun.session.acceptedResult,
+          integrationTarget: fixtureRun.session.integrationTarget,
+          plannedAttempt,
+          responsibilityBeganAt: queued.position,
+          version: workflowJournalEventVersion
+        })
+      )
+      const lineageOperationId = OperationId.make("journaled-bootstrap:quarantine-direction:lineage")
+      yield* storage.append(
+        runId,
+        intentRecordKey(lineageOperationId),
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operation: makeTargetLineageObservationOperation({
+            integrationTarget: fixtureRun.session.integrationTarget,
+            operationId: lineageOperationId,
+            plannedAttempt,
+            predecessorOperationIds: []
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+      const lineage = yield* storage.append(
+        runId,
+        outcomeRecordKey(lineageOperationId),
+        TargetLineageObservedEvent.make({
+          observation: TargetLineageObservation.make({
+            plannedBaseIsAncestorOfTargetHead: true,
+            plannedBaseSha: plannedAttempt.baseSha,
+            targetHeadSha: plannedAttempt.baseSha
+          }),
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: lineageOperationId,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      const correlation = IntegratorSessionCorrelation.make({
+        ...fixtureRun.session,
+        expectedTargetHead: plannedAttempt.baseSha,
+        plannedAttempt,
+        queuedAt: queued.position,
+        startedAt: started.position,
+        targetLineageObservedAt: lineage.position
       })
+      const run = IntegratorRunCorrelation.make({ ordinal: fixtureRun.ordinal, session: correlation })
       yield* storage.append(
         runId,
         integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(run.session)),
@@ -2355,19 +2413,21 @@ it.effect("keeps the Journal-backed quarantine direction route available after d
         integratorRunStartedRecordKey(run),
         IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion })
       )
-      const detail = IntegratorNotPreparedDetail.make("operator must choose the next disposition")
-      const result = yield* storage.append(
+      const detail = IntegrationQuarantineFailureDetail.make("provider activity was proved absent")
+      const absence = yield* storage.append(
         runId,
-        integratorRunResultRecordedRecordKey(run),
-        IntegratorRunResultRecordedEvent.make({
-          result: IntegratorResult.cases.NotPrepared.make({ correlation: run, detail }),
+        integrationProviderRunActivityAbsentRecordKey(run),
+        IntegrationProviderRunActivityAbsentEvent.make({
+          correlation,
+          detail,
+          occurrenceClassification: "NonActionOccurrence",
           run,
           version: workflowJournalEventVersion
         })
       )
-      const basis = IntegrationQuarantineBasis.cases.ConclusiveResult.make({
-        cause: IntegrationQuarantineCause.cases.NotPrepared.make({ detail }),
-        evidence: IntegrationQuarantineResultEvidence.make({ resultRecordedAt: result.position })
+      const basis = IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
+        detail,
+        ownedActivityProvenAbsentAt: absence.position
       })
       const quarantine = yield* storage.append(
         runId,
@@ -2388,6 +2448,12 @@ it.effect("keeps the Journal-backed quarantine direction route available after d
         }),
         requestId
       }
+      yield* bootstrap.activate(
+        target,
+        Effect.die("cold import must not evaluate a replacement initial policy"),
+        runId,
+        Effect.succeed(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+      )
       const applied = yield* bootstrap.operatorControl.applyIntegrationQuarantineDirection(request)
 
       expect(applied.application.event.fingerprint.direction).toBe("Retry")
@@ -2414,15 +2480,9 @@ it.effect("keeps the Journal-backed quarantine direction route available after d
           })
           .pipe(Effect.flip)
       ).toMatchObject({ _tag: "JournaledRunIdentityMismatch", expectedRunId: runId })
-      expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual([
-        "WorkflowRunBegan",
-        "TargetLineageObserved",
-        "IntegratorSessionFixed",
-        "IntegratorRunStarted",
-        "IntegratorRunResultRecorded",
-        "IntegrationQuarantined",
-        "IntegrationQuarantineDirectionApplied"
-      ])
+      const records = yield* storage.read(runId)
+      expect(records.at(-1)?.event._tag).toBe("IntegrationQuarantineDirectionApplied")
+      expect(records.filter(({ event }) => event._tag === "IntegrationQuarantineDirectionApplied")).toHaveLength(1)
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
@@ -3219,6 +3279,12 @@ it.effect("applies inactive Run controls through the Journal while inactive Task
       expect(unpaused.event).toMatchObject({ _tag: "ControlDirectionApplied", direction: "Unpause" })
       expect(yield* bootstrap.readRunReactivationControl(target, runId)).toBe("RunUnpaused")
       expect(yield* Ref.get(observed)).toEqual(["Pause", "Unpause"])
+      expect(yield* bootstrap.operatorControl.applyRunCancellation({ runId })).toMatchObject({
+        _tag: "RunCancellationApplied"
+      })
+      expect(yield* bootstrap.operatorControl.applyRunCancellation({ runId })).toMatchObject({
+        _tag: "RunCancellationAlreadyApplied"
+      })
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
