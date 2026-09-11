@@ -1,5 +1,5 @@
 import { it as effectIt } from "@effect/vitest"
-import { Context, Effect, Layer, Option, Ref } from "effect"
+import { Context, Effect, Layer, Option, Ref, Stream } from "effect"
 import { expect, it } from "vitest"
 import {
   activeWorkAuthorityRefreshForOwner,
@@ -147,10 +147,10 @@ import {
   journalGraphSnapshotForObservation
 } from "../../workflow-journal/record-evidence.js"
 import { acceptedJournalPrefixFromValidatedHistory } from "../../workflow-journal/accepted-prefix.js"
-import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
+import { InRunJournal, type JournalError, type JournalRecord } from "../../workflow-journal/store.js"
 import { Journal } from "../delivery/journal.js"
 import { liveJournalTestLayer } from "../delivery/live-journal-test-layer.js"
-import { currentSignalOf, TrackerGraphState } from "../delivery/relations.js"
+import { makeCurrentSignal, TrackerGraphState } from "../delivery/relations.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 import {
   integrationQuarantineDirectionAppliedRecordKey,
@@ -806,14 +806,17 @@ const currentProjectionJournal = (
           read: () => Effect.die("configured projection must not export journal records")
         })
         const state = {
-          ...currentSignalOf(liveState),
+          ...makeCurrentSignal<typeof liveState, JournalError>(
+            Effect.succeed({ changes: Stream.empty, current: liveState })
+          ),
           get: Ref.getAndSet(initialWasRead, true).pipe(Effect.map((wasRead) => (wasRead ? liveState : initialState)))
         }
         const journal = Journal.of({
           append: inRunJournal.append,
           read: () => Effect.die("configured projection must not export journal records"),
           readAccepted: () => Effect.succeed(prefix),
-          state
+          state,
+          terminate: () => Effect.die("projection coverage does not terminate the Run")
         })
         return Context.empty().pipe(Context.add(InRunJournal, inRunJournal), Context.add(Journal, journal))
       })
