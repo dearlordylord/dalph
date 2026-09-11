@@ -7,29 +7,65 @@ import nodeProcess from "node:process"
 import { setImmediate as scheduleNextTurn } from "node:timers"
 import { NodeServices } from "@effect/platform-node"
 import {
+  makeTaskWorkSpecification,
+  PlannedTaskAttempt,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorReport,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
 import {
+  ActiveTaskClaim,
+  AcceptedJournalReader,
   ApplicationExitDiagnostic,
   ApplicationExitDrainFailure,
   CoordinatorLock,
+  ClaimOwner,
+  ClaimToken,
+  describeJournalEvent,
   InRunJournal,
+  InitialControlPolicy,
+  journalLayer,
   JournalPosition,
-  JournalRecordKey,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
+  PlannedWorktreeReady,
   ExecutingAttemptForApplicationExit,
+  FixtureTarget,
+  makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
+  makeTaskAttemptPlanOperation,
+  makeTaskClaimAcquisitionOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
+  makeTrackerGraphObservationOperation,
   nodeCoordinatorLockLayer,
+  OperationId,
   plannedAttemptProtocolControllerLayer,
+  projectTrackerSnapshot,
+  reduceWorkflowJournalHistory,
   suspendApplicationExitAttempts,
+  TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisition,
+  TaskClaimAcquisitionIntendedEvent,
+  taskTrackerFactsObservedEvent,
+  taskTrackerReadIntent,
+  TaskLifecycle,
+  TaskTrackerFactsObservedEvent,
+  TaskWorkCapacity,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
+  TrackerRevision,
+  WorkflowRunBeganEvent,
   workflowJournalEventVersion,
   type JournalRecord,
   type ApplicationExitTraceEvent
 } from "@dalph/orchestrator"
-import { Effect, Layer, Ref, Result, Schema } from "effect"
+import { Effect, Layer, Option, Ref, Result, Schema } from "effect"
 import {
   makeLinuxSupervisorApplicationExitHost,
   nodeApplicationHostProcessBoundary
@@ -43,7 +79,7 @@ import {
 
 const usageErrorStatus = 64
 const fixtureFailureStatus = 70
-const runningReportPosition = 2
+const suspensionJournalAppendCount = 3
 const modeArgument = nodeProcess.argv[2]
 const gitCommonDirectoryArgument = nodeProcess.argv[3]
 const journalArgument = nodeProcess.argv[4]
@@ -85,51 +121,150 @@ const record = (
   event: JournalRecord["event"]
 ): JournalRecord => ({
   event,
-  key: JournalRecordKey.make(`linux-host-${position}`),
+  key: describeJournalEvent(event).expectedKey,
   position: JournalPosition.make(position),
   runId: plannedAttempt.runId
 })
 
-const runningRecords = (plannedAttempt: ReturnType<typeof makeFixturePlannedAttempt>): ReadonlyArray<JournalRecord> => [
-  record(
+const runningRecords = (fixtureAttempt: ReturnType<typeof makeFixturePlannedAttempt>) => {
+  const specification = makeTaskWorkSpecification({
+    body: "Suspend the controlled Linux application-exit executor.",
+    taskId: fixtureAttempt.taskId,
+    title: "Controlled Linux application-exit executor"
+  })
+  const plannedAttempt = PlannedTaskAttempt.make({ ...fixtureAttempt, taskRevision: specification.fingerprint })
+  const target = FixtureTarget.make("linux-application-exit-host")
+  const activeClaim = ActiveTaskClaim.make({
+    operationId: OperationId.make("linux-host-claim"),
+    owner: ClaimOwner.make("dalph:linux-host"),
+    taskId: plannedAttempt.taskId,
+    token: ClaimToken.make("linux-host-claim-token")
+  })
+  const claimOperation = makeTaskClaimAcquisitionOperation({
+    acquisition: TaskClaimAcquisition.make(activeClaim),
+    predecessorOperationIds: []
+  })
+  const graphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("linux-host-graph"),
+    target,
+    [claimOperation.operationId],
+    [plannedAttempt.taskId]
+  )
+  const projected = projectTrackerSnapshot({
+    revision: TrackerRevision.make("linux-host-tracker-revision"),
+    tasks: [
+      {
+        id: plannedAttempt.taskId,
+        lifecycle: TaskLifecycle.cases.Open.make({}),
+        parentTaskId: null,
+        prerequisiteIds: []
+      }
+    ]
+  })
+  const snapshot = Option.getOrThrow(projected._tag === "Valid" ? Option.some(projected.snapshot) : Option.none())
+  const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make("linux-host-specification"),
+    target,
+    plannedAttempt.taskId,
+    [graphOperation.operationId]
+  )
+  const planOperation = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make("linux-host-plan"),
     plannedAttempt,
-    1,
-    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
-  ),
-  record(
+    predecessorOperationIds: [specificationOperation.operationId]
+  })
+  const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+    operationId: OperationId.make("linux-host-worktree"),
     plannedAttempt,
-    runningReportPosition,
+    predecessorOperationIds: [planOperation.operationId]
+  })
+  const version = workflowJournalEventVersion
+  const report = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+    correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+  })
+  const events: ReadonlyArray<JournalRecord["event"]> = [
+    WorkflowRunBeganEvent.make({
+      initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      target,
+      version
+    }),
+    TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version }),
+    TaskClaimAcquiredEvent.make({ claim: activeClaim, version }),
+    taskTrackerReadIntent(graphOperation),
+    TaskTrackerFactsObservedEvent.make({
+      observation: makeCompleteTaskTrackerFactsObserved(graphOperation, snapshot),
+      operationId: graphOperation.operationId,
+      version
+    }),
+    taskTrackerReadIntent(specificationOperation),
+    taskTrackerFactsObservedEvent(
+      specificationOperation.operationId,
+      makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, specification)
+    ),
+    TaskAttemptPlannedEvent.make({ operation: planOperation, version }),
+    TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version }),
+    TaskWorktreeReadyEvent.make({
+      operationId: worktreeOperation.operationId,
+      proof: PlannedWorktreeReady.make({
+        baseSha: plannedAttempt.baseSha,
+        branch: plannedAttempt.branch,
+        headSha: plannedAttempt.baseSha,
+        worktree: plannedAttempt.worktree
+      }),
+      version
+    }),
+    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version }),
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "Begin",
+      ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+      plannedAttempt,
+      version
+    }),
+    PlannedAttemptExecutorCommandResponseObservedEvent.make({
+      command: "Begin",
+      ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+      report,
+      version
+    }),
     PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-      report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-        correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
-      }),
-      version: workflowJournalEventVersion
+      report,
+      version
     })
+  ]
+  const records = events.map((event, index) => record(plannedAttempt, index + 1, event))
+  const visibleRecords = records.filter(
+    ({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ||
+      event._tag === "PlannedAttemptExecutorWorkReported"
   )
-]
+  return { plannedAttempt, records, target, visibleRecords }
+}
 
 const executingExecutorDrain = (runningInput: RunningHostFixtureInput) =>
   Effect.gen(function* () {
-    const plannedAttempt = makeFixturePlannedAttempt(runningInput)
-    const records = yield* Ref.make(runningRecords(plannedAttempt))
-    const journal = Layer.succeed(
-      InRunJournal,
-      InRunJournal.of({
-        append: (runId, key, event) =>
-          Ref.modify(records, (current) => {
-            const appended = {
-              event,
-              key,
-              position: JournalPosition.make(current.length + 1),
-              runId
-            } satisfies JournalRecord
-            if (runningInput.journalPath !== undefined) appendFileSync(runningInput.journalPath, `${event._tag}\n`)
-            return [appended, [...current, appended]] as const
-          }),
-        read: () => Ref.get(records)
-      })
-    )
+    const fixture = runningRecords(makeFixturePlannedAttempt(runningInput))
+    const { plannedAttempt } = fixture
+    const initial = reduceWorkflowJournalHistory(plannedAttempt.runId, fixture.records)
+    if (initial._tag === "InvalidWorkflowJournalHistory") {
+      return yield* Effect.die(`linux host fixture history is invalid: ${JSON.stringify(initial.issues)}`)
+    }
+    const stored = yield* Ref.make(fixture.records)
+    const records = yield* Ref.make(fixture.visibleRecords)
+    const storageReads = yield* Ref.make(0)
+    const storage = {
+      append: (runId: typeof plannedAttempt.runId, key: JournalRecord["key"], event: JournalRecord["event"]) =>
+        Ref.modify(stored, (current) => {
+          const existing = current.find((candidate) => candidate.key === key)
+          if (existing !== undefined) return [existing, current] as const
+          const appended = record(plannedAttempt, current.length + 1, event)
+          return [appended, [...current, appended]] as const
+        }),
+      read: () => Ref.updateAndGet(storageReads, (count) => count + 1).pipe(Effect.andThen(Ref.get(stored))),
+      terminateRun: () => Effect.die("application Exit must not terminate the controlled Run")
+    }
+    const journal = journalLayer(plannedAttempt.runId, fixture.target, initial, storage)
     const executor = Layer.succeed(
       PlannedAttemptExecutor,
       PlannedAttemptExecutor.of({
@@ -145,9 +280,32 @@ const executingExecutorDrain = (runningInput: RunningHostFixtureInput) =>
         resume: () => Effect.die("application Exit must not ask the executor to resume")
       })
     )
-    const drain = suspendApplicationExitAttempts([
-      ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
-    ]).pipe(Effect.provide(Layer.mergeAll(journal, executor, plannedAttemptProtocolControllerLayer)))
+    const drain = Effect.gen(function* () {
+      const accepted = yield* AcceptedJournalReader
+      const live = yield* InRunJournal
+      const activated = yield* accepted.readAccepted(plannedAttempt.runId)
+      const recordingJournal = InRunJournal.of({
+        read: live.read,
+        append: (runId, key, event) =>
+          live.append(runId, key, event).pipe(
+            Effect.tap((appended) => Ref.update(records, (current) => [...current, appended])),
+            Effect.tap(() =>
+              Effect.sync(() => {
+                if (runningInput.journalPath !== undefined) appendFileSync(runningInput.journalPath, `${event._tag}\n`)
+              })
+            )
+          )
+      })
+      const result = yield* suspendApplicationExitAttempts([
+        ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
+      ]).pipe(Effect.provideService(InRunJournal, recordingJournal))
+      const advanced = yield* accepted.readAccepted(plannedAttempt.runId)
+      const reads = yield* Ref.get(storageReads)
+      if (advanced.records.length !== activated.records.length + suspensionJournalAppendCount || reads !== 0) {
+        return yield* Effect.die("accepted Journal appends must publish without storage reread")
+      }
+      return result
+    }).pipe(Effect.provide(Layer.mergeAll(journal, executor, plannedAttemptProtocolControllerLayer)))
     return { drain, records }
   })
 
