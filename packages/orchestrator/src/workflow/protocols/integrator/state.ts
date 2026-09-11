@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import type { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
 import { integratorRunStartedRecordKey, integratorSessionFixedRecordKey } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import { journalRecordsOfKind, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import type { WorkflowJournalEvent } from "../../registry/event.js"
 import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
 import {
@@ -136,20 +137,26 @@ const latestStartedRunFor = (
 }
 
 const activeSuccessorFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   predecessor: IntegratorSessionCorrelation
 ):
   | { readonly _tag: "Absent" }
   | { readonly _tag: "Invalid"; readonly detail: string }
   | { readonly _tag: "Valid"; readonly successor: IntegratorSessionCorrelation } => {
-  const related = records.filter(
-    ({ event }) =>
-      event._tag === "IntegratorSuccessorSessionFixed" && event.predecessor.sessionId === predecessor.sessionId
-  )
-  if (related.length > 1) {
+  let record: JournalRecord | undefined
+  let relatedCount = 0
+  for (const candidate of journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")) {
+    if (
+      candidate.event._tag === "IntegratorSuccessorSessionFixed" &&
+      candidate.event.predecessor.sessionId === predecessor.sessionId
+    ) {
+      relatedCount += 1
+      record ??= candidate
+    }
+  }
+  if (relatedCount > 1) {
     return { _tag: "Invalid", detail: "multiple FullRerun successors describe one Integrator predecessor" }
   }
-  const record = related[0]
   if (record === undefined || record.event._tag !== "IntegratorSuccessorSessionFixed") return { _tag: "Absent" }
   return evaluateIntegratorFullRerunSuccessor(records, record, predecessor)
 }
@@ -160,7 +167,7 @@ const activeSuccessorFor = (
  * caller-supplied pair of distinct session identifiers.
  */
 export const validateIntegratorSuccessorSessionFixed = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   predecessor: IntegratorSessionCorrelation,
   expectedSuccessor: IntegratorSessionCorrelation
 ): { readonly _tag: "Valid" } | { readonly _tag: "Invalid"; readonly detail: string } => {
