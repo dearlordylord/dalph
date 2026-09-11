@@ -4,6 +4,13 @@ import type { AttemptId, TaskId } from "@dalph/contracts"
 import type { OperationId } from "../workflow/identity.js"
 import type { TargetPromotionRequestId } from "../workflow/protocols/target-promotion/events.js"
 import type { IntegratorSessionId } from "../workflow/protocols/integrator/events.js"
+import {
+  appendClaimObservationEpisode,
+  claimObservationEpisodeAt,
+  emptyClaimObservationEpisodes,
+  inspectClaimObservationEpisodeStorage,
+  type ClaimObservationEpisodeIndex
+} from "./claim-observation-episodes.js"
 import { workflowOperationId, type WorkflowOperation } from "../workflow/registry/operation.js"
 import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
 import type { JournalPosition, JournalRecordKey } from "./identity.js"
@@ -49,6 +56,7 @@ interface EvidenceIndexes {
   readonly byPromotionRequest: HashMap.HashMap<TargetPromotionRequestId, JournalRecordSequence>
   readonly byIntegratorSession: HashMap.HashMap<IntegratorSessionId, JournalRecordSequence>
   readonly byRestartRead: HashMap.HashMap<string, JournalRecordSequence>
+  readonly claimObservationEpisodes: ClaimObservationEpisodeIndex
 }
 
 const indexesByEvidence = new WeakMap<JournalRecordEvidence, EvidenceIndexes>()
@@ -77,7 +85,8 @@ export const emptyJournalEvidence = (): JournalRecordEvidence =>
     recordsByOperation: HashMap.empty(),
     byPromotionRequest: HashMap.empty(),
     byIntegratorSession: HashMap.empty(),
-    byRestartRead: HashMap.empty()
+    byRestartRead: HashMap.empty(),
+    claimObservationEpisodes: emptyClaimObservationEpisodes()
   })
 
 const operationOf = ({ event }: JournalRecord): WorkflowOperation | undefined =>
@@ -313,7 +322,8 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
     recordsByOperation,
     byPromotionRequest,
     byIntegratorSession,
-    byRestartRead
+    byRestartRead,
+    claimObservationEpisodes: appendClaimObservationEpisode(indexes.claimObservationEpisodes, record)
   })
 }
 
@@ -510,6 +520,9 @@ export const journalRestartReadIntents = (
     : source.filter((record) => restartReadKeyOf(record) === key)
 }
 
+export const journalTaskClaimObservationAt = (source: JournalRecordEvidence, taskId: TaskId) =>
+  claimObservationEpisodeAt(indexesFor(source).claimObservationEpisodes, taskId, source.records.length)
+
 /** Full accepted prefixes can reuse the exact indexed kind sequence. */
 export const journalEvidenceKindSequence = (
   source: JournalRecordEvidence,
@@ -632,6 +645,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     indexes.byPromotionRequest,
     indexes.byIntegratorSession,
     indexes.byRestartRead,
+    indexes.claimObservationEpisodes,
     inspectJournalRecordStorage(source.records),
     ...Array.from(HashMap.values(indexes.byKind), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byAttempt), inspectJournalRecordStorage),
@@ -649,6 +663,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     ...Array.from(HashMap.values(indexes.recordsByOperation), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byPromotionRequest), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byIntegratorSession), inspectJournalRecordStorage),
-    ...Array.from(HashMap.values(indexes.byRestartRead), inspectJournalRecordStorage)
+    ...Array.from(HashMap.values(indexes.byRestartRead), inspectJournalRecordStorage),
+    ...inspectClaimObservationEpisodeStorage(indexes.claimObservationEpisodes)
   ]
 }
