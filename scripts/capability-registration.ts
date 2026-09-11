@@ -120,6 +120,7 @@ const implementationCompositionEvidenceSources = [
   { role: "controlled", source: "packages/orchestrator/src/workflow-journal/store.test.ts" },
   { role: "production", source: "packages/dalph/src/application/production.ts" },
   { role: "qualification", source: "packages/dalph/bin/codex-qualification-host.ts" },
+  { role: "qualification", source: "packages/dalph/src/application/qualification-journal.ts" },
   { role: "controlled", source: "packages/dalph/src/application/dry-run.ts" },
   { role: "production", source: "packages/orchestrator/src/authorities/task-tracker/github/graph-reader.ts" },
   { role: "controlled", source: "packages/orchestrator/src/workflow/interpretation/layers.ts" },
@@ -760,7 +761,7 @@ export const capabilityRegistrationInventory = {
         "sqliteJournalTestLayer",
         "packages/orchestrator/src/workflow-journal/adapters/sqlite-store.ts",
         "sqliteJournalTestLayer",
-        composed("packages/dalph/bin/codex-qualification-host.ts", "sqliteJournalTestLayer")
+        composed("packages/dalph/src/application/qualification-journal.ts", "sqliteJournalTestLayer")
       )
     },
     {
@@ -1119,6 +1120,7 @@ export const capabilityRegistrationInventory = {
     { role: "production", source: "packages/dalph/src/application/production.ts" },
     { role: "production", source: "packages/dalph/src/application/production-host.ts" },
     { role: "qualification", source: "packages/dalph/bin/codex-qualification-host.ts" },
+    { role: "qualification", source: "packages/dalph/src/application/qualification-journal.ts" },
     {
       role: "production",
       source: "packages/orchestrator/src/authorities/coordinator-ownership/live-task-work-start.ts"
@@ -1128,6 +1130,21 @@ export const capabilityRegistrationInventory = {
     { role: "controlled", source: "packages/dalph/src/application/dry-run.ts" }
   ],
   compositionSupportBindings: [
+    support(
+      "qualificationWorkflowJournalLayer",
+      "qualification lifecycle around the registered SQLite journal implementation",
+      "packages/dalph/src/application/qualification-journal.ts"
+    ),
+    support(
+      "liveJournalTestLayer",
+      "controlled accepted-journal lifecycle around the registered in-memory journal implementation",
+      "packages/orchestrator/src/coordination/delivery/live-journal-test-layer.ts"
+    ),
+    support(
+      "dispositionCleanupLiveJournalTestLayer",
+      "disposition-cleanup fixture lifecycle around the controlled accepted-journal composition",
+      "packages/orchestrator/src/workflow/protocols/disposition-cleanup/live-journal-test.ts"
+    ),
     support(
       "githubDeliveryAuthorityLayer",
       "exact four-capability GitHub tracker assembly over one configured client and Crypto service",
