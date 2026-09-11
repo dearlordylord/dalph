@@ -11,7 +11,8 @@ import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   advanceWorkflowJournalHistory,
   reduceWorkflowJournalHistory,
-  inspectWorkflowJournalHistoryValidationPath
+  inspectWorkflowJournalHistoryValidationPath,
+  observeWorkflowJournalValidationSteps
 } from "./history.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 
@@ -48,6 +49,10 @@ it.each([64, 256])(
     })
     let coldIndexedVisits = 0
     let coldMaterializations = 0
+    let coldValidationSteps = 0
+    const stopColdSteps = observeWorkflowJournalValidationSteps(() => {
+      coldValidationSteps += 1
+    })
     const stopCold = observeJournalRecordSequenceOperations((operation) => {
       if (operation._tag === "IndexedRecordVisit") coldIndexedVisits += 1
       else coldMaterializations += 1
@@ -57,11 +62,13 @@ it.each([64, 256])(
         return reduceWorkflowJournalHistory(runId, records)
       } finally {
         stopCold()
+        stopColdSteps()
       }
     })()
     expect(prior._tag).toBe("ValidWorkflowJournalHistory")
     expect(inspectWorkflowJournalHistoryValidationPath(prior)).toBe("IndexedCold")
     expect(coldSlices).toBe(0)
+    expect(coldValidationSteps).toBe(size)
     expect(coldMaterializations).toBe(0)
     expect(coldIndexedVisits).toBeLessThanOrEqual(size * 32)
     expect(historicalReads).toBeLessThanOrEqual(size * 20)
@@ -69,6 +76,10 @@ it.each([64, 256])(
     historicalReads = 0
     let indexedVisits = 0
     let materializations = 0
+    let validationSteps = 0
+    const stopSteps = observeWorkflowJournalValidationSteps(() => {
+      validationSteps += 1
+    })
     const stop = observeJournalRecordSequenceOperations((operation) => {
       if (operation._tag === "IndexedRecordVisit") indexedVisits += 1
       else materializations += 1
@@ -78,8 +89,10 @@ it.each([64, 256])(
       expect(next._tag).toBe("ValidWorkflowJournalHistory")
     } finally {
       stop()
+      stopSteps()
     }
     expect(historicalReads).toBe(0)
+    expect(validationSteps).toBe(1)
     expect(materializations).toBe(0)
     expect(indexedVisits).toBeLessThanOrEqual(16)
   }

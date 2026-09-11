@@ -84,6 +84,18 @@ const validationPathByHistory = new WeakMap<object, "IndexedCold" | "RawDiagnost
 
 /** Test-only path evidence: valid canonical histories must not take raw diagnostic replay. */
 export const inspectWorkflowJournalHistoryValidationPath = (history: object) => validationPathByHistory.get(history)
+
+let validationStepObserver: (() => void) | undefined
+
+/** Test-only synchronous kernel counter; cleanup restores any enclosing observer. */
+export const observeWorkflowJournalValidationSteps = (observer: () => void): (() => void) => {
+  const prior = validationStepObserver
+  validationStepObserver = observer
+  return () => {
+    validationStepObserver = prior
+  }
+}
+
 type UnfinishedAttempt = { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
 const unfinishedByHistory = new WeakMap<ValidWorkflowJournalHistory, HashMap.HashMap<TaskId, UnfinishedAttempt>>()
 
@@ -855,6 +867,7 @@ const validateRecord = (
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
 ): FoldIndexes => {
+  validationStepObserver?.()
   const envelope = validateRecordEnvelope(record, index, runId, indexes, issues)
   let next = envelope.indexes
   const descriptor = describeJournalEvent(record.event)
