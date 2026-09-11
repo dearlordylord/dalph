@@ -30,6 +30,7 @@ it.effect("rejects an operator claim-reacquisition direction before the Run begi
     expect(yield* (yield* JournalStore).read(runId)).toEqual([])
   }).pipe(
     Effect.provide(taskClaimReacquisitionControlLayer),
+    // No Run exists to activate; this is the explicit absent cold-storage diagnostic seam.
     Effect.provide(unpublishedAcceptedJournalReaderTestLayer.pipe(Layer.provideMerge(memoryJournalTestLayer)))
   )
 )
