@@ -25,6 +25,7 @@ export {
   evaluateAuthoredObservationCapture,
   evaluateAuthoredObservationChronology,
   runAuthoredScenarioCassette,
+  useAuthoredScenarioCassette,
   type AuthoredDeliveryFrame,
   type AuthoredDeliveryPublication,
   type AuthoredObservationCapture,

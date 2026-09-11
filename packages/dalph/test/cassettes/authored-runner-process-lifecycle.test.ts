@@ -2,14 +2,21 @@ import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
-import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
+import { AcceptedJournalReader } from "@dalph/orchestrator"
+import { maintainedAuthoredCassetteCatalog, useAuthoredScenarioCassette } from "../../src/cassettes/index.js"
 
 it.effect(
   "reopens the application process after a durable append loses its live-Journal acknowledgement",
   () =>
     Effect.gen(function* () {
-      const run = yield* runAuthoredScenarioCassette(
-        maintainedAuthoredCassetteCatalog.deliveryStoryDs14ThroughDs17
+      const run = yield* useAuthoredScenarioCassette(
+        maintainedAuthoredCassetteCatalog.deliveryStoryDs14ThroughDs17,
+        (currentRun) =>
+          Effect.gen(function* () {
+            const accepted = yield* (yield* AcceptedJournalReader).readAccepted(currentRun.runId)
+            expect(accepted.lastPosition).toBe(currentRun.records.at(-1)?.position)
+            return currentRun
+          })
       ).pipe(Effect.provide(NodeCrypto.layer))
 
       expect(run.activationOrdinals).toEqual([1, 2])

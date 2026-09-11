@@ -13,11 +13,17 @@ import {
   maintainedAuthoredCassetteCatalog,
   maintainedIntegrationFinalityProtocolCassetteCatalog,
   runAuthoredScenarioCassette,
-  runIntegrationFinalityProtocolCassetteFromPromotedRecords
+  runIntegrationFinalityProtocolCassetteFromPromotedRecords,
+  useAuthoredScenarioCassette
 } from "../../src/cassettes/index.js"
 import { IntegrationFinalityProtocolCassette } from "../../src/cassettes/integration-finality-protocol-cassette-domain.js"
 
 const runAuthored = (input: unknown) => runAuthoredScenarioCassette(input).pipe(Effect.provide(NodeCrypto.layer))
+
+const useAuthored = <A, E, R>(
+  input: unknown,
+  use: (run: Effect.Success<ReturnType<typeof runAuthoredScenarioCassette>>) => Effect.Effect<A, E, R>
+) => useAuthoredScenarioCassette(input, use).pipe(Effect.provide(NodeCrypto.layer))
 
 type ReplacementRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptReplaced" }>
@@ -40,27 +46,28 @@ const replacementRecordFor = Effect.fn("IntegrationFinalityProtocolCassetteTest.
 })
 
 it.effect("accepts a promoted history containing a replacement plan while selecting the promoted plan", () =>
-  Effect.gen(function* () {
-    const promoted = yield* runAuthored(maintainedAuthoredCassetteCatalog.targetPromotionSuccess)
-    const unrelated = yield* runAuthored(maintainedAuthoredCassetteCatalog.changedAttemptRestartsCleanly)
-    const replacement = yield* replacementRecordFor(unrelated.records)
+  useAuthored(maintainedAuthoredCassetteCatalog.targetPromotionSuccess, (promoted) =>
+    Effect.gen(function* () {
+      const unrelated = yield* runAuthored(maintainedAuthoredCassetteCatalog.changedAttemptRestartsCleanly)
+      const replacement = yield* replacementRecordFor(unrelated.records)
 
-    expect(unrelated.history._tag).toBe("ValidWorkflowJournalHistory")
+      expect(unrelated.history._tag).toBe("ValidWorkflowJournalHistory")
 
-    const replacementRecord = JournalRecord.make({
-      event: replacement.event,
-      key: replacement.key,
-      position: JournalPosition.make(promoted.records.length + 1),
-      runId: unrelated.runId
+      const replacementRecord = JournalRecord.make({
+        event: replacement.event,
+        key: replacement.key,
+        position: JournalPosition.make(promoted.records.length + 1),
+        runId: unrelated.runId
+      })
+      const finalized = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(
+        maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess,
+        [...promoted.records, replacementRecord]
+      )
+
+      expect(finalized.failureTag).toBeNull()
+      expect(finalized.records.some(({ event }) => event._tag === "IntegrationFinalitySettled")).toBe(true)
     })
-    const finalized = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(
-      maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess,
-      [...promoted.records, replacementRecord]
-    )
-
-    expect(finalized.failureTag).toBeNull()
-    expect(finalized.records.some(({ event }) => event._tag === "IntegrationFinalitySettled")).toBe(true)
-  })
+  )
 )
 
 it.effect("rejects Executing and terminal reports as replacement quiescence witnesses", () =>

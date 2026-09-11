@@ -52,6 +52,11 @@ const singletonGraph = {
   tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
 }
 
+const completedSingletonGraph = {
+  ...singletonGraph,
+  tasks: [{ ...singletonGraph.tasks[0], lifecycle: { _tag: "CompletedSuccessfully" } }]
+}
+
 const changedAttemptSpecification = {
   body: "Implement the changed accepted singleton behavior without rewriting prior executor history.",
   taskId: TaskId.make("A"),
@@ -3438,8 +3443,7 @@ const promotionScenarioFrom = (name: string, promotionStory: ReadonlyArray<unkno
     )
   })
 
-/** Git accepts the one exact H -> M update after the verified candidate is sealed. */
-export const targetPromotionSuccessAuthoredCassette: ScenarioCassette = promotionScenarioFrom(
+const targetPromotionSuccessBeforeCompletionRefresh = promotionScenarioFrom(
   "promotes Git-qualified M by exact compare-and-set and records exact ancestry",
   [
     targetPromotionGitReadReturned("/dalph/cassettes/integration.git", promotionCandidateCommit, {
@@ -3462,6 +3466,22 @@ export const targetPromotionSuccessAuthoredCassette: ScenarioCassette = promotio
     taskId: "A"
   }
 )
+
+/** Git accepts H -> M, then the next activation refreshes the still-open tracker graph before remaining active. */
+export const targetPromotionSuccessAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...targetPromotionSuccessBeforeCompletionRefresh,
+  story: targetPromotionSuccessBeforeCompletionRefresh.story.flatMap((item): ReadonlyArray<unknown> =>
+    item._tag === "ExpectedBehavior"
+      ? [
+          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+          { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+          item
+        ]
+      : [item]
+  )
+})
 
 const issue138PrePromotionBlockerGraph = {
   revision: "issue-138-pre-promotion-blocker",
@@ -3874,9 +3894,21 @@ const deliveryFinalityAdditionalPrerequisiteSatisfiedGraph = {
 
 const deliveryFinalityBase = (() => {
   let recovered = false
+  let skipPostPromotionRefresh = false
   return targetPromotionSuccessAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
     if (item._tag === "CoordinatorProcessDies") recovered = true
+    if (item._tag === "TargetPromotionCompareAndSetReturned" && item.result._tag === "Applied") {
+      skipPostPromotionRefresh = true
+      return [item]
+    }
+    if (skipPostPromotionRefresh && item._tag === "DalphSelects" && item.operation._tag === "ReadTrackerGraph") {
+      return []
+    }
     if (item._tag === "TrackerGraphReadReturned") {
+      if (skipPostPromotionRefresh) {
+        skipPostPromotionRefresh = false
+        return []
+      }
       return [{ ...item, graph: recovered ? deliveryFinalityExpandedGraph : deliveryFinalityStartingGraph }]
     }
     if (item._tag !== "ExpectedBehavior") return [item]
@@ -5053,7 +5085,6 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
     doubleDiamondAcceptedReport(fiveTaskDiamondAttempts.e),
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:E:2", taskId: "E" } },
     ...doubleDiamondIntegrationFinality(fiveTaskDiamondAttempts.e, "/dalph/cassettes/five-task-diamond.git"),
-    ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.aComplete),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
@@ -5217,10 +5248,10 @@ const deliveryStorySuccessorPromotionRequest = targetPromotionGitRequest(
 export const deliveryStoryDs14ThroughDs17AuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
-  ...targetPromotionSuccessAuthoredCassette,
+  ...targetPromotionSuccessBeforeCompletionRefresh,
   name: "DS-14 through DS-17 rejected exact-head offer, FullRerun successor, and finality",
   startingFacts: {
-    ...targetPromotionSuccessAuthoredCassette.startingFacts,
+    ...targetPromotionSuccessBeforeCompletionRefresh.startingFacts,
     targetLineageObservations: [
       {
         plannedBaseIsAncestorOfTargetHead: true,
@@ -5231,7 +5262,7 @@ export const deliveryStoryDs14ThroughDs17AuthoredCassette: ScenarioCassette = Sc
       deliveryStorySuccessorLineage
     ]
   },
-  story: targetPromotionSuccessAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
+  story: targetPromotionSuccessBeforeCompletionRefresh.story.flatMap((item): ReadonlyArray<unknown> => {
     if (item._tag === "TargetPromotionCompareAndSetReturned") {
       return [
         { ...item, result: { _tag: "RejectedExpectedHead", observedHeadSha: deliveryStoryChangedHead } },
@@ -5306,7 +5337,13 @@ export const deliveryStoryDs14ThroughDs17AuthoredCassette: ScenarioCassette = Sc
         { _tag: "TaskClaimCurrentReadReturned", taskId: "A" }
       ]
     }
-    if (item._tag === "ExpectedBehavior") return [{ ...item, orchestration: null }]
+    if (item._tag === "ExpectedBehavior") {
+      return [
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+        { _tag: "TrackerGraphReadReturned", graph: completedSingletonGraph },
+        { ...item, orchestration: null }
+      ]
+    }
     return [item]
   })
 })

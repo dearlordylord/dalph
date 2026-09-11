@@ -277,7 +277,7 @@ const preparedFinalityFromPromotedRecords = Effect.fn(
 
 interface FinalityJournal {
   readonly baselineLength: number
-  readonly records: Ref.Ref<ReadonlyArray<JournalRecord>>
+  readonly read: Effect.Effect<ReadonlyArray<JournalRecord>, unknown>
   readonly service: InRunJournal["Service"]
 }
 
@@ -287,7 +287,7 @@ const makeJournal = Effect.fn("IntegrationFinalityProtocolCassette.makeJournal")
   const records = yield* Ref.make(initial)
   return {
     baselineLength: initial.length,
-    records,
+    read: Ref.get(records),
     service: InRunJournal.of({
       append: (runId, key, event) =>
         Ref.modify(records, (current) => {
@@ -300,6 +300,14 @@ const makeJournal = Effect.fn("IntegrationFinalityProtocolCassette.makeJournal")
       read: () => Ref.get(records)
     })
   } satisfies FinalityJournal
+})
+
+const useLiveJournal = Effect.fn("IntegrationFinalityProtocolCassette.useLiveJournal")(function* (
+  prepared: PreparedFinality
+) {
+  const service = yield* InRunJournal
+  const current = yield* service.read(prepared.runId)
+  return { baselineLength: current.length, read: service.read(prepared.runId), service } satisfies FinalityJournal
 })
 
 const takeBoundaryResult = Effect.fn("IntegrationFinalityProtocolCassette.takeBoundaryResult")(function* (
@@ -570,7 +578,7 @@ const assertTerminalExpectation = Effect.fn("IntegrationFinalityProtocolCassette
   journal: FinalityJournal,
   expected: Extract<CompletionClaimProtocolStoryItem, { readonly _tag: "AwaitSettlement" }>["expected"]
 ) {
-  const records = yield* Ref.get(journal.records)
+  const records = yield* journal.read
   const remainingResults = yield* Ref.get(boundary.remainingResults)
   /* v8 ignore next -- @preserve Schema closure proves every declared boundary result belongs to a bounded story. */
   if (remainingResults.length !== 0) {
@@ -718,9 +726,7 @@ const interpretStoryItem = Effect.fn("IntegrationFinalityProtocolCassette.interp
 })
 
 const runPreparedIntegrationFinalityProtocolCassette = Effect.fn("IntegrationFinalityProtocolCassette.runPrepared")(
-  function* (cassette: IntegrationFinalityProtocolCassette, prepared: PreparedFinality) {
-    const initialRecords = initialRecordsFor(prepared)
-    const journal = yield* makeJournal(initialRecords)
+  function* (cassette: IntegrationFinalityProtocolCassette, prepared: PreparedFinality, journal: FinalityJournal) {
     const boundary = yield* scriptedBoundaryFor(prepared, cassette.initialClaim, cassette.boundaryResults).pipe(
       Effect.provide(
         controlledCompletionClaimBoundaryLayerFrom([
@@ -739,7 +745,7 @@ const runPreparedIntegrationFinalityProtocolCassette = Effect.fn("IntegrationFin
     for (const item of cassette.story) {
       state = yield* interpretStoryItem(state, item, prepared, boundary, journal)
     }
-    const records = yield* Ref.get(journal.records)
+    const records = yield* journal.read
     return IntegrationFinalityProtocolCassetteRun.make({
       boundaryCalls: yield* Ref.get(boundary.boundaryCalls),
       deletionCalls: yield* Ref.get(boundary.deletionCalls),
@@ -757,15 +763,18 @@ const runPreparedIntegrationFinalityProtocolCassette = Effect.fn("IntegrationFin
 export const runIntegrationFinalityProtocolCassette = Effect.fn("IntegrationFinalityProtocolCassette.run")(function* (
   cassette: IntegrationFinalityProtocolCassette
 ) {
-  return yield* runPreparedIntegrationFinalityProtocolCassette(cassette, yield* makePreparedFinality())
+  const prepared = yield* makePreparedFinality()
+  return yield* runPreparedIntegrationFinalityProtocolCassette(
+    cassette,
+    prepared,
+    yield* makeJournal(initialRecordsFor(prepared))
+  )
 })
 
 /** Continues a valid whole-Run candidate, verification, and promotion history through the finality protocol. */
 export const runIntegrationFinalityProtocolCassetteFromPromotedRecords = Effect.fn(
   "IntegrationFinalityProtocolCassette.runFromPromotedRecords"
 )(function* (cassette: IntegrationFinalityProtocolCassette, records: ReadonlyArray<JournalRecord>) {
-  return yield* runPreparedIntegrationFinalityProtocolCassette(
-    cassette,
-    yield* preparedFinalityFromPromotedRecords(records)
-  )
+  const prepared = yield* preparedFinalityFromPromotedRecords(records)
+  return yield* runPreparedIntegrationFinalityProtocolCassette(cassette, prepared, yield* useLiveJournal(prepared))
 })
