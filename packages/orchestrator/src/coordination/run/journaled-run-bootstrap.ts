@@ -89,7 +89,13 @@ import {
   ApplyRunCancellationRequest,
   RunCancellationAppliedEvent
 } from "../../workflow/protocols/run-cancellation/events.js"
-import { runCancellationAppliedRecordKey } from "../../workflow-journal/record-key.js"
+import { intentRecordKey, runCancellationAppliedRecordKey } from "../../workflow-journal/record-key.js"
+import {
+  firstJournalRecordOfKind,
+  journalRecordByKey,
+  journalRecordsAfter
+} from "../../workflow-journal/record-evidence.js"
+import type { JournalRecord } from "../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   activeWorkAuthorityRefreshForOwner,
@@ -115,6 +121,7 @@ import { JournalPosition } from "../../workflow-journal/identity.js"
 import { TraceCursor } from "../../presentation/trace-reader.js"
 import type { DeliveryRuntimeObservationState } from "../delivery/delivery-runtime-observation.js"
 import { currentSignalFromCurrentFirstStream, type CurrentSignal } from "../delivery/relations.js"
+import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 
 /** A journal prefix has acknowledged the exact beginning before delivery can call the tracker. */
 export const JournaledRunEstablished = Schema.Struct({
@@ -213,7 +220,7 @@ type RuntimeControlState =
 type TerminalRunFinalityProof = Extract<RunFinalityProof, { readonly decision: { readonly _tag: "RunMayTerminate" } }>
 
 type TaskTrackerReadIntentEvent = Extract<
-  JournalState["records"][number]["event"],
+  JournalRecord["event"],
   { readonly _tag: "TaskTrackerReadIntentRecorded" }
 >
 type TrackerGraphReadOperation = Extract<TaskTrackerReadIntentEvent["operation"], { readonly _tag: "ReadTrackerGraph" }>
@@ -222,19 +229,15 @@ type TrackerGraphReadIntentEvent = Omit<TaskTrackerReadIntentEvent, "operation">
 }
 
 const isTrackerGraphReadIntentEvent = (
-  event: JournalState["records"][number]["event"]
+  event: JournalRecord["event"]
 ): event is TrackerGraphReadIntentEvent =>
   event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTrackerGraph"
 
 const terminalGraphReadFor = (proof: TerminalRunFinalityProof, state: JournalState) => {
   const graph = state.graph
-  let operation: TaskTrackerReadIntentEvent | undefined
-  for (const { event } of state.records) {
-    if (event._tag !== "TaskTrackerReadIntentRecorded") continue
-    if (event.operation.operationId !== proof.evidence.operationId) continue
-    operation = event
-    break
-  }
+  const operationRecord = journalRecordByKey(state.prefix, intentRecordKey(proof.evidence.operationId))
+  const operation =
+    operationRecord?.event._tag === "TaskTrackerReadIntentRecorded" ? operationRecord.event : undefined
   if (graph._tag !== "GraphEstablished") return undefined
   if (operation === undefined) return undefined
   /* v8 ignore next -- @preserve Production terminal evidence is generated only from the exact tracker-graph read operation. */
@@ -267,7 +270,7 @@ const terminalProofMatchesGraphRead = (
 
 /** Alice's accepted cancellation makes an older terminal graph non-current even when later bookkeeping advanced the activation. */
 const cancellationSupersedesTerminalEvidence = (proof: TerminalRunFinalityProof, state: JournalState): boolean =>
-  state.records.some(
+  Array.from(journalRecordsAfter(state.prefix, proof.evidence.observedAt)).some(
     ({ event, position }) => event._tag === "RunCancellationApplied" && proof.evidence.observedAt <= position
   )
 
@@ -547,6 +550,7 @@ export const journaledRunBootstrapLayer = (
               const runtimeJournalLayer = Layer.effectContext(
                 Effect.gen(function* () {
                   const journal = yield* Journal
+                  const acceptedJournalReader = yield* AcceptedJournalReader
                   const acceptedJournal = Journal.of({
                     ...journal,
                     append: (...input) =>
@@ -556,6 +560,7 @@ export const journaledRunBootstrapLayer = (
                   })
                   return Context.empty().pipe(
                     Context.add(Journal, acceptedJournal),
+                    Context.add(AcceptedJournalReader, acceptedJournalReader),
                     Context.add(
                       InRunJournal,
                       InRunJournal.of({ append: acceptedJournal.append, read: acceptedJournal.read })
@@ -601,7 +606,7 @@ export const journaledRunBootstrapLayer = (
                     ? Effect.succeed({ proof })
                     : journal.state.get.pipe(
                         Effect.map((state) => {
-                          const changed = state.records.some(
+                          const changed = Array.from(journalRecordsAfter(state.prefix, proof.acceptedAt)).some(
                             ({ event, position }) =>
                               (proof.acceptedAt === null || position > proof.acceptedAt) &&
                               event._tag !== "TaskWorkCapacityChanged"
@@ -840,8 +845,9 @@ export const journaledRunBootstrapLayer = (
             }
             return yield* withRuntimeControls(({ journal, runId }) =>
               Effect.gen(function* () {
-                const existing = (yield* journal.state.get).records.find(
-                  ({ event }) => event._tag === "RunCancellationApplied"
+                const existing = firstJournalRecordOfKind(
+                  (yield* journal.state.get).prefix,
+                  "RunCancellationApplied"
                 )
                 if (existing !== undefined) {
                   return AppliedRunCancellation.cases.RunCancellationAlreadyApplied.make({

@@ -20,6 +20,14 @@ import {
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
+import {
+  isJournalRecordEvidence,
+  journalEvidenceBefore,
+  journalRecordByKey,
+  journalRecordsOfKind,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
+import type { ValidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 import type { FreshTaskCandidate } from "../delivery/fresh-task-candidate.js"
 import { immutableSnapshot } from "../immutable-snapshot.js"
 import { acceptedFreshAttemptLineage } from "./fresh-attempt-lineage.js"
@@ -205,37 +213,34 @@ const isExactClaim = (
   claim.taskId === acquisition.taskId &&
   claim.token === acquisition.token
 
-const exactOwnedClaimWasAccepted = (records: ReadonlyArray<JournalRecord>, intent: ClaimIntentRecord): boolean =>
-  records.some(
-    (record) =>
-      record.position > intent.position &&
-      record.runId === intent.runId &&
-      record.event._tag === "TaskClaimAcquired" &&
-      record.key === outcomeRecordKey(intent.event.operation.acquisition.operationId) &&
-      isExactClaim(record.event.claim, intent.event.operation.acquisition)
-  )
+const exactOwnedClaimWasAccepted = (records: JournalHistorySource, intent: ClaimIntentRecord): boolean => {
+  const record = journalRecordByKey(records, outcomeRecordKey(intent.event.operation.acquisition.operationId))
+  return record !== undefined &&
+    record.position > intent.position &&
+    record.runId === intent.runId &&
+    record.event._tag === "TaskClaimAcquired" &&
+    isExactClaim(record.event.claim, intent.event.operation.acquisition)
+}
 
 const exactPreOwnershipRejectionWasAccepted = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   intent: ClaimIntentRecord
 ): boolean => {
   if (exactOwnedClaimWasAccepted(records, intent)) return false
-  return records.some(
-    (record) =>
-      record.position > intent.position &&
-      record.runId === intent.runId &&
-      record.event._tag === "TaskClaimAcquisitionRejected" &&
-      record.event.operationId === intent.event.operation.acquisition.operationId &&
-      record.key === outcomeRecordKey(intent.event.operation.acquisition.operationId)
-  )
+  const record = journalRecordByKey(records, outcomeRecordKey(intent.event.operation.acquisition.operationId))
+  return record !== undefined &&
+    record.position > intent.position &&
+    record.runId === intent.runId &&
+    record.event._tag === "TaskClaimAcquisitionRejected" &&
+    record.event.operationId === intent.event.operation.acquisition.operationId
 }
 
 const exactAttemptHandoffs = (
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ): ReadonlyMap<string, Extract<FreshTaskAdmissionReleaseEvidence, { readonly _tag: "ExactAttemptHandoffAccepted" }>> =>
   new Map(
-    records.flatMap((record) => {
+    Array.from(journalRecordsOfKind(records, "PlannedAttemptExecutorWorkResponsibilityBegan")).flatMap((record) => {
       if (record.event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") return []
       if (
         record.runId !== runId ||
@@ -244,7 +249,9 @@ const exactAttemptHandoffs = (
       ) {
         return []
       }
-      const acceptedPrefix = records.filter((candidate) => candidate.position <= record.position)
+      const acceptedPrefix = isJournalRecordEvidence(records)
+        ? journalEvidenceBefore(records, record.position + 1)
+        : records.filter((candidate) => candidate.position <= record.position)
       const lineage = acceptedFreshAttemptLineage(acceptedPrefix, record.event.plannedAttempt, "WorktreeReady")
       if (lineage === undefined) return []
       const evidence = exactAttemptHandoffAccepted({
@@ -276,13 +283,21 @@ export const projectFreshTaskAdmission = (
       runId
     })
   }
-  const acceptedAt = reduction.runState.appliedThrough
+  return projectFreshTaskAdmissionFromAccepted(runId, reduction.prefix, reduction.runState)
+}
+
+/** Projects live admission directly from an already accepted prefix and its exact reconstructed state. */
+export const projectFreshTaskAdmissionFromAccepted = (
+  runId: RunId,
+  acceptedRecords: JournalHistorySource,
+  runState: ValidWorkflowJournalHistory["runState"]
+): FreshTaskAdmissionProjection | FreshTaskAdmissionProjectionInvalid => {
+  const acceptedAt = runState.appliedThrough
   if (acceptedAt === null) {
     return new FreshTaskAdmissionProjectionInvalid({ issues: ["accepted Run history is empty"], runId })
   }
-  const acceptedRecords = reduction.records
-  const requiredPositions = requiredPlannedAttemptPositionsOf(reduction.runState)
-  const heldAttempts = reduction.runState.responsibility.entries.flatMap((entry) => {
+  const requiredPositions = requiredPlannedAttemptPositionsOf(runState)
+  const heldAttempts = runState.responsibility.entries.flatMap((entry) => {
     if (entry._tag !== "PlannedAttemptExecutorWorkResponsibility") return []
     const required = requiredPositions.some(
       ({ attemptId, runId: requiredRunId, taskId }) =>
@@ -293,7 +308,7 @@ export const projectFreshTaskAdmission = (
     return required ? [immutableSnapshot(entry.plannedAttempt)] : []
   })
   const handoffs = exactAttemptHandoffs(runId, acceptedRecords)
-  const intents = acceptedRecords.filter(
+  const intents = Array.from(journalRecordsOfKind(acceptedRecords, "TaskClaimAcquisitionIntended")).filter(
     (record): record is ClaimIntentRecord =>
       record.event._tag === "TaskClaimAcquisitionIntended" &&
       record.event.operation.authority._tag === "TaskSelectionAuthority" &&

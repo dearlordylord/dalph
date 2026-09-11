@@ -297,6 +297,24 @@ export const journalRecordByPosition = (source: JournalHistorySource, position: 
 export const journalRecordByKey = (source: JournalHistorySource, key: JournalRecordKey): JournalRecord | undefined =>
   isJournalRecordEvidence(source) ? visible(source, Option.getOrUndefined(HashMap.get(indexesFor(source).byKey, key))) : source.find((record) => record.key === key)
 
+export const journalRecordsAfter = (
+  source: JournalHistorySource,
+  after: JournalPosition | null
+): Iterable<JournalRecord> => {
+  if (!isJournalRecordEvidence(source)) {
+    return source.filter((record) => after === null || record.position > after)
+  }
+  const firstOffset = after ?? 0
+  return {
+    *[Symbol.iterator]() {
+      for (let offset = firstOffset; offset < source.records.length; offset += 1) {
+        const record = journalRecordAt(source.records, offset)
+        if (record !== undefined) yield record
+      }
+    }
+  }
+}
+
 function* indexedRecords(source: JournalRecordEvidence, records: JournalRecordSequence): IterableIterator<JournalRecord> {
   for (let index = 0; index < records.length; index += 1) {
     const record = journalRecordAt(records, index)
