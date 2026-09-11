@@ -83,7 +83,7 @@ it("derives delivery operation evidence from indexed kinds without materializing
     []
   )
   const projection = projectTrackerSnapshot({ revision: "delivery-indexed-evidence-revision", tasks: [] })
-  if (projection._tag === "Invalid") throw new Error("expected a valid empty tracker graph")
+  if (projection._tag === "Invalid") return expect.fail("expected a valid empty tracker graph")
   const records: ReadonlyArray<JournalRecord> = [
     {
       event: taskTrackerReadIntent(operation),

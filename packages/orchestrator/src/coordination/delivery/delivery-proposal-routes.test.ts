@@ -411,7 +411,7 @@ const queued = QueuedIntegrationResponsibility.make({
 const acceptedTerminalRecord = acceptedIntegrationHistory.records.find(
   ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkTerminal"
 )
-if (acceptedTerminalRecord === undefined) throw new Error("accepted integration history lacks its terminal report")
+if (acceptedTerminalRecord === undefined) expect.fail("accepted integration history lacks its terminal report")
 const unqueued = UnqueuedAcceptedResult.make({
   acceptedResult,
   plannedAttempt,
@@ -3947,7 +3947,7 @@ describe("delivery proposal route matrix", () => {
     const trackerReadTarget = options?.trackerReadTarget ?? target
     const acceptedPlan = records.find(({ event }) => event._tag === "TaskAttemptPlanned")
     if (acceptedPlan?.event._tag !== "TaskAttemptPlanned") {
-      throw new Error("accepted executing history lacks its attempt plan")
+      return expect.fail("accepted executing history lacks its attempt plan")
     }
     const attemptPlanOperationId = acceptedPlan.event.operation.operationId
     const foreignPlanOperationId = OperationId.make("continuation-foreign-plan")
