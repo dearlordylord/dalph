@@ -4,9 +4,21 @@ import { journalRecordsForAttemptKind, type JournalHistorySource } from "../../.
 
 /** One durable Stop or Restart application that consumes the exact attempt's accepted Safe authority. */
 type AppliedTerminalAttemptChoice = Omit<JournalRecord, "event"> & {
-  readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }> & {
+  readonly event: Omit<Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>, "choice"> & {
     readonly choice: "RestartTaskImplementation" | "StopTaskImplementation"
   }
+}
+
+const isAppliedTerminalAttemptChoice = (
+  record: JournalRecord,
+  plannedAttempt: PlannedTaskAttempt
+): record is AppliedTerminalAttemptChoice => {
+  const { event } = record
+  return (
+    event._tag === "AttemptChoiceApplied" &&
+    (event.choice === "RestartTaskImplementation" || event.choice === "StopTaskImplementation") &&
+    plannedTaskAttemptEquivalence(event.subject.plannedAttempt, plannedAttempt)
+  )
 }
 
 /** Returns the latest durable terminal choice for one immutable planned attempt. */
@@ -16,12 +28,7 @@ export const appliedTerminalChoiceFor = (
 ): AppliedTerminalAttemptChoice | undefined => {
   let found: AppliedTerminalAttemptChoice | undefined
   for (const record of journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "AttemptChoiceApplied")) {
-    if (
-      record.event._tag === "AttemptChoiceApplied" &&
-      (record.event.choice === "RestartTaskImplementation" || record.event.choice === "StopTaskImplementation") &&
-      plannedTaskAttemptEquivalence(record.event.subject.plannedAttempt, plannedAttempt)
-    )
-      found = record as AppliedTerminalAttemptChoice
+    if (isAppliedTerminalAttemptChoice(record, plannedAttempt)) found = record
   }
   return found
 }

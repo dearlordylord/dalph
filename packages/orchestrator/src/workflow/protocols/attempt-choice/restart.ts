@@ -80,11 +80,14 @@ export {
 } from "./restart-authority.js"
 export type { AttemptRestartPendingReason, AttemptRestartRejectedReason } from "./restart-reasons.js"
 
+const lastRecordOffset = -1
+
 const lastRecordPosition = (
   records: JournalHistorySource,
   fallback: JournalRecord["position"]
 ): JournalRecord["position"] =>
-  (isJournalRecordEvidence(records) ? journalRecordAt(records.records, -1) : records.at(-1))?.position ?? fallback
+  (isJournalRecordEvidence(records) ? journalRecordAt(records.records, lastRecordOffset) : records.at(lastRecordOffset))
+    ?.position ?? fallback
 
 type RecordedReplacementLookup = Data.TaggedEnum<{
   Absent: Record<never, never>

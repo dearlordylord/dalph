@@ -43,6 +43,7 @@ import {
   journalEvidenceBefore,
   journalRecordByKey,
   journalRecordsOfKind,
+  type JournalRecordEvidence,
   type JournalHistorySource
 } from "../../../workflow-journal/record-evidence.js"
 
@@ -51,12 +52,16 @@ const fullObservationFromEvent = (event: unknown): Option.Option<CompleteTaskTra
     observation._tag === "CompleteTaskTrackerFacts" ? Option.some(observation) : Option.none()
   )
 
-type TaskTrackerObservationHistory = ReadonlyArray<{ readonly event: unknown }> | JournalHistorySource
+type TaskTrackerObservationHistory = ReadonlyArray<{ readonly event: unknown }> | JournalRecordEvidence
+
+const isIndexedTaskTrackerObservationHistory = (
+  records: TaskTrackerObservationHistory
+): records is JournalRecordEvidence => !Array.isArray(records)
 
 const taskTrackerFactEvents = function* (records: TaskTrackerObservationHistory): Iterable<unknown> {
-  const candidates = Array.isArray(records)
-    ? records
-    : journalRecordsOfKind(records as JournalHistorySource, "TaskTrackerFactsObserved")
+  const candidates = isIndexedTaskTrackerObservationHistory(records)
+    ? journalRecordsOfKind(records, "TaskTrackerFactsObserved")
+    : records
   for (const { event } of candidates) yield event
 }
 

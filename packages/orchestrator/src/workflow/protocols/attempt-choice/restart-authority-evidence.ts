@@ -33,7 +33,7 @@ import {
 
 /** Exact durable applied Restart choice used by replacement reconstruction. */
 export type RestartApplicationRecord = Omit<JournalRecord, "event"> & {
-  readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }> & {
+  readonly event: Omit<Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>, "choice"> & {
     readonly choice: "RestartTaskImplementation"
   }
 }
@@ -43,21 +43,42 @@ export type PlannedAttemptReplacementRecord = Omit<JournalRecord, "event"> & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptReplaced" }>
 }
 
+const isRestartApplicationRecord = (
+  record: JournalRecord,
+  requestId: AttemptChoiceRequestId,
+  subject: AttemptChoiceSubject
+): record is RestartApplicationRecord => {
+  const { event } = record
+  return (
+    event._tag === "AttemptChoiceApplied" &&
+    event.choice === "RestartTaskImplementation" &&
+    record.runId === subject.plannedAttempt.runId &&
+    record.key === attemptChoiceAppliedRecordKey(event.requestId) &&
+    sameAttemptChoiceRequestId(event.requestId, requestId) &&
+    sameAttemptChoiceSubject(event.subject, subject)
+  )
+}
+
+const isPlannedAttemptReplacementRecord = (
+  record: JournalRecord,
+  subject: AttemptChoiceSubject
+): record is PlannedAttemptReplacementRecord => {
+  const { event } = record
+  return (
+    event._tag === "PlannedAttemptReplaced" &&
+    record.runId === subject.plannedAttempt.runId &&
+    record.key === plannedAttemptReplacedRecordKey(subject.plannedAttempt.attemptId) &&
+    sameAttemptChoiceSubject(event.subject, subject)
+  )
+}
+
 export const exactAppliedRestart = (
   records: JournalHistorySource,
   requestId: AttemptChoiceRequestId,
   subject: AttemptChoiceSubject
 ): RestartApplicationRecord | undefined => {
   const record = journalRecordByKey(records, attemptChoiceAppliedRecordKey(requestId))
-  return record !== undefined &&
-    record.event._tag === "AttemptChoiceApplied" &&
-    record.event.choice === "RestartTaskImplementation" &&
-    record.runId === subject.plannedAttempt.runId &&
-    record.key === attemptChoiceAppliedRecordKey(record.event.requestId) &&
-    sameAttemptChoiceRequestId(record.event.requestId, requestId) &&
-    sameAttemptChoiceSubject(record.event.subject, subject)
-    ? (record as RestartApplicationRecord)
-    : undefined
+  return record !== undefined && isRestartApplicationRecord(record, requestId, subject) ? record : undefined
 }
 
 export const recordedReplacement = (
@@ -65,13 +86,7 @@ export const recordedReplacement = (
   subject: AttemptChoiceSubject
 ): PlannedAttemptReplacementRecord | undefined => {
   const record = journalRecordByKey(records, plannedAttemptReplacedRecordKey(subject.plannedAttempt.attemptId))
-  return record !== undefined &&
-    record.event._tag === "PlannedAttemptReplaced" &&
-    record.runId === subject.plannedAttempt.runId &&
-    record.key === plannedAttemptReplacedRecordKey(subject.plannedAttempt.attemptId) &&
-    sameAttemptChoiceSubject(record.event.subject, subject)
-    ? (record as PlannedAttemptReplacementRecord)
-    : undefined
+  return record !== undefined && isPlannedAttemptReplacementRecord(record, subject) ? record : undefined
 }
 
 /** Canonical claim authority retained at the exact applied Restart position. */

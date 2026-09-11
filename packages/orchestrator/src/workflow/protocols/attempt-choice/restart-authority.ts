@@ -11,6 +11,7 @@ import {
   type JournalHistorySource
 } from "../../../workflow-journal/record-evidence.js"
 import { OperationId } from "../../identity.js"
+import type { WorkflowJournalEvent } from "../../registry/event.js"
 import {
   latestPlannedAttemptExecutorEvidence,
   isAcceptedPlannedAttemptExecutorEvidence
@@ -112,7 +113,9 @@ export const nextRestartReadOperationId = (
   after: JournalPosition
 ): OperationId => {
   const prefix = `attempt-restart:${encodeURIComponent(requestId.nonce)}:${phase}:after:`
-  let pending: JournalRecord["event"] | undefined
+  let pending:
+    | Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerReadIntentRecorded" | "GitReadIntentRecorded" }>
+    | undefined
   for (const { event } of journalRestartReadIntents(records, requestId.nonce, phase)) {
     let hasOutcome = false
     if (event._tag !== "TaskTrackerReadIntentRecorded" && event._tag !== "GitReadIntentRecorded") continue
@@ -128,10 +131,7 @@ export const nextRestartReadOperationId = (
     }
     if (event.operation.operationId.startsWith(prefix) && !hasOutcome) pending = event
   }
-  return pending !== undefined &&
-    (pending._tag === "TaskTrackerReadIntentRecorded" || pending._tag === "GitReadIntentRecorded")
-    ? pending.operation.operationId
-    : OperationId.make(`${prefix}${after}`)
+  return pending !== undefined ? pending.operation.operationId : OperationId.make(`${prefix}${after}`)
 }
 
 export const currentRestartQuiescence = Effect.fn("AttemptRestart.establishQuiescence")(
