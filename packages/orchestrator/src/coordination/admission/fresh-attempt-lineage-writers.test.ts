@@ -11,7 +11,7 @@ import {
   WorktreeLocator,
   makeTaskWorkSpecification
 } from "@dalph/contracts"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option } from "effect"
 import { expect } from "vitest"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
@@ -20,8 +20,13 @@ import { InitialControlPolicy } from "../../control/policy.js"
 import { memoryJournalTestLayer } from "../../workflow-journal/adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
+import {
+  journalEvidenceFrom,
+  journalGraphSnapshotForObservation
+} from "../../workflow-journal/record-evidence.js"
 import { attemptPlanRecordKey, intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
-import { JournalStore } from "../../workflow-journal/store.js"
+import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
+import { JournalStore, type JournalRecord } from "../../workflow-journal/store.js"
 import { OperationId } from "../../workflow/identity.js"
 import { WorkflowInterpreter, type WorkflowInterpreterService } from "../../workflow/interpretation/interpreter.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
@@ -29,19 +34,24 @@ import { beginPlannedAttemptExecutorResponsibility } from "../../workflow/protoc
 import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
-  TaskClaimAcquisitionIntendedEvent
+  TaskClaimAcquisitionIntendedEvent,
+  taskTrackerReadIntent
 } from "../../workflow/registry/event.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
-  makeTaskWorkSpecificationObservationOperation
+  makeTaskWorkSpecificationObservationOperation,
+  makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
 import {
+  makeCompleteTaskTrackerFactsObserved,
   makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
+import { makeTaskTrackerFactsObservedFromRead } from "../../workflow/protocols/task-tracker-read/protocol.js"
 import { acceptedFreshAttemptLineage, freshAttemptPlanPredecessorLineageWasAccepted } from "./fresh-attempt-lineage.js"
 import { TaskWorkCapacity } from "./capacity.js"
+import { validSnapshot } from "../../../test/task-dag.js"
 
 const runId = RunId.make("fresh-attempt-lineage-writers")
 const plannedAttempt = PlannedTaskAttempt.make({
@@ -87,6 +97,93 @@ const beginRun = Effect.fn("FreshAttemptLineageWritersTest.beginRun")(function* 
   return journal
 })
 
+const repeatedUnchangedLineage = (count: number) => {
+  const taskId = TaskId.make(`fresh-attempt-lineage-repeated-${count}`)
+  const target = FixtureTarget.make(`fresh-attempt-lineage-repeated-target-${count}`)
+  const specification = makeTaskWorkSpecification({ body: "Repeated graph reads", taskId, title: "Repeated" })
+  const attempt = PlannedTaskAttempt.make({
+    ...plannedAttempt,
+    attemptId: AttemptId.make(`fresh-attempt-lineage-repeated-attempt-${count}`),
+    taskId,
+    taskRevision: TaskRevision.make(specification.fingerprint)
+  })
+  const claimOperation = makeTaskClaimAcquisitionOperation({
+    acquisition: {
+      operationId: OperationId.make(`fresh-attempt-lineage-repeated-claim-${count}`),
+      owner: ClaimOwner.make("dalph:fresh-attempt-lineage-repeated"),
+      taskId,
+      token: ClaimToken.make(`fresh-attempt-lineage-repeated-token-${count}`)
+    },
+    predecessorOperationIds: []
+  })
+  const snapshot = validSnapshot({
+    revision: `fresh-attempt-lineage-repeated-revision-${count}`,
+    tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+  })
+  const records: Array<JournalRecord> = []
+  const append = (event: JournalRecord["event"], key: JournalRecord["key"]) =>
+    records.push({ event, key, position: JournalPosition.make(records.length + 1), runId })
+  append(
+    TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion }),
+    intentRecordKey(claimOperation.acquisition.operationId)
+  )
+  append(
+    TaskClaimAcquiredEvent.make({
+      claim: ActiveTaskClaim.make(claimOperation.acquisition),
+      version: workflowJournalEventVersion
+    }),
+    outcomeRecordKey(claimOperation.acquisition.operationId)
+  )
+  const fullRead = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make(`fresh-attempt-lineage-repeated-full-${count}`),
+    target,
+    [claimOperation.acquisition.operationId],
+    [taskId]
+  )
+  append(taskTrackerReadIntent(fullRead), intentRecordKey(fullRead.operationId))
+  append(
+    taskTrackerFactsObservedEvent(
+      fullRead.operationId,
+      makeCompleteTaskTrackerFactsObserved(fullRead, snapshot)
+    ),
+    outcomeRecordKey(fullRead.operationId)
+  )
+  let latestRead = fullRead
+  for (let index = 0; index < count; index += 1) {
+    latestRead = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make(`fresh-attempt-lineage-repeated-unchanged-${count}-${index}`),
+      target,
+      [claimOperation.acquisition.operationId],
+      [taskId]
+    )
+    append(taskTrackerReadIntent(latestRead), intentRecordKey(latestRead.operationId))
+    append(makeTaskTrackerFactsObservedFromRead(records, latestRead, snapshot), outcomeRecordKey(latestRead.operationId))
+  }
+  const graphPosition = JournalPosition.make(records.length)
+  const specificationRead = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make(`fresh-attempt-lineage-repeated-specification-${count}`),
+    target,
+    taskId,
+    [latestRead.operationId]
+  )
+  append(taskTrackerReadIntent(specificationRead), intentRecordKey(specificationRead.operationId))
+  append(
+    taskTrackerFactsObservedEvent(
+      specificationRead.operationId,
+      makeFocusedTaskWorkSpecificationFactsObserved(specificationRead, specification)
+    ),
+    outcomeRecordKey(specificationRead.operationId)
+  )
+  const operation = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make(`fresh-attempt-lineage-repeated-plan-${count}`),
+    plannedAttempt: attempt,
+    predecessorOperationIds: [claimOperation.acquisition.operationId, specificationRead.operationId]
+  })
+  return { evidence: journalEvidenceFrom(records), graphPosition, operation }
+}
+
 it.effect("rejects a fresh attempt plan before append when its exact predecessor lineage is absent", () =>
   Effect.gen(function* () {
     const journal = yield* beginRun()
@@ -103,6 +200,28 @@ it.effect("rejects a fresh attempt plan before append when its exact predecessor
     expect((yield* journal.read(runId)).some(({ event }) => event._tag === "TaskAttemptPlanned")).toBe(false)
   }).pipe(Effect.provide(journaled), Effect.provide(memoryJournalTestLayer))
 )
+
+it("checks one task without traversing the full graph after 64 and 256 unchanged observations", () => {
+  const fixtures = [repeatedUnchangedLineage(64), repeatedUnchangedLineage(256)]
+  const visits = fixtures.map(({ evidence, graphPosition, operation }) => {
+    const graph = Option.getOrThrow(journalGraphSnapshotForObservation(evidence, graphPosition))
+    Object.defineProperty(graph, "eligibleTasks", {
+      value: () => expect.fail("live eligibility must not traverse the full graph")
+    })
+    let count = 0
+    const stop = observeJournalRecordSequenceOperations(() => {
+      count += 1
+    })
+    try {
+      expect(freshAttemptPlanPredecessorLineageWasAccepted(evidence, operation)).toBe(true)
+    } finally {
+      stop()
+    }
+    return count
+  })
+  expect(visits[0]).toBeGreaterThan(0)
+  expect(visits[1]).toBe(visits[0])
+})
 
 it.effect("refuses a focused specification outcome without its exact read intent", () =>
   Effect.sync(() => {
