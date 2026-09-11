@@ -13,6 +13,10 @@ import {
   type JournalHistorySource
 } from "../../workflow-journal/record-evidence.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
+import type {
+  IntegrationResponsibilityBeganEvent,
+  IntegrationStartedEvent
+} from "../../workflow/protocols/integration-admission/events.js"
 import {
   acceptedResultEquivalence,
   integrationResponsibilityEquivalence
@@ -27,20 +31,17 @@ import { type IntegratorHistoryIndexes, validateIntegratorHistoryEvent } from ".
 import { deriveIntegrationQuarantineState } from "../../workflow/protocols/integration-quarantine/state.js"
 import { validateProviderRunActivityAbsent } from "../../workflow/protocols/integration-quarantine/provider-failure.js"
 
+type IntegrationResponsibilityBegan = typeof IntegrationResponsibilityBeganEvent.Type
+type IntegrationStarted = typeof IntegrationStartedEvent.Type
+
 export interface IntegrationHistoryIndexes extends IntegratorHistoryIndexes {
   readonly acceptedExecutorResults: HashMap.HashMap<AttemptId, AcceptedResult>
   readonly executorResponsibilitiesBegan: HashMap.HashMap<
     AttemptId,
     { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
   >
-  readonly integrationResponsibilitiesBegan: HashMap.HashMap<
-    JournalPosition,
-    Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationResponsibilityBegan" }>
-  >
-  readonly integrationStarted: HashMap.HashMap<
-    JournalPosition,
-    Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationStarted" }>
-  >
+  readonly integrationResponsibilitiesBegan: HashMap.HashMap<JournalPosition, IntegrationResponsibilityBegan>
+  readonly integrationStarted: HashMap.HashMap<JournalPosition, IntegrationStarted>
   readonly targetPromotionHistory: TargetPromotionHistoryIndexes
 }
 
@@ -74,7 +75,7 @@ interface IntegrationHistoryValidation<Indexes extends IntegrationHistoryIndexes
 }
 
 const invalidResponsibilityBeginning = (
-  event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationResponsibilityBegan" }>,
+  event: IntegrationResponsibilityBegan,
   indexes: IntegrationHistoryIndexes
 ): string | undefined => {
   const accepted = mapGet(indexes.acceptedExecutorResults, event.plannedAttempt.attemptId)
@@ -88,7 +89,7 @@ const invalidResponsibilityBeginning = (
 }
 
 const invalidIntegrationStart = (
-  event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationStarted" }>,
+  event: IntegrationStarted,
   position: JournalPosition,
   indexes: IntegrationHistoryIndexes
 ): string | undefined => {
