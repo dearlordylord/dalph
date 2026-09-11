@@ -1,6 +1,7 @@
 import { Context, Effect, Option } from "effect"
 import type { IntegrationTarget } from "@dalph/contracts"
 import { InRunJournal } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
 import type { JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import {
   integratorRunCandidateGitObservedRecordKey,
@@ -227,7 +228,7 @@ const qualifyOrNotPreparedForRun = Effect.fn("IntegratorProtocol.qualifyOrNotPre
     return IntegratorRunProtocolResult.cases.NotPrepared.make({ detail: result.detail, run })
   }
 
-  const currentRecords = yield* journal.read(runIdForCorrelation(run.session))
+  const currentRecords = yield* (yield* AcceptedJournalReader).readAccepted(runIdForCorrelation(run.session))
   const recordedObservation = yield* readRunCandidateObservation(currentRecords, run, result.candidateText)
   let observation: IntegratorGitObservation
   if (Option.isSome(recordedObservation)) {
@@ -308,7 +309,8 @@ export const prepareIntegrationCandidateRun = Effect.fn("IntegratorProtocol.prep
   if (requestInput.run.ordinal > integratorRetryRunOrdinal) {
     return yield* new IntegratorJournalContradiction({ detail: "Integrator run ordinal exceeds Retry bound", runId })
   }
-  const records = yield* journal.read(runId)
+  const accepted = yield* AcceptedJournalReader
+  const records = yield* accepted.readAccepted(runId)
   const session = yield* correlationForRequestedRun(journal, requestInput, records)
   if (!integratorCorrelationsEqual(session, requestInput.run.session)) {
     return yield* new IntegratorJournalContradiction({
@@ -317,7 +319,7 @@ export const prepareIntegrationCandidateRun = Effect.fn("IntegratorProtocol.prep
     })
   }
   const run = requestInput.run
-  const recordsAfterSession = yield* journal.read(runId)
+  const recordsAfterSession = yield* accepted.readAccepted(runId)
   const recordedRunResult = yield* readRecordedRunResult(recordsAfterSession, run)
 
   const reconciledRunResult = yield* reconcileRunResult(
