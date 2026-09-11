@@ -7,15 +7,17 @@ import {
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
+  makeTaskWorkSpecification,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
-  TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
 import { acceptedResultFixture } from "../../../../test/support/evidence.js"
+import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
@@ -36,7 +38,6 @@ import {
   outcomeRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
-import { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
 import {
   IntegrationQuarantineBasis,
   IntegrationQuarantineCause,
@@ -91,6 +92,7 @@ import {
   IntegratorResult
 } from "./events.js"
 import { integratorContract } from "../../../../test/contracts/integrator-contract.js"
+import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
 
 const sha = (value: string): GitCommitSha => GitCommitSha.make(value.repeat(40))
 
@@ -105,10 +107,16 @@ const targetHead = sha("b")
 const changedTargetHead = sha("e")
 const acceptedResultCommit = sha("c")
 const canonicalCandidateCommit = sha("d")
-const targetLineageObservedAt = JournalPosition.make(3)
-const changedTargetLineageObservedAt = JournalPosition.make(6)
 const candidateText = IntegratorCandidateText.make("M-reported-by-integrator")
 const notPreparedDetail = IntegratorNotPreparedDetail.make("integrator reached a conclusive non-prepared outcome")
+const trackerTarget = FixtureTarget.make("integrator-protocol-test")
+const initialControlPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+const taskId = TaskId.make("task-222")
+const taskSpecification = makeTaskWorkSpecification({
+  body: "Prepare an accepted integration candidate.",
+  taskId,
+  title: "Accepted integration candidate"
+})
 
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId,
@@ -116,19 +124,38 @@ const plannedAttempt = PlannedTaskAttempt.make({
   branch: TaskBranchRef.make("refs/heads/dalph/integrator-222"),
   executor: TaskExecutorLocator.make("executor:controlled-fake"),
   runId,
-  taskId: TaskId.make("task-222"),
-  taskRevision: TaskRevision.make("revision-222"),
+  taskId,
+  taskRevision: taskSpecification.fingerprint,
   worktree: WorktreeLocator.make("/worktrees/integrator-222")
 })
 
-const responsibility = StartedIntegrationResponsibility.make({
-  acceptedResult: acceptedResultFixture(acceptedResultCommit),
-  integrationTarget: target,
-  plannedAttempt,
-  queuedAt: JournalPosition.make(8),
-  startedAt: JournalPosition.make(9)
+const activeClaim = ActiveTaskClaim.make({
+  operationId: OperationId.make("operation-claim-222"),
+  owner: ClaimOwner.make("dalph:integrator-protocol-test"),
+  taskId,
+  token: ClaimToken.make("integrator-protocol-test-token")
 })
+const acceptedResult = acceptedResultFixture(acceptedResultCommit)
+const acceptedHistory = makeAcceptedIntegrationHistory({
+  acceptedResult,
+  activeClaim,
+  integrationTarget: target,
+  initialControlPolicy,
+  plannedAttempt,
+  runId,
+  targetHeadSha: targetHead,
+  taskSpecification,
+  trackerTarget
+})
+const responsibility = acceptedHistory.responsibility
+const targetLineageObservedAt = acceptedHistory.targetLineageObservedAt
+const changedTargetLineageObservedAt = JournalPosition.make(Number(targetLineageObservedAt) + 1)
 
+/*
+ * The accepted prefix above is the exact chronology consumed by the outer
+ * Integrator. Its queue, start, and target-lineage positions are returned by
+ * the fixture rather than guessed from a shorter wrapper history.
+ */
 const compatibleInput = (
   targetHeadSha = targetHead,
   targetLineageAt = targetLineageObservedAt
@@ -200,6 +227,7 @@ interface Harness {
   readonly gitCalls: Ref.Ref<number>
   readonly gitCandidates: Ref.Ref<ReadonlyArray<IntegratorCandidateText>>
   readonly records: Ref.Ref<ReadonlyArray<JournalRecord>>
+  readonly accepted: AcceptedJournalReader["Service"]
   readonly journal: InRunJournal["Service"]
   readonly run: (input: IntegratorPreparationInput) => Effect.Effect<IntegratorRunProtocolResult, unknown>
   readonly runExact: (
@@ -222,41 +250,11 @@ const makeHarness = (
     const store = yield* JournalStore
     const baseJournal = yield* InRunJournal
     const accepted = yield* AcceptedJournalReader
-    yield* store.beginRun(
-      runId,
-      FixtureTarget.make("integrator-protocol-test"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* store.append(
-      runId,
-      intentRecordKey(OperationId.make("operation-target-lineage-222")),
-      GitReadIntentRecordedEvent.make({
-          initiatedBy: { _tag: "DalphCoordinator" },
-          occurrenceClassification: "InitiatedAction",
-          operation: makeTargetLineageObservationOperation({
-            integrationTarget: target,
-            operationId: OperationId.make("operation-target-lineage-222"),
-            plannedAttempt,
-            predecessorOperationIds: []
-          }),
-          version: workflowJournalEventVersion
-        })
-    )
-    yield* store.append(
-      runId,
-      outcomeRecordKey(OperationId.make("operation-target-lineage-222")),
-      TargetLineageObservedEvent.make({
-          observation: TargetLineageObservation.make({
-            plannedBaseIsAncestorOfTargetHead: true,
-            plannedBaseSha: base,
-            targetHeadSha: targetHead
-          }),
-          occurrenceClassification: "NonActionOccurrence",
-          operationId: OperationId.make("operation-target-lineage-222"),
-          plannedAttempt,
-          version: workflowJournalEventVersion
-        })
-    )
+    yield* store.beginRun(runId, trackerTarget, initialControlPolicy)
+    for (const record of acceptedHistory.records) {
+      if (record.event._tag === "WorkflowRunBegan") continue
+      yield* store.append(runId, record.key, record.event)
+    }
     const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(yield* store.read(runId))
 
     const journal = InRunJournal.of({
@@ -300,7 +298,17 @@ const makeHarness = (
         Effect.provideService(InRunJournal, journal)
       )
 
-    return { integratorCalls, gitCalls, gitCandidates, journal, records, readRecords: Ref.get(records), run, runExact }
+    return {
+      accepted,
+      integratorCalls,
+      gitCalls,
+      gitCandidates,
+      journal,
+      records,
+      readRecords: Ref.get(records),
+      run,
+      runExact
+    }
   }).pipe(Effect.provide(memoryJournalTestLayer))
 
 const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAuthorization")(function* (
@@ -977,9 +985,11 @@ describe("outer Integrator protocol", () => {
       if (result._tag !== "NotPrepared") return yield* Effect.die("expected exact NotPrepared result")
 
       const first = yield* appendInitialConclusiveIntegrationQuarantine(result).pipe(
+        Effect.provideService(AcceptedJournalReader, harness.accepted),
         Effect.provideService(InRunJournal, harness.journal)
       )
       const redelivered = yield* appendInitialConclusiveIntegrationQuarantine(result).pipe(
+        Effect.provideService(AcceptedJournalReader, harness.accepted),
         Effect.provideService(InRunJournal, harness.journal)
       )
       const records = yield* harness.readRecords
@@ -1006,6 +1016,7 @@ describe("outer Integrator protocol", () => {
       if (result._tag !== "CandidateRejected") return yield* Effect.die("expected exact rejected candidate")
 
       const quarantine = yield* appendInitialConclusiveIntegrationQuarantine(result).pipe(
+        Effect.provideService(AcceptedJournalReader, harness.accepted),
         Effect.provideService(InRunJournal, harness.journal)
       )
       const records = yield* harness.readRecords
