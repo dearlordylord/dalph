@@ -68,4 +68,4 @@ export const materializeJournalRecords = (records: JournalRecordSequence): Reado
 }
 
 /** Test-only structural inspection; never materializes records or copies HAMT nodes. */
-export const inspectJournalRecordStorage = storageFor
+export const inspectJournalRecordStorage: (records: JournalRecordSequence) => object = storageFor
