@@ -15,6 +15,7 @@ import {
   type FreshTaskEntryDecision
 } from "../../src/coordination/delivery/fresh-task-candidate.js"
 import { JournalPosition } from "../../src/workflow-journal/identity.js"
+import { journalEvidenceFrom } from "../../src/workflow-journal/record-evidence.js"
 import { intentRecordKey, outcomeRecordKey } from "../../src/workflow-journal/record-key.js"
 import type { JournalRecord } from "../../src/workflow-journal/store.js"
 import { makeTrackerGraphObservationOperation } from "../../src/workflow/registry/operation.js"
@@ -118,7 +119,7 @@ export const makeFreshTaskCandidateFrontierForTest = (input: {
       revision: initialRunPolicyRevision,
       taskExecutionCapacity: TaskWorkCapacity.make(Math.max(1, input.decisions.length))
     }),
-    workflowHistory: { records }
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
   }
   const frontier = Effect.runSync(
     deriveFreshTaskCandidateEvaluation({
