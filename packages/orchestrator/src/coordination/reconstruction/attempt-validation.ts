@@ -436,13 +436,17 @@ export const acceptedExecutorProofEvidenceFor = (
   plannedAttempt: PlannedTaskAttempt,
   proof: Extract<WorkflowJournalEvent, { readonly _tag: "AttemptImplementationAbandoned" }>["proof"]
 ): AcceptedPlannedAttemptExecutorEvidence | undefined => {
-  if (!isJournalRecordEvidence(prior)) return plannedAttemptExecutorEvidence(prior, plannedAttempt).find(
-    (evidence): evidence is AcceptedPlannedAttemptExecutorEvidence =>
-      evidence.source._tag === "AcceptedReport" && evidence.source.ordinal === proof.reportOrdinal
+  if (!isJournalRecordEvidence(prior))
+    return plannedAttemptExecutorEvidence(prior, plannedAttempt).find(
+      (evidence): evidence is AcceptedPlannedAttemptExecutorEvidence =>
+        evidence.source._tag === "AcceptedReport" && evidence.source.ordinal === proof.reportOrdinal
+    )
+  const record = journalRecordByKey(
+    prior,
+    plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, proof.reportOrdinal)
   )
-  const record = journalRecordByKey(prior, plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, proof.reportOrdinal))
   if (record?.event._tag !== "PlannedAttemptExecutorWorkReported") return undefined
-  const { report, ordinal } = record.event
+  const { ordinal, report } = record.event
   return report.correlation.runId === plannedAttempt.runId && report.correlation.attemptId === plannedAttempt.attemptId
     ? { observedAt: record.position, report, source: { _tag: "AcceptedReport", ordinal } }
     : undefined
@@ -1404,7 +1408,8 @@ export const replacementPreservesPriorResources = (
     if (position <= applicationPosition) return false
     return replacementResourceConflict(event, plannedAttempt, witness)
   }
-  if (!isJournalRecordEvidence(prior)) return !hasMatching(journalRecordsForTask(prior, plannedAttempt.taskId), conflicts)
+  if (!isJournalRecordEvidence(prior))
+    return !hasMatching(journalRecordsForTask(prior, plannedAttempt.taskId), conflicts)
   // Every accepted occurrence of these kinds belongs to the exact run/task or immutable attempt.
   // The last occurrence therefore answers whether any such mutation followed the Restart application.
   const latestMutations = [

@@ -86,6 +86,7 @@ import {
   TaskClaimReacquisitionRequestId
 } from "../task-claim-reacquisition/events.js"
 import { taskClaimReacquisitionOperationId } from "../task-claim-reacquisition/plan.js"
+import { observeSettledCompletionClaimReplacementLookup } from "../../../workflow-journal/settled-completion-claim-replacement.js"
 
 const replacementOperationId = OperationId.make("history-replacement-operation")
 const deletionOperationId = OperationId.make("history-deletion-operation")
@@ -307,6 +308,36 @@ const completeValidationErrorsFrom = (
 const completeValidationErrors = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<string> =>
   completeValidationErrorsFrom(records, records)
 
+it("preserves raw outcome-before-intent issue ordering without inventing a later deletion defect", () => {
+  const records = validFinalityRecords()
+    .filter(({ position }) => position <= 10)
+    .map((current) =>
+      current.event._tag === "CompletionClaimReplaced"
+        ? { ...current, position: JournalPosition.make(4) }
+        : current.event._tag === "CompletionClaimReplacementIntended"
+          ? { ...current, position: JournalPosition.make(6) }
+          : current
+    )
+    .sort((left, right) => left.position - right.position)
+  let indexes = makeIntegrationFinalityHistoryIndexes()
+  const issues: Array<{ readonly position: JournalPosition; readonly detail: string }> = []
+  for (const current of records) {
+    const validation = invalidIntegrationFinalityHistory(current, records, indexes)
+    indexes = validation.indexes
+    if (validation.detail !== undefined) issues.push({ position: current.position, detail: validation.detail })
+  }
+  expect(issues).toEqual([
+    {
+      position: 4,
+      detail: `completion-claim replacement outcome ${replacementOperationId} has no unique matching intent`
+    },
+    {
+      position: 5,
+      detail: `completion-claim replacement attempt ${replacementOperationId} is not the next exact request`
+    }
+  ])
+})
+
 const insertBeforeDeletionAttempt = (event: JournalRecord["event"]): ReadonlyArray<JournalRecord> => {
   const records = validFinalityRecords()
   const attemptIndex = records.findIndex(
@@ -426,6 +457,50 @@ it("keeps exact replacement prerequisites bounded after 64 and 256 unrelated acc
   })
   expect(visits[0]).toBeGreaterThan(0)
   expect(visits[1]).toBe(visits[0])
+})
+
+it("uses one exact settled-claim lookup after 64 and 256 unrelated replacement settlements", () => {
+  const visits = [64, 256].map((size) => {
+    const records = validFinalityRecords()
+    const unrelated = Array.from({ length: size }, (_, index) => {
+      const claim = CompletionTaskClaim.make({
+        ...fixture.claim,
+        originalClaim: ActiveTaskClaim.make({
+          ...fixture.activeClaim,
+          operationId: OperationId.make(`history-unrelated-claim:${index}`),
+          token: ClaimToken.make(`history-unrelated-token:${index}`)
+        })
+      })
+      const operationId = OperationId.make(`history-unrelated-replacement:${index}`)
+      return [
+        record(
+          21 + index * 2,
+          CompletionClaimReplacementIntendedEvent.make({ claim, operationId, version: workflowJournalEventVersion })
+        ),
+        record(
+          22 + index * 2,
+          CompletionClaimReplacedEvent.make({ claim, operationId, version: workflowJournalEventVersion })
+        )
+      ]
+    }).flat()
+    const deletionIntent = records.find(({ event }) => event._tag === "CompletionClaimDeletionIntended")
+    if (deletionIntent?.event._tag !== "CompletionClaimDeletionIntended") {
+      return expect.fail("fixture must contain deletion intent")
+    }
+    const evidence = journalEvidenceFrom([...records, ...unrelated])
+    const operations: Array<string> = []
+    const stop = observeSettledCompletionClaimReplacementLookup((operation) => operations.push(operation))
+    try {
+      expect(
+        invalidIntegrationFinalityHistory(deletionIntent, evidence, makeIntegrationFinalityHistoryIndexes()).detail
+      ).toBe(undefined)
+    } finally {
+      stop()
+    }
+    expect(operations).toEqual(["SettlementLookup"])
+    return operations.length
+  })
+  expect(visits).toEqual([1, 1])
 })
 
 it("reports identical ordered finality diagnostics from cold records and indexed live evidence", () => {

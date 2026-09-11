@@ -476,6 +476,13 @@ reconciliation, and reaches at most one post-quiescence tracker
 reconfirmation before returning or recording termination.
 _Avoid_: Process lifetime, recovery activation, continuous coordinator loop
 
+**Workflow-finality premise change**:
+A journal occurrence other than capacity-only bookkeeping that may invalidate
+an earlier finality proof for the same Run. Its position supports checking a
+later tail without replaying that tail; it does not assert the Run's current
+finality and is retained only as immutable derived evidence.
+_Avoid_: Finality state, completed Run, capacity revision
+
 **Workflow Run termination**:
 The final durable workflow-journal fact for one globally settled Run. In V1 it
 classifies the result as `Completed`, `Blocked`, or `Cancelled` from one fresh
@@ -897,6 +904,14 @@ The bounded identity derived from one canonical encoding of every field in an
 exact completion claim. It identifies evidence for comparison and cannot by
 itself reconstruct or authorize the claim.
 _Avoid_: Completion claim, claim token, task revision
+
+**Settled completion-claim replacement evidence**:
+The immutable, journal-derived pair of an exact replacement intent and its
+later matching outcome. It proves that replacement was recorded, not that the
+tracker still holds the claim. Different original or reacquired claims for one
+promotion remain independently queryable at earlier journal cutoffs; this
+in-memory evidence is not another persisted authority record.
+_Avoid_: Current completion claim, promotion success, tracker fingerprint
 
 **Completion-claim cleanup disposition**:
 The recoverable, task-local removal of the two tracker records retained after

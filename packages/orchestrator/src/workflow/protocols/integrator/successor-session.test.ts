@@ -324,7 +324,7 @@ describe("Integrator FullRerun successor session", () => {
         _tag: "RunUnfinished",
         run: { ordinal: IntegratorRunOrdinal.make(1), session: first.event.successor }
       })
-    })
+    }).pipe(Effect.provide(memoryJournalTestLayer))
   )
 
   it.effect("recovers a recorded full rerun without creating a second successor", () =>
@@ -343,7 +343,7 @@ describe("Integrator FullRerun successor session", () => {
       expect(
         (yield* Ref.get(records)).filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
       ).toHaveLength(1)
-    })
+    }).pipe(Effect.provide(memoryJournalTestLayer))
   )
 
   it.effect("rejects a read intended before D even when its observation arrives afterward", () =>
@@ -363,7 +363,7 @@ describe("Integrator FullRerun successor session", () => {
       const { journal } = yield* makeJournal(initial)
       const failure = yield* appendIntegratorSuccessorSessionIfNeeded(journal, input, initial).pipe(Effect.flip)
       expect(failure).toBeInstanceOf(IntegratorJournalContradiction)
-    })
+    }).pipe(Effect.provide(memoryJournalTestLayer))
   )
 
   it.effect("an operator FullRerun fixes one successor at the fresh head without changing its queue position", () =>
@@ -401,7 +401,7 @@ describe("Integrator FullRerun successor session", () => {
       expect(
         (yield* Ref.get(records)).filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
       ).toHaveLength(1)
-    })
+    }).pipe(Effect.provide(memoryJournalTestLayer))
   )
 
   it.effect("rejects a fresh observation reordered before D", () =>
@@ -419,7 +419,7 @@ describe("Integrator FullRerun successor session", () => {
       const { journal } = yield* makeJournal(initial)
       const failure = yield* appendIntegratorSuccessorSessionIfNeeded(journal, input, initial).pipe(Effect.flip)
       expect(failure).toBeInstanceOf(IntegratorJournalContradiction)
-    })
+    }).pipe(Effect.provide(memoryJournalTestLayer))
   )
 
   it.effect("rejects a second successor identity under the one predecessor key", () =>
@@ -486,7 +486,7 @@ describe("Integrator FullRerun successor session", () => {
         (yield* Ref.get(records)).filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
       ).toHaveLength(1)
       void later
-    })
+    }).pipe(Effect.provide(memoryJournalTestLayer))
   )
 
   it.effect("rejects every missing or contradictory FullRerun predecessor fact before appending S2", () =>
@@ -589,7 +589,7 @@ describe("Integrator FullRerun successor session", () => {
         initial
       ).pipe(Effect.flip)
       expect(incompatible).toBeInstanceOf(IntegratorJournalContradiction)
-    })
+    }).pipe(Effect.provide(memoryJournalTestLayer))
   )
 
   it.effect("rejects duplicate or foreign successor identities and collisions with existing resources", () =>
@@ -763,7 +763,7 @@ describe("Integrator FullRerun successor session", () => {
         [...initial, contradictoryIdentity]
       ).pipe(Effect.flip)
       expect(identityFailure).toBeInstanceOf(IntegratorJournalContradiction)
-    })
+    }).pipe(Effect.provide(memoryJournalTestLayer))
   )
 
   it.effect("reconciles an ambiguous successor append only when the reread contains the exact winner", () =>
@@ -901,6 +901,6 @@ describe("Integrator FullRerun successor session", () => {
       })
       const noPredecessor = yield* readActiveIntegratorSession(initial, unrelatedResponsibility)
       expect(Option.isNone(noPredecessor)).toBe(true)
-    })
+    }).pipe(Effect.provide(memoryJournalTestLayer))
   )
 })
