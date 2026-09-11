@@ -780,7 +780,7 @@ it.effect("reconciles every ambiguous direction append outcome against the Journ
         Effect.gen(function* () {
           subjectAttempted = true
           if (appliedEvent._tag !== "IntegrationQuarantineDirectionApplied") {
-            return Effect.die("control supplied a non-direction event")
+            return yield* Effect.die("control supplied a non-direction event")
           }
           const subjectEvent = IntegrationQuarantineDirectionAppliedEvent.make({
             ...appliedEvent,

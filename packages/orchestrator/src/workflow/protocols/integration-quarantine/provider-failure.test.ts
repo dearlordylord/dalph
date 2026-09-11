@@ -336,6 +336,9 @@ const makeSuccessorHistory = Effect.fn("ProviderFailureTest.makeSuccessorHistory
       version: workflowJournalEventVersion
     })
   )
+  if (freshLineage.event._tag !== "TargetLineageObserved") {
+    return yield* Effect.die("provider-failure successor fixture appended a foreign lineage result")
+  }
   const successorSession = integratorSuccessorCorrelationFor({
     directionAppliedAt: direction.position,
     predecessor: history.session,
