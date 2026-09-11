@@ -23,6 +23,8 @@ import {
   JournalPosition,
   JournalStore,
   journaledWorkflowInterpreterLayer,
+  liveJournalTestLayer,
+  makeWorkflowRunBeganRecord,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskWorkSpecificationObservationOperation,
@@ -39,8 +41,6 @@ import {
 } from "@dalph/orchestrator"
 import { Effect, Layer, Option } from "effect"
 import { expect } from "vitest"
-import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
-import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 
 const runId = RunId.make("generic-workflow-run")
 const target = FixtureTarget.make("generic-workflow-target")
