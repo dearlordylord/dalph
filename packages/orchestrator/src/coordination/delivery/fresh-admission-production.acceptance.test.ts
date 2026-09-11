@@ -70,6 +70,7 @@ import {
   plannedAttemptExecutorWorkReportedRecordKey
 } from "../../workflow-journal/record-key.js"
 import { InRunJournal, JournalStore } from "../../workflow-journal/store.js"
+import { journalRecordForOperationId } from "../../workflow-journal/record-evidence.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { projectFreshTaskCommitments } from "../admission/fresh-task-admission-projection.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
@@ -570,7 +571,7 @@ const awaitClaimAcquired = Effect.fn("FreshAdmissionProductionTest.awaitClaimAcq
   operationId: TaskClaimAcquisition["operationId"]
 ) {
   const accepted = (state: JournalState) =>
-    state.records.some(({ event }) => event._tag === "TaskClaimAcquired" && event.claim.operationId === operationId)
+    journalRecordForOperationId(state.prefix, operationId)?.event._tag === "TaskClaimAcquired"
   const current = yield* journal.state.get
   if (accepted(current)) return
   const observed = yield* journal.state.changes.pipe(Stream.filter(accepted), Stream.runHead)

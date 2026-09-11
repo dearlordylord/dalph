@@ -59,6 +59,7 @@ import {
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
+import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { OperationId } from "../../workflow/identity.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
@@ -314,7 +315,7 @@ const safeContinuationEligibility = (
     pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
     responsibility: { entries: [responsibility] },
     runId,
-    workflowHistory: { records }
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
   }
   const facts = deriveJournalResponsibilityFacts(runState).find(
     (candidate) => candidate._tag === "PlannedAttemptExecutorFreshFacts"
