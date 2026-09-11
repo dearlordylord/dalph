@@ -66,6 +66,7 @@ import {
 } from "../../workflow/task-tracker-facts/observation.js"
 import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
+import { exportWorkflowHistoryRecords } from "../reconstruction/reduce.js"
 
 const runId = RunId.make("fresh-admission-reconstruction-acceptance")
 const target = FixtureTarget.make("fresh-admission-reconstruction-target")
@@ -274,7 +275,10 @@ const basisFor = (prefixIndex: number, records: ReadonlyArray<JournalRecord>) =>
         }`
       )
   )
-  const freshAdmission = projectFreshTaskAdmission(runId, reduction.runState.workflowHistory.records)
+  const freshAdmission = projectFreshTaskAdmission(
+    runId,
+    exportWorkflowHistoryRecords(reduction.runState.workflowHistory)
+  )
   if (freshAdmission._tag === "FreshTaskAdmissionProjectionInvalid") {
     return expect.fail(
       `reconstruction prefix ${prefixIndex + 1} has invalid fresh admission: ${JSON.stringify(freshAdmission.issues)}`

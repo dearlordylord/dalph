@@ -637,6 +637,7 @@ it.effect("reconstructs an append accepted before the process could publish it",
       Effect.gen(function* () {
         const failAfterDurableAppend = yield* Ref.make(false)
         const crashingJournal = yield* makeJournal(crashRunId, target, initial, {
+          ...storage,
           append: (...args) =>
             storage
               .append(...args)
@@ -703,6 +704,7 @@ it.effect("lets multiple graph subscribers observe one accepted read without per
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const appendCalls = yield* Ref.make(0)
     const journal = yield* makeJournal(subscriberRunId, target, initial, {
+      ...storage,
       append: (...args) => Ref.update(appendCalls, (count) => count + 1).pipe(Effect.andThen(storage.append(...args)))
     })
     const firstAttached = yield* Deferred.make<void>()
@@ -867,6 +869,7 @@ it.effect("fails closed when storage returns different content for an already pu
       target
     )
     const journal = yield* makeJournal(mismatchRunId, target, initial, {
+      ...storage,
       append: (...args) =>
         Ref.getAndUpdate(appendCalls, (count) => count + 1).pipe(
           Effect.flatMap((call) => storage.append(...args).pipe(Effect.map((record) => ({ call, record })))),
@@ -959,6 +962,7 @@ it.effect("attempts no later storage append after an accepted position contradic
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const appendCalls = yield* Ref.make(0)
     const journal = yield* makeJournal(gapRunId, target, initial, {
+      ...storage,
       append: (...args) =>
         Ref.update(appendCalls, (count) => count + 1).pipe(
           Effect.andThen(storage.append(...args)),
