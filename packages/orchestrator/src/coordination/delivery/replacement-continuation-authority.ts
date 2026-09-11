@@ -9,6 +9,13 @@ import { isExactTaskClaim, type ActiveTaskClaim } from "../../authorities/task-t
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
+import {
+  isJournalRecordEvidence,
+  journalRecordByKey,
+  journalRecordsForAttemptKind,
+  type JournalHistorySource,
+  type JournalRecordEvidence
+} from "../../workflow-journal/record-evidence.js"
 import { causalClaimForAttempt } from "../../workflow/claim-authority-history.js"
 import type { OperationId } from "../../workflow/identity.js"
 import {
@@ -90,7 +97,7 @@ export const replacementContinuationAuthorityMatchesStep = (
     : step._tag === "ReconcileTaskWorktree" && replacementReconciliationMatches(authority, step))
 
 const exactReplacementClaim = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   replacement: NonNullable<ReturnType<typeof recordedReplacement>>,
   causalClaim: NonNullable<ReturnType<typeof causalClaimForAttempt>>
 ): ActiveTaskClaim | undefined => {
@@ -125,10 +132,19 @@ type SpecificationIntentRecord = JournalRecord & {
 }
 
 const exactSpecificationOutcome = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId,
   operationId: OperationId
 ): SpecificationOutcomeRecord | undefined => {
+  if (isJournalRecordEvidence(records)) {
+    const record = journalRecordByKey(records, outcomeRecordKey(operationId))
+    return record?.runId === runId &&
+      record.event._tag === "TaskTrackerFactsObserved" &&
+      record.event.operationId === operationId &&
+      record.event.observation._tag === "FocusedTaskWorkSpecificationFacts"
+      ? { ...record, event: { ...record.event, observation: record.event.observation } }
+      : undefined
+  }
   const matches = records.filter(
     (record): record is SpecificationOutcomeRecord =>
       record.runId === runId &&
@@ -141,10 +157,19 @@ const exactSpecificationOutcome = (
 }
 
 const exactSpecificationIntent = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId,
   operationId: OperationId
 ): SpecificationIntentRecord | undefined => {
+  if (isJournalRecordEvidence(records)) {
+    const record = journalRecordByKey(records, intentRecordKey(operationId))
+    return record?.runId === runId &&
+      record.event._tag === "TaskTrackerReadIntentRecorded" &&
+      record.event.operation._tag === "ReadTaskWorkSpecification" &&
+      record.event.operation.operationId === operationId
+      ? { ...record, event: { ...record.event, operation: record.event.operation } }
+      : undefined
+  }
   const matches = records.filter(
     (record): record is SpecificationIntentRecord =>
       record.runId === runId &&
@@ -177,7 +202,7 @@ const specificationIdentityMatches = (
 }
 
 const exactReplacementSpecification = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId,
   plannedAttempt: PlannedTaskAttempt,
   replacement: NonNullable<ReturnType<typeof recordedReplacement>>
@@ -197,31 +222,43 @@ const exactReplacementSpecification = (
 
 interface AcceptedReplacementEvidence {
   readonly causalClaim: NonNullable<ReturnType<typeof causalClaimForAttempt>>
-  readonly records: ReadonlyArray<JournalRecord>
+  readonly records: JournalHistorySource
   readonly replacement: ReplacementRecord
 }
 
 const acceptedReplacementEvidenceFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId,
   plannedAttempt: PlannedTaskAttempt,
   successorPlanOperationId: OperationId
 ): AcceptedReplacementEvidence | undefined => {
-  const detachedRecords = immutableSnapshot(records)
-  const history = reduceWorkflowJournalHistory(runId, detachedRecords)
-  if (history._tag !== "ValidWorkflowJournalHistory") return undefined
-  const replacement = detachedRecords.findLast(
-    (record): record is ReplacementRecord =>
+  const acceptedRecords: ReadonlyArray<JournalRecord> | JournalRecordEvidence = isJournalRecordEvidence(records)
+    ? records
+    : immutableSnapshot(records)
+  if (!isJournalRecordEvidence(acceptedRecords)) {
+    const history = reduceWorkflowJournalHistory(runId, acceptedRecords)
+    if (history._tag !== "ValidWorkflowJournalHistory") return undefined
+  }
+  let replacement: ReplacementRecord | undefined
+  for (const record of journalRecordsForAttemptKind(
+    acceptedRecords,
+    plannedAttempt.attemptId,
+    "PlannedAttemptReplaced"
+  )) {
+    if (
       record.event._tag === "PlannedAttemptReplaced" &&
       record.runId === runId &&
       record.event.requestId.runId === runId &&
       record.event.successorPlan.operationId === successorPlanOperationId &&
       plannedTaskAttemptEquivalence(record.event.successorPlan.plannedAttempt, plannedAttempt)
-  )
-  const causalClaim = causalClaimForAttempt(detachedRecords, plannedAttempt.attemptId)
+    ) {
+      replacement = { ...record, event: record.event }
+    }
+  }
+  const causalClaim = causalClaimForAttempt(acceptedRecords, plannedAttempt.attemptId)
   return replacement === undefined || causalClaim === undefined
     ? undefined
-    : { causalClaim, records: detachedRecords, replacement }
+    : { causalClaim, records: acceptedRecords, replacement }
 }
 
 /**
@@ -229,7 +266,7 @@ const acceptedReplacementEvidenceFor = (
  * its causal claim, successor plan, and F2 specification observation agree.
  */
 export const replacementContinuationAuthorityFrom = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId,
   plannedAttempt: PlannedTaskAttempt,
   successorPlanOperationId: OperationId
