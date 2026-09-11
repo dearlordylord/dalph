@@ -204,6 +204,11 @@ type ClaimIntentRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquisitionIntended" }>
 }
 
+const isSelectionClaimIntentRecord = (record: JournalRecord): record is ClaimIntentRecord =>
+  record.event._tag === "TaskClaimAcquisitionIntended" &&
+  record.event.operation.authority._tag === "TaskSelectionAuthority" &&
+  record.key === intentRecordKey(record.event.operation.acquisition.operationId)
+
 const isExactClaim = (
   claim: ActiveTaskClaim,
   acquisition: ClaimIntentRecord["event"]["operation"]["acquisition"]
@@ -284,7 +289,10 @@ export const projectFreshTaskAdmission = (
       runId
     })
   }
-  return projectFreshTaskAdmissionFromAccepted(runId, reduction.prefix, reduction.runState)
+  // The cold boundary deliberately projects the supplied replay envelope.
+  // Its cached validation state cannot turn changed rows into live accepted
+  // evidence; exact handoff/commitment checks below must re-read those rows.
+  return projectFreshTaskAdmissionFromAccepted(runId, records, reduction.runState)
 }
 
 /** Projects live admission directly from an already accepted prefix and its exact reconstructed state. */
@@ -310,10 +318,7 @@ export const projectFreshTaskAdmissionFromAccepted = (
   })
   const handoffs = exactAttemptHandoffs(runId, acceptedRecords)
   const intents = Array.from(journalRecordsOfKind(acceptedRecords, "TaskClaimAcquisitionIntended")).filter(
-    (record): record is ClaimIntentRecord =>
-      record.event._tag === "TaskClaimAcquisitionIntended" &&
-      record.event.operation.authority._tag === "TaskSelectionAuthority" &&
-      record.key === intentRecordKey(record.event.operation.acquisition.operationId)
+    isSelectionClaimIntentRecord
   )
   const releaseEvidence = intents.flatMap((intent): ReadonlyArray<FreshTaskAdmissionReleaseEvidence> => {
     const acquisition = intent.event.operation.acquisition
@@ -380,13 +385,7 @@ export const projectFreshTaskCommitments = (
   const handoffs = exactAttemptHandoffs(runId, records)
   const commitments: Array<Extract<TaskAdmissionOccupancy, { readonly _tag: "FreshTaskCommitted" }>> = []
   for (const record of journalRecordsOfKind(records, "TaskClaimAcquisitionIntended")) {
-    if (
-      record.event._tag !== "TaskClaimAcquisitionIntended" ||
-      record.event.operation.authority._tag !== "TaskSelectionAuthority" ||
-      record.key !== intentRecordKey(record.event.operation.acquisition.operationId)
-    ) {
-      continue
-    }
+    if (!isSelectionClaimIntentRecord(record)) continue
     const acquisition = record.event.operation.acquisition
     const released =
       exactPreOwnershipRejectionWasAccepted(records, record) ||
