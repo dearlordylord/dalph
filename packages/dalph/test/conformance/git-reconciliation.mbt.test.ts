@@ -16,9 +16,13 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { Context, Effect, Layer, Option, Ref, Schema } from "effect"
+import { ActiveTaskClaim } from "../../../orchestrator/src/authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../../../orchestrator/src/authorities/task-tracker/claim.js"
+import { makeAcceptedIntegrationHistory } from "../../../orchestrator/test/support/accepted-integration-history.js"
 import {
   decideResultCommitQualification,
   decideGitFactPreservation,
@@ -38,42 +42,23 @@ import {
   TrackerAdapterReadError,
   TrackerAdapterReadFailureReason
 } from "../../../orchestrator/src/authorities/task-tracker/graph-reader.js"
-import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
 import { InRunJournal, JournalStore } from "../../../orchestrator/src/workflow-journal/store.js"
 import { memoryJournalTestLayer } from "../../../orchestrator/src/workflow-journal/adapters/memory-store.js"
+import { AcceptedJournalReader } from "../../../orchestrator/src/workflow-journal/accepted-reader.js"
 import { JournalPosition } from "../../../orchestrator/src/workflow-journal/identity.js"
-import {
-  intentRecordKey,
-  integrationResponsibilityBeganRecordKey,
-  integrationStartedRecordKey,
-  outcomeRecordKey
-} from "../../../orchestrator/src/workflow-journal/record-key.js"
 import {
   makeIntegrationTargetResourceController,
   acquireStartedIntegrationTarget,
   releaseStartedIntegrationTarget
 } from "../../../orchestrator/src/coordination/admission/integration-target-resource.js"
-import {
-  makeTrackerGraphObservationOperation,
-  makeTargetLineageObservationOperation
-} from "../../../orchestrator/src/workflow/registry/operation.js"
-import {
-  GitReadIntentRecordedEvent,
-  TargetLineageObservedEvent
-} from "../../../orchestrator/src/workflow/registry/event.js"
+import { makeTrackerGraphObservationOperation } from "../../../orchestrator/src/workflow/registry/operation.js"
 import { latestReconstructedTaskGraph } from "../../../orchestrator/src/coordination/reconstruction/graph-knowledge.js"
 import { reconstructRunState } from "../../../orchestrator/src/coordination/reconstruction/reduce.js"
 import { OperationId } from "../../../orchestrator/src/workflow/identity.js"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
-import { TaskWorkCapacity } from "../../../orchestrator/src/coordination/admission/capacity.js"
 import { WorkflowInterpreter } from "../../../orchestrator/src/workflow/interpretation/interpreter.js"
 import { controlledWorkflowInterpreterLayer } from "../../../orchestrator/src/workflow/interpretation/layers.js"
 import { journaledWorkflowInterpreterLayer } from "../../../orchestrator/src/workflow-journal/journaled-interpreter.js"
-import { workflowJournalEventVersion } from "../../../orchestrator/src/workflow/kernel/event.js"
-import {
-  IntegrationResponsibilityBeganEvent,
-  IntegrationStartedEvent
-} from "../../../orchestrator/src/workflow/protocols/integration-admission/events.js"
 import { TargetLineageObservation } from "../../../orchestrator/src/authorities/git/target-lineage.js"
 import {
   Integrator,
@@ -139,6 +124,7 @@ const makeProductionReconciliationTrace = () => {
   const context = Effect.runSync(Effect.scoped(Layer.build(memoryJournalTestLayer)))
   const journalStore = Context.get(context, JournalStore)
   const journal = Context.get(context, InRunJournal)
+  const accepted = Context.get(context, AcceptedJournalReader)
   const runId = RunId.make("git-reconciliation-production-run")
   const target = FixtureTarget.make("git-reconciliation-production-target")
   const integrationTarget = IntegrationTarget.make({
@@ -149,24 +135,37 @@ const makeProductionReconciliationTrace = () => {
     commit: GitCommitSha.make("8".repeat(40)),
     evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("8".repeat(64)) })
   })
+  const specification = makeTaskWorkSpecification({
+    body: "Exercise the production Git reconciliation boundary.",
+    taskId: TaskId.make("git-reconciliation-production-A"),
+    title: "Git reconciliation production trace"
+  })
   const productionAttempt = PlannedTaskAttempt.make({
     attemptId: AttemptId.make("git-reconciliation-production-attempt"),
     baseSha: base,
     branch: TaskBranchRef.make("refs/heads/dalph/git-reconciliation-production"),
     executor: TaskExecutorLocator.make("executor:git-reconciliation-production"),
     runId,
-    taskId: TaskId.make("git-reconciliation-production-A"),
-    taskRevision: TaskRevision.make("git-reconciliation-production-revision"),
+    taskId: specification.taskId,
+    taskRevision: specification.fingerprint,
     worktree: WorktreeLocator.make("/worktrees/git-reconciliation-production")
   })
-  const started = {
-    _tag: "StartedIntegrationResponsibility" as const,
+  const acceptedHistory = makeAcceptedIntegrationHistory({
     acceptedResult,
+    activeClaim: ActiveTaskClaim.make({
+      operationId: OperationId.make("git-reconciliation-production-claim"),
+      owner: ClaimOwner.make("dalph:git-reconciliation-production"),
+      taskId: productionAttempt.taskId,
+      token: ClaimToken.make("git-reconciliation-production-token")
+    }),
     integrationTarget,
     plannedAttempt: productionAttempt,
-    queuedAt: JournalPosition.make(2),
-    startedAt: JournalPosition.make(3)
-  }
+    runId,
+    targetHeadSha: base,
+    taskSpecification: specification,
+    trackerTarget: target
+  })
+  const started = acceptedHistory.responsibility
   const reportedCandidate = IntegratorCandidateText.make("git-reconciliation-reported-candidate")
   const candidateForHead = (head: GitCommitSha) => (head === base ? candidate : GitCommitSha.make("5".repeat(40)))
   let gitExpectedTargetHead = base
@@ -232,7 +231,8 @@ const makeProductionReconciliationTrace = () => {
       Effect.scoped(
         Layer.build(
           journaledWorkflowInterpreterLayer(runId, workflowInterpreterLayer).pipe(
-            Layer.provide(Layer.succeed(InRunJournal, journal))
+            Layer.provide(Layer.succeed(InRunJournal, journal)),
+            Layer.provide(Layer.succeed(AcceptedJournalReader, accepted))
           )
         )
       )
@@ -240,11 +240,7 @@ const makeProductionReconciliationTrace = () => {
     return Context.get(context, WorkflowInterpreter)
   }
   let interpreter = makeJournaledInterpreter()
-  const targetLineage: TargetLineageObservation = TargetLineageObservation.make({
-    plannedBaseIsAncestorOfTargetHead: true,
-    plannedBaseSha: base,
-    targetHeadSha: base
-  })
+  const targetLineage = acceptedHistory.targetLineage
   let operationOrdinal = 0
 
   const append = (
@@ -252,38 +248,6 @@ const makeProductionReconciliationTrace = () => {
     event: Parameters<InRunJournal["Service"]["append"]>[2]
   ) => Effect.runSync(journal.append(runId, key, event))
   const records = () => Effect.runSync(journal.read(runId))
-  const appendTargetLineage = (
-    lineageTarget: IntegrationTarget,
-    lineageAttempt: PlannedTaskAttempt,
-    lineage: TargetLineageObservation,
-    label: string
-  ) => {
-    const operation = makeTargetLineageObservationOperation({
-      integrationTarget: lineageTarget,
-      operationId: OperationId.make(`git-reconciliation-production-${label}-${++operationOrdinal}`),
-      plannedAttempt: lineageAttempt,
-      predecessorOperationIds: []
-    })
-    append(
-      intentRecordKey(operation.operationId),
-      GitReadIntentRecordedEvent.make({
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        operation,
-        version: workflowJournalEventVersion
-      })
-    )
-    return append(
-      outcomeRecordKey(operation.operationId),
-      TargetLineageObservedEvent.make({
-        observation: lineage,
-        occurrenceClassification: "NonActionOccurrence",
-        operationId: operation.operationId,
-        plannedAttempt: lineageAttempt,
-        version: workflowJournalEventVersion
-      })
-    )
-  }
   const reconstruct = () => {
     const result = reconstructRunState(runId, records())
     if (result._tag !== "ValidReconstructedRun")
@@ -419,38 +383,26 @@ const makeProductionReconciliationTrace = () => {
       Effect.exit(
         prepareIntegrationCandidateRun({ preparation: input, run }).pipe(
           Effect.provideService(InRunJournal, journal),
+          Effect.provideService(AcceptedJournalReader, accepted),
           Effect.provideService(Integrator, integrator),
           Effect.provideService(IntegratorGit, integratorGit)
         )
       )
     )
   }
-  Effect.runSync(
-    journalStore.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }))
-  )
-  append(
-    integrationResponsibilityBeganRecordKey(productionAttempt.attemptId),
-    IntegrationResponsibilityBeganEvent.make({
-      acceptedResult,
-      integrationTarget,
-      plannedAttempt: productionAttempt,
-      version: workflowJournalEventVersion
-    })
-  )
-  append(
-    integrationStartedRecordKey(productionAttempt.attemptId),
-    IntegrationStartedEvent.make({
-      acceptedResult,
-      integrationTarget,
-      plannedAttempt: productionAttempt,
-      responsibilityBeganAt: started.queuedAt,
-      version: workflowJournalEventVersion
-    })
-  )
+  const beginning = acceptedHistory.records[0]
+  if (beginning?.event._tag !== "WorkflowRunBegan")
+    return Effect.runSync(Effect.die("accepted fixture lacks Run beginning"))
+  Effect.runSync(journalStore.beginRun(runId, target, beginning.event.initialControlPolicy))
+  for (const retained of acceptedHistory.records.slice(1)) {
+    if (retained.event._tag === "WorkflowRunBegan" || retained.event._tag === "WorkflowRunTerminated") {
+      return Effect.runSync(Effect.die(`accepted fixture contains unexpected ${retained.event._tag}`))
+    }
+    append(retained.key, retained.event)
+  }
   Effect.runSync(resource.acquire(physicalResponsibility))
   Effect.runSync(resource.publishAcceptedOwnership(physicalResponsibility))
-  const initialLineageRecord = appendTargetLineage(integrationTarget, productionAttempt, targetLineage, "lineage")
-  const initialIntegratorResult = integratorProtocol(started, targetLineage, initialLineageRecord.position)
+  const initialIntegratorResult = integratorProtocol(started, targetLineage, acceptedHistory.targetLineageObservedAt)
   if (initialIntegratorResult._tag === "Failure") {
     return Effect.runSync(Effect.die("production MBT initial Integrator call failed"))
   }
@@ -460,7 +412,7 @@ const makeProductionReconciliationTrace = () => {
     const initialInput = IntegratorPreparationInput.make({
       responsibility: started,
       targetLineage,
-      targetLineageObservedAt: initialLineageRecord.position
+      targetLineageObservedAt: acceptedHistory.targetLineageObservedAt
     })
     const run = IntegratorRunCorrelation.make({
       ordinal: IntegratorRunOrdinal.make(1),
