@@ -51,6 +51,9 @@ export interface ReplacementContinuationAuthority {
 
 type ReplacementRecord = NonNullable<ReturnType<typeof recordedReplacement>>
 
+const isReplacementRecord = (record: JournalRecord): record is ReplacementRecord =>
+  record.event._tag === "PlannedAttemptReplaced"
+
 /** Runtime guard for replacement authority minted from one validated accepted Journal prefix. */
 const isReplacementContinuationAuthority = (value: unknown): value is ReplacementContinuationAuthority =>
   typeof value === "object" && value !== null && issuedReplacementContinuationAuthorities.has(value)
@@ -246,13 +249,13 @@ const acceptedReplacementEvidenceFor = (
     "PlannedAttemptReplaced"
   )) {
     if (
-      record.event._tag === "PlannedAttemptReplaced" &&
+      isReplacementRecord(record) &&
       record.runId === runId &&
       record.event.requestId.runId === runId &&
       record.event.successorPlan.operationId === successorPlanOperationId &&
       plannedTaskAttemptEquivalence(record.event.successorPlan.plannedAttempt, plannedAttempt)
     ) {
-      replacement = { ...record, event: record.event }
+      replacement = record
     }
   }
   const causalClaim = causalClaimForAttempt(acceptedRecords, plannedAttempt.attemptId)
