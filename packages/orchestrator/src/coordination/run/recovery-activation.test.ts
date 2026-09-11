@@ -1540,7 +1540,9 @@ it("suspends a running grouping descendant and reopens it after current facts mo
     }
   ]
 
-  expect(taskPauseSuspensionIsOwed(records, plannedAttempt, JournalPosition.make(2), graph)).toBe(true)
+  expect(taskPauseSuspensionIsOwed(journalEvidenceFrom(records), plannedAttempt, JournalPosition.make(2), graph)).toBe(
+    true
+  )
 
   const regrouped = validSnapshot({
     revision: "regrouped-descendant-v2",
@@ -1555,7 +1557,9 @@ it("suspends a running grouping descendant and reopens it after current facts mo
   })
   expect(safelySuspendedAttemptMayContinue(pause, plannedAttempt, graph)).toBe(false)
   expect(safelySuspendedAttemptMayContinue(pause, plannedAttempt, regrouped)).toBe(true)
-  expect(taskPauseSuspensionIsOwed(records, plannedAttempt, JournalPosition.make(2), regrouped)).toBe(true)
+  expect(
+    taskPauseSuspensionIsOwed(journalEvidenceFrom(records), plannedAttempt, JournalPosition.make(2), regrouped)
+  ).toBe(true)
 
   const lateGroupingGraphRead = makeTrackerGraphObservationOperation(
     { _tag: "WorkflowEstablishment" },
@@ -1623,19 +1627,38 @@ it("suspends a running grouping descendant and reopens it after current facts mo
       })
     }
   ]
-  expect(taskPauseSuspensionIsOwed(lateGroupingRecords, plannedAttempt, JournalPosition.make(2), regrouped)).toBe(true)
-
-  const activePauseWithoutGraph = [responsibilityBegan, taskPaused]
-  expect(taskPauseSuspensionIsOwed(activePauseWithoutGraph, plannedAttempt, JournalPosition.make(2), graph)).toBe(true)
-  expect(taskPauseSuspensionIsOwed(activePauseWithoutGraph, plannedAttempt, JournalPosition.make(2), regrouped)).toBe(
-    false
-  )
   expect(
     taskPauseSuspensionIsOwed(
-      [
+      journalEvidenceFrom(lateGroupingRecords),
+      plannedAttempt,
+      JournalPosition.make(2),
+      regrouped
+    )
+  ).toBe(true)
+
+  const activePauseWithoutGraph = [responsibilityBegan, taskPaused]
+  expect(
+    taskPauseSuspensionIsOwed(
+      journalEvidenceFrom(activePauseWithoutGraph),
+      plannedAttempt,
+      JournalPosition.make(2),
+      graph
+    )
+  ).toBe(true)
+  expect(
+    taskPauseSuspensionIsOwed(
+      journalEvidenceFrom(activePauseWithoutGraph),
+      plannedAttempt,
+      JournalPosition.make(2),
+      regrouped
+    )
+  ).toBe(false)
+  expect(
+    taskPauseSuspensionIsOwed(
+      journalEvidenceFrom([
         ...activePauseWithoutGraph,
         { position: JournalPosition.make(9), event: lateGroupingRecords.at(-1)?.event ?? taskPaused.event }
-      ],
+      ]),
       plannedAttempt,
       JournalPosition.make(2),
       graph
@@ -1663,11 +1686,11 @@ it("suspends a running grouping descendant and reopens it after current facts mo
   })
   expect(
     taskPauseSuspensionIsOwed(
-      [
+      journalEvidenceFrom([
         ...records,
         { position: JournalPosition.make(5), event: lostSuspensionCommand },
         { position: JournalPosition.make(6), event: exactSafeProjection }
-      ],
+      ]),
       plannedAttempt,
       JournalPosition.make(2),
       graph
@@ -1675,7 +1698,7 @@ it("suspends a running grouping descendant and reopens it after current facts mo
   ).toBe(true)
   expect(
     taskPauseSuspensionIsOwed(
-      [
+      journalEvidenceFrom([
         ...records,
         {
           position: JournalPosition.make(5),
@@ -1687,7 +1710,7 @@ it("suspends a running grouping descendant and reopens it after current facts mo
             version: workflowJournalEventVersion
           })
         }
-      ],
+      ]),
       plannedAttempt,
       JournalPosition.make(2),
       graph
@@ -1695,7 +1718,7 @@ it("suspends a running grouping descendant and reopens it after current facts mo
   ).toBe(false)
   expect(
     taskPauseSuspensionIsOwed(
-      [{ position: JournalPosition.make(1), event: taskPaused.event }],
+      journalEvidenceFrom([{ position: JournalPosition.make(1), event: taskPaused.event }]),
       plannedAttempt,
       JournalPosition.make(2),
       graph
@@ -1711,7 +1734,7 @@ it("suspends a running grouping descendant and reopens it after current facts mo
   })
   expect(
     taskPauseSuspensionIsOwed(
-      [responsibilityBegan, { position: JournalPosition.make(4), event: exactTaskPause }],
+      journalEvidenceFrom([responsibilityBegan, { position: JournalPosition.make(4), event: exactTaskPause }]),
       plannedAttempt,
       JournalPosition.make(2),
       undefined
@@ -1719,7 +1742,11 @@ it("suspends a running grouping descendant and reopens it after current facts mo
   ).toBe(true)
   expect(
     taskPauseSuspensionIsOwed(
-      [responsibilityBegan, taskPaused, { position: JournalPosition.make(5), event: reconfirmedGroupingGraphEvent }],
+      journalEvidenceFrom([
+        responsibilityBegan,
+        taskPaused,
+        { position: JournalPosition.make(5), event: reconfirmedGroupingGraphEvent }
+      ]),
       plannedAttempt,
       JournalPosition.make(2),
       graph
@@ -1737,13 +1764,66 @@ it("suspends a running grouping descendant and reopens it after current facts mo
   )
   expect(
     taskPauseSuspensionIsOwed(
-      [...activePauseWithoutGraph, { position: JournalPosition.make(5), event: foreignGroupingGraphEvent }],
+      journalEvidenceFrom([
+        ...activePauseWithoutGraph,
+        { position: JournalPosition.make(5), event: foreignGroupingGraphEvent }
+      ]),
       plannedAttempt,
       JournalPosition.make(2),
       regrouped,
       coverageTarget
     )
   ).toBe(false)
+})
+
+it("retains a sparse owed task Pause when a duplicate-key Unpause follows without materializing history", () => {
+  const executing = coverageRecord(
+    64,
+    PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+        correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+      }),
+      version: workflowJournalEventVersion
+    })
+  )
+  const pause = coverageRecord(
+    128,
+    ControlDirectionAppliedEvent.make({
+      direction: "Pause",
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: ControlDirectionApplicationOrdinal.make(1),
+      subject: { _tag: "Task", runId: coverageRunId, taskId: coverageTaskId },
+      version: workflowJournalEventVersion
+    })
+  )
+  const unpause = coverageRecord(
+    256,
+    ControlDirectionAppliedEvent.make({
+      direction: "Unpause",
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: ControlDirectionApplicationOrdinal.make(1),
+      subject: { _tag: "Task", runId: coverageRunId, taskId: coverageTaskId },
+      version: workflowJournalEventVersion
+    })
+  )
+  expect(unpause.key).toBe(pause.key)
+  const evidence = journalEvidenceFrom([executing, pause, unpause])
+  const operations: Array<Parameters<Parameters<typeof observeJournalRecordSequenceOperations>[0]>[0]> = []
+  const stopObserving = observeJournalRecordSequenceOperations((operation) => operations.push(operation))
+
+  try {
+    expect(
+      taskPauseSuspensionIsOwed(evidence, coverageAttempt, JournalPosition.make(32), undefined, coverageTarget)
+    ).toBe(true)
+  } finally {
+    stopObserving()
+  }
+
+  expect(operations.some(({ _tag }) => _tag === "HistoricalMaterialization")).toBe(false)
+  expect(operations.filter(({ _tag }) => _tag === "IndexedRecordVisit").length).toBeLessThanOrEqual(16)
 })
 
 it("retains an owed Run Pause suspension after Unpause until the exact executor report arrives", () => {
