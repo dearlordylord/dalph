@@ -3,7 +3,17 @@ import { type ActiveTaskClaim, isExactTaskClaim } from "../../../authorities/tas
 import type { TaskClaimReacquisitionRequestId } from "./events.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
-import { journalRecordsForTask, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
+import {
+  isJournalRecordEvidence,
+  journalEvidenceBefore,
+  journalRecordByKey,
+  journalRecordsForTask,
+  journalTaskClaimObservationAt,
+  lastJournalRecordForTaskKind,
+  type JournalHistorySource,
+  type JournalRecordEvidence
+} from "../../../workflow-journal/record-evidence.js"
+import { outcomeRecordKey } from "../../../workflow-journal/record-key.js"
 import { OperationId } from "../../identity.js"
 
 /** Stable acquisition operation identity derived from one applied reacquisition direction. */
@@ -88,6 +98,9 @@ export const latestTaskClaimReacquisitionDirection = (
   expectedClaim: ActiveTaskClaim,
   throughPosition: JournalPosition
 ) => {
+  if (isJournalRecordEvidence(records)) {
+    return latestIndexedTaskClaimReacquisitionDirection(records, runId, taskId, expectedClaim, throughPosition)
+  }
   const taskRecords = Array.from(journalRecordsForTask(records, taskId))
   return taskRecords.findLast(
     ({ event, position }) =>
@@ -97,4 +110,34 @@ export const latestTaskClaimReacquisitionDirection = (
       position <= throughPosition &&
       directionFollowsCurrentLossEpisode(taskRecords, taskId, expectedClaim, position, throughPosition)
   )?.event
+}
+
+const latestIndexedTaskClaimReacquisitionDirection = (
+  records: JournalRecordEvidence,
+  runId: RunId,
+  taskId: TaskId,
+  expectedClaim: ActiveTaskClaim,
+  throughPosition: JournalPosition
+) => {
+  const through = journalEvidenceBefore(records, throughPosition + 1)
+  const direction = lastJournalRecordForTaskKind(through, taskId, "TaskClaimReacquisitionDirected")
+  if (direction?.event._tag !== "TaskClaimReacquisitionDirected" || direction.event.subject.runId !== runId) {
+    return undefined
+  }
+  const loss = journalTaskClaimObservationAt(journalEvidenceBefore(through, direction.position), taskId)
+  const current = journalTaskClaimObservationAt(through, taskId)
+  if (loss === undefined || current === undefined || loss.episodeStartedAt !== current.episodeStartedAt) {
+    return undefined
+  }
+  if (claimLossEpisodeAt(loss.record, expectedClaim) === undefined) return undefined
+  const acquired = journalRecordByKey(through, outcomeRecordKey(expectedClaim.operationId))
+  if (
+    acquired?.event._tag === "TaskClaimAcquired" &&
+    acquired.event.claim.taskId === taskId &&
+    isExactTaskClaim(acquired.event.claim, expectedClaim) &&
+    acquired.position > loss.record.position
+  ) {
+    return undefined
+  }
+  return direction.event
 }
