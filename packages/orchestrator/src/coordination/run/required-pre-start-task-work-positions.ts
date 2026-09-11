@@ -200,7 +200,7 @@ const requiredPositionForClaimIntent = (
 export const requiredPreStartTaskWorkPositionsOf = (
   runState: Pick<ReconstructedRunState, "runId" | "responsibility" | "workflowHistory">
 ): ReadonlyArray<RequiredPreStartTaskWorkPosition> => {
-  const records = runState.workflowHistory.prefix ?? runState.workflowHistory.records
+  const records = runState.workflowHistory.evidence
   const positions: Array<RequiredPreStartTaskWorkPosition> = []
   for (const intent of latestClaimIntentByTask(records, runState.runId).values()) {
     const position = requiredPositionForClaimIntent(records, runState.runId, intent)

@@ -147,7 +147,7 @@ const finalRecordOffset = -1
 
 /** Live reconstruction retains the accepted indexed prefix; raw arrays exist only in isolated pure fixtures. */
 const journalHistoryOf = (runState: Pick<ReconstructedRunState, "workflowHistory">): JournalHistorySource =>
-  runState.workflowHistory.prefix ?? runState.workflowHistory.records
+  runState.workflowHistory.evidence
 
 const journalRecordsForPlannedAttempt = (
   source: JournalHistorySource,
