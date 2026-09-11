@@ -773,6 +773,34 @@ it("starts one unchanged Retry run with the same session and fresh lineage posit
   })
 })
 
+it("uses the last accepted journal position rather than record count for sparse Retry evidence", () => {
+  const scenario = retryHistory("ConclusiveResult", fixedHead)
+  const records = scenario.records.map((candidate) =>
+    candidate.position === JournalPosition.make(10)
+      ? { ...candidate, position: JournalPosition.make(100) }
+      : candidate.position === JournalPosition.make(11)
+        ? { ...candidate, position: JournalPosition.make(101) }
+        : candidate
+  )
+  const evidence = journalEvidenceFrom(records)
+  const sparse = {
+    ...scenario,
+    records,
+    runState: { ...scenario.runState, appliedThrough: JournalPosition.make(101), workflowHistory: { evidence } }
+  }
+
+  expect(evidence.records).toHaveLength(11)
+  expect(evidence.lastPosition).toBe(JournalPosition.make(101))
+  expect(transitionsFor(sparse)).toEqual([
+    RunnableFrontierTransition.RunIntegrator({
+      lineage: scenario.currentLineage,
+      lineageObservedAt: JournalPosition.make(101),
+      responsibility,
+      run: integratorRunCorrelationForSession(scenario.session, IntegratorRunOrdinal.make(2))
+    })
+  ])
+})
+
 it("resumes the same unfinished Retry run after process disappearance", () => {
   const scenario = retryHistory("ConclusiveResult", fixedHead)
   const runTwo = integratorRunCorrelationForSession(scenario.session, IntegratorRunOrdinal.make(2))
