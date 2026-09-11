@@ -1,7 +1,7 @@
 import { RunId } from "@dalph/contracts"
 import { Context, Effect, Layer, Option, PubSub, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
-import { advanceWorkflowJournalHistory } from "../reconstruction/history.js"
+import { advanceWorkflowJournalHistory, reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { ValidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 import type { AcceptedReconstructedRunState } from "../reconstruction/state.js"
 import { JournalPosition, type JournalRecordKey } from "../../workflow-journal/identity.js"
@@ -10,7 +10,7 @@ import type {
   JournalError,
   JournalAppendError,
   JournalRecord,
-  JournalStorageAppendError
+  JournalStoreService
 } from "../../workflow-journal/store.js"
 import {
   JournalHistoryInvalid,
@@ -35,12 +35,13 @@ import type { AcceptedJournalPrefix } from "../../workflow-journal/accepted-pref
 import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import { journalRecordAt, materializeJournalRecords } from "../../workflow-journal/record-sequence.js"
 import { acceptedJournalRecordForKey } from "../../workflow-journal/accepted-prefix.js"
-import { intentRecordKey } from "../../workflow-journal/record-key.js"
+import { intentRecordKey, workflowRunTerminatedRecordKey } from "../../workflow-journal/record-key.js"
 import {
   journalGraphObservationAt,
   journalGraphSnapshotForObservation
 } from "../../workflow-journal/record-evidence.js"
 import { exactWorkflowRunTargetFor } from "../../workflow-journal/run-target.js"
+import { RunFinalityEvidence, type RunTerminationDisposition } from "../frontier/run-finality.js"
 
 const latestJournalRecordOffset = -1
 
@@ -62,14 +63,8 @@ export interface JournalState {
   readonly prefix: AcceptedJournalPrefix
 }
 
-/** The raw append operation needed beneath the journal state service. */
-export interface JournalStorageAppend {
-  readonly append: (
-    runId: RunId,
-    key: JournalRecordKey,
-    event: AppendableWorkflowJournalEvent
-  ) => Effect.Effect<JournalRecord, JournalStorageAppendError>
-}
+/** Persistence owned by the Journal; raw reads occur only to reconcile an ambiguous terminal write. */
+export type JournalStorageBoundary = Pick<JournalStoreService, "append" | "read" | "terminateRun">
 
 /** The journal state plus the direct in-Run append/read operations it exposes. */
 export interface JournalService {
@@ -81,6 +76,11 @@ export interface JournalService {
   ) => Effect.Effect<JournalRecord, JournalAppendError>
   readonly read: (runId: RunId) => Effect.Effect<ReadonlyArray<JournalRecord>, JournalError | InRunJournalRunMismatch>
   readonly readAccepted: (runId: RunId) => Effect.Effect<AcceptedJournalPrefix, JournalError | InRunJournalRunMismatch>
+  /** Persists termination and publishes its exact accepted successor under the append publication lock. */
+  readonly terminate: (
+    disposition: RunTerminationDisposition,
+    evidence: RunFinalityEvidence
+  ) => Effect.Effect<JournalRecord, JournalError | Effect.Error<ReturnType<JournalStoreService["terminateRun"]>>>
 }
 
 export class Journal extends Context.Service<Journal, JournalService>()("@dalph/Journal") {}
@@ -176,7 +176,7 @@ const graphObservationFromAcceptedRecord = (
 }
 
 const graphStateFrom = (
-  reconstructed: ReconstructedRunState,
+  reconstructed: AcceptedReconstructedRunState,
   record: JournalRecord,
   prefix: AcceptedJournalPrefix,
   target: TrackerTarget
@@ -238,7 +238,7 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
   runId: RunId,
   target: TrackerTarget,
   initial: ValidWorkflowJournalHistory,
-  storage: JournalStorageAppend,
+  storage: JournalStorageBoundary,
   onAcceptedRecord: (record: JournalRecord) => Effect.Effect<void> = () => Effect.void
 ) {
   const first = journalRecordAt(initial.prefix.records, 0)
@@ -291,6 +291,34 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
   )
   const failJournal = (failure: JournalError) =>
     SubscriptionRef.set(publicationState, { _tag: "JournalFailed", failure }).pipe(Effect.andThen(Effect.fail(failure)))
+  const acceptAcknowledgedRecord = (
+    status: Extract<JournalStatus, { readonly _tag: "JournalOpen" }>,
+    record: JournalRecord
+  ) =>
+    Effect.gen(function* () {
+      const before = status.value
+      if (record.position <= before.position) {
+        const existing = acceptedJournalRecordForKey(before.prefix, record.key)
+        if (JSON.stringify(existing) !== JSON.stringify(record)) {
+          return yield* failJournal(new JournalRecordMismatch({ position: record.position, key: record.key, runId }))
+        }
+        return record
+      }
+      const expectedPosition = JournalPosition.make(before.position + 1)
+      if (record.position !== expectedPosition) {
+        return yield* failJournal(new JournalPositionGap({ position: record.position, expectedPosition, runId }))
+      }
+      const nextHistory = advanceWorkflowJournalHistory(status.history, record)
+      if (nextHistory._tag === "InvalidWorkflowJournalHistory") {
+        return yield* failJournal(
+          new JournalHistoryInvalid({ position: record.position, detail: JSON.stringify(nextHistory.issues), runId })
+        )
+      }
+      const next = advanceJournalState(nextHistory, before, record, target)
+      yield* SubscriptionRef.set(publicationState, { _tag: "JournalOpen", history: nextHistory, value: next })
+      yield* onAcceptedRecord(record)
+      return record
+    })
   const append = (run: RunId, key: JournalRecordKey, event: AppendableWorkflowJournalEvent) =>
     publication.withPermit(
       Effect.uninterruptible(
@@ -299,33 +327,60 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
           const status = yield* SubscriptionRef.get(publicationState)
           if (status._tag === "JournalFailed") return yield* status.failure
           const record = yield* storage.append(run, key, event)
-          const before = status.value
-          if (record.position <= before.position) {
-            const existing = acceptedJournalRecordForKey(before.prefix, record.key)
-            if (JSON.stringify(existing) !== JSON.stringify(record)) {
-              const failure = new JournalRecordMismatch({ position: record.position, key, runId })
-              return yield* failJournal(failure)
-            }
-            return record
+          return yield* acceptAcknowledgedRecord(status, record)
+        })
+      )
+    )
+  const terminate: JournalService["terminate"] = (disposition, evidence) =>
+    publication.withPermit(
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          const status = yield* SubscriptionRef.get(publicationState)
+          if (status._tag === "JournalFailed") return yield* status.failure
+          const record = yield* storage.terminateRun(runId, disposition, evidence).pipe(
+            Effect.catch((failure) =>
+              Effect.gen(function* () {
+                // This is an explicit ambiguity-reconciliation boundary, never a live reader.
+                // Recheck all durable history before accepting a terminal acknowledgement lost in transit.
+                const records = yield* storage.read(runId)
+                const reduction = reduceWorkflowJournalHistory(runId, records)
+                if (reduction._tag === "InvalidWorkflowJournalHistory") {
+                  return yield* failJournal(
+                    new JournalHistoryInvalid({
+                      detail: JSON.stringify(reduction.issues),
+                      position: JournalPosition.make(status.value.position + 1),
+                      runId
+                    })
+                  )
+                }
+                for (let offset = 0; offset < status.value.prefix.records.length; offset += 1) {
+                  const prior = journalRecordAt(status.value.prefix.records, offset)
+                  if (JSON.stringify(prior) !== JSON.stringify(records[offset])) {
+                    return yield* failJournal(
+                      new JournalRecordMismatch({
+                        key: prior?.key ?? workflowRunTerminatedRecordKey,
+                        position: prior?.position ?? JournalPosition.make(offset + 1),
+                        runId
+                      })
+                    )
+                  }
+                }
+                const terminal = acceptedJournalRecordForKey(reduction.prefix, workflowRunTerminatedRecordKey)
+                if (terminal === undefined) return yield* failure
+                return terminal
+              })
+            )
+          )
+          if (
+            record.key !== workflowRunTerminatedRecordKey ||
+            record.runId !== runId ||
+            record.event._tag !== "WorkflowRunTerminated" ||
+            record.event.disposition !== disposition ||
+            !Schema.toEquivalence(RunFinalityEvidence)(record.event.evidence, evidence)
+          ) {
+            return yield* failJournal(new JournalRecordMismatch({ key: record.key, position: record.position, runId }))
           }
-          const expectedPosition = JournalPosition.make(before.position + 1)
-          if (record.position !== expectedPosition) {
-            const failure = new JournalPositionGap({ position: record.position, expectedPosition, runId })
-            return yield* failJournal(failure)
-          }
-          const nextHistory = advanceWorkflowJournalHistory(status.history, record)
-          if (nextHistory._tag === "InvalidWorkflowJournalHistory") {
-            const failure = new JournalHistoryInvalid({
-              position: record.position,
-              detail: JSON.stringify(nextHistory.issues),
-              runId
-            })
-            return yield* failJournal(failure)
-          }
-          const next = advanceJournalState(nextHistory, before, record, target)
-          yield* SubscriptionRef.set(publicationState, { _tag: "JournalOpen", history: nextHistory, value: next })
-          yield* onAcceptedRecord(record)
-          return record
+          return yield* acceptAcknowledgedRecord(status, record)
         })
       )
     )
@@ -337,7 +392,7 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
     requestedRunId === runId
       ? state.get.pipe(Effect.map(({ prefix }) => prefix))
       : Effect.fail(new InRunJournalRunMismatch({ expectedRunId: runId, requestedRunId }))
-  return { state, append, read, readAccepted } satisfies JournalService
+  return { state, append, read, readAccepted, terminate } satisfies JournalService
 })
 
 /** Installs the one journal and exposes only its in-Run and descriptive capabilities. */
@@ -345,7 +400,7 @@ export const journalLayer = (
   runId: RunId,
   target: TrackerTarget,
   initial: ValidWorkflowJournalHistory,
-  storage: JournalStorageAppend,
+  storage: JournalStorageBoundary,
   onAcceptedRecord?: (record: JournalRecord) => Effect.Effect<void>
 ) =>
   Layer.effectContext(

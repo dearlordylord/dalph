@@ -797,7 +797,7 @@ export {
   Journal,
   type JournalService,
   type JournalState,
-  type JournalStorageAppend
+  type JournalStorageBoundary
 } from "./coordination/delivery/journal.js"
 export { delivery } from "./coordination/delivery/delivery.js"
 export { deliveryActionPlanning } from "./coordination/delivery/delivery-action-planning.js"
