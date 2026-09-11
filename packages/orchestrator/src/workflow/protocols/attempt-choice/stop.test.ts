@@ -40,7 +40,10 @@ import {
 import { Journal } from "../../../coordination/delivery/journal.js"
 import { executeAcceptedWorkflowAction } from "../../../coordination/delivery/recovered-delivery-action-adapter.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import {
+  memoryJournalTestLayer,
+  memoryJournalTestLayerFromPartitionRecords
+} from "../../../workflow-journal/adapters/memory-store.js"
 import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import {
@@ -465,6 +468,53 @@ it("does not authorize Alice's Stop when the evidence seam has no accepted execu
   expect(attemptStoppageEvidenceDisposition([], plannedAttempt)).toEqual({ _tag: "LaterCommandRecorded" })
 })
 
+it.effect("invalidates raw Stop evidence when a later Resume consumes the accepted Safe report", () =>
+  Effect.gen(function* () {
+    yield* appendExposedPrefix()
+    const journal = yield* JournalStore
+    const ordinal = PlannedAttemptExecutorCommandOrdinal.make(3)
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, ordinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "Resume",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    expect(attemptStoppageEvidenceDisposition(yield* journal.read(runId), plannedAttempt)).toEqual({
+      _tag: "LaterCommandRecorded"
+    })
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("waits at the raw evidence seam when an unaccepted Executing observation follows Safe", () =>
+  Effect.gen(function* () {
+    yield* appendExposedPrefix()
+    const journal = yield* JournalStore
+    const ordinal = PlannedAttemptExecutorStateObservationOrdinal.make(3)
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, ordinal),
+      PlannedAttemptExecutorStateObservedEvent.make({
+        observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        ordinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    expect(attemptStoppageEvidenceDisposition(yield* journal.read(runId), plannedAttempt)).toEqual({
+      _tag: "AwaitingLifecycleAcceptance"
+    })
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
 it.effect("invalidates Alice's Stop evidence when a later executor command breaks its safe report", () =>
   Effect.gen(function* () {
     yield* appendExposedStop()
@@ -770,11 +820,26 @@ it.effect("fails closed before Alice can apply Stop when the attempt's claim aut
 
 it.effect("fails closed when an active attempt has no immutable Run beginning", () =>
   Effect.gen(function* () {
-    const recovery = yield* makeRunRecoveryProjection(runId)
-    const projection = yield* recovery.readDeliveryProjection
-    expect(projection.frontier.transitions).toEqual([])
-    expect(projection.frontier.explanations).toEqual([])
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+    const orphanRecords = yield* Effect.gen(function* () {
+      yield* appendExposedPrefix()
+      // Construct a distinct malformed journal whose first event is claim acquisition,
+      // not a gap-corrupted valid journal. No live reader sees or repairs these rows.
+      return (yield* (yield* JournalStore).read(runId))
+        .filter(({ event }) => event._tag !== "WorkflowRunBegan")
+        .map((record, index) => ({ ...record, position: JournalPosition.make(index + 1) }))
+    }).pipe(Effect.provide(memoryJournalTestLayer))
+    expect(orphanRecords.some(({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan")).toBe(true)
+    yield* Effect.gen(function* () {
+      const recovery = yield* makeRunRecoveryProjection(runId)
+      const projection = yield* recovery.readDeliveryProjection
+      expect(projection.frontier.transitions).toEqual([])
+      expect(projection.frontier.explanations).toEqual([
+        { _tag: "TypedIssue", operationId: exactClaim.operationId, reason: "MissingFreshFacts" },
+        { _tag: "TypedIssue", operationId: plannedWorktreeOperation.operationId, reason: "MissingFreshFacts" },
+        { _tag: "PlannedAttemptExecutorWorkTypedIssue", correlation, reason: "MissingFreshFacts" }
+      ])
+    }).pipe(Effect.provide(memoryJournalTestLayerFromPartitionRecords({ hot: orphanRecords })))
+  })
 )
 
 it.effect("rejects attempt choices that are not exposed by the exact Run plan safe report and latest fingerprint", () =>

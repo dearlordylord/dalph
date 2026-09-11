@@ -28,6 +28,7 @@ import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import {
   attemptPlanRecordKey,
@@ -553,6 +554,16 @@ it.effect("rejects an attempt-choice request identity bound to another Run", () 
       subjectRunId: foreignRunId
     })
   }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
+)
+
+it.effect("rejects Alice's pre-begin Run at the cold recovery boundary before a live choice owner can exist", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    expect(yield* journal.readRunForRecovery(runId, target).pipe(Effect.flip)).toMatchObject({
+      _tag: "WorkflowRunNotBegan",
+      runId
+    })
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("requires the exact planned attempt before exposing Alice's choice", () =>
