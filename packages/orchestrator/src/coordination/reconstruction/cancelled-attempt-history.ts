@@ -15,8 +15,26 @@ import {
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-facts/observation-match.js"
 import { integrationResponsibilityEquivalence } from "../../workflow/protocols/integration-admission/responsibility.js"
-import { claimReadMatchesTarget, exactWorkflowRunTargetFor } from "../../workflow-journal/run-target.js"
+import { claimReadMatchesTarget, exactWorkflowRunTargetForRun } from "../../workflow-journal/run-target.js"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
+import {
+  cancelledAttemptImplementationResponsibilityRelinquishedRecordKey,
+  intentRecordKey,
+  outcomeRecordKey,
+  plannedAttemptExecutorWorkReportedRecordKey,
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
+  plannedAttemptReplacedRecordKey,
+  runCancellationAppliedRecordKey
+} from "../../workflow-journal/record-key.js"
+import {
+  isJournalRecordEvidence,
+  journalEvidenceBefore,
+  journalRecordByKey,
+  journalRecordByPosition,
+  journalRecordsForTask,
+  lastJournalRecordForAttemptKind,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
 
 type RelinquishedEvent = Extract<
   WorkflowJournalEvent,
@@ -31,45 +49,87 @@ type ClaimObservationRecord = Omit<JournalRecord, "event"> & {
   readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerFactsObserved" }>
 }
 
-const priorRecords = (records: ReadonlyArray<JournalRecord>, position: JournalPosition): ReadonlyArray<JournalRecord> =>
-  records.filter((candidate) => candidate.position < position)
+const priorRecords = (records: JournalHistorySource, position: JournalPosition): JournalHistorySource =>
+  isJournalRecordEvidence(records)
+    ? journalEvidenceBefore(records, position)
+    : records.filter((candidate) => candidate.position < position)
+
+const recordsThrough = (records: JournalHistorySource, position: JournalPosition): JournalHistorySource =>
+  isJournalRecordEvidence(records)
+    ? journalEvidenceBefore(records, position + 1)
+    : records.filter((candidate) => candidate.position <= position)
 
 const exactCancellation = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   position: JournalPosition
 ): CancellationAppliedRecord | undefined =>
-  records.find(
-    (candidate): candidate is CancellationAppliedRecord =>
-      candidate.position === position && candidate.event._tag === "RunCancellationApplied"
-  )
+  (() => {
+    const candidate = isJournalRecordEvidence(records)
+      ? journalRecordByPosition(records, position)
+      : records.find((record) => record.position === position && record.event._tag === "RunCancellationApplied")
+    return candidate?.event._tag === "RunCancellationApplied" ? { ...candidate, event: candidate.event } : undefined
+  })()
 
 const matchingRelinquishment = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   cancellationAppliedAt: JournalPosition,
   beforePosition: JournalPosition
 ): (JournalRecord & { readonly event: RelinquishedEvent }) | undefined =>
-  records.findLast(
-    (candidate): candidate is JournalRecord & { readonly event: RelinquishedEvent } =>
-      candidate.position < beforePosition &&
-      candidate.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+  (() => {
+    const source = priorRecords(records, beforePosition)
+    const candidate = isJournalRecordEvidence(source)
+      ? journalRecordByKey(
+          source,
+          cancelledAttemptImplementationResponsibilityRelinquishedRecordKey(plannedAttempt.attemptId)
+        )
+      : source.findLast(
+          (record) =>
+            record.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+            record.event.cancellationAppliedAt === cancellationAppliedAt &&
+            plannedTaskAttemptEquivalence(record.event.plannedAttempt, plannedAttempt)
+        )
+    return candidate?.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
       candidate.event.cancellationAppliedAt === cancellationAppliedAt &&
       plannedTaskAttemptEquivalence(candidate.event.plannedAttempt, plannedAttempt)
-  )
+      ? { ...candidate, event: candidate.event }
+      : undefined
+  })()
 
 const proofEvidenceFor = (
   proof: RelinquishedEvent["proof"],
   plannedAttempt: PlannedTaskAttempt,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ): PlannedAttemptExecutorEvidence | undefined =>
-  plannedAttemptExecutorEvidence(records, plannedAttempt).find(
-    (candidate) => candidate.source._tag === "AcceptedReport" && candidate.source.ordinal === proof.reportOrdinal
-  )
+  (() => {
+    if (!isJournalRecordEvidence(records)) {
+      return plannedAttemptExecutorEvidence(records, plannedAttempt).find(
+        (candidate) => candidate.source._tag === "AcceptedReport" && candidate.source.ordinal === proof.reportOrdinal
+      )
+    }
+    const candidate = journalRecordByKey(
+      records,
+      plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, proof.reportOrdinal)
+    )
+    if (
+      candidate?.event._tag !== "PlannedAttemptExecutorWorkReported" ||
+      candidate.event.ordinal !== proof.reportOrdinal ||
+      candidate.event.report.correlation.runId !== plannedAttempt.runId ||
+      candidate.event.report.correlation.attemptId !== plannedAttempt.attemptId
+    ) {
+      return undefined
+    }
+    return {
+      observedAt: candidate.position,
+      report: candidate.event.report,
+      source: { _tag: "AcceptedReport", ordinal: candidate.event.ordinal }
+    }
+  })()
 
 const proofMatchesEvidence = (
   proof: RelinquishedEvent["proof"],
   plannedAttempt: PlannedTaskAttempt,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ): boolean => {
   const evidence = proofEvidenceFor(proof, plannedAttempt, records)
   const latest = latestPlannedAttemptExecutorEvidence(records, plannedAttempt)
@@ -81,13 +141,12 @@ const proofMatchesEvidence = (
   ) {
     return false
   }
-  return !records.some(
-    ({ event, position }) =>
-      position > evidence.observedAt &&
-      event._tag === "PlannedAttemptExecutorCommandIntended" &&
-      event.plannedAttempt.runId === plannedAttempt.runId &&
-      event.plannedAttempt.attemptId === plannedAttempt.attemptId
+  const laterCommand = lastJournalRecordForAttemptKind(
+    records,
+    plannedAttempt.attemptId,
+    "PlannedAttemptExecutorCommandIntended"
   )
+  return laterCommand === undefined || laterCommand.position <= evidence.observedAt
 }
 
 const focusedClaimObservationRecord = (
@@ -103,29 +162,35 @@ const focusedClaimObservationRecord = (
   taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
 
 const claimObservationRecordFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   operationId: OperationId,
   taskId: PlannedTaskAttempt["taskId"],
   after: JournalPosition,
   before: JournalPosition,
   immutableRunTarget: TrackerTarget | undefined
 ): ClaimObservationRecord | undefined => {
-  const observation = records.findLast(
-    (candidate): candidate is ClaimObservationRecord =>
-      candidate.position > after &&
-      candidate.position < before &&
-      focusedClaimObservationRecord(candidate, taskId, immutableRunTarget) &&
-      candidate.event.operationId === operationId
-  )
-  if (
-    observation === undefined ||
-    records.some(
-      (candidate) =>
-        candidate.position > observation.position &&
-        candidate.position < before &&
+  const bounded = priorRecords(records, before)
+  const exact = isJournalRecordEvidence(bounded)
+    ? journalRecordByKey(bounded, outcomeRecordKey(operationId))
+    : bounded.findLast(
+        (candidate) =>
+          candidate.position > after &&
+          focusedClaimObservationRecord(candidate, taskId, immutableRunTarget) &&
+          candidate.event.operationId === operationId
+      )
+  const observation =
+    exact !== undefined &&
+    exact.position > after &&
+    focusedClaimObservationRecord(exact, taskId, immutableRunTarget) &&
+    exact.event.operationId === operationId
+      ? exact
+      : undefined
+  const latestFocused = isJournalRecordEvidence(bounded)
+    ? Array.from(journalRecordsForTask(bounded, taskId)).findLast((candidate) =>
         focusedClaimObservationRecord(candidate, taskId, immutableRunTarget)
-    )
-  ) {
+      )
+    : bounded.findLast((candidate) => focusedClaimObservationRecord(candidate, taskId, immutableRunTarget))
+  if (observation === undefined || (latestFocused !== undefined && latestFocused.position > observation.position)) {
     return undefined
   }
   return observation
@@ -151,7 +216,7 @@ const claimObservationIsAbsentOrForeign = (
 type ClaimReadOperation = Extract<WorkflowOperation, { readonly _tag: "ReadTaskClaim" }>
 
 const claimReadIntentFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   operationId: OperationId,
   taskId: PlannedTaskAttempt["taskId"],
   after: JournalPosition,
@@ -159,96 +224,128 @@ const claimReadIntentFor = (
   immutableRunTarget: TrackerTarget | undefined
 ): ClaimReadOperation | undefined =>
   (() => {
-    const intent = records.findLast(
-      ({ event, position }) =>
-        position > after &&
-        position < before &&
-        event._tag === "TaskTrackerReadIntentRecorded" &&
-        event.operation._tag === "ReadTaskClaim" &&
-        event.operation.operationId === operationId &&
-        event.operation.taskId === taskId &&
-        immutableRunTarget !== undefined &&
-        taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(immutableRunTarget)
-    )
+    const bounded = priorRecords(records, before)
+    const intent = isJournalRecordEvidence(bounded)
+      ? journalRecordByKey(bounded, intentRecordKey(operationId))
+      : bounded.findLast(
+          ({ event, position }) =>
+            position > after &&
+            event._tag === "TaskTrackerReadIntentRecorded" &&
+            event.operation._tag === "ReadTaskClaim" &&
+            event.operation.operationId === operationId &&
+            event.operation.taskId === taskId &&
+            immutableRunTarget !== undefined &&
+            taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(immutableRunTarget)
+        )
     if (intent?.event._tag !== "TaskTrackerReadIntentRecorded") return undefined
+    if (
+      intent.position <= after ||
+      intent.event.operation._tag !== "ReadTaskClaim" ||
+      intent.event.operation.operationId !== operationId ||
+      intent.event.operation.taskId !== taskId ||
+      immutableRunTarget === undefined ||
+      taskTrackerTargetKey(intent.event.operation.target) !== taskTrackerTargetKey(immutableRunTarget)
+    ) {
+      return undefined
+    }
     if (!claimReadMatchesTarget(records, operationId, taskId, after, before, immutableRunTarget)) return undefined
-    /* v8 ignore next -- @preserve The find predicate admits only ReadTaskClaim intent records. */
-    return intent.event.operation._tag === "ReadTaskClaim" ? intent.event.operation : undefined
+    return intent.event.operation
   })()
 
 const cancellationRelinquishmentForRelease = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authority: Extract<
     CancelledAttemptTaskClaimReleaseOperation["authority"],
     { readonly _tag: "CancelledAttemptClaimReleaseAuthority" }
   >,
   beforePosition: JournalPosition
 ): (JournalRecord & { readonly event: RelinquishedEvent }) | undefined =>
-  records.find(
-    (candidate): candidate is JournalRecord & { readonly event: RelinquishedEvent } =>
-      candidate.position === authority.implementationRelinquishedAt &&
+  (() => {
+    const candidate = isJournalRecordEvidence(records)
+      ? journalRecordByPosition(records, authority.implementationRelinquishedAt)
+      : records.find(
+          (record) =>
+            record.position === authority.implementationRelinquishedAt &&
+            record.position < beforePosition &&
+            record.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+            record.event.cancellationAppliedAt === authority.cancellationAppliedAt
+        )
+    return candidate !== undefined &&
       candidate.position < beforePosition &&
       candidate.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
       candidate.event.cancellationAppliedAt === authority.cancellationAppliedAt
-  )
+      ? { ...candidate, event: candidate.event }
+      : undefined
+  })()
 
 const priorCancellationClaimDisposition = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   relinquishedAt: JournalPosition,
   claim: RelinquishedEvent["authorizedClaim"],
   beforePosition: JournalPosition
 ): JournalRecord | undefined =>
-  records.find(
-    (candidate) =>
-      candidate.position > relinquishedAt &&
-      candidate.position < beforePosition &&
-      ((candidate.event._tag === "CancelledAttemptClaimNoReleaseObserved" &&
-        isExactTaskClaim(candidate.event.expectedClaim, claim)) ||
-        (candidate.event._tag === "TaskClaimReleased" && isExactTaskClaim(candidate.event.release.claim, claim)))
-  )
+  (() => {
+    const bounded = priorRecords(records, beforePosition)
+    const candidates = isJournalRecordEvidence(bounded)
+      ? Array.from(journalRecordsForTask(bounded, claim.taskId))
+      : bounded
+    return candidates.find(
+      (candidate) =>
+        candidate.position > relinquishedAt &&
+        ((candidate.event._tag === "CancelledAttemptClaimNoReleaseObserved" &&
+          isExactTaskClaim(candidate.event.expectedClaim, claim)) ||
+          (candidate.event._tag === "TaskClaimReleased" && isExactTaskClaim(candidate.event.release.claim, claim)))
+    )
+  })()
 
 const priorCancellationReleaseIntent = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   relinquishedAt: JournalPosition,
   claim: RelinquishedEvent["authorizedClaim"],
   beforePosition: JournalPosition
 ): JournalRecord | undefined =>
-  records.find(
-    (candidate) =>
-      candidate.position > relinquishedAt &&
-      candidate.position < beforePosition &&
-      candidate.event._tag === "TaskClaimReleaseIntended" &&
-      candidate.event.operation.authority._tag === "CancelledAttemptClaimReleaseAuthority" &&
-      isExactTaskClaim(candidate.event.operation.release.claim, claim)
-  )
+  (() => {
+    const bounded = priorRecords(records, beforePosition)
+    const candidates = isJournalRecordEvidence(bounded)
+      ? Array.from(journalRecordsForTask(bounded, claim.taskId))
+      : bounded
+    return candidates.find(
+      (candidate) =>
+        candidate.position > relinquishedAt &&
+        candidate.event._tag === "TaskClaimReleaseIntended" &&
+        candidate.event.operation.authority._tag === "CancelledAttemptClaimReleaseAuthority" &&
+        isExactTaskClaim(candidate.event.operation.release.claim, claim)
+    )
+  })()
 
 const claimBelongsToCancelledAttempt = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId,
   claim: RelinquishedEvent["authorizedClaim"],
   beforePosition: JournalPosition
 ): boolean => {
-  const cancellation = records.findLast(
-    (candidate) =>
-      candidate.position < beforePosition &&
-      candidate.runId === runId &&
-      candidate.event._tag === "RunCancellationApplied"
-  )
-  if (cancellation === undefined) return false
-  const prior = records.filter((candidate) => candidate.position < cancellation.position)
-  const attempts = prior.flatMap((candidate) => {
+  const bounded = priorRecords(records, beforePosition)
+  const cancellation = isJournalRecordEvidence(bounded)
+    ? journalRecordByKey(bounded, runCancellationAppliedRecordKey)
+    : bounded.findLast((candidate) => candidate.runId === runId && candidate.event._tag === "RunCancellationApplied")
+  if (cancellation === undefined || cancellation.runId !== runId) return false
+  const prior = priorRecords(records, cancellation.position)
+  const candidates = isJournalRecordEvidence(prior) ? Array.from(journalRecordsForTask(prior, claim.taskId)) : prior
+  const attempts = candidates.flatMap((candidate) => {
     if (candidate.event._tag === "TaskAttemptPlanned") return [candidate.event.operation.plannedAttempt]
     if (candidate.event._tag === "PlannedAttemptReplaced") return [candidate.event.successorPlan.plannedAttempt]
     return []
   })
   return attempts.some((plannedAttempt) => {
-    const executorBegan = prior.some(
-      (candidate) =>
-        candidate.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
-        plannedTaskAttemptEquivalence(candidate.event.plannedAttempt, plannedAttempt)
-    )
+    const executorBegan = isJournalRecordEvidence(prior)
+      ? journalRecordByKey(prior, plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId))
+      : prior.find(
+          (candidate) =>
+            candidate.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+            plannedTaskAttemptEquivalence(candidate.event.plannedAttempt, plannedAttempt)
+        )
     const authorized = authorizedClaimForAttempt(prior, plannedAttempt)?.claim
-    return executorBegan && authorized !== undefined && isExactTaskClaim(authorized, claim)
+    return executorBegan !== undefined && authorized !== undefined && isExactTaskClaim(authorized, claim)
   })
 }
 
@@ -265,14 +362,14 @@ const postCancellationForwardWorkTags = new Set<WorkflowJournalEvent["_tag"]>([
 const postCancellationClaimAcquisitionWork = (
   operationId: OperationId,
   eventTag: "TaskClaimAcquired" | "TaskClaimAcquisitionRejected",
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   cancellationAt: JournalPosition
 ): string | undefined =>
   claimAcquisitionWasIntendedBeforeCancellation(records, operationId, cancellationAt) ? undefined : eventTag
 
 const postCancellationIntegrationWork = (
   record: JournalRecord,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   cancellationAt: JournalPosition
 ): string | undefined =>
   integrationResponsibilityWasBeganBeforeCancellation(record, records, cancellationAt)
@@ -280,40 +377,59 @@ const postCancellationIntegrationWork = (
     : "IntegrationStarted"
 
 const claimAcquisitionWasIntendedBeforeCancellation = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   operationId: OperationId,
   cancellationAt: JournalPosition
 ): boolean =>
-  records.some(
-    ({ event, position }) =>
-      position < cancellationAt &&
-      event._tag === "TaskClaimAcquisitionIntended" &&
-      event.operation.acquisition.operationId === operationId
-  )
+  (() => {
+    const prior = priorRecords(records, cancellationAt)
+    if (!isJournalRecordEvidence(prior)) {
+      return prior.some(
+        ({ event }) =>
+          event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.operationId === operationId
+      )
+    }
+    const intent = journalRecordByKey(prior, intentRecordKey(operationId))
+    return (
+      intent?.event._tag === "TaskClaimAcquisitionIntended" &&
+      intent.event.operation.acquisition.operationId === operationId
+    )
+  })()
 
 const integrationResponsibilityWasBeganBeforeCancellation = (
   record: JournalRecord,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   cancellationAt: JournalPosition
 ): boolean => {
   const started = record.event
   /* v8 ignore next -- @preserve postCancellationForwardWork calls this helper only for IntegrationStarted records. */
   if (started._tag !== "IntegrationStarted") return false
-  return records.some((candidate) => {
-    const began = candidate.event
-    return (
-      candidate.position < cancellationAt &&
-      candidate.position < record.position &&
-      candidate.position === started.responsibilityBeganAt &&
-      began._tag === "IntegrationResponsibilityBegan" &&
-      integrationResponsibilityEquivalence(began, started)
-    )
-  })
+  if (!isJournalRecordEvidence(records)) {
+    return records.some((candidate) => {
+      const began = candidate.event
+      return (
+        candidate.position < cancellationAt &&
+        candidate.position < record.position &&
+        candidate.position === started.responsibilityBeganAt &&
+        began._tag === "IntegrationResponsibilityBegan" &&
+        integrationResponsibilityEquivalence(began, started)
+      )
+    })
+  }
+  const candidate = journalRecordByPosition(records, started.responsibilityBeganAt)
+  const began = candidate?.event
+  return (
+    candidate !== undefined &&
+    candidate.position < cancellationAt &&
+    candidate.position < record.position &&
+    began?._tag === "IntegrationResponsibilityBegan" &&
+    integrationResponsibilityEquivalence(began, started)
+  )
 }
 
 const postCancellationForwardWork = (
   record: JournalRecord,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   cancellationAt: JournalPosition
 ): string | undefined => {
   const { event } = record
@@ -339,17 +455,15 @@ const postCancellationForwardWork = (
 const validateNoForwardWorkAfterCancellation = (
   record: JournalRecord,
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): void => {
   if (record.runId !== runId) return
-  const cancellation = records.findLast(
-    (candidate) =>
-      candidate.position < record.position &&
-      candidate.runId === runId &&
-      candidate.event._tag === "RunCancellationApplied"
-  )
-  if (cancellation === undefined) return
+  const prior = priorRecords(records, record.position)
+  const cancellation = isJournalRecordEvidence(prior)
+    ? journalRecordByKey(prior, runCancellationAppliedRecordKey)
+    : prior.findLast((candidate) => candidate.runId === runId && candidate.event._tag === "RunCancellationApplied")
+  if (cancellation === undefined || cancellation.runId !== runId) return
   const forbidden = postCancellationForwardWork(record, records, cancellation.position)
   if (forbidden !== undefined) {
     onInvalid(`post-cancellation history cannot record forward-work event ${forbidden}`)
@@ -360,8 +474,8 @@ const validateRelinquishmentFoundations = (
   event: RelinquishedEvent,
   position: JournalPosition,
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
-  prior: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
+  prior: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): CancellationAppliedRecord | undefined => {
   const cancellation = exactCancellation(records, event.cancellationAppliedAt)
@@ -382,30 +496,41 @@ const validateRelinquishmentFoundations = (
 const validateRelinquishmentResponsibility = (
   event: RelinquishedEvent,
   cancellation: CancellationAppliedRecord | undefined,
-  prior: ReadonlyArray<JournalRecord>,
+  prior: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): void => {
-  const began = prior.find(
-    (candidate) =>
-      candidate.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
-      plannedTaskAttemptEquivalence(candidate.event.plannedAttempt, event.plannedAttempt)
-  )
-  if (began === undefined || (cancellation !== undefined && began.position >= cancellation.position)) {
+  const began = isJournalRecordEvidence(prior)
+    ? journalRecordByKey(prior, plannedAttemptExecutorWorkResponsibilityBeganRecordKey(event.plannedAttempt.attemptId))
+    : prior.find(
+        (candidate) =>
+          candidate.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+          plannedTaskAttemptEquivalence(candidate.event.plannedAttempt, event.plannedAttempt)
+      )
+  const matchingBegan =
+    began?.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+    plannedTaskAttemptEquivalence(began.event.plannedAttempt, event.plannedAttempt)
+      ? began
+      : undefined
+  if (matchingBegan === undefined || (cancellation !== undefined && matchingBegan.position >= cancellation.position)) {
     onInvalid("cancelled-attempt relinquishment requires prior executor-work responsibility")
   }
 }
 
 const validateRelinquishmentNotReplaced = (
   event: RelinquishedEvent,
-  prior: ReadonlyArray<JournalRecord>,
+  prior: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): void => {
+  const replacement = isJournalRecordEvidence(prior)
+    ? journalRecordByKey(prior, plannedAttemptReplacedRecordKey(event.plannedAttempt.attemptId))
+    : prior.find(
+        (candidate) =>
+          candidate.event._tag === "PlannedAttemptReplaced" &&
+          plannedTaskAttemptEquivalence(candidate.event.subject.plannedAttempt, event.plannedAttempt)
+      )
   if (
-    prior.some(
-      (candidate) =>
-        candidate.event._tag === "PlannedAttemptReplaced" &&
-        plannedTaskAttemptEquivalence(candidate.event.subject.plannedAttempt, event.plannedAttempt)
-    )
+    replacement?.event._tag === "PlannedAttemptReplaced" &&
+    plannedTaskAttemptEquivalence(replacement.event.subject.plannedAttempt, event.plannedAttempt)
   ) {
     onInvalid("cancelled-attempt relinquishment cannot follow replacement of the exact planned attempt")
   }
@@ -413,15 +538,22 @@ const validateRelinquishmentNotReplaced = (
 
 const validateRelinquishmentNotRepeated = (
   event: RelinquishedEvent,
-  prior: ReadonlyArray<JournalRecord>,
+  prior: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): void => {
+  const relinquished = isJournalRecordEvidence(prior)
+    ? journalRecordByKey(
+        prior,
+        cancelledAttemptImplementationResponsibilityRelinquishedRecordKey(event.plannedAttempt.attemptId)
+      )
+    : prior.find(
+        (candidate) =>
+          candidate.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+          plannedTaskAttemptEquivalence(candidate.event.plannedAttempt, event.plannedAttempt)
+      )
   if (
-    prior.some(
-      (candidate) =>
-        candidate.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
-        plannedTaskAttemptEquivalence(candidate.event.plannedAttempt, event.plannedAttempt)
-    )
+    relinquished?.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+    plannedTaskAttemptEquivalence(relinquished.event.plannedAttempt, event.plannedAttempt)
   ) {
     onInvalid("cancelled-attempt implementation responsibility is already relinquished")
   }
@@ -430,12 +562,11 @@ const validateRelinquishmentNotRepeated = (
 const validateRelinquishmentClaim = (
   event: RelinquishedEvent,
   cancellation: CancellationAppliedRecord | undefined,
-  records: ReadonlyArray<JournalRecord>,
-  prior: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
+  prior: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): void => {
-  const recordsThroughCancellation =
-    cancellation === undefined ? prior : records.filter((candidate) => candidate.position <= cancellation.position)
+  const recordsThroughCancellation = cancellation === undefined ? prior : recordsThrough(records, cancellation.position)
   const authorized = authorizedClaimForAttempt(recordsThroughCancellation, event.plannedAttempt)?.claim
   if (authorized === undefined || !isExactTaskClaim(authorized, event.authorizedClaim)) {
     onInvalid("cancelled-attempt relinquishment requires the exact authorized claim")
@@ -445,7 +576,7 @@ const validateRelinquishmentClaim = (
 const validateRelinquishmentProof = (
   event: RelinquishedEvent,
   cancellation: CancellationAppliedRecord | undefined,
-  prior: ReadonlyArray<JournalRecord>,
+  prior: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): void => {
   if (cancellation === undefined || !proofMatchesEvidence(event.proof, event.plannedAttempt, prior)) {
@@ -456,7 +587,7 @@ const validateRelinquishmentProof = (
 const validateRelinquishment = (
   record: JournalRecord,
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): void => {
   if (record.event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished") return
@@ -474,7 +605,7 @@ const validateNoReleaseFoundations = (
   event: NoReleaseEvent,
   position: JournalPosition,
   runId: RunId,
-  prior: ReadonlyArray<JournalRecord>,
+  prior: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): (JournalRecord & { readonly event: RelinquishedEvent }) | undefined => {
   if (event.plannedAttempt.runId !== runId) onInvalid("cancelled-attempt no-release binds another Run")
@@ -502,12 +633,12 @@ const noReleaseObservationMatchesEvent = (
 }
 
 const noReleaseObservationIsValid = (
-  prior: ReadonlyArray<JournalRecord>,
+  prior: JournalHistorySource,
   event: NoReleaseEvent,
   position: JournalPosition,
   relinquished: JournalRecord & { readonly event: RelinquishedEvent }
 ): boolean => {
-  const immutableRunTarget = exactWorkflowRunTargetFor(prior)
+  const immutableRunTarget = exactWorkflowRunTargetForRun(prior, event.plannedAttempt.runId)
   const observation = claimObservationRecordFor(
     prior,
     event.observationOperationId,
@@ -540,7 +671,7 @@ const noReleaseObservationIsValid = (
 }
 
 const validateNoReleaseObservation = (
-  prior: ReadonlyArray<JournalRecord>,
+  prior: JournalHistorySource,
   event: NoReleaseEvent,
   position: JournalPosition,
   relinquished: JournalRecord & { readonly event: RelinquishedEvent },
@@ -552,7 +683,7 @@ const validateNoReleaseObservation = (
 }
 
 const validateNoReleaseDisposition = (
-  prior: ReadonlyArray<JournalRecord>,
+  prior: JournalHistorySource,
   event: NoReleaseEvent,
   position: JournalPosition,
   relinquished: JournalRecord & { readonly event: RelinquishedEvent },
@@ -569,7 +700,7 @@ const validateNoReleaseDisposition = (
 const validateNoRelease = (
   record: JournalRecord,
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): void => {
   if (record.event._tag !== "CancelledAttemptClaimNoReleaseObserved") return
@@ -584,12 +715,15 @@ const validateNoRelease = (
 const validateNonCancellationReleaseAuthority = (
   operation: ReleaseIntentEvent["operation"],
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   position: JournalPosition,
-  prior: ReadonlyArray<JournalRecord>,
+  prior: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): void => {
-  const relinquished = prior.findLast(
+  const candidates = isJournalRecordEvidence(prior)
+    ? Array.from(journalRecordsForTask(prior, operation.release.claim.taskId))
+    : prior
+  const relinquished = candidates.findLast(
     (candidate) =>
       candidate.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
       isExactTaskClaim(candidate.event.authorizedClaim, operation.release.claim)
@@ -607,7 +741,7 @@ const cancellationReleaseRelinquishmentFor = (
   >,
   runId: RunId,
   position: JournalPosition,
-  prior: ReadonlyArray<JournalRecord>,
+  prior: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): (JournalRecord & { readonly event: RelinquishedEvent }) | undefined => {
   const cancellation = exactCancellation(prior, authority.cancellationAppliedAt)
@@ -626,7 +760,7 @@ const cancellationReleaseRelinquishmentFor = (
 }
 
 const cancellationReleaseObservationIsValid = (
-  prior: ReadonlyArray<JournalRecord>,
+  prior: JournalHistorySource,
   authority: Extract<
     ReleaseIntentEvent["operation"]["authority"],
     { readonly _tag: "CancelledAttemptClaimReleaseAuthority" }
@@ -634,7 +768,7 @@ const cancellationReleaseObservationIsValid = (
   position: JournalPosition,
   relinquished: JournalRecord & { readonly event: RelinquishedEvent }
 ): boolean => {
-  const immutableRunTarget = exactWorkflowRunTargetFor(prior)
+  const immutableRunTarget = exactWorkflowRunTargetForRun(prior, relinquished.event.plannedAttempt.runId)
   const observation = claimObservationRecordFor(
     prior,
     authority.observationOperationId,
@@ -659,7 +793,7 @@ const cancellationReleaseObservationIsValid = (
 }
 
 const validateCancellationReleaseObservation = (
-  prior: ReadonlyArray<JournalRecord>,
+  prior: JournalHistorySource,
   authority: Extract<
     ReleaseIntentEvent["operation"]["authority"],
     { readonly _tag: "CancelledAttemptClaimReleaseAuthority" }
@@ -674,7 +808,7 @@ const validateCancellationReleaseObservation = (
 }
 
 const validateCancellationReleaseDisposition = (
-  prior: ReadonlyArray<JournalRecord>,
+  prior: JournalHistorySource,
   operation: ReleaseIntentEvent["operation"],
   position: JournalPosition,
   relinquished: JournalRecord & { readonly event: RelinquishedEvent },
@@ -691,7 +825,7 @@ const validateCancellationReleaseDisposition = (
 const validateCancellationReleaseIntent = (
   record: JournalRecord,
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): void => {
   if (record.event._tag !== "TaskClaimReleaseIntended") return
@@ -720,19 +854,24 @@ const validateCancellationReleaseIntent = (
 const validateCancellationReleaseOutcome = (
   record: JournalRecord,
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): void => {
   if (record.event._tag !== "TaskClaimReleased") return
   const released = record.event
   const prior = priorRecords(records, record.position)
-  const intent = prior.findLast((candidate): candidate is JournalRecord & { readonly event: ReleaseIntentEvent } => {
-    const candidateEvent = candidate.event
-    return (
-      candidateEvent._tag === "TaskClaimReleaseIntended" &&
-      candidateEvent.operation.release.operationId === released.release.operationId
-    )
-  })
+  const intentCandidate = isJournalRecordEvidence(prior)
+    ? journalRecordByKey(prior, intentRecordKey(released.release.operationId))
+    : prior.findLast(
+        (candidate) =>
+          candidate.event._tag === "TaskClaimReleaseIntended" &&
+          candidate.event.operation.release.operationId === released.release.operationId
+      )
+  const intent =
+    intentCandidate?.event._tag === "TaskClaimReleaseIntended" &&
+    intentCandidate.event.operation.release.operationId === released.release.operationId
+      ? { ...intentCandidate, event: intentCandidate.event }
+      : undefined
   if (intent?.event.operation.authority._tag !== "CancelledAttemptClaimReleaseAuthority") return
   if (intent.runId !== runId || !isExactTaskClaim(intent.event.operation.release.claim, released.release.claim)) {
     onInvalid("cancelled-attempt claim release outcome contradicts its exact intent")
@@ -755,7 +894,7 @@ const validateCancellationReleaseOutcome = (
 export const validateCancelledAttemptHistory = (
   record: JournalRecord,
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): void => {
   validateNoForwardWorkAfterCancellation(record, runId, records, onInvalid)
