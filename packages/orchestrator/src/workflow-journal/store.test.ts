@@ -2,13 +2,14 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
 import { it } from "@effect/vitest"
-import { Cause, ConfigProvider, Deferred, Effect, FileSystem, Fiber, Layer, Path } from "effect"
+import { Cause, ConfigProvider, Context, Deferred, Effect, FileSystem, Fiber, Layer, Option, Path } from "effect"
 import * as Reactivity from "effect/unstable/reactivity/Reactivity"
 import * as SqlError from "effect/unstable/sql/SqlError"
 import { describe, expect } from "vitest"
 import { RunId, TaskId } from "@dalph/contracts"
 import {
   FixtureTarget,
+  AcceptedJournalReader,
   CoordinatorOwnership,
   InitialControlPolicy,
   InRunJournalRunMismatch,
@@ -954,6 +955,13 @@ journalAppendContract("sqlite", () =>
 )
 journalAppendContract("sqlite-qualification", () =>
   sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") })
+)
+it.effect("does not manufacture accepted history from the raw SQLite test journal", () =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") }))
+    expect(Context.getOption(context, AcceptedJournalReader)).toSatisfy(Option.isNone)
+    expect(Context.getOption(context, JournalStore)).toSatisfy(Option.isSome)
+  })
 )
 durableJournalStoreContract(
   "sqlite",

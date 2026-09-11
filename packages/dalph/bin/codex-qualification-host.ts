@@ -33,17 +33,8 @@ import {
   nodeGitCommandLayer,
   beginPlannedAttemptExecutorWork,
   plannedAttemptProtocolControllerLayer,
-  sqliteJournalTestLayer,
   JournalDatabaseLocator,
-  JournalStore,
-  OperationId,
-  FixtureTarget,
-  makeTaskWorkSpecificationObservationOperation,
-  makeFocusedTaskWorkSpecificationFactsObserved,
-  taskTrackerReadIntent,
-  taskTrackerFactsObservedEvent,
-  intentRecordKey,
-  outcomeRecordKey
+  InRunJournal
 } from "@dalph/orchestrator"
 import { Cause, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import {
@@ -57,6 +48,7 @@ import {
   nodeCodexAttemptStoreLayer
 } from "../src/application/codex-attempt-store.js"
 import { nodeCodexPlannedAttemptExecutorLayer } from "../src/application/codex-planned-attempt-executor.js"
+import { qualificationWorkflowJournalLayer } from "../src/application/qualification-journal.js"
 import { CodexQualificationAction, CodexQualificationHostEvent } from "./codex-qualification-host-contract.js"
 
 const QualificationConfiguration = Schema.Struct({
@@ -268,25 +260,7 @@ const configurationProgram = Effect.gen(function* () {
 
         if (configuration.action === "workflow-association-cut" || configuration.action === "workflow-begin") {
           yield* Effect.gen(function* () {
-            const journal = yield* JournalStore
-            const records = yield* journal.read(attempt.runId)
-            if (records.length === 0) {
-              const read = makeTaskWorkSpecificationObservationOperation(
-                OperationId.make("qualification-original-specification"),
-                FixtureTarget.make("qualification"),
-                attempt.taskId,
-                []
-              )
-              yield* journal.append(attempt.runId, intentRecordKey(read.operationId), taskTrackerReadIntent(read))
-              yield* journal.append(
-                attempt.runId,
-                outcomeRecordKey(read.operationId),
-                taskTrackerFactsObservedEvent(
-                  read.operationId,
-                  makeFocusedTaskWorkSpecificationFactsObserved(read, specification)
-                )
-              )
-            }
+            const journal = yield* InRunJournal
             yield* writeEvent(reportEvent("Begin", yield* beginPlannedAttemptExecutorWork(attempt)))
             const after = yield* journal.read(attempt.runId)
             const intents = after.flatMap(({ event }) =>
@@ -305,10 +279,12 @@ const configurationProgram = Effect.gen(function* () {
             Effect.provide(
               Layer.merge(
                 plannedAttemptProtocolControllerLayer,
-                sqliteJournalTestLayer({
+                qualificationWorkflowJournalLayer({
+                  attempt,
                   filename: JournalDatabaseLocator.make(
                     nodePath.join(configuration.stateDirectory, "qualification-journal.sqlite")
-                  )
+                  ),
+                  specification
                 })
               )
             )
