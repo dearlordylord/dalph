@@ -265,16 +265,15 @@ const invalidRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | 
             candidate.plannedAttempt.runId,
             ...(candidate.observation._tag === "ExactExecutorReport"
               ? [candidate.observation.report.correlation.runId]
-              : candidate.observation._tag === "ExecutorReportContradiction"
-                ? [candidate.observation.observed.correlation.runId]
-                : [])
+              : [])
           ],
           runId
         ),
       PlannedAttemptExecutorCommandResponseContradicted: (candidate) =>
         invalidNestedRunBinding(
           "executor command response",
-          [candidate.plannedAttempt.runId, candidate.observed.correlation.runId],
+          // The expected attempt is authority; the explicitly foreign response is retained evidence.
+          [candidate.plannedAttempt.runId],
           runId
         ),
       PlannedAttemptExecutorStateObserved: (candidate) =>
@@ -284,9 +283,7 @@ const invalidRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | 
             candidate.plannedAttempt.runId,
             ...(candidate.observation._tag === "ExactExecutorReport"
               ? [candidate.observation.report.correlation.runId]
-              : candidate.observation._tag === "ExecutorReportContradiction"
-                ? [candidate.observation.observed.correlation.runId]
-                : [])
+              : [])
           ],
           runId
         ),
