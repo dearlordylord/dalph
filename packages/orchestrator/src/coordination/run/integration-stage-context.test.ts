@@ -16,14 +16,11 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { InRunJournal, JournalStore } from "../../workflow-journal/store.js"
-import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
-import { memoryJournalTestLayer } from "../../workflow-journal/adapters/memory-store.js"
-import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
-import { makeJournal } from "../delivery/journal.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { liveJournalTestLayer } from "../delivery/live-journal-test-layer.js"
+import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import {
   AcceptedResultNotDurable,
   AcceptedResultEvidenceUnavailable,
@@ -49,20 +46,20 @@ const integrationTarget = IntegrationTarget.make({
   ref: IntegrationTargetRef.make("refs/heads/master")
 })
 
-const makeIntegrationJournal = Effect.fn("IntegrationStageContextTest.makeJournal")(function* (
-  plannedAttempt: PlannedTaskAttempt
-) {
-  const storage = yield* JournalStore
+const integrationJournalLayer = (plannedAttempt: PlannedTaskAttempt) => {
   const target = FixtureTarget.make(`${plannedAttempt.runId}-target`)
-  yield* storage.beginRun(
-    plannedAttempt.runId,
-    target,
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-  )
-  const initial = reduceWorkflowJournalHistory(plannedAttempt.runId, yield* storage.read(plannedAttempt.runId))
-  if (initial._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die(initial)
-  return yield* makeJournal(plannedAttempt.runId, target, initial, storage)
-})
+  return liveJournalTestLayer({
+    records: [
+      makeWorkflowRunBeganRecord(
+        plannedAttempt.runId,
+        target,
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      )
+    ],
+    runId: plannedAttempt.runId,
+    target
+  })
+}
 
 it("fails with a typed error when a fresh accepted result has no ambient journal", async () => {
   const plannedAttempt = plannedAttemptFixture("missing-integration-journal")
@@ -87,11 +84,7 @@ it("fails with a typed error when a fresh accepted result has no ambient journal
 it.effect("uses the ambient journal when a fresh accepted result is queued", () =>
   Effect.gen(function* () {
     const plannedAttempt = plannedAttemptFixture("available-integration-journal")
-    const journal = yield* makeIntegrationJournal(plannedAttempt)
-    const context = yield* makeIntegrationStageContext().pipe(
-      Effect.provideService(InRunJournal, InRunJournal.of({ append: journal.append, read: journal.read })),
-      Effect.provideService(AcceptedJournalReader, AcceptedJournalReader.of({ readAccepted: journal.readAccepted }))
-    )
+    const context = yield* makeIntegrationStageContext()
     const failure = yield* context
       .queueAcceptedResult(plannedAttempt, acceptedResultFixture(GitCommitSha.make("a".repeat(40))), integrationTarget)
       .pipe(Effect.flip)
@@ -104,16 +97,13 @@ it.effect("uses the ambient journal when a fresh accepted result is queued", () 
         runId: plannedAttempt.runId
       })
     )
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(integrationJournalLayer(plannedAttemptFixture("available-integration-journal"))))
 )
 
 it.effect("uses both ambient boundaries before delegating accepted-result admission", () =>
   Effect.gen(function* () {
     const plannedAttempt = plannedAttemptFixture("available-integration-boundaries")
-    const journal = yield* makeIntegrationJournal(plannedAttempt)
     const context = yield* makeIntegrationStageContext().pipe(
-      Effect.provideService(InRunJournal, InRunJournal.of({ append: journal.append, read: journal.read })),
-      Effect.provideService(AcceptedJournalReader, AcceptedJournalReader.of({ readAccepted: journal.readAccepted })),
       Effect.provideService(
         EvidenceStore,
         EvidenceStore.of({ put: () => Effect.die("put is unreachable"), read: () => Effect.die("read is unreachable") })
@@ -127,5 +117,5 @@ it.effect("uses both ambient boundaries before delegating accepted-result admiss
     expect(failure).toEqual(
       new AcceptedResultNotDurable({ attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId })
     )
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(integrationJournalLayer(plannedAttemptFixture("available-integration-boundaries"))))
 )
