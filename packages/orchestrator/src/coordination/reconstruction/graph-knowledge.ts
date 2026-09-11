@@ -53,13 +53,39 @@ interface GraphKnowledgeIndex {
   readonly latest: GraphFactsObservation | undefined
 }
 const graphIndexes = new WeakMap<ReconstructableGraphKnowledge, GraphKnowledgeIndex>()
-const emptyGraphIndex = (): GraphKnowledgeIndex => ({ observations: HashMap.empty(), length: 0, completeByOperation: HashMap.empty(), latestByTarget: HashMap.empty(), specifications: HashMap.empty(), latest: undefined })
-const addGraphObservation = (prior: GraphKnowledgeIndex, observation: TaskTrackerFactsObservation): GraphKnowledgeIndex => ({
+const emptyGraphIndex = (): GraphKnowledgeIndex => ({
+  observations: HashMap.empty(),
+  length: 0,
+  completeByOperation: HashMap.empty(),
+  latestByTarget: HashMap.empty(),
+  specifications: HashMap.empty(),
+  latest: undefined
+})
+const addGraphObservation = (
+  prior: GraphKnowledgeIndex,
+  observation: TaskTrackerFactsObservation
+): GraphKnowledgeIndex => ({
   observations: HashMap.set(prior.observations, prior.length, observation),
   length: prior.length + 1,
-  completeByOperation: observation._tag === "CompleteTaskTrackerFacts" && !HashMap.has(prior.completeByOperation, observation.operationId) ? HashMap.set(prior.completeByOperation, observation.operationId, observation) : prior.completeByOperation,
-  latestByTarget: isGraphFactsObservation(observation) ? HashMap.set(prior.latestByTarget, taskTrackerTargetKey(observation.target), observation) : prior.latestByTarget,
-  specifications: observation._tag === "FocusedTaskWorkSpecificationFacts" ? HashMap.set(HashMap.set(prior.specifications, JSON.stringify([observation.factFamily.taskId, taskTrackerTargetKey(observation.target)]), observation), JSON.stringify([observation.factFamily.taskId]), observation) : prior.specifications,
+  completeByOperation:
+    observation._tag === "CompleteTaskTrackerFacts" && !HashMap.has(prior.completeByOperation, observation.operationId)
+      ? HashMap.set(prior.completeByOperation, observation.operationId, observation)
+      : prior.completeByOperation,
+  latestByTarget: isGraphFactsObservation(observation)
+    ? HashMap.set(prior.latestByTarget, taskTrackerTargetKey(observation.target), observation)
+    : prior.latestByTarget,
+  specifications:
+    observation._tag === "FocusedTaskWorkSpecificationFacts"
+      ? HashMap.set(
+          HashMap.set(
+            prior.specifications,
+            JSON.stringify([observation.factFamily.taskId, taskTrackerTargetKey(observation.target)]),
+            observation
+          ),
+          JSON.stringify([observation.factFamily.taskId]),
+          observation
+        )
+      : prior.specifications,
   latest: isGraphFactsObservation(observation) ? observation : prior.latest
 })
 const graphIndexFor = (knowledge: ReconstructableGraphKnowledge): GraphKnowledgeIndex => {
@@ -76,14 +102,21 @@ export const initializeDurableGraphKnowledge = (knowledge: ReconstructableGraphK
 }
 
 /** Adds one observation using shared immutable indexes; historical arrays are explicit lazy exports. */
-export const advanceDurableGraphKnowledge = (prior: ReconstructableGraphKnowledge, observation: TaskTrackerFactsObservation): ReconstructableGraphKnowledge => {
+export const advanceDurableGraphKnowledge = (
+  prior: ReconstructableGraphKnowledge,
+  observation: TaskTrackerFactsObservation
+): ReconstructableGraphKnowledge => {
   const index = addGraphObservation(graphIndexFor(prior), observation)
   return graphKnowledgeWithIndex(index)
 }
 const graphKnowledgeWithIndex = (index: GraphKnowledgeIndex): ReconstructableGraphKnowledge => {
   let exported: ReadonlyArray<TaskTrackerFactsObservation> | undefined
   const knowledge: ReconstructableGraphKnowledge = {
-    get taskTrackerFacts() { return exported ??= Array.from({ length: index.length }, (_, offset) => Option.getOrThrow(HashMap.get(index.observations, offset))) }
+    get taskTrackerFacts() {
+      return (exported ??= Array.from({ length: index.length }, (_, offset) =>
+        Option.getOrThrow(HashMap.get(index.observations, offset))
+      ))
+    }
   }
   graphIndexes.set(knowledge, index)
   return knowledge
@@ -115,7 +148,11 @@ export const reconstructedTaskGraphFor = (
   const observation =
     latest._tag === "CompleteTaskTrackerFacts"
       ? latest
-      : Option.getOrUndefined(Option.filter(HashMap.get(index.completeByOperation, latest.priorFullObservationOperationId), (full) => reconfirmationMatchesPriorFullObservation(latest, full)))
+      : Option.getOrUndefined(
+          Option.filter(HashMap.get(index.completeByOperation, latest.priorFullObservationOperationId), (full) =>
+            reconfirmationMatchesPriorFullObservation(latest, full)
+          )
+        )
   const result = (() => {
     if (observation?._tag !== "CompleteTaskTrackerFacts") return Option.none<TaskDagSnapshot>()
     const projected = projectTrackerSnapshot({
@@ -150,7 +187,10 @@ export const reconstructedTaskWorkSpecificationFor = (
   taskId: TaskId,
   immutableRunTarget?: TrackerTarget
 ): Option.Option<TaskWorkSpecification> => {
-  const key = immutableRunTarget === undefined ? JSON.stringify([taskId]) : JSON.stringify([taskId, taskTrackerTargetKey(immutableRunTarget)])
+  const key =
+    immutableRunTarget === undefined
+      ? JSON.stringify([taskId])
+      : JSON.stringify([taskId, taskTrackerTargetKey(immutableRunTarget)])
   const observation = Option.getOrUndefined(HashMap.get(graphIndexFor(knowledge).specifications, key))
   if (observation?._tag !== "FocusedTaskWorkSpecificationFacts") return Option.none()
   return Option.some(

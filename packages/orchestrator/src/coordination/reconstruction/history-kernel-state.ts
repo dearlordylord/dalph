@@ -6,11 +6,21 @@ import type { WorkflowOperation } from "../../workflow/registry/operation.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import type { IntegrationHistoryIndexes } from "./integration-history.js"
 import type { IntegrationFinalityHistoryIndexes } from "../../workflow/protocols/integration-finality/history.js"
-import { makeTaskTrackerReconfirmationIndex, type TaskTrackerReconfirmationIndex } from "../../workflow/task-tracker-facts/reconfirmation.js"
-import { WorkflowJournalHistoryIdentityIssue, WorkflowJournalHistorySemanticIssue, type WorkflowJournalHistoryIssue } from "./history-result.js"
+import {
+  makeTaskTrackerReconfirmationIndex,
+  type TaskTrackerReconfirmationIndex
+} from "../../workflow/task-tracker-facts/reconfirmation.js"
+import {
+  WorkflowJournalHistoryIdentityIssue,
+  WorkflowJournalHistorySemanticIssue,
+  type WorkflowJournalHistoryIssue
+} from "./history-result.js"
+
+const SemanticFoldIndexesTypeId: unique symbol = Symbol("SemanticFoldIndexes")
 
 /** Process-local immutable semantic fold facts, never persisted external authority. */
 export interface FoldIndexes extends IntegrationHistoryIndexes {
+  readonly [SemanticFoldIndexesTypeId]: true
   readonly abandonedExecutorAttempts: HashSet.HashSet<AttemptId>
   readonly integrationFinalityHistory: IntegrationFinalityHistoryIndexes
   readonly attemptChoiceSubjects: HashSet.HashSet<string>
@@ -20,9 +30,15 @@ export interface FoldIndexes extends IntegrationHistoryIndexes {
   readonly executorCommandProjectionOrdinals: HashMap.HashMap<string, number>
   readonly executorReportOrdinals: HashMap.HashMap<AttemptId, number>
   readonly executorStateObservationOrdinals: HashMap.HashMap<AttemptId, number>
-  readonly executorResponsibilitiesBegan: HashMap.HashMap<AttemptId, { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }>
+  readonly executorResponsibilitiesBegan: HashMap.HashMap<
+    AttemptId,
+    { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
+  >
   readonly plans: HashMap.HashMap<AttemptId, PlannedTaskAttempt>
-  readonly gitReadIntents: HashMap.HashMap<OperationId, Extract<WorkflowOperation, { readonly _tag: "ReadTargetLineage" | "ReadTaskWorktree" }>>
+  readonly gitReadIntents: HashMap.HashMap<
+    OperationId,
+    Extract<WorkflowOperation, { readonly _tag: "ReadTargetLineage" | "ReadTaskWorktree" }>
+  >
   readonly latestRunPolicyRevision: number | undefined
   readonly seenEventKindsByOperation: HashMap.HashMap<OperationId, HashSet.HashSet<WorkflowJournalEvent["_tag"]>>
   readonly seenKeys: HashSet.HashSet<JournalRecordKey>
@@ -36,15 +52,26 @@ export interface FoldIndexes extends IntegrationHistoryIndexes {
 export const mapGet = <Key, Value>(map: HashMap.HashMap<Key, Value>, key: Key): Value | undefined =>
   Option.getOrUndefined(HashMap.get(map, key))
 
-export const identityIssue = (issues: Array<WorkflowJournalHistoryIssue>, runId: RunId, position: JournalPosition, detail: string): void => {
+export const identityIssue = (
+  issues: Array<WorkflowJournalHistoryIssue>,
+  runId: RunId,
+  position: JournalPosition,
+  detail: string
+): void => {
   issues.push(new WorkflowJournalHistoryIdentityIssue({ detail, position, runId }))
 }
 
-export const semanticIssue = (issues: Array<WorkflowJournalHistoryIssue> | Array<WorkflowJournalHistorySemanticIssue>, runId: RunId, position: JournalPosition, detail: string): void => {
+export const semanticIssue = (
+  issues: Array<WorkflowJournalHistoryIssue> | Array<WorkflowJournalHistorySemanticIssue>,
+  runId: RunId,
+  position: JournalPosition,
+  detail: string
+): void => {
   issues.push(new WorkflowJournalHistorySemanticIssue({ detail, position, runId }))
 }
 
 export const emptyIndexes = (): FoldIndexes => ({
+  [SemanticFoldIndexesTypeId]: true,
   acceptedExecutorResults: HashMap.empty(),
   abandonedExecutorAttempts: HashSet.empty(),
   attemptChoiceSubjects: HashSet.empty(),
@@ -68,10 +95,20 @@ export const emptyIndexes = (): FoldIndexes => ({
   integratorRunResults: HashMap.empty(),
   integratorRunCandidateGitReadIntents: HashMap.empty(),
   integratorRunCandidateGitObservations: HashMap.empty(),
-  targetPromotionHistory: { attempts: HashMap.empty(), deferrals: HashMap.empty(), intents: HashMap.empty(), terminals: HashSet.empty() },
+  targetPromotionHistory: {
+    attempts: HashMap.empty(),
+    deferrals: HashMap.empty(),
+    intents: HashMap.empty(),
+    terminals: HashSet.empty()
+  },
   integrationFinalityHistory: {
-    deletionAttempts: HashMap.empty(), deletionIntents: HashMap.empty(), deletionTerminals: HashSet.empty(),
-    replacementAttempts: HashMap.empty(), replacementIntents: HashMap.empty(), replacementTerminals: HashMap.empty(), settlements: HashSet.empty()
+    deletionAttempts: HashMap.empty(),
+    deletionIntents: HashMap.empty(),
+    deletionTerminals: HashSet.empty(),
+    replacementAttempts: HashMap.empty(),
+    replacementIntents: HashMap.empty(),
+    replacementTerminals: HashMap.empty(),
+    settlements: HashSet.empty()
   },
   latestControlDirectionOrdinal: 0,
   plans: HashMap.empty(),

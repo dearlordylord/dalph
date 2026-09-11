@@ -8,47 +8,65 @@ import { taskWorkCapacityPolicyRecordKey } from "../../workflow-journal/record-k
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { TaskWorkCapacityChangedEvent } from "../../workflow/registry/event.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
-import { advanceWorkflowJournalHistory, reduceWorkflowJournalHistory, inspectWorkflowJournalHistoryValidationPath } from "./history.js"
+import {
+  advanceWorkflowJournalHistory,
+  reduceWorkflowJournalHistory,
+  inspectWorkflowJournalHistoryValidationPath
+} from "./history.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 
-it.each([64, 256])("Alice changes capacity after %i accepted records without materializing or traversing the prefix", (size) => {
-  const runId = RunId.make("capacity-scaling")
-  const began = makeWorkflowRunBeganRecord(runId, FixtureTarget.make("capacity-scaling"), InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }))
-  const capacityRecord = (position: number) => ({
-    event: TaskWorkCapacityChangedEvent.make({ capacity: TaskWorkCapacity.make(2), initiatedBy: { _tag: "Operator" }, occurrenceClassification: "InitiatedAction", previousRevision: RunPolicyRevision.make(position - 1), revision: RunPolicyRevision.make(position), version: workflowJournalEventVersion }),
-    key: taskWorkCapacityPolicyRecordKey(RunPolicyRevision.make(position)),
-    position: JournalPosition.make(position),
-    runId
-  })
-  let historicalReads = 0
-  let coldSlices = 0
-  const records = new Proxy([began, ...Array.from({ length: size - 1 }, (_, offset) => capacityRecord(offset + 2))], {
-    get(target, property, receiver) {
-      if (typeof property === "string" && /^\d+$/.test(property)) historicalReads += 1
-      if (property === "slice") coldSlices += 1
-      return Reflect.get(target, property, receiver)
+it.each([64, 256])(
+  "Alice changes capacity after %i accepted records without materializing or traversing the prefix",
+  (size) => {
+    const runId = RunId.make("capacity-scaling")
+    const began = makeWorkflowRunBeganRecord(
+      runId,
+      FixtureTarget.make("capacity-scaling"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+    )
+    const capacityRecord = (position: number) => ({
+      event: TaskWorkCapacityChangedEvent.make({
+        capacity: TaskWorkCapacity.make(2),
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        previousRevision: RunPolicyRevision.make(position - 1),
+        revision: RunPolicyRevision.make(position),
+        version: workflowJournalEventVersion
+      }),
+      key: taskWorkCapacityPolicyRecordKey(RunPolicyRevision.make(position)),
+      position: JournalPosition.make(position),
+      runId
+    })
+    let historicalReads = 0
+    let coldSlices = 0
+    const records = new Proxy([began, ...Array.from({ length: size - 1 }, (_, offset) => capacityRecord(offset + 2))], {
+      get(target, property, receiver) {
+        if (typeof property === "string" && /^\d+$/.test(property)) historicalReads += 1
+        if (property === "slice") coldSlices += 1
+        return Reflect.get(target, property, receiver)
+      }
+    })
+    const prior = reduceWorkflowJournalHistory(runId, records)
+    expect(prior._tag).toBe("ValidWorkflowJournalHistory")
+    expect(inspectWorkflowJournalHistoryValidationPath(prior)).toBe("IndexedCold")
+    expect(coldSlices).toBe(0)
+    expect(historicalReads).toBeLessThanOrEqual(size * 20)
+    if (prior._tag !== "ValidWorkflowJournalHistory") return
+    historicalReads = 0
+    let indexedVisits = 0
+    let materializations = 0
+    const stop = observeJournalRecordSequenceOperations((operation) => {
+      if (operation._tag === "IndexedRecordVisit") indexedVisits += 1
+      else materializations += 1
+    })
+    try {
+      const next = advanceWorkflowJournalHistory(prior, capacityRecord(size + 1))
+      expect(next._tag).toBe("ValidWorkflowJournalHistory")
+    } finally {
+      stop()
     }
-  })
-  const prior = reduceWorkflowJournalHistory(runId, records)
-  expect(prior._tag).toBe("ValidWorkflowJournalHistory")
-  expect(inspectWorkflowJournalHistoryValidationPath(prior)).toBe("IndexedCold")
-  expect(coldSlices).toBe(0)
-  expect(historicalReads).toBeLessThanOrEqual(size * 20)
-  if (prior._tag !== "ValidWorkflowJournalHistory") return
-  historicalReads = 0
-  let indexedVisits = 0
-  let materializations = 0
-  const stop = observeJournalRecordSequenceOperations((operation) => {
-    if (operation._tag === "IndexedRecordVisit") indexedVisits += 1
-    else materializations += 1
-  })
-  try {
-    const next = advanceWorkflowJournalHistory(prior, capacityRecord(size + 1))
-    expect(next._tag).toBe("ValidWorkflowJournalHistory")
-  } finally {
-    stop()
+    expect(historicalReads).toBe(0)
+    expect(materializations).toBe(0)
+    expect(indexedVisits).toBeLessThanOrEqual(16)
   }
-  expect(historicalReads).toBe(0)
-  expect(materializations).toBe(0)
-  expect(indexedVisits).toBeLessThanOrEqual(16)
-})
+)

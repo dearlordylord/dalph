@@ -109,7 +109,11 @@ const appendResponsibility = (
     const positions = Option.getOrElse(HashMap.get(index.attemptPositions, attemptId), () => HashSet.empty<number>())
     let entries = index.entries
     for (const position of positions) entries = HashMap.remove(entries, position)
-    return responsibilityWithIndex({ ...index, entries, attemptPositions: HashMap.remove(index.attemptPositions, attemptId) })
+    return responsibilityWithIndex({
+      ...index,
+      entries,
+      attemptPositions: HashMap.remove(index.attemptPositions, attemptId)
+    })
   }
   const entry = responsibilityForRecord(record)
   return entry === undefined ? prior : responsibilityWithIndex(addResponsibility(responsibilityIndexFor(prior), entry))
@@ -124,7 +128,19 @@ const responsibilityIndexes = new WeakMap<WorkflowResponsibilityState, Responsib
 const addResponsibility = (prior: ResponsibilityIndex, entry: WorkflowResponsibilityEntry): ResponsibilityIndex => ({
   entries: HashMap.set(prior.entries, prior.length, entry),
   length: prior.length + 1,
-  attemptPositions: entry._tag === "PlannedAttemptExecutorWorkResponsibility" ? HashMap.set(prior.attemptPositions, entry.plannedAttempt.attemptId, HashSet.add(Option.getOrElse(HashMap.get(prior.attemptPositions, entry.plannedAttempt.attemptId), () => HashSet.empty<number>()), prior.length)) : prior.attemptPositions
+  attemptPositions:
+    entry._tag === "PlannedAttemptExecutorWorkResponsibility"
+      ? HashMap.set(
+          prior.attemptPositions,
+          entry.plannedAttempt.attemptId,
+          HashSet.add(
+            Option.getOrElse(HashMap.get(prior.attemptPositions, entry.plannedAttempt.attemptId), () =>
+              HashSet.empty<number>()
+            ),
+            prior.length
+          )
+        )
+      : prior.attemptPositions
 })
 const responsibilityIndexFor = (state: WorkflowResponsibilityState): ResponsibilityIndex => {
   const cached = responsibilityIndexes.get(state)
@@ -137,7 +153,11 @@ const responsibilityIndexFor = (state: WorkflowResponsibilityState): Responsibil
 const responsibilityWithIndex = (index: ResponsibilityIndex): WorkflowResponsibilityState => {
   let exported: WorkflowResponsibilityState["entries"] | undefined
   const state: WorkflowResponsibilityState = {
-    get entries() { return exported ??= Array.from({ length: index.length }, (_, offset) => Option.getOrUndefined(HashMap.get(index.entries, offset))).filter((entry) => entry !== undefined) }
+    get entries() {
+      return (exported ??= Array.from({ length: index.length }, (_, offset) =>
+        Option.getOrUndefined(HashMap.get(index.entries, offset))
+      ).filter((entry) => entry !== undefined))
+    }
   }
   responsibilityIndexes.set(state, index)
   return state
@@ -147,11 +167,18 @@ const appendControlPolicy = (
   prior: ReconstructedRunState["controlPolicy"],
   record: JournalRecord
 ): ReconstructedRunState["controlPolicy"] =>
-  record.event._tag === "TaskWorkCapacityChanged"
+  record.event._tag === "WorkflowRunBegan"
     ? Option.some(
-        RunControlPolicy.make({ revision: record.event.revision, taskExecutionCapacity: record.event.capacity })
+        RunControlPolicy.make({
+          revision: initialRunPolicyRevision,
+          taskExecutionCapacity: record.event.initialControlPolicy.taskExecutionCapacity
+        })
       )
-    : prior
+    : record.event._tag === "TaskWorkCapacityChanged"
+      ? Option.some(
+          RunControlPolicy.make({ revision: record.event.revision, taskExecutionCapacity: record.event.capacity })
+        )
+      : prior
 
 const appendPauseState = (prior: ReconstructedPauseState, record: JournalRecord): ReconstructedPauseState => {
   if (record.event._tag !== "ControlDirectionApplied") return prior

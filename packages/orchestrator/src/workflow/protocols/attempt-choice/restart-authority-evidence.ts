@@ -2,7 +2,12 @@ import { plannedTaskAttemptEquivalence, type PlannedTaskAttempt } from "@dalph/c
 import { Schema } from "effect"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
-import { journalRecordsForAttempt, journalEvidenceBefore, isJournalRecordEvidence, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
+import {
+  journalRecordsForAttempt,
+  journalEvidenceBefore,
+  isJournalRecordEvidence,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import {
   attemptChoiceAppliedRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
@@ -74,7 +79,9 @@ export const restartClaimAuthorityAtApplication = (
   application: RestartApplicationRecord
 ) =>
   authorizedClaimForAttempt(
-    isJournalRecordEvidence(records) ? journalEvidenceBefore(records, JournalPosition.make(application.position + 1)) : records.filter(({ position }) => position <= application.position),
+    isJournalRecordEvidence(records)
+      ? journalEvidenceBefore(records, JournalPosition.make(application.position + 1))
+      : records.filter(({ position }) => position <= application.position),
     application.event.subject.plannedAttempt
   )
 

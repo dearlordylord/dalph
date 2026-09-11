@@ -1,11 +1,5 @@
 /* eslint-disable functional/immutable-data, max-lines -- The chronological validator owns its local indexes and cross-event invariants. */
-import {
-  plannedTaskAttemptEquivalence,
-  type AttemptId,
-  type PlannedTaskAttempt,
-  type RunId,
-  type TaskId
-} from "@dalph/contracts"
+import { type AttemptId, type PlannedTaskAttempt, type RunId, type TaskId } from "@dalph/contracts"
 import { type JournalPosition, type JournalRecordKey } from "../../workflow-journal/identity.js"
 import {
   acceptedJournalPrefixFromValidatedHistory,
@@ -13,20 +7,31 @@ import {
   appendValidatedJournalRecord,
   type AcceptedJournalPrefix
 } from "../../workflow-journal/accepted-prefix.js"
-import { type OperationId } from "../../workflow/identity.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
-import type { WorkflowOperation } from "../../workflow/registry/operation.js"
 import { HashMap, HashSet, Iterable, Option } from "effect"
-import { firstJournalRecordOfKind, lastJournalRecordOfKind, journalRecordByPosition, journalRecordByKey, journalRecordsOfKind, journalRecordsForTask, journalEvidenceBefore, appendJournalEvidence, emptyJournalEvidence, isJournalRecordEvidence, type JournalHistorySource, type JournalRecordEvidence } from "../../workflow-journal/record-evidence.js"
+import {
+  firstJournalRecordOfKind,
+  lastJournalRecordOfKind,
+  journalRecordByPosition,
+  journalRecordByKey,
+  journalRecordsOfKind,
+  journalRecordsForTask,
+  journalEvidenceBefore,
+  appendJournalEvidence,
+  emptyJournalEvidence,
+  isJournalRecordEvidence,
+  type JournalHistorySource,
+  type JournalRecordEvidence
+} from "../../workflow-journal/record-evidence.js"
 import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import { journalRecordAt, materializeJournalRecords } from "../../workflow-journal/record-sequence.js"
 import {
   duplicateUnfinishedTaskAttemptIssue,
   type InvalidWorkflowJournalHistory,
   type WorkflowJournalHistoryIssue,
-  WorkflowJournalHistorySemanticIssue,
+  type WorkflowJournalHistorySemanticIssue,
   type ValidWorkflowJournalHistory
 } from "./history-result.js"
 import { advanceReconstructedRunState, reconstructValidatedRunState } from "./reduce.js"
@@ -65,6 +70,7 @@ export {
 } from "./attempt-validation.js"
 
 const finalArrayElementOffset = -1
+const currentRecordExclusivePositionOffset = 2
 
 /** Cold malformed envelopes retain their original predicate search; live evidence uses the exact key. */
 const keyedCandidates = (records: JournalHistorySource, key: JournalRecordKey): Iterable<JournalRecord> => {
@@ -84,41 +90,63 @@ const unfinishedByHistory = new WeakMap<ValidWorkflowJournalHistory, HashMap.Has
 /** The export closure captures only this prefix, never the predecessor history. */
 const acceptedWorkflowHistory = (prefix: AcceptedJournalPrefix): ReconstructedWorkflowHistory => {
   let exported: ReadonlyArray<JournalRecord> | undefined
-  return { prefix, get records() { return exported ??= materializeJournalRecords(prefix.records) } }
+  return {
+    prefix,
+    get records() {
+      return (exported ??= materializeJournalRecords(prefix.records))
+    }
+  }
 }
 
-const acceptedHistoryResult = (prefix: AcceptedJournalPrefix, runState: ReconstructedRunState): ValidWorkflowJournalHistory => ({
+const acceptedHistoryResult = (
+  prefix: AcceptedJournalPrefix,
+  runState: ReconstructedRunState
+): ValidWorkflowJournalHistory => ({
   _tag: "ValidWorkflowJournalHistory",
   prefix,
   runId: prefix.runId,
-  get records() { return runState.workflowHistory.records },
+  get records() {
+    return runState.workflowHistory.records
+  },
   runState
 })
 
 const attemptIsFinished = (indexes: FoldIndexes, attemptId: AttemptId): boolean =>
-  HashSet.has(indexes.terminalExecutorAttempts, attemptId) || HashSet.has(indexes.abandonedExecutorAttempts, attemptId) || HashSet.has(indexes.supersededExecutorAttempts, attemptId)
+  HashSet.has(indexes.terminalExecutorAttempts, attemptId) ||
+  HashSet.has(indexes.abandonedExecutorAttempts, attemptId) ||
+  HashSet.has(indexes.supersededExecutorAttempts, attemptId)
 
 const unfinishedTasksFrom = (indexes: FoldIndexes): HashMap.HashMap<TaskId, UnfinishedAttempt> => {
   let unfinished: HashMap.HashMap<TaskId, UnfinishedAttempt> = HashMap.empty()
   for (const [attemptId, responsibility] of indexes.executorResponsibilitiesBegan) {
-    if (!attemptIsFinished(indexes, attemptId)) unfinished = HashMap.set(unfinished, responsibility.plannedAttempt.taskId, responsibility)
+    if (!attemptIsFinished(indexes, attemptId))
+      unfinished = HashMap.set(unfinished, responsibility.plannedAttempt.taskId, responsibility)
   }
   return unfinished
 }
 
 /** Only responsibility acquisition or exact terminal/supersession changes can affect this invariant. */
-const advanceUnfinishedTasks = (prior: HashMap.HashMap<TaskId, UnfinishedAttempt>, indexes: FoldIndexes, record: JournalRecord): HashMap.HashMap<TaskId, UnfinishedAttempt> | undefined => {
+const advanceUnfinishedTasks = (
+  prior: HashMap.HashMap<TaskId, UnfinishedAttempt>,
+  indexes: FoldIndexes,
+  record: JournalRecord
+): HashMap.HashMap<TaskId, UnfinishedAttempt> | undefined => {
   const event = record.event
-  const attemptId = event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ? event.plannedAttempt.attemptId
-    : event._tag === "PlannedAttemptExecutorWorkReported" ? event.report.correlation.attemptId
-    : event._tag === "AttemptImplementationAbandoned" || event._tag === "PlannedAttemptReplaced" ? event.subject.plannedAttempt.attemptId
-    : undefined
+  const attemptId =
+    event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+      ? event.plannedAttempt.attemptId
+      : event._tag === "PlannedAttemptExecutorWorkReported"
+        ? event.report.correlation.attemptId
+        : event._tag === "AttemptImplementationAbandoned" || event._tag === "PlannedAttemptReplaced"
+          ? event.subject.plannedAttempt.attemptId
+          : undefined
   if (attemptId === undefined) return prior
   const responsibility = mapGet(indexes.executorResponsibilitiesBegan, attemptId)
   if (responsibility === undefined) return prior
   const taskId = responsibility.plannedAttempt.taskId
   const existing = mapGet(prior, taskId)
-  if (attemptIsFinished(indexes, attemptId)) return existing?.plannedAttempt.attemptId === attemptId ? HashMap.remove(prior, taskId) : prior
+  if (attemptIsFinished(indexes, attemptId))
+    return existing?.plannedAttempt.attemptId === attemptId ? HashMap.remove(prior, taskId) : prior
   if (existing !== undefined && existing.plannedAttempt.attemptId !== attemptId) return undefined
   return HashMap.set(prior, taskId, responsibility)
 }
@@ -242,10 +270,14 @@ const validateClaim = (
 ): void => {
   if (record.event._tag !== "TaskClaimAcquired") return
   const acquired = record.event.claim
-  const intent = Option.getOrUndefined(Iterable.findFirst(keyedCandidates(records, intentRecordKey(acquired.operationId)),
-    ({ event }) =>
-      event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.operationId === acquired.operationId
-  ))?.event
+  const intent = Option.getOrUndefined(
+    Iterable.findFirst(
+      keyedCandidates(records, intentRecordKey(acquired.operationId)),
+      ({ event }) =>
+        event._tag === "TaskClaimAcquisitionIntended" &&
+        event.operation.acquisition.operationId === acquired.operationId
+    )
+  )?.event
   const intended = intent?._tag === "TaskClaimAcquisitionIntended" ? intent.operation.acquisition : undefined
   if (intended === undefined || !acquiredClaimMatchesIntent(acquired, intended)) {
     identityIssue(issues, runId, record.position, `acquired task claim contradicts operation ${acquired.operationId}`)
@@ -260,12 +292,15 @@ const validateClaimRejection = (
 ): void => {
   if (record.event._tag !== "TaskClaimAcquisitionRejected") return
   const rejected = record.event
-  const intent = Option.getOrUndefined(Iterable.findFirst(keyedCandidates(records, intentRecordKey(rejected.operationId)),
-    ({ event, position }) =>
-      position < record.position &&
-      event._tag === "TaskClaimAcquisitionIntended" &&
-      event.operation.acquisition.operationId === rejected.operationId
-  ))?.event
+  const intent = Option.getOrUndefined(
+    Iterable.findFirst(
+      keyedCandidates(records, intentRecordKey(rejected.operationId)),
+      ({ event, position }) =>
+        position < record.position &&
+        event._tag === "TaskClaimAcquisitionIntended" &&
+        event.operation.acquisition.operationId === rejected.operationId
+    )
+  )?.event
   /* v8 ignore next -- @preserve The event descriptor separately reports a rejection without its required intent. */
   if (intent?._tag !== "TaskClaimAcquisitionIntended") return
   const attempted = ActiveTaskClaim.make(intent.operation.acquisition)
@@ -283,10 +318,13 @@ const matchingReacquisitionDirection = (record: JournalRecord, runId: RunId, rec
   /* v8 ignore next -- @preserve The caller invokes this helper only for an explicit acquisition intent. */
   if (record.event._tag !== "TaskClaimAcquisitionIntended") return undefined
   const { acquisition } = record.event.operation
-  const expectedClaim = Option.getOrUndefined(Iterable.findLast(journalRecordsForTask(records, acquisition.taskId),
-    ({ event, position }) =>
-      position < record.position && event._tag === "TaskClaimAcquired" && event.claim.taskId === acquisition.taskId
-  ))?.event
+  const expectedClaim = Option.getOrUndefined(
+    Iterable.findLast(
+      journalRecordsForTask(records, acquisition.taskId),
+      ({ event, position }) =>
+        position < record.position && event._tag === "TaskClaimAcquired" && event.claim.taskId === acquisition.taskId
+    )
+  )?.event
   /* v8 ignore start -- @preserve Missing prior acquisition authority is rejected by the caller's undefined direction result. */
   const direction =
     expectedClaim?._tag === "TaskClaimAcquired"
@@ -324,12 +362,15 @@ const findTrackerReadIntent = (
   observedEvent: Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerFactsObserved" }>,
   observedAt: JournalPosition
 ) =>
-  Option.getOrUndefined(Iterable.findFirst(keyedCandidates(records, intentRecordKey(observedEvent.operationId)),
-    ({ event, position }) =>
-      position < observedAt &&
-      event._tag === "TaskTrackerReadIntentRecorded" &&
-      event.operation.operationId === observedEvent.operationId
-  ))?.event
+  Option.getOrUndefined(
+    Iterable.findFirst(
+      keyedCandidates(records, intentRecordKey(observedEvent.operationId)),
+      ({ event, position }) =>
+        position < observedAt &&
+        event._tag === "TaskTrackerReadIntentRecorded" &&
+        event.operation.operationId === observedEvent.operationId
+    )
+  )?.event
 
 const validateReconfirmationReference = (
   record: JournalRecord,
@@ -414,7 +455,9 @@ const validateLifecycleBoundaries = (
   if (terminated !== undefined && began === undefined) {
     semanticIssue(issues, runId, terminated.position, "WorkflowRunTerminated requires prior WorkflowRunBegan")
   }
-  const lastRecord = isJournalRecordEvidence(records) ? journalRecordAt(records.records, finalArrayElementOffset) : records.at(finalArrayElementOffset)
+  const lastRecord = isJournalRecordEvidence(records)
+    ? journalRecordAt(records.records, finalArrayElementOffset)
+    : records.at(finalArrayElementOffset)
   if (terminated !== undefined && terminated !== lastRecord) {
     semanticIssue(issues, runId, terminated.position, "WorkflowRunTerminated must be the final record")
   }
@@ -438,11 +481,7 @@ export const validateCancellationMultiplicityHistory = (
   records: JournalHistorySource
 ): ReadonlyArray<WorkflowJournalHistorySemanticIssue> => {
   const issues = new Array<WorkflowJournalHistorySemanticIssue>()
-  validateCancellationMultiplicity(
-    runId,
-    Array.from(journalRecordsOfKind(records, "RunCancellationApplied")),
-    issues
-  )
+  validateCancellationMultiplicity(runId, Array.from(journalRecordsOfKind(records, "RunCancellationApplied")), issues)
   return issues
 }
 
@@ -526,12 +565,15 @@ const terminationObservationsFor = (
   const completeObservationRecord =
     fresh._tag === "CompleteTaskTrackerFacts"
       ? observed
-      : Option.getOrUndefined(Iterable.findFirst(keyedCandidates(records, outcomeRecordKey(fresh.priorFullObservationOperationId)),
-          ({ event }) =>
-            event._tag === "TaskTrackerFactsObserved" &&
-            event.operationId === fresh.priorFullObservationOperationId &&
-            event.observation._tag === "CompleteTaskTrackerFacts"
-        ))
+      : Option.getOrUndefined(
+          Iterable.findFirst(
+            keyedCandidates(records, outcomeRecordKey(fresh.priorFullObservationOperationId)),
+            ({ event }) =>
+              event._tag === "TaskTrackerFactsObserved" &&
+              event.operationId === fresh.priorFullObservationOperationId &&
+              event.observation._tag === "CompleteTaskTrackerFacts"
+          )
+        )
   if (
     completeObservationRecord?.event._tag !== "TaskTrackerFactsObserved" ||
     completeObservationRecord.event.observation._tag !== "CompleteTaskTrackerFacts"
@@ -547,10 +589,13 @@ const validateTerminationIntent = (
   evidence: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"],
   reject: (detail: string) => void
 ): void => {
-  const intent = Option.getOrUndefined(Iterable.findFirst(keyedCandidates(records, intentRecordKey(evidence.operationId)),
-    ({ event }) =>
-      event._tag === "TaskTrackerReadIntentRecorded" && event.operation.operationId === evidence.operationId
-  ))
+  const intent = Option.getOrUndefined(
+    Iterable.findFirst(
+      keyedCandidates(records, intentRecordKey(evidence.operationId)),
+      ({ event }) =>
+        event._tag === "TaskTrackerReadIntentRecorded" && event.operation.operationId === evidence.operationId
+    )
+  )
   if (intent?.event._tag !== "TaskTrackerReadIntentRecorded" || intent.event.operation._tag !== "ReadTrackerGraph") {
     reject("termination evidence must name the exact complete graph-read intent")
   } else if (
@@ -747,7 +792,11 @@ const firstTrackerRootOf = (
   records: JournalHistorySource,
   target: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"]["target"]
 ): TaskId | undefined => {
-  const firstRootObservation = Option.getOrUndefined(Iterable.findFirst(journalRecordsOfKind(records, "TaskTrackerFactsObserved"), (record) => isCompleteGraphObservationForTarget(record, target)))
+  const firstRootObservation = Option.getOrUndefined(
+    Iterable.findFirst(journalRecordsOfKind(records, "TaskTrackerFactsObserved"), (record) =>
+      isCompleteGraphObservationForTarget(record, target)
+    )
+  )
   return firstRootObservation?.event._tag === "TaskTrackerFactsObserved" &&
     firstRootObservation.event.observation._tag === "CompleteTaskTrackerFacts"
     ? firstRootObservation.event.observation.rootTaskId
@@ -834,7 +883,9 @@ const validateRecord = (
   validateAttemptRestartAuthorityReadFailure(record, runId, records, issues)
   next = validatePlannedAttemptReplacement(record, runId, records, next, issues)
   validateContinuationAuthorization(record, runId, records, issues)
-  const recordsThroughCurrent = isJournalRecordEvidence(records) ? journalEvidenceBefore(records, index + 2) : records.slice(0, index + 1)
+  const recordsThroughCurrent = isJournalRecordEvidence(records)
+    ? journalEvidenceBefore(records, index + currentRecordExclusivePositionOffset)
+    : records.slice(0, index + 1)
   next = validatePlan(record, runId, recordsThroughCurrent, next, issues)
   validateClaimReacquisitionIntent(record, runId, records, issues)
   validateClaim(record, runId, records, issues)
@@ -885,7 +936,10 @@ const finishValidation = (
     validationPathByHistory.set(invalid, "RawDiagnostic")
     return rememberReduction(invalid)
   }
-  const prefix = evidence === undefined ? acceptedJournalPrefixFromValidatedHistory(runId, records) : acceptedJournalPrefixFromValidatedEvidence(runId, evidence)
+  const prefix =
+    evidence === undefined
+      ? acceptedJournalPrefixFromValidatedHistory(runId, records)
+      : acceptedJournalPrefixFromValidatedEvidence(runId, evidence)
   const state = reconstructValidatedRunState(runId, records)
   const valid: ValidWorkflowJournalHistory = {
     _tag: "ValidWorkflowJournalHistory",
@@ -918,7 +972,10 @@ export const reduceUnindexedWorkflowJournalHistoryForTesting = (runId: RunId, re
   reduceRawDiagnosticHistory(runId, [...records])
 
 /** Cold recovery and live append execute the same indexed chronological record kernel. */
-export const reduceWorkflowJournalHistory = (runId: RunId, records: ReadonlyArray<JournalRecord>): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
+export const reduceWorkflowJournalHistory = (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>
+): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
   const cached = cachedReductionFor(runId, records)
   if (cached !== undefined) return cached
   let indexes = emptyIndexes()
@@ -927,7 +984,13 @@ export const reduceWorkflowJournalHistory = (runId: RunId, records: ReadonlyArra
   for (const [index, record] of records.entries()) {
     // Decoded evidence is indexed only after its envelope is canonical. Raw
     // fallback retains duplicate positions/keys and contradictory Run identity.
-    if (record.position !== index + 1 || record.runId !== runId || record.key !== describeJournalEvent(record.event).expectedKey || HashSet.has(indexes.seenKeys, record.key)) return reduceRawDiagnosticHistory(runId, records)
+    if (
+      record.position !== index + 1 ||
+      record.runId !== runId ||
+      record.key !== describeJournalEvent(record.event).expectedKey ||
+      HashSet.has(indexes.seenKeys, record.key)
+    )
+      return reduceRawDiagnosticHistory(runId, records)
     evidence = appendJournalEvidence(evidence, record)
     indexes = validateRecord(record, index, runId, evidence, indexes, issues)
     if (issues.length > 0) return reduceRawDiagnosticHistory(runId, records)
@@ -945,7 +1008,8 @@ export const advanceWorkflowJournalHistory = (
 ): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
   const cached = foldIndexesByHistory.get(prior)
   const unfinished = unfinishedByHistory.get(prior)
-  const replay = () => reduceWorkflowJournalHistory(prior.runId, [...materializeJournalRecords(prior.prefix.records), record])
+  const replay = () =>
+    reduceWorkflowJournalHistory(prior.runId, [...materializeJournalRecords(prior.prefix.records), record])
   if (cached === undefined || unfinished === undefined) return replay()
 
   /*

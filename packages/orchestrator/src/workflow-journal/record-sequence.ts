@@ -10,10 +10,14 @@ export type JournalRecordSequenceOperation =
 let operationObserver: ((operation: JournalRecordSequenceOperation) => void) | undefined
 
 /** Test-only synchronous operation observer; the returned cleanup restores the previous observer. */
-export const observeJournalRecordSequenceOperations = (observer: (operation: JournalRecordSequenceOperation) => void): (() => void) => {
+export const observeJournalRecordSequenceOperations = (
+  observer: (operation: JournalRecordSequenceOperation) => void
+): (() => void) => {
   const prior = operationObserver
   operationObserver = observer
-  return () => { operationObserver = prior }
+  return () => {
+    operationObserver = prior
+  }
 }
 
 /**
@@ -58,7 +62,9 @@ export const journalRecordsBefore = (records: JournalRecordSequence, exclusiveEn
 /** Explicit export boundary; live successor validation must use indexed access. */
 export const materializeJournalRecords = (records: JournalRecordSequence): ReadonlyArray<JournalRecord> => {
   operationObserver?.({ _tag: "HistoricalMaterialization", length: records.length })
-  return Array.from({ length: records.length }, (_, index) => Option.getOrThrow(HashMap.get(storageFor(records), index)))
+  return Array.from({ length: records.length }, (_, index) =>
+    Option.getOrThrow(HashMap.get(storageFor(records), index))
+  )
 }
 
 /** Imports decoded storage history once at establishment, without certifying its semantics. */

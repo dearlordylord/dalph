@@ -21,7 +21,8 @@ export const hasLaterCompleteObservation = (
       (event.observation._tag === "CompleteTaskTrackerFacts" ||
         event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
       taskTrackerTargetKey(event.observation.target) === targetKey
-    ) return true
+    )
+      return true
   }
   return false
 }

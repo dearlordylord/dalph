@@ -1,7 +1,11 @@
 import { Effect, Schema } from "effect"
 import { type JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
-import { journalRecordsForAttempt, journalRecordsOfKind, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
+import {
+  journalRecordsForAttempt,
+  journalRecordsOfKind,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import { OperationId } from "../../identity.js"
 import {
   latestPlannedAttemptExecutorEvidence,
@@ -106,6 +110,5 @@ export const nextRestartReadOperationId = (
 }
 
 export const currentRestartQuiescence = Effect.fn("AttemptRestart.establishQuiescence")(
-  (records: JournalHistorySource, subject: AttemptChoiceSubject) =>
-    Effect.succeed(currentQuiescence(records, subject))
+  (records: JournalHistorySource, subject: AttemptChoiceSubject) => Effect.succeed(currentQuiescence(records, subject))
 )
