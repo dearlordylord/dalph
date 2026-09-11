@@ -4040,6 +4040,9 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
                   opportunity
                 )
       const selected = decision.transition
+      if (selected?._tag === "ObservePlannedAttemptContinuationGraph" && pendingFocusedReads.size > 0) {
+        return decisions
+      }
       if (
         selected?._tag !== "ObservePlannedAttemptContinuationGraph" ||
         activeRefreshGraphSelection === undefined ||
