@@ -40,6 +40,7 @@ import {
   isJournalRecordEvidence,
   journalEvidenceBefore,
   journalRecordsForAttempt,
+  journalRecordsForOperationId,
   journalRecordsForTask,
   journalRecordsOfKind,
   type JournalHistorySource
@@ -1285,7 +1286,7 @@ const replacementWorktreeIsExact = (
   witness: PlannedAttemptReplacementRecord["event"]["witness"],
   applicationPosition: JournalPosition
 ): boolean => {
-  const record = findLast(journalRecordsForAttempt(prior, plannedAttempt.attemptId), (candidate) =>
+  const record = findLast(journalRecordsForOperationId(prior, witness.oldWorktreeObservationOperationId), (candidate) =>
     isReplacementWorktreeRecord(candidate, witness.oldWorktreeObservationOperationId)
   )
   if (record === undefined) return false
