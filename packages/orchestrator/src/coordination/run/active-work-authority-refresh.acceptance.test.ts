@@ -697,6 +697,9 @@ const projectionFor = (
     for (const record of records.filter(
       ({ position }) => runningBoundary !== undefined && position > runningBoundary
     )) {
+      if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+        return yield* Effect.die("active-refresh fixture successors must be ordinary in-Run events")
+      }
       yield* journal.append(record.runId, record.key, record.event)
     }
     return yield* recovery.readDeliveryProjection
