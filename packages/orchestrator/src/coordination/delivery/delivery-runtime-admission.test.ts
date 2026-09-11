@@ -19,6 +19,9 @@ import {
 import { Cause, Effect, Exit, Layer, Option, Result } from "effect"
 import { expect } from "vitest"
 import { validSnapshot } from "../../../test/task-dag.js"
+import { makeExecutingAttemptHistory } from "../../../test/support/executing-attempt-history.js"
+import { liveJournalTestLayer } from "./live-journal-test-layer.js"
+import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import {
   makeFreshTaskAdmissionBasis,
@@ -51,7 +54,6 @@ import {
   appendExecutorCommandDeliveryIntent,
   type AcceptedExecutorCommandDelivery
 } from "../../workflow/protocols/planned-attempt-executor-work/command-delivery.js"
-import { memoryJournalTestLayerFromPartitionRecords } from "../../workflow-journal/adapters/memory-store.js"
 import {
   attemptPlanRecordKey,
   intentRecordKey,
@@ -82,6 +84,7 @@ import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorCommandProjectionObservation,
   PlannedAttemptExecutorCommandProjectionObservedEvent,
   PlannedAttemptExecutorCommandProjectionOrdinal,
@@ -154,6 +157,7 @@ const withProtocolController = <A, E>(
 const runId = RunId.make("admission-test-run")
 const taskId = TaskId.make("A")
 const correlation = { attemptId: AttemptId.make("attempt:A:0"), runId }
+const admissionSpecification = makeTaskWorkSpecification({ body: "admission-test-F1", taskId, title: "Admission A" })
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: correlation.attemptId,
   baseSha: GitCommitSha.make("1".repeat(40)),
@@ -161,7 +165,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
   executor: TaskExecutorLocator.make("executor:admission-test"),
   runId,
   taskId,
-  taskRevision: TaskRevision.make("admission-test-F1"),
+  taskRevision: admissionSpecification.fingerprint,
   worktree: WorktreeLocator.make("/worktrees/attempt-A-0")
 })
 
@@ -182,6 +186,7 @@ const admissionBasis = (
     })
   )
 
+/** Pure admission-comparison evidence, including deliberately stale witnesses; never imported as accepted history. */
 const safeContinuationEligibility = (
   basis:
     | { readonly _tag: "LifecycleReopenAfterAcceptedSafe" }
@@ -314,14 +319,14 @@ const safeContinuationEligibility = (
     pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
     responsibility: { entries: [responsibility] },
     runId,
-    workflowHistory: { records }
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
   }
   const facts = deriveJournalResponsibilityFacts(runState).find(
     (candidate) => candidate._tag === "PlannedAttemptExecutorFreshFacts"
   )
   const eligibility = facts?.safeContinuationRevalidationEligibility
   if (!isSafeContinuationRevalidationEligibility(eligibility)) {
-    return Effect.die("validated Safe recovery history did not establish revalidation eligibility")
+    return Effect.die("pure Safe evidence did not establish revalidation eligibility")
   }
   return Effect.succeed(eligibility)
 }
@@ -645,15 +650,7 @@ it.effect("keeps one exact safe continuation reservation through reads and Resum
       yield* controller.bindPlannedAttemptPosition(second.reservation, plannedAttempt)
       yield* controller.synchronize(yield* basis(1))
       expect((yield* controller.snapshot).positions.get(taskId)?._tag).toBe("SafeContinuationReserved")
-      const receipt = yield* appendExecutorCommandDeliveryIntent({
-        _tag: "PlannedAttemptExecutorCommandIntended",
-        command: "Resume",
-        ordinal: PlannedAttemptExecutorCommandOrdinal.make(3),
-        plannedAttempt,
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        version: workflowJournalEventVersion
-      }).pipe(Effect.provide(memoryJournalTestLayerFromPartitionRecords({ hot: exactHandoffFixture.records })))
+      const receipt = yield* makeAcceptedResumeReceipt(plannedAttempt)
       yield* controller.bindPlannedAttemptPosition(second.reservation, plannedAttempt, undefined, receipt)
       expect((yield* controller.snapshot).positions.get(taskId)?._tag).toBe("LocallyAcceptedAttemptPosition")
       yield* controller.synchronize(yield* basis(1))
@@ -919,38 +916,22 @@ it.effect("rejects stale, foreign, and wrong-kind accepted Resume handoffs witho
         expect((yield* controller.snapshot).positions.get(taskId)).toEqual(positionBeforeRejection)
         yield* controller.rollback(admitted.reservation, "AfterDurableClaimIntentOrAmbiguity")
       })
-      const initialIntent = (attempt: PlannedTaskAttempt) =>
-        PlannedAttemptExecutorCommandIntendedEvent.make({
-          command: "Resume",
-          initiatedBy: { _tag: "DalphCoordinator" },
-          occurrenceClassification: "InitiatedAction",
-          ordinal: PlannedAttemptExecutorCommandOrdinal.make(3),
-          plannedAttempt: attempt,
-          version: workflowJournalEventVersion
-        })
-      const lifecycleEligibility = yield* safeContinuationEligibility()
-      const earlyReceipt = yield* appendExecutorCommandDeliveryIntent(initialIntent(plannedAttempt)).pipe(
-        Effect.provide(
-          memoryJournalTestLayerFromPartitionRecords({
-            hot: [
-              makeWorkflowRunBeganRecord(
-                runId,
-                FixtureTarget.make("safe-binding-early"),
-                InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-              )
-            ]
-          })
-        )
+      const earlyReceipt = yield* makeAcceptedResumeReceipt(plannedAttempt)
+      // The receipt is genuine; only the pure admission witness has a non-earlier
+      // responsibility position, so the comparison must reject the stale handoff.
+      const laterEligibility = yield* safeContinuationEligibility(
+        { _tag: "LifecycleReopenAfterAcceptedSafe" },
+        plannedAttempt,
+        earlyReceipt.acceptedAt
       )
-      yield* bindRejected(lifecycleEligibility, earlyReceipt, "early")
+      yield* bindRejected(laterEligibility, earlyReceipt, "early")
 
+      const lifecycleEligibility = yield* safeContinuationEligibility()
       const foreignAttempt = PlannedTaskAttempt.make({
         ...plannedAttempt,
         attemptId: AttemptId.make("safe-binding-foreign-attempt")
       })
-      const foreignReceipt = yield* appendExecutorCommandDeliveryIntent(initialIntent(foreignAttempt)).pipe(
-        Effect.provide(memoryJournalTestLayerFromPartitionRecords({ hot: exactHandoffFixture.records }))
-      )
+      const foreignReceipt = yield* makeAcceptedResumeReceipt(foreignAttempt)
       yield* bindRejected(lifecycleEligibility, foreignReceipt, "foreign")
 
       const reconciledEligibility = yield* safeContinuationEligibility({
@@ -959,26 +940,120 @@ it.effect("rejects stale, foreign, and wrong-kind accepted Resume handoffs witho
         projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1),
         resumeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(3)
       })
-      const initialRetryReceipt = yield* appendExecutorCommandDeliveryIntent(initialIntent(plannedAttempt)).pipe(
-        Effect.provide(memoryJournalTestLayerFromPartitionRecords({ hot: exactHandoffFixture.records }))
-      )
+      const initialRetryReceipt = yield* makeAcceptedResumeReceipt(plannedAttempt)
       yield* bindRejected(reconciledEligibility, initialRetryReceipt, "wrong-kind")
     })
   )
 )
 
-const responsibilityAcceptedAt = JournalPosition.make(Number(taskAProjection.acceptedAt) + 2)
-const acceptedResponsibility = Effect.runSync(
-  beginPlannedAttemptExecutorResponsibility(plannedAttempt).pipe(
-    Effect.provideService(
-      InRunJournal,
-      InRunJournal.of({
-        append: (acceptedRunId, key, event) =>
-          Effect.succeed({ event, key, position: responsibilityAcceptedAt, runId: acceptedRunId }),
-        read: () => Effect.succeed([])
+const executorFixtureTarget = FixtureTarget.make("admission-live-executor")
+const executingHistoryFor = (attempt: PlannedTaskAttempt) =>
+  makeExecutingAttemptHistory({
+    activeClaim: ActiveTaskClaim.make(taskACommitment.operation.acquisition),
+    plannedAttempt: attempt,
+    runId,
+    taskSpecification: admissionSpecification,
+    trackerTarget: executorFixtureTarget
+  })
+
+/** The real Journal accepts Suspend #2 and Safe #2 before issuing the Resume #3 receipt. */
+const makeAcceptedResumeReceipt = (attempt: PlannedTaskAttempt) =>
+  Effect.gen(function* () {
+    const journal = yield* InRunJournal
+    const append = (event: Parameters<typeof journal.append>[2]) =>
+      journal.append(runId, describeJournalEvent(event).expectedKey, event)
+    const ordinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+    const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+      correlation: plannedAttemptExecutorCorrelation(attempt)
+    })
+    yield* append(
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "Suspend",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal,
+        plannedAttempt: attempt,
+        version: workflowJournalEventVersion
       })
     )
+    yield* append(
+      PlannedAttemptExecutorCommandResponseObservedEvent.make({
+        commandOrdinal: ordinal,
+        occurrenceClassification: "NonActionOccurrence",
+        plannedAttempt: attempt,
+        report: safe,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* append(
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+        report: safe,
+        version: workflowJournalEventVersion
+      })
+    )
+    return yield* appendExecutorCommandDeliveryIntent(
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "Resume",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: PlannedAttemptExecutorCommandOrdinal.make(3),
+        plannedAttempt: attempt,
+        version: workflowJournalEventVersion
+      })
+    )
+  }).pipe(
+    Effect.provide(
+      liveJournalTestLayer({ records: executingHistoryFor(attempt).records, runId, target: executorFixtureTarget })
+    )
   )
+
+const responsibilityHistory = executingHistoryFor(plannedAttempt).records
+const responsibilityRecord = Option.getOrThrow(
+  Option.fromUndefinedOr(
+    responsibilityHistory.find(({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan")
+  )
+)
+const responsibilityAcceptedAt = responsibilityRecord.position
+const acceptedResponsibility = beginPlannedAttemptExecutorResponsibility(plannedAttempt).pipe(
+  Effect.provide(
+    liveJournalTestLayer({
+      records: responsibilityHistory.filter(({ position }) => position < responsibilityAcceptedAt),
+      runId,
+      target: executorFixtureTarget
+    })
+  )
+)
+
+it.effect("issues Resume handoff only after the same live Journal accepts exact Safe suspension", () =>
+  Effect.gen(function* () {
+    const receipt = yield* makeAcceptedResumeReceipt(plannedAttempt)
+    expect(receipt).toMatchObject({
+      plannedAttempt,
+      commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(3),
+      delivery: { _tag: "InitialCommandDelivery", command: "Resume" }
+    })
+    expect(receipt.acceptedAt).toBeGreaterThan(responsibilityAcceptedAt)
+
+    const rejected = yield* appendExecutorCommandDeliveryIntent(
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "Resume",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: PlannedAttemptExecutorCommandOrdinal.make(2),
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    ).pipe(
+      Effect.flip,
+      Effect.provide(liveJournalTestLayer({ records: responsibilityHistory, runId, target: executorFixtureTarget }))
+    )
+    expect(rejected).toMatchObject({
+      _tag: "JournalHistoryInvalid",
+      runId,
+      detail: expect.stringContaining("lacks an unconsumed accepted safe suspension")
+    })
+  })
 )
 
 it.effect("binds an exact planned attempt once and rejects its local position as fresh binding authority", () =>
@@ -1819,12 +1894,11 @@ it.effect("retains a locally accepted exact attempt through stale commitment syn
       if (proposal === undefined) return yield* Effect.die("handoff proposal was not derived")
       const admitted = yield* admission.tryReserve(proposal)
       if (admitted._tag !== "Admitted") return yield* Effect.die("handoff proposal was not admitted")
-      yield* admission.bindPlannedAttemptPosition(admitted.reservation, plannedAttempt, acceptedResponsibility)
+      const receipt = yield* acceptedResponsibility
+      yield* admission.bindPlannedAttemptPosition(admitted.reservation, plannedAttempt, receipt)
       expect(
         Exit.isFailure(
-          yield* Effect.exit(
-            admission.bindPlannedAttemptPosition(admitted.reservation, plannedAttempt, acceptedResponsibility)
-          )
+          yield* Effect.exit(admission.bindPlannedAttemptPosition(admitted.reservation, plannedAttempt, receipt))
         )
       ).toBe(true)
       yield* admission.synchronize(commitmentBasis(1))
@@ -1867,7 +1941,8 @@ it.effect("releases a local handoff when a newer accepted basis no longer requir
       if (proposal === undefined) return yield* Effect.die("handoff proposal was not derived")
       const admitted = yield* admission.tryReserve(proposal)
       if (admitted._tag !== "Admitted") return yield* Effect.die("handoff proposal was not admitted")
-      yield* admission.bindPlannedAttemptPosition(admitted.reservation, plannedAttempt, acceptedResponsibility)
+      const receipt = yield* acceptedResponsibility
+      yield* admission.bindPlannedAttemptPosition(admitted.reservation, plannedAttempt, receipt)
       yield* admission.complete(admitted.reservation)
 
       yield* admission.synchronize(admissionBasis(1, [], undefined, taskAProjection.acceptedAt))
@@ -2156,7 +2231,8 @@ it.effect("rejects a conflicting accepted exact attempt without discarding the l
       if (proposal === undefined) return yield* Effect.die("handoff proposal was not derived")
       const admitted = yield* admission.tryReserve(proposal)
       if (admitted._tag !== "Admitted") return yield* Effect.die("handoff proposal was not admitted")
-      yield* admission.bindPlannedAttemptPosition(admitted.reservation, plannedAttempt, acceptedResponsibility)
+      const receipt = yield* acceptedResponsibility
+      yield* admission.bindPlannedAttemptPosition(admitted.reservation, plannedAttempt, receipt)
       const otherCorrelation = { attemptId: AttemptId.make("attempt:A:conflicting-accepted"), runId }
       const conflictingAttempt = plannedAttemptFor(taskId, otherCorrelation, "conflicting-accepted")
       const result = yield* Effect.exit(admission.synchronize(admissionBasis(1, [conflictingAttempt])))
@@ -2992,7 +3068,8 @@ it.effect("rejects a local fresh handoff when a different commitment is publishe
       const admitted = yield* admission.tryReserve(proposal)
       if (admitted._tag !== "Admitted") return yield* Effect.die("fresh handoff was not admitted")
 
-      yield* admission.bindPlannedAttemptPosition(admitted.reservation, plannedAttempt, acceptedResponsibility)
+      const receipt = yield* acceptedResponsibility
+      yield* admission.bindPlannedAttemptPosition(admitted.reservation, plannedAttempt, receipt)
       const differentProjection = makeFreshTaskAdmissionProjectionForTest(
         taskId,
         OperationId.make("admission-test-different-commitment"),
@@ -3039,7 +3116,8 @@ it.effect("rejects a local handoff when the accepted exact attempt differs", () 
       if (proposal === undefined) return yield* Effect.die("fresh handoff proposal was not derived")
       const admitted = yield* admission.tryReserve(proposal)
       if (admitted._tag !== "Admitted") return yield* Effect.die("fresh handoff was not admitted")
-      yield* admission.bindPlannedAttemptPosition(admitted.reservation, plannedAttempt, acceptedResponsibility)
+      const receipt = yield* acceptedResponsibility
+      yield* admission.bindPlannedAttemptPosition(admitted.reservation, plannedAttempt, receipt)
 
       const otherCorrelation = { attemptId: AttemptId.make("attempt:A:accepted-different"), runId }
       const otherAttempt = plannedAttemptFor(taskId, otherCorrelation, "accepted-different")

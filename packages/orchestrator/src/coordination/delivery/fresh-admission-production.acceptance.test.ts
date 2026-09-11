@@ -59,7 +59,6 @@ import {
   makeCompleteTaskTrackerFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
-import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import {
   intentRecordKey,
@@ -69,14 +68,17 @@ import {
   plannedAttemptExecutorStateObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey
 } from "../../workflow-journal/record-key.js"
-import { InRunJournal, JournalStore } from "../../workflow-journal/store.js"
+import { InRunJournal } from "../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
+import { journalRecordByKey } from "../../workflow-journal/record-evidence.js"
+import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { projectFreshTaskCommitments } from "../admission/fresh-task-admission-projection.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
-import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
-import { type JournalState, makeJournal } from "./journal.js"
+import { Journal, type JournalState } from "./journal.js"
+import { liveJournalTestLayer } from "./live-journal-test-layer.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { DeliveryActionExecutor, type MaterializedDeliveryAction } from "./delivery-action-executor.js"
 import { makeLiveDeliveryActionExecutor } from "./live-delivery-action-executor.js"
@@ -95,6 +97,8 @@ const runId = RunId.make("fresh-admission-production-acceptance")
 const target = FixtureTarget.make("fresh-admission-production-target")
 const capacity = TaskWorkCapacity.make(3)
 const policy = InitialControlPolicy.make({ taskExecutionCapacity: capacity })
+const productionJournalLayer = () =>
+  liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, policy)], runId, target })
 const taskIds = ["A", "B", "C", "D", "E"].map((value) => TaskId.make(value))
 const taskA = Option.getOrThrowWith(Option.fromUndefinedOr(taskIds[0]), () => new Error("missing A fixture"))
 const selectedTaskIds = taskIds.slice(0, 3)
@@ -255,11 +259,7 @@ const currentProjection = (stateGet: Effect.Effect<JournalState>) => ({
 
 const makeJournalService = () =>
   Effect.gen(function* () {
-    const storage = yield* JournalStore
-    yield* storage.beginRun(runId, target, policy)
-    const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
-    if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
-    const journal = yield* makeJournal(runId, target, initial, storage)
+    const journal = yield* Journal
     const operation = makeTrackerGraphObservationOperation(
       { _tag: "WorkflowEstablishment" },
       yield* (yield* OperationIdAllocator).allocate(),
@@ -402,6 +402,7 @@ const buildProductionHarness = Effect.fn("FreshAdmissionProductionTest.buildHarn
   const beginCalls = yield* Queue.unbounded<TaskId>()
   const finishBegins = yield* Deferred.make<void>()
   const journal = yield* makeJournalService()
+  const acceptedJournalReader = yield* AcceptedJournalReader
   const integrationTargets = yield* makeIntegrationTargetResourceController()
   const lifecycle = yield* makeApplicationExitLifecycle()
   const resources = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets, lifecycle.admission)
@@ -422,7 +423,11 @@ const buildProductionHarness = Effect.fn("FreshAdmissionProductionTest.buildHarn
         options.completePreBegin === true,
         options.controlLaterStages === true ? controlledStages : undefined
       )
-    ).pipe(Layer.provide(Layer.succeed(InRunJournal, journal)))
+    ).pipe(
+      Layer.provide(
+        Layer.merge(Layer.succeed(InRunJournal, journal), Layer.succeed(AcceptedJournalReader, acceptedJournalReader))
+      )
+    )
   )
   const workflowInterpreter = Context.get(journaledContext, WorkflowInterpreter)
   const identityContext = yield* Layer.build(
@@ -442,6 +447,7 @@ const buildProductionHarness = Effect.fn("FreshAdmissionProductionTest.buildHarn
   )
   const actionContext = Context.empty().pipe(
     Context.add(InRunJournal, journal),
+    Context.add(AcceptedJournalReader, acceptedJournalReader),
     Context.add(OperationIdAllocator, Context.get(identityContext, OperationIdAllocator)),
     Context.add(PlannedTaskAttemptPlanner, Context.get(identityContext, PlannedTaskAttemptPlanner)),
     Context.add(TaskClaimAcquisitionPlanner, Context.get(identityContext, TaskClaimAcquisitionPlanner)),
@@ -570,7 +576,7 @@ const awaitClaimAcquired = Effect.fn("FreshAdmissionProductionTest.awaitClaimAcq
   operationId: TaskClaimAcquisition["operationId"]
 ) {
   const accepted = (state: JournalState) =>
-    state.records.some(({ event }) => event._tag === "TaskClaimAcquired" && event.claim.operationId === operationId)
+    journalRecordByKey(state.prefix, outcomeRecordKey(operationId))?.event._tag === "TaskClaimAcquired"
   const current = yield* journal.state.get
   if (accepted(current)) return
   const observed = yield* journal.state.changes.pipe(Stream.filter(accepted), Stream.runHead)
@@ -632,7 +638,7 @@ it.effect("admits only A, B, and C from the complete A-E production frontier acr
       yield* Fiber.interrupt(runtime)
     }).pipe(
       Effect.provide(deterministicOperationIdAllocatorLayer("fresh-admission-production-bootstrap")),
-      Effect.provide(memoryJournalStoreLayer)
+      Effect.provide(productionJournalLayer())
     )
   )
 )
@@ -666,7 +672,7 @@ it.effect("preserves the admitted A-C set across every claim-response readiness 
           yield* Fiber.interrupt(runtime)
         }).pipe(
           Effect.provide(deterministicOperationIdAllocatorLayer(`fresh-admission-permutation-${order.join("")}`)),
-          Effect.provide(memoryJournalStoreLayer)
+          Effect.provide(productionJournalLayer())
         )
       )
     }
@@ -747,7 +753,7 @@ it.effect("keeps D and E outside every production boundary while A, B, and C rea
       expect((yield* Fiber.await(runtime))._tag).toBe("Failure")
     }).pipe(
       Effect.provide(deterministicOperationIdAllocatorLayer("fresh-admission-pre-begin-bootstrap")),
-      Effect.provide(memoryJournalStoreLayer)
+      Effect.provide(productionJournalLayer())
     )
   )
 )
@@ -865,7 +871,7 @@ it.effect("retains A-C through independently reversed post-claim production stag
           yield* Fiber.interrupt(runtime)
         }).pipe(
           Effect.provide(deterministicOperationIdAllocatorLayer(`fresh-admission-causal-${schedule.name}`)),
-          Effect.provide(memoryJournalStoreLayer)
+          Effect.provide(productionJournalLayer())
         )
       )
     }
@@ -908,7 +914,7 @@ it.effect("retains A-C admission when a later pre-Begin production stage fails",
           ).toBe(false)
         }).pipe(
           Effect.provide(deterministicOperationIdAllocatorLayer(`fresh-admission-failure-${stage}`)),
-          Effect.provide(memoryJournalStoreLayer)
+          Effect.provide(productionJournalLayer())
         )
       )
     }
@@ -1031,7 +1037,7 @@ it.effect("admits D alone after B returns Safe or Terminal while A and C remain 
           expect((yield* Fiber.await(runtime))._tag).toBe("Failure")
         }).pipe(
           Effect.provide(deterministicOperationIdAllocatorLayer(`fresh-admission-release-${reportTag}`)),
-          Effect.provide(memoryJournalStoreLayer)
+          Effect.provide(productionJournalLayer())
         )
       )
     }
@@ -1085,7 +1091,7 @@ it.effect("settles A's foreign claim rejection task-locally and admits D alone w
       yield* Fiber.interrupt(runtime)
     }).pipe(
       Effect.provide(deterministicOperationIdAllocatorLayer("fresh-admission-foreign-bootstrap")),
-      Effect.provide(memoryJournalStoreLayer)
+      Effect.provide(productionJournalLayer())
     )
   )
 )
@@ -1136,7 +1142,7 @@ it.effect("retains A after an ambiguous claim-provider failure and does not admi
       ).toEqual(taskIds.slice(0, 3))
     }).pipe(
       Effect.provide(deterministicOperationIdAllocatorLayer("fresh-admission-ambiguous-bootstrap")),
-      Effect.provide(memoryJournalStoreLayer)
+      Effect.provide(productionJournalLayer())
     )
   )
 )

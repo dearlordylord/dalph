@@ -16,6 +16,8 @@ import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
 import type { DeliveryActionExecutionLease } from "../coordination/delivery/delivery-action-executor.js"
 import { recoverTaskClaimReleaseOperation } from "../coordination/frontier/recovery.js"
 import { reduceWorkflowJournalHistory } from "../coordination/reconstruction/history.js"
+import { Journal } from "../coordination/delivery/journal.js"
+import { liveJournalTestLayer } from "../coordination/delivery/live-journal-test-layer.js"
 import { OperationId } from "../workflow/identity.js"
 import {
   makeTaskClaimAcquisitionOperation,
@@ -27,9 +29,8 @@ import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import { intentRecordKey, outcomeRecordKey } from "./record-key.js"
 import { AuthoritativeTaskClaimReleased } from "../workflow/protocols/task-claim-release/protocol.js"
 import { releaseTaskClaimThrough, WorkflowInterpreter } from "../workflow/interpretation/interpreter.js"
-import { memoryJournalTestLayer } from "./adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
-import { JournalStore } from "./store.js"
+import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
 
 const unused = () => Effect.die("unused")
 const controlledRecoveryLease: Pick<DeliveryActionExecutionLease, "forwardBoundary" | "recordIntent"> = {
@@ -40,6 +41,8 @@ const controlledRecoveryLease: Pick<DeliveryActionExecutionLease, "forwardBounda
   recordIntent: () => Effect.void
 }
 const runId = RunId.make("journaled-claim-release-run")
+const target = FixtureTarget.make("journaled-claim-release-target")
+const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const release = TaskClaimRelease.make({
   claim: ActiveTaskClaim.make({
     operationId: OperationId.make("journaled-claim-acquisition"),
@@ -73,7 +76,11 @@ const provider = Layer.effect(
     })
   })
 )
-const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.provide(memoryJournalTestLayer))
+const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(
+  Layer.provideMerge(
+    liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy)], runId, target })
+  )
+)
 
 it.effect("records exact claim-release intent and outcome once before replay returns", () =>
   Effect.gen(function* () {
@@ -82,12 +89,7 @@ it.effect("records exact claim-release intent and outcome once before replay ret
       predecessorOperationIds: [release.claim.operationId],
       release
     })
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("journaled-claim-release-target"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* Journal
     const acquisition = makeTaskClaimAcquisitionOperation({
       acquisition: {
         operationId: release.claim.operationId,
@@ -116,7 +118,7 @@ it.effect("records exact claim-release intent and outcome once before replay ret
         .map(({ event }) => event._tag)
         .filter((tag) => tag === "TaskClaimReleaseIntended" || tag === "TaskClaimReleased")
     ).toEqual(["TaskClaimReleaseIntended", "TaskClaimReleased"])
-  }).pipe(Effect.provide(journaled), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(journaled))
 )
 
 it.effect("recovers an unfinished exact release intent after throttle and rereads before cleanup", () =>
@@ -178,12 +180,7 @@ it.effect("recovers an unfinished exact release intent after throttle and reread
       })
     )
     const journaled = () => Layer.fresh(journaledWorkflowInterpreterLayer(recoveryRunId, provider))
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      recoveryRunId,
-      FixtureTarget.make("journaled-throttled-release-target"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* Journal
     const acquisition = makeTaskClaimAcquisitionOperation({
       acquisition: recoveryRelease.claim,
       predecessorOperationIds: []
@@ -245,5 +242,19 @@ it.effect("recovers an unfinished exact release intent after throttle and reread
       "TaskClaimReleaseIntended",
       "TaskClaimReleased"
     ])
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(
+    Effect.provide(
+      liveJournalTestLayer({
+        records: [
+          makeWorkflowRunBeganRecord(
+            RunId.make("journaled-throttled-release-recovery"),
+            FixtureTarget.make("journaled-throttled-release-target"),
+            initialPolicy
+          )
+        ],
+        runId: RunId.make("journaled-throttled-release-recovery"),
+        target: FixtureTarget.make("journaled-throttled-release-target")
+      })
+    )
+  )
 )

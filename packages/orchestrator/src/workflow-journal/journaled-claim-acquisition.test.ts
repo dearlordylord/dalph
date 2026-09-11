@@ -15,15 +15,16 @@ import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../control/policy.js"
 import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
 import { reduceWorkflowJournalHistory } from "../coordination/reconstruction/history.js"
+import { Journal } from "../coordination/delivery/journal.js"
+import { liveJournalTestLayer } from "../coordination/delivery/live-journal-test-layer.js"
 import type { DeliveryActionExecutionLease } from "../coordination/delivery/delivery-action-executor.js"
 import { recoverTaskClaimOperation } from "../coordination/frontier/recovery.js"
 import { makeRunRecoveryProjection } from "../coordination/run/recovery-activation.js"
 import { OperationId } from "../workflow/identity.js"
 import { acquireTaskClaimThrough, WorkflowInterpreter, WorkflowTrace } from "../workflow/interpretation/interpreter.js"
 import { makeTaskClaimAcquisitionOperation } from "../workflow/registry/operation.js"
-import { memoryJournalTestLayer } from "./adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
-import { JournalStore } from "./store.js"
+import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
 
 const unused = () => Effect.die("unused")
 const controlledRecoveryLease: Pick<DeliveryActionExecutionLease, "forwardBoundary" | "recordIntent"> = {
@@ -33,12 +34,14 @@ const controlledRecoveryLease: Pick<DeliveryActionExecutionLease, "forwardBounda
   },
   recordIntent: () => Effect.void
 }
+const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+const foreignRunId = RunId.make("journaled-foreign-claim-rejection")
+const foreignTarget = FixtureTarget.make("foreign-claim-target")
 
 it.effect("records a foreign acquisition rejection as terminal and never reconstructs a retry", () =>
   Effect.gen(function* () {
-    const runId = RunId.make("journaled-foreign-claim-rejection")
+    const runId = foreignRunId
     const taskId = TaskId.make("foreign-claim-task")
-    const target = FixtureTarget.make("foreign-claim-target")
     const operation = makeTaskClaimAcquisitionOperation({
       acquisition: {
         operationId: OperationId.make("rejected-acquisition"),
@@ -54,12 +57,7 @@ it.effect("records a foreign acquisition rejection as terminal and never reconst
       taskId,
       token: ClaimToken.make("foreign-token")
     })
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* Journal
     const interpreter = yield* WorkflowInterpreter
     expect(yield* interpreter.acquireTaskClaim(operation)).toEqual({
       _tag: "AuthoritativeTaskClaimAcquisitionRejected",
@@ -89,7 +87,7 @@ it.effect("records a foreign acquisition rejection as terminal and never reconst
   }).pipe(
     Effect.provide(
       journaledWorkflowInterpreterLayer(
-        RunId.make("journaled-foreign-claim-rejection"),
+        foreignRunId,
         Layer.succeed(
           WorkflowInterpreter,
           WorkflowInterpreter.of({
@@ -115,11 +113,18 @@ it.effect("records a foreign acquisition rejection as terminal and never reconst
             releaseTaskClaim: unused
           })
         )
-      ).pipe(Layer.provide(memoryJournalTestLayer))
+      ).pipe(
+        Layer.provideMerge(
+          liveJournalTestLayer({
+            records: [makeWorkflowRunBeganRecord(foreignRunId, foreignTarget, initialPolicy)],
+            runId: foreignRunId,
+            target: foreignTarget
+          })
+        )
+      )
     ),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
-    Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
   )
 )
 
@@ -178,12 +183,7 @@ it.effect("recovers an unfinished exact claim intent after throttle and rereads 
       })
     )
     const journaled = () => Layer.fresh(journaledWorkflowInterpreterLayer(runId, provider))
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("journaled-throttled-claim-target"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* Journal
     const firstFailure = yield* Effect.gen(function* () {
       const interpreter = yield* WorkflowInterpreter
       return yield* interpreter.acquireTaskClaim(operation).pipe(Effect.flip)
@@ -224,5 +224,19 @@ it.effect("recovers an unfinished exact claim intent after throttle and rereads 
       "TaskClaimAcquisitionIntended",
       "TaskClaimAcquired"
     ])
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(
+    Effect.provide(
+      liveJournalTestLayer({
+        records: [
+          makeWorkflowRunBeganRecord(
+            RunId.make("journaled-throttled-claim-recovery"),
+            FixtureTarget.make("journaled-throttled-claim-target"),
+            initialPolicy
+          )
+        ],
+        runId: RunId.make("journaled-throttled-claim-recovery"),
+        target: FixtureTarget.make("journaled-throttled-claim-target")
+      })
+    )
+  )
 )
