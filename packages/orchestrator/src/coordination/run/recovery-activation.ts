@@ -4252,7 +4252,6 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
               transition.responsibility.queuedAt === responsibility.queuedAt
           )
         if (
-          targetIsHeld &&
           claimIsExact &&
           claimObservedAt !== undefined &&
           !graphWasCheckedAfterClaim &&
@@ -4267,6 +4266,9 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
               transition.responsibility.queuedAt === responsibility.queuedAt
           )
         ) {
+          // Tracker freshness does not require Git target ownership. In
+          // particular, Retry may first release a stale target, refresh the
+          // post-claim graph, then reacquire before reading Git lineage.
           const claimRecord = journalRecordByPosition(journalHistoryOf(runState), claimObservedAt)
           const claimOperationId =
             claimRecord?.event._tag === "TaskClaimAcquired"

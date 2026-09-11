@@ -401,6 +401,7 @@ const buildProductionHarness = Effect.fn("FreshAdmissionProductionTest.buildHarn
   const completedStages = yield* Ref.make<ReadonlyArray<ControlledFreshStageCall>>([])
   const beginCalls = yield* Queue.unbounded<TaskId>()
   const finishBegins = yield* Deferred.make<void>()
+  const activationGraphBaseline = (yield* (yield* Journal).state.get).position
   const journal = yield* makeJournalService()
   const acceptedJournalReader = yield* AcceptedJournalReader
   const integrationTargets = yield* makeIntegrationTargetResourceController()
@@ -411,7 +412,8 @@ const buildProductionHarness = Effect.fn("FreshAdmissionProductionTest.buildHarn
     target,
     journal,
     currentProjection(journal.state.get.pipe(Effect.orDie)),
-    integrationTargets
+    integrationTargets,
+    activationGraphBaseline
   )
   const relationContext = yield* Layer.build(relationLayer)
   const relation = yield* deliveryRuntime.pipe(Effect.provide(relationContext))

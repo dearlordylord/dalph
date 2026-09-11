@@ -103,7 +103,8 @@ it.effect("appends nothing while every descriptive signal is observed", () =>
       target,
       withPoisonedAppend(journal),
       projectionOf(journal.state.get.pipe(Effect.orDie)),
-      integrationTargets
+      integrationTargets,
+      (yield* journal.state.get).position
     )
 
     const observed = yield* Effect.gen(function* () {
