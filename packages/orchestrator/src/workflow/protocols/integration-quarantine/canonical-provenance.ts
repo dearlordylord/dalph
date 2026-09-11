@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Cold diagnostics and indexed live provenance stay co-located for parity. */
 import {
   integrationProviderRunActivityAbsentRecordKey,
   integrationQuarantinedRecordKey,
@@ -364,9 +365,6 @@ const validateIndexedProviderRunActivityAbsent = (
   if (authorizationIssue !== undefined) return { _tag: "Invalid", detail: authorizationIssue }
   if (!absenceMatches(record, run)) {
     return { _tag: "Invalid", detail: "provider-activity absence has a foreign key or Journal Run" }
-  }
-  if (journalRecordByKey(records, integrationProviderRunActivityAbsentRecordKey(run)) !== record) {
-    return { _tag: "Invalid", detail: "provider-activity absence is duplicate or contradictory" }
   }
   for (const candidate of journalRecordsOfKind(records, "IntegratorRunResultRecorded")) {
     if (candidate.event._tag === "IntegratorRunResultRecorded" && integratorRunCorrelationsEqual(candidate.event.run, run)) {
