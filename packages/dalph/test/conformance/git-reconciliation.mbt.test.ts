@@ -189,7 +189,11 @@ const makeProductionReconciliationTrace = Effect.gen(function* () {
       )
   })
   const resource = yield* makeIntegrationTargetResourceController()
-  const physicalResponsibility = { integrationTarget, queuedAt: started.queuedAt }
+  const physicalResponsibility = {
+    integrationTarget,
+    plannedAttempt: started.plannedAttempt,
+    queuedAt: started.queuedAt
+  }
   const initialGraphProjection = projectTrackerSnapshot({
     revision: "git-reconciliation-production-initial",
     tasks: [
@@ -259,13 +263,15 @@ const makeProductionReconciliationTrace = Effect.gen(function* () {
         currentTrackerTaskIds: trackerReadUnavailable
           ? new Set()
           : Option.match(currentGraph, { onNone: () => new Set(), onSome: (graph) => new Set(graph.taskIds()) }),
-        heldResponsibilityPositions: resourceSnapshot.heldResponsibilityPositions,
+        heldResponsibilities: resourceSnapshot.heldResponsibilities,
         integrationTarget: Option.some(integrationTarget),
         targetLineageByAttemptId: new Map([[productionAttempt.attemptId, targetLineage]]),
         targetPromotionConfigured: true,
         taskClaimAuthorityByAttemptId: new Map([[productionAttempt.attemptId, { _tag: "Exact" as const }]])
       }),
-      held: resourceSnapshot.heldResponsibilityPositions.has(started.queuedAt),
+      held: resourceSnapshot.heldResponsibilities.some(
+        ({ queuedAt, runId: heldRunId }) => queuedAt === started.queuedAt && heldRunId === started.plannedAttempt.runId
+      ),
       records: records()
     }
   }

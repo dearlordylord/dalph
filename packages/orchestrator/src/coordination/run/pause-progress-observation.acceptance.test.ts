@@ -622,7 +622,7 @@ const startRelationRuntime = Effect.fn("PauseProgressAcceptance.startRelationRun
   keepActivationOpen: Deferred.Deferred<void>,
   integration?: {
     readonly release: Deferred.Deferred<void>
-    readonly responsibility: Pick<StartedIntegrationResponsibility, "integrationTarget" | "queuedAt">
+    readonly responsibility: Pick<StartedIntegrationResponsibility, "integrationTarget" | "plannedAttempt" | "queuedAt">
   },
   runtimeAccepted?: ReadonlyArray<{ readonly acceptedAt: JournalPosition; readonly observed: Deferred.Deferred<void> }>,
   beforeRuntime?: Effect.Effect<void, never, Journal>,

@@ -94,6 +94,7 @@ import { deriveStartedIntegrationFrontier } from "./integration-frontier-transit
 import { RunnableFrontierTransition } from "./frontier.js"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
 import type { CurrentTaskClaimAuthority } from "./task-claim-authority.js"
+import { IntegrationResponsibilityIdentity } from "../admission/integration-target-resource.js"
 
 const sha = (value: string): GitCommitSha => GitCommitSha.make(value.repeat(40))
 
@@ -130,6 +131,8 @@ const responsibility = StartedIntegrationResponsibility.make({
   queuedAt: JournalPosition.make(1),
   startedAt: JournalPosition.make(2)
 })
+const identity = (queuedAt: JournalPosition, identityRunId: RunId = runId) =>
+  IntegrationResponsibilityIdentity.make({ queuedAt, runId: identityRunId })
 
 const lineage = (targetHeadSha: GitCommitSha) =>
   TargetLineageObservation.make({ plannedBaseIsAncestorOfTargetHead: true, plannedBaseSha: baseSha, targetHeadSha })
@@ -412,9 +415,9 @@ const transitionsFor = (scenario: ReturnType<typeof retryHistory>) =>
   deriveStartedIntegrationFrontier(
     scenario.runState,
     {
-      activeResponsibilityPositions: new Set(),
+      activeResponsibilities: [],
       currentTrackerTaskIds: new Set([taskId]),
-      heldResponsibilityPositions: new Set([responsibility.queuedAt]),
+      heldResponsibilities: [identity(responsibility.queuedAt)],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map([[attemptId, scenario.currentLineage]]),
       targetLineageRefreshRequiredAttemptIds: new Set(),
@@ -480,9 +483,9 @@ it("releases the target before an initial Integrator run when fresh lineage is i
     deriveStartedIntegrationFrontier(
       runState,
       {
-        activeResponsibilityPositions: new Set(),
+        activeResponsibilities: [],
         currentTrackerTaskIds: new Set([taskId]),
-        heldResponsibilityPositions: new Set([responsibility.queuedAt]),
+        heldResponsibilities: [identity(responsibility.queuedAt)],
         integrationTarget: Option.some(target),
         targetLineageByAttemptId: new Map([[attemptId, incompatibleLineage]]),
         targetLineageRefreshRequiredAttemptIds: new Set(),
@@ -491,6 +494,47 @@ it("releases the target before an initial Integrator run when fresh lineage is i
       [responsibility]
     ).transitions()
   ).toEqual([RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })])
+})
+
+it("does not treat another Run at the same journal position as this Run's held target", () => {
+  const incompatibleLineage = TargetLineageObservation.make({
+    plannedBaseIsAncestorOfTargetHead: false,
+    plannedBaseSha: baseSha,
+    targetHeadSha: fixedHead
+  })
+  const fresh = lineageRecords(4, incompatibleLineage, "cross-run-position-collision")
+  const records = [...firstStartedResponsibilityRecords(), fresh.intent, fresh.observation]
+  const runState: ReconstructedRunState = {
+    appliedThrough: JournalPosition.make(4),
+    controlPolicy: Option.none(),
+    graphKnowledge: { taskTrackerFacts: [] },
+    pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
+    cancellation: notAppliedCancellation,
+    responsibility: { entries: [] },
+    runId,
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
+  }
+  const transitions = deriveStartedIntegrationFrontier(
+    runState,
+    {
+      activeResponsibilities: [],
+      currentTrackerTaskIds: new Set([taskId]),
+      heldResponsibilities: [
+        IntegrationResponsibilityIdentity.make({
+          queuedAt: responsibility.queuedAt,
+          runId: RunId.make("another-run-at-position-two")
+        })
+      ],
+      integrationTarget: Option.some(target),
+      targetLineageByAttemptId: new Map([[attemptId, incompatibleLineage]]),
+      targetLineageRefreshRequiredAttemptIds: new Set(),
+      taskClaimAuthorityByAttemptId: new Map([[attemptId, { _tag: "Exact" as const }]])
+    },
+    [responsibility]
+  ).transitions()
+
+  expect(transitions).toContainEqual(RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility }))
+  expect(transitions).not.toContainEqual(RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility }))
 })
 
 it("keeps unobserved claims and absent durable lineage waiting without starting Integrator", () => {
@@ -506,9 +550,9 @@ it("keeps unobserved claims and absent durable lineage waiting without starting 
     workflowHistory: { evidence: journalEvidenceFrom(records) }
   }
   const baseFacts = {
-    activeResponsibilityPositions: new Set<JournalPosition>(),
+    activeResponsibilities: [],
     currentTrackerTaskIds: new Set([taskId]),
-    heldResponsibilityPositions: new Set([responsibility.queuedAt]),
+    heldResponsibilities: [identity(responsibility.queuedAt)],
     integrationTarget: Option.some(target),
     targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>()
   }
@@ -547,9 +591,9 @@ it("keeps unobserved claims and absent durable lineage waiting without starting 
 it("waits for an explicitly applied claim reacquisition when integration claim evidence is missing", () => {
   const scenario = unfinishedFirstSessionHistory()
   const frontier = deriveIntegrationFrontier(scenario.runState, {
-    activeResponsibilityPositions: new Set(),
+    activeResponsibilities: [],
     currentTrackerTaskIds: new Set([taskId]),
-    heldResponsibilityPositions: new Set([responsibility.queuedAt]),
+    heldResponsibilities: [identity(responsibility.queuedAt)],
     integrationTarget: Option.some(target),
     targetLineageByAttemptId: new Map([[attemptId, scenario.initialLineage]]),
     targetLineageRefreshRequiredAttemptIds: new Set(),
@@ -578,9 +622,9 @@ it("explains incompatible lineage as a target rewrite after the fixed session", 
   const analysis = deriveStartedIntegrationFrontier(
     scenario.runState,
     {
-      activeResponsibilityPositions: new Set(),
+      activeResponsibilities: [],
       currentTrackerTaskIds: new Set([taskId]),
-      heldResponsibilityPositions: new Set([responsibility.queuedAt]),
+      heldResponsibilities: [identity(responsibility.queuedAt)],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map([[attemptId, incompatibleLineage]]),
       targetLineageRefreshRequiredAttemptIds: new Set(),
@@ -637,9 +681,9 @@ it("records CandidateRejected quarantine from the exact run result and candidate
   const transitions = deriveStartedIntegrationFrontier(
     runState,
     {
-      activeResponsibilityPositions: new Set(),
+      activeResponsibilities: [],
       currentTrackerTaskIds: new Set(),
-      heldResponsibilityPositions: new Set(),
+      heldResponsibilities: [],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map(),
       targetLineageRefreshRequiredAttemptIds: new Set(),
@@ -701,9 +745,9 @@ it("recovers a durable initial Integrator result by recording Q before any fresh
   const transitions = deriveStartedIntegrationFrontier(
     runState,
     {
-      activeResponsibilityPositions: new Set(),
+      activeResponsibilities: [],
       currentTrackerTaskIds: new Set(),
-      heldResponsibilityPositions: new Set(),
+      heldResponsibilities: [],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map(),
       targetLineageRefreshRequiredAttemptIds: new Set(),
@@ -736,9 +780,9 @@ it("recovers provider-owned activity absence by recording Q without calling Inte
   const transitions = deriveStartedIntegrationFrontier(
     runState,
     {
-      activeResponsibilityPositions: new Set(),
+      activeResponsibilities: [],
       currentTrackerTaskIds: new Set(),
-      heldResponsibilityPositions: new Set(),
+      heldResponsibilities: [],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map(),
       targetLineageRefreshRequiredAttemptIds: new Set(),
@@ -971,8 +1015,8 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
   }
 
   const runtimeFacts = {
-    activeResponsibilityPositions: new Set<JournalPosition>(),
-    heldResponsibilityPositions: new Set([responsibility.queuedAt]),
+    activeResponsibilities: [],
+    heldResponsibilities: [identity(responsibility.queuedAt)],
     integrationTarget: Option.some(target),
     targetLineageByAttemptId: new Map([[attemptId, lineage(preparedCandidateCommit)]]),
     targetLineageRefreshRequiredAttemptIds: new Set([attemptId]),
@@ -1018,7 +1062,7 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
       ])
     }
   }
-  const releasedRuntimeFacts = { ...runtimeFacts, heldResponsibilityPositions: new Set<JournalPosition>() }
+  const releasedRuntimeFacts = { ...runtimeFacts, heldResponsibilities: [] }
   expect(
     deriveStartedIntegrationFrontier(
       deferredRunState,
@@ -1169,9 +1213,9 @@ it("derives a fresh quarantine after the authorized Retry run ends conclusively"
   const transitions = deriveStartedIntegrationFrontier(
     runState,
     {
-      activeResponsibilityPositions: new Set(),
+      activeResponsibilities: [],
       currentTrackerTaskIds: new Set([taskId]),
-      heldResponsibilityPositions: new Set([responsibility.queuedAt]),
+      heldResponsibilities: [identity(responsibility.queuedAt)],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map([[attemptId, scenario.currentLineage]]),
       targetLineageRefreshRequiredAttemptIds: new Set(),
@@ -1322,9 +1366,9 @@ it("continues unrelated runnable work while an integration session is restored",
 
   expect(
     deriveIntegrationFrontier(runState, {
-      activeResponsibilityPositions: new Set(),
+      activeResponsibilities: [],
       currentTrackerTaskIds: new Set([restored.plannedAttempt.taskId, unrelated.plannedAttempt.taskId]),
-      heldResponsibilityPositions: new Set(),
+      heldResponsibilities: [],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map([[restored.plannedAttempt.attemptId, scenario.initialLineage]]),
       targetLineageRefreshRequiredAttemptIds: new Set(),
@@ -1340,9 +1384,9 @@ it("continues unrelated runnable work while an integration session is restored",
 
   expect(
     deriveIntegrationFrontier(runState, {
-      activeResponsibilityPositions: new Set(),
+      activeResponsibilities: [],
       currentTrackerTaskIds: new Set([restored.plannedAttempt.taskId, unrelated.plannedAttempt.taskId]),
-      heldResponsibilityPositions: new Set([restored.queuedAt]),
+      heldResponsibilities: [identity(restored.queuedAt, restored.plannedAttempt.runId)],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map([[restored.plannedAttempt.attemptId, scenario.initialLineage]]),
       targetLineageRefreshRequiredAttemptIds: new Set(),
@@ -1434,13 +1478,13 @@ it("blocks later same-target integration while unrelated work continues", () => 
 
   expect(
     deriveIntegrationFrontier(runState, {
-      activeResponsibilityPositions: new Set(),
+      activeResponsibilities: [],
       currentTrackerTaskIds: new Set([
         responsibility.plannedAttempt.taskId,
         laterSameTarget.plannedAttempt.taskId,
         unrelated.plannedAttempt.taskId
       ]),
-      heldResponsibilityPositions: new Set(),
+      heldResponsibilities: [],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map(),
       targetLineageRefreshRequiredAttemptIds: new Set(),
