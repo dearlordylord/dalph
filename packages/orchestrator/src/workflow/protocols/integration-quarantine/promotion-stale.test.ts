@@ -1,6 +1,6 @@
 import { GitCommitSha, RunId } from "@dalph/contracts"
 import { it } from "@effect/vitest"
-import { Effect, Layer, Ref, Schema } from "effect"
+import { Effect, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
@@ -19,7 +19,6 @@ import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/ide
 import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
 import {
   InRunJournal,
-  type InRunJournalService,
   JournalStore,
   JournalStoreContradiction,
   type JournalRecord
