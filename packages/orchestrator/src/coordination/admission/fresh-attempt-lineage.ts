@@ -17,8 +17,7 @@ import {
   isJournalRecordEvidence,
   journalEvidenceBefore,
   journalRecordByKey,
-  journalRecordsForAttempt,
-  journalRecordsOfKind,
+  journalRecordsForAttemptKind,
   type JournalHistorySource
 } from "../../workflow-journal/record-evidence.js"
 
@@ -174,15 +173,27 @@ const taskWasEligibleAt = (
   taskId: PlannedTaskAttempt["taskId"]
 ): boolean => {
   if (outcome.event._tag !== "TaskTrackerFactsObserved") return false
+  const observation = outcome.event.observation
+  if (
+    observation._tag !== "CompleteTaskTrackerFacts" &&
+    observation._tag !== "UnchangedTaskTrackerFactsReconfirmed"
+  ) {
+    return false
+  }
+  const priorFull =
+    observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
+      ? journalRecordByKey(records, outcomeRecordKey(observation.priorFullObservationOperationId))
+      : undefined
+  const taskTrackerFacts = [
+    ...(priorFull?.event._tag === "TaskTrackerFactsObserved" &&
+    priorFull.event.observation._tag === "CompleteTaskTrackerFacts"
+      ? [priorFull.event.observation]
+      : []),
+    observation
+  ]
   const reconstructed = reconstructedTaskGraphFor(
-    {
-      taskTrackerFacts: Array.from(journalRecordsOfKind(records, "TaskTrackerFactsObserved")).flatMap((record) =>
-        record.position <= outcome.position && record.event._tag === "TaskTrackerFactsObserved"
-          ? [record.event.observation]
-          : []
-      )
-    },
-    outcome.event.observation.target
+    { taskTrackerFacts },
+    observation.target
   )
   return Option.isSome(reconstructed) && reconstructed.value.eligibleTasks().some(({ id }) => id === taskId)
 }
@@ -296,13 +307,24 @@ export const acceptedFreshAttemptLineage = (
   if (plan === undefined) return undefined
   if (boundary === "Plan") return { _tag: "AcceptedFreshAttemptPlanLineage", ...plan }
 
-  const worktree = exactlyOne(
-    Array.from(journalRecordsForAttempt(runRecords, plannedAttempt.attemptId)).flatMap((intent) => {
+  let worktree:
+    | {
+        readonly intent: JournalRecord
+        readonly operation: Extract<WorkflowOperation, { readonly _tag: "ReconcileTaskWorktree" }>
+        readonly outcome: JournalRecord
+      }
+    | undefined
+  let worktreeCount = 0
+  for (const intent of journalRecordsForAttemptKind(
+    runRecords,
+    plannedAttempt.attemptId,
+    "TaskWorktreeReconciliationIntended"
+  )) {
       if (
         intent.event._tag !== "TaskWorktreeReconciliationIntended" ||
         !plannedTaskAttemptEquivalence(intent.event.operation.plannedAttempt, plannedAttempt)
       ) {
-        return []
+        continue
       }
       const operationId = intent.event.operation.operationId
       const outcome = journalRecordByKey(runRecords, outcomeRecordKey(operationId))
@@ -314,12 +336,12 @@ export const acceptedFreshAttemptLineage = (
         !plannedAttemptWorktreeObservationMatchesPlan(outcome.event.proof, plannedAttempt) ||
         !causalPredecessors(runRecords, intent.event.operation).has(plan.planOperationId)
       ) {
-        return []
+        continue
       }
-      return [{ intent, operation: intent.event.operation, outcome }]
-    })
-  )
-  return worktree === undefined
+      worktreeCount += 1
+      worktree ??= { intent, operation: intent.event.operation, outcome }
+  }
+  return worktreeCount !== 1 || worktree === undefined
     ? undefined
     : { _tag: "AcceptedFreshAttemptWorktreeLineage", ...plan, worktreeOperationId: worktree.operation.operationId }
 }
