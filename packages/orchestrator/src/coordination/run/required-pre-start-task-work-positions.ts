@@ -137,8 +137,12 @@ const claimOutcomeFor = (
   const operationId = intent.operation.acquisition.operationId
   const record = journalRecordByKey(records, outcomeRecordKey(operationId))
   if (record === undefined || record.runId !== runId || record.position <= intent._recordPosition) return undefined
-  if (record.event._tag === "TaskClaimAcquired" && record.event.claim.operationId === operationId) return record
-  if (record.event._tag === "TaskClaimAcquisitionRejected" && record.event.operationId === operationId) return record
+  if (record.event._tag === "TaskClaimAcquired" && record.event.claim.operationId === operationId) {
+    return { ...record, event: record.event }
+  }
+  if (record.event._tag === "TaskClaimAcquisitionRejected" && record.event.operationId === operationId) {
+    return { ...record, event: record.event }
+  }
   return undefined
 }
 
