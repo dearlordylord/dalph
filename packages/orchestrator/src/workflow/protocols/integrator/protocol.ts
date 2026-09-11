@@ -1,7 +1,7 @@
 import { Context, Effect, Option } from "effect"
 import type { IntegrationTarget } from "@dalph/contracts"
 import { InRunJournal } from "../../../workflow-journal/store.js"
-import type { JournalRecord } from "../../../workflow-journal/store.js"
+import type { JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import {
   integratorRunCandidateGitObservedRecordKey,
   integratorRunResultRecordedRecordKey
@@ -160,7 +160,7 @@ const qualifyRunCandidate = (
 const correlationForPreparation = Effect.fn("IntegratorProtocol.correlationForPreparation")(function* (
   journal: InRunJournal["Service"],
   input: IntegratorPreparationInput,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   const runId = input.responsibility.plannedAttempt.runId
   const recordedCorrelation = yield* readActiveIntegratorSession(records, input.responsibility)
@@ -262,7 +262,7 @@ const qualifyOrNotPreparedForRun = Effect.fn("IntegratorProtocol.qualifyOrNotPre
 const correlationForRequestedRun = Effect.fn("IntegratorProtocol.correlationForRequestedRun")(function* (
   journal: InRunJournal["Service"],
   request: IntegratorRunPreparationInput,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   if (request.run.ordinal === 1) return yield* correlationForPreparation(journal, request.preparation, records)
   const runId = request.preparation.responsibility.plannedAttempt.runId

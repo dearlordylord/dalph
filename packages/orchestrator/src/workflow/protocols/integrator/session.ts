@@ -3,7 +3,17 @@ import { Effect, Option, Schema } from "effect"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { OperationId } from "../../identity.js"
-import { integratorRunStartedRecordKey, integratorSessionFixedRecordKey } from "../../../workflow-journal/record-key.js"
+import {
+  integratorRunStartedRecordKey,
+  integratorSessionFixedRecordKey,
+  intentRecordKey
+} from "../../../workflow-journal/record-key.js"
+import {
+  isJournalRecordEvidence,
+  journalRecordByKey,
+  journalRecordByPosition,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import type { InRunJournal, JournalRecord } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { StartedIntegrationResponsibility } from "../integration-admission/responsibility.js"
@@ -147,7 +157,7 @@ const sessionRecordMatches = (record: JournalRecord, correlation: IntegratorSess
 export const appendIntegratorSessionIfNeeded = Effect.fn("IntegratorProtocol.appendSessionIfNeeded")(function* (
   journal: InRunJournal["Service"],
   correlation: IntegratorSessionCorrelation,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   const key = integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(correlation))
   const existing = integratorFindEventAtKey(records, key)
@@ -184,7 +194,7 @@ const runStartRecordMatches = (record: JournalRecord, run: IntegratorRunCorrelat
 export const appendIntegratorRunStartedIfNeeded = Effect.fn("IntegratorProtocol.appendRunStartedIfNeeded")(function* (
   journal: InRunJournal["Service"],
   run: IntegratorRunCorrelation,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   const key = integratorRunStartedRecordKey(run)
   const existing = integratorFindEventAtKey(records, key)
@@ -217,24 +227,29 @@ const plannedAttemptEquivalence = Schema.toEquivalence(PlannedTaskAttempt)
 const integrationTargetEquivalence = Schema.toEquivalence(IntegrationTarget)
 
 const targetLineageIntentFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   targetLineagePosition: JournalPosition,
   operationId: OperationId
-): JournalRecord | undefined =>
-  records.find(
+): JournalRecord | undefined => {
+  if (isJournalRecordEvidence(records)) {
+    const record = journalRecordByKey(records, intentRecordKey(operationId))
+    return record !== undefined && record.position < targetLineagePosition ? record : undefined
+  }
+  return records.find(
     ({ event, position }) =>
       position < targetLineagePosition &&
       event._tag === "GitReadIntentRecorded" &&
       event.operation._tag === "ReadTargetLineage" &&
       event.operation.operationId === operationId
   )
+}
 
 // eslint-disable-next-line complexity -- One exact lineage pair must bind operation, target, attempt, observation, and Journal positions.
 const matchingIntegratorTargetLineageIntentPosition = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   input: IntegratorPreparationInput
 ): JournalPosition | undefined => {
-  const record = records.find(({ position }) => position === input.targetLineageObservedAt)
+  const record = journalRecordByPosition(records, input.targetLineageObservedAt)
   if (record?.event._tag !== "TargetLineageObserved") return undefined
   const intent = targetLineageIntentFor(records, record.position, record.event.operationId)
   return intent?.event._tag === "GitReadIntentRecorded" &&
@@ -247,12 +262,12 @@ const matchingIntegratorTargetLineageIntentPosition = (
 }
 
 export const hasMatchingIntegratorTargetLineageObservation = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   input: IntegratorPreparationInput
 ): boolean => matchingIntegratorTargetLineageIntentPosition(records, input) !== undefined
 
 export const readRecordedIntegratorSession = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   responsibility: StartedIntegrationResponsibility
 ): Effect.Effect<Option.Option<IntegratorSessionCorrelation>, IntegratorJournalContradiction> => {
   const existing = integratorFindEventAtKey(

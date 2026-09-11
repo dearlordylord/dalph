@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Cold successor diagnostics and indexed live evidence stay co-located for exact parity. */
 import { plannedTaskAttemptEquivalence, type IntegrationTarget } from "@dalph/contracts"
 import { Effect, Option, Schema } from "effect"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
@@ -5,10 +6,18 @@ import {
   integrationQuarantineDirectionAppliedRecordKey,
   integrationQuarantinedRecordKey,
   integratorSessionFixedRecordKey,
-  integratorSuccessorSessionFixedRecordKey
+  integratorSuccessorSessionFixedRecordKey,
+  intentRecordKey
 } from "../../../workflow-journal/record-key.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { InRunJournal, JournalRecord } from "../../../workflow-journal/store.js"
+import {
+  isJournalRecordEvidence,
+  journalRecordByKey,
+  journalRecordByPosition,
+  journalRecordsForIntegratorSession,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import { exactJournalRecordAtKey } from "../../../workflow-journal/exact-record.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import type { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
@@ -33,6 +42,10 @@ export type IntegratorSuccessorSessionFixedRecord = JournalRecord & {
   readonly event: IntegratorSuccessorSessionFixedEvent
 }
 
+const isIntegratorSuccessorSessionFixedRecord = (
+  record: JournalRecord
+): record is IntegratorSuccessorSessionFixedRecord => record.event._tag === "IntegratorSuccessorSessionFixed"
+
 const successorEventEquivalence = Schema.toEquivalence(IntegratorSuccessorSessionFixedEvent)
 const targetLineageEquivalence = Schema.toEquivalence(TargetLineageObservation)
 
@@ -47,8 +60,8 @@ const reject = (
 const sameTarget = (left: IntegrationTarget, right: IntegrationTarget): boolean =>
   left.repository === right.repository && left.ref === right.ref
 
-const exactRecordAt = (records: ReadonlyArray<JournalRecord>, position: JournalPosition): JournalRecord | undefined =>
-  records.find((record) => record.position === position)
+const exactRecordAt = (records: JournalHistorySource, position: JournalPosition): JournalRecord | undefined =>
+  journalRecordByPosition(records, position)
 
 type TargetLineageObservedEvent = Extract<JournalRecord["event"], { readonly _tag: "TargetLineageObserved" }>
 
@@ -58,7 +71,7 @@ const validSuccessor = (): SuccessorValidation => ({ _tag: "Valid" })
 const invalidSuccessor = (detail: string): SuccessorValidation => ({ _tag: "Invalid", detail })
 
 const targetLineageMatches = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   input: IntegratorSuccessorPreparationInput,
   correlation: IntegratorSessionCorrelation
 ): boolean => {
@@ -71,12 +84,20 @@ const targetLineageMatches = (
 }
 
 const targetLineageReadIntentFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   input: IntegratorSuccessorPreparationInput,
   operationId: TargetLineageObservedEvent["operationId"],
   observationPosition: JournalPosition
-): JournalRecord | undefined =>
-  records.find((record) => {
+): JournalRecord | undefined => {
+  if (isJournalRecordEvidence(records)) {
+    const record = journalRecordByKey(records, intentRecordKey(operationId))
+    return record !== undefined &&
+      record.position > input.directionAppliedAt &&
+      record.position < observationPosition
+      ? record
+      : undefined
+  }
+  return records.find((record) => {
     const event = record.event
     return (
       event._tag === "GitReadIntentRecorded" &&
@@ -86,6 +107,7 @@ const targetLineageReadIntentFor = (
       record.position < observationPosition
     )
   })
+}
 
 type ReadTargetLineageOperation = Extract<
   Extract<JournalRecord["event"], { readonly _tag: "GitReadIntentRecorded" }>["operation"],
@@ -114,11 +136,11 @@ const targetLineageFactsMatch = (
   targetLineageIntentFactsMatch(intent.event.operation, observation, correlation)
 
 const predecessorFixedAt = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   predecessor: IntegratorSessionCorrelation
 ): JournalRecord | undefined => {
   const key = integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(predecessor))
-  const record = records.find((candidate) => candidate.key === key)
+  const record = journalRecordByKey(records, key)
   return record?.event._tag === "IntegratorSessionFixed" &&
     integratorCorrelationsEqual(record.event.correlation, predecessor)
     ? record
@@ -178,7 +200,7 @@ type FreshSuccessorEvidence =
 const invalidFreshSuccessor = (detail: string): FreshSuccessorEvidence => ({ _tag: "Invalid", detail })
 
 const validateFreshSuccessorEvidence = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   input: IntegratorSuccessorPreparationInput
 ): FreshSuccessorEvidence => {
   const predecessor = input.predecessor
@@ -211,7 +233,7 @@ const validateFreshSuccessorEvidence = (
 }
 
 const validateFreshSuccessorPreconditions = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   input: IntegratorSuccessorPreparationInput,
   successor: IntegratorSessionCorrelation
 ): SuccessorValidation => {
@@ -237,14 +259,29 @@ const validateFreshSuccessorPreconditions = (
 }
 
 const existingSuccessorFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   predecessor: IntegratorSessionCorrelation
-): ReadonlyArray<IntegratorSuccessorSessionFixedRecord> =>
-  records.filter(
-    (record): record is IntegratorSuccessorSessionFixedRecord =>
-      record.event._tag === "IntegratorSuccessorSessionFixed" &&
-      record.event.predecessor.sessionId === predecessor.sessionId
-  )
+): Iterable<IntegratorSuccessorSessionFixedRecord> => ({
+  *[Symbol.iterator]() {
+    for (const record of journalRecordsForIntegratorSession(records, predecessor.sessionId)) {
+      if (isIntegratorSuccessorSessionFixedRecord(record) && record.event.predecessor.sessionId === predecessor.sessionId) {
+        yield record
+      }
+    }
+  }
+})
+
+const firstTwoSuccessorsFor = (
+  records: JournalHistorySource,
+  predecessor: IntegratorSessionCorrelation
+): readonly [IntegratorSuccessorSessionFixedRecord | undefined, boolean] => {
+  let first: IntegratorSuccessorSessionFixedRecord | undefined
+  for (const record of existingSuccessorFor(records, predecessor)) {
+    if (first !== undefined) return [first, true]
+    first = record
+  }
+  return [first, false]
+}
 
 const validateExistingSuccessor = (
   existing: IntegratorSuccessorSessionFixedRecord,
@@ -299,7 +336,7 @@ const successorIdentityCollision = (
   })
 
 const validateSuccessorUniqueness = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   input: IntegratorSuccessorPreparationInput,
   successor: IntegratorSessionCorrelation,
   expectedKey: JournalRecord["key"]
@@ -307,13 +344,14 @@ const validateSuccessorUniqueness = (
   | { readonly _tag: "Available" }
   | { readonly _tag: "Existing"; readonly record: IntegratorSuccessorSessionFixedRecord }
   | { readonly _tag: "Invalid"; readonly detail: string } => {
-  const related = existingSuccessorFor(records, input.predecessor)
-  if (related.length > 1) {
+  const [existing, duplicate] = firstTwoSuccessorsFor(records, input.predecessor)
+  if (duplicate) {
     return { _tag: "Invalid", detail: "Journal history contains multiple FullRerun successors for one predecessor" }
   }
-  const existing = related[0]
   if (existing !== undefined) return validateExistingSuccessor(existing, input, successor, expectedKey)
-  const identityCollision = successorIdentityCollision(records, successor)
+  const identityCollision = isJournalRecordEvidence(records)
+    ? false
+    : successorIdentityCollision(records, successor)
   return identityCollision
     ? { _tag: "Invalid", detail: "FullRerun successor reuses an existing session or resource identity" }
     : { _tag: "Available" }
@@ -343,7 +381,7 @@ const successorRecordMatches = (
   successorEventEquivalence(record.event, event)
 
 const validateActiveIntegratorSuccessorRecord = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   fixed: IntegratorSuccessorSessionFixedRecord,
   predecessor: IntegratorSessionCorrelation
 ):
@@ -381,17 +419,16 @@ const validateActiveIntegratorSuccessorRecord = (
 
 /** Pure, fail-closed lookup used before reconstruction or delivery selects S2. */
 const activeIntegratorSuccessorFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   predecessor: IntegratorSessionCorrelation
 ):
   | { readonly _tag: "Absent" }
   | { readonly _tag: "Invalid"; readonly detail: string }
   | { readonly _tag: "Valid"; readonly successor: IntegratorSessionCorrelation } => {
-  const related = existingSuccessorFor(records, predecessor)
-  if (related.length > 1) {
+  const [fixed, duplicate] = firstTwoSuccessorsFor(records, predecessor)
+  if (duplicate) {
     return { _tag: "Invalid", detail: "Journal history contains multiple successors for one Integrator session" }
   }
-  const fixed = related[0]
   if (fixed === undefined) return { _tag: "Absent" }
   return validateActiveIntegratorSuccessorRecord(records, fixed, predecessor)
 }
@@ -404,7 +441,7 @@ export const appendIntegratorSuccessorSessionIfNeeded = Effect.fn("IntegratorPro
   function* (
     journal: InRunJournal["Service"],
     input: IntegratorSuccessorPreparationInput,
-    records: ReadonlyArray<JournalRecord>
+    records: JournalHistorySource
   ) {
     const successor = integratorSuccessorCorrelationFor(input)
     const key = integratorSuccessorSessionFixedRecordKey(
@@ -432,7 +469,7 @@ export const appendIntegratorSuccessorSessionIfNeeded = Effect.fn("IntegratorPro
       Effect.catchTag("JournalStoreContradiction", ({ existingPosition }) =>
         Effect.gen(function* () {
           const refreshed = yield* journal.read(runIdFor(input.predecessor))
-          const winner = refreshed.find((record) => record.position === existingPosition)
+          const winner = journalRecordByPosition(refreshed, existingPosition)
           if (winner !== undefined && successorRecordMatches(winner, key, event)) return winner
           return yield* reject(input.predecessor, "FullRerun successor append contradicted existing Journal history")
         })
@@ -449,7 +486,7 @@ export const appendIntegratorSuccessorSessionIfNeeded = Effect.fn("IntegratorPro
  * journal, but a valid S2 relation makes S2 the active session.
  */
 export const readActiveIntegratorSession = Effect.fn("IntegratorProtocol.readActiveIntegratorSession")(function* (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   responsibility: StartedIntegrationResponsibility
 ) {
   const predecessor = yield* readRecordedIntegratorSession(records, responsibility)

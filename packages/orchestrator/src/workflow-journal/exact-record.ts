@@ -1,4 +1,9 @@
 import type { JournalRecord } from "./store.js"
+import {
+  isJournalRecordEvidence,
+  journalRecordByKey,
+  type JournalHistorySource
+} from "./record-evidence.js"
 
 /** Total lookup result for one journal key; duplicate history is not absence. */
 type ExactJournalRecordAtKey =
@@ -8,9 +13,13 @@ type ExactJournalRecordAtKey =
 
 /** Finds exactly one record at a key without encoding contradiction as a string sentinel. */
 export const exactJournalRecordAtKey = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   key: JournalRecord["key"]
 ): ExactJournalRecordAtKey => {
+  if (isJournalRecordEvidence(records)) {
+    const record = journalRecordByKey(records, key)
+    return record === undefined ? { _tag: "Missing" } : { _tag: "Found", record }
+  }
   const matches = records.filter((record) => record.key === key)
   if (matches.length > 1) {
     return { _tag: "Duplicate", detail: "Journal history contains duplicate records for one exact key" }
