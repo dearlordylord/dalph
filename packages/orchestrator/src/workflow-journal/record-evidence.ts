@@ -127,6 +127,19 @@ const taskIdsOf = (record: JournalRecord, indexes?: EvidenceIndexes): ReadonlySe
     ids.add(descriptor.plannedAttempt.plannedAttempt.taskId)
   }
   const event = record.event
+  if (event._tag === "TaskTrackerFactsObserved") {
+    const observation = event.observation
+    if (observation._tag === "FocusedTaskWorkSpecificationFacts") {
+      ids.add(observation.factFamily.coverage.taskId)
+    }
+    if (
+      observation._tag === "FocusedTaskClaimFacts" ||
+      observation._tag === "FocusedTaskClaimFactsUnreadable"
+    ) {
+      ids.add(observation.coverage.taskId)
+    }
+    if (observation._tag === "FocusedTaskCompletionFacts") ids.add(observation.request.taskId)
+  }
   if ("plannedAttempt" in event) ids.add(event.plannedAttempt.taskId)
   if ("subject" in event) {
     if ("plannedAttempt" in event.subject) ids.add(event.subject.plannedAttempt.taskId)
