@@ -30,7 +30,6 @@ import {
 import { TaskTrackerFactsObservedEvent } from "../../task-tracker-facts/observation.js"
 import { taskTrackerObservationMatchesRead } from "../../task-tracker-facts/observation-match.js"
 import { TaskTrackerReadIntentRecordedEvent } from "../../registry/event.js"
-import { journalPrefixPredecessorOf } from "../../../workflow-journal/prefix-lineage.js"
 import { completionTaskRequestFor } from "./completion-task-request.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 
@@ -261,10 +260,6 @@ const finalityClaimKey = (claim: CompletionTaskClaim): string => {
   return key
 }
 
-const appendedEventChangesClaim = (event: unknown, claim: CompletionTaskClaim): boolean => {
-  return Schema.is(CompletionClaimFinalityJournalEvent)(event) && completionTaskClaimEquals(event.claim, claim)
-}
-
 const successProofOf = (
   event: CompletionClaimDeletionIntendedEvent | CompletionClaimDeletedEvent | IntegrationFinalitySettledEvent
 ): CompletionSuccessObservation => event.successObservation
@@ -374,11 +369,7 @@ export const deriveIntegrationFinalityStateFor = (
   const claimKey = finalityClaimKey(claim)
   const cachedByClaim = finalityStateByPrefix.get(records)
   if (cachedByClaim?.has(claimKey) === true) return cachedByClaim.get(claimKey)
-  const predecessor = journalPrefixPredecessorOf(records)
-  const state =
-    predecessor !== undefined && !appendedEventChangesClaim(predecessor.appended.event, claim)
-      ? deriveIntegrationFinalityStateFor(predecessor.prior, claim)
-      : deriveIntegrationFinalityState(records, claim)
+  const state = deriveIntegrationFinalityState(records, claim)
   const cache = cachedByClaim ?? new Map<string, IntegrationFinalityState | undefined>()
   cache.set(claimKey, state)
   finalityStateByPrefix.set(records, cache)

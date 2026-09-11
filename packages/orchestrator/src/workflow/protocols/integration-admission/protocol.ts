@@ -42,7 +42,6 @@ import {
   type IntegrationFinalitySettledEvent
 } from "../integration-finality/events.js"
 import { EvidenceReference, EvidenceStore, EvidenceStoreFailure } from "../evidence-store.js"
-import { journalPrefixPredecessorOf } from "../../../workflow-journal/prefix-lineage.js"
 
 export { StartedIntegrationResponsibility } from "./responsibility.js"
 
@@ -292,6 +291,7 @@ type ExecutorResponsibilityBeganJournalEvent = Extract<
   JournalRecord["event"],
   { readonly _tag: "PlannedAttemptExecutorWorkResponsibilityBegan" }
 >
+type ExecutorWorkReportedEvent = Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorWorkReported" }>
 
 const advanceExecutorResponsibility = (
   prior: IntegrationAdmissionPrefixIndexes,
@@ -343,15 +343,6 @@ const advanceIntegrationAdmissionPrefixIndexes = (
 
 const admissionIndexesByPrefix = new WeakMap<ReadonlyArray<JournalRecord>, IntegrationAdmissionPrefixIndexes>()
 
-const transferredAdmissionIndexesFor = (
-  records: ReadonlyArray<JournalRecord>
-): IntegrationAdmissionPrefixIndexes | undefined => {
-  const predecessor = journalPrefixPredecessorOf(records)
-  if (predecessor === undefined || predecessor.appended !== records[records.length - 1]) return undefined
-  const prior = integrationAdmissionPrefixIndexesFor(predecessor.prior)
-  return advanceIntegrationAdmissionPrefixIndexes(prior, predecessor.appended)
-}
-
 const replayIntegrationAdmissionPrefixIndexes = (
   records: ReadonlyArray<JournalRecord>
 ): IntegrationAdmissionPrefixIndexes => {
@@ -372,7 +363,7 @@ const integrationAdmissionPrefixIndexesFor = (
   const cached = admissionIndexesByPrefix.get(records)
   if (cached !== undefined) return cached
 
-  const indexes = transferredAdmissionIndexesFor(records) ?? replayIntegrationAdmissionPrefixIndexes(records)
+  const indexes = replayIntegrationAdmissionPrefixIndexes(records)
   admissionIndexesByPrefix.set(records, indexes)
   return indexes
 }
@@ -549,40 +540,6 @@ const unqueuedAcceptedResultsByPrefix = new WeakMap<
   ReadonlyArray<UnqueuedAcceptedResult>
 >()
 
-type ExecutorWorkReportedEvent = Extract<
-  JournalRecord["event"],
-  { readonly _tag: "PlannedAttemptExecutorWorkReported" }
->
-
-const incrementalUnqueuedAcceptedResultsForTerminal = (
-  indexes: IntegrationAdmissionPrefixIndexes,
-  prior: ReadonlyArray<UnqueuedAcceptedResult>,
-  appended: ExecutorWorkReportedEvent,
-  terminalAt: JournalPosition
-): ReadonlyArray<UnqueuedAcceptedResult> => {
-  if (appended.report._tag !== "ExecutorWorkTerminal" || appended.report.result._tag !== "Accepted") return prior
-  if (HashSet.has(indexes.queuedAttemptIds, appended.report.correlation.attemptId)) return prior
-  const plannedAttempt = hashMapValue(indexes.executorResponsibilities, appended.report.correlation.attemptId)
-  if (plannedAttempt === undefined) return prior
-  return [
-    ...prior,
-    UnqueuedAcceptedResult.make({ acceptedResult: appended.report.result.acceptedResult, plannedAttempt, terminalAt })
-  ]
-}
-
-const incrementalUnqueuedAcceptedResultsFor = (
-  indexes: IntegrationAdmissionPrefixIndexes,
-  prior: ReadonlyArray<UnqueuedAcceptedResult>,
-  appendedRecord: JournalRecord
-): ReadonlyArray<UnqueuedAcceptedResult> => {
-  const appended = appendedRecord.event
-  if (appended._tag === "IntegrationResponsibilityBegan") {
-    return prior.filter(({ plannedAttempt }) => plannedAttempt.attemptId !== appended.plannedAttempt.attemptId)
-  }
-  if (appended._tag !== "PlannedAttemptExecutorWorkReported") return prior
-  return incrementalUnqueuedAcceptedResultsForTerminal(indexes, prior, appended, appendedRecord.position)
-}
-
 export const deriveUnqueuedAcceptedResults = (
   records: JournalHistorySource
 ): ReadonlyArray<UnqueuedAcceptedResult> => {
@@ -625,16 +582,6 @@ export const deriveUnqueuedAcceptedResults = (
   if (cached !== undefined) return cached
 
   const indexes = integrationAdmissionPrefixIndexesFor(records)
-  const predecessor = journalPrefixPredecessorOf(records)
-  if (predecessor !== undefined) {
-    const prior = unqueuedAcceptedResultsByPrefix.get(predecessor.prior)
-    if (prior !== undefined && predecessor.appended === records[records.length - 1]) {
-      const results = incrementalUnqueuedAcceptedResultsFor(indexes, prior, predecessor.appended)
-      unqueuedAcceptedResultsByPrefix.set(records, results)
-      return results
-    }
-  }
-
   const results = records.flatMap((record) => {
     const event = record.event
     if (
@@ -699,69 +646,6 @@ export const deriveIntegrationAdmission = (records: JournalHistorySource): Integ
   if (cached !== undefined) return cached
 
   const indexes = integrationAdmissionPrefixIndexesFor(records)
-  const predecessor = journalPrefixPredecessorOf(records)
-  if (predecessor !== undefined) {
-    const prior = integrationAdmissionByPrefix.get(predecessor.prior)
-    if (prior !== undefined && predecessor.appended === records[records.length - 1]) {
-      const appendedRecord = predecessor.appended
-      const appended = appendedRecord.event
-      const next = (() => {
-        if (appended._tag === "IntegrationResponsibilityBegan") {
-          const queued: JournalRecord & { readonly event: typeof IntegrationResponsibilityBeganEvent.Type } = {
-            ...appendedRecord,
-            event: appended
-          }
-          if (settledFor(indexes, queued)) return prior
-          return {
-            responsibilities: [
-              ...prior.responsibilities,
-              QueuedIntegrationResponsibility.make({
-                acceptedResult: appended.acceptedResult,
-                integrationTarget: appended.integrationTarget,
-                plannedAttempt: appended.plannedAttempt,
-                preIntegrationCancellation: PreIntegrationCancellationCapability.make({
-                  attemptId: appended.plannedAttempt.attemptId,
-                  queuedAt: appendedRecord.position,
-                  runId: appendedRecord.runId
-                }),
-                queuedAt: appendedRecord.position
-              })
-            ]
-          }
-        }
-        if (appended._tag === "IntegrationStarted") {
-          return {
-            responsibilities: prior.responsibilities.map((responsibility) =>
-              responsibility._tag === "QueuedIntegrationResponsibility" &&
-              responsibility.queuedAt === appended.responsibilityBeganAt &&
-              integrationResponsibilityEquivalence(responsibility, appended)
-                ? StartedIntegrationResponsibility.make({
-                    acceptedResult: responsibility.acceptedResult,
-                    integrationTarget: responsibility.integrationTarget,
-                    plannedAttempt: responsibility.plannedAttempt,
-                    queuedAt: responsibility.queuedAt,
-                    startedAt: appendedRecord.position
-                  })
-                : responsibility
-            )
-          }
-        }
-        if (appended._tag === "IntegrationFinalitySettled") {
-          if (exactSettledClaim(indexes, appended.claim)) {
-            return {
-              responsibilities: prior.responsibilities.filter(
-                (responsibility) =>
-                  !plannedTaskAttemptEquivalence(responsibility.plannedAttempt, appended.claim.plannedAttempt)
-              )
-            }
-          }
-        }
-        return prior
-      })()
-      integrationAdmissionByPrefix.set(records, next)
-      return next
-    }
-  }
 
   const admission: IntegrationAdmission = {
     responsibilities: records
