@@ -16,7 +16,8 @@ import {
   TargetPromotionTerminalBasis,
   targetPromotionCandidateCommitOf,
   targetPromotionCorrelationFor,
-  targetPromotionGitRequestFor
+  targetPromotionGitRequestFor,
+  targetPromotionRunIdOf
 } from "./events.js"
 import { TargetPromotionResultContradiction } from "./errors.js"
 import { TargetPromotionPendingRetry, TargetPromotionState } from "./state.js"
@@ -34,7 +35,9 @@ import {
   appendTargetPromotionReconciliationDeferral,
   appendTargetPromotionStale,
   appendTargetPromotionSuccess,
-  readValidatedTargetPromotionState
+  readAcceptedTargetPromotionEvidence,
+  validateTargetPromotionState,
+  type CurrentTargetPromotionEvidence
 } from "./transition-journal.js"
 
 const ordinalFor = (value: number): TargetPromotionAttemptOrdinal => TargetPromotionAttemptOrdinal.make(value)
@@ -200,56 +203,65 @@ const authorizeDeferredProgress = (
   )
 }
 
-/** Appends only the outer promotion intent and returns permission for the later initial read. */
-export const recordTargetPromotionIntent = Effect.fn("TargetPromotion.recordIntent")(function* (
-  candidate: IntegratorRunQualifiedCandidate
-) {
-  const correlation = targetPromotionCorrelationFor(candidate)
-  const state = yield* readValidatedTargetPromotionState(correlation)
-  if (state !== undefined) {
-    return yield* new TargetPromotionResultContradiction({
-      candidateCommit: candidate.candidateCommit,
-      detail: "target promotion intent requires an absent exact promotion state"
-    })
-  }
-  yield* appendTargetPromotionEvent(
-    correlation,
-    targetPromotionIntentRecordKey(correlation.requestId),
-    TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
-  )
-  return mintReadAuthorization(correlation, undefined, "RetryAuthorized", "PendingInitial")
-})
+/** Internal engine seam: every reread obtains current evidence after the preceding append. */
+export const makeTargetPromotionTransitions = <E, R>(readEvidence: CurrentTargetPromotionEvidence<E, R>) => {
+  const readValidatedTargetPromotionState = Effect.fn("TargetPromotion.readValidatedState")(function* (
+    correlation: TargetPromotionCorrelation
+  ) {
+    return yield* validateTargetPromotionState(yield* readEvidence(targetPromotionRunIdOf(correlation)), correlation)
+  })
 
-/** Selects the next read or retry without reading Git, appending an event, or requesting a mutation. */
-export const authorizeTargetPromotionProgress = Effect.fn("TargetPromotion.authorizeProgress")(function* (
-  candidate: IntegratorRunQualifiedCandidate,
-  authority: "ReadOnly" | "RetryAuthorized"
-) {
-  const correlation = targetPromotionCorrelationFor(candidate)
-  const state = yield* readValidatedTargetPromotionState(correlation)
-  if (state === undefined) {
-    return yield* new TargetPromotionResultContradiction({
-      candidateCommit: candidate.candidateCommit,
-      detail: "target promotion progress requires a durable promotion intent"
-    })
-  }
-  if (state._tag === "PromotionPending") {
-    const progress = authorizePendingProgress(state, authority)
-    if (progress !== undefined) return progress
-    return yield* new TargetPromotionResultContradiction({
-      candidateCommit: candidate.candidateCommit,
-      detail: "read-only reconciliation requires one exact unmatched compare-and-set intent"
-    })
-  }
-  if (state._tag === "PromotionReconciliationDeferred") {
-    return authorizeDeferredProgress(state, authority)
-  }
-  return state
-})
+  /** Appends only the outer promotion intent and returns permission for the later initial read. */
+  const recordTargetPromotionIntent = Effect.fn("TargetPromotion.recordIntent")(function* (
+    candidate: IntegratorRunQualifiedCandidate
+  ) {
+    const correlation = targetPromotionCorrelationFor(candidate)
+    const state = yield* readValidatedTargetPromotionState(correlation)
+    if (state !== undefined) {
+      return yield* new TargetPromotionResultContradiction({
+        candidateCommit: candidate.candidateCommit,
+        detail: "target promotion intent requires an absent exact promotion state"
+      })
+    }
+    yield* appendTargetPromotionEvent(
+      correlation,
+      targetPromotionIntentRecordKey(correlation.requestId),
+      TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
+    )
+    return mintReadAuthorization(correlation, undefined, "RetryAuthorized", "PendingInitial")
+  })
 
-/** Starts a new promotion or selects the next step for an existing exact correlation. */
-export const authorizeOrRecordTargetPromotionProgress = Effect.fn("TargetPromotion.authorizeOrRecordProgress")(
-  function* (candidate: IntegratorRunQualifiedCandidate) {
+  /** Selects the next read or retry without reading Git, appending an event, or requesting a mutation. */
+  const authorizeTargetPromotionProgress = Effect.fn("TargetPromotion.authorizeProgress")(function* (
+    candidate: IntegratorRunQualifiedCandidate,
+    authority: "ReadOnly" | "RetryAuthorized"
+  ) {
+    const correlation = targetPromotionCorrelationFor(candidate)
+    const state = yield* readValidatedTargetPromotionState(correlation)
+    if (state === undefined) {
+      return yield* new TargetPromotionResultContradiction({
+        candidateCommit: candidate.candidateCommit,
+        detail: "target promotion progress requires a durable promotion intent"
+      })
+    }
+    if (state._tag === "PromotionPending") {
+      const progress = authorizePendingProgress(state, authority)
+      if (progress !== undefined) return progress
+      return yield* new TargetPromotionResultContradiction({
+        candidateCommit: candidate.candidateCommit,
+        detail: "read-only reconciliation requires one exact unmatched compare-and-set intent"
+      })
+    }
+    if (state._tag === "PromotionReconciliationDeferred") {
+      return authorizeDeferredProgress(state, authority)
+    }
+    return state
+  })
+
+  /** Starts a new promotion or selects the next step for an existing exact correlation. */
+  const authorizeOrRecordTargetPromotionProgress = Effect.fn("TargetPromotion.authorizeOrRecordProgress")(function* (
+    candidate: IntegratorRunQualifiedCandidate
+  ) {
     const correlation = targetPromotionCorrelationFor(candidate)
     const state = yield* readValidatedTargetPromotionState(correlation)
     if (state === undefined) {
@@ -267,171 +279,191 @@ export const authorizeOrRecordTargetPromotionProgress = Effect.fn("TargetPromoti
     }
     if (state._tag === "PromotionReconciliationDeferred") return authorizeDeferredProgress(state, "RetryAuthorized")
     return state
-  }
-)
+  })
 
-const finishReadDecision = Effect.fn("TargetPromotion.finishReadDecision")(function* (
-  authorization: TargetPromotionReadAuthorization,
-  decision: TargetPromotionReadDecision
-) {
-  switch (decision._tag) {
-    case "AttemptAuthorized":
-      return mintAttemptAuthorization(
-        authorization.correlation,
-        decision.attemptOrdinal,
-        decision.reason,
-        decision.durableBasis
-      )
-    case "NonConvergent":
-      return yield* appendTargetPromotionNonConvergence(
-        authorization.correlation,
-        decision.attemptOrdinal,
-        decision.observation
-      )
-    case "PropagateFailure":
-      return yield* decision.failure
-    case "ReconciliationDeferred":
-      return yield* appendTargetPromotionReconciliationDeferral(
-        authorization.correlation,
-        decision.afterAttemptOrdinal,
-        decision.deferral
-      )
-    case "ResultContradiction":
+  const finishReadDecision = Effect.fn("TargetPromotion.finishReadDecision")(function* (
+    authorization: TargetPromotionReadAuthorization,
+    decision: TargetPromotionReadDecision
+  ) {
+    switch (decision._tag) {
+      case "AttemptAuthorized":
+        return mintAttemptAuthorization(
+          authorization.correlation,
+          decision.attemptOrdinal,
+          decision.reason,
+          decision.durableBasis
+        )
+      case "NonConvergent":
+        return yield* appendTargetPromotionNonConvergence(
+          authorization.correlation,
+          decision.attemptOrdinal,
+          decision.observation
+        )
+      case "PropagateFailure":
+        return yield* decision.failure
+      case "ReconciliationDeferred":
+        return yield* appendTargetPromotionReconciliationDeferral(
+          authorization.correlation,
+          decision.afterAttemptOrdinal,
+          decision.deferral
+        )
+      case "ResultContradiction":
+        return yield* new TargetPromotionResultContradiction({
+          candidateCommit: targetPromotionCandidateCommitOf(authorization.correlation),
+          detail: decision.detail
+        })
+      case "Stale":
+        return yield* appendTargetPromotionStale(authorization.correlation, decision.basis, decision.observation)
+      case "Succeeded":
+        return yield* appendTargetPromotionSuccess(authorization.correlation, decision.basis, decision.observation)
+    }
+  })
+
+  /** Performs exactly the one Git read represented by a process-local authorization. */
+  const observeTargetPromotionRead = Effect.fn("TargetPromotion.observeRead")(function* (
+    authorization: TargetPromotionReadAuthorization
+  ) {
+    const state = yield* readValidatedTargetPromotionState(authorization.correlation)
+    if (!targetPromotionReadBasisMatches(authorization, state)) {
       return yield* new TargetPromotionResultContradiction({
         candidateCommit: targetPromotionCandidateCommitOf(authorization.correlation),
-        detail: decision.detail
+        detail: "promotion read authorization no longer matches the exact durable state"
       })
-    case "Stale":
-      return yield* appendTargetPromotionStale(authorization.correlation, decision.basis, decision.observation)
-    case "Succeeded":
-      return yield* appendTargetPromotionSuccess(authorization.correlation, decision.basis, decision.observation)
-  }
-})
+    }
 
-/** Performs exactly the one Git read represented by a process-local authorization. */
-export const observeTargetPromotionRead = Effect.fn("TargetPromotion.observeRead")(function* (
-  authorization: TargetPromotionReadAuthorization
-) {
-  const state = yield* readValidatedTargetPromotionState(authorization.correlation)
-  if (!targetPromotionReadBasisMatches(authorization, state)) {
-    return yield* new TargetPromotionResultContradiction({
-      candidateCommit: targetPromotionCandidateCommitOf(authorization.correlation),
-      detail: "promotion read authorization no longer matches the exact durable state"
-    })
-  }
-
-  const git = yield* TargetPromotionGit
-  const request = targetPromotionGitRequestFor(authorization.correlation)
-  if (!availableReadAuthorizations.delete(authorization)) {
-    return yield* new TargetPromotionResultContradiction({
-      candidateCommit: request.candidateCommit,
-      detail: "promotion read permission was already consumed or did not originate in this process"
-    })
-  }
-  const readResult = yield* git.read(request).pipe(Effect.result)
-  const decision =
-    readResult._tag === "Failure"
-      ? decideFailedTargetPromotionRead(authorization, readResult.failure)
-      : decideSuccessfulTargetPromotionRead(authorization, readResult.success)
-  return yield* finishReadDecision(authorization, decision)
-})
-
-/** Appends exactly one numbered compare-and-set intent and does not call Git. */
-export const recordTargetPromotionAttemptIntent = Effect.fn("TargetPromotion.recordAttemptIntent")(function* (
-  authorization: TargetPromotionAttemptAuthorization
-) {
-  const state = yield* readValidatedTargetPromotionState(authorization.correlation)
-  if (!targetPromotionAttemptBasisMatches(authorization, state)) {
-    return yield* new TargetPromotionResultContradiction({
-      candidateCommit: targetPromotionCandidateCommitOf(authorization.correlation),
-      detail: "promotion attempt authorization no longer matches the exact durable state"
-    })
-  }
-  const key = targetPromotionAttemptIntentRecordKey(authorization.correlation.requestId, authorization.attemptOrdinal)
-  const event = TargetPromotionAttemptIntendedEvent.make({
-    attemptOrdinal: authorization.attemptOrdinal,
-    correlation: authorization.correlation,
-    reason: authorization.reason,
-    version: workflowJournalEventVersion
+    const git = yield* TargetPromotionGit
+    const request = targetPromotionGitRequestFor(authorization.correlation)
+    if (!availableReadAuthorizations.delete(authorization)) {
+      return yield* new TargetPromotionResultContradiction({
+        candidateCommit: request.candidateCommit,
+        detail: "promotion read permission was already consumed or did not originate in this process"
+      })
+    }
+    const readResult = yield* git.read(request).pipe(Effect.result)
+    const decision =
+      readResult._tag === "Failure"
+        ? decideFailedTargetPromotionRead(authorization, readResult.failure)
+        : decideSuccessfulTargetPromotionRead(authorization, readResult.success)
+    return yield* finishReadDecision(authorization, decision)
   })
-  if (!availableAttemptAuthorizations.delete(authorization)) {
-    return yield* new TargetPromotionResultContradiction({
-      candidateCommit: targetPromotionCandidateCommitOf(authorization.correlation),
-      detail: "promotion attempt-intent permission was already consumed or did not originate in this process"
-    })
-  }
-  yield* appendTargetPromotionEvent(authorization.correlation, key, event)
-  return mintIntendedAttempt(authorization)
-})
 
-const pendingAttemptOrdinalMatches = (
-  state: TargetPromotionState | undefined,
-  attemptOrdinal: TargetPromotionAttemptOrdinal
-): boolean =>
-  state?._tag === "PromotionPending" &&
-  state.retry._tag === "NeedReconciliationRead" &&
-  state.retry.afterAttemptOrdinal === attemptOrdinal
+  /** Appends exactly one numbered compare-and-set intent and does not call Git. */
+  const recordTargetPromotionAttemptIntent = Effect.fn("TargetPromotion.recordAttemptIntent")(function* (
+    authorization: TargetPromotionAttemptAuthorization
+  ) {
+    const state = yield* readValidatedTargetPromotionState(authorization.correlation)
+    if (!targetPromotionAttemptBasisMatches(authorization, state)) {
+      return yield* new TargetPromotionResultContradiction({
+        candidateCommit: targetPromotionCandidateCommitOf(authorization.correlation),
+        detail: "promotion attempt authorization no longer matches the exact durable state"
+      })
+    }
+    const key = targetPromotionAttemptIntentRecordKey(authorization.correlation.requestId, authorization.attemptOrdinal)
+    const event = TargetPromotionAttemptIntendedEvent.make({
+      attemptOrdinal: authorization.attemptOrdinal,
+      correlation: authorization.correlation,
+      reason: authorization.reason,
+      version: workflowJournalEventVersion
+    })
+    if (!availableAttemptAuthorizations.delete(authorization)) {
+      return yield* new TargetPromotionResultContradiction({
+        candidateCommit: targetPromotionCandidateCommitOf(authorization.correlation),
+        detail: "promotion attempt-intent permission was already consumed or did not originate in this process"
+      })
+    }
+    yield* appendTargetPromotionEvent(authorization.correlation, key, event)
+    return mintIntendedAttempt(authorization)
+  })
 
-/** Calls Git exactly once for an already-journaled attempt and does not append a result. */
-export const sendTargetPromotionAttempt = Effect.fn("TargetPromotion.sendAttempt")(function* (
-  attempt: TargetPromotionIntendedAttempt
-) {
-  const state = yield* readValidatedTargetPromotionState(attempt.correlation)
-  if (!pendingAttemptOrdinalMatches(state, attempt.attemptOrdinal)) {
-    return yield* new TargetPromotionResultContradiction({
-      candidateCommit: targetPromotionCandidateCommitOf(attempt.correlation),
-      detail: "promotion attempt intent no longer matches the exact durable state"
-    })
-  }
-  const git = yield* TargetPromotionGit
-  const request = targetPromotionGitRequestFor(attempt.correlation)
-  if (!availableIntendedAttempts.delete(attempt)) {
-    return yield* new TargetPromotionResultContradiction({
-      candidateCommit: targetPromotionCandidateCommitOf(attempt.correlation),
-      detail: "promotion attempt permission was already consumed or did not originate in this process"
-    })
-  }
-  const result = yield* git.compareAndSet(request).pipe(Effect.result)
-  return result._tag === "Failure"
-    ? {
-        _tag: "TargetPromotionAttemptAmbiguous" as const,
-        attemptOrdinal: attempt.attemptOrdinal,
-        correlation: attempt.correlation
-      }
-    : mintObservedAttempt(attempt, result.success)
-})
+  const pendingAttemptOrdinalMatches = (
+    state: TargetPromotionState | undefined,
+    attemptOrdinal: TargetPromotionAttemptOrdinal
+  ): boolean =>
+    state?._tag === "PromotionPending" &&
+    state.retry._tag === "NeedReconciliationRead" &&
+    state.retry.afterAttemptOrdinal === attemptOrdinal
 
-/** Appends the terminal interpretation of one already-observed compare-and-set response. */
-export const settleTargetPromotionAttempt = Effect.fn("TargetPromotion.settleAttempt")(function* (
-  attempt: TargetPromotionSettlementClaim
-) {
-  const state = yield* readValidatedTargetPromotionState(attempt.correlation)
-  if (!pendingAttemptOrdinalMatches(state, attempt.attemptOrdinal)) {
-    return yield* new TargetPromotionResultContradiction({
-      candidateCommit: targetPromotionCandidateCommitOf(attempt.correlation),
-      detail: "observed promotion attempt no longer matches the exact durable state"
-    })
-  }
-  const basis = TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal: attempt.attemptOrdinal })
-  const decision = decideTargetPromotionSettlement(attempt.correlation, attempt.result)
-  if (!availableObservedAttempts.delete(attempt)) {
-    return yield* new TargetPromotionResultContradiction({
-      candidateCommit: targetPromotionCandidateCommitOf(attempt.correlation),
-      detail: "promotion result proof was already consumed or did not originate from the Git boundary"
-    })
-  }
-  switch (decision._tag) {
-    case "ResultContradiction":
+  /** Calls Git exactly once for an already-journaled attempt and does not append a result. */
+  const sendTargetPromotionAttempt = Effect.fn("TargetPromotion.sendAttempt")(function* (
+    attempt: TargetPromotionIntendedAttempt
+  ) {
+    const state = yield* readValidatedTargetPromotionState(attempt.correlation)
+    if (!pendingAttemptOrdinalMatches(state, attempt.attemptOrdinal)) {
       return yield* new TargetPromotionResultContradiction({
         candidateCommit: targetPromotionCandidateCommitOf(attempt.correlation),
-        detail: decision.detail
+        detail: "promotion attempt intent no longer matches the exact durable state"
       })
-    case "Stale":
-      return yield* appendTargetPromotionStale(attempt.correlation, basis, decision.observation)
-    case "Succeeded":
-      return yield* appendTargetPromotionSuccess(attempt.correlation, basis, decision.observation)
+    }
+    const git = yield* TargetPromotionGit
+    const request = targetPromotionGitRequestFor(attempt.correlation)
+    if (!availableIntendedAttempts.delete(attempt)) {
+      return yield* new TargetPromotionResultContradiction({
+        candidateCommit: targetPromotionCandidateCommitOf(attempt.correlation),
+        detail: "promotion attempt permission was already consumed or did not originate in this process"
+      })
+    }
+    const result = yield* git.compareAndSet(request).pipe(Effect.result)
+    return result._tag === "Failure"
+      ? {
+          _tag: "TargetPromotionAttemptAmbiguous" as const,
+          attemptOrdinal: attempt.attemptOrdinal,
+          correlation: attempt.correlation
+        }
+      : mintObservedAttempt(attempt, result.success)
+  })
+
+  /** Appends the terminal interpretation of one already-observed compare-and-set response. */
+  const settleTargetPromotionAttempt = Effect.fn("TargetPromotion.settleAttempt")(function* (
+    attempt: TargetPromotionSettlementClaim
+  ) {
+    const state = yield* readValidatedTargetPromotionState(attempt.correlation)
+    if (!pendingAttemptOrdinalMatches(state, attempt.attemptOrdinal)) {
+      return yield* new TargetPromotionResultContradiction({
+        candidateCommit: targetPromotionCandidateCommitOf(attempt.correlation),
+        detail: "observed promotion attempt no longer matches the exact durable state"
+      })
+    }
+    const basis = TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal: attempt.attemptOrdinal })
+    const decision = decideTargetPromotionSettlement(attempt.correlation, attempt.result)
+    if (!availableObservedAttempts.delete(attempt)) {
+      return yield* new TargetPromotionResultContradiction({
+        candidateCommit: targetPromotionCandidateCommitOf(attempt.correlation),
+        detail: "promotion result proof was already consumed or did not originate from the Git boundary"
+      })
+    }
+    switch (decision._tag) {
+      case "ResultContradiction":
+        return yield* new TargetPromotionResultContradiction({
+          candidateCommit: targetPromotionCandidateCommitOf(attempt.correlation),
+          detail: decision.detail
+        })
+      case "Stale":
+        return yield* appendTargetPromotionStale(attempt.correlation, basis, decision.observation)
+      case "Succeeded":
+        return yield* appendTargetPromotionSuccess(attempt.correlation, basis, decision.observation)
+    }
+  })
+
+  return {
+    recordTargetPromotionIntent,
+    authorizeTargetPromotionProgress,
+    authorizeOrRecordTargetPromotionProgress,
+    observeTargetPromotionRead,
+    recordTargetPromotionAttemptIntent,
+    sendTargetPromotionAttempt,
+    settleTargetPromotionAttempt
   }
-})
+}
+
+export const {
+  recordTargetPromotionIntent,
+  authorizeTargetPromotionProgress,
+  authorizeOrRecordTargetPromotionProgress,
+  observeTargetPromotionRead,
+  recordTargetPromotionAttemptIntent,
+  sendTargetPromotionAttempt,
+  settleTargetPromotionAttempt
+} = makeTargetPromotionTransitions(readAcceptedTargetPromotionEvidence)
 
 export const pendingTargetPromotionAfter = (
   attempt: TargetPromotionAmbiguousAttempt | TargetPromotionIntendedAttempt
