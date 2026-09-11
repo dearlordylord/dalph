@@ -79,7 +79,6 @@ const keyedCandidates = (records: JournalHistorySource, key: JournalRecordKey): 
   return record === undefined ? [] : [record]
 }
 
-const foldIndexesByHistory = new WeakMap<ValidWorkflowJournalHistory, FoldIndexes>()
 const validationPathByHistory = new WeakMap<object, "IndexedCold" | "RawDiagnostic" | "IndexedSuccessor">()
 
 /** Test-only path evidence: valid canonical histories must not take raw diagnostic replay. */
@@ -97,7 +96,22 @@ export const observeWorkflowJournalValidationSteps = (observer: () => void): (()
 }
 
 type UnfinishedAttempt = { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
-const unfinishedByHistory = new WeakMap<ValidWorkflowJournalHistory, HashMap.HashMap<TaskId, UnfinishedAttempt>>()
+const ValidatedKernelStateTypeId: unique symbol = Symbol("ValidatedKernelState")
+interface ValidatedKernelState {
+  readonly indexes: FoldIndexes
+  readonly unfinished: HashMap.HashMap<TaskId, UnfinishedAttempt>
+}
+/** Accepted history and its immutable chronological kernel state are one nominal in-process value; decoded objects cannot impersonate it. */
+export interface KernelValidatedWorkflowJournalHistory {
+  readonly [ValidatedKernelStateTypeId]: ValidatedKernelState
+  readonly _tag: "ValidWorkflowJournalHistory"
+  readonly runState: ReconstructedRunState
+  readonly records: ReadonlyArray<JournalRecord>
+  readonly runId: RunId
+  readonly prefix: AcceptedJournalPrefix
+}
+/** An internal caller bypassed nominal construction; replay must not conceal the programming defect. */
+class JournalKernelInvariantDefect extends Error {}
 
 /** The export closure captures only this prefix, never the predecessor history. */
 const acceptedWorkflowHistory = (prefix: AcceptedJournalPrefix): ReconstructedWorkflowHistory => {
@@ -112,8 +126,10 @@ const acceptedWorkflowHistory = (prefix: AcceptedJournalPrefix): ReconstructedWo
 
 const acceptedHistoryResult = (
   prefix: AcceptedJournalPrefix,
-  runState: ReconstructedRunState
+  runState: ReconstructedRunState,
+  kernel: ValidatedKernelState
 ): ValidWorkflowJournalHistory => ({
+  [ValidatedKernelStateTypeId]: kernel,
   _tag: "ValidWorkflowJournalHistory",
   prefix,
   runId: prefix.runId,
@@ -161,26 +177,6 @@ const advanceUnfinishedTasks = (
     return existing?.plannedAttempt.attemptId === attemptId ? HashMap.remove(prior, taskId) : prior
   if (existing !== undefined && existing.plannedAttempt.attemptId !== attemptId) return undefined
   return HashMap.set(prior, taskId, responsibility)
-}
-type WorkflowJournalHistoryReduction = ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory
-
-/**
- * Process-local reduction results keyed by the exact immutable record-array
- * object. A restart receives freshly decoded records and therefore cannot use
- * this cache; durable journal records remain the only recovery authority.
- */
-const reductionsByPrefix = new WeakMap<ReadonlyArray<JournalRecord>, Map<RunId, WorkflowJournalHistoryReduction>>()
-
-const cachedReductionFor = (
-  runId: RunId,
-  records: ReadonlyArray<JournalRecord>
-): WorkflowJournalHistoryReduction | undefined => reductionsByPrefix.get(records)?.get(runId)
-
-const rememberReduction = (reduction: WorkflowJournalHistoryReduction): WorkflowJournalHistoryReduction => {
-  const byRun = reductionsByPrefix.get(reduction.records) ?? new Map<RunId, WorkflowJournalHistoryReduction>()
-  byRun.set(reduction.runId, reduction)
-  reductionsByPrefix.set(reduction.records, byRun)
-  return reduction
 }
 
 const validateRecordEnvelope = (
@@ -950,7 +946,7 @@ const finishValidation = (
     if (evidence !== undefined) return reduceRawDiagnosticHistory(runId, records)
     const invalid: InvalidWorkflowJournalHistory = { _tag: "InvalidWorkflowJournalHistory", issues, records, runId }
     validationPathByHistory.set(invalid, "RawDiagnostic")
-    return rememberReduction(invalid)
+    return invalid
   }
   const prefix =
     evidence === undefined
@@ -958,16 +954,15 @@ const finishValidation = (
       : acceptedJournalPrefixFromValidatedEvidence(runId, evidence)
   const state = reconstructValidatedRunState(runId, records)
   const valid: ValidWorkflowJournalHistory = {
+    [ValidatedKernelStateTypeId]: { indexes, unfinished: unfinishedTasksFrom(indexes) },
     _tag: "ValidWorkflowJournalHistory",
     runState: { ...state, workflowHistory: { ...state.workflowHistory, prefix } },
     records,
     runId,
     prefix
   }
-  foldIndexesByHistory.set(valid, indexes)
   validationPathByHistory.set(valid, evidence === undefined ? "RawDiagnostic" : "IndexedCold")
-  unfinishedByHistory.set(valid, unfinishedTasksFrom(indexes))
-  return rememberReduction(valid)
+  return valid
 }
 
 /** Diagnostic replay preserves the original complete-array ordering for malformed histories. */
@@ -992,8 +987,6 @@ export const reduceWorkflowJournalHistory = (
   runId: RunId,
   records: ReadonlyArray<JournalRecord>
 ): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
-  const cached = cachedReductionFor(runId, records)
-  if (cached !== undefined) return cached
   let indexes = emptyIndexes()
   let evidence = emptyJournalEvidence()
   const issues = new Array<WorkflowJournalHistoryIssue>()
@@ -1016,24 +1009,24 @@ export const reduceWorkflowJournalHistory = (
 
 /**
  * Validates and advances one exact successor of an already accepted immutable prefix.
- * Prefixes not produced in this process fall back to the complete restart reducer.
+ * Only nominal kernel-produced histories can advance. Persisted input enters the cold reducer explicitly.
  */
 export const advanceWorkflowJournalHistory = (
   prior: ValidWorkflowJournalHistory,
   record: JournalRecord
 ): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
-  const cached = foldIndexesByHistory.get(prior)
-  const unfinished = unfinishedByHistory.get(prior)
+  const kernel = prior[ValidatedKernelStateTypeId]
+  if (kernel === undefined)
+    throw new JournalKernelInvariantDefect("validated journal history lacks its private kernel state")
+  const { indexes, unfinished } = kernel
   const replay = () =>
     reduceWorkflowJournalHistory(prior.runId, [...materializeJournalRecords(prior.prefix.records), record])
-  if (cached === undefined || unfinished === undefined) return replay()
 
   /*
    * Fork the immutable index roots for this successor. Effect HashMap and
    * HashSet updates share unchanged HAMT nodes, while the accepted prefix
    * keeps its exact roots for later branches or retries.
    */
-  const indexes = cached
   const issues = new Array<WorkflowJournalHistoryIssue>()
   const candidate = appendJournalEvidence(prior.prefix, record)
   const advancedIndexes = validateRecord(record, prior.prefix.records.length, prior.runId, candidate, indexes, issues)
@@ -1044,9 +1037,10 @@ export const advanceWorkflowJournalHistory = (
   if (issues.length > 0 || advancedUnfinished === undefined) return replay()
   const prefix = appendValidatedJournalRecord(prior.prefix, record)
   const history = acceptedWorkflowHistory(prefix)
-  const advanced = acceptedHistoryResult(prefix, advanceReconstructedRunState(prior.runState, record, history))
-  foldIndexesByHistory.set(advanced, advancedIndexes)
+  const advanced = acceptedHistoryResult(prefix, advanceReconstructedRunState(prior.runState, record, history), {
+    indexes: advancedIndexes,
+    unfinished: advancedUnfinished
+  })
   validationPathByHistory.set(advanced, "IndexedSuccessor")
-  unfinishedByHistory.set(advanced, advancedUnfinished)
   return advanced
 }

@@ -16,6 +16,31 @@ import {
 } from "./history.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 
+it("rejects a fabricated valid-history shape without replaying its accepted prefix", () => {
+  const runId = RunId.make("fabricated-history")
+  const began = makeWorkflowRunBeganRecord(
+    runId,
+    FixtureTarget.make("fabricated-history"),
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+  )
+  const valid = reduceWorkflowJournalHistory(runId, [began])
+  if (valid._tag !== "ValidWorkflowJournalHistory") return expect.fail("fixture prefix must validate")
+  const fabricated = { _tag: valid._tag, records: valid.records, runId, prefix: valid.prefix, runState: valid.runState }
+  let visits = 0
+  const stop = observeJournalRecordSequenceOperations(() => {
+    visits += 1
+  })
+  try {
+    // @ts-expect-error A structural imitation cannot carry the private validated kernel state.
+    expect(() => advanceWorkflowJournalHistory(fabricated, began)).toThrow(
+      "validated journal history lacks its private kernel state"
+    )
+  } finally {
+    stop()
+  }
+  expect(visits).toBe(0)
+})
+
 it.each([64, 256])(
   "Alice changes capacity after %i accepted records without materializing or traversing the prefix",
   (size) => {

@@ -3,8 +3,7 @@ import { AttemptId, RunId, TaskId } from "@dalph/contracts"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { type PlannedTaskAttempt } from "@dalph/contracts"
 import type { JournalRecord } from "../../workflow-journal/store.js"
-import type { ReconstructedRunState } from "./state.js"
-import type { AcceptedJournalPrefix } from "../../workflow-journal/accepted-prefix.js"
+import type { KernelValidatedWorkflowJournalHistory } from "./history.js"
 
 const WorkflowJournalHistoryIssueFields = { detail: Schema.String, position: JournalPosition, runId: RunId }
 
@@ -56,13 +55,7 @@ export const duplicateUnfinishedTaskAttemptIssue = (
     taskId: second.taskId
   })
 
-export interface ValidWorkflowJournalHistory {
-  readonly _tag: "ValidWorkflowJournalHistory"
-  readonly runState: ReconstructedRunState
-  readonly records: ReadonlyArray<JournalRecord>
-  readonly runId: RunId
-  readonly prefix: AcceptedJournalPrefix
-}
+export type ValidWorkflowJournalHistory = KernelValidatedWorkflowJournalHistory
 
 export interface InvalidWorkflowJournalHistory {
   readonly _tag: "InvalidWorkflowJournalHistory"
