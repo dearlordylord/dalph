@@ -17,7 +17,7 @@ import {
   journalRecordByPosition,
   journalRecordByKey,
   journalRecordsOfKind,
-  journalRecordsForTask,
+  lastJournalRecordForTaskKind,
   journalEvidenceBefore,
   appendJournalEvidence,
   emptyJournalEvidence,
@@ -330,13 +330,16 @@ const matchingReacquisitionDirection = (record: JournalRecord, runId: RunId, rec
   /* v8 ignore next -- @preserve The caller invokes this helper only for an explicit acquisition intent. */
   if (record.event._tag !== "TaskClaimAcquisitionIntended") return undefined
   const { acquisition } = record.event.operation
-  const expectedClaim = Option.getOrUndefined(
-    Iterable.findLast(
-      journalRecordsForTask(records, acquisition.taskId),
-      ({ event, position }) =>
-        position < record.position && event._tag === "TaskClaimAcquired" && event.claim.taskId === acquisition.taskId
-    )
-  )?.event
+  const expectedClaim = isJournalRecordEvidence(records)
+    ? lastJournalRecordForTaskKind(
+        journalEvidenceBefore(records, record.position),
+        acquisition.taskId,
+        "TaskClaimAcquired"
+      )?.event
+    : records.findLast(
+        ({ event, position }) =>
+          position < record.position && event._tag === "TaskClaimAcquired" && event.claim.taskId === acquisition.taskId
+      )?.event
   /* v8 ignore start -- @preserve Missing prior acquisition authority is rejected by the caller's undefined direction result. */
   const direction =
     expectedClaim?._tag === "TaskClaimAcquired"
