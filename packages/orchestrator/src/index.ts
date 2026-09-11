@@ -319,6 +319,7 @@ export {
   WorkflowRunBeganEvent,
   WorkflowRunTerminatedEvent
 } from "./workflow/registry/event.js"
+export { makeWorkflowRunBeganRecord } from "./workflow-journal/run-lifecycle.js"
 export {
   AttemptWorktreeLost,
   PlannedAttemptWorktreeObservation
@@ -802,6 +803,7 @@ export {
   type JournalState,
   type JournalStorageBoundary
 } from "./coordination/delivery/journal.js"
+export { liveJournalTestLayer } from "./coordination/delivery/live-journal-test-layer.js"
 export { delivery } from "./coordination/delivery/delivery.js"
 export { deliveryActionPlanning } from "./coordination/delivery/delivery-action-planning.js"
 export {
