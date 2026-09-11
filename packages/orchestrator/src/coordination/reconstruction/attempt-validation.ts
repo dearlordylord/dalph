@@ -412,7 +412,7 @@ export const validateAttemptStop = (
         )
       }
       const authorizedClaim = authorizedClaimForAttempt(
-        Array.from(journalRecordsForAttempt(prior, event.subject.plannedAttempt.attemptId)),
+        prior,
         event.subject.plannedAttempt
       )?.claim
       const claimMatches = () => authorizedClaim !== undefined && isExactTaskClaim(authorizedClaim, event.expectedClaim)
