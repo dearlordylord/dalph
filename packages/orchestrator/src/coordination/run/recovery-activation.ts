@@ -53,6 +53,7 @@ import {
 } from "../../workflow/protocols/integrator/state.js"
 import {
   intentRecordKey,
+  outcomeRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   integratorRunStartedRecordKey,
   integratorSessionFixedRecordKey
@@ -132,6 +133,8 @@ import {
   lastJournalRecordForAttemptKind,
   journalGraphObservationAt,
   journalGraphSnapshotForObservation,
+  journalLatestTaskRead,
+  journalEvidenceBefore,
   journalRecordByPosition,
   journalRecordByKey,
   journalRecordsForAttempt,
@@ -2945,6 +2948,33 @@ const activeRefreshGraphReadSelectionFor = (
   }
 }
 
+/** A crashed focused read retains its exact identity before a new activation asks for G1. */
+const pendingFocusedReadAtActivation = (
+  records: JournalRecordEvidence,
+  baseline: Option.Option<JournalPosition>,
+  plannedAttempt: PlannedTaskAttempt
+): RunnableFrontierTransition | undefined => {
+  if (Option.isNone(baseline)) return undefined
+  const target = exactWorkflowRunTargetFor(records)
+  if (target === undefined) return undefined
+  const initial = journalEvidenceBefore(records, baseline.value + 1)
+  for (const kind of ["ReadTaskWorkSpecification", "ReadTaskClaim"] as const) {
+    const intent = journalLatestTaskRead(initial, { taskId: plannedAttempt.taskId, target, kind })
+    if (intent?.event._tag !== "TaskTrackerReadIntentRecorded") continue
+    const operation = intent.event.operation
+    if (
+      operation._tag !== kind ||
+      !continuationTrackerReadHasExactPlanPredecessor(initial, operation, plannedAttempt) ||
+      journalRecordByKey(records, outcomeRecordKey(operation.operationId)) !== undefined
+    )
+      continue
+    return operation._tag === "ReadTaskWorkSpecification"
+      ? RunnableFrontierTransition.ObservePlannedAttemptContinuationSpecification({ operation, plannedAttempt })
+      : RunnableFrontierTransition.ObservePlannedAttemptContinuationClaim({ operation, plannedAttempt })
+  }
+  return undefined
+}
+
 const decisionWithoutCurrentGraph = (
   plannedAttempt: PlannedTaskAttempt,
   planOperationId: OperationId | undefined,
@@ -3964,6 +3994,17 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     ),
     ...activeReadyTransitions
   ]
+  const pendingFocusedReads = new Map(
+    continuationInputs.flatMap((transition) => {
+      if (transition._tag !== "ObservePlannedAttemptExecutorWork") return []
+      const pending = pendingFocusedReadAtActivation(
+        recoverySource,
+        activationBaselinePosition,
+        transition.plannedAttempt
+      )
+      return pending === undefined ? [] : [[transition.plannedAttempt.attemptId, pending] as const]
+    })
+  )
   /**
    * A complete graph is one activation boundary, even when several captured
    * executing attempts independently need that boundary. Keep each later
@@ -3972,6 +4013,10 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
    */
   const continuationDecisions = continuationInputs.reduce<ReadonlyArray<ContinuationDecision>>(
     (decisions, transition) => {
+      const pendingFocused =
+        transition._tag === "ObservePlannedAttemptExecutorWork"
+          ? pendingFocusedReads.get(transition.plannedAttempt.attemptId)
+          : undefined
       const decision =
         transition._tag !== "ObservePlannedAttemptExecutorWork"
           ? continuationDecisionFor(
@@ -3982,16 +4027,18 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
               integrationTarget,
               opportunity
             )
-          : pendingContinuationAttemptIds.has(transition.plannedAttempt.attemptId)
-            ? {}
-            : continuationDecisionFor(
-                transition,
-                journalHistoryOf(runState),
-                currentGraphObservationForAttempt(transition.plannedAttempt),
-                freshnessBaselineForAttempt(transition.plannedAttempt),
-                integrationTarget,
-                opportunity
-              )
+          : pendingFocused !== undefined
+            ? { transition: pendingFocused }
+            : pendingContinuationAttemptIds.has(transition.plannedAttempt.attemptId)
+              ? {}
+              : continuationDecisionFor(
+                  transition,
+                  journalHistoryOf(runState),
+                  currentGraphObservationForAttempt(transition.plannedAttempt),
+                  freshnessBaselineForAttempt(transition.plannedAttempt),
+                  integrationTarget,
+                  opportunity
+                )
       const selected = decision.transition
       if (
         selected?._tag !== "ObservePlannedAttemptContinuationGraph" ||
@@ -4018,6 +4065,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
   )
   const activeRefreshGraphBootstrapTransitions =
     activeRefreshGraphSelection !== undefined &&
+    pendingFocusedReads.size === 0 &&
     activeRefreshGraphObservation === undefined &&
     !activeRefreshHasSettledUnreadableGraph &&
     !continuationDecisions.some(({ transition }) => transition?._tag === "ObservePlannedAttemptContinuationGraph")
