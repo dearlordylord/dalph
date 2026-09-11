@@ -243,7 +243,10 @@ const operationIdsOf = (record: JournalRecord): ReadonlySet<OperationId> => {
   if ("deletionOperationId" in record.event) ids.add(record.event.deletionOperationId)
   if ("replacementOperationId" in record.event) ids.add(record.event.replacementOperationId)
   if ("expectedClaim" in record.event) ids.add(record.event.expectedClaim.operationId)
-  if ("release" in record.event) ids.add(record.event.release.claim.operationId)
+  if ("release" in record.event) {
+    ids.add(record.event.release.operationId)
+    ids.add(record.event.release.claim.operationId)
+  }
   if ("operation" in record.event && "release" in record.event.operation) {
     ids.add(record.event.operation.release.claim.operationId)
   }
