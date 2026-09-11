@@ -2,7 +2,7 @@ import { RunId } from "@dalph/contracts"
 import { Context, Effect, Layer, Option, PubSub, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import { reconstructedTaskGraphFor } from "../reconstruction/graph-knowledge.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
-import { advanceWorkflowJournalHistory, reduceWorkflowJournalHistory } from "../reconstruction/history.js"
+import { advanceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { ValidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
 import { JournalPosition, type JournalRecordKey } from "../../workflow-journal/identity.js"
@@ -34,11 +34,11 @@ import type {
 import type { TrackerGraphReadCause } from "../../workflow/registry/operation.js"
 import type { AcceptedJournalPrefix } from "../../workflow-journal/accepted-prefix.js"
 import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
-import { materializeJournalRecords } from "../../workflow-journal/record-sequence.js"
+import { journalRecordAt, materializeJournalRecords } from "../../workflow-journal/record-sequence.js"
 import { acceptedJournalRecordForKey } from "../../workflow-journal/accepted-prefix.js"
 import { intentRecordKey } from "../../workflow-journal/record-key.js"
 
-const lastElementOffset = -1
+const latestJournalRecordOffset = -1
 
 const JournaledGraphReceiptTypeId: unique symbol = Symbol("JournaledGraphReceipt")
 const JournaledTrackerGraphObservationTypeId: unique symbol = Symbol("JournaledTrackerGraphObservation")
@@ -86,7 +86,7 @@ export class JournalInitialHistoryInvalid extends Schema.TaggedError<JournalInit
   "JournalInitialHistoryInvalid",
   {
     historyRunId: RunId,
-    reason: Schema.Literals(["EmptyHistory", "InvalidHistory", "MissingRunBeginning", "RunIdentityMismatch"]),
+    reason: Schema.Literals(["EmptyHistory", "MissingRunBeginning", "RunIdentityMismatch"]),
     requestedRunId: RunId
   }
 ) {}
@@ -229,8 +229,8 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
   storage: JournalStorageAppend,
   onAcceptedRecord: (record: JournalRecord) => Effect.Effect<void> = () => Effect.void
 ) {
-  const first = initial.records.at(0)
-  const last = initial.records.at(lastElementOffset)
+  const first = journalRecordAt(initial.prefix.records, 0)
+  const last = journalRecordAt(initial.prefix.records, latestJournalRecordOffset)
   if (first === undefined || last === undefined) {
     return yield* new JournalInitialHistoryInvalid({
       historyRunId: initial.runId,
@@ -252,24 +252,16 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
       requestedRunId: runId
     })
   }
-  const validated = reduceWorkflowJournalHistory(runId, initial.records)
-  if (validated._tag === "InvalidWorkflowJournalHistory") {
-    return yield* new JournalInitialHistoryInvalid({
-      historyRunId: initial.runId,
-      reason: "InvalidHistory",
-      requestedRunId: runId
-    })
-  }
   const initialPosition = last.position
   const publicationState = yield* SubscriptionRef.make<JournalStatus>({
     _tag: "JournalOpen",
-    history: validated,
+    history: initial,
     value: {
       _tag: "JournalState",
       position: initialPosition,
       graph: TrackerGraphState.cases.GraphNotEstablished.make({}),
-      reconstructed: validated.runState,
-      prefix: validated.prefix
+      reconstructed: initial.runState,
+      prefix: initial.prefix
     }
   })
   yield* Effect.addFinalizer(() => PubSub.shutdown(publicationState.pubsub))
