@@ -1526,7 +1526,7 @@ const recordsFor = (cassette: RecordedCassetteType): ReadonlyArray<JournalRecord
   })
 
 /** Folds recorded meanings as workflow history; it never drives boundary implementations. */
-export const foldRecordedCassette = (cassette: RecordedCassetteType) =>
+export const foldRecordedCassette = (cassette: RecordedCassetteType): ReturnType<typeof reduceWorkflowJournalHistory> =>
   reduceWorkflowJournalHistory(cassette.runId, recordsFor(cassette))
 
 const semanticWorkflowHistory = (history: ReturnType<typeof reduceWorkflowJournalHistory>): unknown =>
