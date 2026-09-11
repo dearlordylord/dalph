@@ -11,6 +11,8 @@ import {
   type WorkflowRunAlreadyTerminated,
   WorkflowRunNotBegan
 } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { firstJournalRecordOfKind } from "../../../workflow-journal/record-evidence.js"
 import {
   TaskClaimReacquisitionDirectedEvent,
   TaskClaimReacquisitionRequestId,
@@ -52,12 +54,13 @@ export const taskClaimReacquisitionControlLayer = Layer.effect(
   TaskClaimReacquisitionControl,
   Effect.gen(function* () {
     const journal = yield* InRunJournal
+    const acceptedJournal = yield* AcceptedJournalReader
     const apply = Effect.fn("TaskClaimReacquisitionControl.apply")(function* (input: unknown) {
       const request = yield* Schema.decodeUnknownEffect(ApplyTaskClaimReacquisitionRequest, {
         onExcessProperty: "error"
       })(input)
-      const records = yield* journal.read(request.subject.runId)
-      if (!records.some(({ event }) => event._tag === "WorkflowRunBegan")) {
+      const records = yield* acceptedJournal.readAccepted(request.subject.runId)
+      if (firstJournalRecordOfKind(records, "WorkflowRunBegan") === undefined) {
         return yield* new WorkflowRunNotBegan({ runId: request.subject.runId })
       }
       return yield* journal

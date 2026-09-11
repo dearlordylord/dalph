@@ -11,6 +11,7 @@ import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memor
 import { sqliteJournalTestLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
 import { JournalDatabaseLocator } from "../../../workflow-journal/identity.js"
 import { InRunJournal, JournalStore } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
 import { controlDirectionAppliedRecordKey } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { ControlDirectionApplicationOrdinal, ControlDirectionAppliedEvent } from "./events.js"
@@ -28,25 +29,30 @@ const makeJournalReadBarrier = Effect.gen(function* () {
   const peakReads = yield* Ref.make(0)
   const firstReadEntered = yield* Deferred.make<void>()
   const releaseReads = yield* Deferred.make<void>()
-  const layer = Layer.effect(
-    InRunJournal,
-    Effect.gen(function* () {
-      const delegate = yield* JournalStore
-      return InRunJournal.of({
-        append: delegate.append,
-        read: (readRunId) =>
-          Effect.gen(function* () {
-            if (!(yield* Ref.get(armed))) return yield* delegate.read(readRunId)
-            const active = yield* Ref.updateAndGet(activeReads, (count) => count + 1)
-            yield* Ref.update(peakReads, (peak) => Math.max(peak, active))
-            yield* Deferred.succeed(firstReadEntered, undefined)
-            yield* Deferred.await(releaseReads)
-            const records = yield* delegate.read(readRunId)
-            yield* Ref.update(activeReads, (count) => count - 1)
-            return records
-          })
+  const layer = Layer.merge(
+    Layer.effect(
+      InRunJournal,
+      JournalStore.pipe(Effect.map((delegate) => InRunJournal.of({ append: delegate.append, read: delegate.read })))
+    ),
+    Layer.effect(
+      AcceptedJournalReader,
+      Effect.gen(function* () {
+        const delegate = yield* AcceptedJournalReader
+        return AcceptedJournalReader.of({
+          readAccepted: (readRunId) =>
+            Effect.gen(function* () {
+              if (!(yield* Ref.get(armed))) return yield* delegate.readAccepted(readRunId)
+              const active = yield* Ref.updateAndGet(activeReads, (count) => count + 1)
+              yield* Ref.update(peakReads, (peak) => Math.max(peak, active))
+              yield* Deferred.succeed(firstReadEntered, undefined)
+              yield* Deferred.await(releaseReads)
+              const records = yield* delegate.readAccepted(readRunId)
+              yield* Ref.update(activeReads, (count) => count - 1)
+              return records
+            })
+        })
       })
-    })
+    )
   ).pipe(Layer.provide(memoryJournalTestLayer))
   return { activeReads, armed, firstReadEntered, layer, peakReads, releaseReads }
 })

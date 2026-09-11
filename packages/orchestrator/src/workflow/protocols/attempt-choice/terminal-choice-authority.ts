@@ -1,6 +1,6 @@
 import { plannedTaskAttemptEquivalence, type PlannedTaskAttempt } from "@dalph/contracts"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
-import { journalRecordsForAttempt, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
+import { journalRecordsForAttemptKind, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 
 /** One durable Stop or Restart application that consumes the exact attempt's accepted Safe authority. */
 type AppliedTerminalAttemptChoice = Omit<JournalRecord, "event"> & {
@@ -13,10 +13,15 @@ type AppliedTerminalAttemptChoice = Omit<JournalRecord, "event"> & {
 export const appliedTerminalChoiceFor = (
   records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt
-): AppliedTerminalAttemptChoice | undefined =>
-  Array.from(journalRecordsForAttempt(records, plannedAttempt.attemptId)).findLast(
-    (record): record is AppliedTerminalAttemptChoice =>
+): AppliedTerminalAttemptChoice | undefined => {
+  let found: AppliedTerminalAttemptChoice | undefined
+  for (const record of journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "AttemptChoiceApplied")) {
+    if (
       record.event._tag === "AttemptChoiceApplied" &&
       (record.event.choice === "RestartTaskImplementation" || record.event.choice === "StopTaskImplementation") &&
       plannedTaskAttemptEquivalence(record.event.subject.plannedAttempt, plannedAttempt)
-  )
+    )
+      found = record as AppliedTerminalAttemptChoice
+  }
+  return found
+}

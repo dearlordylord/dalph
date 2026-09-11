@@ -613,7 +613,18 @@ export const journalRecordCountForAttemptCommandKind = (
 export const journalRecordsForTask = (source: JournalHistorySource, taskId: TaskId): Iterable<JournalRecord> =>
   isJournalRecordEvidence(source)
     ? indexedRecords(source, Option.getOrElse(HashMap.get(indexesFor(source).byTask, taskId), emptyJournalRecords))
-    : journalRecordsForTask(journalEvidenceFrom(source), taskId)
+    : source.filter((record) => {
+        if (taskIdsOf(record).has(taskId)) return true
+        if (
+          record.event._tag !== "TaskTrackerFactsObserved" ||
+          record.event.observation._tag !== "UnchangedTaskTrackerFactsReconfirmed"
+        )
+          return false
+        const prior = source.find(
+          ({ key }) => key === outcomeRecordKey(record.event.observation.priorFullObservationOperationId)
+        )
+        return prior !== undefined && taskIdsOf(prior).has(taskId)
+      })
 
 export const lastJournalRecordForTaskKind = (
   source: JournalHistorySource,
