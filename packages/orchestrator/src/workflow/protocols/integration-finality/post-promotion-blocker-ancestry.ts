@@ -2,7 +2,17 @@ import { Effect, Option } from "effect"
 import type { RunId } from "@dalph/contracts"
 import { taskTrackerTargetKey } from "../../../authorities/task-tracker/target.js"
 import { reconstructedTaskGraphFor } from "../../../coordination/reconstruction/graph-knowledge.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
+import {
+  firstJournalRecordOfKind,
+  isJournalRecordEvidence,
+  journalEvidenceBefore,
+  journalGraphBlockerClearEpisodeAt,
+  journalRecordsForOperationId,
+  journalRecordsForPromotionRequest,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import { intentRecordKey, outcomeRecordKey } from "../../../workflow-journal/record-key.js"
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -33,14 +43,21 @@ const isGraphRecord = (record: JournalRecord): record is GraphRecord =>
     record.event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
 
 const promotionSucceededAt = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   claim: CompletionTaskClaim
-): JournalPosition | undefined =>
-  records.findLast(
-    ({ event }) =>
+): JournalPosition | undefined => {
+  let position: JournalPosition | undefined
+  const candidates = isJournalRecordEvidence(records)
+    ? journalRecordsForPromotionRequest(records, claim.promotionCorrelation.requestId)
+    : records
+  for (const { event, position: candidatePosition } of candidates) {
+    if (
       event._tag === "TargetPromotionObservedSuccess" &&
       targetPromotionCorrelationEquals(event.correlation, claim.promotionCorrelation)
-  )?.position
+    ) position = candidatePosition
+  }
+  return position
+}
 
 const taskIsBlockedAt = (
   records: ReadonlyArray<JournalRecord>,
@@ -63,13 +80,23 @@ const taskIsBlockedAt = (
 
 /** Derives the latest exact blocked-then-clear tracker chronology after promotion. */
 export const postPromotionBlockerClearAuthorizationFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   claim: CompletionTaskClaim
 ): PostPromotionBlockerClearAuthorizationType | undefined => {
   const promotedAt = promotionSucceededAt(records, claim)
   if (promotedAt === undefined) return undefined
-  const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")
+  const began = firstJournalRecordOfKind(records, "WorkflowRunBegan")
   if (began?.event._tag !== "WorkflowRunBegan") return undefined
+  if (isJournalRecordEvidence(records)) {
+    const episode = journalGraphBlockerClearEpisodeAt(records, {
+      afterPosition: promotedAt,
+      target: began.event.target,
+      taskId: claim.plannedAttempt.taskId
+    })
+    return episode === undefined
+      ? undefined
+      : PostPromotionBlockerClearAuthorization.make({ ...episode, claim })
+  }
   const runTargetKey = taskTrackerTargetKey(began.event.target)
   const graphRecords = records.filter(
     (record): record is GraphRecord =>
@@ -115,11 +142,16 @@ type PostPromotionBlockerAncestryOutcome = Extract<
 
 /** Checks one authorization against the exact durable promotion and tracker chronology. */
 export const postPromotionBlockerClearAuthorizationIssue = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorization: PostPromotionBlockerClearAuthorizationType,
   beforePosition?: JournalPosition
 ): string | undefined => {
-  const prior = beforePosition === undefined ? records : records.filter(({ position }) => position < beforePosition)
+  const prior =
+    beforePosition === undefined
+      ? records
+      : isJournalRecordEvidence(records)
+        ? journalEvidenceBefore(records, beforePosition)
+        : records.filter(({ position }) => position < beforePosition)
   const derived = postPromotionBlockerClearAuthorizationFor(prior, authorization.claim)
   return derived !== undefined && authorizationEquals(derived, authorization)
     ? undefined
@@ -127,7 +159,7 @@ export const postPromotionBlockerClearAuthorizationIssue = (
 }
 
 const invalidPostPromotionBlockerAncestryIntent = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   record: JournalRecord,
   event: PostPromotionBlockerAncestryIntent
 ): PostPromotionBlockerAncestryHistoryIssue | undefined => {
@@ -136,18 +168,19 @@ const invalidPostPromotionBlockerAncestryIntent = (
 }
 
 const invalidPostPromotionBlockerAncestryOutcome = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   record: JournalRecord,
   event: PostPromotionBlockerAncestryOutcome
 ): PostPromotionBlockerAncestryHistoryIssue | undefined => {
-  const intent = records.findLast(
-    ({ event: candidate, position }) =>
+  let intent: PostPromotionBlockerAncestryIntent | undefined
+  for (const { event: candidate, position } of journalRecordsForOperationId(records, event.operationId)) {
+    if (
       position < record.position &&
       candidate._tag === "PostPromotionBlockerCandidateAncestryReadIntended" &&
       candidate.operationId === event.operationId
-  )?.event
-  return intent?._tag === "PostPromotionBlockerCandidateAncestryReadIntended" &&
-    authorizationEquals(intent.authorization, event.authorization)
+    ) intent = candidate
+  }
+  return intent !== undefined && authorizationEquals(intent.authorization, event.authorization)
     ? undefined
     : {
         detail: `post-promotion blocker ancestry outcome ${event.operationId} lacks its exact prior intent`,
@@ -157,7 +190,7 @@ const invalidPostPromotionBlockerAncestryOutcome = (
 
 /** Rejects a blocker-clear ancestry event without its exact Run-local chronology and prior intent. */
 export const invalidPostPromotionBlockerAncestryHistory = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   record: JournalRecord,
   runId: RunId
 ): PostPromotionBlockerAncestryHistoryIssue | undefined => {
@@ -185,13 +218,15 @@ export const postPromotionBlockerAncestryIsPositive = (
 
 /** Selects the durable outcome for one exact authorization. */
 export const postPromotionBlockerAncestryOutcomeFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorization: PostPromotionBlockerClearAuthorizationType
 ) => {
   const operationId = postPromotionBlockerAncestryOperationIdFor(authorization)
-  return records.findLast(
-    ({ event }) => event._tag === "PostPromotionBlockerCandidateAncestryObserved" && event.operationId === operationId
-  )
+  let outcome: JournalRecord | undefined
+  for (const record of journalRecordsForOperationId(records, operationId)) {
+    if (record.event._tag === "PostPromotionBlockerCandidateAncestryObserved") outcome = record
+  }
+  return outcome
 }
 
 /** Journal-first, restart-idempotent Git ancestry read after one blocker clears. */
@@ -201,6 +236,7 @@ export const readPostPromotionBlockerCandidateAncestry = Effect.fn(
   const operationId = postPromotionBlockerAncestryOperationIdFor(authorization)
   const runId = authorization.claim.plannedAttempt.runId
   const journal = yield* InRunJournal
+  const accepted = yield* AcceptedJournalReader
   yield* journal.append(
     runId,
     intentRecordKey(operationId),
@@ -210,7 +246,7 @@ export const readPostPromotionBlockerCandidateAncestry = Effect.fn(
       version: workflowJournalEventVersion
     })
   )
-  const records = yield* journal.read(runId)
+  const records = yield* accepted.readAccepted(runId)
   const existing = postPromotionBlockerAncestryOutcomeFor(records, authorization)
   if (existing?.event._tag === "PostPromotionBlockerCandidateAncestryObserved") {
     return existing.event.observation
