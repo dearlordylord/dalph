@@ -24,10 +24,13 @@ import {
   makeCompletionTaskFactsObservationOperation,
   makeTaskClaimReleaseOperation,
   makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeObservationOperation,
   makeTrackerGraphObservationOperation,
   TaskClaimReleaseAuthority
 } from "../workflow/registry/operation.js"
 import {
+  GitReadIntentRecordedEvent,
+  PlannedAttemptWorktreeObservedEvent,
   TaskClaimReleasedEvent,
   TaskClaimReleaseIntendedEvent,
   taskTrackerReadIntent
@@ -52,6 +55,7 @@ import { integrationFinalityFixture } from "../workflow/protocols/integration-fi
 import { JournalPosition, JournalRecordKey } from "./identity.js"
 import type { JournalRecord } from "./store.js"
 import {
+  lastJournalRecordForAttemptKind,
   journalEvidenceBefore,
   journalEvidenceFrom,
   journalOperationById,
@@ -64,8 +68,85 @@ import {
   journalRecordsForTaskKind,
   journalRecordsOfKind
 } from "./record-evidence.js"
+import { AttemptWorktreeLost } from "../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 import { observeRetainedExecutorResponsibilityProjection } from "./retained-executor-responsibility.js"
 import { observeJournalRecordSequenceOperations } from "./record-sequence.js"
+
+it("links worktree outcomes to their exact earlier read attempt with cutoff-safe constant latest lookup", () => {
+  const plannedAttempt = integrationFinalityFixture.plannedAttempt
+  const visits: Array<number> = []
+  for (const size of [64, 256]) {
+    const records: Array<JournalRecord> = []
+    for (let offset = 0; offset < size; offset += 1) {
+      const operation = makeTaskWorktreeObservationOperation({
+        operationId: OperationId.make(`worktree-read-${offset}`),
+        plannedAttempt,
+        predecessorOperationIds: []
+      })
+      const intent = GitReadIntentRecordedEvent.make({
+        operation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+      const outcome = PlannedAttemptWorktreeObservedEvent.make({
+        operationId: operation.operationId,
+        observation: AttemptWorktreeLost.make({ plannedAttempt }),
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      })
+      for (const event of [intent, outcome]) {
+        records.push({
+          event,
+          key: describeJournalEvent(event).expectedKey,
+          position: JournalPosition.make(records.length + 1),
+          runId: plannedAttempt.runId
+        })
+      }
+    }
+    const evidence = journalEvidenceFrom(records)
+    expect(lastJournalRecordForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptWorktreeObserved")).toBe(
+      records.at(-1)
+    )
+    let count = 0
+    const stop = observeJournalRecordSequenceOperations((operation) => {
+      if (operation._tag === "IndexedRecordVisit") count += 1
+    })
+    try {
+      expect(
+        lastJournalRecordForAttemptKind(evidence, plannedAttempt.attemptId, "PlannedAttemptWorktreeObserved")
+      ).toBe(records.at(-1))
+    } finally {
+      stop()
+    }
+    visits.push(count)
+    expect(
+      lastJournalRecordForAttemptKind(
+        journalEvidenceBefore(evidence, 3),
+        plannedAttempt.attemptId,
+        "PlannedAttemptWorktreeObserved"
+      )
+    ).toBe(records[1])
+    const orphan = records[1]
+    const intent = records[0]
+    if (orphan === undefined || intent === undefined) return expect.fail("fixture must include intent and outcome")
+    expect(
+      lastJournalRecordForAttemptKind(
+        journalEvidenceFrom([orphan]),
+        plannedAttempt.attemptId,
+        "PlannedAttemptWorktreeObserved"
+      )
+    ).toBeUndefined()
+    expect(
+      lastJournalRecordForAttemptKind(
+        journalEvidenceFrom([intent, { ...orphan, runId: RunId.make("foreign-worktree-run") }]),
+        plannedAttempt.attemptId,
+        "PlannedAttemptWorktreeObserved"
+      )
+    ).toBeUndefined()
+  }
+  expect(visits).toEqual([1, 1])
+})
 
 it("indexes a completion tracker read by its exact nested request operation without scanning unrelated records", () => {
   const request = integrationFinalityFixture.completionRequest
