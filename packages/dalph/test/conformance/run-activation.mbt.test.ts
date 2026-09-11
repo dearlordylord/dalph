@@ -77,6 +77,7 @@ import { makeReactiveDeliveryRelationsLayer } from "../../../orchestrator/src/co
 import { Journal } from "../../../orchestrator/src/coordination/delivery/journal.js"
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
 import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
+import { RunActivationGraphBaseline } from "../../../orchestrator/src/coordination/run/activation-graph-baseline.js"
 import { AllocatedWorkflowRunId } from "../../../orchestrator/src/coordination/run/fresh-run-identity.js"
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
@@ -967,7 +968,8 @@ const makeRunActivationDriverImplementation = () => {
               target,
               journal,
               recovery,
-              integrationTargets
+              integrationTargets,
+              yield* RunActivationGraphBaseline
             )
             const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
             const acceptedFactPublication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(relations))

@@ -273,6 +273,7 @@ const recoveredDeliveryEvaluation = Effect.fn("RecoveredSettlementTest.readDeliv
   const initial = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
   if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
   const journalService = yield* makeJournal(runId, trackerTarget, initial, journal)
+  const activationGraphBaseline = (yield* journalService.state.get).position
   const integrationResources = yield* makeIntegrationTargetResourceController()
   const recovery = yield* makeRunRecoveryProjection(runId, integrationTarget, integrationResources)
   yield* installFreshTrackerFacts(journalService)
@@ -281,7 +282,8 @@ const recoveredDeliveryEvaluation = Effect.fn("RecoveredSettlementTest.readDeliv
     trackerTarget,
     journalService,
     recovery,
-    integrationResources
+    integrationResources,
+    activationGraphBaseline
   )
   const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
   return Option.getOrThrow(yield* relation.changes.pipe(Stream.runHead))

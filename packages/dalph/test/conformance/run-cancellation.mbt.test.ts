@@ -65,6 +65,7 @@ import {
 } from "../../../orchestrator/src/coordination/application-exit/application-shell.js"
 import { journaledCurrentDeliveryFrameOf } from "../../../orchestrator/src/coordination/run/current-delivery-frame.js"
 import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
+import { RunActivationGraphBaseline } from "../../../orchestrator/src/coordination/run/activation-graph-baseline.js"
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
 import { noopJournalMaintenanceObservation } from "../../../orchestrator/src/workflow-journal/maintenance.js"
@@ -1115,7 +1116,8 @@ const makeCancellationDriverImplementation = () => {
         target,
         journal,
         recovery,
-        runtimeResources.integrationTargets
+        runtimeResources.integrationTargets,
+        yield* RunActivationGraphBaseline
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
       const acceptedFactPublication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(relations))
