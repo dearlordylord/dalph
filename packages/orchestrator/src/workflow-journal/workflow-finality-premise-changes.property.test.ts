@@ -15,6 +15,7 @@ import {
   lastWorkflowFinalityPremiseChangeAt,
   observeWorkflowFinalityPremiseChangeLookup
 } from "./workflow-finality-premise-changes.js"
+import { journalEvidenceFrom, journalWorkflowFinalityPremiseChangeAt } from "./record-evidence.js"
 
 const runId = integrationFinalityFixture.runId
 const foreignRunId = RunId.make("foreign-finality-premise-run")
@@ -92,6 +93,21 @@ it.each([64, 256])("shares a %i-record capacity-only tail and performs one warm 
   const stop = observeWorkflowFinalityPremiseChangeLookup((event) => visits.push(event))
   try {
     expect(lastWorkflowFinalityPremiseChangeAt(evidence, { runId, throughPosition: size * 2 })).toBe(size)
+  } finally {
+    stop()
+  }
+  expect(visits).toEqual(["PositionLookup"])
+})
+
+it.each([64, 256])("serves a mixed %i-record bootstrap tail through one indexed lookup", (size) => {
+  const prefix = Array.from({ length: size }, (_, offset) => occurrence(offset + 1, offset % 2 === 1))
+  const premiseChange = occurrence(size + 1, false)
+  const capacityTail = Array.from({ length: size }, (_, offset) => occurrence(size + offset + 2, true))
+  const evidence = journalEvidenceFrom([...prefix, premiseChange, ...capacityTail])
+  const visits: Array<string> = []
+  const stop = observeWorkflowFinalityPremiseChangeLookup((event) => visits.push(event))
+  try {
+    expect(journalWorkflowFinalityPremiseChangeAt(evidence, runId)).toBe(premiseChange.position)
   } finally {
     stop()
   }
