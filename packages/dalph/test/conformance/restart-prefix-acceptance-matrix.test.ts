@@ -18,7 +18,6 @@ import {
   type IntegratorSessionId,
   JournalPosition,
   JournalRecordKey,
-  JournalStore,
   CoordinatorOwnership,
   OperationId,
   TaskClaimAcquiredEvent,
@@ -48,21 +47,15 @@ import {
   TargetPromotionGit,
   TargetPromotionGitReadObservation,
   TargetPromotionGitReadFailure,
-  TargetPromotionHistoryContradiction,
   TargetPromotionReconciliationDeferredEvent,
   TargetPromotionReconciliationDeferral,
   TargetPromotionRuntime,
   intentRecordKey,
   integrationQuarantinedRecordKey,
   makeTrackerGraphObservationOperation,
-  memoryJournalStoreLayer,
-  appendPromotionStaleIntegrationQuarantine,
-  targetPromotionAttemptIntentRecordKey,
   targetPromotionCorrelationEquals,
   targetPromotionCorrelationFor,
-  targetPromotionIntentRecordKey,
   targetPromotionReconciliationDeferredRecordKey,
-  targetPromotionStaleRecordKey,
   type IntegrationTargetResourceController,
   type JournalRecord,
   makeIntegrationTargetResourceController,
@@ -90,6 +83,9 @@ import {
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
+import { journalLayer } from "../../../orchestrator/src/coordination/delivery/journal.js"
+import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
+import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
 import { TaskLifecycle, TrackerRevision } from "../../../orchestrator/src/authorities/task-tracker/task.js"
 import {
@@ -627,151 +623,158 @@ const productionRestartProjection = (
   reconciliationMode: ReconciliationBoundaryMode = "CandidateAbsent"
 ): Effect.Effect<ProductionRestartProjection, unknown> =>
   withRecoveryPrefixStore(prefix, lane, (storage) =>
-    Effect.gen(function* () {
-      const began = prefix.records[0]
-      const session = prefix.records.find(({ event }) => event._tag === "IntegratorSessionFixed")
-      if (began.event._tag !== "WorkflowRunBegan" || session?.event._tag !== "IntegratorSessionFixed") {
-        return yield* Effect.die("restart prefix lacks its run and predecessor integration session")
-      }
-      const resources = yield* makeIntegrationTargetResourceController()
-      const journal = InRunJournal.of({ append: storage.append, read: storage.read })
-      const decodedRecords = yield* storage.read(began.runId)
-      const replay: RecoveryStoreReplay = {
-        decodedRecords,
-        historyTag: reduceWorkflowJournalHistory(began.runId, decodedRecords)._tag,
-        projection: yield* projectWorkflowOccurrences(decodedRecords)
-      }
-      const recovery = yield* makeRunRecoveryProjection(
-        began.runId,
-        session.event.correlation.integrationTarget,
-        resources,
-        disabledTargetPromotionRuntime
-      ).pipe(Effect.provideService(InRunJournal, journal))
-      const beforeAcquire = yield* recovery.readDeliveryProjection
-      const acquire = beforeAcquire.frontier.transitions.find(
-        (transition) => transition._tag === "AcquireStartedIntegrationTarget"
-      )
-      if (acquire?._tag === "AcquireStartedIntegrationTarget") {
-        yield* acquireStartedIntegrationTarget(resources, acquire)
-      }
-      const afterAcquire = yield* recovery.readDeliveryProjection
-      const boundaryCalls: Array<string> = []
-      let afterRecovery: RunRecoveryProjectionSnapshot | undefined
-      if (prefix.cut === "AttemptIntended") {
-        const reconciliation = exactlyOne(
-          afterAcquire.frontier.transitions.filter(({ _tag }) => _tag === "ReconcileTargetPromotionAttempt"),
-          "recovered ReconcileTargetPromotionAttempt"
-        )
-        if (reconciliation._tag !== "ReconcileTargetPromotionAttempt") {
-          return yield* Effect.die("recovered promotion reconciliation transition narrowing failed")
+    Effect.scoped(
+      Effect.gen(function* () {
+        const began = prefix.records[0]
+        const session = prefix.records.find(({ event }) => event._tag === "IntegratorSessionFixed")
+        if (began.event._tag !== "WorkflowRunBegan" || session?.event._tag !== "IntegratorSessionFixed") {
+          return yield* Effect.die("restart prefix lacks its run and predecessor integration session")
         }
-        // This is a current Git boundary fact, not a record copied from the
-        // later authored run: the target moved to this controlled test head.
-        const reconciledTargetHead = GitCommitSha.make("4".repeat(40))
-        const runtime = TargetPromotionRuntime.of({
-          git: {
-            compareAndSet: () =>
-              Effect.sync(() => boundaryCalls.push("compareAndSet")).pipe(
-                Effect.andThen(Effect.die("restart must reconcile before any compare-and-set retry"))
-              ),
-            read: (request) =>
-              Effect.sync(() => {
-                boundaryCalls.push("read")
-                if (reconciliationMode === "Unreadable") {
-                  return new TargetPromotionGitReadFailure({
-                    candidateCommit: request.candidateCommit,
-                    detail: "controlled destination read unavailable",
-                    target: request.integrationTarget
-                  })
-                }
-                return TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
-                  currentHeadSha:
-                    reconciliationMode === "ExpectedHead"
-                      ? reconciliation.candidate.run.session.expectedTargetHead
-                      : reconciledTargetHead
-                })
-              }).pipe(
-                Effect.flatMap((result) =>
-                  result instanceof TargetPromotionGitReadFailure ? Effect.fail(result) : Effect.succeed(result)
-                )
-              )
-          }
-        })
-        const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
-        const lease = executionLeaseFor(resources)
-        const reconciliationResult = yield* executeIntegrationAction(
-          identityFreeActionFor(began.runId, yield* storage.read(began.runId), reconciliation),
-          reconciliation,
-          lease,
-          began.event.target
-        ).pipe(
-          Effect.provideService(CoordinatorOwnership, ownership),
-          Effect.provideService(TargetPromotionRuntime, runtime),
-          Effect.provideService(InRunJournal, journal)
+        const decodedRecords = yield* storage.read(began.runId)
+        const initial = reduceWorkflowJournalHistory(began.runId, decodedRecords)
+        if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
+        const journalContext = yield* Layer.build(journalLayer(began.runId, began.event.target, initial, storage))
+        const journal = Context.get(journalContext, InRunJournal)
+        const resources = yield* makeIntegrationTargetResourceController()
+        const replay: RecoveryStoreReplay = {
+          decodedRecords,
+          historyTag: reduceWorkflowJournalHistory(began.runId, decodedRecords)._tag,
+          projection: yield* projectWorkflowOccurrences(decodedRecords)
+        }
+        const recovery = yield* makeRunRecoveryProjection(
+          began.runId,
+          session.event.correlation.integrationTarget,
+          resources,
+          disabledTargetPromotionRuntime
+        ).pipe(Effect.provide(journalContext))
+        const beforeAcquire = yield* recovery.readDeliveryProjection
+        const acquire = beforeAcquire.frontier.transitions.find(
+          (transition) => transition._tag === "AcquireStartedIntegrationTarget"
         )
-        if (reconciliationMode === "CandidateAbsent") {
-          expect(reconciliationResult._tag).toBe("ActionCompleted")
-          const afterStale = yield* recovery.readDeliveryProjection
-          const quarantine = exactlyOne(
-            afterStale.frontier.transitions.filter(({ _tag }) => _tag === "RecordPromotionStaleIntegrationQuarantine"),
-            "recovered promotion-stale quarantine"
+        if (acquire?._tag === "AcquireStartedIntegrationTarget") {
+          yield* acquireStartedIntegrationTarget(resources, acquire)
+        }
+        const afterAcquire = yield* recovery.readDeliveryProjection
+        const boundaryCalls: Array<string> = []
+        let afterRecovery: RunRecoveryProjectionSnapshot | undefined
+        if (prefix.cut === "AttemptIntended") {
+          const reconciliation = exactlyOne(
+            afterAcquire.frontier.transitions.filter(({ _tag }) => _tag === "ReconcileTargetPromotionAttempt"),
+            "recovered ReconcileTargetPromotionAttempt"
           )
-          if (quarantine._tag !== "RecordPromotionStaleIntegrationQuarantine") {
-            return yield* Effect.die("recovered quarantine transition narrowing failed")
+          if (reconciliation._tag !== "ReconcileTargetPromotionAttempt") {
+            return yield* Effect.die("recovered promotion reconciliation transition narrowing failed")
           }
-          yield* executeIntegrationAction(
-            identityFreeActionFor(began.runId, yield* storage.read(began.runId), quarantine),
-            quarantine,
+          // This is a current Git boundary fact, not a record copied from the
+          // later authored run: the target moved to this controlled test head.
+          const reconciledTargetHead = GitCommitSha.make("4".repeat(40))
+          const runtime = TargetPromotionRuntime.of({
+            git: {
+              compareAndSet: () =>
+                Effect.sync(() => boundaryCalls.push("compareAndSet")).pipe(
+                  Effect.andThen(Effect.die("restart must reconcile before any compare-and-set retry"))
+                ),
+              read: (request) =>
+                Effect.sync(() => {
+                  boundaryCalls.push("read")
+                  if (reconciliationMode === "Unreadable") {
+                    return new TargetPromotionGitReadFailure({
+                      candidateCommit: request.candidateCommit,
+                      detail: "controlled destination read unavailable",
+                      target: request.integrationTarget
+                    })
+                  }
+                  return TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
+                    currentHeadSha:
+                      reconciliationMode === "ExpectedHead"
+                        ? reconciliation.candidate.run.session.expectedTargetHead
+                        : reconciledTargetHead
+                  })
+                }).pipe(
+                  Effect.flatMap((result) =>
+                    result instanceof TargetPromotionGitReadFailure ? Effect.fail(result) : Effect.succeed(result)
+                  )
+                )
+            }
+          })
+          const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+          const lease = executionLeaseFor(resources)
+          const reconciliationResult = yield* executeIntegrationAction(
+            identityFreeActionFor(began.runId, yield* storage.read(began.runId), reconciliation),
+            reconciliation,
             lease,
             began.event.target
-          ).pipe(Effect.provideService(InRunJournal, journal))
-        } else {
-          expect(reconciliationResult).toMatchObject({
-            _tag: "ActionDeferred",
-            reason:
-              reconciliationMode === "Unreadable"
-                ? "TargetPromotionDestinationUnreadable"
-                : "TargetPromotionRetryAuthorityRequired"
-          })
-          const unrelatedOperationId = OperationId.make(
-            `restart-reconciliation-stability:${reconciliationMode}:${lane}`
+          ).pipe(
+            Effect.provideService(CoordinatorOwnership, ownership),
+            Effect.provideService(TargetPromotionRuntime, runtime),
+            Effect.provide(journalContext)
           )
-          const unrelatedOperation = makeTrackerGraphObservationOperation(
-            { _tag: "WorkflowEstablishment" },
-            unrelatedOperationId,
-            began.event.target
-          )
-          yield* storage.append(
-            began.runId,
-            intentRecordKey(unrelatedOperationId),
-            TaskTrackerReadIntentRecordedEvent.make({
-              operation: unrelatedOperation,
-              version: workflowJournalEventVersion
+          if (reconciliationMode === "CandidateAbsent") {
+            expect(reconciliationResult._tag).toBe("ActionCompleted")
+            const afterStale = yield* recovery.readDeliveryProjection
+            const quarantine = exactlyOne(
+              afterStale.frontier.transitions.filter(
+                ({ _tag }) => _tag === "RecordPromotionStaleIntegrationQuarantine"
+              ),
+              "recovered promotion-stale quarantine"
+            )
+            if (quarantine._tag !== "RecordPromotionStaleIntegrationQuarantine") {
+              return yield* Effect.die("recovered quarantine transition narrowing failed")
+            }
+            yield* executeIntegrationAction(
+              identityFreeActionFor(began.runId, yield* storage.read(began.runId), quarantine),
+              quarantine,
+              lease,
+              began.event.target
+            ).pipe(Effect.provide(journalContext))
+          } else {
+            expect(reconciliationResult).toMatchObject({
+              _tag: "ActionDeferred",
+              reason:
+                reconciliationMode === "Unreadable"
+                  ? "TargetPromotionDestinationUnreadable"
+                  : "TargetPromotionRetryAuthorityRequired"
             })
-          )
+            const unrelatedOperationId = OperationId.make(
+              `restart-reconciliation-stability:${reconciliationMode}:${lane}`
+            )
+            const unrelatedOperation = makeTrackerGraphObservationOperation(
+              { _tag: "WorkflowEstablishment" },
+              unrelatedOperationId,
+              began.event.target
+            )
+            yield* journal.append(
+              began.runId,
+              intentRecordKey(unrelatedOperationId),
+              TaskTrackerReadIntentRecordedEvent.make({
+                operation: unrelatedOperation,
+                version: workflowJournalEventVersion
+              })
+            )
+          }
+          if (reconciliationMode === "CandidateAbsent") {
+            afterRecovery = yield* recovery.readDeliveryProjection
+          } else {
+            const restartedResources = yield* makeIntegrationTargetResourceController()
+            const restartedRecovery = yield* makeRunRecoveryProjection(
+              began.runId,
+              session.event.correlation.integrationTarget,
+              restartedResources,
+              disabledTargetPromotionRuntime
+            ).pipe(Effect.provide(journalContext))
+            afterRecovery = yield* restartedRecovery.readDeliveryProjection
+          }
         }
-        if (reconciliationMode === "CandidateAbsent") {
-          afterRecovery = yield* recovery.readDeliveryProjection
-        } else {
-          const restartedResources = yield* makeIntegrationTargetResourceController()
-          const restartedRecovery = yield* makeRunRecoveryProjection(
-            began.runId,
-            session.event.correlation.integrationTarget,
-            restartedResources,
-            disabledTargetPromotionRuntime
-          ).pipe(Effect.provideService(InRunJournal, journal))
-          afterRecovery = yield* restartedRecovery.readDeliveryProjection
+        return {
+          afterAcquire,
+          afterRecovery,
+          beforeAcquire,
+          boundaryCalls,
+          records: yield* storage.read(began.runId),
+          replay
         }
-      }
-      return {
-        afterAcquire,
-        afterRecovery,
-        beforeAcquire,
-        boundaryCalls,
-        records: yield* storage.read(began.runId),
-        replay
-      }
-    })
+      })
+    )
   )
 
 const exactAttemptTransitions = (snapshot: RunRecoveryProjectionSnapshot, attemptId: string) =>
@@ -820,67 +823,51 @@ const storedPromotionStalePrefix = Effect.fn("RestartPrefixAcceptanceMatrix.stor
   const runId = candidate.run.session.plannedAttempt.runId
   const attemptOrdinal = TargetPromotionAttemptOrdinal.make(1)
   const changedHead = GitCommitSha.make("4".repeat(40))
-  const exact = yield* Effect.scoped(
-    Effect.gen(function* () {
-      const storage = yield* JournalStore
-      yield* storage.beginRun(
-        runId,
-        FixtureTarget.make("promotion-stale-storage-prefix"),
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-      )
-      yield* storage.append(
-        runId,
-        targetPromotionIntentRecordKey(correlation.requestId),
-        TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
-      )
-      yield* storage.append(
-        runId,
-        targetPromotionAttemptIntentRecordKey(correlation.requestId, attemptOrdinal),
-        TargetPromotionAttemptIntendedEvent.make({
-          attemptOrdinal,
-          correlation,
-          reason: TargetPromotionAttemptReason.cases.Initial.make({
-            observedHeadSha: candidate.run.session.expectedTargetHead
-          }),
-          version: workflowJournalEventVersion
-        })
-      )
-      const stale = yield* storage.append(
-        runId,
-        targetPromotionStaleRecordKey(correlation.requestId),
-        TargetPromotionStaleEvent.make({
-          basis: TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal }),
-          correlation,
-          observation: { _tag: "CompareAndSetRejected", observedHeadSha: changedHead },
-          version: workflowJournalEventVersion
-        })
-      )
-      const journal = InRunJournal.of({ append: storage.append, read: storage.read })
-      yield* appendPromotionStaleIntegrationQuarantine({ correlation, targetPromotionStaleAt: stale.position }).pipe(
-        Effect.provideService(InRunJournal, journal)
-      )
-      return yield* storage.read(runId)
-    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  const rawRecord = (event: JournalRecord["event"], position: number): JournalRecord => ({
+    event,
+    key: describeJournalEvent(event).expectedKey,
+    position: JournalPosition.make(position),
+    runId
+  })
+  const began = makeWorkflowRunBeganRecord(
+    runId,
+    FixtureTarget.make("promotion-stale-storage-prefix"),
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
   )
-  const began = exactlyOne(
-    exact.filter(({ event }) => event._tag === "WorkflowRunBegan"),
-    "minimal stored-prefix WorkflowRunBegan"
+  const intent = rawRecord(TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion }), 2)
+  const attempt = rawRecord(
+    TargetPromotionAttemptIntendedEvent.make({
+      attemptOrdinal,
+      correlation,
+      reason: TargetPromotionAttemptReason.cases.Initial.make({
+        observedHeadSha: candidate.run.session.expectedTargetHead
+      }),
+      version: workflowJournalEventVersion
+    }),
+    3
   )
-  const intent = exactlyOne(
-    exact.filter(({ event }) => event._tag === "TargetPromotionIntended"),
-    "minimal stored-prefix promotion intent"
+  const stale = rawRecord(
+    TargetPromotionStaleEvent.make({
+      basis: TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal }),
+      correlation,
+      observation: { _tag: "CompareAndSetRejected", observedHeadSha: changedHead },
+      version: workflowJournalEventVersion
+    }),
+    4
   )
-  const attempt = exactlyOne(
-    exact.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended"),
-    "minimal stored-prefix promotion attempt"
-  )
-  const stale = exactlyOne(
-    exact.filter(({ event }) => event._tag === "TargetPromotionStale"),
-    "minimal stored-prefix stale result"
-  )
-  const quarantine = exactlyOne(
-    exact.filter(({ event }) => event._tag === "IntegrationQuarantined"),
-    "minimal stored-prefix quarantine"
+  const exactQuarantineBasis = IntegrationQuarantineBasis.cases.PromotionStale.make({
+    candidateCommit: candidate.candidateCommit,
+    observedTargetHead: changedHead,
+    targetPromotionStaleAt: stale.position
+  })
+  const quarantine = rawRecord(
+    IntegrationQuarantinedEvent.make({
+      basis: exactQuarantineBasis,
+      correlation: candidate.run.session,
+      occurrenceClassification: "NonActionOccurrence",
+      version: workflowJournalEventVersion
+    }),
+    5
   )
   if (
     attempt.event._tag !== "TargetPromotionAttemptIntended" ||
@@ -1131,18 +1118,23 @@ it.effect(
               const workflowTarget = began.event.target
               const predecessor = predecessorFixed.event.correlation
               const chronology: Array<string> = []
+              const decodedRecords = yield* storage.read(began.runId)
+              const initial = reduceWorkflowJournalHistory(began.runId, decodedRecords)
+              if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
+              const acceptedContext = yield* Layer.build(journalLayer(began.runId, workflowTarget, initial, storage))
+              const liveJournal = Context.get(acceptedContext, InRunJournal)
               const journal = InRunJournal.of({
                 append: (recordRunId, key, event) =>
-                  storage.append(recordRunId, key, event).pipe(
+                  liveJournal.append(recordRunId, key, event).pipe(
                     Effect.tap(() =>
                       Effect.sync(() => {
                         chronology.push("append:" + event._tag)
                       })
                     )
                   ),
-                read: storage.read
+                read: liveJournal.read
               })
-              const decodedRecords = yield* storage.read(began.runId)
+              const runtimeJournalContext = acceptedContext.pipe(Context.add(InRunJournal, journal))
               const predecessorLineage = exactlyOne(
                 decodedRecords.filter(
                   ({ event, position }) =>
@@ -1166,7 +1158,7 @@ it.effect(
                 predecessor.integrationTarget,
                 resources,
                 disabledTargetPromotionRuntime
-              ).pipe(Effect.provideService(InRunJournal, journal))
+              ).pipe(Effect.provide(runtimeJournalContext))
               const directionOnly = yield* recovery.readDeliveryProjection
               expect(exactAttemptTransitions(directionOnly, predecessor.plannedAttempt.attemptId), lane).toEqual([])
               if (directionOnly.evidence._tag !== "AvailableDeliveryProjectionEvidence") {
@@ -1257,7 +1249,7 @@ it.effect(
               const journaledInterpreter = journaledWorkflowInterpreterLayer(
                 began.runId,
                 Layer.succeed(WorkflowInterpreter, boundaryInterpreter)
-              ).pipe(Layer.provide(Layer.succeed(InRunJournal, journal)))
+              ).pipe(Layer.provide(Layer.succeedContext(runtimeJournalContext)))
               const journaledInterpreterContext = yield* Effect.scoped(Layer.build(journaledInterpreter))
               const persistedBoundaryInterpreter = Context.get(journaledInterpreterContext, WorkflowInterpreter)
               const lease: DeliveryActionExecutionLease = {
@@ -1326,7 +1318,7 @@ it.effect(
               })
               const claimResult = yield* executeAcceptedWorkflowAction(began.runId, claimTransition, lease).pipe(
                 Effect.provideService(WorkflowTrace, trace),
-                Effect.provideService(InRunJournal, journal),
+                Effect.provide(runtimeJournalContext),
                 Effect.provideService(WorkflowInterpreter, persistedBoundaryInterpreter)
               )
               expect(claimResult).toEqual(
@@ -1405,7 +1397,7 @@ it.effect(
 
               const observeLineage = executeAcceptedWorkflowAction(began.runId, lineageTransition, lease).pipe(
                 Effect.provideService(WorkflowTrace, trace),
-                Effect.provideService(InRunJournal, journal),
+                Effect.provide(runtimeJournalContext),
                 Effect.provideService(WorkflowInterpreter, persistedBoundaryInterpreter)
               ) satisfies Effect.Effect<unknown, unknown, never>
               const observed = yield* observeLineage
@@ -1497,7 +1489,7 @@ it.effect(
 
               const action = identityFreeActionFor(began.runId, afterLineageRecords, fixSuccessor)
               const fix = executeIntegrationAction(action, fixSuccessor, lease, workflowTarget).pipe(
-                Effect.provideService(InRunJournal, journal),
+                Effect.provide(runtimeJournalContext),
                 Effect.provideService(WorkflowInterpreter, persistedBoundaryInterpreter)
               ) satisfies Effect.Effect<unknown, unknown, never>
               expect(yield* fix).toMatchObject({ _tag: "ActionCompleted" })
@@ -1545,7 +1537,7 @@ it.effect(
                 predecessor.integrationTarget,
                 restartedResources,
                 disabledTargetPromotionRuntime
-              ).pipe(Effect.provideService(InRunJournal, journal))
+              ).pipe(Effect.provide(runtimeJournalContext))
               const restarted = yield* restartedRecovery.readDeliveryProjection
               expect(exactAttemptTransitions(restarted, predecessor.plannedAttempt.attemptId), lane).toEqual([])
               if (restarted.evidence._tag !== "AvailableDeliveryProjectionEvidence") {
@@ -1610,6 +1602,10 @@ it.effect(
         "direct malformed retry-authority attempt prefix"
       )
       const began = attemptPrefix.records[0]
+      if (began.event._tag !== "WorkflowRunBegan") {
+        return yield* Effect.die("direct retry-authority store fixture did not retain its Run begin")
+      }
+      const trackerTarget = began.event.target
       const attempt = attemptPrefix.records.at(-1)
       if (attempt?.event._tag !== "TargetPromotionAttemptIntended") {
         return yield* Effect.die("direct retry-authority store fixture did not retain its exact attempt")
@@ -1663,14 +1659,24 @@ it.effect(
                     Effect.andThen(Effect.die("malformed durable history must not read Git"))
                   )
               })
-              const journal = InRunJournal.of({ append: storage.append, read: storage.read })
               const failure = yield* Effect.flip(
-                runTargetPromotion(candidate).pipe(
-                  Effect.provideService(InRunJournal, journal),
-                  Effect.provideService(TargetPromotionGit, git)
+                Effect.scoped(
+                  Layer.build(
+                    liveJournalTestLayer({ records: before, runId: began.runId, target: trackerTarget })
+                  ).pipe(
+                    Effect.flatMap((journalContext) =>
+                      runTargetPromotion(candidate).pipe(
+                        Effect.provide(journalContext),
+                        Effect.provideService(TargetPromotionGit, git)
+                      )
+                    )
+                  )
                 )
               )
-              expect(failure, lane).toBeInstanceOf(TargetPromotionHistoryContradiction)
+              expect(failure, lane).toMatchObject({
+                _tag: "JournalHistoryInvalid",
+                detail: expect.stringContaining("instead of exact expected head")
+              })
               expect(yield* Ref.get(calls), lane).toEqual([])
               expect(yield* storage.read(began.runId), lane).toEqual(before)
             })

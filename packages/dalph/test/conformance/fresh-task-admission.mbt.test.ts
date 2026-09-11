@@ -18,7 +18,7 @@ import {
   makeTaskWorkSpecification,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
-import { Effect, Option, Result, Schema } from "effect"
+import { Context, Effect, ManagedRuntime, Option, Result, Schema } from "effect"
 import { expect } from "vitest"
 import { exportWorkflowHistoryRecords } from "@dalph/orchestrator"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
@@ -62,7 +62,14 @@ import { reconstructedTaskGraphFor } from "../../../orchestrator/src/coordinatio
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
 import { requiredPlannedAttemptPositionsOf } from "../../../orchestrator/src/coordination/run/required-planned-attempt-positions.js"
 import { JournalPosition, type JournalRecordKey } from "../../../orchestrator/src/workflow-journal/identity.js"
-import { InRunJournal, type JournalRecord } from "../../../orchestrator/src/workflow-journal/store.js"
+import {
+  InRunJournal,
+  type AppendableWorkflowJournalEvent,
+  type JournalRecord
+} from "../../../orchestrator/src/workflow-journal/store.js"
+import type { AcceptedJournalReader } from "../../../orchestrator/src/workflow-journal/accepted-reader.js"
+import type { Journal } from "../../../orchestrator/src/coordination/delivery/journal.js"
+import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
 import {
   attemptPlanRecordKey,
   intentRecordKey,
@@ -295,6 +302,14 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
   const continuationReservations = new Map<TaskTag, DeliveryAdmissionReservation>()
   const claimCycles = new Map<TaskTag, number>()
   const ambiguousResponsibilityTags = new Set<TaskTag>()
+  const acquireJournalRuntime = (initialRecords: ReadonlyArray<JournalRecord>) => {
+    const managed = ManagedRuntime.make(liveJournalTestLayer({ records: initialRecords, runId, target }))
+    const context = managed.runSync(Effect.context<AcceptedJournalReader | InRunJournal | Journal>())
+    return { context, journal: Context.get(context, InRunJournal), managed }
+  }
+  let journalRuntime: ReturnType<typeof acquireJournalRuntime> | undefined
+  const requireJournalRuntime = () =>
+    journalRuntime ?? Effect.runSync(Effect.die("fresh-task admission journal used before init"))
   const visibleRecords = () => records.slice(0, visiblePrefixLength)
   const validReduction = (candidate: ReadonlyArray<JournalRecord>) => {
     const reduction = reduceWorkflowJournalHistory(runId, candidate)
@@ -312,33 +327,21 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
   }
 
   const append = (
-    event: JournalRecord["event"],
+    event: AppendableWorkflowJournalEvent,
     key: JournalRecordKey,
     visibility: "AcceptedUnobserved" | "Visible" = "Visible"
   ): JournalRecord => {
     if (visibility === "Visible" && visiblePrefixLength !== records.length) {
       return Effect.runSync(Effect.die("cannot append after a process-unobserved accepted Journal suffix"))
     }
-    const record = { event, key, position: JournalPosition.make(++sequence), runId } satisfies JournalRecord
-    records = [...records, record]
+    const record = Effect.runSync(requireJournalRuntime().journal.append(runId, key, event).pipe(Effect.orDie))
+    records = Effect.runSync(requireJournalRuntime().journal.read(runId).pipe(Effect.orDie))
+    sequence = Number(record.position)
     validReduction(records)
     if (visibility === "Visible") visiblePrefixLength = records.length
     validReduction(visibleRecords())
     return record
   }
-  /**
-   * The conformance driver owns one reducer-validated Journal history.
-   * Production responsibility admission must use that history instead of
-   * manually manufacturing its private acceptance proof.
-   */
-  const reducerValidInMemoryJournalFor = (visibility: "AcceptedUnobserved" | "Visible") =>
-    InRunJournal.of({
-      append: (eventRunId, key, event) => {
-        if (eventRunId !== runId) return Effect.die(`unexpected responsibility Run ${eventRunId}`)
-        return Effect.sync(() => append(event, key, visibility))
-      },
-      read: (eventRunId) => Effect.succeed(records.filter(({ runId: recordedRunId }) => recordedRunId === eventRunId))
-    })
   const appendGraph = (suffix: string, explicitlyCoveredTaskIds: ReadonlyArray<TaskId> = [], snapshot = graph) => {
     const operation = makeTrackerGraphObservationOperation(
       { _tag: "WorkflowEstablishment" },
@@ -354,7 +357,7 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
     )
     return operation
   }
-  let currentGraphOperation = appendGraph("initial", [...taskIds.values()])
+  let currentGraphOperation: ReturnType<typeof appendGraph>
   const appendLifecycleGraph = (tag: TaskTag, lifecycle: "Open" | "TerminalWithoutSuccess") => {
     const operation = makeTrackerGraphObservationOperation(
       { _tag: "AttemptContinuation" },
@@ -431,10 +434,7 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
     const { runState } = currentReduction()
     const policy = Option.getOrUndefined(runState.controlPolicy)
     if (policy === undefined) return Effect.die("fresh-task admission MBT policy is not reconstructable")
-    const freshAdmission = projectFreshTaskAdmission(
-      runId,
-      exportWorkflowHistoryRecords(runState.workflowHistory)
-    )
+    const freshAdmission = projectFreshTaskAdmission(runId, exportWorkflowHistoryRecords(runState.workflowHistory))
     if (freshAdmission._tag === "FreshTaskAdmissionProjectionInvalid") return Effect.die(freshAdmission)
     return makeFreshTaskAdmissionBasis({
       acceptedAt: runState.appliedThrough,
@@ -605,19 +605,21 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
     visibility: "AcceptedUnobserved" | "Visible" = "Visible"
   ) {
     const plannedAttempt = attemptFor(tag)
+    const visibleBeforeAppend = visiblePrefixLength
     const acceptedResponsibility = yield* beginPlannedAttemptExecutorResponsibility(plannedAttempt).pipe(
-      Effect.provideService(InRunJournal, reducerValidInMemoryJournalFor(visibility))
+      Effect.provide(requireJournalRuntime().context)
     )
+    records = yield* requireJournalRuntime().journal.read(runId)
+    sequence = Number(records.at(-1)?.position ?? 1)
+    visiblePrefixLength = visibility === "Visible" ? records.length : visibleBeforeAppend
     const operation = latestClaimOperationFor(tag)
-    if (operation === undefined) return Effect.runSync(Effect.die(`missing accepted handoff claim for ${tag}`))
+    if (operation === undefined) return yield* Effect.die(`missing accepted handoff claim for ${tag}`)
     if (
       projectFreshTaskCommitments(runId, visibility === "Visible" ? visibleRecords() : records).some(
         ({ commitment }) => commitment.operation.acquisition.operationId === operation.acquisition.operationId
       )
     ) {
-      return Effect.runSync(
-        Effect.die(`accepted handoff did not dispose commitment ${operation.acquisition.operationId}`)
-      )
+      return yield* Effect.die(`accepted handoff did not dispose commitment ${operation.acquisition.operationId}`)
     }
     return acceptedResponsibility
   })
@@ -892,8 +894,10 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
   return {
     init: () =>
       Effect.gen(function* () {
+        if (journalRuntime !== undefined) yield* journalRuntime.managed.disposeEffect
         process = "ProcessUp"
         records = [makeWorkflowRunBeganRecord(runId, target, initialPolicy)]
+        journalRuntime = acquireJournalRuntime(records)
         sequence = 1
         visiblePrefixLength = 1
         graphSequence = 0
@@ -1060,7 +1064,7 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
       Effect.gen(function* () {
         const tag = tagged(input)
         const operation = latestClaimOperationFor(tag)
-        if (operation === undefined) return Effect.runSync(Effect.die(`missing accepted handoff claim for ${tag}`))
+        if (operation === undefined) return yield* Effect.die(`missing accepted handoff claim for ${tag}`)
         yield* appendAcceptedResponsibility(tag, "AcceptedUnobserved")
       }),
     loseExecutorResponsibilityAppendResponseFor: (input) =>

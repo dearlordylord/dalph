@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
@@ -22,7 +22,6 @@ import {
 import {
   FixtureTarget,
   InitialControlPolicy,
-  InRunJournal,
   JournalPosition,
   JournalStore,
   OperationId,
@@ -41,6 +40,7 @@ import {
   IntegratorCandidateResourceLocator,
   IntegratorSessionCorrelation,
   IntegratorSessionId,
+  integratorSuccessorCorrelationFor,
   WorktreeCleanupAuthorization,
   WorktreeCleanupEvidenceRevision,
   WorktreeCleanupMutationResult,
@@ -54,7 +54,7 @@ import {
   runBranchCleanup,
   integratorCandidateCleanupTestLayer,
   runIntegratorCandidateCleanup,
-  memoryJournalTestLayer,
+  reduceWorkflowJournalHistory,
   runWorktreeCleanup,
   makeDispositionCleanupActivation,
   worktreeCleanupTestLayer,
@@ -67,6 +67,9 @@ import {
   integratorCandidateCleanupAuthorizedRecordKey
 } from "@dalph/orchestrator"
 import type { JournalRecord } from "@dalph/orchestrator"
+import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
+import { journalLayer } from "../../../orchestrator/src/coordination/delivery/journal.js"
+import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import {
   expectedRecoveryPrefix,
   prefixThrough,
@@ -77,6 +80,7 @@ import type { RecoveryPrefix, RecoveryPrefixResume, RecoveryStoreReplay } from "
 import { recoveryPrefixCutLabels, type RecoveryPrefixCutLabel } from "./recovery-prefix-contract.js"
 
 const runId = RunId.make("issue-69-recovery-prefix-run")
+const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const baseSha = GitCommitSha.make("1111111111111111111111111111111111111111")
 const attempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("issue-69-recovery-p1"),
@@ -100,14 +104,14 @@ const successor = PlannedTaskAttempt.make({
 const authorization = WorktreeCleanupAuthorization.make({
   causalPredecessors: replacementPredecessorsFor(attempt),
   disposition: PlannedAttemptCleanupDisposition.cases.Superseded.make({
-    dispositionAt: JournalPosition.make(23),
+    dispositionAt: JournalPosition.make(33),
     plannedAttempt: attempt,
     successorAttempt: successor
   }),
   evidenceRevision: WorktreeCleanupEvidenceRevision.make(1),
   expectedHead: baseSha,
   locator: attempt.worktree,
-  observationAt: JournalPosition.make(20),
+  observationAt: JournalPosition.make(30),
   observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
   operationId: OperationId.make("disposition-cleanup:worktree:issue-69-recovery-p1"),
   owner: WorktreeCleanupOwner.make({ attemptId: attempt.attemptId, branch: attempt.branch }),
@@ -132,7 +136,7 @@ const branchAuthorization = BranchCleanupAuthorization.make({
   evidenceRevision: BranchCleanupEvidenceRevision.make(1),
   expectedHead: baseSha,
   locator: attempt.branch,
-  observationAt: JournalPosition.make(20),
+  observationAt: JournalPosition.make(30),
   observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
   operationId: OperationId.make("disposition-cleanup:branch:issue-69-recovery-p1"),
   owner: BranchCleanupOwner.make({ attemptId: attempt.attemptId }),
@@ -164,28 +168,33 @@ const candidatePredecessor = IntegratorSessionCorrelation.make({
   expectedTargetHead: baseSha,
   integrationTarget: candidateTarget,
   plannedAttempt: attempt,
-  queuedAt: JournalPosition.make(2),
+  queuedAt: JournalPosition.make(17),
   sessionId: IntegratorSessionId.make("session:issue-69-recovery-p1"),
-  startedAt: JournalPosition.make(3),
-  targetLineageObservedAt: JournalPosition.make(5)
+  startedAt: JournalPosition.make(18),
+  targetLineageObservedAt: JournalPosition.make(20)
 })
-const candidateSuccessor = IntegratorSessionCorrelation.make({
-  ...candidatePredecessor,
-  candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-recovery-p2"),
-  sessionId: IntegratorSessionId.make("session:issue-69-recovery-p2"),
-  targetLineageObservedAt: JournalPosition.make(12)
+const candidateSuccessor = integratorSuccessorCorrelationFor({
+  directionAppliedAt: JournalPosition.make(25),
+  predecessor: candidatePredecessor,
+  quarantineAt: JournalPosition.make(24),
+  targetLineage: {
+    plannedBaseIsAncestorOfTargetHead: true,
+    plannedBaseSha: candidatePredecessor.plannedAttempt.baseSha,
+    targetHeadSha: candidatePredecessor.expectedTargetHead
+  },
+  targetLineageObservedAt: JournalPosition.make(27)
 })
 const candidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
   causalPredecessors: [OperationId.make("issue-69-recovery-full-rerun")],
   disposition: IntegratorCandidateCleanupDisposition.make({
-    directionAppliedAt: JournalPosition.make(10),
-    dispositionAt: JournalPosition.make(9),
+    directionAppliedAt: JournalPosition.make(25),
+    dispositionAt: JournalPosition.make(24),
     predecessor: candidatePredecessor,
     successor: candidateSuccessor
   }),
   evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
   locator: candidatePredecessor.candidateResource,
-  observationAt: JournalPosition.make(5),
+  observationAt: JournalPosition.make(20),
   observationOperationId: OperationId.make("session:issue-69-recovery-p1:predecessor-lineage"),
   operationId: OperationId.make("disposition-cleanup:integrator-candidate:session:issue-69-recovery-p1"),
   owner: IntegratorCandidateCleanupOwner.make({ sessionId: candidatePredecessor.sessionId }),
@@ -205,12 +214,7 @@ const candidateAbsent = IntegratorCandidateCleanupObservation.cases.Absent.make(
 const maintainedSource = Effect.scoped(
   Effect.gen(function* () {
     const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-recovery-target"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendReplacementProvenance(attempt, successor)
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     yield* runWorktreeCleanup(authorization)
     yield* runWorktreeCleanup(authorization)
     return yield* journal.read(runId)
@@ -227,9 +231,26 @@ const maintainedSource = Effect.scoped(
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(
+      liveJournalTestLayer({
+        records: [makeWorkflowRunBeganRecord(runId, FixtureTarget.make("issue-69-recovery-target"), initialPolicy)],
+        runId,
+        target: FixtureTarget.make("issue-69-recovery-target")
+      })
+    )
   )
 )
+
+const acceptedJournalContextFor = Effect.fn("DispositionCleanupRecovery.acceptedJournalContextFor")(function* (
+  journal: JournalStore["Service"]
+) {
+  const records = yield* journal.read(runId)
+  const began = records[0]
+  if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("cleanup recovery prefix lacks Run begin")
+  const initial = reduceWorkflowJournalHistory(runId, records)
+  if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
+  return yield* Layer.build(journalLayer(runId, began.event.target, initial, journal))
+})
 
 interface CleanupResumeEvidence {
   readonly finalTag: string
@@ -334,7 +355,7 @@ const expectedFamilyTagsAfterResume = (
 
 const resumeCleanupAfter =
   (cut: RecoveryPrefixCutLabel): RecoveryPrefixResume =>
-  ({ inRunJournal, journal }) => {
+  ({ journal }) => {
     const responseLossCut = cut === "P0" || cut === "P1"
     const boundary = worktreeCleanupTestLayer(
       responseLossCut
@@ -350,22 +371,26 @@ const resumeCleanupAfter =
           }
         : { observations: [absent] }
     )
-    return Effect.gen(function* () {
-      const firstActivation = yield* makeDispositionCleanupActivation(runId)
-      const first = yield* firstActivation.run
-      const final = responseLossCut ? yield* (yield* makeDispositionCleanupActivation(runId)).run : first
-      const records = yield* journal.read(runId)
-      const calls = yield* (yield* TestWorktreeCleanupBoundary).calls()
-      return {
-        finalTag: final.worktree?._tag ?? (cut === "P6" ? "Settled" : "Pending"),
-        ...cleanupResumeEvidence(records, "Worktree"),
-        mutationCalls: calls.filter(({ _tag }) => _tag === "Remove").length,
-        mutationIntentCount: records.filter(({ event }) => event._tag === "WorktreeCleanupMutationIntended").length,
-        observationCalls: calls.filter(({ _tag }) => _tag === "Observe").length,
-        settlementCount: records.filter(({ event }) => event._tag === "WorktreeCleanupSettled").length
-      } satisfies CleanupResumeEvidence
-    }).pipe(
-      Effect.provideService(InRunJournal, inRunJournal),
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const journalContext = yield* acceptedJournalContextFor(journal)
+        return yield* Effect.gen(function* () {
+          const firstActivation = yield* makeDispositionCleanupActivation(runId)
+          const first = yield* firstActivation.run
+          const final = responseLossCut ? yield* (yield* makeDispositionCleanupActivation(runId)).run : first
+          const records = yield* journal.read(runId)
+          const calls = yield* (yield* TestWorktreeCleanupBoundary).calls()
+          return {
+            finalTag: final.worktree?._tag ?? (cut === "P6" ? "Settled" : "Pending"),
+            ...cleanupResumeEvidence(records, "Worktree"),
+            mutationCalls: calls.filter(({ _tag }) => _tag === "Remove").length,
+            mutationIntentCount: records.filter(({ event }) => event._tag === "WorktreeCleanupMutationIntended").length,
+            observationCalls: calls.filter(({ _tag }) => _tag === "Observe").length,
+            settlementCount: records.filter(({ event }) => event._tag === "WorktreeCleanupSettled").length
+          } satisfies CleanupResumeEvidence
+        }).pipe(Effect.provide(journalContext))
+      })
+    ).pipe(
       Effect.provide(boundary),
       Effect.provide(branchCleanupTestLayer({ observations: [] })),
       Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] }))
@@ -505,12 +530,7 @@ it.effect("reopens every cleanup P0-P6 prefix through memory and SQLite", () =>
 const branchMaintainedSource = Effect.scoped(
   Effect.gen(function* () {
     const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-branch-recovery-target"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendReplacementProvenance(attempt, successor)
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const worktree = yield* runWorktreeCleanup(authorization)
     if (worktree._tag !== "Settled") return yield* Effect.die("branch recovery source could not settle its worktree")
     yield* runBranchCleanup(branchAuthorization)
@@ -541,18 +561,21 @@ const branchMaintainedSource = Effect.scoped(
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(
+      liveJournalTestLayer({
+        records: [
+          makeWorkflowRunBeganRecord(runId, FixtureTarget.make("issue-69-branch-recovery-target"), initialPolicy)
+        ],
+        runId,
+        target: FixtureTarget.make("issue-69-branch-recovery-target")
+      })
+    )
   )
 )
 
 const candidateMaintainedSource = Effect.scoped(
   Effect.gen(function* () {
     const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-candidate-recovery-target"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
     yield* appendCandidateProvenance(
       candidatePredecessor,
       candidateSuccessor,
@@ -576,13 +599,21 @@ const candidateMaintainedSource = Effect.scoped(
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(
+      liveJournalTestLayer({
+        records: [
+          makeWorkflowRunBeganRecord(runId, FixtureTarget.make("issue-69-candidate-recovery-target"), initialPolicy)
+        ],
+        runId,
+        target: FixtureTarget.make("issue-69-candidate-recovery-target")
+      })
+    )
   )
 )
 
 const resumeBranchCleanupAfter =
   (cut: RecoveryPrefixCutLabel): RecoveryPrefixResume =>
-  ({ inRunJournal, journal }) => {
+  ({ journal }) => {
     const responseLossCut = cut === "P0" || cut === "P1"
     const boundary = branchCleanupTestLayer(
       responseLossCut
@@ -597,29 +628,34 @@ const resumeBranchCleanupAfter =
           }
         : { observations: [branchAbsent] }
     )
-    return Effect.gen(function* () {
-      const firstActivation = yield* makeDispositionCleanupActivation(runId)
-      const first = yield* firstActivation.run
-      const final = responseLossCut ? yield* (yield* makeDispositionCleanupActivation(runId)).run : first
-      const records = yield* journal.read(runId)
-      const calls = yield* (yield* TestBranchCleanupBoundary).calls()
-      return {
-        finalTag: final.branch?._tag ?? (cut === "P6" ? "Settled" : "Pending"),
-        ...cleanupResumeEvidence(records, "Branch"),
-        mutationCalls: calls.filter(({ _tag }) => _tag === "Remove").length,
-        mutationIntentCount: records.filter(
-          ({ event }) =>
-            event._tag === "BranchCleanupMutationIntended" &&
-            event.authorization.operationId === branchAuthorization.operationId
-        ).length,
-        observationCalls: calls.filter(({ _tag }) => _tag === "Observe").length,
-        settlementCount: records.filter(
-          ({ event }) =>
-            event._tag === "BranchCleanupSettled" && event.authorization.operationId === branchAuthorization.operationId
-        ).length
-      } satisfies CleanupResumeEvidence
-    }).pipe(
-      Effect.provideService(InRunJournal, inRunJournal),
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const journalContext = yield* acceptedJournalContextFor(journal)
+        return yield* Effect.gen(function* () {
+          const firstActivation = yield* makeDispositionCleanupActivation(runId)
+          const first = yield* firstActivation.run
+          const final = responseLossCut ? yield* (yield* makeDispositionCleanupActivation(runId)).run : first
+          const records = yield* journal.read(runId)
+          const calls = yield* (yield* TestBranchCleanupBoundary).calls()
+          return {
+            finalTag: final.branch?._tag ?? (cut === "P6" ? "Settled" : "Pending"),
+            ...cleanupResumeEvidence(records, "Branch"),
+            mutationCalls: calls.filter(({ _tag }) => _tag === "Remove").length,
+            mutationIntentCount: records.filter(
+              ({ event }) =>
+                event._tag === "BranchCleanupMutationIntended" &&
+                event.authorization.operationId === branchAuthorization.operationId
+            ).length,
+            observationCalls: calls.filter(({ _tag }) => _tag === "Observe").length,
+            settlementCount: records.filter(
+              ({ event }) =>
+                event._tag === "BranchCleanupSettled" &&
+                event.authorization.operationId === branchAuthorization.operationId
+            ).length
+          } satisfies CleanupResumeEvidence
+        }).pipe(Effect.provide(journalContext))
+      })
+    ).pipe(
       Effect.provide(boundary),
       Effect.provide(worktreeCleanupTestLayer({ observations: [] })),
       Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] }))
@@ -628,7 +664,7 @@ const resumeBranchCleanupAfter =
 
 const resumeCandidateCleanupAfter =
   (cut: RecoveryPrefixCutLabel): RecoveryPrefixResume =>
-  ({ inRunJournal, journal }) => {
+  ({ journal }) => {
     const responseLossCut = cut === "P0" || cut === "P1"
     const boundary = integratorCandidateCleanupTestLayer(
       responseLossCut
@@ -645,34 +681,41 @@ const resumeCandidateCleanupAfter =
           }
         : { observations: [candidateAbsent], evidenceRevision: candidatePresent.revision }
     )
-    return Effect.gen(function* () {
-      const firstActivation = yield* makeDispositionCleanupActivation(runId)
-      const first = yield* firstActivation.run
-      const final = responseLossCut ? yield* (yield* makeDispositionCleanupActivation(runId)).run : first
-      const records = yield* journal.read(runId)
-      const activeAuthorization = records.findLast(({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized")
-      const activeOperationId =
-        activeAuthorization?.event._tag === "IntegratorCandidateCleanupAuthorized"
-          ? activeAuthorization.event.authorization.operationId
-          : undefined
-      const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
-      return {
-        finalTag: final.candidate?._tag ?? (cut === "P6" ? "Settled" : "Pending"),
-        ...cleanupResumeEvidence(records, "IntegratorCandidate"),
-        mutationCalls: calls.filter(({ _tag }) => _tag === "Remove").length,
-        mutationIntentCount: records.filter(
-          ({ event }) =>
-            event._tag === "IntegratorCandidateCleanupMutationIntended" &&
-            event.authorization.operationId === activeOperationId
-        ).length,
-        observationCalls: calls.filter(({ _tag }) => _tag === "Observe").length,
-        settlementCount: records.filter(
-          ({ event }) =>
-            event._tag === "IntegratorCandidateCleanupSettled" && event.authorization.operationId === activeOperationId
-        ).length
-      } satisfies CleanupResumeEvidence
-    }).pipe(
-      Effect.provideService(InRunJournal, inRunJournal),
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const journalContext = yield* acceptedJournalContextFor(journal)
+        return yield* Effect.gen(function* () {
+          const firstActivation = yield* makeDispositionCleanupActivation(runId)
+          const first = yield* firstActivation.run
+          const final = responseLossCut ? yield* (yield* makeDispositionCleanupActivation(runId)).run : first
+          const records = yield* journal.read(runId)
+          const activeAuthorization = records.findLast(
+            ({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized"
+          )
+          const activeOperationId =
+            activeAuthorization?.event._tag === "IntegratorCandidateCleanupAuthorized"
+              ? activeAuthorization.event.authorization.operationId
+              : undefined
+          const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
+          return {
+            finalTag: final.candidate?._tag ?? (cut === "P6" ? "Settled" : "Pending"),
+            ...cleanupResumeEvidence(records, "IntegratorCandidate"),
+            mutationCalls: calls.filter(({ _tag }) => _tag === "Remove").length,
+            mutationIntentCount: records.filter(
+              ({ event }) =>
+                event._tag === "IntegratorCandidateCleanupMutationIntended" &&
+                event.authorization.operationId === activeOperationId
+            ).length,
+            observationCalls: calls.filter(({ _tag }) => _tag === "Observe").length,
+            settlementCount: records.filter(
+              ({ event }) =>
+                event._tag === "IntegratorCandidateCleanupSettled" &&
+                event.authorization.operationId === activeOperationId
+            ).length
+          } satisfies CleanupResumeEvidence
+        }).pipe(Effect.provide(journalContext))
+      })
+    ).pipe(
       Effect.provide(boundary),
       Effect.provide(worktreeCleanupTestLayer({ observations: [] })),
       Effect.provide(branchCleanupTestLayer({ observations: [] }))
