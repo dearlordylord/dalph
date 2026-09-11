@@ -8,6 +8,10 @@ import {
   IntegrationTargetRef,
   TaskRevision
 } from "@dalph/contracts"
+import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
+import { defaultTaskWorkCapacity } from "../../../coordination/admission/capacity.js"
+import { InitialControlPolicy } from "../../../control/policy.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
 import {
   AcceptedResultEvidenceUnavailable,
@@ -41,15 +45,24 @@ import {
 import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../attempt-choice/events.js"
 import { EvidenceStore } from "../evidence-store.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
+import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
 import { rememberValidatedJournalPrefixSuccessor } from "../../../workflow-journal/prefix-lineage.js"
 import {
   InRunJournal,
+  JournalStore,
   JournalRecord,
   type JournalRecord as JournalRecordType
 } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { acceptedResultEquivalence } from "./responsibility.js"
+import {
+  attemptPlanRecordKey,
+  plannedAttemptExecutorWorkReportedRecordKey,
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
+} from "../../../workflow-journal/record-key.js"
+import { TaskAttemptPlannedEvent } from "../../registry/event.js"
+import { makeTaskAttemptPlanOperation } from "../../registry/operation.js"
 
 const fixture = integrationFinalityFixture
 
@@ -62,6 +75,48 @@ const journalWith = (records: ReadonlyArray<JournalRecordType>): InRunJournal["S
       runId: fixture.runId
     }),
   read: (_runId) => Effect.succeed(records)
+})
+
+const beginAcceptedResultRun = Effect.gen(function* () {
+  const journal = yield* JournalStore
+  yield* journal.beginRun(
+    fixture.runId,
+    FixtureTarget.make("integration-admission-target"),
+    InitialControlPolicy.make({ taskExecutionCapacity: defaultTaskWorkCapacity })
+  )
+})
+
+const appendDurableAcceptedResult = Effect.gen(function* () {
+  yield* beginAcceptedResultRun
+  const journal = yield* JournalStore
+  yield* journal.append(
+    fixture.runId,
+    attemptPlanRecordKey(fixture.plannedAttempt.attemptId),
+    TaskAttemptPlannedEvent.make({
+      operation: makeTaskAttemptPlanOperation({
+        operationId: OperationId.make("integration-admission-plan"),
+        plannedAttempt: fixture.plannedAttempt,
+        predecessorOperationIds: []
+      }),
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    fixture.runId,
+    plannedAttemptExecutorWorkResponsibilityBeganRecordKey(fixture.plannedAttempt.attemptId),
+    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+      plannedAttempt: fixture.plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    fixture.runId,
+    plannedAttemptExecutorWorkReportedRecordKey(
+      fixture.plannedAttempt.attemptId,
+      PlannedAttemptExecutorReportOrdinal.make(1)
+    ),
+    acceptedReportAt(1).event as typeof PlannedAttemptExecutorWorkReportedEvent.Type
+  )
 })
 
 const queued = (queuedAt: number): QueuedIntegrationResponsibility =>
@@ -195,16 +250,17 @@ it.effect("provides the exact configured integration target to the settlement ru
 
 it.effect("rejects queue admission until the exact accepted executor result is durable", () =>
   Effect.gen(function* () {
+    yield* beginAcceptedResultRun
     const failure = yield* queueAcceptedResultIntegrationResponsibility(
       fixture.plannedAttempt,
       fixture.qualifiedCandidate.run.session.acceptedResult,
       fixture.integrationTarget
-    ).pipe(Effect.provideService(InRunJournal, journalWith([])), Effect.flip)
+    ).pipe(Effect.flip)
 
     expect(failure).toEqual(
       new AcceptedResultNotDurable({ attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId })
     )
-  })
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("crosses the integration cutoff once for an exact queued responsibility", () =>
@@ -367,7 +423,9 @@ it("retains repeated executor and accepted-terminal facts without sharing branch
 
   expect(deriveUnqueuedAcceptedResults(records)).toHaveLength(2)
   expect(deriveUnqueuedAcceptedResults(records)).toEqual(deriveUnqueuedAcceptedResults([...records]))
+  expect(deriveUnqueuedAcceptedResults(journalEvidenceFrom(records))).toEqual(deriveUnqueuedAcceptedResults(records))
   expect(deriveIntegrationAdmission(records)).toEqual(deriveIntegrationAdmission(records.slice()))
+  expect(deriveIntegrationAdmission(journalEvidenceFrom(records))).toEqual(deriveIntegrationAdmission(records))
 })
 
 it("settles an exact finality prefix, rejects a mismatch, and suppresses a later settled queue", () => {
@@ -470,15 +528,17 @@ it("incrementally suppresses only queued and unknown accepted reports", () => {
 it.effect("queues only a durable accepted result after evidence checks", () =>
   Effect.gen(function* () {
     const acceptedResult = fixture.qualifiedCandidate.run.session.acceptedResult
-    const durable = [responsibilityRecordAt(1), acceptedReportAt(2)]
     const afterRestart = [responsibilityRecordAt(1), restartChoiceAt(2), acceptedReportAt(3)]
-    const evidenceFailure = yield* Effect.flip(
-      queueAcceptedResultIntegrationResponsibility(
-        fixture.plannedAttempt,
-        acceptedResult,
-        fixture.integrationTarget
-      ).pipe(Effect.provideService(InRunJournal, journalWith(durable)))
-    )
+    const evidenceFailure = yield* Effect.gen(function* () {
+      yield* appendDurableAcceptedResult
+      return yield* Effect.flip(
+        queueAcceptedResultIntegrationResponsibility(
+          fixture.plannedAttempt,
+          acceptedResult,
+          fixture.integrationTarget
+        )
+      )
+    }).pipe(Effect.provide(memoryJournalTestLayer))
     expect(evidenceFailure).toBeInstanceOf(AcceptedResultEvidenceUnavailable)
 
     const manifest = AcceptedResultEvidenceManifest.make({
@@ -488,12 +548,15 @@ it.effect("queues only a durable accepted result after evidence checks", () =>
       outcome: "Accepted",
       predecessor: null
     })
-    const queuedResult = yield* queueAcceptedResultIntegrationResponsibility(
-      fixture.plannedAttempt,
-      acceptedResult,
-      fixture.integrationTarget
-    ).pipe(
-      Effect.provideService(InRunJournal, journalWith(durable)),
+    const queuedResult = yield* Effect.gen(function* () {
+      yield* appendDurableAcceptedResult
+      return yield* queueAcceptedResultIntegrationResponsibility(
+        fixture.plannedAttempt,
+        acceptedResult,
+        fixture.integrationTarget
+      )
+    }).pipe(
+      Effect.provide(memoryJournalTestLayer),
       Effect.provideService(
         EvidenceStore,
         EvidenceStore.of({
@@ -504,29 +567,20 @@ it.effect("queues only a durable accepted result after evidence checks", () =>
     )
     expect(queuedResult.acceptedResult).toEqual(acceptedResult)
 
-    const queuedAfterRestart = yield* queueAcceptedResultIntegrationResponsibility(
-      fixture.plannedAttempt,
-      acceptedResult,
-      fixture.integrationTarget
-    ).pipe(
-      Effect.provideService(InRunJournal, journalWith(afterRestart)),
-      Effect.provideService(
-        EvidenceStore,
-        EvidenceStore.of({
-          put: () => Effect.die("unused"),
-          read: () => Effect.succeed(new TextEncoder().encode(JSON.stringify(manifest)))
-        })
-      )
-    )
-    expect(queuedAfterRestart.acceptedResult).toEqual(acceptedResult)
+    // A restart choice between executor responsibility and terminal evidence
+    // does not consume either fact in the indexed admission projection.
+    expect(deriveUnqueuedAcceptedResults(journalEvidenceFrom(afterRestart))).toHaveLength(1)
 
-    const notDurable = yield* Effect.flip(
-      queueAcceptedResultIntegrationResponsibility(
-        fixture.plannedAttempt,
-        acceptedResult,
-        fixture.integrationTarget
-      ).pipe(Effect.provideService(InRunJournal, journalWith([acceptedReportAt(1)])))
-    )
+    const notDurable = yield* Effect.gen(function* () {
+      yield* beginAcceptedResultRun
+      return yield* Effect.flip(
+        queueAcceptedResultIntegrationResponsibility(
+          fixture.plannedAttempt,
+          acceptedResult,
+          fixture.integrationTarget
+        )
+      )
+    }).pipe(Effect.provide(memoryJournalTestLayer))
     expect(notDurable).toEqual(
       new AcceptedResultNotDurable({ attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId })
     )

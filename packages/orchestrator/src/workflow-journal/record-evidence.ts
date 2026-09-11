@@ -647,6 +647,18 @@ export const journalRecordsForTask = (source: JournalHistorySource, taskId: Task
         return prior !== undefined && taskIdsOf(prior).has(taskId)
       })
 
+export const journalRecordsForTaskKind = (
+  source: JournalHistorySource,
+  taskId: TaskId,
+  kind: JournalRecord["event"]["_tag"]
+): Iterable<JournalRecord> => {
+  if (!isJournalRecordEvidence(source)) {
+    return source.filter((record) => record.event._tag === kind && taskIdsOf(record).has(taskId))
+  }
+  const kinds = Option.getOrElse(HashMap.get(indexesFor(source).byTaskKind, taskId), HashMap.empty)
+  return indexedRecords(source, Option.getOrElse(HashMap.get(kinds, kind), emptyJournalRecords))
+}
+
 export const lastJournalRecordForTaskKind = (
   source: JournalHistorySource,
   taskId: TaskId,

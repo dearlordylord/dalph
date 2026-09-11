@@ -32,6 +32,7 @@ import { taskTrackerObservationMatchesRead } from "../../task-tracker-facts/obse
 import { TaskTrackerReadIntentRecordedEvent } from "../../registry/event.js"
 import { journalPrefixPredecessorOf } from "../../../workflow-journal/prefix-lineage.js"
 import { completionTaskRequestFor } from "./completion-task-request.js"
+import type { JournalRecord } from "../../../workflow-journal/store.js"
 
 /** The exact durable evidence currently owned by one completion-finality protocol. */
 export const IntegrationFinalityState = Schema.TaggedUnion({
@@ -66,9 +67,7 @@ export type IntegrationFinalityState = typeof IntegrationFinalityState.Type
 
 /** Minimal journal occurrence accepted by the pure finality-state projector. */
 export type IntegrationFinalityJournalOccurrence = { readonly event: unknown; readonly position: JournalPosition }
-type IntegrationFinalityHistorySource =
-  | ReadonlyArray<IntegrationFinalityJournalOccurrence>
-  | JournalRecordEvidence
+type IntegrationFinalityHistorySource = ReadonlyArray<JournalRecord> | JournalRecordEvidence
 
 const latestFocusedCompletedTaskObservationFromEvidence = (
   records: JournalRecordEvidence,
