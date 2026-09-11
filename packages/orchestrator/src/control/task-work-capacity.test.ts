@@ -34,6 +34,7 @@ import { liveJournalTestLayer } from "../coordination/delivery/live-journal-test
 import { AcceptedJournalReader } from "../workflow-journal/accepted-reader.js"
 import { makeWorkflowRunBeganRecord } from "../workflow-journal/run-lifecycle.js"
 import { JournalPosition } from "../workflow-journal/identity.js"
+import { journalEvidenceFrom, journalRecordByPosition } from "../workflow-journal/record-evidence.js"
 import { OperationId } from "../workflow/identity.js"
 import {
   TaskAttemptPlannedEvent,
@@ -144,7 +145,12 @@ it.effect(
         revision: RunPolicyRevision.make(2),
         taskExecutionCapacity: TaskWorkCapacity.make(1)
       })
-      expect(reduced.records.map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan", "TaskWorkCapacityChanged"])
+      const evidence = reduced.runState.workflowHistory.evidence
+      expect([
+        journalRecordByPosition(evidence, JournalPosition.make(1))?.event._tag,
+        journalRecordByPosition(evidence, JournalPosition.make(2))?.event._tag,
+        journalRecordByPosition(evidence, JournalPosition.make(3))?.event._tag
+      ]).toEqual(["WorkflowRunBegan", "TaskWorkCapacityChanged", undefined])
       expect((yield* projectWorkflowOccurrences(records)).occurrences).toEqual([
         {
           _tag: "AppliedTaskWorkCapacity",
@@ -596,14 +602,14 @@ it.effect("restart holds the task-work position until an exact Safe or Terminal 
       const positions = requiredPlannedAttemptPositionsOf({
         responsibility: { entries: [responsibility] },
         workflowHistory: {
-          records: [
+          evidence: journalEvidenceFrom([
             {
               event,
               key: plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, ordinal),
               position: JournalPosition.make(2),
               runId
             }
-          ]
+          ])
         }
       })
 
@@ -657,7 +663,7 @@ it.effect("restart releases the task-work position after an unchanged accepted S
       const positions = requiredPlannedAttemptPositionsOf({
         responsibility: { entries: [responsibility] },
         workflowHistory: {
-          records: [
+          evidence: journalEvidenceFrom([
             {
               event: accepted,
               key: plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
@@ -670,7 +676,7 @@ it.effect("restart releases the task-work position after an unchanged accepted S
               position: JournalPosition.make(3),
               runId
             }
-          ]
+          ])
         }
       })
 

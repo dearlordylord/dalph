@@ -1,4 +1,5 @@
 import { Context, Effect, Option } from "effect"
+import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import { InRunJournal } from "../../workflow-journal/store.js"
 import {
   AcceptedResultEvidenceUnavailable,
@@ -13,26 +14,31 @@ export const makeIntegrationStageContext = Effect.fn("Workflow.makeIntegrationSt
   const ambient = yield* Effect.context<never>()
   const integrationTarget = Context.getOption(ambient, IntegrationTargetSelection)
   const integrationJournal = Context.getOption(ambient, InRunJournal)
+  const acceptedJournal = Context.getOption(ambient, AcceptedJournalReader)
   const acceptanceEvidenceStore = Context.getOption(ambient, EvidenceStore)
-  const queueAcceptedResult = (...args: Parameters<typeof queueAcceptedResultIntegrationResponsibility>) => {
+  const queueAcceptedResult = Effect.fn("Workflow.IntegrationStageContext.queueAcceptedResult")(function* (
+    ...args: Parameters<typeof queueAcceptedResultIntegrationResponsibility>
+  ) {
     const journal = Option.getOrUndefined(integrationJournal)
+    const accepted = Option.getOrUndefined(acceptedJournal)
+    if (journal === undefined || accepted === undefined) {
+      return yield* new IntegrationJournalUnavailable({ attemptId: args[0].attemptId, runId: args[0].runId })
+    }
     const evidenceStore = Option.getOrUndefined(acceptanceEvidenceStore)
-    return journal === undefined
-      ? Effect.fail(new IntegrationJournalUnavailable({ attemptId: args[0].attemptId, runId: args[0].runId }))
-      : evidenceStore === undefined
-        ? Effect.fail(
-            new AcceptedResultEvidenceUnavailable({
-              attemptId: args[0].attemptId,
-              detail: "acceptance evidence store is not configured for this run activation",
-              reference: args[1].evidenceManifest,
-              runId: args[0].runId
-            })
-          )
-        : queueAcceptedResultIntegrationResponsibility(...args).pipe(
-            Effect.provideService(InRunJournal, journal),
-            Effect.provideService(EvidenceStore, evidenceStore),
-            Effect.asVoid
-          )
-  }
+    if (evidenceStore === undefined) {
+      return yield* new AcceptedResultEvidenceUnavailable({
+        attemptId: args[0].attemptId,
+        detail: "acceptance evidence store is not configured for this run activation",
+        reference: args[1].evidenceManifest,
+        runId: args[0].runId
+      })
+    }
+    return yield* queueAcceptedResultIntegrationResponsibility(...args).pipe(
+      Effect.provideService(AcceptedJournalReader, accepted),
+      Effect.provideService(InRunJournal, journal),
+      Effect.provideService(EvidenceStore, evidenceStore),
+      Effect.asVoid
+    )
+  })
   return { integrationTarget, queueAcceptedResult }
 })

@@ -3,6 +3,7 @@ import {
   AttemptId,
   GitCommitSha,
   PlannedAttemptExecutor,
+  type PlannedAttemptExecutorService,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -11,18 +12,20 @@ import {
   TaskId,
   TaskRevision,
   WorktreeLocator,
+  makeTaskWorkSpecification,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
-import { Deferred, Effect, Fiber, Layer, Option, Ref, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Option, Ref } from "effect"
 import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
-import { InRunJournal, JournalHistoryInvalid, type JournalRecord } from "../../workflow-journal/store.js"
+import { InRunJournal, JournalStore, type JournalRecord } from "../../workflow-journal/store.js"
+import type { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import { OperationId } from "../../workflow/identity.js"
-import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
+import { ActiveTaskClaim, TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
-import { currentSignalFromCurrentFirstStream } from "../delivery/relations.js"
+import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
@@ -38,8 +41,15 @@ import {
   plannedAttemptProtocolControllerLayer
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
-import { Journal } from "../delivery/journal.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
+import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import { InitialControlPolicy } from "../../control/policy.js"
+import { TaskWorkCapacity } from "../admission/capacity.js"
+import { liveJournalTestLayer } from "../delivery/live-journal-test-layer.js"
+import { Journal, journalLayer } from "../delivery/journal.js"
+import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
+import { memoryJournalStoreLayerFromPartitionRecords } from "../../workflow-journal/adapters/memory-store.js"
+import { makeExecutingAttemptHistory } from "../../../test/support/executing-attempt-history.js"
 import { type ApplicationExitTraceEvent, makeApplicationExitShell } from "./application-shell.js"
 import { ApplicationExitResult } from "./lifecycle-decision.js"
 import {
@@ -49,6 +59,7 @@ import {
   suspendExecutingExecutorWorkForApplicationExit
 } from "./executor-drain.js"
 
+const taskSpecification = makeTaskWorkSpecification({ body: "Complete task A.", taskId: TaskId.make("A"), title: "A" })
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("exit-attempt-A"),
   baseSha: GitCommitSha.make("1".repeat(40)),
@@ -56,24 +67,96 @@ const plannedAttempt = PlannedTaskAttempt.make({
   executor: TaskExecutorLocator.make("executor:controlled-fake"),
   runId: RunId.make("exit-run"),
   taskId: TaskId.make("A"),
-  taskRevision: TaskRevision.make("task-A-revision"),
+  taskRevision: TaskRevision.make(taskSpecification.fingerprint),
   worktree: WorktreeLocator.make("/worktrees/exit-attempt-A")
 })
 const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+const taskSpecificationB = makeTaskWorkSpecification({ body: "Complete task B.", taskId: TaskId.make("B"), title: "B" })
 const plannedAttemptB = PlannedTaskAttempt.make({
   ...plannedAttempt,
   attemptId: AttemptId.make("exit-attempt-B"),
   branch: TaskBranchRef.make("refs/heads/dalph/exit-attempt-B"),
   taskId: TaskId.make("B"),
-  taskRevision: TaskRevision.make("task-B-revision"),
+  taskRevision: TaskRevision.make(taskSpecificationB.fingerprint),
   worktree: WorktreeLocator.make("/worktrees/exit-attempt-B")
 })
-const correlationB = plannedAttemptExecutorCorrelation(plannedAttemptB)
+const trackerTarget = FixtureTarget.make("exit-target")
+const activeClaim = ActiveTaskClaim.make({
+  operationId: OperationId.make("exit-claim-A"),
+  owner: ClaimOwner.make("exit-owner"),
+  taskId: plannedAttempt.taskId,
+  token: ClaimToken.make("exit-token-A")
+})
+const activeClaimB = ActiveTaskClaim.make({
+  operationId: OperationId.make("exit-claim-B"),
+  owner: ClaimOwner.make("exit-owner"),
+  taskId: plannedAttemptB.taskId,
+  token: ClaimToken.make("exit-token-B")
+})
+const executingHistory = makeExecutingAttemptHistory({
+  activeClaim,
+  initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+  plannedAttempt,
+  runId: plannedAttempt.runId,
+  taskSpecification,
+  trackerTarget
+})
+const twoAttemptExecutingHistory = makeExecutingAttemptHistory({
+  activeClaim: activeClaimB,
+  plannedAttempt: plannedAttemptB,
+  priorRecords: executingHistory.records,
+  runId: plannedAttempt.runId,
+  taskSpecification: taskSpecificationB,
+  trackerTarget
+})
+
+const liveExecutingJournalLayer = (records: ReadonlyArray<JournalRecord> = executingHistory.records) =>
+  liveJournalTestLayer({ records, runId: plannedAttempt.runId, target: trackerTarget })
+
+const protocolLayer = (executor: PlannedAttemptExecutorService) =>
+  Layer.merge(Layer.succeed(PlannedAttemptExecutor, executor), plannedAttemptProtocolControllerLayer)
+
+const failedJournalTestLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const store = yield* JournalStore
+    const initial = reduceWorkflowJournalHistory(plannedAttempt.runId, executingHistory.records)
+    if (initial._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die(initial)
+    return journalLayer(plannedAttempt.runId, trackerTarget, initial, {
+      append: (runId, key, event) =>
+        store
+          .append(runId, key, event)
+          .pipe(
+            Effect.map((acknowledged) => ({ ...acknowledged, key: JournalRecordKey.make("malformed-acknowledgement") }))
+          ),
+      read: store.read,
+      terminateRun: store.terminateRun
+    })
+  })
+).pipe(Layer.provideMerge(memoryJournalStoreLayerFromPartitionRecords({ hot: executingHistory.records })))
+
+const observedJournalTestLayer = (accepted: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const store = yield* JournalStore
+      const initial = reduceWorkflowJournalHistory(plannedAttempt.runId, executingHistory.records)
+      if (initial._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die(initial)
+      return journalLayer(plannedAttempt.runId, trackerTarget, initial, store, (record) =>
+        Ref.update(accepted, (current) => [...current, record])
+      )
+    })
+  ).pipe(Layer.provideMerge(memoryJournalStoreLayerFromPartitionRecords({ hot: executingHistory.records })))
 
 const record = (position: number, event: JournalRecord["event"]): JournalRecord => ({
   event,
   key: JournalRecordKey.make(`exit-executor-${position}`),
   position: JournalPosition.make(position),
+  runId: plannedAttempt.runId
+})
+
+const appendRecord = (records: ReadonlyArray<JournalRecord>, event: JournalRecord["event"]): JournalRecord => ({
+  event,
+  key: describeJournalEvent(event).expectedKey,
+  position: JournalPosition.make(records.length + 1),
   runId: plannedAttempt.runId
 })
 
@@ -155,59 +238,34 @@ it("ignores non-executor responsibilities and exact attempts without current Exe
 
 it.effect("maps a failed Run-journal state read to one application Exit drain diagnostic", () =>
   Effect.gen(function* () {
-    const journalFailure = new JournalHistoryInvalid({
-      detail: "accepted prefix cannot be reduced",
-      position: JournalPosition.make(2),
-      runId: plannedAttempt.runId
+    const journal = yield* Journal
+    const command = PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "Suspend",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: PlannedAttemptExecutorCommandOrdinal.make(2),
+      plannedAttempt,
+      version: workflowJournalEventVersion
     })
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const journalFailure = yield* journal
+      .append(plannedAttempt.runId, describeJournalEvent(command).expectedKey, command)
+      .pipe(Effect.flip)
+    expect(journalFailure).toMatchObject({ _tag: "JournalHistoryInvalid" })
     const failure = yield* suspendExecutingExecutorWorkForApplicationExit().pipe(
       Effect.flip,
-      Effect.provide(
-        Layer.mergeAll(
-          journalLayer(records),
-          Layer.succeed(PlannedAttemptExecutor, unusedExecutor),
-          plannedAttemptProtocolControllerLayer,
-          Layer.succeed(
-            Journal,
-            Journal.of({
-              append: () => Effect.die("the failed state read must prevent append"),
-              read: () => Effect.die("the failed state read must prevent direct read"),
-              state: currentSignalFromCurrentFirstStream(Stream.fail(journalFailure))
-            })
-          )
-        )
-      )
+      Effect.provide(protocolLayer(unusedExecutor))
     )
 
     expect(failure).toMatchObject({
       _tag: "ApplicationExitDrainFailure",
       diagnostics: [expect.stringContaining("JournalHistoryInvalid")]
     })
-  })
+  }).pipe(Effect.provide(failedJournalTestLayer))
 )
-
-const journalLayer = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
-  Layer.succeed(
-    InRunJournal,
-    InRunJournal.of({
-      append: (runId, key, event) =>
-        Ref.modify(records, (current) => {
-          const appended = {
-            event,
-            key,
-            position: JournalPosition.make(current.length + 1),
-            runId
-          } satisfies JournalRecord
-          return [appended, [...current, appended]] as const
-        }),
-      read: () => Ref.get(records)
-    })
-  )
 
 it.effect("records the exact suspension intent before the fast call and records safe evidence afterward", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make(runningHistory())
+    const journal = yield* InRunJournal
     const calls = yield* Ref.make<ReadonlyArray<string>>([])
     const executor = PlannedAttemptExecutor.of({
       observe: () => Effect.die("application Exit must not observe fresh executor state"),
@@ -225,30 +283,22 @@ it.effect("records the exact suspension intent before the fast call and records 
 
     yield* suspendApplicationExitAttempts([
       ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
-    ]).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          journalLayer(records),
-          Layer.succeed(PlannedAttemptExecutor, executor),
-          plannedAttemptProtocolControllerLayer
-        )
-      )
-    )
+    ]).pipe(Effect.provide(protocolLayer(executor)))
 
     expect(yield* Ref.get(calls)).toEqual([`Suspend:${plannedAttempt.runId}/${plannedAttempt.attemptId}`])
-    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
-      "PlannedAttemptExecutorWorkResponsibilityBegan",
-      "PlannedAttemptExecutorWorkReported",
+    expect(
+      (yield* journal.read(plannedAttempt.runId)).slice(executingHistory.records.length).map(({ event }) => event._tag)
+    ).toEqual([
       "PlannedAttemptExecutorCommandIntended",
       "PlannedAttemptExecutorCommandResponseObserved",
       "PlannedAttemptExecutorWorkReported"
     ])
-  })
+  }).pipe(Effect.provide(liveExecutingJournalLayer()))
 )
 
 it.effect("accepts an exact Terminal suspension response as the attempt's safe Exit boundary", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make(runningHistory())
+    const journal = yield* InRunJournal
     const executor = PlannedAttemptExecutor.of({
       observe: () => Effect.die("application Exit must not observe executor state"),
       requestSuspension: () =>
@@ -261,45 +311,19 @@ it.effect("accepts an exact Terminal suspension response as the attempt's safe E
 
     const safe = yield* suspendApplicationExitAttempts([
       ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
-    ]).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          journalLayer(records),
-          Layer.succeed(PlannedAttemptExecutor, executor),
-          plannedAttemptProtocolControllerLayer
-        )
-      )
-    )
+    ]).pipe(Effect.provide(protocolLayer(executor)))
     expect(safe).toEqual([correlation])
     expect(
-      (yield* Ref.get(records)).some(
+      (yield* journal.read(plannedAttempt.runId)).some(
         ({ event }) =>
           event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkTerminal"
       )
     ).toBe(true)
-  })
+  }).pipe(Effect.provide(liveExecutingJournalLayer()))
 )
 
 it.effect("requests suspension for every running exact planned attempt retained by the Run", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      ...runningHistory(),
-      record(
-        3,
-        PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
-          plannedAttempt: plannedAttemptB,
-          version: workflowJournalEventVersion
-        })
-      ),
-      record(
-        4,
-        PlannedAttemptExecutorWorkReportedEvent.make({
-          ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-          report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation: correlationB }),
-          version: workflowJournalEventVersion
-        })
-      )
-    ])
     const calls = yield* Ref.make<ReadonlyArray<string>>([])
     const executor = PlannedAttemptExecutor.of({
       observe: () => Effect.die("application Exit must not observe executor state"),
@@ -318,26 +342,18 @@ it.effect("requests suspension for every running exact planned attempt retained 
     const safe = yield* suspendApplicationExitAttempts([
       ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt }),
       ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt: plannedAttemptB })
-    ]).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          journalLayer(records),
-          Layer.succeed(PlannedAttemptExecutor, executor),
-          plannedAttemptProtocolControllerLayer
-        )
-      )
-    )
+    ]).pipe(Effect.provide(protocolLayer(executor)))
 
     expect(new Set(yield* Ref.get(calls))).toEqual(new Set([plannedAttempt.attemptId, plannedAttemptB.attemptId]))
     expect(new Set(safe.map(({ attemptId }) => attemptId))).toEqual(
       new Set([plannedAttempt.attemptId, plannedAttemptB.attemptId])
     )
-  })
+  }).pipe(Effect.provide(liveExecutingJournalLayer(twoAttemptExecutingHistory.records)))
 )
 
 it.effect("rejects a foreign suspension report and records the contradiction without releasing safety", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make(runningHistory())
+    const journal = yield* InRunJournal
     const foreignCorrelation = { ...correlation, attemptId: AttemptId.make("foreign-exit-attempt") }
     const executor = PlannedAttemptExecutor.of({
       observe: () => Effect.die("application Exit must not observe executor state"),
@@ -351,67 +367,43 @@ it.effect("rejects a foreign suspension report and records the contradiction wit
 
     const failure = yield* suspendApplicationExitAttempts([
       ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
-    ]).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          journalLayer(records),
-          Layer.succeed(PlannedAttemptExecutor, executor),
-          plannedAttemptProtocolControllerLayer
-        )
-      ),
-      Effect.flip
-    )
+    ]).pipe(Effect.provide(protocolLayer(executor)), Effect.flip)
 
     expect(failure).toMatchObject({
       _tag: "ApplicationExitDrainFailure",
       diagnostics: [expect.stringContaining("PlannedAttemptExecutorCorrelationMismatch")]
     })
-    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
-      "PlannedAttemptExecutorWorkResponsibilityBegan",
-      "PlannedAttemptExecutorWorkReported",
-      "PlannedAttemptExecutorCommandIntended",
-      "PlannedAttemptExecutorCommandResponseContradicted"
-    ])
-  })
+    expect(
+      (yield* journal.read(plannedAttempt.runId)).slice(executingHistory.records.length).map(({ event }) => event._tag)
+    ).toEqual(["PlannedAttemptExecutorCommandIntended", "PlannedAttemptExecutorCommandResponseContradicted"])
+  }).pipe(Effect.provide(liveExecutingJournalLayer()))
 )
 
 it.effect("retains an acknowledged suspension intent when the fast call has no response", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const records = yield* Ref.make(runningHistory())
-      const called = yield* Deferred.make<void>()
-      const executor = PlannedAttemptExecutor.of({
-        observe: () => Effect.die("application Exit must not observe executor state for an unresolved command"),
-        requestSuspension: () => Deferred.succeed(called, undefined).pipe(Effect.andThen(Effect.never)),
-        begin: () => Effect.die("application Exit must not begin executor work"),
-        resume: () => Effect.die("application Exit must not resume executor work")
-      })
-      const draining = yield* suspendApplicationExitAttempts([
-        ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
-      ]).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            journalLayer(records),
-            Layer.succeed(PlannedAttemptExecutor, executor),
-            plannedAttemptProtocolControllerLayer
-          )
-        ),
-        Effect.forkChild
-      )
-      yield* Deferred.await(called)
+      const accepted = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+      yield* Effect.gen(function* () {
+        const called = yield* Deferred.make<void>()
+        const executor = PlannedAttemptExecutor.of({
+          observe: () => Effect.die("application Exit must not observe executor state for an unresolved command"),
+          requestSuspension: () => Deferred.succeed(called, undefined).pipe(Effect.andThen(Effect.never)),
+          begin: () => Effect.die("application Exit must not begin executor work"),
+          resume: () => Effect.die("application Exit must not resume executor work")
+        })
+        const draining = yield* suspendApplicationExitAttempts([
+          ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
+        ]).pipe(Effect.provide(protocolLayer(executor)), Effect.forkChild)
+        yield* Deferred.await(called)
 
-      expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
-        "PlannedAttemptExecutorWorkResponsibilityBegan",
-        "PlannedAttemptExecutorWorkReported",
-        "PlannedAttemptExecutorCommandIntended"
-      ])
-      yield* Fiber.interrupt(draining)
-      expect((yield* Ref.get(records)).some(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toBe(
-        true
-      )
-      expect(
-        (yield* Ref.get(records)).filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")
-      ).toHaveLength(1)
+        expect((yield* Ref.get(accepted)).map(({ event }) => event._tag)).toEqual([
+          "PlannedAttemptExecutorCommandIntended"
+        ])
+        yield* Fiber.interrupt(draining)
+        expect((yield* Ref.get(accepted)).map(({ event }) => event._tag)).toEqual([
+          "PlannedAttemptExecutorCommandIntended"
+        ])
+      }).pipe(Effect.provide(observedJournalTestLayer(accepted)))
     })
   )
 )
@@ -419,21 +411,16 @@ it.effect("retains an acknowledged suspension intent when the fast call has no r
 it.effect("does not retry or project an already-unresolved executor command during Exit", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const unresolved = [
-        ...runningHistory(),
-        record(
-          3,
-          PlannedAttemptExecutorCommandIntendedEvent.make({
-            command: "Begin",
-            initiatedBy: { _tag: "DalphCoordinator" },
-            occurrenceClassification: "InitiatedAction",
-            ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
-            plannedAttempt,
-            version: workflowJournalEventVersion
-          })
-        )
-      ]
-      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(unresolved)
+      const unresolvedEvent = PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "Suspend",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: PlannedAttemptExecutorCommandOrdinal.make(2),
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+      const unresolved = [...executingHistory.records, appendRecord(executingHistory.records, unresolvedEvent)]
+      const journal = yield* InRunJournal
       const attempt = executingAttemptsForApplicationExit({ records: unresolved, responsibilities: [responsibility] })
       expect(attempt).toEqual([ExecutingAttemptForApplicationExit.ExecutorCommandAlreadyUnresolved({ plannedAttempt })])
       const executor = PlannedAttemptExecutor.of({
@@ -445,46 +432,44 @@ it.effect("does not retry or project an already-unresolved executor command duri
       // Simulate discovery racing just ahead of the unmatched intent: the guarded protocol must still refuse projection.
       const draining = yield* suspendApplicationExitAttempts([
         ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
-      ]).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            journalLayer(records),
-            Layer.succeed(PlannedAttemptExecutor, executor),
-            plannedAttemptProtocolControllerLayer
-          )
-        ),
-        Effect.forkChild
-      )
+      ]).pipe(Effect.provide(protocolLayer(executor)), Effect.forkChild)
       yield* Effect.yieldNow
 
-      expect(yield* Ref.get(records)).toEqual(unresolved)
+      expect(yield* journal.read(plannedAttempt.runId)).toEqual(unresolved)
       yield* Fiber.interrupt(draining)
     })
+  ).pipe(
+    Effect.provide(
+      liveExecutingJournalLayer([
+        ...executingHistory.records,
+        appendRecord(
+          executingHistory.records,
+          PlannedAttemptExecutorCommandIntendedEvent.make({
+            command: "Suspend",
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            ordinal: PlannedAttemptExecutorCommandOrdinal.make(2),
+            plannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        )
+      ])
+    )
   )
 )
 
 it.effect("keeps an already-classified unresolved executor command pending for the original Exit deadline", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
       const draining = yield* suspendApplicationExitAttempts([
         ExecutingAttemptForApplicationExit.ExecutorCommandAlreadyUnresolved({ plannedAttempt })
-      ]).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            journalLayer(records),
-            Layer.succeed(PlannedAttemptExecutor, unusedExecutor),
-            plannedAttemptProtocolControllerLayer
-          )
-        ),
-        Effect.forkChild
-      )
+      ]).pipe(Effect.provide(protocolLayer(unusedExecutor)), Effect.forkChild)
       yield* Effect.yieldNow
 
       expect(draining.pollUnsafe()).toBeUndefined()
       yield* Fiber.interrupt(draining)
     })
-  )
+  ).pipe(Effect.provide(liveExecutingJournalLayer()))
 )
 
 it.effect("waits for the exact attempt permit before a concurrent Exit suspension can enter", () =>
@@ -520,7 +505,7 @@ const executingExecutorExitAuthoredCassette = [
 it.effect("Alice exits successfully only after the running exact attempt is safely suspended", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const records = yield* Ref.make(runningHistory())
+      const journal = yield* InRunJournal
       const lifecycleCassette = yield* Ref.make<ReadonlyArray<ApplicationExitTraceEvent>>([])
       const executor = PlannedAttemptExecutor.of({
         observe: () => Effect.die("application Exit must not observe executor state"),
@@ -533,17 +518,10 @@ it.effect("Alice exits successfully only after the running exact attempt is safe
         begin: () => Effect.die("application Exit must not begin executor work"),
         resume: () => Effect.die("application Exit must not resume executor work")
       })
+      const journalContext = yield* Effect.context<AcceptedJournalReader | InRunJournal>()
       const executorDrain = suspendApplicationExitAttempts([
         ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
-      ]).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            journalLayer(records),
-            Layer.succeed(PlannedAttemptExecutor, executor),
-            plannedAttemptProtocolControllerLayer
-          )
-        )
-      )
+      ]).pipe(Effect.provide(protocolLayer(executor)), Effect.provide(journalContext))
       const shell = yield* makeApplicationExitShell(
         CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation }),
         { requestEnd: () => Effect.void },
@@ -559,21 +537,23 @@ it.effect("Alice exits successfully only after the running exact attempt is safe
         _tag: "ExecutingExecutorWorkReachedSafeBoundary",
         correlations: [correlation]
       })
-      expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
-        "PlannedAttemptExecutorWorkResponsibilityBegan",
-        "PlannedAttemptExecutorWorkReported",
+      expect(
+        (yield* journal.read(plannedAttempt.runId))
+          .slice(executingHistory.records.length)
+          .map(({ event }) => event._tag)
+      ).toEqual([
         "PlannedAttemptExecutorCommandIntended",
         "PlannedAttemptExecutorCommandResponseObserved",
         "PlannedAttemptExecutorWorkReported"
       ])
     })
-  )
+  ).pipe(Effect.provide(liveExecutingJournalLayer()))
 )
 
 it.effect("Alice receives timeout when the suspension response still reports the attempt running", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const records = yield* Ref.make(runningHistory())
+      const journal = yield* InRunJournal
       const suspensionReturned = yield* Deferred.make<void>()
       const executor = PlannedAttemptExecutor.of({
         observe: () => Effect.die("application Exit must not observe executor state"),
@@ -588,18 +568,11 @@ it.effect("Alice receives timeout when the suspension response still reports the
         CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation }),
         { requestEnd: () => Effect.void }
       )
+      const journalContext = yield* Effect.context<AcceptedJournalReader | InRunJournal>()
       yield* shell.registerExecutorDrain({
         suspendExecutingExecutorWork: suspendApplicationExitAttempts([
           ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })
-        ]).pipe(
-          Effect.provide(
-            Layer.mergeAll(
-              journalLayer(records),
-              Layer.succeed(PlannedAttemptExecutor, executor),
-              plannedAttemptProtocolControllerLayer
-            )
-          )
-        )
+        ]).pipe(Effect.provide(protocolLayer(executor)), Effect.provide(journalContext))
       })
       const exiting = yield* shell.requestBoundary.requestExit.pipe(Effect.forkChild)
       yield* Deferred.await(suspensionReturned)
@@ -608,18 +581,17 @@ it.effect("Alice receives timeout when the suspension response still reports the
       expect(yield* Fiber.join(exiting)).toEqual(
         ApplicationExitResult.cases.TimedOut.make({ diagnostics: [], requestedStatus: 1 })
       )
-      expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
-        "PlannedAttemptExecutorWorkResponsibilityBegan",
-        "PlannedAttemptExecutorWorkReported",
-        "PlannedAttemptExecutorCommandIntended",
-        "PlannedAttemptExecutorCommandResponseObserved"
-      ])
       expect(
-        (yield* Ref.get(records)).some(
+        (yield* journal.read(plannedAttempt.runId))
+          .slice(executingHistory.records.length)
+          .map(({ event }) => event._tag)
+      ).toEqual(["PlannedAttemptExecutorCommandIntended", "PlannedAttemptExecutorCommandResponseObserved"])
+      expect(
+        (yield* journal.read(plannedAttempt.runId)).some(
           ({ event }) =>
             event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkSafelySuspended"
         )
       ).toBe(false)
     })
-  )
+  ).pipe(Effect.provide(liveExecutingJournalLayer()))
 )
