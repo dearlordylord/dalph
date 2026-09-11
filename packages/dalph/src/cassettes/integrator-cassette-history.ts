@@ -63,14 +63,14 @@ import {
   type IntegratorCassetteInput
 } from "./integrator-cassette-domain.js"
 
-export interface CoherentIntegratorHistory {
+interface CoherentIntegratorHistory {
   readonly input: IntegratorCassetteInput
   readonly records: ReadonlyArray<JournalRecord>
   readonly startingFacts: AuthoredIntegratorCassette["startingFacts"]
   readonly target: TrackerTarget
 }
 
-export interface CoherentIntegratorHistoryOptions {
+interface CoherentIntegratorHistoryOptions {
   readonly claimOwner?: ClaimOwner
   readonly specification?: TaskWorkSpecification
   readonly target?: TrackerTarget
