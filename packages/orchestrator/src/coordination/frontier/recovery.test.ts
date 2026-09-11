@@ -555,14 +555,10 @@ it.effect("fresh-run journal facts expose membership constraints without recover
     OperationId.make("fresh-membership-removal-read"),
     target
   )
+  const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 
   return Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     yield* journal.append(
       runId,
       intentRecordKey(claim.acquisition.operationId),
@@ -601,7 +597,9 @@ it.effect("fresh-run journal facts expose membership constraints without recover
         Layer.provide(controlledFakePlannedAttemptExecutorLayer)
       )
     ),
-    Effect.provide(memoryJournalTestLayer),
+    Effect.provide(
+      liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, policy)], runId, target })
+    ),
     Effect.provideService(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
@@ -1060,12 +1058,7 @@ it.effect("a task leaving complete membership safely suspends its executor work 
       [plan.operationId],
       [taskId]
     )
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      graphRead.target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     yield* journal.append(
       runId,
       intentRecordKey(claim.acquisition.operationId),
@@ -1556,7 +1549,19 @@ it.effect("a task leaving complete membership safely suspends its executor work 
       { _tag: "RunMayTerminate" }
     )
   }).pipe(
-    Effect.provide(memoryJournalTestLayer),
+    Effect.provide(
+      liveJournalTestLayer({
+        records: [
+          makeWorkflowRunBeganRecord(
+            RunId.make("executor-membership-constraint-run"),
+            FixtureTarget.make("executor-membership-constraint-target"),
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+          )
+        ],
+        runId: RunId.make("executor-membership-constraint-run"),
+        target: FixtureTarget.make("executor-membership-constraint-target")
+      })
+    ),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(
       WorkflowInterpreter,
