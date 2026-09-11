@@ -46,7 +46,6 @@ import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../attempt-ch
 import { EvidenceStore } from "../evidence-store.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
-import { rememberValidatedJournalPrefixSuccessor } from "../../../workflow-journal/prefix-lineage.js"
 import {
   InRunJournal,
   JournalStore,
@@ -139,9 +138,6 @@ const recordAt = (position: number, event: JournalRecordType["event"]): JournalR
     position: JournalPosition.make(position),
     runId: fixture.runId
   })
-
-const lastRecord = (records: ReadonlyArray<JournalRecordType>): JournalRecordType =>
-  records[records.length - 1] as JournalRecordType
 
 const responsibilityRecordAt = (position: number): JournalRecordType =>
   recordAt(
@@ -399,17 +395,6 @@ it("derives sibling successors from one persistent prefix index without leaking 
 
   expect(deriveUnqueuedAcceptedResults(prefix)).toHaveLength(1)
   expect(deriveIntegrationAdmission(prefix).responsibilities).toHaveLength(0)
-  rememberValidatedJournalPrefixSuccessor(
-    { records: prefix, runId: fixture.runId },
-    { records: queuedBranch, runId: fixture.runId },
-    queuedRecord
-  )
-  rememberValidatedJournalPrefixSuccessor(
-    { records: prefix, runId: fixture.runId },
-    { records: startedBranch, runId: fixture.runId },
-    startedRecord
-  )
-
   expect(deriveUnqueuedAcceptedResults(queuedBranch)).toEqual([])
   expect(deriveUnqueuedAcceptedResults(startedBranch)).toEqual(coldStartedResults)
   expect(deriveIntegrationAdmission(queuedBranch).responsibilities).toHaveLength(1)
@@ -428,7 +413,7 @@ it("retains repeated executor and accepted-terminal facts without sharing branch
   expect(deriveIntegrationAdmission(journalEvidenceFrom(records))).toEqual(deriveIntegrationAdmission(records))
 })
 
-it("settles an exact finality prefix, rejects a mismatch, and suppresses a later settled queue", () => {
+it("settles exact finality and fails closed on a contradictory later settlement", () => {
   const baseFinality = finalityRecords({ includeSettlement: false })
   const queuedRecord = recordAt(
     5,
@@ -464,45 +449,19 @@ it("settles an exact finality prefix, rejects a mismatch, and suppresses a later
 
   expect(deriveIntegrationAdmission(prior).responsibilities).toHaveLength(1)
   expect(deriveIntegrationAdmission(finalityRecords({ duplicateFacts: true }))).toEqual({ responsibilities: [] })
-  rememberValidatedJournalPrefixSuccessor(
-    { records: prior, runId: fixture.runId },
-    { records: settled, runId: fixture.runId },
-    lastRecord(settled)
-  )
-  rememberValidatedJournalPrefixSuccessor(
-    { records: settled, runId: fixture.runId },
-    { records: mismatch, runId: fixture.runId },
-    lastRecord(mismatch)
-  )
-  rememberValidatedJournalPrefixSuccessor(
-    { records: settled, runId: fixture.runId },
-    { records: settledQueue, runId: fixture.runId },
-    lastRecord(settledQueue)
-  )
-  rememberValidatedJournalPrefixSuccessor(
-    { records: settled, runId: fixture.runId },
-    { records: unrelatedAppend, runId: fixture.runId },
-    lastRecord(unrelatedAppend)
-  )
-
   expect(deriveIntegrationAdmission(settled).responsibilities).toHaveLength(0)
-  expect(deriveIntegrationAdmission(mismatch).responsibilities).toHaveLength(0)
+  expect(deriveIntegrationAdmission(mismatch).responsibilities).toHaveLength(1)
   expect(deriveIntegrationAdmission(settledQueue).responsibilities).toHaveLength(0)
   expect(deriveIntegrationAdmission(unrelatedAppend).responsibilities).toHaveLength(0)
 })
 
-it("incrementally suppresses only queued and unknown accepted reports", () => {
+it("suppresses only queued and unknown accepted reports across chronological appends", () => {
   const appendAndDerive = (
     prior: ReadonlyArray<JournalRecordType>,
     appended: JournalRecordType
   ): ReadonlyArray<ReturnType<typeof deriveUnqueuedAcceptedResults>[number]> => {
     const successor = [...prior, appended]
     expect(deriveUnqueuedAcceptedResults(prior)).toBeDefined()
-    rememberValidatedJournalPrefixSuccessor(
-      { records: prior, runId: fixture.runId },
-      { records: successor, runId: fixture.runId },
-      appended
-    )
     return deriveUnqueuedAcceptedResults(successor)
   }
 
