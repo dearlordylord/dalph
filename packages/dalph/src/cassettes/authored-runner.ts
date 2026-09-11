@@ -3240,6 +3240,7 @@ export const useAuthoredScenarioCassette = <A, E, R>(
 > =>
   Effect.scoped(
     runAuthoredScenarioCassetteWith({ input, options }).pipe(
+      Effect.mapError(authoredScenarioCassetteRunFailureOf),
       Effect.flatMap(({ journalContext, run }) => use(run).pipe(Effect.provide(journalContext)))
     )
-  ).pipe(Effect.mapError(authoredScenarioCassetteRunFailureOf))
+  )

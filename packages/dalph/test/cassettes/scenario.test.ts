@@ -88,6 +88,7 @@ import {
   projectTrackerSnapshot,
   reduceWorkflowJournalHistory,
   readPostPromotionBlockerCandidateAncestry,
+  liveJournalTestLayer,
   RunPolicyRevision,
   TrackerRevision,
   TrackerMutation,
@@ -112,7 +113,6 @@ import {
   type WorkflowOperation,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
-import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
 
 import {
   assertExactlyOneAuthoredCassetteStoryItemOwner,
@@ -171,7 +171,6 @@ import {
   renderAuthoredCassetteLyrics,
   renderRecordedCassetteLyrics,
   runTargetPromotionProtocolCassette,
-  runIntegrationFinalityProtocolCassette,
   runIntegrationFinalityProtocolCassetteFromPromotedRecords,
   runPauseRestartsPassivelyAuthoredCassette,
   runPauseObservationDisconnectsAuthoredCassette,
@@ -7708,6 +7707,13 @@ const replayIntegrationFinalityCassette = (
     return first
   })
 
+const runIntegrationFinalityFromPromotedCassette = (
+  cassette: (typeof maintainedIntegrationFinalityProtocolCassetteCatalog)[keyof typeof maintainedIntegrationFinalityProtocolCassetteCatalog]
+) =>
+  useAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess, (promoted) =>
+    runIntegrationFinalityProtocolCassetteFromPromotedRecords(cassette, promoted.records)
+  )
+
 const focusedCleanupTags = (journalTags: ReadonlyArray<string>): ReadonlyArray<string> => {
   const completionIntentAt = journalTags.lastIndexOf("CompletionTaskIntended")
   return completionIntentAt < 0 ? [] : journalTags.slice(completionIntentAt)
@@ -7848,7 +7854,7 @@ it.effect("keeps an empty frontier active while claim replacement is non-converg
       name: "replacement remains pending at an empty frontier",
       story: [{ _tag: "RunReplacement" }, { _tag: "ObserveEmptyFrontier" }, { _tag: "AwaitSettlement", expected }]
     })
-    const run = yield* runIntegrationFinalityProtocolCassette(cassette)
+    const run = yield* runIntegrationFinalityFromPromotedCassette(cassette)
     expect(run.sawEmptyFrontierWhilePending).toBe(true)
   })
 )
@@ -7945,13 +7951,13 @@ it.effect("replays definite completion-claim boundary rejections as terminal typ
         }
       ]
     })
-    expect((yield* runIntegrationFinalityProtocolCassette(replacement)).failureTag).toBe(
+    expect((yield* runIntegrationFinalityFromPromotedCassette(replacement)).failureTag).toBe(
       "IntegrationFinality.CompletionClaimReplacementFailure"
     )
-    expect((yield* runIntegrationFinalityProtocolCassette(deletion)).failureTag).toBe(
+    expect((yield* runIntegrationFinalityFromPromotedCassette(deletion)).failureTag).toBe(
       "IntegrationFinality.CompletionClaimDeletionFailure"
     )
-    expect((yield* runIntegrationFinalityProtocolCassette(ambiguousReplacement)).failureTag).toBe(
+    expect((yield* runIntegrationFinalityFromPromotedCassette(ambiguousReplacement)).failureTag).toBe(
       "IntegrationFinality.CompletionClaimDidNotConverge"
     )
   })

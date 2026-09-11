@@ -1,25 +1,10 @@
 /* eslint-disable max-lines -- The cassette seam keeps the exact boundary script and production protocol together. */
 import { Effect, Match, Ref } from "effect"
+import type { PlannedTaskAttempt, RunId, TaskId } from "@dalph/contracts"
 import {
-  AcceptedResult,
-  AttemptId,
-  GitCommitSha,
-  GitRepositoryLocator,
-  IntegrationTarget,
-  IntegrationTargetRef,
-  PlannedTaskAttempt,
-  RunId,
-  TaskBranchRef,
-  TaskExecutorLocator,
-  TaskId,
-  TaskRevision,
-  WorktreeLocator
-} from "@dalph/contracts"
-import {
+  type JournalRecord,
   ActiveTaskClaim,
   authorizedClaimForAttempt,
-  ClaimOwner,
-  ClaimToken,
   CompletionClaimBoundary,
   type CompletionClaimBoundaryService,
   type CompletionClaimMarkerObservation,
@@ -41,38 +26,18 @@ import {
   completionClaimReplacementOperationIdFor,
   completionClaimReplacementRequestFor,
   describeJournalEvent,
-  EvidenceDigest,
-  EvidenceReference,
   FocusedCompletedTaskObservation,
   FrontierExplanation,
-  FixtureTarget,
   InRunJournal,
-  IntegratorCandidateResourceLocator,
-  IntegratorCandidateText,
-  IntegratorSessionCorrelation,
-  IntegratorRunCorrelation,
-  IntegratorRunOrdinal,
-  IntegratorRunQualifiedCandidate,
-  IntegratorSessionId,
-  JournalPosition,
-  JournalRecord,
-  makeTaskAttemptPlanOperation,
   OperationId,
   completionTaskRequestFor,
   readCompletionFocusedFacts,
   deriveRunFinalityDecision,
   runCompletionClaimDeletionProtocol,
   runCompletionClaimReplacementProtocol,
-  TargetPromotionAttemptOrdinal,
-  TargetPromotionObservedSuccessEvent,
-  TargetPromotionSuccessObservation,
-  targetPromotionCorrelationFor,
-  TaskAttemptPlannedEvent,
-  TaskClaimAcquiredEvent,
   type CompletionTaskBoundaryService,
   type TrackerTarget,
   TrackerRevision,
-  type WorkflowJournalEvent,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
 import {
@@ -84,130 +49,13 @@ import {
 
 export * from "./integration-finality-protocol-cassette-domain.js"
 
-type AppendableWorkflowJournalEvent = Exclude<
-  WorkflowJournalEvent,
-  { readonly _tag: "WorkflowRunBegan" | "WorkflowRunTerminated" }
->
-
-const gitShaLength = 40
-const evidenceDigestLength = 64
-const candidateConstructedPosition = 3
-const integratorStartedPosition = 2
-const initialClaimPosition = 1
-const initialAttemptPosition = 2
-const initialPromotionPosition = 3
-const noInitialRecords = (): ReadonlyArray<JournalRecord> | null => null
-
-const makePreparedFinality = Effect.fn("IntegrationFinalityProtocolCassette.makePreparedFinality")(() =>
-  Effect.sync(() => {
-    const runId = RunId.make("integration-finality-protocol-cassette-run")
-    const taskId = TaskId.make("integration-finality-protocol-cassette-task")
-    const target = FixtureTarget.make("integration-finality-protocol-cassette-target")
-    const integrationTarget = IntegrationTarget.make({
-      ref: IntegrationTargetRef.make("refs/heads/main"),
-      repository: GitRepositoryLocator.make("/repositories/integration-finality-protocol.git")
-    })
-    const expectedTargetHead = GitCommitSha.make("1".repeat(gitShaLength))
-    const candidateCommit = GitCommitSha.make("3".repeat(gitShaLength))
-    const acceptedResult = AcceptedResult.make({
-      commit: GitCommitSha.make("2".repeat(gitShaLength)),
-      evidenceManifest: EvidenceReference.make({
-        byteLength: 1,
-        digest: EvidenceDigest.make("a".repeat(evidenceDigestLength))
-      })
-    })
-    const plannedAttempt = PlannedTaskAttempt.make({
-      attemptId: AttemptId.make("integration-finality-protocol-attempt"),
-      baseSha: expectedTargetHead,
-      branch: TaskBranchRef.make("refs/heads/dalph/integration-finality-protocol"),
-      executor: TaskExecutorLocator.make("executor:integration-finality-protocol"),
-      runId,
-      taskId,
-      taskRevision: TaskRevision.make("integration-finality-protocol-revision"),
-      worktree: WorktreeLocator.make("/worktrees/integration-finality-protocol")
-    })
-    const integratorCorrelation = IntegratorSessionCorrelation.make({
-      acceptedResult,
-      candidateResource: IntegratorCandidateResourceLocator.make("/candidate/integration-finality-protocol"),
-      expectedTargetHead,
-      integrationTarget,
-      plannedAttempt,
-      queuedAt: JournalPosition.make(1),
-      sessionId: IntegratorSessionId.make("integration-finality-protocol-session"),
-      startedAt: JournalPosition.make(integratorStartedPosition),
-      targetLineageObservedAt: JournalPosition.make(integratorStartedPosition)
-    })
-    const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
-      candidateCommit,
-      candidateText: IntegratorCandidateText.make("refs/heads/integration-finality-protocol-candidate"),
-      directParents: [expectedTargetHead, acceptedResult.commit],
-      qualifiedAt: JournalPosition.make(candidateConstructedPosition),
-      run: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: integratorCorrelation })
-    })
-    const promotionCorrelation = targetPromotionCorrelationFor(qualifiedCandidate)
-    const activeClaim = ActiveTaskClaim.make({
-      operationId: OperationId.make("integration-finality-protocol-active-claim"),
-      owner: ClaimOwner.make("dalph:integration-finality-protocol"),
-      taskId,
-      token: ClaimToken.make("integration-finality-protocol-token")
-    })
-    const claim = CompletionTaskClaim.make({ originalClaim: activeClaim, plannedAttempt, promotionCorrelation })
-    const planOperation = makeTaskAttemptPlanOperation({
-      operationId: OperationId.make("integration-finality-protocol-plan-attempt"),
-      plannedAttempt,
-      predecessorOperationIds: [activeClaim.operationId]
-    })
-    const promotionSuccess = TargetPromotionObservedSuccessEvent.make({
-      basis: { _tag: "AfterAttempt", attemptOrdinal: TargetPromotionAttemptOrdinal.make(1) },
-      correlation: promotionCorrelation,
-      observation: TargetPromotionSuccessObservation.cases.CompareAndSetApplied.make({
-        candidateAncestry: "Current",
-        targetHeadSha: candidateCommit
-      }),
-      version: workflowJournalEventVersion
-    })
-    return {
-      activeClaim,
-      claim,
-      initialRecords: noInitialRecords(),
-      planOperation,
-      plannedAttempt,
-      promotionCorrelation,
-      promotionSuccess,
-      runId,
-      target,
-      taskId
-    }
-  })
-)
-
-type PreparedFinality = Omit<Effect.Success<ReturnType<typeof makePreparedFinality>>, "target"> & {
+interface PreparedFinality {
+  readonly activeClaim: ActiveTaskClaim
+  readonly claim: CompletionTaskClaim
+  readonly plannedAttempt: PlannedTaskAttempt
+  readonly runId: RunId
   readonly target: TrackerTarget
-}
-
-const journalRecordFor = (runId: RunId, position: number, event: AppendableWorkflowJournalEvent): JournalRecord =>
-  JournalRecord.make({
-    event,
-    key: describeJournalEvent(event).expectedKey,
-    position: JournalPosition.make(position),
-    runId
-  })
-
-const initialRecordsFor = (prepared: PreparedFinality) => {
-  if (prepared.initialRecords !== null) return prepared.initialRecords
-  return [
-    journalRecordFor(
-      prepared.runId,
-      initialClaimPosition,
-      TaskClaimAcquiredEvent.make({ claim: prepared.activeClaim, version: workflowJournalEventVersion })
-    ),
-    journalRecordFor(
-      prepared.runId,
-      initialAttemptPosition,
-      TaskAttemptPlannedEvent.make({ operation: prepared.planOperation, version: workflowJournalEventVersion })
-    ),
-    journalRecordFor(prepared.runId, initialPromotionPosition, prepared.promotionSuccess)
-  ] satisfies ReadonlyArray<JournalRecord>
+  readonly taskId: TaskId
 }
 
 const promotedPlanFor = (records: ReadonlyArray<JournalRecord>) => {
@@ -264,11 +112,7 @@ const preparedFinalityFromPromotedRecords = Effect.fn(
   return {
     activeClaim,
     claim,
-    initialRecords: records,
-    planOperation: planned,
     plannedAttempt,
-    promotionCorrelation: promotion.correlation,
-    promotionSuccess: promotion,
     runId,
     target,
     taskId
@@ -277,30 +121,9 @@ const preparedFinalityFromPromotedRecords = Effect.fn(
 
 interface FinalityJournal {
   readonly baselineLength: number
-  readonly read: Effect.Effect<ReadonlyArray<JournalRecord>, unknown>
+  readonly read: ReturnType<InRunJournal["Service"]["read"]>
   readonly service: InRunJournal["Service"]
 }
-
-const makeJournal = Effect.fn("IntegrationFinalityProtocolCassette.makeJournal")(function* (
-  initial: ReadonlyArray<JournalRecord>
-) {
-  const records = yield* Ref.make(initial)
-  return {
-    baselineLength: initial.length,
-    read: Ref.get(records),
-    service: InRunJournal.of({
-      append: (runId, key, event) =>
-        Ref.modify(records, (current) => {
-          const existing = current.find((record) => record.key === key)
-          /* v8 ignore next -- @preserve Schema-closed stories never append the same stable occurrence twice. */
-          if (existing !== undefined) return [Effect.succeed(existing), current] as const
-          const appended = JournalRecord.make({ event, key, position: JournalPosition.make(current.length + 1), runId })
-          return [Effect.succeed(appended), [...current, appended]] as const
-        }).pipe(Effect.flatten),
-      read: () => Ref.get(records)
-    })
-  } satisfies FinalityJournal
-})
 
 const useLiveJournal = Effect.fn("IntegrationFinalityProtocolCassette.useLiveJournal")(function* (
   prepared: PreparedFinality
@@ -758,18 +581,6 @@ const runPreparedIntegrationFinalityProtocolCassette = Effect.fn("IntegrationFin
     })
   }
 )
-
-/** Replays a bounded completion-claim story through the ordinary production protocols. */
-export const runIntegrationFinalityProtocolCassette = Effect.fn("IntegrationFinalityProtocolCassette.run")(function* (
-  cassette: IntegrationFinalityProtocolCassette
-) {
-  const prepared = yield* makePreparedFinality()
-  return yield* runPreparedIntegrationFinalityProtocolCassette(
-    cassette,
-    prepared,
-    yield* makeJournal(initialRecordsFor(prepared))
-  )
-})
 
 /** Continues a valid whole-Run candidate, verification, and promotion history through the finality protocol. */
 export const runIntegrationFinalityProtocolCassetteFromPromotedRecords = Effect.fn(
