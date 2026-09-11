@@ -404,7 +404,12 @@ export const journaledRunBootstrapLayer = (
           }
           const built = yield* Layer.build(
             journalLayer(expectedRunId, target, initial, exitAwareStorage, (record) =>
-              publishAcceptedHistory(record.runId, record.position)
+              // Journal acceptance precedes presentation. The terminal cursor
+              // must wait for finish to close status and announce termination,
+              // so a current-first history consumer can stop at that cursor.
+              record.event._tag === "WorkflowRunTerminated"
+                ? Effect.void
+                : publishAcceptedHistory(record.runId, record.position)
             )
           ).pipe(Scope.provide(bootstrapScope), Effect.exit)
           if (built._tag === "Failure") {
@@ -774,6 +779,7 @@ export const journaledRunBootstrapLayer = (
             terminatedAt: TraceCursor.make({ position: termination.position, runId: termination.runId })
           })
         )
+        yield* publishAcceptedHistory(termination.runId, termination.position)
         const shouldAttemptRetirement = yield* Ref.modify(startupRetirementAttempts, (attempted) => {
           /* v8 ignore next -- @preserve lifecycle.terminateRun accepts one terminal append per Run; a second finish for the same Run is rejected before this guard. */
           if (attempted.has(runId)) return [false, attempted] as const
