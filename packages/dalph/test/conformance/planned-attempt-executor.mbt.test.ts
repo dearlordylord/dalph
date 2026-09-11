@@ -22,8 +22,8 @@ import {
   beginPlannedAttemptExecutorResponsibility,
   beginPlannedAttemptExecutorWork,
   type JournalRecord,
+  Journal,
   JournalStore,
-  journalStoreCapabilities,
   JournalPosition,
   makePlannedAttemptProtocolController,
   makeApplicationExitLifecycle,
@@ -34,7 +34,9 @@ import {
   resumePlannedAttemptExecutorWork,
   TaskWorkCapacity
 } from "../../../orchestrator/src/index.js"
-import { Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect"
+import { Context, Deferred, Effect, Fiber, Layer, Ref, Schema, Scope } from "effect"
+import { AcceptedJournalReader } from "../../../orchestrator/src/workflow-journal/accepted-reader.js"
+import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
 import { makeExecutorResumeModelFixture } from "./planned-attempt-executor-resume-fixture.js"
 import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
@@ -104,6 +106,13 @@ const plannedAttempt = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/worktrees/model-attempt")
 })
 const correlation = { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+const modelTarget = FixtureTarget.make("planned-attempt-executor-model")
+const modelRunBegan = makeWorkflowRunBeganRecord(
+  plannedAttempt.runId,
+  modelTarget,
+  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+)
+let executorConformanceScope: Scope.Scope | undefined
 const freshAttemptPrefixAcceptedAt = JournalPosition.make(10)
 const plannedAttemptGraph = (() => {
   const projected = projectTrackerSnapshot({
@@ -121,7 +130,7 @@ const continuationProposal = {
     acceptedAt: freshAttemptPrefixAcceptedAt,
     purpose: "EstablishCurrentGraph",
     runId: plannedAttempt.runId,
-    target: FixtureTarget.make("planned-attempt-executor-model")
+    target: modelTarget
   }),
   admission: {
     integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
@@ -216,7 +225,7 @@ const executorConformanceDriver = defineDriver(
     settleCommandResponse: {}
   },
   () => {
-    let records: ReadonlyArray<JournalRecord> = []
+    let records: ReadonlyArray<JournalRecord> = [modelRunBegan]
     let controller: DeliveryRuntimeAdmissionController | undefined
     let protocolController: PlannedAttemptProtocolControllerService | undefined
     let authorityReport: PlannedAttemptExecutorReport | undefined
@@ -255,60 +264,57 @@ const executorConformanceDriver = defineDriver(
     let resumeReservation: DeliveryAdmissionReservation | undefined
     let redeliveryCalls: ReadonlyArray<PlannedAttemptExecutorCommandOrdinal> = []
 
-    const journal = JournalStore.of({
+    const scope = executorConformanceScope
+    if (scope === undefined) return Effect.runSync(Effect.die("executor model requires a live Journal scope"))
+    const liveContext = Effect.runSync(
+      Layer.build(
+        liveJournalTestLayer({ records: [modelRunBegan], runId: plannedAttempt.runId, target: modelTarget })
+      ).pipe(Effect.provideService(Scope.Scope, scope))
+    )
+    const liveJournal = Context.get(liveContext, Journal)
+    const acceptedJournal = Context.get(liveContext, AcceptedJournalReader)
+    const liveInRunJournal = Context.get(liveContext, InRunJournal)
+    const liveJournalStore = Context.get(liveContext, JournalStore)
+    const appendAcceptedRecord = (event: JournalRecord["event"]) =>
+      Effect.gen(function* () {
+        if (
+          pauseCommandIntent &&
+          (event._tag === "PlannedAttemptExecutorCommandIntended" ||
+            event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended")
+        ) {
+          pauseCommandIntent = false
+          yield* Deferred.succeed(commandIntentSignal, undefined)
+          yield* Deferred.await(commandIntentGate)
+        }
+        if (pauseResponse && event._tag === "PlannedAttemptExecutorCommandResponseObserved") {
+          pauseResponse = false
+          yield* Deferred.succeed(responseSignal, undefined)
+          yield* Deferred.await(responseGate)
+        }
+        if (pauseProjection && event._tag === "PlannedAttemptExecutorCommandProjectionObserved") {
+          pauseProjection = false
+          yield* Deferred.succeed(projectionSignal, undefined)
+          yield* Deferred.await(projectionGate)
+        }
+        if (pauseState && event._tag === "PlannedAttemptExecutorStateObserved") {
+          pauseState = false
+          yield* Deferred.succeed(stateSignal, undefined)
+          yield* Deferred.await(stateGate)
+        }
+      })
+    const journal = InRunJournal.of({
       append: (eventRunId, key, event) =>
         Effect.gen(function* () {
           const existing = records.find((record) => record.runId === eventRunId && record.key === key)
           if (existing !== undefined) return existing
-          const record = {
-            event,
-            key,
-            position: JournalPosition.make(records.filter(({ runId }) => runId === eventRunId).length + 1),
-            runId: eventRunId
-          } satisfies JournalRecord
-          records = [...records, record]
-          const reduction = reduceWorkflowJournalHistory(eventRunId, records)
-          if (reduction._tag === "InvalidWorkflowJournalHistory") {
-            return yield* Effect.die(
-              `planned-attempt executor MBT constructed invalid history: ${JSON.stringify(reduction.issues)}`
-            )
-          }
-          if (
-            pauseCommandIntent &&
-            (event._tag === "PlannedAttemptExecutorCommandIntended" ||
-              event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended")
-          ) {
-            pauseCommandIntent = false
-            yield* Deferred.succeed(commandIntentSignal, undefined)
-            yield* Deferred.await(commandIntentGate)
-          }
-          if (pauseResponse && event._tag === "PlannedAttemptExecutorCommandResponseObserved") {
-            pauseResponse = false
-            yield* Deferred.succeed(responseSignal, undefined)
-            yield* Deferred.await(responseGate)
-          }
-          if (pauseProjection && event._tag === "PlannedAttemptExecutorCommandProjectionObserved") {
-            pauseProjection = false
-            yield* Deferred.succeed(projectionSignal, undefined)
-            yield* Deferred.await(projectionGate)
-          }
-          if (pauseState && event._tag === "PlannedAttemptExecutorStateObserved") {
-            pauseState = false
-            yield* Deferred.succeed(stateSignal, undefined)
-            yield* Deferred.await(stateGate)
-          }
+          const record = yield* liveInRunJournal.append(eventRunId, key, event)
+          records = yield* liveInRunJournal.read(eventRunId)
+          yield* appendAcceptedRecord(event)
           return record
         }),
-      beginRun: () => Effect.die("executor model does not own Run lifecycle"),
-      read: (requestedRunId) => Effect.succeed(records.filter(({ runId }) => runId === requestedRunId)),
-      readRunForRecovery: () => Effect.die("executor model reconstructs its exact journal locally"),
-      scanHot: () => Effect.die("executor model never scans all Runs"),
-      auditAll: () => Effect.die("executor model never audits all Runs"),
-      retireTerminalRun: (eventRunId) =>
-        Effect.succeed({ _tag: "AlreadyRetired", partition: "Cold", runId: eventRunId } as const),
-      terminateRun: () => Effect.die("executor model never terminates its Run")
+      read: (requestedRunId) => liveInRunJournal.read(requestedRunId)
     })
-    const reducerValidInMemoryJournal = InRunJournal.of({ append: journal.append, read: journal.read })
+    const reducerValidInMemoryJournal = journal
     const resumeFixture = makeExecutorResumeModelFixture(reducerValidInMemoryJournal, plannedAttempt, specification)
     const appendExactFreshAttemptPrefix = Effect.fn("ExecutorModel.appendExactFreshAttemptPrefix")(function* () {
       const claimOperation = makeTaskClaimAcquisitionOperation({
@@ -411,9 +417,11 @@ const executorConformanceDriver = defineDriver(
         })
       )
     })
-    const journalLayer = Layer.merge(
+    const journalLayer = Layer.mergeAll(
       Layer.succeed(InRunJournal, reducerValidInMemoryJournal),
-      journalStoreCapabilities(Layer.succeed(JournalStore, journal))
+      Layer.succeed(AcceptedJournalReader, acceptedJournal),
+      Layer.succeed(JournalStore, liveJournalStore),
+      Layer.succeed(Journal, liveJournal)
     )
     const executor = PlannedAttemptExecutor.of({
       observe: () =>
@@ -644,13 +652,7 @@ const executorConformanceDriver = defineDriver(
           if (pendingCommand !== undefined) yield* Fiber.interrupt(pendingCommand)
           if (pendingProjection !== undefined) yield* Fiber.interrupt(pendingProjection)
           if (pendingState !== undefined) yield* Fiber.interrupt(pendingState)
-          records = [
-            makeWorkflowRunBeganRecord(
-              plannedAttempt.runId,
-              FixtureTarget.make("planned-attempt-executor-model"),
-              InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-            )
-          ]
+          records = yield* liveInRunJournal.read(plannedAttempt.runId)
           resumeRecoveryRequired = false
           resumeWitness = undefined
           resumeEligibility = undefined
@@ -1102,6 +1104,13 @@ const executorConformanceDriver = defineDriver(
   }
 )
 
+const scopedExecutorConformanceDriver = {
+  create: () => {
+    executorConformanceScope = Scope.makeUnsafe()
+    return executorConformanceDriver.create()
+  }
+}
+
 const executorStateCheck = stateCheck(
   (raw) =>
     Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
@@ -1122,7 +1131,7 @@ quintIt(
   "replays durable executor commands through production protocol and admission seams",
   {
     backend: "typescript",
-    driverFactory: executorConformanceDriver,
+    driverFactory: scopedExecutorConformanceDriver,
     maxSamples: 100,
     maxSteps: 34,
     nTraces: 100,
@@ -1150,7 +1159,7 @@ it.effect(
         stateCheck: executorStateCheck,
         driverFactory: {
           create: () =>
-            executorConformanceDriver
+            scopedExecutorConformanceDriver
               .create()
               .pipe(
                 Effect.map((driver) => ({
