@@ -13,9 +13,13 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { acceptedResultFixture } from "../../../../test/support/evidence.js"
+import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
+import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
@@ -69,6 +73,7 @@ import {
   IntegratorSuccessorPreparationInput
 } from "./session.js"
 import { deriveCurrentIntegratorState, integratorResponsibilityFactsFromCorrelation } from "./state.js"
+import { describeJournalEvent } from "../../registry/event-descriptor.js"
 
 const sha = (value: string): GitCommitSha => GitCommitSha.make(value.repeat(40))
 
@@ -286,6 +291,116 @@ const successorInputFor = (records: ReadonlyArray<JournalRecord>): IntegratorSuc
         targetLineageObservedAt: observation.position
       })
     : undefined
+}
+
+const acceptedSuccessorFixture = () => {
+  const specification = makeTaskWorkSpecification({
+    body: "Exercise one accepted FullRerun successor boundary.",
+    taskId: plannedAttempt.taskId,
+    title: "Accepted successor fixture"
+  })
+  const accepted = makeAcceptedIntegrationHistory({
+    acceptedResult: responsibility.acceptedResult,
+    activeClaim: ActiveTaskClaim.make({
+      operationId: OperationId.make("accepted-successor-claim"),
+      owner: ClaimOwner.make("accepted-successor-owner"),
+      taskId: plannedAttempt.taskId,
+      token: ClaimToken.make("accepted-successor-token")
+    }),
+    integrationTarget: target,
+    plannedAttempt: { ...plannedAttempt, taskRevision: specification.fingerprint },
+    runId,
+    targetHeadSha: predecessorHead,
+    taskSpecification: specification,
+    trackerTarget: FixtureTarget.make("accepted-successor-target")
+  })
+  let records = accepted.records
+  const append = (event: JournalRecord["event"]): JournalRecord => {
+    const record: JournalRecord = {
+      event,
+      key: describeJournalEvent(event).expectedKey,
+      position: JournalPosition.make(records.length + 1),
+      runId
+    }
+    records = [...records, record]
+    return record
+  }
+  const acceptedPredecessor = integratorCorrelationFor(accepted)
+  append(IntegratorSessionFixedEvent.make({ correlation: acceptedPredecessor, version: workflowJournalEventVersion }))
+  const run = integratorRunCorrelationForSession(acceptedPredecessor, IntegratorRunOrdinal.make(1))
+  append(IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion }))
+  const detail = IntegratorNotPreparedDetail.make("accepted successor fixture has no first-run candidate")
+  const result = append(
+    IntegratorRunResultRecordedEvent.make({
+      result: IntegratorResult.cases.NotPrepared.make({ correlation: run, detail }),
+      run,
+      version: workflowJournalEventVersion
+    })
+  )
+  const basis = IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+    cause: { _tag: "NotPrepared", detail },
+    evidence: { resultRecordedAt: result.position }
+  })
+  const quarantine = append(
+    IntegrationQuarantinedEvent.make({
+      basis,
+      correlation: acceptedPredecessor,
+      occurrenceClassification: "NonActionOccurrence",
+      version: workflowJournalEventVersion
+    })
+  )
+  const direction = append(
+    IntegrationQuarantineDirectionAppliedEvent.make({
+      fingerprint: IntegrationQuarantineDirectionFingerprint.make({
+        direction: "FullRerun",
+        quarantineAt: quarantine.position,
+        sessionId: acceptedPredecessor.sessionId
+      }),
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "accepted-successor", runId }),
+      version: workflowJournalEventVersion
+    })
+  )
+  const lineageOperation = makeTargetLineageObservationOperation({
+    integrationTarget: target,
+    operationId: OperationId.make("accepted-successor-fresh-lineage"),
+    plannedAttempt: accepted.plannedAttempt,
+    predecessorOperationIds: [accepted.targetLineageOperation.operationId]
+  })
+  append(
+    GitReadIntentRecordedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operation: lineageOperation,
+      version: workflowJournalEventVersion
+    })
+  )
+  const observation = append(
+    TargetLineageObservedEvent.make({
+      observation: TargetLineageObservation.make({
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: accepted.plannedAttempt.baseSha,
+        targetHeadSha: freshHead
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: lineageOperation.operationId,
+      plannedAttempt: accepted.plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  if (observation.event._tag !== "TargetLineageObserved") throw new Error("accepted fixture lacks fresh lineage")
+  return {
+    input: IntegratorSuccessorPreparationInput.make({
+      directionAppliedAt: direction.position,
+      predecessor: acceptedPredecessor,
+      quarantineAt: quarantine.position,
+      targetLineage: observation.event.observation,
+      targetLineageObservedAt: observation.position
+    }),
+    records,
+    trackerTarget: accepted.trackerTarget
+  }
 }
 
 describe("Integrator FullRerun successor session", () => {
@@ -768,17 +883,21 @@ describe("Integrator FullRerun successor session", () => {
 
   it.effect("reconciles an ambiguous successor append only when the reread contains the exact winner", () =>
     Effect.gen(function* () {
-      const initial = makeFixture(freshHead)
-      const input = successorInputFor(initial)
-      if (input === undefined) return yield* Effect.die("successor fixture lacks fresh observation")
+      const fixture = acceptedSuccessorFixture()
+      const initial = fixture.records
+      const input = fixture.input
       const store = yield* JournalStore
       const baseJournal = yield* InRunJournal
       const accepted = yield* AcceptedJournalReader
-      yield* store.beginRun(
-        runId,
-        FixtureTarget.make("successor-append-winner"),
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-      )
+      const beginning = initial[0]
+      if (beginning?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("fixture lacks Run beginning")
+      yield* store.beginRun(runId, fixture.trackerTarget, beginning.event.initialControlPolicy)
+      for (const record of initial.slice(1)) {
+        if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+          return yield* Effect.die("fixture contains unexpected Run lifecycle event")
+        }
+        yield* store.append(runId, record.key, record.event)
+      }
       const winningJournal: InRunJournal["Service"] = {
         append: (requestedRunId, key, event) =>
           baseJournal
