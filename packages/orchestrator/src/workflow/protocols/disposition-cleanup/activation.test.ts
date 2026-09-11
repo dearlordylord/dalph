@@ -1,12 +1,11 @@
 import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
-import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
-import { InitialControlPolicy } from "../../../control/policy.js"
-import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
+import { dispositionCleanupLiveJournalTestLayer } from "./live-journal-test.js"
+import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
+import { JournalRecord } from "../../../workflow-journal/store.js"
 import {
   branchCleanupObservationIntendedRecordKey,
   plannedAttemptReplacedRecordKey,
@@ -37,60 +36,55 @@ import {
 } from "./disposition.js"
 import { BranchCleanupObservationIntendedEvent } from "./branch.js"
 
-const begin = Effect.fn("DispositionCleanupActivationTest.begin")(function* (target: string) {
-  const journal = yield* JournalStore
-  yield* journal.beginRun(
-    runId,
-    FixtureTarget.make(target),
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-  )
+const begin = Effect.fn("DispositionCleanupActivationTest.begin")(function* () {
+  const journal = yield* InRunJournal
   return journal
 })
 
 it.effect("fails closed when replacement authority has no exact ready-worktree witness", () =>
-  Effect.gen(function* () {
-    const journal = yield* begin("activation-missing-replacement-witness")
-    const replacement = yield* journal.append(
-      runId,
-      plannedAttemptReplacedRecordKey(attempt.attemptId),
-      replacementProvenanceFor(attempt, successor)
-    )
+  Effect.sync(() => {
+    const replacement = JournalRecord.make({
+      event: replacementProvenanceFor(attempt, successor),
+      key: plannedAttemptReplacedRecordKey(attempt.attemptId),
+      position: JournalPosition.make(1),
+      runId
+    })
     const derived = deriveCleanupAuthorizations([replacement])
     expect(derived.worktree).toEqual([])
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  })
 )
 
 it.effect("fails closed when abandonment authority has no exact ready-worktree witness", () =>
   Effect.gen(function* () {
-    const journal = yield* begin("activation-missing-abandonment-witness")
+    const journal = yield* begin()
     yield* appendAbandonedProvenance(attempt)
     const records = (yield* journal.read(runId)).filter(({ event }) => event._tag !== "PlannedAttemptWorktreeObserved")
     expect(deriveCleanupAuthorizations(records).worktree).toEqual([])
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("derives one abandonment authorization from the latest exact ready-worktree witness", () =>
   Effect.gen(function* () {
-    const journal = yield* begin("activation-abandonment-witness")
+    const journal = yield* begin()
     yield* appendAbandonedProvenance(attempt)
     const derived = deriveCleanupAuthorizations(yield* journal.read(runId)).worktree
     expect(derived).toHaveLength(1)
     expect(derived[0]?.disposition._tag).toBe("Abandoned")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("derives the same cleanup authorization from cold records and indexed accepted evidence", () =>
   Effect.gen(function* () {
-    const journal = yield* begin("activation-indexed-abandonment-witness")
+    const journal = yield* begin()
     yield* appendAbandonedProvenance(attempt)
     const records = yield* journal.read(runId)
     expect(deriveCleanupAuthorizations(journalEvidenceFrom(records))).toEqual(deriveCleanupAuthorizations(records))
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("keeps an existing exact cleanup authorization when activation derives it again", () =>
   Effect.gen(function* () {
-    const journal = yield* begin("activation-existing-exact-authorization")
+    const journal = yield* begin()
     yield* appendAbandonedProvenance(attempt)
 
     yield* appendDerivedCleanupAuthorizations(runId, ["worktree"])
@@ -100,21 +94,21 @@ it.effect("keeps an existing exact cleanup authorization when activation derives
       ({ event }) => event._tag === "WorktreeCleanupAuthorized"
     )
     expect(authorizations).toHaveLength(1)
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("rejects a derived replacement authorization when its provenance prefix is incomplete", () =>
   Effect.gen(function* () {
-    const journal = yield* begin("activation-incomplete-replacement-prefix")
-    yield* appendReplacementProvenance(attempt, successor)
+    const journal = yield* begin()
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const records = (yield* journal.read(runId)).filter(({ event }) => event._tag !== "TaskClaimAcquired")
     expect(deriveCleanupAuthorizations(records).worktree).toEqual([])
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("deduplicates repeated typed terminal evidence for one cleanup operation", () =>
   Effect.gen(function* () {
-    const journal = yield* begin("activation-duplicate-terminal-evidence")
+    const journal = yield* begin()
     yield* appendAbandonedProvenance(attempt, OperationId.make("activation-duplicate-abandonment"))
     const records = yield* journal.read(runId)
     const abandonment = records.find(({ event }) => event._tag === "AttemptImplementationAbandoned")
@@ -122,13 +116,13 @@ it.effect("deduplicates repeated typed terminal evidence for one cleanup operati
     if (abandonment === undefined) return
     const derived = deriveCleanupAuthorizations([...records, abandonment])
     expect(derived.worktree).toHaveLength(1)
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("rejects a branch authorization when its settled worktree history is incomplete", () =>
   Effect.gen(function* () {
-    const journal = yield* begin("activation-incomplete-settlement-history")
-    yield* appendReplacementProvenance(attempt, successor)
+    const journal = yield* begin()
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     yield* journal.append(
       runId,
       worktreeCleanupSettledRecordKey(authorization.operationId),
@@ -144,13 +138,13 @@ it.effect("rejects a branch authorization when its settled worktree history is i
       })
     )
     expect(deriveCleanupAuthorizations(yield* journal.read(runId)).branch).toEqual([])
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("rejects a branch authorization when its own history begins after worktree settlement", () =>
   Effect.gen(function* () {
-    const journal = yield* begin("activation-branch-history-after-settlement")
-    yield* appendReplacementProvenance(attempt, successor)
+    const journal = yield* begin()
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     yield* runWorktreeCleanup(authorization)
     const beforeBranchEvent = deriveCleanupAuthorizations(yield* journal.read(runId)).branch[0]
     expect(beforeBranchEvent).toBeDefined()
@@ -199,18 +193,15 @@ it.effect("rejects a branch authorization when its own history begins after work
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("rejects a replacement with a settled worktree record before its authority witness", () =>
-  Effect.gen(function* () {
-    const journal = yield* begin("activation-settlement-before-witness")
+  Effect.sync(() => {
     const replacement = replacementProvenanceFor(attempt, successor)
-    yield* journal.append(
-      runId,
-      worktreeCleanupSettledRecordKey(authorization.operationId),
-      WorktreeCleanupSettledEvent.make({
+    const settlement = JournalRecord.make({
+      event: WorktreeCleanupSettledEvent.make({
         authorization,
         occurrenceClassification: "NonActionOccurrence",
         result: WorktreeCleanupMutationResult.cases.AlreadyAbsent.make({
@@ -219,13 +210,17 @@ it.effect("rejects a replacement with a settled worktree record before its autho
           revision: WorktreeCleanupEvidenceRevision.make(1)
         }),
         version: workflowJournalEventVersion
-      })
-    )
-    const replacementRecord = yield* journal.append(
-      runId,
-      plannedAttemptReplacedRecordKey(attempt.attemptId),
-      replacement
-    )
-    expect(deriveCleanupAuthorizations([replacementRecord]).worktree).toEqual([])
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+      }),
+      key: worktreeCleanupSettledRecordKey(authorization.operationId),
+      position: JournalPosition.make(1),
+      runId
+    })
+    const replacementRecord = JournalRecord.make({
+      event: replacement,
+      key: plannedAttemptReplacedRecordKey(attempt.attemptId),
+      position: JournalPosition.make(2),
+      runId
+    })
+    expect(deriveCleanupAuthorizations([settlement, replacementRecord]).worktree).toEqual([])
+  })
 )

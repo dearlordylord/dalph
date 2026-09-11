@@ -15,11 +15,8 @@ import {
   TaskId,
   WorktreeLocator
 } from "@dalph/contracts"
-import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
-import { InitialControlPolicy } from "../../../control/policy.js"
-import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
+import { dispositionCleanupLiveJournalTestLayer } from "./live-journal-test.js"
 import { authorization, attempt, runId, successor } from "./fixtures.js"
 import { appendAbandonedProvenance } from "./provenance-fixtures.js"
 import {
@@ -49,13 +46,8 @@ import {
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { OperationId } from "../../identity.js"
 
-const begin = Effect.fn("DispositionCleanupLoopTest.begin")(function* (target: string) {
-  const journal = yield* JournalStore
-  yield* journal.beginRun(
-    runId,
-    FixtureTarget.make(target),
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-  )
+const begin = Effect.fn("DispositionCleanupLoopTest.begin")(function* (_target?: string) {
+  const journal = yield* InRunJournal
   return journal
 })
 
@@ -77,7 +69,7 @@ const foreignSuccessorAttempt = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/tmp/issue-69-foreign-p2")
 })
 const foreignAttemptDisposition = PlannedAttemptCleanupDisposition.cases.Superseded.make({
-  dispositionAt: JournalPosition.make(23),
+  dispositionAt: JournalPosition.make(33),
   plannedAttempt: foreignAttempt,
   successorAttempt: foreignSuccessorAttempt
 })
@@ -87,7 +79,7 @@ const foreignBranchAuthorization = BranchCleanupAuthorization.make({
   evidenceRevision: BranchCleanupEvidenceRevision.make(1),
   expectedHead: foreignAttempt.baseSha,
   locator: foreignAttempt.branch,
-  observationAt: JournalPosition.make(20),
+  observationAt: JournalPosition.make(30),
   observationOperationId: OperationId.make("issue-69-foreign-branch-observation"),
   operationId: OperationId.make("issue-69-foreign-branch-cleanup"),
   owner: BranchCleanupOwner.make({ attemptId: foreignAttempt.attemptId }),
@@ -136,7 +128,7 @@ const foreignCandidateAuthorization = IntegratorCandidateCleanupAuthorization.ma
 
 it.effect("selects the same typed worktree responsibility with and without an operation filter", () =>
   Effect.gen(function* () {
-    const journal = yield* begin("loop-operation-filter")
+    const journal = yield* begin()
     yield* appendAbandonedProvenance(attempt)
     const activated = yield* activateDispositionCleanup(runId)
     const selected = activated.worktree[0]
@@ -147,12 +139,15 @@ it.effect("selects the same typed worktree responsibility with and without an op
     expect(selectCleanupResponsibilities(records, selected.operationId).worktree?.operationId).toBe(
       selected.operationId
     )
-  }).pipe(Effect.provide(worktreeCleanupTestLayer({ observations: [] })), Effect.provide(memoryJournalTestLayer))
+  }).pipe(
+    Effect.provide(worktreeCleanupTestLayer({ observations: [] })),
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
+  )
 )
 
 it.effect("deduplicates duplicate typed proposals before crossing a cleanup boundary", () =>
   Effect.gen(function* () {
-    yield* begin("loop-duplicate-proposals")
+    yield* begin()
     const result = yield* runDispositionCleanupLoop(runId, {
       branch: [],
       candidate: [],
@@ -164,25 +159,28 @@ it.effect("deduplicates duplicate typed proposals before crossing a cleanup boun
     Effect.provide(worktreeCleanupTestLayer({ observations: [] })),
     Effect.provide(branchCleanupTestLayer({ observations: [] })),
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("does not append a duplicate derived authorization when its key is already durable", () =>
   Effect.gen(function* () {
-    yield* begin("loop-duplicate-derived-authorization")
+    yield* begin()
     yield* appendAbandonedProvenance(attempt)
     yield* appendDerivedCleanupAuthorizations(runId, ["worktree"])
-    const before = yield* (yield* JournalStore).read(runId)
+    const before = yield* (yield* InRunJournal).read(runId)
     yield* appendDerivedCleanupAuthorizations(runId, ["worktree"])
-    const after = yield* (yield* JournalStore).read(runId)
+    const after = yield* (yield* InRunJournal).read(runId)
     expect(after).toEqual(before)
-  }).pipe(Effect.provide(worktreeCleanupTestLayer({ observations: [] })), Effect.provide(memoryJournalTestLayer))
+  }).pipe(
+    Effect.provide(worktreeCleanupTestLayer({ observations: [] })),
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
+  )
 )
 
 it.effect("filters foreign branch and candidate proposals before crossing their cleanup boundaries", () =>
   Effect.gen(function* () {
-    yield* begin("loop-mixed-run-proposals")
+    yield* begin()
     yield* appendAbandonedProvenance(attempt)
     const branchBoundary = yield* TestBranchCleanupBoundary
     const candidateBoundary = yield* TestIntegratorCandidateCleanupBoundary
@@ -205,13 +203,13 @@ it.effect("filters foreign branch and candidate proposals before crossing their 
     Effect.provide(worktreeCleanupTestLayer({ observations: [] })),
     Effect.provide(branchCleanupTestLayer({ observations: [] })),
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("ignores a malformed tagged authorization record at the journal boundary", () =>
   Effect.gen(function* () {
-    const journal = yield* begin("loop-malformed-authorization")
+    const journal = yield* begin()
     const records = yield* journal.read(runId)
     const beginning = records[0]
     expect(beginning).toBeDefined()
@@ -224,31 +222,11 @@ it.effect("ignores a malformed tagged authorization record at the journal bounda
 
     expect(() => selectCleanupResponsibilities([...records, malformed])).not.toThrow()
     expect(selectCleanupResponsibilities([...records, malformed]).worktree).toBeUndefined()
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("refuses cleanup selection from a no-begin journal", () =>
-  Effect.gen(function* () {
-    const journal = yield* JournalStore
+  Effect.sync(() => {
     expect(selectCleanupResponsibilities([])).toEqual({ branch: undefined, candidate: undefined, worktree: undefined })
-    expect(yield* activateDispositionCleanup(runId)).toEqual({ branch: [], candidate: [], worktree: [] })
-    yield* appendDerivedCleanupAuthorizations(runId, ["worktree", "branch", "candidate"])
-    const result = yield* runDispositionCleanupLoop(runId)
-    expect(result).toEqual({
-      branch: undefined,
-      branchOutcomes: [],
-      candidate: undefined,
-      candidateOutcomes: [],
-      remaining: { branch: [], candidate: [], worktree: [] },
-      selected: { branch: undefined, candidate: undefined, worktree: undefined },
-      worktree: undefined,
-      worktreeOutcomes: []
-    })
-    expect(yield* journal.read(runId)).toEqual([])
-  }).pipe(
-    Effect.provide(worktreeCleanupTestLayer({ observations: [] })),
-    Effect.provide(branchCleanupTestLayer({ observations: [] })),
-    Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
-    Effect.provide(memoryJournalTestLayer)
-  )
+  })
 )

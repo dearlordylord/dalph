@@ -3,26 +3,27 @@ import { Effect, Layer, Schema } from "effect"
 import { expect, it } from "vitest"
 import {
   AcceptedResult,
+  AttemptId,
   EvidenceDigest,
   EvidenceReference,
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
+  PlannedTaskAttempt,
   TaskBranchRef,
+  TaskId,
   WorktreeLocator
 } from "@dalph/contracts"
-import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
-import { InitialControlPolicy } from "../../../control/policy.js"
-import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
+import { dispositionCleanupLiveJournalTestLayer } from "./live-journal-test.js"
 import { OperationId } from "../../identity.js"
 import {
   IntegratorCandidateResourceLocator,
   IntegratorSessionCorrelation,
   IntegratorSessionId
 } from "../integrator/events.js"
+import { integratorSuccessorCorrelationFor } from "../integrator/session.js"
 import {
   BranchCleanupAuthorization,
   BranchCleanupEvidenceRevision,
@@ -80,26 +81,38 @@ const candidateTarget = IntegrationTarget.make({
   ref: IntegrationTargetRef.make("refs/heads/main"),
   repository: GitRepositoryLocator.make("repo:issue-69-property")
 })
+const candidateAttempt = PlannedTaskAttempt.make({
+  ...attempt,
+  attemptId: AttemptId.make("issue-69-property-candidate-attempt"),
+  branch: TaskBranchRef.make("refs/heads/task/issue-69-property-candidate"),
+  taskId: TaskId.make("issue-69-property-candidate-task"),
+  worktree: WorktreeLocator.make("/tmp/issue-69-property-candidate")
+})
 const candidatePredecessor = IntegratorSessionCorrelation.make({
   acceptedResult: candidateAcceptedResult,
   candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-property-p1"),
   expectedTargetHead: baseSha,
   integrationTarget: candidateTarget,
-  plannedAttempt: attempt,
-  queuedAt: JournalPosition.make(2),
+  plannedAttempt: candidateAttempt,
+  queuedAt: JournalPosition.make(17),
   sessionId: IntegratorSessionId.make("session:issue-69-property-p1"),
-  startedAt: JournalPosition.make(6),
-  targetLineageObservedAt: JournalPosition.make(4)
+  startedAt: JournalPosition.make(18),
+  targetLineageObservedAt: JournalPosition.make(20)
 })
-const candidateSuccessor = IntegratorSessionCorrelation.make({
-  ...candidatePredecessor,
-  candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-property-p2"),
-  sessionId: IntegratorSessionId.make("session:issue-69-property-p2"),
-  targetLineageObservedAt: JournalPosition.make(12)
+const candidateSuccessor = integratorSuccessorCorrelationFor({
+  directionAppliedAt: JournalPosition.make(25),
+  predecessor: candidatePredecessor,
+  quarantineAt: JournalPosition.make(24),
+  targetLineage: {
+    plannedBaseIsAncestorOfTargetHead: true,
+    plannedBaseSha: candidatePredecessor.plannedAttempt.baseSha,
+    targetHeadSha: candidatePredecessor.expectedTargetHead
+  },
+  targetLineageObservedAt: JournalPosition.make(27)
 })
 const candidateDisposition = IntegratorCandidateCleanupDisposition.make({
-  directionAppliedAt: JournalPosition.make(10),
-  dispositionAt: JournalPosition.make(9),
+  directionAppliedAt: JournalPosition.make(25),
+  dispositionAt: JournalPosition.make(24),
   predecessor: candidatePredecessor,
   successor: candidateSuccessor
 })
@@ -108,7 +121,7 @@ const candidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
   disposition: candidateDisposition,
   evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
   locator: candidatePredecessor.candidateResource,
-  observationAt: JournalPosition.make(4),
+  observationAt: JournalPosition.make(20),
   observationOperationId: OperationId.make("session:issue-69-property-p1:predecessor-lineage"),
   operationId: OperationId.make("issue-69-property-candidate-cleanup"),
   owner: IntegratorCandidateCleanupOwner.make({ sessionId: candidatePredecessor.sessionId }),
@@ -118,7 +131,7 @@ const candidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
 const settledWorktreeAuthorization = WorktreeCleanupAuthorization.make({
   ...authorization,
   disposition: PlannedAttemptCleanupDisposition.cases.Settled.make({
-    dispositionAt: JournalPosition.make(23),
+    dispositionAt: JournalPosition.make(24),
     plannedAttempt: attempt,
     settlementOperationId: OperationId.make("issue-69-property-settlement")
   })
@@ -226,15 +239,15 @@ const candidateObservationFor = (value: PropertyCase, exact: boolean): Integrato
 }
 
 const runPropertyCase = Effect.fn("DispositionCleanup.propertyCase")(function* (value: PropertyCase) {
-  const journal = yield* JournalStore
-  yield* journal.beginRun(
-    runId,
-    FixtureTarget.make("issue-69-disposition-property"),
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-  )
+  const journal = yield* InRunJournal
   if (value.disposition === "Superseded") {
-    yield* appendCandidateProvenance(candidatePredecessor, candidateSuccessor, "issue-69-property-full-rerun")
-    yield* appendReplacementProvenance(attempt, successor)
+    yield* appendCandidateProvenance(
+      candidatePredecessor,
+      candidateSuccessor,
+      "issue-69-property-full-rerun",
+      "StartupValid"
+    )
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
   }
   const worktree =
     value.disposition === "Superseded"
@@ -360,7 +373,7 @@ it("runs all three cleanup families for independently varied facts without a des
                         ]
                       : []
                 }),
-                memoryJournalTestLayer,
+                dispositionCleanupLiveJournalTestLayer(),
                 worktreeCleanupTestLayer({
                   observations: [
                     worktreeObservationFor(

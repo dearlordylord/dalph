@@ -3,13 +3,9 @@ import { it as effectIt } from "@effect/vitest"
 import fc from "fast-check"
 import { AttemptId, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
 import { Effect } from "effect"
-import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
-import { InitialControlPolicy } from "../../../control/policy.js"
-import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { AttemptChoiceRequestId } from "../attempt-choice/events.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { dispositionCleanupLiveJournalTestLayer } from "./live-journal-test.js"
 import { OperationId } from "../../identity.js"
 import {
   PlannedAttemptCleanupDisposition,
@@ -97,19 +93,13 @@ effectIt.effect("table-reconciles changed locator, owner, and revision without a
     ]
     for (const observation of cases) {
       const result = yield* Effect.gen(function* () {
-        const journal = yield* JournalStore
-        yield* journal.beginRun(
-          runId,
-          FixtureTarget.make("issue-69-worktree-property-protocol"),
-          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-        )
-        yield* appendReplacementProvenance(attempt, successor)
+        yield* appendReplacementProvenance(attempt, successor, "StartupValid")
         const outcome = yield* runWorktreeCleanup(authorization)
         const calls = yield* (yield* TestWorktreeCleanupBoundary).calls()
         return { calls, outcome }
       }).pipe(
         Effect.provide(worktreeCleanupTestLayer({ observations: [observation] })),
-        Effect.provide(memoryJournalTestLayer)
+        Effect.provide(dispositionCleanupLiveJournalTestLayer())
       )
       expect(result.outcome._tag).toBe("Preserved")
       expect(result.calls.map(({ _tag }) => _tag)).toEqual(["Observe"])

@@ -17,13 +17,12 @@ import {
   encodeTaskRevisionFingerprint
 } from "@dalph/contracts"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
-import { InitialControlPolicy } from "../../../control/policy.js"
-import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
+import { JournalRecord } from "../../../workflow-journal/store.js"
+import { dispositionCleanupLiveJournalTestLayer } from "./live-journal-test.js"
 import {
   outcomeRecordKey,
   intentRecordKey,
@@ -90,7 +89,7 @@ const successor = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/tmp/issue-69-p2")
 })
 const disposition = PlannedAttemptCleanupDisposition.cases.Superseded.make({
-  dispositionAt: JournalPosition.make(23),
+  dispositionAt: JournalPosition.make(33),
   plannedAttempt: attempt,
   successorAttempt: successor
 })
@@ -100,7 +99,7 @@ const authorization = WorktreeCleanupAuthorization.make({
   evidenceRevision: WorktreeCleanupEvidenceRevision.make(1),
   expectedHead: baseSha,
   locator: attempt.worktree,
-  observationAt: JournalPosition.make(20),
+  observationAt: JournalPosition.make(30),
   observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
   operationId: OperationId.make("issue-69-worktree-cleanup"),
   owner: WorktreeCleanupOwner.make({ attemptId: attempt.attemptId, branch: attempt.branch }),
@@ -112,17 +111,14 @@ const setup = (
   mutations: ReadonlyArray<WorktreeCleanupMutationResult> = []
 ) =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-target"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendReplacementProvenance(attempt, successor)
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const result = yield* runWorktreeCleanup(authorization)
     const calls = yield* TestWorktreeCleanupBoundary
     return { calls: yield* calls.calls(), result }
-  }).pipe(Effect.provide(worktreeCleanupTestLayer({ observations, mutations })), Effect.provide(memoryJournalTestLayer))
+  }).pipe(
+    Effect.provide(worktreeCleanupTestLayer({ observations, mutations })),
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
+  )
 
 const present = WorktreeCleanupObservation.cases.Present.make({
   attemptId: attempt.attemptId,
@@ -228,12 +224,7 @@ it.effect("does not settle a removal whose revision predates the fresh absence",
 
 it.effect("ordinary activation selects two exact worktree operations independently and excludes a contradiction", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-ordinary-cleanup-activation"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     const firstRaw = yield* appendAbandonedProvenance(attempt)
     const secondRaw = yield* appendAbandonedProvenance(secondAttempt)
     const firstAuthorization = WorktreeCleanupAuthorization.make({
@@ -331,18 +322,13 @@ it.effect("ordinary activation selects two exact worktree operations independent
     ),
     Effect.provide(branchCleanupTestLayer({ observations: [] })),
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("ordinary activation derives authorization from terminal facts before crossing the boundary", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-terminal-facts-activation"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     yield* appendAbandonedProvenance(attempt, OperationId.make("issue-69-terminal-facts"))
     const before = yield* journal.read(runId)
     expect(before.some(({ event }) => event._tag === "WorktreeCleanupAuthorized")).toBe(false)
@@ -385,18 +371,13 @@ it.effect("ordinary activation derives authorization from terminal facts before 
     ),
     Effect.provide(branchCleanupTestLayer({ observations: [] })),
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("does not let a forged same-disposition authorization suppress canonical recovery", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-forged-recovery-authorization"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     const canonical = yield* appendAbandonedProvenance(attempt)
     const forged = WorktreeCleanupAuthorization.make({
       ...canonical,
@@ -425,18 +406,13 @@ it.effect("does not let a forged same-disposition authorization suppress canonic
     Effect.provide(worktreeCleanupTestLayer({ observations: [], mutations: [] })),
     Effect.provide(branchCleanupTestLayer({ observations: [] })),
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("ordinary activation runs two terminal responsibilities and excludes a forged authorization", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-two-terminal-facts"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     yield* appendAbandonedProvenance(attempt, OperationId.make("issue-69-two-terminal-first"))
     yield* appendAbandonedProvenance(secondAttempt, OperationId.make("issue-69-two-terminal-second"))
     const activation = yield* makeDispositionCleanupActivation(runId)
@@ -505,18 +481,13 @@ it.effect("ordinary activation runs two terminal responsibilities and excludes a
     ),
     Effect.provide(branchCleanupTestLayer({ observations: [] })),
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("converges past the three-responsibility activation cap", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-more-than-three-responsibilities"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     const attempts = [attempt, ...fairnessAttempts]
     for (const plannedAttempt of attempts) {
       yield* appendAbandonedProvenance(
@@ -600,18 +571,12 @@ it.effect("converges past the three-responsibility activation cap", () =>
       })
     ),
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("skips an exhausted operation so later responsibilities receive their bounded turn", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-fairness"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
     const attempts = [attempt, secondAttempt, loopAttempt("p3"), loopAttempt("p4")]
     const authorizations = yield* Effect.forEach(attempts, (plannedAttempt) =>
       appendAbandonedProvenance(
@@ -679,18 +644,12 @@ it.effect("skips an exhausted operation so later responsibilities receive their 
     ),
     Effect.provide(branchCleanupTestLayer({ observations: [] })),
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("removes an abandoned worktree only after the durable Stop and executor witness", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-abandoned-worktree"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
     const abandonedAuthorization = yield* appendAbandonedProvenance(attempt)
     const result = yield* runWorktreeCleanup(abandonedAuthorization)
     expect(result._tag).toBe("Settled")
@@ -718,47 +677,41 @@ it.effect("removes an abandoned worktree only after the durable Stop and executo
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("preserves an abandoned cleanup when a later executor command follows the safe report", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-abandoned-later-command"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     const abandonedAuthorization = yield* appendAbandonedProvenance(attempt)
     const laterOrdinal = PlannedAttemptExecutorCommandOrdinal.make(3)
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorCommandIntendedRecordKey(attempt.attemptId, laterOrdinal),
-      PlannedAttemptExecutorCommandIntendedEvent.make({
+    const records = yield* journal.read(runId)
+    const laterCommand = JournalRecord.make({
+      event: PlannedAttemptExecutorCommandIntendedEvent.make({
         command: "Resume",
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
         ordinal: laterOrdinal,
         plannedAttempt: attempt,
         version: workflowJournalEventVersion
-      })
-    )
-    const result = yield* runWorktreeCleanup(abandonedAuthorization)
-    expect(result._tag).toBe("Preserved")
+      }),
+      key: plannedAttemptExecutorCommandIntendedRecordKey(attempt.attemptId, laterOrdinal),
+      position: JournalPosition.make(records.length + 1),
+      runId
+    })
+    expect(validateWorktreeCleanupProvenance([...records, laterCommand], abandonedAuthorization)._tag).toBe("Invalid")
     expect(yield* (yield* TestWorktreeCleanupBoundary).calls()).toEqual([])
-  }).pipe(Effect.provide(worktreeCleanupTestLayer({ observations: [present] })), Effect.provide(memoryJournalTestLayer))
+  }).pipe(
+    Effect.provide(worktreeCleanupTestLayer({ observations: [present] })),
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
+  )
 )
 
 it.effect("replays a settled worktree twice without a boundary call or journal write", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-worktree-settled-replay"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendReplacementProvenance(attempt, successor)
+    const journal = yield* InRunJournal
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const first = yield* runWorktreeCleanup(authorization)
     const afterFirst = yield* journal.read(runId)
     const second = yield* runWorktreeCleanup(authorization)
@@ -789,19 +742,13 @@ it.effect("replays a settled worktree twice without a boundary call or journal w
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("does not call a boundary when a replayed operation has different authorization facts", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-authorization-replay"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendReplacementProvenance(attempt, successor)
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const first = yield* runWorktreeCleanup(authorization)
     const replayedAuthorization = WorktreeCleanupAuthorization.make({
       ...authorization,
@@ -825,19 +772,14 @@ it.effect("does not call a boundary when a replayed operation has different auth
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("records initial absence as reconciliation, never as a mutation result", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-initial-absence"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendReplacementProvenance(attempt, successor)
+    const journal = yield* InRunJournal
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const result = yield* runWorktreeCleanup(authorization)
     const records = yield* journal.read(runId)
     expect(result._tag).toBe("Settled")
@@ -854,23 +796,20 @@ it.effect("records initial absence as reconciliation, never as a mutation result
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("preserves a caller-made disposition when durable terminal provenance is missing", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-missing-provenance"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
     const result = yield* runWorktreeCleanup(authorization)
     const calls = yield* (yield* TestWorktreeCleanupBoundary).calls()
     expect(result._tag).toBe("Preserved")
     expect(calls).toEqual([])
-  }).pipe(Effect.provide(worktreeCleanupTestLayer({ observations: [present] })), Effect.provide(memoryJournalTestLayer))
+  }).pipe(
+    Effect.provide(worktreeCleanupTestLayer({ observations: [present] })),
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
+  )
 )
 
 it.effect("preserves an invalid successful mutation response instead of settling", () =>
@@ -966,13 +905,7 @@ it.effect("preserves a worktree when the observation script is exhausted", () =>
 
 it.effect("replays a contradicted worktree without rereading or appending", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-contradiction-replay"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendReplacementProvenance(attempt, successor)
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const first = yield* runWorktreeCleanup(authorization)
     const second = yield* runWorktreeCleanup(authorization)
     const calls = yield* (yield* TestWorktreeCleanupBoundary).calls()
@@ -993,7 +926,7 @@ it.effect("replays a contradicted worktree without rereading or appending", () =
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
@@ -1028,13 +961,7 @@ it.effect("preserves changed or unreadable worktree facts without a remove call"
 
 it.effect("reconciles an applied response loss with a fresh absence and never duplicates remove", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-target-loss"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendReplacementProvenance(attempt, successor)
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const first = yield* runWorktreeCleanup(authorization).pipe(
       Effect.provide(
         worktreeCleanupTestLayer({
@@ -1069,7 +996,7 @@ it.effect("reconciles an applied response loss with a fresh absence and never du
     )
     expect(first._tag).toBe("Pending")
     expect(second._tag).toBe("Settled")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 const boundBoundaryLayer = worktreeCleanupTestLayer({
@@ -1095,13 +1022,7 @@ const boundBoundaryLayer = worktreeCleanupTestLayer({
 
 it.effect("stops after the three-request cleanup bound", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-target-bound"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendReplacementProvenance(attempt, successor)
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const first = yield* runWorktreeCleanup(authorization)
     const second = yield* runWorktreeCleanup(authorization)
     const third = yield* runWorktreeCleanup(authorization)
@@ -1110,18 +1031,13 @@ it.effect("stops after the three-request cleanup bound", () =>
     expect(fourth._tag).toBe("Pending")
     const boundary = yield* TestWorktreeCleanupBoundary
     expect((yield* boundary.calls()).filter((call) => call._tag === "Remove")).toHaveLength(3)
-  }).pipe(Effect.provide(boundBoundaryLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(boundBoundaryLayer), Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("rejects a settlement whose result names a foreign worktree", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-foreign-settlement"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendReplacementProvenance(attempt, successor)
+    const journal = yield* InRunJournal
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const settled = yield* runWorktreeCleanup(authorization)
     expect(settled._tag).toBe("Settled")
     const records = yield* journal.read(runId)
@@ -1156,19 +1072,14 @@ it.effect("rejects a settlement whose result names a foreign worktree", () =>
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("preserves a cleanup family event that has no authorization prefix", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-missing-authorization-prefix"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendReplacementProvenance(attempt, successor)
+    const journal = yield* InRunJournal
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const ordinal = CleanupObservationOrdinal.make(1)
     const operationId = OperationId.make(`${authorization.operationId}:observe:${ordinal}`)
     yield* journal.append(
@@ -1186,18 +1097,16 @@ it.effect("preserves a cleanup family event that has no authorization prefix", (
     const result = yield* runWorktreeCleanup(authorization)
     expect(result._tag).toBe("Preserved")
     expect(yield* (yield* TestWorktreeCleanupBoundary).calls()).toEqual([])
-  }).pipe(Effect.provide(worktreeCleanupTestLayer({ observations: [present] })), Effect.provide(memoryJournalTestLayer))
+  }).pipe(
+    Effect.provide(worktreeCleanupTestLayer({ observations: [present] })),
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
+  )
 )
 
 it.effect("ignores malformed cleanup history for an unrelated operation", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-unrelated-operation"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendReplacementProvenance(attempt, successor)
+    const journal = yield* InRunJournal
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const unrelated = WorktreeCleanupAuthorization.make({
       ...authorization,
       operationId: OperationId.make("issue-69-unrelated-cleanup")
@@ -1236,7 +1145,7 @@ it.effect("ignores malformed cleanup history for an unrelated operation", () =>
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
@@ -1246,12 +1155,7 @@ it("does not authorize cleanup for a current quarantine without a terminal dispo
 
 it.effect("does not treat nonterminal TargetLineageObserved as a planned-attempt settlement", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-nonterminal-settlement"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     const settlementOperationId = OperationId.make("issue-69-nonterminal-settlement-read")
     const operation = makeTargetLineageObservationOperation({
       integrationTarget: IntegrationTarget.make({
@@ -1300,18 +1204,15 @@ it.effect("does not treat nonterminal TargetLineageObserved as a planned-attempt
     const result = yield* runWorktreeCleanup(settledAuthorization)
     expect(result._tag).toBe("Preserved")
     expect(yield* (yield* TestWorktreeCleanupBoundary).calls()).toEqual([])
-  }).pipe(Effect.provide(worktreeCleanupTestLayer({ observations: [present] })), Effect.provide(memoryJournalTestLayer))
+  }).pipe(
+    Effect.provide(worktreeCleanupTestLayer({ observations: [present] })),
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
+  )
 )
 
 it.effect("preserves an authorization whose observation provenance is forged", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-forged-observation"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendReplacementProvenance(attempt, successor)
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const forged = WorktreeCleanupAuthorization.make({
       ...authorization,
       observationAt: authorization.disposition.dispositionAt,
@@ -1320,18 +1221,16 @@ it.effect("preserves an authorization whose observation provenance is forged", (
     const result = yield* runWorktreeCleanup(forged)
     expect(result._tag).toBe("Preserved")
     expect(yield* (yield* TestWorktreeCleanupBoundary).calls()).toEqual([])
-  }).pipe(Effect.provide(worktreeCleanupTestLayer({ observations: [present] })), Effect.provide(memoryJournalTestLayer))
+  }).pipe(
+    Effect.provide(worktreeCleanupTestLayer({ observations: [present] })),
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
+  )
 )
 
 it.effect("rejects a replacement when a same-operation tracker read names a foreign target", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-foreign-tracker-target"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendReplacementProvenance(attempt, successor)
+    const journal = yield* InRunJournal
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const records = yield* journal.read(runId)
     const foreignTarget = FixtureTarget.make("issue-69-foreign-tracker-read")
     const foreignRecords = records.map((record) =>
@@ -1340,5 +1239,8 @@ it.effect("rejects a replacement when a same-operation tracker read names a fore
         : record
     )
     expect(validateWorktreeCleanupProvenance(foreignRecords, authorization)._tag).toBe("Invalid")
-  }).pipe(Effect.provide(worktreeCleanupTestLayer({ observations: [present] })), Effect.provide(memoryJournalTestLayer))
+  }).pipe(
+    Effect.provide(worktreeCleanupTestLayer({ observations: [present] })),
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
+  )
 )

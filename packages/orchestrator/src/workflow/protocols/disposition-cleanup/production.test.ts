@@ -27,13 +27,8 @@ import {
   type GitCommandService,
   nodeGitCommandLayer
 } from "../../../authorities/git/command.js"
-import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
-import { InitialControlPolicy } from "../../../control/policy.js"
-import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { JournalDatabaseLocator, JournalPosition } from "../../../workflow-journal/identity.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
-import { sqliteJournalTestLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
 import { OperationId } from "../../identity.js"
 import {
   BranchCleanupAuthorization,
@@ -57,6 +52,10 @@ import {
   appendCurrentQuarantineProvenance,
   appendReplacementProvenance
 } from "./provenance-fixtures.js"
+import {
+  dispositionCleanupLiveJournalTestLayer,
+  dispositionCleanupSqliteLiveJournalTestLayer
+} from "./live-journal-test.js"
 import { authorization, attempt, successor, runId as fixtureRunId } from "./fixtures.js"
 import { makeDispositionCleanupActivation } from "./loop.js"
 import {
@@ -64,6 +63,7 @@ import {
   IntegratorSessionCorrelation,
   IntegratorSessionId
 } from "../integrator/events.js"
+import { integratorSuccessorCorrelationFor } from "../integrator/session.js"
 import { dispositionCleanupContract } from "../../../../test/contracts/disposition-cleanup-contract.js"
 import {
   IntegratorCandidateCleanupBoundary,
@@ -81,34 +81,46 @@ const candidateTarget = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("repo:production-cleanup"),
   ref: IntegrationTargetRef.make("refs/heads/main")
 })
+const candidateAttempt = PlannedTaskAttempt.make({
+  ...attempt,
+  attemptId: AttemptId.make("production-cleanup-candidate-attempt"),
+  branch: TaskBranchRef.make("refs/heads/task/production-cleanup-candidate"),
+  taskId: TaskId.make("production-cleanup-candidate-task"),
+  worktree: WorktreeLocator.make("/tmp/production-cleanup-candidate")
+})
 const candidatePredecessor = IntegratorSessionCorrelation.make({
   acceptedResult: candidateAcceptedResult,
   candidateResource: IntegratorCandidateResourceLocator.make("candidate:production-cleanup-predecessor"),
   expectedTargetHead: authorization.expectedHead,
   integrationTarget: candidateTarget,
-  plannedAttempt: attempt,
-  queuedAt: JournalPosition.make(2),
+  plannedAttempt: candidateAttempt,
+  queuedAt: JournalPosition.make(17),
   sessionId: IntegratorSessionId.make("session:production-cleanup-predecessor"),
-  startedAt: JournalPosition.make(6),
-  targetLineageObservedAt: JournalPosition.make(4)
+  startedAt: JournalPosition.make(18),
+  targetLineageObservedAt: JournalPosition.make(20)
 })
-const candidateSuccessor = IntegratorSessionCorrelation.make({
-  ...candidatePredecessor,
-  candidateResource: IntegratorCandidateResourceLocator.make("candidate:production-cleanup-successor"),
-  sessionId: IntegratorSessionId.make("session:production-cleanup-successor"),
-  targetLineageObservedAt: JournalPosition.make(12)
+const candidateSuccessor = integratorSuccessorCorrelationFor({
+  directionAppliedAt: JournalPosition.make(25),
+  predecessor: candidatePredecessor,
+  quarantineAt: JournalPosition.make(24),
+  targetLineage: {
+    plannedBaseIsAncestorOfTargetHead: true,
+    plannedBaseSha: candidatePredecessor.plannedAttempt.baseSha,
+    targetHeadSha: candidatePredecessor.expectedTargetHead
+  },
+  targetLineageObservedAt: JournalPosition.make(27)
 })
 const candidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
   causalPredecessors: [OperationId.make("production-provider-full-rerun")],
   disposition: IntegratorCandidateCleanupDisposition.make({
-    directionAppliedAt: JournalPosition.make(10),
-    dispositionAt: JournalPosition.make(9),
+    directionAppliedAt: JournalPosition.make(25),
+    dispositionAt: JournalPosition.make(24),
     predecessor: candidatePredecessor,
     successor: candidateSuccessor
   }),
   evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
   locator: candidatePredecessor.candidateResource,
-  observationAt: JournalPosition.make(4),
+  observationAt: JournalPosition.make(20),
   observationOperationId: OperationId.make(`${candidatePredecessor.sessionId}:predecessor-lineage`),
   operationId: OperationId.make("production-candidate-cleanup"),
   owner: IntegratorCandidateCleanupOwner.make({ sessionId: candidatePredecessor.sessionId }),
@@ -277,16 +289,10 @@ it.effect(
             runBytesInWorktree: () => Effect.die("byte command is outside preservation qualification")
           } satisfies GitCommandService)
           const result = yield* Effect.gen(function* () {
-            const journal = yield* JournalStore
-            yield* journal.beginRun(
-              fixtureRunId,
-              FixtureTarget.make(`production-cleanup-preserve-${current.name}`),
-              InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-            )
-            yield* appendReplacementProvenance(attempt, successor)
+            yield* appendReplacementProvenance(attempt, successor, "StartupValid")
             return yield* runWorktreeCleanup(authorization)
           }).pipe(
-            Effect.provide(memoryJournalTestLayer),
+            Effect.provide(dispositionCleanupLiveJournalTestLayer()),
             Effect.provide(gitDispositionCleanupBoundaryLayer(GitCommonDirectoryTarget.make(`${root}/repository.git`))),
             Effect.provide(Layer.succeed(GitCommand, commands)),
             Effect.provide(
@@ -384,18 +390,12 @@ it.effect("production SQLite cleanup reopens after a lost Git response without a
       }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
       const run = (seed: boolean) =>
         Effect.gen(function* () {
-          const journal = yield* JournalStore
           if (seed) {
-            yield* journal.beginRun(
-              fixtureRunId,
-              FixtureTarget.make("production-cleanup-recovery-target"),
-              InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-            )
-            yield* appendReplacementProvenance(attempt, successor)
+            yield* appendReplacementProvenance(attempt, successor, "StartupValid")
           }
           return yield* runWorktreeCleanup(authorization)
         }).pipe(
-          Effect.provide(sqliteJournalTestLayer({ filename })),
+          Effect.provide(dispositionCleanupSqliteLiveJournalTestLayer(filename)),
           Effect.provide(gitDispositionCleanupBoundaryLayer(target)),
           Effect.provide(Layer.succeed(GitCommand, commands)),
           Effect.provide(productionCoordinatorOwnershipLayer(target)),
@@ -480,23 +480,19 @@ it.effect(
         } satisfies GitCommandService)
         const run = (seed: boolean) =>
           Effect.gen(function* () {
-            const journal = yield* JournalStore
+            const journal = yield* InRunJournal
             if (seed) {
-              yield* journal.beginRun(
-                fixtureRunId,
-                FixtureTarget.make("production-provider-cleanup-target"),
-                InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-              )
               yield* appendCandidateProvenance(
                 candidatePredecessor,
                 candidateSuccessor,
-                "production-provider-full-rerun"
+                "production-provider-full-rerun",
+                "StartupValid"
               )
             }
             const outcome = yield* runIntegratorCandidateCleanup(candidateAuthorization)
             return { outcome, records: yield* journal.read(fixtureRunId) }
           }).pipe(
-            Effect.provide(sqliteJournalTestLayer({ filename })),
+            Effect.provide(dispositionCleanupSqliteLiveJournalTestLayer(filename)),
             Effect.provide(gitDispositionCleanupBoundaryLayer(target, providerAuthorityLayer)),
             Effect.provide(Layer.succeed(GitCommand, commands)),
             Effect.provide(productionCoordinatorOwnershipLayer(target)),
@@ -716,16 +712,10 @@ it.effect("production current quarantine performs no cleanup boundary call", () 
       )
       const target = GitCommonDirectoryTarget.make(`${root}/repository.git`)
       const evidence = yield* Effect.gen(function* () {
-        const journal = yield* JournalStore
-        yield* journal.beginRun(
-          fixtureRunId,
-          FixtureTarget.make("production-current-quarantine-target"),
-          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-        )
         // The journal contains the terminal integrator facts for a current
         // quarantine, but no FullRerun direction or successor evidence. The
         // authorization is therefore not retained or derived at activation.
-        yield* appendCurrentQuarantineProvenance(candidatePredecessor)
+        yield* appendCurrentQuarantineProvenance(candidatePredecessor, "StartupValid")
         const activation = yield* makeDispositionCleanupActivation(fixtureRunId)
         const result = yield* activation.run
         return {
@@ -736,7 +726,7 @@ it.effect("production current quarantine performs no cleanup boundary call", () 
           providerRemoveCalls: yield* Ref.get(providerRemoveCalls)
         }
       }).pipe(
-        Effect.provide(sqliteJournalTestLayer({ filename })),
+        Effect.provide(dispositionCleanupSqliteLiveJournalTestLayer(filename)),
         Effect.provide(gitDispositionCleanupBoundaryLayer(target, providerAuthorityLayer)),
         Effect.provide(Layer.succeed(GitCommand, commands)),
         Effect.provide(
