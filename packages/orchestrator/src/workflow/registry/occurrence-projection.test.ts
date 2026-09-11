@@ -33,6 +33,9 @@ import {
 } from "../../control/policy.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import { InRunJournal, type JournalRecord, JournalStore, RunLifecycleJournal } from "../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
+import { makeJournal } from "../../coordination/delivery/journal.js"
+import { reduceWorkflowJournalHistory } from "../../coordination/reconstruction/history.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import {
   GitReadIntentRecordedEvent,
@@ -1319,10 +1322,23 @@ it.effect("projects Alice's distinct attempt-choice and claim-reacquisition acti
 
 it.effect("reconstructs after process loss without a coordinator-crash journal event", () =>
   Effect.gen(function* () {
+    const target = FixtureTarget.make("occurrence-fixture")
+    const began: JournalRecord = {
+      event: WorkflowRunBeganEvent.make({
+        initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        target,
+        version: workflowJournalEventVersion
+      }),
+      key: workflowRunBeganRecordKey,
+      position: JournalPosition.make(1),
+      runId
+    }
     const retainedIntent: JournalRecord = {
       event: taskTrackerReadIntent(operation),
       key: intentRecordKey(operation.operationId),
-      position: JournalPosition.make(1),
+      position: JournalPosition.make(2),
       runId
     }
     const retainedOutcome: JournalRecord = {
@@ -1331,13 +1347,13 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         taskIds: []
       }),
       key: outcomeRecordKey(operation.operationId),
-      position: JournalPosition.make(2),
+      position: JournalPosition.make(3),
       runId
     }
     const retainedPrefixes: ReadonlyArray<ReadonlyArray<JournalRecord>> = [
-      [],
-      [retainedIntent],
-      [retainedIntent, retainedOutcome]
+      [began],
+      [began, retainedIntent],
+      [began, retainedIntent, retainedOutcome]
     ]
     const projected = projectTrackerSnapshot({ revision: "startup-authority-reread", tasks: [] })
     const snapshot = Option.getOrThrow(
@@ -1346,19 +1362,6 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
 
     for (const prefix of retainedPrefixes) {
       const trackerReads = yield* Ref.make(0)
-      const target = FixtureTarget.make("occurrence-fixture")
-      const began: JournalRecord = {
-        event: WorkflowRunBeganEvent.make({
-          initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
-          initiatedBy: { _tag: "DalphCoordinator" },
-          occurrenceClassification: "InitiatedAction",
-          target,
-          version: workflowJournalEventVersion
-        }),
-        key: workflowRunBeganRecordKey,
-        position: JournalPosition.make(1),
-        runId
-      }
       const terminalFixture = completedRunFinalityFixture({
         observedAt: JournalPosition.make(prefix.length + 1),
         runId,
@@ -1408,16 +1411,22 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         retireTerminalRun: () => Effect.die("startup authority reread must not retire"),
         terminateRun: () => Effect.succeed(terminated)
       })
+      const initial = reduceWorkflowJournalHistory(runId, prefix)
+      if (initial._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die(initial)
+      const liveJournal = yield* makeJournal(runId, target, initial, journal)
+      const liveJournalLayer = Layer.mergeAll(
+        Layer.succeed(AcceptedJournalReader, AcceptedJournalReader.of({ readAccepted: liveJournal.readAccepted })),
+        Layer.succeed(InRunJournal, InRunJournal.of({ append: liveJournal.append, read: liveJournal.read }))
+      )
       const startupLayer = Layer.mergeAll(
-        Layer.succeed(InRunJournal, InRunJournal.of({ append: journal.append, read: journal.read })),
+        liveJournalLayer,
         Layer.succeed(WorkflowInterpreter, interpreter),
         Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
         controlledFakePlannedAttemptExecutorLayer
       )
       const recovery = yield* makeRunRecoveryProjection(runId).pipe(Effect.provide(startupLayer))
-      const journalLayer = Layer.succeed(InRunJournal, InRunJournal.of({ append: journal.append, read: journal.read }))
       const workflowLayer = Layer.mergeAll(
-        journalLayer,
+        liveJournalLayer,
         Layer.succeed(
           RunLifecycleJournal,
           RunLifecycleJournal.of({
@@ -1432,7 +1441,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
         ),
         Layer.succeed(RunRecoveryProjection, recovery),
         journaledWorkflowInterpreterLayer(runId, Layer.succeed(WorkflowInterpreter, interpreter)).pipe(
-          Layer.provide(journalLayer)
+          Layer.provide(liveJournalLayer)
         ),
         Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
         Layer.succeed(

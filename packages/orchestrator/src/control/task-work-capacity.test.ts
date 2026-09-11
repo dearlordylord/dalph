@@ -29,8 +29,12 @@ import { makeRunRecoveryProjection } from "../coordination/run/recovery-activati
 import { requiredPlannedAttemptPositionsOf } from "../coordination/run/required-planned-attempt-positions.js"
 import { reduceWorkflowJournalHistory } from "../coordination/reconstruction/history.js"
 import { memoryJournalTestLayer } from "../workflow-journal/adapters/memory-store.js"
-import { InRunJournal, JournalStore } from "../workflow-journal/store.js"
+import { InRunJournal, JournalStore, JournalStoreContradiction } from "../workflow-journal/store.js"
+import { liveJournalTestLayer } from "../coordination/delivery/live-journal-test-layer.js"
+import { AcceptedJournalReader } from "../workflow-journal/accepted-reader.js"
+import { makeWorkflowRunBeganRecord } from "../workflow-journal/run-lifecycle.js"
 import { JournalPosition } from "../workflow-journal/identity.js"
+import { journalEvidenceFrom, journalRecordByPosition } from "../workflow-journal/record-evidence.js"
 import { OperationId } from "../workflow/identity.js"
 import {
   TaskAttemptPlannedEvent,
@@ -85,6 +89,22 @@ import {
   TaskWorkCapacityControl
 } from "./task-work-capacity.js"
 
+const capacityJournalLayer = (runId: RunId, target: ReturnType<typeof FixtureTarget.make>, capacity = 2) =>
+  liveJournalTestLayer({
+    records: [
+      makeWorkflowRunBeganRecord(
+        runId,
+        target,
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(capacity) })
+      )
+    ],
+    runId,
+    target
+  })
+
+const capacityLiveLayer = (runId: RunId, target: ReturnType<typeof FixtureTarget.make>, capacity = 2) =>
+  taskWorkCapacityControlLayer.pipe(Layer.provideMerge(capacityJournalLayer(runId, target, capacity)))
+
 it.effect("rejects an invalid journal prefix instead of deriving a capacity", () =>
   Effect.gen(function* () {
     const runId = RunId.make("invalid-capacity-prefix")
@@ -112,13 +132,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const runId = RunId.make("durable-capacity-run")
-      const target = FixtureTarget.make("durable-capacity-target")
-      const journal = yield* JournalStore
-      yield* journal.beginRun(
-        runId,
-        target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
-      )
+      const journal = yield* InRunJournal
       const control = yield* TaskWorkCapacityControl
 
       yield* control.apply({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId })
@@ -131,7 +145,12 @@ it.effect(
         revision: RunPolicyRevision.make(2),
         taskExecutionCapacity: TaskWorkCapacity.make(1)
       })
-      expect(reduced.records.map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan", "TaskWorkCapacityChanged"])
+      const evidence = reduced.runState.workflowHistory.evidence
+      expect([
+        journalRecordByPosition(evidence, JournalPosition.make(1))?.event._tag,
+        journalRecordByPosition(evidence, JournalPosition.make(2))?.event._tag,
+        journalRecordByPosition(evidence, JournalPosition.make(3))?.event._tag
+      ]).toEqual(["WorkflowRunBegan", "TaskWorkCapacityChanged", undefined])
       expect((yield* projectWorkflowOccurrences(records)).occurrences).toEqual([
         {
           _tag: "AppliedTaskWorkCapacity",
@@ -143,19 +162,17 @@ it.effect(
           runId
         }
       ])
-    }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(memoryJournalTestLayer))
+    }).pipe(
+      Effect.provide(
+        capacityLiveLayer(RunId.make("durable-capacity-run"), FixtureTarget.make("durable-capacity-target"))
+      )
+    )
 )
 
 it.effect("rejects a stale capacity revision without appending another applied change", () =>
   Effect.gen(function* () {
     const runId = RunId.make("stale-capacity-run")
-    const target = FixtureTarget.make("stale-capacity-target")
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
-    )
+    const journal = yield* InRunJournal
     const control = yield* TaskWorkCapacityControl
     const request = { capacity: 1, expectedRevision: initialRunPolicyRevision, runId }
 
@@ -172,30 +189,27 @@ it.effect("rejects a stale capacity revision without appending another applied c
       "WorkflowRunBegan",
       "TaskWorkCapacityChanged"
     ])
-  }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(
+    Effect.provide(capacityLiveLayer(RunId.make("stale-capacity-run"), FixtureTarget.make("stale-capacity-target")))
+  )
 )
 
 it.effect("reports that capacity has no durable value before the Run begins", () =>
   Effect.gen(function* () {
-    const control = yield* TaskWorkCapacityControl
-    const failure = yield* control.read(RunId.make("unbegun-capacity-run")).pipe(Effect.flip)
+    const runId = RunId.make("unbegun-capacity-run")
+    const failure = yield* reconstructTaskWorkCapacityPolicy(runId, []).pipe(Effect.flip)
 
     expect(failure).toMatchObject({ _tag: "WorkflowRunNotBegan", runId: "unbegun-capacity-run" })
-  }).pipe(Effect.provide(taskWorkCapacityControlLayer), Effect.provide(memoryJournalTestLayer))
+  })
 )
 
 it.effect("rereads the winning policy when another writer commits the requested revision first", () =>
   Effect.gen(function* () {
     const runId = RunId.make("racing-capacity-run")
-    const target = FixtureTarget.make("racing-capacity-target")
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
-    )
-    const racingJournal = JournalStore.of({
-      ...journal,
+    const journal = yield* InRunJournal
+    const acceptedJournal = yield* AcceptedJournalReader
+    const racingJournal = InRunJournal.of({
+      read: journal.read,
       append: (requestedRunId, key, event) =>
         event._tag === "TaskWorkCapacityChanged"
           ? journal
@@ -204,7 +218,13 @@ it.effect("rereads the winning policy when another writer commits the requested 
                 key,
                 TaskWorkCapacityChangedEvent.make({ ...event, capacity: TaskWorkCapacity.make(8) })
               )
-              .pipe(Effect.andThen(journal.append(requestedRunId, key, event)))
+              .pipe(
+                Effect.flatMap((winner) =>
+                  Effect.fail(
+                    new JournalStoreContradiction({ existingPosition: winner.position, key, runId: requestedRunId })
+                  )
+                )
+              )
           : journal.append(requestedRunId, key, event)
     })
     const conflict = yield* Effect.gen(function* () {
@@ -212,7 +232,14 @@ it.effect("rereads the winning policy when another writer commits the requested 
       return yield* control.apply({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId }).pipe(Effect.flip)
     }).pipe(
       Effect.provide(
-        taskWorkCapacityControlLayer.pipe(Layer.provide(Layer.succeed(InRunJournal, InRunJournal.of(racingJournal))))
+        taskWorkCapacityControlLayer.pipe(
+          Layer.provide(
+            Layer.merge(
+              Layer.succeed(InRunJournal, racingJournal),
+              Layer.succeed(AcceptedJournalReader, acceptedJournal)
+            )
+          )
+        )
       )
     )
 
@@ -222,19 +249,18 @@ it.effect("rereads the winning policy when another writer commits the requested 
       expectedRevision: 1,
       runId
     })
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(
+    Effect.provide(
+      capacityJournalLayer(RunId.make("racing-capacity-run"), FixtureTarget.make("racing-capacity-target"))
+    )
+  )
 )
 
 it.effect("restart reconstructs three unfinished task positions without an admission snapshot", () =>
   Effect.gen(function* () {
     const runId = RunId.make("restart-capacity-run")
     const target = FixtureTarget.make("restart-capacity-target")
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
-    )
+    const journal = yield* InRunJournal
     const control = yield* TaskWorkCapacityControl
     yield* control.apply({ capacity: 3, expectedRevision: initialRunPolicyRevision, runId })
     const attempts = ["A", "B", "C"].map((task) => {
@@ -530,8 +556,9 @@ it.effect("restart reconstructs three unfinished task positions without an admis
       ])
     )
   }).pipe(
-    Effect.provide(taskWorkCapacityControlLayer),
-    Effect.provide(memoryJournalTestLayer),
+    Effect.provide(
+      capacityLiveLayer(RunId.make("restart-capacity-run"), FixtureTarget.make("restart-capacity-target"))
+    ),
     Effect.provide(plannedAttemptProtocolControllerLayer)
   )
 )
@@ -575,14 +602,14 @@ it.effect("restart holds the task-work position until an exact Safe or Terminal 
       const positions = requiredPlannedAttemptPositionsOf({
         responsibility: { entries: [responsibility] },
         workflowHistory: {
-          records: [
+          evidence: journalEvidenceFrom([
             {
               event,
               key: plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, ordinal),
               position: JournalPosition.make(2),
               runId
             }
-          ]
+          ])
         }
       })
 
@@ -636,7 +663,7 @@ it.effect("restart releases the task-work position after an unchanged accepted S
       const positions = requiredPlannedAttemptPositionsOf({
         responsibility: { entries: [responsibility] },
         workflowHistory: {
-          records: [
+          evidence: journalEvidenceFrom([
             {
               event: accepted,
               key: plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
@@ -649,7 +676,7 @@ it.effect("restart releases the task-work position after an unchanged accepted S
               position: JournalPosition.make(3),
               runId
             }
-          ]
+          ])
         }
       })
 
