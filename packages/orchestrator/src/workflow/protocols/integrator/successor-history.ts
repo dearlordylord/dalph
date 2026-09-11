@@ -7,6 +7,12 @@ import {
 } from "../../../workflow-journal/record-key.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import {
+  isJournalRecordEvidence,
+  journalRecordByKey,
+  journalRecordByPosition,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
 import {
   integrationQuarantineDirectionSubject,
@@ -33,7 +39,8 @@ const correlationEquivalence = Schema.toEquivalence(IntegratorSessionCorrelation
 
 const runIdFor = (correlation: IntegratorSessionCorrelation) => correlation.plannedAttempt.runId
 
-const recordAt = (records: ReadonlyArray<JournalRecord>, position: JournalPosition): JournalRecord | undefined => {
+const recordAt = (records: JournalHistorySource, position: JournalPosition): JournalRecord | undefined => {
+  if (isJournalRecordEvidence(records)) return journalRecordByPosition(records, position)
   const matches = records.filter((record) => record.position === position)
   return matches.length === 1 ? matches[0] : undefined
 }
@@ -48,7 +55,7 @@ const isDirectionRecord = (record: JournalRecord | undefined): record is Directi
   record?.event._tag === "IntegrationQuarantineDirectionApplied"
 
 const exactPredecessorLineage = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   predecessor: IntegratorSessionCorrelation,
   beforePosition: JournalPosition
 ): boolean =>
@@ -64,7 +71,7 @@ const exactPredecessorLineage = (
   ) !== undefined
 
 const exactPredecessorSession = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   predecessor: IntegratorSessionCorrelation,
   beforePosition: JournalPosition
 ): PredecessorSessionRecord | undefined => {
@@ -75,7 +82,16 @@ const exactPredecessorSession = (
     queuedAt: predecessor.queuedAt,
     startedAt: predecessor.startedAt
   })
-  const matches = records.filter(
+  const indexed = isJournalRecordEvidence(records) ? journalRecordByKey(records, key) : undefined
+  const matches = isJournalRecordEvidence(records) ? (indexed === undefined ? [] : [indexed]).filter(
+    (record): record is PredecessorSessionRecord =>
+      record.event._tag === "IntegratorSessionFixed" &&
+      record.key === key &&
+      record.runId === runIdFor(predecessor) &&
+      correlationEquivalence(record.event.correlation, predecessor) &&
+      record.position > predecessor.targetLineageObservedAt &&
+      record.position < beforePosition
+  ) : records.filter(
     (record): record is PredecessorSessionRecord =>
       record.event._tag === "IntegratorSessionFixed" &&
       record.key === key &&
@@ -88,7 +104,7 @@ const exactPredecessorSession = (
 }
 
 const exactQuarantine = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   successor: SuccessorRecord,
   predecessor: IntegratorSessionCorrelation
 ): QuarantineRecord | undefined => {
@@ -104,7 +120,7 @@ const exactQuarantine = (
 }
 
 const exactDirection = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   successor: SuccessorRecord,
   predecessor: IntegratorSessionCorrelation,
   quarantine: QuarantineRecord
@@ -124,7 +140,7 @@ const exactDirection = (
 }
 
 const exactSuccessorLineage = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   successor: SuccessorRecord,
   direction: DirectionRecord
 ): ExactLineageEvidence | undefined =>
@@ -146,7 +162,7 @@ const exactSuccessorLineage = (
  * Run, deterministic key, operation identity, and exact chronology.
  */
 export const evaluateIntegratorFullRerunSuccessor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   record: JournalRecord,
   predecessor: IntegratorSessionCorrelation
 ):
