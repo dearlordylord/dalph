@@ -1287,6 +1287,8 @@ it.effect("DS-02 starts only A, B, and C through the production workflow algebra
       return taskId === "D" || taskId === "E" ? [{ event: event._tag, position, taskId }] : []
     })
     const finalPublication = run.publications.at(-1)
+    // Begin returns and journals the exact Executing report. A second passive
+    // executor observation would reread evidence already accepted by that boundary.
     const expectedStages = [
       "ReadCurrentTaskGraph",
       "AcquireTaskClaim",
@@ -1294,8 +1296,7 @@ it.effect("DS-02 starts only A, B, and C through the production workflow algebra
       "ReadTaskWorkSpecification",
       "RecordTaskAttemptPlan",
       "ReconcileTaskWorktree",
-      "BeginPlannedAttemptExecutorWork",
-      "ObservePlannedAttemptExecutorWork"
+      "BeginPlannedAttemptExecutorWork"
     ]
     const stagesByTask = Object.fromEntries(
       ["A", "B", "C", "D", "E"].map((taskId) => [
