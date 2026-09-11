@@ -613,7 +613,18 @@ export const journalRecordCountForAttemptCommandKind = (
 export const journalRecordsForTask = (source: JournalHistorySource, taskId: TaskId): Iterable<JournalRecord> =>
   isJournalRecordEvidence(source)
     ? indexedRecords(source, Option.getOrElse(HashMap.get(indexesFor(source).byTask, taskId), emptyJournalRecords))
-    : journalRecordsForTask(journalEvidenceFrom(source), taskId)
+    : source.filter((record) => {
+        if (taskIdsOf(record).has(taskId)) return true
+        if (
+          record.event._tag !== "TaskTrackerFactsObserved" ||
+          record.event.observation._tag !== "UnchangedTaskTrackerFactsReconfirmed"
+        )
+          return false
+        const prior = source.find(
+          ({ key }) => key === outcomeRecordKey(record.event.observation.priorFullObservationOperationId)
+        )
+        return prior !== undefined && taskIdsOf(prior).has(taskId)
+      })
 
 export const lastJournalRecordForTaskKind = (
   source: JournalHistorySource,
@@ -621,7 +632,11 @@ export const lastJournalRecordForTaskKind = (
   kind: JournalRecord["event"]["_tag"]
 ): JournalRecord | undefined => {
   if (!isJournalRecordEvidence(source)) {
-    return Array.from(journalRecordsForTask(source, taskId)).findLast((record) => record.event._tag === kind)
+    let latest: JournalRecord | undefined
+    for (const record of journalRecordsForTask(source, taskId)) {
+      if (record.event._tag === kind) latest = record
+    }
+    return latest
   }
   const kinds = Option.getOrElse(HashMap.get(indexesFor(source).byTaskKind, taskId), HashMap.empty)
   return lastVisibleRecord(source, Option.getOrElse(HashMap.get(kinds, kind), emptyJournalRecords))

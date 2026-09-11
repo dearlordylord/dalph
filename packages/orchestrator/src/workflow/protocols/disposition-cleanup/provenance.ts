@@ -2,8 +2,17 @@
 
 import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import { Match, Option, Schema } from "effect"
-import type { JournalPosition } from "../../../workflow-journal/identity.js"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import {
+  isJournalRecordEvidence,
+  journalEvidenceBefore,
+  journalRecordByKey,
+  journalRecordByPosition,
+  journalRecordsForOperationId,
+  journalRecordsOfKind,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import {
   branchCleanupAuthorizedRecordKey,
   branchCleanupAbsenceConfirmedRecordKey,
@@ -45,7 +54,7 @@ import {
   restartClaimAuthorityAtApplication
 } from "../attempt-choice/restart-authority-evidence.js"
 import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
-import type { OperationId } from "../../identity.js"
+import { OperationId } from "../../identity.js"
 import { integratorCorrelationsEqual, validateIntegratorSuccessorSessionFixed } from "../integrator/state.js"
 import {
   IntegratorRunCorrelation,
@@ -92,8 +101,35 @@ const valid = (detail: string): CleanupProvenanceValidation => ({ _tag: "Valid",
 const invalid = (detail: string): CleanupProvenanceValidation => ({ _tag: "Invalid", detail })
 const activeTaskClaimEquivalence = Schema.toEquivalence(ActiveTaskClaim)
 
-const recordAt = (records: ReadonlyArray<JournalRecord>, position: JournalPosition): JournalRecord | undefined =>
-  records.find((record) => record.position === position)
+const recordAt = (records: JournalHistorySource, position: JournalPosition): JournalRecord | undefined =>
+  journalRecordByPosition(records, position)
+
+const recordsOfKind = <Kind extends JournalRecord["event"]["_tag"]>(
+  records: JournalHistorySource,
+  kind: Kind
+): ReadonlyArray<JournalRecord> => Array.from(journalRecordsOfKind(records, kind))
+
+const recordsForOperation = (
+  records: JournalHistorySource,
+  operationId: OperationId,
+  terminalKeys: ReadonlyArray<JournalRecord["key"]> = []
+): ReadonlyArray<JournalRecord> =>
+  isJournalRecordEvidence(records)
+    ? [
+        ...journalRecordsForOperationId(records, operationId),
+        ...terminalKeys.flatMap((key) => {
+          const record = journalRecordByKey(records, key)
+          return record === undefined ? [] : [record]
+        })
+      ]
+        .filter((record, index, all) => all.indexOf(record) === index)
+        .toSorted((left, right) => Number(left.position) - Number(right.position))
+    : records
+
+const recordsThrough = (records: JournalHistorySource, position: JournalPosition): JournalHistorySource =>
+  isJournalRecordEvidence(records)
+    ? journalEvidenceBefore(records, JournalPosition.make(Number(position) + 1))
+    : records.filter((record) => record.position <= position)
 
 const operationIdsEqual = (left: ReadonlyArray<unknown>, right: ReadonlyArray<unknown>): boolean =>
   left.length === right.length && left.every((operationId, index) => operationId === right[index])
@@ -174,7 +210,7 @@ const replacementWitnessOperationIds = (
  * a copied operation id must fail when its upstream read chronology is absent.
  */
 const validateReplacementWitnessRecords = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   replacement: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptReplaced" }>,
   application: JournalRecord,
   replacementRecord: JournalRecord
@@ -183,7 +219,7 @@ const validateReplacementWitnessRecords = (
   const after = application.position
   const before = replacementRecord.position
   const exactIntent = (operationId: OperationId, position: JournalPosition): JournalRecord | undefined => {
-    const intents = records.filter(
+    const intents = recordsForOperation(records, operationId).filter(
       (candidate) =>
         candidate.event._tag === "TaskTrackerReadIntentRecorded" &&
         candidate.event.operation.operationId === operationId &&
@@ -194,7 +230,7 @@ const validateReplacementWitnessRecords = (
     return intents.length === 1 ? intents[0] : undefined
   }
   const exactGitIntent = (operationId: OperationId, position: JournalPosition): JournalRecord | undefined => {
-    const intents = records.filter(
+    const intents = recordsForOperation(records, operationId).filter(
       (candidate) =>
         candidate.event._tag === "GitReadIntentRecorded" &&
         candidate.event.operation.operationId === operationId &&
@@ -205,7 +241,9 @@ const validateReplacementWitnessRecords = (
     return intents.length === 1 ? intents[0] : undefined
   }
   const exactClaimIntent = (position: JournalPosition): JournalRecord | undefined => {
-    const intents = records.filter(
+    const intents = recordsForOperation(records, replacement.witness.expectedClaim.operationId, [
+      intentRecordKey(replacement.witness.expectedClaim.operationId)
+    ]).filter(
       (candidate) =>
         candidate.event._tag === "TaskClaimAcquisitionIntended" &&
         candidate.event.operation.acquisition.operationId === replacement.witness.expectedClaim.operationId &&
@@ -215,7 +253,9 @@ const validateReplacementWitnessRecords = (
     )
     return intents.length === 1 ? intents[0] : undefined
   }
-  const claimOutcomes = records.filter(
+  const claimOutcomes = recordsForOperation(records, replacement.witness.expectedClaim.operationId, [
+    outcomeRecordKey(replacement.witness.expectedClaim.operationId)
+  ]).filter(
     (candidate) =>
       candidate.event._tag === "TaskClaimAcquired" &&
       candidate.event.claim.operationId === replacement.witness.expectedClaim.operationId
@@ -234,7 +274,7 @@ const validateReplacementWitnessRecords = (
   }
 
   const graphOperationId = replacement.witness.graphObservationOperationId
-  const graphOutcomes = records.filter(
+  const graphOutcomes = recordsForOperation(records, graphOperationId).filter(
     (candidate) =>
       candidate.event._tag === "TaskTrackerFactsObserved" && candidate.event.operationId === graphOperationId
   )
@@ -264,7 +304,7 @@ const validateReplacementWitnessRecords = (
   }
 
   const specificationOperationId = replacement.witness.specificationObservationOperationId
-  const specificationOutcomes = records.filter(
+  const specificationOutcomes = recordsForOperation(records, specificationOperationId).filter(
     (candidate) =>
       candidate.event._tag === "TaskTrackerFactsObserved" && candidate.event.operationId === specificationOperationId
   )
@@ -298,7 +338,7 @@ const validateReplacementWitnessRecords = (
   }
 
   const claimObservationOperationId = replacement.witness.claimObservationOperationId
-  const claimObservationOutcomes = records.filter(
+  const claimObservationOutcomes = recordsForOperation(records, claimObservationOperationId).filter(
     (candidate) =>
       candidate.event._tag === "TaskTrackerFactsObserved" && candidate.event.operationId === claimObservationOperationId
   )
@@ -331,7 +371,7 @@ const validateReplacementWitnessRecords = (
   }
 
   const worktreeOperationId = replacement.witness.oldWorktreeObservationOperationId
-  const worktreeOutcomes = records.filter(
+  const worktreeOutcomes = recordsForOperation(records, worktreeOperationId).filter(
     (candidate) =>
       candidate.event._tag === "PlannedAttemptWorktreeObserved" && candidate.event.operationId === worktreeOperationId
   )
@@ -355,7 +395,7 @@ const validateReplacementWitnessRecords = (
   }
 
   const lineageOperationId = replacement.witness.targetLineageObservationOperationId
-  const lineageOutcomes = records.filter(
+  const lineageOutcomes = recordsForOperation(records, lineageOperationId).filter(
     (candidate) =>
       candidate.event._tag === "TargetLineageObserved" && candidate.event.operationId === lineageOperationId
   )
@@ -384,7 +424,7 @@ const validateReplacementWitnessRecords = (
 }
 
 const validatePlannedAttemptDisposition = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   disposition: PlannedAttemptCleanupDisposition,
   causalPredecessors: ReadonlyArray<unknown>
 ): CleanupProvenanceValidation => {
@@ -399,7 +439,7 @@ const validatePlannedAttemptDisposition = (
     }
     const replacement = record.event
     const canonicalReplacement = recordedReplacement(records, replacement.subject)
-    const matchingReplacements = records.filter(
+    const matchingReplacements = recordsOfKind(records, "PlannedAttemptReplaced").filter(
       (candidate) =>
         candidate.event._tag === "PlannedAttemptReplaced" &&
         plannedTaskAttemptEquivalence(candidate.event.subject.plannedAttempt, replacement.subject.plannedAttempt)
@@ -470,7 +510,7 @@ const validatePlannedAttemptDisposition = (
       return invalid("abandonment provenance names a foreign request or attempt")
     }
     const abandonment = record.event
-    const appliedChoice = records.find((candidate) => {
+    const appliedChoice = recordsOfKind(records, "AttemptChoiceApplied").find((candidate) => {
       if (candidate.position >= record.position || candidate.event._tag !== "AttemptChoiceApplied") return false
       return (
         candidate.runId === disposition.plannedAttempt.runId &&
@@ -485,7 +525,7 @@ const validatePlannedAttemptDisposition = (
       return invalid("abandonment provenance lacks the exact executor quiescence proof")
     }
     const retainedClaim = authorizedClaimForAttempt(
-      records.filter(({ position }) => position <= record.position),
+      recordsThrough(records, record.position),
       disposition.plannedAttempt
     )
     if (retainedClaim === undefined || !claimsEqual(retainedClaim.claim, abandonment.expectedClaim)) {
@@ -511,11 +551,18 @@ const validatePlannedAttemptDisposition = (
 }
 
 const firstCleanupAuthorizationPosition = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   operationId: string,
   tags: ReadonlyArray<string>
 ): JournalPosition | undefined =>
-  records
+  recordsForOperation(records, OperationId.make(operationId), [
+    worktreeCleanupAuthorizedRecordKey(OperationId.make(operationId)),
+    worktreeCleanupSettledRecordKey(OperationId.make(operationId)),
+    branchCleanupAuthorizedRecordKey(OperationId.make(operationId)),
+    branchCleanupSettledRecordKey(OperationId.make(operationId)),
+    integratorCandidateCleanupAuthorizedRecordKey(OperationId.make(operationId)),
+    integratorCandidateCleanupSettledRecordKey(OperationId.make(operationId))
+  ])
     .filter(
       (record) =>
         tags.includes(record.event._tag) &&
@@ -526,12 +573,14 @@ const firstCleanupAuthorizationPosition = (
     .toSorted((left, right) => Number(left) - Number(right))[0]
 
 const validateWorktreeAuthorityObservation = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorization: WorktreeCleanupAuthorization | BranchCleanupAuthorization,
   family: "worktree" | "branch"
 ): CleanupProvenanceValidation => {
   const plannedAttempt = authorization.disposition.plannedAttempt
-  const observations = records.filter((record) => record.position === authorization.observationAt)
+  const observations = [recordAt(records, authorization.observationAt)].filter(
+    (record): record is JournalRecord => record !== undefined
+  )
   const observation = observations.length === 1 ? observations[0] : undefined
   if (
     observation?.event._tag !== "PlannedAttemptWorktreeObserved" ||
@@ -547,7 +596,7 @@ const validateWorktreeAuthorityObservation = (
   ) {
     return invalid(`${family} cleanup authorization does not bind an exact preceding planned-worktree observation`)
   }
-  const intents = records.filter(
+  const intents = recordsForOperation(records, authorization.observationOperationId).filter(
     (record) =>
       record.position < observation.position &&
       record.runId === plannedAttempt.runId &&
@@ -591,7 +640,7 @@ const validateWorktreeAuthorityObservation = (
 }
 
 const validateCandidateAuthorityObservation = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorization: IntegratorCandidateCleanupAuthorization
 ): CleanupProvenanceValidation => {
   const predecessor = authorization.disposition.predecessor
@@ -626,7 +675,7 @@ const validateCandidateAuthorityObservation = (
 
 /** Validates the authority observation fields before a family appends CleanupAuthorized. */
 export const validateCleanupAuthorizationObservation = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorization: WorktreeCleanupAuthorization | BranchCleanupAuthorization | IntegratorCandidateCleanupAuthorization
 ): CleanupProvenanceValidation =>
   "worktreeCleanupOperationId" in authorization
@@ -637,7 +686,7 @@ export const validateCleanupAuthorizationObservation = (
 
 /** Validates the terminal worktree/branch disposition before any authorization event is appended. */
 export const validateWorktreeCleanupProvenance = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorization: WorktreeCleanupAuthorization | BranchCleanupAuthorization
 ): CleanupProvenanceValidation => {
   const observation = validateCleanupAuthorizationObservation(records, authorization)
@@ -657,7 +706,7 @@ export const validateWorktreeCleanupProvenance = (
 
 /** Validates the exact quarantine, applied FullRerun, and successor relation for candidate cleanup. */
 export const validateIntegratorCandidateCleanupProvenance = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorization: IntegratorCandidateCleanupAuthorization
 ): CleanupProvenanceValidation => {
   const observation = validateCandidateAuthorityObservation(records, authorization)
@@ -677,7 +726,7 @@ export const validateIntegratorCandidateCleanupProvenance = (
     return invalid("candidate cleanup requires the exact applied FullRerun direction")
   }
 
-  const matchingDirections = records.filter(
+  const matchingDirections = recordsOfKind(records, "IntegrationQuarantineDirectionApplied").filter(
     (record) =>
       record.event._tag === "IntegrationQuarantineDirectionApplied" &&
       record.event.fingerprint.sessionId === disposition.predecessor.sessionId &&
@@ -705,7 +754,7 @@ export const validateIntegratorCandidateCleanupProvenance = (
     return invalid("candidate cleanup FullRerun direction must follow the canonical predecessor quarantine")
   }
   if (
-    records.some(
+    recordsOfKind(records, "IntegrationQuarantined").some(
       (record) =>
         record.event._tag === "IntegrationQuarantined" &&
         record.event.correlation.sessionId === disposition.predecessor.sessionId &&
@@ -716,7 +765,7 @@ export const validateIntegratorCandidateCleanupProvenance = (
   }
   const quarantineBasis = quarantine.event.basis
   if (quarantineBasis._tag === "ProviderRunFailure") {
-    const absence = records.find(
+    const absence = recordsOfKind(records, "IntegrationProviderRunActivityAbsent").find(
       (
         record
       ): record is JournalRecord & {
@@ -741,7 +790,7 @@ export const validateIntegratorCandidateCleanupProvenance = (
     return invalid("candidate authorization does not bind the exact FullRerun request")
   }
 
-  const matchingSuccessors = records.filter(
+  const matchingSuccessors = recordsOfKind(records, "IntegratorSuccessorSessionFixed").filter(
     (record) =>
       record.event._tag === "IntegratorSuccessorSessionFixed" &&
       record.runId === disposition.predecessor.plannedAttempt.runId &&
@@ -1063,9 +1112,16 @@ const worktreeHistoryDescriptor = (
 
 /** Reconstructs one operation-scoped worktree cleanup prefix before a retry. */
 export const validateWorktreeCleanupHistory = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorization: WorktreeCleanupAuthorization
-): CleanupProvenanceValidation => validateCleanupHistory(records, worktreeHistoryDescriptor(authorization))
+): CleanupProvenanceValidation =>
+  validateCleanupHistory(
+    recordsForOperation(records, authorization.operationId, [
+      worktreeCleanupAuthorizedRecordKey(authorization.operationId),
+      worktreeCleanupSettledRecordKey(authorization.operationId)
+    ]),
+    worktreeHistoryDescriptor(authorization)
+  )
 
 const branchHistoryDescriptor = (
   authorization: BranchCleanupAuthorization
@@ -1218,9 +1274,16 @@ const branchHistoryDescriptor = (
 
 /** Reconstructs one operation-scoped branch cleanup prefix before a retry. */
 export const validateBranchCleanupHistory = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorization: BranchCleanupAuthorization
-): CleanupProvenanceValidation => validateCleanupHistory(records, branchHistoryDescriptor(authorization))
+): CleanupProvenanceValidation =>
+  validateCleanupHistory(
+    recordsForOperation(records, authorization.operationId, [
+      branchCleanupAuthorizedRecordKey(authorization.operationId),
+      branchCleanupSettledRecordKey(authorization.operationId)
+    ]),
+    branchHistoryDescriptor(authorization)
+  )
 
 const candidateHistoryDescriptor = (
   authorization: IntegratorCandidateCleanupAuthorization
@@ -1390,14 +1453,23 @@ const candidateHistoryDescriptor = (
 
 /** Reconstructs one operation-scoped candidate cleanup prefix before a retry. */
 export const validateIntegratorCandidateCleanupHistory = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorization: IntegratorCandidateCleanupAuthorization
-): CleanupProvenanceValidation => validateCleanupHistory(records, candidateHistoryDescriptor(authorization))
+): CleanupProvenanceValidation =>
+  validateCleanupHistory(
+    recordsForOperation(records, authorization.operationId, [
+      integratorCandidateCleanupAuthorizedRecordKey(authorization.operationId),
+      integratorCandidateCleanupSettledRecordKey(authorization.operationId)
+    ]),
+    candidateHistoryDescriptor(authorization)
+  )
 export const validateSettledWorktreeForBranch = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorization: BranchCleanupAuthorization
 ): CleanupProvenanceValidation => {
-  const candidates = records.filter(
+  const candidates = recordsForOperation(records, authorization.worktreeCleanupOperationId, [
+    worktreeCleanupSettledRecordKey(authorization.worktreeCleanupOperationId)
+  ]).filter(
     (record) =>
       record.event._tag === "WorktreeCleanupSettled" &&
       record.event.authorization.operationId === authorization.worktreeCleanupOperationId
@@ -1423,7 +1495,7 @@ export const validateSettledWorktreeForBranch = (
   if (provenance._tag === "Invalid") return invalid(provenance.detail)
   const history = validateWorktreeCleanupHistory(records, settled.event.authorization)
   if (history._tag === "Invalid") return invalid(history.detail)
-  const branchEvents = records.filter((record) => {
+  const branchEvents = recordsForOperation(records, authorization.operationId).filter((record) => {
     const branchAuthorization = branchAuthorizationOf(record.event)
     return branchAuthorization?.operationId === authorization.operationId
   })

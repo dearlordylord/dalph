@@ -5,6 +5,13 @@ import type { CoordinatorOwnershipError } from "../../../authorities/coordinator
 import type { OperationId } from "../../identity.js"
 import { JournalRecord, type JournalAppendError, type JournalReadError } from "../../../workflow-journal/store.js"
 import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import {
+  journalRecordByKey,
+  journalRecordsForOperationId,
+  journalRecordsOfKind,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import {
   isCleanupEligibleDisposition,
   type BranchCleanupAuthorization,
@@ -101,8 +108,8 @@ export type DispositionCleanupLoopResult = {
 export const cleanupResponsibilitySelectionLimit = 3 as const // eslint-disable-line no-magic-numbers
 
 /** Cleanup authority is unavailable until exactly one immutable Run beginning exists. */
-const hasImmutableRunBeginning = (records: ReadonlyArray<JournalRecord>): boolean =>
-  records.filter(({ event }) => event._tag === "WorkflowRunBegan").length === 1
+const hasImmutableRunBeginning = (records: JournalHistorySource): boolean =>
+  Array.from(journalRecordsOfKind(records, "WorkflowRunBegan")).length === 1
 
 const emptyCleanupLoopResult = (): DispositionCleanupLoopResult => ({
   branch: undefined,
@@ -136,11 +143,12 @@ export class DispositionCleanupActivation extends Context.Service<
  * replacement or successor evidence is what makes it eligible.
  */
 const familyAuthorizations = <Authorization extends { readonly operationId: OperationId }>(
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
+  kind: JournalRecord["event"]["_tag"],
   authorizationOf: (event: JournalRecord["event"]) => Authorization | undefined,
   validate: (authorization: Authorization) => boolean
 ): ReadonlyArray<Authorization> =>
-  records
+  Array.from(journalRecordsOfKind(records, kind))
     .toSorted((left, right) => Number(left.position) - Number(right.position))
     .map((record) => authorizationOf(record.event))
     .filter((authorization): authorization is Authorization => authorization !== undefined && validate(authorization))
@@ -165,10 +173,10 @@ const bounded = <Authorization>(values: ReadonlyArray<Authorization>): ReadonlyA
   values.slice(0, cleanupResponsibilitySelectionLimit)
 
 const hasTerminalCleanupEvent = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorization: BranchCleanupAuthorization | IntegratorCandidateCleanupAuthorization | WorktreeCleanupAuthorization
 ): boolean =>
-  records.some((record) => {
+  Array.from(journalRecordsForOperationId(records, authorization.operationId)).some((record) => {
     if (record.event._tag === "WorktreeCleanupSettled" || record.event._tag === "WorktreeCleanupContradicted") {
       if (!("expectedHead" in authorization) || "worktreeCleanupOperationId" in authorization) return false
       return (
@@ -198,10 +206,10 @@ const hasTerminalCleanupEvent = (
 
 /** Count only mutation intents for the exact authorized subject and operation. */
 const mutationAttemptCount = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorization: BranchCleanupAuthorization | IntegratorCandidateCleanupAuthorization | WorktreeCleanupAuthorization
 ): number =>
-  records.filter((record) => {
+  Array.from(journalRecordsForOperationId(records, authorization.operationId)).filter((record) => {
     if (record.event._tag === "WorktreeCleanupMutationIntended") {
       return (
         "expectedHead" in authorization &&
@@ -229,21 +237,21 @@ const mutationAttemptCount = (
   }).length
 
 const hasMutationBudget = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorization: BranchCleanupAuthorization | IntegratorCandidateCleanupAuthorization | WorktreeCleanupAuthorization
 ): boolean => mutationAttemptCount(records, authorization) < cleanupMutationRequestLimit
 
-const validWorktree = (records: ReadonlyArray<JournalRecord>, authorization: WorktreeCleanupAuthorization): boolean =>
+const validWorktree = (records: JournalHistorySource, authorization: WorktreeCleanupAuthorization): boolean =>
   validateWorktreeCleanupProvenance(records, authorization)._tag === "Valid" &&
   validateWorktreeCleanupHistory(records, authorization)._tag === "Valid"
 
-const validBranch = (records: ReadonlyArray<JournalRecord>, authorization: BranchCleanupAuthorization): boolean =>
+const validBranch = (records: JournalHistorySource, authorization: BranchCleanupAuthorization): boolean =>
   validateWorktreeCleanupProvenance(records, authorization)._tag === "Valid" &&
   validateSettledWorktreeForBranch(records, authorization)._tag === "Valid" &&
   validateBranchCleanupHistory(records, authorization)._tag === "Valid"
 
 const validCandidate = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorization: IntegratorCandidateCleanupAuthorization
 ): boolean =>
   validateIntegratorCandidateCleanupProvenance(records, authorization)._tag === "Valid" &&
@@ -271,16 +279,16 @@ export const selectCleanupResponsibilities = (
  * foreign history for one operation does not hide an unrelated operation in
  * the same family; each result is validated against its own operation prefix.
  */
-const selectCleanupResponsibilitySetInternal = (
-  records: ReadonlyArray<unknown>,
+const selectCleanupResponsibilitySetFromHistory = (
+  journalRecords: JournalHistorySource,
   requireMutationBudget: boolean
 ): DispositionCleanupResponsibilitySet => {
-  const journalRecords = records.filter((record): record is JournalRecord => Schema.is(JournalRecord)(record))
   if (!hasImmutableRunBeginning(journalRecords)) return { branch: [], candidate: [], worktree: [] }
   return {
     branch: bounded(
       familyAuthorizations(
         journalRecords,
+        "BranchCleanupAuthorized",
         (event) => (Schema.is(BranchCleanupAuthorizedEvent)(event) ? event.authorization : undefined),
         (authorization) => validBranch(journalRecords, authorization)
       ).filter(
@@ -292,6 +300,7 @@ const selectCleanupResponsibilitySetInternal = (
     candidate: bounded(
       familyAuthorizations(
         journalRecords,
+        "IntegratorCandidateCleanupAuthorized",
         (event) => (Schema.is(IntegratorCandidateCleanupAuthorizedEvent)(event) ? event.authorization : undefined),
         (authorization) => validCandidate(journalRecords, authorization)
       ).filter(
@@ -303,6 +312,7 @@ const selectCleanupResponsibilitySetInternal = (
     worktree: bounded(
       familyAuthorizations(
         journalRecords,
+        "WorktreeCleanupAuthorized",
         (event) => (Schema.is(WorktreeCleanupAuthorizedEvent)(event) ? event.authorization : undefined),
         (authorization) => validWorktree(journalRecords, authorization)
       ).filter(
@@ -313,6 +323,15 @@ const selectCleanupResponsibilitySetInternal = (
     )
   }
 }
+
+const selectCleanupResponsibilitySetInternal = (
+  records: ReadonlyArray<unknown>,
+  requireMutationBudget: boolean
+): DispositionCleanupResponsibilitySet =>
+  selectCleanupResponsibilitySetFromHistory(
+    records.filter((record): record is JournalRecord => Schema.is(JournalRecord)(record)),
+    requireMutationBudget
+  )
 
 export const selectCleanupResponsibilitySet = (records: ReadonlyArray<unknown>): DispositionCleanupResponsibilitySet =>
   selectCleanupResponsibilitySetInternal(records, true)
@@ -327,12 +346,12 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
   proposals: DispositionCleanupProposals = { branch: [], candidate: [], worktree: [] },
   readEvidenceRevision?: CandidateEvidenceRevisionReader
 ) {
-  const journal = yield* InRunJournal
-  const initialRecords = yield* journal.read(runId)
+  const reader = yield* AcceptedJournalReader
+  const initialRecords = yield* reader.readAccepted(runId)
   if (!hasImmutableRunBeginning(initialRecords)) return emptyCleanupLoopResult()
   yield* appendDerivedCleanupAuthorizations(runId, ["worktree", "candidate"], readEvidenceRevision)
-  const recordsAfterDerived = yield* journal.read(runId)
-  let selectedSet = selectCleanupResponsibilitySet(recordsAfterDerived)
+  const recordsAfterDerived = yield* reader.readAccepted(runId)
+  let selectedSet = selectCleanupResponsibilitySetFromHistory(recordsAfterDerived, true)
   const scopedProposals = {
     branch: proposals.branch.filter((authorization) => authorization.disposition.plannedAttempt.runId === runId),
     candidate: proposals.candidate.filter(
@@ -353,8 +372,8 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
   )
 
   yield* appendDerivedCleanupAuthorizations(runId, ["branch"])
-  selectedSet = selectCleanupResponsibilitySet(yield* journal.read(runId))
-  const branchRecords = yield* journal.read(runId)
+  selectedSet = selectCleanupResponsibilitySetFromHistory(yield* reader.readAccepted(runId), true)
+  const branchRecords = yield* reader.readAccepted(runId)
   const branchCandidates = bounded(
     byOperation([...selectedSet.branch, ...scopedProposals.branch]).filter((authorization) =>
       hasMutationBudget(branchRecords, authorization)
@@ -367,8 +386,8 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
       : Effect.succeed(BranchCleanupOutcome.cases.Preserved.make({ authorization, reason: "ineligible disposition" }))
   )
 
-  selectedSet = selectCleanupResponsibilitySet(yield* journal.read(runId))
-  const candidateRecords = yield* journal.read(runId)
+  selectedSet = selectCleanupResponsibilitySetFromHistory(yield* reader.readAccepted(runId), true)
+  const candidateRecords = yield* reader.readAccepted(runId)
   const candidateCandidates = bounded(
     byOperation([...selectedSet.candidate, ...scopedProposals.candidate]).filter((authorization) =>
       hasMutationBudget(candidateRecords, authorization)
@@ -388,7 +407,7 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
     candidate: selectedSet.candidate[0],
     worktree: selectedSet.worktree[0]
   }
-  const remaining = selectCleanupResponsibilitySetInternal(yield* journal.read(runId), false)
+  const remaining = selectCleanupResponsibilitySetFromHistory(yield* reader.readAccepted(runId), false)
   return {
     branch: branchOutcomes[0],
     candidate: candidateOutcomes[0],
@@ -415,11 +434,11 @@ export const activateDispositionCleanup = Effect.fn("DispositionCleanup.activate
   // this in the same ordinary activation pass means a resumed Run can derive
   // the branch authorization without a caller supplying one; the loop will
   // execute it only when the settlement is already present.
-  const journal = yield* InRunJournal
-  const records = yield* journal.read(runId)
+  const reader = yield* AcceptedJournalReader
+  const records = yield* reader.readAccepted(runId)
   if (!hasImmutableRunBeginning(records)) return { branch: [], candidate: [], worktree: [] }
   yield* appendDerivedCleanupAuthorizations(runId, ["worktree", "branch", "candidate"], readEvidenceRevision)
-  return selectCleanupResponsibilitySet(yield* journal.read(runId))
+  return selectCleanupResponsibilitySetFromHistory(yield* reader.readAccepted(runId), true)
 })
 
 /**
@@ -431,6 +450,7 @@ export const makeDispositionCleanupActivation = Effect.fn("DispositionCleanup.ma
   runId: RunId
 ) {
   const journal = yield* InRunJournal
+  const reader = yield* AcceptedJournalReader
   const worktreeBoundary = yield* WorktreeCleanupBoundary
   const branchBoundary = yield* BranchCleanupBoundary
   const candidateBoundary = yield* IntegratorCandidateCleanupBoundary
@@ -439,6 +459,7 @@ export const makeDispositionCleanupActivation = Effect.fn("DispositionCleanup.ma
   const responsibilities = yield* activateDispositionCleanup(runId, readEvidenceRevision)
   const run = runDispositionCleanupLoop(runId).pipe(
     Effect.provideService(InRunJournal, journal),
+    Effect.provideService(AcceptedJournalReader, reader),
     Effect.provideService(WorktreeCleanupBoundary, worktreeBoundary),
     Effect.provideService(BranchCleanupBoundary, branchBoundary),
     Effect.provideService(IntegratorCandidateCleanupBoundary, candidateBoundary)
@@ -457,7 +478,8 @@ export const appendDerivedCleanupAuthorizations = Effect.fn("DispositionCleanup.
     readEvidenceRevision?: CandidateEvidenceRevisionReader
   ) {
     const journal = yield* InRunJournal
-    let records = yield* journal.read(runId)
+    const reader = yield* AcceptedJournalReader
+    let records = yield* reader.readAccepted(runId)
     if (!hasImmutableRunBeginning(records)) return
     const evidenceSubjects =
       families.includes("candidate") && readEvidenceRevision !== undefined
@@ -488,7 +510,7 @@ export const appendDerivedCleanupAuthorizations = Effect.fn("DispositionCleanup.
       authorization: WorktreeCleanupAuthorization | BranchCleanupAuthorization | IntegratorCandidateCleanupAuthorization
     ) {
       const key = cleanupAuthorizationKey(authorization)
-      if (records.some((record) => record.key === key)) return
+      if (journalRecordByKey(records, key) !== undefined) return
       const event =
         "worktreeCleanupOperationId" in authorization
           ? BranchCleanupAuthorizedEvent.make({
@@ -511,7 +533,7 @@ export const appendDerivedCleanupAuthorizations = Effect.fn("DispositionCleanup.
                 version: workflowJournalEventVersion
               })
       yield* journal.append(runId, key, event)
-      records = yield* journal.read(runId)
+      records = yield* reader.readAccepted(runId)
     })
     for (const family of families) {
       const authorizations = derived[family]

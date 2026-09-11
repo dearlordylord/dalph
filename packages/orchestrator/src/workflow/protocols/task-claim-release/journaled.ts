@@ -1,6 +1,8 @@
 import type { RunId } from "@dalph/contracts"
 import { Effect } from "effect"
 import { InRunJournal } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { journalRecordByKey } from "../../../workflow-journal/record-evidence.js"
 import { intentRecordKey, outcomeRecordKey } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { TaskClaimReleaseIntendedEvent, TaskClaimReleasedEvent } from "../../registry/event.js"
@@ -39,6 +41,7 @@ export const runJournaledTaskClaimRelease = Effect.fn("TaskClaimRelease.runJourn
   } = {}
 ) {
   const journal = yield* InRunJournal
+  const acceptedJournal = yield* AcceptedJournalReader
   yield* Effect.uninterruptible(
     journal
       .append(
@@ -48,10 +51,12 @@ export const runJournaledTaskClaimRelease = Effect.fn("TaskClaimRelease.runJourn
       )
       .pipe(Effect.andThen(options.onIntentRecorded ?? Effect.void))
   )
-  const existing = (yield* journal.read(runId)).find(
-    ({ event }) => event._tag === "TaskClaimReleased" && releaseEquals(event.release, operation.release)
+  const existing = journalRecordByKey(
+    yield* acceptedJournal.readAccepted(runId),
+    outcomeRecordKey(operation.release.operationId)
   )
-  if (existing !== undefined) return AuthoritativeTaskClaimReleased.make({ release: operation.release })
+  if (existing?.event._tag === "TaskClaimReleased" && releaseEquals(existing.event.release, operation.release))
+    return AuthoritativeTaskClaimReleased.make({ release: operation.release })
   const intent =
     options.boundaryIntent ?? InterruptibleWorkflowBoundaryIntent.TaskClaimCleanup({ family: "TaskTracker", operation })
   return yield* runInterruptibleBoundary(options.execution, intent, release, (result) =>

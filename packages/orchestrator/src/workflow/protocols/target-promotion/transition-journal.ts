@@ -1,7 +1,11 @@
 import { Effect } from "effect"
 import { InRunJournal } from "../../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
-import { journalRecordsForPromotionRequest } from "../../../workflow-journal/record-evidence.js"
+import {
+  journalRecordsForPromotionRequest,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
+import type { RunId } from "@dalph/contracts"
 import {
   targetPromotionNonConvergenceRecordKey,
   targetPromotionObservedSuccessRecordKey,
@@ -118,12 +122,21 @@ export const appendTargetPromotionReconciliationDeferral = Effect.fn("TargetProm
   }
 )
 
-export const readValidatedTargetPromotionState = Effect.fn("TargetPromotion.readValidatedState")(function* (
-  correlation: TargetPromotionCorrelation
+/** Current decoded evidence is an input, not a claim that the whole workflow history is accepted. */
+export type CurrentTargetPromotionEvidence<E, R> = (runId: RunId) => Effect.Effect<JournalHistorySource, E, R>
+
+export const readAcceptedTargetPromotionEvidence = Effect.fn("TargetPromotion.readAcceptedEvidence")(function* (
+  runId: RunId
 ) {
   const accepted = yield* AcceptedJournalReader
-  const prefix = yield* accepted.readAccepted(targetPromotionRunIdOf(correlation))
-  const records = Array.from(journalRecordsForPromotionRequest(prefix, correlation.requestId))
+  return yield* accepted.readAccepted(runId)
+})
+
+export const validateTargetPromotionState = Effect.fn("TargetPromotion.validateState")(function* (
+  source: JournalHistorySource,
+  correlation: TargetPromotionCorrelation
+) {
+  const records = Array.from(journalRecordsForPromotionRequest(source, correlation.requestId))
   const foreignCorrelation = targetPromotionCorrelationConflictFor(records, correlation)
   if (foreignCorrelation !== undefined) {
     return yield* new TargetPromotionCorrelationContradiction({

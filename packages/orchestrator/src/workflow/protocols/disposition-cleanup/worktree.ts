@@ -3,6 +3,12 @@
 import { Effect, Context, Layer, Ref, Schema } from "effect"
 import { TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
 import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import {
+  journalRecordByKey,
+  journalRecordsForOperationId,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import type { AppendableWorkflowJournalEvent, JournalRecord } from "../../../workflow-journal/store.js"
 import {
   worktreeCleanupAuthorizedRecordKey,
@@ -245,11 +251,11 @@ export const worktreeCleanupTestLayer = (input: {
   )
 
 const recordsFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   tag: WorktreeCleanupJournalEvent["_tag"],
   operationId: OperationId
 ) =>
-  records.filter(
+  Array.from(journalRecordsForOperationId(records, operationId)).filter(
     (record) =>
       Schema.is(WorktreeCleanupJournalEvent)(record.event) &&
       record.event._tag === tag &&
@@ -283,17 +289,11 @@ export const worktreeCleanupObservationMatchesAuthorization = (
     })
   )
 
-const nextObservationOrdinal = (
-  records: ReadonlyArray<JournalRecord>,
-  operationId: OperationId
-): CleanupObservationOrdinal =>
+const nextObservationOrdinal = (records: JournalHistorySource, operationId: OperationId): CleanupObservationOrdinal =>
   CleanupObservationOrdinal.make(recordsFor(records, "WorktreeCleanupObservationIntended", operationId).length + 1)
 
-const unmatchedObservationIntent = (
-  records: ReadonlyArray<JournalRecord>,
-  authorization: WorktreeCleanupAuthorization
-) =>
-  records.find((record) => {
+const unmatchedObservationIntent = (records: JournalHistorySource, authorization: WorktreeCleanupAuthorization) =>
+  Array.from(journalRecordsForOperationId(records, authorization.operationId)).find((record) => {
     if (
       record.event._tag !== "WorktreeCleanupObservationIntended" ||
       !worktreeCleanupAuthorizationEquals(record.event.authorization, authorization)
@@ -301,7 +301,7 @@ const unmatchedObservationIntent = (
       return false
     }
     const intended = record.event
-    return !records.some((observed) => {
+    return !Array.from(journalRecordsForOperationId(records, intended.operationId)).some((observed) => {
       if (observed.event._tag !== "WorktreeCleanupObserved") return false
       return (
         observed.event.authorization.operationId === authorization.operationId &&
@@ -311,22 +311,22 @@ const unmatchedObservationIntent = (
     })
   })
 
-const existingAuthorization = (records: ReadonlyArray<JournalRecord>, operationId: OperationId) =>
-  records.find(
+const existingAuthorization = (records: JournalHistorySource, operationId: OperationId) =>
+  Array.from(journalRecordsForOperationId(records, operationId)).find(
     (record): record is JournalRecord & { readonly event: WorktreeCleanupAuthorizedEvent } =>
       record.event._tag === "WorktreeCleanupAuthorized" && record.event.authorization.operationId === operationId
   )?.event
 
-const existingSettled = (records: ReadonlyArray<JournalRecord>, authorization: WorktreeCleanupAuthorization) =>
-  records.find(
+const existingSettled = (records: JournalHistorySource, authorization: WorktreeCleanupAuthorization) =>
+  Array.from(journalRecordsForOperationId(records, authorization.operationId)).find(
     (record): record is JournalRecord & { readonly event: WorktreeCleanupSettledEvent } =>
       record.event._tag === "WorktreeCleanupSettled" &&
       record.event.authorization.operationId === authorization.operationId &&
       worktreeCleanupAuthorizationEquals(record.event.authorization, authorization)
   )?.event
 
-const existingContradiction = (records: ReadonlyArray<JournalRecord>, authorization: WorktreeCleanupAuthorization) =>
-  records.find(
+const existingContradiction = (records: JournalHistorySource, authorization: WorktreeCleanupAuthorization) =>
+  Array.from(journalRecordsForOperationId(records, authorization.operationId)).find(
     (record): record is JournalRecord & { readonly event: WorktreeCleanupContradictedEvent } =>
       record.event._tag === "WorktreeCleanupContradicted" &&
       record.event.authorization.operationId === authorization.operationId &&
@@ -346,7 +346,7 @@ export const worktreeCleanupMutationResultMatchesAuthorization = (
 
 const observeFresh = Effect.fn("WorktreeCleanup.observeFresh")(function* (
   authorization: WorktreeCleanupAuthorization,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   const boundary = yield* WorktreeCleanupBoundary
   const runId = authorization.disposition.plannedAttempt.runId
@@ -360,7 +360,7 @@ const observeFresh = Effect.fn("WorktreeCleanup.observeFresh")(function* (
       ? unmatched.event.operationId
       : OperationId.make(`${authorization.operationId}:observe:${ordinal}`)
   const key = worktreeCleanupObservationIntendedRecordKey(authorization.operationId, ordinal)
-  if (!records.some((record) => record.key === key)) {
+  if (journalRecordByKey(records, key) === undefined) {
     yield* appendEvent(
       runId,
       key,
@@ -387,7 +387,7 @@ const observeFresh = Effect.fn("WorktreeCleanup.observeFresh")(function* (
       version: workflowJournalEventVersion
     })
   )
-  return { observed, operationId, ordinal, records: yield* (yield* InRunJournal).read(runId) }
+  return { observed, operationId, ordinal, records: yield* (yield* AcceptedJournalReader).readAccepted(runId) }
 })
 
 const appendContradiction = Effect.fn("WorktreeCleanup.appendContradiction")(function* (
@@ -395,11 +395,11 @@ const appendContradiction = Effect.fn("WorktreeCleanup.appendContradiction")(fun
   observation: WorktreeCleanupObservation,
   operationId: OperationId,
   detail: string,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   const runId = authorization.disposition.plannedAttempt.runId
   const key = worktreeCleanupContradictedRecordKey(authorization.operationId)
-  if (!records.some((record) => record.key === key)) {
+  if (journalRecordByKey(records, key) === undefined) {
     yield* appendEvent(
       runId,
       key,
@@ -421,7 +421,7 @@ const settleFromAbsence = Effect.fn("WorktreeCleanup.settleFromAbsence")(functio
   operationId: OperationId,
   ordinal: CleanupObservationOrdinal,
   result: Extract<WorktreeCleanupMutationResult, { readonly _tag: "AlreadyAbsent" | "Removed" }>,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   if (result.revision !== observation.revision) {
     yield* appendContradiction(
@@ -437,14 +437,14 @@ const settleFromAbsence = Effect.fn("WorktreeCleanup.settleFromAbsence")(functio
     })
   }
   const runId = authorization.disposition.plannedAttempt.runId
-  const mutationExists = records.some(
+  const mutationExists = Array.from(journalRecordsForOperationId(records, authorization.operationId)).some(
     (record) =>
       record.event._tag === "WorktreeCleanupMutationIntended" &&
       worktreeCleanupAuthorizationEquals(record.event.authorization, authorization)
   )
   const derivedCause = mutationExists ? "MutationResponseReconciliation" : "InitialAbsence"
   const absenceKey = worktreeCleanupAbsenceConfirmedRecordKey(authorization.operationId, ordinal)
-  if (!records.some((record) => record.key === absenceKey)) {
+  if (journalRecordByKey(records, absenceKey) === undefined) {
     yield* appendEvent(
       runId,
       absenceKey,
@@ -484,9 +484,9 @@ export const runWorktreeCleanup = Effect.fn("WorktreeCleanup.run")(function* (
   authorization: WorktreeCleanupAuthorization
 ) {
   const boundary = yield* WorktreeCleanupBoundary
-  const journal = yield* InRunJournal
+  const reader = yield* AcceptedJournalReader
   const runId = authorization.disposition.plannedAttempt.runId
-  let records = yield* journal.read(runId)
+  let records = yield* reader.readAccepted(runId)
 
   const provenance = validateWorktreeCleanupProvenance(records, authorization)
   if (provenance._tag === "Invalid") {
@@ -531,7 +531,7 @@ export const runWorktreeCleanup = Effect.fn("WorktreeCleanup.run")(function* (
         version: workflowJournalEventVersion
       })
     )
-    records = yield* journal.read(runId)
+    records = yield* reader.readAccepted(runId)
   }
 
   const firstObservation = yield* observeFresh(authorization, records)
@@ -606,7 +606,7 @@ export const runWorktreeCleanup = Effect.fn("WorktreeCleanup.run")(function* (
       version: workflowJournalEventVersion
     })
   )
-  records = yield* journal.read(runId)
+  records = yield* reader.readAccepted(runId)
   if (!worktreeCleanupMutationResultMatchesAuthorization(result, authorization)) {
     yield* appendContradiction(
       authorization,

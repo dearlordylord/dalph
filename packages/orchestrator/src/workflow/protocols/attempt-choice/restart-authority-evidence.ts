@@ -3,8 +3,9 @@ import { Schema } from "effect"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import {
-  journalRecordsForAttempt,
   journalEvidenceBefore,
+  journalRecordByKey,
+  journalRecordsForAttemptKind,
   isJournalRecordEvidence,
   type JournalHistorySource
 } from "../../../workflow-journal/record-evidence.js"
@@ -47,30 +48,30 @@ export const exactAppliedRestart = (
   requestId: AttemptChoiceRequestId,
   subject: AttemptChoiceSubject
 ): RestartApplicationRecord | undefined => {
-  const matches = Array.from(journalRecordsForAttempt(records, subject.plannedAttempt.attemptId)).filter(
-    (record): record is RestartApplicationRecord =>
-      record.event._tag === "AttemptChoiceApplied" &&
-      record.event.choice === "RestartTaskImplementation" &&
-      record.runId === subject.plannedAttempt.runId &&
-      record.key === attemptChoiceAppliedRecordKey(record.event.requestId) &&
-      sameAttemptChoiceRequestId(record.event.requestId, requestId) &&
-      sameAttemptChoiceSubject(record.event.subject, subject)
-  )
-  return matches.length === 1 ? matches[0] : undefined
+  const record = journalRecordByKey(records, attemptChoiceAppliedRecordKey(requestId))
+  return record !== undefined &&
+    record.event._tag === "AttemptChoiceApplied" &&
+    record.event.choice === "RestartTaskImplementation" &&
+    record.runId === subject.plannedAttempt.runId &&
+    record.key === attemptChoiceAppliedRecordKey(record.event.requestId) &&
+    sameAttemptChoiceRequestId(record.event.requestId, requestId) &&
+    sameAttemptChoiceSubject(record.event.subject, subject)
+    ? (record as RestartApplicationRecord)
+    : undefined
 }
 
 export const recordedReplacement = (
   records: JournalHistorySource,
   subject: AttemptChoiceSubject
 ): PlannedAttemptReplacementRecord | undefined => {
-  const replacements = Array.from(journalRecordsForAttempt(records, subject.plannedAttempt.attemptId)).filter(
-    (record): record is PlannedAttemptReplacementRecord =>
-      record.event._tag === "PlannedAttemptReplaced" &&
-      record.runId === subject.plannedAttempt.runId &&
-      record.key === plannedAttemptReplacedRecordKey(subject.plannedAttempt.attemptId) &&
-      sameAttemptChoiceSubject(record.event.subject, subject)
-  )
-  return replacements.length === 1 ? replacements[0] : undefined
+  const record = journalRecordByKey(records, plannedAttemptReplacedRecordKey(subject.plannedAttempt.attemptId))
+  return record !== undefined &&
+    record.event._tag === "PlannedAttemptReplaced" &&
+    record.runId === subject.plannedAttempt.runId &&
+    record.key === plannedAttemptReplacedRecordKey(subject.plannedAttempt.attemptId) &&
+    sameAttemptChoiceSubject(record.event.subject, subject)
+    ? (record as PlannedAttemptReplacementRecord)
+    : undefined
 }
 
 /** Canonical claim authority retained at the exact applied Restart position. */
@@ -134,50 +135,74 @@ export const exactExecutorQuiescenceEvidence = (
   before: JournalPosition,
   expected: AttemptQuiescenceProof
 ): boolean => {
-  const attemptRecords = Array.from(journalRecordsForAttempt(records, plannedAttempt.attemptId))
-  const bounded = attemptRecords.filter(({ position }) => position < before)
+  const bounded = isJournalRecordEvidence(records)
+    ? journalEvidenceBefore(records, before)
+    : records.filter(({ position }) => position < before)
   const evidence = latestPlannedAttemptExecutorEvidence(bounded, plannedAttempt)
   if (evidence === undefined || evidence.observedAt >= before) return false
-  const responsibilities = bounded.filter(
-    (record) =>
+  let responsibilityCount = 0
+  for (const record of journalRecordsForAttemptKind(
+    bounded,
+    plannedAttempt.attemptId,
+    "PlannedAttemptExecutorWorkResponsibilityBegan"
+  )) {
+    if (
       record.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
       record.runId === plannedAttempt.runId &&
       record.key === plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId) &&
       plannedTaskAttemptEquivalence(record.event.plannedAttempt, plannedAttempt) &&
       record.position < evidence.observedAt
-  )
-  if (responsibilities.length !== 1) return false
-  const commands = bounded.filter(
-    (record) =>
+    )
+      responsibilityCount += 1
+  }
+  if (responsibilityCount !== 1) return false
+  let commandCount = 0
+  for (const record of journalRecordsForAttemptKind(
+    bounded,
+    plannedAttempt.attemptId,
+    "PlannedAttemptExecutorCommandIntended"
+  )) {
+    if (
       record.event._tag === "PlannedAttemptExecutorCommandIntended" &&
       record.runId === plannedAttempt.runId &&
       record.key === plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, record.event.ordinal) &&
       plannedTaskAttemptEquivalence(record.event.plannedAttempt, plannedAttempt) &&
       record.position < evidence.observedAt
-  )
-  if (commands.length === 0) return false
+    )
+      commandCount += 1
+  }
+  if (commandCount === 0) return false
   if (!isAcceptedPlannedAttemptExecutorEvidence(evidence)) return false
   if (!hasValidAcceptedPlannedAttemptExecutorLifecycleHistory(bounded, plannedAttempt)) return false
   const source = evidence.source
+  const candidate = journalRecordByKey(
+    bounded,
+    plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, source.ordinal)
+  )
   const exactSource =
-    bounded.filter(
-      (candidate) =>
-        candidate.event._tag === "PlannedAttemptExecutorWorkReported" &&
-        candidate.runId === plannedAttempt.runId &&
-        candidate.key === plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, source.ordinal) &&
-        candidate.position === evidence.observedAt &&
-        candidate.event.ordinal === source.ordinal &&
-        candidate.event.report.correlation.runId === plannedAttempt.runId &&
-        candidate.event.report.correlation.attemptId === plannedAttempt.attemptId
-    ).length === 1
+    candidate !== undefined &&
+    candidate.event._tag === "PlannedAttemptExecutorWorkReported" &&
+    candidate.runId === plannedAttempt.runId &&
+    candidate.key === plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, source.ordinal) &&
+    candidate.position === evidence.observedAt &&
+    candidate.event.ordinal === source.ordinal &&
+    candidate.event.report.correlation.runId === plannedAttempt.runId &&
+    candidate.event.report.correlation.attemptId === plannedAttempt.attemptId
   if (!exactSource) return false
-  const laterExecutorCommand = attemptRecords.some(
-    ({ event, position }) =>
+  let laterExecutorCommand = false
+  for (const { event, position } of journalRecordsForAttemptKind(
+    records,
+    plannedAttempt.attemptId,
+    "PlannedAttemptExecutorCommandIntended"
+  )) {
+    if (
       position > evidence.observedAt &&
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
       event.plannedAttempt.runId === plannedAttempt.runId &&
       event.plannedAttempt.attemptId === plannedAttempt.attemptId
-  )
+    )
+      laterExecutorCommand = true
+  }
   if (laterExecutorCommand) return false
   const quiescent = evidence.report._tag === "ExecutorWorkSafelySuspended"
   return quiescent && proofEquals(proofFor(evidence), expected)

@@ -36,6 +36,7 @@ import { makeIntegrationTargetResourceController } from "../admission/integratio
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import type { CurrentDeliveryFrame } from "./current-delivery-frame.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
+import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
@@ -1127,7 +1128,7 @@ it("retains a rejected claim while its focused reread has no outcome and rejects
     taskId: selectionTaskId,
     token: ClaimToken.make("fresh-workflow-selection-disposition-foreign-token")
   })
-  const rejected = selectionClaimRejectedRecord(operation, foreign, 4)
+  const rejected = selectionClaimRejectedRecord(operation, foreign, 2)
   const wakeGraph = makeTrackerGraphObservationOperation(
     { _tag: "WorkflowEstablishment" },
     OperationId.make("fresh-workflow-selection-disposition-wake"),
@@ -1139,15 +1140,15 @@ it("retains a rejected claim while its focused reread has no outcome and rejects
     selectionTaskId,
     [operation.acquisition.operationId, wakeGraph.operationId]
   )
-  const claimIntent = selectionClaimIntentRecord(operation, 3)
+  const claimIntent = selectionClaimIntentRecord(operation, 1)
   const records: ReadonlyArray<JournalRecord> = [
     claimIntent,
     rejected,
-    ...selectionGraphRecords(wakeGraph, 5),
+    ...selectionGraphRecords(wakeGraph, 3),
     {
       event: taskTrackerReadIntent(focusedRead),
       key: intentRecordKey(focusedRead.operationId),
-      position: JournalPosition.make(7),
+      position: JournalPosition.make(5),
       runId: selectionRunId
     }
   ]
@@ -1156,6 +1157,15 @@ it("retains a rejected claim while its focused reread has no outcome and rejects
   expect(
     rejectedFreshTaskClaimDisposition(
       records,
+      task,
+      claimIntent,
+      new Set([wakeGraph.operationId]),
+      taskTrackerTargetKey(selectionTarget)
+    )
+  ).toEqual({ _tag: "ConstraintRetained" })
+  expect(
+    rejectedFreshTaskClaimDisposition(
+      journalEvidenceFrom(records),
       task,
       claimIntent,
       new Set([wakeGraph.operationId]),

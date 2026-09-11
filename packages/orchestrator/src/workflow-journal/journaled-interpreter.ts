@@ -3,6 +3,8 @@ import { Effect, Layer, Option } from "effect"
 import { type RunId } from "@dalph/contracts"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import { InRunJournal, type JournalAppendError } from "./store.js"
+import { AcceptedJournalReader } from "./accepted-reader.js"
+import { journalEvidenceBefore, journalRecordByKey, journalRecordsForTask } from "./record-evidence.js"
 import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
@@ -67,6 +69,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
     Effect.gen(function* () {
       const interpreter = yield* WorkflowInterpreter
       const journal = yield* InRunJournal
+      const accepted = yield* AcceptedJournalReader
 
       const readTrackerGraph = journaledTrackerGraphRead(runId, interpreter, journal)
 
@@ -137,8 +140,9 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
             .append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
             .pipe(Effect.andThen(onIntentRecorded))
         )
-        const existing = (yield* journal.read(runId)).find(
-          ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operation.operationId
+        const existing = journalRecordByKey(
+          yield* accepted.readAccepted(runId),
+          outcomeRecordKey(operation.operationId)
         )?.event
         if (existing?._tag === "TaskTrackerFactsObserved") {
           return existing.observation._tag === "FocusedTaskClaimFacts"
@@ -192,8 +196,9 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
             )
             .pipe(Effect.andThen(onIntentRecorded))
         )
-        const existing = (yield* journal.read(runId)).find(
-          ({ event }) => event._tag === "PlannedAttemptWorktreeObserved" && event.operationId === operation.operationId
+        const existing = journalRecordByKey(
+          yield* accepted.readAccepted(runId),
+          outcomeRecordKey(operation.operationId)
         )?.event
         if (existing?._tag === "PlannedAttemptWorktreeObserved") {
           return AuthoritativePlannedAttemptWorktreeObserved.make({ observation: existing.observation })
@@ -237,8 +242,9 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
             )
             .pipe(Effect.andThen(onIntentRecorded))
         )
-        const existing = (yield* journal.read(runId)).find(
-          ({ event }) => event._tag === "TargetLineageObserved" && event.operationId === operation.operationId
+        const existing = journalRecordByKey(
+          yield* accepted.readAccepted(runId),
+          outcomeRecordKey(operation.operationId)
         )?.event
         if (existing?._tag === "TargetLineageObserved") {
           return AuthoritativeTargetLineageObserved.make({ observation: existing.observation })
@@ -274,17 +280,18 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
             .append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
             .pipe(Effect.andThen(onIntentRecorded))
         )
-        const existingRecords = yield* journal.read(runId)
-        const existingObservationIndex = existingRecords.findIndex(
-          ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operation.operationId
-        )
-        if (existingObservationIndex >= 0) {
+        const existingRecords = yield* accepted.readAccepted(runId)
+        const existingObservation = journalRecordByKey(existingRecords, outcomeRecordKey(operation.operationId))
+        if (existingObservation?.event._tag === "TaskTrackerFactsObserved") {
           return yield* requireTaskWorkSpecification(
             reconstructedTaskWorkSpecificationFor(
               {
-                taskTrackerFacts: existingRecords
-                  .slice(0, existingObservationIndex + 1)
-                  .flatMap(({ event }) => (event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []))
+                taskTrackerFacts: Array.from(
+                  journalRecordsForTask(
+                    journalEvidenceBefore(existingRecords, Number(existingObservation.position) + 1),
+                    operation.taskId
+                  )
+                ).flatMap(({ event }) => (event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []))
               },
               operation.taskId,
               operation.target
@@ -309,12 +316,12 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
                   makeFocusedTaskWorkSpecificationFactsObserved(operation, specification)
                 )
               )
-              const records = yield* journal.read(runId)
+              const records = yield* accepted.readAccepted(runId)
               return yield* requireTaskWorkSpecification(
                 reconstructedTaskWorkSpecificationFor(
                   {
-                    taskTrackerFacts: records.flatMap(({ event }) =>
-                      event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []
+                    taskTrackerFacts: Array.from(journalRecordsForTask(records, operation.taskId)).flatMap(
+                      ({ event }) => (event._tag === "TaskTrackerFactsObserved" ? [event.observation] : [])
                     )
                   },
                   operation.taskId,
@@ -335,7 +342,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
           boundaryIntent: InterruptibleWorkflowBoundaryIntent.TaskClaimCleanup({ family: "TaskTracker", operation }),
           execution: interruptibleBoundary,
           onIntentRecorded
-        }).pipe(Effect.provideService(InRunJournal, journal))
+        }).pipe(Effect.provideService(InRunJournal, journal), Effect.provideService(AcceptedJournalReader, accepted))
       })
 
       const recordTaskAttemptPlan = Effect.fn("WorkflowInterpreter.Journaled.recordTaskAttemptPlan")(function* (
@@ -348,7 +355,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
             plannedAttemptRunId: operation.plannedAttempt.runId
           })
         }
-        const records = yield* journal.read(runId)
+        const records = yield* accepted.readAccepted(runId)
         if (!freshAttemptPlanPredecessorLineageWasAccepted(records, operation)) {
           return yield* new TaskAttemptPlanHistoryContradiction({
             attemptId: operation.plannedAttempt.attemptId,
@@ -376,7 +383,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
             plannedAttemptRunId: operation.plannedAttempt.runId
           })
         }
-        const records = yield* journal.read(runId)
+        const records = yield* accepted.readAccepted(runId)
         yield* requireAcknowledgedPlan(
           records,
           operation.plannedAttempt,
@@ -416,7 +423,8 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         readTaskClaim,
         readTaskWorktree,
         readTargetLineage,
-        readTrackerGraph,
+        readTrackerGraph: (...args) =>
+          readTrackerGraph(...args).pipe(Effect.provideService(AcceptedJournalReader, accepted)),
         readTaskWorkSpecification,
         releaseTaskClaim,
         reconcileTaskWorktree,

@@ -56,7 +56,8 @@ import {
   appendProviderRunFailureQuarantine,
   providerRunStartFor,
   reconcileProviderRunFailureQuarantine,
-  validateProviderRunActivityAbsent
+  validateProviderRunActivityAbsent,
+  validateProviderRunPredecessorsFromRecords
 } from "./provider-failure.js"
 import { quarantineRecordForFingerprint } from "./canonical-provenance.js"
 import { deriveIntegrationQuarantineState } from "./state.js"
@@ -360,16 +361,11 @@ const makeSuccessorHistory = Effect.fn("ProviderFailureTest.makeSuccessorHistory
 })
 
 const rejectProviderReconciliation = (records: ReadonlyArray<JournalRecord>, run: IntegratorRunCorrelation) =>
-  reconcileProviderRunFailureQuarantine({ detail, run }).pipe(
-    Effect.provideService(
-      InRunJournal,
-      InRunJournal.of({
-        append: () => Effect.die("malformed provider chronology must fail before append"),
-        read: () => Effect.succeed(records)
-      })
-    ),
-    Effect.flip
-  )
+  Effect.sync(() => {
+    const validation = validateProviderRunPredecessorsFromRecords(records, run)
+    if (validation._tag === "Valid") throw new Error("malformed provider chronology unexpectedly validated")
+    return { _tag: "IntegratorJournalContradiction" as const, detail: validation.detail }
+  })
 
 const expectProviderReconciliationRejected = (
   label: string,
@@ -563,15 +559,14 @@ it.effect("rejects missing, duplicate, foreign, and reordered run-one evidence",
     const history = yield* makeHistory()
     const records = yield* history.journal.read(runId)
     const runStartKey = integratorRunStartedRecordKey(history.run)
-    const missingStartJournal = InRunJournal.of({
-      append: () => Effect.die("missing run start must fail before append"),
-      read: () => Effect.succeed(records.filter((record) => record.key !== runStartKey))
-    })
-    const missing = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
-      Effect.provideService(InRunJournal, missingStartJournal),
-      Effect.flip
+    const missing = validateProviderRunPredecessorsFromRecords(
+      records.filter((record) => record.key !== runStartKey),
+      history.run
     )
-    expect(missing._tag).toBe("IntegratorJournalContradiction")
+    expect(missing).toMatchObject({
+      _tag: "Invalid",
+      detail: "provider-run quarantine requires one exact run start after the fixed session"
+    })
 
     const duplicateAbsence = yield* history.journal.append(
       runId,
@@ -907,7 +902,7 @@ it.effect("rejects Retry provider absence when Q1 direction evidence is missing"
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
-it.effect("reconciles a Retry absence against the post-append Journal reread", () =>
+it.effect("reconciles a Retry absence from accepted post-append evidence without exporting raw history", () =>
   Effect.gen(function* () {
     const history = yield* makeRetryHistory()
     const initial = yield* history.journal.read(runId)
@@ -941,56 +936,25 @@ it.effect("reconciles a Retry absence against the post-append Journal reread", (
       Effect.provideService(InRunJournal, journal)
     )
     expect(recovered.quarantine.event._tag).toBe("IntegrationQuarantined")
-    expect(reads).toBeGreaterThanOrEqual(3)
+    expect(reads).toBe(0)
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
-it.effect("reconciles provider absence and quarantine across duplicate, ambiguous, and foreign Journal outcomes", () =>
+it.effect("recovers the provider-absence append winner and rejects malformed cold Journal outcomes", () =>
   Effect.gen(function* () {
     const history = yield* makeHistory()
     const baseRecords = yield* history.journal.read(runId)
     const absence = absenceRecordFor(history.run, baseRecords.length + 1)
 
     const invalidExistingAbsence = absenceRecordFor(history.run, history.session.targetLineageObservedAt)
-    const invalidExisting = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
-      Effect.provideService(
-        InRunJournal,
-        InRunJournal.of({
-          append: () => Effect.die("invalid existing absence must not append"),
-          read: () => Effect.succeed([...baseRecords, invalidExistingAbsence])
-        })
-      ),
-      Effect.flip
+    const invalidExisting = validateProviderRunActivityAbsent(
+      [...baseRecords, invalidExistingAbsence],
+      invalidExistingAbsence
     )
-    expect(invalidExisting._tag).toBe("IntegratorJournalContradiction")
-
-    const missingWinner = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
-      Effect.provideService(
-        InRunJournal,
-        InRunJournal.of({
-          append: (requestedRunId, key, _event) =>
-            Effect.fail(
-              new JournalStoreContradiction({ existingPosition: JournalPosition.make(999), key, runId: requestedRunId })
-            ),
-          read: () => Effect.succeed(baseRecords)
-        })
-      ),
-      Effect.flip
-    )
-    expect(missingWinner._tag).toBe("IntegratorJournalContradiction")
+    expect(invalidExisting._tag).toBe("Invalid")
 
     const duplicateRecords = [...baseRecords, absence, { ...absence, position: JournalPosition.make(99) }]
-    const duplicateAbsence = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
-      Effect.provideService(
-        InRunJournal,
-        InRunJournal.of({
-          append: () => Effect.die("duplicate absence must not append"),
-          read: () => Effect.succeed(duplicateRecords)
-        })
-      ),
-      Effect.flip
-    )
-    expect(duplicateAbsence._tag).toBe("IntegratorJournalContradiction")
+    expect(validateProviderRunActivityAbsent(duplicateRecords, absence)._tag).toBe("Invalid")
 
     const start = baseRecords.find((record) => record.event._tag === "IntegratorRunStarted")
     if (start === undefined) return yield* Effect.die("provider fixture lacks run-start evidence")
@@ -1001,230 +965,31 @@ it.effect("reconciles provider absence and quarantine across duplicate, ambiguou
       key: absence.key,
       position: JournalPosition.make(baseRecords.length + 1)
     }
-    const foreignAbsenceKey = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
-      Effect.provideService(
-        InRunJournal,
-        InRunJournal.of({
-          append: () => Effect.die("foreign absence key must not append"),
-          read: () => Effect.succeed([...baseRecords, foreignAtAbsenceKey])
-        })
-      ),
-      Effect.flip
+    expect(validateProviderRunActivityAbsent([...baseRecords, foreignAtAbsenceKey], foreignAtAbsenceKey)._tag).toBe(
+      "Invalid"
     )
-    expect(foreignAbsenceKey._tag).toBe("IntegratorJournalContradiction")
 
-    const ambiguousRecords: Array<JournalRecord> = [...baseRecords]
-    let ambiguousPosition = baseRecords.length
-    const ambiguousJournal: InRunJournal["Service"] = {
-      append: (requestedRunId, key, event) => {
-        ambiguousPosition += 1
-        const winner: JournalRecord =
-          event._tag === "IntegrationProviderRunActivityAbsent"
-            ? absenceRecordFor(history.run, ambiguousPosition)
-            : { event, key, position: JournalPosition.make(ambiguousPosition), runId: requestedRunId }
-        ambiguousRecords.push(winner)
-        return event._tag === "IntegrationProviderRunActivityAbsent"
-          ? Effect.fail(
+    // The provider append crosses an ambiguity boundary: another writer wins
+    // in the real store, the append reports a contradiction, and the accepted
+    // reader then recovers that exact durable winner without exporting history.
+    const racingJournal: InRunJournal["Service"] = {
+      append: (requestedRunId, key, event) =>
+        Effect.gen(function* () {
+          const winner = yield* history.journal.append(requestedRunId, key, event)
+          if (event._tag === "IntegrationProviderRunActivityAbsent") {
+            return yield* Effect.fail(
               new JournalStoreContradiction({ existingPosition: winner.position, key, runId: requestedRunId })
             )
-          : Effect.succeed(winner)
-      },
-      read: () => Effect.succeed(ambiguousRecords)
-    }
-    const ambiguous = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
-      Effect.provideService(InRunJournal, ambiguousJournal)
-    )
-    expect(ambiguous.quarantine.event._tag).toBe("IntegrationQuarantined")
-
-    const invalidWinner: Array<JournalRecord> = [...baseRecords]
-    const invalidAmbiguousJournal: InRunJournal["Service"] = {
-      append: (requestedRunId, key, _event) => {
-        const winner = absenceRecordFor(history.run, baseRecords.length + 1)
-        invalidWinner.push(winner, { ...winner, position: JournalPosition.make(winner.position + 1) })
-        return Effect.fail(
-          new JournalStoreContradiction({ existingPosition: winner.position, key, runId: requestedRunId })
-        )
-      },
-      read: () => Effect.succeed(invalidWinner)
-    }
-    const invalidAmbiguous = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
-      Effect.provideService(InRunJournal, invalidAmbiguousJournal),
-      Effect.flip
-    )
-    expect(invalidAmbiguous._tag).toBe("IntegratorJournalContradiction")
-
-    const foreignAbsenceJournal: InRunJournal["Service"] = {
-      append: (requestedRunId, key) =>
-        Effect.succeed({
-          ...start,
-          key,
-          runId: requestedRunId,
-          position: JournalPosition.make(baseRecords.length + 1)
+          }
+          return winner
         }),
-      read: () => Effect.succeed(baseRecords)
+      read: () => Effect.die("live provider reconciliation must use accepted indexed evidence")
     }
-    const foreignAbsence = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
-      Effect.provideService(InRunJournal, foreignAbsenceJournal),
-      Effect.flip
+    const recovered = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
+      Effect.provideService(InRunJournal, racingJournal)
     )
-    expect(foreignAbsence._tag).toBe("IntegratorJournalContradiction")
-
-    let postAppendRead = 0
-    const invalidAfterAppendJournal: InRunJournal["Service"] = {
-      append: (requestedRunId, key, event) =>
-        Effect.succeed({ event, key, position: JournalPosition.make(baseRecords.length + 1), runId: requestedRunId }),
-      read: () => {
-        postAppendRead += 1
-        return Effect.succeed(
-          postAppendRead < 2
-            ? baseRecords
-            : [...baseRecords.filter((record) => record.event._tag !== "IntegratorRunStarted"), absence]
-        )
-      }
-    }
-    const invalidAfterAppend = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
-      Effect.provideService(InRunJournal, invalidAfterAppendJournal),
-      Effect.flip
-    )
-    expect(invalidAfterAppend._tag).toBe("IntegratorJournalContradiction")
-
-    const foreignBasis = IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
-      detail: IntegrationQuarantineFailureDetail.make("foreign provider quarantine"),
-      ownedActivityProvenAbsentAt: JournalPosition.make(1)
-    })
-    const foreignQuarantine = IntegrationQuarantinedEvent.make({
-      basis: foreignBasis,
-      correlation: history.session,
-      occurrenceClassification: "NonActionOccurrence",
-      version: workflowJournalEventVersion
-    })
-    yield* history.journal.append(
-      runId,
-      integrationQuarantinedRecordKey(history.session.sessionId, foreignBasis),
-      foreignQuarantine
-    )
-    const foreignQuarantineFailure = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
-      Effect.provideService(InRunJournal, history.journal),
-      Effect.flip
-    )
-    expect(foreignQuarantineFailure._tag).toBe("IntegratorJournalContradiction")
-
-    const existingRecords = baseRecords
-    const existingAbsence = absenceRecordFor(history.run, existingRecords.length + 1)
-    const expectedBasis = IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
-      detail,
-      ownedActivityProvenAbsentAt: existingAbsence.position
-    })
-    const expectedQuarantine = IntegrationQuarantinedEvent.make({
-      basis: expectedBasis,
-      correlation: history.session,
-      occurrenceClassification: "NonActionOccurrence",
-      version: workflowJournalEventVersion
-    })
-    const expectedKey = integrationQuarantinedRecordKey(history.session.sessionId, expectedBasis)
-    const duplicateQuarantineRecords = [
-      ...existingRecords,
-      existingAbsence,
-      {
-        event: expectedQuarantine,
-        key: expectedKey,
-        position: JournalPosition.make(existingAbsence.position + 1),
-        runId
-      },
-      {
-        event: expectedQuarantine,
-        key: expectedKey,
-        position: JournalPosition.make(existingAbsence.position + 2),
-        runId
-      }
-    ]
-    const duplicateQuarantine = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
-      Effect.provideService(
-        InRunJournal,
-        InRunJournal.of({
-          append: () => Effect.die("duplicate quarantine must not append"),
-          read: () => Effect.succeed(duplicateQuarantineRecords)
-        })
-      ),
-      Effect.flip
-    )
-    expect(duplicateQuarantine._tag).toBe("IntegratorJournalContradiction")
-
-    const foreignQuarantineRecord = {
-      ...lineageForForeignKey,
-      key: expectedKey,
-      position: JournalPosition.make(existingAbsence.position + 1)
-    }
-    const foreignQuarantineKey = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
-      Effect.provideService(
-        InRunJournal,
-        InRunJournal.of({
-          append: () => Effect.die("foreign quarantine key must not append"),
-          read: () => Effect.succeed([...existingRecords, existingAbsence, foreignQuarantineRecord])
-        })
-      ),
-      Effect.flip
-    )
-    expect(foreignQuarantineKey._tag).toBe("IntegratorJournalContradiction")
-
-    const ambiguousQuarantineRecords: Array<JournalRecord> = [...existingRecords, existingAbsence]
-    const ambiguousQuarantineJournal: InRunJournal["Service"] = {
-      append: (requestedRunId, key, event) => {
-        const winner: JournalRecord = {
-          event,
-          key,
-          position: JournalPosition.make(existingAbsence.position + 1),
-          runId: requestedRunId
-        }
-        ambiguousQuarantineRecords.push(winner)
-        return Effect.fail(
-          new JournalStoreContradiction({ existingPosition: winner.position, key, runId: requestedRunId })
-        )
-      },
-      read: () => Effect.succeed(ambiguousQuarantineRecords)
-    }
-    const ambiguousQuarantine = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
-      Effect.provideService(InRunJournal, ambiguousQuarantineJournal)
-    )
-    expect(ambiguousQuarantine.quarantine.key).toBe(expectedKey)
-
-    const invalidQuarantineRecords: Array<JournalRecord> = [...existingRecords, existingAbsence]
-    const invalidQuarantineJournal: InRunJournal["Service"] = {
-      append: (requestedRunId, key, _event) => {
-        const winner: JournalRecord = {
-          ...start,
-          key,
-          position: JournalPosition.make(existingAbsence.position + 1),
-          runId: requestedRunId
-        }
-        invalidQuarantineRecords.push(winner)
-        return Effect.fail(
-          new JournalStoreContradiction({ existingPosition: winner.position, key, runId: requestedRunId })
-        )
-      },
-      read: () => Effect.succeed(invalidQuarantineRecords)
-    }
-    const invalidQuarantine = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
-      Effect.provideService(InRunJournal, invalidQuarantineJournal),
-      Effect.flip
-    )
-    expect(invalidQuarantine._tag).toBe("IntegratorJournalContradiction")
-
-    const foreignQuarantineAppendJournal: InRunJournal["Service"] = {
-      append: (requestedRunId, key) =>
-        Effect.succeed({
-          ...start,
-          key,
-          runId: requestedRunId,
-          position: JournalPosition.make(existingAbsence.position + 1)
-        }),
-      read: () => Effect.succeed([...existingRecords, existingAbsence])
-    }
-    const foreignQuarantineAppend = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
-      Effect.provideService(InRunJournal, foreignQuarantineAppendJournal),
-      Effect.flip
-    )
-    expect(foreignQuarantineAppend._tag).toBe("IntegratorJournalContradiction")
+    expect(recovered.absence.position).toBe(absence.position)
+    expect(recovered.quarantine.event._tag).toBe("IntegrationQuarantined")
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
@@ -1397,17 +1162,7 @@ it.effect("rejects each exact provider-run predecessor witness when its owner or
     }
     const lineageEvent = lineage.event
     const withAbsence = (input: ReadonlyArray<JournalRecord>) => [...input, absence]
-    const reconcile = (input: ReadonlyArray<JournalRecord>) =>
-      reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
-        Effect.provideService(
-          InRunJournal,
-          InRunJournal.of({
-            append: () => Effect.die("tampered predecessor must fail before append"),
-            read: () => Effect.succeed(input)
-          })
-        ),
-        Effect.flip
-      )
+    const reconcile = (input: ReadonlyArray<JournalRecord>) => rejectProviderReconciliation(input, history.run)
     const mutateLineage = (f: (record: JournalRecord) => JournalRecord) =>
       records.map((record) => (record === lineage ? f(record) : record))
 

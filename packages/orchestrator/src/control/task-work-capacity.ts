@@ -5,13 +5,20 @@ import { reduceWorkflowJournalHistory } from "../coordination/reconstruction/his
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import { TaskWorkCapacityChangedEvent } from "../workflow/registry/event.js"
 import { taskWorkCapacityPolicyRecordKey } from "../workflow-journal/record-key.js"
+import { AcceptedJournalReader } from "../workflow-journal/accepted-reader.js"
+import {
+  firstJournalRecordOfKind,
+  isJournalRecordEvidence,
+  lastJournalRecordOfKind,
+  type JournalHistorySource
+} from "../workflow-journal/record-evidence.js"
 import {
   type JournalAppendError,
   type JournalReadError,
   InRunJournal,
   WorkflowRunNotBegan
 } from "../workflow-journal/store.js"
-import { RunControlPolicy, RunPolicyRevision } from "./policy.js"
+import { initialRunPolicyRevision, RunControlPolicy, RunPolicyRevision } from "./policy.js"
 
 export const SetTaskWorkCapacityRequest = Schema.Struct({
   capacity: TaskWorkCapacity,
@@ -54,8 +61,19 @@ export class TaskWorkCapacityControl extends Context.Service<TaskWorkCapacityCon
 
 export const reconstructTaskWorkCapacityPolicy = Effect.fn("TaskWorkCapacityControl.reconstruct")(function* (
   runId: RunId,
-  records: Parameters<typeof reduceWorkflowJournalHistory>[1]
+  records: Parameters<typeof reduceWorkflowJournalHistory>[1] | JournalHistorySource
 ) {
+  if (isJournalRecordEvidence(records)) {
+    const began = firstJournalRecordOfKind(records, "WorkflowRunBegan")
+    if (began?.event._tag !== "WorkflowRunBegan") return yield* new WorkflowRunNotBegan({ runId })
+    const changed = lastJournalRecordOfKind(records, "TaskWorkCapacityChanged")
+    return changed?.event._tag === "TaskWorkCapacityChanged"
+      ? RunControlPolicy.make({ revision: changed.event.revision, taskExecutionCapacity: changed.event.capacity })
+      : RunControlPolicy.make({
+          revision: initialRunPolicyRevision,
+          taskExecutionCapacity: began.event.initialControlPolicy.taskExecutionCapacity
+        })
+  }
   const reduced = reduceWorkflowJournalHistory(runId, records)
   if (reduced._tag === "InvalidWorkflowJournalHistory") return yield* Effect.fail(reduced)
   return yield* Option.match(reduced.runState.controlPolicy, {
@@ -68,8 +86,9 @@ export const taskWorkCapacityControlLayer = Layer.effect(
   TaskWorkCapacityControl,
   Effect.gen(function* () {
     const journal = yield* InRunJournal
+    const acceptedJournal = yield* AcceptedJournalReader
     const read = Effect.fn("TaskWorkCapacityControl.read")(function* (runId: RunId) {
-      return yield* reconstructTaskWorkCapacityPolicy(runId, yield* journal.read(runId))
+      return yield* reconstructTaskWorkCapacityPolicy(runId, yield* acceptedJournal.readAccepted(runId))
     })
     const apply = Effect.fn("TaskWorkCapacityControl.apply")(function* (input: unknown) {
       const request = yield* Schema.decodeUnknownEffect(SetTaskWorkCapacityRequest)(input)

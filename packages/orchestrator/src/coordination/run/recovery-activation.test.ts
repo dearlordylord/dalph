@@ -140,6 +140,7 @@ import {
   taskTrackerReadIntent
 } from "../../workflow/registry/event.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import {
   integrationQuarantineDirectionAppliedRecordKey,
@@ -5349,7 +5350,7 @@ it("replays G2 only for the exact later empty-coverage read with the complete pr
     [],
     [coverageAttempt.taskId]
   )
-  const currentGraph = { operationId: coverageGraphOperation.operationId, recordedAt: JournalPosition.make(20) }
+  const currentGraph = { operationId: coverageGraphOperation.operationId, recordedAt: JournalPosition.make(1) }
   const expectedPredecessors = [earlierGraph.operationId, currentGraph.operationId]
   const activeG2 = makeTrackerGraphObservationOperation(
     { _tag: "PostQuiescenceReconfirmation", quiescentGraphOperationId: currentGraph.operationId },
@@ -5358,16 +5359,18 @@ it("replays G2 only for the exact later empty-coverage read with the complete pr
     expectedPredecessors
   )
   const prefix = [
-    coverageRecord(10, taskTrackerReadIntent(earlierGraph)),
-    coverageRecord(21, taskTrackerReadIntent(activeG2))
+    coverageRecord(1, taskTrackerReadIntent(earlierGraph)),
+    coverageRecord(2, taskTrackerReadIntent(activeG2))
   ]
-  expect(pendingActiveRefreshG2OperationFor(prefix, coverageRunId, coverageTarget, currentGraph)).toEqual(activeG2)
+  expect(
+    pendingActiveRefreshG2OperationFor(journalEvidenceFrom(prefix), coverageRunId, coverageTarget, currentGraph)
+  ).toEqual(activeG2)
 
   const variants = [
-    coverageRecord(21, taskTrackerReadIntent(activeG2), RunId.make("active-g2-foreign-run")),
-    coverageRecord(20, taskTrackerReadIntent(activeG2)),
+    coverageRecord(2, taskTrackerReadIntent(activeG2), RunId.make("active-g2-foreign-run")),
+    coverageRecord(1, taskTrackerReadIntent(activeG2)),
     coverageRecord(
-      21,
+      2,
       taskTrackerReadIntent(
         makeTrackerGraphObservationOperation(
           { _tag: "WorkflowEstablishment" },
@@ -5378,7 +5381,7 @@ it("replays G2 only for the exact later empty-coverage read with the complete pr
       )
     ),
     coverageRecord(
-      21,
+      2,
       taskTrackerReadIntent(
         makeTrackerGraphObservationOperation(
           { _tag: "WorkflowEstablishment" },
@@ -5390,7 +5393,7 @@ it("replays G2 only for the exact later empty-coverage read with the complete pr
       )
     ),
     coverageRecord(
-      21,
+      2,
       taskTrackerReadIntent(
         makeTrackerGraphObservationOperation({ _tag: "WorkflowEstablishment" }, activeG2.operationId, coverageTarget, [
           currentGraph.operationId
@@ -5401,7 +5404,7 @@ it("replays G2 only for the exact later empty-coverage read with the complete pr
   for (const candidate of variants) {
     expect(
       pendingActiveRefreshG2OperationFor(
-        [coverageRecord(10, taskTrackerReadIntent(earlierGraph)), candidate],
+        [coverageRecord(1, taskTrackerReadIntent(earlierGraph)), candidate],
         coverageRunId,
         coverageTarget,
         currentGraph
@@ -5410,7 +5413,7 @@ it("replays G2 only for the exact later empty-coverage read with the complete pr
   }
   expect(
     pendingActiveRefreshG2OperationFor(
-      [...prefix, coverageRecord(22, { ...coverageGraphEvent, operationId: activeG2.operationId })],
+      [...prefix, coverageRecord(3, { ...coverageGraphEvent, operationId: activeG2.operationId })],
       coverageRunId,
       coverageTarget,
       currentGraph

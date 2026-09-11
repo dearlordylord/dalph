@@ -40,6 +40,7 @@ import {
   isJournalRecordEvidence,
   journalEvidenceBefore,
   journalRecordsForAttempt,
+  journalRecordsForOperationId,
   journalRecordsForTask,
   journalRecordsOfKind,
   type JournalHistorySource
@@ -411,10 +412,7 @@ export const validateAttemptStop = (
           `attempt abandonment for ${event.subject.plannedAttempt.attemptId} follows a later executor command`
         )
       }
-      const authorizedClaim = authorizedClaimForAttempt(
-        Array.from(journalRecordsForAttempt(prior, event.subject.plannedAttempt.attemptId)),
-        event.subject.plannedAttempt
-      )?.claim
+      const authorizedClaim = authorizedClaimForAttempt(prior, event.subject.plannedAttempt)?.claim
       const claimMatches = () => authorizedClaim !== undefined && isExactTaskClaim(authorizedClaim, event.expectedClaim)
       if (!claimMatches()) {
         semanticIssue(
@@ -731,11 +729,7 @@ export const validateContinuationAuthorization = (
     identityIssue(issues, runId, record.position, "continuation authorization binds another Run")
   }
   const prior = historyBefore(records, record.position)
-  const evaluation = evaluatePlannedAttemptContinuationAuthorization(
-    Array.from(journalRecordsForTask(prior, event.plannedAttempt.taskId)),
-    event.plannedAttempt,
-    event.witness
-  )
+  const evaluation = evaluatePlannedAttemptContinuationAuthorization(prior, event.plannedAttempt, event.witness)
   if (evaluation._tag === "Rejected") {
     semanticIssue(issues, runId, record.position, evaluation.detail)
   }
@@ -994,7 +988,7 @@ const freshReplacementTrackerReadIntent = (
   applicationPosition: JournalPosition
 ): ReplacementTrackerReadIntent | undefined =>
   findLast(
-    journalRecordsOfKind(prior, "TaskTrackerReadIntentRecorded"),
+    journalRecordsForOperationId(prior, operationId),
     (record): record is ReplacementTrackerReadIntent =>
       record.position > applicationPosition &&
       record.event._tag === "TaskTrackerReadIntentRecorded" &&
@@ -1007,7 +1001,7 @@ const freshReplacementGitReadIntent = (
   applicationPosition: JournalPosition
 ): ReplacementGitReadIntent | undefined =>
   findLast(
-    journalRecordsOfKind(prior, "GitReadIntentRecorded"),
+    journalRecordsForOperationId(prior, operationId),
     (record): record is ReplacementGitReadIntent =>
       record.position > applicationPosition &&
       record.event._tag === "GitReadIntentRecorded" &&
@@ -1285,7 +1279,7 @@ const replacementWorktreeIsExact = (
   witness: PlannedAttemptReplacementRecord["event"]["witness"],
   applicationPosition: JournalPosition
 ): boolean => {
-  const record = findLast(journalRecordsForAttempt(prior, plannedAttempt.attemptId), (candidate) =>
+  const record = findLast(journalRecordsForOperationId(prior, witness.oldWorktreeObservationOperationId), (candidate) =>
     isReplacementWorktreeRecord(candidate, witness.oldWorktreeObservationOperationId)
   )
   if (record === undefined) return false
@@ -1522,9 +1516,7 @@ export const validatePlan = (
       ? record.event.operation.plannedAttempt
       : record.event.successorPlan.plannedAttempt
   if (record.event._tag === "TaskAttemptPlanned") {
-    if (
-      acceptedFreshAttemptLineage(recordsThroughPlan, plannedAttempt, "Plan") === undefined
-    ) {
+    if (acceptedFreshAttemptLineage(recordsThroughPlan, plannedAttempt, "Plan") === undefined) {
       semanticIssue(
         issues,
         runId,

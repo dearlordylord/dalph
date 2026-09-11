@@ -3,6 +3,11 @@ import { isExactTaskClaim } from "../../../authorities/task-tracker/claim-mutati
 import type { TrackerTarget } from "../../../authorities/task-tracker/target.js"
 import { claimReadMatchesTarget } from "../../../workflow-journal/run-target.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import {
+  journalRecordsForAttempt,
+  journalRecordsForTask,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import { sameAttemptChoiceRequestId, sameAttemptChoiceSubject } from "./events.js"
 
 type AbandonmentRecord = Omit<JournalRecord, "event"> & {
@@ -22,24 +27,31 @@ type ClaimReleaseIntentRecord = Omit<JournalRecord, "event"> & {
 }
 
 export const abandonmentFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   application: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>
-) =>
-  records.findLast(
-    (record): record is AbandonmentRecord =>
+) => {
+  let found: AbandonmentRecord | undefined
+  for (const record of journalRecordsForAttempt(records, application.subject.plannedAttempt.attemptId)) {
+    if (
       record.event._tag === "AttemptImplementationAbandoned" &&
       sameAttemptChoiceRequestId(record.event.requestId, application.requestId) &&
       sameAttemptChoiceSubject(record.event.subject, application.subject)
-  )
+    ) {
+      found = record as AbandonmentRecord
+    }
+  }
+  return found
+}
 
 export const noReleaseAfter = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   abandonment: JournalRecord,
   application: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>,
   immutableRunTarget: TrackerTarget
-) =>
-  records.findLast(
-    (record): record is NoReleaseRecord =>
+) => {
+  let found: NoReleaseRecord | undefined
+  for (const record of journalRecordsForAttempt(records, application.subject.plannedAttempt.attemptId)) {
+    if (
       record.position > abandonment.position &&
       record.event._tag === "StoppedAttemptClaimNoReleaseObserved" &&
       sameAttemptChoiceRequestId(record.event.requestId, application.requestId) &&
@@ -52,31 +64,40 @@ export const noReleaseAfter = (
         record.position,
         immutableRunTarget
       )
-  )
+    )
+      found = record as NoReleaseRecord
+  }
+  return found
+}
 
 export const claimReleaseAfter = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   abandonment: JournalRecord,
   expectedClaim: Extract<JournalRecord["event"], { readonly _tag: "AttemptImplementationAbandoned" }>["expectedClaim"],
   plannedAttemptTaskId: TaskId,
   immutableRunTarget: TrackerTarget
-) =>
-  records.findLast((record): record is ClaimReleasedRecord => {
+) => {
+  let found: ClaimReleasedRecord | undefined
+  for (const record of journalRecordsForTask(records, plannedAttemptTaskId)) {
     if (
       record.position <= abandonment.position ||
       record.event._tag !== "TaskClaimReleased" ||
       !isExactTaskClaim(record.event.release.claim, expectedClaim)
     )
-      return false
+      continue
     const released = record.event
-    const releaseIntent = records.findLast(
-      ({ event, position }) =>
+    let releaseIntent: ClaimReleaseIntentRecord | undefined
+    for (const candidate of journalRecordsForTask(records, plannedAttemptTaskId)) {
+      const { event, position } = candidate
+      if (
         position > abandonment.position &&
         position < record.position &&
         event._tag === "TaskClaimReleaseIntended" &&
         event.operation.release.operationId === released.release.operationId
-    )
-    return (
+      )
+        releaseIntent = candidate as ClaimReleaseIntentRecord
+    }
+    if (
       releaseIntent?.event._tag === "TaskClaimReleaseIntended" &&
       releaseIntent.event.operation.authority._tag === "StoppedAttemptClaimReleaseAuthority" &&
       claimReadMatchesTarget(
@@ -88,29 +109,38 @@ export const claimReleaseAfter = (
         immutableRunTarget
       )
     )
-  })
+      found = record as ClaimReleasedRecord
+  }
+  return found
+}
 
 export const claimReleaseIntentAfter = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   abandonment: JournalRecord,
   expectedClaim: Extract<JournalRecord["event"], { readonly _tag: "AttemptImplementationAbandoned" }>["expectedClaim"],
   plannedAttemptTaskId: TaskId,
   immutableRunTarget: TrackerTarget
-) =>
-  records.findLast((record): record is ClaimReleaseIntentRecord => {
+) => {
+  let found: ClaimReleaseIntentRecord | undefined
+  for (const record of journalRecordsForTask(records, plannedAttemptTaskId)) {
     if (
       record.position <= abandonment.position ||
       record.event._tag !== "TaskClaimReleaseIntended" ||
       !isExactTaskClaim(record.event.operation.release.claim, expectedClaim) ||
       record.event.operation.authority._tag !== "StoppedAttemptClaimReleaseAuthority"
     )
-      return false
-    return claimReadMatchesTarget(
-      records,
-      record.event.operation.authority.observationOperationId,
-      plannedAttemptTaskId,
-      abandonment.position,
-      record.position,
-      immutableRunTarget
+      continue
+    if (
+      claimReadMatchesTarget(
+        records,
+        record.event.operation.authority.observationOperationId,
+        plannedAttemptTaskId,
+        abandonment.position,
+        record.position,
+        immutableRunTarget
+      )
     )
-  })
+      found = record as ClaimReleaseIntentRecord
+  }
+  return found
+}

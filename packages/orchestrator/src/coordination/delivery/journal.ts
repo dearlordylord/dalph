@@ -76,9 +76,7 @@ export interface JournalService {
     event: AppendableWorkflowJournalEvent
   ) => Effect.Effect<JournalRecord, JournalAppendError>
   readonly read: (runId: RunId) => Effect.Effect<ReadonlyArray<JournalRecord>, JournalError | InRunJournalRunMismatch>
-  readonly readAccepted: (
-    runId: RunId
-  ) => Effect.Effect<AcceptedJournalPrefix, JournalError | InRunJournalRunMismatch>
+  readonly readAccepted: (runId: RunId) => Effect.Effect<AcceptedJournalPrefix, JournalError | InRunJournalRunMismatch>
 }
 
 export class Journal extends Context.Service<Journal, JournalService>()("@dalph/Journal") {}
@@ -163,7 +161,12 @@ const graphObservationFromAcceptedRecord = (
   const intent = acceptedJournalRecordForKey(prefix, intentRecordKey(event.operationId))
   return intent?.event._tag === "TaskTrackerReadIntentRecorded" && intent.event.operation._tag === "ReadTrackerGraph"
     ? journaledTrackerGraphObservationFromReceipt(
-        journaledGraphReceiptFromEvent({ cause: intent.event.operation.cause, event, position: record.position, snapshot })
+        journaledGraphReceiptFromEvent({
+          cause: intent.event.operation.cause,
+          event,
+          position: record.position,
+          snapshot
+        })
       )
     : Option.none()
 }
@@ -294,7 +297,7 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
           const record = yield* storage.append(run, key, event)
           const before = status.value
           if (record.position <= before.position) {
-          const existing = acceptedJournalRecordForKey(before.prefix, record.key)
+            const existing = acceptedJournalRecordForKey(before.prefix, record.key)
             if (JSON.stringify(existing) !== JSON.stringify(record)) {
               const failure = new JournalRecordMismatch({ position: record.position, key, runId })
               return yield* failJournal(failure)

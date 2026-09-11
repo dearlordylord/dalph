@@ -2,6 +2,12 @@
 
 import { Effect, Context, Layer, Ref, Schema } from "effect"
 import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import {
+  journalRecordByKey,
+  journalRecordsForOperationId,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import type { AppendableWorkflowJournalEvent, JournalRecord } from "../../../workflow-journal/store.js"
 import {
   integratorCandidateCleanupAuthorizedRecordKey,
@@ -354,11 +360,11 @@ export const integratorCandidateCleanupTestLayer = (input: {
   )
 
 const recordsWith = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   tag: IntegratorCandidateCleanupJournalEvent["_tag"],
   operationId: OperationId
 ) =>
-  records.filter(
+  Array.from(journalRecordsForOperationId(records, operationId)).filter(
     (record) =>
       Schema.is(IntegratorCandidateCleanupJournalEvent)(record.event) &&
       record.event._tag === tag &&
@@ -398,19 +404,16 @@ export const integratorCandidateCleanupMutationResultMatchesAuthorization = (
   authorization: IntegratorCandidateCleanupAuthorization
 ): boolean => result.locator === authorization.locator && result.sessionId === authorization.owner.sessionId
 
-const nextObservationOrdinal = (
-  records: ReadonlyArray<JournalRecord>,
-  operationId: OperationId
-): CleanupObservationOrdinal =>
+const nextObservationOrdinal = (records: JournalHistorySource, operationId: OperationId): CleanupObservationOrdinal =>
   CleanupObservationOrdinal.make(
     recordsWith(records, "IntegratorCandidateCleanupObservationIntended", operationId).length + 1
   )
 
 const unmatchedObservationIntent = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorization: IntegratorCandidateCleanupAuthorization
 ) =>
-  records.find((record) => {
+  Array.from(journalRecordsForOperationId(records, authorization.operationId)).find((record) => {
     if (
       record.event._tag !== "IntegratorCandidateCleanupObservationIntended" ||
       !integratorCandidateCleanupAuthorizationEquals(record.event.authorization, authorization)
@@ -418,7 +421,7 @@ const unmatchedObservationIntent = (
       return false
     }
     const intended = record.event
-    return !records.some((observed) => {
+    return !Array.from(journalRecordsForOperationId(records, intended.operationId)).some((observed) => {
       if (observed.event._tag !== "IntegratorCandidateCleanupObserved") return false
       return (
         observed.event.authorization.operationId === authorization.operationId &&
@@ -428,29 +431,23 @@ const unmatchedObservationIntent = (
     })
   })
 
-const existingAuthorization = (records: ReadonlyArray<JournalRecord>, operationId: OperationId) =>
-  records.find(
+const existingAuthorization = (records: JournalHistorySource, operationId: OperationId) =>
+  Array.from(journalRecordsForOperationId(records, operationId)).find(
     (record): record is JournalRecord & { readonly event: IntegratorCandidateCleanupAuthorizedEvent } =>
       record.event._tag === "IntegratorCandidateCleanupAuthorized" &&
       record.event.authorization.operationId === operationId
   )?.event
 
-const existingSettled = (
-  records: ReadonlyArray<JournalRecord>,
-  authorization: IntegratorCandidateCleanupAuthorization
-) =>
-  records.find(
+const existingSettled = (records: JournalHistorySource, authorization: IntegratorCandidateCleanupAuthorization) =>
+  Array.from(journalRecordsForOperationId(records, authorization.operationId)).find(
     (record): record is JournalRecord & { readonly event: IntegratorCandidateCleanupSettledEvent } =>
       record.event._tag === "IntegratorCandidateCleanupSettled" &&
       record.event.authorization.operationId === authorization.operationId &&
       integratorCandidateCleanupAuthorizationEquals(record.event.authorization, authorization)
   )?.event
 
-const existingContradiction = (
-  records: ReadonlyArray<JournalRecord>,
-  authorization: IntegratorCandidateCleanupAuthorization
-) =>
-  records.find(
+const existingContradiction = (records: JournalHistorySource, authorization: IntegratorCandidateCleanupAuthorization) =>
+  Array.from(journalRecordsForOperationId(records, authorization.operationId)).find(
     (record): record is JournalRecord & { readonly event: IntegratorCandidateCleanupContradictedEvent } =>
       record.event._tag === "IntegratorCandidateCleanupContradicted" &&
       record.event.authorization.operationId === authorization.operationId &&
@@ -459,7 +456,7 @@ const existingContradiction = (
 
 const observeFresh = Effect.fn("IntegratorCandidateCleanup.observeFresh")(function* (
   authorization: IntegratorCandidateCleanupAuthorization,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   const boundary = yield* IntegratorCandidateCleanupBoundary
   const runId = authorization.disposition.predecessor.plannedAttempt.runId
@@ -473,7 +470,7 @@ const observeFresh = Effect.fn("IntegratorCandidateCleanup.observeFresh")(functi
       ? unmatched.event.operationId
       : OperationId.make(`${authorization.operationId}:observe:${ordinal}`)
   const key = integratorCandidateCleanupObservationIntendedRecordKey(authorization.operationId, ordinal)
-  if (!records.some((record) => record.key === key)) {
+  if (journalRecordByKey(records, key) === undefined) {
     yield* appendEvent(
       runId,
       key,
@@ -500,7 +497,7 @@ const observeFresh = Effect.fn("IntegratorCandidateCleanup.observeFresh")(functi
       version: workflowJournalEventVersion
     })
   )
-  return { observed, operationId, ordinal, records: yield* (yield* InRunJournal).read(runId) }
+  return { observed, operationId, ordinal, records: yield* (yield* AcceptedJournalReader).readAccepted(runId) }
 })
 
 const appendContradiction = Effect.fn("IntegratorCandidateCleanup.appendContradiction")(function* (
@@ -534,7 +531,7 @@ const settleFromAbsence = Effect.fn("IntegratorCandidateCleanup.settleFromAbsenc
   operationId: OperationId,
   ordinal: CleanupObservationOrdinal,
   result: Extract<IntegratorCandidateCleanupMutationResult, { readonly _tag: "AlreadyAbsent" | "Removed" }>,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   if (result.revision !== observation.revision) {
     yield* appendContradiction(
@@ -549,14 +546,14 @@ const settleFromAbsence = Effect.fn("IntegratorCandidateCleanup.settleFromAbsenc
     })
   }
   const runId = authorization.disposition.predecessor.plannedAttempt.runId
-  const mutationExists = records.some(
+  const mutationExists = Array.from(journalRecordsForOperationId(records, authorization.operationId)).some(
     (record) =>
       record.event._tag === "IntegratorCandidateCleanupMutationIntended" &&
       integratorCandidateCleanupAuthorizationEquals(record.event.authorization, authorization)
   )
   const derivedCause = mutationExists ? "MutationResponseReconciliation" : "InitialAbsence"
   const absenceKey = integratorCandidateCleanupAbsenceConfirmedRecordKey(authorization.operationId, ordinal)
-  if (!records.some((record) => record.key === absenceKey)) {
+  if (journalRecordByKey(records, absenceKey) === undefined) {
     yield* appendEvent(
       runId,
       absenceKey,
@@ -593,9 +590,9 @@ export const runIntegratorCandidateCleanup = Effect.fn("IntegratorCandidateClean
   authorization: IntegratorCandidateCleanupAuthorization
 ) {
   const boundary = yield* IntegratorCandidateCleanupBoundary
-  const journal = yield* InRunJournal
+  const reader = yield* AcceptedJournalReader
   const runId = authorization.disposition.predecessor.plannedAttempt.runId
-  let records = yield* journal.read(runId)
+  let records = yield* reader.readAccepted(runId)
   const provenance = validateIntegratorCandidateCleanupProvenance(records, authorization)
   if (provenance._tag === "Invalid") {
     return IntegratorCandidateCleanupOutcome.cases.Preserved.make({ authorization, reason: provenance.detail })
@@ -629,7 +626,7 @@ export const runIntegratorCandidateCleanup = Effect.fn("IntegratorCandidateClean
         version: workflowJournalEventVersion
       })
     )
-    records = yield* journal.read(runId)
+    records = yield* reader.readAccepted(runId)
   }
   const firstObservation = yield* observeFresh(authorization, records)
   records = firstObservation.records
@@ -702,7 +699,7 @@ export const runIntegratorCandidateCleanup = Effect.fn("IntegratorCandidateClean
       version: workflowJournalEventVersion
     })
   )
-  records = yield* journal.read(runId)
+  records = yield* reader.readAccepted(runId)
   if (!integratorCandidateCleanupMutationResultMatchesAuthorization(result, authorization)) {
     yield* appendContradiction(
       authorization,

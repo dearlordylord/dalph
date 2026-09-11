@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Cold diagnostics and indexed live provenance stay co-located for parity. */
 import {
   integrationProviderRunActivityAbsentRecordKey,
   integrationQuarantinedRecordKey,
@@ -5,6 +6,14 @@ import {
   integratorSessionFixedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import {
+  isJournalRecordEvidence,
+  journalRecordByKey,
+  journalRecordByPosition,
+  journalRecordsOfKind,
+  type JournalHistorySource,
+  type JournalRecordEvidence
+} from "../../../workflow-journal/record-evidence.js"
 import { exactJournalRecordAtKey } from "../../../workflow-journal/exact-record.js"
 import type {
   IntegrationQuarantineDirectionFingerprint,
@@ -161,16 +170,21 @@ const providerRunStartFor = (
 }
 
 const retryAuthorizationIssue = (
-  history: ReadonlyArray<JournalRecord>,
+  history: JournalHistorySource,
   run: IntegratorRunCorrelation,
   runStart: JournalRecord
 ): string | undefined => {
   if (run.ordinal !== integratorRetryRunOrdinal) return undefined
-  const successor = history.find(
-    (record) =>
+  let successor: JournalRecord | undefined
+  for (const record of journalRecordsOfKind(history, "IntegratorSuccessorSessionFixed")) {
+    if (
       record.event._tag === "IntegratorSuccessorSessionFixed" &&
       integratorCorrelationsEqual(record.event.successor, run.session)
-  )
+    ) {
+      successor = record
+      break
+    }
+  }
   if (successor?.event._tag === "IntegratorSuccessorSessionFixed") {
     const authorization = evaluateIntegratorFullRerunAuthorization(
       history,
@@ -278,18 +292,136 @@ const hasExactRunResultOrCandidate = (records: ReadonlyArray<JournalRecord>, run
         integratorRunCorrelationsEqual(candidate.event.run, run))
   )
 
-/** Pure validator shared by provider-failure reconciliation and cleanup provenance. */
-export const validateProviderRunActivityAbsent = (
-  records: ReadonlyArray<JournalRecord>,
-  record: JournalRecord
-):
+type ProviderAbsenceValidation =
   | {
       readonly _tag: "Valid"
       readonly run: IntegratorRunCorrelation
       readonly record: AbsenceRecord
       readonly runStart: JournalRecord
     }
-  | { readonly _tag: "Invalid"; readonly detail: string } => {
+  | { readonly _tag: "Invalid"; readonly detail: string }
+
+const indexedProviderRunStart = (
+  records: JournalRecordEvidence,
+  run: IntegratorRunCorrelation,
+  beforePosition: JournalRecord["position"]
+): ProviderRunPredecessors | undefined => {
+  const direct = journalRecordByKey(records, fixedSessionKey(run.session))
+  let session = direct
+  if (
+    direct?.event._tag !== "IntegratorSessionFixed" ||
+    !integratorCorrelationsEqual(direct.event.correlation, run.session)
+  ) {
+    session = undefined
+    for (const candidate of journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")) {
+      if (
+        candidate.event._tag === "IntegratorSuccessorSessionFixed" &&
+        integratorCorrelationsEqual(candidate.event.successor, run.session)
+      ) {
+        if (session !== undefined) return undefined
+        const relation = evaluateIntegratorFullRerunSuccessor(records, candidate, candidate.event.predecessor)
+        if (relation._tag === "Invalid") return undefined
+        session = candidate
+      }
+    }
+  } else {
+    const lineage = exactTargetLineageRecord(records, {
+      expectedTargetHead: run.session.expectedTargetHead,
+      integrationTarget: run.session.integrationTarget,
+      plannedAttempt: run.session.plannedAttempt,
+      targetLineageObservedAt: run.session.targetLineageObservedAt
+    })
+    if (lineage === undefined || lineage.observation.position >= direct.position) return undefined
+  }
+  if (session === undefined) return undefined
+  const start = journalRecordByKey(records, integratorRunStartedRecordKey(run))
+  return start?.event._tag === "IntegratorRunStarted" &&
+    start.position > session.position &&
+    start.position < beforePosition &&
+    integratorRunCorrelationsEqual(start.event.run, run)
+    ? { session, runStart: start }
+    : undefined
+}
+
+const validateIndexedProviderRunActivityAbsent = (
+  records: JournalRecordEvidence,
+  record: JournalRecord
+): ProviderAbsenceValidation => {
+  if (record.event._tag !== "IntegrationProviderRunActivityAbsent") {
+    return { _tag: "Invalid", detail: "record is not provider-activity absence evidence" }
+  }
+  const run = record.event.run
+  if (!integratorCorrelationsEqual(record.event.correlation, run.session)) {
+    return { _tag: "Invalid", detail: "provider-activity absence has a foreign session correlation" }
+  }
+  if (![initialRunOrdinal, integratorRetryRunOrdinal].includes(run.ordinal)) {
+    return { _tag: "Invalid", detail: "provider-run quarantine accepts only Integrator runs 1 and 2" }
+  }
+  const predecessors = indexedProviderRunStart(records, run, record.position)
+  if (predecessors === undefined) {
+    return { _tag: "Invalid", detail: "provider-run quarantine requires one exact run start after the fixed session" }
+  }
+  const authorizationIssue = retryAuthorizationIssue(records, run, predecessors.runStart)
+  if (authorizationIssue !== undefined) return { _tag: "Invalid", detail: authorizationIssue }
+  if (!absenceMatches(record, run)) {
+    return { _tag: "Invalid", detail: "provider-activity absence has a foreign key or Journal Run" }
+  }
+  for (const candidate of journalRecordsOfKind(records, "IntegratorRunResultRecorded")) {
+    if (candidate.event._tag === "IntegratorRunResultRecorded" && integratorRunCorrelationsEqual(candidate.event.run, run)) {
+      return { _tag: "Invalid", detail: "provider-activity absence contradicts exact run evidence" }
+    }
+  }
+  for (const kind of ["IntegratorRunCandidateGitReadIntended", "IntegratorRunCandidateGitObserved"] as const) {
+    for (const candidate of journalRecordsOfKind(records, kind)) {
+      if ("run" in candidate.event && integratorRunCorrelationsEqual(candidate.event.run, run)) {
+        return { _tag: "Invalid", detail: "provider-activity absence contradicts exact run evidence" }
+      }
+    }
+  }
+  return { _tag: "Valid", run, record, runStart: predecessors.runStart }
+}
+
+/** Validates the exact fixed-session and run-start chronology before an absence append. */
+export const validateProviderRunPredecessors = (
+  records: JournalHistorySource,
+  run: IntegratorRunCorrelation,
+  beforePosition: JournalRecord["position"]
+): ProviderRunPredecessorValidation => {
+  if (!isJournalRecordEvidence(records)) return validateRunOnePredecessors(records, run, beforePosition)
+  if (![initialRunOrdinal, integratorRetryRunOrdinal].includes(run.ordinal)) {
+    return { _tag: "Invalid", detail: "provider-run quarantine accepts only Integrator runs 1 and 2" }
+  }
+  const predecessors = indexedProviderRunStart(records, run, beforePosition)
+  if (predecessors === undefined) {
+    return { _tag: "Invalid", detail: "provider-run quarantine requires one exact run start after the fixed session" }
+  }
+  const authorizationIssue = retryAuthorizationIssue(records, run, predecessors.runStart)
+  if (authorizationIssue !== undefined) return { _tag: "Invalid", detail: authorizationIssue }
+  for (const kind of [
+    "IntegratorRunResultRecorded",
+    "IntegratorRunCandidateGitReadIntended",
+    "IntegratorRunCandidateGitObserved"
+  ] as const) {
+    for (const candidate of journalRecordsOfKind(records, kind)) {
+      if ("run" in candidate.event && integratorRunCorrelationsEqual(candidate.event.run, run)) {
+        return {
+          _tag: "Invalid",
+          detail: kind === "IntegratorRunResultRecorded"
+            ? "provider-run absence contradicts an already recorded Integrator result"
+            : "provider-run absence contradicts run-bound candidate evidence"
+        }
+      }
+    }
+  }
+  return { _tag: "Valid", value: predecessors }
+}
+
+/** Pure validator shared by provider-failure reconciliation and cleanup provenance. */
+export const validateProviderRunActivityAbsent = (
+  records: JournalHistorySource,
+  record: JournalRecord
+): ProviderAbsenceValidation => {
+  if (isJournalRecordEvidence(records)) return validateIndexedProviderRunActivityAbsent(records, record)
   if (record.event._tag !== "IntegrationProviderRunActivityAbsent") {
     return { _tag: "Invalid", detail: "record is not provider-activity absence evidence" }
   }
@@ -314,10 +446,14 @@ export const validateProviderRunActivityAbsent = (
 
 /** Finds cleanup provenance after the provider-absence or stale-promotion proof has passed. */
 export const quarantineRecordForFingerprint = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   fingerprint: IntegrationQuarantineDirectionFingerprint
-): QuarantineRecord | undefined =>
-  records.find((record): record is QuarantineRecord => {
+): QuarantineRecord | undefined => {
+  const candidates = isJournalRecordEvidence(records)
+    ? [journalRecordByPosition(records, fingerprint.quarantineAt)]
+    : records
+  return candidates.find((record): record is QuarantineRecord => {
+    if (record === undefined) return false
     if (
       record.event._tag !== "IntegrationQuarantined" ||
       record.position !== fingerprint.quarantineAt ||
@@ -331,7 +467,7 @@ export const quarantineRecordForFingerprint = (
       return validatePromotionStaleQuarantineEvidence(records, record)._tag === "Valid"
     }
     if (basis._tag !== "ProviderRunFailure") return false
-    const absence = records.find((candidate) => candidate.position === basis.ownedActivityProvenAbsentAt)
+    const absence = journalRecordByPosition(records, basis.ownedActivityProvenAbsentAt)
     const validation = absence === undefined ? undefined : validateProviderRunActivityAbsent(records, absence)
     return (
       validation?._tag === "Valid" &&
@@ -339,3 +475,4 @@ export const quarantineRecordForFingerprint = (
       validation.record.event.detail === basis.detail
     )
   })
+}

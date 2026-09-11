@@ -10,6 +10,8 @@ import {
   InRunJournal,
   WorkflowRunNotBegan
 } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { firstJournalRecordOfKind, journalRecordsOfKind } from "../../../workflow-journal/record-evidence.js"
 
 interface ControlDirectionApplicationService {
   readonly apply: (
@@ -27,19 +29,20 @@ export const controlDirectionApplicationLayer = Layer.effect(
   ControlDirectionApplication,
   Effect.gen(function* () {
     const journal = yield* InRunJournal
+    const acceptedJournal = yield* AcceptedJournalReader
     const applications = yield* Semaphore.make(1)
     const applyUnserialized = Effect.fn("ControlDirectionApplication.apply")(function* (input: unknown) {
       const request = yield* Schema.decodeUnknownEffect(ApplyControlDirectionRequest, { onExcessProperty: "error" })(
         input
       )
       const runId = controlDirectionRunId(request.subject)
-      const records = yield* journal.read(runId)
-      if (!records.some(({ event }) => event._tag === "WorkflowRunBegan")) {
+      const records = yield* acceptedJournal.readAccepted(runId)
+      if (firstJournalRecordOfKind(records, "WorkflowRunBegan") === undefined) {
         return yield* new WorkflowRunNotBegan({ runId })
       }
-      const ordinal = ControlDirectionApplicationOrdinal.make(
-        records.filter(({ event }) => event._tag === "ControlDirectionApplied").length + 1
-      )
+      let priorApplicationCount = 0
+      for (const _record of journalRecordsOfKind(records, "ControlDirectionApplied")) priorApplicationCount += 1
+      const ordinal = ControlDirectionApplicationOrdinal.make(priorApplicationCount + 1)
       const appended = yield* journal.append(
         runId,
         controlDirectionAppliedRecordKey(ordinal),
