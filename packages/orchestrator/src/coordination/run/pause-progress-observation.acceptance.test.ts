@@ -1,3 +1,4 @@
+import { RunActivationGraphBaseline } from "./activation-graph-baseline.js"
 import {
   AttemptId,
   GitCommitSha,
@@ -602,7 +603,8 @@ const publishJournaledRuntimeObservation = Effect.fn("PauseProgressAcceptance.pu
       target,
       journal,
       recovery,
-      resources.integrationTargets
+      resources.integrationTargets,
+      yield* RunActivationGraphBaseline
     )
     const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
     const evaluation = yield* relation.get
@@ -1763,7 +1765,8 @@ it.effect("ends Alice's old subscription on coordinator death, then restarts G2 
               target,
               journal,
               recovery,
-              resources.integrationTargets
+              resources.integrationTargets,
+              yield* RunActivationGraphBaseline
             )
             const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
             const acceptedFactPublication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(relations))

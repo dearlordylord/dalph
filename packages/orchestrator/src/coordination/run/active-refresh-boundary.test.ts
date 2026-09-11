@@ -3,6 +3,10 @@ import { expect } from "vitest"
 import { Effect, Option } from "effect"
 import {
   makeTaskWorkSpecification,
+  AttemptId,
+  TaskId,
+  TaskBranchRef,
+  WorktreeLocator,
   PlannedAttemptExecutorReport,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
@@ -25,6 +29,7 @@ import {
 } from "../../workflow/task-tracker-facts/observation.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
+import { OperationId } from "../../workflow/identity.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
@@ -58,7 +63,29 @@ it.effect(
           trackerTarget: fixture.target,
           taskSpecification: specification
         })
-        const records: Array<JournalRecord> = [...executing]
+        const otherTaskId = TaskId.make("pending-focused-other-task")
+        const otherSpecification = makeTaskWorkSpecification({ body: "other", title: "Other", taskId: otherTaskId })
+        const otherAttempt = {
+          ...plannedAttempt,
+          attemptId: AttemptId.make("pending-focused-other-attempt"),
+          taskId: otherTaskId,
+          taskRevision: otherSpecification.fingerprint,
+          branch: TaskBranchRef.make("refs/heads/pending-focused-other"),
+          worktree: WorktreeLocator.make("/worktrees/pending-focused-other")
+        }
+        const { records: bothExecuting } = makeExecutingAttemptHistory({
+          activeClaim: {
+            ...fixture.activeClaim,
+            operationId: OperationId.make("pending-focused-other-claim"),
+            taskId: otherTaskId
+          },
+          plannedAttempt: otherAttempt,
+          runId: fixture.runId,
+          trackerTarget: fixture.target,
+          taskSpecification: otherSpecification,
+          priorRecords: executing
+        })
+        const records: Array<JournalRecord> = [...bothExecuting]
         for (let ordinal = 2; ordinal <= count; ordinal += 1) {
           const event = TaskWorkCapacityChangedEvent.make({
             capacity: TaskWorkCapacity.make(1),
@@ -78,7 +105,7 @@ it.effect(
         const cost = yield* Effect.gen(function* () {
           const journal = yield* Journal
           const writer = yield* InRunJournal
-          const append = (event: JournalRecord["event"]) =>
+          const append = (event: Parameters<typeof writer.append>[2]) =>
             writer.append(fixture.runId, describeJournalEvent(event).expectedKey, event)
           const subjects = activeWorkAuthorityRefreshSubjectsForRunState((yield* journal.state.get).reconstructed)
           const opportunity = activeWorkAuthorityRefreshForOwner("Timer", subjects)
@@ -100,6 +127,12 @@ it.effect(
           const projected = projectTrackerSnapshot({
             revision: TrackerRevision.make("pending-focused-graph"),
             tasks: [
+              {
+                id: otherTaskId,
+                lifecycle: TaskLifecycle.cases.Open.make({}),
+                parentTaskId: null,
+                prerequisiteIds: []
+              },
               {
                 id: fixture.taskId,
                 lifecycle: TaskLifecycle.cases.Open.make({}),

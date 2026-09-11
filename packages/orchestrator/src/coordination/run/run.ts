@@ -1,5 +1,6 @@
 import { type PlannedAttemptExecutor, RunId } from "@dalph/contracts"
 import { Context, Effect, Schema, type Stream } from "effect"
+import { RunActivationGraphBaseline } from "./activation-graph-baseline.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { InitialControlPolicy } from "../../control/policy.js"
 import type { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
@@ -93,6 +94,7 @@ export interface AcceptedRunReactivationObservers {
 }
 
 export type JournaledRunServices =
+  | RunActivationGraphBaseline
   | AcceptedJournalReader
   | Journal
   | AttemptChoiceControl
@@ -296,12 +298,14 @@ const makeJournaledDeliveryRelations = Effect.fn("Delivery.makeJournaledRelation
   const journal = yield* Journal
   const recovery = yield* RunRecoveryProjection
   const resources = yield* DeliveryRuntimeResources
+  const activationGraphBaseline = yield* RunActivationGraphBaseline
   return yield* makeReactiveDeliveryRelationsLayer(
     runId,
     target,
     journal,
     recovery,
     resources.integrationTargets,
+    activationGraphBaseline,
     opportunity
   )
 })

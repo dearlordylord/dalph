@@ -4251,6 +4251,52 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
               transition._tag === "ReleaseStartedIntegrationTarget" &&
               transition.responsibility.queuedAt === responsibility.queuedAt
           )
+        if (
+          claimIsExact &&
+          claimObservedAt !== undefined &&
+          !graphWasCheckedAfterClaim &&
+          targetLineageReadIsRequired &&
+          !integrationResourceSnapshot.activeResponsibilityPositions.has(responsibility.queuedAt) &&
+          !integration.transitions.some(
+            (transition) =>
+              (transition._tag === "ReleaseStartedIntegrationTarget" ||
+                transition._tag === "RunIntegrator" ||
+                transition._tag === "RunTargetPromotion" ||
+                transition._tag === "ReconcileTargetPromotionAttempt") &&
+              transition.responsibility.queuedAt === responsibility.queuedAt
+          )
+        ) {
+          // Tracker freshness does not require Git target ownership. In
+          // particular, Retry may first release a stale target, refresh the
+          // post-claim graph, then reacquire before reading Git lineage.
+          const claimRecord = journalRecordByPosition(journalHistoryOf(runState), claimObservedAt)
+          const claimOperationId =
+            claimRecord?.event._tag === "TaskClaimAcquired"
+              ? claimRecord.event.claim.operationId
+              : claimRecord?.event._tag === "TaskTrackerFactsObserved"
+                ? claimRecord.event.operationId
+                : undefined
+          const planOperationId = plannedAttemptPlanOperationId(
+            journalHistoryOf(runState),
+            responsibility.plannedAttempt
+          )
+          if (claimOperationId !== undefined && planOperationId !== undefined) {
+            return [
+              RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+                operation: makeTrackerGraphObservationOperation(
+                  { _tag: "AttemptContinuation" },
+                  OperationId.make(
+                    `integration-candidate:${responsibility.plannedAttempt.attemptId}:after:${claimObservedAt}:graph`
+                  ),
+                  establishedRunTarget,
+                  [planOperationId, claimOperationId],
+                  [responsibility.plannedAttempt.taskId]
+                ),
+                plannedAttempt: responsibility.plannedAttempt
+              })
+            ]
+          }
+        }
         if (quarantineDirection !== undefined && !targetIsHeld && lineageReadIsReady) {
           return integration.transitions.some(
             (transition) =>
