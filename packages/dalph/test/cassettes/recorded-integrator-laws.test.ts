@@ -18,6 +18,7 @@ import {
   TargetLineageObservedEvent,
   WorkflowActor,
   WorkflowOperation,
+  exportWorkflowHistoryRecords,
   type WorkflowJournalEvent,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
@@ -201,7 +202,7 @@ it("projects, folds, and non-trivially renames the current FullRerun successor c
       }
       expect(
         (yield* verifyRecordedCassetteRoundTripWithRenaming(
-          history.records,
+          exportWorkflowHistoryRecords(history.runState.workflowHistory),
           renamed,
           invertCassetteIdentityRenaming(renaming)
         )).every(

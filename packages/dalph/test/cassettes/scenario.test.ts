@@ -56,6 +56,7 @@ import {
   describeJournalEvent,
   EvidenceDigest,
   EvidenceReference,
+  exportWorkflowHistoryRecords,
   ForeignWorktreeRegistration,
   FixtureTarget,
   GitWorktreeReadFailure,
@@ -2323,7 +2324,7 @@ it.effect(
       )
       const started =
         run.history._tag === "ValidWorkflowJournalHistory"
-          ? deriveIntegrationAdmission(run.history.runState.workflowHistory.records).responsibilities.find(
+          ? deriveIntegrationAdmission(run.history.runState.workflowHistory.evidence).responsibilities.find(
               (responsibility) => responsibility._tag === "StartedIntegrationResponsibility"
             )
           : undefined
@@ -2452,7 +2453,7 @@ it.effect("delegates changed H after a cleared blocker without reusing M or crea
     if (blockedHistory._tag !== "ValidWorkflowJournalHistory") {
       return yield* Effect.die("pre-promotion blocker prefix must remain valid journal history")
     }
-    const started = deriveIntegrationAdmission(blockedHistory.runState.workflowHistory.records).responsibilities.find(
+    const started = deriveIntegrationAdmission(blockedHistory.runState.workflowHistory.evidence).responsibilities.find(
       (responsibility) => responsibility._tag === "StartedIntegrationResponsibility"
     )
     if (started?._tag !== "StartedIntegrationResponsibility") {
@@ -2569,7 +2570,7 @@ it.effect("durably waits after an unreadable blocker restart read and resumes on
     if (run.history._tag !== "ValidWorkflowJournalHistory") {
       return yield* Effect.die("unreadable blocker recovery must retain valid journal history")
     }
-    const started = deriveIntegrationAdmission(run.history.runState.workflowHistory.records).responsibilities.find(
+    const started = deriveIntegrationAdmission(run.history.runState.workflowHistory.evidence).responsibilities.find(
       (responsibility) => responsibility._tag === "StartedIntegrationResponsibility"
     )
     if (started?._tag !== "StartedIntegrationResponsibility") {
@@ -3139,7 +3140,9 @@ it.effect("proves promoted ancestry after the blocker clears and completes witho
     }
     expect(deriveIntegrationFrontier(completionClaimBlockedHistory.runState, facts).transitions).toEqual([])
     expect(
-      completionClaimBlockedHistory.records.filter(({ event }) => event._tag === "CompletionClaimReplaced")
+      exportWorkflowHistoryRecords(completionClaimBlockedHistory.runState.workflowHistory).filter(
+        ({ event }) => event._tag === "CompletionClaimReplaced"
+      )
     ).toHaveLength(1)
 
     const ancestryTransition = postBlockerClearTransitions.find(
@@ -6892,7 +6895,7 @@ it.effect(
         )
       }
       const checkpoints = yield* verifyRecordedCassetteRoundTripWithRenaming(
-        recordedHistory.records,
+        exportWorkflowHistoryRecords(recordedHistory.runState.workflowHistory),
         renamed,
         invertCassetteIdentityRenaming(renaming)
       )
@@ -7118,7 +7121,10 @@ it.effect(
       if (restartFailureHistory._tag !== "ValidWorkflowJournalHistory") {
         return yield* Effect.die("Restart W1 read failure recording must fold into valid journal history")
       }
-      expectRecordedRoundTrip(restartFailureHistory.records, restartFailureRecorded)
+      expectRecordedRoundTrip(
+        exportWorkflowHistoryRecords(restartFailureHistory.runState.workflowHistory),
+        restartFailureRecorded
+      )
       const replacementOperationIds = Array.from(
         new Set([
           replacementEntry.successorPlan.operationId,
@@ -7304,7 +7310,10 @@ it.effect(
       if (contradictoryResponseHistory._tag !== "ValidWorkflowJournalHistory") {
         return yield* Effect.die("a contradictory response must remain unsettled for the following exact projection")
       }
-      expectRecordedRoundTrip(contradictoryResponseHistory.records, contradictoryResponseCassette)
+      expectRecordedRoundTrip(
+        exportWorkflowHistoryRecords(contradictoryResponseHistory.runState.workflowHistory),
+        contradictoryResponseCassette
+      )
       const [completionRun, lostCompletionRun, rejectedCompletionRun] = yield* Effect.all([
         runAuthoredScenarioCassette(deliveryFinalitySpineAuthoredCassette),
         runAuthoredScenarioCassette(ambiguousCompletionResponseAuthoredCassette),
