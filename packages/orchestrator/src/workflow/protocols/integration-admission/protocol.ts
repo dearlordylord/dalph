@@ -209,11 +209,6 @@ const settledClaimsForAttempt = (
 ): Chunk.Chunk<CompletionTaskClaim> =>
   hashMapValue(indexes.settledClaimsByAttempt, plannedAttempt.attemptId) ?? Chunk.empty<CompletionTaskClaim>()
 
-const exactSettledClaim = (indexes: IntegrationAdmissionPrefixIndexes, claim: CompletionTaskClaim): boolean =>
-  Chunk.some(settledClaimsForAttempt(indexes, claim.plannedAttempt), (settled) =>
-    completionTaskClaimEquals(settled, claim)
-  )
-
 const finalityFactsWithReplacementIntent = (
   facts: FinalityClaimFacts,
   event: CompletionClaimReplacementIntendedEvent
