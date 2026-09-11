@@ -1,5 +1,7 @@
 import { Effect } from "effect"
 import { InRunJournal } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { journalRecordsForPromotionRequest } from "../../../workflow-journal/record-evidence.js"
 import {
   targetPromotionNonConvergenceRecordKey,
   targetPromotionObservedSuccessRecordKey,
@@ -119,8 +121,9 @@ export const appendTargetPromotionReconciliationDeferral = Effect.fn("TargetProm
 export const readValidatedTargetPromotionState = Effect.fn("TargetPromotion.readValidatedState")(function* (
   correlation: TargetPromotionCorrelation
 ) {
-  const journal = yield* InRunJournal
-  const records = yield* journal.read(targetPromotionRunIdOf(correlation))
+  const accepted = yield* AcceptedJournalReader
+  const prefix = yield* accepted.readAccepted(targetPromotionRunIdOf(correlation))
+  const records = Array.from(journalRecordsForPromotionRequest(prefix, correlation.requestId))
   const foreignCorrelation = targetPromotionCorrelationConflictFor(records, correlation)
   if (foreignCorrelation !== undefined) {
     return yield* new TargetPromotionCorrelationContradiction({
