@@ -2,11 +2,11 @@
 import { type RunId } from "@dalph/contracts"
 import { HashMap, HashSet, Option } from "effect"
 import { type JournalPosition } from "../../../workflow-journal/identity.js"
+import { outcomeRecordKey } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import type { OperationId } from "../../identity.js"
 import type { WorkflowJournalEvent } from "../../registry/event.js"
 import type { FocusedTaskCompletionFactsObserved } from "../../task-tracker-facts/focused-completion-observation.js"
-import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import {
   completionTaskClaimEquals,
   completionSuccessObservationEquals,
@@ -25,13 +25,13 @@ import { isExactTaskClaim } from "../../../authorities/task-tracker/claim-mutati
 import { taskTrackerTargetKey } from "../../../authorities/task-tracker/target.js"
 import { invalidCompletionTaskHistory } from "./completion-task-history.js"
 import { taskTrackerObservationMatchesRead } from "../../task-tracker-facts/observation-match.js"
-import { recordedTaskAttemptPlans } from "../task-attempt-planning/journal-evidence.js"
+import { recordedTaskAttemptPlanFor } from "../task-attempt-planning/journal-evidence.js"
 import {
   isJournalRecordEvidence,
   firstJournalRecordOfKind,
   journalEvidenceBefore,
+  journalRecordByKey,
   journalRecordByPosition,
-  journalRecordsForAttempt,
   journalRecordsForAttemptKind,
   journalRecordsForOperationId,
   journalRecordsForTask,
@@ -139,35 +139,29 @@ const exactPlanPrior = (
   records: JournalHistorySource,
   claim: CompletionTaskClaim,
   position: JournalPosition
-): boolean =>
-  recordedTaskAttemptPlans(
-    Array.from(journalRecordsForAttempt(prior(records, position), claim.plannedAttempt.attemptId))
-  ).some((operation) => {
-    if (
-      operation.plannedAttempt.attemptId !== claim.plannedAttempt.attemptId ||
-      !plannedTaskAttemptEquivalence(operation.plannedAttempt, claim.plannedAttempt)
-    )
-      return false
-    const accepted = prior(records, position)
-    const originalIsCausal = causalPredecessors(accepted, operation).has(claim.originalClaim.operationId)
-    const authorized = authorizedClaimForAttempt(accepted, claim.plannedAttempt)
-    return originalIsCausal || (authorized !== undefined && isExactTaskClaim(authorized.claim, claim.originalClaim))
-  })
+): boolean => {
+  const accepted = prior(records, position)
+  const operation = recordedTaskAttemptPlanFor(accepted, claim.plannedAttempt)
+  if (operation === undefined) return false
+  const originalIsCausal = causalPredecessors(accepted, operation).has(claim.originalClaim.operationId)
+  const authorized = authorizedClaimForAttempt(accepted, claim.plannedAttempt)
+  return originalIsCausal || (authorized !== undefined && isExactTaskClaim(authorized.claim, claim.originalClaim))
+}
 
 const exactOriginalClaimPrior = (
   records: JournalHistorySource,
   claim: CompletionTaskClaim,
   position: JournalPosition
-): boolean =>
-  hasMatching(
-    journalRecordsForTask(prior(records, position), claim.originalClaim.taskId),
-    ({ event }) =>
-      event._tag === "TaskClaimAcquired" &&
-      event.claim.taskId === claim.originalClaim.taskId &&
-      event.claim.operationId === claim.originalClaim.operationId &&
-      event.claim.owner === claim.originalClaim.owner &&
-      event.claim.token === claim.originalClaim.token
+): boolean => {
+  const acquired = journalRecordByKey(prior(records, position), outcomeRecordKey(claim.originalClaim.operationId))
+  return (
+    acquired?.event._tag === "TaskClaimAcquired" &&
+    acquired.event.claim.taskId === claim.originalClaim.taskId &&
+    acquired.event.claim.operationId === claim.originalClaim.operationId &&
+    acquired.event.claim.owner === claim.originalClaim.owner &&
+    acquired.event.claim.token === claim.originalClaim.token
   )
+}
 
 const exactPromotionPrior = (
   records: JournalHistorySource,

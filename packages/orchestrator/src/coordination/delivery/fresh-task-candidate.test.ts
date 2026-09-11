@@ -8,6 +8,7 @@ import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
+import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
 import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import type { CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
 import { RunActivationOpportunity } from "../run/run-activation-opportunity.js"
@@ -267,7 +268,7 @@ const hostileCandidateFrame = (): CurrentDeliveryFrame => {
       taskExecutionCapacity: TaskWorkCapacity.make(1)
     }),
     runId,
-    workflowHistory: { records }
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
   }
 }
 
