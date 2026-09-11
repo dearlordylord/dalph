@@ -11,7 +11,7 @@ import {
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
-import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
+import { InRunJournal, type JournalError, type JournalRecord } from "../../workflow-journal/store.js"
 import { Journal } from "../delivery/journal.js"
 import { workflowJournalTransitionRuleFor } from "../reconstruction/history-transition.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
@@ -4383,6 +4383,7 @@ export class RunRecoveryProjectionRunMismatch extends Schema.TaggedError<RunReco
 
 export type RunRecoveryProjectionError =
   | Effect.Error<ReturnType<typeof projectRecoveredRunState>>
+  | JournalError
   | RunRecoveryProjectionRunMismatch
 
 /** Read-only reconstructed evidence consumed by delivery. */

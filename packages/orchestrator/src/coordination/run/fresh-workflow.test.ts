@@ -897,10 +897,7 @@ it("does not materialize accepted history when a worktree-ready proof does not m
   const frame = selectionFrameWith(records)
   const indexedFrame: CurrentDeliveryFrame = {
     ...frame,
-    workflowHistory: {
-      ...frame.workflowHistory,
-      prefix: acceptedJournalPrefixFromValidatedHistory(selectionRunId, frame.workflowHistory.records)
-    }
+    workflowHistory: { evidence: acceptedJournalPrefixFromValidatedHistory(selectionRunId, records) }
   }
   let materializations = 0
   const stop = observeJournalRecordSequenceOperations((operation) => {

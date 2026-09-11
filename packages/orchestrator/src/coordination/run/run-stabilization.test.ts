@@ -959,7 +959,11 @@ it.effect("replays an intent-only G2 after a crash without allocating a second i
           operationId: g1Operation.operationId,
           recordedAt: g1.observation.recordedAt
         })
-      ).toEqual(replayableActiveIntent?.event.operation)
+      ).toEqual(
+        replayableActiveIntent?.event._tag === "TaskTrackerReadIntentRecorded"
+          ? replayableActiveIntent.event.operation
+          : undefined
+      )
       expect(
         afterCrash
           .filter(({ event }) => event._tag === "TaskTrackerReadIntentRecorded")
