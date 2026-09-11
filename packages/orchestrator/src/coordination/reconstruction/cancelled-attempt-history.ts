@@ -6,6 +6,7 @@ import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { OperationId } from "../../workflow/identity.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import type { CancelledAttemptTaskClaimReleaseOperation, WorkflowOperation } from "../../workflow/registry/operation.js"
+import type { CancelledAttemptClaimNoReleaseObservedEvent } from "../../workflow/protocols/run-cancellation/events.js"
 import { authorizedClaimForAttempt } from "../../workflow/claim-authority-history.js"
 import { recordedTaskAttemptPlanFor } from "../../workflow/protocols/task-attempt-planning/journal-evidence.js"
 import {
@@ -40,7 +41,7 @@ type RelinquishedEvent = Extract<
   WorkflowJournalEvent,
   { readonly _tag: "CancelledAttemptImplementationResponsibilityRelinquished" }
 >
-type NoReleaseEvent = Extract<WorkflowJournalEvent, { readonly _tag: "CancelledAttemptClaimNoReleaseObserved" }>
+type NoReleaseEvent = CancelledAttemptClaimNoReleaseObservedEvent
 type CancellationAppliedRecord = Omit<JournalRecord, "event"> & {
   readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "RunCancellationApplied" }>
 }
@@ -213,7 +214,7 @@ const claimObservationIsAbsentOrForeign = (
   return observed._tag === "UnclaimedTask" || !isExactTaskClaim(observed, expectedClaim)
 }
 
-type ClaimReadOperation = Extract<WorkflowOperation, { readonly _tag: "ReadTaskClaim" }>
+type ClaimReadOperation = typeof WorkflowOperation.cases.ReadTaskClaim.Type
 
 const claimReadIntentFor = (
   records: JournalHistorySource,
@@ -622,10 +623,8 @@ const validateNoReleaseFoundations = (
 
 const noReleaseObservationMatchesEvent = (
   expected: NoReleaseEvent["observation"],
-  observed: NoReleaseEvent["observation"] | undefined
+  observed: NoReleaseEvent["observation"]
 ): boolean => {
-  /* v8 ignore next -- @preserve noReleaseObservationIsValid calls this only after proving a focused absent-or-foreign observation. */
-  if (observed === undefined) return false
   if (observed._tag === "UnclaimedTask") {
     return expected._tag === "UnclaimedTask" && expected.taskId === observed.taskId
   }
@@ -662,12 +661,8 @@ const noReleaseObservationIsValid = (
   if (!readIntent.predecessorOperationIds.includes(relinquished.event.authorizedClaim.operationId)) return false
   if (!taskTrackerObservationMatchesRead(observation.event.observation, readIntent)) return false
   if (!claimObservationIsAbsentOrForeign(observation, event.expectedClaim)) return false
-  /* v8 ignore next -- @preserve claimObservationIsAbsentOrForeign above rejects unreadable focused observations. */
-  const observedClaim =
-    observation.event.observation._tag === "FocusedTaskClaimFacts"
-      ? observation.event.observation.observation
-      : undefined
-  return noReleaseObservationMatchesEvent(event.observation, observedClaim)
+  if (observation.event.observation._tag !== "FocusedTaskClaimFacts") return false
+  return noReleaseObservationMatchesEvent(event.observation, observation.event.observation.observation)
 }
 
 const validateNoReleaseObservation = (
