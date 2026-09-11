@@ -3,6 +3,7 @@ import { Schema } from "effect"
 import { RunId } from "@dalph/contracts"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
 import {
   attemptPlanRecordKey,
   intentRecordKey,
@@ -674,11 +675,18 @@ it("rejects marker-deletion settlement when a later active-record read contradic
 
 it("projects each phase from exact stored evidence without rescanning authority state", () => {
   const records = validFinalityRecords()
+  const canonicalRecords = records.map((candidate) => ({
+    ...candidate,
+    key: describeJournalEvent(candidate.event).expectedKey
+  }))
   expect(deriveIntegrationFinalityStateFor(records.slice(0, 4), fixture.claim)?._tag).toBe("ReplacementPending")
   expect(deriveIntegrationFinalityStateFor(records.slice(0, 6), fixture.claim)?._tag).toBe("CompletionClaimReplaced")
   expect(deriveIntegrationFinalityStateFor(records.slice(0, 10), fixture.claim)?._tag).toBe("DeletionPending")
   expect(deriveIntegrationFinalityStateFor(records.slice(0, 19), fixture.claim)?._tag).toBe("CompletionClaimDeleted")
   expect(deriveIntegrationFinalityStateFor(records, fixture.claim)?._tag).toBe("IntegrationFinalitySettled")
+  expect(deriveIntegrationFinalityStateFor(journalEvidenceFrom(canonicalRecords), fixture.claim)).toEqual(
+    deriveIntegrationFinalityStateFor(records, fixture.claim)
+  )
 })
 
 it("keeps every finality event accepted while excluding unrelated or malformed records", () => {
@@ -809,8 +817,20 @@ it("does not settle from a terminal occurrence with different operation evidence
 
 it("uses only the exact focused task-local success as cleanup authority", () => {
   const records = validFinalityRecords()
+  const canonicalRecords = records.map((candidate) => ({
+    ...candidate,
+    key: describeJournalEvent(candidate.event).expectedKey
+  }))
   expect(
     latestFocusedCompletedTaskObservationFor(records, fixture.taskId, JournalPosition.make(6), fixture.claim)
+  ).toEqual(successObservation)
+  expect(
+    latestFocusedCompletedTaskObservationFor(
+      journalEvidenceFrom(canonicalRecords),
+      fixture.taskId,
+      JournalPosition.make(6),
+      fixture.claim
+    )
   ).toEqual(successObservation)
   expect(
     latestFocusedCompletedTaskObservationFor(
