@@ -95,13 +95,7 @@ const promotedPlanFor = (records: FinalityPremiseSource) => {
     ...premiseRecordsForKind(records, "TaskAttemptPlanned"),
     ...premiseRecordsForKind(records, "PlannedAttemptReplaced")
   ]
-    .flatMap(({ event }) =>
-      event._tag === "TaskAttemptPlanned"
-        ? [event.operation]
-        : event._tag === "PlannedAttemptReplaced"
-          ? [event.successorPlan]
-          : []
-    )
+    .flatMap(({ event }) => (event._tag === "TaskAttemptPlanned" ? [event.operation] : [event.successorPlan]))
     .findLast(
       ({ plannedAttempt }) =>
         plannedAttempt.attemptId === promotedAttempt.attemptId && plannedAttempt.runId === promotedAttempt.runId
@@ -112,7 +106,6 @@ const promotedPlanFor = (records: FinalityPremiseSource) => {
 const completeGraphCoveringTask = (records: FinalityPremiseSource, taskId: TaskId) =>
   premiseRecordsForKind(records, "TaskTrackerFactsObserved").findLast(
     ({ event }) =>
-      event._tag === "TaskTrackerFactsObserved" &&
       event.observation._tag === "CompleteTaskTrackerFacts" &&
       event.observation.factFamilies[0].taskIds.includes(taskId)
   )?.event
