@@ -27,7 +27,11 @@ import {
   makeTrackerGraphObservationOperation,
   TaskClaimReleaseAuthority
 } from "../workflow/registry/operation.js"
-import { TaskClaimReleaseIntendedEvent, taskTrackerReadIntent } from "../workflow/registry/event.js"
+import {
+  TaskClaimReleasedEvent,
+  TaskClaimReleaseIntendedEvent,
+  taskTrackerReadIntent
+} from "../workflow/registry/event.js"
 import {
   TaskTrackerFactsObservedEvent,
   makeFocusedTaskWorkSpecificationFactsObserved
@@ -239,6 +243,69 @@ it("indexes a release intent by its nested claim operation at every safe cutoff"
 
   expect(Array.from(journalRecordsForOperationId(earlier, claimOperationId))).toEqual([intent])
   expect(Array.from(journalRecordsForOperationId(complete, claimOperationId))).toEqual([intent, later])
+})
+
+it("indexes a released claim by both exact operation identities without scanning unrelated releases", () => {
+  const runId = RunId.make("nested-released-correlation-run")
+  const releaseRecord = (
+    position: number,
+    claimOperationId: OperationId,
+    releaseOperationId: OperationId,
+    key: JournalRecordKey
+  ): JournalRecord => {
+    const claim = ActiveTaskClaim.make({
+      operationId: claimOperationId,
+      owner: ClaimOwner.make(`nested-released-owner:${position}`),
+      taskId: TaskId.make(`nested-released-task:${position}`),
+      token: ClaimToken.make(`nested-released-token:${position}`)
+    })
+    return {
+      event: TaskClaimReleasedEvent.make({
+        release: TaskClaimRelease.make({ claim, operationId: releaseOperationId }),
+        version: workflowJournalEventVersion
+      }),
+      key,
+      position: JournalPosition.make(position),
+      runId
+    }
+  }
+  const exactClaimOperationId = OperationId.make("nested-released-exact-claim")
+  const exactReleaseOperationId = OperationId.make("nested-released-exact-release")
+  const visits = [64, 256].map((size) => {
+    const duplicateKey = JournalRecordKey.make(`nested-released-duplicate-key:${size}`)
+    const records = [
+      ...Array.from({ length: size }, (_, index) =>
+        releaseRecord(
+          index + 1,
+          OperationId.make(`nested-released-foreign-claim:${index}`),
+          OperationId.make(`nested-released-foreign-release:${index}`),
+          duplicateKey
+        )
+      ),
+      releaseRecord(size + 1, exactClaimOperationId, exactReleaseOperationId, duplicateKey)
+    ]
+    const indexed = journalEvidenceFrom(records)
+    for (const operationId of [exactClaimOperationId, exactReleaseOperationId]) {
+      expect(Array.from(journalRecordsForOperationId(indexed, operationId))).toEqual(
+        Array.from(journalRecordsForOperationId(records, operationId))
+      )
+    }
+    expect(Array.from(journalRecordsForOperationId(indexed, OperationId.make("nested-released-absent")))).toEqual([])
+    const operations: Array<string> = []
+    const stop = observeJournalRecordSequenceOperations((operation) => operations.push(operation._tag))
+    try {
+      expect(Array.from(journalRecordsForOperationId(indexed, exactReleaseOperationId))).toEqual([records.at(-1)])
+      expect(Array.from(journalRecordsForOperationId(indexed, exactClaimOperationId))).toEqual([records.at(-1)])
+    } finally {
+      stop()
+    }
+    return operations
+  })
+
+  expect(visits).toEqual([
+    ["IndexedRecordVisit", "IndexedRecordVisit"],
+    ["IndexedRecordVisit", "IndexedRecordVisit"]
+  ])
 })
 
 it("indexes promotion success by its nested planned-attempt task with constant exact lookup work", () => {

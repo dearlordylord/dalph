@@ -6,6 +6,7 @@ import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
 import { observeJournalRecordSequenceOperations } from "../../../workflow-journal/record-sequence.js"
+import { observeCompletionReadCycleOperations } from "../../../workflow-journal/completion-read-cycles.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -301,18 +302,62 @@ it("keeps one exact authorization-cycle lookup constant across 64 and 256 cycles
     }
     if (finalIntent === undefined) return expect.fail("fixture must contain an authorization cycle")
     const evidence = journalEvidenceFrom(records)
-    const operations: Array<string> = []
-    const stop = observeJournalRecordSequenceOperations((operation) => operations.push(operation._tag))
+    const sequenceOperations: Array<string> = []
+    const cycleOperations: Array<string> = []
+    const stopSequence = observeJournalRecordSequenceOperations((operation) => sequenceOperations.push(operation._tag))
+    const stopCycle = observeCompletionReadCycleOperations((operation) => cycleOperations.push(operation))
     try {
       expect(invalidCompletionTaskHistory(finalIntent, evidence, fixture.runId)).toBeUndefined()
     } finally {
-      stop()
+      stopCycle()
+      stopSequence()
     }
-    expect(operations.every((operation) => operation === "IndexedRecordVisit")).toBe(true)
-    return operations.length
+    expect(sequenceOperations.every((operation) => operation === "IndexedRecordVisit")).toBe(true)
+    expect(cycleOperations).toEqual(["SnapshotLookup"])
+    return sequenceOperations.length
   })
   expect(visits[0]).toBeGreaterThan(0)
   expect(visits[1]).toBe(visits[0])
+})
+
+it("keeps one exact open confirmation lookup constant across 64 and 256 cycles on the same request", () => {
+  const visits = [64, 256].map((size) => {
+    const records: Array<JournalRecord> = [
+      record(
+        1,
+        CompletionTaskResponseLostEvent.make({ attemptOrdinal: ordinal, request, version: workflowJournalEventVersion })
+      )
+    ]
+    for (let index = 0; index < size; index += 1) {
+      const purpose = CompletionTaskFocusedReadPurpose.cases.Confirmation.make({
+        attemptOrdinal: ordinal,
+        confirmationOrdinal: CompletionTaskConfirmationReadOrdinal.make(index + 1)
+      })
+      const focused = focusedReadEvents(purpose)
+      records.push(record(records.length + 1, focused.intent), record(records.length + 2, focused.outcome))
+    }
+    const lookupIntent = record(
+      records.length + 1,
+      CompletionTaskRequestLookupIntendedEvent.make({
+        attemptOrdinal: ordinal,
+        operationId: lookupOperationId,
+        request,
+        version: workflowJournalEventVersion
+      })
+    )
+    records.push(lookupIntent)
+    const evidence = journalEvidenceFrom(records)
+    const cycleOperations: Array<string> = []
+    const stop = observeCompletionReadCycleOperations((operation) => cycleOperations.push(operation))
+    try {
+      expect(invalidCompletionTaskHistory(lookupIntent, evidence, fixture.runId)).toBeUndefined()
+    } finally {
+      stop()
+    }
+    expect(cycleOperations).toEqual(["SnapshotLookup"])
+    return cycleOperations.length
+  })
+  expect(visits).toEqual([1, 1])
 })
 
 it("preserves the raw diagnostic ordering when a focused outcome precedes the first Run beginning", () => {
@@ -365,6 +410,37 @@ it("dispatches a rejected numbered completion response through history validatio
   const records = [...exact.slice(0, 8), record(9, rejected)]
   expect(invalidCompletionTaskHistory(eventAt(records, 9), records, fixture.runId)?.detail).toContain(
     "mutually exclusive CompletionTaskResponseLost and CompletionTaskRejected outcomes"
+  )
+})
+
+it("preserves raw input order when multiple mutually exclusive results share a position", () => {
+  const exact = chronology()
+  const rejected = record(
+    8,
+    CompletionTaskRejectedEvent.make({
+      attemptOrdinal: ordinal,
+      detail: "first raw result",
+      request,
+      version: workflowJournalEventVersion
+    })
+  )
+  const lost = record(
+    8,
+    CompletionTaskResponseLostEvent.make({ attemptOrdinal: ordinal, request, version: workflowJournalEventVersion })
+  )
+  const acknowledged = record(
+    9,
+    CompletionTaskAcknowledgedEvent.make({
+      acknowledgement: CompletionTaskAcknowledgement.make({ operationId: request.operationId, taskId: request.taskId }),
+      attemptOrdinal: ordinal,
+      request,
+      version: workflowJournalEventVersion
+    })
+  )
+  const raw = [...exact.slice(0, 7), rejected, lost, acknowledged]
+
+  expect(invalidCompletionTaskHistory(acknowledged, raw, fixture.runId)?.detail).toContain(
+    "mutually exclusive CompletionTaskRejected and CompletionTaskAcknowledged outcomes"
   )
 })
 
