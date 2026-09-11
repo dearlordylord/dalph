@@ -476,6 +476,13 @@ reconciliation, and reaches at most one post-quiescence tracker
 reconfirmation before returning or recording termination.
 _Avoid_: Process lifetime, recovery activation, continuous coordinator loop
 
+**Workflow-finality premise change**:
+A journal occurrence other than capacity-only bookkeeping that may invalidate
+an earlier finality proof for the same Run. Its position supports checking a
+later tail without replaying that tail; it does not assert the Run's current
+finality and is retained only as immutable derived evidence.
+_Avoid_: Finality state, completed Run, capacity revision
+
 **Workflow Run termination**:
 The final durable workflow-journal fact for one globally settled Run. In V1 it
 classifies the result as `Completed`, `Blocked`, or `Cancelled` from one fresh
