@@ -544,7 +544,8 @@ it.live(
             yield* appendReplacementProvenance(plannedAttempt, successorAttempt, "StartupValid").pipe(
               Effect.provide(journalContext)
             )
-            yield* Context.get(journalContext, AcceptedJournalReader).readAccepted(runId)
+            const accepted = yield* Context.get(journalContext, AcceptedJournalReader).readAccepted(runId)
+            expect(accepted.runId).toBe(runId)
             const reduced = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
             expect(reduced._tag).toBe("ValidWorkflowJournalHistory")
           })
