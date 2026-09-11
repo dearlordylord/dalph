@@ -1,6 +1,13 @@
-import { Effect, Ref } from "effect"
+/* eslint-disable max-lines -- The maintained cassette keeps its canonical accepted bootstrap beside the protocol replay it owns. */
+import { PlannedAttemptExecutorReport } from "@dalph/contracts"
+import { Effect, Layer, Option, Ref } from "effect"
 import {
+  ActiveTaskClaim,
+  ClaimOwner,
+  ClaimToken,
+  FixtureTarget,
   GitReadIntentRecordedEvent,
+  InitialControlPolicy,
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent,
   InRunJournal,
@@ -14,26 +21,60 @@ import {
   IntegratorResult,
   JournalPosition,
   JournalRecord,
+  JournalStore,
   OperationId,
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorStateObservedEvent,
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent,
+  PlannedWorktreeReady,
+  TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisition,
+  TaskClaimAcquisitionIntendedEvent,
+  TaskLifecycle,
+  TaskWorkCapacity,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
   TargetLineageObservedEvent,
+  TrackerRevision,
   WorkflowActor,
+  WorkflowRunBeganEvent,
   deriveIntegratorRunState,
   describeJournalEvent,
   integratorCorrelationFor,
+  journalLayer,
+  makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
   makeTargetLineageObservationOperation,
+  makeTaskAttemptPlanOperation,
+  makeTaskClaimAcquisitionOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
+  makeTrackerGraphObservationOperation,
+  memoryJournalStoreLayer,
   prepareIntegrationCandidateRun,
+  projectTrackerSnapshot,
+  reduceWorkflowJournalHistory,
+  taskTrackerFactsObservedEvent,
+  taskTrackerReadIntent,
   workflowJournalEventVersion,
   type IntegratorCandidateText,
-  type IntegratorRequest,
-  type WorkflowJournalEvent
+  type IntegratorRequest
 } from "@dalph/orchestrator"
 import {
+  AuthoredIntegratorCassette,
   IntegratorCassetteRun,
   IntegratorCassetteTerminalExpectation,
   RecordedIntegratorOutcome,
   integratorPreparationInputFor,
+  maintainedIntegratorTaskSpecification,
   recordedIntegratorCassetteFor,
-  type AuthoredIntegratorCassette,
   type AuthoredIntegratorGitResult,
   type AuthoredIntegratorResult,
   type AuthoredIntegratorStoryItem,
@@ -47,18 +88,6 @@ import {
 export * from "./integrator-cassette-domain.js"
 export * from "./integrator-cassette-stories.js"
 
-const initialLineageIntentPosition = 3
-
-type AppendableWorkflowJournalEvent = Exclude<
-  WorkflowJournalEvent,
-  { readonly _tag: "WorkflowRunBegan" | "WorkflowRunTerminated" }
->
-
-interface IntegratorCassetteJournal {
-  readonly records: Ref.Ref<ReadonlyArray<JournalRecord>>
-  readonly service: InRunJournal["Service"]
-}
-
 interface IntegratorCassetteRuntime {
   readonly cassette: AuthoredIntegratorCassette
   readonly gitCandidates: Ref.Ref<ReadonlyArray<IntegratorCandidateText>>
@@ -66,82 +95,277 @@ interface IntegratorCassetteRuntime {
   readonly gitCalls: Ref.Ref<number>
   readonly integratorCalls: Ref.Ref<ReadonlyArray<IntegratorRequest>>
   readonly integratorResults: Ref.Ref<ReadonlyArray<AuthoredIntegratorResult>>
-  readonly journal: IntegratorCassetteJournal
   readonly input: IntegratorCassetteInput
 }
 
-const journalRecordFor = (
+const acceptedExecutorReportOrdinal = 2
+const cassetteTarget = FixtureTarget.make("integrator-maintained-target")
+
+const appendRecord = (
+  records: ReadonlyArray<JournalRecord>,
   runId: IntegratorCassetteInput["responsibility"]["plannedAttempt"]["runId"],
-  position: number,
-  event: AppendableWorkflowJournalEvent
-): JournalRecord =>
-  JournalRecord.make({
+  event: JournalRecord["event"]
+) => {
+  const record = JournalRecord.make({
     event,
     key: describeJournalEvent(event).expectedKey,
-    position: JournalPosition.make(position),
+    position: JournalPosition.make(records.length + 1),
     runId
   })
-
-const initialRecordsFor = (startingFacts: AuthoredIntegratorStartingFacts): ReadonlyArray<JournalRecord> => {
-  const { responsibility, targetLineage, targetLineageObservedAt } = startingFacts
-  const began = IntegrationResponsibilityBeganEvent.make({
-    acceptedResult: responsibility.acceptedResult,
-    integrationTarget: responsibility.integrationTarget,
-    plannedAttempt: responsibility.plannedAttempt,
-    version: workflowJournalEventVersion
-  })
-  const started = IntegrationStartedEvent.make({
-    acceptedResult: responsibility.acceptedResult,
-    integrationTarget: responsibility.integrationTarget,
-    plannedAttempt: responsibility.plannedAttempt,
-    responsibilityBeganAt: responsibility.queuedAt,
-    version: workflowJournalEventVersion
-  })
-  const lineageOperationId = OperationId.make(`integrator-cassette-lineage:${responsibility.plannedAttempt.attemptId}`)
-  const lineageOperation = makeTargetLineageObservationOperation({
-    integrationTarget: responsibility.integrationTarget,
-    operationId: lineageOperationId,
-    plannedAttempt: responsibility.plannedAttempt,
-    predecessorOperationIds: []
-  })
-  const lineageIntent = GitReadIntentRecordedEvent.make({
-    initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-    occurrenceClassification: "InitiatedAction",
-    operation: lineageOperation,
-    version: workflowJournalEventVersion
-  })
-  const lineage = TargetLineageObservedEvent.make({
-    observation: targetLineage,
-    occurrenceClassification: "NonActionOccurrence",
-    operationId: lineageOperationId,
-    plannedAttempt: responsibility.plannedAttempt,
-    version: workflowJournalEventVersion
-  })
-  return [
-    journalRecordFor(responsibility.plannedAttempt.runId, responsibility.queuedAt, began),
-    journalRecordFor(responsibility.plannedAttempt.runId, responsibility.startedAt, started),
-    journalRecordFor(responsibility.plannedAttempt.runId, initialLineageIntentPosition, lineageIntent),
-    journalRecordFor(responsibility.plannedAttempt.runId, targetLineageObservedAt, lineage)
-  ]
+  return { record, records: [...records, record] }
 }
 
-const makeJournal = Effect.fn("IntegratorCassette.makeJournal")(function* (
-  initialRecords: ReadonlyArray<JournalRecord>
-) {
-  const records = yield* Ref.make(initialRecords)
-  const service = InRunJournal.of({
-    append: (runId, key, event) =>
-      Ref.modify(records, (current) => {
-        const existing = current.find((record) => record.key === key)
-        if (existing !== undefined) return [Effect.succeed(existing), current] as const
-        const largestPosition = current.reduce((largest, record) => Math.max(largest, record.position), 0)
-        const appended = JournalRecord.make({ event, key, position: JournalPosition.make(largestPosition + 1), runId })
-        return [Effect.succeed(appended), [...current, appended]] as const
-      }).pipe(Effect.flatten),
-    read: (runId) => Ref.get(records).pipe(Effect.map((current) => current.filter((record) => record.runId === runId)))
+/** Builds the actual accepted attempt chronology that owns the cassette's integration responsibility. */
+const acceptedSetupFor = (cassette: AuthoredIntegratorCassette) => {
+  const authored = cassette.startingFacts
+  const { acceptedResult, integrationTarget, plannedAttempt } = authored.responsibility
+  const runId = plannedAttempt.runId
+  const claim = ActiveTaskClaim.make({
+    operationId: OperationId.make(`integrator-cassette-claim:${plannedAttempt.attemptId}`),
+    owner: ClaimOwner.make("integrator-cassette-coordinator"),
+    taskId: plannedAttempt.taskId,
+    token: ClaimToken.make(`integrator-cassette-token:${plannedAttempt.attemptId}`)
   })
-  return { records, service } satisfies IntegratorCassetteJournal
-})
+  const claimOperation = makeTaskClaimAcquisitionOperation({
+    acquisition: TaskClaimAcquisition.make(claim),
+    predecessorOperationIds: []
+  })
+  const graphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make(`${claim.operationId}:graph`),
+    cassetteTarget,
+    [claim.operationId],
+    [plannedAttempt.taskId]
+  )
+  const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make(`${claim.operationId}:specification`),
+    cassetteTarget,
+    plannedAttempt.taskId,
+    [graphOperation.operationId]
+  )
+  const planOperation = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make(`${claim.operationId}:plan`),
+    plannedAttempt,
+    predecessorOperationIds: [specificationOperation.operationId]
+  })
+  const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+    operationId: OperationId.make(`${claim.operationId}:worktree`),
+    plannedAttempt,
+    predecessorOperationIds: [planOperation.operationId]
+  })
+  const graph = Option.getOrThrow(
+    Option.fromUndefinedOr(
+      (() => {
+        const projection = projectTrackerSnapshot({
+          revision: TrackerRevision.make("integrator-maintained-graph"),
+          tasks: [
+            {
+              id: plannedAttempt.taskId,
+              lifecycle: TaskLifecycle.cases.Open.make({}),
+              parentTaskId: null,
+              prerequisiteIds: []
+            }
+          ]
+        })
+        return projection._tag === "Valid" ? projection.snapshot : undefined
+      })()
+    )
+  )
+  const targetLineageOperation = makeTargetLineageObservationOperation({
+    integrationTarget,
+    operationId: OperationId.make(`${claim.operationId}:target-lineage`),
+    plannedAttempt,
+    predecessorOperationIds: [worktreeOperation.operationId]
+  })
+  const runBegan = WorkflowRunBeganEvent.make({
+    initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+    occurrenceClassification: "InitiatedAction",
+    target: cassetteTarget,
+    version: workflowJournalEventVersion
+  })
+  let records: ReadonlyArray<JournalRecord> = [
+    JournalRecord.make({
+      event: runBegan,
+      key: describeJournalEvent(runBegan).expectedKey,
+      position: JournalPosition.make(1),
+      runId
+    })
+  ]
+  const append = (event: JournalRecord["event"]) => {
+    const next = appendRecord(records, runId, event)
+    records = next.records
+    return next.record
+  }
+  const executingReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+    correlation: { attemptId: plannedAttempt.attemptId, runId }
+  })
+  const acceptedReport = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+    correlation: { attemptId: plannedAttempt.attemptId, runId },
+    result: { _tag: "Accepted", acceptedResult }
+  })
+  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+
+  return {
+    append,
+    authored,
+    commandOrdinal,
+    graph,
+    graphOperation,
+    acceptedReport,
+    claim,
+    claimOperation,
+    executingReport,
+    integrationTarget,
+    planOperation,
+    plannedAttempt,
+    records: () => records,
+    specificationOperation,
+    targetLineageOperation,
+    worktreeOperation
+  }
+}
+
+const materializeAcceptedSetup = (cassette: AuthoredIntegratorCassette) => {
+  const setup = acceptedSetupFor(cassette)
+  const {
+    acceptedReport,
+    append,
+    authored,
+    claim,
+    claimOperation,
+    commandOrdinal,
+    executingReport,
+    graph,
+    graphOperation,
+    integrationTarget,
+    plannedAttempt,
+    planOperation,
+    specificationOperation,
+    targetLineageOperation,
+    worktreeOperation
+  } = setup
+  append(TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion }))
+  append(TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion }))
+  append(taskTrackerReadIntent(graphOperation))
+  append(
+    taskTrackerFactsObservedEvent(
+      graphOperation.operationId,
+      makeCompleteTaskTrackerFactsObserved(graphOperation, graph)
+    )
+  )
+  append(taskTrackerReadIntent(specificationOperation))
+  append(
+    taskTrackerFactsObservedEvent(
+      specificationOperation.operationId,
+      makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, maintainedIntegratorTaskSpecification)
+    )
+  )
+  append(TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion }))
+  append(
+    TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: workflowJournalEventVersion })
+  )
+  append(
+    TaskWorktreeReadyEvent.make({
+      operationId: worktreeOperation.operationId,
+      proof: PlannedWorktreeReady.make({
+        baseSha: plannedAttempt.baseSha,
+        branch: plannedAttempt.branch,
+        headSha: plannedAttempt.baseSha,
+        worktree: plannedAttempt.worktree
+      }),
+      version: workflowJournalEventVersion
+    })
+  )
+  append(
+    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+  )
+  append(
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "Begin",
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      ordinal: commandOrdinal,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  append(
+    PlannedAttemptExecutorCommandResponseObservedEvent.make({
+      commandOrdinal,
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt,
+      report: executingReport,
+      version: workflowJournalEventVersion
+    })
+  )
+  append(
+    PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+      report: executingReport,
+      version: workflowJournalEventVersion
+    })
+  )
+  append(
+    PlannedAttemptExecutorStateObservedEvent.make({
+      observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: acceptedReport }),
+      occurrenceClassification: "NonActionOccurrence",
+      ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  append(
+    PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: PlannedAttemptExecutorReportOrdinal.make(acceptedExecutorReportOrdinal),
+      report: acceptedReport,
+      version: workflowJournalEventVersion
+    })
+  )
+  const queued = append(
+    IntegrationResponsibilityBeganEvent.make({
+      acceptedResult: authored.responsibility.acceptedResult,
+      integrationTarget,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  const started = append(
+    IntegrationStartedEvent.make({
+      acceptedResult: authored.responsibility.acceptedResult,
+      integrationTarget,
+      plannedAttempt,
+      responsibilityBeganAt: queued.position,
+      version: workflowJournalEventVersion
+    })
+  )
+  append(
+    GitReadIntentRecordedEvent.make({
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      operation: targetLineageOperation,
+      version: workflowJournalEventVersion
+    })
+  )
+  const lineage = append(
+    TargetLineageObservedEvent.make({
+      observation: authored.targetLineage,
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: targetLineageOperation.operationId,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  return {
+    records: setup.records(),
+    startingFacts: {
+      responsibility: { ...authored.responsibility, queuedAt: queued.position, startedAt: started.position },
+      targetLineage: authored.targetLineage,
+      targetLineageObservedAt: lineage.position
+    },
+    target: cassetteTarget
+  }
+}
 
 const takeScripted = <A>(script: Ref.Ref<ReadonlyArray<A>>, label: string): Effect.Effect<A> =>
   Effect.gen(function* () {
@@ -150,7 +374,10 @@ const takeScripted = <A>(script: Ref.Ref<ReadonlyArray<A>>, label: string): Effe
     return next
   })
 
-const makeRuntime = Effect.fn("IntegratorCassette.makeRuntime")(function* (cassette: AuthoredIntegratorCassette) {
+const makeRuntime = Effect.fn("IntegratorCassette.makeRuntime")(function* (
+  cassette: AuthoredIntegratorCassette,
+  startingFacts: AuthoredIntegratorStartingFacts
+) {
   return {
     cassette,
     gitCandidates: yield* Ref.make<ReadonlyArray<IntegratorCandidateText>>([]),
@@ -158,13 +385,34 @@ const makeRuntime = Effect.fn("IntegratorCassette.makeRuntime")(function* (casse
     gitCalls: yield* Ref.make(0),
     integratorCalls: yield* Ref.make<ReadonlyArray<IntegratorRequest>>([]),
     integratorResults: yield* Ref.make(cassette.integratorResults),
-    journal: yield* makeJournal(initialRecordsFor(cassette.startingFacts)),
-    input: integratorPreparationInputFor(cassette.startingFacts)
-  } satisfies Omit<IntegratorCassetteRuntime, "journal" | "input"> & {
-    readonly journal: IntegratorCassetteJournal
-    readonly input: IntegratorCassetteInput
-  }
+    input: integratorPreparationInputFor(startingFacts)
+  } satisfies IntegratorCassetteRuntime
 })
+
+const integratorCassetteJournalLayer = (setup: ReturnType<typeof materializeAcceptedSetup>) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const storage = yield* JournalStore
+      const began = setup.records[0]
+      if (began?.event._tag !== "WorkflowRunBegan") {
+        return yield* Effect.die("maintained Integrator cassette accepted setup lacks its Run beginning")
+      }
+      yield* storage.beginRun(began.runId, began.event.target, began.event.initialControlPolicy)
+      for (const record of setup.records.slice(1)) {
+        if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+          return yield* Effect.die("maintained Integrator cassette setup contains an unexpected lifecycle record")
+        }
+        yield* storage.append(record.runId, record.key, record.event)
+      }
+      const initial = reduceWorkflowJournalHistory(began.runId, yield* storage.read(began.runId))
+      if (initial._tag === "InvalidWorkflowJournalHistory") {
+        return yield* Effect.die(
+          `maintained Integrator cassette accepted setup is invalid: ${JSON.stringify(initial.issues)}`
+        )
+      }
+      return journalLayer(began.runId, setup.target, initial, storage)
+    })
+  ).pipe(Layer.provideMerge(memoryJournalStoreLayer))
 
 const integratorServiceFor = (runtime: IntegratorCassetteRuntime): Integrator["Service"] => ({
   prepare: (request) =>
@@ -239,7 +487,6 @@ const runOne = Effect.fn("IntegratorCassette.runOne")(function* (runtime: Integr
     run: initialRunFor(runtime.input)
   }).pipe(
     Effect.result,
-    Effect.provideService(InRunJournal, runtime.journal.service),
     Effect.provideService(Integrator, Integrator.of(integratorServiceFor(runtime))),
     Effect.provideService(IntegratorGit, IntegratorGit.of(gitServiceFor(runtime)))
   )
@@ -253,8 +500,11 @@ const terminalObservationFor = Effect.fn("IntegratorCassette.terminalObservation
   outcomes: ReadonlyArray<RecordedIntegratorOutcome>,
   expected: IntegratorCassetteTerminalExpectation
 ) {
-  const records = yield* Ref.get(runtime.journal.records)
+  const records = yield* (yield* InRunJournal).read(runtime.input.responsibility.plannedAttempt.runId)
   const recorded = recordedIntegratorCassetteFor(runtime.cassette.name, records)
+  const focusedRecords = records.slice(
+    records.findIndex(({ event }) => event._tag === "IntegrationResponsibilityBegan")
+  )
   const requests = yield* Ref.get(runtime.integratorCalls)
   const sessionIds = requests.map(({ correlation }) => correlation.session.sessionId)
   const candidateResources = requests.map(({ correlation }) => correlation.session.candidateResource)
@@ -263,7 +513,7 @@ const terminalObservationFor = Effect.fn("IntegratorCassette.terminalObservation
     gitCandidates: yield* Ref.get(runtime.gitCandidates),
     gitCalls: yield* Ref.get(runtime.gitCalls),
     integratorCalls: requests.length,
-    journalTags: records.map(({ event }) => event._tag),
+    journalTags: focusedRecords.map(({ event }) => event._tag),
     outcomes,
     recordedTags: recorded.entries.map(({ _tag }) => _tag),
     sessionIdPrefixes: sessionIds.map((session) => session.slice(0, "integrator-session:".length)),
@@ -274,7 +524,7 @@ const terminalObservationFor = Effect.fn("IntegratorCassette.terminalObservation
       `maintained Integrator cassette ${runtime.cassette.name} terminal mismatch: expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`
     )
   }
-  return { actual, recorded, records }
+  return { actual, recorded, records: focusedRecords }
 })
 
 const interpretStoryItem = Effect.fn("IntegratorCassette.interpretStoryItem")(function* (
@@ -291,10 +541,12 @@ const interpretStoryItem = Effect.fn("IntegratorCassette.interpretStoryItem")(fu
 })
 
 /** Replays a maintained authored story through the real outer Integrator protocol and its durable journal. */
-export const runMaintainedIntegratorCassette = Effect.fn("IntegratorCassette.runMaintained")(function* (
-  cassette: AuthoredIntegratorCassette
+const runMaintainedIntegratorCassetteInJournal = Effect.fn("IntegratorCassette.runMaintainedInJournal")(function* (
+  cassette: AuthoredIntegratorCassette,
+  startingFacts: AuthoredIntegratorStartingFacts
 ) {
-  const runtime = yield* makeRuntime(cassette)
+  const replayedCassette = AuthoredIntegratorCassette.make({ ...cassette, startingFacts })
+  const runtime = yield* makeRuntime(replayedCassette, startingFacts)
   const outcomes = yield* Ref.make<ReadonlyArray<RecordedIntegratorOutcome>>([])
   let terminal:
     | { readonly recorded: RecordedIntegratorCassette; readonly records: ReadonlyArray<JournalRecord> }
@@ -308,7 +560,7 @@ export const runMaintainedIntegratorCassette = Effect.fn("IntegratorCassette.run
   const recorded = terminal.recorded
   const requests = yield* Ref.get(runtime.integratorCalls)
   return IntegratorCassetteRun.make({
-    cassette,
+    cassette: replayedCassette,
     candidateResources: requests.map(({ correlation }) => correlation.session.candidateResource),
     gitCandidates: yield* Ref.get(runtime.gitCandidates),
     gitCalls: yield* Ref.get(runtime.gitCalls),
@@ -318,8 +570,17 @@ export const runMaintainedIntegratorCassette = Effect.fn("IntegratorCassette.run
     records,
     recorded,
     sessionIds: requests.map(({ correlation }) => correlation.session.sessionId),
-    state: currentStateFor(records, integratorPreparationInputFor(cassette.startingFacts))
+    state: currentStateFor(records, integratorPreparationInputFor(startingFacts))
   })
+})
+
+export const runMaintainedIntegratorCassette = Effect.fn("IntegratorCassette.runMaintained")(function* (
+  cassette: AuthoredIntegratorCassette
+) {
+  const setup = materializeAcceptedSetup(cassette)
+  return yield* runMaintainedIntegratorCassetteInJournal(cassette, setup.startingFacts).pipe(
+    Effect.provide(integratorCassetteJournalLayer(setup))
+  )
 })
 
 /** Short alias used by maintained-cassette tests and future catalog tooling. */

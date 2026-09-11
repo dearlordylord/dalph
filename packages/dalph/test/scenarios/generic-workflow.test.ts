@@ -19,6 +19,7 @@ import {
   ClaimOwner,
   ClaimToken,
   FixtureTarget,
+  InitialControlPolicy,
   JournalPosition,
   JournalStore,
   journaledWorkflowInterpreterLayer,
@@ -27,17 +28,19 @@ import {
   makeTaskWorkSpecificationObservationOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
-  memoryJournalTestLayer,
   OperationId,
   PlannedWorktreeReady,
   projectTrackerSnapshot,
   requireAcknowledgedPlan,
   TaskAttemptPlannedEvent,
+  TaskWorkCapacity,
   workflowJournalEventVersion,
   WorkflowInterpreter
 } from "@dalph/orchestrator"
 import { Effect, Layer, Option } from "effect"
 import { expect } from "vitest"
+import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
+import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 
 const runId = RunId.make("generic-workflow-run")
 const target = FixtureTarget.make("generic-workflow-target")
@@ -60,6 +63,11 @@ const plannedAttempt = PlannedTaskAttempt.make({
   taskRevision: TaskRevision.make(taskSpecification.fingerprint),
   worktree: WorktreeLocator.make("/worktrees/attempt-A")
 })
+const runBegan = makeWorkflowRunBeganRecord(
+  runId,
+  target,
+  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+)
 
 it.effect("journals claim, plan, and Git worktree boundaries without executor internals", () => {
   const claimOperation = makeTaskClaimAcquisitionOperation({
@@ -119,7 +127,9 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
       releaseTaskClaim: () => Effect.die("unused")
     })
   )
-  const layer = journaledWorkflowInterpreterLayer(runId, base).pipe(Layer.provideMerge(memoryJournalTestLayer))
+  const layer = journaledWorkflowInterpreterLayer(runId, base).pipe(
+    Layer.provideMerge(liveJournalTestLayer({ records: [runBegan], runId, target }))
+  )
 
   return Effect.gen(function* () {
     const interpreter = yield* WorkflowInterpreter
@@ -143,6 +153,7 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
     yield* interpreter.reconcileTaskWorktree(worktreeOperation)
     const records = yield* (yield* JournalStore).read(runId)
     expect(records.map(({ event }) => event._tag)).toEqual([
+      "WorkflowRunBegan",
       "TaskClaimAcquisitionIntended",
       "TaskClaimAcquired",
       "TaskTrackerReadIntentRecorded",
