@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { appendAcceptedSafeExecutorHistory } from "../../../../test/support/planned-attempt-executor-history.js"
+import { appendAcceptedSafeExecutorHistory } from "./live-executor-history.js"
 import {
   AttemptId,
   GitCommitSha,
@@ -26,9 +26,10 @@ import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-activation.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
+import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import { attemptPlanRecordKey, intentRecordKey, outcomeRecordKey } from "../../../workflow-journal/record-key.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
+import { InRunJournal } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
@@ -62,6 +63,12 @@ import { PlannedAttemptExecutorReportOrdinal } from "../planned-attempt-executor
 const runId = RunId.make("attempt-choice-recovery-run")
 const taskId = TaskId.make("attempt-choice-recovery-task")
 const target = FixtureTarget.make("attempt-choice-recovery-target")
+const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+const testJournalLayer = liveJournalTestLayer({
+  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy)],
+  runId,
+  target
+})
 const integrationTarget = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repositories/attempt-choice-recovery.git"),
   ref: IntegrationTargetRef.make("refs/heads/main")
@@ -119,12 +126,7 @@ const plannedWorktreeOperation = makeTaskWorktreeReconciliationOperation({
 
 const appendChangedSafelySuspendedAttempt = Effect.fn("AttemptChoiceRecoveryTest.appendChangedSafelySuspendedAttempt")(
   function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     yield* journal.append(
       runId,
       intentRecordKey(claimOperation.acquisition.operationId),
@@ -214,7 +216,7 @@ const appendChangedSafelySuspendedAttempt = Effect.fn("AttemptChoiceRecoveryTest
 it.effect("never claims the executor incorporated changed instructions", () =>
   Effect.gen(function* () {
     yield* appendChangedSafelySuspendedAttempt()
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const recovery = yield* makeRunRecoveryProjection(runId, integrationTarget)
 
     const first = (yield* recovery.readDeliveryProjection).frontier
@@ -345,13 +347,13 @@ it.effect("never claims the executor incorporated changed instructions", () =>
       }
     })
     expect(plannedAttempt.taskRevision).toBe(plannedSpecification.fingerprint)
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("waits for a readable claim after Continue reports unreadable claim facts", () =>
   Effect.gen(function* () {
     yield* appendChangedSafelySuspendedAttempt()
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const recovery = yield* makeRunRecoveryProjection(runId)
     const graph = (yield* recovery.readDeliveryProjection).frontier.transitions.find(
       ({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph"
@@ -407,13 +409,13 @@ it.effect("waits for a readable claim after Continue reports unreadable claim fa
       ]),
       transitions: []
     })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("requires a new choice when instructions change again before continuation", () =>
   Effect.gen(function* () {
     yield* appendChangedSafelySuspendedAttempt()
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const recovery = yield* makeRunRecoveryProjection(runId)
     const graph = (yield* recovery.readDeliveryProjection).frontier.transitions.find(
       ({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph"
@@ -459,5 +461,5 @@ it.effect("requires a new choice when instructions change again before continuat
       })
     )
     expect(constrained.transitions).toEqual([])
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )

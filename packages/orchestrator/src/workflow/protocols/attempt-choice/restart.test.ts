@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { appendAcceptedSafeExecutorHistory } from "../../../../test/support/planned-attempt-executor-history.js"
+import { appendAcceptedSafeExecutorHistory } from "./live-executor-history.js"
 import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
 import { acceptedResultFixture } from "../../../../test/support/evidence.js"
 import {
@@ -50,7 +50,9 @@ import {
 import { causalPredecessorOperationIds } from "../../causal-history.js"
 import { authorizedClaimForAttempt, causalClaimForAttempt } from "../../claim-authority-history.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
+import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { journaledWorkflowInterpreterLayer } from "../../../workflow-journal/journaled-interpreter.js"
 import {
@@ -129,6 +131,12 @@ const runId = RunId.make("attempt-restart-run")
 const taskId = TaskId.make("attempt-restart-A")
 const independentTaskId = TaskId.make("attempt-restart-C")
 const target = FixtureTarget.make("attempt-restart-target")
+const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+const testJournalLayer = liveJournalTestLayer({
+  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy)],
+  runId,
+  target
+})
 const baseSha = GitCommitSha.make("1".repeat(40))
 const oldHeadSha = GitCommitSha.make("2".repeat(40))
 const targetHeadSha = GitCommitSha.make("3".repeat(40))
@@ -278,8 +286,7 @@ const independentOnlyGraph = Option.getOrThrow(
 )
 
 const appendExposedRestart = Effect.gen(function* () {
-  const journal = yield* JournalStore
-  yield* journal.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }))
+  const journal = yield* InRunJournal
   yield* journal.append(
     runId,
     intentRecordKey(exactClaim.operationId),
@@ -405,7 +412,7 @@ interface RestartHarnessOptions {
 const exerciseRestart = (options: RestartHarnessOptions) =>
   Effect.gen(function* () {
     yield* appendExposedRestart
-    const exposedRecords = yield* (yield* JournalStore).read(runId)
+    const exposedRecords = yield* (yield* AcceptedJournalReader).readAccepted(runId)
     expect(
       restartReplacementDisposition(exposedRecords, plannedAttempt, Option.none(), Option.some(integrationTarget))
     ).toMatchObject({ _tag: "AttemptRestartRequired", requestId, subject })
@@ -416,7 +423,7 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
     if (options.pendingQuiescence === true) {
       const pendingReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
       const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
-      yield* (yield* JournalStore).append(
+      yield* (yield* InRunJournal).append(
         runId,
         plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, observationOrdinal),
         PlannedAttemptExecutorStateObservedEvent.make({
@@ -439,7 +446,7 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
         taskId,
         title: "foreign target F3"
       })
-      const journal = yield* JournalStore
+      const journal = yield* InRunJournal
       yield* journal.append(
         runId,
         intentRecordKey(foreignOperation.operationId),
@@ -455,7 +462,7 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
       )
     }
     if (options.postChoiceClaimReacquired === true) {
-      const journal = yield* JournalStore
+      const journal = yield* InRunJournal
       const lossRead = makeTaskClaimObservationOperation(
         OperationId.make("attempt-restart-post-choice-claim-loss"),
         target,
@@ -499,7 +506,7 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
       )
     }
     if (options.additionalRecordedAttempt === true) {
-      const journal = yield* JournalStore
+      const journal = yield* InRunJournal
       yield* journal.append(
         runId,
         intentRecordKey(independentClaim.operationId),
@@ -583,7 +590,7 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
     if (options.executor !== undefined) {
       const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
       const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(3)
-      const journal = yield* JournalStore
+      const journal = yield* InRunJournal
       yield* journal.append(
         runId,
         plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, observationOrdinal),
@@ -607,7 +614,7 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
         })
       )
     }
-    const durableJournal = yield* JournalStore
+    const durableJournal = yield* InRunJournal
     const base = Layer.succeed(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
@@ -790,6 +797,7 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
       result = yield* restart
     }
     return {
+      accepted: yield* (yield* AcceptedJournalReader).readAccepted(runId),
       ambiguousFailure,
       plannerCalls: yield* Ref.get(plannerCalls),
       plannerOrdinals: yield* Ref.get(plannerOrdinals),
@@ -808,7 +816,7 @@ it.effect("keeps target-A restart advancement valid after a later foreign-target
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -982,7 +990,7 @@ it.effect("fails closed when Alice's live Restart boundary sees a forged unaccep
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -1027,7 +1035,7 @@ it("recognizes only the exact attempt's integration-start cutoff", () => {
 })
 
 it("recognizes every terminal outcome for a pending Git read intent", () => {
-  type HistoryRecord = Parameters<typeof gitReadIntentHasOutcome>[0][number]
+  type HistoryRecord = JournalRecord
   const operationId = OperationId.make("pending-git-read")
   const record = (event: unknown) => ({ event }) as HistoryRecord
   const hasOutcome = (event: unknown) => gitReadIntentHasOutcome([record(event)], operationId)
@@ -1066,7 +1074,7 @@ it.effect("rejects a replacement when the planner returns a non-distinct success
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -1183,14 +1191,14 @@ it.effect("atomically supersedes exact P1 with clean P2 from fresh F2 K1 W1 and 
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
 it.effect("exposes the same exact attempt choice for a replacement-recorded successor", () =>
   Effect.gen(function* () {
     yield* exerciseRestart({})
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     yield* appendAcceptedSafeExecutorHistory(successorAttempt)
     const specificationRead = makeTaskWorkSpecificationObservationOperation(
       OperationId.make("attempt-restart-successor-F3"),
@@ -1221,7 +1229,7 @@ it.effect("exposes the same exact attempt choice for a replacement-recorded succ
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -1230,7 +1238,7 @@ it.effect("fails closed when claim chronology is absent or late", () =>
     expect(authorizedClaimForAttempt([], plannedAttempt)).toBeUndefined()
 
     yield* appendExposedRestart
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const records = yield* journal.read(runId)
     const plan = records.find(({ event }) => event._tag === "TaskAttemptPlanned")
     if (plan === undefined) return expect.fail("expected original plan")
@@ -1243,28 +1251,28 @@ it.effect("fails closed when claim chronology is absent or late", () =>
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
 it.effect("falls back to the original causal claim when reacquisition direction is absent", () =>
   Effect.gen(function* () {
     yield* exerciseRestart({ postChoiceClaimReacquired: true })
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const withReacquisition = yield* journal.read(runId)
     const withoutDirection = withReacquisition.filter(({ event }) => event._tag !== "TaskClaimReacquisitionDirected")
     expect(authorizedClaimForAttempt(withoutDirection, plannedAttempt)?.claim).toEqual(exactClaim)
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
 it.effect("removes every new attempt-choice capability from superseded P1", () =>
   Effect.gen(function* () {
     yield* exerciseRestart({})
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const laterSpecification = makeTaskWorkSpecificationObservationOperation(
       OperationId.make("attempt-restart-superseded-P1-F3"),
       target,
@@ -1290,30 +1298,30 @@ it.effect("removes every new attempt-choice capability from superseded P1", () =
       .pipe(Effect.flip)
     expect(rejected).toMatchObject({ _tag: "AttemptChoiceNotAvailable", reason: "AttemptSuperseded" })
 
-    yield* journal.append(
-      runId,
-      attemptChoiceAppliedRecordKey(laterRequestId),
-      AttemptChoiceAppliedEvent.make({
-        choice: "RestartTaskImplementation",
-        initiatedBy: { _tag: "Operator" },
-        occurrenceClassification: "InitiatedAction",
-        requestId: laterRequestId,
-        subject: laterSubject,
-        version: workflowJournalEventVersion
-      })
-    )
-    const reduction = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
-    expect(reduction._tag).toBe("InvalidWorkflowJournalHistory")
-    if (reduction._tag !== "InvalidWorkflowJournalHistory") return
-    expect(reduction.issues).toContainEqual(
-      expect.objectContaining({
-        detail: `attempt-choice request ${laterRequestId.nonce} follows the atomic replacement of the same attempt`
-      })
-    )
+    const forgedAppend = yield* journal
+      .append(
+        runId,
+        attemptChoiceAppliedRecordKey(laterRequestId),
+        AttemptChoiceAppliedEvent.make({
+          choice: "RestartTaskImplementation",
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          requestId: laterRequestId,
+          subject: laterSubject,
+          version: workflowJournalEventVersion
+        })
+      )
+      .pipe(Effect.flip)
+    expect(forgedAppend).toMatchObject({
+      _tag: "JournalHistoryInvalid",
+      detail: expect.stringContaining(
+        `attempt-choice request ${laterRequestId.nonce} follows the atomic replacement of the same attempt`
+      )
+    })
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -1334,7 +1342,7 @@ it.effect("keeps P2's atomic plan in the durable causal operation graph", () =>
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -1348,7 +1356,7 @@ it.effect("allocates P2 in A's next task-local slot regardless of independent C"
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -1356,7 +1364,7 @@ it.effect("keeps P1 worktree authority independent from a later task C worktree 
   Effect.gen(function* () {
     yield* appendExposedRestart
     const recovery = yield* makeRunRecoveryProjection(runId, integrationTarget)
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const appendWorktreeObservation = Effect.fn("AttemptRestartTest.appendWorktreeObservation")(function* (
       observedAttempt: PlannedTaskAttempt,
       observation: AttemptWorktreeLost | PlannedWorktreeReady,
@@ -1413,14 +1421,14 @@ it.effect("keeps P1 worktree authority independent from a later task C worktree 
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
 it.effect("keeps P1 restart eligibility independent from a later task C graph read", () =>
   Effect.gen(function* () {
     yield* appendExposedRestart
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const cGraph = makeTrackerGraphObservationOperation(
       { _tag: "WorkflowEstablishment" },
       OperationId.make("attempt-restart-independent-C-graph"),
@@ -1449,14 +1457,14 @@ it.effect("keeps P1 restart eligibility independent from a later task C graph re
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
 it.effect("rejects a new F3 Continue after the earlier F2 Restart choice", () =>
   Effect.gen(function* () {
     yield* appendExposedRestart
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const laterSpecification = makeTaskWorkSpecificationObservationOperation(
       OperationId.make("attempt-restart-new-choice-F3"),
       target,
@@ -1497,7 +1505,7 @@ it.effect("rejects a new F3 Continue after the earlier F2 Restart choice", () =>
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -1540,7 +1548,7 @@ it.effect("rejects replacement authority whose boundary intent predates the appl
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -1695,14 +1703,14 @@ it.effect("rejects every missing or superseding replacement authority fact", () 
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
 it.effect("rejects replacement when a later task read supersedes the named F2 authority", () =>
   Effect.gen(function* () {
     yield* exerciseRestart({})
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const laterRead = makeTaskWorkSpecificationObservationOperation(
       OperationId.make("attempt-restart-later-F3"),
       target,
@@ -1750,7 +1758,7 @@ it.effect("rejects replacement when a later task read supersedes the named F2 au
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -1850,7 +1858,7 @@ const nonAuthorizingCases = [
 for (const fixture of nonAuthorizingCases) {
   it.effect(fixture.name, () =>
     exerciseRestart(fixture.options).pipe(
-      Effect.tap(({ plannerCalls, records, result }) =>
+      Effect.tap(({ accepted, plannerCalls, records, result }) =>
         Effect.sync(() => {
           expect(result).toMatchObject({ _tag: fixture.tag, reason: fixture.reason })
           expect(plannerCalls).toBe(0)
@@ -1900,7 +1908,7 @@ for (const fixture of nonAuthorizingCases) {
             expect(hasUnfinishedRunResponsibility(reduction.runState)).toBe(false)
           }
           const disposition = restartReplacementDisposition(
-            records,
+            accepted,
             plannedAttempt,
             Option.none(),
             Option.some(integrationTarget)
@@ -1913,7 +1921,7 @@ for (const fixture of nonAuthorizingCases) {
       ),
       Effect.provide(attemptChoiceControlLayer),
       Effect.provide(plannedAttemptProtocolControllerLayer),
-      Effect.provide(memoryJournalTestLayer)
+      Effect.provide(testJournalLayer)
     )
   )
 }
@@ -1949,7 +1957,7 @@ it.effect("rejects Resume after applied Restart before recording intent or conta
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -1967,7 +1975,7 @@ it.effect("records a later identified read after a durable Restart authority fai
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -1982,7 +1990,7 @@ it.effect("keeps D1 permanently stale after F3 even when a later read returns F2
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -2025,7 +2033,7 @@ it.effect("rejects a Restart authority failure whose read intent predates the ap
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -2051,6 +2059,6 @@ it.effect("recovers an ambiguously acknowledged replacement append as exact P2 w
     ),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )

@@ -1,10 +1,7 @@
 import { it } from "@effect/vitest"
 import { acceptedResultFixture } from "../../../../test/support/evidence.js"
 import { validSnapshot } from "../../../../test/task-dag.js"
-import {
-  appendAcceptedExecutingExecutorHistory,
-  appendAcceptedSafeExecutorHistory
-} from "../../../../test/support/planned-attempt-executor-history.js"
+import { appendAcceptedExecutingExecutorHistory, appendAcceptedSafeExecutorHistory } from "./live-executor-history.js"
 import {
   AttemptId,
   GitCommitSha,
@@ -30,7 +27,8 @@ import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
+import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import {
   attemptPlanRecordKey,
   attemptChoiceAppliedRecordKey,
@@ -43,7 +41,7 @@ import {
   integrationResponsibilityBeganRecordKey,
   integrationStartedRecordKey
 } from "../../../workflow-journal/record-key.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
+import { InRunJournal, JournalStore } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { OperationId } from "../../identity.js"
 import {
@@ -105,14 +103,19 @@ const plannedAttempt = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/worktrees/attempt-choice-P")
 })
 const target = FixtureTarget.make("attempt-choice-target")
+const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+const testJournalLayer = liveJournalTestLayer({
+  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy)],
+  runId,
+  target
+})
 
 const appendExposedChoice = Effect.fn("AttemptChoiceTest.appendExposedChoice")(function* (
   acceptedReport: PlannedAttemptExecutorReport = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
     correlation: { attemptId: plannedAttempt.attemptId, runId }
   })
 ) {
-  const journal = yield* JournalStore
-  yield* journal.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }))
+  const journal = yield* InRunJournal
   const claim = ActiveTaskClaim.make({
     operationId: OperationId.make("attempt-choice-claim"),
     owner: ClaimOwner.make("attempt-choice-test"),
@@ -241,7 +244,7 @@ const request = (
 const appendAcceptedTerminal = Effect.fn("AttemptChoiceTest.appendAcceptedTerminal")(function* (
   result: PlannedAttemptExecutorResult = { _tag: "Failed" }
 ) {
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   const report = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
     correlation: { attemptId: plannedAttempt.attemptId, runId },
     result
@@ -271,7 +274,7 @@ const appendAcceptedTerminal = Effect.fn("AttemptChoiceTest.appendAcceptedTermin
 })
 
 const appendIntegrationCutoff = Effect.fn("AttemptChoiceTest.appendIntegrationCutoff")(function* () {
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   const integrationTarget = IntegrationTarget.make({
     repository: GitRepositoryLocator.make("/repositories/attempt-choice.git"),
     ref: IntegrationTargetRef.make("refs/heads/master")
@@ -313,7 +316,7 @@ it.effect("records both task fingerprints when Alice continues the exact attempt
       requestId: input.requestId,
       subject: { observedTaskRevision: observedRevision, plannedAttempt }
     })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("coalesces exact Stop redelivery and rejects request identity reuse", () =>
@@ -328,7 +331,7 @@ it.effect("coalesces exact Stop redelivery and rejects request identity reuse", 
     expect(yield* control.read(input.requestId)).toEqual(first)
     const contradiction = yield* control.apply(request("ContinueExistingAttempt", "stable-D2")).pipe(Effect.flip)
     expect(contradiction).toBeInstanceOf(AttemptChoiceRequestIdentityContradiction)
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("reports accepted Terminal as the current result of exact Stop redelivery", () =>
@@ -344,7 +347,7 @@ it.effect("reports accepted Terminal as the current result of exact Stop redeliv
       _tag: "StopApplied",
       status: { _tag: "SupersededByTerminal" }
     })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("rejects every later fingerprint choice after Stop wins the exact attempt", () =>
@@ -360,7 +363,7 @@ it.effect("rejects every later fingerprint choice after Stop wins the exact atte
       taskId,
       []
     )
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
     yield* journal.append(
       runId,
@@ -384,7 +387,7 @@ it.effect("rejects every later fingerprint choice after Stop wins the exact atte
         .pipe(Effect.flip)
       expect(rejection).toBeInstanceOf(AttemptChoiceAlreadyApplied)
     }
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("coalesces exact Continue redelivery and rejects request identity reuse", () =>
@@ -396,7 +399,7 @@ it.effect("coalesces exact Continue redelivery and rejects request identity reus
 
     const contradiction = yield* control.apply(request("StopTaskImplementation", "stable-D1")).pipe(Effect.flip)
     expect(contradiction).toBeInstanceOf(AttemptChoiceRequestIdentityContradiction)
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("journals Restart as the third exact choice and coalesces its redelivery", () =>
@@ -415,13 +418,13 @@ it.effect("journals Restart as the third exact choice and coalesces its redelive
     expect(
       yield* control.apply(request("ContinueExistingAttempt", "stable-restart-D1")).pipe(Effect.flip)
     ).toBeInstanceOf(AttemptChoiceRequestIdentityContradiction)
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("treats a settled Resume intent as consuming Safe authority even when the response is unchanged", () =>
   Effect.gen(function* () {
     yield* appendExposedChoice()
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
       correlation: { attemptId: plannedAttempt.attemptId, runId }
     })
@@ -461,23 +464,23 @@ it.effect("treats a settled Resume intent as consuming Safe authority even when 
     }
 
     const forgedRequest = request("StopTaskImplementation", "forged-after-settled-resume")
-    yield* journal.append(
-      runId,
-      attemptChoiceAppliedRecordKey(forgedRequest.requestId),
-      AttemptChoiceAppliedEvent.make({
-        ...forgedRequest,
-        initiatedBy: { _tag: "Operator" },
-        occurrenceClassification: "InitiatedAction",
-        version: workflowJournalEventVersion
-      })
-    )
-    expect(reduceWorkflowJournalHistory(runId, yield* journal.read(runId))).toMatchObject({
-      _tag: "InvalidWorkflowJournalHistory",
-      issues: expect.arrayContaining([
-        expect.objectContaining({ detail: expect.stringContaining("requires the latest accepted safely-suspended") })
-      ])
+    const forgedAppend = yield* journal
+      .append(
+        runId,
+        attemptChoiceAppliedRecordKey(forgedRequest.requestId),
+        AttemptChoiceAppliedEvent.make({
+          ...forgedRequest,
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          version: workflowJournalEventVersion
+        })
+      )
+      .pipe(Effect.flip)
+    expect(forgedAppend).toMatchObject({
+      _tag: "JournalHistoryInvalid",
+      detail: expect.stringContaining("requires the latest accepted safely-suspended")
     })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("rejects Continue after Restart even when a newer fingerprint exposes another terminal choice", () =>
@@ -494,7 +497,7 @@ it.effect("rejects Continue after Restart even when a newer fingerprint exposes 
       taskId,
       []
     )
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
     yield* journal.append(
       runId,
@@ -513,24 +516,23 @@ it.effect("rejects Continue after Restart even when a newer fingerprint exposes 
     const rejection = yield* control.apply(continueRequest).pipe(Effect.flip)
     expect(rejection).toMatchObject({ _tag: "AttemptChoiceNotAvailable", reason: "TerminalChoiceAlreadyApplied" })
 
-    yield* journal.append(
-      runId,
-      attemptChoiceAppliedRecordKey(continueRequest.requestId),
-      AttemptChoiceAppliedEvent.make({
-        ...continueRequest,
-        initiatedBy: { _tag: "Operator" },
-        occurrenceClassification: "InitiatedAction",
-        version: workflowJournalEventVersion
-      })
-    )
-    const reduction = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
-    expect(reduction).toMatchObject({
-      _tag: "InvalidWorkflowJournalHistory",
-      issues: expect.arrayContaining([
-        expect.objectContaining({ detail: expect.stringContaining("follows the terminal Restart direction") })
-      ])
+    const forgedAppend = yield* journal
+      .append(
+        runId,
+        attemptChoiceAppliedRecordKey(continueRequest.requestId),
+        AttemptChoiceAppliedEvent.make({
+          ...continueRequest,
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          version: workflowJournalEventVersion
+        })
+      )
+      .pipe(Effect.flip)
+    expect(forgedAppend).toMatchObject({
+      _tag: "JournalHistoryInvalid",
+      detail: expect.stringContaining("follows the terminal Restart direction")
     })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("rejects an attempt-choice request identity bound to another Run", () =>
@@ -550,28 +552,16 @@ it.effect("rejects an attempt-choice request identity bound to another Run", () 
       boundRunId: runId,
       subjectRunId: foreignRunId
     })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
-it.effect("requires the Run and exact planned attempt before exposing Alice's choice", () =>
+it.effect("requires the exact planned attempt before exposing Alice's choice", () =>
   Effect.gen(function* () {
     const control = yield* AttemptChoiceControl
-
-    expect(yield* control.apply(request("ContinueExistingAttempt", "before-run")).pipe(Effect.flip)).toMatchObject({
-      _tag: "WorkflowRunNotBegan",
-      runId
-    })
-
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("attempt-choice-target"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
     const unavailable = yield* control.apply(request("ContinueExistingAttempt", "before-plan")).pipe(Effect.flip)
     expect(unavailable).toBeInstanceOf(AttemptChoiceNotAvailable)
     expect(unavailable).toMatchObject({ reason: "AttemptNotPlanned" })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("reports an unknown attempt-choice request identity without inventing a result", () =>
@@ -581,13 +571,13 @@ it.effect("reports an unknown attempt-choice request identity without inventing 
 
     expect(missing).toBeInstanceOf(AttemptChoiceResultNotFound)
     expect(missing).toMatchObject({ requestId })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("does not expose a choice from a safe report older than a later executor request", () =>
   Effect.gen(function* () {
     yield* appendExposedChoice()
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const ordinal = PlannedAttemptExecutorCommandOrdinal.make(3)
     yield* journal.append(
       runId,
@@ -606,7 +596,7 @@ it.effect("does not expose a choice from a safe report older than a later execut
       .apply(request("StopTaskImplementation", "stale-safe-stop"))
       .pipe(Effect.flip)
     expect(unavailable).toMatchObject({ _tag: "AttemptChoiceNotAvailable", reason: "ExecutorNotSafelySuspended" })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("does not expose a choice from an exact Safe state observation before WorkReported accepts it", () =>
@@ -616,7 +606,7 @@ it.effect("does not expose a choice from an exact Safe state observation before 
         correlation: { attemptId: plannedAttempt.attemptId, runId }
       })
     )
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const suspendOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
     yield* journal.append(
       runId,
@@ -670,7 +660,7 @@ it.effect("does not expose a choice from an exact Safe state observation before 
       .pipe(Effect.flip)
 
     expect(unavailable).toMatchObject({ _tag: "AttemptChoiceNotAvailable", reason: "ExecutorNotSafelySuspended" })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("requires Alice's choice to name the latest observed task fingerprint", () =>
@@ -686,13 +676,13 @@ it.effect("requires Alice's choice to name the latest observed task fingerprint"
 
     expect(stale).toBeInstanceOf(AttemptChoiceNotAvailable)
     expect(stale).toMatchObject({ reason: "ObservedFingerprintNotCurrent" })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("scopes a terminal choice to the immutable Run target", () =>
   Effect.gen(function* () {
     yield* appendExposedChoice()
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const foreignTarget = FixtureTarget.make("attempt-choice-foreign-target")
     const foreignSpecification = makeTaskWorkSpecification({
       body: "Foreign target body F3",
@@ -733,13 +723,13 @@ it.effect("scopes a terminal choice to the immutable Run target", () =>
       application: { event: { subject: { observedTaskRevision: observedRevision } } }
     })
     expect(yield* control.read(applied.application.event.requestId)).toEqual(applied)
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("keeps a target-A Stop choice exposed after a later foreign-target specification", () =>
   Effect.gen(function* () {
     yield* appendExposedChoice()
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const foreignTarget = FixtureTarget.make("attempt-choice-stop-foreign-target")
     const foreignOperation = makeTaskWorkSpecificationObservationOperation(
       OperationId.make("attempt-choice-stop-foreign-specification-F3"),
@@ -765,7 +755,7 @@ it.effect("keeps a target-A Stop choice exposed after a later foreign-target spe
       application: { event: { subject: { observedTaskRevision: observedRevision } } },
       status: { _tag: "AwaitingQuiescence" }
     })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("lets the first journaled valid choice win a concurrent Continue and Stop race", () =>
@@ -800,7 +790,7 @@ it.effect("lets the first journaled valid choice win a concurrent Continue and S
     expect(
       (yield* (yield* JournalStore).read(runId)).filter(({ event }) => event._tag === "AttemptChoiceApplied")
     ).toHaveLength(1)
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("rejects Continue and Stop after the exact integration cutoff", () =>
@@ -823,25 +813,24 @@ it.effect("rejects Continue and Stop after the exact integration cutoff", () =>
     ).toHaveLength(0)
 
     const forgedRequest = request("ContinueExistingAttempt", "forged-after-cutoff")
-    const journal = yield* JournalStore
-    yield* journal.append(
-      runId,
-      attemptChoiceAppliedRecordKey(forgedRequest.requestId),
-      AttemptChoiceAppliedEvent.make({
-        ...forgedRequest,
-        initiatedBy: { _tag: "Operator" },
-        occurrenceClassification: "InitiatedAction",
-        version: workflowJournalEventVersion
-      })
-    )
-    const reduction = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
-    expect(reduction).toMatchObject({
-      _tag: "InvalidWorkflowJournalHistory",
-      issues: expect.arrayContaining([
-        expect.objectContaining({ detail: expect.stringContaining("follows the exact integration-start cutoff") })
-      ])
+    const journal = yield* InRunJournal
+    const forgedAppend = yield* journal
+      .append(
+        runId,
+        attemptChoiceAppliedRecordKey(forgedRequest.requestId),
+        AttemptChoiceAppliedEvent.make({
+          ...forgedRequest,
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          version: workflowJournalEventVersion
+        })
+      )
+      .pipe(Effect.flip)
+    expect(forgedAppend).toMatchObject({
+      _tag: "JournalHistoryInvalid",
+      detail: expect.stringContaining("follows the exact integration-start cutoff")
     })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("returns exact pre-cutoff redelivery after integration has begun", () =>
@@ -855,5 +844,5 @@ it.effect("returns exact pre-cutoff redelivery after integration has begun", () 
     expect(
       (yield* (yield* JournalStore).read(runId)).filter(({ event }) => event._tag === "AttemptChoiceApplied")
     ).toHaveLength(1)
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )

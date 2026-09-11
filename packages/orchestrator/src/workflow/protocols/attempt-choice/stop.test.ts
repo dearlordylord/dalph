@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { appendAcceptedSafeExecutorHistory } from "../../../../test/support/planned-attempt-executor-history.js"
+import { appendAcceptedSafeExecutorHistory } from "./live-executor-history.js"
 import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
 import {
   AttemptId,
@@ -37,13 +37,14 @@ import {
   acceptedWorkflowTransitionOperationId,
   deliveryProposalsOf
 } from "../../../coordination/delivery/delivery-proposal.js"
-import { Journal, makeJournal } from "../../../coordination/delivery/journal.js"
+import { Journal } from "../../../coordination/delivery/journal.js"
 import { executeAcceptedWorkflowAction } from "../../../coordination/delivery/recovered-delivery-action-adapter.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
-import { memoryJournalStoreLayer, memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
+import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import {
   attemptPlanRecordKey,
-  attemptChoiceAppliedRecordKey,
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
@@ -138,6 +139,12 @@ const inertBoundaryLease = {
 const runId = RunId.make("attempt-stop-run")
 const taskId = TaskId.make("attempt-stop-task")
 const target = FixtureTarget.make("attempt-stop-target")
+const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+const testJournalLayer = liveJournalTestLayer({
+  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy)],
+  runId,
+  target
+})
 const plannedSpecification = makeTaskWorkSpecification({ body: "Original F1", taskId, title: "Original F1" })
 const changedSpecification = makeTaskWorkSpecification({ body: "Changed F2", taskId, title: "Changed F2" })
 const plannedAttempt = PlannedTaskAttempt.make({
@@ -198,20 +205,8 @@ const requestId = AttemptChoiceRequestId.make({ nonce: "attempt-stop-D2", runId 
 const subject = { observedTaskRevision: changedSpecification.fingerprint, plannedAttempt }
 const unusedBoundary = () => Effect.die("unused boundary")
 
-const appendExposedStop = Effect.fn("AttemptStopTest.appendExposed")(function* (
-  includeClaim = true,
-  includeRunBeginning = true,
-  includeChoice = true
-) {
-  const journal = yield* JournalStore
-  if (!includeChoice) return
-  if (includeRunBeginning) {
-    yield* journal.beginRun(
-      runId,
-      target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-  }
+const appendExposedStop = Effect.fn("AttemptStopTest.appendExposed")(function* (includeClaim = true) {
+  const journal = yield* InRunJournal
   if (includeClaim) {
     yield* journal.append(
       runId,
@@ -279,7 +274,7 @@ const appendExposedStop = Effect.fn("AttemptStopTest.appendExposed")(function* (
       })
     )
   }
-  yield* appendAcceptedSafeExecutorHistory(plannedAttempt)
+  yield* appendAcceptedSafeExecutorHistory(plannedAttempt, journal)
   const specificationRead = makeTaskWorkSpecificationObservationOperation(
     OperationId.make("attempt-stop-observe-F2"),
     target,
@@ -294,28 +289,13 @@ const appendExposedStop = Effect.fn("AttemptStopTest.appendExposed")(function* (
       makeFocusedTaskWorkSpecificationFactsObserved(specificationRead, changedSpecification)
     )
   )
-  if (includeRunBeginning) {
-    yield* (yield* AttemptChoiceControl).apply({ choice: "StopTaskImplementation", requestId, subject })
-  } else {
-    yield* journal.append(
-      runId,
-      attemptChoiceAppliedRecordKey(requestId),
-      AttemptChoiceAppliedEvent.make({
-        choice: "StopTaskImplementation",
-        initiatedBy: { _tag: "Operator" },
-        occurrenceClassification: "InitiatedAction",
-        requestId,
-        subject,
-        version: workflowJournalEventVersion
-      })
-    )
-  }
+  yield* (yield* AttemptChoiceControl).apply({ choice: "StopTaskImplementation", requestId, subject })
 })
 
 /** Seeds the exact target-A prefix before a separate published Journal owns later appends. */
 const appendExposedPrefix = Effect.fn("AttemptStopTest.appendExposedPrefix")(function* () {
   const journal = yield* JournalStore
-  yield* journal.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }))
+  yield* journal.beginRun(runId, target, initialPolicy)
   yield* journal.append(
     runId,
     intentRecordKey(exactClaim.operationId),
@@ -379,7 +359,7 @@ const appendExposedPrefix = Effect.fn("AttemptStopTest.appendExposedPrefix")(fun
       version: workflowJournalEventVersion
     })
   )
-  yield* appendAcceptedSafeExecutorHistory(plannedAttempt)
+  yield* appendAcceptedSafeExecutorHistory(plannedAttempt, journal)
   const specificationRead = makeTaskWorkSpecificationObservationOperation(
     OperationId.make("attempt-stop-published-prefix-specification"),
     target,
@@ -397,7 +377,7 @@ const appendExposedPrefix = Effect.fn("AttemptStopTest.appendExposedPrefix")(fun
 })
 
 const appendResumedExecuting = Effect.fn("AttemptStopTest.appendResumedExecuting")(function* () {
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(3)
   const report = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
   yield* journal.append(
@@ -477,7 +457,7 @@ it.effect("proves the exact executor stopped before abandoning implementation re
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -488,56 +468,62 @@ it("does not authorize Alice's Stop when the evidence seam has no accepted execu
 it.effect("invalidates Alice's Stop evidence when a later executor command breaks its safe report", () =>
   Effect.gen(function* () {
     yield* appendExposedStop()
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(3)
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
-      PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: "Resume",
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        ordinal: commandOrdinal,
-        plannedAttempt,
-        version: workflowJournalEventVersion
-      })
-    )
+    const rejected = yield* journal
+      .append(
+        runId,
+        plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+        PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "Resume",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: commandOrdinal,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      .pipe(Effect.flip)
 
-    expect(attemptStoppageEvidenceDisposition(yield* journal.read(runId), plannedAttempt)).toEqual({
-      _tag: "LaterCommandRecorded"
+    expect(rejected).toMatchObject({
+      _tag: "JournalHistoryInvalid",
+      detail: expect.stringContaining("follows terminal choice")
     })
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
-it.effect("waits at the evidence seam when an unaccepted Executing projection is latest", () =>
+it.effect("rejects an unaccepted Executing projection at the live journal boundary", () =>
   Effect.gen(function* () {
     yield* appendExposedStop()
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(3)
     const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, observationOrdinal),
-      PlannedAttemptExecutorStateObservedEvent.make({
-        observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: executing }),
-        occurrenceClassification: "NonActionOccurrence",
-        ordinal: observationOrdinal,
-        plannedAttempt,
-        version: workflowJournalEventVersion
-      })
-    )
+    const rejected = yield* journal
+      .append(
+        runId,
+        plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, observationOrdinal),
+        PlannedAttemptExecutorStateObservedEvent.make({
+          observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: executing }),
+          occurrenceClassification: "NonActionOccurrence",
+          ordinal: observationOrdinal,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      .pipe(Effect.flip)
 
-    expect(attemptStoppageEvidenceDisposition(yield* journal.read(runId), plannedAttempt)).toEqual({
-      _tag: "AwaitingLifecycleAcceptance"
+    expect(rejected).toMatchObject({
+      _tag: "JournalHistoryInvalid",
+      detail: expect.stringContaining("violates PlannedAttemptExecutorLifecycleTransitionContradiction")
     })
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -556,14 +542,14 @@ it.effect("coalesces a second Stop advancement after its exact abandonment is du
     Effect.provideService(PlannedAttemptExecutor, unusedPlannedAttemptExecutor),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
 it.effect("treats an accepted terminal report after Stop as absorbing without abandonment or executor contact", () =>
   Effect.gen(function* () {
     yield* appendExposedStop()
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
     const terminalOrdinal = PlannedAttemptExecutorReportOrdinal.make(3)
     const terminal = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
@@ -617,7 +603,7 @@ it.effect("treats an accepted terminal report after Stop as absorbing without ab
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -653,7 +639,7 @@ it.effect("rejects Resume after applied Stop before recording intent or contacti
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -729,7 +715,7 @@ it.effect("serializes a public Resume against exact Stop abandonment without poi
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -765,7 +751,7 @@ it.effect("rejects Stop advancement and observation without Alice's exact applie
   }).pipe(
     Effect.provideService(PlannedAttemptExecutor, unusedPlannedAttemptExecutor),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -778,23 +764,17 @@ it.effect("fails closed before Alice can apply Stop when the attempt's claim aut
     Effect.provideService(PlannedAttemptExecutor, unusedPlannedAttemptExecutor),
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
 it.effect("fails closed when an active attempt has no immutable Run beginning", () =>
   Effect.gen(function* () {
-    yield* appendExposedStop(true, false, false)
-
     const recovery = yield* makeRunRecoveryProjection(runId)
     const projection = yield* recovery.readDeliveryProjection
     expect(projection.frontier.transitions).toEqual([])
     expect(projection.frontier.explanations).toEqual([])
-  }).pipe(
-    Effect.provide(attemptChoiceControlLayer),
-    Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
-  )
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects attempt choices that are not exposed by the exact Run plan safe report and latest fingerprint", () =>
@@ -888,7 +868,7 @@ it.effect("rejects attempt choices that are not exposed by the exact Run plan sa
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -921,7 +901,7 @@ it.effect("coalesces concurrent abandonment and treats later Stop observation as
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -1069,21 +1049,23 @@ it.effect("rejects stopped-attempt events without their exact choice quiescence 
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
 it.effect("fails closed when durable resumed work is forged after Alice's applied Stop", () =>
   Effect.gen(function* () {
     yield* appendExposedStop()
-    yield* appendResumedExecuting()
-
-    const rejected = yield* (yield* AcceptedJournalReader).readAccepted(runId).pipe(Effect.flip)
-    expect(rejected).toMatchObject({ _tag: "JournalHistoryInvalid", runId })
+    const rejected = yield* appendResumedExecuting().pipe(Effect.flip)
+    expect(rejected).toMatchObject({
+      _tag: "JournalHistoryInvalid",
+      detail: expect.stringContaining("follows terminal choice"),
+      runId
+    })
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -1126,7 +1108,7 @@ it.effect("rejects executor work that reopens an abandoned attempt", () =>
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -1144,7 +1126,7 @@ it.effect("derives a no-release result only from the exact journaled focused cla
         })
       )
     )
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const missingOperationId = OperationId.make("attempt-stop-missing-claim-read")
     const missing = yield* recordStoppedAttemptClaimNoRelease(requestId, subject, missingOperationId).pipe(Effect.flip)
     expect(missing._tag).toBe("StoppedAttemptClaimObservationMissing")
@@ -1212,7 +1194,7 @@ it.effect("derives a no-release result only from the exact journaled focused cla
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -1230,7 +1212,7 @@ it.effect("does not settle a stopped claim from a foreign-target observation", (
         })
       )
     )
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const foreignTarget = FixtureTarget.make("attempt-stop-foreign-target")
     const foreignRead = makeTaskClaimObservationOperation(
       OperationId.make("attempt-stop-foreign-claim-read"),
@@ -1272,7 +1254,7 @@ it.effect("does not settle a stopped claim from a foreign-target observation", (
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -1282,7 +1264,7 @@ it.effect("settles Stop from the exact target observation after a later foreign 
     yield* advanceAttemptStoppage(requestId, subject).pipe(
       Effect.provideService(PlannedAttemptExecutor, unusedPlannedAttemptExecutor)
     )
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const exactRead = makeTaskClaimObservationOperation(
       OperationId.make("attempt-stop-interleaved-exact-claim-read"),
       target,
@@ -1324,22 +1306,16 @@ it.effect("settles Stop from the exact target observation after a later foreign 
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
 it.effect("rejects a no-release after a later same-target unreadable claim observation", () =>
   Effect.gen(function* () {
-    yield* appendExposedPrefix()
-    const storage = yield* JournalStore
-    const initialReduction = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
-    if (initialReduction._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initialReduction)
-    const published = yield* makeJournal(runId, target, initialReduction, storage)
-    const publishedCapabilities = Layer.merge(
-      Layer.succeed(InRunJournal, published),
-      Layer.succeed(AcceptedJournalReader, published)
-    )
-    const publishedControlLayer = attemptChoiceControlLayer.pipe(Layer.provide(publishedCapabilities))
+    const initialRecords = yield* Effect.gen(function* () {
+      yield* appendExposedPrefix()
+      return yield* (yield* JournalStore).read(runId)
+    }).pipe(Effect.provide(memoryJournalTestLayer))
     yield* Effect.gen(function* () {
       const journal = yield* Journal
       const stop = yield* (yield* AttemptChoiceControl).apply({ choice: "StopTaskImplementation", requestId, subject })
@@ -1420,31 +1396,20 @@ it.effect("rejects a no-release after a later same-target unreadable claim obser
         terminationPreconditionIssues(records, runId, completedRunFinalityFixture({ runId, target }).evidence)
       ).not.toEqual([])
     }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          Layer.succeed(Journal, published),
-          Layer.succeed(InRunJournal, published),
-          Layer.succeed(AcceptedJournalReader, published),
-          publishedControlLayer
-        )
-      )
+      Effect.provide(attemptChoiceControlLayer),
+      Effect.provide(plannedAttemptProtocolControllerLayer),
+      Effect.provide(liveJournalTestLayer({ records: initialRecords, runId, target }))
     )
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  })
 )
 
 it.effect("keeps a published target-A Stop valid through advancement, reduction, and recovery", () =>
   Effect.gen(function* () {
-    yield* appendExposedPrefix()
-    const storage = yield* JournalStore
-    const initialReduction = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
-    if (initialReduction._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initialReduction)
-    const published = yield* makeJournal(runId, target, initialReduction, storage)
-    const publishedCapabilities = Layer.merge(
-      Layer.succeed(InRunJournal, published),
-      Layer.succeed(AcceptedJournalReader, published)
-    )
-    const publishedControlLayer = attemptChoiceControlLayer.pipe(Layer.provide(publishedCapabilities))
-    yield* Effect.gen(function* () {
+    const initialRecords = yield* Effect.gen(function* () {
+      yield* appendExposedPrefix()
+      return yield* (yield* JournalStore).read(runId)
+    }).pipe(Effect.provide(memoryJournalTestLayer))
+    const finalRecords = yield* Effect.gen(function* () {
       const journal = yield* Journal
       const attached = yield* Deferred.make<void>()
       const publications = yield* journal.state.changes.pipe(
@@ -1523,29 +1488,13 @@ it.effect("keeps a published target-A Stop valid through advancement, reduction,
       const advancedRecords = yield* journal.read(runId)
       expect((yield* journal.state.get).position).toBe(beforeForeign.position + 4)
       expect(reduceWorkflowJournalHistory(runId, advancedRecords)._tag).toBe("ValidWorkflowJournalHistory")
+      return advancedRecords
     }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          Layer.succeed(Journal, published),
-          Layer.succeed(InRunJournal, published),
-          Layer.succeed(AcceptedJournalReader, published),
-          publishedControlLayer
-        )
-      )
+      Effect.provide(attemptChoiceControlLayer),
+      Effect.provide(plannedAttemptProtocolControllerLayer),
+      Effect.provide(liveJournalTestLayer({ records: initialRecords, runId, target }))
     )
 
-    const finalRecords = yield* storage.read(runId)
-    const finalReduction = reduceWorkflowJournalHistory(runId, finalRecords)
-    if (finalReduction._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(finalReduction)
-    const restartedJournal = yield* makeJournal(runId, target, finalReduction, storage)
-    const restartedControlLayer = attemptChoiceControlLayer.pipe(
-      Layer.provide(
-        Layer.merge(
-          Layer.succeed(InRunJournal, restartedJournal),
-          Layer.succeed(AcceptedJournalReader, restartedJournal)
-        )
-      )
-    )
     yield* Effect.gen(function* () {
       const restartedChoice = yield* (yield* AttemptChoiceControl).read(requestId)
       expect(restartedChoice._tag).toBe("StopApplied")
@@ -1556,16 +1505,11 @@ it.effect("keeps a published target-A Stop valid through advancement, reduction,
         expect.objectContaining({ _tag: "ResumePlannedAttemptExecutorWorkAfterCurrentFacts" })
       )
     }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          Layer.succeed(Journal, restartedJournal),
-          Layer.succeed(InRunJournal, restartedJournal),
-          Layer.succeed(AcceptedJournalReader, restartedJournal),
-          restartedControlLayer
-        )
-      )
+      Effect.provide(attemptChoiceControlLayer),
+      Effect.provide(plannedAttemptProtocolControllerLayer),
+      Effect.provide(liveJournalTestLayer({ records: finalRecords, runId, target }))
     )
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  })
 )
 
 it.effect("rejects a stale no-release observation after a newer exact claim read", () =>
@@ -1582,7 +1526,7 @@ it.effect("rejects a stale no-release observation after a newer exact claim read
         })
       )
     )
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const staleRead = makeTaskClaimObservationOperation(
       OperationId.make("attempt-stop-stale-no-release"),
       target,
@@ -1657,7 +1601,7 @@ it.effect("rejects a stale no-release observation after a newer exact claim read
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -1675,7 +1619,7 @@ it.effect("requires one exact stopped-claim release operation after its current 
         })
       )
     )
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const exactRead = makeTaskClaimObservationOperation(
       OperationId.make("attempt-stop-release-authority-read"),
       target,
@@ -1923,7 +1867,7 @@ it.effect("requires one exact stopped-claim release operation after its current 
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -1941,7 +1885,7 @@ it.effect("makes released and no-release stopped-claim dispositions mutually exc
         })
       )
     )
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const exactRead = makeTaskClaimObservationOperation(
       OperationId.make("attempt-stop-terminal-exact-read"),
       target,
@@ -2016,7 +1960,7 @@ it.effect("makes released and no-release stopped-claim dispositions mutually exc
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -2088,7 +2032,7 @@ it.effect("releases only the freshly confirmed exact claim after Stop", () =>
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -2197,7 +2141,7 @@ it.effect("retries the same stopped-claim release after reconstruction confirms 
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
 
@@ -2316,6 +2260,6 @@ it.effect("stops implementation without mutating an absent or foreign claim", ()
   }).pipe(
     Effect.provide(attemptChoiceControlLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(testJournalLayer)
   )
 )
