@@ -1,9 +1,5 @@
-import { Effect, Ref } from "effect"
+import { Context, Effect, Layer, Ref } from "effect"
 import {
-  GitReadIntentRecordedEvent,
-  IntegrationResponsibilityBeganEvent,
-  IntegrationStartedEvent,
-  InRunJournal,
   Integrator,
   IntegratorCallFailure,
   IntegratorGit,
@@ -12,51 +8,42 @@ import {
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorResult,
-  JournalPosition,
-  JournalRecord,
-  OperationId,
-  TargetLineageObservedEvent,
-  WorkflowActor,
+  Journal,
   deriveIntegratorRunState,
-  describeJournalEvent,
   integratorCorrelationFor,
-  makeTargetLineageObservationOperation,
+  liveJournalTestLayer,
   prepareIntegrationCandidateRun,
-  workflowJournalEventVersion,
   type IntegratorCandidateText,
   type IntegratorRequest,
-  type WorkflowJournalEvent
+  type AcceptedJournalReader,
+  type InRunJournal,
+  type JournalRecord,
+  type TrackerTarget
 } from "@dalph/orchestrator"
 import {
   IntegratorCassetteRun,
   IntegratorCassetteTerminalExpectation,
   RecordedIntegratorOutcome,
-  integratorPreparationInputFor,
   recordedIntegratorCassetteFor,
   type AuthoredIntegratorCassette,
   type AuthoredIntegratorGitResult,
   type AuthoredIntegratorResult,
   type AuthoredIntegratorStoryItem,
-  type AuthoredIntegratorStartingFacts,
   type IntegratorCassetteInput,
   type IntegratorCassettePublicResult,
   type IntegratorCassetteRequest,
   type IntegratorCassetteRun as IntegratorCassetteRunType,
   type RecordedIntegratorCassette
 } from "./integrator-cassette-domain.js"
+import { coherentHistoryFor, type CoherentIntegratorHistory } from "./integrator-cassette-history.js"
 export * from "./integrator-cassette-domain.js"
 export * from "./integrator-cassette-stories.js"
 
-const initialLineageIntentPosition = 3
-
-type AppendableWorkflowJournalEvent = Exclude<
-  WorkflowJournalEvent,
-  { readonly _tag: "WorkflowRunBegan" | "WorkflowRunTerminated" }
->
-
 interface IntegratorCassetteJournal {
-  readonly records: Ref.Ref<ReadonlyArray<JournalRecord>>
-  readonly service: InRunJournal["Service"]
+  readonly context: Context.Context<AcceptedJournalReader | Journal | InRunJournal>
+  readonly journal: Journal["Service"]
+  readonly outputRecords: (records: ReadonlyArray<JournalRecord>) => ReadonlyArray<JournalRecord>
+  readonly target: TrackerTarget
 }
 
 interface IntegratorCassetteRuntime {
@@ -70,77 +57,36 @@ interface IntegratorCassetteRuntime {
   readonly input: IntegratorCassetteInput
 }
 
-const journalRecordFor = (
-  runId: IntegratorCassetteInput["responsibility"]["plannedAttempt"]["runId"],
-  position: number,
-  event: AppendableWorkflowJournalEvent
-): JournalRecord =>
-  JournalRecord.make({
-    event,
-    key: describeJournalEvent(event).expectedKey,
-    position: JournalPosition.make(position),
-    runId
-  })
+const outputRecordsFor = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<JournalRecord> =>
+  records.filter(({ event }) =>
+    [
+      "GitReadIntentRecorded",
+      "IntegrationResponsibilityBegan",
+      "IntegrationStarted",
+      "TargetLineageObserved",
+      "IntegratorSessionFixed",
+      "IntegratorRunStarted",
+      "IntegratorRunResultRecorded",
+      "IntegratorRunCandidateGitReadIntended",
+      "IntegratorRunCandidateGitObserved"
+    ].includes(event._tag)
+  )
 
-const initialRecordsFor = (startingFacts: AuthoredIntegratorStartingFacts): ReadonlyArray<JournalRecord> => {
-  const { responsibility, targetLineage, targetLineageObservedAt } = startingFacts
-  const began = IntegrationResponsibilityBeganEvent.make({
-    acceptedResult: responsibility.acceptedResult,
-    integrationTarget: responsibility.integrationTarget,
-    plannedAttempt: responsibility.plannedAttempt,
-    version: workflowJournalEventVersion
-  })
-  const started = IntegrationStartedEvent.make({
-    acceptedResult: responsibility.acceptedResult,
-    integrationTarget: responsibility.integrationTarget,
-    plannedAttempt: responsibility.plannedAttempt,
-    responsibilityBeganAt: responsibility.queuedAt,
-    version: workflowJournalEventVersion
-  })
-  const lineageOperationId = OperationId.make(`integrator-cassette-lineage:${responsibility.plannedAttempt.attemptId}`)
-  const lineageOperation = makeTargetLineageObservationOperation({
-    integrationTarget: responsibility.integrationTarget,
-    operationId: lineageOperationId,
-    plannedAttempt: responsibility.plannedAttempt,
-    predecessorOperationIds: []
-  })
-  const lineageIntent = GitReadIntentRecordedEvent.make({
-    initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-    occurrenceClassification: "InitiatedAction",
-    operation: lineageOperation,
-    version: workflowJournalEventVersion
-  })
-  const lineage = TargetLineageObservedEvent.make({
-    observation: targetLineage,
-    occurrenceClassification: "NonActionOccurrence",
-    operationId: lineageOperationId,
-    plannedAttempt: responsibility.plannedAttempt,
-    version: workflowJournalEventVersion
-  })
-  return [
-    journalRecordFor(responsibility.plannedAttempt.runId, responsibility.queuedAt, began),
-    journalRecordFor(responsibility.plannedAttempt.runId, responsibility.startedAt, started),
-    journalRecordFor(responsibility.plannedAttempt.runId, initialLineageIntentPosition, lineageIntent),
-    journalRecordFor(responsibility.plannedAttempt.runId, targetLineageObservedAt, lineage)
-  ]
-}
-
-const makeJournal = Effect.fn("IntegratorCassette.makeJournal")(function* (
-  initialRecords: ReadonlyArray<JournalRecord>
-) {
-  const records = yield* Ref.make(initialRecords)
-  const service = InRunJournal.of({
-    append: (runId, key, event) =>
-      Ref.modify(records, (current) => {
-        const existing = current.find((record) => record.key === key)
-        if (existing !== undefined) return [Effect.succeed(existing), current] as const
-        const largestPosition = current.reduce((largest, record) => Math.max(largest, record.position), 0)
-        const appended = JournalRecord.make({ event, key, position: JournalPosition.make(largestPosition + 1), runId })
-        return [Effect.succeed(appended), [...current, appended]] as const
-      }).pipe(Effect.flatten),
-    read: (runId) => Ref.get(records).pipe(Effect.map((current) => current.filter((record) => record.runId === runId)))
-  })
-  return { records, service } satisfies IntegratorCassetteJournal
+const makeJournal = Effect.fn("IntegratorCassette.makeJournal")(function* (history: CoherentIntegratorHistory) {
+  const context = yield* Layer.build(
+    liveJournalTestLayer({
+      records: history.records,
+      runId: history.input.responsibility.plannedAttempt.runId,
+      target: history.target
+    })
+  )
+  const journal = Context.get(context, Journal)
+  return {
+    context,
+    journal,
+    outputRecords: outputRecordsFor,
+    target: history.target
+  } satisfies IntegratorCassetteJournal
 })
 
 const takeScripted = <A>(script: Ref.Ref<ReadonlyArray<A>>, label: string): Effect.Effect<A> =>
@@ -151,6 +97,7 @@ const takeScripted = <A>(script: Ref.Ref<ReadonlyArray<A>>, label: string): Effe
   })
 
 const makeRuntime = Effect.fn("IntegratorCassette.makeRuntime")(function* (cassette: AuthoredIntegratorCassette) {
+  const history = yield* coherentHistoryFor(cassette)
   return {
     cassette,
     gitCandidates: yield* Ref.make<ReadonlyArray<IntegratorCandidateText>>([]),
@@ -158,8 +105,8 @@ const makeRuntime = Effect.fn("IntegratorCassette.makeRuntime")(function* (casse
     gitCalls: yield* Ref.make(0),
     integratorCalls: yield* Ref.make<ReadonlyArray<IntegratorRequest>>([]),
     integratorResults: yield* Ref.make(cassette.integratorResults),
-    journal: yield* makeJournal(initialRecordsFor(cassette.startingFacts)),
-    input: integratorPreparationInputFor(cassette.startingFacts)
+    journal: yield* makeJournal(history),
+    input: history.input
   } satisfies Omit<IntegratorCassetteRuntime, "journal" | "input"> & {
     readonly journal: IntegratorCassetteJournal
     readonly input: IntegratorCassetteInput
@@ -239,7 +186,7 @@ const runOne = Effect.fn("IntegratorCassette.runOne")(function* (runtime: Integr
     run: initialRunFor(runtime.input)
   }).pipe(
     Effect.result,
-    Effect.provideService(InRunJournal, runtime.journal.service),
+    Effect.provide(runtime.journal.context),
     Effect.provideService(Integrator, Integrator.of(integratorServiceFor(runtime))),
     Effect.provideService(IntegratorGit, IntegratorGit.of(gitServiceFor(runtime)))
   )
@@ -253,8 +200,9 @@ const terminalObservationFor = Effect.fn("IntegratorCassette.terminalObservation
   outcomes: ReadonlyArray<RecordedIntegratorOutcome>,
   expected: IntegratorCassetteTerminalExpectation
 ) {
-  const records = yield* Ref.get(runtime.journal.records)
-  const recorded = recordedIntegratorCassetteFor(runtime.cassette.name, records)
+  const allRecords = yield* runtime.journal.journal.read(runtime.input.responsibility.plannedAttempt.runId)
+  const records = runtime.journal.outputRecords(allRecords)
+  const recorded = recordedIntegratorCassetteFor(runtime.cassette.name, allRecords)
   const requests = yield* Ref.get(runtime.integratorCalls)
   const sessionIds = requests.map(({ correlation }) => correlation.session.sessionId)
   const candidateResources = requests.map(({ correlation }) => correlation.session.candidateResource)
@@ -267,14 +215,14 @@ const terminalObservationFor = Effect.fn("IntegratorCassette.terminalObservation
     outcomes,
     recordedTags: recorded.entries.map(({ _tag }) => _tag),
     sessionIdPrefixes: sessionIds.map((session) => session.slice(0, "integrator-session:".length)),
-    stateTag: currentStateFor(records, runtime.input)._tag
+    stateTag: currentStateFor(allRecords, runtime.input)._tag
   })
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     return yield* Effect.die(
       `maintained Integrator cassette ${runtime.cassette.name} terminal mismatch: expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`
     )
   }
-  return { actual, recorded, records }
+  return { actual, allRecords, recorded, records }
 })
 
 const interpretStoryItem = Effect.fn("IntegratorCassette.interpretStoryItem")(function* (
@@ -297,7 +245,11 @@ export const runMaintainedIntegratorCassette = Effect.fn("IntegratorCassette.run
   const runtime = yield* makeRuntime(cassette)
   const outcomes = yield* Ref.make<ReadonlyArray<RecordedIntegratorOutcome>>([])
   let terminal:
-    | { readonly recorded: RecordedIntegratorCassette; readonly records: ReadonlyArray<JournalRecord> }
+    | {
+        readonly allRecords: ReadonlyArray<JournalRecord>
+        readonly recorded: RecordedIntegratorCassette
+        readonly records: ReadonlyArray<JournalRecord>
+      }
     | undefined
   for (const item of cassette.story) {
     const observed = yield* interpretStoryItem(runtime, outcomes, item)
@@ -318,7 +270,7 @@ export const runMaintainedIntegratorCassette = Effect.fn("IntegratorCassette.run
     records,
     recorded,
     sessionIds: requests.map(({ correlation }) => correlation.session.sessionId),
-    state: currentStateFor(records, integratorPreparationInputFor(cassette.startingFacts))
+    state: currentStateFor(terminal.allRecords, runtime.input)
   })
 })
 
