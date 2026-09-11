@@ -22,6 +22,7 @@ import {
 } from "../../workflow/task-tracker-facts/observation.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
+import { materializeJournalRecords } from "../../workflow-journal/record-sequence.js"
 import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import {
   JournalHistoryInvalid,
@@ -657,7 +658,9 @@ it.effect("reconstructs an append accepted before the process could publish it",
           intentRecordKey(operation.operationId),
           taskTrackerReadIntent(operation)
         )
-        expect(yield* storage.read(crashRunId)).not.toBe((yield* crashingJournal.state.get).prefix.records)
+        expect(yield* storage.read(crashRunId)).toEqual(
+          materializeJournalRecords((yield* crashingJournal.state.get).prefix.records)
+        )
         yield* Ref.set(failAfterDurableAppend, true)
         const interruptedPublication = yield* crashingJournal
           .append(

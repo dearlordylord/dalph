@@ -1,6 +1,8 @@
 import type { PlannedTaskAttempt } from "@dalph/contracts"
 import { isDependencySatisfied, isTaskOpen } from "../../../authorities/task-tracker/task.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import { outcomeRecordKey } from "../../../workflow-journal/record-key.js"
+import { journalRecordByKey, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import type { WorkflowJournalEvent } from "../../registry/event.js"
 import type { CompleteTaskTrackerFactsObserved } from "../../task-tracker-facts/observation.js"
 import { reconfirmationMatchesPriorFullObservation } from "../../task-tracker-facts/reconfirmation.js"
@@ -11,19 +13,14 @@ type GraphObservation = Extract<
 >
 
 const completeGraphObservationFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   observation: GraphObservation,
   observedAt: JournalRecord["position"]
 ): CompleteTaskTrackerFactsObserved | undefined => {
   if (observation._tag === "CompleteTaskTrackerFacts") return observation
-  const prior = records.findLast(
-    ({ event, position }) =>
-      position < observedAt &&
-      event._tag === "TaskTrackerFactsObserved" &&
-      event.observation._tag === "CompleteTaskTrackerFacts" &&
-      event.operationId === observation.priorFullObservationOperationId
-  )
+  const prior = journalRecordByKey(records, outcomeRecordKey(observation.priorFullObservationOperationId))
   return prior?.event._tag === "TaskTrackerFactsObserved" &&
+    prior.position < observedAt &&
     prior.event.observation._tag === "CompleteTaskTrackerFacts" &&
     reconfirmationMatchesPriorFullObservation(observation, prior.event.observation)
     ? prior.event.observation
@@ -32,7 +29,7 @@ const completeGraphObservationFor = (
 
 /** Derives current scheduler eligibility from the exact complete normalized graph payload. */
 export const graphKeepsTaskEligible = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   observation: GraphObservation,
   observedAt: JournalRecord["position"],
   taskId: PlannedTaskAttempt["taskId"]

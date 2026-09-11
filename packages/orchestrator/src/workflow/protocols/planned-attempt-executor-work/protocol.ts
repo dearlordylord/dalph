@@ -11,6 +11,11 @@ import {
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { plannedAttemptExecutorStateObservedRecordKey } from "../../../workflow-journal/record-key.js"
 import { InRunJournal } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import {
+  journalRecordCountForAttemptKind,
+  journalRecordsForAttemptKind
+} from "../../../workflow-journal/record-evidence.js"
 import {
   PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorStateObservation,
@@ -55,9 +60,12 @@ const publishPlannedAttemptExecutorProjectionResultUnserialized = Effect.fn(
   "PlannedAttemptExecutorWorkflow.publishProjectionResultUnserialized"
 )(function* (plannedAttempt: PlannedTaskAttempt, projection: Effect.Effect<PlannedAttemptExecutorProjection>) {
   const journal = yield* InRunJournal
+  const acceptedJournal = yield* AcceptedJournalReader
   const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-  const records = yield* journal.read(plannedAttempt.runId)
-  const responsibility = records.find(
+  const records = yield* acceptedJournal.readAccepted(plannedAttempt.runId)
+  const responsibility = Array.from(
+    journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptExecutorWorkResponsibilityBegan")
+  ).find(
     ({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
       event.plannedAttempt.attemptId === plannedAttempt.attemptId
@@ -87,11 +95,7 @@ const publishPlannedAttemptExecutorProjectionResultUnserialized = Effect.fn(
   }
   const projected = yield* projection
   const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(
-    records.filter(
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorStateObserved" &&
-        event.plannedAttempt.attemptId === plannedAttempt.attemptId
-    ).length + 1
+    journalRecordCountForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptExecutorStateObserved") + 1
   )
   const invalidProjection = validatePlannedAttemptExecutorProjectionCorrelation(projected, correlation)
   if (invalidProjection !== undefined) {
@@ -225,10 +229,12 @@ export const publishPlannedAttemptExecutorProjectionResultWithPermit = (
 const acceptPendingPlannedAttemptExecutorObservationUnserialized = Effect.fn(
   "PlannedAttemptExecutorWorkflow.acceptPendingObservationUnserialized"
 )(function* (plannedAttempt: PlannedTaskAttempt) {
-  const journal = yield* InRunJournal
+  const acceptedJournal = yield* AcceptedJournalReader
   const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-  const records = yield* journal.read(plannedAttempt.runId)
-  const responsibility = records.find(
+  const records = yield* acceptedJournal.readAccepted(plannedAttempt.runId)
+  const responsibility = Array.from(
+    journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptExecutorWorkResponsibilityBegan")
+  ).find(
     ({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
       event.plannedAttempt.attemptId === plannedAttempt.attemptId
@@ -269,8 +275,8 @@ export const acceptPendingPlannedAttemptExecutorObservationWithPermit = (
 const reconcileOrObservePlannedAttemptExecutorStateResultUnserialized = Effect.fn(
   "PlannedAttemptExecutorWorkflow.reconcileOrObserveStateResultUnserialized"
 )(function* (permit: PlannedAttemptProtocolPermit, plannedAttempt: PlannedTaskAttempt) {
-  const journal = yield* InRunJournal
-  const records = yield* journal.read(plannedAttempt.runId)
+  const acceptedJournal = yield* AcceptedJournalReader
+  const records = yield* acceptedJournal.readAccepted(plannedAttempt.runId)
   const unsettledCommand = latestUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt)
   if (unsettledCommand === undefined) {
     return yield* observePlannedAttemptExecutorStateUnserialized(plannedAttempt)
