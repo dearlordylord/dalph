@@ -1197,18 +1197,14 @@ effectIt.effect(
           { _tag: "WorkflowEstablishment" },
           OperationId.make(`direction-retry-graph-after-lineage:${graphAfterDirection}`),
           coverageTarget,
-          [acceptedCoverageClaimOperation.operationId],
+          [],
           [coverageAttempt.taskId]
         )
         const laterClaimOperation = makeTaskClaimObservationOperation(
           OperationId.make(`direction-retry-claim-after-lineage:${graphAfterDirection}`),
           coverageTarget,
           coverageAttempt.taskId,
-          [
-            acceptedCoveragePlanOperation.operationId,
-            laterGraphOperation.operationId,
-            acceptedCoverageSpecificationOperation.operationId
-          ]
+          [laterGraphOperation.operationId]
         )
         const afterLaterGraph = {
           ...afterObservation,
@@ -1236,34 +1232,68 @@ effectIt.effect(
           }
         }
         const graphRefreshResources = yield* makeIntegrationTargetResourceController()
-        const graphRefreshRecovery = yield* liveProjectionFor(
-          makeRunRecoveryProjection(coverageRunId, fixture.integrationTarget, graphRefreshResources),
-          coverageRunId,
-          coverageTarget,
-          afterLaterGraph
-        )
-        const graphRefreshAcquire = (yield* graphRefreshRecovery.readDeliveryProjection).frontier.transitions.find(
-          ({ _tag }) => _tag === "AcquireStartedIntegrationTarget"
-        )
-        if (graphRefreshAcquire?._tag !== "AcquireStartedIntegrationTarget") {
-          return yield* Effect.die("expected refreshed target responsibility acquisition")
-        }
-        yield* graphRefreshResources.acquire(graphRefreshAcquire.responsibility)
-        yield* graphRefreshResources.publishAcceptedOwnership(graphRefreshAcquire.responsibility)
-        const heldGraphRefreshRecovery = yield* liveProjectionFor(
-          makeRunRecoveryProjection(coverageRunId, fixture.integrationTarget, graphRefreshResources),
-          coverageRunId,
-          coverageTarget,
-          afterLaterGraph
-        )
-        const graphRefreshProjection = yield* heldGraphRefreshRecovery.readDeliveryProjection
-        const refreshedRead = graphRefreshProjection.frontier.transitions.find(
-          ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+        yield* graphRefreshResources.acquire(reacquire.responsibility)
+        yield* graphRefreshResources.publishAcceptedOwnership(reacquire.responsibility)
+        const refreshedRead = yield* Effect.gen(function* () {
+          const journal = yield* InRunJournal
+          const recovery = yield* makeRunRecoveryProjection(
+            coverageRunId,
+            fixture.integrationTarget,
+            graphRefreshResources
+          )
+          const releaseProjection = yield* recovery.readDeliveryProjection
+          const release = releaseProjection.frontier.transitions.find(
+            ({ _tag }) => _tag === "ReleaseStartedIntegrationTarget"
+          )
+          if (release?._tag !== "ReleaseStartedIntegrationTarget") {
+            return yield* Effect.die("expected stale target release before the post-claim graph read")
+          }
+          yield* graphRefreshResources.release(release.responsibility)
+          const graphRefreshProjection = yield* recovery.readDeliveryProjection
+          const postClaimGraphRead = graphRefreshProjection.frontier.transitions.find(
+            ({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph"
+          )
+          if (postClaimGraphRead?._tag !== "ObservePlannedAttemptContinuationGraph") {
+            return yield* Effect.die(
+              `expected a post-claim graph read after releasing stale ownership; got ${graphRefreshProjection.frontier.transitions.map(({ _tag }) => _tag).join(",")}`
+            )
+          }
+          yield* journal.append(
+            coverageRunId,
+            intentRecordKey(postClaimGraphRead.operation.operationId),
+            taskTrackerReadIntent(postClaimGraphRead.operation)
+          )
+          yield* journal.append(
+            coverageRunId,
+            outcomeRecordKey(postClaimGraphRead.operation.operationId),
+            taskTrackerFactsObservedEvent(
+              postClaimGraphRead.operation.operationId,
+              makeCompleteTaskTrackerFactsObserved(postClaimGraphRead.operation, coverageGraph)
+            )
+          )
+          const reacquireProjection = yield* recovery.readDeliveryProjection
+          const refreshedAcquire = reacquireProjection.frontier.transitions.find(
+            ({ _tag }) => _tag === "AcquireStartedIntegrationTarget"
+          )
+          if (refreshedAcquire?._tag !== "AcquireStartedIntegrationTarget") {
+            return yield* Effect.die("expected exact target reacquisition after the post-claim graph observation")
+          }
+          yield* graphRefreshResources.acquire(refreshedAcquire.responsibility)
+          yield* graphRefreshResources.publishAcceptedOwnership(refreshedAcquire.responsibility)
+          return (yield* recovery.readDeliveryProjection).frontier.transitions.find(
+            ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+          )
+        }).pipe(
+          Effect.provide(
+            liveJournalTestLayer({
+              records: exportWorkflowHistoryRecords(afterLaterGraph.workflowHistory),
+              runId: coverageRunId,
+              target: coverageTarget
+            })
+          )
         )
         if (refreshedRead?._tag !== "ObservePlannedAttemptContinuationTargetLineage") {
-          return yield* Effect.die(
-            `expected refreshed lineage read; got ${graphRefreshProjection.frontier.transitions.map(({ _tag }) => _tag).join(",")}; explanations ${graphRefreshProjection.frontier.explanations.map(({ _tag }) => _tag).join(",")}`
-          )
+          return yield* Effect.die("expected refreshed lineage read after the accepted post-claim graph observation")
         }
         expect(refreshedRead.operation.operationId).not.toBe(firstRead.operation.operationId)
       }
