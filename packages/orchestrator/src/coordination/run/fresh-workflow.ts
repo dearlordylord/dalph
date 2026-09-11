@@ -92,40 +92,27 @@ const decisionFor = (step: FreshWorkflowStepType): FreshWorkflowDecision => ({
         : continued(step.task.id, step.predecessorOperationId)
 })
 
-const observedOperationIdsByPrefix = new WeakMap<object, ReadonlySet<OperationId>>()
-const completeGraphObservationIdsByPrefix = new WeakMap<object, ReadonlySet<OperationId>>()
-
-const observedOperationIds = (records: JournalHistorySource): ReadonlySet<OperationId> => {
-  const cached = observedOperationIdsByPrefix.get(records)
-  if (cached !== undefined) return cached
-  const observed = new Set<OperationId>()
-  for (const { event } of journalRecordsOfKind(records, "TaskTrackerFactsObserved")) {
-    if (event._tag === "TaskTrackerFactsObserved") observed.add(event.operationId)
-  }
-  for (const { event } of journalRecordsOfKind(records, "TaskWorktreeReady")) {
-    if (event._tag === "TaskWorktreeReady") observed.add(event.operationId)
-  }
-  observedOperationIdsByPrefix.set(records, observed)
-  return observed
-}
+const observedOperationIds = (records: JournalHistorySource): ReadonlySet<OperationId> =>
+  new Set([
+    ...Array.from(journalRecordsOfKind(records, "TaskTrackerFactsObserved")).flatMap(({ event }) =>
+      event._tag === "TaskTrackerFactsObserved" ? [event.operationId] : []
+    ),
+    ...Array.from(journalRecordsOfKind(records, "TaskWorktreeReady")).flatMap(({ event }) =>
+      event._tag === "TaskWorktreeReady" ? [event.operationId] : []
+    )
+  ])
 
 /** Only a complete current graph outcome can authorize a claim; a typed read failure merely settles its read. */
-const completeGraphObservationIds = (records: JournalHistorySource): ReadonlySet<OperationId> => {
-  const cached = completeGraphObservationIdsByPrefix.get(records)
-  if (cached !== undefined) return cached
-  const observed = new Set<OperationId>()
-  for (const { event } of journalRecordsOfKind(records, "TaskTrackerFactsObserved")) {
-    if (
+const completeGraphObservationIds = (records: JournalHistorySource): ReadonlySet<OperationId> =>
+  new Set(
+    Array.from(journalRecordsOfKind(records, "TaskTrackerFactsObserved")).flatMap(({ event }) =>
       event._tag === "TaskTrackerFactsObserved" &&
       (event.observation._tag === "CompleteTaskTrackerFacts" ||
         event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
-    ) {
-      observed.add(event.operationId)
-    }
-  }
-  completeGraphObservationIdsByPrefix.set(records, observed)
-  return observed
-}
+        ? [event.operationId]
+        : []
+    )
+  )
 
 const plannedSpecificationFor = (
   records: JournalHistorySource,

@@ -383,23 +383,21 @@ export const projectFreshTaskCommitments = (
     return projection._tag === "FreshTaskAdmissionProjection" ? projection.commitments : []
   }
   const handoffs = exactAttemptHandoffs(runId, records)
-  const commitments: Array<Extract<TaskAdmissionOccupancy, { readonly _tag: "FreshTaskCommitted" }>> = []
-  for (const record of journalRecordsOfKind(records, "TaskClaimAcquisitionIntended")) {
-    if (!isSelectionClaimIntentRecord(record)) continue
+  const commitments = Array.from(journalRecordsOfKind(records, "TaskClaimAcquisitionIntended")).flatMap((record) => {
+    if (!isSelectionClaimIntentRecord(record)) return []
     const acquisition = record.event.operation.acquisition
     const released =
       exactPreOwnershipRejectionWasAccepted(records, record) ||
       handoffs.has(freshTaskAdmissionReleaseKey(acquisition.taskId, acquisition.operationId))
-    if (!released && isTaskSelectionAcquireTaskClaimOperation(record.event.operation)) {
-      commitments.push(
-        Object.freeze(
-          TaskAdmissionOccupancy.FreshTaskCommitted({
-            commitment: brandFreshTaskCommitment(record.position, runId, record.event.operation)
-          })
-        )
+    if (released || !isTaskSelectionAcquireTaskClaimOperation(record.event.operation)) return []
+    return [
+      Object.freeze(
+        TaskAdmissionOccupancy.FreshTaskCommitted({
+          commitment: brandFreshTaskCommitment(record.position, runId, record.event.operation)
+        })
       )
-    }
-  }
+    ]
+  })
   return Object.freeze(commitments)
 }
 

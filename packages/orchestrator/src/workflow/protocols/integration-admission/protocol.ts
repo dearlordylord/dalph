@@ -522,21 +522,20 @@ const settledFor = (
 /** Finds accepted terminal facts that still need their exact durable integration responsibility. */
 export const deriveUnqueuedAcceptedResults = (records: JournalHistorySource): ReadonlyArray<UnqueuedAcceptedResult> => {
   if (isJournalRecordEvidence(records)) {
-    const queuedAttemptIds = new Set(
+    const queuedAttemptIds = HashSet.fromIterable(
       Array.from(journalRecordsOfKind(records, "IntegrationResponsibilityBegan"), (record) =>
         record.event._tag === "IntegrationResponsibilityBegan" ? record.event.plannedAttempt.attemptId : undefined
       ).filter((attemptId) => attemptId !== undefined)
     )
-    const results: Array<UnqueuedAcceptedResult> = []
-    for (const record of journalRecordsOfKind(records, "PlannedAttemptExecutorWorkReported")) {
-      if (record.event._tag !== "PlannedAttemptExecutorWorkReported") continue
+    return Array.from(journalRecordsOfKind(records, "PlannedAttemptExecutorWorkReported")).flatMap((record) => {
+      if (record.event._tag !== "PlannedAttemptExecutorWorkReported") return []
       const report = record.event.report
       if (
         report._tag !== "ExecutorWorkTerminal" ||
         report.result._tag !== "Accepted" ||
-        queuedAttemptIds.has(report.correlation.attemptId)
+        HashSet.has(queuedAttemptIds, report.correlation.attemptId)
       ) {
-        continue
+        return []
       }
       let plannedAttempt: PlannedTaskAttempt | undefined
       for (const responsibility of journalRecordsForAttemptKind(
@@ -548,17 +547,16 @@ export const deriveUnqueuedAcceptedResults = (records: JournalHistorySource): Re
           plannedAttempt = responsibility.event.plannedAttempt
         }
       }
-      if (plannedAttempt !== undefined) {
-        results.push(
-          UnqueuedAcceptedResult.make({
-            acceptedResult: report.result.acceptedResult,
-            plannedAttempt,
-            terminalAt: record.position
-          })
-        )
-      }
-    }
-    return results
+      return plannedAttempt === undefined
+        ? []
+        : [
+            UnqueuedAcceptedResult.make({
+              acceptedResult: report.result.acceptedResult,
+              plannedAttempt,
+              terminalAt: record.position
+            })
+          ]
+    })
   }
   const indexes = replayIntegrationAdmissionPrefixIndexes(records)
   const results = records.flatMap((record) => {
@@ -588,34 +586,35 @@ export const deriveUnqueuedAcceptedResults = (records: JournalHistorySource): Re
 /** Reconstructs FIFO and cutoff state solely from immutable journal records. */
 export const deriveIntegrationAdmission = (records: JournalHistorySource): IntegrationAdmission => {
   if (isJournalRecordEvidence(records)) {
-    const responsibilities: Array<IntegrationResponsibility> = []
-    for (const record of journalRecordsOfKind(records, "IntegrationResponsibilityBegan")) {
-      if (record.event._tag !== "IntegrationResponsibilityBegan") continue
-      const queued = { ...record, event: record.event }
-      if (settledForEvidence(records, queued)) continue
-      const started = startedForEvidence(records, queued)
-      responsibilities.push(
-        started === undefined
-          ? QueuedIntegrationResponsibility.make({
-              acceptedResult: queued.event.acceptedResult,
-              integrationTarget: queued.event.integrationTarget,
-              plannedAttempt: queued.event.plannedAttempt,
-              preIntegrationCancellation: PreIntegrationCancellationCapability.make({
-                attemptId: queued.event.plannedAttempt.attemptId,
+    const responsibilities = Array.from(journalRecordsOfKind(records, "IntegrationResponsibilityBegan")).flatMap(
+      (record): ReadonlyArray<IntegrationResponsibility> => {
+        if (record.event._tag !== "IntegrationResponsibilityBegan") return []
+        const queued = { ...record, event: record.event }
+        if (settledForEvidence(records, queued)) return []
+        const started = startedForEvidence(records, queued)
+        return [
+          started === undefined
+            ? QueuedIntegrationResponsibility.make({
+                acceptedResult: queued.event.acceptedResult,
+                integrationTarget: queued.event.integrationTarget,
+                plannedAttempt: queued.event.plannedAttempt,
+                preIntegrationCancellation: PreIntegrationCancellationCapability.make({
+                  attemptId: queued.event.plannedAttempt.attemptId,
+                  queuedAt: queued.position,
+                  runId: queued.runId
+                }),
+                queuedAt: queued.position
+              })
+            : StartedIntegrationResponsibility.make({
+                acceptedResult: queued.event.acceptedResult,
+                integrationTarget: queued.event.integrationTarget,
+                plannedAttempt: queued.event.plannedAttempt,
                 queuedAt: queued.position,
-                runId: queued.runId
-              }),
-              queuedAt: queued.position
-            })
-          : StartedIntegrationResponsibility.make({
-              acceptedResult: queued.event.acceptedResult,
-              integrationTarget: queued.event.integrationTarget,
-              plannedAttempt: queued.event.plannedAttempt,
-              queuedAt: queued.position,
-              startedAt: started.position
-            })
-      )
-    }
+                startedAt: started.position
+              })
+        ]
+      }
+    )
     return { responsibilities }
   }
   const indexes = replayIntegrationAdmissionPrefixIndexes(records)
@@ -664,18 +663,24 @@ const integrationTargetKey = (responsibility: IntegrationResponsibility): string
 export const selectStartableIntegrationResponsibilities = (
   admission: IntegrationAdmission
 ): ReadonlyArray<QueuedIntegrationResponsibility> => {
-  const unavailableTargets = new Set(
+  const initiallyUnavailableTargets = HashSet.fromIterable(
     admission.responsibilities.flatMap((responsibility) =>
       responsibility._tag === "StartedIntegrationResponsibility" ? [integrationTargetKey(responsibility)] : []
     )
   )
-  return admission.responsibilities.flatMap((responsibility) => {
-    if (responsibility._tag !== "QueuedIntegrationResponsibility") return []
-    const target = integrationTargetKey(responsibility)
-    if (unavailableTargets.has(target)) return []
-    unavailableTargets.add(target)
-    return [responsibility]
-  })
+  const selected = admission.responsibilities.reduce(
+    (state, responsibility) => {
+      if (responsibility._tag !== "QueuedIntegrationResponsibility") return state
+      const target = integrationTargetKey(responsibility)
+      if (HashSet.has(state.unavailableTargets, target)) return state
+      return {
+        startable: Chunk.append(responsibility)(state.startable),
+        unavailableTargets: HashSet.add(state.unavailableTargets, target)
+      }
+    },
+    { startable: Chunk.empty<QueuedIntegrationResponsibility>(), unavailableTargets: initiallyUnavailableTargets }
+  )
+  return Array.from(selected.startable)
 }
 
 /** Records one exact accepted result; the returned envelope position owns FIFO order. */

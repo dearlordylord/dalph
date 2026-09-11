@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { HashSet, Schema } from "effect"
 import type { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
 import { integratorRunStartedRecordKey, integratorSessionFixedRecordKey } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
@@ -47,10 +47,7 @@ export const integratorResponsibilityFactsEqual = responsibilityFactsEquivalence
 
 export const integratorCorrelationsEqual = integratorSessionCorrelationsEqual
 
-export const integratorFindEventAtKey = (
-  records: JournalHistorySource,
-  key: JournalRecord["key"]
-): JournalRecord | undefined => journalRecordByKey(records, key)
+export const integratorFindEventAtKey = journalRecordByKey
 
 /** Reconstructs run-bound state without upcasting any session-only history. */
 export const deriveIntegratorRunState = (
@@ -113,7 +110,7 @@ const latestStartedRunFor = (
   | { readonly _tag: "Absent" }
   | { readonly _tag: "Invalid"; readonly detail: string }
   | { readonly _tag: "Valid"; readonly run: IntegratorRunCorrelation } => {
-  const ordinals = new Set<number>()
+  let ordinals = HashSet.empty<number>()
   let latest: IntegratorRunCorrelation | undefined
   for (const record of journalRecordsOfKind(records, "IntegratorRunStarted")) {
     const { event } = record
@@ -121,10 +118,10 @@ const latestStartedRunFor = (
     if (event.run.ordinal > integratorRetryRunOrdinal || record.key !== integratorRunStartedRecordKey(event.run)) {
       return { _tag: "Invalid", detail: "Integrator run start has a foreign key or exceeds the Retry bound" }
     }
-    if (ordinals.has(event.run.ordinal)) {
+    if (HashSet.has(ordinals, event.run.ordinal)) {
       return { _tag: "Invalid", detail: "Integrator run start repeats one exact session ordinal" }
     }
-    ordinals.add(event.run.ordinal)
+    ordinals = HashSet.add(ordinals, event.run.ordinal)
     /* v8 ignore next -- @preserve validated Journal order records a lower ordinal before its authorized successor. */
     if (latest === undefined || event.run.ordinal > latest.ordinal) latest = event.run
   }
