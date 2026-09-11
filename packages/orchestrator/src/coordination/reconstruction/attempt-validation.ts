@@ -44,6 +44,9 @@ import {
   isJournalRecordEvidence,
   journalEvidenceBefore,
   journalGraphSnapshotForObservation,
+  journalLatestTaskObservation,
+  journalLatestTaskRead,
+  journalLatestAttemptRead,
   journalRecordsForAttempt,
   journalRecordsForOperationId,
   journalRecordsForTask,
@@ -118,14 +121,22 @@ const validateAttemptChoiceAuthority = (
     )
   }
   const immutableRunTarget = exactWorkflowRunTargetFor(prior)
-  const latestSpecification = findLast(
-    journalRecordsForTask(prior, subject.plannedAttempt.taskId),
-    ({ event }) =>
-      immutableRunTarget !== undefined &&
-      event._tag === "TaskTrackerFactsObserved" &&
-      event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
-      event.observation.factFamily.taskId === subject.plannedAttempt.taskId &&
-      taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
+  const latestSpecification = (
+    isJournalRecordEvidence(prior) && immutableRunTarget !== undefined
+      ? journalLatestTaskObservation(prior, {
+          taskId: subject.plannedAttempt.taskId,
+          target: immutableRunTarget,
+          kind: "FocusedTaskWorkSpecificationFacts"
+        })
+      : findLast(
+          journalRecordsForTask(prior, subject.plannedAttempt.taskId),
+          ({ event }) =>
+            immutableRunTarget !== undefined &&
+            event._tag === "TaskTrackerFactsObserved" &&
+            event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+            event.observation.factFamily.taskId === subject.plannedAttempt.taskId &&
+            taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
+        )
   )?.event
   const specificationMatches = () =>
     latestSpecification?._tag === "TaskTrackerFactsObserved" &&
@@ -301,8 +312,28 @@ const latestFocusedClaimObservationAfter = (
   baselinePosition: JournalPosition,
   taskId: TaskId,
   immutableRunTarget: ReturnType<typeof exactWorkflowRunTargetFor>
-) =>
-  findLast(
+) => {
+  if (isJournalRecordEvidence(prior)) {
+    if (immutableRunTarget === undefined) return undefined
+    const complete = journalLatestTaskObservation(prior, {
+      taskId,
+      target: immutableRunTarget,
+      kind: "FocusedTaskClaimFacts"
+    })
+    const unreadable = journalLatestTaskObservation(prior, {
+      taskId,
+      target: immutableRunTarget,
+      kind: "FocusedTaskClaimFactsUnreadable"
+    })
+    const latest =
+      complete === undefined
+        ? unreadable
+        : unreadable === undefined || complete.position > unreadable.position
+          ? complete
+          : unreadable
+    return latest !== undefined && latest.position > baselinePosition ? latest : undefined
+  }
+  return findLast(
     journalRecordsForTask(prior, taskId),
     ({ event, position }) =>
       position > baselinePosition &&
@@ -313,6 +344,7 @@ const latestFocusedClaimObservationAfter = (
       event.observation.coverage.taskId === taskId &&
       taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
   )
+}
 
 const matchingFocusedClaimReadIntentAfter = (
   prior: JournalHistorySource,
@@ -1175,15 +1207,21 @@ const replacementGraphIsExact = (
   if (record === undefined) return false
   if (record.position <= applicationPosition) return false
   if (
-    hasMatching(
-      journalRecordsForTask(prior, plannedAttempt.taskId),
-      ({ event, position }) =>
-        position > record.position &&
-        event._tag === "TaskTrackerReadIntentRecorded" &&
-        event.operation._tag === "ReadTrackerGraph" &&
-        event.operation.readShape.explicitlyCoveredTaskIds.includes(plannedAttempt.taskId) &&
-        taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(record.event.observation.target)
-    )
+    isJournalRecordEvidence(prior)
+      ? (journalLatestTaskRead(prior, {
+          taskId: plannedAttempt.taskId,
+          target: record.event.observation.target,
+          kind: "ReadTrackerGraph"
+        })?.position ?? 0) > record.position
+      : hasMatching(
+          journalRecordsForTask(prior, plannedAttempt.taskId),
+          ({ event, position }) =>
+            position > record.position &&
+            event._tag === "TaskTrackerReadIntentRecorded" &&
+            event.operation._tag === "ReadTrackerGraph" &&
+            event.operation.readShape.explicitlyCoveredTaskIds.includes(plannedAttempt.taskId) &&
+            taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(record.event.observation.target)
+        )
   ) {
     return false
   }
@@ -1217,15 +1255,21 @@ const replacementSpecificationIsExact = (
   const intent = freshReplacementTrackerReadIntent(prior, operationId, applicationPosition)
   if (intent?.event.operation._tag !== "ReadTaskWorkSpecification") return false
   if (
-    hasMatching(
-      journalRecordsForTask(prior, subject.plannedAttempt.taskId),
-      ({ event, position }) =>
-        position > record.position &&
-        event._tag === "TaskTrackerReadIntentRecorded" &&
-        event.operation._tag === "ReadTaskWorkSpecification" &&
-        event.operation.taskId === subject.plannedAttempt.taskId &&
-        taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(intent.event.operation.target)
-    )
+    isJournalRecordEvidence(prior)
+      ? (journalLatestTaskRead(prior, {
+          taskId: subject.plannedAttempt.taskId,
+          target: intent.event.operation.target,
+          kind: "ReadTaskWorkSpecification"
+        })?.position ?? 0) > record.position
+      : hasMatching(
+          journalRecordsForTask(prior, subject.plannedAttempt.taskId),
+          ({ event, position }) =>
+            position > record.position &&
+            event._tag === "TaskTrackerReadIntentRecorded" &&
+            event.operation._tag === "ReadTaskWorkSpecification" &&
+            event.operation.taskId === subject.plannedAttempt.taskId &&
+            taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(intent.event.operation.target)
+        )
   ) {
     return false
   }
@@ -1252,15 +1296,21 @@ const replacementClaimIsExact = (
   const intent = freshReplacementTrackerReadIntent(prior, witness.claimObservationOperationId, application.position)
   if (intent?.event.operation._tag !== "ReadTaskClaim") return false
   if (
-    hasMatching(
-      journalRecordsForTask(prior, plannedAttempt.taskId),
-      ({ event, position }) =>
-        position > record.position &&
-        event._tag === "TaskTrackerReadIntentRecorded" &&
-        event.operation._tag === "ReadTaskClaim" &&
-        event.operation.taskId === plannedAttempt.taskId &&
-        taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(intent.event.operation.target)
-    )
+    isJournalRecordEvidence(prior)
+      ? (journalLatestTaskRead(prior, {
+          taskId: plannedAttempt.taskId,
+          target: intent.event.operation.target,
+          kind: "ReadTaskClaim"
+        })?.position ?? 0) > record.position
+      : hasMatching(
+          journalRecordsForTask(prior, plannedAttempt.taskId),
+          ({ event, position }) =>
+            position > record.position &&
+            event._tag === "TaskTrackerReadIntentRecorded" &&
+            event.operation._tag === "ReadTaskClaim" &&
+            event.operation.taskId === plannedAttempt.taskId &&
+            taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(intent.event.operation.target)
+        )
   ) {
     return false
   }
@@ -1320,14 +1370,16 @@ const replacementWorktreeIsExact = (
   if (record === undefined) return false
   if (record.position <= applicationPosition) return false
   if (
-    hasMatching(
-      journalRecordsForAttempt(prior, plannedAttempt.attemptId),
-      ({ event, position }) =>
-        position > record.position &&
-        event._tag === "GitReadIntentRecorded" &&
-        event.operation._tag === "ReadTaskWorktree" &&
-        plannedTaskAttemptEquivalence(event.operation.plannedAttempt, plannedAttempt)
-    )
+    isJournalRecordEvidence(prior)
+      ? (journalLatestAttemptRead(prior, { plannedAttempt, kind: "ReadTaskWorktree" })?.position ?? 0) > record.position
+      : hasMatching(
+          journalRecordsForAttempt(prior, plannedAttempt.attemptId),
+          ({ event, position }) =>
+            position > record.position &&
+            event._tag === "GitReadIntentRecorded" &&
+            event.operation._tag === "ReadTaskWorktree" &&
+            plannedTaskAttemptEquivalence(event.operation.plannedAttempt, plannedAttempt)
+        )
   ) {
     return false
   }
@@ -1381,10 +1433,16 @@ const replacementTargetIsExact = (
   if (intent?.event.operation._tag !== "ReadTargetLineage") return false
   const currentTarget = intent.event.operation.integrationTarget
   if (
-    hasMatching(
-      journalRecordsForAttempt(prior, plannedAttempt.attemptId),
-      isLaterTargetAuthority(record.position, currentTarget, plannedAttempt)
-    )
+    isJournalRecordEvidence(prior)
+      ? (journalLatestAttemptRead(prior, {
+          plannedAttempt,
+          kind: "ReadTargetLineage",
+          integrationTarget: currentTarget
+        })?.position ?? 0) > record.position
+      : hasMatching(
+          journalRecordsForAttempt(prior, plannedAttempt.attemptId),
+          isLaterTargetAuthority(record.position, currentTarget, plannedAttempt)
+        )
   ) {
     return false
   }

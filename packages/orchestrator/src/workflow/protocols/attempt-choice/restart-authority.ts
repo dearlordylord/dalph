@@ -6,6 +6,8 @@ import {
   journalRecordsForOperationId,
   journalRecordsForTask,
   journalRestartReadIntents,
+  isJournalRecordEvidence,
+  journalSpecificationDivergedAfter,
   type JournalHistorySource
 } from "../../../workflow-journal/record-evidence.js"
 import { OperationId } from "../../identity.js"
@@ -50,6 +52,13 @@ export const restartChoiceWasInvalidatedByLaterSpecification = (
   subject: AttemptChoiceSubject,
   immutableRunTarget?: TrackerTarget
 ): boolean => {
+  if (isJournalRecordEvidence(records))
+    return journalSpecificationDivergedAfter(records, {
+      taskId: subject.plannedAttempt.taskId,
+      ...(immutableRunTarget === undefined ? {} : { target: immutableRunTarget }),
+      expected: subject.observedTaskRevision,
+      afterPosition: applicationPosition
+    })
   for (const { event, position } of journalRecordsForTask(records, subject.plannedAttempt.taskId)) {
     if (
       position > applicationPosition &&
