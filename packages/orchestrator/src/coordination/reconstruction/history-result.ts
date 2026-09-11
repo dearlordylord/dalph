@@ -4,6 +4,7 @@ import { JournalPosition } from "../../workflow-journal/identity.js"
 import { type PlannedTaskAttempt } from "@dalph/contracts"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { KernelValidatedWorkflowJournalHistory } from "./history.js"
+import type { AcceptedJournalPrefix } from "../../workflow-journal/accepted-prefix.js"
 
 const WorkflowJournalHistoryIssueFields = { detail: Schema.String, position: JournalPosition, runId: RunId }
 
@@ -61,5 +62,14 @@ export interface InvalidWorkflowJournalHistory {
   readonly _tag: "InvalidWorkflowJournalHistory"
   readonly issues: ReadonlyArray<WorkflowJournalHistoryIssue>
   readonly records: ReadonlyArray<JournalRecord>
+  readonly runId: RunId
+}
+
+/** A canonical live append was rejected; the immutable accepted predecessor stays separate from the unaccepted occurrence. */
+export interface InvalidWorkflowJournalSuccessor {
+  readonly _tag: "InvalidWorkflowJournalHistory"
+  readonly issues: ReadonlyArray<WorkflowJournalHistoryIssue>
+  readonly prior: AcceptedJournalPrefix
+  readonly record: JournalRecord
   readonly runId: RunId
 }
