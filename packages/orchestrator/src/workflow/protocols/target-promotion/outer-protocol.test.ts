@@ -20,6 +20,8 @@ import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/ide
 import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
 import { observeJournalRecordSequenceOperations } from "../../../workflow-journal/record-sequence.js"
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { acceptedJournalPrefixFromValidatedHistory } from "../../../workflow-journal/accepted-prefix.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   IntegratorCandidateResourceLocator,
@@ -104,18 +106,30 @@ const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
 const request = targetPromotionCorrelationFor(qualifiedCandidate)
 
 const journalLayer = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
-  Layer.succeed(
-    InRunJournal,
-    InRunJournal.of({
-      append: (requestedRunId, key, event) =>
-        Ref.modify(records, (current) => {
-          const existing = current.find((record) => record.key === key)
-          if (existing !== undefined) return [Effect.succeed(existing), current] as const
-          const record = { event, key, position: JournalPosition.make(current.length + 1), runId: requestedRunId }
-          return [Effect.succeed(record), [...current, record]] as const
-        }).pipe(Effect.flatten),
-      read: () => Ref.get(records)
-    })
+  Layer.merge(
+    Layer.succeed(
+      InRunJournal,
+      InRunJournal.of({
+        append: (requestedRunId, key, event) =>
+          Ref.modify(records, (current) => {
+            const existing = current.find((record) => record.key === key)
+            if (existing !== undefined) return [Effect.succeed(existing), current] as const
+            const record = { event, key, position: JournalPosition.make(current.length + 1), runId: requestedRunId }
+            return [Effect.succeed(record), [...current, record]] as const
+          }).pipe(Effect.flatten),
+        read: () => Ref.get(records)
+      })
+    ),
+    // This focused protocol fixture deliberately bypasses whole-workflow validation.
+    Layer.succeed(
+      AcceptedJournalReader,
+      AcceptedJournalReader.of({
+        readAccepted: (requestedRunId) =>
+          Ref.get(records).pipe(
+            Effect.map((history) => acceptedJournalPrefixFromValidatedHistory(requestedRunId, history))
+          )
+      })
+    )
   )
 
 const gitLayer = (compareAndSet: TargetPromotionGitService["compareAndSet"], read: TargetPromotionGitService["read"]) =>

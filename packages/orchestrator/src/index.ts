@@ -335,7 +335,15 @@ export {
   coordinatorOwnershipLayer,
   productionCoordinatorOwnershipLayer
 } from "./authorities/coordinator-ownership/live-task-work-start.js"
-export * from "./coordination/reconstruction/history.js"
+export {
+  advanceWorkflowJournalHistory,
+  reduceWorkflowJournalHistory,
+  replacementFollowsIntegrationCutoff,
+  replacementProofIsAcceptedSafe,
+  replacementResourceConflict,
+  validateAttemptStopHistory,
+  validateCancellationMultiplicityHistory
+} from "./coordination/reconstruction/history.js"
 export * from "./coordination/reconstruction/history-result.js"
 export { deriveIntegrationFrontier } from "./coordination/frontier/integration-frontier.js"
 export {
