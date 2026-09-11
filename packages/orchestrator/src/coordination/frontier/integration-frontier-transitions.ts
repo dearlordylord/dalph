@@ -39,6 +39,11 @@ import {
 import { IntegrationQuarantineBasis } from "../../workflow/protocols/integration-quarantine/events.js"
 import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
+import {
+  journalRecordByKey,
+  journalRecordsForAttemptKind,
+  journalRecordsOfKind
+} from "../../workflow-journal/record-evidence.js"
 import { integrationQuarantinedRecordKey } from "../../workflow-journal/record-key.js"
 import {
   validateProviderRunActivityAbsent,
@@ -110,6 +115,9 @@ const targetLineageEqual = (left: TargetLineageObservation, right: TargetLineage
   left.plannedBaseSha === right.plannedBaseSha &&
   left.targetHeadSha === right.targetHeadSha
 
+const workflowHistorySource = (runState: ReconstructedRunState) =>
+  runState.workflowHistory.prefix ?? runState.workflowHistory.records
+
 const durableTargetLineageFor = (
   runState: ReconstructedRunState,
   runtimeFacts: IntegrationFrontierRuntimeFacts,
@@ -118,7 +126,13 @@ const durableTargetLineageFor = (
 ): DurableTargetLineage | undefined => {
   const current = runtimeFacts.targetLineageByAttemptId?.get(responsibility.plannedAttempt.attemptId)
   if (current === undefined) return undefined
-  const record = runState.workflowHistory.records.findLast(
+  const record = Array.from(
+    journalRecordsForAttemptKind(
+      workflowHistorySource(runState),
+      responsibility.plannedAttempt.attemptId,
+      "TargetLineageObserved"
+    )
+  ).findLast(
     ({ event, position }) =>
       event._tag === "TargetLineageObserved" &&
       (afterPosition === undefined || position > afterPosition) &&
@@ -132,9 +146,7 @@ const durableTargetLineageFor = (
 }
 
 const nextJournalPositionFor = (runState: ReconstructedRunState): JournalPosition =>
-  JournalPosition.make(
-    runState.workflowHistory.records.reduce((latest, record) => Math.max(latest, Number(record.position)), 0) + 1
-  )
+  JournalPosition.make(runState.workflowHistory.records.length + 1)
 
 const runBoundIntegratorStateFor = (
   state: CurrentIntegratorState
@@ -166,11 +178,11 @@ const promotionStaleQuarantineFor = (
   const runBoundState = runBoundIntegratorStateFor(integratorState)
   if (runBoundState === undefined) return undefined
   const quarantine = deriveIntegrationQuarantineState(
-    runState.workflowHistory.records,
+    workflowHistorySource(runState),
     runBoundState.run.session.sessionId
   )
   if (quarantine._tag !== "NoQuarantine") return undefined
-  return pendingPromotionStaleIntegrationQuarantineFor(runState.workflowHistory.records, promotion.correlation)
+  return pendingPromotionStaleIntegrationQuarantineFor(workflowHistorySource(runState), promotion.correlation)
 }
 
 /** Finds exact provider-absence evidence whose dependent initial Q append was interrupted. */
@@ -185,8 +197,8 @@ const providerRunFailureQuarantineFor = (
     return undefined
   }
   const { run } = integratorState
-  const records = runState.workflowHistory.records
-  const validAbsences = records.flatMap((record) => {
+  const records = workflowHistorySource(runState)
+  const validAbsences = Array.from(journalRecordsOfKind(records, "IntegrationProviderRunActivityAbsent")).flatMap((record) => {
     if (record.event._tag !== "IntegrationProviderRunActivityAbsent") return []
     const validation = validateProviderRunActivityAbsent(records, record)
     return validation._tag === "Valid" && integratorRunCorrelationsEqual(validation.run, run) ? [validation.record] : []
@@ -200,7 +212,7 @@ const providerRunFailureQuarantineFor = (
     ownedActivityProvenAbsentAt: absence.position
   })
   const quarantineKey = integrationQuarantinedRecordKey(run.session.sessionId, basis)
-  return records.some((record) => record.key === quarantineKey) ? undefined : { detail: absence.event.detail, run }
+  return journalRecordByKey(records, quarantineKey) !== undefined ? undefined : { detail: absence.event.detail, run }
 }
 
 /** Finds a conclusive modern run-1 result whose Q append was interrupted or never dispatched. */
@@ -213,7 +225,7 @@ const initialConclusiveQuarantineFor = (
   const result = conclusiveQuarantineResultFor(integratorState)
   if (result === undefined) return undefined
   const quarantine = deriveIntegrationQuarantineState(
-    runState.workflowHistory.records,
+    workflowHistorySource(runState),
     runBoundState.run.session.sessionId
   )
   return quarantine._tag === "NoQuarantine" ? result : undefined
@@ -229,7 +241,7 @@ const retryConclusiveQuarantineFor = (
   const result = conclusiveQuarantineResultFor(integratorState)
   if (result === undefined) return undefined
   const quarantine = deriveIntegrationQuarantineState(
-    runState.workflowHistory.records,
+    workflowHistorySource(runState),
     runBoundState.run.session.sessionId
   )
   return quarantine._tag === "DirectionApplied" && quarantine.application.fingerprint.direction === "Retry"
@@ -245,7 +257,7 @@ const currentQuarantineStateFor = (
   /* v8 ignore next -- @preserve retryIntegratorProgressFor returns before calling this helper when no run is bound. */
   return runBoundState === undefined
     ? undefined
-    : deriveIntegrationQuarantineState(runState.workflowHistory.records, runBoundState.run.session.sessionId)
+    : deriveIntegrationQuarantineState(workflowHistorySource(runState), runBoundState.run.session.sessionId)
 }
 
 /**
@@ -284,7 +296,7 @@ const retryIntegratorProgressFor = (
     /* v8 ignore next -- @preserve Integrator history rejects ordinals above the single bounded Retry before frontier derivation. */
     if (runBoundState.run.ordinal !== integratorRetryRunOrdinal) return { _tag: "Blocked" }
     if (integratorState._tag === "GitQualifiedPrepared") return { _tag: "NotApplicable" }
-    const authorizationIssue = integratorRunTwoAuthorizationIssue(runState.workflowHistory.records, runBoundState.run, {
+    const authorizationIssue = integratorRunTwoAuthorizationIssue(workflowHistorySource(runState), runBoundState.run, {
       beforePosition: nextJournalPositionFor(runState),
       requiredTargetLineageObservedAt: lineage.observedAt
     })
@@ -322,7 +334,7 @@ const retryIntegratorProgressFor = (
   }
 
   const run = integratorRunCorrelationForSession(runBoundState.run.session, integratorRetryRunOrdinal)
-  const authorizationIssue = integratorRunTwoAuthorizationIssue(runState.workflowHistory.records, run, {
+  const authorizationIssue = integratorRunTwoAuthorizationIssue(workflowHistorySource(runState), run, {
     beforePosition: nextJournalPositionFor(runState),
     requiredTargetLineageObservedAt: lineage.observedAt
   })
@@ -370,7 +382,7 @@ const explanationAfterPrerequisitesFor = (
   promotion: PromotionState
 ): FrontierExplanation => {
   if (promotion?._tag === "PromotionSucceeded") {
-    return integrationFinalityExplanationFor(runState.workflowHistory.records, responsibility, promotion, runtimeFacts)
+    return integrationFinalityExplanationFor(workflowHistorySource(runState), responsibility, promotion, runtimeFacts)
   }
   if (integratorState._tag === "GitQualifiedPrepared" && runtimeFacts.targetPromotionConfigured !== true) {
     return FrontierExplanation.TargetPromotionConfigurationWait({
@@ -404,7 +416,7 @@ const promotionSucceededTransitionsFor = (
   /* v8 ignore next -- @preserve The promotion action releases its exact target in ensuring; this defends same-process retained ownership. */
   if (held) return [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })]
   if (!trackerFactsAreCurrent || waiting) return []
-  return integrationFinalityTransitionsFor(runState.workflowHistory.records, responsibility, promotion, runtimeFacts)
+  return integrationFinalityTransitionsFor(workflowHistorySource(runState), responsibility, promotion, runtimeFacts)
 }
 
 const integratorStateBlocksProgress = (state: CurrentIntegratorState, promotion: PromotionState): boolean => {
@@ -677,10 +689,10 @@ export const deriveStartedIntegrationFrontier = (
     return authority._tag === "Exact" ? undefined : authority
   }
   const integratorStateFor = (responsibility: StartedIntegrationResponsibility) =>
-    deriveCurrentIntegratorState(runState.workflowHistory.records, responsibility)
+    deriveCurrentIntegratorState(workflowHistorySource(runState), responsibility)
   const promotionFor = (state: CurrentIntegratorState) =>
     state._tag === "GitQualifiedPrepared"
-      ? deriveTargetPromotionStateFor(runState.workflowHistory.records, integratorRunQualifiedCandidateFromState(state))
+      ? deriveTargetPromotionStateFor(workflowHistorySource(runState), integratorRunQualifiedCandidateFromState(state))
       : undefined
   const succeededPromotionFor = (responsibility: StartedIntegrationResponsibility) => {
     const promotion = promotionFor(integratorStateFor(responsibility))
