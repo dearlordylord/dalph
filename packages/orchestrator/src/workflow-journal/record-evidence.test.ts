@@ -18,9 +18,28 @@ import {
   journalEvidenceFrom,
   journalOperationById,
   journalRecordByPosition,
+  journalRestartReadIntents,
   journalRecordsForTask,
   journalRecordsOfKind
 } from "./record-evidence.js"
+
+it("indexes restart read intents by request and phase", () => {
+  const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("attempt-restart:request%3Aone:graph:after:7"),
+    FixtureTarget.make("restart-read-target")
+  )
+  const record = {
+    event: taskTrackerReadIntent(operation),
+    key: JournalRecordKey.make("restart-read-intent"),
+    position: JournalPosition.make(1),
+    runId: RunId.make("restart-read-run")
+  }
+  const indexed = journalEvidenceFrom([record])
+
+  expect(Array.from(journalRestartReadIntents(indexed, "request:one", "graph"))).toEqual([record])
+  expect(Array.from(journalRestartReadIntents(indexed, "request:one", "claim"))).toEqual([])
+})
 
 it("an earlier evidence window still finds the operation before a later repeated occurrence", () => {
   const operation = makeTrackerGraphObservationOperation(
