@@ -105,7 +105,7 @@ it.effect(
         const cost = yield* Effect.gen(function* () {
           const journal = yield* Journal
           const writer = yield* InRunJournal
-          const append = (event: JournalRecord["event"]) =>
+          const append = (event: Parameters<typeof writer.append>[2]) =>
             writer.append(fixture.runId, describeJournalEvent(event).expectedKey, event)
           const subjects = activeWorkAuthorityRefreshSubjectsForRunState((yield* journal.state.get).reconstructed)
           const opportunity = activeWorkAuthorityRefreshForOwner("Timer", subjects)
