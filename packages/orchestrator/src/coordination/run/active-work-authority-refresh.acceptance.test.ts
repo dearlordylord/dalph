@@ -1176,6 +1176,18 @@ it.effect("production delivery composition settles the exact pending specificati
         "TaskTrackerFactsObserved"
       ])
       expect(targetRecords.every(({ event }) => eventOperationId(event) === operation.operationId)).toBe(true)
+      const nextActivation = yield* makeRunRecoveryProjection(
+        runId,
+        undefined,
+        undefined,
+        undefined,
+        false,
+        false,
+        opportunity
+      ).pipe(Effect.provide(context))
+      expect((yield* nextActivation.readDeliveryProjection).frontier.transitions[0]?._tag).toBe(
+        "ObservePlannedAttemptContinuationGraph"
+      )
     }
   })
 )
