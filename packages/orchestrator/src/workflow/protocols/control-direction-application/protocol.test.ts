@@ -215,6 +215,7 @@ describe("ControlDirectionApplication", () => {
       expect(yield* journal.read(runId)).toEqual([])
     }).pipe(
       Effect.provide(controlDirectionApplicationLayer),
+      // No Run exists to activate; this is the explicit absent cold-storage diagnostic seam.
       Effect.provide(unpublishedAcceptedJournalReaderTestLayer.pipe(Layer.provideMerge(memoryJournalTestLayer)))
     )
   )

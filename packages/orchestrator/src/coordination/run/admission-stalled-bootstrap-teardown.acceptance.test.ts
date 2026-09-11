@@ -28,6 +28,7 @@ import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretatio
 import { OperationId } from "../../workflow/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
+import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import { attemptPlanRecordKey, intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import {
@@ -193,6 +194,7 @@ const runtimeLayer = (
   Layer.mergeAll(
     Layer.effectDiscard(Effect.addFinalizer(() => Ref.update(runtimeFinalizers, (count) => count + 1))),
     Layer.effect(InRunJournal, InRunJournal),
+    Layer.effect(AcceptedJournalReader, AcceptedJournalReader),
     attemptChoiceControlLayer,
     controlDirectionApplicationLayer,
     Layer.succeed(PlannedAttemptExecutor, executor),
@@ -420,6 +422,7 @@ it.effect("returns admission-stalled finality through production bootstrap teard
           )
         )
         const journal = yield* InRunJournal
+        const acceptedReader = yield* AcceptedJournalReader
         const actionExecutor = DeliveryActionExecutor.of({
           execute: (action, lease) => {
             if (
@@ -434,6 +437,7 @@ it.effect("returns admission-stalled finality through production bootstrap teard
             })
             return executeFreshPlannedAttempt(action, action.proposal.route, lease).pipe(
               Effect.provideService(InRunJournal, journal),
+              Effect.provideService(AcceptedJournalReader, acceptedReader),
               Effect.provideService(PlannedAttemptExecutor, plannedAttemptExecutor),
               Effect.provideService(
                 PassivePlannedAttemptObserver,

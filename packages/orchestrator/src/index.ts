@@ -4,6 +4,7 @@ export type {
   JournalPrefixIdentity,
   JournalSuccessorProvenance
 } from "./workflow-journal/accepted-prefix.js"
+export { AcceptedJournalReader, type AcceptedJournalReaderService } from "./workflow-journal/accepted-reader.js"
 export type { JournalRecordSequence } from "./workflow-journal/record-sequence.js"
 export { IntegratorBoundaryUnavailable } from "./coordination/delivery/integrator-boundary.js"
 export {
@@ -795,6 +796,7 @@ export {
 export {
   JournalInitialHistoryInvalid,
   Journal,
+  journalLayer,
   type JournalService,
   type JournalState,
   type JournalStorageBoundary

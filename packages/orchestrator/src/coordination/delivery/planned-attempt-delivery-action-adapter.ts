@@ -386,18 +386,18 @@ export const executePlannedAttemptTransition = Effect.fn("DeliveryAction.execute
     action.proposal.admission.safeContinuationRevalidation
   ).pipe(
     Effect.map((result) => ({ _tag: "ExecutorReport" as const, result })),
-    Effect.catchTag("PlannedAttemptContinuationAuthorizationRejected", (rejection) =>
-      rejection.reason === "StaleWitness"
-        ? lease
-            .releasePlannedAttemptPosition(plannedAttemptExecutorCorrelation(transition.plannedAttempt))
-            .pipe(Effect.as({ _tag: "ContinuationAuthorizationStale" as const }))
-        : Effect.fail(rejection)
-    ),
-    Effect.catchTag("PlannedAttemptResumeRedeliveryRejected", () =>
-      lease
-        .releasePlannedAttemptPosition(plannedAttemptExecutorCorrelation(transition.plannedAttempt))
-        .pipe(Effect.as({ _tag: "ContinuationAuthorizationStale" as const }))
-    )
+    Effect.catchTags({
+      PlannedAttemptContinuationAuthorizationRejected: (rejection) =>
+        rejection.reason === "StaleWitness"
+          ? lease
+              .releasePlannedAttemptPosition(plannedAttemptExecutorCorrelation(transition.plannedAttempt))
+              .pipe(Effect.as({ _tag: "ContinuationAuthorizationStale" as const }))
+          : Effect.fail(rejection),
+      PlannedAttemptResumeRedeliveryRejected: () =>
+        lease
+          .releasePlannedAttemptPosition(plannedAttemptExecutorCorrelation(transition.plannedAttempt))
+          .pipe(Effect.as({ _tag: "ContinuationAuthorizationStale" as const }))
+    })
   )
   if (result._tag === "ContinuationAuthorizationStale") {
     return deliveryActionDeferred(action.proposal.id, "ContinuationAuthorizationStale")

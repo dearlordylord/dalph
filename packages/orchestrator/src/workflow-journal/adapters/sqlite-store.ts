@@ -1,9 +1,9 @@
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
-import { Cause, Config, Effect, Layer } from "effect"
+import { Cause, Config, Effect, Exit, HashMap, Layer, Option, Ref, Semaphore } from "effect"
 import * as Reactivity from "effect/unstable/reactivity/Reactivity"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import type { RunId } from "@dalph/contracts"
-import { JournalDatabaseLocator, type JournalRecordKey } from "../identity.js"
+import { JournalDatabaseLocator, JournalPosition, type JournalRecordKey } from "../identity.js"
 import { encodeJournalEvent, equalJournalEvents } from "../event-codec.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import {
@@ -27,7 +27,11 @@ import { classifyJournalMethodFailure, classifyJournalStorageFailure } from "./s
 import { acquireExclusiveJournalWriter, migrateJournal } from "./sqlite-store-migration.js"
 import { makeSqliteJournalQueries } from "./sqlite-store-queries.js"
 import { makeSqliteTerminalHistoryRetirement } from "./sqlite-store-retirement.js"
-import { unpublishedAcceptedJournalReaderTestLayer } from "../test-accepted-reader.js"
+import {
+  appendSqliteStorageCheckpoint,
+  type SqliteHotStorageCheckpoint,
+  type SqliteStorageCheckpoint
+} from "./sqlite-storage-checkpoint.js"
 
 interface SqliteJournalStoreConfig {
   readonly filename: JournalDatabaseLocator
@@ -43,6 +47,63 @@ interface SqliteJournalTestConfig extends SqliteJournalStoreConfig {
   readonly afterRetirementCopy?: () => Effect.Effect<void, string>
   /** Deterministic lost-response seam after the retirement transaction commits. */
   readonly afterRetirementCommit?: () => Effect.Effect<void, string>
+  /** Counts complete partition loads without exposing mutable adapter state. */
+  readonly onPartitionRowsQueried?: (partition: "Hot" | "Cold", runId: RunId, rowCount: number) => Effect.Effect<void>
+  /** Deterministic lost-response or concurrency cut after append COMMIT and before checkpoint publication. */
+  readonly afterAppendCommit?: () => Effect.Effect<void, string>
+  /** Counts rows inserted through the append path. */
+  readonly onAppendInserted?: (runId: RunId) => Effect.Effect<void>
+  /** Counts process-local exact key lookups through the append path. */
+  readonly onAppendKeyLookup?: (runId: RunId, key: JournalRecordKey) => Effect.Effect<void>
+}
+
+type SqliteAppendCheckpointDecision =
+  | { readonly _tag: "Appendable"; readonly checkpoint: SqliteHotStorageCheckpoint }
+  | { readonly _tag: "Rejected"; readonly error: WorkflowRunAlreadyTerminated }
+
+const decideSqliteAppendCheckpoint = (
+  checkpoint: SqliteStorageCheckpoint,
+  runId: RunId
+): SqliteAppendCheckpointDecision => {
+  if (checkpoint.partition === "Cold") {
+    return {
+      _tag: "Rejected",
+      error: new WorkflowRunAlreadyTerminated({ runId, terminatedAt: checkpoint.terminalPosition })
+    }
+  }
+  if (checkpoint.terminalPosition !== undefined) {
+    return {
+      _tag: "Rejected",
+      error: new WorkflowRunAlreadyTerminated({ runId, terminatedAt: checkpoint.terminalPosition })
+    }
+  }
+  return { _tag: "Appendable", checkpoint }
+}
+
+/** The append transaction's typed outcome before it crosses the SQLite insert boundary. */
+type SqliteAppendDecision =
+  | { readonly _tag: "Replay"; readonly record: JournalRecord }
+  | { readonly _tag: "Contradiction"; readonly error: JournalStoreContradiction }
+  | { readonly _tag: "Insert"; readonly position: JournalPosition }
+
+const decideSqliteAppend = (
+  checkpoint: SqliteStorageCheckpoint,
+  runId: RunId,
+  key: JournalRecordKey,
+  event: AppendableWorkflowJournalEvent
+): SqliteAppendDecision => {
+  const existing = HashMap.get(checkpoint.recordsByKey, key)
+  if (Option.isNone(existing)) {
+    return { _tag: "Insert", position: JournalPosition.make((checkpoint.decodedThrough ?? 0) + 1) }
+  }
+  const evidence = existing.value
+  if (equalJournalEvents(evidence.event, event)) {
+    return { _tag: "Replay", record: { event, key, position: evidence.position, runId } satisfies JournalRecord }
+  }
+  return {
+    _tag: "Contradiction",
+    error: new JournalStoreContradiction({ existingPosition: evidence.position, key, runId })
+  }
 }
 
 export { classifyJournalStorageFailure } from "./sqlite-store-errors.js"
@@ -65,26 +126,53 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
         )
         yield* migrateJournal(sql, testConfig?.afterColdTableCreated)
         yield* acquireExclusiveJournalWriter(sql)
-        const queries = makeSqliteJournalQueries(sql, testConfig?.beforeReadLoad)
-        const { hasPartitionRows, insertLifecycleRecord, loadRunRecords, scanPartition } = queries
+        const queries = makeSqliteJournalQueries(sql, testConfig?.beforeReadLoad, testConfig?.onPartitionRowsQueried)
+        const {
+          hasPartitionRows,
+          insertLifecycleRecord,
+          loadRunRecords,
+          loadRunSnapshot,
+          loadRunSnapshotForPartition,
+          locateRunPartition,
+          scanPartition
+        } = queries
+        const serialization = yield* Semaphore.make(1)
+        const checkpoints = yield* Ref.make(HashMap.empty<RunId, SqliteStorageCheckpoint>())
+        const invalidate = (runId: RunId) => Ref.update(checkpoints, HashMap.remove(runId))
+        const invalidateAll = Ref.set(checkpoints, HashMap.empty())
+        const publish = (checkpoint: SqliteStorageCheckpoint) =>
+          Ref.update(checkpoints, HashMap.set(checkpoint.runId, checkpoint))
+
+        const loadCurrentSnapshot = Effect.fn("JournalStore.Sqlite.loadCurrentSnapshot")(function* (
+          runId: RunId,
+          operation: Parameters<typeof loadRunSnapshot>[1]
+        ) {
+          const partition = yield* locateRunPartition(runId, operation)
+          const current = HashMap.get(yield* Ref.get(checkpoints), runId)
+          if (Option.isSome(current) && current.value.partition === partition) return current.value
+          return (yield* loadRunSnapshotForPartition(partition, runId, operation)).checkpoint
+        })
 
         const beginRun = Effect.fn("JournalStore.Sqlite.beginRun")(function* (
           runId: RunId,
           target: TrackerTarget,
           initialControlPolicy: InitialControlPolicy
         ) {
-          return yield* Effect.gen(function* () {
-            const existing = yield* loadRunRecords(runId, "JournalStore.beginRun")
-            const decision = decideWorkflowRunBeginning(existing, runId, target, initialControlPolicy)
-            if (decision._tag === "LifecycleTransitionRejected") {
-              return yield* decision.failure
-            }
-            const record = decision.record
-            yield* insertLifecycleRecord(record)
-            return record
-          }).pipe(
-            sql.withTransaction,
-            Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.beginRun", cause))
+          return yield* serialization.withPermit(
+            Effect.gen(function* () {
+              const existing = yield* loadRunRecords(runId, "JournalStore.beginRun")
+              const decision = decideWorkflowRunBeginning(existing, runId, target, initialControlPolicy)
+              if (decision._tag === "LifecycleTransitionRejected") {
+                return yield* decision.failure
+              }
+              const record = decision.record
+              yield* insertLifecycleRecord(record)
+              return record
+            }).pipe(
+              sql.withTransaction,
+              Effect.ensuring(invalidate(runId)),
+              Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.beginRun", cause))
+            )
           )
         })
 
@@ -94,48 +182,47 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
           event: AppendableWorkflowJournalEvent
         ) {
           const encoded = encodeJournalEvent(event)
-          return yield* Effect.gen(function* () {
-            const cold = yield* hasPartitionRows("Cold", runId, "JournalStore.append")
-            const records = yield* loadRunRecords(runId, "JournalStore.append")
-            const terminated = records.find(({ event: recorded }) => recorded._tag === "WorkflowRunTerminated")
-            if (terminated !== undefined) {
-              return yield* new WorkflowRunAlreadyTerminated({ runId, terminatedAt: terminated.position })
-            }
-            /* v8 ignore next -- @preserve Cold load validation fails malformed/nonterminal history before this branch; valid terminal Cold history has already matched terminated above. */
-            if (cold) {
-              return yield* new JournalHistoryCorruption({
-                detail: "cold partition contains nonterminal history",
-                operation: "JournalStore.append",
-                partition: "Cold",
-                runId
-              })
-            }
-            const existing = yield* queries.findExistingRecord(runId, key)
-            if (existing !== undefined) {
-              if (equalJournalEvents(existing.event, event)) {
-                return { event, key, position: existing.position, runId } satisfies JournalRecord
-              }
-              return yield* new JournalStoreContradiction({ existingPosition: existing.position, key, runId })
-            }
-            const position = yield* queries.nextPosition(runId)
-            yield* sql`
+          return yield* serialization.withPermit(
+            Effect.gen(function* () {
+              const checkpoint = yield* loadCurrentSnapshot(runId, "JournalStore.append")
+              const checkpointDecision = decideSqliteAppendCheckpoint(checkpoint, runId)
+              if (checkpointDecision._tag === "Rejected") return yield* checkpointDecision.error
+              const appendableCheckpoint = checkpointDecision.checkpoint
+              if (testConfig?.onAppendKeyLookup !== undefined) yield* testConfig.onAppendKeyLookup(runId, key)
+              const decision = decideSqliteAppend(appendableCheckpoint, runId, key, event)
+              if (decision._tag === "Contradiction") return yield* decision.error
+              if (decision._tag === "Replay") return { checkpoint: appendableCheckpoint, record: decision.record }
+              const { position } = decision
+              yield* sql`
             INSERT INTO journal_records (
               run_id, position, record_key, event_kind, event_version, payload_json
             ) VALUES (
               ${runId}, ${position}, ${key}, ${encoded.kind}, ${encoded.version}, ${encoded.payloadJson}
             )
           `
-            return { event, key, position, runId } satisfies JournalRecord
-          }).pipe(
-            sql.withTransaction,
-            Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.append", cause))
+              if (testConfig?.onAppendInserted !== undefined) yield* testConfig.onAppendInserted(runId)
+              const record = { event, key, position, runId } satisfies JournalRecord
+              return { checkpoint: appendSqliteStorageCheckpoint(appendableCheckpoint, record), record }
+            }).pipe(
+              sql.withTransaction,
+              Effect.tap(() => testConfig?.afterAppendCommit?.() ?? Effect.void),
+              Effect.tap(({ checkpoint }) => publish(checkpoint)),
+              Effect.map(({ record }) => record),
+              Effect.onExit((exit) => (Exit.isFailure(exit) ? invalidate(runId) : Effect.void)),
+              Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.append", cause))
+            )
           )
         })
 
         const read = Effect.fn("JournalStore.Sqlite.read")(function* (runId: RunId) {
-          return yield* loadRunRecords(runId, "JournalStore.read").pipe(
-            sql.withTransaction,
-            Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.read", cause))
+          return yield* serialization.withPermit(
+            loadRunSnapshot(runId, "JournalStore.read").pipe(
+              sql.withTransaction,
+              Effect.tap(({ checkpoint }) => publish(checkpoint)),
+              Effect.map(({ records }) => records),
+              Effect.onExit((exit) => (Exit.isFailure(exit) ? invalidate(runId) : Effect.void)),
+              Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.read", cause))
+            )
           )
         })
 
@@ -143,18 +230,22 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
           runId: RunId,
           target: TrackerTarget
         ) {
-          return yield* readRecoverableRunBeginning(
-            yield* loadRunRecords(runId, "JournalStore.readRunForRecovery").pipe(
-              sql.withTransaction,
-              Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.readRunForRecovery", cause))
-            ),
-            runId,
-            target
+          return yield* serialization.withPermit(
+            Effect.gen(function* () {
+              const snapshot = yield* loadRunSnapshot(runId, "JournalStore.readRunForRecovery").pipe(
+                sql.withTransaction,
+                Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.readRunForRecovery", cause))
+              )
+              yield* publish(snapshot.checkpoint)
+              return yield* readRecoverableRunBeginning(snapshot.records, runId, target)
+            }).pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? invalidate(runId) : Effect.void)))
           )
         })
 
         const scanHot = Effect.fn("JournalStore.Sqlite.scanHot")(function* () {
-          const result = yield* scanPartition("Hot", "JournalStore.scanHot")
+          const result = yield* serialization.withPermit(
+            scanPartition("Hot", "JournalStore.scanHot").pipe(Effect.ensuring(invalidateAll))
+          )
           const invalidRunIds = new Set(result.issues.flatMap((issue) => (issue.runId === null ? [] : [issue.runId])))
           return {
             issues: result.issues,
@@ -165,25 +256,31 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
         })
 
         const auditAll = Effect.fn("JournalStore.Sqlite.auditAll")(function* () {
-          return yield* Effect.gen(function* () {
-            const hot = yield* scanPartition("Hot", "JournalStore.auditAll")
-            const cold = yield* scanPartition("Cold", "JournalStore.auditAll")
-            const contradictoryRunId = [...hot.rowRunIds].find((candidate) => cold.rowRunIds.has(candidate))
-            if (contradictoryRunId !== undefined)
-              return yield* new JournalPartitionContradiction({ runId: contradictoryRunId })
-            return { issues: [...hot.issues, ...cold.issues], runs: [...hot.runs, ...cold.runs] }
-          }).pipe(
-            sql.withTransaction,
-            Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.auditAll", cause))
+          return yield* serialization.withPermit(
+            Effect.gen(function* () {
+              const hot = yield* scanPartition("Hot", "JournalStore.auditAll")
+              const cold = yield* scanPartition("Cold", "JournalStore.auditAll")
+              const contradictoryRunId = [...hot.rowRunIds].find((candidate) => cold.rowRunIds.has(candidate))
+              if (contradictoryRunId !== undefined)
+                return yield* new JournalPartitionContradiction({ runId: contradictoryRunId })
+              return { issues: [...hot.issues, ...cold.issues], runs: [...hot.runs, ...cold.runs] }
+            }).pipe(
+              sql.withTransaction,
+              Effect.ensuring(invalidateAll),
+              Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.auditAll", cause))
+            )
           )
         })
 
         const retireSqlite = makeSqliteTerminalHistoryRetirement(sql, queries, testConfig?.afterRetirementCopy)
         const retireTerminalRun = Effect.fn("JournalStore.Sqlite.retireTerminalRun")(function* (runId: RunId) {
-          return yield* retireSqlite(runId).pipe(
-            sql.withTransaction,
-            Effect.tap(() => testConfig?.afterRetirementCommit?.() ?? Effect.void),
-            Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.retireTerminalRun", cause))
+          return yield* serialization.withPermit(
+            retireSqlite(runId).pipe(
+              sql.withTransaction,
+              Effect.tap(() => testConfig?.afterRetirementCommit?.() ?? Effect.void),
+              Effect.ensuring(invalidate(runId)),
+              Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.retireTerminalRun", cause))
+            )
           )
         })
 
@@ -192,28 +289,31 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
           disposition: RunTerminationDisposition,
           evidence: RunFinalityEvidence
         ) {
-          return yield* Effect.gen(function* () {
-            const cold = yield* hasPartitionRows("Cold", runId, "JournalStore.terminateRun")
-            const records = yield* loadRunRecords(runId, "JournalStore.terminateRun")
-            const decision = decideWorkflowRunTermination(records, runId, disposition, evidence)
-            if (decision._tag === "LifecycleTransitionRejected") {
-              return yield* decision.failure
-            }
-            /* v8 ignore next -- @preserve Cold load validation fails malformed/nonterminal history before this branch; valid terminal Cold history is rejected by the lifecycle decision above. */
-            if (cold) {
-              return yield* new JournalHistoryCorruption({
-                detail: "cold partition contains nonterminal history",
-                operation: "JournalStore.terminateRun",
-                partition: "Cold",
-                runId
-              })
-            }
-            const record = decision.record
-            yield* insertLifecycleRecord(record)
-            return record
-          }).pipe(
-            sql.withTransaction,
-            Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.terminateRun", cause))
+          return yield* serialization.withPermit(
+            Effect.gen(function* () {
+              const cold = yield* hasPartitionRows("Cold", runId, "JournalStore.terminateRun")
+              const records = yield* loadRunRecords(runId, "JournalStore.terminateRun")
+              const decision = decideWorkflowRunTermination(records, runId, disposition, evidence)
+              if (decision._tag === "LifecycleTransitionRejected") {
+                return yield* decision.failure
+              }
+              /* v8 ignore next -- @preserve Cold load validation fails malformed/nonterminal history before this branch; valid terminal Cold history is rejected by the lifecycle decision above. */
+              if (cold) {
+                return yield* new JournalHistoryCorruption({
+                  detail: "cold partition contains nonterminal history",
+                  operation: "JournalStore.terminateRun",
+                  partition: "Cold",
+                  runId
+                })
+              }
+              const record = decision.record
+              yield* insertLifecycleRecord(record)
+              return record
+            }).pipe(
+              sql.withTransaction,
+              Effect.ensuring(invalidate(runId)),
+              Effect.mapError((cause) => classifyJournalMethodFailure("JournalStore.terminateRun", cause))
+            )
           )
         })
 
@@ -236,9 +336,7 @@ export const sqliteJournalStoreLayer = (config: SqliteJournalStoreConfig) => sql
 
 /** Complete test-only composition whose appends are not published through Journal. */
 export const sqliteJournalTestLayer = (config: SqliteJournalTestConfig) =>
-  Layer.merge(unpublishedInRunJournalTestLayer, unpublishedAcceptedJournalReaderTestLayer).pipe(
-    Layer.provideMerge(sqliteJournalStoreLayerInternal(config, config))
-  )
+  unpublishedInRunJournalTestLayer.pipe(Layer.provideMerge(sqliteJournalStoreLayerInternal(config, config)))
 
 export const journalDatabaseLocatorConfig = Config.schema(JournalDatabaseLocator, "DALPH_JOURNAL_DATABASE")
 

@@ -1,6 +1,6 @@
 import { describe, expect } from "vitest"
 import { it } from "@effect/vitest"
-import { Effect, Layer, Option, Ref, Schema } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -22,8 +22,6 @@ import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutatio
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
-import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
-import { InitialControlPolicy } from "../../../control/policy.js"
 import { OperationId } from "../../identity.js"
 import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../registry/event.js"
 import { makeTargetLineageObservationOperation } from "../../registry/operation.js"
@@ -34,7 +32,6 @@ import { liveJournalTestLayer } from "../../../coordination/delivery/live-journa
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
-import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import {
   integrationQuarantineDirectionAppliedRecordKey,
   integrationQuarantinedRecordKey,
@@ -265,28 +262,6 @@ const makeFixture = (observedHead: GitCommitSha = freshHead, observedAt: number 
   ].map((record) => ({ ...record, position: record.position }))
 }
 
-const makeJournal = (initial: ReadonlyArray<JournalRecord>) =>
-  Effect.gen(function* () {
-    const records = yield* Ref.make(initial)
-    const journal = InRunJournal.of({
-      append: (requestedRunId, key, event) =>
-        Ref.modify(records, (current) => {
-          const existing = current.find((record) => record.key === key)
-          if (existing !== undefined) return [Effect.succeed(existing), current] as const
-          const appended: JournalRecord = {
-            event,
-            key,
-            position: JournalPosition.make(Math.max(...current.map((record) => Number(record.position))) + 1),
-            runId: requestedRunId
-          }
-          return [Effect.succeed(appended), [...current, appended]] as const
-        }).pipe(Effect.flatMap((result) => result)),
-      read: (requestedRunId) =>
-        Ref.get(records).pipe(Effect.map((current) => current.filter(({ runId: id }) => id === requestedRunId)))
-    })
-    return { journal, records }
-  })
-
 const successorInputFor = (records: ReadonlyArray<JournalRecord>): IntegratorSuccessorPreparationInput | undefined => {
   const observation = records.at(-1)
   return observation?.event._tag === "TargetLineageObserved"
@@ -410,63 +385,67 @@ const acceptedSuccessorFixture = () => {
   }
 }
 
+const acceptedResponsibilityFor = (predecessor: ReturnType<typeof acceptedSuccessorFixture>["input"]["predecessor"]) =>
+  StartedIntegrationResponsibility.make({
+    acceptedResult: predecessor.acceptedResult,
+    integrationTarget: predecessor.integrationTarget,
+    plannedAttempt: predecessor.plannedAttempt,
+    queuedAt: predecessor.queuedAt,
+    startedAt: predecessor.startedAt
+  })
+
+const acceptedSuccessorLayer = (fixture: ReturnType<typeof acceptedSuccessorFixture>) =>
+  liveJournalTestLayer({ records: fixture.records, runId, target: fixture.trackerTarget })
+
 describe("Integrator FullRerun successor session", () => {
-  it.effect("preserves predecessor resources for separately authorized cleanup", () =>
-    Effect.gen(function* () {
-      const initial = makeFixture(predecessorHead)
-      const freshObservation = initial.at(-1)
-      if (freshObservation === undefined) return yield* Effect.die("fixture lacks fresh observation")
-      const input = IntegratorSuccessorPreparationInput.make({
-        directionAppliedAt: JournalPosition.make(12),
-        predecessor,
-        quarantineAt: JournalPosition.make(10),
-        targetLineage:
-          freshObservation.event._tag === "TargetLineageObserved"
-            ? freshObservation.event.observation
-            : yield* Effect.die("fixture lacks TargetLineageObserved"),
-        targetLineageObservedAt: freshObservation.position
-      })
-      const { journal, records } = yield* makeJournal(initial)
-      const first = yield* appendIntegratorSuccessorSessionIfNeeded(journal, input, initial)
-      const second = yield* appendIntegratorSuccessorSessionIfNeeded(journal, input, yield* Ref.get(records))
+  it.effect("preserves predecessor resources for separately authorized cleanup", () => {
+    const fixture = acceptedSuccessorFixture()
+    return Effect.gen(function* () {
+      const journal = yield* InRunJournal
+      const first = yield* appendIntegratorSuccessorSessionIfNeeded(journal, fixture.input, fixture.records)
+      const current = yield* (yield* AcceptedJournalReader).readAccepted(runId)
+      const second = yield* appendIntegratorSuccessorSessionIfNeeded(journal, fixture.input, current)
+      const predecessor = fixture.input.predecessor
       expect(second).toEqual(first)
       expect(first.event.predecessor.candidateResource).toBe(predecessor.candidateResource)
       expect(first.event.successor.candidateResource).not.toBe(predecessor.candidateResource)
       expect(first.event.successor.sessionId).not.toBe(predecessor.sessionId)
-      expect(first.event.successor.expectedTargetHead).toBe(predecessorHead)
+      expect(first.event.successor.expectedTargetHead).toBe(freshHead)
       expect(first.event.successor.queuedAt).toBe(predecessor.queuedAt)
       expect(first.event.successor.startedAt).toBe(predecessor.startedAt)
       expect(first.event.successor.acceptedResult).toEqual(predecessor.acceptedResult)
       expect(
-        (yield* Ref.get(records)).filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
+        (yield* journal.read(runId)).filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
       ).toHaveLength(1)
-      const active = yield* readActiveIntegratorSession(yield* Ref.get(records), responsibility)
+      const accepted = yield* (yield* AcceptedJournalReader).readAccepted(runId)
+      const active = yield* readActiveIntegratorSession(accepted, acceptedResponsibilityFor(predecessor))
       expect(Option.isSome(active) && active.value.sessionId).toBe(first.event.successor.sessionId)
-      expect(deriveCurrentIntegratorState(yield* Ref.get(records), responsibility)).toMatchObject({
+      expect(deriveCurrentIntegratorState(accepted, acceptedResponsibilityFor(predecessor))).toMatchObject({
         _tag: "RunUnfinished",
         run: { ordinal: IntegratorRunOrdinal.make(1), session: first.event.successor }
       })
-    }).pipe(Effect.provide(rawJournalBoundaryLayer))
-  )
+    }).pipe(Effect.provide(acceptedSuccessorLayer(fixture)))
+  })
 
-  it.effect("recovers a recorded full rerun without creating a second successor", () =>
-    Effect.gen(function* () {
-      const initial = makeFixture(freshHead)
-      const input = successorInputFor(initial)
-      if (input === undefined) return yield* Effect.die("successor fixture lacks fresh observation")
-      const { journal, records } = yield* makeJournal(initial)
-
-      const first = yield* appendIntegratorSuccessorSessionIfNeeded(journal, input, initial)
-      const recovered = yield* appendIntegratorSuccessorSessionIfNeeded(journal, input, yield* Ref.get(records))
-      const reconstructed = yield* readActiveIntegratorSession(yield* Ref.get(records), responsibility)
+  it.effect("recovers a recorded full rerun without creating a second successor", () => {
+    const fixture = acceptedSuccessorFixture()
+    return Effect.gen(function* () {
+      const journal = yield* InRunJournal
+      const first = yield* appendIntegratorSuccessorSessionIfNeeded(journal, fixture.input, fixture.records)
+      const accepted = yield* (yield* AcceptedJournalReader).readAccepted(runId)
+      const recovered = yield* appendIntegratorSuccessorSessionIfNeeded(journal, fixture.input, accepted)
+      const reconstructed = yield* readActiveIntegratorSession(
+        accepted,
+        acceptedResponsibilityFor(fixture.input.predecessor)
+      )
 
       expect(recovered).toEqual(first)
       expect(Option.isSome(reconstructed) && reconstructed.value).toEqual(first.event.successor)
       expect(
-        (yield* Ref.get(records)).filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
+        (yield* journal.read(runId)).filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
       ).toHaveLength(1)
-    }).pipe(Effect.provide(rawJournalBoundaryLayer))
-  )
+    }).pipe(Effect.provide(acceptedSuccessorLayer(fixture)))
+  })
 
   it.effect("rejects a read intended before D even when its observation arrives afterward", () =>
     Effect.gen(function* () {
@@ -482,49 +461,38 @@ describe("Integrator FullRerun successor session", () => {
         targetLineage: observation.event.observation,
         targetLineageObservedAt: observation.position
       })
-      const { journal } = yield* makeJournal(initial)
+      const journal = InRunJournal.of({
+        append: () => Effect.die("reordered cold history must fail before append"),
+        read: () => Effect.succeed(initial)
+      })
       const failure = yield* appendIntegratorSuccessorSessionIfNeeded(journal, input, initial).pipe(Effect.flip)
       expect(failure).toBeInstanceOf(IntegratorJournalContradiction)
     }).pipe(Effect.provide(rawJournalBoundaryLayer))
   )
 
-  it.effect("an operator FullRerun fixes one successor at the fresh head without changing its queue position", () =>
-    Effect.gen(function* () {
-      const initial = [
-        makeWorkflowRunBeganRecord(
-          runId,
-          FixtureTarget.make("successor-session-test"),
-          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-        ),
-        ...makeFixture(freshHead)
-      ]
-      const observation = initial.find(({ position }) => position === JournalPosition.make(15))
-      if (observation?.event._tag !== "TargetLineageObserved") return yield* Effect.die("fixture lacks observation")
-      const successorInput = IntegratorSuccessorPreparationInput.make({
-        directionAppliedAt: JournalPosition.make(12),
-        predecessor,
-        quarantineAt: JournalPosition.make(10),
-        targetLineage: observation.event.observation,
-        targetLineageObservedAt: observation.position
-      })
-      const { journal, records } = yield* makeJournal(initial)
-      const fixed = yield* appendIntegratorSuccessorSessionIfNeeded(journal, successorInput, initial)
+  it.effect("an operator FullRerun fixes one successor at the fresh head without changing its queue position", () => {
+    const fixture = acceptedSuccessorFixture()
+    return Effect.gen(function* () {
+      const journal = yield* InRunJournal
+      const fixed = yield* appendIntegratorSuccessorSessionIfNeeded(journal, fixture.input, fixture.records)
+      const predecessor = fixture.input.predecessor
       const run = integratorRunCorrelationForSession(fixed.event.successor, IntegratorRunOrdinal.make(1))
       expect(run.session.queuedAt).toBe(predecessor.queuedAt)
       expect(run.session.expectedTargetHead).toBe(freshHead)
-      expect(yield* readActiveIntegratorSession(yield* Ref.get(records), responsibility)).toEqual(
+      const accepted = yield* (yield* AcceptedJournalReader).readAccepted(runId)
+      expect(yield* readActiveIntegratorSession(accepted, acceptedResponsibilityFor(predecessor))).toEqual(
         Option.some(fixed.event.successor)
       )
       expect(
-        (yield* Ref.get(records)).filter(
+        (yield* journal.read(runId)).filter(
           ({ event }) => event._tag === "IntegratorRunStarted" && event.run.session.sessionId === predecessor.sessionId
         )
       ).toHaveLength(1)
       expect(
-        (yield* Ref.get(records)).filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
+        (yield* journal.read(runId)).filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
       ).toHaveLength(1)
-    }).pipe(Effect.provide(rawJournalBoundaryLayer))
-  )
+    }).pipe(Effect.provide(acceptedSuccessorLayer(fixture)))
+  })
 
   it.effect("rejects a fresh observation reordered before D", () =>
     Effect.gen(function* () {
@@ -538,26 +506,21 @@ describe("Integrator FullRerun successor session", () => {
         targetLineage: observation.event.observation,
         targetLineageObservedAt: observation.position
       })
-      const { journal } = yield* makeJournal(initial)
+      const journal = InRunJournal.of({
+        append: () => Effect.die("reordered cold history must fail before append"),
+        read: () => Effect.succeed(initial)
+      })
       const failure = yield* appendIntegratorSuccessorSessionIfNeeded(journal, input, initial).pipe(Effect.flip)
       expect(failure).toBeInstanceOf(IntegratorJournalContradiction)
     }).pipe(Effect.provide(rawJournalBoundaryLayer))
   )
 
-  it.effect("rejects a second successor identity under the one predecessor key", () =>
-    Effect.gen(function* () {
-      const initial = makeFixture(freshHead)
-      const observation = initial.at(-1)
-      if (observation?.event._tag !== "TargetLineageObserved") return yield* Effect.die("fixture lacks observation")
-      const input = IntegratorSuccessorPreparationInput.make({
-        directionAppliedAt: JournalPosition.make(12),
-        predecessor,
-        quarantineAt: JournalPosition.make(10),
-        targetLineage: observation.event.observation,
-        targetLineageObservedAt: observation.position
-      })
-      const { journal, records } = yield* makeJournal(initial)
-      yield* appendIntegratorSuccessorSessionIfNeeded(journal, input, initial)
+  it.effect("rejects a second successor identity under the one predecessor key", () => {
+    const fixture = acceptedSuccessorFixture()
+    return Effect.gen(function* () {
+      const journal = yield* InRunJournal
+      const predecessor = fixture.input.predecessor
+      yield* appendIntegratorSuccessorSessionIfNeeded(journal, fixture.input, fixture.records)
       const later = yield* journal.append(
         runId,
         intentRecordKey(OperationId.make("successor-second-lineage")),
@@ -565,9 +528,9 @@ describe("Integrator FullRerun successor session", () => {
           initiatedBy: { _tag: "DalphCoordinator" },
           occurrenceClassification: "InitiatedAction",
           operation: makeTargetLineageObservationOperation({
-            integrationTarget: target,
+            integrationTarget: predecessor.integrationTarget,
             operationId: OperationId.make("successor-second-lineage"),
-            plannedAttempt,
+            plannedAttempt: predecessor.plannedAttempt,
             predecessorOperationIds: []
           }),
           version: workflowJournalEventVersion
@@ -584,32 +547,29 @@ describe("Integrator FullRerun successor session", () => {
           }),
           occurrenceClassification: "NonActionOccurrence",
           operationId: OperationId.make("successor-second-lineage"),
-          plannedAttempt,
+          plannedAttempt: predecessor.plannedAttempt,
           version: workflowJournalEventVersion
         })
       )
       const secondInput = IntegratorSuccessorPreparationInput.make({
-        directionAppliedAt: JournalPosition.make(12),
+        directionAppliedAt: fixture.input.directionAppliedAt,
         predecessor,
-        quarantineAt: JournalPosition.make(10),
+        quarantineAt: fixture.input.quarantineAt,
         targetLineage:
           secondObserved.event._tag === "TargetLineageObserved"
             ? secondObserved.event.observation
             : yield* Effect.die("fixture lacks second observation"),
         targetLineageObservedAt: secondObserved.position
       })
-      const failure = yield* appendIntegratorSuccessorSessionIfNeeded(
-        journal,
-        secondInput,
-        yield* Ref.get(records)
-      ).pipe(Effect.flip)
+      const accepted = yield* (yield* AcceptedJournalReader).readAccepted(runId)
+      const failure = yield* appendIntegratorSuccessorSessionIfNeeded(journal, secondInput, accepted).pipe(Effect.flip)
       expect(failure).toBeInstanceOf(IntegratorJournalContradiction)
       expect(
-        (yield* Ref.get(records)).filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
+        (yield* journal.read(runId)).filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
       ).toHaveLength(1)
       void later
-    }).pipe(Effect.provide(rawJournalBoundaryLayer))
-  )
+    }).pipe(Effect.provide(acceptedSuccessorLayer(fixture)))
+  })
 
   it.effect("rejects every missing or contradictory FullRerun predecessor fact before appending S2", () =>
     Effect.gen(function* () {
@@ -714,14 +674,13 @@ describe("Integrator FullRerun successor session", () => {
     }).pipe(Effect.provide(rawJournalBoundaryLayer))
   )
 
-  it.effect("rejects duplicate or foreign successor identities and collisions with existing resources", () =>
-    Effect.gen(function* () {
-      const initial = makeFixture(freshHead)
-      const input = successorInputFor(initial)
-      if (input === undefined) return yield* Effect.die("successor fixture lacks fresh observation")
-
-      const validJournal = yield* makeJournal(initial)
-      const valid = yield* appendIntegratorSuccessorSessionIfNeeded(validJournal.journal, input, initial)
+  it.effect("rejects duplicate or foreign successor identities and collisions with existing resources", () => {
+    const fixture = acceptedSuccessorFixture()
+    return Effect.gen(function* () {
+      const initial = fixture.records
+      const input = fixture.input
+      const journal = yield* InRunJournal
+      const valid = yield* appendIntegratorSuccessorSessionIfNeeded(journal, input, initial)
       const duplicateKeyRecords = [
         ...initial,
         { ...valid, position: JournalPosition.make(16) },
@@ -753,7 +712,7 @@ describe("Integrator FullRerun successor session", () => {
       const collision = {
         ...fixed,
         event: IntegratorSessionFixedEvent.make({
-          correlation: { ...predecessor, sessionId: valid.event.successor.sessionId },
+          correlation: { ...input.predecessor, sessionId: valid.event.successor.sessionId },
           version: workflowJournalEventVersion
         }),
         key: JournalRecordKey.make("successor-collision"),
@@ -773,7 +732,7 @@ describe("Integrator FullRerun successor session", () => {
       const resourceCollision = {
         ...fixed,
         event: IntegratorSessionFixedEvent.make({
-          correlation: { ...predecessor, candidateResource: valid.event.successor.candidateResource },
+          correlation: { ...input.predecessor, candidateResource: valid.event.successor.candidateResource },
           version: workflowJournalEventVersion
         }),
         key: JournalRecordKey.make("successor-resource-collision"),
@@ -855,7 +814,10 @@ describe("Integrator FullRerun successor session", () => {
         ...valid,
         key: JournalRecordKey.make("successor-different-subject"),
         position: JournalPosition.make(16),
-        event: IntegratorSuccessorSessionFixedEvent.make({ ...valid.event, quarantineAt: JournalPosition.make(9) })
+        event: IntegratorSuccessorSessionFixedEvent.make({
+          ...valid.event,
+          quarantineAt: JournalPosition.make(Number(input.quarantineAt) - 1)
+        })
       }
       const subjectFailure = yield* appendIntegratorSuccessorSessionIfNeeded(
         {
@@ -885,8 +847,8 @@ describe("Integrator FullRerun successor session", () => {
         [...initial, contradictoryIdentity]
       ).pipe(Effect.flip)
       expect(identityFailure).toBeInstanceOf(IntegratorJournalContradiction)
-    }).pipe(Effect.provide(rawJournalBoundaryLayer))
-  )
+    }).pipe(Effect.provide(acceptedSuccessorLayer(fixture)))
+  })
 
   it.effect("reconciles an ambiguous successor append only when the reread contains the exact winner", () =>
     Effect.gen(function* () {
@@ -949,83 +911,87 @@ describe("Integrator FullRerun successor session", () => {
     )
   )
 
-  it.effect("fails closed when reconstructing an active successor from duplicate, incomplete, or foreign history", () =>
-    Effect.gen(function* () {
-      const initial = makeFixture(freshHead)
-      const input = successorInputFor(initial)
-      if (input === undefined) return yield* Effect.die("successor fixture lacks fresh observation")
-      const active = (records: ReadonlyArray<JournalRecord>) =>
-        readActiveIntegratorSession(records, responsibility).pipe(
-          Effect.match({
-            onFailure: (error) => ({ _tag: "Failure" as const, error }),
-            onSuccess: (value) => ({ _tag: "Success" as const, value })
-          })
+  it.effect(
+    "fails closed when reconstructing an active successor from duplicate, incomplete, or foreign history",
+    () => {
+      const fixture = acceptedSuccessorFixture()
+      return Effect.gen(function* () {
+        const initial = fixture.records
+        const input = fixture.input
+        const responsibility = acceptedResponsibilityFor(input.predecessor)
+        const active = (records: ReadonlyArray<JournalRecord>) =>
+          readActiveIntegratorSession(records, responsibility).pipe(
+            Effect.match({
+              onFailure: (error) => ({ _tag: "Failure" as const, error }),
+              onSuccess: (value) => ({ _tag: "Success" as const, value })
+            })
+          )
+
+        const absent = yield* readActiveIntegratorSession(initial, responsibility)
+        expect(Option.isSome(absent)).toBe(true)
+
+        const journal = yield* InRunJournal
+        const fixed = yield* appendIntegratorSuccessorSessionIfNeeded(journal, input, initial)
+        const validRecords = yield* journal.read(runId)
+        const duplicate = yield* active([
+          ...validRecords,
+          { ...fixed, key: JournalRecordKey.make("successor-duplicate"), position: JournalPosition.make(17) }
+        ])
+        expect(duplicate._tag).toBe("Failure")
+
+        const missingLineage = yield* active(
+          validRecords.filter((record) => record.position !== fixed.event.successor.targetLineageObservedAt)
         )
+        expect(missingLineage._tag).toBe("Failure")
 
-      const absent = yield* readActiveIntegratorSession(initial, responsibility)
-      expect(Option.isSome(absent)).toBe(true)
+        const foreignPredecessor = validRecords.map((record) =>
+          record.event._tag === "IntegratorSuccessorSessionFixed"
+            ? {
+                ...record,
+                event: IntegratorSuccessorSessionFixedEvent.make({
+                  ...record.event,
+                  predecessor: { ...record.event.predecessor, expectedTargetHead: freshHead }
+                })
+              }
+            : record
+        )
+        const foreign = yield* active(foreignPredecessor)
+        expect(foreign._tag).toBe("Failure")
 
-      const validJournal = yield* makeJournal(initial)
-      const fixed = yield* appendIntegratorSuccessorSessionIfNeeded(validJournal.journal, input, initial)
-      const validRecords = yield* Ref.get(validJournal.records)
-      const duplicate = yield* active([
-        ...validRecords,
-        { ...fixed, key: JournalRecordKey.make("successor-duplicate"), position: JournalPosition.make(17) }
-      ])
-      expect(duplicate._tag).toBe("Failure")
+        const foreignIdentity = validRecords.map((record) =>
+          record.event._tag === "IntegratorSuccessorSessionFixed"
+            ? {
+                ...record,
+                event: IntegratorSuccessorSessionFixedEvent.make({
+                  ...record.event,
+                  successor: { ...record.event.successor, sessionId: IntegratorSessionId.make("foreign-successor") }
+                })
+              }
+            : record
+        )
+        const foreignIdentityResult = yield* active(foreignIdentity)
+        expect(foreignIdentityResult._tag).toBe("Failure")
 
-      const missingLineage = yield* active(
-        validRecords.filter((record) => record.position !== fixed.event.successor.targetLineageObservedAt)
-      )
-      expect(missingLineage._tag).toBe("Failure")
+        const invalidPredecessor = yield* active(
+          validRecords.filter((record) => record.event._tag !== "IntegrationStarted")
+        )
+        expect(invalidPredecessor._tag).toBe("Failure")
 
-      const foreignPredecessor = validRecords.map((record) =>
-        record.event._tag === "IntegratorSuccessorSessionFixed"
-          ? {
-              ...record,
-              event: IntegratorSuccessorSessionFixedEvent.make({
-                ...record.event,
-                predecessor: { ...record.event.predecessor, expectedTargetHead: freshHead }
-              })
-            }
-          : record
-      )
-      const foreign = yield* active(foreignPredecessor)
-      expect(foreign._tag).toBe("Failure")
+        const beforeFresh = validRecords.map((record) =>
+          record.event._tag === "IntegratorSuccessorSessionFixed"
+            ? { ...record, position: JournalPosition.make(14) }
+            : record
+        )
+        const reordered = yield* active(beforeFresh)
+        expect(reordered._tag).toBe("Failure")
 
-      const foreignIdentity = validRecords.map((record) =>
-        record.event._tag === "IntegratorSuccessorSessionFixed"
-          ? {
-              ...record,
-              event: IntegratorSuccessorSessionFixedEvent.make({
-                ...record.event,
-                successor: { ...record.event.successor, sessionId: IntegratorSessionId.make("foreign-successor") }
-              })
-            }
-          : record
-      )
-      const foreignIdentityResult = yield* active(foreignIdentity)
-      expect(foreignIdentityResult._tag).toBe("Failure")
-
-      const invalidPredecessor = yield* active(
-        validRecords.filter((record) => record.event._tag !== "IntegrationStarted")
-      )
-      expect(invalidPredecessor._tag).toBe("Failure")
-
-      const beforeFresh = validRecords.map((record) =>
-        record.event._tag === "IntegratorSuccessorSessionFixed"
-          ? { ...record, position: JournalPosition.make(14) }
-          : record
-      )
-      const reordered = yield* active(beforeFresh)
-      expect(reordered._tag).toBe("Failure")
-
-      const unrelatedResponsibility = StartedIntegrationResponsibility.make({
-        ...responsibility,
-        plannedAttempt: { ...responsibility.plannedAttempt, runId: RunId.make("unrelated-successor-run") }
-      })
-      const noPredecessor = yield* readActiveIntegratorSession(initial, unrelatedResponsibility)
-      expect(Option.isNone(noPredecessor)).toBe(true)
-    }).pipe(Effect.provide(rawJournalBoundaryLayer))
+        const unrelatedResponsibility = StartedIntegrationResponsibility.make({
+          ...responsibility,
+          plannedAttempt: { ...responsibility.plannedAttempt, runId: RunId.make("unrelated-successor-run") }
+        })
+        const noPredecessor = yield* readActiveIntegratorSession(initial, unrelatedResponsibility)
+        expect(Option.isNone(noPredecessor)).toBe(true)
+      }).pipe(Effect.provide(acceptedSuccessorLayer(fixture)))
+    }
   )
 })

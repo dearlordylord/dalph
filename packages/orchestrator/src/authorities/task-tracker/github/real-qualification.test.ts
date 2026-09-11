@@ -18,13 +18,10 @@ import { OperationId } from "../../../workflow/identity.js"
 import { makeTaskTrackerFactsObservedFromRead } from "../../../workflow/protocols/task-tracker-read/protocol.js"
 import { runTaskClaimAcquisitionProtocol } from "../../../workflow/protocols/task-claim-acquisition/protocol.js"
 import { EvidenceStore, memoryEvidenceStoreLayer } from "../../../workflow/protocols/evidence-store.js"
-import { JournalPosition } from "../../../workflow-journal/identity.js"
-import { InRunJournal, JournalRecord } from "../../../workflow-journal/store.js"
-import { targetPromotionObservedSuccessRecordKey } from "../../../workflow-journal/record-key.js"
+import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
 import {
   CompletionClaimBoundary,
   CompletionTaskBoundary,
-  CompletionTaskClaim,
   CompletionTaskRequestOrdinal,
   completionClaimDeletionRequestFor,
   completionClaimReplacementRequestFor,
@@ -40,12 +37,9 @@ import {
   readCurrentCompletionConfirmation,
   runCompletionTaskProtocol
 } from "../../../workflow/protocols/integration-finality/completion-task-protocol.js"
-import { IntegratorRunQualifiedCandidate } from "../../../workflow/protocols/integrator/events.js"
 import {
   TargetPromotionGit,
-  TargetPromotionGitReadObservation,
-  TargetPromotionObservedSuccessEvent,
-  targetPromotionCorrelationFor
+  TargetPromotionGitReadObservation
 } from "../../../workflow/protocols/target-promotion/events.js"
 import {
   ClaimOwner,
@@ -78,6 +72,10 @@ import { githubTaskIdFor } from "./task-identity.js"
 import { GithubIssueNumber, GithubIssueTarget, GithubRepositoryName, GithubRepositoryOwner } from "./target.js"
 import { githubGraphqlTestClient } from "./graphql-client.test-fixture.js"
 import { CreateClaimLabelResponse, FindClaimLabelResponse, GithubGraphqlErrors } from "./claim-label-response.js"
+import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
+import { makePromotedIntegrationHistory } from "../../../../test/support/promoted-integration-history.js"
+import { integratorCorrelationFor } from "../../../workflow/protocols/integrator/session.js"
+import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 
 // oxlint-disable-next-line no-restricted-globals -- opt-in is evaluated before test registration.
 const qualificationEnabled = globalThis.process.env["DALPH_GITHUB_QUALIFICATION"] === "1"
@@ -841,22 +839,6 @@ const responseLossGithubGraphqlClient = (
     })
   )
 
-const qualificationJournalLayer = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
-  Layer.succeed(
-    InRunJournal,
-    InRunJournal.of({
-      append: (runId, key, event) =>
-        Ref.modify(records, (current) => {
-          const existing = current.find((record) => record.key === key)
-          if (existing !== undefined) return [Effect.succeed(existing), current] as const
-          const record = JournalRecord.make({ event, key, position: JournalPosition.make(current.length + 1), runId })
-          return [Effect.succeed(record), [...current, record]] as const
-        }).pipe(Effect.flatten),
-      read: (runId) =>
-        Ref.get(records).pipe(Effect.map((current) => current.filter((record) => record.runId === runId)))
-    })
-  )
-
 const qualificationTargetGit = TargetPromotionGit.of({
   compareAndSet: () => Effect.die("completion authorization must only read the already-promoted candidate"),
   read: (request) =>
@@ -970,68 +952,75 @@ const runDeliveryAuthorityQualificationJourney = Effect.fn("GithubQualification.
       )
     )
     const acceptedResult = AcceptedResult.make({ commit: acceptedCommit, evidenceManifest })
-    const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
-      ...integrationFinalityFixture.qualifiedCandidate,
-      directParents: [
-        integrationFinalityFixture.qualifiedCandidate.run.session.expectedTargetHead,
-        acceptedResult.commit
-      ],
-      run: {
-        ...integrationFinalityFixture.qualifiedCandidate.run,
-        session: { ...integrationFinalityFixture.qualifiedCandidate.run.session, acceptedResult, plannedAttempt }
-      }
-    })
-    const claim = CompletionTaskClaim.make({
-      originalClaim: activeClaim,
+    const accepted = makeAcceptedIntegrationHistory({
+      acceptedResult,
+      activeClaim,
+      integrationTarget: integrationFinalityFixture.integrationTarget,
       plannedAttempt,
-      promotionCorrelation: targetPromotionCorrelationFor(qualifiedCandidate)
+      runId: plannedAttempt.runId,
+      targetHeadSha: integrationFinalityFixture.qualifiedCandidate.run.session.expectedTargetHead,
+      taskSpecification: specification,
+      trackerTarget: fixture.issue.target
     })
-    const promotion = TargetPromotionObservedSuccessEvent.make({
-      ...integrationFinalityFixture.promotionSuccess,
-      correlation: claim.promotionCorrelation
+    const promoted = makePromotedIntegrationHistory({
+      candidateCommit: integrationFinalityFixture.qualifiedCandidate.candidateCommit,
+      candidateText: integrationFinalityFixture.qualifiedCandidate.candidateText,
+      originalClaim: activeClaim,
+      records: accepted.records,
+      session: integratorCorrelationFor(accepted)
     })
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      JournalRecord.make({
-        event: promotion,
-        key: targetPromotionObservedSuccessRecordKey(claim.promotionCorrelation.requestId),
-        position: JournalPosition.make(1),
-        runId: plannedAttempt.runId
-      })
-    ])
-    const journal = qualificationJournalLayer(records)
-    const replacement = yield* runCompletionClaimReplacementProtocol(
-      completionClaims,
-      completionClaimReplacementRequestFor(claim)
-    ).pipe(Effect.provide(journal))
-    const completionRequest = completionTaskRequestFor(claim)
-    const completion = yield* runCompletionTaskProtocol(
-      taskCompletion,
-      completionRequest,
-      fixture.issue.target,
-      (ordinal) =>
-        authorizeCompletionTaskAttempt(taskCompletion, completionRequest, fixture.issue.target, ordinal).pipe(
-          Effect.provideService(TargetPromotionGit, qualificationTargetGit)
-        )
-    ).pipe(Effect.provide(journal))
-    const successObservation =
-      "_tag" in completion
-        ? completion
-        : (yield* readCurrentCompletionConfirmation(
-            taskCompletion,
-            completionRequest,
-            CompletionTaskRequestOrdinal.make(1),
-            fixture.issue.target
-          ).pipe(Effect.provide(journal))).observation
-    if (successObservation === undefined) {
-      return yield* Effect.die("fresh focused completion confirmation did not observe exact success")
-    }
-    const finality = yield* runCompletionClaimDeletionProtocol(
-      completionClaims,
-      completionClaimDeletionRequestFor(claim, successObservation),
-      replacement.operationId
-    ).pipe(Effect.provide(journal))
-
-    return { activeClaim, claim, finality, records: yield* Ref.get(records), specification, successObservation }
+    const claim = promoted.claim
+    return yield* Effect.gen(function* () {
+      const replacement = yield* runCompletionClaimReplacementProtocol(
+        completionClaims,
+        completionClaimReplacementRequestFor(claim)
+      )
+      const completionRequest = completionTaskRequestFor(claim)
+      const completion = yield* runCompletionTaskProtocol(
+        taskCompletion,
+        completionRequest,
+        fixture.issue.target,
+        (ordinal) =>
+          authorizeCompletionTaskAttempt(taskCompletion, completionRequest, fixture.issue.target, ordinal).pipe(
+            Effect.provideService(TargetPromotionGit, qualificationTargetGit)
+          )
+      )
+      const successObservation =
+        "_tag" in completion
+          ? completion
+          : (yield* readCurrentCompletionConfirmation(
+              taskCompletion,
+              completionRequest,
+              CompletionTaskRequestOrdinal.make(1),
+              fixture.issue.target
+            )).observation
+      if (successObservation === undefined) {
+        return yield* Effect.die("fresh focused completion confirmation did not observe exact success")
+      }
+      const finality = yield* runCompletionClaimDeletionProtocol(
+        completionClaims,
+        completionClaimDeletionRequestFor(claim, successObservation),
+        replacement.operationId
+      )
+      const journal = yield* InRunJournal
+      const records = yield* journal.read(plannedAttempt.runId)
+      return {
+        activeClaim,
+        claim,
+        finality,
+        records: records.slice(Number(promoted.promotionRecord.position) - 1),
+        specification,
+        successObservation
+      }
+    }).pipe(
+      Effect.provide(
+        liveJournalTestLayer({
+          records: promoted.promotedRecords,
+          runId: plannedAttempt.runId,
+          target: fixture.issue.target
+        })
+      )
+    )
   }
 )
 

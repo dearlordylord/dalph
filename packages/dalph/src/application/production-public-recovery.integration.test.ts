@@ -3,6 +3,7 @@ import nodeProcess from "node:process"
 import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
+  AcceptedJournalReader,
   appendReplacementProvenance,
   freshWorkflowRunId,
   GitCommand,
@@ -12,6 +13,7 @@ import {
   GithubIssueTarget,
   InitialControlPolicy,
   JournalDatabaseLocator,
+  journalLayer,
   JournalStore,
   nodeGitCommandLayer,
   reduceWorkflowJournalHistory,
@@ -523,19 +525,28 @@ it.live(
         })
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const journalContext = yield* Layer.build(
+            const storageContext = yield* Layer.build(
               sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(fixture.journalDatabase) })
             )
-            const journal = Context.get(journalContext, JournalStore)
-            yield* journal.beginRun(
+            const storage = Context.get(storageContext, JournalStore)
+            yield* storage.beginRun(
               runId,
               trackerTarget,
               InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
             )
+            const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
+            if (initial._tag === "InvalidWorkflowJournalHistory") {
+              return yield* Effect.die(
+                `replacement fixture initial history is invalid: ${JSON.stringify(initial.issues)}`
+              )
+            }
+            const journalContext = yield* Layer.build(journalLayer(runId, trackerTarget, initial, storage))
             yield* appendReplacementProvenance(plannedAttempt, successorAttempt, "StartupValid").pipe(
               Effect.provide(journalContext)
             )
-            const reduced = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
+            const accepted = yield* Context.get(journalContext, AcceptedJournalReader).readAccepted(runId)
+            expect(accepted.runId).toBe(runId)
+            const reduced = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
             expect(reduced._tag).toBe("ValidWorkflowJournalHistory")
           })
         )

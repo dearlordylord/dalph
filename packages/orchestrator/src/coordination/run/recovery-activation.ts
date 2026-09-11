@@ -4536,6 +4536,31 @@ const recoveryProjectionSnapshot = (
   ...(projection.activeRefreshBoundary === undefined ? {} : { activeRefreshBoundary: projection.activeRefreshBoundary })
 })
 
+/**
+ * Evaluates persisted rows before a live Journal can own them. This explicit
+ * cold diagnostic reduces the raw input once and fails closed on every
+ * semantically unaccepted prefix; live recovery never falls back to it.
+ */
+export const diagnoseColdRunRecoveryProjection = Effect.fn("RunRecoveryProjection.diagnoseCold")(function* (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>
+) {
+  const reduction = reduceWorkflowJournalHistory(runId, records)
+  if (reduction._tag === "InvalidWorkflowJournalHistory") return yield* Effect.fail(reduction)
+  const resources = yield* makeIntegrationTargetResourceController()
+  const projection = yield* projectRecoveredRunState(
+    reduction.runState,
+    resources,
+    Option.none(),
+    Option.none(),
+    false,
+    false,
+    false,
+    RunActivationOpportunity.OrdinaryRunEntry()
+  )
+  return recoveryProjectionSnapshot(projection)
+})
+
 const samePositions = (left: ReadonlySet<JournalPosition>, right: ReadonlySet<JournalPosition>): boolean =>
   left.size === right.size && [...left].every((position) => right.has(position))
 
