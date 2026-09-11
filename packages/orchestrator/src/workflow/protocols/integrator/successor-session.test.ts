@@ -371,7 +371,7 @@ const acceptedSuccessorFixture = () => {
       version: workflowJournalEventVersion
     })
   )
-  if (observation.event._tag !== "TargetLineageObserved") throw new Error("accepted fixture lacks fresh lineage")
+  if (observation.event._tag !== "TargetLineageObserved") return expect.fail("accepted fixture lacks fresh lineage")
   return {
     input: IntegratorSuccessorPreparationInput.make({
       directionAppliedAt: direction.position,

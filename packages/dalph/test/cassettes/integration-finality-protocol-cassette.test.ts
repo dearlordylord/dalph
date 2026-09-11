@@ -28,7 +28,7 @@ const useAuthored = <A, E, R>(
 const replacementBase = maintainedAuthoredCassetteCatalog.changedAttemptRestartsCleanly
 const replacementChoice = replacementBase.story.find((item) => item._tag === "OperatorRestartsAttempt")
 if (replacementChoice?._tag !== "OperatorRestartsAttempt") {
-  throw new Error("replacement fixture requires its accepted Restart choice")
+  expect.fail("replacement fixture requires its accepted Restart choice")
 }
 const replacementRevision = replacementChoice.observedTaskRevision
 const acceptedCommit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

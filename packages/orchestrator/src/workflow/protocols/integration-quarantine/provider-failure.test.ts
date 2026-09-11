@@ -372,9 +372,9 @@ const makeSuccessorHistory = Effect.fn("ProviderFailureTest.makeSuccessorHistory
 })
 
 const rejectProviderReconciliation = (records: ReadonlyArray<JournalRecord>, run: IntegratorRunCorrelation) =>
-  Effect.sync(() => {
+  Effect.gen(function* () {
     const validation = validateProviderRunPredecessorsFromRecords(records, run)
-    if (validation._tag === "Valid") throw new Error("malformed provider chronology unexpectedly validated")
+    if (validation._tag === "Valid") return yield* Effect.die("malformed provider chronology unexpectedly validated")
     return { _tag: "IntegratorJournalContradiction" as const, detail: validation.detail }
   })
 

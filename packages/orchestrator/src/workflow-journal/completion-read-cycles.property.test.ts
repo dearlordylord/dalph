@@ -136,7 +136,7 @@ it("matches chronological intent/outcome presence at every sparse cutoff without
                 candidate.event._tag !== "TaskTrackerReadIntentRecorded" ||
                 candidate.event.operation._tag !== "ReadCompletionTaskFacts"
               )
-                throw new Error("fixture intent mismatch")
+                return expect.fail("fixture intent mismatch")
               const value = candidate.event.operation.purpose
               return value._tag === "Authorization" ? value.authorizationOrdinal : value.confirmationOrdinal
             })
@@ -221,7 +221,7 @@ it("retains shared cutoff structure rather than a chain of copied unresolved his
     return reachableObjects(inspectCompletionReadCycleStorage(evidence))
   })
   const [small, large] = sizes
-  if (small === undefined || large === undefined) throw new Error("fixture requires both retained sizes")
+  if (small === undefined || large === undefined) return expect.fail("fixture requires both retained sizes")
   expect(small).toBeGreaterThan(64)
   expect(large).toBeLessThan(small * 8)
 })

@@ -1895,9 +1895,7 @@ it.each([64, 256])(
     if (reduced._tag !== "ValidWorkflowJournalHistory") return expect.fail(JSON.stringify(reduced.issues))
     const state = reduced.runState
     Object.defineProperty(state, "graphKnowledge", {
-      get: () => {
-        throw new Error("live responsibility derivation must not reproject reconstructed graph knowledge")
-      }
+      get: () => expect.fail("live responsibility derivation must not reproject reconstructed graph knowledge")
     })
     const operations: Array<Parameters<Parameters<typeof observeJournalRecordSequenceOperations>[0]>[0]> = []
     const stopObserving = observeJournalRecordSequenceOperations((operation) => operations.push(operation))

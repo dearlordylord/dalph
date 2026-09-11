@@ -287,7 +287,7 @@ const effectiveAdmissionHistory = makeExecutingAttemptHistory({
 const effectiveAdmissionResponsibilityIndex = effectiveAdmissionHistory.records.findIndex(
   ({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
 )
-if (effectiveAdmissionResponsibilityIndex < 0) throw new Error("effective admission fixture must reach responsibility")
+if (effectiveAdmissionResponsibilityIndex < 0) expect.fail("effective admission fixture must reach responsibility")
 const effectiveAdmissionSeed = effectiveAdmissionHistory.records.slice(0, effectiveAdmissionResponsibilityIndex)
 const effectiveAdmissionJournalLayer = liveJournalTestLayer({ records: effectiveAdmissionSeed, runId, target })
 
@@ -336,7 +336,7 @@ const recoveredProposalFor = (
     transitions: [transition]
   }).ticketDelivery
   const recovered = proposals[0]
-  if (recovered === undefined) throw new Error(`no recovered proposal for ${transition._tag}`)
+  if (recovered === undefined) return expect.fail(`no recovered proposal for ${transition._tag}`)
   return recovered
 }
 
@@ -1602,7 +1602,7 @@ it.effect("does not repeat one started-integration lineage read after only its c
         transitions: [transition]
       }).deliverySettlement
       const derived = proposals[0]
-      if (derived === undefined) throw new Error("started integration must derive its target-lineage read")
+      if (derived === undefined) return expect.fail("started integration must derive its target-lineage read")
       return derived
     }
     const first = lineageRead("first")
