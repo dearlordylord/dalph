@@ -216,9 +216,8 @@ const appendCancellationState = (
 export const advanceReconstructedRunState = (
   prior: ReconstructedRunState,
   record: JournalRecord,
-  records: ReadonlyArray<JournalRecord> | ReconstructedWorkflowHistory = [...prior.workflowHistory.records, record]
+  history: ReconstructedWorkflowHistory
 ): ReconstructedRunState => {
-  const history = "records" in records ? records : { records }
   return {
     appliedThrough: record.position,
     controlPolicy: appendControlPolicy(prior.controlPolicy, record),
