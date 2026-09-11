@@ -88,7 +88,7 @@ export const activeWorkAuthorityRefreshSubjectsFor = makeActiveWorkAuthorityRefr
 export const activeWorkAuthorityRefreshSubjectsForRunState = (
   runState: Pick<ReconstructedRunState, "runId" | "responsibility" | "workflowHistory">
 ): ActiveWorkAuthorityRefreshSubjects => {
-  const acceptedHistory = runState.workflowHistory.prefix ?? runState.workflowHistory.records
+  const acceptedHistory = runState.workflowHistory.evidence
   return activeWorkAuthorityRefreshSubjectsFor(
     runState.responsibility.entries.flatMap((entry) => {
       if (entry._tag !== "PlannedAttemptExecutorWorkResponsibility") return []

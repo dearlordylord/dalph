@@ -6,6 +6,7 @@ import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { hasUnfinishedRunResponsibility } from "./recovery-activation.js"
 import { AllocatedWorkflowRunId, freshWorkflowRunId } from "./fresh-run-identity.js"
 import { StartupRecoveryBlocked } from "./startup-recovery.js"
+import { firstJournalRecordOfKind } from "../../workflow-journal/record-evidence.js"
 
 /** The production host allocated a new identity or recovered one exact unfinished identity. */
 export const ProductionRunSelection = Schema.TaggedUnion({
@@ -25,15 +26,16 @@ export class ProductionRunSelectionConflict extends Schema.TaggedError<Productio
 const isUnfinished = (
   reduction: Extract<ReturnType<typeof reduceWorkflowJournalHistory>, { readonly _tag: "ValidWorkflowJournalHistory" }>
 ): boolean => {
-  const began = reduction.records.some(({ event }) => event._tag === "WorkflowRunBegan")
-  const terminated = reduction.records.some(({ event }) => event._tag === "WorkflowRunTerminated")
+  const evidence = reduction.runState.workflowHistory.evidence
+  const began = firstJournalRecordOfKind(evidence, "WorkflowRunBegan") !== undefined
+  const terminated = firstJournalRecordOfKind(evidence, "WorkflowRunTerminated") !== undefined
   return (began && !terminated) || hasUnfinishedRunResponsibility(reduction.runState)
 }
 
 const recordedTarget = (
   reduction: Extract<ReturnType<typeof reduceWorkflowJournalHistory>, { readonly _tag: "ValidWorkflowJournalHistory" }>
 ): TrackerTarget | undefined => {
-  const beginning = reduction.records.find(({ event }) => event._tag === "WorkflowRunBegan")
+  const beginning = firstJournalRecordOfKind(reduction.runState.workflowHistory.evidence, "WorkflowRunBegan")
   /* v8 ignore next -- @preserve A valid unfinished Run reduction necessarily contains its first WorkflowRunBegan record. */
   return beginning?.event._tag === "WorkflowRunBegan" ? beginning.event.target : undefined
 }

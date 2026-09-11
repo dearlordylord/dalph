@@ -21,6 +21,7 @@ import {
 } from "../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { acceptedJournalPrefixFromValidatedHistory } from "../../workflow-journal/accepted-prefix.js"
+import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 import { OperationId } from "../../workflow/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
@@ -182,7 +183,11 @@ const cancelledNoRelease = (
   })
 
 const reconstructed = (records: ReadonlyArray<JournalRecord>, entries = []) =>
-  requiredPreStartTaskWorkPositionsOf({ runId, responsibility: { entries }, workflowHistory: { records } })
+  requiredPreStartTaskWorkPositionsOf({
+    runId,
+    responsibility: { entries },
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
+  })
 
 it("reads pre-start positions from accepted indexed evidence without exporting journal records", () => {
   const prefix = acceptedJournalPrefixFromValidatedHistory(runId, [claimIntent, claimAcquired, plan])
@@ -192,12 +197,7 @@ it("reads pre-start positions from accepted indexed evidence without exporting j
     const positions = requiredPreStartTaskWorkPositionsOf({
       runId,
       responsibility: { entries: [] },
-      workflowHistory: {
-        prefix,
-        get records(): ReadonlyArray<JournalRecord> {
-          throw new Error("accepted position reconstruction must not export the journal prefix")
-        }
-      }
+      workflowHistory: { evidence: prefix }
     })
     expect(positions).toEqual([
       {
