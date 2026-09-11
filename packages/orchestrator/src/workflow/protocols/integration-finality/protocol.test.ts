@@ -1,9 +1,10 @@
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect"
+import { Deferred, Effect, Fiber, Ref, Schema } from "effect"
 import { expect } from "vitest"
-import { TaskId } from "@dalph/contracts"
+import { makeTaskWorkSpecification, TaskId, type AcceptedResult } from "@dalph/contracts"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
-import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
+import type { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import type { InRunJournal, JournalRecord } from "../../../workflow-journal/store.js"
 import {
   completionClaimDeletionAttemptIntentRecordKey,
   completionClaimDeletionIntentRecordKey,
@@ -12,12 +13,17 @@ import {
   completionClaimReplacementAttemptIntentRecordKey,
   completionClaimReplacementIntentRecordKey,
   completionClaimReplacedRecordKey as replacedKey,
-  integrationFinalitySettledRecordKey,
-  targetPromotionObservedSuccessRecordKey
+  integrationFinalitySettledRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { OperationId } from "../../identity.js"
 import { describeJournalEvent } from "../../registry/event-descriptor.js"
+import {
+  makeCompletionTaskFactsObservationOperation,
+  makeTaskClaimReleaseOperation,
+  TaskClaimReleaseAuthority
+} from "../../registry/operation.js"
+import { TaskClaimReleasedEvent, TaskClaimReleaseIntendedEvent, taskTrackerReadIntent } from "../../registry/event.js"
 import { IntegratorRunOrdinal, IntegratorRunQualifiedCandidate } from "../integrator/events.js"
 import { TargetPromotionObservedSuccessEvent, targetPromotionCorrelationFor } from "../target-promotion/events.js"
 import {
@@ -29,6 +35,8 @@ import {
   CompletionClaimDeletionReadObservedEvent,
   CompletionClaimDeletionReadPurpose,
   CompletionClaimCleanupReadOrdinal,
+  CompletionTaskConfirmationReadOrdinal,
+  CompletionTaskFocusedReadPurpose,
   CompletionClaimDeletionFailure,
   CompletionClaimFingerprint,
   CompletionClaimReadFailure,
@@ -39,6 +47,7 @@ import {
   CompletionClaimReplacementIntendedEvent,
   CompletionClaimReplacementFailure,
   CompletionTaskClaim,
+  FocusedTaskCompletionFacts,
   CompletionTaskIntendedEvent,
   CompletionClaimRequestOrdinal,
   type CompletionClaimReplacementRequest,
@@ -63,7 +72,7 @@ import {
   runCompletionClaimReplacementProtocol
 } from "./protocol.js"
 import { continuesCompletionClaimCleanup } from "./cleanup-boundary-transition.js"
-import { integrationFinalityFixture as fixture } from "./fixtures.js"
+import { integrationFinalityFixture as sourceFixture } from "./fixtures.js"
 import { makeApplicationExitLifecycle } from "../../../coordination/application-exit/lifecycle.js"
 import { InterruptibleWorkflowBoundaryIntent } from "../../interpretation/interpreter.js"
 import { CompletionClaimCleanupBoundaryCall } from "../../interpretation/interruptible-boundary.js"
@@ -77,6 +86,17 @@ import {
 } from "../../../authorities/task-tracker/claim-mutation.js"
 import { ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { runTaskClaimReleaseProtocol } from "../task-claim-release/protocol.js"
+import { integratorCorrelationFor } from "../integrator/session.js"
+import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
+import { makePromotedIntegrationHistory } from "../../../../test/support/promoted-integration-history.js"
+import { Journal } from "../../../coordination/delivery/journal.js"
+import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
+import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
+import { exportWorkflowHistoryRecords } from "../../../coordination/reconstruction/reduce.js"
+import {
+  makeFocusedTaskCompletionFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../task-tracker-facts/observation.js"
 
 const deletionOperationFor = completionClaimDeletionOperationIdFor
 const replacementOperationFor = completionClaimReplacementOperationIdFor
@@ -89,20 +109,44 @@ class DecodedTaskClaimReleaseFailure extends Schema.TaggedError<DecodedTaskClaim
   { detail: Schema.String, release: TaskClaimRelease }
 ) {}
 
-const appendJournalLayer = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
-  Layer.succeed(
-    InRunJournal,
-    InRunJournal.of({
-      append: (runId, key, event) =>
-        Ref.modify(records, (current) => {
-          const existing = current.find((record) => record.key === key)
-          if (existing !== undefined) return [Effect.succeed(existing), current] as const
-          const appended: JournalRecord = { event, key, position: JournalPosition.make(current.length + 1), runId }
-          return [Effect.succeed(appended), [...current, appended]] as const
-        }).pipe(Effect.flatten),
-      read: () => Ref.get(records)
-    })
-  )
+const taskSpecification = makeTaskWorkSpecification({
+  body: "Exercise exact completion-finality boundaries after an accepted integration prefix.",
+  taskId: sourceFixture.taskId,
+  title: "Completion-finality boundary fixture"
+})
+const makeHistory = (acceptedResult: AcceptedResult) => {
+  const accepted = makeAcceptedIntegrationHistory({
+    acceptedResult,
+    activeClaim: sourceFixture.activeClaim,
+    integrationTarget: sourceFixture.integrationTarget,
+    plannedAttempt: { ...sourceFixture.plannedAttempt, taskRevision: taskSpecification.fingerprint },
+    runId: sourceFixture.runId,
+    targetHeadSha: sourceFixture.qualifiedCandidate.run.session.expectedTargetHead,
+    taskSpecification,
+    trackerTarget: sourceFixture.target
+  })
+  const promoted = makePromotedIntegrationHistory({
+    candidateCommit: sourceFixture.qualifiedCandidate.candidateCommit,
+    candidateText: sourceFixture.qualifiedCandidate.candidateText,
+    originalClaim: accepted.activeClaim,
+    records: accepted.records,
+    session: integratorCorrelationFor(accepted)
+  })
+  return { accepted, promoted }
+}
+
+const defaultHistory = makeHistory(sourceFixture.qualifiedCandidate.run.session.acceptedResult)
+const accepted = defaultHistory.accepted
+const promoted = defaultHistory.promoted
+const fixture = {
+  ...sourceFixture,
+  claim: promoted.claim,
+  completionRequest: promoted.completionRequest,
+  plannedAttempt: accepted.plannedAttempt,
+  promotionCorrelation: promoted.promotionCorrelation,
+  promotionSuccess: promoted.promotionSuccess,
+  qualifiedCandidate: promoted.qualifiedCandidate
+}
 
 const recordOf = (position: number, key: string, event: JournalRecord["event"]): JournalRecord => ({
   event,
@@ -111,35 +155,171 @@ const recordOf = (position: number, key: string, event: JournalRecord["event"]):
   runId: fixture.runId
 })
 
-const promotionRecord = recordOf(
-  1,
-  targetPromotionObservedSuccessRecordKey(fixture.promotionCorrelation.requestId),
-  fixture.promotionSuccess
+const appendEvent = (records: ReadonlyArray<JournalRecord>, event: JournalRecord["event"]): JournalRecord =>
+  recordOf(records.length + 1, describeJournalEvent(event).expectedKey, event)
+
+const appendEvents = (
+  records: ReadonlyArray<JournalRecord>,
+  events: ReadonlyArray<JournalRecord["event"]>
+): ReadonlyArray<JournalRecord> =>
+  events.reduce((current, event) => [...current, appendEvent(current, event)], [...records])
+
+const acceptedRecords = () => [...accepted.records]
+
+const promotionRecords = () => [...promoted.promotedRecords]
+
+const replacedPrefix = () => [...promoted.replacedRecords]
+
+const replacedRecords = () => [...promoted.replacedRecords, ...focusedSuccessRecords]
+
+const journalRecordsRef = (records: ReadonlyArray<JournalRecord>) =>
+  Ref.make<ReadonlyArray<JournalRecord>>([...records])
+
+const focusedSuccessPurpose = CompletionTaskFocusedReadPurpose.cases.Confirmation.make({
+  attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+  confirmationOrdinal: CompletionTaskConfirmationReadOrdinal.make(1)
+})
+const focusedSuccessOperation = makeCompletionTaskFactsObservationOperation(
+  fixture.completionRequest,
+  fixture.target,
+  focusedSuccessPurpose
 )
-
-const replacementRecord = (position = 2, operationId = replacementOperationFor(fixture.claim)) =>
-  recordOf(
-    position,
-    replacedKey(operationId),
-    CompletionClaimReplacedEvent.make({ claim: fixture.claim, operationId, version: workflowJournalEventVersion })
-  )
-
-const focusedSuccessObservation = { ...fixture.successObservation, observedAt: JournalPosition.make(5) }
+const focusedSuccessFacts = FocusedTaskCompletionFacts.make({
+  currentClaim: fixture.claim,
+  lifecycle: "CompletedSuccessfully",
+  operationId: focusedSuccessOperation.operationId,
+  target: fixture.target,
+  targetMembership: "Member",
+  taskId: fixture.taskId,
+  taskRevision: fixture.plannedAttempt.taskRevision,
+  trackerRevision: fixture.trackerRevision,
+  unfinishedPrerequisiteTaskIds: []
+})
+const focusedSuccessFactsReadIntentEvent = taskTrackerReadIntent(focusedSuccessOperation)
+const focusedSuccessFactsEvent = taskTrackerFactsObservedEvent(
+  focusedSuccessOperation.operationId,
+  makeFocusedTaskCompletionFactsObserved(focusedSuccessOperation, focusedSuccessFacts)
+)
+const focusedSuccessObservation = {
+  ...fixture.successObservation,
+  claim: fixture.claim,
+  observedAt: JournalPosition.make(promoted.replacedRecords.length + 3),
+  operationId: focusedSuccessOperation.operationId,
+  taskRevision: fixture.plannedAttempt.taskRevision
+}
 const focusedSuccessRecords = [
   recordOf(
-    3,
+    promoted.replacedRecords.length + 1,
     describeJournalEvent(
       CompletionTaskIntendedEvent.make({ request: fixture.completionRequest, version: workflowJournalEventVersion })
     ).expectedKey,
     CompletionTaskIntendedEvent.make({ request: fixture.completionRequest, version: workflowJournalEventVersion })
   ),
   recordOf(
-    4,
-    describeJournalEvent(fixture.focusedSuccessFactsReadIntentEvent).expectedKey,
-    fixture.focusedSuccessFactsReadIntentEvent
+    promoted.replacedRecords.length + 2,
+    describeJournalEvent(focusedSuccessFactsReadIntentEvent).expectedKey,
+    focusedSuccessFactsReadIntentEvent
   ),
-  recordOf(5, describeJournalEvent(fixture.focusedSuccessFactsEvent).expectedKey, fixture.focusedSuccessFactsEvent)
+  recordOf(
+    promoted.replacedRecords.length + 3,
+    describeJournalEvent(focusedSuccessFactsEvent).expectedKey,
+    focusedSuccessFactsEvent
+  )
 ] as const
+
+const appendDeletionOutcomePrefix = (
+  records: ReadonlyArray<JournalRecord>,
+  deletionOperationId: OperationId,
+  replacementOperationId: OperationId,
+  successObservation: FocusedCompletedTaskObservation
+): ReadonlyArray<JournalRecord> => {
+  const request = { claim: fixture.claim, operationId: deletionOperationId, successObservation }
+  const releaseOperation = makeTaskClaimReleaseOperation({
+    authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
+    predecessorOperationIds: [fixture.claim.originalClaim.operationId, successObservation.operationId],
+    release: completionOriginalTaskClaimReleaseFor(fixture.claim)
+  })
+  const one = CompletionClaimRequestOrdinal.make(1)
+  const two = CompletionClaimRequestOrdinal.make(2)
+  const readOne = CompletionClaimCleanupReadOrdinal.make(1)
+  const beforeOriginalRelease = CompletionClaimDeletionReadPurpose.cases.BeforeOriginalClaimRelease.make({
+    readOrdinal: readOne
+  })
+  const beforeDeleteOne = CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
+    attemptOrdinal: one,
+    readOrdinal: readOne
+  })
+  const confirmReleasedOne = CompletionClaimDeletionReadPurpose.cases.ConfirmOriginalClaimReleased.make({
+    attemptOrdinal: one,
+    readOrdinal: readOne
+  })
+  const beforeDeleteTwo = CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
+    attemptOrdinal: two,
+    readOrdinal: readOne
+  })
+  const confirmAbsentTwo = CompletionClaimDeletionReadPurpose.cases.ConfirmNoActiveClaimAfterMarkerAbsent.make({
+    attemptOrdinal: two,
+    readOrdinal: readOne
+  })
+  return appendEvents(records, [
+    CompletionClaimDeletionIntendedEvent.make({
+      claim: fixture.claim,
+      operationId: deletionOperationId,
+      successObservation,
+      version: workflowJournalEventVersion
+    }),
+    CompletionClaimDeletionReadObservedEvent.make({
+      observation: fixture.claim,
+      purpose: beforeOriginalRelease,
+      replacementOperationId,
+      request,
+      version: workflowJournalEventVersion
+    }),
+    TaskClaimReleaseIntendedEvent.make({ operation: releaseOperation, version: workflowJournalEventVersion }),
+    TaskClaimReleasedEvent.make({ release: releaseOperation.release, version: workflowJournalEventVersion }),
+    CompletionClaimDeletionReadObservedEvent.make({
+      observation: fixture.claim,
+      purpose: beforeDeleteOne,
+      replacementOperationId,
+      request,
+      version: workflowJournalEventVersion
+    }),
+    CompletionClaimDeletionReadObservedEvent.make({
+      observation: { _tag: "UnclaimedTask", taskId: fixture.taskId },
+      purpose: confirmReleasedOne,
+      replacementOperationId,
+      request,
+      version: workflowJournalEventVersion
+    }),
+    CompletionClaimDeletionAttemptIntendedEvent.make({
+      attemptOrdinal: one,
+      claim: fixture.claim,
+      operationId: deletionOperationId,
+      successObservation,
+      version: workflowJournalEventVersion
+    }),
+    CompletionClaimDeletionReadObservedEvent.make({
+      observation: CompletionClaimMarkerAbsent.make({ taskId: fixture.taskId }),
+      purpose: beforeDeleteTwo,
+      replacementOperationId,
+      request,
+      version: workflowJournalEventVersion
+    }),
+    CompletionClaimDeletionReadObservedEvent.make({
+      observation: { _tag: "UnclaimedTask", taskId: fixture.taskId },
+      purpose: confirmAbsentTwo,
+      replacementOperationId,
+      request,
+      version: workflowJournalEventVersion
+    }),
+    CompletionClaimDeletedEvent.make({
+      claim: fixture.claim,
+      operationId: deletionOperationId,
+      successObservation,
+      version: workflowJournalEventVersion
+    })
+  ])
+}
 
 it("continues completion-claim cleanup only across adjacent exact calls", () => {
   const request = completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation)
@@ -516,10 +696,28 @@ const makeBoundary = (input: {
     })
   })()
 
-const runWith = <A, E>(effect: Effect.Effect<A, E, InRunJournal>, records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
-  effect.pipe(Effect.provide(appendJournalLayer(records)))
+const runWith = <A, E>(
+  effect: Effect.Effect<A, E, InRunJournal | AcceptedJournalReader>,
+  records: Ref.Ref<ReadonlyArray<JournalRecord>>
+) =>
+  Effect.gen(function* () {
+    const initial = yield* Ref.get(records)
+    return yield* effect.pipe(
+      Effect.ensuring(
+        Effect.gen(function* () {
+          const journal = yield* Journal
+          const state = yield* journal.state.get
+          yield* Ref.set(records, exportWorkflowHistoryRecords(state.reconstructed.workflowHistory))
+        })
+      ),
+      Effect.provide(liveJournalTestLayer({ records: initial, runId: fixture.runId, target: fixture.target }))
+    )
+  })
 
 const tags = (records: ReadonlyArray<JournalRecord>) => records.map(({ event }) => event._tag)
+
+const tagsAfterPromotionSuccess = (records: ReadonlyArray<JournalRecord>) =>
+  tags(records.slice(Number(promoted.promotionRecord.position) - 1))
 
 const originalClaimCleanupMethods = (initiallyActive = true) => {
   let active = initiallyActive
@@ -537,7 +735,7 @@ const originalClaimCleanupMethods = (initiallyActive = true) => {
 it.effect("requires exact promotion success and Integrator run before replacing the active claim", () =>
   Effect.gen(function* () {
     expect(fixture.promotionCorrelation.qualifiedCandidate.run.ordinal).toBe(IntegratorRunOrdinal.make(1))
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const records = yield* journalRecordsRef(acceptedRecords())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -550,7 +748,7 @@ it.effect("requires exact promotion success and Integrator run before replacing 
     )
     expect(failure).toBeInstanceOf(CompletionClaimPromotionRequired)
     expect(yield* Ref.get(replacementCalls)).toBe(0)
-    expect(yield* Ref.get(records)).toEqual([])
+    expect(yield* Ref.get(records)).toEqual(accepted.records)
 
     const foreignCandidate = IntegratorRunQualifiedCandidate.make({
       ...fixture.qualifiedCandidate,
@@ -560,25 +758,28 @@ it.effect("requires exact promotion success and Integrator run before replacing 
       ...fixture.promotionSuccess,
       correlation: targetPromotionCorrelationFor(foreignCandidate)
     })
-    const foreignRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      recordOf(1, targetPromotionObservedSuccessRecordKey(foreignPromotion.correlation.requestId), foreignPromotion)
-    ])
-    const foreignFailure = yield* runWith(
-      runCompletionClaimReplacementProtocol(
-        makeBoundary({ initial: [fixture.activeClaim], replacementCalls, deletionCalls, readCalls }),
-        { claim: fixture.claim, operationId: replacementOperationFor(fixture.claim) }
-      ).pipe(Effect.flip),
-      foreignRecords
+    const foreignPromotionCorrelation = foreignPromotion.correlation
+    const foreignRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>(
+      appendEvents(acceptedRecords(), [foreignPromotion])
     )
-    expect(foreignFailure).toBeInstanceOf(CompletionClaimPromotionRequired)
+    const foreignReduction = reduceWorkflowJournalHistory(fixture.runId, yield* Ref.get(foreignRecords))
+    expect(foreignReduction._tag).toBe("InvalidWorkflowJournalHistory")
+    if (foreignReduction._tag !== "InvalidWorkflowJournalHistory") return
+    expect(foreignReduction.issues).toEqual([
+      expect.objectContaining({
+        detail: `target promotion terminal has no exact latest unresolved attempt for request ${foreignPromotionCorrelation.requestId}`,
+        position: JournalPosition.make(accepted.records.length + 1),
+        runId: fixture.runId
+      })
+    ])
     expect(yield* Ref.get(replacementCalls)).toBe(0)
-    expect(yield* Ref.get(foreignRecords)).toHaveLength(1)
+    expect(yield* Ref.get(foreignRecords)).toHaveLength(accepted.records.length + 1)
   })
 )
 
 it.effect("stops immediately after definite replacement or deletion rejection", () =>
   Effect.gen(function* () {
-    const replacementRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord])
+    const replacementRecords = yield* journalRecordsRef(promotionRecords())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -600,11 +801,7 @@ it.effect("stops immediately after definite replacement or deletion rejection", 
     ).toBe("IntegrationFinality.CompletionClaimReplacementFailure")
     expect(yield* Ref.get(replacementCalls)).toBe(1)
 
-    const deletionRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      promotionRecord,
-      replacementRecord(),
-      ...focusedSuccessRecords
-    ])
+    const deletionRecords = yield* journalRecordsRef(replacedRecords())
     const deletionBoundary = makeBoundary({
       deletion: ["DefinitelyNotApplied"],
       deletionCalls,
@@ -630,7 +827,7 @@ it.effect(
   "completion claim replacement and deletion throttles each stop after one mutation and restart reads first",
   () =>
     Effect.gen(function* () {
-      const replacementRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord])
+      const replacementRecords = yield* journalRecordsRef(promotionRecords())
       const replacementCalls = yield* Ref.make(0)
       const deletionCalls = yield* Ref.make(0)
       const readCalls = yield* Ref.make(0)
@@ -664,7 +861,7 @@ it.effect(
       expect(yield* Ref.get(replacementChronology)).toEqual(["read", "replace"])
 
       const afterReplacementThrottle = yield* Ref.get(replacementRecords)
-      expect(afterReplacementThrottle.map(({ event }) => event._tag)).toEqual([
+      expect(tagsAfterPromotionSuccess(afterReplacementThrottle)).toEqual([
         "TargetPromotionObservedSuccess",
         "CompletionClaimReplacementIntended",
         "CompletionClaimReplacementAttemptIntended"
@@ -697,11 +894,7 @@ it.effect(
       expect(yield* Ref.get(replacementChronology)).toEqual(["read", "replace", "read", "replace"])
       expect(yield* Ref.get(replacementCalls)).toBe(2)
 
-      const deletionRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-        promotionRecord,
-        replacementRecord(),
-        ...focusedSuccessRecords
-      ])
+      const deletionRecords = yield* journalRecordsRef(replacedRecords())
       const deletionChronology = yield* Ref.make<
         ReadonlyArray<"delete" | "read" | "readOriginal" | "releaseOriginal" | "replace">
       >([])
@@ -802,7 +995,7 @@ it.effect(
 
 it.effect("writes replacement intent first and reconciles an unknown response by a fresh claim read", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord])
+    const records = yield* journalRecordsRef(promotionRecords())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -822,7 +1015,7 @@ it.effect("writes replacement intent first and reconciles an unknown response by
     expect(completionTaskClaimEquals(result.claim, fixture.claim)).toBe(true)
     expect(yield* Ref.get(replacementCalls)).toBe(1)
     expect(yield* Ref.get(readCalls)).toBe(2)
-    expect(tags(yield* Ref.get(records))).toEqual([
+    expect(tagsAfterPromotionSuccess(yield* Ref.get(records))).toEqual([
       "TargetPromotionObservedSuccess",
       "CompletionClaimReplacementIntended",
       "CompletionClaimReplacementAttemptIntended",
@@ -833,7 +1026,7 @@ it.effect("writes replacement intent first and reconciles an unknown response by
 
 it.effect("fails closed on a foreign claim without attempting replacement", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord])
+    const records = yield* journalRecordsRef(promotionRecords())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -847,13 +1040,13 @@ it.effect("fails closed on a foreign claim without attempting replacement", () =
     )
     expect(failure).toBeInstanceOf(CompletionClaimOwnershipConflict)
     expect(yield* Ref.get(replacementCalls)).toBe(0)
-    expect(tags(yield* Ref.get(records))).toEqual([
+    expect(tagsAfterPromotionSuccess(yield* Ref.get(records))).toEqual([
       "TargetPromotionObservedSuccess",
       "CompletionClaimReplacementIntended"
     ])
 
     const foreignCompletion = CompletionTaskClaim.make({ ...fixture.claim, originalClaim: foreign })
-    const completionRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord])
+    const completionRecords = yield* journalRecordsRef(promotionRecords())
     expect(
       yield* runWith(
         runCompletionClaimReplacementProtocol(
@@ -881,7 +1074,7 @@ it.effect("rejects a foreign completion claim on ordinary and exhausted replacem
       return CompletionClaimBoundary.of({ ...base, readTaskClaim: () => Effect.succeed(initial) })
     }
 
-    const ordinaryRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord])
+    const ordinaryRecords = yield* journalRecordsRef(promotionRecords())
     const ordinaryFailure = yield* runWith(
       runCompletionClaimReplacementProtocol(directCompletionBoundary(foreignCompletion), request).pipe(Effect.flip),
       ordinaryRecords
@@ -889,7 +1082,7 @@ it.effect("rejects a foreign completion claim on ordinary and exhausted replacem
     expect(ordinaryFailure).toBeInstanceOf(CompletionClaimOwnershipConflict)
     expect(yield* Ref.get(replacementCalls)).toBe(0)
 
-    const exhaustedRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord])
+    const exhaustedRecords = yield* journalRecordsRef(promotionRecords())
     yield* runWith(
       runCompletionClaimReplacementProtocol(
         makeBoundary({
@@ -914,11 +1107,7 @@ it.effect("rejects a foreign completion claim on ordinary and exhausted replacem
 
 it.effect("does not delete a different completion claim", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      promotionRecord,
-      replacementRecord(),
-      ...focusedSuccessRecords
-    ])
+    const records = yield* journalRecordsRef(replacedRecords())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -949,11 +1138,7 @@ it.effect("does not delete when the completion marker disappears or changes befo
     })
 
     for (const changedMarker of [CompletionClaimMarkerAbsent.make({ taskId: fixture.taskId }), foreignMarker]) {
-      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-        promotionRecord,
-        replacementRecord(),
-        ...focusedSuccessRecords
-      ])
+      const records = yield* journalRecordsRef(replacedRecords())
       const replacementCalls = yield* Ref.make(0)
       const deletionCalls = yield* Ref.make(0)
       const readCalls = yield* Ref.make(0)
@@ -983,9 +1168,9 @@ it.effect("maps original-claim release exhaustion, unreadable state, and rejecti
   Effect.gen(function* () {
     const request = completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation)
     const replacementOperationId = replacementOperationFor(fixture.claim)
-    const initialRecords = [promotionRecord, replacementRecord(), ...focusedSuccessRecords]
+    const initialRecords = replacedRecords()
 
-    const exhaustionRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>(initialRecords)
+    const exhaustionRecords = yield* journalRecordsRef(initialRecords)
     const exhaustionReplacementCalls = yield* Ref.make(0)
     const exhaustionDeletionCalls = yield* Ref.make(0)
     const exhaustionReadCalls = yield* Ref.make(0)
@@ -1007,7 +1192,7 @@ it.effect("maps original-claim release exhaustion, unreadable state, and rejecti
     expect(exhausted).toMatchObject({ attempts: 3, phase: "OriginalClaimRelease" })
     expect(yield* Ref.get(exhaustionDeletionCalls)).toBe(0)
 
-    const unreadableRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>(initialRecords)
+    const unreadableRecords = yield* journalRecordsRef(initialRecords)
     const unreadableDeletionCalls = yield* Ref.make(0)
     const unreadableBoundary = CompletionClaimBoundary.of({
       deleteTaskClaim: () => Ref.update(unreadableDeletionCalls, (count) => count + 1),
@@ -1025,7 +1210,7 @@ it.effect("maps original-claim release exhaustion, unreadable state, and rejecti
     expect(unreadable).toBeInstanceOf(CompletionClaimReadFailure)
     expect(yield* Ref.get(unreadableDeletionCalls)).toBe(0)
 
-    const rejectedRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>(initialRecords)
+    const rejectedRecords = yield* journalRecordsRef(initialRecords)
     const rejectedDeletionCalls = yield* Ref.make(0)
     const decodedReleaseFailure = new DecodedTaskClaimReleaseFailure({
       detail: "tracker decoded an exact typed release rejection",
@@ -1051,7 +1236,7 @@ it.effect("maps original-claim release exhaustion, unreadable state, and rejecti
 
 it.effect("bounds unresolved replacement responses at three requests", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord])
+    const records = yield* journalRecordsRef(promotionRecords())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -1070,7 +1255,7 @@ it.effect("bounds unresolved replacement responses at three requests", () =>
     )
     expect(failure).toBeInstanceOf(CompletionClaimDidNotConverge)
     expect(yield* Ref.get(replacementCalls)).toBe(3)
-    expect(tags(yield* Ref.get(records))).toEqual([
+    expect(tagsAfterPromotionSuccess(yield* Ref.get(records))).toEqual([
       "TargetPromotionObservedSuccess",
       "CompletionClaimReplacementIntended",
       "CompletionClaimReplacementAttemptIntended",
@@ -1082,7 +1267,7 @@ it.effect("bounds unresolved replacement responses at three requests", () =>
 
 it.effect("later activation discovers replacement success after three ambiguous requests without request four", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord])
+    const records = yield* journalRecordsRef(promotionRecords())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -1115,7 +1300,7 @@ it.effect("later activation discovers replacement success after three ambiguous 
 
 it.effect("fails closed when exhausted replacement reconciliation observes another claim", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord])
+    const records = yield* journalRecordsRef(promotionRecords())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -1151,7 +1336,7 @@ it.effect("fails closed when exhausted replacement reconciliation observes anoth
 
 it.effect("records replacement success on the third and final request without a fourth read", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord])
+    const records = yield* journalRecordsRef(promotionRecords())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -1179,47 +1364,32 @@ it.effect("resumes replacement from its exact durable request ordinal and ignore
   Effect.gen(function* () {
     const operationId = replacementOperationFor(fixture.claim)
     const foreignOperationId = OperationId.make("foreign-replacement-history")
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      promotionRecord,
-      recordOf(
-        2,
-        completionClaimReplacementIntentRecordKey(foreignOperationId),
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(
+      appendEvents(promotionRecords(), [
         CompletionClaimReplacementIntendedEvent.make({
           claim: fixture.claim,
           operationId: foreignOperationId,
           version: workflowJournalEventVersion
-        })
-      ),
-      recordOf(
-        3,
-        completionClaimReplacementIntentRecordKey(operationId),
+        }),
         CompletionClaimReplacementIntendedEvent.make({
           claim: fixture.claim,
           operationId,
           version: workflowJournalEventVersion
-        })
-      ),
-      recordOf(
-        5,
-        completionClaimReplacementAttemptIntentRecordKey(foreignOperationId, CompletionClaimRequestOrdinal.make(1)),
+        }),
         CompletionClaimReplacementAttemptIntendedEvent.make({
           attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
           claim: fixture.claim,
           operationId: foreignOperationId,
           version: workflowJournalEventVersion
-        })
-      ),
-      recordOf(
-        6,
-        completionClaimReplacementAttemptIntentRecordKey(operationId, CompletionClaimRequestOrdinal.make(1)),
+        }),
         CompletionClaimReplacementAttemptIntendedEvent.make({
           attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
           claim: fixture.claim,
           operationId,
           version: workflowJournalEventVersion
         })
-      )
-    ])
+      ])
+    )
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -1241,7 +1411,7 @@ it.effect("resumes replacement from its exact durable request ordinal and ignore
 
 it.effect("returns an already recorded exact replacement without touching the tracker", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord, replacementRecord()])
+    const records = yield* journalRecordsRef(replacedPrefix())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -1260,11 +1430,7 @@ it.effect("returns an already recorded exact replacement without touching the tr
 
 it.effect("deletes only the exact completion claim after actual fresh success and settles once", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      promotionRecord,
-      replacementRecord(),
-      ...focusedSuccessRecords
-    ])
+    const records = yield* journalRecordsRef(replacedRecords())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -1283,8 +1449,10 @@ it.effect("deletes only the exact completion claim after actual fresh success an
     )
     expect(result.claim).toEqual(fixture.claim)
     expect(yield* Ref.get(deletionCalls)).toBe(1)
-    expect(tags(yield* Ref.get(records))).toEqual([
+    expect(tagsAfterPromotionSuccess(yield* Ref.get(records))).toEqual([
       "TargetPromotionObservedSuccess",
+      "CompletionClaimReplacementIntended",
+      "CompletionClaimReplacementAttemptIntended",
       "CompletionClaimReplaced",
       "CompletionTaskIntended",
       "TaskTrackerReadIntentRecorded",
@@ -1342,11 +1510,7 @@ it.effect("localizes A cleanup conflicts while independent B completes its own c
       ]
     ]
     for (const observations of cases) {
-      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-        promotionRecord,
-        replacementRecord(),
-        ...focusedSuccessRecords
-      ])
+      const records = yield* journalRecordsRef(replacedRecords())
       const replacementCalls = yield* Ref.make(0)
       const deletionCalls = yield* Ref.make(0)
       const readCalls = yield* Ref.make(0)
@@ -1380,11 +1544,7 @@ it.effect("localizes A cleanup conflicts while independent B completes its own c
       })
     }
 
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      promotionRecord,
-      replacementRecord(),
-      ...focusedSuccessRecords
-    ])
+    const records = yield* journalRecordsRef(replacedRecords())
     let independentActive = true
     const boundary = CompletionClaimBoundary.of({
       deleteTaskClaim: () => Effect.die("unreadable cleanup evidence must not delete the completion marker"),
@@ -1428,11 +1588,7 @@ it.effect("localizes A cleanup conflicts while independent B completes its own c
 
 it.effect("observes a lost active-claim deletion before deleting the completion marker", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      promotionRecord,
-      replacementRecord(),
-      ...focusedSuccessRecords
-    ])
+    const records = yield* journalRecordsRef(replacedRecords())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -1481,11 +1637,7 @@ it.effect("observes a lost active-claim deletion before deleting the completion 
 
 it.effect("stops after one throttled active-claim delete and resumes from the same durable release identity", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      promotionRecord,
-      replacementRecord(),
-      ...focusedSuccessRecords
-    ])
+    const records = yield* journalRecordsRef(replacedRecords())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -1535,11 +1687,7 @@ it.effect("restart rereads a recorded active-claim release before deleting the c
   Effect.gen(function* () {
     const request = completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation)
     const prepareReleasedPrefix = Effect.gen(function* () {
-      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-        promotionRecord,
-        replacementRecord(),
-        ...focusedSuccessRecords
-      ])
+      const records = yield* journalRecordsRef(replacedRecords())
       const replacementCalls = yield* Ref.make(0)
       const deletionCalls = yield* Ref.make(0)
       const readCalls = yield* Ref.make(0)
@@ -1662,24 +1810,7 @@ it.effect("restart rereads a recorded active-claim release before deleting the c
 it.effect("keeps an acknowledged completion-claim deletion unobserved when Exit prevents its exact reread", () =>
   Effect.gen(function* () {
     const replacementOperationId = replacementOperationFor(fixture.claim)
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      recordOf(
-        1,
-        targetPromotionObservedSuccessRecordKey(fixture.promotionCorrelation.requestId),
-        fixture.promotionSuccess
-      ),
-      recordOf(
-        1,
-        completionClaimReplacementIntentRecordKey(replacementOperationId),
-        CompletionClaimReplacementIntendedEvent.make({
-          claim: fixture.claim,
-          operationId: replacementOperationId,
-          version: workflowJournalEventVersion
-        })
-      ),
-      replacementRecord(),
-      ...focusedSuccessRecords
-    ])
+    const records = yield* journalRecordsRef(replacedRecords())
     const request = completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation)
     const lifecycle = yield* makeApplicationExitLifecycle()
     const owner = yield* lifecycle.admission.acquireForwardOwner("InterruptibleBoundary")
@@ -1790,11 +1921,7 @@ it.effect("keeps an acknowledged completion-claim deletion unobserved when Exit 
 
 it.effect("preserves an interrupted completion-claim deletion behind its exact attempt intent", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      promotionRecord,
-      replacementRecord(),
-      ...focusedSuccessRecords
-    ])
+    const records = yield* journalRecordsRef(replacedRecords())
     const request = completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation)
     const replacementOperationId = replacementOperationFor(fixture.claim)
     const lifecycle = yield* makeApplicationExitLifecycle()
@@ -1840,24 +1967,7 @@ it.effect("preserves an interrupted completion-claim deletion behind its exact a
 it.effect("recomposes and reopens an interrupted completion cleanup through authored and recorded cassettes", () =>
   Effect.gen(function* () {
     const replacementOperationId = replacementOperationFor(fixture.claim)
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      recordOf(
-        1,
-        targetPromotionObservedSuccessRecordKey(fixture.promotionCorrelation.requestId),
-        fixture.promotionSuccess
-      ),
-      recordOf(
-        1,
-        completionClaimReplacementIntentRecordKey(replacementOperationId),
-        CompletionClaimReplacementIntendedEvent.make({
-          claim: fixture.claim,
-          operationId: replacementOperationId,
-          version: workflowJournalEventVersion
-        })
-      ),
-      replacementRecord(),
-      ...focusedSuccessRecords
-    ])
+    const records = yield* journalRecordsRef(replacedRecords())
     const request = completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation)
     const authored = yield* Ref.make<ReadonlyArray<string>>([])
     const record = (item: string) => Ref.update(authored, (items) => [...items, item])
@@ -1961,11 +2071,7 @@ it.effect("recomposes and reopens an interrupted completion cleanup through auth
 
 it.effect("starts no completion-claim deletion after Exit closes between its read and delete", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      promotionRecord,
-      replacementRecord(),
-      ...focusedSuccessRecords
-    ])
+    const records = yield* journalRecordsRef(replacedRecords())
     const request = completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation)
     const replacementOperationId = replacementOperationFor(fixture.claim)
     const lifecycle = yield* makeApplicationExitLifecycle()
@@ -2034,37 +2140,26 @@ it.effect("starts no completion-claim deletion after Exit closes between its rea
 it.effect("ignores another deletion operation while settling the exact completion claim", () =>
   Effect.gen(function* () {
     const foreignOperationId = OperationId.make("foreign-deletion-history")
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      promotionRecord,
-      replacementRecord(),
-      ...focusedSuccessRecords,
-      recordOf(
-        5,
-        completionClaimDeletionIntentRecordKey(foreignOperationId),
-        CompletionClaimDeletionIntendedEvent.make({
-          claim: fixture.claim,
-          operationId: foreignOperationId,
-          successObservation: focusedSuccessObservation,
-          version: workflowJournalEventVersion
-        })
-      ),
-      recordOf(
-        6,
-        completionClaimDeletedRecordKey(foreignOperationId),
-        CompletionClaimDeletedEvent.make({
-          claim: fixture.claim,
-          operationId: foreignOperationId,
-          successObservation: focusedSuccessObservation,
-          version: workflowJournalEventVersion
-        })
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(
+      appendDeletionOutcomePrefix(
+        replacedRecords(),
+        foreignOperationId,
+        replacementOperationFor(fixture.claim),
+        focusedSuccessObservation
       )
-    ])
+    )
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
     yield* runWith(
       runCompletionClaimDeletionProtocol(
-        makeBoundary({ initial: [fixture.claim], replacementCalls, deletionCalls, readCalls }),
+        makeBoundary({
+          initial: [fixture.claim],
+          originalClaimPresent: false,
+          replacementCalls,
+          deletionCalls,
+          readCalls
+        }),
         completionClaimDeletionRequestFor(fixture.claim, focusedSuccessObservation),
         replacementOperationFor(fixture.claim)
       ),
@@ -2077,31 +2172,14 @@ it.effect("ignores another deletion operation while settling the exact completio
 it.effect("adds the missing settlement when restart finds an exact prior deletion outcome", () =>
   Effect.gen(function* () {
     const deletionOperationId = deletionOperationFor(fixture.claim)
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      promotionRecord,
-      replacementRecord(),
-      ...focusedSuccessRecords,
-      recordOf(
-        4,
-        completionClaimDeletionIntentRecordKey(deletionOperationId),
-        CompletionClaimDeletionIntendedEvent.make({
-          claim: fixture.claim,
-          operationId: deletionOperationId,
-          successObservation: focusedSuccessObservation,
-          version: workflowJournalEventVersion
-        })
-      ),
-      recordOf(
-        5,
-        completionClaimDeletedRecordKey(deletionOperationId),
-        CompletionClaimDeletedEvent.make({
-          claim: fixture.claim,
-          operationId: deletionOperationId,
-          successObservation: focusedSuccessObservation,
-          version: workflowJournalEventVersion
-        })
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(
+      appendDeletionOutcomePrefix(
+        replacedRecords(),
+        deletionOperationId,
+        replacementOperationFor(fixture.claim),
+        focusedSuccessObservation
       )
-    ])
+    )
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -2120,7 +2198,7 @@ it.effect("adds the missing settlement when restart finds an exact prior deletio
 
 it.effect("rejects a forged success proof before deletion intent", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([promotionRecord, replacementRecord()])
+    const records = yield* journalRecordsRef(replacedPrefix())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -2137,18 +2215,19 @@ it.effect("rejects a forged success proof before deletion intent", () =>
       records
     )
     expect(failure).toBeInstanceOf(FocusedTaskCompletionSuccessRequired)
-    expect(tags(yield* Ref.get(records))).toEqual(["TargetPromotionObservedSuccess", "CompletionClaimReplaced"])
+    expect(tagsAfterPromotionSuccess(yield* Ref.get(records))).toEqual([
+      "TargetPromotionObservedSuccess",
+      "CompletionClaimReplacementIntended",
+      "CompletionClaimReplacementAttemptIntended",
+      "CompletionClaimReplaced"
+    ])
     expect(yield* Ref.get(deletionCalls)).toBe(0)
   })
 )
 
 it.effect("does not reopen success when deletion response is unknown but already applied", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      promotionRecord,
-      replacementRecord(),
-      ...focusedSuccessRecords
-    ])
+    const records = yield* journalRecordsRef(replacedRecords())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -2188,11 +2267,7 @@ it.effect("refuses settlement when an active claim appears after the completion 
       [foreignActive, CompletionClaimOwnershipConflict],
       ["Unreadable", CompletionClaimReadFailure]
     ] as const) {
-      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-        promotionRecord,
-        replacementRecord(),
-        ...focusedSuccessRecords
-      ])
+      const records = yield* journalRecordsRef(replacedRecords())
       let active: typeof fixture.activeClaim | undefined = fixture.activeClaim
       let markerPresent = true
       const boundary = CompletionClaimBoundary.of({
@@ -2237,11 +2312,7 @@ it.effect("refuses settlement when an active claim appears after the completion 
 
 it.effect("bounds deletion retries at three and preserves the successful observation on non-convergence", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      promotionRecord,
-      replacementRecord(),
-      ...focusedSuccessRecords
-    ])
+    const records = yield* journalRecordsRef(replacedRecords())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -2275,11 +2346,7 @@ it.effect("bounds deletion retries at three and preserves the successful observa
 
 it.effect("later activation discovers deletion success after three ambiguous requests without request four", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      promotionRecord,
-      replacementRecord(),
-      ...focusedSuccessRecords
-    ])
+    const records = yield* journalRecordsRef(replacedRecords())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -2314,11 +2381,7 @@ it.effect("later activation discovers deletion success after three ambiguous req
 
 it.effect("fails closed after exhausted deletion when marker absence is followed by an active record", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      promotionRecord,
-      replacementRecord(),
-      ...focusedSuccessRecords
-    ])
+    const records = yield* journalRecordsRef(replacedRecords())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -2377,11 +2440,7 @@ it.effect("fails closed after exhausted deletion when marker absence is followed
 
 it.effect("fails closed when exhausted deletion reconciliation observes another completion claim", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      promotionRecord,
-      replacementRecord(),
-      ...focusedSuccessRecords
-    ])
+    const records = yield* journalRecordsRef(replacedRecords())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
@@ -2419,11 +2478,7 @@ it.effect("fails closed when exhausted deletion reconciliation observes another 
 
 it.effect("records deletion success on the third and final request without a fourth read", () =>
   Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      promotionRecord,
-      replacementRecord(),
-      ...focusedSuccessRecords
-    ])
+    const records = yield* journalRecordsRef(replacedRecords())
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
