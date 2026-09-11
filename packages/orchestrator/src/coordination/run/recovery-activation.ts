@@ -134,11 +134,14 @@ import {
   journalGraphSnapshotForObservation,
   journalRetainedExecutorResponsibilitySubjects,
   journalRecordsForAttempt,
+  journalRecordsForAttemptKind,
   journalRecordsForIntegratorSession,
   journalRecordsForOperationId,
   journalRecordsForPromotionRequest,
   journalRecordsForTask,
+  journalRecordsForTaskKind,
   journalRecordsOfKind,
+  type JournalRecordEvidence,
   type JournalHistorySource
 } from "../../workflow-journal/record-evidence.js"
 import { journalRecordAt } from "../../workflow-journal/record-sequence.js"
@@ -147,7 +150,7 @@ export { deriveIntegrationFrontier } from "../frontier/integration-frontier.js"
 const finalRecordOffset = -1
 
 /** Live reconstruction retains the accepted indexed prefix; raw arrays exist only in isolated pure fixtures. */
-const journalHistoryOf = (runState: Pick<ReconstructedRunState, "workflowHistory">): JournalHistorySource =>
+const journalHistoryOf = (runState: Pick<ReconstructedRunState, "workflowHistory">): JournalRecordEvidence =>
   runState.workflowHistory.evidence
 
 const journalRecordsForPlannedAttempt = (
@@ -1221,35 +1224,41 @@ export const restartReplacementDisposition = (
 }
 
 const suspensionIsOwedAfterBoundary = (
-  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  source: JournalRecordEvidence,
   plannedAttempt: PlannedTaskAttempt,
   beganAt: JournalPosition,
   boundaryPosition: JournalPosition
 ): boolean => {
   if (boundaryPosition <= beganAt) return false
-  const latestReportBeforeBoundary = records.findLast(
-    ({ event, position }) => position < boundaryPosition && isExecutorReportFor(event, plannedAttempt)
-  )?.event
+  let latestReportBeforeBoundary: JournalRecord["event"] | undefined
+  let settledAfterBoundary = false
+  for (const { event, position } of journalRecordsForAttemptKind(
+    source,
+    plannedAttempt.attemptId,
+    "PlannedAttemptExecutorWorkReported"
+  )) {
+    if (!isExecutorReportFor(event, plannedAttempt)) continue
+    if (position < boundaryPosition) latestReportBeforeBoundary = event
+    if (position > boundaryPosition && isSuspensionSettlementFor(event, plannedAttempt)) settledAfterBoundary = true
+  }
   const wasExecutingOrCrossingBeginBoundary =
     latestReportBeforeBoundary === undefined ||
     (latestReportBeforeBoundary._tag === "PlannedAttemptExecutorWorkReported" &&
       latestReportBeforeBoundary.report._tag === "ExecutorWorkExecuting")
-  const settledAfterBoundary = records.some(
-    ({ event, position }) => position > boundaryPosition && isSuspensionSettlementFor(event, plannedAttempt)
-  )
   return wasExecutingOrCrossingBeginBoundary && !settledAfterBoundary
 }
 
 const suspensionWasOwedAfterPause = (
-  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  source: JournalRecordEvidence,
   plannedAttempt: PlannedTaskAttempt,
   beganAt: JournalPosition,
   isApplicablePause: (event: JournalRecord["event"]) => boolean
-): boolean =>
-  records.some(
-    ({ event, position }) =>
-      isApplicablePause(event) && suspensionIsOwedAfterBoundary(records, plannedAttempt, beganAt, position)
-  )
+): boolean => {
+  for (const { event, position } of journalRecordsOfKind(source, "ControlDirectionApplied")) {
+    if (isApplicablePause(event) && suspensionIsOwedAfterBoundary(source, plannedAttempt, beganAt, position)) return true
+  }
+  return false
+}
 
 const taskPauseCoversAttempt = (
   event: JournalRecord["event"],
@@ -1281,72 +1290,24 @@ const isGraphObservationRecord = (
   (record.event.observation._tag === "CompleteTaskTrackerFacts" ||
     record.event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
 
-const reconstructedGraphsByHistory = new WeakMap<
-  ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
-  Map<JournalPosition, TaskDagSnapshot | undefined>
->()
-
-type PauseCoverageHistoryIndex = {
-  readonly graphObservations: ReadonlyArray<GraphObservationRecord>
-  readonly taskUnpausePositions: Map<JournalPosition, JournalPosition | undefined>
-}
-
-const pauseCoverageHistoryIndexes = new WeakMap<
-  ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
-  PauseCoverageHistoryIndex
->()
-
-const pauseCoverageHistoryIndexFor = (
-  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>
-): PauseCoverageHistoryIndex => {
-  const cached = pauseCoverageHistoryIndexes.get(records)
-  if (cached !== undefined) return cached
-  const index = {
-    graphObservations: records.filter(isGraphObservationRecord),
-    taskUnpausePositions: new Map<JournalPosition, JournalPosition | undefined>()
-  }
-  pauseCoverageHistoryIndexes.set(records, index)
-  return index
-}
-
 const taskUnpausePositionFor = (
-  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
-  index: PauseCoverageHistoryIndex,
+  source: JournalRecordEvidence,
   pause: TaskPauseEvent,
   pausePosition: JournalPosition
 ): JournalPosition | undefined => {
-  if (index.taskUnpausePositions.has(pausePosition)) return index.taskUnpausePositions.get(pausePosition)
-  const unpausePosition = records.find(
-    ({ event, position }) => position > pausePosition && isMatchingTaskUnpause(event, pause)
-  )?.position
-  // eslint-disable-next-line functional/immutable-data -- This process-local index is intentionally populated lazily.
-  index.taskUnpausePositions.set(pausePosition, unpausePosition)
-  return unpausePosition
+  for (const { event, position } of journalRecordsOfKind(source, "ControlDirectionApplied")) {
+    if (position > pausePosition && isMatchingTaskUnpause(event, pause)) return position
+  }
+  return undefined
 }
 
 const graphReconstructedAt = (
-  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  source: JournalRecordEvidence,
   graphObservation: GraphObservationRecord
-): TaskDagSnapshot | undefined => {
-  const cachedByPosition = reconstructedGraphsByHistory.get(records)
-  if (cachedByPosition?.has(graphObservation.position) === true) {
-    return cachedByPosition.get(graphObservation.position)
-  }
-  const graph = Option.getOrUndefined(
-    reconstructedTaskGraphFromEvents(
-      records.filter(({ position }) => position <= graphObservation.position).map(({ event }) => event),
-      graphObservation.event.observation.target
-    )
-  )
-  const cache = cachedByPosition ?? new Map<JournalPosition, TaskDagSnapshot | undefined>()
-  // eslint-disable-next-line functional/immutable-data -- This process-local index is intentionally populated lazily.
-  cache.set(graphObservation.position, graph)
-  reconstructedGraphsByHistory.set(records, cache)
-  return graph
-}
+): TaskDagSnapshot | undefined => Option.getOrUndefined(journalGraphSnapshotForObservation(source, graphObservation.position))
 
 const taskPauseCoverageBoundaries = (
-  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  source: JournalRecordEvidence,
   pause: TaskPauseEvent,
   pausePosition: JournalPosition,
   plannedAttempt: PlannedTaskAttempt,
@@ -1354,22 +1315,25 @@ const taskPauseCoverageBoundaries = (
   immutableRunTarget?: TrackerTarget
 ): ReadonlyArray<JournalPosition> => {
   if (pause.subject.taskId === plannedAttempt.taskId) return [pausePosition]
-  const historyIndex = pauseCoverageHistoryIndexFor(records)
-  const unpausePosition = taskUnpausePositionFor(records, historyIndex, pause, pausePosition)
-  const graphObservations = historyIndex.graphObservations.filter(
-    ({ event, position }) =>
-      (immutableRunTarget === undefined ||
-        taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(immutableRunTarget)) &&
-      (position < pausePosition ||
-        (position > pausePosition && (unpausePosition === undefined || position < unpausePosition)))
+  const unpausePosition = taskUnpausePositionFor(source, pause, pausePosition)
+  const graphObservations = Array.from(
+    journalRecordsForTaskKind(source, plannedAttempt.taskId, "TaskTrackerFactsObserved")
   )
+    .filter(isGraphObservationRecord)
+    .filter(
+      ({ event, position }) =>
+        (immutableRunTarget === undefined ||
+          taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(immutableRunTarget)) &&
+        (position < pausePosition ||
+          (position > pausePosition && (unpausePosition === undefined || position < unpausePosition)))
+    )
   const graphBeforePause = graphObservations.findLast(({ position }) => position < pausePosition)
   const graphsWhilePaused = graphObservations.filter(({ position }) => position > pausePosition)
   const observedGraphs = [
     ...(graphBeforePause === undefined ? [] : [{ boundary: pausePosition, observation: graphBeforePause }]),
     ...graphsWhilePaused.map((observation) => ({ boundary: observation.position, observation }))
   ].flatMap(({ boundary, observation }) => {
-    const graph = graphReconstructedAt(records, observation)
+    const graph = graphReconstructedAt(source, observation)
     return graph === undefined ? [] : [{ boundary, graph }]
   })
   if (observedGraphs.length === 0) {
@@ -1388,19 +1352,24 @@ const taskPauseCoverageBoundaries = (
 
 /** A covered running attempt still owes the exact suspension requested by an applied task Pause. */
 export const taskPauseSuspensionIsOwed = (
-  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  source: JournalRecordEvidence,
   plannedAttempt: PlannedTaskAttempt,
   beganAt: JournalPosition,
   currentGraph: TaskDagSnapshot | undefined,
   immutableRunTarget?: TrackerTarget
-): boolean =>
-  records.some(
-    ({ event, position }) =>
+): boolean => {
+  for (const { event, position } of journalRecordsOfKind(source, "ControlDirectionApplied")) {
+    if (
       isTaskPauseEvent(event) &&
-      taskPauseCoverageBoundaries(records, event, position, plannedAttempt, currentGraph, immutableRunTarget).some(
-        (boundary) => suspensionIsOwedAfterBoundary(records, plannedAttempt, beganAt, boundary)
+      taskPauseCoverageBoundaries(source, event, position, plannedAttempt, currentGraph, immutableRunTarget).some(
+        (boundary) => suspensionIsOwedAfterBoundary(source, plannedAttempt, beganAt, boundary)
       )
-  )
+    ) {
+      return true
+    }
+  }
+  return false
+}
 
 const reportSettlesSuspensionFor = (
   report: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorWorkReported" }>["report"],
@@ -1594,7 +1563,7 @@ export const deriveJournalResponsibilityFacts = (
       responsibility._tag === "TaskClaimResponsibility"
         ? undefined
         : currentTaskClaimAuthority(
-            records,
+            source,
             responsibility.taskId,
             expectedClaim,
             freshnessBaselineForTask(responsibility.taskId),
@@ -1645,13 +1614,13 @@ export const deriveJournalResponsibilityFacts = (
      * crossed its boundary; only a correlated executor report settles it.
      */
     const runPauseSuspensionOwed = suspensionWasOwedAfterPause(
-      records,
+      source,
       responsibility.plannedAttempt,
       responsibility.beganAt,
       isRunPauseEvent
     )
     const taskPauseSuspensionOwed = taskPauseSuspensionIsOwed(
-      records,
+      source,
       responsibility.plannedAttempt,
       responsibility.beganAt,
       attemptTaskGraph,
@@ -2002,7 +1971,7 @@ export const deriveJournalResponsibilityFacts = (
     const facts = { _tag: "PlannedAttemptExecutorFreshFacts" as const, disposition, responsibility }
     if (disposition._tag !== "Ready" || disposition.acceptedProgress._tag !== "ExecutorReportAccepted") return facts
     const safeContinuationRevalidationEligibility = safeContinuationRevalidationEligibilityFromRecoveryHistory(
-      records,
+      source,
       responsibility.plannedAttempt,
       responsibility.beganAt,
       disposition.acceptedProgress,
@@ -4086,7 +4055,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
       return [
         plannedAttempt.attemptId,
         currentTaskClaimAuthority(
-          Array.from(journalRecordsForTask(journalHistoryOf(runState), plannedAttempt.taskId)),
+          journalHistoryOf(runState),
           plannedAttempt.taskId,
           authorizedClaimForAttempt(journalHistoryOf(runState), plannedAttempt)?.claim,
           freshnessBaselineForTask(plannedAttempt.taskId),

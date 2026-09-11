@@ -898,6 +898,14 @@ exact completion claim. It identifies evidence for comparison and cannot by
 itself reconstruct or authorize the claim.
 _Avoid_: Completion claim, claim token, task revision
 
+**Settled completion-claim replacement evidence**:
+The immutable, journal-derived pair of an exact replacement intent and its
+later matching outcome. It proves that replacement was recorded, not that the
+tracker still holds the claim. Different original or reacquired claims for one
+promotion remain independently queryable at earlier journal cutoffs; this
+in-memory evidence is not another persisted authority record.
+_Avoid_: Current completion claim, promotion success, tracker fingerprint
+
 **Completion-claim cleanup disposition**:
 The recoverable, task-local removal of the two tracker records retained after
 fresh focused task success. Dalph first confirms that the exact completion

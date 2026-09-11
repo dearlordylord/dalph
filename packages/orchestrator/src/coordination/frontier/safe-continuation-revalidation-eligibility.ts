@@ -7,12 +7,19 @@ import {
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { immutableSnapshot } from "../immutable-snapshot.js"
-import { reconstructedTaskGraphFromEvents } from "../reconstruction/graph-knowledge.js"
 import type { RunActivationOpportunity } from "../run/run-activation-opportunity.js"
 import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import { exactWorkflowRunTargetFor } from "../../workflow-journal/run-target.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
+import {
+  journalEvidenceBefore,
+  journalGraphObservationAt,
+  journalGraphSnapshotForObservation,
+  journalRecordByKey,
+  journalRecordsForAttemptKind,
+  type JournalRecordEvidence
+} from "../../workflow-journal/record-evidence.js"
 import {
   currentUnconsumedAcceptedSafeEvidence,
   latestAcceptedPlannedAttemptExecutorEvidence,
@@ -23,11 +30,7 @@ import type {
   PlannedAttemptExecutorCommandProjectionOrdinal,
   PlannedAttemptExecutorReportOrdinal
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
-import {
-  acceptedExecutingAttemptsForAuthorityCheckIntent,
-  continuationTrackerReadHasExactPlanPredecessor,
-  type ContinuationTrackerReadOperation
-} from "../../workflow/protocols/planned-attempt-continuation/tracker-read-freshness.js"
+import { acceptedExecutingAttemptsForAuthorityCheckIntent } from "../../workflow/protocols/planned-attempt-continuation/tracker-read-freshness.js"
 
 const SafeContinuationRevalidationEligibilityTypeId: unique symbol = Symbol(
   "@dalph/SafeContinuationRevalidationEligibility"
@@ -80,49 +83,21 @@ const isCompleteGraphObservationRecord = (record: JournalRecord): record is Comp
     record.event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
 
 const graphReconstructedAt = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalRecordEvidence,
   graphObservation: CompleteGraphObservationRecord
 ): TaskDagSnapshot | undefined =>
-  Option.getOrUndefined(
-    reconstructedTaskGraphFromEvents(
-      records.filter(({ position }) => position <= graphObservation.position).map(({ event }) => event),
-      graphObservation.event.observation.target
-    )
-  )
-
-const exactContinuationGraphReadIntentFor = (
-  records: ReadonlyArray<JournalRecord>,
-  operationId: CompleteGraphObservationRecord["event"]["operationId"],
-  plannedAttempt: PlannedTaskAttempt
-): Extract<ContinuationTrackerReadOperation, { readonly _tag: "ReadTrackerGraph" }> | undefined => {
-  const intent = records.findLast((record) => {
-    if (record.event._tag !== "TaskTrackerReadIntentRecorded") return false
-    const operation = record.event.operation
-    return (
-      operation._tag === "ReadTrackerGraph" &&
-      operation.operationId === operationId &&
-      record.key === intentRecordKey(operationId) &&
-      continuationTrackerReadHasExactPlanPredecessor(records, operation, plannedAttempt)
-    )
-  })
-  return intent?.event._tag === "TaskTrackerReadIntentRecorded" && intent.event.operation._tag === "ReadTrackerGraph"
-    ? intent.event.operation
-    : undefined
-}
+  Option.getOrUndefined(journalGraphSnapshotForObservation(records, graphObservation.position))
 
 const taskWasClosedAtAcceptedSafe = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalRecordEvidence,
   plannedAttempt: PlannedTaskAttempt,
   acceptedSafe: AcceptedPlannedAttemptExecutorEvidence,
   immutableRunTarget: TrackerTarget
 ): boolean => {
-  const graphBeforeSafe = records.findLast(
-    (record): record is CompleteGraphObservationRecord =>
-      record.position <= acceptedSafe.observedAt &&
-      isCompleteGraphObservationRecord(record) &&
-      taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
-  )
-  if (graphBeforeSafe === undefined) return false
+  const graphBeforeSafe = journalGraphObservationAt(journalEvidenceBefore(records, acceptedSafe.observedAt + 1), {
+    target: immutableRunTarget
+  })
+  if (graphBeforeSafe === undefined || !isCompleteGraphObservationRecord(graphBeforeSafe)) return false
   const before = graphReconstructedAt(records, graphBeforeSafe)
   return (
     Option.getOrUndefined(before?.lifecycleOf(plannedAttempt.taskId) ?? Option.none())?._tag ===
@@ -136,20 +111,20 @@ const taskWasClosedAtAcceptedSafe = (
  * This is lifecycle-reopen evidence, not exact continuation-read eligibility.
  */
 const latestTaskReopenAfterAcceptedSafe = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalRecordEvidence,
   plannedAttempt: PlannedTaskAttempt,
   acceptedSafe: AcceptedPlannedAttemptExecutorEvidence
 ): CompleteGraphObservationRecord | undefined => {
   const immutableRunTarget = exactWorkflowRunTargetFor(records)
   if (immutableRunTarget === undefined) return undefined
   if (!taskWasClosedAtAcceptedSafe(records, plannedAttempt, acceptedSafe, immutableRunTarget)) return undefined
-  const reopened = records.findLast(
-    (record): record is CompleteGraphObservationRecord =>
-      record.position > acceptedSafe.observedAt &&
-      isCompleteGraphObservationRecord(record) &&
-      taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
+  const reopened = journalGraphObservationAt(records, { target: immutableRunTarget })
+  if (
+    reopened === undefined ||
+    reopened.position <= acceptedSafe.observedAt ||
+    !isCompleteGraphObservationRecord(reopened)
   )
-  if (reopened === undefined) return undefined
+    return undefined
   const after = graphReconstructedAt(records, reopened)
   return Option.getOrUndefined(after?.lifecycleOf(plannedAttempt.taskId) ?? Option.none())?._tag === "Open"
     ? reopened
@@ -162,7 +137,7 @@ const latestTaskReopenAfterAcceptedSafe = (
  * B/D-style authority read, not a general bootstrap or C continuation read.
  */
 export const hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalRecordEvidence,
   plannedAttempt: PlannedTaskAttempt
 ): boolean => {
   const acceptedSafe = currentUnconsumedAcceptedSafeEvidence(records, plannedAttempt)
@@ -175,19 +150,14 @@ export const hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck 
   ) {
     return false
   }
-  const intent = records.findLast(
-    ({ event, key, runId }) =>
-      runId === plannedAttempt.runId &&
-      event._tag === "TaskTrackerReadIntentRecorded" &&
-      event.operation._tag === "ReadTrackerGraph" &&
-      event.operation.operationId === reopened.event.operationId &&
-      key === intentRecordKey(reopened.event.operationId)
-  )
+  const intent = journalRecordByKey(records, intentRecordKey(reopened.event.operationId))
   if (intent?.event._tag !== "TaskTrackerReadIntentRecorded" || intent.event.operation._tag !== "ReadTrackerGraph") {
     return false
   }
   const operation = intent.event.operation
   return (
+    intent.runId === plannedAttempt.runId &&
+    operation.operationId === reopened.event.operationId &&
     intent.position < reopened.position &&
     acceptedExecutingAttemptsForAuthorityCheckIntent(records, intent) !== undefined &&
     taskTrackerTargetKey(operation.target) === taskTrackerTargetKey(reopened.event.observation.target) &&
@@ -196,46 +166,54 @@ export const hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck 
 }
 
 const exactTaskWasReopenedAfterAcceptedSafe = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalRecordEvidence,
   plannedAttempt: PlannedTaskAttempt,
   acceptedSafe: AcceptedPlannedAttemptExecutorEvidence
 ): boolean => {
   const immutableRunTarget = exactWorkflowRunTargetFor(records)
   if (immutableRunTarget === undefined) return false
   if (!taskWasClosedAtAcceptedSafe(records, plannedAttempt, acceptedSafe, immutableRunTarget)) return false
-  const reopened = records.findLast(
-    (record): record is CompleteGraphObservationRecord =>
-      record.position > acceptedSafe.observedAt &&
-      isCompleteGraphObservationRecord(record) &&
-      taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(immutableRunTarget) &&
-      exactContinuationGraphReadIntentFor(
-        records,
-        record.event.operationId,
-        plannedAttempt
-      )?.readShape.explicitlyCoveredTaskIds.includes(plannedAttempt.taskId) === true
+  const reopened = journalGraphObservationAt(records, { plannedAttempt, target: immutableRunTarget })
+  if (
+    reopened === undefined ||
+    reopened.position <= acceptedSafe.observedAt ||
+    !isCompleteGraphObservationRecord(reopened)
   )
-  if (reopened === undefined) return false
+    return false
   const after = graphReconstructedAt(records, reopened)
   return Option.getOrUndefined(after?.lifecycleOf(plannedAttempt.taskId) ?? Option.none())?._tag === "Open"
 }
 
-const reconciledResumeStillSafeBasis = (records: ReadonlyArray<JournalRecord>, plannedAttempt: PlannedTaskAttempt) => {
-  const resume = records.findLast(
-    ({ event }) =>
-      event._tag === "PlannedAttemptExecutorCommandIntended" &&
-      event.command === "Resume" &&
-      plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
-  )
+const reconciledResumeStillSafeBasis = (records: JournalRecordEvidence, plannedAttempt: PlannedTaskAttempt) => {
+  let resume: JournalRecord | undefined
+  for (const record of journalRecordsForAttemptKind(
+    records,
+    plannedAttempt.attemptId,
+    "PlannedAttemptExecutorCommandIntended"
+  )) {
+    if (
+      record.event._tag === "PlannedAttemptExecutorCommandIntended" &&
+      record.event.command === "Resume" &&
+      plannedTaskAttemptEquivalence(record.event.plannedAttempt, plannedAttempt)
+    )
+      resume = record
+  }
   if (resume?.event._tag !== "PlannedAttemptExecutorCommandIntended") return undefined
   const lifecycleSafe = latestAcceptedPlannedAttemptExecutorEvidence(
-    records.filter(({ position }) => position < resume.position),
+    journalEvidenceBefore(records, resume.position),
     plannedAttempt
   )
   if (lifecycleSafe?.report._tag !== "ExecutorWorkSafelySuspended") return undefined
   const resumeCommandOrdinal = resume.event.ordinal
-  const reconciled = records.findLast(
-    ({ event, position }) =>
-      position > resume.position &&
+  let reconciled: JournalRecord | undefined
+  for (const record of journalRecordsForAttemptKind(
+    records,
+    plannedAttempt.attemptId,
+    "PlannedAttemptExecutorCommandProjectionObserved"
+  )) {
+    const event = record.event
+    if (
+      record.position > resume.position &&
       event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
       event.commandOrdinal === resumeCommandOrdinal &&
       plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt) &&
@@ -243,25 +221,43 @@ const reconciledResumeStillSafeBasis = (records: ReadonlyArray<JournalRecord>, p
       event.observation.report._tag === "ExecutorWorkSafelySuspended" &&
       event.observation.report.correlation.runId === plannedAttempt.runId &&
       event.observation.report.correlation.attemptId === plannedAttempt.attemptId
-  )
+    )
+      reconciled = record
+  }
   if (reconciled?.event._tag !== "PlannedAttemptExecutorCommandProjectionObserved") return undefined
   const projectionOrdinal = reconciled.event.projectionOrdinal
-  const consumed = records.some(
-    ({ event, position }) =>
-      position > reconciled.position &&
+  let consumed = false
+  for (const record of journalRecordsForAttemptKind(
+    records,
+    plannedAttempt.attemptId,
+    "PlannedAttemptExecutorResumeRedeliveryIntended"
+  )) {
+    const event = record.event
+    if (
+      record.position > reconciled.position &&
       event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended" &&
       plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt) &&
       event.commandOrdinal === resumeCommandOrdinal &&
       event.projectionOrdinal === projectionOrdinal &&
       event.authorization.safeProjectionObservedAt === reconciled.position
-  )
-  const superseded = records.some(
-    ({ event, position }) =>
-      position > reconciled.position &&
+    )
+      consumed = true
+  }
+  let superseded = false
+  for (const record of journalRecordsForAttemptKind(
+    records,
+    plannedAttempt.attemptId,
+    "PlannedAttemptExecutorCommandIntended"
+  )) {
+    const event = record.event
+    if (
+      record.position > reconciled.position &&
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
       (event.command === "Begin" || event.command === "Resume") &&
       plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
-  )
+    )
+      superseded = true
+  }
   return consumed || superseded
     ? undefined
     : {
@@ -300,7 +296,7 @@ const issueSafeContinuationRevalidationEligibility = (
  * Structural Ready facts or accepted-report values cannot call the issuer.
  */
 export const safeContinuationRevalidationEligibilityFromRecoveryHistory = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalRecordEvidence,
   plannedAttempt: PlannedTaskAttempt,
   responsibilityBeganAt: JournalPosition,
   acceptedProgress: { readonly _tag: "ExecutorReportAccepted"; readonly ordinal: PlannedAttemptExecutorReportOrdinal },
