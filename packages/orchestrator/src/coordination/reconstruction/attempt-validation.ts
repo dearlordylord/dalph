@@ -39,6 +39,7 @@ import {
   firstJournalRecordOfKind,
   isJournalRecordEvidence,
   journalEvidenceBefore,
+  journalGraphSnapshotForObservation,
   journalRecordsForAttempt,
   journalRecordsForOperationId,
   journalRecordsForTask,
@@ -1163,12 +1164,14 @@ const replacementGraphIsExact = (
   ) {
     return false
   }
-  const graphState = reconstructedTaskGraphFromEvents(
-    Array.from(journalRecordsForTask(prior, plannedAttempt.taskId))
-      .filter(({ position }) => position <= record.position)
-      .map(({ event }) => event),
-    record.event.observation.target
-  )
+  const graphState = isJournalRecordEvidence(prior)
+    ? journalGraphSnapshotForObservation(prior, record.position)
+    : reconstructedTaskGraphFromEvents(
+        Array.from(journalRecordsForTask(prior, plannedAttempt.taskId))
+          .filter(({ position }) => position <= record.position)
+          .map(({ event }) => event),
+        record.event.observation.target
+      )
   return Option.exists(graphState, (snapshot) =>
     snapshot.eligibleTasks().some(({ id }) => id === plannedAttempt.taskId)
   )
