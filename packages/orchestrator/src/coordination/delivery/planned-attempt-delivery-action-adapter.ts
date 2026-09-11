@@ -13,6 +13,14 @@ import {
 } from "../../workflow-journal/record-key.js"
 import { InRunJournal } from "../../workflow-journal/store.js"
 import { type JournalRecord } from "../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
+import {
+  journalRecordsForAttemptKind,
+  journalRecordsForOperationId,
+  lastJournalRecordForAttemptKind,
+  lastJournalRecordOfKind,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
 import {
   latestPlannedAttemptExecutorEvidence,
   type PlannedAttemptExecutorEvidence
@@ -72,13 +80,15 @@ type CancelledAttemptRelinquishmentTransition = Extract<
 >
 
 const cancelledAttemptRelinquishmentIsQuiescent = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   transition: CancelledAttemptRelinquishmentTransition,
   evidence: PlannedAttemptExecutorEvidence | undefined
 ): boolean =>
   evidence !== undefined &&
   (evidence.report._tag === "ExecutorWorkSafelySuspended" || evidence.report._tag === "ExecutorWorkTerminal") &&
-  !records.some(
+  !Array.from(
+    journalRecordsForAttemptKind(records, transition.plannedAttempt.attemptId, "PlannedAttemptExecutorCommandIntended")
+  ).some(
     ({ event, position }) =>
       position > evidence.observedAt &&
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
@@ -87,18 +97,24 @@ const cancelledAttemptRelinquishmentIsQuiescent = (
   quiescenceProofMatchesEvidence(transition.proof, evidence)
 
 const cancelledAttemptRelinquishmentContext = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   transition: CancelledAttemptRelinquishmentTransition
 ) => {
   if (
-    records.some(
+    Array.from(
+      journalRecordsForAttemptKind(
+        records,
+        transition.plannedAttempt.attemptId,
+        "CancelledAttemptImplementationResponsibilityRelinquished"
+      )
+    ).some(
       ({ event }) =>
         event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
         plannedTaskAttemptEquivalence(event.plannedAttempt, transition.plannedAttempt)
     )
   )
     return undefined
-  const cancellation = records.findLast(({ event }) => event._tag === "RunCancellationApplied")
+  const cancellation = lastJournalRecordOfKind(records, "RunCancellationApplied")
   const authorizedClaim = authorizedClaimForAttempt(records, transition.plannedAttempt)?.claim
   if (cancellation === undefined || authorizedClaim === undefined) return undefined
   const evidence = latestPlannedAttemptExecutorEvidence(records, transition.plannedAttempt)
@@ -109,7 +125,7 @@ const cancelledAttemptRelinquishmentContext = (
 const executeCancelledAttemptRelinquishment = Effect.fn("DeliveryAction.executeCancelledAttemptRelinquishment")(
   function* (transition: CancelledAttemptRelinquishmentTransition) {
     const journal = yield* InRunJournal
-    const records = yield* journal.read(transition.plannedAttempt.runId)
+    const records = yield* (yield* AcceptedJournalReader).readAccepted(transition.plannedAttempt.runId)
     const context = cancelledAttemptRelinquishmentContext(records, transition)
     if (context === undefined) return
     yield* journal.append(
@@ -165,24 +181,36 @@ const hasMatchingCancelledAttemptClaimRead = (
 }
 
 const cancelledAttemptClaimNoReleaseFacts = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   transition: CancelledAttemptClaimNoReleaseTransition
 ) => {
   if (
-    records.some(
+    Array.from(
+      journalRecordsForAttemptKind(
+        records,
+        transition.plannedAttempt.attemptId,
+        "CancelledAttemptClaimNoReleaseObserved"
+      )
+    ).some(
       ({ event }) =>
         event._tag === "CancelledAttemptClaimNoReleaseObserved" &&
         plannedTaskAttemptEquivalence(event.plannedAttempt, transition.plannedAttempt)
     )
   )
     return undefined
-  const relinquished = records.findLast(
-    (record): record is CancelledAttemptRelinquishedRecord =>
-      record.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
-      plannedTaskAttemptEquivalence(record.event.plannedAttempt, transition.plannedAttempt)
+  const relinquishedCandidate = lastJournalRecordForAttemptKind(
+    records,
+    transition.plannedAttempt.attemptId,
+    "CancelledAttemptImplementationResponsibilityRelinquished"
   )
+  const relinquished =
+    relinquishedCandidate?.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+    plannedTaskAttemptEquivalence(relinquishedCandidate.event.plannedAttempt, transition.plannedAttempt)
+      ? ({ ...relinquishedCandidate, event: relinquishedCandidate.event } satisfies CancelledAttemptRelinquishedRecord)
+      : undefined
   if (relinquished === undefined) return undefined
-  const observation = records.findLast(
+  const operationRecords = Array.from(journalRecordsForOperationId(records, transition.observationOperationId))
+  const observation = operationRecords.findLast(
     (record): record is FocusedClaimObservationRecord =>
       record.position > relinquished.position &&
       record.event._tag === "TaskTrackerFactsObserved" &&
@@ -191,7 +219,7 @@ const cancelledAttemptClaimNoReleaseFacts = (
       record.event.observation.coverage.taskId === transition.plannedAttempt.taskId
   )
   if (observation === undefined) return undefined
-  const readIntent = records.findLast(
+  const readIntent = operationRecords.findLast(
     (record) =>
       record.position > relinquished.position &&
       record.position < observation.position &&
@@ -210,7 +238,7 @@ const cancelledAttemptClaimNoReleaseFacts = (
 const executeCancelledAttemptClaimNoRelease = Effect.fn("DeliveryAction.executeCancelledAttemptClaimNoRelease")(
   function* (transition: CancelledAttemptClaimNoReleaseTransition) {
     const journal = yield* InRunJournal
-    const records = yield* journal.read(transition.plannedAttempt.runId)
+    const records = yield* (yield* AcceptedJournalReader).readAccepted(transition.plannedAttempt.runId)
     const facts = cancelledAttemptClaimNoReleaseFacts(records, transition)
     if (facts === undefined) return
     yield* journal.append(

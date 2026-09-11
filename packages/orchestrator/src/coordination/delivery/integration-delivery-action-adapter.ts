@@ -41,7 +41,13 @@ import {
   readCurrentCompletionConfirmation,
   runCompletionTaskProtocol
 } from "../../workflow/protocols/integration-finality/completion-task-protocol.js"
-import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
+import type { JournalRecord } from "../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
+import {
+  journalRecordsForOperationId,
+  journalRecordsForTask,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
 import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-boundary.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { integrationExitBoundaryFamilyFor } from "./integration-exit-boundary.js"
@@ -230,10 +236,11 @@ const completePromotedTask = Effect.fn("DeliveryAction.completePromotedTask")(fu
 })
 
 const completionConfirmationBasisFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   transition: ObserveFocusedTaskCompletion
 ): CompletionConfirmationBasis | undefined => {
-  for (const { event } of records.toReversed()) {
+  const operationRecords = Array.from(journalRecordsForOperationId(records, transition.request.operationId))
+  for (const { event } of operationRecords.toReversed()) {
     if (event._tag === "CompletionTaskAcknowledged" && event.request.operationId === transition.request.operationId) {
       return event
     }
@@ -249,11 +256,11 @@ const completionConfirmationBasisFor = (
 }
 
 const resumableDurableConfirmationFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   transition: ObserveFocusedTaskCompletion,
   basis: CompletionConfirmationBasis
 ): DurableCompletionConfirmation | undefined => {
-  const durable = records.findLast(
+  const durable = Array.from(journalRecordsForTask(records, transition.request.claim.plannedAttempt.taskId)).findLast(
     ({ event }) =>
       event._tag === "TaskTrackerFactsObserved" &&
       event.observation._tag === "FocusedTaskCompletionFacts" &&
@@ -280,8 +287,7 @@ const observeFocusedTaskCompletion = Effect.fn("DeliveryAction.observeFocusedTas
   target: TrackerTarget
 ) {
   const boundary = yield* completionTaskBoundary()
-  const journal = yield* InRunJournal
-  const records = yield* journal.read(transition.request.claim.plannedAttempt.runId)
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(transition.request.claim.plannedAttempt.runId)
   const confirmationBasis = completionConfirmationBasisFor(records, transition)
   if (confirmationBasis === undefined) {
     return deliveryActionDeferred(
@@ -332,7 +338,7 @@ const executeTargetPromotion = Effect.fn("DeliveryAction.runTargetPromotion")(fu
   if (Option.isNone(runtime)) return yield* new TargetPromotionRuntimeUnavailable()
   const ownership = Context.getOption(context, CoordinatorOwnership)
   if (Option.isNone(ownership)) return yield* new TargetPromotionRuntimeUnavailable()
-  const journal = yield* InRunJournal
+  const acceptedJournal = yield* AcceptedJournalReader
   const correlation = targetPromotionCorrelationFor(transition.candidate)
   yield* lease.integrationTargets
     .withPermit(
@@ -346,7 +352,7 @@ const executeTargetPromotion = Effect.fn("DeliveryAction.runTargetPromotion")(fu
     )
     .pipe(
       Effect.ensuring(
-        journal.read(transition.responsibility.plannedAttempt.runId).pipe(
+        acceptedJournal.readAccepted(transition.responsibility.plannedAttempt.runId).pipe(
           Effect.flatMap((records) =>
             pendingPromotionStaleIntegrationQuarantineFor(records, correlation) === undefined
               ? lease.integrationTargets.release(transition.responsibility)
@@ -371,7 +377,7 @@ const executeTargetPromotionReconciliation = Effect.fn("DeliveryAction.reconcile
   if (Option.isNone(runtime)) return yield* new TargetPromotionRuntimeUnavailable()
   const ownership = Context.getOption(context, CoordinatorOwnership)
   if (Option.isNone(ownership)) return yield* new TargetPromotionRuntimeUnavailable()
-  const journal = yield* InRunJournal
+  const acceptedJournal = yield* AcceptedJournalReader
   const correlation = targetPromotionCorrelationFor(transition.candidate)
   const result = yield* lease.integrationTargets
     .withPermit(
@@ -385,7 +391,7 @@ const executeTargetPromotionReconciliation = Effect.fn("DeliveryAction.reconcile
     )
     .pipe(
       Effect.ensuring(
-        journal.read(transition.responsibility.plannedAttempt.runId).pipe(
+        acceptedJournal.readAccepted(transition.responsibility.plannedAttempt.runId).pipe(
           Effect.flatMap((records) =>
             pendingPromotionStaleIntegrationQuarantineFor(records, correlation) === undefined
               ? lease.integrationTargets.release(transition.responsibility)
