@@ -3,6 +3,7 @@ import {
   AttemptId,
   GitCommitSha,
   PlannedTaskAttempt,
+  plannedAttemptExecutorCorrelation,
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
@@ -23,7 +24,7 @@ import {
 } from "../../workflow/protocols/attempt-choice/events.js"
 import { emptyIndexes } from "./history-kernel-state.js"
 import type { WorkflowJournalHistoryIssue } from "./history-result.js"
-import { replacementPreservesPriorResources, validateAttemptChoice, validateAttemptStop } from "./attempt-validation.js"
+import { acceptedExecutorProofEvidenceFor, replacementPreservesPriorResources, validateAttemptChoice, validateAttemptStop } from "./attempt-validation.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { InitialControlPolicy } from "../../control/policy.js"
@@ -35,7 +36,7 @@ import { OperationId } from "../../workflow/identity.js"
 import { makeTaskClaimReleaseOperation } from "../../workflow/registry/operation.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import { TaskClaimReleaseIntendedEvent, TaskClaimReleasedEvent } from "../../workflow/registry/event.js"
-import { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import { PlannedAttemptExecutorReportOrdinal, PlannedAttemptExecutorWorkReportedEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 
 const runId = RunId.make("attempt-validation-hot-cold")
 const plannedAttempt = PlannedTaskAttempt.make({
@@ -243,6 +244,32 @@ const validate = (source: JournalHistorySource): ReadonlyArray<WorkflowJournalHi
   validateAttemptChoice(record, runId, source, emptyIndexes(), issues)
   return issues
 }
+
+it.each([64, 256])("bounds an exact Stop proof lookup after %i same-attempt accepted reports", (size) => {
+  const records = Array.from({ length: size }, (_, offset): JournalRecord => {
+    const event = PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: PlannedAttemptExecutorReportOrdinal.make(offset + 1),
+      report: { _tag: "ExecutorWorkExecuting", correlation: plannedAttemptExecutorCorrelation(plannedAttempt) },
+      version: workflowJournalEventVersion
+    })
+    return { event, key: describeJournalEvent(event).expectedKey, position: JournalPosition.make(offset + 1), runId }
+  })
+  const proof = { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) } as const
+  const expected = acceptedExecutorProofEvidenceFor(records, plannedAttempt, proof)
+  const evidence = journalEvidenceFrom(records)
+  let visits = 0
+  const stop = observeJournalRecordSequenceOperations((operation) => {
+    expect(operation._tag).toBe("IndexedRecordVisit")
+    visits += 1
+  })
+  try {
+    expect(acceptedExecutorProofEvidenceFor(evidence, plannedAttempt, proof)).toEqual(expected)
+  } finally {
+    stop()
+  }
+  expect(expected?.source.ordinal).toBe(1)
+  expect(visits).toBe(0)
+})
 
 it.each([64, 256])("bounds replacement claim preservation after %i unrelated same-task releases", (size) => {
   const expectedClaim = ActiveTaskClaim.make({

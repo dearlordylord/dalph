@@ -4,7 +4,8 @@ import { HashMap, HashSet, Option } from "effect"
 import type { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import {
   attemptChoiceAppliedRecordKey,
-  attemptImplementationAbandonedRecordKey
+  attemptImplementationAbandonedRecordKey,
+  plannedAttemptExecutorWorkReportedRecordKey
 } from "../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { OperationId } from "../../workflow/identity.js"
@@ -19,7 +20,8 @@ import {
   currentUnconsumedAcceptedSafeEvidence,
   latestPlannedAttemptExecutorEvidence,
   latestUnsettledPlannedAttemptExecutorCommand,
-  plannedAttemptExecutorEvidence
+  plannedAttemptExecutorEvidence,
+  type AcceptedPlannedAttemptExecutorEvidence
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import { authorizedClaimForAttempt } from "../../workflow/claim-authority-history.js"
 import {
@@ -429,14 +431,22 @@ const stopDispositionCandidates = (
   )
 }
 
-const proofEvidenceFor = (
+export const acceptedExecutorProofEvidenceFor = (
   prior: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   proof: Extract<WorkflowJournalEvent, { readonly _tag: "AttemptImplementationAbandoned" }>["proof"]
-) =>
-  plannedAttemptExecutorEvidence(prior, plannedAttempt).find(
-    (evidence) => evidence.source._tag === "AcceptedReport" && evidence.source.ordinal === proof.reportOrdinal
+): AcceptedPlannedAttemptExecutorEvidence | undefined => {
+  if (!isJournalRecordEvidence(prior)) return plannedAttemptExecutorEvidence(prior, plannedAttempt).find(
+    (evidence): evidence is AcceptedPlannedAttemptExecutorEvidence =>
+      evidence.source._tag === "AcceptedReport" && evidence.source.ordinal === proof.reportOrdinal
   )
+  const record = journalRecordByKey(prior, plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, proof.reportOrdinal))
+  if (record?.event._tag !== "PlannedAttemptExecutorWorkReported") return undefined
+  const { report, ordinal } = record.event
+  return report.correlation.runId === plannedAttempt.runId && report.correlation.attemptId === plannedAttempt.attemptId
+    ? { observedAt: record.position, report, source: { _tag: "AcceptedReport", ordinal } }
+    : undefined
+}
 
 const sameClaimObservation = (
   left: Extract<WorkflowJournalEvent, { readonly _tag: "StoppedAttemptClaimNoReleaseObserved" }>["observation"],
@@ -478,7 +488,7 @@ export const validateAttemptStop = (
   }
   const validateAbandonment = () => {
     if (event._tag === "AttemptImplementationAbandoned") {
-      const evidence = proofEvidenceFor(prior, event.subject.plannedAttempt, event.proof)
+      const evidence = acceptedExecutorProofEvidenceFor(prior, event.subject.plannedAttempt, event.proof)
       const currentEvidence = latestPlannedAttemptExecutorEvidence(prior, event.subject.plannedAttempt)
       const evidenceProvesQuiescence = () =>
         evidence !== undefined &&
@@ -1567,7 +1577,7 @@ export const replacementFollowsIntegrationCutoff = (
     ].every(Boolean)
   })
 
-type ReplacementQuiescenceEvidence = NonNullable<ReturnType<typeof proofEvidenceFor>>
+type ReplacementQuiescenceEvidence = NonNullable<ReturnType<typeof acceptedExecutorProofEvidenceFor>>
 
 export const replacementProofIsAcceptedSafe = (proof: ReplacementQuiescenceEvidence): boolean =>
   proof.report._tag === "ExecutorWorkSafelySuspended"
@@ -1580,7 +1590,7 @@ const replacementQuiescenceIsCurrent = (
   plannedAttempt: PlannedTaskAttempt,
   quiescenceProof: PlannedAttemptReplacementRecord["event"]["witness"]["quiescenceProof"]
 ): boolean => {
-  const proof = proofEvidenceFor(prior, plannedAttempt, quiescenceProof)
+  const proof = acceptedExecutorProofEvidenceFor(prior, plannedAttempt, quiescenceProof)
   if (proof === undefined) return false
   const latestEvidence = latestPlannedAttemptExecutorEvidence(prior, plannedAttempt)
   return [
