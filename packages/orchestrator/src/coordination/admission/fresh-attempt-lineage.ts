@@ -1,6 +1,7 @@
 import { plannedTaskAttemptEquivalence, type PlannedTaskAttempt } from "@dalph/contracts"
 import { Option } from "effect"
 import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
+import { isDependencySatisfied, isTaskOpen } from "../../authorities/task-tracker/task.js"
 import {
   causalPredecessorOperationIds,
   causalPredecessorOperationIdsFromEvidence
@@ -16,6 +17,7 @@ import { plannedAttemptWorktreeObservationMatchesPlan } from "../../workflow/pro
 import {
   isJournalRecordEvidence,
   journalEvidenceBefore,
+  journalGraphSnapshotForObservation,
   journalRecordByKey,
   journalRecordsForAttemptKind,
   type JournalHistorySource
@@ -179,6 +181,19 @@ const taskWasEligibleAt = (
     observation._tag !== "UnchangedTaskTrackerFactsReconfirmed"
   ) {
     return false
+  }
+  if (isJournalRecordEvidence(records)) {
+    const graph = journalGraphSnapshotForObservation(records, outcome.position)
+    if (Option.isNone(graph)) return false
+    const lifecycle = graph.value.lifecycleOf(taskId)
+    return (
+      Option.isSome(lifecycle) &&
+      isTaskOpen(lifecycle.value) &&
+      graph.value.prerequisitesOf(taskId).every((prerequisiteId) => {
+        const prerequisite = graph.value.lifecycleOf(prerequisiteId)
+        return Option.isSome(prerequisite) && isDependencySatisfied(prerequisite.value)
+      })
+    )
   }
   const priorFull =
     observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
