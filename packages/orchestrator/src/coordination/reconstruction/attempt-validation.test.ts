@@ -18,6 +18,7 @@ import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   AttemptChoiceAppliedEvent,
   AttemptChoiceRequestId,
+  AttemptImplementationAbandonedEvent,
   AttemptStoppageIntendedEvent
 } from "../../workflow/protocols/attempt-choice/events.js"
 import { emptyIndexes } from "./history-kernel-state.js"
@@ -28,6 +29,13 @@ import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
+import { OperationId } from "../../workflow/identity.js"
+import { makeTaskClaimReleaseOperation } from "../../workflow/registry/operation.js"
+import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
+import { TaskClaimReleaseIntendedEvent, TaskClaimReleasedEvent } from "../../workflow/registry/event.js"
+import { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 
 const runId = RunId.make("attempt-validation-hot-cold")
 const plannedAttempt = PlannedTaskAttempt.make({
@@ -55,6 +63,72 @@ const record: JournalRecord = {
   position: JournalPosition.make(1),
   runId
 }
+
+it.each([64, 256])("bounds Stop disposition validation after %i unrelated same-task releases", (size) => {
+  const claim = ActiveTaskClaim.make({
+    operationId: OperationId.make("stop-original-claim"),
+    owner: ClaimOwner.make("dalph"),
+    taskId: plannedAttempt.taskId,
+    token: ClaimToken.make("stop-original-token")
+  })
+  const releaseIntent = (nonce: string) => TaskClaimReleaseIntendedEvent.make({
+    operation: makeTaskClaimReleaseOperation({
+      release: { claim, operationId: OperationId.make(`alternate-release-${nonce}`) },
+      predecessorOperationIds: [claim.operationId, OperationId.make("missing-focused-read")],
+      authority: {
+        _tag: "StoppedAttemptClaimReleaseAuthority",
+        observationOperationId: OperationId.make("missing-focused-read"),
+        requestId: AttemptChoiceRequestId.make({ runId, nonce })
+      }
+    }),
+    version: workflowJournalEventVersion
+  })
+  const ownIntent = releaseIntent(requestId.nonce)
+  const events = [
+    AttemptChoiceAppliedEvent.make({ ...choice, choice: "StopTaskImplementation" }),
+    AttemptImplementationAbandonedEvent.make({
+      expectedClaim: claim,
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      proof: { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+      requestId,
+      subject: choice.subject,
+      version: workflowJournalEventVersion
+    }),
+    ...Array.from({ length: size }, (_, offset) => releaseIntent(`unrelated-${offset}`)),
+    ownIntent,
+    TaskClaimReleasedEvent.make({ release: ownIntent.operation.release, version: workflowJournalEventVersion })
+  ]
+  const records = events.map((event, offset): JournalRecord => ({
+    event, key: describeJournalEvent(event).expectedKey, position: JournalPosition.make(offset + 1), runId
+  }))
+  const candidate: JournalRecord = {
+    event: ownIntent,
+    key: describeJournalEvent(ownIntent).expectedKey,
+    position: JournalPosition.make(records.length + 1),
+    runId
+  }
+  // This pure validator seam deliberately diagnoses an incomplete chronology; it does not manufacture Accepted.
+  const expected = new Array<WorkflowJournalHistoryIssue>()
+  validateAttemptStop(candidate, runId, records, emptyIndexes(), expected)
+  const evidence = journalEvidenceFrom(records)
+  const actual = new Array<WorkflowJournalHistoryIssue>()
+  let visits = 0
+  const stop = observeJournalRecordSequenceOperations((operation) => {
+    expect(operation._tag).toBe("IndexedRecordVisit")
+    visits += 1
+  })
+  try {
+    validateAttemptStop(candidate, runId, evidence, emptyIndexes(), actual)
+  } finally {
+    stop()
+  }
+  expect(actual).toEqual(expected)
+  expect(actual.map((issue) => "detail" in issue ? issue.detail : issue._tag)).toContain(
+    "stopped-attempt claim disposition is already terminal"
+  )
+  expect(visits).toBeLessThanOrEqual(16)
+})
 
 it.each([64, 256])("bounds checking a new direction after %i same-attempt Continue records", (size) => {
   const began = makeWorkflowRunBeganRecord(

@@ -53,6 +53,7 @@ import {
   journalRecordsForTask,
   journalRecordsOfKind,
   journalRecordByKey,
+  journalStopRequestDispositionAt,
   type JournalRecordEvidence,
   type JournalHistorySource
 } from "../../workflow-journal/record-evidence.js"
@@ -413,6 +414,19 @@ const stoppedReleaseOutcomeMatchesRequest = (
   return authority !== undefined && sameAttemptChoiceRequestId(authority.requestId, requestId)
 }
 
+/** Accepted chronology has at most one of each terminal fact; raw diagnostics retain every malformed occurrence in order. */
+const stopDispositionCandidates = (
+  prior: JournalHistorySource,
+  requestId: Extract<WorkflowJournalEvent, { readonly _tag: "AttemptChoiceApplied" }>["requestId"],
+  taskId: TaskId
+): Iterable<JournalRecord> => {
+  if (!isJournalRecordEvidence(prior)) return journalRecordsForTask(prior, taskId)
+  const disposition = journalStopRequestDispositionAt(prior, requestId)
+  return [disposition.releaseIntent, disposition.releaseOutcome, disposition.noRelease].filter(
+    (candidate): candidate is JournalRecord => candidate !== undefined
+  )
+}
+
 const proofEvidenceFor = (
   prior: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
@@ -507,7 +521,7 @@ export const validateAttemptStop = (
       }
       const validateNoReleaseObservation = () => {
         const latestReleaseIntent = findLast(
-          journalRecordsForTask(prior, event.subject.plannedAttempt.taskId),
+          stopDispositionCandidates(prior, event.requestId, event.subject.plannedAttempt.taskId),
           ({ event: priorEvent, position }) =>
             position > abandonment.position &&
             priorEvent._tag === "TaskClaimReleaseIntended" &&
@@ -571,7 +585,7 @@ export const validateAttemptStop = (
       }
       validateNoReleaseObservation()
       const priorTerminalDisposition = findFirst(
-        journalRecordsForTask(prior, event.subject.plannedAttempt.taskId),
+        stopDispositionCandidates(prior, event.requestId, event.subject.plannedAttempt.taskId),
         ({ event: priorEvent, position }) =>
           position > abandonment.position &&
           ((priorEvent._tag === "StoppedAttemptClaimNoReleaseObserved" &&
@@ -615,7 +629,7 @@ export const validateAttemptStop = (
         const validateReleaseUniqueness = () => {
           if (
             hasMatching(
-              journalRecordsForTask(prior, event.operation.release.claim.taskId),
+              stopDispositionCandidates(prior, authority.requestId, event.operation.release.claim.taskId),
               ({ event: priorEvent, position }) =>
                 position > abandonment.position &&
                 priorEvent._tag === "TaskClaimReleaseIntended" &&
@@ -632,7 +646,7 @@ export const validateAttemptStop = (
           }
           if (
             hasMatching(
-              journalRecordsForTask(prior, event.operation.release.claim.taskId),
+              stopDispositionCandidates(prior, authority.requestId, event.operation.release.claim.taskId),
               ({ event: priorEvent, position }) =>
                 position > abandonment.position &&
                 ((priorEvent._tag === "StoppedAttemptClaimNoReleaseObserved" &&
@@ -727,7 +741,7 @@ export const validateAttemptStop = (
           return
         }
         const priorTerminalDisposition = findFirst(
-          journalRecordsForTask(prior, event.release.claim.taskId),
+          stopDispositionCandidates(prior, authority.requestId, event.release.claim.taskId),
           ({ event: priorEvent, position }) =>
             position > abandonment.position &&
             ((priorEvent._tag === "StoppedAttemptClaimNoReleaseObserved" &&
