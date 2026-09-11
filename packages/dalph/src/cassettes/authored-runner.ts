@@ -2409,7 +2409,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                       Effect.gen(function* () {
                         const expected = yield* cursor.consumeControlDirectionFailure
                         /* v8 ignore next -- @preserve Maintained failed-control stories carry the immediately following visible result. */
-                        if (Option.isNone(expected)) return yield* failure
+                        if (Option.isNone(expected)) return yield* Effect.fail(failure)
                         const expectedFailure = expected.value
                         /* v8 ignore next -- @preserve Both maintained failure variants exercise the matching path; this guard diagnoses malformed authored stories. */
                         if (
