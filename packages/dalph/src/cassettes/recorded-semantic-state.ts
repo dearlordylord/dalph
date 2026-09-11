@@ -1,5 +1,9 @@
 import { Match } from "effect"
-import { deriveJournalResponsibilityFacts, type reduceWorkflowJournalHistory } from "@dalph/orchestrator"
+import {
+  deriveJournalResponsibilityFacts,
+  exportWorkflowHistoryRecords,
+  type reduceWorkflowJournalHistory
+} from "@dalph/orchestrator"
 
 export const semanticJson = (value: unknown): string => JSON.stringify(value)
 
@@ -50,4 +54,6 @@ export const semanticState = (history: ReturnType<typeof reduceWorkflowJournalHi
       }
 
 export const appliedOccurrencePosition = (history: ReturnType<typeof reduceWorkflowJournalHistory>): number =>
-  history._tag === "InvalidWorkflowJournalHistory" ? 0 : history.runState.workflowHistory.records.length
+  history._tag === "InvalidWorkflowJournalHistory"
+    ? 0
+    : exportWorkflowHistoryRecords(history.runState.workflowHistory).length

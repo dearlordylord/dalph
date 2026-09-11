@@ -20,6 +20,7 @@ import {
 } from "@dalph/contracts"
 import { Effect, Option, Result, Schema } from "effect"
 import { expect } from "vitest"
+import { exportWorkflowHistoryRecords } from "@dalph/orchestrator"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
 import { ActiveTaskClaim, UnclaimedTask } from "../../../orchestrator/src/authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../../orchestrator/src/authorities/task-tracker/claim.js"
@@ -430,7 +431,10 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
     const { runState } = currentReduction()
     const policy = Option.getOrUndefined(runState.controlPolicy)
     if (policy === undefined) return Effect.die("fresh-task admission MBT policy is not reconstructable")
-    const freshAdmission = projectFreshTaskAdmission(runId, runState.workflowHistory.records)
+    const freshAdmission = projectFreshTaskAdmission(
+      runId,
+      exportWorkflowHistoryRecords(runState.workflowHistory)
+    )
     if (freshAdmission._tag === "FreshTaskAdmissionProjectionInvalid") return Effect.die(freshAdmission)
     return makeFreshTaskAdmissionBasis({
       acceptedAt: runState.appliedThrough,
