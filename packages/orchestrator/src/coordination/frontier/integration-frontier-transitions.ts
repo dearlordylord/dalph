@@ -2,7 +2,6 @@
 import { Option } from "effect"
 import { plannedAttemptExecutorCorrelation, type AttemptId, type TaskId } from "@dalph/contracts"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
-import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
 import type { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
 import { deriveTargetPromotionStateFor } from "../../workflow/protocols/target-promotion/protocol.js"
 import {
@@ -41,9 +40,12 @@ import type { TargetLineageObservation } from "../../authorities/git/target-line
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
   journalRecordByKey,
+  journalGraphObservationAt,
+  journalGraphSnapshotForObservation,
   journalRecordsForAttemptKind,
   journalRecordsOfKind
 } from "../../workflow-journal/record-evidence.js"
+import { exactWorkflowRunTargetFor } from "../../workflow-journal/run-target.js"
 import { integrationQuarantinedRecordKey } from "../../workflow-journal/record-key.js"
 import {
   validateProviderRunActivityAbsent,
@@ -82,7 +84,12 @@ const unsatisfiedPrerequisites = (
   runState: ReconstructedRunState,
   responsibility: StartedIntegrationResponsibility
 ): ReadonlyArray<TaskId> => {
-  const graph = latestReconstructedTaskGraph(runState.graphKnowledge)
+  const source = runState.workflowHistory.evidence
+  const target = exactWorkflowRunTargetFor(source)
+  if (target === undefined) return []
+  const observation = journalGraphObservationAt(source, { target })
+  if (observation === undefined) return []
+  const graph = journalGraphSnapshotForObservation(source, observation.position)
   if (Option.isNone(graph)) return []
   return graph.value
     .prerequisitesOf(responsibility.plannedAttempt.taskId)

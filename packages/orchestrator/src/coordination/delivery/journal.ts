@@ -1,6 +1,5 @@
 import { RunId } from "@dalph/contracts"
 import { Context, Effect, Layer, Option, PubSub, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
-import { reconstructedTaskGraphFor } from "../reconstruction/graph-knowledge.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { advanceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { ValidWorkflowJournalHistory } from "../reconstruction/history-result.js"
@@ -37,6 +36,11 @@ import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js
 import { journalRecordAt, materializeJournalRecords } from "../../workflow-journal/record-sequence.js"
 import { acceptedJournalRecordForKey } from "../../workflow-journal/accepted-prefix.js"
 import { intentRecordKey } from "../../workflow-journal/record-key.js"
+import {
+  journalGraphObservationAt,
+  journalGraphSnapshotForObservation
+} from "../../workflow-journal/record-evidence.js"
+import { exactWorkflowRunTargetFor } from "../../workflow-journal/run-target.js"
 
 const latestJournalRecordOffset = -1
 
@@ -176,8 +180,15 @@ const graphStateFrom = (
   record: JournalRecord,
   prefix: AcceptedJournalPrefix,
   target: TrackerTarget
-): TrackerGraphState =>
-  Option.match(reconstructedTaskGraphFor(reconstructed.graphKnowledge, target), {
+): TrackerGraphState => {
+  const source = reconstructed.workflowHistory.evidence
+  const establishedTarget = exactWorkflowRunTargetFor(source)
+  if (establishedTarget === undefined || taskTrackerTargetKey(establishedTarget) !== taskTrackerTargetKey(target)) {
+    return TrackerGraphState.cases.GraphNotEstablished.make({})
+  }
+  const observation = journalGraphObservationAt(source, { target: establishedTarget })
+  if (observation === undefined) return TrackerGraphState.cases.GraphNotEstablished.make({})
+  return Option.match(journalGraphSnapshotForObservation(source, observation.position), {
     /* v8 ignore next -- A newly journaled complete/reconfirmed graph event necessarily reconstructs graph knowledge. */
     onNone: () => TrackerGraphState.cases.GraphNotEstablished.make({}),
     onSome: (graph) => {
@@ -188,6 +199,7 @@ const graphStateFrom = (
       })
     }
   })
+}
 
 const acceptedRecordPublishesGraph = (record: JournalRecord, target: TrackerTarget): boolean => {
   const targetKey = taskTrackerTargetKey(target)
