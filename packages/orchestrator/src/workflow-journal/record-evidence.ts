@@ -186,6 +186,12 @@ const operationIdsOf = (record: JournalRecord): ReadonlySet<OperationId> => {
   const ids = new Set<OperationId>()
   const operation = operationOf(record)
   if (operation !== undefined) ids.add(workflowOperationId(operation))
+  if (
+    record.event._tag === "TaskTrackerReadIntentRecorded" &&
+    record.event.operation._tag === "ReadCompletionTaskFacts"
+  ) {
+    ids.add(record.event.operation.request.operationId)
+  }
   if ("operationId" in record.event) ids.add(record.event.operationId)
   if ("request" in record.event && "operationId" in record.event.request) ids.add(record.event.request.operationId)
   if ("authorization" in record.event && "operationId" in record.event.authorization) {
@@ -783,10 +789,7 @@ export const journalRetainedExecutorResponsibilitySubjects = (source: JournalRec
   })
 
 /** The first exact replacement intent and outcome settled for one completion claim at this evidence cutoff. */
-export const journalSettledCompletionClaimReplacement = (
-  source: JournalRecordEvidence,
-  claim: CompletionTaskClaim
-) =>
+export const journalSettledCompletionClaimReplacement = (source: JournalRecordEvidence, claim: CompletionTaskClaim) =>
   settledCompletionClaimReplacementAt(indexesFor(source).settledCompletionClaimReplacements, {
     claim,
     throughPosition: source.lastPosition ?? 0

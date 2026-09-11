@@ -17,6 +17,7 @@ import { OperationId } from "../workflow/identity.js"
 import { ClaimOwner, ClaimToken } from "../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim, TaskClaimRelease } from "../authorities/task-tracker/claim-mutation.js"
 import {
+  makeCompletionTaskFactsObservationOperation,
   makeTaskClaimReleaseOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation,
@@ -34,6 +35,12 @@ import {
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../workflow/protocols/planned-attempt-executor-work/events.js"
 import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
+import {
+  CompletionTaskAuthorizationReadOrdinal,
+  CompletionTaskFocusedReadPurpose,
+  CompletionTaskRequestOrdinal
+} from "../workflow/protocols/integration-finality/events.js"
+import { integrationFinalityFixture } from "../workflow/protocols/integration-finality/fixtures.js"
 import { JournalPosition, JournalRecordKey } from "./identity.js"
 import type { JournalRecord } from "./store.js"
 import {
@@ -48,6 +55,119 @@ import {
   journalRecordsOfKind
 } from "./record-evidence.js"
 import { observeRetainedExecutorResponsibilityProjection } from "./retained-executor-responsibility.js"
+import { observeJournalRecordSequenceOperations } from "./record-sequence.js"
+
+it("indexes a completion tracker read by its exact nested request operation without scanning unrelated records", () => {
+  const request = integrationFinalityFixture.completionRequest
+  const purpose = CompletionTaskFocusedReadPurpose.cases.Authorization.make({
+    attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
+    authorizationOrdinal: CompletionTaskAuthorizationReadOrdinal.make(1)
+  })
+  const focusedOperation = makeCompletionTaskFactsObservationOperation(
+    request,
+    integrationFinalityFixture.target,
+    purpose
+  )
+  const focusedEvent = taskTrackerReadIntent(focusedOperation)
+  const focusedRecord = (position: number, key: JournalRecordKey = describeJournalEvent(focusedEvent).expectedKey) => ({
+    event: focusedEvent,
+    key,
+    position: JournalPosition.make(position),
+    runId: integrationFinalityFixture.runId
+  })
+  const unrelatedRecord = (position: number): JournalRecord => {
+    const operation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make(`nested-completion-unrelated-${position}`),
+      integrationFinalityFixture.target
+    )
+    const event = taskTrackerReadIntent(operation)
+    return {
+      event,
+      key: describeJournalEvent(event).expectedKey,
+      position: JournalPosition.make(position),
+      runId: integrationFinalityFixture.runId
+    }
+  }
+
+  const visits = [64, 256].map((size) => {
+    const records = [...Array.from({ length: size }, (_, index) => unrelatedRecord(index + 1)), focusedRecord(size + 1)]
+    const indexed = journalEvidenceFrom(records)
+    const operations: Array<Parameters<Parameters<typeof observeJournalRecordSequenceOperations>[0]>[0]> = []
+    const stop = observeJournalRecordSequenceOperations((operation) => operations.push(operation))
+    try {
+      expect(Array.from(journalRecordsForOperationId(indexed, request.operationId))).toEqual([records.at(-1)])
+    } finally {
+      stop()
+    }
+    return operations
+  })
+
+  expect(visits[0]).toEqual(visits[1])
+  expect(visits[0]).toEqual([{ _tag: "IndexedRecordVisit" }])
+})
+
+it("keeps nested completion request correlations exact across malformed identities, collisions, and duplicate keys", () => {
+  const request = integrationFinalityFixture.completionRequest
+  const purpose = CompletionTaskFocusedReadPurpose.cases.Authorization.make({
+    attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
+    authorizationOrdinal: CompletionTaskAuthorizationReadOrdinal.make(1)
+  })
+  const exactOperation = makeCompletionTaskFactsObservationOperation(
+    request,
+    integrationFinalityFixture.target,
+    purpose
+  )
+  const exactEvent: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerReadIntentRecorded" }> & {
+    readonly operation: typeof exactOperation
+  } = { _tag: "TaskTrackerReadIntentRecorded", operation: exactOperation, version: workflowJournalEventVersion }
+  const malformedRequestOperationId = OperationId.make("nested-completion-malformed-request")
+  const malformedEvent: JournalRecord["event"] = {
+    ...exactEvent,
+    operation: {
+      ...exactEvent.operation,
+      request: { ...exactEvent.operation.request, operationId: malformedRequestOperationId }
+    }
+  }
+  const collidingOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    request.operationId,
+    integrationFinalityFixture.target
+  )
+  const collidingEvent = taskTrackerReadIntent(collidingOperation)
+  const duplicateKey = JournalRecordKey.make("nested-completion-duplicate-key")
+  const records: ReadonlyArray<JournalRecord> = [
+    {
+      event: exactEvent,
+      key: duplicateKey,
+      position: JournalPosition.make(1),
+      runId: integrationFinalityFixture.runId
+    },
+    {
+      event: malformedEvent,
+      key: duplicateKey,
+      position: JournalPosition.make(2),
+      runId: integrationFinalityFixture.runId
+    },
+    {
+      event: collidingEvent,
+      key: describeJournalEvent(collidingEvent).expectedKey,
+      position: JournalPosition.make(3),
+      runId: integrationFinalityFixture.runId
+    }
+  ]
+  const indexed = journalEvidenceFrom(records)
+
+  expect(Array.from(journalRecordsForOperationId(indexed, request.operationId))).toEqual(
+    Array.from(journalRecordsForOperationId(records, request.operationId))
+  )
+  expect(Array.from(journalRecordsForOperationId(indexed, request.operationId))).toEqual([records[0], records[2]])
+  expect(Array.from(journalRecordsForOperationId(indexed, malformedRequestOperationId))).toEqual([records[1]])
+  expect(Array.from(journalRecordsForOperationId(indexed, exactOperation.operationId))).toEqual([
+    records[0],
+    records[1]
+  ])
+})
 
 it("indexes a release intent by its nested claim operation at every safe cutoff", () => {
   const runId = RunId.make("nested-release-correlation-run")
