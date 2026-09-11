@@ -164,6 +164,80 @@ it.each([64, 256])("bounds checking a new direction after %i same-attempt Contin
   expect(visits).toBe(4)
 })
 
+it.each([64, 256])("bounds exact abandoned-claim lookup after %i unrelated same-task abandonments", (size) => {
+  const claim = ActiveTaskClaim.make({
+    operationId: OperationId.make("still-retained-claim"),
+    owner: ClaimOwner.make("dalph"),
+    taskId: plannedAttempt.taskId,
+    token: ClaimToken.make("still-retained-token")
+  })
+  const records = Array.from({ length: size }, (_, offset): JournalRecord => {
+    const event = AttemptImplementationAbandonedEvent.make({
+      expectedClaim: ActiveTaskClaim.make({
+        ...claim,
+        operationId: OperationId.make(`other-abandoned-claim-${offset}`),
+        token: ClaimToken.make(`other-abandoned-token-${offset}`)
+      }),
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      proof: { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+      requestId: AttemptChoiceRequestId.make({ runId, nonce: `other-abandonment-${offset}` }),
+      subject: choice.subject,
+      version: workflowJournalEventVersion
+    })
+    return { event, key: describeJournalEvent(event).expectedKey, position: JournalPosition.make(offset + 1), runId }
+  })
+  const event = TaskClaimReleaseIntendedEvent.make({
+    operation: makeTaskClaimReleaseOperation({
+      release: { claim, operationId: OperationId.make("retained-claim-release") },
+      predecessorOperationIds: [claim.operationId],
+      authority: { _tag: "WorkflowClaimReleaseAuthority" }
+    }),
+    version: workflowJournalEventVersion
+  })
+  const candidate: JournalRecord = {
+    event, key: describeJournalEvent(event).expectedKey, position: JournalPosition.make(size + 1), runId
+  }
+  const evidence = journalEvidenceFrom(records)
+  const issues = new Array<WorkflowJournalHistoryIssue>()
+  let visits = 0
+  const stop = observeJournalRecordSequenceOperations((operation) => {
+    expect(operation._tag).toBe("IndexedRecordVisit")
+    visits += 1
+  })
+  try {
+    validateAttemptStop(candidate, runId, evidence, emptyIndexes(), issues)
+  } finally {
+    stop()
+  }
+  expect(issues).toEqual([])
+  expect(visits).toBe(1)
+  const abandonment = AttemptImplementationAbandonedEvent.make({
+    expectedClaim: claim,
+    initiatedBy: { _tag: "DalphCoordinator" },
+    occurrenceClassification: "InitiatedAction",
+    proof: { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+    requestId,
+    subject: choice.subject,
+    version: workflowJournalEventVersion
+  })
+  const withOwnAbandonment = [...records, {
+    event: abandonment,
+    key: describeJournalEvent(abandonment).expectedKey,
+    position: JournalPosition.make(size + 1),
+    runId
+  }]
+  const afterAbandonment = { ...candidate, position: JournalPosition.make(size + 2) }
+  const coldIssues = new Array<WorkflowJournalHistoryIssue>()
+  const indexedIssues = new Array<WorkflowJournalHistoryIssue>()
+  validateAttemptStop(afterAbandonment, runId, withOwnAbandonment, emptyIndexes(), coldIssues)
+  validateAttemptStop(afterAbandonment, runId, journalEvidenceFrom(withOwnAbandonment), emptyIndexes(), indexedIssues)
+  expect(indexedIssues).toEqual(coldIssues)
+  expect(indexedIssues.map((issue) => "detail" in issue ? issue.detail : issue._tag)).toEqual([
+    "an abandoned attempt claim release requires explicit stopped-attempt authority"
+  ])
+})
+
 const validate = (source: JournalHistorySource): ReadonlyArray<WorkflowJournalHistoryIssue> => {
   const issues = new Array<WorkflowJournalHistoryIssue>()
   validateAttemptChoice(record, runId, source, emptyIndexes(), issues)

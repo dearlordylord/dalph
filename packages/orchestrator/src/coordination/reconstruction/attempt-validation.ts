@@ -706,7 +706,9 @@ export const validateAttemptStop = (
         validateReleaseObservation()
       } else {
         const abandonedClaim = findLast(
-          journalRecordsForTask(prior, event.operation.release.claim.taskId),
+          isJournalRecordEvidence(prior)
+            ? journalRecordsForOperationId(prior, event.operation.release.claim.operationId)
+            : journalRecordsForTask(prior, event.operation.release.claim.taskId),
           ({ event: priorEvent }) =>
             priorEvent._tag === "AttemptImplementationAbandoned" &&
             isExactTaskClaim(priorEvent.expectedClaim, event.operation.release.claim)
