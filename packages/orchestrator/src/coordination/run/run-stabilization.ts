@@ -22,7 +22,12 @@ import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-plan
 import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import { executeTrackerGraphRead } from "../delivery/delivery-action-adapter-common.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
-import { InRunJournal, type InRunJournalService, type JournalRecord } from "../../workflow-journal/store.js"
+import { AcceptedJournalReader, type AcceptedJournalReaderService } from "../../workflow-journal/accepted-reader.js"
+import {
+  emptyJournalEvidence,
+  journalRecordsOfKind,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
 import type { RunActivationOpportunity } from "./run-activation-opportunity.js"
 import { pendingActiveRefreshG2OperationFor } from "./recovery-activation.js"
 import { currentAcceptedPlannedAttemptExecutorLifecycleFor } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
@@ -175,17 +180,17 @@ const shouldReturnInitialProof = (quiescence: DeliveryRuntimeQuiescence): boolea
 }
 
 const journaledPredecessorOperationIds = (
-  journal: InRunJournalService,
+  journal: AcceptedJournalReaderService,
   runId: DeliveryRuntimeQuiescence["current"]["runId"],
   target: TrackerTarget
 ) =>
   runId === undefined
     ? Effect.succeed<ReadonlyArray<ReturnType<typeof makeTrackerGraphObservationOperation>["operationId"]>>([])
     : journal
-        .read(runId)
+        .readAccepted(runId)
         .pipe(
           Effect.map((records) =>
-            records.flatMap(({ event }) =>
+            Array.from(journalRecordsOfKind(records, "TaskTrackerReadIntentRecorded")).flatMap(({ event }) =>
               event._tag === "TaskTrackerReadIntentRecorded" &&
               event.operation._tag === "ReadTrackerGraph" &&
               taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(target)
@@ -226,11 +231,11 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
       /* v8 ignore next -- @preserve shouldReturnInitialProof accepts every first phase without an established graph. */
       if (currentGraph === undefined) return proofOf(target, firstQuiescence)
 
-      const journal = yield* InRunJournal
+      const journal = yield* AcceptedJournalReader
       const currentGraphOperationId = currentGraph.observation.operationId
       const reconstructedRunId = firstQuiescence.current.runId
-      let journalRecords: ReadonlyArray<JournalRecord> = []
-      if (reconstructedRunId !== undefined) journalRecords = yield* journal.read(reconstructedRunId)
+      let journalRecords: JournalHistorySource = emptyJournalEvidence()
+      if (reconstructedRunId !== undefined) journalRecords = yield* journal.readAccepted(reconstructedRunId)
       if (
         opportunity._tag === "ActiveWorkAuthorityRefresh" &&
         currentGraph.observation.cause._tag !== "ExecutingWorkAuthorityCheck"
