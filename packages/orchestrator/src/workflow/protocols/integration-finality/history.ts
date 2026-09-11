@@ -38,12 +38,6 @@ import {
   journalRecordsOfKind,
   type JournalHistorySource
 } from "../../../workflow-journal/record-evidence.js"
-import {
-  appendSettledCompletionClaimReplacementEvidence,
-  emptySettledCompletionClaimReplacements,
-  settledCompletionClaimReplacementAt,
-  type SettledCompletionClaimReplacementEvidence
-} from "../../../workflow-journal/settled-completion-claim-replacement.js"
 
 type ReplacementIntent = Extract<WorkflowJournalEvent, { readonly _tag: "CompletionClaimReplacementIntended" }>
 type ReplacementAttempt = Extract<WorkflowJournalEvent, { readonly _tag: "CompletionClaimReplacementAttemptIntended" }>
@@ -83,7 +77,6 @@ export interface IntegrationFinalityHistoryIndexes {
   >
   readonly deletionTerminals: HashSet.HashSet<OperationId>
   readonly settlements: HashSet.HashSet<string>
-  readonly settledCompletionClaimReplacements: SettledCompletionClaimReplacementEvidence
 }
 
 /** Creates an empty private history index; no authority or frontier is stored. */
@@ -94,8 +87,7 @@ export const makeIntegrationFinalityHistoryIndexes = (): IntegrationFinalityHist
   replacementAttempts: HashMap.empty(),
   replacementIntents: HashMap.empty(),
   replacementTerminals: HashMap.empty(),
-  settlements: HashSet.empty(),
-  settledCompletionClaimReplacements: emptySettledCompletionClaimReplacements()
+  settlements: HashSet.empty()
 })
 
 const mapGet = <Key, Value>(map: HashMap.HashMap<Key, Value>, key: Key): Value | undefined =>
@@ -322,15 +314,27 @@ const invalidDeletionIntent = (
   const accepted = prior(records, record.position)
   const replacement = isJournalRecordEvidence(accepted)
     ? journalSettledCompletionClaimReplacement(accepted, event.claim)
-    : settledCompletionClaimReplacementAt(indexes.settledCompletionClaimReplacements, {
-        claim: event.claim,
-        throughPosition: record.position - 1
+    : undefined
+  /** Raw diagnostic replay retains earlier malformed outcomes in the fold. It must not invent extra later issues by substituting accepted-only matching semantics. */
+  const replacementWasRecorded = isJournalRecordEvidence(accepted)
+    ? replacement !== undefined
+    : [...HashMap.keys(indexes.replacementTerminals)].some((operationId) => {
+        const intent = mapGet(indexes.replacementIntents, operationId)
+        return intent !== undefined && completionTaskClaimEquals(intent.event.claim, event.claim)
       })
+  const replacementRecord = isJournalRecordEvidence(accepted)
+    ? replacement?.outcome
+    : accepted.find(
+        (candidate) =>
+          candidate.event._tag === "CompletionClaimReplaced" &&
+          completionTaskClaimEquals(candidate.event.claim, event.claim)
+      )
   const valid = [
     !duplicate,
     completionTaskClaimEquals(event.claim, event.successObservation.claim),
-    replacement !== undefined,
-    replacement !== undefined && replacement.outcome.position < event.successObservation.observedAt,
+    replacementWasRecorded,
+    replacementRecord !== undefined,
+    replacementRecord !== undefined && replacementRecord.position < event.successObservation.observedAt,
     completeTaskInObservation(records, event.successObservation, record.position)
   ].every(Boolean)
   return {
@@ -855,26 +859,15 @@ export const invalidIntegrationFinalityHistory = (
   indexes: IntegrationFinalityHistoryIndexes
 ): IntegrationFinalityHistoryValidation => {
   const event = record.event
-  const retainReplacementSettlement = (validation: IntegrationFinalityHistoryValidation) => ({
-    ...validation,
-    indexes: {
-      ...validation.indexes,
-      settledCompletionClaimReplacements: appendSettledCompletionClaimReplacementEvidence(
-        indexes.settledCompletionClaimReplacements,
-        record
-      )
-    }
-  })
   if (event._tag === "TaskClaimReleaseIntended") {
-    return retainReplacementSettlement({ detail: invalidCompletionCleanupReleaseIntent(record, records, event), indexes })
+    return { detail: invalidCompletionCleanupReleaseIntent(record, records, event), indexes }
   }
   const replacement = invalidReplacementHistory(record, records, indexes)
-  if (replacement !== undefined) return retainReplacementSettlement(replacement)
+  if (replacement !== undefined) return replacement
   const deletion = invalidDeletionHistory(record, records, indexes)
-  if (deletion !== undefined) return retainReplacementSettlement(deletion)
-  if (event._tag === "IntegrationFinalitySettled")
-    return retainReplacementSettlement(invalidSettlement(record, records, indexes, event))
-  return retainReplacementSettlement({ detail: undefined, indexes })
+  if (deletion !== undefined) return deletion
+  if (event._tag === "IntegrationFinalitySettled") return invalidSettlement(record, records, indexes, event)
+  return { detail: undefined, indexes }
 }
 
 /** Applies run binding and causal validation for one finality event. */

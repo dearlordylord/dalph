@@ -1,4 +1,4 @@
-import { RunId } from "@dalph/contracts"
+import { RunId, TaskId } from "@dalph/contracts"
 import fc from "fast-check"
 import { expect, it } from "vitest"
 import { OperationId } from "../workflow/identity.js"
@@ -129,6 +129,33 @@ it("matches the chronological raw oracle for missing, mismatched, duplicate, and
       }
     })
   )
+})
+
+it("leaves schema-invalid decoded claim diagnostics to the validator instead of throwing during indexing", () => {
+  const valid = claimFor(0)
+  const malformed = { ...valid, originalClaim: { ...valid.originalClaim, taskId: TaskId.make("foreign-claim-task") } }
+  const operationId = OperationId.make("malformed-claim-replacement")
+  const records: ReadonlyArray<JournalRecord> = [
+    {
+      ...occurrence("Intent", valid, operationId, 1),
+      event: {
+        _tag: "CompletionClaimReplacementIntended",
+        claim: malformed,
+        operationId,
+        version: workflowJournalEventVersion
+      }
+    },
+    {
+      ...occurrence("Outcome", valid, operationId, 2),
+      event: { _tag: "CompletionClaimReplaced", claim: malformed, operationId, version: workflowJournalEventVersion }
+    }
+  ]
+  const evidence = records.reduce(
+    appendSettledCompletionClaimReplacementEvidence,
+    emptySettledCompletionClaimReplacements()
+  )
+  expect(settledCompletionClaimReplacementAt(evidence, { claim: malformed, throughPosition: 2 })).toBeUndefined()
+  expect(settledCompletionClaimReplacementAt(evidence, { claim: valid, throughPosition: 2 })).toBeUndefined()
 })
 
 it.each([64, 256])("looks up one settled claim after %i unrelated claims without visiting their histories", (count) => {

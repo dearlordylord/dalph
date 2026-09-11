@@ -47,10 +47,12 @@ const retain = (roots: Roots): SettledCompletionClaimReplacementEvidence => {
   rootsByEvidence.set(evidence, roots)
   return evidence
 }
-const encodeClaim = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.toCodecJson(CompletionTaskClaim)))
+const encodeClaim = Schema.encodeUnknownOption(Schema.fromJsonString(Schema.toCodecJson(CompletionTaskClaim)))
 /** In-memory exact schema identity, not the tracker's durable authority fingerprint. */
-const claimKey = (claim: CompletionTaskClaim): string =>
-  JSON.stringify([claim.promotionCorrelation.requestId, encodeClaim(claim)])
+const claimKey = (claim: CompletionTaskClaim): string | undefined =>
+  Option.getOrUndefined(
+    Option.map(encodeClaim(claim), (encoded) => JSON.stringify([claim.promotionCorrelation.requestId, encoded]))
+  )
 const operationKey = (record: ReplacementIntent | ReplacementOutcome): string =>
   JSON.stringify([record.runId, record.event.operationId])
 
@@ -64,6 +66,8 @@ export const appendSettledCompletionClaimReplacementEvidence = (
 ): SettledCompletionClaimReplacementEvidence => {
   const event = record.event
   if (event._tag !== "CompletionClaimReplacementIntended" && event._tag !== "CompletionClaimReplaced") return evidence
+  const key = claimKey(event.claim)
+  if (key === undefined) return evidence
   if (event.claim.plannedAttempt.runId !== record.runId) return evidence
   const roots = rootsOf(evidence)
   if (isReplacementIntent(record)) {
@@ -79,7 +83,6 @@ export const appendSettledCompletionClaimReplacementEvidence = (
   ) {
     return evidence
   }
-  const key = claimKey(event.claim)
   if (HashMap.has(roots.settled, key)) return evidence
   return retain({ ...roots, settled: HashMap.set(roots.settled, key, { intent, outcome }) })
 }
@@ -98,8 +101,10 @@ export const settledCompletionClaimReplacementAt = (
   evidence: SettledCompletionClaimReplacementEvidence,
   query: { readonly claim: CompletionTaskClaim; readonly throughPosition: number }
 ): SettledCompletionClaimReplacement | undefined => {
+  const key = claimKey(query.claim)
+  if (key === undefined) return undefined
   for (const observer of observers) observer("SettlementLookup")
-  const settled = Option.getOrUndefined(HashMap.get(rootsOf(evidence).settled, claimKey(query.claim)))
+  const settled = Option.getOrUndefined(HashMap.get(rootsOf(evidence).settled, key))
   return settled !== undefined &&
     settled.outcome.position <= query.throughPosition &&
     completionTaskClaimEquals(settled.outcome.event.claim, query.claim)
