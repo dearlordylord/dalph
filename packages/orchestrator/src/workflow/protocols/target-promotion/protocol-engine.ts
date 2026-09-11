@@ -5,7 +5,7 @@ import { makeTargetPromotionTransitions, type TargetPromotionProgress } from "./
 import { TargetPromotionPendingRetry, TargetPromotionState } from "./state.js"
 
 /** Internal stateless engine; production supplies accepted evidence, focused tests supply decoded evidence. */
-export const makeTargetPromotionEngine = <E, R>(readEvidence: CurrentTargetPromotionEvidence<E, R>) => {
+const makeTargetPromotionEngineImplementation = <E, R>(readEvidence: CurrentTargetPromotionEvidence<E, R>) => {
   const transitions = makeTargetPromotionTransitions(readEvidence)
   const finishProgress = Effect.fn("TargetPromotion.finishProgress")(function* (progress: TargetPromotionProgress) {
     const afterRead =
@@ -34,3 +34,15 @@ export const makeTargetPromotionEngine = <E, R>(readEvidence: CurrentTargetPromo
   })
   return { ...transitions, reconcileTargetPromotionAttempt, runTargetPromotion }
 }
+
+type TargetPromotionEngineImplementation<E, R> = ReturnType<typeof makeTargetPromotionEngineImplementation<E, R>>
+
+/** The complete outer protocol surface without exposing process-local capability brands. */
+export interface TargetPromotionEngine<E, R> extends ReturnType<typeof makeTargetPromotionTransitions<E, R>> {
+  readonly reconcileTargetPromotionAttempt: TargetPromotionEngineImplementation<E, R>["reconcileTargetPromotionAttempt"]
+  readonly runTargetPromotion: TargetPromotionEngineImplementation<E, R>["runTargetPromotion"]
+}
+
+export const makeTargetPromotionEngine = <E, R>(
+  readEvidence: CurrentTargetPromotionEvidence<E, R>
+): TargetPromotionEngine<E, R> => makeTargetPromotionEngineImplementation(readEvidence)
