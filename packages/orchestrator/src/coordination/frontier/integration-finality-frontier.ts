@@ -18,6 +18,13 @@ import {
 import type { TargetPromotionState } from "../../workflow/protocols/target-promotion/state.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
+import {
+  isJournalRecordEvidence,
+  journalGraphObservationAt,
+  journalRecordsForOperationId,
+  journalRecordsOfKind,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
 import type { IntegrationFrontierRuntimeFacts } from "./integration-frontier.js"
 import { completionTaskConfirmationDisposition } from "../../workflow/protocols/integration-finality/completion-task-protocol.js"
 import {
@@ -33,11 +40,15 @@ import {
 } from "./frontier.js"
 
 const replacementPositionFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   operationId: ReturnType<typeof completionClaimReplacementOperationIdFor>
-): JournalPosition | undefined =>
-  records.findLast(({ event }) => event._tag === "CompletionClaimReplaced" && event.operationId === operationId)
-    ?.position
+): JournalPosition | undefined => {
+  let position: JournalPosition | undefined
+  for (const record of journalRecordsForOperationId(records, operationId)) {
+    if (record.event._tag === "CompletionClaimReplaced") position = record.position
+  }
+  return position
+}
 
 const completionClaimFor = (
   responsibility: StartedIntegrationResponsibility,
@@ -55,46 +66,54 @@ const completionClaimFor = (
 }
 
 const latestCompletionTaskOutcomeFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   request: CompletionTaskRequest
-): JournalRecord | undefined =>
-  records.findLast(
-    ({ event }) =>
-      (event._tag === "CompletionTaskAcknowledged" || event._tag === "CompletionTaskRejected") &&
-      event.request.operationId === request.operationId
-  )
+): JournalRecord | undefined => {
+  let latest: JournalRecord | undefined
+  for (const record of journalRecordsForOperationId(records, request.operationId)) {
+    if (record.event._tag === "CompletionTaskAcknowledged" || record.event._tag === "CompletionTaskRejected") {
+      latest = record
+    }
+  }
+  return latest
+}
+
+type CompletionTaskRequestLookupRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "CompletionTaskRequestLookupObserved" }>
+}
+
+const isCompletionTaskRequestLookupRecord = (record: JournalRecord): record is CompletionTaskRequestLookupRecord =>
+  record.event._tag === "CompletionTaskRequestLookupObserved"
 
 const latestCompletionTaskLookupFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   request: CompletionTaskRequest
 ):
-  | (JournalRecord & {
-      readonly event: Extract<JournalRecord["event"], { readonly _tag: "CompletionTaskRequestLookupObserved" }>
-    })
+  | CompletionTaskRequestLookupRecord
   | undefined => {
-  const latest = records.findLast(
-    (
-      record
-    ): record is JournalRecord & {
-      readonly event: Extract<JournalRecord["event"], { readonly _tag: "CompletionTaskRequestLookupObserved" }>
-    } =>
-      record.event._tag === "CompletionTaskRequestLookupObserved" &&
-      record.event.request.operationId === request.operationId
-  )
+  let latest: CompletionTaskRequestLookupRecord | undefined
+  for (const record of journalRecordsForOperationId(records, request.operationId)) {
+    if (isCompletionTaskRequestLookupRecord(record)) latest = record
+  }
   return latest
 }
 
 const latestCompletionConfirmationFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   request: CompletionTaskRequest
-): JournalRecord | undefined =>
-  records.findLast(
-    ({ event }) =>
-      event._tag === "TaskTrackerFactsObserved" &&
-      event.observation._tag === "FocusedTaskCompletionFacts" &&
-      event.observation.request.operationId === request.operationId &&
-      event.observation.purpose._tag === "Confirmation"
-  )
+): JournalRecord | undefined => {
+  let latest: JournalRecord | undefined
+  for (const record of journalRecordsForOperationId(records, request.operationId)) {
+    if (
+      record.event._tag === "TaskTrackerFactsObserved" &&
+      record.event.observation._tag === "FocusedTaskCompletionFacts" &&
+      record.event.observation.purpose._tag === "Confirmation"
+    ) {
+      latest = record
+    }
+  }
+  return latest
+}
 
 const isCompleteGraphRead = (record: JournalRecord): boolean =>
   record.event._tag === "TaskTrackerFactsObserved" &&
@@ -108,11 +127,17 @@ const isCompleteGraphRead = (record: JournalRecord): boolean =>
     UnchangedTaskTrackerFactsReconfirmed: () => true
   })
 
-const latestCompleteGraphPosition = (records: ReadonlyArray<JournalRecord>): JournalPosition | undefined =>
-  records.findLast(isCompleteGraphRead)?.position
+const latestCompleteGraphPosition = (records: JournalHistorySource): JournalPosition | undefined => {
+  if (isJournalRecordEvidence(records)) return journalGraphObservationAt(records, {})?.position
+  let position: JournalPosition | undefined
+  for (const record of journalRecordsOfKind(records, "TaskTrackerFactsObserved")) {
+    if (isCompleteGraphRead(record)) position = record.position
+  }
+  return position
+}
 
 const deletionSuccessFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   responsibility: StartedIntegrationResponsibility,
   claim: CompletionTaskClaim,
   replacementOperationId: ReturnType<typeof completionClaimReplacementOperationIdFor>,
@@ -141,7 +166,7 @@ const replacementTransitionsFor = (
 
 const deletionTransitionsFor = (
   state: Exclude<IntegrationFinalityState, { readonly _tag: "ReplacementPending" | "IntegrationFinalitySettled" }>,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   claim: CompletionTaskClaim,
   responsibility: StartedIntegrationResponsibility,
   replacementOperationId: ReturnType<typeof completionClaimReplacementOperationIdFor>
@@ -209,7 +234,7 @@ const decisiveLookupTransitionsFor = (
 }
 
 const focusedSuccessFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   responsibility: StartedIntegrationResponsibility,
   claim: CompletionTaskClaim
 ) => {
@@ -226,7 +251,7 @@ const confirmationRequiredAfterFor = (
 ): JournalPosition | undefined => (lookup?.event.lookup._tag === "Applied" ? lookup.position : outcome?.position)
 
 const completionTaskTransitionsFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   responsibility: StartedIntegrationResponsibility,
   claim: CompletionTaskClaim,
   request: CompletionTaskRequest
@@ -254,7 +279,7 @@ const completionTaskTransitionsFor = (
 
 const finalityTransitionsForState = (
   state: IntegrationFinalityState | undefined,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   claim: CompletionTaskClaim,
   responsibility: StartedIntegrationResponsibility,
   replacementOperationId: ReturnType<typeof completionClaimReplacementOperationIdFor>,
@@ -274,7 +299,7 @@ const finalityTransitionsForState = (
 }
 
 const postPromotionBlockerClearTransitionsFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   claim: CompletionTaskClaim,
   responsibility: StartedIntegrationResponsibility
 ): ReadonlyArray<RunnableFrontierTransitionType> | undefined => {
@@ -291,7 +316,7 @@ const postPromotionBlockerClearTransitionsFor = (
 
 /** Derives only the task-scoped post-promotion claim action; it never acquires a Git target. */
 export const integrationFinalityTransitionsFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   responsibility: StartedIntegrationResponsibility,
   promotion: Extract<TargetPromotionState, { readonly _tag: "PromotionSucceeded" }>,
   runtimeFacts: IntegrationFrontierRuntimeFacts
@@ -343,7 +368,7 @@ const nonConvergenceExplanationFor = (
 }
 
 const waitsForFreshSuccess = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   state: IntegrationFinalityState | undefined,
   claim: CompletionTaskClaim | undefined,
   responsibility: StartedIntegrationResponsibility
@@ -358,16 +383,16 @@ const waitsForFreshSuccess = (
 }
 
 const focusedSuccessWaitReasonFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   claim: CompletionTaskClaim
 ): IntegrationFinalityTrackerSuccessWaitReason => {
   const request = completionTaskRequestFor(claim)
-  const focusedObservation = records.findLast(
-    ({ event }) =>
-      event._tag === "TaskTrackerFactsObserved" &&
-      event.observation._tag === "FocusedTaskCompletionFacts" &&
-      event.observation.request.operationId === request.operationId
-  )
+  let focusedObservation: JournalRecord | undefined
+  for (const record of journalRecordsForOperationId(records, request.operationId)) {
+    if (record.event._tag === "TaskTrackerFactsObserved" && record.event.observation._tag === "FocusedTaskCompletionFacts") {
+      focusedObservation = record
+    }
+  }
   if (
     focusedObservation?.event._tag !== "TaskTrackerFactsObserved" ||
     focusedObservation.event.observation._tag !== "FocusedTaskCompletionFacts"
@@ -397,7 +422,7 @@ const focusedSuccessWaitReasonFor = (
 }
 
 export const integrationFinalityExplanationFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   responsibility: StartedIntegrationResponsibility,
   promotion: Extract<TargetPromotionState, { readonly _tag: "PromotionSucceeded" }>,
   runtimeFacts: IntegrationFrontierRuntimeFacts

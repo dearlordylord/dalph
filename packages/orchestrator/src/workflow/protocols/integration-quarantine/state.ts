@@ -11,6 +11,7 @@ import {
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import {
   isJournalRecordEvidence,
+  journalRecordByPosition,
   journalRecordsForIntegratorSession,
   type JournalHistorySource
 } from "../../../workflow-journal/record-evidence.js"
@@ -70,39 +71,56 @@ const directionRecordHasCanonicalKey = (record: DirectionRecord): boolean =>
 const gitObservationEqual = Schema.toEquivalence(IntegratorGitObservation)
 
 const quarantineRecordsFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   sessionId: IntegratorSessionId
-): ReadonlyArray<QuarantineRecord> =>
-  records
-    .filter(
-      (record): record is QuarantineRecord =>
-        isQuarantineRecord(record) && record.event.correlation.sessionId === sessionId
-    )
-    .toSorted((left, right) => left.position - right.position)
+): Iterable<QuarantineRecord> => {
+  if (!isJournalRecordEvidence(records)) {
+    return records
+      .filter(
+        (record): record is QuarantineRecord =>
+          isQuarantineRecord(record) && record.event.correlation.sessionId === sessionId
+      )
+      .toSorted((left, right) => left.position - right.position)
+  }
+  return {
+    *[Symbol.iterator]() {
+      for (const record of journalRecordsForIntegratorSession(records, sessionId)) {
+        if (isQuarantineRecord(record) && record.event.correlation.sessionId === sessionId) yield record
+      }
+    }
+  }
+}
 
 const directionRecordsFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   subject: IntegrationQuarantineDirectionSubject
-): ReadonlyArray<DirectionRecord> =>
-  records
-    .filter(
-      (record): record is DirectionRecord =>
-        record.event._tag === "IntegrationQuarantineDirectionApplied" &&
-        sameIntegrationQuarantineDirectionSubject(
-          IntegrationQuarantineDirectionSubject.make({
-            quarantineAt: record.event.fingerprint.quarantineAt,
-            sessionId: record.event.fingerprint.sessionId
-          }),
-          subject
-        )
+): Iterable<DirectionRecord> => {
+  const matches = (record: JournalRecord): record is DirectionRecord =>
+    record.event._tag === "IntegrationQuarantineDirectionApplied" &&
+    sameIntegrationQuarantineDirectionSubject(
+      IntegrationQuarantineDirectionSubject.make({
+        quarantineAt: record.event.fingerprint.quarantineAt,
+        sessionId: record.event.fingerprint.sessionId
+      }),
+      subject
     )
-    .toSorted((left, right) => left.position - right.position)
+  if (!isJournalRecordEvidence(records)) {
+    return records.filter(matches).toSorted((left, right) => left.position - right.position)
+  }
+  return {
+    *[Symbol.iterator]() {
+      for (const record of journalRecordsForIntegratorSession(records, subject.sessionId)) {
+        if (matches(record)) yield record
+      }
+    }
+  }
+}
 
-const recordAt = (records: ReadonlyArray<JournalRecord>, position: JournalPosition): JournalRecord | undefined =>
-  records.find((record) => record.position === position)
+const recordAt = (records: JournalHistorySource, position: JournalPosition): JournalRecord | undefined =>
+  journalRecordByPosition(records, position)
 
 const providerActivityAbsenceMatches = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   record: JournalRecord | undefined,
   correlation: IntegrationQuarantinedEvent["correlation"],
   detail: Extract<IntegrationQuarantineBasis, { readonly _tag: "ProviderRunFailure" }>["detail"]
@@ -135,15 +153,17 @@ const isIntegratorCandidateObservationRecord = (
 const isDirectionRecord = (record: JournalRecord | undefined): record is DirectionRecord =>
   record?.event._tag === "IntegrationQuarantineDirectionApplied"
 
-const hasMatchingRunStart = (records: ReadonlyArray<JournalRecord>, record: IntegratorResultRecord): boolean => {
+const hasMatchingRunStart = (records: JournalHistorySource, record: IntegratorResultRecord): boolean => {
   const run = record.event.run
-  return records.some(
-    (candidate) =>
+  for (const candidate of journalRecordsForIntegratorSession(records, run.session.sessionId)) {
+    if (
       candidate.position < record.position &&
       candidate.event._tag === "IntegratorRunStarted" &&
       (run.ordinal !== integratorRetryRunOrdinal || candidate.key === integratorRunStartedRecordKey(run)) &&
       integratorRunCorrelationsEqual(candidate.event.run, run)
-  )
+    ) return true
+  }
+  return false
 }
 
 const resultBelongsToQuarantinedRun = (record: IntegratorResultRecord, quarantine: QuarantineRecord): boolean => {
@@ -158,7 +178,7 @@ const resultBelongsToQuarantinedRun = (record: IntegratorResultRecord, quarantin
 }
 
 const resultRecordFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   position: JournalPosition,
   quarantine: QuarantineRecord
 ): IntegratorResultRecord | undefined => {
@@ -187,7 +207,7 @@ const candidateResultMatches = (
   record.event.result._tag === "PreparedCandidate" && record.event.result.candidateText === candidateText.candidateText
 
 const candidateObservationRecordFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   position: JournalPosition,
   quarantine: QuarantineRecord,
   resultRecord: IntegratorResultRecord
@@ -213,7 +233,7 @@ const candidateObservationMatches = (
   record.event.candidateText === cause.candidateText &&
   gitObservationEqual(record.event.observation, cause.observation)
 
-const retryResultIsAuthorized = (records: ReadonlyArray<JournalRecord>, resultRecord: IntegratorResultRecord) => {
+const retryResultIsAuthorized = (records: JournalHistorySource, resultRecord: IntegratorResultRecord) => {
   if (resultRecord.event.run.ordinal !== integratorRetryRunOrdinal) return true
   const runStart = providerRunStartFor(records, resultRecord.event.run)
   if (runStart === undefined || runStart.position >= resultRecord.position) return false
@@ -228,7 +248,7 @@ const retryResultIsAuthorized = (records: ReadonlyArray<JournalRecord>, resultRe
 }
 
 const invalidCandidateEvidenceMatchesRecords = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   quarantine: QuarantineRecord,
   resultRecord: IntegratorResultRecord,
   cause: Extract<IntegrationQuarantineBasis, { readonly _tag: "ConclusiveResult" }>["cause"] & {
@@ -245,7 +265,7 @@ const invalidCandidateEvidenceMatchesRecords = (
   )
 
 const conclusiveEvidenceMatchesRecords = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   quarantine: QuarantineRecord
 ): boolean => {
   /* v8 ignore next -- @preserve this helper is called only after quarantineEvidenceMatchesRecords narrows the basis to ConclusiveResult. */
@@ -265,20 +285,22 @@ const conclusiveEvidenceMatchesRecords = (
 }
 
 const priorQuarantineFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "RetryTargetHeadChanged" }>,
   correlation: QuarantineRecord["event"]["correlation"]
 ): QuarantineRecord | undefined =>
-  records.find(
-    (record): record is QuarantineRecord =>
+  (() => {
+    const record = recordAt(records, basis.priorQuarantineAt)
+    return record !== undefined &&
       isQuarantineRecord(record) &&
-      record.position === basis.priorQuarantineAt &&
       record.event.correlation.sessionId === correlation.sessionId &&
       quarantineRecordHasCanonicalKey(record)
-  )
+      ? record
+      : undefined
+  })()
 
 const retryDirectionFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "RetryTargetHeadChanged" }>,
   correlation: QuarantineRecord["event"]["correlation"]
 ): DirectionRecord | undefined => {
@@ -294,7 +316,7 @@ const retryDirectionFor = (
 }
 
 const targetLineageFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "RetryTargetHeadChanged" }>,
   correlation: QuarantineRecord["event"]["correlation"]
 ): JournalRecord | undefined => {
@@ -317,7 +339,7 @@ const retryEvidencePositionsAreCausal = (
   observationRecord.position < quarantine.position
 
 function retryTargetHeadEvidenceMatchesRecords(
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   quarantine: QuarantineRecord
 ): boolean {
   /* v8 ignore next -- @preserve quarantineEvidenceMatchesRecords dispatches here only for RetryTargetHeadChanged bases. */
@@ -335,12 +357,12 @@ function retryTargetHeadEvidenceMatchesRecords(
 }
 
 const promotionStaleEvidenceMatchesRecords = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   quarantine: QuarantineRecord
 ): boolean => validatePromotionStaleQuarantineEvidence(records, quarantine)._tag === "Valid"
 
 function quarantineEvidenceMatchesRecords(
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   quarantine: QuarantineRecord
 ): boolean {
   const { basis } = quarantine.event
@@ -351,7 +373,7 @@ function quarantineEvidenceMatchesRecords(
 }
 
 const providerFailureEvidenceMatchesRecords = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   quarantine: QuarantineRecord,
   basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "ProviderRunFailure" }>
 ): boolean => {
@@ -369,10 +391,8 @@ const providerFailureEvidenceMatchesRecords = (
 const contradiction = (detail: string): IntegrationQuarantineState =>
   IntegrationQuarantineState.cases.Contradiction.make({ detail })
 
-const lastArrayElement = -1
-
 const quarantineContradiction = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   quarantine: QuarantineRecord,
   sessionId: IntegratorSessionId
 ): string | undefined => {
@@ -384,32 +404,43 @@ const quarantineContradiction = (
   }
   const subject = IntegrationQuarantineDirectionSubject.make({ quarantineAt: quarantine.position, sessionId })
   const directions = directionRecordsFor(records, subject)
-  if (directions.length > 1) return "one quarantine occurrence has more than one applied direction"
-  const successorSession = records.some(
-    ({ event, position, runId }) =>
+  let directionCount = 0
+  let hasForeignDirection = false
+  let hasNonCausalDirection = false
+  for (const direction of directions) {
+    directionCount += 1
+    hasForeignDirection ||= !directionRecordHasCanonicalKey(direction)
+    hasNonCausalDirection ||= direction.position <= quarantine.position
+  }
+  if (directionCount > 1) return "one quarantine occurrence has more than one applied direction"
+  let successorSession = false
+  for (const { event, position, runId } of journalRecordsForIntegratorSession(records, sessionId)) {
+    if (
       event._tag === "IntegratorSuccessorSessionFixed" &&
       runId === quarantine.runId &&
       position < quarantine.position &&
       integratorCorrelationsEqual(event.successor, quarantine.event.correlation)
-  )
-  if (successorSession && directions.length > 0) {
+    ) {
+      successorSession = true
+      break
+    }
+  }
+  if (successorSession && directionCount > 0) {
     return "a FullRerun successor quarantine cannot apply another direction"
   }
-  if (directions.some((direction) => !directionRecordHasCanonicalKey(direction))) {
+  if (hasForeignDirection) {
     return "quarantine direction has a foreign Journal key"
   }
-  return directions.some((direction) => direction.position <= quarantine.position)
-    ? "a quarantine direction must follow its quarantine occurrence"
-    : undefined
+  return hasNonCausalDirection ? "a quarantine direction must follow its quarantine occurrence" : undefined
 }
 
 const latestQuarantineState = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   latest: QuarantineRecord,
   sessionId: IntegratorSessionId
 ): IntegrationQuarantineState => {
   const subject = IntegrationQuarantineDirectionSubject.make({ quarantineAt: latest.position, sessionId })
-  const application = directionRecordsFor(records, subject)[0]
+  const application = directionRecordsFor(records, subject)[Symbol.iterator]().next().value
   if (application === undefined) {
     return IntegrationQuarantineState.cases.Quarantined.make({
       quarantine: latest.event,
@@ -429,18 +460,14 @@ export const deriveIntegrationQuarantineState = (
   source: JournalHistorySource,
   sessionId: IntegratorSessionId
 ): IntegrationQuarantineState => {
-  const records = isJournalRecordEvidence(source)
-    ? Array.from(journalRecordsForIntegratorSession(source, sessionId))
-    : source
-  const quarantines = quarantineRecordsFor(records, sessionId)
-  const latest = quarantines.at(lastArrayElement)
-  if (latest === undefined) return IntegrationQuarantineState.cases.NoQuarantine.make({ sessionId })
-
-  for (const quarantine of quarantines) {
-    const detail = quarantineContradiction(records, quarantine, sessionId)
+  let latest: QuarantineRecord | undefined
+  for (const quarantine of quarantineRecordsFor(source, sessionId)) {
+    const detail = quarantineContradiction(source, quarantine, sessionId)
     if (detail !== undefined) return contradiction(detail)
+    latest = quarantine
   }
-  return latestQuarantineState(records, latest, sessionId)
+  if (latest === undefined) return IntegrationQuarantineState.cases.NoQuarantine.make({ sessionId })
+  return latestQuarantineState(source, latest, sessionId)
 }
 
 /** Returns the exact quarantine occurrence named by a direction fingerprint. */
@@ -448,17 +475,14 @@ export const quarantineRecordForFingerprint = (
   source: JournalHistorySource,
   fingerprint: IntegrationQuarantineDirectionFingerprint
 ): QuarantineRecord | undefined => {
-  const records = isJournalRecordEvidence(source)
-    ? Array.from(journalRecordsForIntegratorSession(source, fingerprint.sessionId))
-    : source
-  return records.find(
-    (record): record is QuarantineRecord =>
-      isQuarantineRecord(record) &&
-      record.position === fingerprint.quarantineAt &&
-      record.event.correlation.sessionId === fingerprint.sessionId &&
-      quarantineRecordHasCanonicalKey(record) &&
-      quarantineEvidenceMatchesRecords(records, record)
-  )
+  const record = recordAt(source, fingerprint.quarantineAt)
+  return record !== undefined &&
+    isQuarantineRecord(record) &&
+    record.event.correlation.sessionId === fingerprint.sessionId &&
+    quarantineRecordHasCanonicalKey(record) &&
+    quarantineEvidenceMatchesRecords(source, record)
+    ? record
+    : undefined
 }
 
 /** Exposes the narrowed Journal event type for adjacent registry projections. */

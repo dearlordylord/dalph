@@ -35,6 +35,7 @@ import {
   outcomeRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
+import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
 import {
   InRunJournal,
   JournalStore,
@@ -353,6 +354,9 @@ it.effect("records Q2 CandidateRejected only with the exact run-two Git evidence
     const records = yield* history.journal.read(runId)
     const reconstructed = deriveIntegrationQuarantineState(records, history.session.sessionId)
     expect(reconstructed._tag).toBe("Quarantined")
+    expect(deriveIntegrationQuarantineState(journalEvidenceFrom(records), history.session.sessionId)).toEqual(
+      reconstructed
+    )
 
     const foreignCandidateKey = records.map((record) =>
       record.position === candidateObservationRecord.position

@@ -343,6 +343,18 @@ const indexedProviderRunStart = (
     : undefined
 }
 
+/** Resolves the exact fixed-session/run-start relation before a causal boundary without applying absence-only exclusions. */
+export const providerRunStartBefore = (
+  records: JournalHistorySource,
+  run: IntegratorRunCorrelation,
+  beforePosition: JournalRecord["position"]
+): JournalRecord | undefined => {
+  if (isJournalRecordEvidence(records)) return indexedProviderRunStart(records, run, beforePosition)?.runStart
+  const history = records.filter((record) => record.position < beforePosition)
+  const fixedSession = fixedSessionForRun(history, run)
+  return fixedSession._tag === "Valid" ? providerRunStartFor(history, run, fixedSession) : undefined
+}
+
 const validateIndexedProviderRunActivityAbsent = (
   records: JournalRecordEvidence,
   record: JournalRecord

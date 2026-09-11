@@ -41,6 +41,7 @@ import {
 } from "../../../workflow-journal/store.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   IntegrationProviderRunActivityAbsentEvent,
@@ -775,6 +776,9 @@ it.effect("rejects provider absence when its run predecessors or exact Journal f
     }
     expect(validateProviderRunActivityAbsent([...records, runResult], absence)._tag).toBe("Invalid")
     expect(providerRunStartFor(records, history.run)?.position).toBeGreaterThan(history.session.targetLineageObservedAt)
+    expect(providerRunStartFor(journalEvidenceFrom(records), history.run)).toBe(
+      providerRunStartFor(records, history.run)
+    )
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
