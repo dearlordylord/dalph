@@ -145,6 +145,7 @@ import type { AcceptedPlannedAttemptExecutorResponsibility } from "../../workflo
 import type { DeliveryAdmissionReservation, DeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { InRunJournal, type JournalRecord, JournalStorageUnavailable } from "../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { deriveJournalResponsibilityFacts } from "../run/recovery-activation.js"
 import { requiredPlannedAttemptPositionsOf } from "../run/required-planned-attempt-positions.js"
@@ -159,6 +160,7 @@ import {
   preparedBeginProposalsOf as derivePreparedBeginProposals
 } from "../../../test/support/prepared-begin-proposal.js"
 import { makeFreshTaskCandidateFrontierForTest } from "../../../test/support/fresh-task-candidate.js"
+import { makeExecutingAttemptHistory } from "../../../test/support/executing-attempt-history.js"
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
 import { deliveryRuntimeLocalDeferralAfter, DeliveryRuntimeLocalDeferral } from "./delivery-runtime-local-deferral.js"
 import { reconcileDeliveryRuntimeLocalDeferrals } from "./delivery-runtime-local-deferral-reconciliation.js"
@@ -167,6 +169,7 @@ import {
   PassivePlannedAttemptObserver,
   PassivePlannedAttemptProjectionPublication
 } from "../run/passive-planned-attempt-observer.js"
+import { liveJournalTestLayer } from "./live-journal-test-layer.js"
 
 const deliveryRuntimeResourceCapabilitiesOf = Effect.fn("RunDeliveryRuntimeTest.makeCapabilities")(function* (
   integrationTargets: Parameters<typeof makeCapabilitiesWithAdmission>[0]
@@ -267,6 +270,26 @@ const preparedAttemptFixture = (name: string) =>
   makePreparedBeginFixture(plannedAttempt, "runtime-admission-stalled", name)
 const preparedBeginProposalsOf = (fixtures: ReadonlyArray<ReturnType<typeof preparedAttemptFixture>>) =>
   derivePreparedBeginProposals(runId, fixtures)
+
+const effectiveAdmissionAttempt = preparedAttemptFixture("snapshot-C")
+const effectiveAdmissionHistory = makeExecutingAttemptHistory({
+  activeClaim: ActiveTaskClaim.make({
+    operationId: effectiveAdmissionAttempt.fresh.step.claimOperationId,
+    owner: ClaimOwner.make("runtime-admission-stalled-owner"),
+    taskId: effectiveAdmissionAttempt.attempt.taskId,
+    token: ClaimToken.make("runtime-admission-stalled-token")
+  }),
+  plannedAttempt: effectiveAdmissionAttempt.attempt,
+  runId,
+  taskSpecification: effectiveAdmissionAttempt.fresh.step.specification,
+  trackerTarget: target
+})
+const effectiveAdmissionResponsibilityIndex = effectiveAdmissionHistory.records.findIndex(
+  ({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+)
+if (effectiveAdmissionResponsibilityIndex < 0) throw new Error("effective admission fixture must reach responsibility")
+const effectiveAdmissionSeed = effectiveAdmissionHistory.records.slice(0, effectiveAdmissionResponsibilityIndex)
+const effectiveAdmissionJournalLayer = liveJournalTestLayer({ records: effectiveAdmissionSeed, runId, target })
 
 const handoffCorrelation = { attemptId: AttemptId.make("runtime-admission-handoff-attempt"), runId }
 const handoffIntegrationTarget = IntegrationTarget.make({
@@ -4131,22 +4154,12 @@ const runEffectiveAdmissionSnapshotScenario = Effect.fn("Test.runEffectiveAdmiss
         .publish(evaluation)
         .pipe(Effect.andThen(Ref.update(relationPublicationCount, (count) => count + 1)))
   }
-  const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
-  const journal = InRunJournal.of({
-    append: (recordRunId, key, event) =>
-      Ref.modify(records, (current) => {
-        const existing = current.find((record) => record.key === key)
-        if (existing !== undefined) return [existing, current] as const
-        const appended = {
-          event,
-          key,
-          position: JournalPosition.make(current.length + 1),
-          runId: recordRunId
-        } satisfies JournalRecord
-        return [appended, [...current, appended]] as const
-      }),
-    read: () => Ref.get(records)
-  })
+  const journal = yield* InRunJournal
+  const acceptedJournalReader = yield* AcceptedJournalReader
+  const acceptedScenarioRecords = journal.read(runId).pipe(
+    Effect.orDie,
+    Effect.map((records) => records.slice(effectiveAdmissionSeed.length))
+  )
   const admissionCreated = yield* Deferred.make<DeliveryRuntimeAdmissionController>()
   const beginBoundary = yield* Deferred.make<{
     readonly journalTags: ReadonlyArray<JournalRecord["event"]["_tag"]>
@@ -4174,7 +4187,9 @@ const runEffectiveAdmissionSnapshotScenario = Effect.fn("Test.runEffectiveAdmiss
             controller.bindPlannedAttemptPosition(reservation, attempt, acceptedResponsibility).pipe(
               Effect.andThen(
                 Effect.all({
-                  journalTags: Ref.get(records).pipe(Effect.map((current) => current.map(({ event }) => event._tag))),
+                  journalTags: acceptedScenarioRecords.pipe(
+                    Effect.map((current) => current.map(({ event }) => event._tag))
+                  ),
                   position: controller.snapshot.pipe(Effect.map(({ positions }) => positions.get(attempt.taskId)))
                 })
               ),
@@ -4193,7 +4208,7 @@ const runEffectiveAdmissionSnapshotScenario = Effect.fn("Test.runEffectiveAdmiss
       Effect.gen(function* () {
         const admission = yield* Deferred.await(admissionCreated)
         yield* Deferred.succeed(beginBoundary, {
-          journalTags: (yield* Ref.get(records)).map(({ event }) => event._tag),
+          journalTags: (yield* acceptedScenarioRecords).map(({ event }) => event._tag),
           position: (yield* admission.snapshot).positions.get(c.attempt.taskId)
         })
         return executing
@@ -4216,6 +4231,7 @@ const runEffectiveAdmissionSnapshotScenario = Effect.fn("Test.runEffectiveAdmiss
       }
       return executeFreshPlannedAttempt(action, action.proposal.route, lease).pipe(
         Effect.provideService(InRunJournal, journal),
+        Effect.provideService(AcceptedJournalReader, acceptedJournalReader),
         Effect.provideService(PlannedAttemptExecutor, plannedAttemptExecutor),
         Effect.provideService(PassivePlannedAttemptObserver, passiveObserver),
         Effect.provideService(PassivePlannedAttemptProjectionPublication, passivePublication)
@@ -4246,7 +4262,7 @@ const runEffectiveAdmissionSnapshotScenario = Effect.fn("Test.runEffectiveAdmiss
   const acceptedPublicationMade = yield* Ref.make(false)
   const publication = DeliveryAcceptedFactPublication.of({
     awaitCurrent: Effect.gen(function* () {
-      yield* Deferred.succeed(journalCountAtPublication, (yield* Ref.get(records)).length)
+      yield* Deferred.succeed(journalCountAtPublication, (yield* acceptedScenarioRecords).length)
       // Like the production boundary, rereading an already published prefix
       // does not publish the same facts again or rewind the later guard.
       if (!(yield* Ref.getAndSet(acceptedPublicationMade, true))) yield* relation.publish(accepted)
@@ -4268,7 +4284,7 @@ const runEffectiveAdmissionSnapshotScenario = Effect.fn("Test.runEffectiveAdmiss
     beginBoundary: yield* Deferred.await(beginBoundary),
     blocked,
     expectedCorrelations: [a, b, c].map(({ attempt }) => plannedAttemptExecutorCorrelation(attempt)),
-    finalJournalTags: (yield* Ref.get(records)).map(({ event }) => event._tag),
+    finalJournalTags: (yield* acceptedScenarioRecords).map(({ event }) => event._tag),
     handoffBoundary: yield* Deferred.await(handoffBoundary),
     journalCountAtPublication: yield* Deferred.await(journalCountAtPublication),
     relationPublicationCountBeforeQuiescence: yield* Deferred.await(relationPublicationCountBeforeQuiescence),
@@ -4280,7 +4296,9 @@ const runEffectiveAdmissionSnapshotScenario = Effect.fn("Test.runEffectiveAdmiss
 it.effect("accepts C responsibility before binding its exact position and sending journal-first Begin", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const scenario = yield* runEffectiveAdmissionSnapshotScenario()
+      const scenario = yield* runEffectiveAdmissionSnapshotScenario().pipe(
+        Effect.provide(effectiveAdmissionJournalLayer)
+      )
       expect(scenario.handoffBoundary.journalTags).toEqual(["PlannedAttemptExecutorWorkResponsibilityBegan"])
       expect(scenario.handoffBoundary.position).toMatchObject({
         _tag: "LocallyAcceptedAttemptPosition",
@@ -4311,7 +4329,9 @@ it.effect("accepts C responsibility before binding its exact position and sendin
 it.effect("does not journal or publish the process-local admission snapshot", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const scenario = yield* runEffectiveAdmissionSnapshotScenario()
+      const scenario = yield* runEffectiveAdmissionSnapshotScenario().pipe(
+        Effect.provide(effectiveAdmissionJournalLayer)
+      )
       expect(scenario.finalJournalTags).toEqual([
         "PlannedAttemptExecutorWorkResponsibilityBegan",
         "PlannedAttemptExecutorCommandIntended",
