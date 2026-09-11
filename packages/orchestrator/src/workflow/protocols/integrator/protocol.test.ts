@@ -1,6 +1,6 @@
 import { describe, expect } from "vitest"
 import { it } from "@effect/vitest"
-import { Effect, Layer, Ref, Schema } from "effect"
+import { Context, Effect, Layer, Ref, Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -25,10 +25,14 @@ import { InitialControlPolicy } from "../../../control/policy.js"
 import { OperationId } from "../../identity.js"
 import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../registry/event.js"
 import { makeTargetLineageObservationOperation } from "../../registry/operation.js"
-import { InRunJournal, JournalStore } from "../../../workflow-journal/store.js"
+import {
+  InRunJournal,
+  JournalStore,
+  type AppendableWorkflowJournalEvent,
+  type JournalRecord
+} from "../../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
-import type { JournalRecord } from "../../../workflow-journal/store.js"
+import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import {
   integrationQuarantineDirectionAppliedRecordKey,
@@ -241,27 +245,27 @@ interface Harness {
 const makeHarness = (
   integratorResult: (request: IntegratorRequest) => Effect.Effect<IntegratorResult, IntegratorCallFailure>,
   gitBehavior: GitBehavior,
-  appendWinner?: (event: JournalRecord["event"]) => JournalRecord["event"]
-): Effect.Effect<Harness> =>
+  appendWinner?: (event: AppendableWorkflowJournalEvent) => AppendableWorkflowJournalEvent
+) =>
   Effect.gen(function* () {
+    const context = yield* Layer.build(
+      liveJournalTestLayer({ runId, target: trackerTarget, records: acceptedHistory.records }).pipe(Layer.orDie)
+    )
     const integratorCalls = yield* Ref.make<ReadonlyArray<IntegratorRequest>>([])
     const gitCalls = yield* Ref.make(0)
     const gitCandidates = yield* Ref.make<ReadonlyArray<IntegratorCandidateText>>([])
-    const store = yield* JournalStore
-    const baseJournal = yield* InRunJournal
-    const accepted = yield* AcceptedJournalReader
-    yield* store.beginRun(runId, trackerTarget, initialControlPolicy)
-    for (const record of acceptedHistory.records) {
-      if (record.event._tag === "WorkflowRunBegan") continue
-      yield* store.append(runId, record.key, record.event)
-    }
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(yield* store.read(runId))
+    const store = Context.get(context, JournalStore)
+    const baseJournal = Context.get(context, InRunJournal)
+    const accepted = Context.get(context, AcceptedJournalReader)
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(yield* store.read(runId).pipe(Effect.orDie))
 
     const journal = InRunJournal.of({
       append: (requestedRunId, key, event) =>
-        baseJournal.append(requestedRunId, key, appendWinner?.(event) ?? event).pipe(
-          Effect.tap(() => store.read(requestedRunId).pipe(Effect.flatMap((current) => Ref.set(records, current))))
-        ),
+        baseJournal
+          .append(requestedRunId, key, appendWinner?.(event) ?? event)
+          .pipe(
+            Effect.tap(() => store.read(requestedRunId).pipe(Effect.flatMap((current) => Ref.set(records, current))))
+          ),
       read: baseJournal.read
     })
 
@@ -309,12 +313,23 @@ const makeHarness = (
       run,
       runExact
     }
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  })
+
+const appendRawJournalRecord = (
+  records: Ref.Ref<ReadonlyArray<JournalRecord>>,
+  key: JournalRecordKey,
+  event: JournalRecord["event"]
+) =>
+  Ref.modify(records, (current) => {
+    const record = { event, key, position: JournalPosition.make(current.length + 1), runId }
+    return [record, [...current, record]] as const
+  })
 
 const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAuthorization")(function* (
   harness: Harness,
   freshHead: GitCommitSha = targetHead,
-  evidence: "ConclusiveResult" | "ProviderRunFailure" = "ConclusiveResult"
+  evidence: "ConclusiveResult" | "ProviderRunFailure" = "ConclusiveResult",
+  raw = false
 ) {
   const records = yield* harness.readRecords
   const sessionRecord = records.find(({ event }) => event._tag === "IntegratorSessionFixed")
@@ -326,15 +341,30 @@ const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAu
     if (resultRecord?.event._tag !== "IntegratorRunResultRecorded") {
       return yield* Effect.die("expected ordinal-one result")
     }
-    basis = IntegrationQuarantineBasis.cases.ConclusiveResult.make({
-      cause: IntegrationQuarantineCause.cases.NotPrepared.make({ detail: notPreparedDetail }),
-      evidence: { resultRecordedAt: resultRecord.position }
-    })
+    if (resultRecord.event.result._tag === "NotPrepared") {
+      basis = IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+        cause: IntegrationQuarantineCause.cases.NotPrepared.make({ detail: resultRecord.event.result.detail }),
+        evidence: { resultRecordedAt: resultRecord.position }
+      })
+    } else {
+      const observationRecord = records.find(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")
+      if (observationRecord?.event._tag !== "IntegratorRunCandidateGitObserved") {
+        return yield* Effect.die("expected candidate Git observation")
+      }
+      basis = IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+        cause: IntegrationQuarantineCause.cases.InvalidCandidate.make({
+          candidateText: resultRecord.event.result.candidateText,
+          observation: observationRecord.event.observation
+        }),
+        evidence: { candidateObservationAt: observationRecord.position, resultRecordedAt: resultRecord.position }
+      })
+    }
   } else {
     const detail = IntegrationQuarantineFailureDetail.make("provider reports no owned activity for run one")
     const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
-    const absence = yield* harness.journal.append(
-      runId,
+    const append = (key: JournalRecordKey, event: AppendableWorkflowJournalEvent) =>
+      raw ? appendRawJournalRecord(harness.records, key, event) : harness.journal.append(runId, key, event)
+    const absence = yield* append(
       integrationProviderRunActivityAbsentRecordKey(run),
       IntegrationProviderRunActivityAbsentEvent.make({
         correlation: session,
@@ -349,8 +379,9 @@ const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAu
       ownedActivityProvenAbsentAt: absence.position
     })
   }
-  const quarantine = yield* harness.journal.append(
-    runId,
+  const append = (key: JournalRecordKey, event: AppendableWorkflowJournalEvent) =>
+    raw ? appendRawJournalRecord(harness.records, key, event) : harness.journal.append(runId, key, event)
+  const quarantine = yield* append(
     integrationQuarantinedRecordKey(session.sessionId, basis),
     IntegrationQuarantinedEvent.make({
       basis,
@@ -359,8 +390,7 @@ const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAu
       version: workflowJournalEventVersion
     })
   )
-  const direction = yield* harness.journal.append(
-    runId,
+  const direction = yield* append(
     integrationQuarantineDirectionAppliedRecordKey(
       integrationQuarantineDirectionSubject(
         IntegrationQuarantineDirectionFingerprint.make({
@@ -383,8 +413,7 @@ const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAu
     })
   )
   const operationId = OperationId.make("operation-target-lineage-retry")
-  const intent = yield* harness.journal.append(
-    runId,
+  const intent = yield* append(
     intentRecordKey(operationId),
     GitReadIntentRecordedEvent.make({
       initiatedBy: { _tag: "DalphCoordinator" },
@@ -398,8 +427,7 @@ const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAu
       version: workflowJournalEventVersion
     })
   )
-  const observation = yield* harness.journal.append(
-    runId,
+  const observation = yield* append(
     outcomeRecordKey(operationId),
     TargetLineageObservedEvent.make({
       observation: TargetLineageObservation.make({
@@ -855,8 +883,8 @@ describe("outer Integrator protocol", () => {
           const authorization = yield* appendRetryAuthorization(harness)
 
           if (invalidCase === "ConflictingDirection") {
-            yield* harness.journal.append(
-              runId,
+            yield* appendRawJournalRecord(
+              harness.records,
               JournalRecordKey.make("integrator-retry:conflicting-direction"),
               IntegrationQuarantineDirectionAppliedEvent.make({
                 fingerprint: IntegrationQuarantineDirectionFingerprint.make({
@@ -1665,7 +1693,12 @@ describe("outer Integrator protocol", () => {
         successfulGitRead(commitObservation([targetHead, acceptedResultCommit]))
       )
       yield* providerHarness.runExact(compatibleInput(), IntegratorRunOrdinal.make(1))
-      const providerAuthorization = yield* appendRetryAuthorization(providerHarness, targetHead, "ProviderRunFailure")
+      const providerAuthorization = yield* appendRetryAuthorization(
+        providerHarness,
+        targetHead,
+        "ProviderRunFailure",
+        true
+      )
       const providerRecords = yield* providerHarness.readRecords
       const providerQuarantine = providerRecords.find(({ event }) => event._tag === "IntegrationQuarantined")
       if (providerQuarantine?.event._tag !== "IntegrationQuarantined") {
