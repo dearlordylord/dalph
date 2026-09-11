@@ -1,11 +1,15 @@
 import { expect, it } from "vitest"
 import { RunId, TaskId, TaskRevision } from "@dalph/contracts"
+import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
+import { InitialControlPolicy } from "../../../control/policy.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
+import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
+import { observeJournalRecordSequenceOperations } from "../../../workflow-journal/record-sequence.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
-import { taskTrackerReadIntent, type WorkflowJournalEvent } from "../../registry/event.js"
+import { WorkflowRunBeganEvent, taskTrackerReadIntent, type WorkflowJournalEvent } from "../../registry/event.js"
 import { makeCompletionTaskFactsObservationOperation } from "../../registry/operation.js"
 import {
   makeFocusedTaskCompletionFactsObserved,
@@ -21,6 +25,7 @@ import {
 import {
   CompletionTaskConfirmationReadOrdinal,
   CompletionTaskAuthorizationReadOrdinal,
+  CompletionClaimReplacementIntendedEvent,
   CompletionClaimReplacedEvent,
   CompletionTaskAcknowledgement,
   CompletionTaskAcknowledgedEvent,
@@ -252,6 +257,84 @@ it("accepts the exact completion authorization and lost-response reconciliation 
   expect(records.flatMap((current) => invalidCompletionTaskHistory(current, records, fixture.runId) ?? [])).toEqual([])
 })
 
+it("keeps one exact authorization-cycle lookup constant across 64 and 256 cycles on the same request", () => {
+  const visits = [64, 256].map((size) => {
+    const replacementOperationId = completionClaimReplacementOperationIdFor(fixture.claim)
+    const records: Array<JournalRecord> = [
+      record(
+        1,
+        CompletionClaimReplacementIntendedEvent.make({
+          claim: fixture.claim,
+          operationId: replacementOperationId,
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(
+        2,
+        CompletionClaimReplacedEvent.make({
+          claim: fixture.claim,
+          operationId: replacementOperationId,
+          version: workflowJournalEventVersion
+        })
+      )
+    ]
+    let finalIntent: JournalRecord | undefined
+    for (let index = 0; index < size; index += 1) {
+      const purpose = CompletionTaskFocusedReadPurpose.cases.Authorization.make({
+        attemptOrdinal: ordinal,
+        authorizationOrdinal: CompletionTaskAuthorizationReadOrdinal.make(index + 1)
+      })
+      const focused = focusedReadEvents(purpose)
+      const ancestryOperationId = completionTaskCandidateAncestryReadOperationIdFor(request, purpose)
+      const position = records.length + 1
+      records.push(record(position, focused.intent), record(position + 1, focused.outcome))
+      finalIntent = record(
+        position + 2,
+        CompletionTaskCandidateAncestryReadIntendedEvent.make({
+          attemptOrdinal: ordinal,
+          operationId: ancestryOperationId,
+          request,
+          version: workflowJournalEventVersion
+        })
+      )
+      records.push(finalIntent)
+    }
+    if (finalIntent === undefined) return expect.fail("fixture must contain an authorization cycle")
+    const evidence = journalEvidenceFrom(records)
+    const operations: Array<string> = []
+    const stop = observeJournalRecordSequenceOperations((operation) => operations.push(operation._tag))
+    try {
+      expect(invalidCompletionTaskHistory(finalIntent, evidence, fixture.runId)).toBeUndefined()
+    } finally {
+      stop()
+    }
+    expect(operations.every((operation) => operation === "IndexedRecordVisit")).toBe(true)
+    return operations.length
+  })
+  expect(visits[0]).toBeGreaterThan(0)
+  expect(visits[1]).toBe(visits[0])
+})
+
+it("preserves the raw diagnostic ordering when a focused outcome precedes the first Run beginning", () => {
+  const exact = chronology()
+  const focusedOutcome = eventAt(exact, 3)
+  const futureBeginning = record(
+    4,
+    WorkflowRunBeganEvent.make({
+      initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      target: FixtureTarget.make("completion-history-future-foreign-target"),
+      version: workflowJournalEventVersion
+    })
+  )
+  const malformed = [...exact.slice(0, 3), futureBeginning]
+
+  expect(invalidCompletionTaskHistory(focusedOutcome, malformed, fixture.runId)?.detail).toContain(
+    "lacks its exact prior intent"
+  )
+})
+
 it("rejects malformed post-promotion ancestry before dispatching completion history", () => {
   const authorization = PostPromotionBlockerClearAuthorization.make({
     blockerClearedAt: JournalPosition.make(3),
@@ -293,6 +376,22 @@ it("reconstructs calls two and three only after the previous exact request was r
     ...authorizationRecords(3, [23, 24, 25, 26, 27])
   ]
   expect(records.flatMap((current) => invalidCompletionTaskHistory(current, records, fixture.runId) ?? [])).toEqual([])
+})
+
+it("rejects a fourth completion call even after three complete lost-response reconciliation cycles", () => {
+  const throughFourthCall = [
+    ...chronology(),
+    ...authorizationRecords(2, [13, 14, 15, 16, 17]),
+    ...lostResponseReconciliationRecords(2, 18),
+    ...authorizationRecords(3, [23, 24, 25, 26, 27]),
+    ...lostResponseReconciliationRecords(3, 28),
+    ...authorizationRecords(4, [33, 34, 35, 36, 37])
+  ]
+
+  expect(
+    invalidCompletionTaskHistory(eventAt(throughFourthCall, 37), journalEvidenceFrom(throughFourthCall), fixture.runId)
+      ?.detail
+  ).toContain("lacks exact current tracker and Git authorization")
 })
 
 it("rejects retry calls without an exact prior NotApplied result recorded before fresh authorization", () => {
@@ -513,7 +612,11 @@ it("rejects stale authorization, unnumbered outcomes, and mismatched acknowledge
   })
   const contradictoryOutcomes = [...exact.slice(0, 8), record(9, acknowledgementAfterLost)]
   expect(
-    invalidCompletionTaskHistory(eventAt(contradictoryOutcomes, 9), contradictoryOutcomes, fixture.runId)?.detail
+    invalidCompletionTaskHistory(
+      eventAt(contradictoryOutcomes, 9),
+      journalEvidenceFrom(contradictoryOutcomes),
+      fixture.runId
+    )?.detail
   ).toContain("mutually exclusive CompletionTaskResponseLost and CompletionTaskAcknowledged outcomes")
 
   const mismatchedAcknowledgement = CompletionTaskAcknowledgedEvent.make({
