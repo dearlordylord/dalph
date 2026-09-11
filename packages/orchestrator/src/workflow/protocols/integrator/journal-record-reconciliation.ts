@@ -1,6 +1,7 @@
 import { Effect, Option, Schema } from "effect"
 import type { RunId } from "@dalph/contracts"
 import type { InRunJournal, JournalRecord } from "../../../workflow-journal/store.js"
+import type { JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import {
   integratorRunCandidateGitObservedRecordKey,
   integratorRunCandidateGitReadIntendedRecordKey,
@@ -50,7 +51,7 @@ export const runResultFromAppendedRecord = (
 }
 
 export const readRecordedRunResult = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   run: IntegratorRunCorrelation
 ): Effect.Effect<Option.Option<IntegratorResult>, IntegratorJournalContradiction> => {
   const existing = integratorFindEventAtKey(records, integratorRunResultRecordedRecordKey(run))
@@ -96,7 +97,7 @@ const integratorRunMatches = (left: IntegratorRunCorrelation, right: IntegratorR
   left.ordinal === right.ordinal && integratorCorrelationsEqual(left.session, right.session)
 
 const readRecordedRunGitObservation = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   run: IntegratorRunCorrelation,
   candidateText: IntegratorCandidateText
 ): Effect.Effect<Option.Option<IntegratorGitObservation>, IntegratorJournalContradiction> => {
@@ -122,7 +123,7 @@ export const appendRunGitReadIntentIfNeeded = Effect.fn("IntegratorProtocol.appe
   journal: InRunJournal["Service"],
   run: IntegratorRunCorrelation,
   candidateText: IntegratorCandidateText,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   const key = integratorRunCandidateGitReadIntendedRecordKey(run, candidateText)
   const existing = integratorFindEventAtKey(records, key)
@@ -158,7 +159,7 @@ export const appendRunGitReadIntentIfNeeded = Effect.fn("IntegratorProtocol.appe
 })
 
 const readRunGitReadIntent = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   run: IntegratorRunCorrelation,
   candidateText: IntegratorCandidateText
 ): Effect.Effect<boolean, IntegratorJournalContradiction> => {
@@ -188,7 +189,7 @@ const previousRunFor = (run: IntegratorRunCorrelation): IntegratorRunCorrelation
       })
 
 const previousRunHasDurableResult = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   previous: IntegratorRunCorrelation
 ): boolean => {
   const previousStart = integratorFindEventAtKey(records, integratorRunStartedRecordKey(previous))
@@ -205,7 +206,7 @@ const previousRunHasDurableResult = (
 }
 
 const previousRunIsDurablyConclusive = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   run: IntegratorRunCorrelation
 ): boolean => {
   const previous = previousRunFor(run)
@@ -216,7 +217,7 @@ const previousRunIsDurablyConclusive = (
 export const reconcileRunResult = Effect.fn("IntegratorProtocol.reconcileRunResult")(function* (
   journal: InRunJournal["Service"],
   run: IntegratorRunCorrelation,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   recordedRunResult: Option.Option<IntegratorResult>,
   successorAuthorized: boolean
 ) {
@@ -234,7 +235,7 @@ export const reconcileRunResult = Effect.fn("IntegratorProtocol.reconcileRunResu
 })
 
 export const readRunCandidateObservation = Effect.fn("IntegratorProtocol.readRunCandidateObservation")(function* (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   run: IntegratorRunCorrelation,
   candidateText: IntegratorCandidateText
 ) {
