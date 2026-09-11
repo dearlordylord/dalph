@@ -524,285 +524,315 @@ const gitDecisionFromFrontier = (constraint: Constraint, status: Status): string
 // `gitReconciliationStep`, but this adapter does not manufacture those missing
 // outer-Integrator or target-promotion Journal events.
 type ProductionReconciliationTrace = Effect.Success<typeof makeProductionReconciliationTrace>
+type GitReconciliationRuntime = Option.Option<ProductionReconciliationTrace>
 
-const makeGitReconciliationDriver = (runtime: ScopedRef.ScopedRef<ProductionReconciliationTrace>) =>
+const makeGitReconciliationDriver = (runtime: ScopedRef.ScopedRef<GitReconciliationRuntime>) =>
   defineDriver(
-  {
-    init: {},
-    observeAmbiguousTargetAfterGitQualification: {},
-    observeCompatibleTargetAdvance: {},
-    observeEligibleResultCommit: {},
-    observeExactExpectedTargetWithGitQualifiedCandidate: {},
-    observeExactTargetWithUnqualifiedCandidate: {},
-    observeIncompleteTrackerFacts: {},
-    observeIncompatibleTargetRewrite: {},
-    observeLostWorktree: {},
-    observeMissingResultCommit: {},
-    observePrePromotionDependencyBlocker: {},
-    observeNonDescendantResultCommit: {},
-    observeRegistrationConflict: {},
-    observeStaleTargetAfterGitQualification: {},
-    reportSafelySuspended: {},
-    selectIndependentTask: {}
-  },
-  () => {
-    const production = () => ScopedRef.getUnsafe(runtime)
-    let status: Status = "Executing"
-    let constraint: Constraint = "NoGitConstraint"
-    let decision = "ContinueAttempt"
-    let compatibleAdvanceObserved = false
-    let resultRejected = false
-    let resultRejection = "NoResultRejection"
-    let candidatePreserved = true
-    let promotionProof = false
-    let trackerBlocker: TrackerBlocker = "NoTrackerBlocker"
-    let independentTaskSelected = false
-    let exactExpectedHeadObserved = false
-    let candidateGitQualified = false
-    let compareAndSetAuthorized = false
-    let overwriteAuthorized = false
-    let claimPreserved = true
-    let evidencePreserved = true
-    let repairAuthorized = false
-    let worktreePreserved = true
-    let positionHeld = true
-
-    const applyPreservation = (proof: {
-      readonly claimPreserved: true
-      readonly evidencePreserved: true
-      readonly repairAuthorized: false
-      readonly worktreePreserved: true
-    }) => {
-      claimPreserved = proof.claimPreserved
-      evidencePreserved = proof.evidencePreserved
-      repairAuthorized = proof.repairAuthorized
-      worktreePreserved = proof.worktreePreserved
-    }
-
-    const constrain = (next: Exclude<Constraint, "NoGitConstraint">) =>
-      Effect.sync(() => {
-        applyPreservation(decideGitFactPreservation(next))
-        constraint = next
-        compatibleAdvanceObserved = false
-        decision = gitDecisionFromFrontier(constraint, status)
-      })
-    const qualifyResult = (observation: ResultCommitObservation) =>
-      Effect.sync(() => {
-        const result = decideResultCommitQualification(observation)
-        decision = result._tag
-        resultRejected = result._tag === "ResultCommitRejected"
-        if (result._tag === "ResultCommitRejected") {
-          claimPreserved = result.claimPreserved
-          evidencePreserved = result.evidencePreserved
-          worktreePreserved = result.preserveWorktree
-        }
-        resultRejection =
-          result._tag === "ResultCommitRejected"
-            ? result.reason === "Missing"
-              ? "MissingResultCommit"
-              : "NonDescendantResultCommit"
-            : "NoResultRejection"
-      })
-    const decidePromotion = (
-      target: PromotionTargetObservation,
-      candidateGitQualifiedAgainstExpectedHead: boolean,
-      candidateSha: GitCommitSha = candidate,
-      expectedHeadSha: GitCommitSha = advanced
-    ) =>
-      Effect.sync(() => {
-        const result = decideTargetPromotion({
-          candidateSha,
-          candidateVerifiedAgainstExpectedHead: candidateGitQualifiedAgainstExpectedHead,
-          expectedHeadSha,
-          target
+    {
+      init: {},
+      observeAmbiguousTargetAfterGitQualification: {},
+      observeCompatibleTargetAdvance: {},
+      observeEligibleResultCommit: {},
+      observeExactExpectedTargetWithGitQualifiedCandidate: {},
+      observeExactTargetWithUnqualifiedCandidate: {},
+      observeIncompleteTrackerFacts: {},
+      observeIncompatibleTargetRewrite: {},
+      observeLostWorktree: {},
+      observeMissingResultCommit: {},
+      observePrePromotionDependencyBlocker: {},
+      observeNonDescendantResultCommit: {},
+      observeRegistrationConflict: {},
+      observeStaleTargetAfterGitQualification: {},
+      reportSafelySuspended: {},
+      selectIndependentTask: {}
+    },
+    () => {
+      const production = () =>
+        Option.match(ScopedRef.getUnsafe(runtime), {
+          onNone: () => Effect.runSync(Effect.die("Git reconciliation driver action preceded init")),
+          onSome: (current) => current
         })
-        decision = result._tag === "RejectUnverifiedCandidate" ? "RejectUnqualifiedCandidate" : result._tag
-        exactExpectedHeadObserved = target._tag === "ExactTargetHead" && target.currentHeadSha === expectedHeadSha
-        candidateGitQualified = candidateGitQualifiedAgainstExpectedHead
-        compareAndSetAuthorized = result.compareAndSetAuthorized
-        overwriteAuthorized = result.overwriteAuthorized
-        promotionProof = result._tag === "PromoteByExactCompareAndSet" && candidateGitQualifiedAgainstExpectedHead
-      })
-    const decideQualifiedPromotion = (target: PromotionTargetObservation) => {
-      const qualified = production().qualifiedCandidate()
-      return decidePromotion(target, true, qualified.candidateCommit, qualified.expectedHead)
-    }
+      let status: Status = "Executing"
+      let constraint: Constraint = "NoGitConstraint"
+      let decision = "ContinueAttempt"
+      let compatibleAdvanceObserved = false
+      let resultRejected = false
+      let resultRejection = "NoResultRejection"
+      let candidatePreserved = true
+      let promotionProof = false
+      let trackerBlocker: TrackerBlocker = "NoTrackerBlocker"
+      let independentTaskSelected = false
+      let exactExpectedHeadObserved = false
+      let candidateGitQualified = false
+      let compareAndSetAuthorized = false
+      let overwriteAuthorized = false
+      let claimPreserved = true
+      let evidencePreserved = true
+      let repairAuthorized = false
+      let worktreePreserved = true
+      let positionHeld = true
 
-    return {
-      init: () =>
-        Effect.gen(function* () {
-          yield* ScopedRef.set(runtime, makeProductionReconciliationTrace)
-          status = "Executing"
-          constraint = "NoGitConstraint"
-          decision = "ContinueAttempt"
+      const applyPreservation = (proof: {
+        readonly claimPreserved: true
+        readonly evidencePreserved: true
+        readonly repairAuthorized: false
+        readonly worktreePreserved: true
+      }) => {
+        claimPreserved = proof.claimPreserved
+        evidencePreserved = proof.evidencePreserved
+        repairAuthorized = proof.repairAuthorized
+        worktreePreserved = proof.worktreePreserved
+      }
+
+      const constrain = (next: Exclude<Constraint, "NoGitConstraint">) =>
+        Effect.sync(() => {
+          applyPreservation(decideGitFactPreservation(next))
+          constraint = next
           compatibleAdvanceObserved = false
-          resultRejected = false
-          resultRejection = "NoResultRejection"
-          candidatePreserved = true
-          promotionProof = false
-          trackerBlocker = "NoTrackerBlocker"
-          positionHeld = true
-          independentTaskSelected = false
-          exactExpectedHeadObserved = false
-          candidateGitQualified = false
-          compareAndSetAuthorized = false
-          overwriteAuthorized = false
-          applyPreservation(decideGitFactPreservation("NoGitConstraint"))
-        }),
-      observeAmbiguousTargetAfterGitQualification: () =>
-        decideQualifiedPromotion(PromotionTargetObservation.cases.AmbiguousTargetHead.make({})),
-      observePrePromotionDependencyBlocker: () =>
-        Effect.sync(() => {
-          const result = production().readGraph("before-promotion-blocker", false, false)
-          production().applyResourceTransition()
-          const current = production().frontier()
-          positionHeld = current.held
-          decision = current.frontier.explanations.some(({ _tag }) => _tag === "IntegrationDependencyWait")
-            ? "GitConstraintWait"
-            : "ContinueAttempt"
-          trackerBlocker = result.frontier.explanations.some(({ _tag }) => _tag === "IntegrationDependencyWait")
-            ? "BeforePromotionBlocker"
-            : "NoTrackerBlocker"
-        }),
-      observeIncompleteTrackerFacts: () =>
-        Effect.sync(() => {
-          production().readIncompleteTrackerGraph()
-          positionHeld = production().frontier().held
-          decision = "GitConstraintWait"
-          trackerBlocker = "IncompleteTrackerFacts"
-        }),
-      observeCompatibleTargetAdvance: () =>
-        Effect.sync(() => {
-          const lineage = decideTargetLineage(
-            TargetLineageObservation.make({
-              plannedBaseIsAncestorOfTargetHead: true,
-              plannedBaseSha: base,
-              targetHeadSha: advanced
-            })
-          )
-          compatibleAdvanceObserved = true
-          decision =
-            responsibilityDispositionForTargetLineage(acceptedProgress, lineage, false)._tag === "Ready"
-              ? "ContinueAttempt"
-              : "RequestSafeSuspension"
-        }),
-      observeEligibleResultCommit: () =>
-        qualifyResult(
-          ResultCommitObservation.cases.ResultCommitPresent.make({
-            plannedBaseIsAncestorOfResultCommit: true,
-            plannedBaseSha: base,
-            resultCommitSha: candidate
-          })
-        ),
-      observeExactExpectedTargetWithGitQualifiedCandidate: () =>
-        (() => {
-          const qualified = production().qualifiedCandidate()
-          return decidePromotion(
-            PromotionTargetObservation.cases.ExactTargetHead.make({ currentHeadSha: qualified.expectedHead }),
-            true,
-            qualified.candidateCommit,
-            qualified.expectedHead
-          )
-        })(),
-      observeExactTargetWithUnqualifiedCandidate: () =>
-        decidePromotion(PromotionTargetObservation.cases.ExactTargetHead.make({ currentHeadSha: advanced }), false),
-      observeIncompatibleTargetRewrite: () =>
-        Effect.sync(() => {
-          const lineage = decideTargetLineage(
-            TargetLineageObservation.make({
-              plannedBaseIsAncestorOfTargetHead: false,
-              plannedBaseSha: base,
-              targetHeadSha: rewritten
-            })
-          )
-          if (lineage._tag !== "IncompatibleTargetRewrite") {
-            return Effect.runSync(
-              Effect.die("the production lineage decision contradicted the incompatible observation")
-            )
-          }
-          constraint = "TargetRewriteConstraint"
-          applyPreservation(lineage)
-          compatibleAdvanceObserved = false
-          decision =
-            responsibilityDispositionForTargetLineage(acceptedProgress, lineage, false)._tag ===
-            "PlannedAttemptExecutorSuspensionRequested"
-              ? "RequestSafeSuspension"
-              : "ContinueAttempt"
-        }),
-      observeLostWorktree: () => constrain("WorktreeLostConstraint"),
-      observeMissingResultCommit: () =>
-        qualifyResult(ResultCommitObservation.cases.ResultCommitMissing.make({ plannedBaseSha: base })),
-      observeNonDescendantResultCommit: () =>
-        qualifyResult(
-          ResultCommitObservation.cases.ResultCommitPresent.make({
-            plannedBaseIsAncestorOfResultCommit: false,
-            plannedBaseSha: base,
-            resultCommitSha: candidate
-          })
-        ),
-      observeRegistrationConflict: () => constrain("RegistrationConflictConstraint"),
-      observeStaleTargetAfterGitQualification: () =>
-        decideQualifiedPromotion(PromotionTargetObservation.cases.ExactTargetHead.make({ currentHeadSha: rewritten })),
-      reportSafelySuspended: () =>
-        Effect.sync(() => {
-          status = "SafelySuspended"
-          positionHeld = false
           decision = gitDecisionFromFrontier(constraint, status)
-        }),
-      selectIndependentTask: () =>
+        })
+      const qualifyResult = (observation: ResultCommitObservation) =>
         Effect.sync(() => {
-          const disposition =
-            constraint === "TargetRewriteConstraint"
-              ? ResponsibilityDisposition.PlannedAttemptGitConstraint({ gitState: "TargetRewrite" })
-              : constraint === "WorktreeLostConstraint"
-                ? ResponsibilityDisposition.PlannedAttemptGitConstraint({ gitState: "WorktreeLost" })
-                : constraint === "RegistrationConflictConstraint"
-                  ? ResponsibilityDisposition.PlannedAttemptGitConstraint({
-                      gitState: "CompetingWorktreeRegistrations"
-                    })
-                  : { _tag: "Ready" as const, acceptedProgress }
-          independentTaskSelected = deriveRunnableFrontier({
-            freshEligibleTasks: [independentTask],
-            responsibility: { entries: [responsibility] },
-            responsibilityFacts: [{ _tag: "PlannedAttemptExecutorFreshFacts", disposition, responsibility }]
-          }).transitions.some(
-            (transition) =>
-              transition._tag === "CommitFreshTaskClaimIntent" && transition.taskId === independentTask.taskId
-          )
-        }),
-      getState: () =>
-        Effect.sync(() => ({
-          candidateGitQualified,
-          candidatePreserved,
-          claimPreserved,
-          compareAndSetAuthorized,
-          compatibleAdvanceObserved,
-          constraint,
-          decision,
-          evidencePreserved,
-          exactExpectedHeadObserved,
-          independentTaskEligible: true,
-          independentTaskSelected,
-          overwriteAuthorized,
-          positionHeld,
-          repairAuthorized,
-          resultRejected,
-          resultRejection,
-          promotionProof,
-          status,
-          trackerBlocker,
-          worktreePreserved
-        }))
+          const result = decideResultCommitQualification(observation)
+          decision = result._tag
+          resultRejected = result._tag === "ResultCommitRejected"
+          if (result._tag === "ResultCommitRejected") {
+            claimPreserved = result.claimPreserved
+            evidencePreserved = result.evidencePreserved
+            worktreePreserved = result.preserveWorktree
+          }
+          resultRejection =
+            result._tag === "ResultCommitRejected"
+              ? result.reason === "Missing"
+                ? "MissingResultCommit"
+                : "NonDescendantResultCommit"
+              : "NoResultRejection"
+        })
+      const decidePromotion = (
+        target: PromotionTargetObservation,
+        candidateGitQualifiedAgainstExpectedHead: boolean,
+        candidateSha: GitCommitSha = candidate,
+        expectedHeadSha: GitCommitSha = advanced
+      ) =>
+        Effect.sync(() => {
+          const result = decideTargetPromotion({
+            candidateSha,
+            candidateVerifiedAgainstExpectedHead: candidateGitQualifiedAgainstExpectedHead,
+            expectedHeadSha,
+            target
+          })
+          decision = result._tag === "RejectUnverifiedCandidate" ? "RejectUnqualifiedCandidate" : result._tag
+          exactExpectedHeadObserved = target._tag === "ExactTargetHead" && target.currentHeadSha === expectedHeadSha
+          candidateGitQualified = candidateGitQualifiedAgainstExpectedHead
+          compareAndSetAuthorized = result.compareAndSetAuthorized
+          overwriteAuthorized = result.overwriteAuthorized
+          promotionProof = result._tag === "PromoteByExactCompareAndSet" && candidateGitQualifiedAgainstExpectedHead
+        })
+      const decideQualifiedPromotion = (target: PromotionTargetObservation) => {
+        const qualified = production().qualifiedCandidate()
+        return decidePromotion(target, true, qualified.candidateCommit, qualified.expectedHead)
+      }
+
+      return {
+        init: () =>
+          Effect.gen(function* () {
+            yield* ScopedRef.set(runtime, makeProductionReconciliationTrace.pipe(Effect.map(Option.some)))
+            status = "Executing"
+            constraint = "NoGitConstraint"
+            decision = "ContinueAttempt"
+            compatibleAdvanceObserved = false
+            resultRejected = false
+            resultRejection = "NoResultRejection"
+            candidatePreserved = true
+            promotionProof = false
+            trackerBlocker = "NoTrackerBlocker"
+            positionHeld = true
+            independentTaskSelected = false
+            exactExpectedHeadObserved = false
+            candidateGitQualified = false
+            compareAndSetAuthorized = false
+            overwriteAuthorized = false
+            applyPreservation(decideGitFactPreservation("NoGitConstraint"))
+          }),
+        observeAmbiguousTargetAfterGitQualification: () =>
+          decideQualifiedPromotion(PromotionTargetObservation.cases.AmbiguousTargetHead.make({})),
+        observePrePromotionDependencyBlocker: () =>
+          Effect.sync(() => {
+            const result = production().readGraph("before-promotion-blocker", false, false)
+            production().applyResourceTransition()
+            const current = production().frontier()
+            positionHeld = current.held
+            decision = current.frontier.explanations.some(({ _tag }) => _tag === "IntegrationDependencyWait")
+              ? "GitConstraintWait"
+              : "ContinueAttempt"
+            trackerBlocker = result.frontier.explanations.some(({ _tag }) => _tag === "IntegrationDependencyWait")
+              ? "BeforePromotionBlocker"
+              : "NoTrackerBlocker"
+          }),
+        observeIncompleteTrackerFacts: () =>
+          Effect.sync(() => {
+            production().readIncompleteTrackerGraph()
+            positionHeld = production().frontier().held
+            decision = "GitConstraintWait"
+            trackerBlocker = "IncompleteTrackerFacts"
+          }),
+        observeCompatibleTargetAdvance: () =>
+          Effect.sync(() => {
+            const lineage = decideTargetLineage(
+              TargetLineageObservation.make({
+                plannedBaseIsAncestorOfTargetHead: true,
+                plannedBaseSha: base,
+                targetHeadSha: advanced
+              })
+            )
+            compatibleAdvanceObserved = true
+            decision =
+              responsibilityDispositionForTargetLineage(acceptedProgress, lineage, false)._tag === "Ready"
+                ? "ContinueAttempt"
+                : "RequestSafeSuspension"
+          }),
+        observeEligibleResultCommit: () =>
+          qualifyResult(
+            ResultCommitObservation.cases.ResultCommitPresent.make({
+              plannedBaseIsAncestorOfResultCommit: true,
+              plannedBaseSha: base,
+              resultCommitSha: candidate
+            })
+          ),
+        observeExactExpectedTargetWithGitQualifiedCandidate: () =>
+          (() => {
+            const qualified = production().qualifiedCandidate()
+            return decidePromotion(
+              PromotionTargetObservation.cases.ExactTargetHead.make({ currentHeadSha: qualified.expectedHead }),
+              true,
+              qualified.candidateCommit,
+              qualified.expectedHead
+            )
+          })(),
+        observeExactTargetWithUnqualifiedCandidate: () =>
+          decidePromotion(PromotionTargetObservation.cases.ExactTargetHead.make({ currentHeadSha: advanced }), false),
+        observeIncompatibleTargetRewrite: () =>
+          Effect.sync(() => {
+            const lineage = decideTargetLineage(
+              TargetLineageObservation.make({
+                plannedBaseIsAncestorOfTargetHead: false,
+                plannedBaseSha: base,
+                targetHeadSha: rewritten
+              })
+            )
+            if (lineage._tag !== "IncompatibleTargetRewrite") {
+              return Effect.runSync(
+                Effect.die("the production lineage decision contradicted the incompatible observation")
+              )
+            }
+            constraint = "TargetRewriteConstraint"
+            applyPreservation(lineage)
+            compatibleAdvanceObserved = false
+            decision =
+              responsibilityDispositionForTargetLineage(acceptedProgress, lineage, false)._tag ===
+              "PlannedAttemptExecutorSuspensionRequested"
+                ? "RequestSafeSuspension"
+                : "ContinueAttempt"
+          }),
+        observeLostWorktree: () => constrain("WorktreeLostConstraint"),
+        observeMissingResultCommit: () =>
+          qualifyResult(ResultCommitObservation.cases.ResultCommitMissing.make({ plannedBaseSha: base })),
+        observeNonDescendantResultCommit: () =>
+          qualifyResult(
+            ResultCommitObservation.cases.ResultCommitPresent.make({
+              plannedBaseIsAncestorOfResultCommit: false,
+              plannedBaseSha: base,
+              resultCommitSha: candidate
+            })
+          ),
+        observeRegistrationConflict: () => constrain("RegistrationConflictConstraint"),
+        observeStaleTargetAfterGitQualification: () =>
+          decideQualifiedPromotion(
+            PromotionTargetObservation.cases.ExactTargetHead.make({ currentHeadSha: rewritten })
+          ),
+        reportSafelySuspended: () =>
+          Effect.sync(() => {
+            status = "SafelySuspended"
+            positionHeld = false
+            decision = gitDecisionFromFrontier(constraint, status)
+          }),
+        selectIndependentTask: () =>
+          Effect.sync(() => {
+            const disposition =
+              constraint === "TargetRewriteConstraint"
+                ? ResponsibilityDisposition.PlannedAttemptGitConstraint({ gitState: "TargetRewrite" })
+                : constraint === "WorktreeLostConstraint"
+                  ? ResponsibilityDisposition.PlannedAttemptGitConstraint({ gitState: "WorktreeLost" })
+                  : constraint === "RegistrationConflictConstraint"
+                    ? ResponsibilityDisposition.PlannedAttemptGitConstraint({
+                        gitState: "CompetingWorktreeRegistrations"
+                      })
+                    : { _tag: "Ready" as const, acceptedProgress }
+            independentTaskSelected = deriveRunnableFrontier({
+              freshEligibleTasks: [independentTask],
+              responsibility: { entries: [responsibility] },
+              responsibilityFacts: [{ _tag: "PlannedAttemptExecutorFreshFacts", disposition, responsibility }]
+            }).transitions.some(
+              (transition) =>
+                transition._tag === "CommitFreshTaskClaimIntent" && transition.taskId === independentTask.taskId
+            )
+          }),
+        getState: () =>
+          Effect.sync(() => ({
+            candidateGitQualified,
+            candidatePreserved,
+            claimPreserved,
+            compareAndSetAuthorized,
+            compatibleAdvanceObserved,
+            constraint,
+            decision,
+            evidencePreserved,
+            exactExpectedHeadObserved,
+            independentTaskEligible: true,
+            independentTaskSelected,
+            overwriteAuthorized,
+            positionHeld,
+            repairAuthorized,
+            resultRejected,
+            resultRejection,
+            promotionProof,
+            status,
+            trackerBlocker,
+            worktreePreserved
+          }))
+      }
     }
-  })
+  )
 
 const gitReconciliationDriver = {
   create: () =>
     Effect.gen(function* () {
-      const runtime = yield* ScopedRef.fromAcquire(makeProductionReconciliationTrace)
+      const runtime = yield* ScopedRef.fromAcquire(Effect.succeed(Option.none<ProductionReconciliationTrace>()))
       return yield* makeGitReconciliationDriver(runtime).create()
     })
 }
+
+it.effect("imports the Git driver journal once on first init", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let imports = 0
+      const runtime = yield* ScopedRef.fromAcquire(Effect.succeed(Option.none<ProductionReconciliationTrace>()))
+      expect(imports).toBe(0)
+      yield* ScopedRef.set(
+        runtime,
+        makeProductionReconciliationTrace.pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              imports += 1
+            })
+          ),
+          Effect.map(Option.some)
+        )
+      )
+      expect(imports).toBe(1)
+    })
+  )
+)
 
 it.effect("keeps restart replay on one live journal and replaces the complete runtime on init", () =>
   Effect.scoped(
@@ -823,48 +853,49 @@ it.effect("keeps restart replay on one live journal and replaces the complete ru
 
 it.effect(
   "replays Git reconciliation through production decisions and frontier dispositions",
-  () => quintRun({
-    backend: "typescript",
-    driverFactory: gitReconciliationDriver,
-    maxSteps: 12,
-    nTraces: 100,
-    seed: "139",
-    spec: "specs/gitReconciliation.qnt",
-    stateCheck: stateCheck(
-      (raw) =>
-        Effect.gen(function* () {
-          const { state } = yield* Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(Effect.orDie)
-          return {
-            ...state,
-            constraint: variantTag(state.constraint),
-            decision: variantTag(state.decision),
-            resultRejection: variantTag(state.resultRejection),
-            status: variantTag(state.status),
-            trackerBlocker: variantTag(state.trackerBlocker)
-          }
-        }),
-      (spec, implementation) =>
-        spec.candidateGitQualified === implementation.candidateGitQualified &&
-        spec.candidatePreserved === implementation.candidatePreserved &&
-        spec.claimPreserved === implementation.claimPreserved &&
-        spec.compareAndSetAuthorized === implementation.compareAndSetAuthorized &&
-        spec.compatibleAdvanceObserved === implementation.compatibleAdvanceObserved &&
-        spec.constraint === implementation.constraint &&
-        spec.decision === implementation.decision &&
-        spec.evidencePreserved === implementation.evidencePreserved &&
-        spec.exactExpectedHeadObserved === implementation.exactExpectedHeadObserved &&
-        spec.independentTaskEligible === implementation.independentTaskEligible &&
-        spec.independentTaskSelected === implementation.independentTaskSelected &&
-        spec.overwriteAuthorized === implementation.overwriteAuthorized &&
-        spec.positionHeld === implementation.positionHeld &&
-        spec.repairAuthorized === implementation.repairAuthorized &&
-        spec.resultRejected === implementation.resultRejected &&
-        spec.resultRejection === implementation.resultRejection &&
-        spec.promotionProof === implementation.promotionProof &&
-        spec.status === implementation.status &&
-        spec.trackerBlocker === implementation.trackerBlocker &&
-        spec.worktreePreserved === implementation.worktreePreserved
-    )
-  }),
+  () =>
+    quintRun({
+      backend: "typescript",
+      driverFactory: gitReconciliationDriver,
+      maxSteps: 12,
+      nTraces: 100,
+      seed: "139",
+      spec: "specs/gitReconciliation.qnt",
+      stateCheck: stateCheck(
+        (raw) =>
+          Effect.gen(function* () {
+            const { state } = yield* Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(Effect.orDie)
+            return {
+              ...state,
+              constraint: variantTag(state.constraint),
+              decision: variantTag(state.decision),
+              resultRejection: variantTag(state.resultRejection),
+              status: variantTag(state.status),
+              trackerBlocker: variantTag(state.trackerBlocker)
+            }
+          }),
+        (spec, implementation) =>
+          spec.candidateGitQualified === implementation.candidateGitQualified &&
+          spec.candidatePreserved === implementation.candidatePreserved &&
+          spec.claimPreserved === implementation.claimPreserved &&
+          spec.compareAndSetAuthorized === implementation.compareAndSetAuthorized &&
+          spec.compatibleAdvanceObserved === implementation.compatibleAdvanceObserved &&
+          spec.constraint === implementation.constraint &&
+          spec.decision === implementation.decision &&
+          spec.evidencePreserved === implementation.evidencePreserved &&
+          spec.exactExpectedHeadObserved === implementation.exactExpectedHeadObserved &&
+          spec.independentTaskEligible === implementation.independentTaskEligible &&
+          spec.independentTaskSelected === implementation.independentTaskSelected &&
+          spec.overwriteAuthorized === implementation.overwriteAuthorized &&
+          spec.positionHeld === implementation.positionHeld &&
+          spec.repairAuthorized === implementation.repairAuthorized &&
+          spec.resultRejected === implementation.resultRejected &&
+          spec.resultRejection === implementation.resultRejection &&
+          spec.promotionProof === implementation.promotionProof &&
+          spec.status === implementation.status &&
+          spec.trackerBlocker === implementation.trackerBlocker &&
+          spec.worktreePreserved === implementation.worktreePreserved
+      )
+    }),
   { timeout: 30_000 }
 )
