@@ -478,12 +478,7 @@ it.effect("a responsible task leaving complete membership becomes a task-local c
       OperationId.make("membership-removal-read"),
       FixtureTarget.make("membership-constraint-target")
     )
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      graphRead.target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     yield* journal.append(
       runId,
       intentRecordKey(claim.acquisition.operationId),
@@ -517,7 +512,19 @@ it.effect("a responsible task leaving complete membership becomes a task-local c
       transitions: []
     })
   }).pipe(
-    Effect.provide(memoryJournalTestLayer),
+    Effect.provide(
+      liveJournalTestLayer({
+        records: [
+          makeWorkflowRunBeganRecord(
+            RunId.make("membership-constraint-run"),
+            FixtureTarget.make("membership-constraint-target"),
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+          )
+        ],
+        runId: RunId.make("membership-constraint-run"),
+        target: FixtureTarget.make("membership-constraint-target")
+      })
+    ),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(
       WorkflowInterpreter,
