@@ -4,6 +4,7 @@ import { Option } from "effect"
 import { AttemptId, TaskId } from "@dalph/contracts"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
+import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   deriveIntegrationAdmission,
@@ -488,6 +489,9 @@ describe("#141 integration-finality frontier", () => {
       record(12, settlement)
     ]
     expect(integrationFinalityTransitionsFor(records, responsibility, promotion, runtimeFacts)).toEqual([])
+    expect(integrationFinalityTransitionsFor(journalEvidenceFrom(records), responsibility, promotion, runtimeFacts)).toEqual(
+      []
+    )
   })
 
   it("resumes settlement after deletion was recorded but before task finality was recorded", () => {

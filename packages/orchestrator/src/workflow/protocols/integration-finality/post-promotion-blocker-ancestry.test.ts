@@ -17,7 +17,10 @@ import { WorkflowRunBeganEvent } from "../../registry/event.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
-import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
+import { intentRecordKey, outcomeRecordKey } from "../../../workflow-journal/record-key.js"
+import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
+import { JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import {
   PostPromotionBlockerCandidateAncestryObservation,
   PostPromotionBlockerCandidateAncestryObservedEvent,
@@ -126,6 +129,8 @@ describe("post-promotion blocker ancestry chronology", () => {
   it("derives the exact blocked-then-cleared authorization and its boundary variants", () => {
     const records = chronology()
     expect(postPromotionBlockerClearAuthorizationFor(records, fixture.claim)).toEqual(authorization)
+    const indexed = journalEvidenceFrom(records)
+    expect(postPromotionBlockerClearAuthorizationFor(indexed, fixture.claim)).toEqual(authorization)
     expect(
       postPromotionBlockerClearAuthorizationFor(
         records.filter(({ event }) => event._tag !== "TargetPromotionObservedSuccess"),
@@ -224,6 +229,8 @@ describe("post-promotion blocker ancestry chronology", () => {
 
     expect(postPromotionBlockerClearAuthorizationIssue(records, authorization)).toBeUndefined()
     expect(postPromotionBlockerClearAuthorizationIssue(records, authorization, JournalPosition.make(5))).toBeUndefined()
+    expect(postPromotionBlockerClearAuthorizationIssue(indexed, authorization)).toBeUndefined()
+    expect(postPromotionBlockerClearAuthorizationIssue(indexed, authorization, JournalPosition.make(5))).toBeUndefined()
     const mismatched = PostPromotionBlockerClearAuthorization.make({
       blockerClearedAt: JournalPosition.make(5),
       blockerObservedAt: JournalPosition.make(3),
@@ -251,13 +258,13 @@ describe("post-promotion blocker ancestry chronology", () => {
     })
     const intentRecord: JournalRecord = {
       event: intentEvent,
-      key: JournalRecordKey.make("post-promotion-intent"),
+      key: intentRecordKey(operationId),
       position: JournalPosition.make(5),
       runId: fixture.runId
     }
     const outcomeRecord: JournalRecord = {
       event: outcomeEvent,
-      key: JournalRecordKey.make("post-promotion-outcome"),
+      key: outcomeRecordKey(operationId),
       position: JournalPosition.make(6),
       runId: fixture.runId
     }
@@ -270,17 +277,18 @@ describe("post-promotion blocker ancestry chronology", () => {
     expect(postPromotionBlockerAncestryOutcomeFor(records, authorization)?.event).toEqual(outcomeEvent)
     expect(postPromotionBlockerAncestryOutcomeFor(records.slice(0, -1), authorization)).toBeUndefined()
 
-    const journal = InRunJournal.of({ append: () => Effect.succeed(intentRecord), read: () => Effect.succeed(records) })
     const unusedGit = TargetPromotionGit.of({
       compareAndSet: () => Effect.die("cached outcome should avoid Git"),
       read: () => Effect.die("cached outcome should avoid Git")
     })
     expect(
       await Effect.runPromise(
-        readPostPromotionBlockerCandidateAncestry(authorization).pipe(
-          Effect.provideService(InRunJournal, journal),
-          Effect.provideService(TargetPromotionGit, unusedGit)
-        )
+        Effect.gen(function* () {
+          const journal = yield* JournalStore
+          yield* journal.beginRun(fixture.runId, fixture.target, beginning().event.initialControlPolicy)
+          for (const record of records.slice(1)) yield* journal.append(fixture.runId, record.key, record.event)
+          return yield* readPostPromotionBlockerCandidateAncestry(authorization)
+        }).pipe(Effect.provideService(TargetPromotionGit, unusedGit), Effect.provide(memoryJournalTestLayer))
       )
     ).toEqual(outcomeEvent.observation)
 

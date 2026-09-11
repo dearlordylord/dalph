@@ -16,6 +16,7 @@ import {
 import {
   appendGraphEvidence,
   emptyGraphEvidence,
+  graphBlockerClearEpisodeAt,
   graphSnapshotForObservation,
   inspectGraphEvidenceStorage,
   lastGraphObservationAt,
@@ -625,6 +626,20 @@ export const journalGraphSnapshotForObservation = (
   source: JournalRecordEvidence,
   position: JournalPosition
 ) => graphSnapshotForObservation(indexesFor(source).graphEvidence, position, source.records.length)
+
+/** Exact blocked-then-clear graph episode visible at this immutable evidence cutoff. */
+export const journalGraphBlockerClearEpisodeAt = (
+  source: JournalRecordEvidence,
+  query: {
+    readonly target: TrackerTarget
+    readonly taskId: TaskId
+    readonly afterPosition: number
+  }
+) =>
+  graphBlockerClearEpisodeAt(indexesFor(source).graphEvidence, {
+    ...query,
+    throughPosition: source.records.length
+  })
 
 /** Whether a distinct authored specification was observed after one exact earlier choice. */
 export const journalSpecificationDivergedAfter = (
