@@ -38,6 +38,14 @@ import {
   latestTaskReadAt,
   type ReadFreshnessEvidence
 } from "./read-freshness-evidence.js"
+import {
+  appendStopRequestDisposition,
+  emptyStopRequestDisposition,
+  inspectStopRequestDispositionStorage,
+  stopRequestDispositionAt,
+  type StopRequestDispositionEvidence
+} from "./stop-request-disposition.js"
+import type { AttemptChoiceRequestId } from "../workflow/protocols/attempt-choice/events.js"
 import { workflowOperationId, type WorkflowOperation } from "../workflow/registry/operation.js"
 import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
 import type { JournalPosition, JournalRecordKey } from "./identity.js"
@@ -89,6 +97,7 @@ interface EvidenceIndexes {
   readonly graphEvidence: GraphEvidence
   readonly specificationDivergence: SpecificationDivergence
   readonly readFreshnessEvidence: ReadFreshnessEvidence
+  readonly stopRequestDisposition: StopRequestDispositionEvidence
 }
 
 const indexesByEvidence = new WeakMap<JournalRecordEvidence, EvidenceIndexes>()
@@ -122,7 +131,8 @@ export const emptyJournalEvidence = (): JournalRecordEvidence =>
     claimObservationEpisodes: emptyClaimObservationEpisodes(),
     graphEvidence: emptyGraphEvidence(),
     specificationDivergence: emptySpecificationDivergence(),
-    readFreshnessEvidence: emptyReadFreshnessEvidence()
+    readFreshnessEvidence: emptyReadFreshnessEvidence(),
+    stopRequestDisposition: emptyStopRequestDisposition()
   })
 
 const operationOf = ({ event }: JournalRecord): WorkflowOperation | undefined =>
@@ -142,6 +152,11 @@ const operationIdsOf = (record: JournalRecord): ReadonlySet<OperationId> => {
   }
   if ("deletionOperationId" in record.event) ids.add(record.event.deletionOperationId)
   if ("replacementOperationId" in record.event) ids.add(record.event.replacementOperationId)
+  if ("expectedClaim" in record.event) ids.add(record.event.expectedClaim.operationId)
+  if ("release" in record.event) ids.add(record.event.release.claim.operationId)
+  if ("operation" in record.event && "release" in record.event.operation) {
+    ids.add(record.event.operation.release.claim.operationId)
+  }
   if (
     "observation" in record.event &&
     "request" in record.event.observation &&
@@ -361,16 +376,17 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
           })
         )
   const restartReadKey = restartReadKeyOf(record)
-  const byRestartRead = restartReadKey === undefined
-    ? indexes.byRestartRead
-    : HashMap.set(
-        indexes.byRestartRead,
-        restartReadKey,
-        appendJournalRecord(
-          Option.getOrElse(HashMap.get(indexes.byRestartRead, restartReadKey), emptyJournalRecords),
-          record
+  const byRestartRead =
+    restartReadKey === undefined
+      ? indexes.byRestartRead
+      : HashMap.set(
+          indexes.byRestartRead,
+          restartReadKey,
+          appendJournalRecord(
+            Option.getOrElse(HashMap.get(indexes.byRestartRead, restartReadKey), emptyJournalRecords),
+            record
+          )
         )
-      )
   const graphEvidence = appendGraphEvidence(indexes.graphEvidence, record, (operationId) => {
     const records = Option.getOrElse(HashMap.get(indexes.operations, operationId), emptyJournalRecords)
     const operationRecord = journalRecordAt(records, lastSequenceEntryOffset)
@@ -403,7 +419,8 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
     claimObservationEpisodes: appendClaimObservationEpisode(indexes.claimObservationEpisodes, record),
     graphEvidence,
     specificationDivergence: appendSpecificationDivergence(indexes.specificationDivergence, record),
-    readFreshnessEvidence: appendReadFreshnessEvidence(indexes.readFreshnessEvidence, record)
+    readFreshnessEvidence: appendReadFreshnessEvidence(indexes.readFreshnessEvidence, record),
+    stopRequestDisposition: appendStopRequestDisposition(indexes.stopRequestDisposition, record)
   })
 }
 
@@ -613,10 +630,7 @@ export const journalRestartReadIntents = (
 ): Iterable<JournalRecord> => {
   const key = `${encodeURIComponent(nonce)}:${phase}`
   return isJournalRecordEvidence(source)
-    ? indexedRecords(
-        source,
-        Option.getOrElse(HashMap.get(indexesFor(source).byRestartRead, key), emptyJournalRecords)
-      )
+    ? indexedRecords(source, Option.getOrElse(HashMap.get(indexesFor(source).byRestartRead, key), emptyJournalRecords))
     : source.filter((record) => restartReadKeyOf(record) === key)
 }
 
@@ -628,30 +642,17 @@ export const journalGraphObservationAt = (
   source: JournalRecordEvidence,
   query: { readonly target?: TrackerTarget; readonly plannedAttempt?: PlannedTaskAttempt }
 ): JournalRecord | undefined =>
-  lastGraphObservationAt(indexesFor(source).graphEvidence, {
-    ...query,
-    throughPosition: source.records.length
-  })
+  lastGraphObservationAt(indexesFor(source).graphEvidence, { ...query, throughPosition: source.records.length })
 
 /** Immutable graph snapshot derived at one exact observation and bounded by this evidence cutoff. */
-export const journalGraphSnapshotForObservation = (
-  source: JournalRecordEvidence,
-  position: JournalPosition
-) => graphSnapshotForObservation(indexesFor(source).graphEvidence, position, source.records.length)
+export const journalGraphSnapshotForObservation = (source: JournalRecordEvidence, position: JournalPosition) =>
+  graphSnapshotForObservation(indexesFor(source).graphEvidence, position, source.records.length)
 
 /** Exact blocked-then-clear graph episode visible at this immutable evidence cutoff. */
 export const journalGraphBlockerClearEpisodeAt = (
   source: JournalRecordEvidence,
-  query: {
-    readonly target: TrackerTarget
-    readonly taskId: TaskId
-    readonly afterPosition: number
-  }
-) =>
-  graphBlockerClearEpisodeAt(indexesFor(source).graphEvidence, {
-    ...query,
-    throughPosition: source.records.length
-  })
+  query: { readonly target: TrackerTarget; readonly taskId: TaskId; readonly afterPosition: number }
+) => graphBlockerClearEpisodeAt(indexesFor(source).graphEvidence, { ...query, throughPosition: source.records.length })
 
 /** Whether a distinct authored specification was observed after one exact earlier choice. */
 export const journalSpecificationDivergedAfter = (
@@ -681,19 +682,20 @@ export const journalLatestTaskRead = (
   source: JournalRecordEvidence,
   query: Omit<Parameters<typeof latestTaskReadAt>[1], "throughPosition">
 ): JournalRecord | undefined =>
-  latestTaskReadAt(indexesFor(source).readFreshnessEvidence, {
-    ...query,
-    throughPosition: source.records.length
-  })
+  latestTaskReadAt(indexesFor(source).readFreshnessEvidence, { ...query, throughPosition: source.records.length })
 
 export const journalLatestAttemptRead = (
   source: JournalRecordEvidence,
   query: Omit<Parameters<typeof latestAttemptReadAt>[1], "throughPosition">
 ): JournalRecord | undefined =>
-  latestAttemptReadAt(indexesFor(source).readFreshnessEvidence, {
-    ...query,
-    throughPosition: source.records.length
-  })
+  latestAttemptReadAt(indexesFor(source).readFreshnessEvidence, { ...query, throughPosition: source.records.length })
+
+/** One Stop request's latest distinct claim-disposition facts visible at this immutable evidence cutoff. */
+export const journalStopRequestDispositionAt = (
+  source: JournalRecordEvidence,
+  request: AttemptChoiceRequestId
+): ReturnType<typeof stopRequestDispositionAt> =>
+  stopRequestDispositionAt(indexesFor(source).stopRequestDisposition, request, source.records.length)
 
 /** Full accepted prefixes can reuse the exact indexed kind sequence. */
 export const journalEvidenceKindSequence = (
@@ -792,9 +794,8 @@ export const journalRecordsForTask = (source: JournalHistorySource, taskId: Task
           record.event.observation._tag !== "UnchangedTaskTrackerFactsReconfirmed"
         )
           return false
-        const prior = source.find(
-          ({ key }) => key === outcomeRecordKey(record.event.observation.priorFullObservationOperationId)
-        )
+        const priorOperationId = record.event.observation.priorFullObservationOperationId
+        const prior = source.find(({ key }) => key === outcomeRecordKey(priorOperationId))
         return prior !== undefined && taskIdsOf(prior).has(taskId)
       })
 
@@ -849,6 +850,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     indexes.graphEvidence,
     indexes.specificationDivergence,
     indexes.readFreshnessEvidence,
+    indexes.stopRequestDisposition,
     inspectJournalRecordStorage(source.records),
     ...Array.from(HashMap.values(indexes.byKind), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byAttempt), inspectJournalRecordStorage),
@@ -871,6 +873,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     ...inspectClaimObservationEpisodeStorage(indexes.claimObservationEpisodes),
     ...inspectGraphEvidenceStorage(indexes.graphEvidence),
     ...inspectSpecificationDivergenceStorage(indexes.specificationDivergence),
-    ...inspectReadFreshnessEvidenceStorage(indexes.readFreshnessEvidence)
+    ...inspectReadFreshnessEvidenceStorage(indexes.readFreshnessEvidence),
+    ...inspectStopRequestDispositionStorage(indexes.stopRequestDisposition)
   ]
 }

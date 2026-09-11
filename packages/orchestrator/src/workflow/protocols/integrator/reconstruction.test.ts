@@ -69,10 +69,10 @@ import {
   appendRunGitReadIntentIfNeeded,
   readRecordedRunResult,
   readRunCandidateObservation,
-  reconcileRunResult,
   runObservationFromAppendedRecord,
   runResultFromAppendedRecord
 } from "./journal-record-reconciliation.js"
+import { integratorRetryAuthorizationIssue } from "./retry-authorization.js"
 import {
   appendIntegratorRunStartedIfNeeded,
   integratorCorrelationFor,
@@ -1230,12 +1230,9 @@ describe("Integrator journal-record reconciliation", () => {
         ]).pipe(Effect.flip)
       ).toBeInstanceOf(IntegratorJournalContradiction)
       const runTwo = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(2))
-      expect(
-        yield* reconcileRunResult(journal, runTwo, yield* Ref.get(records), Option.none(), false).pipe(Effect.flip)
-      ).toBeInstanceOf(IntegratorJournalContradiction)
-      expect(yield* reconcileRunResult(journal, runOne, yield* Ref.get(records), Option.none(), false)).toEqual(
-        Option.none()
-      )
+      expect(integratorRetryAuthorizationIssue(yield* Ref.get(records), { preparation: input, run: runTwo })).toBeDefined()
+      yield* appendIntegratorRunStartedIfNeeded(journal, runOne, yield* Ref.get(records))
+      expect(yield* readRecordedRunResult(yield* Ref.get(records), runOne)).toEqual(Option.none())
       const withPreviousRun = [
         ...lineageRecords(),
         sessionRecord(),
@@ -1243,9 +1240,8 @@ describe("Integrator journal-record reconciliation", () => {
         runResultRecord(notPreparedResult())
       ]
       const { journal: retryJournal, records: retryRecords } = yield* makeJournal(withPreviousRun)
-      expect(yield* reconcileRunResult(retryJournal, runTwo, withPreviousRun, Option.none(), false)).toEqual(
-        Option.none()
-      )
+      yield* appendIntegratorRunStartedIfNeeded(retryJournal, runTwo, withPreviousRun)
+      expect(yield* readRecordedRunResult(yield* Ref.get(retryRecords), runTwo)).toEqual(Option.none())
       expect((yield* Ref.get(retryRecords)).some((item) => item.event._tag === "IntegratorRunStarted")).toBe(true)
     })
   )
@@ -1269,9 +1265,7 @@ describe("Integrator journal-record reconciliation", () => {
       ]
       const { journal } = yield* makeJournal(previousRunRecords)
       const runTwo = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(2))
-      expect(yield* reconcileRunResult(journal, runTwo, previousRunRecords, Option.none(), false)).toEqual(
-        Option.none()
-      )
+      yield* appendIntegratorRunStartedIfNeeded(journal, runTwo, previousRunRecords)
 
       const losingJournal = InRunJournal.of({
         append: (requestedRunId, key) => Effect.succeed({ ...runStartRecord(runOne, 5, key), runId: requestedRunId }),

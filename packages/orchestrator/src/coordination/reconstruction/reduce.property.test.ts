@@ -203,11 +203,13 @@ it("advances every generated valid prefix to the same state and frontier as comp
   )
 })
 
-it("reuses one validated result for repeated reads of the same immutable prefix", () => {
+it("cold replay derives independent equivalent results without an input-array authority cache", () => {
   const { records, runId } = generatedValidHistory(["same-prefix"])
   const first = reduceWorkflowJournalHistory(runId, records)
   expect(first._tag).toBe("ValidWorkflowJournalHistory")
-  expect(reduceWorkflowJournalHistory(runId, records)).toBe(first)
+  const replayed = reduceWorkflowJournalHistory(runId, records)
+  expect(replayed).not.toBe(first)
+  expect(replayed).toEqual(first)
 })
 
 it("keeps a prior prefix correct when a linear successor is rejected, then accepts a later successor", () => {

@@ -1,11 +1,4 @@
-import { Option } from "effect"
 import type { JournalRecord } from "../../workflow-journal/store.js"
-import {
-  journalRecordsAfter,
-  journalRecordsForOperationId,
-  journalRecordsOfKind,
-  type JournalHistorySource
-} from "../../workflow-journal/record-evidence.js"
 import type { OperationId } from "../../workflow/identity.js"
 import { acceptedOperationIdOf } from "../../workflow/registry/event-descriptor.js"
 import {
@@ -23,6 +16,11 @@ import { completionTaskRequestEquals } from "../../workflow/protocols/integratio
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import type { CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
 import type { ExactTicketDeliveryEvidence, TicketDeliveryEvidence } from "./relations.js"
+import {
+  journalRecordsForOperationId,
+  journalRecordsOfKind,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
 
 type StartedDeliveryResponsibility = Extract<
   ReturnType<typeof deriveIntegrationAdmission>["responsibilities"][number],
@@ -37,7 +35,7 @@ const focusedTaskCompletionSuccessOf = (
   if (event._tag !== "TaskTrackerFactsObserved" || event.observation._tag !== "FocusedTaskCompletionFacts") return []
   const focused = event.observation
   const requestIntentPrecedesSuccess = Array.from(
-    journalRecordsForOperationId(records, focused.request.operationId)
+    journalRecordsForOperationId(records, event.observation.request.operationId)
   ).some(
     (candidate) =>
       candidate.position < position &&
@@ -87,19 +85,42 @@ const integrationEvidenceOf = (
   ]
 }
 
-/** Every operation identity whose journal fact is available to delivery proposal derivation. */
-export const acceptedOperationIdsOf = (records: JournalHistorySource): ReadonlySet<OperationId> =>
-  new Set(
-    Array.from(journalRecordsAfter(records, null)).flatMap(({ event }) =>
-      Option.toArray(Option.fromUndefinedOr(acceptedOperationIdOf(event)))
-    )
-  )
+const initiatingOperationKinds = [
+  "PlannedAttemptReplaced",
+  "TaskTrackerReadIntentRecorded",
+  "GitReadIntentRecorded",
+  "TaskClaimAcquisitionIntended",
+  "TaskClaimReleaseIntended",
+  "TaskAttemptPlanned",
+  "TaskWorktreeReconciliationIntended"
+] as const
+
+/** Every operation identity whose initiating journal fact is available to delivery proposal derivation. */
+const acceptedOperationIdsByPrefix = new WeakMap<object, ReadonlySet<OperationId>>()
+
+export const acceptedOperationIdsOf = (records: JournalHistorySource): ReadonlySet<OperationId> => {
+  const cached = acceptedOperationIdsByPrefix.get(records)
+  if (cached !== undefined) return cached
+  const operationIds = new Set<OperationId>()
+  for (const kind of initiatingOperationKinds) {
+    for (const { event } of journalRecordsOfKind(records, kind)) {
+      const accepted = acceptedOperationIdOf(event)
+      if (accepted !== undefined) operationIds.add(accepted)
+    }
+  }
+  acceptedOperationIdsByPrefix.set(records, operationIds)
+  return operationIds
+}
 
 /** Ordinary tracker or Git read identities whose journal-first intent has no typed outcome yet. */
 export const pendingReadOperationIdsOf = (records: JournalHistorySource): ReadonlySet<OperationId> => {
-  const allRecords = Array.from(journalRecordsAfter(records, null))
   const completed = new Set(
-    allRecords.flatMap(({ event }) => {
+    [
+      ...journalRecordsOfKind(records, "TaskTrackerFactsObserved"),
+      ...journalRecordsOfKind(records, "PlannedAttemptWorktreeObserved"),
+      ...journalRecordsOfKind(records, "TargetLineageObserved"),
+      ...journalRecordsOfKind(records, "AttemptRestartAuthorityReadFailed")
+    ].flatMap(({ event }) => {
       if (event._tag === "TaskTrackerFactsObserved") return [event.operationId]
       if (event._tag === "PlannedAttemptWorktreeObserved" || event._tag === "TargetLineageObserved") {
         return [event.operationId]
@@ -114,7 +135,10 @@ export const pendingReadOperationIdsOf = (records: JournalHistorySource): Readon
     })
   )
   return new Set(
-    allRecords.flatMap(({ event }) =>
+    [
+      ...journalRecordsOfKind(records, "GitReadIntentRecorded"),
+      ...journalRecordsOfKind(records, "TaskTrackerReadIntentRecorded")
+    ].flatMap(({ event }) =>
       (event._tag === "GitReadIntentRecorded" || event._tag === "TaskTrackerReadIntentRecorded") &&
       !completed.has(event.operation.operationId)
         ? [event.operation.operationId]
@@ -123,9 +147,13 @@ export const pendingReadOperationIdsOf = (records: JournalHistorySource): Readon
   )
 }
 
+const journaledIntegrationEvidenceByPrefix = new WeakMap<object, ReadonlyArray<ExactTicketDeliveryEvidence>>()
+
 export const journaledIntegrationEvidenceOf = (
   records: JournalHistorySource
 ): ReadonlyArray<ExactTicketDeliveryEvidence> => {
+  const cached = journaledIntegrationEvidenceByPrefix.get(records)
+  if (cached !== undefined) return cached
   const focusedCompletionSuccesses = Array.from(journalRecordsOfKind(records, "TaskTrackerFactsObserved")).flatMap(
     (record) => focusedTaskCompletionSuccessOf(record, records)
   )
@@ -148,6 +176,7 @@ export const journaledIntegrationEvidenceOf = (
     ...focusedCompletionSuccesses,
     ...finalitySettlements
   ]
+  journaledIntegrationEvidenceByPrefix.set(records, evidence)
   return evidence
 }
 

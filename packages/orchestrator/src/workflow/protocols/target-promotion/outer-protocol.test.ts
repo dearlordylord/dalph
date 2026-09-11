@@ -59,12 +59,12 @@ import { makeTargetPromotionEngine } from "./protocol-engine.js"
 const {
   authorizeTargetPromotionProgress,
   observeTargetPromotionRead,
+  reconcileTargetPromotionAttempt,
   recordTargetPromotionAttemptIntent,
   recordTargetPromotionIntent,
+  runTargetPromotion,
   sendTargetPromotionAttempt,
-  settleTargetPromotionAttempt,
-  reconcileTargetPromotionAttempt,
-  runTargetPromotion
+  settleTargetPromotionAttempt
 } = makeTargetPromotionEngine(
   Effect.fn("PromotionTest.currentEvidence")(function* (runId: RunId) {
     return journalEvidenceFrom(yield* (yield* InRunJournal).read(runId))

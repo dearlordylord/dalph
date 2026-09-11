@@ -84,6 +84,24 @@ const graphRead = (id: string, readTarget = target) =>
     [taskId]
   )
 
+it("retains malformed decoded graph evidence without projecting missing grouping facts", () => {
+  const operation = graphRead("graph-missing-grouping")
+  const full = makeCompleteTaskTrackerFactsObserved(operation, snapshot)
+  const [identities, lifecycles, prerequisites, groupings, membership] = full.factFamilies
+  const malformed = record(1, {
+    _tag: "TaskTrackerFactsObserved",
+    operationId: operation.operationId,
+    observation: {
+      ...full,
+      factFamilies: [identities, lifecycles, prerequisites, { ...groupings, groupings: [] }, membership]
+    },
+    version: workflowJournalEventVersion
+  })
+  const evidence = appendGraphEvidence(emptyGraphEvidence(), malformed, () => undefined)
+  expect(lastGraphObservationAt(evidence, { target, throughPosition: 1 })).toBe(malformed)
+  expect(graphSnapshotForObservation(evidence, malformed.position, malformed.position)).toEqual(Option.none())
+})
+
 it("keeps prior graph windows visible and shares exact unchanged snapshot projections", () => {
   const first = graphRead("graph-first")
   const unchanged = graphRead("graph-unchanged")

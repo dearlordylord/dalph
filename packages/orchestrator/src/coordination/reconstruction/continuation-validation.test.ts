@@ -255,7 +255,7 @@ const validate = (record: JournalRecord, source: JournalHistorySource) => {
 }
 
 it("keeps task B's causal read when validating task A's continuation and fails closed when it is absent", () => {
-  const { records, authorization, crossTask } = fixture(0)
+  const { authorization, crossTask, records } = fixture(0)
   expect(validate(authorization, records)).toEqual([])
   expect(validate(authorization, journalEvidenceFrom(records))).toEqual([])
   const missingCausalRead = records.filter((record) => record !== crossTask)
@@ -268,7 +268,7 @@ it("keeps task B's causal read when validating task A's continuation and fails c
 
 it("keeps warm continuation visits bounded as unrelated task evidence grows", () => {
   const visits = [64, 256].map((size) => {
-    const { records, authorization } = fixture(size)
+    const { authorization, records } = fixture(size)
     const evidence = journalEvidenceFrom(records)
     let indexedVisits = 0
     let materializations = 0

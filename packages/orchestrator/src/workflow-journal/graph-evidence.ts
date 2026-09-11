@@ -1,4 +1,4 @@
-import { HashMap, Option } from "effect"
+import { HashMap, Option, Schema } from "effect"
 import type { PlannedTaskAttempt, TaskId } from "@dalph/contracts"
 import {
   appendBlockerClearEvidence,
@@ -12,7 +12,7 @@ import { taskTrackerTargetKey, type TrackerTarget } from "../authorities/task-tr
 import type { OperationId } from "../workflow/identity.js"
 import type { WorkflowOperation } from "../workflow/registry/operation.js"
 import { continuationReadNamesExactPlan } from "../workflow/protocols/planned-attempt-continuation/plan-correlation.js"
-import type { CompleteTaskTrackerFactsObserved } from "../workflow/task-tracker-facts/observation.js"
+import { CompleteTaskTrackerFactsObserved } from "../workflow/task-tracker-facts/observation.js"
 import { projectCompleteTaskGraph } from "../workflow/task-tracker-facts/graph-projection.js"
 import { reconfirmationMatchesPriorFullObservation } from "../workflow/task-tracker-facts/reconfirmation.js"
 import type { JournalPosition } from "./identity.js"
@@ -119,7 +119,8 @@ export const appendGraphEvidence = (
   let completeByOperation = roots.completeByOperation
   let snapshot: Option.Option<TaskDagSnapshot>
   if (observation._tag === "CompleteTaskTrackerFacts") {
-    snapshot = projectCompleteTaskGraph(observation)
+    // Decoded evidence is indexed before semantic validation; malformed full payloads must reach ordered diagnostics.
+    snapshot = Schema.is(CompleteTaskTrackerFactsObserved)(observation) ? projectCompleteTaskGraph(observation) : Option.none()
     if (!HashMap.has(completeByOperation, observation.operationId))
       completeByOperation = HashMap.set(completeByOperation, observation.operationId, {
         observation,
@@ -176,7 +177,7 @@ export const lastGraphObservationAt = (
   }
 ): JournalRecord | undefined => {
   const roots = rootsOf(evidence)
-  const { target, plannedAttempt } = query
+  const { plannedAttempt, target } = query
   const records =
     plannedAttempt === undefined
       ? target === undefined
