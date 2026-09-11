@@ -5,6 +5,13 @@ import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { integrationQuarantinedRecordKey } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { InRunJournal } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import {
+  journalRecordByKey,
+  journalRecordByPosition,
+  journalEvidenceBefore,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { IntegrationQuarantineBasis, IntegrationQuarantinedEvent } from "./events.js"
 import {
@@ -56,10 +63,11 @@ const changedHeadBasisEquals = (
   left.observedTargetHead === right.observedTargetHead
 
 const sameChangedHeadEvidence = (
-  record: JournalRecord,
+  record: JournalRecord | undefined,
   session: IntegratorSessionCorrelation,
   basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "RetryTargetHeadChanged" }>
 ): record is ChangedHeadQuarantineRecord =>
+  record !== undefined &&
   record.event._tag === "IntegrationQuarantined" &&
   record.runId === runIdFor(session) &&
   integratorCorrelationsEqual(record.event.correlation, session) &&
@@ -68,7 +76,7 @@ const sameChangedHeadEvidence = (
   record.key === integrationQuarantinedRecordKey(session.sessionId, basis)
 
 const retryRelationFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   input: ChangedHeadRetryQuarantineInput
 ): IntegratorRetryAuthorization | string => {
   const run = IntegratorRunCorrelation.make({ ordinal: integratorRetryRunOrdinal, session: input.session })
@@ -90,7 +98,7 @@ const retryRelationFor = (
 }
 
 const validateHistory = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   input: ChangedHeadRetryQuarantineInput
 ): string | undefined => {
   const relation = retryRelationFor(records, input)
@@ -98,36 +106,6 @@ const validateHistory = (
   return relation.lineage.observation.event.observation.targetHeadSha === relation.session.expectedTargetHead
     ? "Retry changed-head quarantine requires a target head different from S's fixed head"
     : undefined
-}
-
-type ExistingChangedHeadResolution =
-  | { readonly _tag: "Record"; readonly record: ChangedHeadQuarantineRecord }
-  | { readonly _tag: "Issue"; readonly detail: string }
-
-const historyWithoutKeyWinner = (
-  records: ReadonlyArray<JournalRecord>,
-  existing: JournalRecord | undefined
-): ReadonlyArray<JournalRecord> => (existing === undefined ? records : records.filter((record) => record !== existing))
-
-const existingChangedHeadResolution = (
-  records: ReadonlyArray<JournalRecord>,
-  existing: JournalRecord | undefined,
-  session: IntegratorSessionCorrelation,
-  basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "RetryTargetHeadChanged" }>
-): ExistingChangedHeadResolution | undefined => {
-  if (existing !== undefined) {
-    return sameChangedHeadEvidence(existing, session, basis)
-      ? { _tag: "Record", record: existing }
-      : { _tag: "Issue", detail: "Changed-head quarantine key contains a foreign or contradictory event" }
-  }
-  const duplicates = records.filter((record) => sameChangedHeadEvidence(record, session, basis))
-  /* v8 ignore next -- @preserve retryRelationFor rejects any same-session changed-head quarantine before this duplicate-history guard can be reached. */
-  if (duplicates.length > 1) {
-    return { _tag: "Issue", detail: "Journal history contains duplicate changed-head quarantine evidence" }
-  }
-  const duplicate = duplicates[0]
-  /* v8 ignore next -- @preserve retryRelationFor rejects an equivalent same-session quarantine before this malformed-key fallback can be reached. */
-  return duplicate === undefined ? undefined : { _tag: "Record", record: duplicate }
 }
 
 /**
@@ -140,8 +118,9 @@ export const appendChangedHeadRetryQuarantine = Effect.fn("IntegrationQuarantine
       input
     )
     const journal = yield* InRunJournal
+    const accepted = yield* AcceptedJournalReader
     const runId = runIdFor(request.session)
-    const records = yield* journal.read(runId)
+    const records = yield* accepted.readAccepted(runId)
     const basis = IntegrationQuarantineBasis.cases.RetryTargetHeadChanged.make({
       direction: "Retry",
       directionAppliedAt: request.directionAppliedAt,
@@ -150,14 +129,16 @@ export const appendChangedHeadRetryQuarantine = Effect.fn("IntegrationQuarantine
       targetLineageObservedAt: request.targetLineageObservedAt
     })
     const key = integrationQuarantinedRecordKey(request.session.sessionId, basis)
-    const existing = records.find((record) => record.key === key)
-    const issue = validateHistory(historyWithoutKeyWinner(records, existing), request)
-    if (issue !== undefined) return yield* reject(request.session, issue)
-    const resolution = existingChangedHeadResolution(records, existing, request.session, basis)
-    if (resolution?._tag === "Issue") return yield* reject(request.session, resolution.detail)
-    if (resolution?._tag === "Record") {
-      return resolution.record
+    const existing = journalRecordByKey(records, key)
+    if (existing !== undefined) {
+      const issue = validateHistory(journalEvidenceBefore(records, existing.position), request)
+      if (issue !== undefined) return yield* reject(request.session, issue)
+      return sameChangedHeadEvidence(existing, request.session, basis)
+        ? existing
+        : yield* reject(request.session, "Changed-head quarantine key contains a foreign or contradictory event")
     }
+    const issue = validateHistory(records, request)
+    if (issue !== undefined) return yield* reject(request.session, issue)
 
     const event = IntegrationQuarantinedEvent.make({
       basis,
@@ -169,8 +150,8 @@ export const appendChangedHeadRetryQuarantine = Effect.fn("IntegrationQuarantine
     const appended = yield* journal.append(runId, key, event).pipe(
       Effect.catchTag("JournalStoreContradiction", ({ existingPosition }) =>
         Effect.gen(function* () {
-          const refreshed = yield* journal.read(runId)
-          const winner = refreshed.find((record) => record.position === existingPosition)
+          const refreshed = yield* accepted.readAccepted(runId)
+          const winner = journalRecordByPosition(refreshed, existingPosition)
           if (winner !== undefined && sameChangedHeadEvidence(winner, request.session, basis)) return winner
           return yield* reject(request.session, "Changed-head quarantine append contradicted existing Journal history")
         })
