@@ -1,7 +1,11 @@
 import { it } from "@effect/vitest"
-import { GitCommitSha, RunId } from "@dalph/contracts"
-import { Effect, Layer, Schema } from "effect"
+import { GitCommitSha, PlannedTaskAttempt, RunId, makeTaskWorkSpecification } from "@dalph/contracts"
+import { Context, Effect, Layer, Schema } from "effect"
 import { expect } from "vitest"
+import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
+import { acceptedResultFixture } from "../../../../test/support/evidence.js"
+import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
@@ -18,14 +22,15 @@ import {
   outcomeRecordKey
 } from "../../../workflow-journal/record-key.js"
 import {
-  type InRunJournal,
+  InRunJournal,
   JournalStore,
   JournalStoreContradiction,
   type JournalRecord
 } from "../../../workflow-journal/store.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 import {
-  journalEvidenceFrom,
   journalEvidenceBefore,
   journalRecordsForQuarantineDirectionRequest
 } from "../../../workflow-journal/record-evidence.js"
@@ -69,19 +74,28 @@ import {
 import { integratorResponsibilityFactsFromCorrelation } from "../integrator/state.js"
 import {
   IntegrationQuarantineDirectionAlreadyApplied,
-  IntegrationQuarantineDirectionControl,
   IntegrationQuarantineDirectionNotAvailable,
   IntegrationQuarantineDirectionRequestIdentityContradiction,
   IntegrationQuarantineDirectionRequestRunMismatch,
   IntegrationQuarantineDirectionResultNotFound,
   makeIntegrationQuarantineDirectionControl,
-  integrationQuarantineDirectionControlLayer
+  preflightIntegrationQuarantineDirectionFromRecords
 } from "./control.js"
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 
 const runId = integrationFinalityFixture.runId
 const target = FixtureTarget.make("integration-quarantine-target")
 const baseCorrelation = integrationFinalityFixture.qualifiedCandidate.run.session
+const liveTaskSpecification = makeTaskWorkSpecification({
+  body: "Exercise the integration quarantine direction control.",
+  taskId: baseCorrelation.plannedAttempt.taskId,
+  title: "Integration quarantine direction"
+})
+const livePlannedAttempt = PlannedTaskAttempt.make({
+  ...baseCorrelation.plannedAttempt,
+  runId,
+  taskRevision: liveTaskSpecification.fingerprint
+})
 
 const correlationFor = (suffix: string) =>
   IntegratorSessionCorrelation.make({
@@ -263,6 +277,81 @@ const appendQuarantine = Effect.fn("IntegrationQuarantineTest.appendQuarantine")
   return { event, journal, record }
 })
 
+const appendLiveQuarantine = Effect.fn("IntegrationQuarantineTest.appendLiveQuarantine")(function* (suffix: string) {
+  const accepted = makeAcceptedIntegrationHistory({
+    acceptedResult: acceptedResultFixture(baseCorrelation.acceptedResult.commit),
+    activeClaim: ActiveTaskClaim.make({
+      operationId: OperationId.make(`integration-quarantine-test:claim:${suffix}`),
+      owner: ClaimOwner.make(`integration-quarantine-test:owner:${suffix}`),
+      taskId: livePlannedAttempt.taskId,
+      token: ClaimToken.make(`integration-quarantine-test:token:${suffix}`)
+    }),
+    integrationTarget: baseCorrelation.integrationTarget,
+    initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    plannedAttempt: livePlannedAttempt,
+    runId,
+    targetHeadSha: baseCorrelation.expectedTargetHead,
+    taskSpecification: liveTaskSpecification,
+    trackerTarget: target
+  })
+  const context = yield* Layer.build(liveJournalTestLayer({ records: accepted.records, runId, target }))
+  const journal = Context.get(context, InRunJournal)
+  const acceptedJournalReader = Context.get(context, AcceptedJournalReader)
+  const correlation = IntegratorSessionCorrelation.make({
+    ...baseCorrelation,
+    acceptedResult: accepted.responsibility.acceptedResult,
+    plannedAttempt: livePlannedAttempt,
+    queuedAt: accepted.responsibility.queuedAt,
+    sessionId: IntegratorSessionId.make(`integration-quarantine-live-session:${suffix}`),
+    startedAt: accepted.responsibility.startedAt,
+    targetLineageObservedAt: accepted.targetLineageObservedAt
+  })
+  const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: correlation })
+  yield* journal.append(
+    runId,
+    integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(correlation)),
+    IntegratorSessionFixedEvent.make({ correlation, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    runId,
+    integratorRunStartedRecordKey(run),
+    IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion })
+  )
+  const detail = IntegratorNotPreparedDetail.make(`integration quarantine live result: ${suffix}`)
+  const result = yield* journal.append(
+    runId,
+    integratorRunResultRecordedRecordKey(run),
+    IntegratorRunResultRecordedEvent.make({
+      result: IntegratorResult.cases.NotPrepared.make({ correlation: run, detail }),
+      run,
+      version: workflowJournalEventVersion
+    })
+  )
+  const event = IntegrationQuarantinedEvent.make({
+    basis: conclusiveBasisFor(IntegrationQuarantineCause.cases.NotPrepared.make({ detail }), result.position),
+    correlation,
+    occurrenceClassification: "NonActionOccurrence",
+    version: workflowJournalEventVersion
+  })
+  const record = yield* journal.append(
+    runId,
+    integrationQuarantinedRecordKey(correlation.sessionId, event.basis),
+    event
+  )
+  return { acceptedJournalReader, event, journal, record }
+})
+
+const liveControl = (
+  history: {
+    readonly acceptedJournalReader: AcceptedJournalReader["Service"]
+    readonly journal: InRunJournal["Service"]
+  },
+  journal: InRunJournal["Service"] = history.journal
+) =>
+  makeIntegrationQuarantineDirectionControl(journal).pipe(
+    Effect.provideService(AcceptedJournalReader, history.acceptedJournalReader)
+  )
+
 const fingerprintFor = (
   event: IntegrationQuarantinedEvent,
   quarantineAt: JournalPosition,
@@ -280,14 +369,30 @@ const requestFor = (
   })
 
 const appendTargetLineageObservation = Effect.fn("IntegrationQuarantineTest.appendTargetLineageObservation")(function* (
+  journal: InRunJournal["Service"],
   correlation: IntegratorSessionCorrelation,
   targetHead: GitCommitSha,
   suffix: string
 ) {
-  const journal = yield* JournalStore
+  const operationId = OperationId.make(`integration-quarantine-test:lineage-operation:${suffix}`)
+  yield* journal.append(
+    runId,
+    intentRecordKey(operationId),
+    GitReadIntentRecordedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operation: makeTargetLineageObservationOperation({
+        integrationTarget: correlation.integrationTarget,
+        operationId,
+        plannedAttempt: correlation.plannedAttempt,
+        predecessorOperationIds: []
+      }),
+      version: workflowJournalEventVersion
+    })
+  )
   return yield* journal.append(
     runId,
-    JournalRecordKey.make(`integration-quarantine-test:lineage:${suffix}`),
+    outcomeRecordKey(operationId),
     TargetLineageObservedEvent.make({
       observation: TargetLineageObservation.make({
         plannedBaseIsAncestorOfTargetHead: true,
@@ -295,7 +400,7 @@ const appendTargetLineageObservation = Effect.fn("IntegrationQuarantineTest.appe
         targetHeadSha: targetHead
       }),
       occurrenceClassification: "NonActionOccurrence",
-      operationId: OperationId.make(`integration-quarantine-test:lineage-operation:${suffix}`),
+      operationId,
       plannedAttempt: correlation.plannedAttempt,
       version: workflowJournalEventVersion
     })
@@ -515,96 +620,26 @@ it.effect("records provider-run failure only after owned activity is proved abse
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
-it.effect("authorizes Retry from exact provider-failure and run-bound conclusive evidence", () =>
+it.effect("authorizes Retry from exact accepted run-bound conclusive evidence", () =>
   Effect.gen(function* () {
-    const providerBasis = IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
-      detail: IntegrationQuarantineFailureDetail.make("provider activity was proved absent for Retry"),
-      ownedActivityProvenAbsentAt: JournalPosition.make(6)
-    })
-    const provider = yield* appendQuarantine(
-      "provider-retry-eligible",
-      quarantineEventFor("provider-retry-eligible", providerBasis)
-    )
-    const providerControl = yield* IntegrationQuarantineDirectionControl
-    const providerRequest = requestFor(
-      fingerprintFor(provider.event, provider.record.position, "Retry"),
-      "provider-retry-eligible-request"
-    )
-    const providerApplied = yield* providerControl.apply(providerRequest)
-    expect(providerApplied._tag).toBe("DirectionApplied")
-    const providerRecords = yield* (yield* JournalStore).read(runId)
-    const providerEvidence = journalEvidenceFrom(providerRecords)
-    expect(
-      Array.from(
-        journalRecordsForQuarantineDirectionRequest(providerEvidence, providerRequest.requestId)
-      )
-    ).toEqual([providerApplied.application])
+    const live = yield* appendLiveQuarantine("run-bound-retry-eligible")
+    const control = yield* liveControl(live)
+    const request = requestFor(fingerprintFor(live.event, live.record.position, "Retry"), "run-bound-retry-request")
+    const applied = yield* control.apply(request)
+    expect(applied._tag).toBe("DirectionApplied")
+    const evidence = yield* live.acceptedJournalReader.readAccepted(runId)
+    expect(Array.from(journalRecordsForQuarantineDirectionRequest(evidence, request.requestId))).toEqual([
+      applied.application
+    ])
     expect(
       Array.from(
         journalRecordsForQuarantineDirectionRequest(
-          journalEvidenceBefore(providerEvidence, providerApplied.application.position),
-          providerRequest.requestId
+          journalEvidenceBefore(evidence, applied.application.position),
+          request.requestId
         )
       )
     ).toEqual([])
-
-    const journal = yield* JournalStore
-    const correlation = IntegratorSessionCorrelation.make({
-      ...baseCorrelation,
-      sessionId: IntegratorSessionId.make("run-bound-retry-eligible"),
-      targetLineageObservedAt: JournalPosition.make(1)
-    })
-    const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: correlation })
-    const start = yield* journal.append(
-      runId,
-      integratorRunStartedRecordKey(run),
-      IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion })
-    )
-    const detail = IntegratorNotPreparedDetail.make("run-bound Retry evidence is exact")
-    const result = yield* journal.append(
-      runId,
-      integratorRunResultRecordedRecordKey(run),
-      IntegratorRunResultRecordedEvent.make({
-        result: IntegratorResult.cases.NotPrepared.make({ correlation: run, detail }),
-        run,
-        version: workflowJournalEventVersion
-      })
-    )
-    const quarantine = IntegrationQuarantinedEvent.make({
-      basis: conclusiveBasisFor(IntegrationQuarantineCause.cases.NotPrepared.make({ detail }), result.position),
-      correlation,
-      occurrenceClassification: "NonActionOccurrence",
-      version: workflowJournalEventVersion
-    })
-    const quarantineRecord = yield* journal.append(
-      runId,
-      integrationQuarantinedRecordKey(correlation.sessionId, quarantine.basis),
-      quarantine
-    )
-    expect(start.position).toBeLessThan(result.position)
-    const runBoundRecords = yield* journal.read(runId)
-    const wronglyKeyedStartJournal: InRunJournal["Service"] = {
-      append: () => Effect.die("wrongly keyed run start must fail before append"),
-      read: () =>
-        Effect.succeed(
-          runBoundRecords.map((candidate) =>
-            candidate === start ? { ...candidate, key: JournalRecordKey.make("wrong-run-bound-start-key") } : candidate
-          )
-        )
-    }
-    const wronglyKeyedStartControl = yield* makeIntegrationQuarantineDirectionControl(wronglyKeyedStartJournal)
-    const wronglyKeyedStart = yield* wronglyKeyedStartControl
-      .apply(requestFor(fingerprintFor(quarantine, quarantineRecord.position, "Retry"), "wrong-run-bound-start"))
-      .pipe(Effect.flip)
-    expect(wronglyKeyedStart).toMatchObject({
-      _tag: "IntegrationQuarantineDirectionNotAvailable",
-      reason: "RetryLimitReached"
-    })
-    const runBoundApplied = yield* providerControl.apply(
-      requestFor(fingerprintFor(quarantine, quarantineRecord.position, "Retry"), "run-bound-retry-request")
-    )
-    expect(runBoundApplied._tag).toBe("DirectionApplied")
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
+  })
 )
 
 it.effect("rejects arbitrary Journal history as proof that a provider run has no owned activity", () =>
@@ -630,35 +665,23 @@ it.effect("distinguishes an unopened Run, a missing quarantine, and a session-mi
     const event = quarantineEventFor("control-lookup")
     const fingerprint = fingerprintFor(event, JournalPosition.make(3), "Retry")
     const request = requestFor(fingerprint, "control-lookup-request")
-    const unopenedJournal: InRunJournal["Service"] = {
-      append: () => Effect.die("unopened Run must fail before append"),
-      read: () => Effect.succeed([])
-    }
-    const unopenedControl = yield* makeIntegrationQuarantineDirectionControl(unopenedJournal)
-    const unopened = yield* unopenedControl.apply(request).pipe(Effect.flip)
+    const unopened = yield* preflightIntegrationQuarantineDirectionFromRecords([], request).pipe(Effect.flip)
     expect(unopened._tag).toBe("WorkflowRunNotBegan")
 
     const { journal, record } = yield* appendQuarantine("control-lookup", event)
     const records = yield* journal.read(runId)
-    const noQuarantineJournal: InRunJournal["Service"] = {
-      append: () => Effect.die("missing quarantine must fail before append"),
-      read: () => Effect.succeed(records.filter((candidate) => candidate.position < event.correlation.queuedAt))
-    }
-    const noQuarantineControl = yield* makeIntegrationQuarantineDirectionControl(noQuarantineJournal)
-    const missing = yield* noQuarantineControl.apply(request).pipe(Effect.flip)
+    const missing = yield* preflightIntegrationQuarantineDirectionFromRecords(
+      records.filter((candidate) => candidate.position < event.correlation.queuedAt),
+      request
+    ).pipe(Effect.flip)
     expect(missing).toMatchObject({ _tag: "IntegrationQuarantineDirectionNotAvailable", reason: "MissingQuarantine" })
 
     const foreignCorrelation = correlationFor("control-lookup-foreign")
     const foreignEvent = IntegrationQuarantinedEvent.make({ ...event, correlation: foreignCorrelation })
-    const sessionMismatchJournal: InRunJournal["Service"] = {
-      append: () => Effect.die("session mismatch must fail before append"),
-      read: () =>
-        Effect.succeed(
-          records.map((candidate) => (candidate === record ? { ...candidate, event: foreignEvent } : candidate))
-        )
-    }
-    const sessionMismatchControl = yield* makeIntegrationQuarantineDirectionControl(sessionMismatchJournal)
-    const mismatch = yield* sessionMismatchControl.apply(request).pipe(Effect.flip)
+    const mismatch = yield* preflightIntegrationQuarantineDirectionFromRecords(
+      records.map((candidate) => (candidate === record ? { ...candidate, event: foreignEvent } : candidate)),
+      request
+    ).pipe(Effect.flip)
     expect(mismatch).toMatchObject({ _tag: "IntegrationQuarantineDirectionNotAvailable", reason: "SessionMismatch" })
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
@@ -669,50 +692,48 @@ it.effect("rejects incomplete conclusive run-one evidence and reports an absent 
     const { journal, record } = yield* appendQuarantine("control-incomplete-result", event)
     const records = yield* journal.read(runId)
     const request = requestFor(fingerprintFor(event, record.position, "Retry"), "control-incomplete-result-request")
-    const incompleteJournal: InRunJournal["Service"] = {
-      append: () => Effect.die("incomplete conclusive evidence must fail before append"),
-      read: () => Effect.succeed(records.filter((candidate) => candidate.event._tag !== "IntegratorRunResultRecorded"))
-    }
-    const incompleteControl = yield* makeIntegrationQuarantineDirectionControl(incompleteJournal)
-    const incomplete = yield* incompleteControl.apply(request).pipe(Effect.flip)
+    const incomplete = yield* preflightIntegrationQuarantineDirectionFromRecords(
+      records.filter((candidate) => candidate.event._tag !== "IntegratorRunResultRecorded"),
+      request
+    ).pipe(Effect.flip)
     expect(incomplete).toMatchObject({ _tag: "IntegrationQuarantineDirectionNotAvailable", reason: "SessionMismatch" })
 
-    const control = yield* IntegrationQuarantineDirectionControl
+    const live = yield* appendLiveQuarantine("missing-result")
+    const control = yield* liveControl(live)
     const notFound = yield* control
       .read({ requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "never-applied", runId }) })
       .pipe(Effect.flip)
     expect(notFound).toBeInstanceOf(IntegrationQuarantineDirectionResultNotFound)
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("reconciles every ambiguous direction append outcome against the Journal winner", () =>
   Effect.gen(function* () {
-    const event = quarantineEventFor("control-append-outcomes")
-    const { journal, record } = yield* appendQuarantine("control-append-outcomes", event)
+    const live = yield* appendLiveQuarantine("control-append-outcomes")
+    const { event, journal, record } = live
     const records = yield* journal.read(runId)
     const fingerprint = fingerprintFor(event, record.position, "FullRerun")
 
     let redelivered: JournalRecord | undefined
     let redeliveryAttempted = false
     const redeliveredJournal: InRunJournal["Service"] = {
-      append: (requestedRunId, key, appliedEvent) => {
-        redeliveryAttempted = true
-        redelivered = {
-          event: appliedEvent,
-          key,
-          position: JournalPosition.make(records.length + 1),
-          runId: requestedRunId
-        }
-        return Effect.fail(
-          new JournalStoreContradiction({ existingPosition: redelivered.position, key, runId: requestedRunId })
-        )
-      },
+      append: (requestedRunId, key, appliedEvent) =>
+        Effect.gen(function* () {
+          redeliveryAttempted = true
+          redelivered = yield* journal.append(requestedRunId, key, appliedEvent)
+          return yield* Effect.fail(
+            new JournalStoreContradiction({ existingPosition: redelivered.position, key, runId: requestedRunId })
+          )
+        }),
       read: () => Effect.succeed(redeliveryAttempted && redelivered !== undefined ? [...records, redelivered] : records)
     }
-    const redeliveredControl = yield* makeIntegrationQuarantineDirectionControl(redeliveredJournal)
+    const redeliveredControl = yield* liveControl(live, redeliveredJournal)
     const redeliveredResult = yield* redeliveredControl.apply(requestFor(fingerprint, "append-redelivered"))
     expect(redeliveredResult._tag).toBe("DirectionApplied")
 
+    const conflictingLive = yield* appendLiveQuarantine("control-append-conflicting")
+    const conflictingRecords = yield* conflictingLive.journal.read(runId)
+    const conflictingFingerprint = fingerprintFor(conflictingLive.event, conflictingLive.record.position, "FullRerun")
     let conflicting: JournalRecord | undefined
     let conflictingAttempted = false
     const conflictingJournal: InRunJournal["Service"] = {
@@ -731,7 +752,7 @@ it.effect("reconciles every ambiguous direction append outcome against the Journ
         conflicting = {
           event: conflictingEvent,
           key,
-          position: JournalPosition.make(records.length + 1),
+          position: JournalPosition.make(conflictingRecords.length + 1),
           runId: requestedRunId
         }
         return Effect.fail(
@@ -739,62 +760,75 @@ it.effect("reconciles every ambiguous direction append outcome against the Journ
         )
       },
       read: () =>
-        Effect.succeed(conflictingAttempted && conflicting !== undefined ? [...records, conflicting] : records)
+        Effect.succeed(
+          conflictingAttempted && conflicting !== undefined ? [...conflictingRecords, conflicting] : conflictingRecords
+        )
     }
-    const conflictingControl = yield* makeIntegrationQuarantineDirectionControl(conflictingJournal)
+    const conflictingControl = yield* liveControl(conflictingLive, conflictingJournal)
     const conflictingResult = yield* conflictingControl
-      .apply(requestFor(fingerprint, "append-conflicting"))
+      .apply(requestFor(conflictingFingerprint, "append-conflicting"))
       .pipe(Effect.flip)
     expect(conflictingResult).toBeInstanceOf(IntegrationQuarantineDirectionRequestIdentityContradiction)
 
+    const subjectLive = yield* appendLiveQuarantine("control-append-subject")
+    const subjectRecords = yield* subjectLive.journal.read(runId)
+    const subjectFingerprint = fingerprintFor(subjectLive.event, subjectLive.record.position, "FullRerun")
     let subjectWinner: JournalRecord | undefined
     let subjectAttempted = false
     const subjectJournal: InRunJournal["Service"] = {
-      append: (requestedRunId, key, appliedEvent) => {
-        subjectAttempted = true
-        if (appliedEvent._tag !== "IntegrationQuarantineDirectionApplied") {
-          return Effect.die("control supplied a non-direction event")
-        }
-        const subjectEvent = IntegrationQuarantineDirectionAppliedEvent.make({
-          ...appliedEvent,
-          requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "subject-winner", runId: requestedRunId })
-        })
-        subjectWinner = {
-          event: subjectEvent,
-          key,
-          position: JournalPosition.make(records.length + 1),
-          runId: requestedRunId
-        }
-        return Effect.fail(
-          new JournalStoreContradiction({ existingPosition: subjectWinner.position, key, runId: requestedRunId })
-        )
-      },
+      append: (requestedRunId, key, appliedEvent) =>
+        Effect.gen(function* () {
+          subjectAttempted = true
+          if (appliedEvent._tag !== "IntegrationQuarantineDirectionApplied") {
+            return Effect.die("control supplied a non-direction event")
+          }
+          const subjectEvent = IntegrationQuarantineDirectionAppliedEvent.make({
+            ...appliedEvent,
+            requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "subject-winner", runId: requestedRunId })
+          })
+          subjectWinner = yield* subjectLive.journal.append(requestedRunId, key, subjectEvent)
+          return yield* Effect.fail(
+            new JournalStoreContradiction({ existingPosition: subjectWinner.position, key, runId: requestedRunId })
+          )
+        }),
       read: () =>
-        Effect.succeed(subjectAttempted && subjectWinner !== undefined ? [...records, subjectWinner] : records)
+        Effect.succeed(
+          subjectAttempted && subjectWinner !== undefined ? [...subjectRecords, subjectWinner] : subjectRecords
+        )
     }
-    const subjectControl = yield* makeIntegrationQuarantineDirectionControl(subjectJournal)
-    const subjectResult = yield* subjectControl.apply(requestFor(fingerprint, "append-subject")).pipe(Effect.flip)
+    const subjectControl = yield* liveControl(subjectLive, subjectJournal)
+    const subjectResult = yield* subjectControl
+      .apply(requestFor(subjectFingerprint, "append-subject"))
+      .pipe(Effect.flip)
     expect(subjectResult).toBeInstanceOf(IntegrationQuarantineDirectionAlreadyApplied)
 
+    const fallbackLive = yield* appendLiveQuarantine("control-append-fallback")
+    const fallbackRecords = yield* fallbackLive.journal.read(runId)
+    const fallbackFingerprint = fingerprintFor(fallbackLive.event, fallbackLive.record.position, "FullRerun")
     let fallbackAttempted = false
     const fallbackJournal: InRunJournal["Service"] = {
       append: (requestedRunId, key) => {
         fallbackAttempted = true
         return Effect.fail(
           new JournalStoreContradiction({
-            existingPosition: JournalPosition.make(records.length + 1),
+            existingPosition: JournalPosition.make(fallbackRecords.length + 1),
             key,
             runId: requestedRunId
           })
         )
       },
-      read: () => Effect.succeed(records)
+      read: () => Effect.succeed(fallbackRecords)
     }
-    const fallbackControl = yield* makeIntegrationQuarantineDirectionControl(fallbackJournal)
-    const fallbackResult = yield* fallbackControl.apply(requestFor(fingerprint, "append-fallback")).pipe(Effect.flip)
+    const fallbackControl = yield* liveControl(fallbackLive, fallbackJournal)
+    const fallbackResult = yield* fallbackControl
+      .apply(requestFor(fallbackFingerprint, "append-fallback"))
+      .pipe(Effect.flip)
     expect(fallbackAttempted).toBe(true)
     expect(fallbackResult).toBeInstanceOf(IntegrationQuarantineDirectionRequestIdentityContradiction)
 
+    const foreignLive = yield* appendLiveQuarantine("control-append-foreign")
+    const foreignRecords = yield* foreignLive.journal.read(runId)
+    const foreignFingerprint = fingerprintFor(foreignLive.event, foreignLive.record.position, "FullRerun")
     const foreignAppendJournal: InRunJournal["Service"] = {
       append: (requestedRunId, key) =>
         Effect.succeed({
@@ -802,22 +836,25 @@ it.effect("reconciles every ambiguous direction append outcome against the Journ
             result: IntegratorResult.cases.NotPrepared.make({
               correlation: IntegratorRunCorrelation.make({
                 ordinal: IntegratorRunOrdinal.make(1),
-                session: event.correlation
+                session: foreignLive.event.correlation
               }),
               detail: IntegratorNotPreparedDetail.make("foreign append result")
             }),
-            run: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: event.correlation }),
+            run: IntegratorRunCorrelation.make({
+              ordinal: IntegratorRunOrdinal.make(1),
+              session: foreignLive.event.correlation
+            }),
             version: workflowJournalEventVersion
           }),
           key,
-          position: JournalPosition.make(records.length + 1),
+          position: JournalPosition.make(foreignRecords.length + 1),
           runId: requestedRunId
         }),
-      read: () => Effect.succeed(records)
+      read: () => Effect.succeed(foreignRecords)
     }
-    const foreignAppendControl = yield* makeIntegrationQuarantineDirectionControl(foreignAppendJournal)
+    const foreignAppendControl = yield* liveControl(foreignLive, foreignAppendJournal)
     const foreignAppend = yield* foreignAppendControl
-      .apply(requestFor(fingerprint, "append-foreign-result"))
+      .apply(requestFor(foreignFingerprint, "append-foreign-result"))
       .pipe(Effect.flip)
     expect(foreignAppend).toBeInstanceOf(IntegrationQuarantineDirectionRequestIdentityContradiction)
   }).pipe(Effect.provide(memoryJournalTestLayer))
@@ -827,12 +864,13 @@ it.effect(
   "reconstructs changed-head Retry as a fresh quarantine only after prior quarantine, Retry, and new lineage evidence",
   () =>
     Effect.gen(function* () {
-      const { event: prior, journal, record: priorRecord } = yield* appendQuarantine("changed-chain-prior")
-      const control = yield* IntegrationQuarantineDirectionControl
+      const live = yield* appendLiveQuarantine("changed-chain-prior")
+      const { event: prior, journal, record: priorRecord } = live
+      const control = yield* liveControl(live)
       const retry = requestFor(fingerprintFor(prior, priorRecord.position, "Retry"), "changed-chain-retry")
       const applied = yield* control.apply(retry)
       const observedHead = GitCommitSha.make("4".repeat(40))
-      const lineage = yield* appendTargetLineageObservation(prior.correlation, observedHead, "changed-chain")
+      const lineage = yield* appendTargetLineageObservation(journal, prior.correlation, observedHead, "changed-chain")
       const successor = IntegrationQuarantinedEvent.make({
         basis: IntegrationQuarantineBasis.cases.RetryTargetHeadChanged.make({
           direction: "Retry",
@@ -866,18 +904,31 @@ it.effect(
       expect(state._tag).toBe("DirectionApplied")
       if (state._tag !== "DirectionApplied") return
       expect(state.quarantine.basis).toEqual(successor.basis)
-    }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
+    }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects changed-head quarantine when its direction evidence is missing, FullRerun, or foreign", () =>
   Effect.gen(function* () {
     const { event: prior, journal, record: priorRecord } = yield* appendQuarantine("changed-negative")
-    const control = yield* IntegrationQuarantineDirectionControl
-    const fullRerun = yield* control.apply(
-      requestFor(fingerprintFor(prior, priorRecord.position, "FullRerun"), "changed-negative-full")
+    const fullRerunEvent = IntegrationQuarantineDirectionAppliedEvent.make({
+      fingerprint: fingerprintFor(prior, priorRecord.position, "FullRerun"),
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "changed-negative-full", runId }),
+      version: workflowJournalEventVersion
+    })
+    const fullRerun = yield* journal.append(
+      runId,
+      integrationQuarantineDirectionAppliedRecordKey(
+        IntegrationQuarantineDirectionSubject.make({
+          quarantineAt: priorRecord.position,
+          sessionId: prior.correlation.sessionId
+        })
+      ),
+      fullRerunEvent
     )
     const observedHead = GitCommitSha.make("5".repeat(40))
-    const lineage = yield* appendTargetLineageObservation(prior.correlation, observedHead, "changed-negative")
+    const lineage = yield* appendTargetLineageObservation(journal, prior.correlation, observedHead, "changed-negative")
     const missingRetryEvidence = IntegrationQuarantinedEvent.make({
       basis: IntegrationQuarantineBasis.cases.RetryTargetHeadChanged.make({
         direction: "Retry",
@@ -895,7 +946,7 @@ it.effect("rejects changed-head quarantine when its direction evidence is missin
       ...missingRetryEvidence,
       basis: IntegrationQuarantineBasis.cases.RetryTargetHeadChanged.make({
         direction: "Retry",
-        directionAppliedAt: fullRerun.application.position,
+        directionAppliedAt: fullRerun.position,
         observedTargetHead: observedHead,
         priorQuarantineAt: priorRecord.position,
         targetLineageObservedAt: lineage.position
@@ -960,22 +1011,35 @@ it.effect("rejects changed-head quarantine when its direction evidence is missin
         prior.correlation.sessionId
       )._tag
     ).toBe("Contradiction")
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("fails closed for canonical quarantine and direction records with foreign or pre-quarantine keys", () =>
   Effect.gen(function* () {
     const { event: prior, journal, record: priorRecord } = yield* appendQuarantine("state-boundary")
-    const control = yield* IntegrationQuarantineDirectionControl
-    const applied = yield* control.apply(
-      requestFor(fingerprintFor(prior, priorRecord.position, "Retry"), "state-boundary-retry")
+    const appliedEvent = IntegrationQuarantineDirectionAppliedEvent.make({
+      fingerprint: fingerprintFor(prior, priorRecord.position, "Retry"),
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "state-boundary-retry", runId }),
+      version: workflowJournalEventVersion
+    })
+    const applied = yield* journal.append(
+      runId,
+      integrationQuarantineDirectionAppliedRecordKey(
+        IntegrationQuarantineDirectionSubject.make({
+          quarantineAt: priorRecord.position,
+          sessionId: prior.correlation.sessionId
+        })
+      ),
+      appliedEvent
     )
     const observedHead = GitCommitSha.make("6".repeat(40))
-    const lineage = yield* appendTargetLineageObservation(prior.correlation, observedHead, "state-boundary")
+    const lineage = yield* appendTargetLineageObservation(journal, prior.correlation, observedHead, "state-boundary")
     const changed = IntegrationQuarantinedEvent.make({
       basis: IntegrationQuarantineBasis.cases.RetryTargetHeadChanged.make({
         direction: "Retry",
-        directionAppliedAt: applied.application.position,
+        directionAppliedAt: applied.position,
         observedTargetHead: observedHead,
         priorQuarantineAt: priorRecord.position,
         targetLineageObservedAt: lineage.position
@@ -1063,15 +1127,28 @@ it.effect("fails closed for canonical quarantine and direction records with fore
     expect(deriveIntegrationQuarantineState(preQuarantineDirection, prior.correlation.sessionId)._tag).toBe(
       "Contradiction"
     )
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("detects duplicate directions on an earlier quarantine even after a later quarantine occurrence", () =>
   Effect.gen(function* () {
     const { event: prior, journal, record: priorRecord } = yield* appendQuarantine("duplicate-earlier")
-    const control = yield* IntegrationQuarantineDirectionControl
-    const retry = yield* control.apply(
-      requestFor(fingerprintFor(prior, priorRecord.position, "Retry"), "duplicate-retry")
+    const retryEvent = IntegrationQuarantineDirectionAppliedEvent.make({
+      fingerprint: fingerprintFor(prior, priorRecord.position, "Retry"),
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "duplicate-retry", runId }),
+      version: workflowJournalEventVersion
+    })
+    const retry = yield* journal.append(
+      runId,
+      integrationQuarantineDirectionAppliedRecordKey(
+        IntegrationQuarantineDirectionSubject.make({
+          quarantineAt: priorRecord.position,
+          sessionId: prior.correlation.sessionId
+        })
+      ),
+      retryEvent
     )
     const conflictingDirection = IntegrationQuarantineDirectionAppliedEvent.make({
       fingerprint: IntegrationQuarantineDirectionFingerprint.make({
@@ -1085,7 +1162,7 @@ it.effect("detects duplicate directions on an earlier quarantine even after a la
       version: workflowJournalEventVersion
     })
     yield* journal.append(runId, JournalRecordKey.make("duplicate-direction"), conflictingDirection)
-    const laterResultPosition = JournalPosition.make(retry.application.position + 1)
+    const laterResultPosition = JournalPosition.make(retry.position + 1)
     yield* journal.append(
       runId,
       JournalRecordKey.make("later-quarantine-result"),
@@ -1117,13 +1194,14 @@ it.effect("detects duplicate directions on an earlier quarantine even after a la
     expect(deriveIntegrationQuarantineState(yield* journal.read(runId), prior.correlation.sessionId)._tag).toBe(
       "Contradiction"
     )
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("deduplicates repeated Retry requests by session quarantine and direction", () =>
   Effect.gen(function* () {
-    const { event, journal, record } = yield* appendQuarantine("retry")
-    const control = yield* IntegrationQuarantineDirectionControl
+    const live = yield* appendLiveQuarantine("retry")
+    const { event, journal, record } = live
+    const control = yield* liveControl(live)
     const request = requestFor(fingerprintFor(event, record.position, "Retry"), "retry-request")
     const first = yield* control.apply(request)
     expect(yield* control.apply(request)).toEqual(first)
@@ -1133,12 +1211,13 @@ it.effect("deduplicates repeated Retry requests by session quarantine and direct
       records.filter(({ event: current }) => current._tag === "IntegrationQuarantineDirectionApplied")
     ).toHaveLength(1)
     expect(first.application.event.requestId).toEqual(request.requestId)
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("uses the Journal as the first-choice authority across two fresh control layers", () =>
   Effect.gen(function* () {
-    const { event, journal, record } = yield* appendQuarantine("concurrent-choice")
+    const live = yield* appendLiveQuarantine("concurrent-choice")
+    const { event, journal, record } = live
     const fingerprint = fingerprintFor(event, record.position, "Retry")
     const requests = [
       requestFor(fingerprint, "concurrent-choice-one"),
@@ -1147,16 +1226,14 @@ it.effect("uses the Journal as the first-choice authority across two fresh contr
     const outcomes = yield* Effect.all(
       requests.map((request) =>
         Effect.gen(function* () {
-          const freshControl = yield* IntegrationQuarantineDirectionControl
+          const freshControl = yield* liveControl(live)
           return yield* freshControl.apply(request)
-        })
-          .pipe(Effect.provide(Layer.fresh(integrationQuarantineDirectionControlLayer)))
-          .pipe(
-            Effect.matchEffect({
-              onFailure: (error) => Effect.succeed({ _tag: "Failure" as const, error }),
-              onSuccess: (result) => Effect.succeed({ _tag: "Success" as const, result })
-            })
-          )
+        }).pipe(
+          Effect.matchEffect({
+            onFailure: (error) => Effect.succeed({ _tag: "Failure" as const, error }),
+            onSuccess: (result) => Effect.succeed({ _tag: "Success" as const, result })
+          })
+        )
       ),
       { concurrency: "unbounded" }
     )
@@ -1178,23 +1255,25 @@ it.effect("uses the Journal as the first-choice authority across two fresh contr
 
 it.effect("replays a recorded Retry direction through the control after restart", () =>
   Effect.gen(function* () {
-    const { event, record } = yield* appendQuarantine("restart")
+    const live = yield* appendLiveQuarantine("restart")
+    const { event, record } = live
     const request = requestFor(fingerprintFor(event, record.position, "Retry"), "restart-request")
-    const control = yield* IntegrationQuarantineDirectionControl
+    const control = yield* liveControl(live)
     const first = yield* control.apply(request)
     const replayed = yield* Effect.gen(function* () {
-      const restartedControl = yield* IntegrationQuarantineDirectionControl
+      const restartedControl = yield* liveControl(live)
       return yield* restartedControl.read({ requestId: request.requestId })
-    }).pipe(Effect.provide(Layer.fresh(integrationQuarantineDirectionControlLayer)))
+    })
 
     expect(replayed).toEqual(first)
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects a conflicting direction after the first choice", () =>
   Effect.gen(function* () {
-    const { event, journal, record } = yield* appendQuarantine("first-choice")
-    const control = yield* IntegrationQuarantineDirectionControl
+    const live = yield* appendLiveQuarantine("first-choice")
+    const { event, journal, record } = live
+    const control = yield* liveControl(live)
     const retry = requestFor(fingerprintFor(event, record.position, "Retry"), "first-retry")
     yield* control.apply(retry)
     const fullRerun = requestFor(fingerprintFor(event, record.position, "FullRerun"), "second-full-rerun")
@@ -1206,13 +1285,14 @@ it.effect("rejects a conflicting direction after the first choice", () =>
         ({ event: current }) => current._tag === "IntegrationQuarantineDirectionApplied"
       )
     ).toHaveLength(1)
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects conflicting request identity and starts nothing", () =>
   Effect.gen(function* () {
-    const { event, journal, record } = yield* appendQuarantine("request-identity")
-    const control = yield* IntegrationQuarantineDirectionControl
+    const live = yield* appendLiveQuarantine("request-identity")
+    const { event, journal, record } = live
+    const control = yield* liveControl(live)
     const first = requestFor(fingerprintFor(event, record.position, "Retry"), "same-request")
     yield* control.apply(first)
     const contradiction = yield* control
@@ -1225,7 +1305,7 @@ it.effect("rejects conflicting request identity and starts nothing", () =>
         ({ event: current }) => current._tag === "IntegrationQuarantineDirectionApplied"
       )
     ).toHaveLength(1)
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("rejects a direction request bound to a different Run than the quarantined responsibility", () =>
@@ -1242,13 +1322,15 @@ it.effect("rejects a direction request bound to a different Run than the quarant
       occurrenceClassification: "NonActionOccurrence",
       version: workflowJournalEventVersion
     })
-    const { record } = yield* appendQuarantine("run-mismatch", event)
-    const control = yield* IntegrationQuarantineDirectionControl
+    const { journal, record } = yield* appendQuarantine("run-mismatch", event)
     const request = requestFor(fingerprintFor(event, record.position, "Retry"), "wrong-run")
-    const rejection = yield* control.apply(request).pipe(Effect.flip)
+    const rejection = yield* preflightIntegrationQuarantineDirectionFromRecords(
+      yield* journal.read(runId),
+      request
+    ).pipe(Effect.flip)
 
     expect(rejection).toBeInstanceOf(IntegrationQuarantineDirectionRequestRunMismatch)
-  }).pipe(Effect.provide(integrationQuarantineDirectionControlLayer), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("decodes unknown direction requests strictly and does not accept malformed story inputs", () =>

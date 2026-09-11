@@ -11,11 +11,15 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
-import { Effect } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { expect } from "vitest"
+import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
 import { acceptedResultFixture } from "../../../../test/support/evidence.js"
+import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
@@ -33,13 +37,10 @@ import {
   intentRecordKey,
   outcomeRecordKey
 } from "../../../workflow-journal/record-key.js"
-import {
-  InRunJournal,
-  JournalStore,
-  JournalStoreContradiction,
-  type JournalRecord
-} from "../../../workflow-journal/store.js"
+import { InRunJournal, JournalStoreContradiction, type JournalRecord } from "../../../workflow-journal/store.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -83,38 +84,37 @@ import {
 } from "../integrator/events.js"
 import { IntegratorProviderActivityAbsent } from "../integrator/errors.js"
 import { integratorResponsibilityFactsFromCorrelation } from "../integrator/state.js"
+import { integratorSuccessorCorrelationFor } from "../integrator/session.js"
 import {
   evaluateIntegratorFullRerunAuthorization,
   evaluateIntegratorRetryAuthorization,
   integratorRunTwoAuthorizationIssue
 } from "../integrator/retry-authorization.js"
 import { evaluateIntegratorFullRerunSuccessor } from "../integrator/successor-history.js"
-import { StartedIntegrationResponsibility } from "../integration-admission/protocol.js"
 
 const runId = RunId.make("provider-failure-quarantine-run")
 const target = FixtureTarget.make("provider-failure-quarantine-target")
 const base = GitCommitSha.make("a".repeat(40))
 const targetHead = GitCommitSha.make("b".repeat(40))
 const acceptedCommit = GitCommitSha.make("c".repeat(40))
+const taskSpecification = makeTaskWorkSpecification({
+  body: "Exercise provider-failure integration quarantine.",
+  taskId: TaskId.make("provider-failure-quarantine-task"),
+  title: "Provider-failure quarantine"
+})
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("provider-failure-quarantine-attempt"),
   baseSha: base,
   branch: TaskBranchRef.make("refs/heads/dalph/provider-failure-quarantine"),
   executor: TaskExecutorLocator.make("executor:provider-failure-quarantine"),
   runId,
-  taskId: TaskId.make("provider-failure-quarantine-task"),
-  taskRevision: TaskRevision.make("provider-failure-quarantine-revision"),
+  taskId: taskSpecification.taskId,
+  taskRevision: taskSpecification.fingerprint,
   worktree: WorktreeLocator.make("/worktrees/provider-failure-quarantine")
 })
-const responsibility = StartedIntegrationResponsibility.make({
-  acceptedResult: acceptedResultFixture(acceptedCommit),
-  integrationTarget: IntegrationTarget.make({
-    ref: IntegrationTargetRef.make("refs/heads/main"),
-    repository: GitRepositoryLocator.make("/repositories/provider-failure-quarantine.git")
-  }),
-  plannedAttempt,
-  queuedAt: JournalPosition.make(3),
-  startedAt: JournalPosition.make(4)
+const integrationTarget = IntegrationTarget.make({
+  ref: IntegrationTargetRef.make("refs/heads/main"),
+  repository: GitRepositoryLocator.make("/repositories/provider-failure-quarantine.git")
 })
 const detail = IntegrationQuarantineFailureDetail.make("the provider has no owned activity for this run")
 
@@ -143,50 +143,35 @@ const mutateSuccessorEvent = (
   records.map((record) => (record === selected ? { ...selected, event: mutate(selected.event) } : record))
 
 const makeHistory = Effect.fn("ProviderFailureTest.makeHistory")(function* () {
-  const journal = yield* JournalStore
-  yield* journal.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }))
-  const lineageOperationId = OperationId.make("provider-failure:lineage-operation")
-  const lineageOperation = makeTargetLineageObservationOperation({
-    integrationTarget: responsibility.integrationTarget,
-    operationId: lineageOperationId,
+  const accepted = makeAcceptedIntegrationHistory({
+    acceptedResult: acceptedResultFixture(acceptedCommit),
+    activeClaim: ActiveTaskClaim.make({
+      operationId: OperationId.make("provider-failure:claim"),
+      owner: ClaimOwner.make("provider-failure:owner"),
+      taskId: plannedAttempt.taskId,
+      token: ClaimToken.make("provider-failure:token")
+    }),
+    integrationTarget,
+    initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
     plannedAttempt,
-    predecessorOperationIds: []
+    runId,
+    targetHeadSha: targetHead,
+    taskSpecification,
+    trackerTarget: target
   })
-  yield* journal.append(
-    runId,
-    intentRecordKey(lineageOperationId),
-    GitReadIntentRecordedEvent.make({
-      initiatedBy: { _tag: "DalphCoordinator" },
-      occurrenceClassification: "InitiatedAction",
-      operation: lineageOperation,
-      version: workflowJournalEventVersion
-    })
-  )
-  const lineage = yield* journal.append(
-    runId,
-    outcomeRecordKey(lineageOperationId),
-    TargetLineageObservedEvent.make({
-      observation: TargetLineageObservation.make({
-        plannedBaseIsAncestorOfTargetHead: true,
-        plannedBaseSha: base,
-        targetHeadSha: targetHead
-      }),
-      occurrenceClassification: "NonActionOccurrence",
-      operationId: lineageOperationId,
-      plannedAttempt,
-      version: workflowJournalEventVersion
-    })
-  )
+  const context = yield* Layer.build(liveJournalTestLayer({ records: accepted.records, runId, target }))
+  const journal = Context.get(context, InRunJournal)
+  const acceptedJournalReader = Context.get(context, AcceptedJournalReader)
   const session = IntegratorSessionCorrelation.make({
-    acceptedResult: responsibility.acceptedResult,
+    acceptedResult: accepted.responsibility.acceptedResult,
     candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:provider-failure"),
     expectedTargetHead: targetHead,
-    integrationTarget: responsibility.integrationTarget,
+    integrationTarget: accepted.responsibility.integrationTarget,
     plannedAttempt,
-    queuedAt: responsibility.queuedAt,
+    queuedAt: accepted.responsibility.queuedAt,
     sessionId: IntegratorSessionId.make("integrator-session:provider-failure"),
-    startedAt: responsibility.startedAt,
-    targetLineageObservedAt: lineage.position
+    startedAt: accepted.responsibility.startedAt,
+    targetLineageObservedAt: accepted.targetLineageObservedAt
   })
   const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
   yield* journal.append(
@@ -199,8 +184,20 @@ const makeHistory = Effect.fn("ProviderFailureTest.makeHistory")(function* () {
     integratorRunStartedRecordKey(run),
     IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion })
   )
-  return { journal, run, session }
+  return { acceptedJournalReader, journal, run, session }
 })
+
+const provideHistory = <A, E, R>(
+  history: {
+    readonly acceptedJournalReader: AcceptedJournalReader["Service"]
+    readonly journal: InRunJournal["Service"]
+  },
+  effect: Effect.Effect<A, E, R>
+) =>
+  effect.pipe(
+    Effect.provideService(InRunJournal, history.journal),
+    Effect.provideService(AcceptedJournalReader, history.acceptedJournalReader)
+  )
 
 const providerFailure = (run: IntegratorRunCorrelation): IntegratorProviderActivityAbsent =>
   IntegratorProviderActivityAbsent.make({ correlation: run, detail })
@@ -220,7 +217,10 @@ const absenceRecordFor = (run: IntegratorRunCorrelation, position: number, absen
 
 const makeRetryHistory = Effect.fn("ProviderFailureTest.makeRetryHistory")(function* () {
   const history = yield* makeHistory()
-  const first = yield* appendProviderRunFailureQuarantine({ run: history.run, failure: providerFailure(history.run) })
+  const first = yield* provideHistory(
+    history,
+    appendProviderRunFailureQuarantine({ run: history.run, failure: providerFailure(history.run) })
+  )
   const subject = IntegrationQuarantineDirectionSubject.make({
     quarantineAt: first.quarantine.position,
     sessionId: history.session.sessionId
@@ -282,7 +282,10 @@ const makeRetryHistory = Effect.fn("ProviderFailureTest.makeRetryHistory")(funct
 
 const makeSuccessorHistory = Effect.fn("ProviderFailureTest.makeSuccessorHistory")(function* () {
   const history = yield* makeHistory()
-  const first = yield* appendProviderRunFailureQuarantine({ run: history.run, failure: providerFailure(history.run) })
+  const first = yield* provideHistory(
+    history,
+    appendProviderRunFailureQuarantine({ run: history.run, failure: providerFailure(history.run) })
+  )
   const subject = IntegrationQuarantineDirectionSubject.make({
     quarantineAt: first.quarantine.position,
     sessionId: history.session.sessionId
@@ -333,10 +336,11 @@ const makeSuccessorHistory = Effect.fn("ProviderFailureTest.makeSuccessorHistory
       version: workflowJournalEventVersion
     })
   )
-  const successorSession = IntegratorSessionCorrelation.make({
-    ...history.session,
-    candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:provider-failure-successor"),
-    sessionId: IntegratorSessionId.make("integrator-session:provider-failure-successor"),
+  const successorSession = integratorSuccessorCorrelationFor({
+    directionAppliedAt: direction.position,
+    predecessor: history.session,
+    quarantineAt: first.quarantine.position,
+    targetLineage: freshLineage.event.observation,
     targetLineageObservedAt: freshLineage.position
   })
   yield* history.journal.append(
@@ -352,7 +356,10 @@ const makeSuccessorHistory = Effect.fn("ProviderFailureTest.makeSuccessorHistory
       version: workflowJournalEventVersion
     })
   )
-  const successorRun = IntegratorRunCorrelation.make({ ordinal: integratorRetryRunOrdinal, session: successorSession })
+  const successorRun = IntegratorRunCorrelation.make({
+    ordinal: IntegratorRunOrdinal.make(1),
+    session: successorSession
+  })
   yield* history.journal.append(
     runId,
     integratorRunStartedRecordKey(successorRun),
@@ -381,11 +388,14 @@ const expectProviderReconciliationRejected = (
 it.effect("records provider-owned absence before one idempotent provider-failure quarantine", () =>
   Effect.gen(function* () {
     const history = yield* makeHistory()
-    const first = yield* appendProviderRunFailureQuarantine({ run: history.run, failure: providerFailure(history.run) })
-    const second = yield* appendProviderRunFailureQuarantine({
-      run: history.run,
-      failure: providerFailure(history.run)
-    })
+    const first = yield* provideHistory(
+      history,
+      appendProviderRunFailureQuarantine({ run: history.run, failure: providerFailure(history.run) })
+    )
+    const second = yield* provideHistory(
+      history,
+      appendProviderRunFailureQuarantine({ run: history.run, failure: providerFailure(history.run) })
+    )
     const records = yield* history.journal.read(runId)
 
     expect(second).toEqual(first)
@@ -399,10 +409,10 @@ it.effect("records provider-owned absence before one idempotent provider-failure
 it.effect("records a run-two provider absence only after authorized Retry Q1/D/L/start evidence", () =>
   Effect.gen(function* () {
     const history = yield* makeRetryHistory()
-    const second = yield* appendProviderRunFailureQuarantine({
-      run: history.retryRun,
-      failure: providerFailure(history.retryRun)
-    })
+    const second = yield* provideHistory(
+      history,
+      appendProviderRunFailureQuarantine({ run: history.retryRun, failure: providerFailure(history.retryRun) })
+    )
     const records = yield* history.journal.read(runId)
 
     expect(second.absence.event.run).toEqual(history.retryRun)
@@ -429,8 +439,14 @@ it.effect("recovers run-two Q without repeating the provider call after absence 
         version: workflowJournalEventVersion
       })
     )
-    const firstRecovery = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.retryRun })
-    const secondRecovery = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.retryRun })
+    const firstRecovery = yield* provideHistory(
+      history,
+      reconcileProviderRunFailureQuarantine({ detail, run: history.retryRun })
+    )
+    const secondRecovery = yield* provideHistory(
+      history,
+      reconcileProviderRunFailureQuarantine({ detail, run: history.retryRun })
+    )
     const records = yield* history.journal.read(runId)
 
     expect(firstRecovery.absence.position).toBe(absence.position)
@@ -443,10 +459,10 @@ it.effect("recovers run-two Q without repeating the provider call after absence 
 it.effect("quarantines provider absence for the FullRerun successor session S2", () =>
   Effect.gen(function* () {
     const history = yield* makeSuccessorHistory()
-    const result = yield* appendProviderRunFailureQuarantine({
-      run: history.successorRun,
-      failure: providerFailure(history.successorRun)
-    })
+    const result = yield* provideHistory(
+      history,
+      appendProviderRunFailureQuarantine({ run: history.successorRun, failure: providerFailure(history.successorRun) })
+    )
     const records = yield* history.journal.read(runId)
 
     expect(result.absence.event.run).toEqual(history.successorRun)
@@ -465,7 +481,7 @@ it.effect("rejects S2 provider absence when the predecessor Q1 terminal evidence
     expect(validateProviderRunActivityAbsent([...records, successorAbsence], successorAbsence)._tag).toBe("Valid")
     expect(
       validateProviderRunActivityAbsent(
-        [...records.filter((record) => record !== history.first.absence), successorAbsence],
+        [...records.filter((record) => record !== history.first.quarantine), successorAbsence],
         successorAbsence
       )._tag
     ).toBe("Invalid")
@@ -486,7 +502,10 @@ it.effect("recovers Q after absence was durably recorded before the process disa
         version: workflowJournalEventVersion
       })
     )
-    const recovered = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run })
+    const recovered = yield* provideHistory(
+      history,
+      reconcileProviderRunFailureQuarantine({ detail, run: history.run })
+    )
     const records = yield* history.journal.read(runId)
 
     expect(recovered.absence.position).toBe(absence.position)
@@ -515,19 +534,22 @@ it.effect("ignores an unrelated responsibility's run-one evidence", () =>
       ordinal: IntegratorRunOrdinal.make(1),
       session: unrelatedSession
     })
-    yield* history.journal.append(
-      runId,
-      integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(unrelatedSession)),
-      IntegratorSessionFixedEvent.make({ correlation: unrelatedSession, version: workflowJournalEventVersion })
-    )
-    yield* history.journal.append(
-      runId,
-      integratorRunStartedRecordKey(unrelatedRun),
-      IntegratorRunStartedEvent.make({ run: unrelatedRun, version: workflowJournalEventVersion })
-    )
-
-    const result = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run })
-    expect(result.quarantine.event.correlation.sessionId).toBe(history.session.sessionId)
+    const records = yield* history.journal.read(runId)
+    const unrelatedFixed: JournalRecord = {
+      event: IntegratorSessionFixedEvent.make({ correlation: unrelatedSession, version: workflowJournalEventVersion }),
+      key: integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(unrelatedSession)),
+      position: JournalPosition.make(records.length + 1),
+      runId
+    }
+    const unrelatedStarted: JournalRecord = {
+      event: IntegratorRunStartedEvent.make({ run: unrelatedRun, version: workflowJournalEventVersion }),
+      key: integratorRunStartedRecordKey(unrelatedRun),
+      position: JournalPosition.make(records.length + 2),
+      runId
+    }
+    expect(
+      validateProviderRunPredecessorsFromRecords([...records, unrelatedFixed, unrelatedStarted], history.run)
+    ).toMatchObject({ _tag: "Valid" })
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
@@ -544,8 +566,9 @@ it.effect("rejects a provider outcome bound to a foreign session", () =>
       }),
       detail: "provider activity was not proven absent"
     })
-    const result = yield* appendProviderRunFailureQuarantine({ run: history.run, failure: foreignFailure }).pipe(
-      Effect.flip
+    const result = yield* provideHistory(
+      history,
+      appendProviderRunFailureQuarantine({ run: history.run, failure: foreignFailure }).pipe(Effect.flip)
     )
     const records = yield* history.journal.read(runId)
 
@@ -569,20 +592,20 @@ it.effect("rejects missing, duplicate, foreign, and reordered run-one evidence",
       detail: "provider-run quarantine requires one exact run start after the fixed session"
     })
 
-    const duplicateAbsence = yield* history.journal.append(
-      runId,
-      JournalRecordKey.make("provider-failure:foreign-absence-key"),
-      IntegrationProviderRunActivityAbsentEvent.make({
+    const duplicateAbsence: JournalRecord = {
+      event: IntegrationProviderRunActivityAbsentEvent.make({
         correlation: history.session,
         detail,
         occurrenceClassification: "NonActionOccurrence",
         run: history.run,
         version: workflowJournalEventVersion
-      })
-    )
+      }),
+      key: JournalRecordKey.make("provider-failure:foreign-absence-key"),
+      position: JournalPosition.make(records.length + 1),
+      runId
+    }
     expect(duplicateAbsence.key).not.toBe(integrationProviderRunActivityAbsentRecordKey(history.run))
-    const duplicate = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(Effect.flip)
-    expect(duplicate._tag).toBe("IntegratorJournalContradiction")
+    expect(validateProviderRunActivityAbsent([...records, duplicateAbsence], duplicateAbsence)._tag).toBe("Invalid")
 
     const fabricatedAbsence: JournalRecord = {
       event: IntegrationProviderRunActivityAbsentEvent.make({
@@ -936,8 +959,11 @@ it.effect("reconciles a Retry absence from accepted post-append evidence without
         return Effect.succeed(current)
       }
     }
-    const recovered = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.retryRun }).pipe(
-      Effect.provideService(InRunJournal, journal)
+    const recovered = yield* provideHistory(
+      history,
+      reconcileProviderRunFailureQuarantine({ detail, run: history.retryRun }).pipe(
+        Effect.provideService(InRunJournal, journal)
+      )
     )
     expect(recovered.quarantine.event._tag).toBe("IntegrationQuarantined")
     expect(reads).toBe(0)
@@ -989,8 +1015,11 @@ it.effect("recovers the provider-absence append winner and rejects malformed col
         }),
       read: () => Effect.die("live provider reconciliation must use accepted indexed evidence")
     }
-    const recovered = yield* reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
-      Effect.provideService(InRunJournal, racingJournal)
+    const recovered = yield* provideHistory(
+      history,
+      reconcileProviderRunFailureQuarantine({ detail, run: history.run }).pipe(
+        Effect.provideService(InRunJournal, racingJournal)
+      )
     )
     expect(recovered.absence.position).toBe(absence.position)
     expect(recovered.quarantine.event._tag).toBe("IntegrationQuarantined")
@@ -1524,15 +1553,19 @@ it.effect("reconstructs exact FullRerun authority and rejects moved or foreign c
     ) {
       return yield* Effect.die("FullRerun fixture lacks its exact Q/D/L/S2 chronology")
     }
+    const fullAuthorizationRun = IntegratorRunCorrelation.make({
+      ordinal: integratorRetryRunOrdinal,
+      session: fullRerun.successorSession
+    })
     const fullAuthorization = evaluateIntegratorFullRerunAuthorization(
       fullRecords,
-      fullRerun.successorRun,
+      fullAuthorizationRun,
       fullRerun.session,
       fullRerun.successorSession.targetLineageObservedAt
     )
     expect(fullAuthorization).toMatchObject({ _tag: "Authorized" })
     expect(
-      evaluateIntegratorRetryAuthorization(fullRecords, fullRerun.successorRun, {
+      evaluateIntegratorRetryAuthorization(fullRecords, fullAuthorizationRun, {
         predecessorSession: fullRerun.session,
         requiredDirection: "FullRerun"
       })
@@ -1540,7 +1573,7 @@ it.effect("reconstructs exact FullRerun authority and rejects moved or foreign c
     expect(
       evaluateIntegratorFullRerunAuthorization(
         fullRecords,
-        fullRerun.successorRun,
+        fullAuthorizationRun,
         fullRerun.session,
         fullRerun.session.targetLineageObservedAt
       )
@@ -1548,7 +1581,7 @@ it.effect("reconstructs exact FullRerun authority and rejects moved or foreign c
     expect(
       evaluateIntegratorFullRerunAuthorization(
         fullRecords.filter((record) => record !== fullRerun.first.absence),
-        fullRerun.successorRun,
+        fullAuthorizationRun,
         fullRerun.session,
         fullRerun.successorSession.targetLineageObservedAt
       )
@@ -1564,13 +1597,13 @@ it.effect("reconstructs exact FullRerun authority and rejects moved or foreign c
     expect(
       evaluateIntegratorFullRerunAuthorization(
         mismatchedFreshTarget,
-        fullRerun.successorRun,
+        fullAuthorizationRun,
         fullRerun.session,
         fullRerun.successorSession.targetLineageObservedAt
       )
     ).toMatchObject({ _tag: "Rejected" })
     expect(
-      evaluateIntegratorRetryAuthorization(fullRecords, fullRerun.successorRun, {
+      evaluateIntegratorRetryAuthorization(fullRecords, fullAuthorizationRun, {
         predecessorSession: { ...fullRerun.session, sessionId: IntegratorSessionId.make("foreign-retry-predecessor") },
         requiredDirection: "FullRerun"
       })
@@ -1578,7 +1611,7 @@ it.effect("reconstructs exact FullRerun authority and rejects moved or foreign c
     expect(
       evaluateIntegratorRetryAuthorization(
         fullRecords.filter((record) => record !== fullPredecessor),
-        fullRerun.successorRun,
+        fullAuthorizationRun,
         { predecessorSession: fullRerun.session, requiredDirection: "FullRerun" }
       )
     ).toMatchObject({ _tag: "Rejected" })
@@ -1595,7 +1628,7 @@ it.effect("reconstructs exact FullRerun authority and rejects moved or foreign c
       expect(
         evaluateIntegratorFullRerunAuthorization(
           records,
-          fullRerun.successorRun,
+          fullAuthorizationRun,
           fullRerun.session,
           fullRerun.successorSession.targetLineageObservedAt
         )._tag
