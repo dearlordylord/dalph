@@ -74,10 +74,7 @@ const evidenceThrough = (records: JournalHistorySource, position: JournalPositio
     ? journalEvidenceBefore(records, position + 1)
     : records.filter((record) => record.position <= position)
 
-const recordsForRun = (
-  records: JournalHistorySource,
-  runId: PlannedTaskAttempt["runId"]
-): JournalHistorySource =>
+const recordsForRun = (records: JournalHistorySource, runId: PlannedTaskAttempt["runId"]): JournalHistorySource =>
   isJournalRecordEvidence(records) ? records : records.filter((record) => record.runId === runId)
 
 const claimAcquisitionMatches = (

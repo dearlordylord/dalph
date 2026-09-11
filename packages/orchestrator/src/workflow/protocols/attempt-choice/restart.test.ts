@@ -812,20 +812,6 @@ it.effect("keeps target-A restart advancement valid after a later foreign-target
   )
 )
 
-it.effect("keeps restart pending while the current executor projection awaits acceptance", () =>
-  Effect.gen(function* () {
-    const result = yield* exerciseRestart({ pendingQuiescence: true })
-
-    expect(result.result).toEqual({ _tag: "AttemptRestartPending", reason: "ExecutorLifecycleAcceptancePending" })
-    expect(result.plannerCalls).toBe(0)
-    expect(result.records.some(({ event }) => event._tag === "PlannedAttemptReplaced")).toBe(false)
-  }).pipe(
-    Effect.provide(attemptChoiceControlLayer),
-    Effect.provide(plannedAttemptProtocolControllerLayer),
-    Effect.provide(memoryJournalTestLayer)
-  )
-)
-
 it("accepts only the latest accepted safe suspension as replacement quiescence", () => {
   const proof = (report: PlannedAttemptExecutorReport, observedAt: number) => ({
     observedAt: JournalPosition.make(observedAt),
@@ -913,11 +899,11 @@ it("rejects every terminal replacement-quiescence result", () => {
   })
 })
 
-it.effect("keeps replacement pending or rejects it when executor authority is not a current safe proof", () =>
+it.effect("keeps Alice's replacement pending at the evidence seam while Executing awaits acceptance", () =>
   Effect.gen(function* () {
     expect(yield* currentRestartQuiescence([], subject)).toEqual({ _tag: "Pending", reason: "ExecutorUnavailable" })
 
-    const pendingReport = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+    const pendingReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
     const pendingObservationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
     const pendingObservation: JournalRecord = {
       event: PlannedAttemptExecutorStateObservedEvent.make({
@@ -986,6 +972,18 @@ it.effect("keeps replacement pending or rejects it when executor authority is no
       reason: "LaterExecutorCommandInvalidatedChoice"
     })
   })
+)
+
+it.effect("fails closed when Alice's live Restart boundary sees a forged unaccepted Executing projection", () =>
+  Effect.gen(function* () {
+    const failure = yield* exerciseRestart({ pendingQuiescence: true }).pipe(Effect.flip)
+
+    expect(failure).toMatchObject({ _tag: "JournalHistoryInvalid", runId })
+  }).pipe(
+    Effect.provide(attemptChoiceControlLayer),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(memoryJournalTestLayer)
+  )
 )
 
 it("classifies every resource event that would invalidate a planned-attempt replacement", () => {

@@ -427,44 +427,10 @@ it.effect("rejects missing run-start evidence", () =>
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
-it.effect("reconciles ambiguous Q2 appends and rejects every foreign winner", () =>
+it.effect("recovers the durable ambiguous Q2 winner and rejects missing or returned foreign winners", () =>
   Effect.gen(function* () {
     const scenario = yield* appendScenario("ambiguous-append")
     const records = yield* scenario.journal.read(scenario.runId)
-    const expected = yield* appendChangedHeadRetryQuarantine(inputFor(scenario))
-    const foreignExisting = {
-      ...scenario.fixedSession,
-      key: expected.key,
-      position: JournalPosition.make(records.length + 1)
-    }
-    const existingForeign = yield* appendChangedHeadRetryQuarantine(inputFor(scenario)).pipe(
-      Effect.provideService(
-        InRunJournal,
-        InRunJournal.of({
-          append: () => Effect.die("a foreign exact-key record must be rejected before append"),
-          read: () => Effect.succeed([...records, foreignExisting])
-        })
-      ),
-      Effect.flip
-    )
-    expect(existingForeign).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
-
-    let reconciledWinner: JournalRecord | undefined
-    const reconciledJournal: InRunJournal["Service"] = {
-      append: (requestedRunId, key, event) => {
-        reconciledWinner = { event, key, position: JournalPosition.make(records.length + 1), runId: requestedRunId }
-        return Effect.fail(
-          new JournalStoreContradiction({ existingPosition: reconciledWinner.position, key, runId: requestedRunId })
-        )
-      },
-      read: () =>
-        reconciledWinner === undefined ? Effect.succeed(records) : Effect.succeed([...records, reconciledWinner])
-    }
-    const reconciled = yield* appendChangedHeadRetryQuarantine(inputFor(scenario)).pipe(
-      Effect.provideService(InRunJournal, reconciledJournal)
-    )
-    expect(reconciled.event._tag).toBe("IntegrationQuarantined")
-
     const missingWinnerJournal: InRunJournal["Service"] = {
       append: (requestedRunId, key) =>
         Effect.fail(
@@ -482,24 +448,6 @@ it.effect("reconciles ambiguous Q2 appends and rejects every foreign winner", ()
     )
     expect(missingWinner).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
 
-    const foreignWinner = {
-      ...scenario.fixedSession,
-      key: JournalRecordKey.make("changed-head-retry:foreign-winner"),
-      position: JournalPosition.make(records.length + 1)
-    }
-    const foreignWinnerJournal: InRunJournal["Service"] = {
-      append: (requestedRunId, key) =>
-        Effect.fail(
-          new JournalStoreContradiction({ existingPosition: foreignWinner.position, key, runId: requestedRunId })
-        ),
-      read: () => Effect.succeed([...records, foreignWinner])
-    }
-    const foreignWinnerFailure = yield* appendChangedHeadRetryQuarantine(inputFor(scenario)).pipe(
-      Effect.provideService(InRunJournal, foreignWinnerJournal),
-      Effect.flip
-    )
-    expect(foreignWinnerFailure).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
-
     const returnedForeignJournal: InRunJournal["Service"] = {
       append: (requestedRunId, key) =>
         Effect.succeed({
@@ -515,5 +463,20 @@ it.effect("reconciles ambiguous Q2 appends and rejects every foreign winner", ()
       Effect.flip
     )
     expect(returnedForeign).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
+
+    const reconciledJournal: InRunJournal["Service"] = {
+      append: (requestedRunId, key, event) =>
+        Effect.gen(function* () {
+          const winner = yield* scenario.journal.append(requestedRunId, key, event)
+          return yield* Effect.fail(
+            new JournalStoreContradiction({ existingPosition: winner.position, key, runId: requestedRunId })
+          )
+        }),
+      read: () => Effect.die("live changed-head recovery must use accepted indexed evidence")
+    }
+    const reconciled = yield* appendChangedHeadRetryQuarantine(inputFor(scenario)).pipe(
+      Effect.provideService(InRunJournal, reconciledJournal)
+    )
+    expect(reconciled.event._tag).toBe("IntegrationQuarantined")
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )

@@ -78,7 +78,9 @@ export const reconcileUnsettledPlannedAttemptExecutorCommand = Effect.fn(
   const executor = yield* PlannedAttemptExecutor
   const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
   const projectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(
-    Array.from(journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptExecutorCommandProjectionObserved")).filter(
+    Array.from(
+      journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptExecutorCommandProjectionObserved")
+    ).filter(
       ({ event }) =>
         event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
         event.plannedAttempt.attemptId === plannedAttempt.attemptId &&

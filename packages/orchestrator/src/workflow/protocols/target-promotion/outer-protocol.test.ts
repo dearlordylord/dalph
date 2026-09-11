@@ -19,9 +19,12 @@ import { acceptedResultFixture } from "../../../../test/support/evidence.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
 import { observeJournalRecordSequenceOperations } from "../../../workflow-journal/record-sequence.js"
-import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
+import { InRunJournal, JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
-import { acceptedJournalPrefixFromValidatedHistory } from "../../../workflow-journal/accepted-prefix.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
+import { InitialControlPolicy } from "../../../control/policy.js"
+import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   IntegratorCandidateResourceLocator,
@@ -47,20 +50,26 @@ import {
 import {
   deriveTargetPromotionState,
   deriveTargetPromotionStateFor,
-  reconcileTargetPromotionAttempt,
-  runTargetPromotion,
+  runTargetPromotion as runAcceptedTargetPromotion,
   TargetPromotionCorrelationContradiction,
   TargetPromotionResultContradiction
 } from "./protocol.js"
 import { targetPromotionContract } from "../../../../test/contracts/target-promotion-contract.js"
-import {
+import { makeTargetPromotionEngine } from "./protocol-engine.js"
+const {
   authorizeTargetPromotionProgress,
   observeTargetPromotionRead,
   recordTargetPromotionAttemptIntent,
   recordTargetPromotionIntent,
   sendTargetPromotionAttempt,
-  settleTargetPromotionAttempt
-} from "./transitions.js"
+  settleTargetPromotionAttempt,
+  reconcileTargetPromotionAttempt,
+  runTargetPromotion
+} = makeTargetPromotionEngine(
+  Effect.fn("PromotionTest.currentEvidence")(function* (runId: RunId) {
+    return journalEvidenceFrom(yield* (yield* InRunJournal).read(runId))
+  })
+)
 
 const runId = RunId.make("outer-promotion-test-run")
 const target = IntegrationTarget.make({
@@ -106,30 +115,18 @@ const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
 const request = targetPromotionCorrelationFor(qualifiedCandidate)
 
 const journalLayer = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
-  Layer.merge(
-    Layer.succeed(
-      InRunJournal,
-      InRunJournal.of({
-        append: (requestedRunId, key, event) =>
-          Ref.modify(records, (current) => {
-            const existing = current.find((record) => record.key === key)
-            if (existing !== undefined) return [Effect.succeed(existing), current] as const
-            const record = { event, key, position: JournalPosition.make(current.length + 1), runId: requestedRunId }
-            return [Effect.succeed(record), [...current, record]] as const
-          }).pipe(Effect.flatten),
-        read: () => Ref.get(records)
-      })
-    ),
-    // This focused protocol fixture deliberately bypasses whole-workflow validation.
-    Layer.succeed(
-      AcceptedJournalReader,
-      AcceptedJournalReader.of({
-        readAccepted: (requestedRunId) =>
-          Ref.get(records).pipe(
-            Effect.map((history) => acceptedJournalPrefixFromValidatedHistory(requestedRunId, history))
-          )
-      })
-    )
+  Layer.succeed(
+    InRunJournal,
+    InRunJournal.of({
+      append: (requestedRunId, key, event) =>
+        Ref.modify(records, (current) => {
+          const existing = current.find((record) => record.key === key)
+          if (existing !== undefined) return [Effect.succeed(existing), current] as const
+          const record = { event, key, position: JournalPosition.make(current.length + 1), runId: requestedRunId }
+          return [Effect.succeed(record), [...current, record]] as const
+        }).pipe(Effect.flatten),
+      read: () => Ref.get(records)
+    })
   )
 
 const gitLayer = (compareAndSet: TargetPromotionGitService["compareAndSet"], read: TargetPromotionGitService["read"]) =>
@@ -164,6 +161,60 @@ const runFor = (
   runTargetPromotion(candidate).pipe(
     Effect.provide(Layer.mergeAll(journalLayer(records), gitLayer(service.compareAndSet, service.read)))
   )
+
+it.effect("rereads accepted history after intent before contacting Git and rejects a missing qualification", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const accepted = yield* AcceptedJournalReader
+    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    let materializations = 0
+    yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        observeJournalRecordSequenceOperations((operation) => {
+          if (operation._tag === "HistoricalMaterialization") materializations += 1
+        })
+      ),
+      (stop) => Effect.sync(stop)
+    )
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("promotion-wrapper"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const failure = yield* runAcceptedTargetPromotion(qualifiedCandidate).pipe(
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({
+          append: (currentRunId, key, event) =>
+            Ref.update(calls, (current) => [...current, `append:${event._tag}`]).pipe(
+              Effect.andThen(journal.append(currentRunId, key, event))
+            ),
+          read: () => Effect.die("production promotion must not export journal history")
+        })
+      ),
+      Effect.provideService(
+        AcceptedJournalReader,
+        AcceptedJournalReader.of({
+          readAccepted: (currentRunId) =>
+            Ref.update(calls, (current) => [...current, "read:accepted"]).pipe(
+              Effect.andThen(accepted.readAccepted(currentRunId))
+            )
+        })
+      ),
+      Effect.provideService(
+        TargetPromotionGit,
+        TargetPromotionGit.of({
+          compareAndSet: () => Effect.die("invalid qualification cannot contact Git"),
+          read: () => Effect.die("invalid qualification cannot contact Git")
+        })
+      ),
+      Effect.flip
+    )
+    expect(failure).toMatchObject({ _tag: "JournalHistoryInvalid" })
+    expect(yield* Ref.get(calls)).toEqual(["read:accepted", "append:TargetPromotionIntended", "read:accepted"])
+    expect(materializations).toBe(0)
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
 
 it.effect("promotes exact M once and records its Integrator correlation and ancestry", () =>
   Effect.gen(function* () {

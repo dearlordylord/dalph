@@ -11,8 +11,16 @@ import {
   outcomeRecordKey
 } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { InRunJournal } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
 import { exactJournalRecordAtKey } from "../../../workflow-journal/exact-record.js"
+import type { AcceptedJournalPrefix } from "../../../workflow-journal/accepted-prefix.js"
+import {
+  journalRecordByKey,
+  journalRecordByPosition,
+  journalRecordsOfKind
+} from "../../../workflow-journal/record-evidence.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   IntegrationProviderRunActivityAbsentEvent,
@@ -28,6 +36,7 @@ import {
   integratorRetryRunOrdinal,
   integratorRunCorrelationsEqual
 } from "../integrator/events.js"
+
 import {
   integratorCorrelationsEqual,
   integratorResponsibilityFactsEqual,
@@ -37,7 +46,7 @@ import {
   evaluateIntegratorFullRerunAuthorization,
   evaluateIntegratorRetryAuthorization
 } from "../integrator/retry-authorization.js"
-import { validateProviderRunActivityAbsent } from "./canonical-provenance.js"
+import { validateProviderRunActivityAbsent, validateProviderRunPredecessors } from "./canonical-provenance.js"
 export { validateProviderRunActivityAbsent } from "./canonical-provenance.js"
 
 /** Input used by both the provider boundary and restart recovery. */
@@ -451,7 +460,8 @@ const providerRunStartedAfterSession = (
     : validPredecessor({ runStart, session: fixedSession.session })
 }
 
-const validateRunOnePredecessors = (
+/** Cold diagnostic boundary retaining duplicate-sensitive raw record semantics. */
+export const validateProviderRunPredecessorsFromRecords = (
   records: ReadonlyArray<JournalRecord>,
   run: IntegratorRunCorrelation
 ): ProviderRunPredecessorValidation => {
@@ -479,7 +489,7 @@ const validateRunOnePredecessors = (
 const appendOrReconcileAbsence = Effect.fn("IntegrationQuarantine.appendOrReconcileProviderActivityAbsence")(function* (
   run: IntegratorRunCorrelation,
   detail: IntegrationQuarantineFailureDetail,
-  records: ReadonlyArray<JournalRecord>
+  records: AcceptedJournalPrefix
 ) {
   const key = absenceKey(run)
   const expected = IntegrationProviderRunActivityAbsentEvent.make({
@@ -489,19 +499,18 @@ const appendOrReconcileAbsence = Effect.fn("IntegrationQuarantine.appendOrReconc
     run,
     version: workflowJournalEventVersion
   })
-  const related = records.filter(
-    (record) =>
+  for (const record of journalRecordsOfKind(records, "IntegrationProviderRunActivityAbsent")) {
+    if (
       record.event._tag === "IntegrationProviderRunActivityAbsent" &&
       integratorCorrelationsEqual(record.event.correlation, run.session) &&
-      integratorRunCorrelationsEqual(record.event.run, run)
-  )
-  if (related.some((record) => !absenceMatches(record, run, detail))) {
-    return yield* reject(run, "provider-activity absence evidence is duplicate or contradictory")
+      integratorRunCorrelationsEqual(record.event.run, run) &&
+      !absenceMatches(record, run, detail)
+    ) {
+      return yield* reject(run, "provider-activity absence evidence is duplicate or contradictory")
+    }
   }
-  const existingAtKey = exactJournalRecordAtKey(records, key)
-  if (existingAtKey._tag === "Duplicate") return yield* reject(run, existingAtKey.detail)
-  if (existingAtKey._tag === "Found") {
-    const existing = existingAtKey.record
+  const existing = journalRecordByKey(records, key)
+  if (existing !== undefined) {
     if (!absenceMatches(existing, run, detail)) {
       return yield* reject(run, "provider-activity absence key contains a foreign event")
     }
@@ -511,8 +520,8 @@ const appendOrReconcileAbsence = Effect.fn("IntegrationQuarantine.appendOrReconc
   const appended = yield* (yield* InRunJournal).append(runIdFor(run), key, expected).pipe(
     Effect.catchTag("JournalStoreContradiction", ({ existingPosition }) =>
       Effect.gen(function* () {
-        const refreshed = yield* (yield* InRunJournal).read(runIdFor(run))
-        const winner = refreshed.find((record) => record.position === existingPosition)
+        const refreshed = yield* (yield* AcceptedJournalReader).readAccepted(runIdFor(run))
+        const winner = journalRecordByPosition(refreshed, existingPosition)
         if (winner !== undefined && absenceMatches(winner, run, detail)) {
           const validation = validateProviderRunActivityAbsent(refreshed, winner)
           if (validation._tag === "Valid") return winner
@@ -524,7 +533,7 @@ const appendOrReconcileAbsence = Effect.fn("IntegrationQuarantine.appendOrReconc
   if (!absenceMatches(appended, run, detail)) {
     return yield* reject(run, "provider-activity absence append returned a foreign Journal record")
   }
-  const refreshed = yield* (yield* InRunJournal).read(runIdFor(run))
+  const refreshed = yield* (yield* AcceptedJournalReader).readAccepted(runIdFor(run))
   const validation = validateProviderRunActivityAbsent(refreshed, appended)
   return validation._tag === "Valid" ? appended : yield* reject(run, validation.detail)
 })
@@ -538,15 +547,20 @@ export const reconcileProviderRunFailureQuarantine = Effect.fn(
   "IntegrationQuarantine.reconcileProviderRunFailureQuarantine"
 )(function* (input: ProviderRunFailureQuarantineInput) {
   const journal = yield* InRunJournal
+  const accepted = yield* AcceptedJournalReader
   const run = input.run
   const runId = runIdFor(run)
-  const records = yield* journal.read(runId)
-  const predecessors = validateRunOnePredecessors(records, run)
+  const records = yield* accepted.readAccepted(runId)
+  const predecessors = validateProviderRunPredecessors(
+    records,
+    run,
+    JournalPosition.make(records.records.length + 1)
+  )
   if (predecessors._tag === "Invalid") return yield* reject(run, predecessors.detail)
 
   const detail = input.detail
   const absence = yield* appendOrReconcileAbsence(run, detail, records)
-  const afterAbsence = yield* journal.read(runId)
+  const afterAbsence = yield* accepted.readAccepted(runId)
   const basis = IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
     detail,
     ownedActivityProvenAbsentAt: absence.position
@@ -558,11 +572,6 @@ export const reconcileProviderRunFailureQuarantine = Effect.fn(
     occurrenceClassification: "NonActionOccurrence",
     version: workflowJournalEventVersion
   })
-  const sessionQuarantines = afterAbsence.filter(
-    (record) =>
-      record.event._tag === "IntegrationQuarantined" &&
-      integratorCorrelationsEqual(record.event.correlation, run.session)
-  )
   const retryPriorQuarantineAt =
     run.ordinal === integratorRetryRunOrdinal
       ? (() => {
@@ -572,19 +581,23 @@ export const reconcileProviderRunFailureQuarantine = Effect.fn(
           return authorization._tag === "Authorized" ? authorization.authorization.quarantine.position : undefined
         })()
       : undefined
-  if (
-    sessionQuarantines.some(
-      (record) =>
-        !quarantineMatches(record, run, expected, key) &&
-        !(retryPriorQuarantineAt !== undefined && record.position === retryPriorQuarantineAt)
-    )
-  ) {
+  let hasConflictingQuarantine = false
+  for (const record of journalRecordsOfKind(afterAbsence, "IntegrationQuarantined")) {
+    if (
+      record.event._tag === "IntegrationQuarantined" &&
+      integratorCorrelationsEqual(record.event.correlation, run.session) &&
+      !quarantineMatches(record, run, expected, key) &&
+      !(retryPriorQuarantineAt !== undefined && record.position === retryPriorQuarantineAt)
+    ) {
+      hasConflictingQuarantine = true
+      break
+    }
+  }
+  if (hasConflictingQuarantine) {
     return yield* reject(run, "provider-run quarantine contradicts an existing quarantine occurrence")
   }
-  const existingAtKey = exactJournalRecordAtKey(afterAbsence, key)
-  if (existingAtKey._tag === "Duplicate") return yield* reject(run, existingAtKey.detail)
-  if (existingAtKey._tag === "Found") {
-    const existing = existingAtKey.record
+  const existing = journalRecordByKey(afterAbsence, key)
+  if (existing !== undefined) {
     if (!quarantineMatches(existing, run, expected, key)) {
       return yield* reject(run, "provider-run quarantine key contains a foreign event")
     }
@@ -593,8 +606,8 @@ export const reconcileProviderRunFailureQuarantine = Effect.fn(
   const appended = yield* journal.append(runId, key, expected).pipe(
     Effect.catchTag("JournalStoreContradiction", ({ existingPosition }) =>
       Effect.gen(function* () {
-        const refreshed = yield* journal.read(runId)
-        const winner = refreshed.find((record) => record.position === existingPosition)
+        const refreshed = yield* accepted.readAccepted(runId)
+        const winner = journalRecordByPosition(refreshed, existingPosition)
         if (winner !== undefined && quarantineMatches(winner, run, expected, key)) return winner
         return yield* reject(run, "provider-run quarantine append contradicted existing Journal history")
       })

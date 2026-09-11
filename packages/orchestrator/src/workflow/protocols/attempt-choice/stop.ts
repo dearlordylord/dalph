@@ -166,7 +166,7 @@ type AttemptStoppageEvidenceDisposition =
   | { readonly _tag: "SupersededByTerminal" }
   | { readonly _tag: "LaterCommandRecorded" }
 
-const attemptStoppageEvidenceDisposition = (
+export const attemptStoppageEvidenceDisposition = (
   records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt
 ): AttemptStoppageEvidenceDisposition => {

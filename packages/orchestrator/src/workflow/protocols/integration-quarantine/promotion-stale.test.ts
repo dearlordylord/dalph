@@ -16,6 +16,7 @@ import {
   targetPromotionStaleRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
+import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
 import {
   InRunJournal,
   type InRunJournalService,
@@ -51,6 +52,7 @@ import {
   validatePromotionStaleQuarantineEvidence
 } from "./promotion-stale-evidence.js"
 import { deriveIntegrationQuarantineState } from "./state.js"
+import { IntegrationQuarantineBasis, IntegrationQuarantinedEvent } from "./events.js"
 
 const candidate = integrationFinalityFixture.qualifiedCandidate
 const correlation = targetPromotionCorrelationFor(candidate)
@@ -288,7 +290,7 @@ it.effect("reports exact pending quarantine work until the stale evidence is set
   Effect.gen(function* () {
     const stale = yield* appendStaleScenario("DirectRejectionAfterAttempt")
     const journal = yield* JournalStore
-    expect(pendingPromotionStaleIntegrationQuarantineFor(yield* journal.read(runId), correlation)).toEqual({
+    expect(pendingPromotionStaleIntegrationQuarantineFor(journalEvidenceFrom(yield* journal.read(runId)), correlation)).toEqual({
       correlation,
       targetPromotionStaleAt: stale.position
     })
@@ -297,85 +299,67 @@ it.effect("reports exact pending quarantine work until the stale evidence is set
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
-it.effect("fails closed for stale-position drift and every ambiguous quarantine append result", () =>
+it.effect("recovers an exact ambiguous quarantine winner and rejects malformed cold evidence", () =>
   Effect.gen(function* () {
-    const fixture = yield* Effect.gen(function* () {
-      const stale = yield* appendStaleScenario("DirectRejectionAfterAttempt")
-      const journal = yield* JournalStore
-      const prefix = yield* journal.read(runId)
-      const winner = yield* appendPromotionStaleIntegrationQuarantine({
-        correlation,
-        targetPromotionStaleAt: stale.position
-      })
-      return { prefix, stale, winner, withWinner: yield* journal.read(runId) }
-    }).pipe(Effect.provide(memoryJournalTestLayer))
-    const input = { correlation, targetPromotionStaleAt: fixture.stale.position }
+    const stale = yield* appendStaleScenario("DirectRejectionAfterAttempt")
+    const journal = yield* JournalStore
+    const prefix = yield* journal.read(runId)
+    const input = { correlation, targetPromotionStaleAt: stale.position }
 
     const wrongPosition = yield* appendPromotionStaleIntegrationQuarantine({
       ...input,
-      targetPromotionStaleAt: JournalPosition.make(Number(fixture.stale.position) + 10)
-    }).pipe(Effect.provide(memoryJournalTestLayerFromPartitionRecords({ hot: fixture.prefix })), Effect.flip)
+      targetPromotionStaleAt: JournalPosition.make(Number(stale.position) + 10)
+    }).pipe(Effect.flip)
     expect(wrongPosition).toBeInstanceOf(IntegrationPromotionStaleQuarantineRejected)
 
+    const basis = IntegrationQuarantineBasis.cases.PromotionStale.make({
+      candidateCommit: candidate.candidateCommit,
+      observedTargetHead: changedHead,
+      targetPromotionStaleAt: stale.position
+    })
     const foreignWinner: JournalRecord = {
-      ...fixture.winner,
-      event: {
-        ...fixture.winner.event,
-        correlation: { ...fixture.winner.event.correlation, sessionId: IntegratorSessionId.make("foreign-session") }
-      }
+      event: IntegrationQuarantinedEvent.make({
+        basis,
+        correlation: { ...candidate.run.session, sessionId: IntegratorSessionId.make("foreign-session") },
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      }),
+      key: integrationQuarantinedRecordKey(candidate.run.session.sessionId, basis),
+      position: JournalPosition.make(prefix.length + 1),
+      runId
     }
-    const layerFor = (read: InRunJournalService["read"], append: InRunJournalService["append"]) =>
-      Layer.succeed(InRunJournal, InRunJournal.of({ append, read }))
-
-    const existingForeign = yield* appendPromotionStaleIntegrationQuarantine(input).pipe(
-      Effect.provide(
-        layerFor(
-          () => Effect.succeed([...fixture.prefix, foreignWinner]),
-          () => Effect.die("unused")
-        )
-      ),
-      Effect.flip
-    )
-    expect(existingForeign).toBeInstanceOf(IntegrationPromotionStaleQuarantineRejected)
-
-    const foreignAppend = yield* appendPromotionStaleIntegrationQuarantine(input).pipe(
-      Effect.provide(
-        layerFor(
-          () => Effect.succeed(fixture.prefix),
-          () => Effect.succeed(foreignWinner)
-        )
-      ),
-      Effect.flip
-    )
-    expect(foreignAppend).toBeInstanceOf(IntegrationPromotionStaleQuarantineRejected)
-
-    const exactReads = yield* Ref.make(0)
-    const exactAfterContradiction = yield* appendPromotionStaleIntegrationQuarantine(input).pipe(
-      Effect.provide(
-        layerFor(
-          () =>
-            Ref.getAndUpdate(exactReads, (count) => count + 1).pipe(
-              Effect.map((count) => (count === 0 ? fixture.prefix : fixture.withWinner))
-            ),
-          (_requestedRunId, key) =>
-            Effect.fail(new JournalStoreContradiction({ existingPosition: fixture.winner.position, key, runId }))
-        )
-      )
-    )
-    expect(exactAfterContradiction).toEqual(fixture.winner)
+    expect(validatePromotionStaleQuarantineEvidence([...prefix, foreignWinner], foreignWinner)._tag).toBe("Invalid")
 
     const missingAfterContradiction = yield* appendPromotionStaleIntegrationQuarantine(input).pipe(
-      Effect.provide(
-        layerFor(
-          () => Effect.succeed(fixture.prefix),
-          (_requestedRunId, key) =>
-            Effect.fail(new JournalStoreContradiction({ existingPosition: fixture.winner.position, key, runId }))
-        )
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({
+          append: (requestedRunId, key) =>
+            Effect.fail(
+              new JournalStoreContradiction({ existingPosition: stale.position, key, runId: requestedRunId })
+            ),
+          read: () => Effect.die("live promotion-stale recovery must use accepted indexed evidence")
+        })
       ),
       Effect.flip
     )
     expect(missingAfterContradiction).toBeInstanceOf(IntegrationPromotionStaleQuarantineRejected)
-  })
+
+    const racingJournal = InRunJournal.of({
+      append: (requestedRunId, key, event) =>
+        Effect.gen(function* () {
+          const winner = yield* journal.append(requestedRunId, key, event)
+          return yield* Effect.fail(
+            new JournalStoreContradiction({ existingPosition: winner.position, key, runId: requestedRunId })
+          )
+        }),
+      read: () => Effect.die("live promotion-stale recovery must use accepted indexed evidence")
+    })
+    const exactAfterContradiction = yield* appendPromotionStaleIntegrationQuarantine(input).pipe(
+      Effect.provideService(InRunJournal, racingJournal)
+    )
+    expect(exactAfterContradiction.event._tag).toBe("IntegrationQuarantined")
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("reconstructs promotion-stale quarantine only from one exact earlier compare-and-set intent", () =>

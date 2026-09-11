@@ -73,7 +73,8 @@ import {
   type JournalRecord,
   JournalStore,
   RunLifecycleJournal,
-  WorkflowRunTargetMismatch
+  WorkflowRunTargetMismatch,
+  type JournalRecord
 } from "../../workflow-journal/store.js"
 import {
   journalMaintenanceDiagnosticFor,
