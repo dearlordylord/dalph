@@ -48,6 +48,7 @@ import {
   journalLatestTaskRead,
   journalLatestAttemptRead,
   journalRecordsForAttempt,
+  journalRecordsForAttemptKind,
   journalRecordsForOperationId,
   journalRecordsForTask,
   journalRecordsOfKind,
@@ -163,11 +164,10 @@ export const validateAttemptChoice = (
   if (record.event._tag !== "AttemptChoiceApplied") return indexes
   const { subject } = record.event
   const prior = historyBefore(records, record.position)
-  const attemptRecords = journalRecordsForAttempt(prior, subject.plannedAttempt.attemptId)
   validateAttemptChoiceAuthority({ ...record, event: record.event }, runId, prior, issues)
   if (
     hasMatching(
-      attemptRecords,
+      journalRecordsForAttemptKind(prior, subject.plannedAttempt.attemptId, "PlannedAttemptReplaced"),
       ({ event }) =>
         event._tag === "PlannedAttemptReplaced" &&
         plannedTaskAttemptEquivalence(event.subject.plannedAttempt, subject.plannedAttempt)
@@ -182,7 +182,7 @@ export const validateAttemptChoice = (
   }
   if (
     hasMatching(
-      journalRecordsForAttempt(prior, subject.plannedAttempt.attemptId),
+      journalRecordsForAttemptKind(prior, subject.plannedAttempt.attemptId, "IntegrationStarted"),
       ({ event }) =>
         event._tag === "IntegrationStarted" &&
         event.plannedAttempt.runId === subject.plannedAttempt.runId &&
@@ -196,13 +196,15 @@ export const validateAttemptChoice = (
       `attempt-choice request ${record.event.requestId.nonce} follows the exact integration-start cutoff`
     )
   }
-  const priorStop = findFirst(
-    journalRecordsForAttempt(prior, subject.plannedAttempt.attemptId),
-    ({ event }) =>
-      event._tag === "AttemptChoiceApplied" &&
-      event.choice === "StopTaskImplementation" &&
-      plannedTaskAttemptEquivalence(event.subject.plannedAttempt, subject.plannedAttempt)
-  )
+  const priorStop = isJournalRecordEvidence(prior)
+    ? mapGet(indexes.attemptStopDirections, subject.plannedAttempt.attemptId)
+    : findFirst(
+        journalRecordsForAttempt(prior, subject.plannedAttempt.attemptId),
+        ({ event }) =>
+          event._tag === "AttemptChoiceApplied" &&
+          event.choice === "StopTaskImplementation" &&
+          plannedTaskAttemptEquivalence(event.subject.plannedAttempt, subject.plannedAttempt)
+      )
   if (priorStop !== undefined) {
     semanticIssue(
       issues,
@@ -211,13 +213,15 @@ export const validateAttemptChoice = (
       `attempt-choice request ${record.event.requestId.nonce} follows the terminal Stop direction for the same attempt`
     )
   }
-  const priorRestart = findFirst(
-    journalRecordsForAttempt(prior, subject.plannedAttempt.attemptId),
-    ({ event }) =>
-      event._tag === "AttemptChoiceApplied" &&
-      event.choice === "RestartTaskImplementation" &&
-      plannedTaskAttemptEquivalence(event.subject.plannedAttempt, subject.plannedAttempt)
-  )
+  const priorRestart = isJournalRecordEvidence(prior)
+    ? mapGet(indexes.attemptRestartDirections, subject.plannedAttempt.attemptId)
+    : findFirst(
+        journalRecordsForAttempt(prior, subject.plannedAttempt.attemptId),
+        ({ event }) =>
+          event._tag === "AttemptChoiceApplied" &&
+          event.choice === "RestartTaskImplementation" &&
+          plannedTaskAttemptEquivalence(event.subject.plannedAttempt, subject.plannedAttempt)
+      )
   if (record.event.choice === "ContinueExistingAttempt" && priorRestart !== undefined) {
     semanticIssue(
       issues,
@@ -235,7 +239,18 @@ export const validateAttemptChoice = (
       `attempt-choice request ${record.event.requestId.nonce} follows the winning direction for the same fingerprint pair`
     )
   }
-  return { ...indexes, attemptChoiceSubjects: HashSet.add(indexes.attemptChoiceSubjects, subjectKey) }
+  return {
+    ...indexes,
+    attemptChoiceSubjects: HashSet.add(indexes.attemptChoiceSubjects, subjectKey),
+    attemptStopDirections:
+      record.event.choice === "StopTaskImplementation"
+        ? HashMap.set(indexes.attemptStopDirections, subject.plannedAttempt.attemptId, subject.plannedAttempt)
+        : indexes.attemptStopDirections,
+    attemptRestartDirections:
+      record.event.choice === "RestartTaskImplementation"
+        ? HashMap.set(indexes.attemptRestartDirections, subject.plannedAttempt.attemptId, subject.plannedAttempt)
+        : indexes.attemptRestartDirections
+  }
 }
 
 const matchingAppliedStop = (

@@ -23,6 +23,11 @@ import {
 import { emptyIndexes } from "./history-kernel-state.js"
 import type { WorkflowJournalHistoryIssue } from "./history-result.js"
 import { validateAttemptChoice, validateAttemptStop } from "./attempt-validation.js"
+import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
+import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { InitialControlPolicy } from "../../control/policy.js"
+import { TaskWorkCapacity } from "../admission/capacity.js"
+import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 
 const runId = RunId.make("attempt-validation-hot-cold")
 const plannedAttempt = PlannedTaskAttempt.make({
@@ -50,6 +55,40 @@ const record: JournalRecord = {
   position: JournalPosition.make(1),
   runId
 }
+
+it.each([64, 256])("bounds checking a new direction after %i same-attempt Continue records", (size) => {
+  const began = makeWorkflowRunBeganRecord(
+    runId,
+    FixtureTarget.make("choice-count"),
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+  )
+  const records = [
+    began,
+    ...Array.from({ length: size }, (_, offset): JournalRecord => {
+      const id = AttemptChoiceRequestId.make({ nonce: `continue-${offset}`, runId })
+      return {
+        ...record,
+        event: { ...choice, requestId: id },
+        key: attemptChoiceAppliedRecordKey(id),
+        position: JournalPosition.make(offset + 2)
+      }
+    })
+  ]
+  // Decoded evidence exercises the chronological query kernel; this is not fabricated Accepted history.
+  const evidence = journalEvidenceFrom(records)
+  const candidate = { ...record, position: JournalPosition.make(size + 2) }
+  let visits = 0
+  const stop = observeJournalRecordSequenceOperations((operation) => {
+    expect(operation._tag).toBe("IndexedRecordVisit")
+    visits += 1
+  })
+  try {
+    validateAttemptChoice(candidate, runId, evidence, emptyIndexes(), [])
+  } finally {
+    stop()
+  }
+  expect(visits).toBe(4)
+})
 
 const validate = (source: JournalHistorySource): ReadonlyArray<WorkflowJournalHistoryIssue> => {
   const issues = new Array<WorkflowJournalHistoryIssue>()

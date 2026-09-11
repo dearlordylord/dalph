@@ -24,6 +24,9 @@ export interface FoldIndexes extends IntegrationHistoryIndexes {
   readonly abandonedExecutorAttempts: HashSet.HashSet<AttemptId>
   readonly integrationFinalityHistory: IntegrationFinalityHistoryIndexes
   readonly attemptChoiceSubjects: HashSet.HashSet<string>
+  /** Terminal Stop/Restart directions are independent of arbitrarily many preceding Continue choices. */
+  readonly attemptStopDirections: HashMap.HashMap<AttemptId, PlannedTaskAttempt>
+  readonly attemptRestartDirections: HashMap.HashMap<AttemptId, PlannedTaskAttempt>
   readonly latestControlDirectionOrdinal: number
   readonly executorCommandOrdinals: HashMap.HashMap<AttemptId, number>
   readonly executorCommandCountsSinceSafeSuspension: HashMap.HashMap<string, number>
@@ -75,6 +78,8 @@ export const emptyIndexes = (): FoldIndexes => ({
   acceptedExecutorResults: HashMap.empty(),
   abandonedExecutorAttempts: HashSet.empty(),
   attemptChoiceSubjects: HashSet.empty(),
+  attemptStopDirections: HashMap.empty(),
+  attemptRestartDirections: HashMap.empty(),
   executorCommandOrdinals: HashMap.empty(),
   executorCommandCountsSinceSafeSuspension: HashMap.empty(),
   executorCommandProjectionOrdinals: HashMap.empty(),
