@@ -7,8 +7,8 @@ import {
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
-  TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { Context, Effect, Exit, Fiber, Layer, Scope } from "effect"
 import { expect } from "vitest"
@@ -32,13 +32,22 @@ import { AuthoritativeTaskWorktreeReady } from "../workflow/protocols/worktree-r
 import {
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
-  TaskAttemptPlannedEvent
+  TaskAttemptPlannedEvent,
+  taskTrackerReadIntent
 } from "../workflow/registry/event.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
-  makeTaskWorktreeReconciliationOperation
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
+  makeTrackerGraphObservationOperation
 } from "../workflow/registry/operation.js"
+import {
+  makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../workflow/task-tracker-facts/observation.js"
+import { validSnapshot } from "../../test/task-dag.js"
 import { attemptPlanRecordKey, intentRecordKey, outcomeRecordKey } from "./record-key.js"
 import { memoryJournalTestLayer } from "./adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
@@ -163,6 +172,24 @@ it.effect("rebuilds the Git application from its recovery projection and records
         token: ClaimToken.make("interruptible-git-token")
       }
       const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition, predecessorOperationIds: [] })
+      const specification = makeTaskWorkSpecification({
+        body: "Recover the interrupted Git worktree reconciliation.",
+        taskId,
+        title: "Interrupted Git worktree reconciliation"
+      })
+      const postClaimGraphOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("interruptible-git-post-claim-graph"),
+        target,
+        [acquisition.operationId],
+        [taskId]
+      )
+      const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+        OperationId.make("interruptible-git-specification"),
+        target,
+        taskId,
+        [postClaimGraphOperation.operationId]
+      )
       const plannedAttempt = PlannedTaskAttempt.make({
         attemptId: AttemptId.make("interruptible-git-attempt"),
         baseSha: GitCommitSha.make("a".repeat(40)),
@@ -170,13 +197,13 @@ it.effect("rebuilds the Git application from its recovery projection and records
         executor: TaskExecutorLocator.make("executor:interruptible-git"),
         runId,
         taskId,
-        taskRevision: TaskRevision.make("interruptible-git-revision"),
+        taskRevision: specification.fingerprint,
         worktree: WorktreeLocator.make("/worktrees/interruptible-git")
       })
       const planOperation = makeTaskAttemptPlanOperation({
         operationId: OperationId.make("interruptible-git-plan"),
         plannedAttempt,
-        predecessorOperationIds: [acquisition.operationId]
+        predecessorOperationIds: [specificationOperation.operationId]
       })
       const operation = makeTaskWorktreeReconciliationOperation({
         operationId: OperationId.make("interruptible-git-reconciliation"),
@@ -205,6 +232,39 @@ it.effect("rebuilds the Git application from its recovery projection and records
         runId,
         outcomeRecordKey(acquisition.operationId),
         TaskClaimAcquiredEvent.make({ claim: ActiveTaskClaim.make(acquisition), version: workflowJournalEventVersion })
+      )
+      yield* journal.append(
+        runId,
+        intentRecordKey(postClaimGraphOperation.operationId),
+        taskTrackerReadIntent(postClaimGraphOperation)
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(postClaimGraphOperation.operationId),
+        taskTrackerFactsObservedEvent(
+          postClaimGraphOperation.operationId,
+          makeCompleteTaskTrackerFactsObserved(
+            postClaimGraphOperation,
+            validSnapshot({
+              revision: "interruptible-git-post-claim-graph",
+              rootTaskId: taskId,
+              tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+            })
+          )
+        )
+      )
+      yield* journal.append(
+        runId,
+        intentRecordKey(specificationOperation.operationId),
+        taskTrackerReadIntent(specificationOperation)
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(specificationOperation.operationId),
+        taskTrackerFactsObservedEvent(
+          specificationOperation.operationId,
+          makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, specification)
+        )
       )
       yield* journal.append(
         runId,
