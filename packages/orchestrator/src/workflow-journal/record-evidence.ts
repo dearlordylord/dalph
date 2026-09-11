@@ -29,6 +29,15 @@ import {
   specificationDivergedAfter,
   type SpecificationDivergence
 } from "./specification-divergence.js"
+import {
+  appendReadFreshnessEvidence,
+  emptyReadFreshnessEvidence,
+  inspectReadFreshnessEvidenceStorage,
+  latestAttemptReadAt,
+  latestTaskObservationAt,
+  latestTaskReadAt,
+  type ReadFreshnessEvidence
+} from "./read-freshness-evidence.js"
 import { workflowOperationId, type WorkflowOperation } from "../workflow/registry/operation.js"
 import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
 import type { JournalPosition, JournalRecordKey } from "./identity.js"
@@ -79,6 +88,7 @@ interface EvidenceIndexes {
   readonly claimObservationEpisodes: ClaimObservationEpisodeIndex
   readonly graphEvidence: GraphEvidence
   readonly specificationDivergence: SpecificationDivergence
+  readonly readFreshnessEvidence: ReadFreshnessEvidence
 }
 
 const indexesByEvidence = new WeakMap<JournalRecordEvidence, EvidenceIndexes>()
@@ -111,7 +121,8 @@ export const emptyJournalEvidence = (): JournalRecordEvidence =>
     byRestartRead: HashMap.empty(),
     claimObservationEpisodes: emptyClaimObservationEpisodes(),
     graphEvidence: emptyGraphEvidence(),
-    specificationDivergence: emptySpecificationDivergence()
+    specificationDivergence: emptySpecificationDivergence(),
+    readFreshnessEvidence: emptyReadFreshnessEvidence()
   })
 
 const operationOf = ({ event }: JournalRecord): WorkflowOperation | undefined =>
@@ -391,7 +402,8 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
     byRestartRead,
     claimObservationEpisodes: appendClaimObservationEpisode(indexes.claimObservationEpisodes, record),
     graphEvidence,
-    specificationDivergence: appendSpecificationDivergence(indexes.specificationDivergence, record)
+    specificationDivergence: appendSpecificationDivergence(indexes.specificationDivergence, record),
+    readFreshnessEvidence: appendReadFreshnessEvidence(indexes.readFreshnessEvidence, record)
   })
 }
 
@@ -656,6 +668,33 @@ export const journalSpecificationDivergedAfter = (
     throughPosition: source.records.length
   })
 
+export const journalLatestTaskObservation = (
+  source: JournalRecordEvidence,
+  query: Omit<Parameters<typeof latestTaskObservationAt>[1], "throughPosition">
+): JournalRecord | undefined =>
+  latestTaskObservationAt(indexesFor(source).readFreshnessEvidence, {
+    ...query,
+    throughPosition: source.records.length
+  })
+
+export const journalLatestTaskRead = (
+  source: JournalRecordEvidence,
+  query: Omit<Parameters<typeof latestTaskReadAt>[1], "throughPosition">
+): JournalRecord | undefined =>
+  latestTaskReadAt(indexesFor(source).readFreshnessEvidence, {
+    ...query,
+    throughPosition: source.records.length
+  })
+
+export const journalLatestAttemptRead = (
+  source: JournalRecordEvidence,
+  query: Omit<Parameters<typeof latestAttemptReadAt>[1], "throughPosition">
+): JournalRecord | undefined =>
+  latestAttemptReadAt(indexesFor(source).readFreshnessEvidence, {
+    ...query,
+    throughPosition: source.records.length
+  })
+
 /** Full accepted prefixes can reuse the exact indexed kind sequence. */
 export const journalEvidenceKindSequence = (
   source: JournalRecordEvidence,
@@ -809,6 +848,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     indexes.claimObservationEpisodes,
     indexes.graphEvidence,
     indexes.specificationDivergence,
+    indexes.readFreshnessEvidence,
     inspectJournalRecordStorage(source.records),
     ...Array.from(HashMap.values(indexes.byKind), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byAttempt), inspectJournalRecordStorage),
@@ -830,6 +870,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     ...Array.from(HashMap.values(indexes.byRestartRead), inspectJournalRecordStorage),
     ...inspectClaimObservationEpisodeStorage(indexes.claimObservationEpisodes),
     ...inspectGraphEvidenceStorage(indexes.graphEvidence),
-    ...inspectSpecificationDivergenceStorage(indexes.specificationDivergence)
+    ...inspectSpecificationDivergenceStorage(indexes.specificationDivergence),
+    ...inspectReadFreshnessEvidenceStorage(indexes.readFreshnessEvidence)
   ]
 }
