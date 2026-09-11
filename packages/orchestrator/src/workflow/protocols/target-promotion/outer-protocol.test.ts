@@ -17,7 +17,8 @@ import {
 } from "@dalph/contracts"
 import { acceptedResultFixture } from "../../../../test/support/evidence.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
-import { rememberValidatedJournalPrefixSuccessor } from "../../../workflow-journal/prefix-lineage.js"
+import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
+import { observeJournalRecordSequenceOperations } from "../../../workflow-journal/record-sequence.js"
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
@@ -212,7 +213,7 @@ it.effect("reconciles an already-current or ancestor candidate without compare-a
   })
 )
 
-it.effect("reuses a validated non-promotion prefix and its exact-request cache", () =>
+it.effect("reads the exact promotion request from indexed history without exporting unrelated records", () =>
   Effect.gen(function* () {
     const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
     const state = yield* run(
@@ -236,14 +237,20 @@ it.effect("reuses a validated non-promotion prefix and its exact-request cache",
       runId
     }
     const successorRecords = [...priorRecords, appended]
-    rememberValidatedJournalPrefixSuccessor(
-      { records: priorRecords, runId },
-      { records: successorRecords, runId },
-      appended
-    )
-
-    expect(deriveTargetPromotionStateFor(successorRecords, qualifiedCandidate)?._tag).toBe("PromotionSucceeded")
-    expect(deriveTargetPromotionStateFor(successorRecords, qualifiedCandidate)?._tag).toBe("PromotionSucceeded")
+    const evidence = journalEvidenceFrom(successorRecords)
+    let materializations = 0
+    const stop = observeJournalRecordSequenceOperations((operation) => {
+      if (operation._tag === "HistoricalMaterialization") materializations += 1
+    })
+    try {
+      const indexed = deriveTargetPromotionStateFor(evidence, qualifiedCandidate)
+      expect(indexed?._tag).toBe("PromotionSucceeded")
+      expect(indexed).toEqual(deriveTargetPromotionStateFor(successorRecords, qualifiedCandidate))
+      expect(deriveTargetPromotionStateFor(evidence, qualifiedCandidate)).toBe(indexed)
+      expect(materializations).toBe(0)
+    } finally {
+      stop()
+    }
   })
 )
 

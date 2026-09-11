@@ -46,10 +46,24 @@ it.each([64, 256])(
         return Reflect.get(target, property, receiver)
       }
     })
-    const prior = reduceWorkflowJournalHistory(runId, records)
+    let coldIndexedVisits = 0
+    let coldMaterializations = 0
+    const stopCold = observeJournalRecordSequenceOperations((operation) => {
+      if (operation._tag === "IndexedRecordVisit") coldIndexedVisits += 1
+      else coldMaterializations += 1
+    })
+    const prior = (() => {
+      try {
+        return reduceWorkflowJournalHistory(runId, records)
+      } finally {
+        stopCold()
+      }
+    })()
     expect(prior._tag).toBe("ValidWorkflowJournalHistory")
     expect(inspectWorkflowJournalHistoryValidationPath(prior)).toBe("IndexedCold")
     expect(coldSlices).toBe(0)
+    expect(coldMaterializations).toBe(0)
+    expect(coldIndexedVisits).toBeLessThanOrEqual(size * 32)
     expect(historicalReads).toBeLessThanOrEqual(size * 20)
     if (prior._tag !== "ValidWorkflowJournalHistory") return
     historicalReads = 0

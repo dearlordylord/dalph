@@ -231,10 +231,13 @@ it("keeps a prior prefix correct when a linear successor is rejected, then accep
   const rejected = advanceWorkflowJournalHistory(prior, malformedNext)
   expect(rejected).toEqual(reduceWorkflowJournalHistory(runId, [...records, malformedNext]))
   expect(rejected._tag).toBe("InvalidWorkflowJournalHistory")
+  expect(inspectWorkflowJournalHistoryValidationPath(rejected)).toBe("RawDiagnostic")
+  expect(rejected).toEqual(reduceUnindexedWorkflowJournalHistoryForTesting(runId, [...records, malformedNext]))
 
   const accepted = advanceWorkflowJournalHistory(prior, validNext)
   expect(accepted).toEqual(reduceWorkflowJournalHistory(runId, [...records, validNext]))
   expect(accepted._tag).toBe("ValidWorkflowJournalHistory")
+  expect(inspectWorkflowJournalHistoryValidationPath(accepted)).toBe("IndexedSuccessor")
 })
 
 it("preserves persistent immutable branching after one sibling successor advances", () => {
