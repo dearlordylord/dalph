@@ -1137,15 +1137,18 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
     if (requirement._tag === "NoIntegrationTargetResource") {
       return { admitted: true, acquired: null }
     }
-    const responsibility = { integrationTarget: requirement.integrationTarget, queuedAt: requirement.queuedAt }
+    const responsibility = {
+      integrationTarget: requirement.integrationTarget,
+      plannedAttempt: requirement.plannedAttempt,
+      queuedAt: requirement.queuedAt
+    }
     if (requirement.access === "Acquire") {
       const result = yield* integrationTargets.acquire(responsibility).pipe(Effect.result)
       return result._tag === "Success"
         ? { admitted: true, acquired: responsibility }
         : { admitted: false, acquired: null }
     }
-    const snapshot = yield* integrationTargets.snapshot
-    return { admitted: snapshot.heldResponsibilityPositions.has(requirement.queuedAt), acquired: null }
+    return { admitted: yield* integrationTargets.isHeld(responsibility), acquired: null }
   })
 
   const tryReservePrepared = Effect.fn("DeliveryRuntimeAdmission.tryReservePrepared")(

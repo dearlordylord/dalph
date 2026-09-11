@@ -77,7 +77,7 @@ const targetFor = (owner: PromotionOwner) =>
 const preparedPromotion = Effect.fn("TargetPromotionProtocolCassette.preparePromotion")(function* (
   participant: PromotionParticipant
 ) {
-  const { owner, queuedAt } = participant
+  const { owner } = participant
   const runId = RunId.make(`target-promotion-protocol-cassette-${owner}`)
   const target = targetFor(owner)
   const acceptedResult = AcceptedResult.make({
@@ -121,9 +121,7 @@ const preparedPromotion = Effect.fn("TargetPromotionProtocolCassette.prepareProm
       story: []
     })
   )
-  const context = yield* Layer.build(
-    liveJournalTestLayer({ records: setup.records, runId, target: setup.target })
-  )
+  const context = yield* Layer.build(liveJournalTestLayer({ records: setup.records, runId, target: setup.target }))
   const journal = Context.get(context, InRunJournal)
   const accepted = Context.get(context, AcceptedJournalReader)
   const correlation = integratorCorrelationFor(setup.input)
@@ -136,9 +134,7 @@ const preparedPromotion = Effect.fn("TargetPromotionProtocolCassette.prepareProm
       Integrator,
       Integrator.of({
         prepare: ({ correlation: requestedRun }) =>
-          Effect.succeed(
-            IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: requestedRun })
-          )
+          Effect.succeed(IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: requestedRun }))
       })
     ),
     Effect.provideService(
@@ -168,20 +164,20 @@ const preparedPromotion = Effect.fn("TargetPromotionProtocolCassette.prepareProm
     qualifiedAt,
     run: result.run
   })
-  return {
-    accepted,
-    baselineLength: records.length,
-    candidate,
-    journal,
-    responsibility: { integrationTarget: target, queuedAt },
-    runId
+  const responsibility = setup.input.responsibility
+  if (
+    candidate.run.session.plannedAttempt.runId !== responsibility.plannedAttempt.runId ||
+    candidate.run.session.queuedAt !== responsibility.queuedAt
+  ) {
+    return yield* Effect.die(`target promotion ${owner} lease does not name its accepted responsibility`)
   }
+  return { accepted, baselineLength: records.length, candidate, journal, responsibility, runId }
 })
 
-interface ExactTargetResponsibility {
-  readonly integrationTarget: IntegrationTarget
-  readonly queuedAt: JournalPosition
-}
+type ExactTargetResponsibility = Pick<
+  StartedIntegrationResponsibility,
+  "integrationTarget" | "plannedAttempt" | "queuedAt"
+>
 
 interface ParticipantRuntime {
   readonly blocked: Deferred.Deferred<void>
@@ -315,8 +311,8 @@ const observeLeases = Effect.fn("TargetPromotionProtocolCassette.observeLeases")
 ) {
   const snapshot = yield* resources.snapshot
   const actual = LeaseObservation.make({
-    active: [...snapshot.activeResponsibilityPositions],
-    held: [...snapshot.heldResponsibilityPositions],
+    active: snapshot.activeResponsibilities,
+    held: snapshot.heldResponsibilities,
     moment: expected.moment
   })
   /* v8 ignore next -- @preserve Maintained cassette values assert all four exact lease snapshots; this defect is diagnostic for manually forged typed values. */
@@ -392,6 +388,10 @@ export const runTargetPromotionProtocolCassette = Effect.fn("TargetPromotionProt
         compareAndSetCount,
         failureTag: failureTags.find((tag) => tag !== null) ?? null,
         leaseObservations: yield* Ref.get(leaseObservations),
+        leaseResponsibilities: runtimes.map(({ prepared }) => ({
+          queuedAt: prepared.responsibility.queuedAt,
+          runId: prepared.responsibility.plannedAttempt.runId
+        })),
         records
       })
     })

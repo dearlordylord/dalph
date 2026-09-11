@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { RunId } from "@dalph/contracts"
 import { JournalPosition, JournalRecord } from "@dalph/orchestrator"
 
 export const PromotionOwner = Schema.Literals(["T1", "T2"])
@@ -17,8 +18,7 @@ export type PromotionBoundaryResult = typeof PromotionBoundaryResult.Type
 
 const PromotionParticipant = Schema.Struct({
   boundaryResults: Schema.Array(PromotionBoundaryResult),
-  owner: PromotionOwner,
-  queuedAt: JournalPosition
+  owner: PromotionOwner
 })
 export type PromotionParticipant = typeof PromotionParticipant.Type
 
@@ -29,9 +29,12 @@ export const TerminalExpectation = Schema.Struct({
 })
 export type TerminalExpectation = typeof TerminalExpectation.Type
 
+export const LeaseResponsibilityIdentity = Schema.Struct({ queuedAt: JournalPosition, runId: RunId })
+export type LeaseResponsibilityIdentity = typeof LeaseResponsibilityIdentity.Type
+
 export const LeaseObservation = Schema.Struct({
-  active: Schema.Array(JournalPosition),
-  held: Schema.Array(JournalPosition),
+  active: Schema.Array(LeaseResponsibilityIdentity),
+  held: Schema.Array(LeaseResponsibilityIdentity),
   moment: Schema.String
 })
 export type LeaseObservation = typeof LeaseObservation.Type
@@ -103,13 +106,21 @@ export const TargetPromotionProtocolCassetteRun = Schema.Struct({
   boundaryCalls: Schema.Array(BoundaryCall),
   compareAndSetCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   failureTag: Schema.NullOr(Schema.String),
+  leaseResponsibilities: Schema.Array(LeaseResponsibilityIdentity),
   leaseObservations: Schema.Array(LeaseObservation),
   records: Schema.Array(JournalRecord)
 })
 export type TargetPromotionProtocolCassetteRun = typeof TargetPromotionProtocolCassetteRun.Type
 
-const firstResponsibilityPosition = JournalPosition.make(8) // eslint-disable-line no-magic-numbers
-const secondResponsibilityPosition = JournalPosition.make(28) // eslint-disable-line no-magic-numbers
+const acceptedResponsibilityPosition = JournalPosition.make(17) // eslint-disable-line no-magic-numbers
+const t1Responsibility = LeaseResponsibilityIdentity.make({
+  queuedAt: acceptedResponsibilityPosition,
+  runId: RunId.make("target-promotion-protocol-cassette-T1")
+})
+const t2Responsibility = LeaseResponsibilityIdentity.make({
+  queuedAt: acceptedResponsibilityPosition,
+  runId: RunId.make("target-promotion-protocol-cassette-T2")
+})
 const successTerminal = TerminalExpectation.make({
   compareAndSetCount: 1,
   failureTag: null,
@@ -124,16 +135,14 @@ export const targetPromotionConcurrentTargetsProtocolCassette = TargetPromotionP
         PromotionBoundaryResult.cases.ReadExpectedHead.make({}),
         PromotionBoundaryResult.cases.CompareAndSetWaitsThenApplies.make({})
       ],
-      owner: "T1",
-      queuedAt: firstResponsibilityPosition
+      owner: "T1"
     },
     {
       boundaryResults: [
         PromotionBoundaryResult.cases.ReadExpectedHead.make({}),
         PromotionBoundaryResult.cases.CompareAndSetApplied.make({})
       ],
-      owner: "T2",
-      queuedAt: secondResponsibilityPosition
+      owner: "T2"
     }
   ],
   story: [
@@ -141,24 +150,20 @@ export const targetPromotionConcurrentTargetsProtocolCassette = TargetPromotionP
     ProtocolStoryItem.cases.StartPromotion.make({ owner: "T1" }),
     ProtocolStoryItem.cases.AwaitBlockedBoundary.make({ owner: "T1" }),
     ProtocolStoryItem.cases.ObserveLeases.make({
-      expected: {
-        active: [firstResponsibilityPosition],
-        held: [firstResponsibilityPosition],
-        moment: "T1WaitingBeforeT2"
-      }
+      expected: { active: [t1Responsibility], held: [t1Responsibility], moment: "T1WaitingBeforeT2" }
     }),
     ProtocolStoryItem.cases.Acquire.make({ owner: "T2" }),
     ProtocolStoryItem.cases.ObserveLeases.make({
       expected: {
-        active: [firstResponsibilityPosition],
-        held: [firstResponsibilityPosition, secondResponsibilityPosition],
+        active: [t1Responsibility],
+        held: [t1Responsibility, t2Responsibility],
         moment: "T2AcquiredWhileT1Waiting"
       }
     }),
     ProtocolStoryItem.cases.StartPromotion.make({ owner: "T2" }),
     ProtocolStoryItem.cases.AwaitSettlement.make({ expected: successTerminal, owner: "T2" }),
     ProtocolStoryItem.cases.ObserveLeases.make({
-      expected: { active: [firstResponsibilityPosition], held: [firstResponsibilityPosition], moment: "T2Settled" }
+      expected: { active: [t1Responsibility], held: [t1Responsibility], moment: "T2Settled" }
     }),
     ProtocolStoryItem.cases.ReleaseBlockedBoundary.make({ owner: "T1" }),
     ProtocolStoryItem.cases.AwaitSettlement.make({ expected: successTerminal, owner: "T1" }),
@@ -173,8 +178,7 @@ export const targetPromotionUnreadableProtocolCassette = TargetPromotionProtocol
       boundaryResults: [
         PromotionBoundaryResult.cases.ReadFailed.make({ detail: "target ref is temporarily unreadable" })
       ],
-      owner: "T1",
-      queuedAt: firstResponsibilityPosition
+      owner: "T1"
     }
   ],
   story: [

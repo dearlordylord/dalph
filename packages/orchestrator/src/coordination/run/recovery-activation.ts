@@ -59,6 +59,7 @@ import {
   integratorSessionFixedRecordKey
 } from "../../workflow-journal/record-key.js"
 import {
+  integrationTargetResourceSnapshotIncludes,
   type IntegrationTargetResourceSnapshot,
   type IntegrationTargetResourceController,
   makeIntegrationTargetResourceController
@@ -4100,8 +4101,9 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
       ? [RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt })]
       : []
   })
-  const integrationResourceSnapshot = currentIntegrationResources ?? (yield* integrationResources.snapshot)
   const integrationResponsibilities = deriveIntegrationAdmission(journalHistoryOf(runState)).responsibilities
+  const exactIntegrationResourceSnapshot = currentIntegrationResources ?? (yield* integrationResources.snapshot)
+  const integrationResourceSnapshot = exactIntegrationResourceSnapshot
   const directionLineageByAttemptId = new Map(
     integrationResponsibilities.flatMap((responsibility) => {
       if (responsibility._tag !== "StartedIntegrationResponsibility") return []
@@ -4213,7 +4215,10 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           taskGraphObservation.position > claimObservedAt
         const claimIsExact =
           taskClaimAuthorityByAttemptId.get(responsibility.plannedAttempt.attemptId)?._tag === "Exact"
-        const targetIsHeld = integrationResourceSnapshot.heldResponsibilityPositions.has(responsibility.queuedAt)
+        const targetIsHeld = integrationTargetResourceSnapshotIncludes(
+          integrationResourceSnapshot.heldResponsibilities,
+          responsibility
+        )
         const directionLineageOperationId =
           quarantineDirection === undefined
             ? undefined
@@ -4238,7 +4243,10 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
               targetLineageRefreshRequiredAttemptIds.has(responsibility.plannedAttempt.attemptId)
             : !directionLineageWasObserved
         const lineageReadIsReady =
-          !integrationResourceSnapshot.activeResponsibilityPositions.has(responsibility.queuedAt) &&
+          !integrationTargetResourceSnapshotIncludes(
+            integrationResourceSnapshot.activeResponsibilities,
+            responsibility
+          ) &&
           graphWasCheckedAfterClaim &&
           claimIsExact &&
           targetLineageReadIsRequired &&
@@ -4256,7 +4264,10 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           claimObservedAt !== undefined &&
           !graphWasCheckedAfterClaim &&
           targetLineageReadIsRequired &&
-          !integrationResourceSnapshot.activeResponsibilityPositions.has(responsibility.queuedAt) &&
+          !integrationTargetResourceSnapshotIncludes(
+            integrationResourceSnapshot.activeResponsibilities,
+            responsibility
+          ) &&
           !integration.transitions.some(
             (transition) =>
               (transition._tag === "ReleaseStartedIntegrationTarget" ||
@@ -4393,7 +4404,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
   const heldIntegrationTaskIds = new Set(
     deriveIntegrationAdmission(journalHistoryOf(runState)).responsibilities.flatMap((responsibility) =>
       responsibility._tag === "StartedIntegrationResponsibility" &&
-      integrationResourceSnapshot.heldResponsibilityPositions.has(responsibility.queuedAt)
+      integrationTargetResourceSnapshotIncludes(integrationResourceSnapshot.heldResponsibilities, responsibility)
         ? [responsibility.plannedAttempt.taskId]
         : []
     )
@@ -4561,15 +4572,21 @@ export const diagnoseColdRunRecoveryProjection = Effect.fn("RunRecoveryProjectio
   return recoveryProjectionSnapshot(projection)
 })
 
-const samePositions = (left: ReadonlySet<JournalPosition>, right: ReadonlySet<JournalPosition>): boolean =>
-  left.size === right.size && [...left].every((position) => right.has(position))
+const sameResponsibilityIdentities = (
+  left: IntegrationTargetResourceSnapshot["heldResponsibilities"],
+  right: IntegrationTargetResourceSnapshot["heldResponsibilities"]
+): boolean =>
+  left.length === right.length &&
+  left.every(({ queuedAt, runId }) =>
+    right.some((candidate) => candidate.queuedAt === queuedAt && candidate.runId === runId)
+  )
 
 const sameIntegrationResourceSnapshot = (
   left: IntegrationTargetResourceSnapshot,
   right: IntegrationTargetResourceSnapshot
 ): boolean =>
-  samePositions(left.activeResponsibilityPositions, right.activeResponsibilityPositions) &&
-  samePositions(left.heldResponsibilityPositions, right.heldResponsibilityPositions)
+  sameResponsibilityIdentities(left.activeResponsibilities, right.activeResponsibilities) &&
+  sameResponsibilityIdentities(left.heldResponsibilities, right.heldResponsibilities)
 
 const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAuthoritative")(function* (
   runId: RunId,

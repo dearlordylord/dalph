@@ -4,12 +4,12 @@ import { Effect, Schema } from "effect"
 import { expect } from "vitest"
 import {
   AttemptQuiescenceProof,
-  JournalPosition,
-  JournalRecord,
+  type JournalRecord,
   PlannedAttemptExecutorWorkReportedEvent,
   reduceWorkflowJournalHistory
 } from "@dalph/orchestrator"
 import {
+  AuthoredScenarioCassette,
   maintainedAuthoredCassetteCatalog,
   maintainedIntegrationFinalityProtocolCassetteCatalog,
   runAuthoredScenarioCassette,
@@ -24,6 +24,128 @@ const useAuthored = <A, E, R>(
   input: unknown,
   use: (run: Effect.Success<ReturnType<typeof runAuthoredScenarioCassette>>) => Effect.Effect<A, E, R>
 ) => useAuthoredScenarioCassette(input, use).pipe(Effect.provide(NodeCrypto.layer))
+
+const replacementBase = maintainedAuthoredCassetteCatalog.changedAttemptRestartsCleanly
+const replacementChoice = replacementBase.story.find((item) => item._tag === "OperatorRestartsAttempt")
+if (replacementChoice?._tag !== "OperatorRestartsAttempt") {
+  throw new Error("replacement fixture requires its accepted Restart choice")
+}
+const replacementRevision = replacementChoice.observedTaskRevision
+const acceptedCommit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const expectedHead = "2222222222222222222222222222222222222222"
+const candidateCommit = "cccccccccccccccccccccccccccccccccccccccc"
+const integrationTarget = { repository: "/dalph/cassettes/repository.git", ref: "refs/heads/master" }
+const successorAttempt = {
+  attemptId: "attempt:A:1",
+  baseSha: "2222222222222222222222222222222222222222",
+  branch: "refs/heads/dalph/attempt-A-1",
+  executor: "executor:cassette",
+  runId: "$authored-run",
+  taskId: "A",
+  taskRevision: replacementRevision,
+  worktree: "/dalph/cassettes/attempt-A-1"
+}
+const integrationSessionSuffix = `$authored-run:attempt:A:1:57:61:${expectedHead}:${acceptedCommit}:/dalph/cassettes/repository.git:refs/heads/master`
+const integrationCorrelation = {
+  ordinal: 1,
+  session: {
+    acceptedResult: {
+      commit: acceptedCommit,
+      evidenceManifest: { byteLength: 273, digest: "1111111111111111111111111111111111111111111111111111111111111111" }
+    },
+    candidateResource: `integrator-resource:${integrationSessionSuffix}`,
+    expectedTargetHead: expectedHead,
+    integrationTarget,
+    plannedAttempt: successorAttempt,
+    queuedAt: 56,
+    sessionId: `integrator-session:${integrationSessionSuffix}`,
+    startedAt: 57,
+    targetLineageObservedAt: 61
+  }
+}
+
+const replacementPromotedAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+  ...replacementBase,
+  name: "a valid same-Run replacement successor reaches target promotion",
+  startingFacts: {
+    ...replacementBase.startingFacts,
+    targetLineageObservations: [
+      replacementBase.startingFacts.targetLineageObservation,
+      { plannedBaseIsAncestorOfTargetHead: true, plannedBaseSha: expectedHead, targetHeadSha: expectedHead }
+    ]
+  },
+  story: [
+    ...replacementBase.story.slice(0, -2),
+    {
+      _tag: "PlannedAttemptExecutorProjectionReturned",
+      report: {
+        _tag: "ExecutorWorkTerminal",
+        attemptId: "attempt:A:1",
+        result: { _tag: "Accepted", acceptedResult: { commit: acceptedCommit } }
+      }
+    },
+    { _tag: "CoordinatorProcessDies" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    {
+      _tag: "TrackerGraphReadReturned",
+      graph: {
+        revision: "singleton-revision",
+        tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+      }
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    {
+      _tag: "TrackerGraphReadReturned",
+      graph: {
+        revision: "singleton-revision",
+        tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+      }
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:1", taskId: "A" } },
+    { _tag: "IntegratorRequestReceived", correlation: integrationCorrelation },
+    {
+      _tag: "IntegratorResultReturned",
+      result: { _tag: "PreparedCandidate", candidateText: "refs/heads/dalph/integrator-candidate-A" }
+    },
+    {
+      _tag: "IntegratorGitObservationReturned",
+      candidateText: "refs/heads/dalph/integrator-candidate-A",
+      observation: {
+        _tag: "Commit",
+        candidateText: "refs/heads/dalph/integrator-candidate-A",
+        commit: candidateCommit,
+        directParents: [expectedHead, acceptedCommit]
+      }
+    },
+    {
+      _tag: "TargetPromotionGitReadReturned",
+      candidateCommit,
+      observation: { _tag: "CandidateNotInAncestry", currentHeadSha: expectedHead },
+      repository: integrationTarget.repository
+    },
+    {
+      _tag: "TargetPromotionCompareAndSetReturned",
+      request: { candidateCommit, expectedTargetHead: expectedHead, integrationTarget },
+      result: { _tag: "Applied" }
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    {
+      _tag: "TrackerGraphReadReturned",
+      graph: {
+        revision: "singleton-revision",
+        tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+      }
+    },
+    {
+      _tag: "ExpectedBehavior",
+      orchestration: null,
+      protocol: null,
+      taskWork: { absences: [], results: [{ _tag: "PlannedWorkForTaskAccepted", commit: acceptedCommit, taskId: "A" }] }
+    }
+  ]
+})
 
 type ReplacementRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptReplaced" }>
@@ -46,22 +168,21 @@ const replacementRecordFor = Effect.fn("IntegrationFinalityProtocolCassetteTest.
 })
 
 it.effect("accepts a promoted history containing a replacement plan while selecting the promoted plan", () =>
-  useAuthored(maintainedAuthoredCassetteCatalog.targetPromotionSuccess, (promoted) =>
+  useAuthored(replacementPromotedAuthoredCassette, (promoted) =>
     Effect.gen(function* () {
-      const unrelated = yield* runAuthored(maintainedAuthoredCassetteCatalog.changedAttemptRestartsCleanly)
-      const replacement = yield* replacementRecordFor(unrelated.records)
-
-      expect(unrelated.history._tag).toBe("ValidWorkflowJournalHistory")
-
-      const replacementRecord = JournalRecord.make({
-        event: replacement.event,
-        key: replacement.key,
-        position: JournalPosition.make(promoted.records.length + 1),
-        runId: unrelated.runId
-      })
+      const replacement = yield* replacementRecordFor(promoted.records)
+      const promotion = promoted.records.findLast(({ event }) => event._tag === "TargetPromotionObservedSuccess")?.event
+      if (promotion?._tag !== "TargetPromotionObservedSuccess") {
+        return yield* Effect.die("replacement fixture did not promote its valid successor")
+      }
+      expect(replacement.runId).toBe(promoted.runId)
+      expect(promotion.correlation.qualifiedCandidate.run.session.plannedAttempt).toEqual(
+        replacement.event.successorPlan.plannedAttempt
+      )
+      expect(promoted.history._tag).toBe("ValidWorkflowJournalHistory")
       const finalized = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(
         maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess,
-        [...promoted.records, replacementRecord]
+        promoted.runId
       )
 
       expect(finalized.failureTag).toBeNull()

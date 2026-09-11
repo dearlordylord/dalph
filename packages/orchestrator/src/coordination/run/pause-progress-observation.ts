@@ -7,7 +7,10 @@ import {
   type TaskId
 } from "@dalph/contracts"
 import { Match, Schema } from "effect"
-import type { IntegrationTargetResourceSnapshot } from "../admission/integration-target-resource.js"
+import {
+  integrationTargetResourceSnapshotIncludes,
+  type IntegrationTargetResourceSnapshot
+} from "../admission/integration-target-resource.js"
 import type {
   DeliveryRuntimeLiveOwnerSnapshot,
   DeliveryRuntimeObservationState
@@ -340,12 +343,13 @@ const resourceBlockers = (
   obligation: QueuedIntegrationObligation | StartedIntegrationObligation,
   resources: IntegrationTargetResourceSnapshot
 ): ReadonlyArray<PauseIntegrationResourceBlocker> => {
-  const queuedAt = obligation.responsibility.queuedAt
+  const responsibility = obligation.responsibility
+  const queuedAt = responsibility.queuedAt
   return [
-    ...(resources.heldResponsibilityPositions.has(queuedAt)
+    ...(integrationTargetResourceSnapshotIncludes(resources.heldResponsibilities, responsibility)
       ? [{ _tag: "HeldIntegrationTarget" as const, queuedAt }]
       : []),
-    ...(resources.activeResponsibilityPositions.has(queuedAt)
+    ...(integrationTargetResourceSnapshotIncludes(resources.activeResponsibilities, responsibility)
       ? [{ _tag: "ActiveIntegrationTarget" as const, queuedAt }]
       : [])
   ]

@@ -33,18 +33,21 @@ const runtimeIncludesAcceptedPosition = (
   (minimumAcceptedAt === null ||
     (runtime.evaluation.acceptedAt !== null && runtime.evaluation.acceptedAt >= minimumAcceptedAt))
 
-const samePositions = (left: ReadonlySet<JournalPosition>, right: ReadonlySet<JournalPosition>): boolean => {
-  if (left.size !== right.size) return false
-  for (const position of left) if (!right.has(position)) return false
-  return true
-}
+const sameResponsibilities = (
+  left: IntegrationTargetResourceSnapshot["heldResponsibilities"],
+  right: IntegrationTargetResourceSnapshot["heldResponsibilities"]
+): boolean =>
+  left.length === right.length &&
+  left.every(({ queuedAt, runId }) =>
+    right.some((candidate) => candidate.queuedAt === queuedAt && candidate.runId === runId)
+  )
 
 const currentResourceSnapshots = (resources: PauseProgressObservationResources) =>
   resources.integrationTargets.changes.pipe(
     Stream.changesWith(
       (left, right) =>
-        samePositions(left.heldResponsibilityPositions, right.heldResponsibilityPositions) &&
-        samePositions(left.activeResponsibilityPositions, right.activeResponsibilityPositions)
+        sameResponsibilities(left.heldResponsibilities, right.heldResponsibilities) &&
+        sameResponsibilities(left.activeResponsibilities, right.activeResponsibilities)
     )
   )
 

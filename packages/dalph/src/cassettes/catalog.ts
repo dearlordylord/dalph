@@ -3472,14 +3472,15 @@ export const targetPromotionSuccessAuthoredCassette: ScenarioCassette = Schema.d
   AuthoredScenarioCassette
 )({
   ...targetPromotionSuccessBeforeCompletionRefresh,
-  story: targetPromotionSuccessBeforeCompletionRefresh.story.flatMap((item): ReadonlyArray<unknown> =>
-    item._tag === "ExpectedBehavior"
-      ? [
-          { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-          { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-          item
-        ]
-      : [item]
+  story: targetPromotionSuccessBeforeCompletionRefresh.story.flatMap(
+    (item): ReadonlyArray<unknown> =>
+      item._tag === "ExpectedBehavior"
+        ? [
+            { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+            { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+            item
+          ]
+        : [item]
   )
 })
 
@@ -4774,7 +4775,11 @@ const doubleDiamondIntegrationReleasingWork = (
         : [decodeStoryItem(item)]
   )
 
-/** The real delivery runtime consumes a staggered double diamond and reconstructs both middle positions before observing X. */
+/**
+ * The runtime reconstructs B/C, observes X in the graph, then gives X capacity only after B's confirmed completion
+ * clears the middle wave. The maintainer accepted this controlled chronology on 2026-09-11; it is one legal
+ * execution, not a universal production ordering (https://github.com/dearlordylord/dalph/issues/350#issuecomment-5640171481).
+ */
 export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
@@ -4879,10 +4884,7 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     },
     ...doubleDiamondGraphRead(doubleDiamondGraphs.dCompleteBeforeX),
     ...doubleDiamondGraphRead(doubleDiamondGraphs.dCompleteBeforeX),
-    {
-      _tag: "CassetteOffersRunReactivationHints",
-      hints: ["Timer"]
-    },
+    { _tag: "CassetteOffersRunReactivationHints", hints: ["Timer"] },
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }

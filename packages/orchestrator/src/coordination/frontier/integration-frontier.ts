@@ -9,7 +9,7 @@ import {
   type StartedIntegrationResponsibility
 } from "../../workflow/protocols/integration-admission/protocol.js"
 import { FrontierExplanation, type RunnableFrontier, RunnableFrontierTransition } from "./frontier.js"
-import type { JournalPosition } from "../../workflow-journal/identity.js"
+import type { IntegrationResponsibilityIdentity } from "../admission/integration-target-resource.js"
 import type { CurrentTaskClaimAuthority } from "./task-claim-authority.js"
 import type { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import type { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
@@ -20,9 +20,9 @@ export { integrationDeliveryWaitsOf, type IntegrationDeliveryWait } from "./inte
 
 export interface IntegrationFrontierRuntimeFacts {
   /** Tasks covered by a complete graph observation committed in this activation. */
-  readonly activeResponsibilityPositions?: ReadonlySet<JournalPosition>
+  readonly activeResponsibilities?: ReadonlyArray<IntegrationResponsibilityIdentity>
   readonly currentTrackerTaskIds: ReadonlySet<TaskId>
-  readonly heldResponsibilityPositions: ReadonlySet<JournalPosition>
+  readonly heldResponsibilities: ReadonlyArray<IntegrationResponsibilityIdentity>
   readonly integrationTarget: Option.Option<IntegrationTarget>
   readonly targetLineageByAttemptId?: ReadonlyMap<AttemptId, TargetLineageObservation>
   /** Attempts whose current graph authority is newer than their last Git target-lineage observation. */
@@ -36,8 +36,8 @@ export interface IntegrationFrontierRuntimeFacts {
 
 const emptyRuntimeFacts: IntegrationFrontierRuntimeFacts = {
   currentTrackerTaskIds: new Set(),
-  activeResponsibilityPositions: new Set(),
-  heldResponsibilityPositions: new Set(),
+  activeResponsibilities: [],
+  heldResponsibilities: [],
   integrationTarget: Option.none(),
   targetLineageByAttemptId: new Map(),
   targetLineageRefreshRequiredAttemptIds: new Set(),

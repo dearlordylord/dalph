@@ -100,6 +100,7 @@ export type IntegrationTargetResourceRequirement =
       readonly _tag: "IntegrationTargetResourceRequired"
       readonly access: "Acquire" | "Release" | "UseHeld"
       readonly integrationTarget: IntegrationTarget
+      readonly plannedAttempt: Pick<PlannedTaskAttempt, "runId">
       readonly queuedAt: JournalPosition
     }
 

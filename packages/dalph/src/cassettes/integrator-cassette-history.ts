@@ -66,7 +66,14 @@ import {
 export interface CoherentIntegratorHistory {
   readonly input: IntegratorCassetteInput
   readonly records: ReadonlyArray<JournalRecord>
+  readonly startingFacts: AuthoredIntegratorCassette["startingFacts"]
   readonly target: TrackerTarget
+}
+
+export interface CoherentIntegratorHistoryOptions {
+  readonly claimOwner?: ClaimOwner
+  readonly specification?: TaskWorkSpecification
+  readonly target?: TrackerTarget
 }
 
 const journalRecordFor = (
@@ -83,24 +90,27 @@ const journalRecordFor = (
 
 /** Builds the complete accepted prefix required by the live Integrator protocol. */
 export const coherentHistoryFor = Effect.fn("IntegratorCassette.coherentHistoryFor")(function* (
-  cassette: AuthoredIntegratorCassette
+  cassette: AuthoredIntegratorCassette,
+  options: CoherentIntegratorHistoryOptions = {}
 ) {
   const source = cassette.startingFacts
   const sourceAttempt = source.responsibility.plannedAttempt
   const runId = sourceAttempt.runId
-  const target = FixtureTarget.make(`integrator-cassette-target:${runId}`)
-  const specification: TaskWorkSpecification = makeTaskWorkSpecification({
-    body: `Maintained Integrator cassette for ${sourceAttempt.taskId}`,
-    taskId: sourceAttempt.taskId,
-    title: `Maintained Integrator cassette for ${sourceAttempt.taskId}`
-  })
+  const target = options.target ?? FixtureTarget.make(`integrator-cassette-target:${runId}`)
+  const specification: TaskWorkSpecification =
+    options.specification ??
+    makeTaskWorkSpecification({
+      body: `Maintained Integrator cassette for ${sourceAttempt.taskId}`,
+      taskId: sourceAttempt.taskId,
+      title: `Maintained Integrator cassette for ${sourceAttempt.taskId}`
+    })
   const plannedAttempt: PlannedTaskAttempt = PlannedTaskAttempt.make({
     ...sourceAttempt,
     taskRevision: specification.fingerprint
   })
   const activeClaim = ActiveTaskClaim.make({
     operationId: OperationId.make(`integrator-cassette-claim:${sourceAttempt.taskId}`),
-    owner: ClaimOwner.make("integrator-cassette"),
+    owner: options.claimOwner ?? ClaimOwner.make("integrator-cassette"),
     taskId: sourceAttempt.taskId,
     token: ClaimToken.make(`integrator-cassette-token:${sourceAttempt.taskId}`)
   })
@@ -308,9 +318,15 @@ export const coherentHistoryFor = Effect.fn("IntegratorCassette.coherentHistoryF
     queuedAt: responsibilityRecord.position,
     startedAt: startedRecord.position
   })
+  const startingFacts = {
+    responsibility: coherentResponsibility,
+    targetLineage: source.targetLineage,
+    targetLineageObservedAt: lineageRecord.position
+  }
   return {
-    input: { ...input, responsibility: coherentResponsibility },
+    input: integratorPreparationInputFor(startingFacts),
     records,
+    startingFacts,
     target
   } satisfies CoherentIntegratorHistory
 })

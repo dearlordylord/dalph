@@ -61,6 +61,7 @@ import {
   ForeignWorktreeRegistration,
   FixtureTarget,
   GitWorktreeReadFailure,
+  IntegrationResponsibilityIdentity,
   Journal,
   JournalPosition,
   makeFocusedTaskClaimFactsObserved,
@@ -155,6 +156,7 @@ import {
   idleRunCancellationAuthoredCassette,
   integrationRunCancellationAuthoredCassette,
   maintainedIntegrationFinalityProtocolCassetteCatalog,
+  evaluateIntegrationFinalityPremisesFromRawRecords,
   IntegrationFinalityProtocolCassette,
   lostPlannedWorktreeSafelySuspendsAuthoredCassette,
   maintainedAuthoredCassetteCatalog,
@@ -1405,7 +1407,9 @@ it.effect("finishes an already-held integration boundary after task Pause withou
     expect(
       deriveIntegrationFrontier(run.history.runState, {
         currentTrackerTaskIds: new Set([TaskId.make("A")]),
-        heldResponsibilityPositions: new Set([integrationBeganAt]),
+        heldResponsibilities: [
+          IntegrationResponsibilityIdentity.make({ queuedAt: integrationBeganAt, runId: run.runId })
+        ],
         integrationTarget: Option.none(),
         taskClaimAuthorityByAttemptId: exactClaimAuthorities(AttemptId.make("attempt:A:0"))
       }).transitions
@@ -1418,7 +1422,7 @@ it.effect("finishes an already-held integration boundary after task Pause withou
     expect(
       deriveIntegrationFrontier(run.history.runState, {
         currentTrackerTaskIds: new Set([TaskId.make("A")]),
-        heldResponsibilityPositions: new Set(),
+        heldResponsibilities: [],
         integrationTarget: Option.none(),
         taskClaimAuthorityByAttemptId: exactClaimAuthorities(AttemptId.make("attempt:A:0"))
       }).transitions
@@ -2166,7 +2170,7 @@ it.effect("continues an accepted result after process death and crosses its inte
     expect(
       deriveIntegrationFrontier(run.history.runState, {
         currentTrackerTaskIds: new Set([TaskId.make("A")]),
-        heldResponsibilityPositions: new Set(),
+        heldResponsibilities: [],
         integrationTarget: Option.none(),
         taskClaimAuthorityByAttemptId: exactClaimAuthorities(AttemptId.make("attempt:A:0"))
       }).explanations
@@ -2184,7 +2188,9 @@ it.effect("continues an accepted result after process death and crosses its inte
     expect(
       deriveIntegrationFrontier(run.history.runState, {
         currentTrackerTaskIds: new Set([TaskId.make("A")]),
-        heldResponsibilityPositions: new Set([integrationBeganAt]),
+        heldResponsibilities: [
+          IntegrationResponsibilityIdentity.make({ queuedAt: integrationBeganAt, runId: run.runId })
+        ],
         integrationTarget: Option.some(
           IntegrationTarget.make({
             repository: GitRepositoryLocator.make("/dalph/cassettes/integration.git"),
@@ -2403,7 +2409,7 @@ it.effect("keeps an unfinished Integrator session dormant when a blocker appears
     if (attempt?._tag !== "IntegratorSessionFixed") return yield* Effect.die("missing fixed Integrator session")
     const facts = {
       currentTrackerTaskIds: new Set([TaskId.make("A"), TaskId.make("B"), TaskId.make("C")]),
-      heldResponsibilityPositions: new Set<JournalPosition>(),
+      heldResponsibilities: [],
       integrationTarget: Option.none(),
       taskClaimAuthorityByAttemptId: exactClaimAuthorities(attempt.correlation.plannedAttempt.attemptId)
     }
@@ -2468,7 +2474,12 @@ it.effect("delegates changed H after a cleared blocker without reusing M or crea
     expect(
       deriveIntegrationFrontier(blockedHistory.runState, {
         currentTrackerTaskIds: new Set([TaskId.make("A"), TaskId.make("B"), TaskId.make("C")]),
-        heldResponsibilityPositions: new Set([started.queuedAt]),
+        heldResponsibilities: [
+          IntegrationResponsibilityIdentity.make({
+            queuedAt: started.queuedAt,
+            runId: started.plannedAttempt.runId
+          })
+        ],
         integrationTarget: Option.some(
           IntegrationTarget.make({
             repository: GitRepositoryLocator.make("/dalph/cassettes/integration.git"),
@@ -2733,7 +2744,7 @@ it.effect("records completion finality after Git-qualified promotion history", (
     Effect.gen(function* () {
       const finalized = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(
         maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess,
-        promoted.records
+        promoted.runId
       )
       const finalityRecords = finalized.records.slice(promoted.records.length)
       const focusedSuccessAt = finalityRecords.findIndex(
@@ -3068,7 +3079,7 @@ it.effect("proves promoted ancestry after the blocker clears and completes witho
     const facts = {
       activeClaimByAttemptId: new Map([[plannedAttempt.operation.plannedAttempt.attemptId, activeClaim.claim]]),
       currentTrackerTaskIds: new Set([taskId, blockerId, unrelatedTaskId]),
-      heldResponsibilityPositions: new Set<JournalPosition>(),
+      heldResponsibilities: [],
       integrationFinalityConfigured: true,
       integrationTarget: Option.none(),
       taskClaimAuthorityByAttemptId: exactClaimAuthorities(plannedAttempt.operation.plannedAttempt.attemptId)
@@ -3229,7 +3240,7 @@ it.effect("proves promoted ancestry after the blocker clears and completes witho
       const records = yield* (yield* Journal).read(clearRunId)
       const resumed = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(
         maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess,
-        records
+        clearRunId
       )
       return { observation, records, resumed }
     }).pipe(
@@ -3399,13 +3410,32 @@ it.effect("keeps another target usable while M promotion waits and releases only
     expect(run).toEqual(replay)
     expect(run.boundaryCalls).toEqual(["T1.read", "T1.compareAndSet", "T2.read", "T2.compareAndSet"])
     expect(run.compareAndSetCount).toBe(2)
+    expect(run.leaseResponsibilities).toEqual([
+      { queuedAt: 17, runId: "target-promotion-protocol-cassette-T1" },
+      { queuedAt: 17, runId: "target-promotion-protocol-cassette-T2" }
+    ])
     expect(tags.filter((tag) => tag === "TargetPromotionIntended")).toHaveLength(2)
     expect(tags.filter((tag) => tag === "TargetPromotionAttemptIntended")).toHaveLength(2)
     expect(tags.filter((tag) => tag === "TargetPromotionObservedSuccess")).toHaveLength(2)
     expect(run.leaseObservations).toEqual([
-      { active: [8], held: [8], moment: "T1WaitingBeforeT2" },
-      { active: [8], held: [8, 28], moment: "T2AcquiredWhileT1Waiting" },
-      { active: [8], held: [8], moment: "T2Settled" },
+      {
+        active: [{ queuedAt: 17, runId: "target-promotion-protocol-cassette-T1" }],
+        held: [{ queuedAt: 17, runId: "target-promotion-protocol-cassette-T1" }],
+        moment: "T1WaitingBeforeT2"
+      },
+      {
+        active: [{ queuedAt: 17, runId: "target-promotion-protocol-cassette-T1" }],
+        held: [
+          { queuedAt: 17, runId: "target-promotion-protocol-cassette-T1" },
+          { queuedAt: 17, runId: "target-promotion-protocol-cassette-T2" }
+        ],
+        moment: "T2AcquiredWhileT1Waiting"
+      },
+      {
+        active: [{ queuedAt: 17, runId: "target-promotion-protocol-cassette-T1" }],
+        held: [{ queuedAt: 17, runId: "target-promotion-protocol-cassette-T1" }],
+        moment: "T2Settled"
+      },
       { active: [], held: [], moment: "AllSettled" }
     ])
   })
@@ -7698,7 +7728,7 @@ const replayIntegrationFinalityCassette = (
       )
       return yield* useAuthoredScenarioCassetteWithCrypto(
         maintainedAuthoredCassetteCatalog.targetPromotionSuccess,
-        (promoted) => runIntegrationFinalityProtocolCassetteFromPromotedRecords(cassette, promoted.records)
+        (promoted) => runIntegrationFinalityProtocolCassetteFromPromotedRecords(cassette, promoted.runId)
       ).pipe(Effect.provide(deterministicCryptoLayer))
     }).pipe(Effect.provide(NodeCrypto.layer))
     const first = yield* runOnce
@@ -7711,7 +7741,7 @@ const runIntegrationFinalityFromPromotedCassette = (
   cassette: (typeof maintainedIntegrationFinalityProtocolCassetteCatalog)[keyof typeof maintainedIntegrationFinalityProtocolCassetteCatalog]
 ) =>
   useAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess, (promoted) =>
-    runIntegrationFinalityProtocolCassetteFromPromotedRecords(cassette, promoted.records)
+    runIntegrationFinalityProtocolCassetteFromPromotedRecords(cassette, promoted.runId)
   )
 
 const focusedCleanupTags = (journalTags: ReadonlyArray<string>): ReadonlyArray<string> => {
@@ -7806,8 +7836,6 @@ it("rejects unclosed, unbounded, and misordered integration-finality protocol st
 it.effect("rejects promoted finality replay without each exact causal premise", () =>
   useAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess, (promoted) =>
     Effect.gen(function* () {
-      const cassette =
-        maintainedIntegrationFinalityProtocolCassetteCatalog.replacesTheExactActiveClaimWithAPromotionBoundCompletionClaim
       for (const omittedTag of [
         "TargetPromotionObservedSuccess",
         "TaskAttemptPlanned",
@@ -7815,8 +7843,7 @@ it.effect("rejects promoted finality replay without each exact causal premise", 
         "TaskTrackerFactsObserved"
       ] as const) {
         const exit = yield* Effect.exit(
-          runIntegrationFinalityProtocolCassetteFromPromotedRecords(
-            cassette,
+          evaluateIntegrationFinalityPremisesFromRawRecords(
             promoted.records.filter(({ event }) => event._tag !== omittedTag)
           )
         )

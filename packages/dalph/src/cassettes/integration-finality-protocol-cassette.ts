@@ -5,6 +5,9 @@ import {
   type JournalRecord,
   type JournalReadError,
   ActiveTaskClaim,
+  type AcceptedJournalPrefix,
+  acceptedJournalRecordsForKind,
+  AcceptedJournalReader,
   authorizedClaimForAttempt,
   CompletionClaimBoundary,
   type CompletionClaimBoundaryService,
@@ -30,6 +33,7 @@ import {
   FocusedCompletedTaskObservation,
   FrontierExplanation,
   InRunJournal,
+  journalRecordAt,
   OperationId,
   completionTaskRequestFor,
   readCompletionFocusedFacts,
@@ -59,11 +63,24 @@ interface PreparedFinality {
   readonly taskId: TaskId
 }
 
-const promotedPlanFor = (records: ReadonlyArray<JournalRecord>) => {
-  const promotion = records.findLast(({ event }) => event._tag === "TargetPromotionObservedSuccess")?.event
+type FinalityPremiseSource = ReadonlyArray<JournalRecord> | AcceptedJournalPrefix
+
+const premiseRecordsForKind = <K extends JournalRecord["event"]["_tag"]>(source: FinalityPremiseSource, kind: K) => {
+  if (!("runId" in source)) return source.filter(({ event }) => event._tag === kind)
+  const records = acceptedJournalRecordsForKind(source, kind)
+  return Array.from({ length: records.length }, (_, index) => journalRecordAt(records, index)).flatMap((record) =>
+    record === undefined ? [] : [record]
+  )
+}
+
+const promotedPlanFor = (records: FinalityPremiseSource) => {
+  const promotion = premiseRecordsForKind(records, "TargetPromotionObservedSuccess").findLast(() => true)?.event
   if (promotion?._tag !== "TargetPromotionObservedSuccess") return undefined
   const promotedAttempt = promotion.correlation.qualifiedCandidate.run.session.plannedAttempt
-  const planned = records
+  const planned = [
+    ...premiseRecordsForKind(records, "TaskAttemptPlanned"),
+    ...premiseRecordsForKind(records, "PlannedAttemptReplaced")
+  ]
     .flatMap(({ event }) =>
       event._tag === "TaskAttemptPlanned"
         ? [event.operation]
@@ -78,17 +95,17 @@ const promotedPlanFor = (records: ReadonlyArray<JournalRecord>) => {
   return planned === undefined ? undefined : { planned, promotion }
 }
 
-const completeGraphCoveringTask = (records: ReadonlyArray<JournalRecord>, taskId: TaskId) =>
-  records.findLast(
+const completeGraphCoveringTask = (records: FinalityPremiseSource, taskId: TaskId) =>
+  premiseRecordsForKind(records, "TaskTrackerFactsObserved").findLast(
     ({ event }) =>
       event._tag === "TaskTrackerFactsObserved" &&
       event.observation._tag === "CompleteTaskTrackerFacts" &&
       event.observation.factFamilies[0].taskIds.includes(taskId)
   )?.event
 
-const preparedFinalityFromPromotedRecords = Effect.fn(
-  "IntegrationFinalityProtocolCassette.preparedFromPromotedRecords"
-)(function* (records: ReadonlyArray<JournalRecord>) {
+const prepareIntegrationFinalityPremises = Effect.fn("IntegrationFinalityProtocolCassette.preparePremises")(function* (
+  records: FinalityPremiseSource
+) {
   const premises = promotedPlanFor(records)
   if (premises === undefined) {
     return yield* Effect.die("promoted finality cassette requires the promoted planned attempt")
@@ -110,14 +127,14 @@ const preparedFinalityFromPromotedRecords = Effect.fn(
     plannedAttempt,
     promotionCorrelation: promotion.correlation
   })
-  return {
-    activeClaim,
-    claim,
-    plannedAttempt,
-    runId,
-    target,
-    taskId
-  } satisfies PreparedFinality
+  return { activeClaim, claim, plannedAttempt, runId, target, taskId } satisfies PreparedFinality
+})
+
+/** Explicit cold diagnostic boundary for malformed stored histories that cannot become an accepted prefix. */
+export const evaluateIntegrationFinalityPremisesFromRawRecords = Effect.fn(
+  "IntegrationFinalityProtocolCassette.evaluatePremisesFromRawRecords"
+)(function* (records: ReadonlyArray<JournalRecord>) {
+  return yield* prepareIntegrationFinalityPremises(records)
 })
 
 interface FinalityJournal {
@@ -586,7 +603,8 @@ const runPreparedIntegrationFinalityProtocolCassette = Effect.fn("IntegrationFin
 /** Continues a valid whole-Run candidate, verification, and promotion history through the finality protocol. */
 export const runIntegrationFinalityProtocolCassetteFromPromotedRecords = Effect.fn(
   "IntegrationFinalityProtocolCassette.runFromPromotedRecords"
-)(function* (cassette: IntegrationFinalityProtocolCassette, records: ReadonlyArray<JournalRecord>) {
-  const prepared = yield* preparedFinalityFromPromotedRecords(records)
+)(function* (cassette: IntegrationFinalityProtocolCassette, runId: RunId) {
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(runId)
+  const prepared = yield* prepareIntegrationFinalityPremises(records)
   return yield* runPreparedIntegrationFinalityProtocolCassette(cassette, prepared, yield* useLiveJournal(prepared))
 })

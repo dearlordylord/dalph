@@ -159,6 +159,7 @@ const integrationTargetFor = (
       _tag: "IntegrationTargetResourceRequired",
       access: "Acquire",
       integrationTarget: transition.responsibility.integrationTarget,
+      plannedAttempt: transition.responsibility.plannedAttempt,
       queuedAt: transition.responsibility.queuedAt
     }
   }
@@ -168,6 +169,7 @@ const integrationTargetFor = (
     _tag: "IntegrationTargetResourceRequired",
     access: startedIntegrationTargetAccessFor(transition),
     integrationTarget: started.integrationTarget,
+    plannedAttempt: started.plannedAttempt,
     queuedAt: started.queuedAt
   }
 }

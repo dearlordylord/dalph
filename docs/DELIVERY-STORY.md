@@ -219,14 +219,20 @@ end.
 
 - `consumes a staggered graph while restart-added X waits for recovered
   capacity` checks the exact twelve prerequisite edges,
-  ordered eligible waves A, B+C, B+C+X after restart, D+X, E+F, H+I, G, and empty, plus the held
-  sequence B+C, C, X, D, E+F, F, H+I, I, G; it also checks X's exact
+  ordered eligible waves A, B+C, B+C+X after restart, D+X, E+F+X, H+I, G,
+  and empty, plus the held sequence B+C, C, X, D+X, E+X, F+X, H+I, I, and
+  G and settlement order A, B, C, D, E, F, X, H, I, G; it also checks X's exact
   specification precedes its first plan, recovered capacity precedes its
   worktree, all ten accepted results settle in order, and no coarse
   executor-completion result appears.
 - `preserves the double-diamond middle positions across coordinator restart` checks
   that B and C both hold task-work positions before death and that recovered
-  publications retain the same Run and Attempt identities.
+  publications retain the same Run and Attempt identities. The recovered graph
+  observes X while B and C are still held; X first holds a position only after
+  B's accepted-result completion is confirmed and both middle positions have
+  cleared. The maintainer accepted this controlled chronology on 2026-09-11 in
+  [the #350 acceptance record](https://github.com/dearlordylord/dalph/issues/350#issuecomment-5640171481);
+  it is one legal execution, not a universal production ordering.
 - `settles a promoted authored task through the real completion-claim boundary`
   checks promotion alone settles nothing; the exact A claim is replaced and
   deleted only after the declared fresh successful tracker read, producing one
