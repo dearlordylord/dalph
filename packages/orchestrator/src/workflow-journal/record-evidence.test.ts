@@ -32,6 +32,7 @@ import {
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
   TaskClaimReleasedEvent,
+  TaskClaimAcquiredEvent,
   TaskClaimReleaseIntendedEvent,
   taskTrackerReadIntent
 } from "../workflow/registry/event.js"
@@ -71,6 +72,48 @@ import {
 import { AttemptWorktreeLost } from "../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 import { observeRetainedExecutorResponsibilityProjection } from "./retained-executor-responsibility.js"
 import { observeJournalRecordSequenceOperations } from "./record-sequence.js"
+
+it("indexes acquired claims by their exact acquisition identity without scanning other claims", () => {
+  const runId = RunId.make("acquired-claim-index-run")
+  const exact = OperationId.make("acquired-claim-exact")
+  const record = (position: number, operationId: OperationId): JournalRecord => {
+    const event = TaskClaimAcquiredEvent.make({
+      claim: ActiveTaskClaim.make({
+        operationId,
+        owner: ClaimOwner.make("acquired-claim-owner"),
+        taskId: TaskId.make(`acquired-claim-task:${position}`),
+        token: ClaimToken.make(`acquired-claim-token:${position}`)
+      }),
+      version: workflowJournalEventVersion
+    })
+    return { event, key: describeJournalEvent(event).expectedKey, position: JournalPosition.make(position), runId }
+  }
+  const counts = [64, 256].map((size) => {
+    const unrelated = Array.from({ length: size }, (_, offset) =>
+      record(offset + 1, OperationId.make(`other-acquired-claim:${offset}`))
+    )
+    const first = record(size + 1, exact)
+    const duplicate = record(size + 2, exact)
+    const records = [...unrelated, first, duplicate]
+    const evidence = journalEvidenceFrom(records)
+    expect(Array.from(journalRecordsForOperationId(journalEvidenceBefore(evidence, first.position), exact))).toEqual([])
+    expect(
+      Array.from(journalRecordsForOperationId(journalEvidenceBefore(evidence, duplicate.position), exact))
+    ).toEqual([first])
+    // Raw duplicate identities stay visible in order; indexing does not certify their validity.
+    expect(Array.from(journalRecordsForOperationId(records, exact))).toEqual([first, duplicate])
+    const operations: Array<Parameters<Parameters<typeof observeJournalRecordSequenceOperations>[0]>[0]> = []
+    const stop = observeJournalRecordSequenceOperations((operation) => operations.push(operation))
+    try {
+      expect(Array.from(journalRecordsForOperationId(evidence, exact))).toEqual([first, duplicate])
+    } finally {
+      stop()
+    }
+    return operations
+  })
+  expect(counts[0]).toEqual(counts[1])
+  expect(counts[0]).toEqual([{ _tag: "IndexedRecordVisit" }, { _tag: "IndexedRecordVisit" }])
+})
 
 it("links worktree outcomes to their exact earlier read attempt with cutoff-safe constant latest lookup", () => {
   const plannedAttempt = integrationFinalityFixture.plannedAttempt
