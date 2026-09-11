@@ -355,10 +355,12 @@ it.effect("routes changed-head Retry through delivery once, releases ownership, 
       integrationTargets: {
         acquire: () => Effect.void,
         changes: Stream.empty,
+        isActive: () => Effect.succeed(false),
+        isHeld: () => Effect.succeed(false),
         publishAcceptedOwnership: () => Effect.void,
         release: () => Ref.update(releases, (count) => count + 1),
         releaseAll: Effect.void,
-        snapshot: Effect.succeed({ activeResponsibilityPositions: new Set(), heldResponsibilityPositions: new Set() }),
+        snapshot: Effect.succeed({ activeResponsibilities: [], heldResponsibilities: [] }),
         withPermit: (_responsibility, effect) => effect
       },
       recordIntent: () => Effect.void,

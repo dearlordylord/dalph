@@ -2449,6 +2449,7 @@ it.effect("Exit rolls back delivery reservations prepared before owner registrat
             _tag: "IntegrationTargetResourceRequired" as const,
             access: "Acquire" as const,
             integrationTarget,
+            plannedAttempt,
             queuedAt: JournalPosition.make(2)
           },
           plannedAttemptProtocol: { _tag: "PlannedAttemptProtocolRequired" as const, correlation },
@@ -2457,7 +2458,7 @@ it.effect("Exit rolls back delivery reservations prepared before owner registrat
         id: DeliveryProposalId.make("exit-racing-all-non-task-resources")
       }
       expect((yield* secondAdmission.tryReserve(resourceProposal).pipe(Effect.flip))._tag).toBe("ApplicationExiting")
-      expect((yield* integrationTargets.snapshot).heldResponsibilityPositions).toEqual(new Set())
+      expect((yield* integrationTargets.snapshot).heldResponsibilities).toEqual([])
       const releasedProtocol = yield* (yield* PlannedAttemptProtocolController).reserve(correlation)
       expect(Option.isSome(releasedProtocol)).toBe(true)
       if (Option.isSome(releasedProtocol)) yield* releasedProtocol.value.release
@@ -2627,7 +2628,7 @@ it.effect("reconciles existing, pending, and integration-backed admission positi
         ref: IntegrationTargetRef.make("refs/heads/main")
       })
       const heldAt = JournalPosition.make(10)
-      const heldResponsibility = { integrationTarget, queuedAt: heldAt }
+      const heldResponsibility = { integrationTarget, plannedAttempt, queuedAt: heldAt }
       yield* integrationTargets.acquire(heldResponsibility)
       yield* integrationTargets.publishAcceptedOwnership(heldResponsibility)
       const integrationProposal = {
@@ -2637,6 +2638,7 @@ it.effect("reconciles existing, pending, and integration-backed admission positi
             _tag: "IntegrationTargetResourceRequired" as const,
             access: "Acquire" as const,
             integrationTarget,
+            plannedAttempt,
             queuedAt: JournalPosition.make(11)
           },
           plannedAttemptProtocol: { _tag: "PlannedAttemptProtocolRequired" as const, correlation },
@@ -2667,7 +2669,7 @@ it.effect("reconciles existing, pending, and integration-backed admission positi
         id: DeliveryProposalId.make("use-held-integration")
       }
       expect((yield* admission.tryReserve(useHeld))._tag).toBe("Admitted")
-      yield* integrationTargets.release({ integrationTarget, queuedAt: heldAt })
+      yield* integrationTargets.release({ integrationTarget, plannedAttempt, queuedAt: heldAt })
       expect((yield* admission.tryReserve(useHeld))._tag).toBe("Deferred")
 
       const noPosition = proposalFor("no-position", { _tag: "NoTaskWorkPosition" })
@@ -2685,7 +2687,7 @@ it.effect("reconciles existing, pending, and integration-backed admission positi
       })
       if (acquired._tag !== "Admitted") return yield* Effect.die("integration target was not acquired")
       yield* admission.rollback(acquired.reservation, "BeforeDurableClaimIntent")
-      expect((yield* integrationTargets.snapshot).heldResponsibilityPositions).toEqual(new Set())
+      expect((yield* integrationTargets.snapshot).heldResponsibilities).toEqual([])
     })
   )
 )

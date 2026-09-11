@@ -1,15 +1,8 @@
 /* eslint-disable max-lines -- The maintained cassette keeps its canonical accepted bootstrap beside the protocol replay it owns. */
-import { PlannedAttemptExecutorReport } from "@dalph/contracts"
-import { Effect, Layer, Option, Ref } from "effect"
+import { Effect, Layer, Ref } from "effect"
 import {
-  ActiveTaskClaim,
   ClaimOwner,
-  ClaimToken,
   FixtureTarget,
-  GitReadIntentRecordedEvent,
-  InitialControlPolicy,
-  IntegrationResponsibilityBeganEvent,
-  IntegrationStartedEvent,
   InRunJournal,
   Integrator,
   IntegratorCallFailure,
@@ -19,51 +12,14 @@ import {
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorResult,
-  JournalPosition,
-  JournalRecord,
+  type JournalRecord,
   JournalStore,
-  OperationId,
-  PlannedAttemptExecutorCommandIntendedEvent,
-  PlannedAttemptExecutorCommandOrdinal,
-  PlannedAttemptExecutorCommandResponseObservedEvent,
-  PlannedAttemptExecutorReportOrdinal,
-  PlannedAttemptExecutorStateObservation,
-  PlannedAttemptExecutorStateObservationOrdinal,
-  PlannedAttemptExecutorStateObservedEvent,
-  PlannedAttemptExecutorWorkReportedEvent,
-  PlannedAttemptExecutorWorkResponsibilityBeganEvent,
-  PlannedWorktreeReady,
-  TaskAttemptPlannedEvent,
-  TaskClaimAcquiredEvent,
-  TaskClaimAcquisition,
-  TaskClaimAcquisitionIntendedEvent,
-  TaskLifecycle,
-  TaskWorkCapacity,
-  TaskWorktreeReadyEvent,
-  TaskWorktreeReconciliationIntendedEvent,
-  TargetLineageObservedEvent,
-  TrackerRevision,
-  WorkflowActor,
-  WorkflowRunBeganEvent,
   deriveIntegratorRunState,
-  describeJournalEvent,
   integratorCorrelationFor,
   journalLayer,
-  makeCompleteTaskTrackerFactsObserved,
-  makeFocusedTaskWorkSpecificationFactsObserved,
-  makeTargetLineageObservationOperation,
-  makeTaskAttemptPlanOperation,
-  makeTaskClaimAcquisitionOperation,
-  makeTaskWorkSpecificationObservationOperation,
-  makeTaskWorktreeReconciliationOperation,
-  makeTrackerGraphObservationOperation,
   memoryJournalStoreLayer,
   prepareIntegrationCandidateRun,
-  projectTrackerSnapshot,
   reduceWorkflowJournalHistory,
-  taskTrackerFactsObservedEvent,
-  taskTrackerReadIntent,
-  workflowJournalEventVersion,
   type IntegratorCandidateText,
   type IntegratorRequest
 } from "@dalph/orchestrator"
@@ -85,6 +41,7 @@ import {
   type IntegratorCassetteRun as IntegratorCassetteRunType,
   type RecordedIntegratorCassette
 } from "./integrator-cassette-domain.js"
+import { coherentHistoryFor } from "./integrator-cassette-history.js"
 export * from "./integrator-cassette-domain.js"
 export * from "./integrator-cassette-stories.js"
 
@@ -98,274 +55,15 @@ interface IntegratorCassetteRuntime {
   readonly input: IntegratorCassetteInput
 }
 
-const acceptedExecutorReportOrdinal = 2
 const cassetteTarget = FixtureTarget.make("integrator-maintained-target")
 
-const appendRecord = (
-  records: ReadonlyArray<JournalRecord>,
-  runId: IntegratorCassetteInput["responsibility"]["plannedAttempt"]["runId"],
-  event: JournalRecord["event"]
-) => {
-  const record = JournalRecord.make({
-    event,
-    key: describeJournalEvent(event).expectedKey,
-    position: JournalPosition.make(records.length + 1),
-    runId
-  })
-  return { record, records: [...records, record] }
-}
-
-/** Builds the actual accepted attempt chronology that owns the cassette's integration responsibility. */
-const acceptedSetupFor = (cassette: AuthoredIntegratorCassette) => {
-  const authored = cassette.startingFacts
-  const { acceptedResult, integrationTarget, plannedAttempt } = authored.responsibility
-  const runId = plannedAttempt.runId
-  const claim = ActiveTaskClaim.make({
-    operationId: OperationId.make(`integrator-cassette-claim:${plannedAttempt.attemptId}`),
-    owner: ClaimOwner.make("integrator-cassette-coordinator"),
-    taskId: plannedAttempt.taskId,
-    token: ClaimToken.make(`integrator-cassette-token:${plannedAttempt.attemptId}`)
-  })
-  const claimOperation = makeTaskClaimAcquisitionOperation({
-    acquisition: TaskClaimAcquisition.make(claim),
-    predecessorOperationIds: []
-  })
-  const graphOperation = makeTrackerGraphObservationOperation(
-    { _tag: "WorkflowEstablishment" },
-    OperationId.make(`${claim.operationId}:graph`),
-    cassetteTarget,
-    [claim.operationId],
-    [plannedAttempt.taskId]
-  )
-  const specificationOperation = makeTaskWorkSpecificationObservationOperation(
-    OperationId.make(`${claim.operationId}:specification`),
-    cassetteTarget,
-    plannedAttempt.taskId,
-    [graphOperation.operationId]
-  )
-  const planOperation = makeTaskAttemptPlanOperation({
-    operationId: OperationId.make(`${claim.operationId}:plan`),
-    plannedAttempt,
-    predecessorOperationIds: [specificationOperation.operationId]
-  })
-  const worktreeOperation = makeTaskWorktreeReconciliationOperation({
-    operationId: OperationId.make(`${claim.operationId}:worktree`),
-    plannedAttempt,
-    predecessorOperationIds: [planOperation.operationId]
-  })
-  const graph = Option.getOrThrow(
-    Option.fromUndefinedOr(
-      (() => {
-        const projection = projectTrackerSnapshot({
-          revision: TrackerRevision.make("integrator-maintained-graph"),
-          tasks: [
-            {
-              id: plannedAttempt.taskId,
-              lifecycle: TaskLifecycle.cases.Open.make({}),
-              parentTaskId: null,
-              prerequisiteIds: []
-            }
-          ]
-        })
-        return projection._tag === "Valid" ? projection.snapshot : undefined
-      })()
-    )
-  )
-  const targetLineageOperation = makeTargetLineageObservationOperation({
-    integrationTarget,
-    operationId: OperationId.make(`${claim.operationId}:target-lineage`),
-    plannedAttempt,
-    predecessorOperationIds: [worktreeOperation.operationId]
-  })
-  const runBegan = WorkflowRunBeganEvent.make({
-    initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
-    initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-    occurrenceClassification: "InitiatedAction",
-    target: cassetteTarget,
-    version: workflowJournalEventVersion
-  })
-  let records: ReadonlyArray<JournalRecord> = [
-    JournalRecord.make({
-      event: runBegan,
-      key: describeJournalEvent(runBegan).expectedKey,
-      position: JournalPosition.make(1),
-      runId
-    })
-  ]
-  const append = (event: JournalRecord["event"]) => {
-    const next = appendRecord(records, runId, event)
-    records = next.records
-    return next.record
-  }
-  const executingReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-    correlation: { attemptId: plannedAttempt.attemptId, runId }
-  })
-  const acceptedReport = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
-    correlation: { attemptId: plannedAttempt.attemptId, runId },
-    result: { _tag: "Accepted", acceptedResult }
-  })
-  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
-
-  return {
-    append,
-    authored,
-    commandOrdinal,
-    graph,
-    graphOperation,
-    acceptedReport,
-    claim,
-    claimOperation,
-    executingReport,
-    integrationTarget,
-    planOperation,
-    plannedAttempt,
-    records: () => records,
-    specificationOperation,
-    targetLineageOperation,
-    worktreeOperation
-  }
-}
-
-const materializeAcceptedSetup = (cassette: AuthoredIntegratorCassette) => {
-  const setup = acceptedSetupFor(cassette)
-  const {
-    acceptedReport,
-    append,
-    authored,
-    claim,
-    claimOperation,
-    commandOrdinal,
-    executingReport,
-    graph,
-    graphOperation,
-    integrationTarget,
-    plannedAttempt,
-    planOperation,
-    specificationOperation,
-    targetLineageOperation,
-    worktreeOperation
-  } = setup
-  append(TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion }))
-  append(TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion }))
-  append(taskTrackerReadIntent(graphOperation))
-  append(
-    taskTrackerFactsObservedEvent(
-      graphOperation.operationId,
-      makeCompleteTaskTrackerFactsObserved(graphOperation, graph)
-    )
-  )
-  append(taskTrackerReadIntent(specificationOperation))
-  append(
-    taskTrackerFactsObservedEvent(
-      specificationOperation.operationId,
-      makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, maintainedIntegratorTaskSpecification)
-    )
-  )
-  append(TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion }))
-  append(
-    TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: workflowJournalEventVersion })
-  )
-  append(
-    TaskWorktreeReadyEvent.make({
-      operationId: worktreeOperation.operationId,
-      proof: PlannedWorktreeReady.make({
-        baseSha: plannedAttempt.baseSha,
-        branch: plannedAttempt.branch,
-        headSha: plannedAttempt.baseSha,
-        worktree: plannedAttempt.worktree
-      }),
-      version: workflowJournalEventVersion
-    })
-  )
-  append(
-    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
-  )
-  append(
-    PlannedAttemptExecutorCommandIntendedEvent.make({
-      command: "Begin",
-      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-      occurrenceClassification: "InitiatedAction",
-      ordinal: commandOrdinal,
-      plannedAttempt,
-      version: workflowJournalEventVersion
-    })
-  )
-  append(
-    PlannedAttemptExecutorCommandResponseObservedEvent.make({
-      commandOrdinal,
-      occurrenceClassification: "NonActionOccurrence",
-      plannedAttempt,
-      report: executingReport,
-      version: workflowJournalEventVersion
-    })
-  )
-  append(
-    PlannedAttemptExecutorWorkReportedEvent.make({
-      ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-      report: executingReport,
-      version: workflowJournalEventVersion
-    })
-  )
-  append(
-    PlannedAttemptExecutorStateObservedEvent.make({
-      observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: acceptedReport }),
-      occurrenceClassification: "NonActionOccurrence",
-      ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
-      plannedAttempt,
-      version: workflowJournalEventVersion
-    })
-  )
-  append(
-    PlannedAttemptExecutorWorkReportedEvent.make({
-      ordinal: PlannedAttemptExecutorReportOrdinal.make(acceptedExecutorReportOrdinal),
-      report: acceptedReport,
-      version: workflowJournalEventVersion
-    })
-  )
-  const queued = append(
-    IntegrationResponsibilityBeganEvent.make({
-      acceptedResult: authored.responsibility.acceptedResult,
-      integrationTarget,
-      plannedAttempt,
-      version: workflowJournalEventVersion
-    })
-  )
-  const started = append(
-    IntegrationStartedEvent.make({
-      acceptedResult: authored.responsibility.acceptedResult,
-      integrationTarget,
-      plannedAttempt,
-      responsibilityBeganAt: queued.position,
-      version: workflowJournalEventVersion
-    })
-  )
-  append(
-    GitReadIntentRecordedEvent.make({
-      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-      occurrenceClassification: "InitiatedAction",
-      operation: targetLineageOperation,
-      version: workflowJournalEventVersion
-    })
-  )
-  const lineage = append(
-    TargetLineageObservedEvent.make({
-      observation: authored.targetLineage,
-      occurrenceClassification: "NonActionOccurrence",
-      operationId: targetLineageOperation.operationId,
-      plannedAttempt,
-      version: workflowJournalEventVersion
-    })
-  )
-  return {
-    records: setup.records(),
-    startingFacts: {
-      responsibility: { ...authored.responsibility, queuedAt: queued.position, startedAt: started.position },
-      targetLineage: authored.targetLineage,
-      targetLineageObservedAt: lineage.position
-    },
+/** Builds the one accepted attempt chronology shared by maintained Integrator and promotion cassettes. */
+const materializeAcceptedSetup = (cassette: AuthoredIntegratorCassette) =>
+  coherentHistoryFor(cassette, {
+    claimOwner: ClaimOwner.make("integrator-cassette-coordinator"),
+    specification: maintainedIntegratorTaskSpecification,
     target: cassetteTarget
-  }
-}
+  })
 
 const takeScripted = <A>(script: Ref.Ref<ReadonlyArray<A>>, label: string): Effect.Effect<A> =>
   Effect.gen(function* () {
@@ -389,7 +87,7 @@ const makeRuntime = Effect.fn("IntegratorCassette.makeRuntime")(function* (
   } satisfies IntegratorCassetteRuntime
 })
 
-const integratorCassetteJournalLayer = (setup: ReturnType<typeof materializeAcceptedSetup>) =>
+const integratorCassetteJournalLayer = (setup: Effect.Success<ReturnType<typeof materializeAcceptedSetup>>) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const storage = yield* JournalStore
@@ -577,7 +275,7 @@ const runMaintainedIntegratorCassetteInJournal = Effect.fn("IntegratorCassette.r
 export const runMaintainedIntegratorCassette = Effect.fn("IntegratorCassette.runMaintained")(function* (
   cassette: AuthoredIntegratorCassette
 ) {
-  const setup = materializeAcceptedSetup(cassette)
+  const setup = yield* materializeAcceptedSetup(cassette)
   return yield* runMaintainedIntegratorCassetteInJournal(cassette, setup.startingFacts).pipe(
     Effect.provide(integratorCassetteJournalLayer(setup))
   )

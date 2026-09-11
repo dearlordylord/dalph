@@ -1,4 +1,4 @@
-import { Deferred, Effect, Match, Ref } from "effect"
+import { Context, Deferred, Effect, Layer, Match, Ref } from "effect"
 import {
   AcceptedResult,
   AttemptId,
@@ -17,17 +17,23 @@ import {
 import {
   EvidenceDigest,
   EvidenceReference,
+  AcceptedJournalReader,
   InRunJournal,
-  IntegratorCandidateResourceLocator,
+  Integrator,
+  IntegratorGit,
+  IntegratorGitObservation,
+  IntegratorResult,
   IntegratorCandidateText,
-  IntegratorSessionCorrelation,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorRunQualifiedCandidate,
-  IntegratorSessionId,
+  StartedIntegrationResponsibility,
   JournalPosition,
-  JournalRecord,
+  TargetLineageObservation,
+  integratorCorrelationFor,
+  liveJournalTestLayer,
   makeIntegrationTargetResourceController,
+  prepareIntegrationCandidateRun,
   runTargetPromotion,
   TargetPromotionCompareAndSetResult,
   TargetPromotionGit,
@@ -36,6 +42,9 @@ import {
   type IntegrationTargetResourceController,
   type TargetPromotionGitService
 } from "@dalph/orchestrator"
+
+import { AuthoredIntegratorCassette } from "./integrator-cassette-domain.js"
+import { coherentHistoryFor } from "./integrator-cassette-history.js"
 
 import {
   LeaseObservation,
@@ -53,8 +62,9 @@ export * from "./target-promotion-protocol-cassette-domain.js"
 
 const gitCommitShaLength = 40
 const evidenceDigestLength = 64
-const candidateConstructedPositionOffset = 2
-const targetLineagePositionOffset = 1
+const authoredStartingPosition = 1
+const authoredStartedPosition = 2
+const authoredLineagePosition = 4
 const expectedHead = GitCommitSha.make("1".repeat(gitCommitShaLength))
 const candidateCommit = GitCommitSha.make("c".repeat(gitCommitShaLength))
 
@@ -64,8 +74,10 @@ const targetFor = (owner: PromotionOwner) =>
     ref: IntegrationTargetRef.make("refs/heads/main")
   })
 
-const preparedPromotion = (participant: PromotionParticipant) => {
-  const { owner, queuedAt } = participant
+const preparedPromotion = Effect.fn("TargetPromotionProtocolCassette.preparePromotion")(function* (
+  participant: PromotionParticipant
+) {
+  const { owner } = participant
   const runId = RunId.make(`target-promotion-protocol-cassette-${owner}`)
   const target = targetFor(owner)
   const acceptedResult = AcceptedResult.make({
@@ -85,60 +97,96 @@ const preparedPromotion = (participant: PromotionParticipant) => {
     taskRevision: TaskRevision.make(`target-promotion-protocol-revision-${owner}`),
     worktree: WorktreeLocator.make(`/worktrees/target-promotion-protocol-${owner.toLowerCase()}`)
   })
-  const correlation = IntegratorSessionCorrelation.make({
-    acceptedResult,
-    candidateResource: IntegratorCandidateResourceLocator.make(`/candidates/${owner}`),
-    expectedTargetHead: expectedHead,
-    integrationTarget: target,
-    plannedAttempt,
-    queuedAt,
-    sessionId: IntegratorSessionId.make(`target-promotion-protocol-session-${owner}`),
-    startedAt: JournalPosition.make(queuedAt + targetLineagePositionOffset),
-    targetLineageObservedAt: JournalPosition.make(queuedAt + targetLineagePositionOffset)
-  })
-  const candidate = IntegratorRunQualifiedCandidate.make({
-    candidateCommit,
-    candidateText: IntegratorCandidateText.make(`refs/heads/target-promotion-protocol-${owner.toLowerCase()}`),
-    directParents: [expectedHead, acceptedResult.commit],
-    qualifiedAt: JournalPosition.make(queuedAt + candidateConstructedPositionOffset),
-    run: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: correlation })
-  })
-  return { candidate, responsibility: { integrationTarget: target, queuedAt }, runId }
-}
-
-interface ExactTargetResponsibility {
-  readonly integrationTarget: IntegrationTarget
-  readonly queuedAt: JournalPosition
-}
-
-const makeJournal = Effect.fn("TargetPromotionProtocolCassette.makeJournal")(function* () {
-  const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
-  return {
-    records,
-    service: InRunJournal.of({
-      append: (runId, key, event) =>
-        Ref.modify(records, (current) => {
-          const existing = current.find((record) => record.key === key)
-          /* v8 ignore next -- @preserve A closed protocol cassette invokes each stable intent/terminal append once; production idempotency is covered by protocol restart tests. */
-          if (existing !== undefined) return [Effect.succeed(existing), current] as const
-          const record = JournalRecord.make({ event, key, position: JournalPosition.make(current.length + 1), runId })
-          return [Effect.succeed(record), [...current, record]] as const
-        }).pipe(Effect.flatten),
-      read: () => Ref.get(records)
-    })
+  const startingFacts = {
+    responsibility: StartedIntegrationResponsibility.make({
+      acceptedResult,
+      integrationTarget: target,
+      plannedAttempt,
+      queuedAt: JournalPosition.make(authoredStartingPosition),
+      startedAt: JournalPosition.make(authoredStartedPosition)
+    }),
+    targetLineage: TargetLineageObservation.make({
+      plannedBaseIsAncestorOfTargetHead: true,
+      plannedBaseSha: plannedAttempt.baseSha,
+      targetHeadSha: expectedHead
+    }),
+    targetLineageObservedAt: JournalPosition.make(authoredLineagePosition)
   }
+  const setup = yield* coherentHistoryFor(
+    AuthoredIntegratorCassette.make({
+      gitResults: [],
+      integratorResults: [],
+      name: `target promotion accepted setup ${owner}`,
+      startingFacts,
+      story: []
+    })
+  )
+  const context = yield* Layer.build(liveJournalTestLayer({ records: setup.records, runId, target: setup.target }))
+  const journal = Context.get(context, InRunJournal)
+  const accepted = Context.get(context, AcceptedJournalReader)
+  const correlation = integratorCorrelationFor(setup.input)
+  const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: correlation })
+  const candidateText = IntegratorCandidateText.make(`refs/heads/target-promotion-protocol-${owner.toLowerCase()}`)
+  const result = yield* prepareIntegrationCandidateRun({ preparation: setup.input, run }).pipe(
+    Effect.provideService(AcceptedJournalReader, accepted),
+    Effect.provideService(InRunJournal, journal),
+    Effect.provideService(
+      Integrator,
+      Integrator.of({
+        prepare: ({ correlation: requestedRun }) =>
+          Effect.succeed(IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: requestedRun }))
+      })
+    ),
+    Effect.provideService(
+      IntegratorGit,
+      IntegratorGit.of({
+        readCandidate: () =>
+          Effect.succeed(
+            IntegratorGitObservation.cases.Commit.make({
+              candidateText,
+              commit: candidateCommit,
+              directParents: [expectedHead, acceptedResult.commit]
+            })
+          )
+      })
+    )
+  )
+  if (result._tag !== "PreparedCandidate") {
+    return yield* Effect.die(`target promotion ${owner} accepted setup did not qualify its candidate`)
+  }
+  const records = yield* journal.read(runId)
+  const qualifiedAt = records.findLast(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")?.position
+  if (qualifiedAt === undefined) return yield* Effect.die(`target promotion ${owner} setup lacks Git evidence`)
+  const candidate = IntegratorRunQualifiedCandidate.make({
+    candidateCommit: result.candidateCommit,
+    candidateText: result.candidateText,
+    directParents: result.observation.directParents,
+    qualifiedAt,
+    run: result.run
+  })
+  const responsibility = setup.input.responsibility
+  if (
+    candidate.run.session.plannedAttempt.runId !== responsibility.plannedAttempt.runId ||
+    candidate.run.session.queuedAt !== responsibility.queuedAt
+  ) {
+    return yield* Effect.die(`target promotion ${owner} lease does not name its accepted responsibility`)
+  }
+  return { accepted, baselineLength: records.length, candidate, journal, responsibility, runId }
 })
+
+type ExactTargetResponsibility = Pick<
+  StartedIntegrationResponsibility,
+  "integrationTarget" | "plannedAttempt" | "queuedAt"
+>
 
 interface ParticipantRuntime {
   readonly blocked: Deferred.Deferred<void>
   readonly boundaryResults: Ref.Ref<ReadonlyArray<PromotionBoundaryResult>>
   readonly compareAndSetCount: Ref.Ref<number>
-  readonly journal: {
-    readonly records: Ref.Ref<ReadonlyArray<JournalRecord>>
-    readonly service: InRunJournal["Service"]
-  }
+  readonly accepted: AcceptedJournalReader["Service"]
+  readonly journal: InRunJournal["Service"]
   readonly owner: PromotionOwner
-  readonly prepared: ReturnType<typeof preparedPromotion>
+  readonly prepared: Effect.Success<ReturnType<typeof preparedPromotion>>
   readonly release: Deferred.Deferred<void>
   readonly settled: Deferred.Deferred<string | null>
 }
@@ -146,13 +194,15 @@ interface ParticipantRuntime {
 const makeParticipantRuntime = Effect.fn("TargetPromotionProtocolCassette.makeParticipantRuntime")(function* (
   participant: PromotionParticipant
 ) {
+  const prepared = yield* preparedPromotion(participant)
   return {
+    accepted: prepared.accepted,
     blocked: yield* Deferred.make<void>(),
     boundaryResults: yield* Ref.make(participant.boundaryResults),
     compareAndSetCount: yield* Ref.make(0),
-    journal: yield* makeJournal(),
+    journal: prepared.journal,
     owner: participant.owner,
-    prepared: preparedPromotion(participant),
+    prepared,
     release: yield* Deferred.make<void>(),
     settled: yield* Deferred.make<string | null>()
   } satisfies ParticipantRuntime
@@ -242,7 +292,8 @@ const startPromotion = Effect.fn("TargetPromotionProtocolCassette.startPromotion
   calls: Ref.Ref<ReadonlyArray<BoundaryCall>>
 ) {
   const action = runTargetPromotion(runtime.prepared.candidate).pipe(
-    Effect.provideService(InRunJournal, runtime.journal.service),
+    Effect.provideService(AcceptedJournalReader, runtime.accepted),
+    Effect.provideService(InRunJournal, runtime.journal),
     Effect.provideService(TargetPromotionGit, TargetPromotionGit.of(gitServiceFor(runtime, calls))),
     Effect.as(null),
     Effect.catchTag("TargetPromotionGitReadFailure", (failure) => Effect.succeed(failure._tag))
@@ -260,8 +311,8 @@ const observeLeases = Effect.fn("TargetPromotionProtocolCassette.observeLeases")
 ) {
   const snapshot = yield* resources.snapshot
   const actual = LeaseObservation.make({
-    active: [...snapshot.activeResponsibilityPositions],
-    held: [...snapshot.heldResponsibilityPositions],
+    active: snapshot.activeResponsibilities,
+    held: snapshot.heldResponsibilities,
     moment: expected.moment
   })
   /* v8 ignore next -- @preserve Maintained cassette values assert all four exact lease snapshots; this defect is diagnostic for manually forged typed values. */
@@ -276,11 +327,11 @@ const observeTerminal = Effect.fn("TargetPromotionProtocolCassette.observeTermin
   expected: TerminalExpectation
 ) {
   const failureTag = yield* Deferred.await(runtime.settled)
-  const records = yield* Ref.get(runtime.journal.records)
+  const records = yield* runtime.journal.read(runtime.prepared.runId)
   const actual = TerminalExpectation.make({
     compareAndSetCount: yield* Ref.get(runtime.compareAndSetCount),
     failureTag,
-    journalTags: records.map(({ event }) => event._tag)
+    journalTags: records.slice(runtime.prepared.baselineLength).map(({ event }) => event._tag)
   })
   /* v8 ignore next -- @preserve Maintained cassette values assert success and unreadable terminal projections; this defect is diagnostic for manually forged typed values. */
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -317,24 +368,32 @@ const interpretStoryItem = Effect.fn("TargetPromotionProtocolCassette.interpretS
 export const runTargetPromotionProtocolCassette = Effect.fn("TargetPromotionProtocolCassette.run")(function* (
   cassette: TargetPromotionProtocolCassette
 ) {
-  const calls = yield* Ref.make<ReadonlyArray<BoundaryCall>>([])
-  const leaseObservations = yield* Ref.make<ReadonlyArray<LeaseObservation>>([])
-  const resources = yield* makeIntegrationTargetResourceController()
-  const runtimes = yield* Effect.forEach(cassette.participants, makeParticipantRuntime)
-  const state = { calls, leaseObservations, resources, runtimes }
-  yield* Effect.forEach(cassette.story, (item) => interpretStoryItem(state, item), { discard: true })
-  const records = yield* Effect.forEach(runtimes, ({ journal }) => Ref.get(journal.records)).pipe(
-    Effect.map((all) => all.flat())
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const calls = yield* Ref.make<ReadonlyArray<BoundaryCall>>([])
+      const leaseObservations = yield* Ref.make<ReadonlyArray<LeaseObservation>>([])
+      const resources = yield* makeIntegrationTargetResourceController()
+      const runtimes = yield* Effect.forEach(cassette.participants, makeParticipantRuntime)
+      const state = { calls, leaseObservations, resources, runtimes }
+      yield* Effect.forEach(cassette.story, (item) => interpretStoryItem(state, item), { discard: true })
+      const records = yield* Effect.forEach(runtimes, ({ journal, prepared }) =>
+        journal.read(prepared.runId).pipe(Effect.map((accepted) => accepted.slice(prepared.baselineLength)))
+      ).pipe(Effect.map((all) => all.flat()))
+      const compareAndSetCount = yield* Effect.forEach(runtimes, ({ compareAndSetCount }) =>
+        Ref.get(compareAndSetCount)
+      ).pipe(Effect.map((counts) => counts.reduce((total, count) => total + count, 0)))
+      const failureTags = yield* Effect.forEach(runtimes, ({ settled }) => Deferred.await(settled))
+      return TargetPromotionProtocolCassetteRun.make({
+        boundaryCalls: yield* Ref.get(calls),
+        compareAndSetCount,
+        failureTag: failureTags.find((tag) => tag !== null) ?? null,
+        leaseObservations: yield* Ref.get(leaseObservations),
+        leaseResponsibilities: runtimes.map(({ prepared }) => ({
+          queuedAt: prepared.responsibility.queuedAt,
+          runId: prepared.responsibility.plannedAttempt.runId
+        })),
+        records
+      })
+    })
   )
-  const compareAndSetCount = yield* Effect.forEach(runtimes, ({ compareAndSetCount }) =>
-    Ref.get(compareAndSetCount)
-  ).pipe(Effect.map((counts) => counts.reduce((total, count) => total + count, 0)))
-  const failureTags = yield* Effect.forEach(runtimes, ({ settled }) => Deferred.await(settled))
-  return TargetPromotionProtocolCassetteRun.make({
-    boundaryCalls: yield* Ref.get(calls),
-    compareAndSetCount,
-    failureTag: failureTags.find((tag) => tag !== null) ?? null,
-    leaseObservations: yield* Ref.get(leaseObservations),
-    records
-  })
 })

@@ -1287,6 +1287,8 @@ it.effect("DS-02 starts only A, B, and C through the production workflow algebra
       return taskId === "D" || taskId === "E" ? [{ event: event._tag, position, taskId }] : []
     })
     const finalPublication = run.publications.at(-1)
+    // Begin returns and journals the exact Executing report. A second passive
+    // executor observation would reread evidence already accepted by that boundary.
     const expectedStages = [
       "ReadCurrentTaskGraph",
       "AcquireTaskClaim",
@@ -1294,8 +1296,7 @@ it.effect("DS-02 starts only A, B, and C through the production workflow algebra
       "ReadTaskWorkSpecification",
       "RecordTaskAttemptPlan",
       "ReconcileTaskWorktree",
-      "BeginPlannedAttemptExecutorWork",
-      "ObservePlannedAttemptExecutorWork"
+      "BeginPlannedAttemptExecutorWork"
     ]
     const stagesByTask = Object.fromEntries(
       ["A", "B", "C", "D", "E"].map((taskId) => [
@@ -3537,14 +3538,14 @@ it.effect(
         issue268ControlledDeliveryCassetteCatalog.issue268Ds01ThroughDs13
       )
       expect(run.cassette).toMatchObject({
-        acceptedOrderDigest: "ccae78199aa01062521d470c017524e665d0ea3a5bdbf3a9f29030c79440bd4d",
-        acceptedSourceSha: "7100fe3af2103bba753e089e8ec78279c5426eb5",
-        occurrenceCount: 1_014,
+        acceptedOrderDigest: "0e325a017a42fe58880a357beda49261ed5383ec6c822a4bc93f94976765f9c3",
+        acceptedSourceSha: "b3c9d61100e2c7867625a13950b33375617b2500",
+        occurrenceCount: 1_010,
         readinessProfile: "R0ThroughR11",
         schemaVersion: 1,
         stop: "DS13Checkpoint"
       })
-      expect(run.consumption).toEqual({ _tag: "AcceptedOccurrenceOrderConsumed", occurrenceCount: 1_014 })
+      expect(run.consumption).toEqual({ _tag: "AcceptedOccurrenceOrderConsumed", occurrenceCount: 1_010 })
       const { ds09, ds10, ds11, ds12, ds13 } = run.characterization
       const { ds01, ds02, ds03, ds04, ds05, ds06, ds07 } = ds09.beforeLoss
       const ds01Publication = ds01.snapshot.publications.find(
@@ -3818,19 +3819,19 @@ it.effect(
       )
       const actual = run.characterization.occurrenceEvidence.observedOccurrences
       expect(run.cassette).toMatchObject({
-        acceptedOrderDigest: "ccae78199aa01062521d470c017524e665d0ea3a5bdbf3a9f29030c79440bd4d",
-        acceptedSourceSha: "7100fe3af2103bba753e089e8ec78279c5426eb5",
-        occurrenceCount: 1_014,
+        acceptedOrderDigest: "0e325a017a42fe58880a357beda49261ed5383ec6c822a4bc93f94976765f9c3",
+        acceptedSourceSha: "b3c9d61100e2c7867625a13950b33375617b2500",
+        occurrenceCount: 1_010,
         readinessProfile: "R0ThroughR11",
         schemaVersion: 1,
         stop: "DS13Checkpoint"
       })
-      expect(run.consumption).toEqual({ _tag: "AcceptedOccurrenceOrderConsumed", occurrenceCount: 1_014 })
+      expect(run.consumption).toEqual({ _tag: "AcceptedOccurrenceOrderConsumed", occurrenceCount: 1_010 })
 
       const missing = consumeIssue268AcceptedOccurrenceOrder(run.cassette.occurrences, actual.slice(0, -1))
       expect(missing._tag).toBe("OccurrenceOrderMismatch")
       if (missing._tag === "OccurrenceOrderMismatch") {
-        expect(missing.mismatch).toMatchObject({ _tag: "UnconsumedExpectedOccurrence", position: 1_014 })
+        expect(missing.mismatch).toMatchObject({ _tag: "UnconsumedExpectedOccurrence", position: 1_010 })
       }
 
       const finalOccurrence = actual.at(-1)
@@ -3841,7 +3842,7 @@ it.effect(
       ])
       expect(unexpected._tag).toBe("OccurrenceOrderMismatch")
       if (unexpected._tag === "OccurrenceOrderMismatch") {
-        expect(unexpected.mismatch).toMatchObject({ _tag: "UnexpectedOccurrence", position: 1_015 })
+        expect(unexpected.mismatch).toMatchObject({ _tag: "UnexpectedOccurrence", position: 1_011 })
       }
 
       const substituted = actual.map((occurrence, index) =>
@@ -3884,14 +3885,14 @@ it.skipIf(c4AlreadyRunsOutsideCoverage)(
   async () => {
     const result = await runIssue268C4()
     expect(result).toMatchObject({
-      acceptedOrderDigest: "ccae78199aa01062521d470c017524e665d0ea3a5bdbf3a9f29030c79440bd4d",
+      acceptedOrderDigest: "0e325a017a42fe58880a357beda49261ed5383ec6c822a4bc93f94976765f9c3",
       iterations: Array.from({ length: 20 }, (_, index) => ({
-        acceptedOrderDigest: "ccae78199aa01062521d470c017524e665d0ea3a5bdbf3a9f29030c79440bd4d",
+        acceptedOrderDigest: "0e325a017a42fe58880a357beda49261ed5383ec6c822a4bc93f94976765f9c3",
         iteration: index + 1,
-        occurrenceCount: 1_014,
+        occurrenceCount: 1_010,
         status: "PASS"
       })),
-      occurrenceCount: 1_014
+      occurrenceCount: 1_010
     })
   },
   c4RepeatabilityTimeout
@@ -4155,13 +4156,13 @@ it.effect(
           .toSorted()
           .join("+")
       )
-      const expectedFrontiers = ["A", "B+C", "B+C+X", "D+X", "E+F", "H+I", "G", ""]
+      const expectedFrontiers = ["A", "B+C", "B+C+X", "D+X", "E+F+X", "H+I", "G", ""]
       let previousFrontier = lastItemIndex
       const frontierPositions = expectedFrontiers.map((frontier) => {
         previousFrontier = eligibleSets.indexOf(frontier, previousFrontier + 1)
         return previousFrontier
       })
-      const expectedOverlaps = ["B+C", "C", "X", "D", "E+F", "F", "H+I", "I", "G"]
+      const expectedOverlaps = ["B+C", "C", "X", "D+X", "E+X", "F+X", "H+I", "I", "G"]
       let previousOverlap = lastItemIndex
       const overlapPositions = expectedOverlaps.map((overlap) => {
         previousOverlap = heldSets.indexOf(overlap, previousOverlap + 1)
@@ -4235,7 +4236,7 @@ it.effect(
         run.records.flatMap(({ event }) =>
           event._tag === "IntegrationFinalitySettled" ? [event.claim.plannedAttempt.taskId] : []
         )
-      ).toEqual(["A", "B", "C", "X", "D", "E", "F", "H", "I", "G"])
+      ).toEqual(["A", "B", "C", "D", "E", "F", "X", "H", "I", "G"])
       expect(
         run.records.some(
           ({ event }) =>

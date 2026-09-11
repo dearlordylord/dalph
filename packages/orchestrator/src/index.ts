@@ -4,8 +4,10 @@ export type {
   JournalPrefixIdentity,
   JournalSuccessorProvenance
 } from "./workflow-journal/accepted-prefix.js"
+export { acceptedJournalRecordsForKind } from "./workflow-journal/accepted-prefix.js"
 export { AcceptedJournalReader, type AcceptedJournalReaderService } from "./workflow-journal/accepted-reader.js"
 export type { JournalRecordSequence } from "./workflow-journal/record-sequence.js"
+export { journalRecordAt } from "./workflow-journal/record-sequence.js"
 export { IntegratorBoundaryUnavailable } from "./coordination/delivery/integrator-boundary.js"
 export {
   AttemptChoice,
@@ -156,6 +158,7 @@ export * from "./coordination/application-exit/lifecycle.js"
 export * from "./coordination/application-exit/executor-drain.js"
 export * from "./coordination/application-exit/application-shell.js"
 export {
+  IntegrationResponsibilityTargetMismatch,
   IntegrationTargetResourceUnavailable,
   acquireStartedIntegrationTarget,
   makeIntegrationTargetResourceController,
@@ -163,6 +166,7 @@ export {
   type IntegrationTargetResourceController,
   type IntegrationTargetResourceSnapshot
 } from "./coordination/admission/integration-target-resource.js"
+export { IntegrationResponsibilityIdentity } from "./workflow/protocols/integration-admission/responsibility.js"
 export {
   SelectedTransitionFingerprint,
   SelectedTransitionIdentity

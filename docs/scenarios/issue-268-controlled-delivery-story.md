@@ -4,15 +4,15 @@ Owning issue: [#268](https://github.com/dearlordylord/dalph/issues/268)
 
 Recovery control: [#314](https://github.com/dearlordylord/dalph/issues/314)
 
-Status: behavioral recovery specification accepted by the maintainer on
-2026-09-02 with this condition: do not freeze a guessed cassette sequence and
-then change production to reproduce it. First freeze the required behavior,
-observe the unchanged production workflow under explicit test controls, and
-only then ask the maintainer to freeze the observed cassette order. This
-documentation-only change does not change Dalph runtime behavior. Acceptance
-freezes the thirteen behavioral outcomes, required causal edges, scope, and
-stop rules. It does not freeze the provisional O001--O091 order or authorize
-production changes to make that order pass.
+Status: the maintainer accepted the adjusted controlled evidence on 2026-09-11
+in [the #268 acceptance record](https://github.com/dearlordylord/dalph/issues/268#issuecomment-5640150959).
+The accepted source is `b3c9d61100e2c7867625a13950b33375617b2500`:
+1,010 exact occurrences with digest
+`0e325a017a42fe58880a357beda49261ed5383ec6c822a4bc93f94976765f9c3`.
+The four removed observations were process-local redundant Journal imports,
+not workflow actions or provider calls. This supersedes only the former
+1,014-event strict oracle and does not authorize production changes to make a
+guessed order pass.
 
 The 2026-09-05 pre-DS-04 audit corrected two stale read inventories without
 changing a behavioral outcome. Governing issue #266 requires an active refresh
@@ -54,23 +54,24 @@ cassette oracle. Changing production scheduling, authority, capacity, or
 lifecycle semantics to satisfy either the provisional or observed sequence is
 outside this recovery.
 
-This creates two acceptance cuts:
+This created two acceptance cuts:
 
-1. **Behavior accepted:** this document now authorizes C0/C1 verification and
-   test-only characterization controls. It does not authorize a production
-   correction or strict cassette.
-2. **Observed order accepted:** after cassette-free characterization, the
-   recorded complete order replaces the provisional O inventory. Only then may
-   C3 implement the strict cassette. A changed required causal edge returns to
-   its owning scenario; a different order among independent operations changes
-   only the cassette adjustment.
+1. **Behavior accepted:** the thirteen behavioral outcomes, required causal
+   edges, scope, stop rules, and test-only characterization controls are fixed.
+2. **Observed order accepted:** the 2026-09-11 record accepts the complete
+   1,010-occurrence order from the source and digest above as the strict C3
+   oracle. A changed required causal edge returns to its owning scenario; a
+   different order among independent operations changes only the cassette
+   adjustment and requires a new acceptance record.
 
-The maintainer accepted the complete observed order at
-`7100fe3af2103bba753e089e8ec78279c5426eb5` on 2026-09-05. C3 serializes that
-order as exact `{ source, kind, detail }` tuples after confirming that the
-unchanged accepted runner produces the recorded 1,014-item inventory and
-digest. The strict comparator observes only the completed DS-13 snapshot; it
-cannot delay or authorize production work.
+The maintained order follows the accepted activation-baseline lifecycle at the
+source above. C3 serializes that order as exact `{ source, kind, detail }`
+tuples after confirming one initial Journal import, one replacement-process
+import after DS-08, and no raw import on ordinary activation return or the
+later active refresh. The accepted 1,010-item inventory retains the required
+fresh G1 tracker observation after restart. The strict comparator observes
+only the completed DS-13 snapshot; it cannot delay or authorize production
+work.
 
 The following work is deliberately outside #268:
 

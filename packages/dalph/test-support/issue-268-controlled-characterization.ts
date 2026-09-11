@@ -688,11 +688,38 @@ const runIssue268StartupCharacterizationFor = (
         yield* Deferred.succeed(options.sharedAuthoritiesReady, sharedAuthorities)
       }
       const baseSharedJournal = sharedAuthorities.journal
+      const processRecoveryImportRecorded = yield* Ref.make(false)
       const sharedJournal =
         occurrenceRecorder === undefined
           ? baseSharedJournal
           : JournalStore.of({
               ...baseSharedJournal,
+              read: (runId) =>
+                mode !== "DS09"
+                  ? baseSharedJournal.read(runId)
+                  : Ref.modify(processRecoveryImportRecorded, (recorded) => [!recorded, true] as const).pipe(
+                      Effect.flatMap((recordImport) =>
+                        recordImport
+                          ? recordOccurrence({
+                              detail: `${scenario.runId}:${JSON.stringify(scenario.target)}`,
+                              kind: "JournalRecoveryReadCalled",
+                              source: "Journal"
+                            }).pipe(
+                              Effect.andThen(baseSharedJournal.read(runId)),
+                              Effect.tap((records) => {
+                                const beginning = records.find(({ event }) => event._tag === "WorkflowRunBegan")
+                                return beginning === undefined
+                                  ? Effect.die("DS-09 replacement process did not import the begun Run")
+                                  : recordOccurrence({
+                                      detail: `${beginning.position}|${describeOccurrenceIdentity(beginning.event)}`,
+                                      kind: "JournalRecoveryReadReturned",
+                                      source: "Journal"
+                                    })
+                              })
+                            )
+                          : baseSharedJournal.read(runId)
+                      )
+                    ),
               append: (runId, key, event) =>
                 (event._tag === "TaskTrackerReadIntentRecorded" &&
                 event.operation._tag === "ReadTrackerGraph" &&

@@ -26,6 +26,7 @@ import { makeTestJournaledTrackerGraphObservation } from "../../../test/journale
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
+import { IntegrationResponsibilityIdentity } from "../../workflow/protocols/integration-admission/responsibility.js"
 import { makeFreshTaskAdmissionTestBasis } from "../../../test/support/fresh-task-admission.js"
 import { makeDeliveryReflection } from "../delivery/relations.js"
 import {
@@ -230,10 +231,7 @@ const evaluation = (
   }
 }
 
-const resources = {
-  activeResponsibilityPositions: new Set<JournalPosition>(),
-  heldResponsibilityPositions: new Set<JournalPosition>()
-}
+const resources = { activeResponsibilities: [], heldResponsibilities: [] }
 
 it("keeps action-only responsibilities and integration-only blockers out of impossible boundary variants", () => {
   expectTypeOf<PauseDeliveryActionResponsibility>().not.toMatchTypeOf<PauseResponsibilityAtBoundary["responsibility"]>()
@@ -331,7 +329,10 @@ it.effect("keeps D's exact held integration responsibility visible until its ord
         },
         liveOwners: []
       }),
-      { activeResponsibilityPositions: new Set(), heldResponsibilityPositions: new Set([queuedAt]) }
+      {
+        activeResponsibilities: [],
+        heldResponsibilities: [IntegrationResponsibilityIdentity.make({ queuedAt, runId })]
+      }
     )
     expect(view._tag).toBe("PauseWaiting")
     if (view._tag !== "PauseWaiting") return

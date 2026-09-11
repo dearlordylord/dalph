@@ -10,7 +10,10 @@ import { JournalPosition } from "../../workflow-journal/identity.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 import { RunPolicyRevision } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
-import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
+import {
+  integrationTargetResourceSnapshotIncludes,
+  makeIntegrationTargetResourceController
+} from "../admission/integration-target-resource.js"
 import { TaskWorkCapacityChangedEvent, taskTrackerReadIntent } from "../../workflow/registry/event.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
@@ -119,9 +122,12 @@ for (const initiallyHeld of [true, false]) {
           if (selected?._tag !== "ObservePlannedAttemptContinuationGraph")
             return yield* Effect.die("held integration requires graph after its claim check")
           expect(selected.operation.predecessorOperationIds).toContain(claim.operationId)
-          expect((yield* resources.snapshot).heldResponsibilityPositions.has(history.responsibility.queuedAt)).toBe(
-            initiallyHeld
-          )
+          expect(
+            integrationTargetResourceSnapshotIncludes(
+              (yield* resources.snapshot).heldResponsibilities,
+              history.responsibility
+            )
+          ).toBe(initiallyHeld)
           expect(
             projection.frontier.transitions.some(
               ({ _tag }) =>
@@ -148,9 +154,12 @@ for (const initiallyHeld of [true, false]) {
           const next = (yield* recovery.readDeliveryProjection).frontier.transitions
           expect(next.some(({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph")).toBe(false)
           expect(next.some(({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage")).toBe(true)
-          expect((yield* resources.snapshot).heldResponsibilityPositions.has(history.responsibility.queuedAt)).toBe(
-            true
-          )
+          expect(
+            integrationTargetResourceSnapshotIncludes(
+              (yield* resources.snapshot).heldResponsibilities,
+              history.responsibility
+            )
+          ).toBe(true)
           expect(materializations).toBe(0)
           return visits
         }).pipe(Effect.provide(liveJournalTestLayer({ records, runId: fixture.runId, target: fixture.target })))

@@ -740,7 +740,11 @@ it.effect("retains the exact task-work position after a safe report when a later
         expectedRunId: runId,
         receivedRunId: "another-reactive-delivery-run"
       })
-      const unrelatedOwnership = { integrationTarget, queuedAt: JournalPosition.make(99) }
+      const unrelatedOwnership = {
+        integrationTarget,
+        plannedAttempt: recoveredAttempt,
+        queuedAt: JournalPosition.make(99)
+      }
       yield* integrationResources.acquire(unrelatedOwnership)
       yield* integrationResources.publishAcceptedOwnership(unrelatedOwnership)
       const ownershipChangedProjection = yield* readDeliveryProjectionFrom(recovery, reconstructed)

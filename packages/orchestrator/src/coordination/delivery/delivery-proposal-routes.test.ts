@@ -500,10 +500,12 @@ const inertLease: DeliveryActionExecutionLease = {
   integrationTargets: {
     acquire: () => Effect.void,
     changes: Stream.empty,
+    isActive: () => Effect.succeed(false),
+    isHeld: () => Effect.succeed(false),
     publishAcceptedOwnership: () => Effect.void,
     release: () => Effect.void,
     releaseAll: Effect.void,
-    snapshot: Effect.succeed({ activeResponsibilityPositions: new Set(), heldResponsibilityPositions: new Set() }),
+    snapshot: Effect.succeed({ activeResponsibilities: [], heldResponsibilities: [] }),
     withPermit: (_responsibility, effect) => effect
   },
   recordIntent: () => Effect.void,

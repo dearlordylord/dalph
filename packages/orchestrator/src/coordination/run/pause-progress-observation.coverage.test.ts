@@ -28,6 +28,7 @@ import { makeTestJournaledTrackerGraphObservation } from "../../../test/journale
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeFreshTaskAdmissionTestBasis } from "../../../test/support/fresh-task-admission.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
+import { IntegrationResponsibilityIdentity } from "../../workflow/protocols/integration-admission/responsibility.js"
 import {
   DeliveryProposalId,
   DeliveryProposalOrdinal,
@@ -210,7 +211,13 @@ const queued = QueuedIntegrationResponsibility.make({
 const integrationProposal = (queuedAt: JournalPosition): DeliveryActionProposal => ({
   ...executorProposal(),
   admission: {
-    integrationTarget: { _tag: "IntegrationTargetResourceRequired", access: "Acquire", integrationTarget, queuedAt },
+    integrationTarget: {
+      _tag: "IntegrationTargetResourceRequired",
+      access: "Acquire",
+      integrationTarget,
+      plannedAttempt: queued.plannedAttempt,
+      queuedAt
+    },
     plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" },
     taskWorkPosition: { _tag: "NoTaskWorkPosition" }
   },
@@ -218,10 +225,8 @@ const integrationProposal = (queuedAt: JournalPosition): DeliveryActionProposal 
 })
 
 const taskSubject = { _tag: "Task" as const, runId, taskId }
-const emptyResources = {
-  activeResponsibilityPositions: new Set<JournalPosition>(),
-  heldResponsibilityPositions: new Set<JournalPosition>()
-}
+const integrationIdentity = (queuedAt: JournalPosition) => IntegrationResponsibilityIdentity.make({ queuedAt, runId })
+const emptyResources = { activeResponsibilities: [], heldResponsibilities: [] }
 
 it.effect("matches executor actions only to the exact planned-attempt obligation and reports every owner state", () =>
   Effect.sync(() => {
@@ -308,8 +313,8 @@ it.effect("matches queued integration actions by position and exposes held and a
         liveOwners: []
       }),
       {
-        activeResponsibilityPositions: new Set([queued.queuedAt]),
-        heldResponsibilityPositions: new Set([queued.queuedAt])
+        activeResponsibilities: [integrationIdentity(queued.queuedAt)],
+        heldResponsibilities: [integrationIdentity(queued.queuedAt)]
       }
     )
     expect(view._tag).toBe("PauseWaiting")
@@ -520,8 +525,16 @@ it.effect("keeps exact task coverage while complete grouping facts are not estab
 it.effect("re-emits Pause progress when only accepted integration-target activity changes", () =>
   Effect.gen(function* () {
     const integrationTargets = yield* makeIntegrationTargetResourceController()
-    yield* integrationTargets.acquire({ integrationTarget, queuedAt: queued.queuedAt })
-    yield* integrationTargets.publishAcceptedOwnership({ integrationTarget, queuedAt: queued.queuedAt })
+    yield* integrationTargets.acquire({
+      integrationTarget,
+      plannedAttempt: queued.plannedAttempt,
+      queuedAt: queued.queuedAt
+    })
+    yield* integrationTargets.publishAcceptedOwnership({
+      integrationTarget,
+      plannedAttempt: queued.plannedAttempt,
+      queuedAt: queued.queuedAt
+    })
     const { observation: runtime, resources } = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
     yield* runtime.publish(evaluation([{ _tag: "QueuedIntegration", responsibility: queued }]), [])
 
@@ -538,7 +551,7 @@ it.effect("re-emits Pause progress when only accepted integration-target activit
     )
     yield* Deferred.await(initialObserved)
     yield* integrationTargets.withPermit(
-      { integrationTarget, queuedAt: queued.queuedAt },
+      { integrationTarget, plannedAttempt: queued.plannedAttempt, queuedAt: queued.queuedAt },
       Fiber.join(activeObserved).pipe(Effect.asVoid)
     )
     expect(yield* Fiber.join(activeObserved)).toMatchObject({ _tag: "Some", value: { _tag: "PauseWaiting" } })
@@ -555,24 +568,24 @@ it.effect("canonicalizes integration-target position sets without depending on i
     const position = (value: number) => JournalPosition.make(value)
     const snapshots = [
       {
-        activeResponsibilityPositions: new Set([position(101)]),
-        heldResponsibilityPositions: new Set([position(201)])
+        activeResponsibilities: [integrationIdentity(position(101))],
+        heldResponsibilities: [integrationIdentity(position(201))]
       },
       {
-        activeResponsibilityPositions: new Set([position(101)]),
-        heldResponsibilityPositions: new Set([position(202)])
+        activeResponsibilities: [integrationIdentity(position(101))],
+        heldResponsibilities: [integrationIdentity(position(202))]
       },
       {
-        activeResponsibilityPositions: new Set([position(101)]),
-        heldResponsibilityPositions: new Set([position(202), position(203)])
+        activeResponsibilities: [integrationIdentity(position(101))],
+        heldResponsibilities: [integrationIdentity(position(202)), integrationIdentity(position(203))]
       },
       {
-        activeResponsibilityPositions: new Set([position(102)]),
-        heldResponsibilityPositions: new Set([position(203), position(202)])
+        activeResponsibilities: [integrationIdentity(position(102))],
+        heldResponsibilities: [integrationIdentity(position(203)), integrationIdentity(position(202))]
       },
       {
-        activeResponsibilityPositions: new Set([position(102), position(103)]),
-        heldResponsibilityPositions: new Set([position(202), position(203)])
+        activeResponsibilities: [integrationIdentity(position(102)), integrationIdentity(position(103))],
+        heldResponsibilities: [integrationIdentity(position(202)), integrationIdentity(position(203))]
       }
     ]
     const views = yield* observePauseProgress(

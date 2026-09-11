@@ -346,8 +346,8 @@ landmark** and **Next delivery landmark** skip repeated publications to the
 stable eligible-frontier waves, full-capacity overlaps, one-holder releases,
 coordinator restarts, and terminal publication. The staggered cassette's
 eligible frontier reaches A, B+C, restart-retained B+C with B+C+X eligible,
-D+X, E+F, H+I, G, and the empty frontier. Its held positions release through
-B+C, C, X, D, E+F, F, H+I, I, and G without scanning more than 24 landmarks. The complete
+D+X, E+F+X, H+I, G, and the empty frontier. Its held positions release through
+B+C, C, X, D+X, E+X, F+X, H+I, I, and G without scanning more than 24 landmarks. The complete
 per-task matrix is a secondary **All task delivery facts** disclosure; the
 graph and selected-task summary remain primary.
 
@@ -741,23 +741,30 @@ plan. It does not reread B or C's specifications as executor authorization.
 
 X's worktree becomes ready after B's Integrator candidate is observed. X's
 executor starts only after B's successful promotion compare-and-set, while B's
-completion finality is still unfinished. X then reports its own accepted result.
-C crosses integration and completion finality next. Only a later complete tracker
-read proves B and C successful and exposes D. D begins and reports its accepted
-result after X has already released its task-work position. X's earlier accepted
-result settles through integration before D's because it entered that queue first.
-The held-position chronology is therefore B+C, C, X, D, E+F, F, H+I, I, and G;
-no terminal executor report is used as a substitute for tracker success or
-delivery settlement.
+completion finality is still unfinished. X remains executing and held; it does
+not report or settle its accepted result yet. C crosses integration and
+completion finality next. Only a later complete tracker read proves B and C
+successful and exposes D. D begins while X remains held, and the next wave
+exposes E and F while X is still held. X's passive accepted report arrives
+before F's report and finality, but it does not settle X or release X's held
+capacity. F crosses finality first; X settles only at its own later finality.
+The accepted held-position chronology is B+C, C, X, D+X, E+X, F+X, H+I, I, and
+G; settlement is A, B, C, D, E, F, X, H, I, and G.
+The maintainer accepted this controlled legal execution on 2026-09-11 in [the
+#350 acceptance record](https://github.com/dearlordylord/dalph/issues/350#issuecomment-5640171481);
+it is not a universal production ordering. No terminal executor report is used
+as a substitute for tracker success or delivery settlement.
 
-The later complete tracker read after X and D settle proves both successful and
-exposes E and F. Those tasks begin together; E reports `ExecutorWorkTerminal`
-first while F remains visibly held, then F reports `ExecutorWorkTerminal`. The
-later successful tracker observation exposes
-H and I, which likewise begin together and release their positions in separate
-publications. G remains blocked until a later tracker observation proves H, I,
-and X successful. G then begins and reports through the same ordinary executor
-protocol. A final complete tracker read produces an empty eligible frontier.
+The later complete tracker read after D settles proves D successful and exposes
+E and F while X remains held. Those tasks use the other capacity position in
+turn: E reports `ExecutorWorkTerminal`, then F begins. X's passive accepted
+report arrives, followed by F's `ExecutorWorkTerminal` report. X remains held
+while F crosses finality; X's own later finality settles X.
+The later successful tracker observation exposes H and I, which begin together
+and release their positions in separate publications. G remains blocked until a
+later tracker observation proves H, I, and X successful. G then begins and
+reports through the same ordinary executor protocol. A final complete tracker
+read produces an empty eligible frontier.
 
 The Lab shows this rolling consumption on the production-observed graph rather
 than making each pair look like one atomic batch. A represented task uses
@@ -903,7 +910,7 @@ task whose exact facts are correlated below.
   runs `authored:deliveryInvariantStory` through the public authored runner and
   checks the exact prerequisite edges, B/C reconstructed positions, X's later
   tracker observation, exact specification-before-plan boundary, capacity
-  release before X's worktree, and the staggered B+C → C → X → D → E+F → F →
+  release before X's worktree, and the accepted B+C → C → X → D+X → E+X → F+X →
   H+I → I → G position chronology. It requires a later successful tracker
   observation before each deeper dependency wave and real executor
   responsibility plus terminal evidence for every task.

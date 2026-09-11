@@ -14,6 +14,7 @@ import {
   type RunnableFrontierTransition as RunnableFrontierTransitionType
 } from "./frontier.js"
 import type { IntegrationFrontierRuntimeFacts } from "./integration-frontier.js"
+import { integrationTargetResourceSnapshotIncludes } from "../admission/integration-target-resource.js"
 import {
   deriveCurrentIntegratorState,
   integratorRunQualifiedCandidateFromState,
@@ -730,9 +731,9 @@ export const deriveStartedIntegrationFrontier = (
   }
   const transitions = started.flatMap<RunnableFrontierTransitionType>((responsibility) => {
     /* v8 ignore next -- @preserve The serialized coordinator cannot select a responsibility while its scoped Integrator effect is active. */
-    if (runtimeFacts.activeResponsibilityPositions?.has(responsibility.queuedAt)) return []
+    if (integrationTargetResourceSnapshotIncludes(runtimeFacts.activeResponsibilities ?? [], responsibility)) return []
     const waiting = unsatisfiedPrerequisites(runState, responsibility).length > 0
-    const held = runtimeFacts.heldResponsibilityPositions.has(responsibility.queuedAt)
+    const held = integrationTargetResourceSnapshotIncludes(runtimeFacts.heldResponsibilities, responsibility)
     const integratorState = integratorStateFor(responsibility)
     const promotion = promotionFor(integratorState)
     const retryProgress = retryIntegratorProgressFor(runState, runtimeFacts, responsibility, integratorState)

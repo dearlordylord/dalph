@@ -895,6 +895,9 @@ interface CandidateAuthorityPrefix {
   readonly directionAppliedAt: JournalPosition
 }
 
+/** Selects whether candidate evidence owns the attempt prefix and which startup-valid event order it uses. */
+type CandidateProvenanceChronology = "Cassette" | "StartupValid" | "StartupValidAcceptedAttempt"
+
 /** Appends the accepted executor result that makes an integration responsibility recoverable at startup. */
 const appendAcceptedAttemptPrefix = Effect.fn("DispositionCleanupTest.appendAcceptedAttemptPrefix")(function* (
   predecessor: IntegratorSessionCorrelation
@@ -1098,12 +1101,13 @@ const appendAcceptedAttemptPrefix = Effect.fn("DispositionCleanupTest.appendAcce
  */
 const appendCandidateAuthorityPrefix = (
   predecessor: IntegratorSessionCorrelation,
-  chronology: "Cassette" | "StartupValid" = "Cassette"
+  chronology: CandidateProvenanceChronology = "Cassette"
 ) =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
     const runId = predecessor.plannedAttempt.runId
     if (chronology === "StartupValid") yield* appendAcceptedAttemptPrefix(predecessor)
+    const startupOrder = chronology !== "Cassette"
     const predecessorRun = IntegratorRunCorrelation.make({
       ordinal: IntegratorRunOrdinal.make(1),
       session: predecessor
@@ -1155,7 +1159,7 @@ const appendCandidateAuthorityPrefix = (
     // offset because their started fact follows the read.
     const quarantineAt = JournalPosition.make(
       Number(predecessor.targetLineageObservedAt) +
-        (chronology === "StartupValid" ? quarantinePositionOffset - 1 : quarantinePositionOffset)
+        (startupOrder ? quarantinePositionOffset - 1 : quarantinePositionOffset)
     )
     const absence = IntegrationProviderRunActivityAbsentEvent.make({
       correlation: predecessor,
@@ -1169,7 +1173,7 @@ const appendCandidateAuthorityPrefix = (
         detail,
         ownedActivityProvenAbsentAt: JournalPosition.make(
           Number(predecessor.targetLineageObservedAt) +
-            (chronology === "StartupValid" ? activityAbsencePositionOffset - 1 : activityAbsencePositionOffset)
+            (startupOrder ? activityAbsencePositionOffset - 1 : activityAbsencePositionOffset)
         )
       }),
       correlation: predecessor,
@@ -1207,12 +1211,12 @@ const appendCandidateAuthorityPrefix = (
       fixed
     )
     yield* appendResponsibility
-    if (chronology === "StartupValid") yield* appendStart
+    if (startupOrder) yield* appendStart
     yield* appendLineageIntent
     yield* appendLineageObservation
     if (chronology === "Cassette") yield* appendSession
     if (chronology === "Cassette") yield* appendStart
-    if (chronology === "StartupValid") yield* appendSession
+    if (startupOrder) yield* appendSession
     yield* journal.append(runId, integratorRunStartedRecordKey(predecessorRun), runStarted)
     yield* journal.append(runId, integrationProviderRunActivityAbsentRecordKey(predecessorRun), absence)
     yield* journal.append(runId, integrationQuarantinedRecordKey(predecessor.sessionId, quarantine.basis), quarantine)
@@ -1226,14 +1230,14 @@ const appendCandidateAuthorityPrefix = (
 
 /** Appends a real current-quarantine history without fabricating disposal authority. */
 const appendCurrentQuarantineProvenanceEffect = Effect.fn("DispositionCleanupTest.appendCurrentQuarantineProvenance")(
-  function* (predecessor: IntegratorSessionCorrelation, chronology: "Cassette" | "StartupValid") {
+  function* (predecessor: IntegratorSessionCorrelation, chronology: CandidateProvenanceChronology) {
     yield* appendCandidateAuthorityPrefix(predecessor, chronology)
   }
 )
 
 export const appendCurrentQuarantineProvenance = (
   predecessor: IntegratorSessionCorrelation,
-  chronology: "Cassette" | "StartupValid" = "Cassette"
+  chronology: CandidateProvenanceChronology = "Cassette"
 ) => appendCurrentQuarantineProvenanceEffect(predecessor, chronology)
 
 /**
@@ -1245,7 +1249,7 @@ export const appendCandidateProvenance = Effect.fn("DispositionCleanupTest.appen
   predecessor: IntegratorSessionCorrelation,
   successor: IntegratorSessionCorrelation,
   directionNonce: string,
-  chronology: "Cassette" | "StartupValid" = "Cassette"
+  chronology: CandidateProvenanceChronology = "Cassette"
 ) {
   const journal = yield* InRunJournal
   const runId = predecessor.plannedAttempt.runId

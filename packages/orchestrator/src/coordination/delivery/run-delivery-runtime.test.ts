@@ -303,6 +303,7 @@ const handoffProposal = (): DeliveryActionProposal => ({
       _tag: "IntegrationTargetResourceRequired",
       access: "Acquire",
       integrationTarget: handoffIntegrationTarget,
+      plannedAttempt,
       queuedAt: JournalPosition.make(42)
     },
     plannedAttemptProtocol: { _tag: "PlannedAttemptProtocolRequired", correlation: handoffCorrelation },
@@ -1607,7 +1608,7 @@ it.effect("does not repeat one started-integration lineage read after only its c
     const first = lineageRead("first")
     const superseding = lineageRead("superseding")
     const integrationTargets = yield* makeIntegrationTargetResourceController()
-    const held = { integrationTarget, queuedAt: responsibility.queuedAt }
+    const held = { integrationTarget, plannedAttempt: responsibility.plannedAttempt, queuedAt: responsibility.queuedAt }
     yield* integrationTargets.acquire(held)
     yield* integrationTargets.publishAcceptedOwnership(held)
 
@@ -1692,7 +1693,7 @@ it.effect("admits bounded fresh claims while an unrelated integration lineage re
         })
     })
     const integrationTargets = yield* makeIntegrationTargetResourceController()
-    const held = { integrationTarget, queuedAt: responsibility.queuedAt }
+    const held = { integrationTarget, plannedAttempt: responsibility.plannedAttempt, queuedAt: responsibility.queuedAt }
     yield* integrationTargets.acquire(held)
     yield* integrationTargets.publishAcceptedOwnership(held)
     const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
@@ -2238,6 +2239,7 @@ it.effect("releases acquired integration ownership and its relation subscriber o
             repository: GitRepositoryLocator.make("/runtime-test/repository.git"),
             ref: IntegrationTargetRef.make("refs/heads/main")
           }),
+          plannedAttempt,
           queuedAt: JournalPosition.make(40)
         },
         plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
@@ -2272,17 +2274,14 @@ it.effect("releases acquired integration ownership and its relation subscriber o
       Effect.forkChild
     )
     yield* Deferred.await(actionStarted)
-    expect((yield* integrationTargets.snapshot).heldResponsibilityPositions).toEqual(
-      new Set([JournalPosition.make(40)])
-    )
+    expect((yield* integrationTargets.snapshot).heldResponsibilities).toEqual([
+      { runId, queuedAt: JournalPosition.make(40) }
+    ])
     expect(yield* Ref.get(subscribers)).toBe(1)
 
     yield* Fiber.interrupt(fiber)
 
-    expect(yield* integrationTargets.snapshot).toEqual({
-      activeResponsibilityPositions: new Set(),
-      heldResponsibilityPositions: new Set()
-    })
+    expect(yield* integrationTargets.snapshot).toEqual({ activeResponsibilities: [], heldResponsibilities: [] })
     expect(yield* Ref.get(subscribers)).toBe(0)
     const afterRollback = yield* capabilities.resources.runtimeObservation.get
     if (afterRollback._tag !== "Closed" || afterRollback.final === null) {
@@ -2304,6 +2303,7 @@ it.effect("rolls back acquired integration ownership when the action fails", () 
             repository: GitRepositoryLocator.make("/runtime-test/failure-repository.git"),
             ref: IntegrationTargetRef.make("refs/heads/main")
           }),
+          plannedAttempt,
           queuedAt: JournalPosition.make(41)
         },
         plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
@@ -2328,10 +2328,7 @@ it.effect("rolls back acquired integration ownership when the action fails", () 
         Effect.flip
       )
     ).toEqual(actionFailure)
-    expect(yield* integrationTargets.snapshot).toEqual({
-      activeResponsibilityPositions: new Set(),
-      heldResponsibilityPositions: new Set()
-    })
+    expect(yield* integrationTargets.snapshot).toEqual({ activeResponsibilities: [], heldResponsibilities: [] })
   }).pipe(Effect.scoped)
 )
 

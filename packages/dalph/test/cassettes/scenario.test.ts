@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest"
 import { completeSingletonDeliveryCassette } from "../../test-support/complete-singleton-delivery.js"
 import { NodeCrypto } from "@effect/platform-node"
-import { Cause, Effect, Exit, Fiber, Option, Ref, Schema } from "effect"
+import { Cause, Crypto, Effect, Exit, Fiber, Layer, Option, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
@@ -42,6 +42,7 @@ import {
   evaluateDeliveryRelationAndRuntimeInputBundle,
   evaluateDeliveryRelationInputBundle,
   evaluateDeliveryRuntimeInputBundle,
+  evaluatePlannedAttemptContinuationAuthorization,
   IntegrationQuarantineBasis,
   IntegrationQuarantineDirectionFingerprint,
   IntegrationQuarantineDirectionRequestId,
@@ -60,8 +61,9 @@ import {
   ForeignWorktreeRegistration,
   FixtureTarget,
   GitWorktreeReadFailure,
+  IntegrationResponsibilityIdentity,
+  Journal,
   JournalPosition,
-  InRunJournal,
   makeFocusedTaskClaimFactsObserved,
   makeFocusedTaskClaimFactsUnreadable,
   makeCompleteTaskTrackerFactsObserved,
@@ -82,12 +84,12 @@ import {
   PlannedAttemptContinuationAuthorizedEvent,
   PlannedAttemptContinuationWitness,
   PlannedWorktreeReady,
-  plannedAttemptProtocolControllerLayer,
-  authorizePlannedAttemptContinuation,
+  plannedAttemptContinuationAuthorizedRecordKey,
   projectWorkflowOccurrences,
   projectTrackerSnapshot,
   reduceWorkflowJournalHistory,
   readPostPromotionBlockerCandidateAncestry,
+  liveJournalTestLayer,
   RunPolicyRevision,
   TrackerRevision,
   TrackerMutation,
@@ -154,6 +156,7 @@ import {
   idleRunCancellationAuthoredCassette,
   integrationRunCancellationAuthoredCassette,
   maintainedIntegrationFinalityProtocolCassetteCatalog,
+  evaluateIntegrationFinalityPremisesFromRawRecords,
   IntegrationFinalityProtocolCassette,
   lostPlannedWorktreeSafelySuspendsAuthoredCassette,
   maintainedAuthoredCassetteCatalog,
@@ -170,7 +173,6 @@ import {
   renderAuthoredCassetteLyrics,
   renderRecordedCassetteLyrics,
   runTargetPromotionProtocolCassette,
-  runIntegrationFinalityProtocolCassette,
   runIntegrationFinalityProtocolCassetteFromPromotedRecords,
   runPauseRestartsPassivelyAuthoredCassette,
   runPauseObservationDisconnectsAuthoredCassette,
@@ -187,6 +189,7 @@ import {
   taskUnpauseAfterSafeSuspensionAuthoredCassette,
   taskUnpauseDuringSuspensionRestartsAuthoredCassette,
   runAuthoredScenarioCassette as runAuthoredScenarioCassetteWithCrypto,
+  useAuthoredScenarioCassette as useAuthoredScenarioCassetteWithCrypto,
   singletonTaskCompletesAuthoredCassette,
   staleTaskPauseRejectedAuthoredCassette,
   targetPromotionConcurrentTargetsProtocolCassette,
@@ -281,6 +284,11 @@ const runAuthoredScenarioCassette = (
   input: unknown,
   options: Parameters<typeof runAuthoredScenarioCassetteWithCrypto>[1] = {}
 ) => runAuthoredScenarioCassetteWithCrypto(input, options).pipe(Effect.provide(NodeCrypto.layer))
+
+const useAuthoredScenarioCassette = <A, E, R>(
+  input: unknown,
+  use: (run: Effect.Success<ReturnType<typeof runAuthoredScenarioCassetteWithCrypto>>) => Effect.Effect<A, E, R>
+) => useAuthoredScenarioCassetteWithCrypto(input, use).pipe(Effect.provide(NodeCrypto.layer))
 
 const cachedDependentTasksRun = Effect.runSync(
   Effect.cached(runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette))
@@ -1399,7 +1407,9 @@ it.effect("finishes an already-held integration boundary after task Pause withou
     expect(
       deriveIntegrationFrontier(run.history.runState, {
         currentTrackerTaskIds: new Set([TaskId.make("A")]),
-        heldResponsibilityPositions: new Set([integrationBeganAt]),
+        heldResponsibilities: [
+          IntegrationResponsibilityIdentity.make({ queuedAt: integrationBeganAt, runId: run.runId })
+        ],
         integrationTarget: Option.none(),
         taskClaimAuthorityByAttemptId: exactClaimAuthorities(AttemptId.make("attempt:A:0"))
       }).transitions
@@ -1412,7 +1422,7 @@ it.effect("finishes an already-held integration boundary after task Pause withou
     expect(
       deriveIntegrationFrontier(run.history.runState, {
         currentTrackerTaskIds: new Set([TaskId.make("A")]),
-        heldResponsibilityPositions: new Set(),
+        heldResponsibilities: [],
         integrationTarget: Option.none(),
         taskClaimAuthorityByAttemptId: exactClaimAuthorities(AttemptId.make("attempt:A:0"))
       }).transitions
@@ -2160,7 +2170,7 @@ it.effect("continues an accepted result after process death and crosses its inte
     expect(
       deriveIntegrationFrontier(run.history.runState, {
         currentTrackerTaskIds: new Set([TaskId.make("A")]),
-        heldResponsibilityPositions: new Set(),
+        heldResponsibilities: [],
         integrationTarget: Option.none(),
         taskClaimAuthorityByAttemptId: exactClaimAuthorities(AttemptId.make("attempt:A:0"))
       }).explanations
@@ -2178,7 +2188,9 @@ it.effect("continues an accepted result after process death and crosses its inte
     expect(
       deriveIntegrationFrontier(run.history.runState, {
         currentTrackerTaskIds: new Set([TaskId.make("A")]),
-        heldResponsibilityPositions: new Set([integrationBeganAt]),
+        heldResponsibilities: [
+          IntegrationResponsibilityIdentity.make({ queuedAt: integrationBeganAt, runId: run.runId })
+        ],
         integrationTarget: Option.some(
           IntegrationTarget.make({
             repository: GitRepositoryLocator.make("/dalph/cassettes/integration.git"),
@@ -2397,7 +2409,7 @@ it.effect("keeps an unfinished Integrator session dormant when a blocker appears
     if (attempt?._tag !== "IntegratorSessionFixed") return yield* Effect.die("missing fixed Integrator session")
     const facts = {
       currentTrackerTaskIds: new Set([TaskId.make("A"), TaskId.make("B"), TaskId.make("C")]),
-      heldResponsibilityPositions: new Set<JournalPosition>(),
+      heldResponsibilities: [],
       integrationTarget: Option.none(),
       taskClaimAuthorityByAttemptId: exactClaimAuthorities(attempt.correlation.plannedAttempt.attemptId)
     }
@@ -2462,7 +2474,12 @@ it.effect("delegates changed H after a cleared blocker without reusing M or crea
     expect(
       deriveIntegrationFrontier(blockedHistory.runState, {
         currentTrackerTaskIds: new Set([TaskId.make("A"), TaskId.make("B"), TaskId.make("C")]),
-        heldResponsibilityPositions: new Set([started.queuedAt]),
+        heldResponsibilities: [
+          IntegrationResponsibilityIdentity.make({
+            queuedAt: started.queuedAt,
+            runId: started.plannedAttempt.runId
+          })
+        ],
         integrationTarget: Option.some(
           IntegrationTarget.make({
             repository: GitRepositoryLocator.make("/dalph/cassettes/integration.git"),
@@ -2723,25 +2740,26 @@ it.effect("preserves accepted tracker completion when a prerequisite concurrentl
 )
 
 it.effect("records completion finality after Git-qualified promotion history", () =>
-  Effect.gen(function* () {
-    const promoted = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess)
-    const finalized = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(
-      maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess,
-      promoted.records
-    )
-    const finalityRecords = finalized.records.slice(promoted.records.length)
-    const focusedSuccessAt = finalityRecords.findIndex(
-      ({ event }) =>
-        event._tag === "TaskTrackerFactsObserved" &&
-        event.observation._tag === "FocusedTaskCompletionFacts" &&
-        event.observation.facts.lifecycle === "CompletedSuccessfully"
-    )
-    expect(focusedSuccessAt).toBeGreaterThanOrEqual(0)
-    expectFocusedCompletionReadCorrelation(finalityRecords, focusedSuccessAt)
-    expect(finalized.records.map(({ event }) => event._tag)).toContain("IntegrationFinalitySettled")
-    expect(finalized.records.some(({ event }) => event._tag === "IntegratorRunResultRecorded")).toBe(true)
-    expect(finalized.records.some(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")).toBe(true)
-  })
+  useAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess, (promoted) =>
+    Effect.gen(function* () {
+      const finalized = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(
+        maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess,
+        promoted.runId
+      )
+      const finalityRecords = finalized.records.slice(promoted.records.length)
+      const focusedSuccessAt = finalityRecords.findIndex(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "FocusedTaskCompletionFacts" &&
+          event.observation.facts.lifecycle === "CompletedSuccessfully"
+      )
+      expect(focusedSuccessAt).toBeGreaterThanOrEqual(0)
+      expectFocusedCompletionReadCorrelation(finalityRecords, focusedSuccessAt)
+      expect(finalized.records.map(({ event }) => event._tag)).toContain("IntegrationFinalitySettled")
+      expect(finalized.records.some(({ event }) => event._tag === "IntegratorRunResultRecorded")).toBe(true)
+      expect(finalized.records.some(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")).toBe(true)
+    })
+  )
 )
 
 it.effect("settles a promoted authored task through the real completion-claim boundary", () =>
@@ -3061,7 +3079,7 @@ it.effect("proves promoted ancestry after the blocker clears and completes witho
     const facts = {
       activeClaimByAttemptId: new Map([[plannedAttempt.operation.plannedAttempt.attemptId, activeClaim.claim]]),
       currentTrackerTaskIds: new Set([taskId, blockerId, unrelatedTaskId]),
-      heldResponsibilityPositions: new Set<JournalPosition>(),
+      heldResponsibilities: [],
       integrationFinalityConfigured: true,
       integrationTarget: Option.none(),
       taskClaimAuthorityByAttemptId: exactClaimAuthorities(plannedAttempt.operation.plannedAttempt.attemptId)
@@ -3151,24 +3169,12 @@ it.effect("proves promoted ancestry after the blocker clears and completes witho
     if (ancestryTransition?._tag !== "ObservePromotedCandidateAncestryAfterBlockerClear") {
       return yield* Effect.die("missing post-promotion blocker-clear ancestry transition")
     }
+    const clearRunId = plannedAttempt.operation.plannedAttempt.runId
+    const clearBeginning = clearRecords.find(({ event }) => event._tag === "WorkflowRunBegan")?.event
+    if (clearBeginning?._tag !== "WorkflowRunBegan") return yield* Effect.die("missing clear-history Run beginning")
     const readAncestryWith = (disposition: "Current" | "NotInAncestry" | "Unreadable") =>
       Effect.gen(function* () {
-        const recordsRef = yield* Ref.make(clearRecords)
-        const journal = InRunJournal.of({
-          append: (runId, key, event) =>
-            Effect.gen(function* () {
-              const records = yield* Ref.get(recordsRef)
-              const existing = records.find((record) => record.runId === runId && record.key === key)
-              if (existing !== undefined) return existing
-              const record = { event, key, position: JournalPosition.make(records.length + 1), runId }
-              yield* Ref.set(recordsRef, [...records, record])
-              return record
-            }),
-          read: (runId) =>
-            Ref.get(recordsRef).pipe(Effect.map((records) => records.filter((record) => record.runId === runId)))
-        })
         const observation = yield* readPostPromotionBlockerCandidateAncestry(ancestryTransition.authorization).pipe(
-          Effect.provideService(InRunJournal, journal),
           Effect.provideService(
             TargetPromotionGit,
             TargetPromotionGit.of({
@@ -3194,8 +3200,13 @@ it.effect("proves promoted ancestry after the blocker clears and completes witho
             })
           )
         )
-        return { observation, records: yield* Ref.get(recordsRef) }
-      })
+        const records = yield* (yield* Journal).read(clearRunId)
+        return { observation, records }
+      }).pipe(
+        Effect.provide(
+          liveJournalTestLayer({ records: clearRecords, runId: clearRunId, target: clearBeginning.target })
+        )
+      )
 
     for (const disposition of ["NotInAncestry", "Unreadable"] as const) {
       const negative = yield* readAncestryWith(disposition)
@@ -3207,35 +3218,35 @@ it.effect("proves promoted ancestry after the blocker clears and completes witho
       )
     }
 
-    const ancestryRecordsRef = yield* Ref.make(clearRecords)
-    const ancestryJournal = InRunJournal.of({
-      append: (runId, key, event) =>
-        Effect.gen(function* () {
-          const records = yield* Ref.get(ancestryRecordsRef)
-          const existing = records.find((record) => record.runId === runId && record.key === key)
-          if (existing !== undefined) return existing
-          const record = { event, key, position: JournalPosition.make(records.length + 1), runId }
-          yield* Ref.set(ancestryRecordsRef, [...records, record])
-          return record
-        }),
-      read: (runId) =>
-        Ref.get(ancestryRecordsRef).pipe(Effect.map((records) => records.filter((record) => record.runId === runId)))
-    })
-    const ancestry = yield* readPostPromotionBlockerCandidateAncestry(ancestryTransition.authorization).pipe(
-      Effect.provideService(InRunJournal, ancestryJournal),
-      Effect.provideService(
-        TargetPromotionGit,
-        TargetPromotionGit.of({
-          compareAndSet: () => Effect.die("post-promotion ancestry cassette must not mutate Git"),
-          read: (request) =>
-            Effect.succeed(
-              TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha: request.candidateCommit })
-            )
-        })
+    const {
+      observation: ancestry,
+      records: clearAndAncestryRecords,
+      resumed
+    } = yield* Effect.gen(function* () {
+      const observation = yield* readPostPromotionBlockerCandidateAncestry(ancestryTransition.authorization).pipe(
+        Effect.provideService(
+          TargetPromotionGit,
+          TargetPromotionGit.of({
+            compareAndSet: () => Effect.die("post-promotion ancestry cassette must not mutate Git"),
+            read: (request) =>
+              Effect.succeed(
+                TargetPromotionGitReadObservation.cases.CandidateCurrent.make({
+                  currentHeadSha: request.candidateCommit
+                })
+              )
+          })
+        )
       )
+      const records = yield* (yield* Journal).read(clearRunId)
+      const resumed = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(
+        maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess,
+        clearRunId
+      )
+      return { observation, records, resumed }
+    }).pipe(
+      Effect.provide(liveJournalTestLayer({ records: clearRecords, runId: clearRunId, target: clearBeginning.target }))
     )
     expect(ancestry).toMatchObject({ _tag: "Observed", observation: { _tag: "CandidateCurrent" } })
-    const clearAndAncestryRecords = yield* Ref.get(ancestryRecordsRef)
     const clearAndAncestryHistory = reduceWorkflowJournalHistory(
       plannedAttempt.operation.plannedAttempt.runId,
       clearAndAncestryRecords
@@ -3245,10 +3256,6 @@ it.effect("proves promoted ancestry after the blocker clears and completes witho
     }
     expect(deriveIntegrationFrontier(clearAndAncestryHistory.runState, facts).transitions).toContainEqual(
       expect.objectContaining({ _tag: "ReplacePromotedTaskClaim" })
-    )
-    const resumed = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(
-      maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess,
-      clearAndAncestryRecords
     )
     const resumedRecords = resumed.records.slice(clearAndAncestryRecords.length)
     const ancestryAt = clearAndAncestryRecords.findIndex(
@@ -3403,13 +3410,32 @@ it.effect("keeps another target usable while M promotion waits and releases only
     expect(run).toEqual(replay)
     expect(run.boundaryCalls).toEqual(["T1.read", "T1.compareAndSet", "T2.read", "T2.compareAndSet"])
     expect(run.compareAndSetCount).toBe(2)
+    expect(run.leaseResponsibilities).toEqual([
+      { queuedAt: 17, runId: "target-promotion-protocol-cassette-T1" },
+      { queuedAt: 17, runId: "target-promotion-protocol-cassette-T2" }
+    ])
     expect(tags.filter((tag) => tag === "TargetPromotionIntended")).toHaveLength(2)
     expect(tags.filter((tag) => tag === "TargetPromotionAttemptIntended")).toHaveLength(2)
     expect(tags.filter((tag) => tag === "TargetPromotionObservedSuccess")).toHaveLength(2)
     expect(run.leaseObservations).toEqual([
-      { active: [8], held: [8], moment: "T1WaitingBeforeT2" },
-      { active: [8], held: [8, 28], moment: "T2AcquiredWhileT1Waiting" },
-      { active: [8], held: [8], moment: "T2Settled" },
+      {
+        active: [{ queuedAt: 17, runId: "target-promotion-protocol-cassette-T1" }],
+        held: [{ queuedAt: 17, runId: "target-promotion-protocol-cassette-T1" }],
+        moment: "T1WaitingBeforeT2"
+      },
+      {
+        active: [{ queuedAt: 17, runId: "target-promotion-protocol-cassette-T1" }],
+        held: [
+          { queuedAt: 17, runId: "target-promotion-protocol-cassette-T1" },
+          { queuedAt: 17, runId: "target-promotion-protocol-cassette-T2" }
+        ],
+        moment: "T2AcquiredWhileT1Waiting"
+      },
+      {
+        active: [{ queuedAt: 17, runId: "target-promotion-protocol-cassette-T1" }],
+        held: [{ queuedAt: 17, runId: "target-promotion-protocol-cassette-T1" }],
+        moment: "T2Settled"
+      },
       { active: [], held: [], moment: "AllSettled" }
     ])
   })
@@ -5628,16 +5654,13 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
     type WorktreeRecord = JournalRecord & {
       readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "PlannedAttemptWorktreeObserved" }>
     }
-    const journalFor = (records: ReadonlyArray<JournalRecord>) =>
-      InRunJournal.of({
-        append: () => Effect.die("continuation authorization rejection test must not append"),
-        read: () => Effect.succeed(records)
-      })
     const rejectWith = (records: ReadonlyArray<JournalRecord>, candidate: typeof witness) =>
-      authorizePlannedAttemptContinuation(plannedAttempt, candidate).pipe(
-        Effect.provideService(InRunJournal, journalFor(records)),
-        Effect.provide(plannedAttemptProtocolControllerLayer),
-        Effect.flip
+      Effect.sync(() => evaluatePlannedAttemptContinuationAuthorization(records, plannedAttempt, candidate)).pipe(
+        Effect.flatMap((result) =>
+          result._tag === "Rejected"
+            ? Effect.succeed(result)
+            : Effect.die("malformed witness was unexpectedly authorized")
+        )
       )
     const replaceObservation = (
       records: ReadonlyArray<JournalRecord>,
@@ -5707,18 +5730,17 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
     if (graphOutcome === undefined) {
       return yield* Effect.die("continuation cassette did not produce graph outcome")
     }
-    const idempotent = yield* authorizePlannedAttemptContinuation(plannedAttempt, witness).pipe(
-      Effect.provideService(InRunJournal, journalFor(preCommandRecords)),
-      Effect.provide(plannedAttemptProtocolControllerLayer)
-    )
-    expect(idempotent.key).toBe(authorization.key)
+    expect(evaluatePlannedAttemptContinuationAuthorization(preCommandRecords, plannedAttempt, witness)).toMatchObject({
+      _tag: "Authorized"
+    })
+    expect(plannedAttemptContinuationAuthorizedRecordKey(plannedAttempt.attemptId, witness)).toBe(authorization.key)
 
     const missingResponsibility = yield* rejectWith(
       preCommandRecords.filter(({ event }) => event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan"),
       witness
     )
     expect(missingResponsibility).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      _tag: "Rejected",
       reason: "MissingWitness",
       witness: "ActiveTaskContinuationGraph"
     })
@@ -5754,7 +5776,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       }
     })
     expect(missing).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      _tag: "Rejected",
       reason: "MissingWitness",
       witness: "ActiveTaskContinuationGraph"
     })
@@ -5767,7 +5789,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       }
     })
     expect(missingSpecification).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      _tag: "Rejected",
       reason: "MissingWitness",
       witness: "ActiveTaskContinuationSpecification"
     })
@@ -5785,7 +5807,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       witness
     )
     expect(staleSpecification).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      _tag: "Rejected",
       reason: "StaleWitness",
       witness: "ActiveTaskContinuationSpecification"
     })
@@ -5798,7 +5820,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       witness
     )
     expect(laterSpecification).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      _tag: "Rejected",
       reason: "LaterWitness",
       witness: "ActiveTaskContinuationSpecification"
     })
@@ -5811,7 +5833,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       witness
     )
     expect(wrongSpecification).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      _tag: "Rejected",
       reason: "WrongAttemptWitness",
       witness: "ActiveTaskContinuationSpecification"
     })
@@ -5823,7 +5845,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       witness
     )
     expect(wrongSpecificationTarget).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      _tag: "Rejected",
       reason: "WrongAttemptWitness",
       witness: "ActiveTaskContinuationSpecification"
     })
@@ -5836,7 +5858,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       }
     })
     expect(missingClaim).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      _tag: "Rejected",
       reason: "MissingWitness",
       witness: "ActiveTaskContinuationClaim"
     })
@@ -5845,7 +5867,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       witness
     )
     expect(staleClaim).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      _tag: "Rejected",
       reason: "StaleWitness",
       witness: "ActiveTaskContinuationClaim"
     })
@@ -5858,7 +5880,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       witness
     )
     expect(laterClaim).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      _tag: "Rejected",
       reason: "LaterWitness",
       witness: "ActiveTaskContinuationClaim"
     })
@@ -5870,7 +5892,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       witness
     )
     expect(wrongClaim).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      _tag: "Rejected",
       reason: "WrongAttemptWitness",
       witness: "ActiveTaskContinuationClaim"
     })
@@ -5879,7 +5901,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       witness
     )
     expect(wrongClaimTarget).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      _tag: "Rejected",
       reason: "WrongAttemptWitness",
       witness: "ActiveTaskContinuationClaim"
     })
@@ -5889,7 +5911,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       worktreeObservationOperationId: OperationId.make("missing-continuation-worktree")
     })
     expect(missingWorktree).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      _tag: "Rejected",
       reason: "MissingWitness",
       witness: "PlannedAttemptWorktree"
     })
@@ -5908,11 +5930,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       ),
       witness
     )
-    expect(staleWorktree).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
-      reason: "StaleWitness",
-      witness: "PlannedAttemptWorktree"
-    })
+    expect(staleWorktree).toMatchObject({ _tag: "Rejected", reason: "StaleWitness", witness: "PlannedAttemptWorktree" })
     const laterWorktree = yield* rejectWith(
       replaceReadIntentPosition(
         preCommandRecords,
@@ -5921,18 +5939,14 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       ),
       witness
     )
-    expect(laterWorktree).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
-      reason: "LaterWitness",
-      witness: "PlannedAttemptWorktree"
-    })
+    expect(laterWorktree).toMatchObject({ _tag: "Rejected", reason: "LaterWitness", witness: "PlannedAttemptWorktree" })
 
     const missingTargetLineage = yield* rejectWith(preCommandRecords, {
       ...witness,
       targetLineageObservationOperationId: OperationId.make("missing-continuation-target-lineage")
     })
     expect(missingTargetLineage).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      _tag: "Rejected",
       reason: "MissingWitness",
       witness: "PlannedAttemptTargetLineage"
     })
@@ -5952,7 +5966,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       witness
     )
     expect(incompatibleTargetLineage).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      _tag: "Rejected",
       reason: "WrongAttemptWitness",
       witness: "PlannedAttemptTargetLineage"
     })
@@ -5966,7 +5980,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       witness
     )
     expect(wrongGraph).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      _tag: "Rejected",
       reason: "WrongAttemptWitness",
       witness: "ActiveTaskContinuationGraph"
     })
@@ -5981,15 +5995,11 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       replacePosition(preCommandRecords, graphOutcome.event.operationId, safeReport.position),
       witness
     )
-    expect(stale).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
-      reason: "StaleWitness",
-      witness: "ActiveTaskContinuationGraph"
-    })
+    expect(stale).toMatchObject({ _tag: "Rejected", reason: "StaleWitness", witness: "ActiveTaskContinuationGraph" })
 
     const consumed = yield* rejectWith(run.records, witness)
     expect(consumed).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
+      _tag: "Rejected",
       reason: "WrongAttemptWitness",
       witness: "AcceptedSafeExecutorReport"
     })
@@ -6000,11 +6010,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
       JournalPosition.make((graphOutcome.position as number) + 1)
     )
     const later = yield* rejectWith(laterRecords, witness)
-    expect(later).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
-      reason: "LaterWitness",
-      witness: "ActiveTaskContinuationGraph"
-    })
+    expect(later).toMatchObject({ _tag: "Rejected", reason: "LaterWitness", witness: "ActiveTaskContinuationGraph" })
 
     const wrongAttempt = { ...plannedAttempt, attemptId: AttemptId.make("attempt:wrong:0") }
     const wrongAttemptRecords = preCommandRecords.map((record) =>
@@ -6018,11 +6024,7 @@ it.effect("rejects missing, stale, later, and wrong-attempt continuation witness
         : record
     )
     const wrong = yield* rejectWith(wrongAttemptRecords, witness)
-    expect(wrong).toMatchObject({
-      _tag: "PlannedAttemptContinuationAuthorizationRejected",
-      reason: "WrongAttemptWitness",
-      witness: "PlannedAttemptWorktree"
-    })
+    expect(wrong).toMatchObject({ _tag: "Rejected", reason: "WrongAttemptWitness", witness: "PlannedAttemptWorktree" })
   })
 )
 
@@ -7715,12 +7717,32 @@ const replayIntegrationFinalityCassette = (
   cassette: (typeof maintainedIntegrationFinalityProtocolCassetteCatalog)[keyof typeof maintainedIntegrationFinalityProtocolCassetteCatalog]
 ) =>
   Effect.gen(function* () {
-    const promoted = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess)
-    const first = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(cassette, promoted.records)
-    const second = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(cassette, promoted.records)
+    const runOnce = Effect.gen(function* () {
+      const nodeCrypto = yield* Crypto.Crypto
+      const deterministicCryptoLayer = Layer.succeed(
+        Crypto.Crypto,
+        Crypto.make({
+          digest: (algorithm, data) => nodeCrypto.digest(algorithm, data),
+          randomBytes: (size) => new Uint8Array(size)
+        })
+      )
+      return yield* useAuthoredScenarioCassetteWithCrypto(
+        maintainedAuthoredCassetteCatalog.targetPromotionSuccess,
+        (promoted) => runIntegrationFinalityProtocolCassetteFromPromotedRecords(cassette, promoted.runId)
+      ).pipe(Effect.provide(deterministicCryptoLayer))
+    }).pipe(Effect.provide(NodeCrypto.layer))
+    const first = yield* runOnce
+    const second = yield* runOnce
     expect(second).toEqual(first)
     return first
   })
+
+const runIntegrationFinalityFromPromotedCassette = (
+  cassette: (typeof maintainedIntegrationFinalityProtocolCassetteCatalog)[keyof typeof maintainedIntegrationFinalityProtocolCassetteCatalog]
+) =>
+  useAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess, (promoted) =>
+    runIntegrationFinalityProtocolCassetteFromPromotedRecords(cassette, promoted.runId)
+  )
 
 const focusedCleanupTags = (journalTags: ReadonlyArray<string>): ReadonlyArray<string> => {
   const completionIntentAt = journalTags.lastIndexOf("CompletionTaskIntended")
@@ -7812,25 +7834,23 @@ it("rejects unclosed, unbounded, and misordered integration-finality protocol st
 })
 
 it.effect("rejects promoted finality replay without each exact causal premise", () =>
-  Effect.gen(function* () {
-    const cassette =
-      maintainedIntegrationFinalityProtocolCassetteCatalog.replacesTheExactActiveClaimWithAPromotionBoundCompletionClaim
-    const promoted = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess)
-    for (const omittedTag of [
-      "TargetPromotionObservedSuccess",
-      "TaskAttemptPlanned",
-      "TaskClaimAcquired",
-      "TaskTrackerFactsObserved"
-    ] as const) {
-      const exit = yield* Effect.exit(
-        runIntegrationFinalityProtocolCassetteFromPromotedRecords(
-          cassette,
-          promoted.records.filter(({ event }) => event._tag !== omittedTag)
+  useAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess, (promoted) =>
+    Effect.gen(function* () {
+      for (const omittedTag of [
+        "TargetPromotionObservedSuccess",
+        "TaskAttemptPlanned",
+        "TaskClaimAcquired",
+        "TaskTrackerFactsObserved"
+      ] as const) {
+        const exit = yield* Effect.exit(
+          evaluateIntegrationFinalityPremisesFromRawRecords(
+            promoted.records.filter(({ event }) => event._tag !== omittedTag)
+          )
         )
-      )
-      expect(exit._tag).toBe("Failure")
-    }
-  })
+        expect(exit._tag).toBe("Failure")
+      }
+    })
+  )
 )
 
 it.effect("keeps an empty frontier active while claim replacement is non-convergent", () =>
@@ -7861,7 +7881,7 @@ it.effect("keeps an empty frontier active while claim replacement is non-converg
       name: "replacement remains pending at an empty frontier",
       story: [{ _tag: "RunReplacement" }, { _tag: "ObserveEmptyFrontier" }, { _tag: "AwaitSettlement", expected }]
     })
-    const run = yield* runIntegrationFinalityProtocolCassette(cassette)
+    const run = yield* runIntegrationFinalityFromPromotedCassette(cassette)
     expect(run.sawEmptyFrontierWhilePending).toBe(true)
   })
 )
@@ -7958,13 +7978,13 @@ it.effect("replays definite completion-claim boundary rejections as terminal typ
         }
       ]
     })
-    expect((yield* runIntegrationFinalityProtocolCassette(replacement)).failureTag).toBe(
+    expect((yield* runIntegrationFinalityFromPromotedCassette(replacement)).failureTag).toBe(
       "IntegrationFinality.CompletionClaimReplacementFailure"
     )
-    expect((yield* runIntegrationFinalityProtocolCassette(deletion)).failureTag).toBe(
+    expect((yield* runIntegrationFinalityFromPromotedCassette(deletion)).failureTag).toBe(
       "IntegrationFinality.CompletionClaimDeletionFailure"
     )
-    expect((yield* runIntegrationFinalityProtocolCassette(ambiguousReplacement)).failureTag).toBe(
+    expect((yield* runIntegrationFinalityFromPromotedCassette(ambiguousReplacement)).failureTag).toBe(
       "IntegrationFinality.CompletionClaimDidNotConverge"
     )
   })

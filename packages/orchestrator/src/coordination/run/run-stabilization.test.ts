@@ -1516,6 +1516,7 @@ it.effect("retains accepted integration ownership through G2 and releases it onc
           repository: GitRepositoryLocator.make("/resource-retention.git"),
           ref: IntegrationTargetRef.make("refs/heads/master")
         }),
+        plannedAttempt: activeVerticalAttempt,
         queuedAt: JournalPosition.make(2)
       }
       yield* controller.acquire(responsibility)
@@ -1537,8 +1538,14 @@ it.effect("retains accepted integration ownership through G2 and releases it onc
           Effect.flatMap((count) =>
             count === 3
               ? controller.snapshot.pipe(
-                  Effect.tap(({ heldResponsibilityPositions }) =>
-                    Ref.set(observedAfterG2, heldResponsibilityPositions.has(responsibility.queuedAt))
+                  Effect.tap(({ heldResponsibilities }) =>
+                    Ref.set(
+                      observedAfterG2,
+                      heldResponsibilities.some(
+                        ({ queuedAt, runId: heldRunId }) =>
+                          queuedAt === responsibility.queuedAt && heldRunId === responsibility.plannedAttempt.runId
+                      )
+                    )
                   ),
                   Effect.andThen(underlying.attach)
                 )
@@ -1549,7 +1556,10 @@ it.effect("retains accepted integration ownership through G2 and releases it onc
       const interpreter = Layer.mock(WorkflowInterpreter, {
         readTrackerGraph: (operation: ReturnType<typeof makeTrackerGraphObservationOperation>) =>
           Effect.gen(function* () {
-            expect((yield* controller.snapshot).heldResponsibilityPositions).toContain(responsibility.queuedAt)
+            expect((yield* controller.snapshot).heldResponsibilities).toContainEqual({
+              queuedAt: responsibility.queuedAt,
+              runId: responsibility.plannedAttempt.runId
+            })
             expect(yield* Ref.get(releases)).toBe(0)
             const g2 = graph(operation.operationId, 4, g1.observation.snapshot)
             yield* SubscriptionRef.set(state, evaluation(base, g2))
@@ -1569,7 +1579,7 @@ it.effect("retains accepted integration ownership through G2 and releases it onc
 
       expect(yield* Ref.get(observedAfterG2)).toBe(true)
       expect(yield* Ref.get(releases)).toBe(1)
-      expect((yield* controller.snapshot).heldResponsibilityPositions).toEqual(new Set())
+      expect((yield* controller.snapshot).heldResponsibilities).toEqual([])
     })
   )
 )

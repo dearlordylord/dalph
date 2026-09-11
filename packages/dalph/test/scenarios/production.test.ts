@@ -1226,9 +1226,12 @@ it.effect("ordinary production Run activation sends FullRerun cleanup through th
         ])
       )
 
-      yield* appendCandidateProvenance(predecessor, successor, "ordinary-production-full-rerun", "StartupValid").pipe(
-        Effect.provide(sqliteJournalTestLayer({ filename: fixture.journalFilename }))
-      )
+      yield* appendCandidateProvenance(
+        predecessor,
+        successor,
+        "ordinary-production-full-rerun",
+        "StartupValidAcceptedAttempt"
+      ).pipe(Effect.provide(sqliteJournalTestLayer({ filename: fixture.journalFilename })))
 
       const activation = yield* Effect.exit(fixture.activate())
       // Cleanup is the qualified boundary under test. Delivery then reaches
@@ -1295,7 +1298,7 @@ it.effect("ordinary production Run activation leaves a current quarantine untouc
         startedAt: positions.startedAt,
         targetLineageObservedAt: positions.predecessorLineageObservedAt
       })
-      yield* appendCurrentQuarantineProvenance(predecessor, "StartupValid").pipe(
+      yield* appendCurrentQuarantineProvenance(predecessor, "StartupValidAcceptedAttempt").pipe(
         Effect.provide(sqliteJournalTestLayer({ filename: fixture.journalFilename }))
       )
 

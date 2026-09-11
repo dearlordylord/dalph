@@ -68,7 +68,7 @@ const deletionOperationId = completionClaimDeletionOperationIdFor(fixture.claim)
 const runtimeFacts = {
   activeClaimByAttemptId: new Map([[fixture.plannedAttempt.attemptId, fixture.activeClaim]]),
   currentTrackerTaskIds: new Set([fixture.taskId]),
-  heldResponsibilityPositions: new Set<JournalPosition>(),
+  heldResponsibilities: [],
   integrationFinalityConfigured: true,
   integrationTarget: Option.none(),
   taskClaimAuthorityByAttemptId: new Map()
@@ -489,9 +489,9 @@ describe("#141 integration-finality frontier", () => {
       record(12, settlement)
     ]
     expect(integrationFinalityTransitionsFor(records, responsibility, promotion, runtimeFacts)).toEqual([])
-    expect(integrationFinalityTransitionsFor(journalEvidenceFrom(records), responsibility, promotion, runtimeFacts)).toEqual(
-      []
-    )
+    expect(
+      integrationFinalityTransitionsFor(journalEvidenceFrom(records), responsibility, promotion, runtimeFacts)
+    ).toEqual([])
   })
 
   it("resumes settlement after deletion was recorded but before task finality was recorded", () => {
