@@ -362,6 +362,9 @@ const taskIdsOf = (record: JournalRecord, indexes?: EvidenceIndexes): ReadonlySe
     ids.add(event.subject.plannedAttempt.taskId)
     ids.add(event.successorPlan.plannedAttempt.taskId)
   }
+  if (event._tag === "TargetPromotionObservedSuccess") {
+    ids.add(event.correlation.qualifiedCandidate.run.session.plannedAttempt.taskId)
+  }
   for (const taskId of graphObservationTaskIds(record, indexes)) ids.add(taskId)
   return ids
 }
