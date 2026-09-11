@@ -1,6 +1,6 @@
 import { describe, expect } from "vitest"
 import { it } from "@effect/vitest"
-import { Effect, Option, Ref, Schema } from "effect"
+import { Effect, Layer, Option, Ref, Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -27,8 +27,10 @@ import { InitialControlPolicy } from "../../../control/policy.js"
 import { OperationId } from "../../identity.js"
 import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../registry/event.js"
 import { makeTargetLineageObservationOperation } from "../../registry/operation.js"
-import { InRunJournal, JournalStore, JournalStoreContradiction } from "../../../workflow-journal/store.js"
+import { InRunJournal, JournalStoreContradiction } from "../../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { unpublishedAcceptedJournalReaderTestLayer } from "../../../workflow-journal/test-accepted-reader.js"
+import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
@@ -76,6 +78,11 @@ import { deriveCurrentIntegratorState, integratorResponsibilityFactsFromCorrelat
 import { describeJournalEvent } from "../../registry/event-descriptor.js"
 
 const sha = (value: string): GitCommitSha => GitCommitSha.make(value.repeat(40))
+
+/** Sparse and malformed decoded projections exercise the cold diagnostic boundary, never accepted live state. */
+const rawJournalBoundaryLayer = unpublishedAcceptedJournalReaderTestLayer.pipe(
+  Layer.provideMerge(memoryJournalTestLayer)
+)
 
 const runId = RunId.make("run-successor-1")
 const attemptId = AttemptId.make("attempt-successor-1")
@@ -439,7 +446,7 @@ describe("Integrator FullRerun successor session", () => {
         _tag: "RunUnfinished",
         run: { ordinal: IntegratorRunOrdinal.make(1), session: first.event.successor }
       })
-    }).pipe(Effect.provide(memoryJournalTestLayer))
+    }).pipe(Effect.provide(rawJournalBoundaryLayer))
   )
 
   it.effect("recovers a recorded full rerun without creating a second successor", () =>
@@ -458,7 +465,7 @@ describe("Integrator FullRerun successor session", () => {
       expect(
         (yield* Ref.get(records)).filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
       ).toHaveLength(1)
-    }).pipe(Effect.provide(memoryJournalTestLayer))
+    }).pipe(Effect.provide(rawJournalBoundaryLayer))
   )
 
   it.effect("rejects a read intended before D even when its observation arrives afterward", () =>
@@ -478,7 +485,7 @@ describe("Integrator FullRerun successor session", () => {
       const { journal } = yield* makeJournal(initial)
       const failure = yield* appendIntegratorSuccessorSessionIfNeeded(journal, input, initial).pipe(Effect.flip)
       expect(failure).toBeInstanceOf(IntegratorJournalContradiction)
-    }).pipe(Effect.provide(memoryJournalTestLayer))
+    }).pipe(Effect.provide(rawJournalBoundaryLayer))
   )
 
   it.effect("an operator FullRerun fixes one successor at the fresh head without changing its queue position", () =>
@@ -516,7 +523,7 @@ describe("Integrator FullRerun successor session", () => {
       expect(
         (yield* Ref.get(records)).filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
       ).toHaveLength(1)
-    }).pipe(Effect.provide(memoryJournalTestLayer))
+    }).pipe(Effect.provide(rawJournalBoundaryLayer))
   )
 
   it.effect("rejects a fresh observation reordered before D", () =>
@@ -534,7 +541,7 @@ describe("Integrator FullRerun successor session", () => {
       const { journal } = yield* makeJournal(initial)
       const failure = yield* appendIntegratorSuccessorSessionIfNeeded(journal, input, initial).pipe(Effect.flip)
       expect(failure).toBeInstanceOf(IntegratorJournalContradiction)
-    }).pipe(Effect.provide(memoryJournalTestLayer))
+    }).pipe(Effect.provide(rawJournalBoundaryLayer))
   )
 
   it.effect("rejects a second successor identity under the one predecessor key", () =>
@@ -601,7 +608,7 @@ describe("Integrator FullRerun successor session", () => {
         (yield* Ref.get(records)).filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
       ).toHaveLength(1)
       void later
-    }).pipe(Effect.provide(memoryJournalTestLayer))
+    }).pipe(Effect.provide(rawJournalBoundaryLayer))
   )
 
   it.effect("rejects every missing or contradictory FullRerun predecessor fact before appending S2", () =>
@@ -704,7 +711,7 @@ describe("Integrator FullRerun successor session", () => {
         initial
       ).pipe(Effect.flip)
       expect(incompatible).toBeInstanceOf(IntegratorJournalContradiction)
-    }).pipe(Effect.provide(memoryJournalTestLayer))
+    }).pipe(Effect.provide(rawJournalBoundaryLayer))
   )
 
   it.effect("rejects duplicate or foreign successor identities and collisions with existing resources", () =>
@@ -878,7 +885,7 @@ describe("Integrator FullRerun successor session", () => {
         [...initial, contradictoryIdentity]
       ).pipe(Effect.flip)
       expect(identityFailure).toBeInstanceOf(IntegratorJournalContradiction)
-    }).pipe(Effect.provide(memoryJournalTestLayer))
+    }).pipe(Effect.provide(rawJournalBoundaryLayer))
   )
 
   it.effect("reconciles an ambiguous successor append only when the reread contains the exact winner", () =>
@@ -886,18 +893,8 @@ describe("Integrator FullRerun successor session", () => {
       const fixture = acceptedSuccessorFixture()
       const initial = fixture.records
       const input = fixture.input
-      const store = yield* JournalStore
       const baseJournal = yield* InRunJournal
       const accepted = yield* AcceptedJournalReader
-      const beginning = initial[0]
-      if (beginning?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("fixture lacks Run beginning")
-      yield* store.beginRun(runId, fixture.trackerTarget, beginning.event.initialControlPolicy)
-      for (const record of initial.slice(1)) {
-        if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
-          return yield* Effect.die("fixture contains unexpected Run lifecycle event")
-        }
-        yield* store.append(runId, record.key, record.event)
-      }
       const winningJournal: InRunJournal["Service"] = {
         append: (requestedRunId, key, event) =>
           baseJournal
@@ -937,10 +934,19 @@ describe("Integrator FullRerun successor session", () => {
         read: () => Effect.succeed(initial)
       }
       const foreignAppend = yield* appendIntegratorSuccessorSessionIfNeeded(foreignAppendJournal, input, initial).pipe(
+        Effect.provideService(AcceptedJournalReader, accepted),
         Effect.flip
       )
       expect(foreignAppend).toBeInstanceOf(IntegratorJournalContradiction)
-    }).pipe(Effect.provide(memoryJournalTestLayer))
+    }).pipe(
+      Effect.provide(
+        liveJournalTestLayer({
+          records: acceptedSuccessorFixture().records,
+          runId,
+          target: acceptedSuccessorFixture().trackerTarget
+        })
+      )
+    )
   )
 
   it.effect("fails closed when reconstructing an active successor from duplicate, incomplete, or foreign history", () =>
@@ -1020,6 +1026,6 @@ describe("Integrator FullRerun successor session", () => {
       })
       const noPredecessor = yield* readActiveIntegratorSession(initial, unrelatedResponsibility)
       expect(Option.isNone(noPredecessor)).toBe(true)
-    }).pipe(Effect.provide(memoryJournalTestLayer))
+    }).pipe(Effect.provide(rawJournalBoundaryLayer))
   )
 })
