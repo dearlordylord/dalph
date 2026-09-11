@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Delivery relations keep the activation-scoped graph boundary with the reactive publication interpreter it constrains. */
 import { type PlannedTaskAttempt, type RunId, type TaskId } from "@dalph/contracts"
 import { Deferred, Effect, Layer, Option, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import * as Cause from "effect/Cause"
