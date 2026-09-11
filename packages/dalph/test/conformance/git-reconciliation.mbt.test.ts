@@ -1,6 +1,5 @@
-import { it } from "@effect/vitest"
-import { defineDriver, stateCheck } from "@firfi/quint-connect/effect"
-import { quintIt } from "@firfi/quint-connect/vitest"
+import { expect, it } from "@effect/vitest"
+import { defineDriver, quintRun, stateCheck } from "@firfi/quint-connect/effect"
 import {
   AcceptedResult,
   EvidenceDigest,
@@ -19,7 +18,7 @@ import {
   WorktreeLocator,
   makeTaskWorkSpecification
 } from "@dalph/contracts"
-import { Context, Effect, Layer, Option, Ref, Schema } from "effect"
+import { Context, Effect, Layer, Option, Ref, Schema, Scope, ScopedRef } from "effect"
 import { ActiveTaskClaim } from "../../../orchestrator/src/authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../../orchestrator/src/authorities/task-tracker/claim.js"
 import { makeAcceptedIntegrationHistory } from "../../../orchestrator/test/support/accepted-integration-history.js"
@@ -42,9 +41,9 @@ import {
   TrackerAdapterReadError,
   TrackerAdapterReadFailureReason
 } from "../../../orchestrator/src/authorities/task-tracker/graph-reader.js"
-import { InRunJournal, JournalStore } from "../../../orchestrator/src/workflow-journal/store.js"
-import { memoryJournalTestLayer } from "../../../orchestrator/src/workflow-journal/adapters/memory-store.js"
+import { InRunJournal } from "../../../orchestrator/src/workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../../orchestrator/src/workflow-journal/accepted-reader.js"
+import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
 import { JournalPosition } from "../../../orchestrator/src/workflow-journal/identity.js"
 import {
   makeIntegrationTargetResourceController,
@@ -120,11 +119,7 @@ const independentTask = {
  * but every blocker, reread, supersession, and restart goes through the same
  * production append/reconstruct/frontier seams as the coordinator.
  */
-const makeProductionReconciliationTrace = () => {
-  const context = Effect.runSync(Effect.scoped(Layer.build(memoryJournalTestLayer)))
-  const journalStore = Context.get(context, JournalStore)
-  const journal = Context.get(context, InRunJournal)
-  const accepted = Context.get(context, AcceptedJournalReader)
+const makeProductionReconciliationTrace = Effect.gen(function* () {
   const runId = RunId.make("git-reconciliation-production-run")
   const target = FixtureTarget.make("git-reconciliation-production-target")
   const integrationTarget = IntegrationTarget.make({
@@ -165,6 +160,10 @@ const makeProductionReconciliationTrace = () => {
     taskSpecification: specification,
     trackerTarget: target
   })
+  const context = yield* Layer.build(liveJournalTestLayer({ records: acceptedHistory.records, runId, target }))
+  const journal = Context.get(context, InRunJournal)
+  const accepted = Context.get(context, AcceptedJournalReader)
+  const scope = yield* Effect.scope
   const started = acceptedHistory.responsibility
   const reportedCandidate = IntegratorCandidateText.make("git-reconciliation-reported-candidate")
   const candidateForHead = (head: GitCommitSha) => (head === base ? candidate : GitCommitSha.make("5".repeat(40)))
@@ -188,7 +187,7 @@ const makeProductionReconciliationTrace = () => {
         })
       )
   })
-  const resource = Effect.runSync(makeIntegrationTargetResourceController())
+  const resource = yield* makeIntegrationTargetResourceController()
   const physicalResponsibility = { integrationTarget, queuedAt: started.queuedAt }
   const initialGraphProjection = projectTrackerSnapshot({
     revision: "git-reconciliation-production-initial",
@@ -202,8 +201,8 @@ const makeProductionReconciliationTrace = () => {
     ]
   })
   if (initialGraphProjection._tag !== "Valid") return Effect.runSync(Effect.die("production MBT initial graph failed"))
-  const graphSnapshot = Effect.runSync(Ref.make(initialGraphProjection.snapshot))
-  const graphReadMode = Effect.runSync(Ref.make<"Complete" | "Incomplete">("Complete"))
+  const graphSnapshot = yield* Ref.make(initialGraphProjection.snapshot)
+  const graphReadMode = yield* Ref.make<"Complete" | "Incomplete">("Complete")
   const trackerReader = TrackerGraphReader.of({
     read: Effect.fn("GitReconciliation.MBT.TrackerGraphReader.read")(function* () {
       if ((yield* Ref.get(graphReadMode)) === "Incomplete") {
@@ -227,26 +226,20 @@ const makeProductionReconciliationTrace = () => {
   const trackerReaderLayer = Layer.succeed(TrackerGraphReader, trackerReader)
   const workflowInterpreterLayer = controlledWorkflowInterpreterLayer.pipe(Layer.provide(trackerReaderLayer))
   const makeJournaledInterpreter = () => {
-    const context = Effect.runSync(
-      Effect.scoped(
-        Layer.build(
-          journaledWorkflowInterpreterLayer(runId, workflowInterpreterLayer).pipe(
-            Layer.provide(Layer.succeed(InRunJournal, journal)),
-            Layer.provide(Layer.succeed(AcceptedJournalReader, accepted))
-          )
+    const interpreterContext = Effect.runSync(
+      Layer.build(
+        journaledWorkflowInterpreterLayer(runId, workflowInterpreterLayer).pipe(
+          Layer.provide(Layer.succeed(InRunJournal, journal)),
+          Layer.provide(Layer.succeed(AcceptedJournalReader, accepted))
         )
-      )
+      ).pipe(Effect.provideService(Scope.Scope, scope))
     )
-    return Context.get(context, WorkflowInterpreter)
+    return Context.get(interpreterContext, WorkflowInterpreter)
   }
   let interpreter = makeJournaledInterpreter()
   const targetLineage = acceptedHistory.targetLineage
   let operationOrdinal = 0
 
-  const append = (
-    key: Parameters<InRunJournal["Service"]["append"]>[1],
-    event: Parameters<InRunJournal["Service"]["append"]>[2]
-  ) => Effect.runSync(journal.append(runId, key, event))
   const records = () => Effect.runSync(journal.read(runId))
   const reconstruct = () => {
     const result = reconstructRunState(runId, records())
@@ -390,16 +383,6 @@ const makeProductionReconciliationTrace = () => {
       )
     )
   }
-  const beginning = acceptedHistory.records[0]
-  if (beginning?.event._tag !== "WorkflowRunBegan")
-    return Effect.runSync(Effect.die("accepted fixture lacks Run beginning"))
-  Effect.runSync(journalStore.beginRun(runId, target, beginning.event.initialControlPolicy))
-  for (const retained of acceptedHistory.records.slice(1)) {
-    if (retained.event._tag === "WorkflowRunBegan" || retained.event._tag === "WorkflowRunTerminated") {
-      return Effect.runSync(Effect.die(`accepted fixture contains unexpected ${retained.event._tag}`))
-    }
-    append(retained.key, retained.event)
-  }
   Effect.runSync(resource.acquire(physicalResponsibility))
   Effect.runSync(resource.publishAcceptedOwnership(physicalResponsibility))
   const initialIntegratorResult = integratorProtocol(started, targetLineage, acceptedHistory.targetLineageObservedAt)
@@ -471,8 +454,16 @@ const makeProductionReconciliationTrace = () => {
     return { candidateCommit: state.candidateCommit, expectedHead }
   }
 
-  return { readGraph, readIncompleteTrackerGraph, qualifiedCandidate, frontier, applyResourceTransition, started }
-}
+  return {
+    applyResourceTransition,
+    frontier,
+    qualifiedCandidate,
+    readGraph,
+    readIncompleteTrackerGraph,
+    recordCount: () => records().length,
+    started
+  }
+})
 
 const SpecProjection = Schema.Struct({
   state: Schema.Struct({
@@ -532,7 +523,10 @@ const gitDecisionFromFrontier = (constraint: Constraint, status: Status): string
 // target-promotion/finality and blocker-session projections through
 // `gitReconciliationStep`, but this adapter does not manufacture those missing
 // outer-Integrator or target-promotion Journal events.
-const gitReconciliationDriver = defineDriver(
+type ProductionReconciliationTrace = Effect.Success<typeof makeProductionReconciliationTrace>
+
+const makeGitReconciliationDriver = (runtime: ScopedRef.ScopedRef<ProductionReconciliationTrace>) =>
+  defineDriver(
   {
     init: {},
     observeAmbiguousTargetAfterGitQualification: {},
@@ -552,7 +546,7 @@ const gitReconciliationDriver = defineDriver(
     selectIndependentTask: {}
   },
   () => {
-    const production = makeProductionReconciliationTrace()
+    const production = () => ScopedRef.getUnsafe(runtime)
     let status: Status = "Executing"
     let constraint: Constraint = "NoGitConstraint"
     let decision = "ContinueAttempt"
@@ -630,13 +624,14 @@ const gitReconciliationDriver = defineDriver(
         promotionProof = result._tag === "PromoteByExactCompareAndSet" && candidateGitQualifiedAgainstExpectedHead
       })
     const decideQualifiedPromotion = (target: PromotionTargetObservation) => {
-      const qualified = production.qualifiedCandidate()
+      const qualified = production().qualifiedCandidate()
       return decidePromotion(target, true, qualified.candidateCommit, qualified.expectedHead)
     }
 
     return {
       init: () =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
+          yield* ScopedRef.set(runtime, makeProductionReconciliationTrace)
           status = "Executing"
           constraint = "NoGitConstraint"
           decision = "ContinueAttempt"
@@ -658,9 +653,9 @@ const gitReconciliationDriver = defineDriver(
         decideQualifiedPromotion(PromotionTargetObservation.cases.AmbiguousTargetHead.make({})),
       observePrePromotionDependencyBlocker: () =>
         Effect.sync(() => {
-          const result = production.readGraph("before-promotion-blocker", false, false)
-          production.applyResourceTransition()
-          const current = production.frontier()
+          const result = production().readGraph("before-promotion-blocker", false, false)
+          production().applyResourceTransition()
+          const current = production().frontier()
           positionHeld = current.held
           decision = current.frontier.explanations.some(({ _tag }) => _tag === "IntegrationDependencyWait")
             ? "GitConstraintWait"
@@ -671,8 +666,8 @@ const gitReconciliationDriver = defineDriver(
         }),
       observeIncompleteTrackerFacts: () =>
         Effect.sync(() => {
-          production.readIncompleteTrackerGraph()
-          positionHeld = production.frontier().held
+          production().readIncompleteTrackerGraph()
+          positionHeld = production().frontier().held
           decision = "GitConstraintWait"
           trackerBlocker = "IncompleteTrackerFacts"
         }),
@@ -701,7 +696,7 @@ const gitReconciliationDriver = defineDriver(
         ),
       observeExactExpectedTargetWithGitQualifiedCandidate: () =>
         (() => {
-          const qualified = production.qualifiedCandidate()
+          const qualified = production().qualifiedCandidate()
           return decidePromotion(
             PromotionTargetObservation.cases.ExactTargetHead.make({ currentHeadSha: qualified.expectedHead }),
             true,
@@ -799,13 +794,36 @@ const gitReconciliationDriver = defineDriver(
           worktreePreserved
         }))
     }
-  }
+  })
+
+const gitReconciliationDriver = {
+  create: () =>
+    Effect.gen(function* () {
+      const runtime = yield* ScopedRef.fromAcquire(makeProductionReconciliationTrace)
+      return yield* makeGitReconciliationDriver(runtime).create()
+    })
+}
+
+it.effect("keeps restart replay on one live journal and replaces the complete runtime on init", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const runtime = yield* ScopedRef.fromAcquire(makeProductionReconciliationTrace)
+      const first = yield* ScopedRef.get(runtime)
+      const initialCount = first.recordCount()
+      first.readIncompleteTrackerGraph()
+      expect(first.recordCount() - initialCount).toBe(4)
+
+      yield* ScopedRef.set(runtime, makeProductionReconciliationTrace)
+      const second = yield* ScopedRef.get(runtime)
+      expect(second).not.toBe(first)
+      expect(second.recordCount()).toBe(initialCount)
+    })
+  )
 )
 
-quintIt(
-  it.effect,
+it.effect(
   "replays Git reconciliation through production decisions and frontier dispositions",
-  {
+  () => quintRun({
     backend: "typescript",
     driverFactory: gitReconciliationDriver,
     maxSteps: 12,
@@ -814,20 +832,17 @@ quintIt(
     spec: "specs/gitReconciliation.qnt",
     stateCheck: stateCheck(
       (raw) =>
-        Effect.sync(() => {
-          return raw
-        }).pipe(
-          Effect.flatMap(Schema.decodeUnknownEffect(SpecProjection)),
-          Effect.map(({ state }) => ({
+        Effect.gen(function* () {
+          const { state } = yield* Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(Effect.orDie)
+          return {
             ...state,
             constraint: variantTag(state.constraint),
             decision: variantTag(state.decision),
             resultRejection: variantTag(state.resultRejection),
             status: variantTag(state.status),
             trackerBlocker: variantTag(state.trackerBlocker)
-          })),
-          Effect.orDie
-        ),
+          }
+        }),
       (spec, implementation) =>
         spec.candidateGitQualified === implementation.candidateGitQualified &&
         spec.candidatePreserved === implementation.candidatePreserved &&
@@ -850,6 +865,6 @@ quintIt(
         spec.trackerBlocker === implementation.trackerBlocker &&
         spec.worktreePreserved === implementation.worktreePreserved
     )
-  },
-  30_000
+  }),
+  { timeout: 30_000 }
 )

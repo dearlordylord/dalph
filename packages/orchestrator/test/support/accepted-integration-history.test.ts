@@ -26,6 +26,9 @@ import { integratorCorrelationFor } from "../../src/workflow/protocols/integrato
 import { JournalPosition } from "../../src/workflow-journal/identity.js"
 import { acceptedResultFixture } from "./evidence.js"
 import { makeAcceptedIntegrationHistory } from "./accepted-integration-history.js"
+import { makeExecutingAttemptHistory } from "./executing-attempt-history.js"
+import { InitialControlPolicy } from "../../src/control/policy.js"
+import { TaskWorkCapacity } from "../../src/coordination/admission/capacity.js"
 
 const runId = RunId.make("accepted-integration-history-test")
 const taskId = TaskId.make("accepted-integration-task")
@@ -69,6 +72,64 @@ const fixture = makeAcceptedIntegrationHistory({
 })
 
 describe("accepted integration history fixture", () => {
+  it("builds one executing attempt without terminal or integration facts", () => {
+    const history = makeExecutingAttemptHistory({
+      activeClaim,
+      plannedAttempt,
+      runId,
+      trackerTarget,
+      taskSpecification: specification
+    })
+    expect(reduceWorkflowJournalHistory(runId, history.records)._tag).toBe("ValidWorkflowJournalHistory")
+    expect(history.records.at(-1)?.event).toMatchObject({
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "ExecutorWorkExecuting" }
+    })
+    expect(history.records.some(({ event }) => event._tag === "IntegrationResponsibilityBegan")).toBe(false)
+  })
+
+  it("continues a shared Run with a second independently authorized executing attempt", () => {
+    const first = makeExecutingAttemptHistory({
+      activeClaim,
+      initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+      plannedAttempt,
+      runId,
+      trackerTarget,
+      taskSpecification: specification
+    })
+    const secondTask = TaskId.make("second-executing-task")
+    const secondSpecification = makeTaskWorkSpecification({
+      taskId: secondTask,
+      body: "Second task",
+      title: "Second task"
+    })
+    const second = makeExecutingAttemptHistory({
+      activeClaim: ActiveTaskClaim.make({
+        ...activeClaim,
+        taskId: secondTask,
+        operationId: OperationId.make("second-claim"),
+        token: ClaimToken.make("second-token")
+      }),
+      plannedAttempt: PlannedTaskAttempt.make({
+        ...plannedAttempt,
+        taskId: secondTask,
+        taskRevision: secondSpecification.fingerprint,
+        attemptId: AttemptId.make("second-attempt"),
+        branch: TaskBranchRef.make("refs/heads/dalph/second"),
+        worktree: WorktreeLocator.make("/worktrees/second")
+      }),
+      runId,
+      trackerTarget,
+      taskSpecification: secondSpecification,
+      priorRecords: first.records
+    })
+    expect(reduceWorkflowJournalHistory(runId, second.records)._tag).toBe("ValidWorkflowJournalHistory")
+    expect(second.records.slice(0, first.records.length)).toEqual(first.records)
+    expect(second.records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+    expect(
+      second.records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan")
+    ).toHaveLength(2)
+  })
   it("returns a reducer-accepted base with dynamic responsibility and lineage positions", () => {
     const reduced = reduceWorkflowJournalHistory(runId, fixture.records)
     expect(reduced._tag).toBe("ValidWorkflowJournalHistory")
@@ -93,12 +154,16 @@ describe("accepted integration history fixture", () => {
     const partial = fixture.records
       .filter(
         ({ event }) =>
-          event._tag !== "IntegrationStarted" && event._tag !== "TargetLineageObserved" && event._tag !== "GitReadIntentRecorded"
+          event._tag !== "IntegrationStarted" &&
+          event._tag !== "TargetLineageObserved" &&
+          event._tag !== "GitReadIntentRecorded"
       )
       .map((record, index) => ({ ...record, position: JournalPosition.make(index + 1) }))
-    const fixed: typeof partial[number] = {
+    const fixed: (typeof partial)[number] = {
       event: IntegratorSessionFixedEvent.make({ correlation: session, version: workflowJournalEventVersion }),
-      key: describeJournalEvent(IntegratorSessionFixedEvent.make({ correlation: session, version: workflowJournalEventVersion })).expectedKey,
+      key: describeJournalEvent(
+        IntegratorSessionFixedEvent.make({ correlation: session, version: workflowJournalEventVersion })
+      ).expectedKey,
       position: JournalPosition.make(partial.length + 1),
       runId
     }
@@ -106,9 +171,7 @@ describe("accepted integration history fixture", () => {
     expect(reduced._tag).toBe("InvalidWorkflowJournalHistory")
     if (reduced._tag !== "InvalidWorkflowJournalHistory") return
     expect(
-      reduced.issues.some(
-        (issue) => "detail" in issue && issue.detail.includes("no exact earlier IntegrationStarted")
-      )
+      reduced.issues.some((issue) => "detail" in issue && issue.detail.includes("no exact earlier IntegrationStarted"))
     ).toBe(true)
   })
 })

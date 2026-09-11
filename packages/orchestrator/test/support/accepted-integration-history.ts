@@ -1,4 +1,4 @@
-import { makeTaskWorkSpecification, PlannedAttemptExecutorReport } from "@dalph/contracts"
+import { PlannedAttemptExecutorReport } from "@dalph/contracts"
 import type {
   AcceptedResult,
   GitCommitSha,
@@ -7,55 +7,38 @@ import type {
   RunId,
   TaskWorkSpecification
 } from "@dalph/contracts"
-import { Effect, Option } from "effect"
-import { PlannedWorktreeReady } from "../../src/authorities/git/worktree.js"
-import { projectTrackerSnapshot } from "../../src/authorities/task-tracker/graph.js"
-import { TaskClaimAcquisition } from "../../src/authorities/task-tracker/claim-mutation.js"
+import { Effect } from "effect"
 import type { ActiveTaskClaim } from "../../src/authorities/task-tracker/claim-mutation.js"
-import { TaskLifecycle, TrackerRevision } from "../../src/authorities/task-tracker/task.js"
 import type { TrackerTarget } from "../../src/authorities/task-tracker/target.js"
-import { InitialControlPolicy } from "../../src/control/policy.js"
-import { TaskWorkCapacity } from "../../src/coordination/admission/capacity.js"
+import type { InitialControlPolicy } from "../../src/control/policy.js"
 import { reduceWorkflowJournalHistory } from "../../src/coordination/reconstruction/history.js"
-import { makeCompleteTaskTrackerFactsObserved, makeFocusedTaskWorkSpecificationFactsObserved, taskTrackerFactsObservedEvent } from "../../src/workflow/task-tracker-facts/observation.js"
 import { OperationId } from "../../src/workflow/identity.js"
 import { workflowJournalEventVersion } from "../../src/workflow/kernel/event.js"
 import { describeJournalEvent } from "../../src/workflow/registry/event-descriptor.js"
+import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../src/workflow/registry/event.js"
 import {
-  GitReadIntentRecordedEvent,
-  TargetLineageObservedEvent,
-  TaskWorktreeReadyEvent,
-  TaskWorktreeReconciliationIntendedEvent,
-  TaskAttemptPlannedEvent,
-  TaskClaimAcquiredEvent,
-  TaskClaimAcquisitionIntendedEvent,
-  taskTrackerReadIntent
-} from "../../src/workflow/registry/event.js"
-import {
-  PlannedAttemptExecutorCommandIntendedEvent,
-  PlannedAttemptExecutorCommandOrdinal,
-  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorStateObservation,
   PlannedAttemptExecutorStateObservationOrdinal,
-  PlannedAttemptExecutorWorkReportedEvent,
-  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+  PlannedAttemptExecutorWorkReportedEvent
 } from "../../src/workflow/protocols/planned-attempt-executor-work/events.js"
-import {
+import { makeTargetLineageObservationOperation } from "../../src/workflow/registry/operation.js"
+import type {
+  makeTrackerGraphObservationOperation,
   makeTaskAttemptPlanOperation,
-  makeTaskClaimAcquisitionOperation,
   makeTaskWorkSpecificationObservationOperation,
-  makeTaskWorktreeReconciliationOperation,
-  makeTargetLineageObservationOperation,
-  makeTrackerGraphObservationOperation
+  makeTaskWorktreeReconciliationOperation
 } from "../../src/workflow/registry/operation.js"
 import { JournalPosition } from "../../src/workflow-journal/identity.js"
-import { makeWorkflowRunBeganRecord } from "../../src/workflow-journal/run-lifecycle.js"
 import type { JournalRecord } from "../../src/workflow-journal/store.js"
 import { TargetLineageObservation } from "../../src/authorities/git/target-lineage.js"
-import { IntegrationResponsibilityBeganEvent, IntegrationStartedEvent } from "../../src/workflow/protocols/integration-admission/events.js"
+import {
+  IntegrationResponsibilityBeganEvent,
+  IntegrationStartedEvent
+} from "../../src/workflow/protocols/integration-admission/events.js"
 import { StartedIntegrationResponsibility } from "../../src/workflow/protocols/integration-admission/responsibility.js"
+import { makeExecutingAttemptHistory } from "./executing-attempt-history.js"
 
 const acceptedExecutorReportOrdinalValue = 2
 
@@ -90,13 +73,6 @@ export interface AcceptedIntegrationHistory {
   readonly worktreeOperation: ReturnType<typeof makeTaskWorktreeReconciliationOperation>
 }
 
-const defaultSpecification = (plannedAttempt: PlannedTaskAttempt): TaskWorkSpecification =>
-  makeTaskWorkSpecification({
-    body: `Accepted integration fixture for ${plannedAttempt.taskId}`,
-    taskId: plannedAttempt.taskId,
-    title: `Accepted integration fixture for ${plannedAttempt.taskId}`
-  })
-
 const appendRecord = (runId: RunId, records: ReadonlyArray<JournalRecord>, event: JournalRecord["event"]) => {
   const appended: JournalRecord = {
     event,
@@ -116,150 +92,25 @@ const requireValidHistory = (runId: RunId, records: ReadonlyArray<JournalRecord>
 
 /** Builds a reducer-accepted pre-session history with positions derived from append order. */
 export const makeAcceptedIntegrationHistory = (input: AcceptedIntegrationHistoryInput): AcceptedIntegrationHistory => {
-  const specification = input.taskSpecification ?? defaultSpecification(input.plannedAttempt)
-  if (specification.fingerprint !== input.plannedAttempt.taskRevision) {
-    Effect.runSync(Effect.die("accepted integration fixture specification must match the planned task revision"))
+  const executing = makeExecutingAttemptHistory(input)
+  const { graphOperation, planOperation, specification, specificationOperation, worktreeOperation } = executing
+  let records = executing.records
+  const append = (event: JournalRecord["event"]): JournalRecord => {
+    const next = appendRecord(input.runId, records, event)
+    records = next.records
+    return next.appended
   }
-
-  const claimOperation = makeTaskClaimAcquisitionOperation({
-    acquisition: TaskClaimAcquisition.make({
-      operationId: input.activeClaim.operationId,
-      owner: input.activeClaim.owner,
-      taskId: input.activeClaim.taskId,
-      token: input.activeClaim.token
-    }),
-    predecessorOperationIds: []
-  })
-  const graphOperation = makeTrackerGraphObservationOperation(
-    { _tag: "WorkflowEstablishment" },
-    OperationId.make(`${input.activeClaim.operationId}:graph`),
-    input.trackerTarget,
-    [claimOperation.acquisition.operationId],
-    [input.plannedAttempt.taskId]
-  )
-  const specificationOperation = makeTaskWorkSpecificationObservationOperation(
-    OperationId.make(`${input.activeClaim.operationId}:specification`),
-    input.trackerTarget,
-    input.plannedAttempt.taskId,
-    [graphOperation.operationId]
-  )
-  const planOperation = makeTaskAttemptPlanOperation({
-    operationId: OperationId.make(`${input.activeClaim.operationId}:plan`),
-    plannedAttempt: input.plannedAttempt,
-    predecessorOperationIds: [specificationOperation.operationId]
-  })
-  const worktreeOperation = makeTaskWorktreeReconciliationOperation({
-    operationId: OperationId.make(`${input.activeClaim.operationId}:worktree`),
-    plannedAttempt: input.plannedAttempt,
-    predecessorOperationIds: [planOperation.operationId]
-  })
   const targetLineageOperation = makeTargetLineageObservationOperation({
     integrationTarget: input.integrationTarget,
     operationId: OperationId.make(`${input.activeClaim.operationId}:target-lineage`),
     plannedAttempt: input.plannedAttempt,
     predecessorOperationIds: [worktreeOperation.operationId]
   })
-  const projected = projectTrackerSnapshot({
-    revision: TrackerRevision.make(`${input.runId}:accepted-integration-graph`),
-    tasks: [
-      {
-        id: input.plannedAttempt.taskId,
-        lifecycle: TaskLifecycle.cases.Open.make({}),
-        parentTaskId: null,
-        prerequisiteIds: []
-      }
-    ]
-  })
-  const graphSnapshot = Option.getOrThrow(
-    projected._tag === "Valid" ? Option.some(projected.snapshot) : Option.none()
-  )
-  const worktreeProof = PlannedWorktreeReady.make({
-    baseSha: input.plannedAttempt.baseSha,
-    branch: input.plannedAttempt.branch,
-    headSha: input.plannedAttempt.baseSha,
-    worktree: input.plannedAttempt.worktree
-  })
   const executorReport = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
     correlation: { attemptId: input.plannedAttempt.attemptId, runId: input.runId },
     result: { _tag: "Accepted", acceptedResult: input.acceptedResult }
   })
-  const policy =
-    input.initialControlPolicy ??
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-  let records: ReadonlyArray<JournalRecord> = [makeWorkflowRunBeganRecord(input.runId, input.trackerTarget, policy)]
-  const append = (event: JournalRecord["event"]): JournalRecord => {
-    const next = appendRecord(input.runId, records, event)
-    records = next.records
-    return next.appended
-  }
-
-  append(TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion }))
-  append(TaskClaimAcquiredEvent.make({ claim: input.activeClaim, version: workflowJournalEventVersion }))
-  append(taskTrackerReadIntent(graphOperation))
-  append(
-    taskTrackerFactsObservedEvent(
-      graphOperation.operationId,
-      makeCompleteTaskTrackerFactsObserved(graphOperation, graphSnapshot)
-    )
-  )
-  append(taskTrackerReadIntent(specificationOperation))
-  append(
-    taskTrackerFactsObservedEvent(
-      specificationOperation.operationId,
-      makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, specification)
-    )
-  )
-  append(TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion }))
-  append(
-    TaskWorktreeReconciliationIntendedEvent.make({
-      operation: worktreeOperation,
-      version: workflowJournalEventVersion
-    })
-  )
-  append(
-    TaskWorktreeReadyEvent.make({
-      operationId: worktreeOperation.operationId,
-      proof: worktreeProof,
-      version: workflowJournalEventVersion
-    })
-  )
-  const beginOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
-  const executingReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-    correlation: { attemptId: input.plannedAttempt.attemptId, runId: input.runId }
-  })
   const stateOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
-  append(
-    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
-      plannedAttempt: input.plannedAttempt,
-      version: workflowJournalEventVersion
-    })
-  )
-  append(
-    PlannedAttemptExecutorCommandIntendedEvent.make({
-      command: "Begin",
-      initiatedBy: { _tag: "DalphCoordinator" },
-      occurrenceClassification: "InitiatedAction",
-      ordinal: beginOrdinal,
-      plannedAttempt: input.plannedAttempt,
-      version: workflowJournalEventVersion
-    })
-  )
-  append(
-    PlannedAttemptExecutorCommandResponseObservedEvent.make({
-      commandOrdinal: beginOrdinal,
-      occurrenceClassification: "NonActionOccurrence",
-      plannedAttempt: input.plannedAttempt,
-      report: executingReport,
-      version: workflowJournalEventVersion
-    })
-  )
-  append(
-    PlannedAttemptExecutorWorkReportedEvent.make({
-      ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-      report: executingReport,
-      version: workflowJournalEventVersion
-    })
-  )
   append(
     PlannedAttemptExecutorStateObservedEvent.make({
       observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: executorReport }),
@@ -293,12 +144,14 @@ export const makeAcceptedIntegrationHistory = (input: AcceptedIntegrationHistory
       version: workflowJournalEventVersion
     })
   )
-  append(GitReadIntentRecordedEvent.make({
-    initiatedBy: { _tag: "DalphCoordinator" },
-    occurrenceClassification: "InitiatedAction",
-    operation: targetLineageOperation,
-    version: workflowJournalEventVersion
-  }))
+  append(
+    GitReadIntentRecordedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operation: targetLineageOperation,
+      version: workflowJournalEventVersion
+    })
+  )
   const targetLineage = TargetLineageObservation.make({
     plannedBaseIsAncestorOfTargetHead: true,
     plannedBaseSha: input.plannedAttempt.baseSha,
