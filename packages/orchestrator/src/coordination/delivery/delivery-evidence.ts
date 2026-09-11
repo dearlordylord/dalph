@@ -189,5 +189,5 @@ export const ticketDeliveryEvidenceOf = (
     _tag: "ResponsibilityFacts",
     facts
   }))
-  return [...evidence, ...journaledIntegrationEvidenceOf(frame.workflowHistory.prefix ?? frame.workflowHistory.records)]
+  return [...evidence, ...journaledIntegrationEvidenceOf(frame.workflowHistory.evidence)]
 }

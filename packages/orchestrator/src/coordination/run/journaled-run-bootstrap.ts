@@ -73,8 +73,7 @@ import {
   type JournalRecord,
   JournalStore,
   RunLifecycleJournal,
-  WorkflowRunTargetMismatch,
-  type JournalRecord
+  WorkflowRunTargetMismatch
 } from "../../workflow-journal/store.js"
 import {
   journalMaintenanceDiagnosticFor,
@@ -95,8 +94,10 @@ import { intentRecordKey, runCancellationAppliedRecordKey } from "../../workflow
 import {
   firstJournalRecordOfKind,
   journalRecordByKey,
-  journalRecordsAfter
+  journalRecordsAfter,
+  lastJournalRecordOfKind
 } from "../../workflow-journal/record-evidence.js"
+import { journalRecordAt } from "../../workflow-journal/record-sequence.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   activeWorkAuthorityRefreshForOwner,
@@ -516,7 +517,7 @@ export const journaledRunBootstrapLayer = (
             Effect.gen(function* () {
               const reactivationObservers = yield* Ref.get(acceptedRunReactivationObservers)
               const acceptedPublicationWatermark = yield* Ref.make(
-                initial.records.at(latestJournalRecordOffset)?.position ?? null
+                journalRecordAt(initial.prefix.records, latestJournalRecordOffset)?.position ?? null
               )
               const ambientPublicationObserver = yield* DeliveryRelationPublicationObserver
               const publicationObserver = DeliveryRelationPublicationObserver.of({
@@ -744,7 +745,7 @@ export const journaledRunBootstrapLayer = (
                 }
                 yield* lifecycle.readRunForRecovery(runId, target)
                 const initial = yield* validateRun(runId, yield* lifecycle.read(runId))
-                const acceptedAt = initial.records.at(latestJournalRecordOffset)?.position
+                const acceptedAt = journalRecordAt(initial.prefix.records, latestJournalRecordOffset)?.position
                 /* v8 ignore next -- successful recovery validation requires a non-empty Run history. */
                 if (acceptedAt === undefined) return yield* Effect.die("established Run has no accepted record")
                 yield* publishAcceptedHistory(runId, acceptedAt)
@@ -809,7 +810,7 @@ export const journaledRunBootstrapLayer = (
             })
           }
           const reduction = yield* validateRun(runId, records)
-          if (reduction.records.some(({ event }) => event._tag === "WorkflowRunTerminated")) {
+          if (lastJournalRecordOfKind(reduction.prefix, "WorkflowRunTerminated") !== undefined) {
             return "RunTerminated" as const
           }
           return reduction.runState.pause.run._tag === "RunPaused" ? ("RunPaused" as const) : ("RunUnpaused" as const)

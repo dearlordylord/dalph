@@ -501,7 +501,7 @@ const freshWorkflowEligibilityContext = (
   recoveredAttemptIds: ReadonlySet<AttemptId>,
   immutableRunTarget: TrackerTarget
 ) => {
-  const records: JournalHistorySource = frame.workflowHistory.prefix ?? frame.workflowHistory.records
+  const records: JournalHistorySource = frame.workflowHistory.evidence
   return {
     completeGraphObserved: completeGraphObservationIds(records),
     immutableRunTargetKey: taskTrackerTargetKey(immutableRunTarget),

@@ -600,7 +600,7 @@ const selectionFrameWith = (claimRecords: ReadonlyArray<JournalRecord>): Current
       revision: initialRunPolicyRevision,
       taskExecutionCapacity: TaskWorkCapacity.make(1)
     }),
-    workflowHistory: { records }
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
   }
 }
 
