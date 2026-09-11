@@ -353,6 +353,19 @@ const validateHistory = (
     : validateCandidateRejectedEvidence(records, candidateEvents, result, recordedResult.value)
 }
 
+/**
+ * Validates unaccepted persisted evidence before a live Journal can exist.
+ * This is the explicit cold-corruption diagnostic boundary; runtime callers use
+ * appendRetryConclusiveIntegrationQuarantine with AcceptedJournalReader.
+ */
+export const retryConclusiveIntegrationQuarantineIssueFromRecords = (
+  records: ReadonlyArray<JournalRecord>,
+  result: RetryConclusiveIntegrationQuarantineInput
+): string | undefined => {
+  const validation = validateHistory(records, result)
+  return validation._tag === "Invalid" ? validation.detail : undefined
+}
+
 /** Records Q2 for one exact Retry run-two conclusive result before ownership is released. */
 export const appendRetryConclusiveIntegrationQuarantine = Effect.fn(
   "IntegrationQuarantine.appendRetryConclusiveIntegrationQuarantine"
