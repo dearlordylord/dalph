@@ -1,7 +1,9 @@
 import { it } from "@effect/vitest"
 import { expect } from "vitest"
 import { Effect } from "effect"
-import { makeTaskWorkSpecification } from "@dalph/contracts"
+import { makeTaskWorkSpecification, TaskId } from "@dalph/contracts"
+import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
+import { TaskLifecycle, TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { makeAcceptedIntegrationHistory } from "../../../test/support/accepted-integration-history.js"
 import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
 import { liveJournalTestLayer } from "../delivery/live-journal-test-layer.js"
@@ -30,6 +32,135 @@ import {
 import { makeRunRecoveryProjection } from "./recovery-activation.js"
 
 for (const initiallyHeld of [true, false]) {
+  it.effect(
+    `waits for a prerequisite before preparing integration lineage with target initially ${initiallyHeld ? "held" : "released"}`,
+    () =>
+      Effect.gen(function* () {
+        const fixture = integrationFinalityFixture
+        const specification = makeTaskWorkSpecification({
+          body: "blocked integration",
+          title: "Blocked integration",
+          taskId: fixture.taskId
+        })
+        const history = makeAcceptedIntegrationHistory({
+          acceptedResult: fixture.qualifiedCandidate.run.session.acceptedResult,
+          activeClaim: fixture.activeClaim,
+          integrationTarget: fixture.integrationTarget,
+          plannedAttempt: { ...fixture.plannedAttempt, taskRevision: specification.fingerprint },
+          runId: fixture.runId,
+          targetHeadSha: fixture.qualifiedCandidate.run.session.expectedTargetHead,
+          taskSpecification: specification,
+          trackerTarget: fixture.target
+        })
+        const prerequisiteId = TaskId.make("integration-prerequisite")
+        yield* Effect.gen(function* () {
+          const writer = yield* InRunJournal
+          const append = (event: Parameters<typeof writer.append>[2]) =>
+            writer.append(fixture.runId, describeJournalEvent(event).expectedKey, event)
+          const resources = yield* makeIntegrationTargetResourceController()
+          const recovery = yield* makeRunRecoveryProjection(fixture.runId, fixture.integrationTarget, resources)
+          if (initiallyHeld) {
+            yield* resources.acquire(history.responsibility)
+            yield* resources.publishAcceptedOwnership(history.responsibility)
+          }
+          for (const prerequisiteComplete of [false, true]) {
+            const projected = projectTrackerSnapshot({
+              revision: TrackerRevision.make(prerequisiteComplete ? "prerequisite-complete" : "prerequisite-open"),
+              tasks: [
+                {
+                  id: fixture.taskId,
+                  lifecycle: TaskLifecycle.cases.Open.make({}),
+                  parentTaskId: null,
+                  prerequisiteIds: [prerequisiteId]
+                },
+                {
+                  id: prerequisiteId,
+                  lifecycle: prerequisiteComplete
+                    ? TaskLifecycle.cases.CompletedSuccessfully.make({})
+                    : TaskLifecycle.cases.Open.make({}),
+                  parentTaskId: null,
+                  prerequisiteIds: []
+                }
+              ]
+            })
+            if (projected._tag !== "Valid") return yield* Effect.die("acyclic prerequisite fixture must be valid")
+            const graph = makeTrackerGraphObservationOperation(
+              { _tag: "WorkflowEstablishment" },
+              OperationId.make(prerequisiteComplete ? "cleared-graph" : "blocked-graph"),
+              fixture.target
+            )
+            yield* append(taskTrackerReadIntent(graph))
+            yield* append(
+              taskTrackerFactsObservedEvent(
+                graph.operationId,
+                makeCompleteTaskTrackerFactsObserved(graph, projected.snapshot)
+              )
+            )
+            const claim = makeTaskClaimObservationOperation(
+              OperationId.make(prerequisiteComplete ? "cleared-claim" : "blocked-claim"),
+              fixture.target,
+              fixture.taskId,
+              [graph.operationId]
+            )
+            yield* append(taskTrackerReadIntent(claim))
+            yield* append(
+              taskTrackerFactsObservedEvent(
+                claim.operationId,
+                makeFocusedTaskClaimFactsObserved(claim, fixture.activeClaim)
+              )
+            )
+            const beforeRelease = yield* recovery.readDeliveryProjection
+            if (!prerequisiteComplete) {
+              expect(beforeRelease.frontier.explanations).toContainEqual(
+                expect.objectContaining({
+                  _tag: "IntegrationDependencyWait",
+                  plannedAttempt: history.responsibility.plannedAttempt,
+                  prerequisiteTaskIds: [prerequisiteId]
+                })
+              )
+              expect(
+                beforeRelease.frontier.transitions.some(({ _tag }) => _tag === "ReleaseStartedIntegrationTarget")
+              ).toBe(initiallyHeld)
+              yield* resources.release(history.responsibility)
+              const waiting = yield* recovery.readDeliveryProjection
+              expect(
+                waiting.frontier.transitions.some(
+                  (transition) =>
+                    (transition._tag === "ObservePlannedAttemptContinuationGraph" ||
+                      transition._tag === "ObservePlannedAttemptContinuationTargetLineage") &&
+                    transition.plannedAttempt.attemptId === history.responsibility.plannedAttempt.attemptId
+                )
+              ).toBe(false)
+            } else {
+              const selected = beforeRelease.frontier.transitions.find(
+                ({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph"
+              )
+              if (selected?._tag !== "ObservePlannedAttemptContinuationGraph")
+                return yield* Effect.die("cleared prerequisite must permit post-claim graph")
+              expect(selected.operation.predecessorOperationIds).toContain(claim.operationId)
+              yield* append(taskTrackerReadIntent(selected.operation))
+              yield* append(
+                taskTrackerFactsObservedEvent(
+                  selected.operation.operationId,
+                  makeCompleteTaskTrackerFactsObserved(selected.operation, projected.snapshot)
+                )
+              )
+              yield* resources.acquire(history.responsibility)
+              yield* resources.publishAcceptedOwnership(history.responsibility)
+              expect(
+                (yield* recovery.readDeliveryProjection).frontier.transitions.some(
+                  ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+                )
+              ).toBe(true)
+            }
+          }
+        }).pipe(
+          Effect.provide(
+            liveJournalTestLayer({ records: history.records, runId: fixture.runId, target: fixture.target })
+          )
+        )
+      })
+  )
   it.effect(`rereads the post-claim graph with target initially ${initiallyHeld ? "held" : "released"}`, () =>
     Effect.gen(function* () {
       const costs: Array<number> = []

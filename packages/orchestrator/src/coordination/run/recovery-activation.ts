@@ -4281,6 +4281,11 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           claimObservedAt !== undefined &&
           !graphWasCheckedAfterClaim &&
           targetLineageReadIsRequired &&
+          !integration.explanations.some(
+            (explanation) =>
+              explanation._tag === "IntegrationDependencyWait" &&
+              plannedTaskAttemptEquivalence(explanation.plannedAttempt, responsibility.plannedAttempt)
+          ) &&
           !integrationTargetResourceSnapshotIncludes(
             integrationResourceSnapshot.activeResponsibilities,
             responsibility
