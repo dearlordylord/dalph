@@ -1112,6 +1112,7 @@ effectIt.effect(
         }
         expect(firstRead.operation.predecessorOperationIds).toEqual([fixture.lineageOperation.operationId])
         expect(firstRead.operation.operationId).toContain(`d:${Number(fixture.directionRecord.position)}`)
+        expect(firstRead.operationIdentity).toBe("Preserve")
 
         const intent = GitReadIntentRecordedEvent.make({
           initiatedBy: { _tag: "DalphCoordinator" },
@@ -1376,6 +1377,7 @@ effectIt.effect("requests a fresh direction-bound lineage read for FullRerun bef
     }
     expect(read.operation.predecessorOperationIds).toEqual([fixture.lineageOperation.operationId])
     expect(read.operation.operationId).toContain(`d:${Number(fixture.directionRecord.position)}`)
+    expect(read.operationIdentity).toBe("Preserve")
   })
 )
 
@@ -4073,6 +4075,16 @@ it("keeps an exact continuation from crossing a non-ancestor target-lineage resu
   if (currentGraph?.event._tag !== "TaskTrackerFactsObserved")
     return expect.fail("expected the exact graph observation")
 
+  expect(
+    continuationDecisionFor(
+      coverageContinuationTransition,
+      records,
+      { event: currentGraph.event, position: currentGraph.position },
+      Option.none(),
+      Option.some(integrationTarget)
+    ).transition
+  ).toMatchObject({ _tag: "ObservePlannedAttemptContinuationTargetLineage", operationIdentity: "Allocate" })
+
   const decision = continuationDecisionFor(
     coverageContinuationTransition,
     [...records, lineageIntent, lineageObservation],
@@ -4763,7 +4775,8 @@ effectIt.effect(
       ).toMatchObject([
         {
           _tag: "ObservePlannedAttemptContinuationTargetLineage",
-          operation: { operationId: lineageOperation.operationId }
+          operation: { operationId: lineageOperation.operationId },
+          operationIdentity: "Preserve"
         }
       ])
     })
@@ -5866,6 +5879,7 @@ it("keeps paused-task boundaries fail-closed while admitting only safe reconcili
   ).toEqual([heldIntegration.transitions[0]])
 
   const heldLineage = RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+    operationIdentity: "Allocate",
     operation: makeTargetLineageObservationOperation({
       integrationTarget: heldIntegration.responsibility.integrationTarget,
       operationId: OperationId.make("recovery-activation-paused-held-lineage"),

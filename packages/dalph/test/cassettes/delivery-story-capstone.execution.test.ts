@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
-import { plannedAttemptExecutorCorrelation } from "@dalph/contracts"
+import { AttemptId, plannedAttemptExecutorCorrelation, TaskId } from "@dalph/contracts"
 import {
   deliveryProposalOrderTaskId,
   deriveRunnableFrontier,
@@ -643,7 +643,7 @@ const deliveryStoryFinalityRestartInsertionAt = (
       (item) => item._tag === "CompletionTaskRequestReturned" && item.taskId === "A" && item.outcome === "Acknowledged"
     )
   }
-  return story.findIndex((item) => item._tag === "ExpectedBehavior") - 1
+  return story.findLastIndex((item) => item._tag === "TaskClaimCurrentReadReturned")
 }
 
 const deliveryStoryWithRestartAfter = (
@@ -743,16 +743,22 @@ const deliveryStoryWithRestartAfter = (
   ) {
     return { ...base, name: `${base.name}; invalid generated authority-read widths`, story: [] }
   }
-  const reconciledPriorIntentOutcomeShift = afterJournalEvent === "TargetPromotionAttemptIntended" ? 1 : 0
+  // Recovery after the durable first intent records its reconciliation, the
+  // second attempt intent, and the rejected outcome before quarantine.
+  const reconciledPriorIntentOutcomeShift = afterJournalEvent === "TargetPromotionAttemptIntended" ? 3 : 0
+  const recoveredAuthorityAndPostProtocolShift = recoveredAuthorityShift + postProtocolGraphShift
   const quarantineShift =
-    (restartPrecedes("IntegrationQuarantined") ? recoveredAuthorityShift : 0) + reconciledPriorIntentOutcomeShift
+    (restartPrecedes("IntegrationQuarantined") ? recoveredAuthorityShift : 0) +
+    (afterJournalEvent === "TargetPromotionAttemptIntended" ? postProtocolGraphShift : 0) +
+    reconciledPriorIntentOutcomeShift
   const directionShift =
     (restartPrecedes("IntegrationQuarantineDirectionApplied") ? recoveredAuthorityShift : 0) +
+    (afterJournalEvent === "TargetPromotionAttemptIntended" ? postProtocolGraphShift : 0) +
     reconciledPriorIntentOutcomeShift
   const lineageShift =
     afterJournalEvent === "TargetLineageObserved"
       ? replacementLineageShift
-      : (restartPrecedes("TargetLineageObserved") ? recoveredAuthorityShift + postProtocolGraphShift : 0) +
+      : (restartPrecedes("TargetLineageObserved") ? recoveredAuthorityAndPostProtocolShift : 0) +
         reconciledPriorIntentOutcomeShift
   const quarantineAt = JournalPosition.make(Number(baselineSuccessor.event.quarantineAt) + quarantineShift)
   const directionAppliedAt = JournalPosition.make(Number(baselineSuccessor.event.directionAppliedAt) + directionShift)
@@ -785,18 +791,23 @@ const deliveryStoryWithRestartAfter = (
     if (rejected?._tag !== "TargetPromotionCompareAndSetReturned") {
       return { ...base, name: `${base.name}; missing rejected CAS fixture`, story: [] }
     }
-    story.splice(rejectedCompareAndSetAt, 0, death, ...restartAuthorityReads, {
+    story.splice(rejectedCompareAndSetAt, 0, death, ...restartAuthorityReads, ...restartPostProtocolGraphRead, {
       _tag: "TargetPromotionGitReadReturned",
       candidateCommit: rejected.request.candidateCommit,
       observation: { _tag: "CandidateNotInAncestry", currentHeadSha: rejected.request.expectedTargetHead },
       repository: rejected.request.integrationTarget.repository
     })
-    const resumedDirectionAt = story.findIndex((item) => item._tag === "OperatorAppliesIntegrationQuarantineDirection")
-    const resumedFreshLineageAt = story.findIndex(
-      (item, index) =>
-        index > resumedDirectionAt && item._tag === "DalphSelects" && item.operation._tag === "ReadTargetLineage"
+    const resumedIntegratorRequestAt = story.findIndex(
+      (item, index) => index > directionAt && item._tag === "IntegratorRequestReceived"
     )
-    story.splice(resumedFreshLineageAt, 0, ...restartPostProtocolGraphRead)
+    const currentLineageSelection = originalRestartAuthorityReads[6]
+    if (
+      currentLineageSelection?._tag !== "DalphSelects" ||
+      currentLineageSelection.operation._tag !== "ReadTargetLineage"
+    ) {
+      return { ...base, name: `${base.name}; missing current lineage selection fixture`, story: [] }
+    }
+    story.splice(resumedIntegratorRequestAt, 0, currentLineageSelection)
   } else if (afterJournalEvent === "TargetPromotionStale" || afterJournalEvent === "IntegrationQuarantined") {
     story.splice(rejectedCompareAndSetAt + 1, 0, death, ...restartAuthorityReads)
     const resumedDirectionAt = story.findIndex((item) => item._tag === "OperatorAppliesIntegrationQuarantineDirection")
@@ -814,11 +825,14 @@ const deliveryStoryWithRestartAfter = (
     const resumedSuccessorRequestAt = story.findIndex(
       (item, index) => index > directionAt && item._tag === "IntegratorRequestReceived"
     )
-    const resumedPromotionLineageAt = story.findIndex(
-      (item, index) =>
-        index > resumedSuccessorRequestAt && item._tag === "DalphSelects" && item.operation._tag === "ReadTargetLineage"
+    story.splice(resumedSuccessorRequestAt, 0, ...restartPostProtocolGraphRead)
+    const resumedPromotionReadAt = story.findIndex(
+      (item, index) => index > resumedSuccessorRequestAt && item._tag === "TargetPromotionGitReadReturned"
     )
-    story.splice(resumedPromotionLineageAt, 0, ...restartPostProtocolGraphRead)
+    story.splice(resumedPromotionReadAt, 0, {
+      _tag: "DalphSelects",
+      operation: { _tag: "ReadTargetLineage", attemptId: AttemptId.make("attempt:A:0"), taskId: TaskId.make("A") }
+    })
   } else {
     const insertionAt = deliveryStoryFinalityRestartInsertionAt(story, afterJournalEvent)
     const taskAlreadyCompleted =
@@ -831,8 +845,6 @@ const deliveryStoryWithRestartAfter = (
       death,
       ...(taskAlreadyCompleted ? completedGraphAuthorityReads : restartGraphAuthorityReads)
     )
-    const expectedBehaviorAt = story.findIndex((item) => item._tag === "ExpectedBehavior")
-    story.splice(expectedBehaviorAt, 0, ...completedGraphAuthorityReads)
   }
 
   return {
@@ -893,7 +905,11 @@ it.effect(
         const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)(
           deliveryStoryWithRestartAfter(checkpoint, baselineRun)
         )
-        const run = yield* runAuthoredScenarioCassette(cassette).pipe(Effect.provide(NodeCrypto.layer))
+        const outcome = yield* runAuthoredScenarioCassette(cassette).pipe(Effect.provide(NodeCrypto.layer), Effect.exit)
+        if (Exit.isFailure(outcome)) {
+          return yield* Effect.die(new Error(`${checkpoint}: ${JSON.stringify(Cause.squash(outcome.cause))}`))
+        }
+        const run = outcome.value
         const resumedOccurrences = run.observationCaptures.flatMap((capture) =>
           capture._tag === "AuthoredStoryOccurrenceCaptured" && capture.activationOrdinal === 3
             ? [capture.occurrence]
@@ -1101,38 +1117,78 @@ it.effect(
 )
 
 it.effect(
-  "rejects DS16 evidence without the rejected CAS attempt or with a pre-request stale read",
+  "fails immediately when an authored CAS response is replaced by another selection without fabricating provider ambiguity",
   () =>
     Effect.gen(function* () {
-      const base = maintainedAuthoredCassetteCatalog.deliveryStoryDs14ThroughDs17
-      const responseLostCassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
+      const base = maintainedAuthoredCassetteCatalog.targetPromotionSuccess
+      const compareAndSetAt = base.story.findIndex((item) => item._tag === "TargetPromotionCompareAndSetReturned")
+      expect(compareAndSetAt).toBeGreaterThan(0)
+      const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
         ...base,
-        name: `${base.name}; rejected CAS evidence substituted with response loss`,
-        story: base.story.flatMap(
-          (item): ReadonlyArray<unknown> =>
-            item._tag === "TargetPromotionCompareAndSetReturned" && item.result._tag === "RejectedExpectedHead"
-              ? [
-                  {
-                    _tag: "TargetPromotionCompareAndSetResponseLost",
-                    detail: "the rejected exact-head CAS response was lost",
-                    request: item.request
-                  },
-                  {
-                    _tag: "TargetPromotionGitReadReturned",
-                    candidateCommit: item.request.candidateCommit,
-                    observation: {
-                      _tag: "CandidateNotInAncestry",
-                      currentHeadSha: "2222222222222222222222222222222222222222"
-                    },
-                    repository: item.request.integrationTarget.repository
-                  }
-                ]
-              : [item]
+        name: `${base.name}; CAS response replaced by an unrelated selection`,
+        story: base.story.map((item, index) =>
+          index === compareAndSetAt
+            ? { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } }
+            : item
         )
       })
-      const responseLostRun = yield* runAuthoredScenarioCassette(responseLostCassette).pipe(
-        Effect.provide(NodeCrypto.layer)
+      const captures: Array<AuthoredObservationCapture> = []
+      const outcome = yield* runAuthoredScenarioCassette(cassette, {
+        onObservationCapture: (capture) => captures.push(capture)
+      }).pipe(Effect.provide(NodeCrypto.layer), Effect.exit)
+
+      expect(Exit.isFailure(outcome)).toBe(true)
+      if (Exit.isFailure(outcome)) {
+        expect(Cause.squash(outcome.cause)).toMatchObject({
+          _tag: "AuthoredCassetteInteractionMismatch",
+          expected: "DalphSelects",
+          storyPosition: compareAndSetAt
+        })
+      }
+      expect(
+        captures.filter(
+          (capture) => capture._tag === "AuthoredStoryOccurrenceCaptured" && capture.storyPosition > compareAndSetAt
+        )
+      ).toHaveLength(0)
+      const occurrences = captures.flatMap((capture) =>
+        capture._tag === "AuthoredStoryOccurrenceCaptured" ? [capture.occurrence] : []
       )
+      expect(
+        occurrences.filter(
+          (occurrence) =>
+            occurrence._tag === "TargetPromotionCompareAndSetResponseLost" ||
+            occurrence._tag === "TargetPromotionCompareAndSetReturned"
+        )
+      ).toHaveLength(0)
+    }),
+  capstoneTimeout
+)
+
+it.effect(
+  "rejects DS16 evidence without the rejected CAS attempt",
+  () =>
+    Effect.gen(function* () {
+      const baselineRun = yield* cachedDs14ThroughDs17Run
+      const responseLostRun: AuthoredScenarioCassetteRun = {
+        ...baselineRun,
+        observationCaptures: baselineRun.observationCaptures.map((capture): AuthoredObservationCapture => {
+          if (
+            capture._tag !== "AuthoredStoryOccurrenceCaptured" ||
+            capture.occurrence._tag !== "TargetPromotionCompareAndSetReturned" ||
+            capture.occurrence.result._tag !== "RejectedExpectedHead"
+          ) {
+            return capture
+          }
+          return {
+            ...capture,
+            occurrence: {
+              _tag: "TargetPromotionCompareAndSetResponseLost",
+              detail: "the rejected exact-head CAS response was lost",
+              request: capture.occurrence.request
+            }
+          }
+        })
+      }
       expect(storyOccurrences(responseLostRun, "TargetPromotionCompareAndSetResponseLost")).toHaveLength(1)
       expect(
         storyOccurrences(responseLostRun, "TargetPromotionCompareAndSetReturned").filter(
@@ -1142,25 +1198,6 @@ it.effect(
       expect(issue272AcceptanceIssues(responseLostRun)).toContain(
         "promotion must use one rejected exact-head CAS followed by one applied successor CAS, never force-update"
       )
-
-      const preRequest = yield* runAuthoredScenarioCassette(
-        maintainedAuthoredCassetteCatalog.targetPromotionStaleBeforeCompareAndSet
-      ).pipe(Effect.provide(NodeCrypto.layer))
-      expect(preRequest.records.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")).toHaveLength(0)
-      expect(eventRecords(preRequest, "TargetPromotionStale")).toHaveLength(1)
-      expect(eventRecords(preRequest, "TargetPromotionStale")[0]?.event.basis._tag).toBe("BeforeFirstAttempt")
-      expect(
-        preRequest.observationCaptures.filter(
-          (capture) =>
-            capture._tag === "AuthoredStoryOccurrenceCaptured" &&
-            capture.occurrence._tag === "TargetPromotionCompareAndSetReturned"
-        )
-      ).toHaveLength(0)
-      expect(preRequest.records.filter(({ event }) => event._tag === "IntegrationQuarantined")).toHaveLength(0)
-      expect(
-        preRequest.records.filter(({ event }) => event._tag === "IntegrationQuarantineDirectionApplied")
-      ).toHaveLength(0)
-      expect(preRequest.records.filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")).toHaveLength(0)
     }),
   capstoneTimeout
 )

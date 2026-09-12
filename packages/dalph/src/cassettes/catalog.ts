@@ -49,11 +49,13 @@ const authoredBeginProposal = (taskId: "A" | "B", attemptId: "attempt:A:0" | "at
 
 const singletonGraph = {
   revision: "singleton-revision",
+  rootTaskId: "A",
   tasks: [{ id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
 }
 
 const completedSingletonGraph = {
   ...singletonGraph,
+  revision: "completed-singleton-revision",
   tasks: [{ ...singletonGraph.tasks[0], lifecycle: { _tag: "CompletedSuccessfully" } }]
 }
 
@@ -5299,7 +5301,6 @@ export const deliveryStoryDs14ThroughDs17AuthoredCassette: ScenarioCassette = Sc
             directParents: [deliveryStoryChangedHead, outerIntegratorAcceptedCommit]
           }
         },
-        { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
         targetPromotionGitReadReturned("/dalph/cassettes/integration.git", deliveryStorySuccessorCandidateCommit, {
           _tag: "CandidateNotInAncestry",
           currentHeadSha: deliveryStoryChangedHead
@@ -5343,6 +5344,7 @@ export const deliveryStoryDs14ThroughDs17AuthoredCassette: ScenarioCassette = Sc
       return [
         { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
         { _tag: "TrackerGraphReadReturned", graph: completedSingletonGraph },
+        { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMayTerminate" } },
         { ...item, orchestration: null }
       ]
     }

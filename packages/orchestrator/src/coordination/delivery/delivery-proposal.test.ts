@@ -549,6 +549,7 @@ describe("deliveryProposalsOf", () => {
           operation: lineageOperation,
           transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
             operation: lineageOperation,
+            operationIdentity: "Allocate",
             plannedAttempt
           })
         }
@@ -649,6 +650,7 @@ describe("deliveryProposalsOf", () => {
     })
     const transition = RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
       operation,
+      operationIdentity: "Allocate",
       plannedAttempt
     })
 
@@ -661,7 +663,7 @@ describe("deliveryProposalsOf", () => {
     }).deliverySettlement
 
     expect(proposal).toMatchObject({
-      actionIdentity: { _tag: "FreshOperationIdRequired" },
+      actionIdentity: { _tag: "FreshOperationIdRequired", source: { _tag: "Allocate" } },
       admission: {
         integrationTarget: {
           _tag: "IntegrationTargetResourceRequired",
@@ -678,6 +680,24 @@ describe("deliveryProposalsOf", () => {
       }
     })
     expect(JSON.stringify(proposal)).not.toContain("projection-placeholder-must-not-be-carried")
+
+    const graphBound = deliveryProposalsOf({
+      acceptedOperationIds: HashSet.empty(),
+      fresh: [],
+      integrationResponsibilities: [responsibility],
+      runId,
+      transitions: [
+        RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+          operation,
+          operationIdentity: "Preserve",
+          plannedAttempt
+        })
+      ]
+    }).deliverySettlement[0]
+    expect(graphBound?.actionIdentity).toEqual({
+      _tag: "FreshOperationIdRequired",
+      source: { _tag: "Preserve", operationId: operation.operationId }
+    })
   })
 
   it("isolates A's missing route evidence while independent B remains actionable", () => {

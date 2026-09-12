@@ -32,6 +32,7 @@ import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { InRunJournal, JournalStoreContradiction } from "../../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
 import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
+import { Journal } from "../../../coordination/delivery/journal.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { OperationId } from "../../identity.js"
 import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../registry/event.js"
@@ -69,6 +70,7 @@ const changedHead = GitCommitSha.make("4".repeat(40))
 
 type Scenario = {
   readonly acceptedJournalReader: AcceptedJournalReader["Service"]
+  readonly coordinatedJournal: Journal["Service"]
   readonly directionRecord: JournalRecord
   readonly fixedSession: JournalRecord
   readonly journal: InRunJournal["Service"]
@@ -228,6 +230,7 @@ const appendScenario = Effect.fn("ChangedHeadRetryTest.appendScenario")(function
   const lineage = yield* appendLineage(journal, session, freshHead, `${suffix}:fresh`)
   return {
     acceptedJournalReader: Context.get(live, AcceptedJournalReader),
+    coordinatedJournal: Context.get(live, Journal),
     directionRecord,
     fixedSession,
     journal: Context.get(live, InRunJournal),
@@ -240,8 +243,9 @@ const appendScenario = Effect.fn("ChangedHeadRetryTest.appendScenario")(function
 
 const provideScenario =
   (scenario: Scenario) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R | AcceptedJournalReader | InRunJournal>) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R | AcceptedJournalReader | InRunJournal | Journal>) =>
     effect.pipe(
+      Effect.provideService(Journal, scenario.coordinatedJournal),
       Effect.provideService(InRunJournal, scenario.journal),
       Effect.provideService(AcceptedJournalReader, scenario.acceptedJournalReader)
     )

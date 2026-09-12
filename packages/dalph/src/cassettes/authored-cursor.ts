@@ -2108,6 +2108,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     return yield* Effect.die(new AuthoredCoordinatorProcessDies({ storyPosition: claimed.index }))
   })
   const pauseAtCoordinatorProcessDeath = Effect.gen(function* () {
+    const index = yield* SubscriptionRef.get(position)
+    if (story[index]?._tag !== "CoordinatorProcessDies") return
     const activeIntegrationDirection = yield* SubscriptionRef.get(integrationQuarantineDirectionInFlight)
     if (Option.isSome(activeIntegrationDirection)) yield* Deferred.await(activeIntegrationDirection.value)
     return yield* dieAtCoordinatorProcessDeath

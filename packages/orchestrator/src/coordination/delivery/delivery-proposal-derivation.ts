@@ -527,10 +527,15 @@ const recoveredProposalOf = (
     HashSet.has(acceptedOperationIds, operationId) &&
     !HashSet.has(pendingReadOperationIds, operationId)
   const newAction = isAcceptedOperation ? undefined : newRecoveredActionOf(transition)
+  const preservesGraphBoundLineageIdentity =
+    transition._tag === "ObservePlannedAttemptContinuationTargetLineage" && transition.operationIdentity === "Preserve"
   return recoveredRouteProposalOf(
     context,
     newAction,
-    operationId !== undefined && (newAction === undefined || HashSet.has(pendingReadOperationIds, operationId))
+    operationId !== undefined &&
+      (newAction === undefined ||
+        HashSet.has(pendingReadOperationIds, operationId) ||
+        preservesGraphBoundLineageIdentity)
       ? operationId
       : undefined,
     transition

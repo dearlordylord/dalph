@@ -14,6 +14,8 @@ import type { InRunJournal, JournalRecord } from "../../../workflow-journal/stor
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
 import {
   isJournalRecordEvidence,
+  journalEvidenceFrom,
+  journalGraphObservationAt,
   journalRecordByKey,
   journalRecordByPosition,
   journalRecordsForIntegratorSession,
@@ -37,6 +39,34 @@ import {
 import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./state.js"
 import { deriveIntegrationQuarantineState } from "../integration-quarantine/state.js"
 import { integrationQuarantineDirectionSubject } from "../integration-quarantine/events.js"
+import { integrationQuarantineDirectionTargetLineageOperationId } from "../integration-quarantine/direction-lineage-operation.js"
+import { exactWorkflowRunTargetFor } from "../../../workflow-journal/run-target.js"
+
+/** Whether a queued S2 fix still names the lineage read authorized by the latest graph-bound Q/D prefix. */
+export const integratorSuccessorPreparationIsCurrent = (
+  records: JournalHistorySource,
+  input: IntegratorSuccessorPreparationInput
+): boolean => {
+  const evidence = isJournalRecordEvidence(records) ? records : journalEvidenceFrom(records)
+  const target = exactWorkflowRunTargetFor(evidence)
+  if (target === undefined) return false
+  const currentGraph = journalGraphObservationAt(evidence, { plannedAttempt: input.predecessor.plannedAttempt, target })
+  const direction = journalRecordByPosition(records, input.directionAppliedAt)
+  const lineage = journalRecordByPosition(records, input.targetLineageObservedAt)
+  if (
+    currentGraph === undefined ||
+    direction?.event._tag !== "IntegrationQuarantineDirectionApplied" ||
+    lineage?.event._tag !== "TargetLineageObserved"
+  ) {
+    return false
+  }
+  const requiredOperationId = integrationQuarantineDirectionTargetLineageOperationId(
+    { direction: direction.event, directionAt: direction.position, quarantineAt: input.quarantineAt },
+    input.predecessor.plannedAttempt,
+    currentGraph.position
+  )
+  return lineage.event.operationId === requiredOperationId
+}
 
 /** The exact journal record that fixes one FullRerun successor. */
 export type IntegratorSuccessorSessionFixedRecord = JournalRecord & {
@@ -370,7 +400,7 @@ const successorEventFor = (
     version: workflowJournalEventVersion
   })
 
-const successorRecordMatches = (
+export const integratorSuccessorAppendRecordMatches = (
   record: JournalRecord,
   key: JournalRecord["key"],
   event: IntegratorSuccessorSessionFixedEvent
@@ -411,7 +441,7 @@ const validateActiveIntegratorSuccessorRecord = (
   if (fixed.position <= input.targetLineageObservedAt) {
     return { _tag: "Invalid", detail: "Integrator successor must be fixed after its fresh target-lineage observation" }
   }
-  return successorRecordMatches(fixed, expectedKey, successorEventFor(input, expectedSuccessor))
+  return integratorSuccessorAppendRecordMatches(fixed, expectedKey, successorEventFor(input, expectedSuccessor))
     ? { _tag: "Valid", successor: expectedSuccessor }
     : { _tag: "Invalid", detail: "Integrator successor record has a foreign key or non-deterministic identity" }
 }
@@ -433,15 +463,10 @@ const activeIntegratorSuccessorFor = (
 }
 
 /**
- * Appends or recovers the one deterministic successor relation after Q/D/L.
- * A journal key collision is reconciled by rereading the winning record.
+ * Validates one exact S2 proposal and exposes either its existing record or the append it requires.
  */
-export const appendIntegratorSuccessorSessionIfNeeded = Effect.fn("IntegratorProtocol.appendSuccessorSessionIfNeeded")(
-  function* (
-    journal: InRunJournal["Service"],
-    input: IntegratorSuccessorPreparationInput,
-    records: JournalHistorySource
-  ) {
+export const prepareIntegratorSuccessorSessionAppend = Effect.fn("IntegratorProtocol.prepareSuccessorSessionAppend")(
+  function* (input: IntegratorSuccessorPreparationInput, records: JournalHistorySource) {
     const successor = integratorSuccessorCorrelationFor(input)
     const key = integratorSuccessorSessionFixedRecordKey(
       input.predecessor,
@@ -454,27 +479,45 @@ export const appendIntegratorSuccessorSessionIfNeeded = Effect.fn("IntegratorPro
     const existingAtKey = exactJournalRecordAtKey(records, key)
     if (existingAtKey._tag === "Duplicate") return yield* reject(input.predecessor, existingAtKey.detail)
     if (existingAtKey._tag === "Found") {
-      return successorRecordMatches(existingAtKey.record, key, event)
-        ? existingAtKey.record
+      return integratorSuccessorAppendRecordMatches(existingAtKey.record, key, event)
+        ? ({ _tag: "Existing", record: existingAtKey.record } as const)
         : yield* reject(input.predecessor, "FullRerun successor key contains a foreign or contradictory event")
     }
 
     const uniqueness = validateSuccessorUniqueness(records, input, successor, key)
     if (uniqueness._tag === "Invalid") return yield* reject(input.predecessor, uniqueness.detail)
     /* v8 ignore next -- @preserve an existing related successor is found by exact key before uniqueness validation; only Available can follow a missing exact key. */
-    if (uniqueness._tag === "Existing") return uniqueness.record
+    if (uniqueness._tag === "Existing") return { _tag: "Existing", record: uniqueness.record } as const
+    return { _tag: "Append", event, key } as const
+  }
+)
 
-    const appended = yield* journal.append(runIdFor(input.predecessor), key, event).pipe(
+/**
+ * Appends or recovers the one deterministic successor relation after Q/D/L.
+ * A journal key collision is reconciled by rereading the winning record.
+ */
+export const appendIntegratorSuccessorSessionIfNeeded = Effect.fn("IntegratorProtocol.appendSuccessorSessionIfNeeded")(
+  function* (
+    journal: InRunJournal["Service"],
+    input: IntegratorSuccessorPreparationInput,
+    records: JournalHistorySource
+  ) {
+    const prepared = yield* prepareIntegratorSuccessorSessionAppend(input, records)
+    if (prepared._tag === "Existing") return prepared.record
+
+    const appended = yield* journal.append(runIdFor(input.predecessor), prepared.key, prepared.event).pipe(
       Effect.catchTag("JournalStoreContradiction", ({ existingPosition }) =>
         Effect.gen(function* () {
           const refreshed = yield* (yield* AcceptedJournalReader).readAccepted(runIdFor(input.predecessor))
           const winner = journalRecordByPosition(refreshed, existingPosition)
-          if (winner !== undefined && successorRecordMatches(winner, key, event)) return winner
+          if (winner !== undefined && integratorSuccessorAppendRecordMatches(winner, prepared.key, prepared.event)) {
+            return winner
+          }
           return yield* reject(input.predecessor, "FullRerun successor append contradicted existing Journal history")
         })
       )
     )
-    return successorRecordMatches(appended, key, event)
+    return integratorSuccessorAppendRecordMatches(appended, prepared.key, prepared.event)
       ? appended
       : yield* reject(input.predecessor, "FullRerun successor append returned a foreign Journal record")
   }

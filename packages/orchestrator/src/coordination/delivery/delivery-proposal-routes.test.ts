@@ -182,12 +182,14 @@ import {
   IntegrationQuarantineFailureDetail,
   integrationQuarantineDirectionSubject
 } from "../../workflow/protocols/integration-quarantine/events.js"
+import { integrationQuarantineDirectionTargetLineageOperationId } from "../../workflow/protocols/integration-quarantine/direction-lineage-operation.js"
 import { IntegratorBoundaryUnavailable } from "./integrator-boundary.js"
 import {
   integratorCorrelationFor,
   integratorInitialRunCorrelationFor,
   integratorSuccessorCorrelationFor
 } from "../../workflow/protocols/integrator/session.js"
+import { IntegratorJournalContradiction } from "../../workflow/protocols/integrator/errors.js"
 import { executeFreshWorkflowOperation } from "./fresh-delivery-action-adapter.js"
 import { executeFreshTrackerGraphRead, executeTrackerGraphRead } from "./delivery-action-adapter-common.js"
 import { executePlannedAttemptTransition as executePlannedAttemptTransitionRaw } from "./planned-attempt-delivery-action-adapter.js"
@@ -247,6 +249,8 @@ import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-bo
 import { TargetPromotionRuntimeUnavailable } from "./target-promotion-boundary.js"
 import { postPromotionBlockerClearAuthorizationFor } from "../../workflow/protocols/integration-finality/post-promotion-blocker-ancestry.js"
 import { liveJournalTestLayer } from "./live-journal-test-layer.js"
+import { Journal } from "./journal.js"
+import { journalEvidenceFrom, journalGraphObservationAt } from "../../workflow-journal/record-evidence.js"
 
 const runId = RunId.make("route-matrix-run")
 const taskId = TaskId.make("A")
@@ -522,6 +526,7 @@ const inertPlannedAttemptExecutor = PlannedAttemptExecutor.of({
 
 interface LiveJournalHarness {
   readonly accepted: AcceptedJournalReader["Service"]
+  readonly coordinatedJournal: Journal["Service"]
   readonly journal: InRunJournal["Service"]
   readonly records: ReturnType<InRunJournal["Service"]["read"]>
 }
@@ -537,6 +542,7 @@ const makeLiveJournalHarness = Effect.fn("DeliveryProposalRoutesTest.makeLiveJou
   const journal = Context.get(context, InRunJournal)
   return {
     accepted: Context.get(context, AcceptedJournalReader),
+    coordinatedJournal: Context.get(context, Journal),
     journal,
     records: journal.read(journalRunId)
   } satisfies LiveJournalHarness
@@ -545,10 +551,12 @@ const makeLiveJournalHarness = Effect.fn("DeliveryProposalRoutesTest.makeLiveJou
 const provideLiveJournal = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
   harness: LiveJournalHarness,
-  journal: InRunJournal["Service"] = harness.journal
+  journal: InRunJournal["Service"] = harness.journal,
+  coordinatedJournal: Journal["Service"] = harness.coordinatedJournal
 ) =>
   effect.pipe(
     Effect.provideService(AcceptedJournalReader, harness.accepted),
+    Effect.provideService(Journal, coordinatedJournal),
     Effect.provideService(InRunJournal, journal)
   )
 
@@ -959,6 +967,7 @@ effectIt.effect("executes cancellation settlement through suspension, relinquish
     }
     const live = yield* makeLiveDeliveryActionExecutor(runId, target).pipe(
       Effect.provide(journaledInterpreter),
+      Effect.provideService(Journal, harness.coordinatedJournal),
       Effect.provideService(InRunJournal, journal),
       Effect.provideService(AcceptedJournalReader, harness.accepted),
       Effect.provideService(PassivePlannedAttemptObserver, inactivePassiveObserver),
@@ -1389,6 +1398,7 @@ describe("delivery proposal route matrix", () => {
         operationId: lineageOperation.operationId,
         transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
           operation: lineageOperation,
+          operationIdentity: "Allocate",
           plannedAttempt
         })
       }
@@ -2077,12 +2087,58 @@ describe("delivery proposal route matrix", () => {
           version: workflowJournalEventVersion
         })
       )
+      if (fullRerunDirection.event._tag !== "IntegrationQuarantineDirectionApplied") {
+        return yield* Effect.die("FullRerun successor fixture requires its applied direction")
+      }
+      const fullRerunDirectionEvent = fullRerunDirection.event
       const successorLineage = TargetLineageObservation.make({
         plannedBaseIsAncestorOfTargetHead: true,
         plannedBaseSha: plannedAttempt.baseSha,
         targetHeadSha: GitCommitSha.make("5".repeat(40))
       })
-      const successorLineageOperationId = OperationId.make("route-matrix-successor-lineage")
+      const planned = (yield* recoveryHarness.records).find(
+        ({ event }) =>
+          event._tag === "TaskAttemptPlanned" &&
+          event.operation.plannedAttempt.attemptId === started.plannedAttempt.attemptId
+      )
+      if (planned?.event._tag !== "TaskAttemptPlanned") {
+        return yield* Effect.die("FullRerun successor fixture requires its attempt plan")
+      }
+      const successorGraphOperation = makeTrackerGraphObservationOperation(
+        { _tag: "AttemptContinuation" },
+        OperationId.make("route-matrix-successor-graph"),
+        target,
+        [planned.event.operation.operationId],
+        [started.plannedAttempt.taskId]
+      )
+      yield* recoveryJournal.append(
+        runId,
+        intentRecordKey(successorGraphOperation.operationId),
+        taskTrackerReadIntent(successorGraphOperation)
+      )
+      yield* recoveryJournal.append(
+        runId,
+        outcomeRecordKey(successorGraphOperation.operationId),
+        taskTrackerGraphFactsObserved(successorGraphOperation, {
+          revision: TrackerRevision.make("route-matrix-successor-graph"),
+          taskIds: [started.plannedAttempt.taskId]
+        })
+      )
+      const currentGraphObservation = journalGraphObservationAt(journalEvidenceFrom(yield* recoveryHarness.records), {
+        plannedAttempt: started.plannedAttempt
+      })
+      if (currentGraphObservation?.event._tag !== "TaskTrackerFactsObserved") {
+        return yield* Effect.die("FullRerun successor fixture requires a current graph observation")
+      }
+      const successorLineageOperationId = integrationQuarantineDirectionTargetLineageOperationId(
+        {
+          direction: fullRerunDirectionEvent,
+          directionAt: fullRerunDirection.position,
+          quarantineAt: retryQuarantine.position
+        },
+        started.plannedAttempt,
+        currentGraphObservation.position
+      )
       const successorLineageOperation = makeTargetLineageObservationOperation({
         integrationTarget: started.integrationTarget,
         operationId: successorLineageOperationId,
@@ -2110,13 +2166,108 @@ describe("delivery proposal route matrix", () => {
           version: workflowJournalEventVersion
         })
       )
-      const successorInput = {
+      const staleSuccessorInput = {
         directionAppliedAt: fullRerunDirection.position,
         predecessor: runIntegrator.run.session,
         quarantineAt: retryQuarantine.position,
         targetLineage: successorLineage,
         targetLineageObservedAt: successorLineageRecord.position
       }
+      const staleFix = RunnableFrontierTransition.FixIntegratorSuccessorSession({
+        input: staleSuccessorInput,
+        responsibility: started
+      })
+      const staleFixProposal = proposalsFor(staleFix).proposals[0]
+      if (staleFixProposal === undefined || !isIdentityFreeProposal(staleFixProposal)) {
+        return yield* Effect.die("missing stale FullRerun successor delivery proposal")
+      }
+      const contradictoryFix = RunnableFrontierTransition.FixIntegratorSuccessorSession({
+        input: { ...staleSuccessorInput, directionAppliedAt: retryQuarantine.position },
+        responsibility: started
+      })
+      const contradictoryFixProposal = proposalsFor(contradictoryFix).proposals[0]
+      if (contradictoryFixProposal === undefined || !isIdentityFreeProposal(contradictoryFixProposal)) {
+        return yield* Effect.die("missing contradictory FullRerun successor delivery proposal")
+      }
+      expect(
+        yield* executeIntegrationAction(
+          { _tag: "IdentityFreeAction", proposal: contradictoryFixProposal },
+          contradictoryFix,
+          inertLease,
+          target
+        ).pipe((effect) => provideLiveJournal(effect, recoveryHarness), Effect.flip)
+      ).toBeInstanceOf(IntegratorJournalContradiction)
+      const newerGraphOperation = makeTrackerGraphObservationOperation(
+        { _tag: "AttemptContinuation" },
+        OperationId.make("route-matrix-newer-successor-graph"),
+        target,
+        [planned.event.operation.operationId],
+        [started.plannedAttempt.taskId]
+      )
+      yield* recoveryJournal.append(
+        runId,
+        intentRecordKey(newerGraphOperation.operationId),
+        taskTrackerReadIntent(newerGraphOperation)
+      )
+      const newerGraph = yield* recoveryJournal.append(
+        runId,
+        outcomeRecordKey(newerGraphOperation.operationId),
+        taskTrackerGraphFactsObserved(newerGraphOperation, {
+          revision: TrackerRevision.make("route-matrix-newer-successor-graph"),
+          taskIds: [started.plannedAttempt.taskId]
+        })
+      )
+      expect(
+        yield* executeIntegrationAction(
+          { _tag: "IdentityFreeAction", proposal: staleFixProposal },
+          staleFix,
+          inertLease,
+          target
+        ).pipe((effect) => provideLiveJournal(effect, recoveryHarness))
+      ).toMatchObject({
+        _tag: "ActionDeferred",
+        proposalId: staleFixProposal.id,
+        reason: "ContinuationAuthorizationStale"
+      })
+      expect(
+        (yield* recoveryHarness.records).filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
+      ).toHaveLength(0)
+      const freshLineageOperationId = integrationQuarantineDirectionTargetLineageOperationId(
+        {
+          direction: fullRerunDirectionEvent,
+          directionAt: fullRerunDirection.position,
+          quarantineAt: retryQuarantine.position
+        },
+        started.plannedAttempt,
+        newerGraph.position
+      )
+      yield* recoveryJournal.append(
+        runId,
+        intentRecordKey(freshLineageOperationId),
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operation: makeTargetLineageObservationOperation({
+            integrationTarget: started.integrationTarget,
+            operationId: freshLineageOperationId,
+            plannedAttempt: started.plannedAttempt,
+            predecessorOperationIds: []
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+      const freshLineageRecord = yield* recoveryJournal.append(
+        runId,
+        outcomeRecordKey(freshLineageOperationId),
+        TargetLineageObservedEvent.make({
+          observation: successorLineage,
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: freshLineageOperationId,
+          plannedAttempt: started.plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      const successorInput = { ...staleSuccessorInput, targetLineageObservedAt: freshLineageRecord.position }
       const fixSuccessor = RunnableFrontierTransition.FixIntegratorSuccessorSession({
         input: successorInput,
         responsibility: started
@@ -2125,18 +2276,116 @@ describe("delivery proposal route matrix", () => {
       if (fixSuccessorProposal === undefined || !isIdentityFreeProposal(fixSuccessorProposal)) {
         return yield* Effect.die("missing FullRerun successor delivery proposal")
       }
-      yield* executeIntegrationAction(
+      const executeFixSuccessor = executeIntegrationAction(
         { _tag: "IdentityFreeAction", proposal: fixSuccessorProposal },
         fixSuccessor,
         inertLease,
         target
       ).pipe((effect) => provideLiveJournal(effect, recoveryHarness))
+      const foreignAcknowledgementJournal = Journal.of({
+        ...recoveryHarness.coordinatedJournal,
+        appendIfAcceptedPrefixCurrent: () => Effect.succeed({ _tag: "Appended" as const, record: freshLineageRecord })
+      })
+      expect(
+        yield* executeIntegrationAction(
+          { _tag: "IdentityFreeAction", proposal: fixSuccessorProposal },
+          fixSuccessor,
+          inertLease,
+          target
+        ).pipe(
+          (effect) =>
+            provideLiveJournal(effect, recoveryHarness, recoveryHarness.journal, foreignAcknowledgementJournal),
+          Effect.flip
+        )
+      ).toBeInstanceOf(IntegratorJournalContradiction)
+      const conditionalAppendEntered = yield* Deferred.make<void>()
+      const releaseConditionalAppend = yield* Deferred.make<void>()
+      const coordinatedJournal = recoveryHarness.coordinatedJournal
+      const heldConditionalJournal = Journal.of({
+        ...coordinatedJournal,
+        appendIfAcceptedPrefixCurrent: (...args) =>
+          Deferred.succeed(conditionalAppendEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseConditionalAppend)),
+            Effect.andThen(coordinatedJournal.appendIfAcceptedPrefixCurrent(...args))
+          )
+      })
+      const racingFix = yield* executeIntegrationAction(
+        { _tag: "IdentityFreeAction", proposal: fixSuccessorProposal },
+        fixSuccessor,
+        inertLease,
+        target
+      ).pipe(
+        (effect) => provideLiveJournal(effect, recoveryHarness, recoveryHarness.journal, heldConditionalJournal),
+        Effect.forkChild
+      )
+      yield* Deferred.await(conditionalAppendEntered)
+      const prefixAdvanceOperation = makeTrackerGraphObservationOperation(
+        { _tag: "AttemptContinuation" },
+        OperationId.make("route-matrix-prefix-advance-during-successor-fix"),
+        FixtureTarget.make("route-matrix-unrelated-successor-target"),
+        [planned.event.operation.operationId],
+        [started.plannedAttempt.taskId]
+      )
+      yield* recoveryJournal.append(
+        runId,
+        intentRecordKey(prefixAdvanceOperation.operationId),
+        taskTrackerReadIntent(prefixAdvanceOperation)
+      )
+      const foreignTargetGraph = yield* recoveryJournal.append(
+        runId,
+        outcomeRecordKey(prefixAdvanceOperation.operationId),
+        taskTrackerGraphFactsObserved(prefixAdvanceOperation, {
+          revision: TrackerRevision.make("route-matrix-unrelated-successor-graph"),
+          taskIds: [started.plannedAttempt.taskId]
+        })
+      )
+      const prefixAfterForeignGraph = journalEvidenceFrom(yield* recoveryHarness.records)
+      expect(
+        journalGraphObservationAt(prefixAfterForeignGraph, { plannedAttempt: started.plannedAttempt })?.position
+      ).toBe(foreignTargetGraph.position)
+      expect(
+        journalGraphObservationAt(prefixAfterForeignGraph, { plannedAttempt: started.plannedAttempt, target })?.position
+      ).toBe(newerGraph.position)
+      yield* Deferred.succeed(releaseConditionalAppend, undefined)
+      expect(yield* Fiber.join(racingFix)).toMatchObject({
+        _tag: "ActionDeferred",
+        proposalId: fixSuccessorProposal.id,
+        reason: "ContinuationAuthorizationStale"
+      })
+      expect(
+        (yield* recoveryHarness.records).filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
+      ).toHaveLength(0)
+      expect(yield* executeFixSuccessor).toMatchObject({ _tag: "ActionCompleted", proposalId: fixSuccessorProposal.id })
+      const postSuccessGraphOperation = makeTrackerGraphObservationOperation(
+        { _tag: "AttemptContinuation" },
+        OperationId.make("route-matrix-graph-after-successor-fix"),
+        target,
+        [planned.event.operation.operationId],
+        [started.plannedAttempt.taskId]
+      )
+      yield* recoveryJournal.append(
+        runId,
+        intentRecordKey(postSuccessGraphOperation.operationId),
+        taskTrackerReadIntent(postSuccessGraphOperation)
+      )
+      yield* recoveryJournal.append(
+        runId,
+        outcomeRecordKey(postSuccessGraphOperation.operationId),
+        taskTrackerGraphFactsObserved(postSuccessGraphOperation, {
+          revision: TrackerRevision.make("route-matrix-graph-after-successor-fix"),
+          taskIds: [started.plannedAttempt.taskId]
+        })
+      )
+      expect(yield* executeFixSuccessor).toMatchObject({ _tag: "ActionCompleted", proposalId: fixSuccessorProposal.id })
+      expect(
+        (yield* recoveryHarness.records).filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
+      ).toHaveLength(1)
 
       const successor = integratorSuccessorCorrelationFor(successorInput)
       const successorRun = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: successor })
       const successorTransition = RunnableFrontierTransition.RunIntegrator({
         lineage: successorLineage,
-        lineageObservedAt: successorLineageRecord.position,
+        lineageObservedAt: freshLineageRecord.position,
         responsibility: started,
         run: successorRun
       })
@@ -5314,8 +5563,11 @@ describe("delivery proposal route matrix", () => {
         readTaskClaim: () => record("readTaskClaim", AuthoritativeTaskClaimObserved.make({ observation: activeClaim })),
         readTaskWorktree: () =>
           record("readTaskWorktree", AuthoritativePlannedAttemptWorktreeObserved.make({ observation: exactWorktree })),
-        readTargetLineage: () =>
-          record("readTargetLineage", AuthoritativeTargetLineageObserved.make({ observation: exactLineage })),
+        readTargetLineage: (operation) =>
+          record(
+            `readTargetLineage:${operation.operationId}`,
+            AuthoritativeTargetLineageObserved.make({ observation: exactLineage })
+          ),
         readTrackerGraph: () => record("readTrackerGraph", projected.snapshot),
         readTaskWorkSpecification: () => record("readTaskWorkSpecification", specification),
         reconcileTaskWorktree: () =>
@@ -5412,6 +5664,7 @@ describe("delivery proposal route matrix", () => {
         }),
         RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
           operation: lineageOperation,
+          operationIdentity: "Preserve",
           plannedAttempt
         })
       ] as const
@@ -5421,8 +5674,12 @@ describe("delivery proposal route matrix", () => {
         if (fresh?.route._tag !== "RecoveredNewActionRoute") {
           return yield* Effect.die(new Error(`missing fresh adapter route for ${transition._tag}`))
         }
+        const materializedOperationId =
+          fresh.actionIdentity._tag === "FreshOperationIdRequired" && fresh.actionIdentity.source._tag === "Preserve"
+            ? fresh.actionIdentity.source.operationId
+            : OperationId.make(`fresh:${transition._tag}`)
         yield* withAdapterServices(
-          executeNewRecoveredAction(fresh.route.action, OperationId.make(`fresh:${transition._tag}`), inertLease, runId)
+          executeNewRecoveredAction(fresh.route.action, materializedOperationId, inertLease, runId)
         )
         yield* withAdapterServices(executeAcceptedWorkflowAction(runId, transition, inertLease))
       }
@@ -5541,8 +5798,8 @@ describe("delivery proposal route matrix", () => {
         "readTaskClaim",
         "readTaskWorktree",
         "readTaskWorktree",
-        "readTargetLineage",
-        "readTargetLineage",
+        `readTargetLineage:${lineageOperation.operationId}`,
+        `readTargetLineage:${lineageOperation.operationId}`,
         "releaseTaskClaim",
         "releaseTaskClaim",
         "acquireTaskClaim"

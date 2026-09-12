@@ -45,6 +45,7 @@ import {
 import { integrationResponsibilityEquivalence } from "../../workflow/protocols/integration-admission/responsibility.js"
 import { deriveIntegrationFrontier, integrationDeliveryWaitsOf } from "../frontier/integration-frontier.js"
 import { deriveIntegrationQuarantineState } from "../../workflow/protocols/integration-quarantine/state.js"
+import { integrationQuarantineDirectionTargetLineageOperationId } from "../../workflow/protocols/integration-quarantine/direction-lineage-operation.js"
 import {
   integratorCorrelationsEqual,
   integratorResponsibilityFactsEqual,
@@ -2607,15 +2608,6 @@ const integrationQuarantineDirectionFor = (
   }
 }
 
-const integrationQuarantineDirectionTargetLineageOperationId = (
-  facts: IntegrationQuarantineDirectionFacts,
-  plannedAttempt: PlannedTaskAttempt,
-  graphObservedAt: JournalPosition
-): OperationId =>
-  OperationId.make(
-    `integration-quarantine-direction:${encodeURIComponent(facts.direction.requestId.nonce)}:${plannedAttempt.attemptId}:q:${facts.quarantineAt}:d:${facts.directionAt}:g:${graphObservedAt}:target-lineage`
-  )
-
 /** A tracker read is current only when its exact operation is causally attached to this durable attempt plan. */
 const exactContinuationTrackerReadIntentFor = (
   records: JournalHistorySource,
@@ -3209,6 +3201,11 @@ const decisionAfterCurrentSpecification = (
       )
       return {
         transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+          operationIdentity:
+            pendingTargetLineageOperation?.event._tag === "GitReadIntentRecorded" &&
+            pendingTargetLineageOperation.event.operation._tag === "ReadTargetLineage"
+              ? "Preserve"
+              : "Allocate",
           operation:
             pendingTargetLineageOperation?.event._tag === "GitReadIntentRecorded" &&
             pendingTargetLineageOperation.event.operation._tag === "ReadTargetLineage"
@@ -3960,6 +3957,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
         })
       : RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
           operation: event.operation,
+          operationIdentity: "Preserve",
           plannedAttempt: event.operation.plannedAttempt
         })
   )
@@ -4321,6 +4319,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
         return targetIsHeld && lineageReadIsReady
           ? [
               RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+                operationIdentity: directionLineageOperationId === undefined ? "Allocate" : "Preserve",
                 operation: makeTargetLineageObservationOperation({
                   integrationTarget: target,
                   operationId: OperationId.make(

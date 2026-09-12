@@ -22,6 +22,7 @@ import type { DeliveryActionExecutionLease, MaterializedDeliveryAction } from ".
 import type { DeliveryActionProposal, IdentityFreeDeliveryProposal } from "./delivery-action-proposal.js"
 import { deliveryProposalsOf } from "./delivery-proposal.js"
 import { executeIntegrationAction } from "./integration-delivery-action-adapter.js"
+import { Journal } from "./journal.js"
 
 const target = FixtureTarget.make("integration-adapter-finality-target")
 const responsibility = StartedIntegrationResponsibility.make({
@@ -100,6 +101,22 @@ const promotionRuntime = TargetPromotionRuntime.of({
   }
 })
 
+const unexpectedJournalCall = <A>(operation: string): Effect.Effect<A> =>
+  Effect.die(`unexpected Journal.${operation} call`)
+
+const unusedJournal = Journal.of({
+  append: () => unexpectedJournalCall("append"),
+  appendIfAcceptedPrefixCurrent: () => unexpectedJournalCall("appendIfAcceptedPrefixCurrent"),
+  read: () => unexpectedJournalCall("read"),
+  readAccepted: () => unexpectedJournalCall("readAccepted"),
+  state: {
+    attach: unexpectedJournalCall("state.attach"),
+    changes: Stream.fromEffect(unexpectedJournalCall("state.changes")),
+    get: unexpectedJournalCall("state.get")
+  },
+  terminate: () => unexpectedJournalCall("terminate")
+})
+
 it.effect("defers blocker-clear ancestry without runtime and completes after the configured Git read", () =>
   Effect.gen(function* () {
     const authorization = PostPromotionBlockerClearAuthorization.make({
@@ -121,6 +138,7 @@ it.effect("defers blocker-clear ancestry without runtime and completes after the
     expect(
       yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
         Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
+        Effect.provideService(Journal, unusedJournal),
         Effect.provideService(InRunJournal, journal)
       )
     ).toMatchObject({ _tag: "ActionDeferred", proposalId: proposal.id, reason: "CompletionTaskUnavailable" })
@@ -129,6 +147,7 @@ it.effect("defers blocker-clear ancestry without runtime and completes after the
     expect(
       yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
         Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
+        Effect.provideService(Journal, unusedJournal),
         Effect.provideService(TargetPromotionRuntime, promotionRuntime),
         Effect.provideService(InRunJournal, journal)
       )
@@ -173,6 +192,7 @@ it.effect("translates a changed focused revision into a deferred completion acti
 
     const result = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
       Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
+      Effect.provideService(Journal, unusedJournal),
       Effect.provideService(CompletionTaskBoundary, boundary),
       Effect.provideService(TargetPromotionRuntime, promotionRuntime),
       Effect.provideService(EvidenceStore, evidenceStore),
