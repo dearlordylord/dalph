@@ -3445,7 +3445,8 @@ const promotionScenarioFrom = (name: string, promotionStory: ReadonlyArray<unkno
     )
   })
 
-const targetPromotionSuccessBeforeCompletionRefresh = promotionScenarioFrom(
+/** Git accepts the one exact H -> M update after the verified candidate is sealed. */
+export const targetPromotionSuccessAuthoredCassette: ScenarioCassette = promotionScenarioFrom(
   "promotes Git-qualified M by exact compare-and-set and records exact ancestry",
   [
     targetPromotionGitReadReturned("/dalph/cassettes/integration.git", promotionCandidateCommit, {
@@ -3468,23 +3469,6 @@ const targetPromotionSuccessBeforeCompletionRefresh = promotionScenarioFrom(
     taskId: "A"
   }
 )
-
-/** Git accepts H -> M, then the next activation refreshes the still-open tracker graph before remaining active. */
-export const targetPromotionSuccessAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
-  AuthoredScenarioCassette
-)({
-  ...targetPromotionSuccessBeforeCompletionRefresh,
-  story: targetPromotionSuccessBeforeCompletionRefresh.story.flatMap(
-    (item): ReadonlyArray<unknown> =>
-      item._tag === "ExpectedBehavior"
-        ? [
-            { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-            { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-            item
-          ]
-        : [item]
-  )
-})
 
 const issue138PrePromotionBlockerGraph = {
   revision: "issue-138-pre-promotion-blocker",
@@ -3897,21 +3881,9 @@ const deliveryFinalityAdditionalPrerequisiteSatisfiedGraph = {
 
 const deliveryFinalityBase = (() => {
   let recovered = false
-  let skipPostPromotionRefresh = false
   return targetPromotionSuccessAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
     if (item._tag === "CoordinatorProcessDies") recovered = true
-    if (item._tag === "TargetPromotionCompareAndSetReturned" && item.result._tag === "Applied") {
-      skipPostPromotionRefresh = true
-      return [item]
-    }
-    if (skipPostPromotionRefresh && item._tag === "DalphSelects" && item.operation._tag === "ReadTrackerGraph") {
-      return []
-    }
     if (item._tag === "TrackerGraphReadReturned") {
-      if (skipPostPromotionRefresh) {
-        skipPostPromotionRefresh = false
-        return []
-      }
       return [{ ...item, graph: recovered ? deliveryFinalityExpandedGraph : deliveryFinalityStartingGraph }]
     }
     if (item._tag !== "ExpectedBehavior") return [item]
@@ -5252,10 +5224,10 @@ const deliveryStorySuccessorPromotionRequest = targetPromotionGitRequest(
 export const deliveryStoryDs14ThroughDs17AuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
-  ...targetPromotionSuccessBeforeCompletionRefresh,
+  ...targetPromotionSuccessAuthoredCassette,
   name: "DS-14 through DS-17 rejected exact-head offer, FullRerun successor, and finality",
   startingFacts: {
-    ...targetPromotionSuccessBeforeCompletionRefresh.startingFacts,
+    ...targetPromotionSuccessAuthoredCassette.startingFacts,
     targetLineageObservations: [
       {
         plannedBaseIsAncestorOfTargetHead: true,
@@ -5266,7 +5238,7 @@ export const deliveryStoryDs14ThroughDs17AuthoredCassette: ScenarioCassette = Sc
       deliveryStorySuccessorLineage
     ]
   },
-  story: targetPromotionSuccessBeforeCompletionRefresh.story.flatMap((item): ReadonlyArray<unknown> => {
+  story: targetPromotionSuccessAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
     if (item._tag === "TargetPromotionCompareAndSetReturned") {
       return [
         { ...item, result: { _tag: "RejectedExpectedHead", observedHeadSha: deliveryStoryChangedHead } },
