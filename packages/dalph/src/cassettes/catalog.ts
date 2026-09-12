@@ -862,6 +862,28 @@ const followsBasePauseObservation = (
   graphSelectionFollowsBasePauseObservation(item, index, story) ||
   graphReturnFollowsBasePauseObservation(item, index, story)
 
+const unpauseWaitingA = {
+  blockers: [
+    { _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:A:0" },
+    { _tag: "LiveDeliveryAction", owner: authoredAdmittedOwner(authoredSuspendProposal("A", "attempt:A:0")) }
+  ],
+  responsibility: {
+    _tag: "PlannedAttemptExecutorWork",
+    attemptId: "attempt:A:0",
+    beganAt: 17,
+    coverage: { _tag: "ExactTaskPauseCoverage" },
+    taskId: "A"
+  }
+} as const
+
+const unpauseSuspendedB = {
+  _tag: "PlannedAttemptExecutorWork",
+  attemptId: "attempt:B:1",
+  beganAt: 30,
+  coverage: { _tag: "GroupingDescendantPauseCoverage", groupingObservedAt: 35, pausedTaskId: "A" },
+  taskId: "B"
+} as const
+
 const unpauseWaitingStory = (): ReadonlyArray<AuthoredCassetteStoryItem> => [
   decodeStoryItem({
     _tag: "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
@@ -879,22 +901,7 @@ const unpauseWaitingStory = (): ReadonlyArray<AuthoredCassetteStoryItem> => [
         _tag: "PauseWaiting" as const,
         atBoundary: [],
         preventing: [
-          {
-            blockers: [
-              { _tag: "ExecutorSafeSuspensionRequired" as const, attemptId: "attempt:A:0" },
-              {
-                _tag: "LiveDeliveryAction" as const,
-                owner: authoredAdmittedOwner(authoredSuspendProposal("A", "attempt:A:0"))
-              }
-            ],
-            responsibility: {
-              _tag: "PlannedAttemptExecutorWork" as const,
-              attemptId: "attempt:A:0",
-              beganAt: 17,
-              coverage: { _tag: "ExactTaskPauseCoverage" as const },
-              taskId: "A"
-            }
-          },
+          unpauseWaitingA,
           {
             blockers: [
               {
@@ -902,16 +909,24 @@ const unpauseWaitingStory = (): ReadonlyArray<AuthoredCassetteStoryItem> => [
                 owner: authoredAdmittedOwner(authoredSuspendProposal("B", "attempt:B:1"))
               }
             ],
-            responsibility: {
-              _tag: "PlannedAttemptExecutorWork" as const,
-              attemptId: "attempt:B:1",
-              beganAt: 30,
-              coverage: { _tag: "GroupingDescendantPauseCoverage" as const, groupingObservedAt: 35, pausedTaskId: "A" },
-              taskId: "B"
-            }
+            responsibility: unpauseSuspendedB
           }
         ]
-      }
+      },
+      {
+        _tag: "PauseWaiting",
+        atBoundary: [],
+        preventing: [
+          unpauseWaitingA,
+          {
+            blockers: [
+              { _tag: "AcceptedOutcomePublicationPending", proposal: authoredSuspendProposal("B", "attempt:B:1") }
+            ],
+            responsibility: unpauseSuspendedB
+          }
+        ]
+      },
+      { _tag: "PauseWaiting", atBoundary: [unpauseSuspendedB], preventing: [unpauseWaitingA] }
     ],
     subject: { _tag: "Task", taskId: "A" }
   }),
@@ -3362,6 +3377,10 @@ export const taskPauseExecutorAndPromotionBoundariesAuthoredCassette: ScenarioCa
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG1 },
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    },
     pauseExecutorAndPromotionWaiting(
       [pauseExecutorSafeA, pauseSuspendProposedA],
       [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
@@ -3378,11 +3397,18 @@ export const taskPauseExecutorAndPromotionBoundariesAuthoredCassette: ScenarioCa
       [pauseExecutorSafeA, pauseSuspendLiveA],
       [pausePromotionRequiredD, pausePromotionLiveD]
     ),
-    pauseExecutorAndPromotionWaiting([pauseSuspendLiveA], [pausePromotionLiveD]),
-    pauseExecutorAndPromotionWaiting([pauseSuspendPendingA], [pausePromotionLiveD]),
+    pauseExecutorAndPromotionWaiting([pauseSuspendLiveA], [pausePromotionRequiredD, pausePromotionLiveD]),
+    pauseExecutorAndPromotionWaiting([pauseSuspendPendingA], [pausePromotionRequiredD, pausePromotionLiveD]),
     {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      _tag: "PauseProgressObserved",
+      result: {
+        _tag: "PauseWaiting",
+        atBoundary: [pauseExecutorResponsibilityA],
+        preventing: [
+          { blockers: [pausePromotionRequiredD, pausePromotionLiveD], responsibility: pausePromotionResponsibilityD }
+        ]
+      },
+      subject: { _tag: "Task", taskId: "A" }
     },
     {
       _tag: "PauseProgressObserved",
