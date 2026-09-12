@@ -112,6 +112,7 @@ import type {
   Issue268ExecutorCommandCapture
 } from "./issue-268-controlled-characterization-types.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "./controlled-synchronous-planned-attempt-executor.js"
+import type { Issue268Ds02PassiveActionCapture, Issue268Ds02PassiveReadCapture } from "./issue-268-controlled-ds02.js"
 import {
   actionStage,
   fixedAttemptPlannerLayer,
@@ -482,6 +483,8 @@ const runIssue268StartupCharacterizationFor = (
       const pendingClaimTaskIds = yield* Ref.make<ReadonlyArray<string>>([])
       const ds01ClaimGate = yield* Deferred.make<void>()
       const executedActions = yield* Ref.make<ReadonlyArray<{ readonly stage: string; readonly taskId: string }>>([])
+      const ds02PassiveActions = yield* Ref.make<ReadonlyArray<Issue268Ds02PassiveActionCapture>>([])
+      const ds02PassiveReads = yield* Ref.make<ReadonlyArray<Issue268Ds02PassiveReadCapture>>([])
       const executorPrivateWip =
         options.sharedAuthorities?.executorPrivateWip ??
         (yield* Ref.make<ReadonlyMap<string, { readonly plan: PlannedTaskAttempt; readonly bytes: string }>>(new Map()))
@@ -516,6 +519,8 @@ const runIssue268StartupCharacterizationFor = (
         observe: (correlation, purpose) =>
           // eslint-disable-next-line complexity -- Restart branches fail-close DS-09 observations plus DS-10/DS-11 suspension lifecycle gates.
           Effect.gen(function* () {
+            if (mode === "DS02" && purpose._tag === "PassiveLifecycleObservation")
+              yield* Ref.update(ds02PassiveReads, (current) => [...current, { correlation, purpose }])
             yield* recordOccurrence({
               detail: `${correlation.attemptId}:${purpose._tag}`,
               kind: "ExecutorObserveCalled",
@@ -1449,6 +1454,13 @@ const runIssue268StartupCharacterizationFor = (
             execute: (action, lease) =>
               Effect.gen(function* () {
                 const stage = actionStage(action)
+                if (mode === "DS02" && stage?.stage === "ObservePlannedAttemptExecutorWork") {
+                  // Memory read returns its immutable owned Hot root; retaining it adds no history copy.
+                  const records = yield* sharedJournal.read(scenario.runId)
+                  const lastPublicationOffset = -1
+                  const publication = (yield* Ref.get(publications)).at(lastPublicationOffset)
+                  yield* Ref.update(ds02PassiveActions, (current) => [...current, { action, publication, records }])
+                }
                 const actionDetail =
                   stage === undefined
                     ? [
@@ -2106,6 +2118,8 @@ const runIssue268StartupCharacterizationFor = (
       } else if (mode === "DS01") yield* completeDs01
       else yield* completeDs02
       return {
+        ds02PassiveActions: yield* Ref.get(ds02PassiveActions),
+        ds02PassiveReads: yield* Ref.get(ds02PassiveReads),
         claimReleaseOrder: yield* Ref.get(claimReleaseOrder),
         claimRequests: yield* Ref.get(claimRequests),
         commands: yield* Ref.get(commands),

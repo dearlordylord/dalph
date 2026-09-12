@@ -43,6 +43,12 @@ import {
   runIssue268ControlledDeliveryCassette
 } from "../../test-support/issue-268-controlled-occurrence-cassette.js"
 import { isIssue268Ds04CompleteCheckpoint } from "../../test-support/issue-268-controlled-ds04.js"
+import {
+  isIssue268Ds02ActionInventory,
+  isIssue268Ds02PassiveAction,
+  isIssue268Ds02PassiveRead,
+  isIssue268Ds02StageSequence
+} from "../../test-support/issue-268-controlled-ds02.js"
 import { isIssue268Ds05CompleteCheckpoint } from "../../test-support/issue-268-controlled-ds05.js"
 import {
   isIssue268Ds06CompleteCheckpoint,
@@ -1389,6 +1395,32 @@ it.effect("DS-01 derives A, B, and C inside capacity while D and E stay outside"
   })
 )
 
+it("DS-02 startup inventory rejects duplicate Begin, reordered startup, and outside-bound admission", () => {
+  const stages = [
+    "ReadCurrentTaskGraph",
+    "AcquireTaskClaim",
+    "ReadPostClaimGraph",
+    "ReadTaskWorkSpecification",
+    "RecordTaskAttemptPlan",
+    "ReconcileTaskWorktree",
+    "BeginPlannedAttemptExecutorWork"
+  ]
+  const valid = ["A", "B", "C"].flatMap((taskId) => stages.map((stage) => ({ stage, taskId })))
+  expect(isIssue268Ds02ActionInventory(valid)).toBe(true)
+  expect(isIssue268Ds02ActionInventory([...valid, { stage: "BeginPlannedAttemptExecutorWork", taskId: "A" }])).toBe(
+    false
+  )
+  expect(
+    isIssue268Ds02ActionInventory(
+      valid.map((action, index) => (index === 0 ? { ...action, stage: "AcquireTaskClaim" } : action))
+    )
+  ).toBe(false)
+  for (const taskId of ["D", "E"])
+    expect(isIssue268Ds02ActionInventory([...valid, { stage: "ObservePlannedAttemptExecutorWork", taskId }])).toBe(
+      false
+    )
+})
+
 it.effect("DS-02 starts only A, B, and C through the production workflow algebra", () =>
   Effect.gen(function* () {
     const run = yield* runIssue268Ds02Characterization
@@ -1415,8 +1447,8 @@ it.effect("DS-02 starts only A, B, and C through the production workflow algebra
       return taskId === "D" || taskId === "E" ? [{ event: event._tag, position, taskId }] : []
     })
     const finalPublication = run.publications.at(-1)
-    // Begin returns and journals the exact Executing report. A second passive
-    // executor observation would reread evidence already accepted by that boundary.
+    // The helper joins the whole activation: an exact read-only lifecycle
+    // attachment may follow startup, but it cannot issue another command/report.
     const expectedStages = [
       "ReadCurrentTaskGraph",
       "AcquireTaskClaim",
@@ -1463,7 +1495,68 @@ it.effect("DS-02 starts only A, B, and C through the production workflow algebra
     expect(claimed).toHaveLength(3)
     expect(new Set(claimed)).toEqual(new Set(["A", "B", "C"]))
     expect(planned).toEqual(["A", "B", "C"])
-    expect(stagesByTask).toEqual({ A: expectedStages, B: expectedStages, C: expectedStages, D: [], E: [] })
+    expect(isIssue268Ds02ActionInventory(run.executedActions)).toBe(true)
+    for (const taskId of ["A", "B", "C"]) {
+      const stages = stagesByTask[taskId] ?? []
+      expect(stages.slice(0, expectedStages.length)).toEqual(expectedStages)
+      expect(isIssue268Ds02StageSequence(stages)).toBe(true)
+      const passiveActions = run.ds02PassiveActions.filter(
+        ({ action }) => deliveryProposalOrderTaskId(action.proposal.order) === taskId
+      )
+      expect(passiveActions).toHaveLength(stages.length - expectedStages.length)
+      const plan = run.plans.find((candidate) => candidate.taskId === taskId)
+      if (plan === undefined) return expect.fail(`DS-02 lacks its exact ${taskId} plan`)
+      for (const capture of passiveActions) {
+        expect(isIssue268Ds02PassiveAction(capture, plan)).toBe(true)
+        expect(isIssue268Ds02PassiveAction({ ...capture, records: [] }, plan)).toBe(false)
+        expect(
+          isIssue268Ds02PassiveAction(capture, { ...plan, attemptId: AttemptId.make("foreign-ds02-attempt") })
+        ).toBe(false)
+        const action = capture.action
+        if (
+          action._tag === "IdentityFreeAction" &&
+          action.proposal.route._tag === "FreshExecutorWorkflowRoute" &&
+          action.proposal.route.step._tag === "ObservePlannedAttemptExecutorWork"
+        ) {
+          const route = action.proposal.route
+          const step = action.proposal.route.step
+          expect(
+            isIssue268Ds02PassiveAction(
+              {
+                ...capture,
+                action: {
+                  ...action,
+                  proposal: {
+                    ...action.proposal,
+                    route: {
+                      ...route,
+                      step: {
+                        ...step,
+                        plannedAttempt: {
+                          ...step.plannedAttempt,
+                          attemptId: AttemptId.make("foreign-ds02-observation")
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              plan
+            )
+          ).toBe(false)
+        }
+      }
+    }
+    expect(stagesByTask["D"]).toEqual([])
+    expect(stagesByTask["E"]).toEqual([])
+    expect(run.ds02PassiveReads.every((capture) => isIssue268Ds02PassiveRead(capture, run.plans))).toBe(true)
+    for (const capture of run.ds02PassiveReads)
+      expect(
+        isIssue268Ds02PassiveRead(
+          { ...capture, correlation: { ...capture.correlation, attemptId: AttemptId.make("foreign-ds02-read") } },
+          run.plans
+        )
+      ).toBe(false)
     expect(run.claimRequests).toHaveLength(3)
     expect(run.claimRequests).toEqual(
       expect.arrayContaining([
