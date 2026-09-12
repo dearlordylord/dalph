@@ -296,6 +296,25 @@ const terminalProofMatchesGraphRead = (
 const cancellationSupersedesTerminalEvidence = (proof: TerminalRunFinalityProof, state: JournalState): boolean =>
   (lastJournalRecordOfKind(state.prefix, "RunCancellationApplied")?.position ?? 0) > proof.evidence.observedAt
 
+const terminalProofStillMatchesAcceptedGraph = (
+  proof: TerminalRunFinalityProof,
+  state: JournalState,
+  runId: RunId,
+  target: TrackerTarget
+): boolean => {
+  if (cancellationSupersedesTerminalEvidence(proof, state)) return false
+  return terminalProofMatchesGraphRead(proof, runId, target, terminalGraphReadFor(proof, state))
+}
+
+const requestedTargetMismatch = (
+  runId: RunId,
+  recordedTarget: TrackerTarget,
+  requestedTarget: TrackerTarget | undefined
+): WorkflowRunTargetMismatch | undefined =>
+  requestedTarget !== undefined && taskTrackerTargetKey(recordedTarget) !== taskTrackerTargetKey(requestedTarget)
+    ? new WorkflowRunTargetMismatch({ recordedTarget, requestedTarget, runId })
+    : undefined
+
 const validateRun = Effect.fn("JournaledRunBootstrap.validateRun")(function* (
   runId: RunId,
   records: Parameters<typeof reduceWorkflowJournalHistory>[1]
@@ -448,16 +467,8 @@ export const journaledRunBootstrapLayer = (
             const current = yield* Ref.get(processJournal)
             if (current._tag === "Failed") return yield* current.failure
             if (current._tag === "Established") {
-              if (
-                requestedTarget !== undefined &&
-                taskTrackerTargetKey(current.target) !== taskTrackerTargetKey(requestedTarget)
-              ) {
-                return yield* new WorkflowRunTargetMismatch({
-                  recordedTarget: current.target,
-                  requestedTarget,
-                  runId: expectedRunId
-                })
-              }
+              const mismatch = requestedTargetMismatch(expectedRunId, current.target, requestedTarget)
+              if (mismatch !== undefined) return yield* mismatch
               return Option.some(current)
             }
             const records = yield* lifecycle.read(expectedRunId)
@@ -466,12 +477,8 @@ export const journaledRunBootstrapLayer = (
             const recordedTarget = exactWorkflowRunTargetFor(initial.prefix)
             /* v8 ignore next -- validation accepts a non-empty workflow history only after WorkflowRunBegan. */
             if (recordedTarget === undefined) return yield* Effect.die("validated Run has no established target")
-            if (
-              requestedTarget !== undefined &&
-              taskTrackerTargetKey(recordedTarget) !== taskTrackerTargetKey(requestedTarget)
-            ) {
-              return yield* new WorkflowRunTargetMismatch({ recordedTarget, requestedTarget, runId: expectedRunId })
-            }
+            const mismatch = requestedTargetMismatch(expectedRunId, recordedTarget, requestedTarget)
+            if (mismatch !== undefined) return yield* mismatch
             return Option.some(yield* installJournalUnlocked(recordedTarget, initial))
           })
         )
@@ -748,11 +755,7 @@ export const journaledRunBootstrapLayer = (
           return RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
         }
         const terminalProof = proof
-        if (cancellationSupersedesTerminalEvidence(terminalProof, state)) {
-          return RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
-        }
-        const graphRead = terminalGraphReadFor(terminalProof, state)
-        if (!terminalProofMatchesGraphRead(terminalProof, runId, target, graphRead)) {
+        if (!terminalProofStillMatchesAcceptedGraph(terminalProof, state, runId, target)) {
           return RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
         }
         const owner = yield* admission.acquireForwardOwner("AuthorizedRunTerminationAppend").pipe(Effect.option)

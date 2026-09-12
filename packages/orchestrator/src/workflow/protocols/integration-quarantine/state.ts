@@ -380,6 +380,36 @@ const providerFailureEvidenceMatchesRecords = (
 const contradiction = (detail: string): IntegrationQuarantineState =>
   IntegrationQuarantineState.cases.Contradiction.make({ detail })
 
+const quarantineDirectionFacts = (directions: Iterable<DirectionRecord>, quarantine: QuarantineRecord) => {
+  let directionCount = 0
+  let hasForeignDirection = false
+  let hasNonCausalDirection = false
+  for (const direction of directions) {
+    directionCount += 1
+    hasForeignDirection ||= !directionRecordHasCanonicalKey(direction)
+    hasNonCausalDirection ||= direction.position <= quarantine.position
+  }
+  return { directionCount, hasForeignDirection, hasNonCausalDirection }
+}
+
+const hasPriorSuccessorSession = (
+  records: JournalHistorySource,
+  quarantine: QuarantineRecord,
+  sessionId: IntegratorSessionId
+): boolean => {
+  for (const { event, position, runId } of journalRecordsForIntegratorSession(records, sessionId)) {
+    if (
+      event._tag === "IntegratorSuccessorSessionFixed" &&
+      runId === quarantine.runId &&
+      position < quarantine.position &&
+      integratorCorrelationsEqual(event.successor, quarantine.event.correlation)
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
 const quarantineContradiction = (
   records: JournalHistorySource,
   quarantine: QuarantineRecord,
@@ -392,28 +422,12 @@ const quarantineContradiction = (
     return "quarantine evidence does not reference exact earlier Journal facts"
   }
   const subject = IntegrationQuarantineDirectionSubject.make({ quarantineAt: quarantine.position, sessionId })
-  const directions = directionRecordsFor(records, subject)
-  let directionCount = 0
-  let hasForeignDirection = false
-  let hasNonCausalDirection = false
-  for (const direction of directions) {
-    directionCount += 1
-    hasForeignDirection ||= !directionRecordHasCanonicalKey(direction)
-    hasNonCausalDirection ||= direction.position <= quarantine.position
-  }
+  const { directionCount, hasForeignDirection, hasNonCausalDirection } = quarantineDirectionFacts(
+    directionRecordsFor(records, subject),
+    quarantine
+  )
   if (directionCount > 1) return "one quarantine occurrence has more than one applied direction"
-  let successorSession = false
-  for (const { event, position, runId } of journalRecordsForIntegratorSession(records, sessionId)) {
-    if (
-      event._tag === "IntegratorSuccessorSessionFixed" &&
-      runId === quarantine.runId &&
-      position < quarantine.position &&
-      integratorCorrelationsEqual(event.successor, quarantine.event.correlation)
-    ) {
-      successorSession = true
-      break
-    }
-  }
+  const successorSession = hasPriorSuccessorSession(records, quarantine, sessionId)
   if (successorSession && directionCount > 0) {
     return "a FullRerun successor quarantine cannot apply another direction"
   }

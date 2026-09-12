@@ -88,6 +88,16 @@ const graphReconstructedAt = (
 ): TaskDagSnapshot | undefined =>
   Option.getOrUndefined(journalGraphSnapshotForObservation(records, graphObservation.position))
 
+const graphShowsTaskLifecycle = (
+  records: JournalRecordEvidence,
+  observation: CompleteGraphObservationRecord,
+  plannedAttempt: PlannedTaskAttempt,
+  lifecycle: "Open" | "TerminalWithoutSuccess"
+): boolean => {
+  const graph = graphReconstructedAt(records, observation)
+  return Option.getOrUndefined(graph?.lifecycleOf(plannedAttempt.taskId) ?? Option.none())?._tag === lifecycle
+}
+
 const taskWasClosedAtAcceptedSafe = (
   records: JournalRecordEvidence,
   plannedAttempt: PlannedTaskAttempt,
@@ -98,11 +108,7 @@ const taskWasClosedAtAcceptedSafe = (
     target: immutableRunTarget
   })
   if (graphBeforeSafe === undefined || !isCompleteGraphObservationRecord(graphBeforeSafe)) return false
-  const before = graphReconstructedAt(records, graphBeforeSafe)
-  return (
-    Option.getOrUndefined(before?.lifecycleOf(plannedAttempt.taskId) ?? Option.none())?._tag ===
-    "TerminalWithoutSuccess"
-  )
+  return graphShowsTaskLifecycle(records, graphBeforeSafe, plannedAttempt, "TerminalWithoutSuccess")
 }
 
 /**
@@ -125,10 +131,36 @@ const latestTaskReopenAfterAcceptedSafe = (
     !isCompleteGraphObservationRecord(reopened)
   )
     return undefined
-  const after = graphReconstructedAt(records, reopened)
-  return Option.getOrUndefined(after?.lifecycleOf(plannedAttempt.taskId) ?? Option.none())?._tag === "Open"
-    ? reopened
-    : undefined
+  return graphShowsTaskLifecycle(records, reopened, plannedAttempt, "Open") ? reopened : undefined
+}
+
+type GraphReadIntentRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerReadIntentRecorded" }> & {
+    readonly operation: Extract<
+      Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerReadIntentRecorded" }>["operation"],
+      { readonly _tag: "ReadTrackerGraph" }
+    >
+  }
+}
+
+const isGraphReadIntent = (record: JournalRecord | undefined): record is GraphReadIntentRecord =>
+  record?.event._tag === "TaskTrackerReadIntentRecorded" && record.event.operation._tag === "ReadTrackerGraph"
+
+const reopenMatchesExecutingAuthorityRead = (
+  records: JournalRecordEvidence,
+  intent: GraphReadIntentRecord,
+  reopened: CompleteGraphObservationRecord,
+  plannedAttempt: PlannedTaskAttempt
+): boolean => {
+  const operation = intent.event.operation
+  return (
+    intent.runId === plannedAttempt.runId &&
+    operation.operationId === reopened.event.operationId &&
+    intent.position < reopened.position &&
+    acceptedExecutingAttemptsForAuthorityCheckIntent(records, intent) !== undefined &&
+    taskTrackerTargetKey(operation.target) === taskTrackerTargetKey(reopened.event.observation.target) &&
+    !operation.readShape.explicitlyCoveredTaskIds.includes(plannedAttempt.taskId)
+  )
 }
 
 /**
@@ -151,18 +183,7 @@ export const hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck 
     return false
   }
   const intent = journalRecordByKey(records, intentRecordKey(reopened.event.operationId))
-  if (intent?.event._tag !== "TaskTrackerReadIntentRecorded" || intent.event.operation._tag !== "ReadTrackerGraph") {
-    return false
-  }
-  const operation = intent.event.operation
-  return (
-    intent.runId === plannedAttempt.runId &&
-    operation.operationId === reopened.event.operationId &&
-    intent.position < reopened.position &&
-    acceptedExecutingAttemptsForAuthorityCheckIntent(records, intent) !== undefined &&
-    taskTrackerTargetKey(operation.target) === taskTrackerTargetKey(reopened.event.observation.target) &&
-    !operation.readShape.explicitlyCoveredTaskIds.includes(plannedAttempt.taskId)
-  )
+  return isGraphReadIntent(intent) && reopenMatchesExecutingAuthorityRead(records, intent, reopened, plannedAttempt)
 }
 
 const exactTaskWasReopenedAfterAcceptedSafe = (
@@ -180,31 +201,47 @@ const exactTaskWasReopenedAfterAcceptedSafe = (
     !isCompleteGraphObservationRecord(reopened)
   )
     return false
-  const after = graphReconstructedAt(records, reopened)
-  return Option.getOrUndefined(after?.lifecycleOf(plannedAttempt.taskId) ?? Option.none())?._tag === "Open"
+  return graphShowsTaskLifecycle(records, reopened, plannedAttempt, "Open")
 }
 
-const reconciledResumeStillSafeBasis = (records: JournalRecordEvidence, plannedAttempt: PlannedTaskAttempt) => {
-  let resume: JournalRecord | undefined
+type ResumeIntentRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorCommandIntended" }>
+}
+
+const isResumeForAttempt = (record: JournalRecord, plannedAttempt: PlannedTaskAttempt): record is ResumeIntentRecord =>
+  record.event._tag === "PlannedAttemptExecutorCommandIntended" &&
+  record.event.command === "Resume" &&
+  plannedTaskAttemptEquivalence(record.event.plannedAttempt, plannedAttempt)
+
+const latestResumeForAttempt = (records: JournalRecordEvidence, plannedAttempt: PlannedTaskAttempt) => {
+  let resume: ResumeIntentRecord | undefined
   for (const record of journalRecordsForAttemptKind(
     records,
     plannedAttempt.attemptId,
     "PlannedAttemptExecutorCommandIntended"
   )) {
-    if (
-      record.event._tag === "PlannedAttemptExecutorCommandIntended" &&
-      record.event.command === "Resume" &&
-      plannedTaskAttemptEquivalence(record.event.plannedAttempt, plannedAttempt)
-    )
-      resume = record
+    if (isResumeForAttempt(record, plannedAttempt)) resume = record
   }
-  if (resume?.event._tag !== "PlannedAttemptExecutorCommandIntended") return undefined
-  const lifecycleSafe = latestAcceptedPlannedAttemptExecutorEvidence(
-    journalEvidenceBefore(records, resume.position),
-    plannedAttempt
-  )
-  if (lifecycleSafe?.report._tag !== "ExecutorWorkSafelySuspended") return undefined
-  const resumeCommandOrdinal = resume.event.ordinal
+  return resume
+}
+
+const projectionReportsExactSafeForAttempt = (
+  event: JournalRecord["event"],
+  plannedAttempt: PlannedTaskAttempt
+): event is Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorCommandProjectionObserved" }> =>
+  event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+  plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt) &&
+  event.observation._tag === "ExactExecutorReport" &&
+  event.observation.report._tag === "ExecutorWorkSafelySuspended" &&
+  event.observation.report.correlation.runId === plannedAttempt.runId &&
+  event.observation.report.correlation.attemptId === plannedAttempt.attemptId
+
+const latestSafeResumeProjection = (
+  records: JournalRecordEvidence,
+  plannedAttempt: PlannedTaskAttempt,
+  resumePosition: JournalPosition,
+  resumeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal
+) => {
   let reconciled: JournalRecord | undefined
   for (const record of journalRecordsForAttemptKind(
     records,
@@ -213,19 +250,22 @@ const reconciledResumeStillSafeBasis = (records: JournalRecordEvidence, plannedA
   )) {
     const event = record.event
     if (
-      record.position > resume.position &&
-      event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-      event.commandOrdinal === resumeCommandOrdinal &&
-      plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt) &&
-      event.observation._tag === "ExactExecutorReport" &&
-      event.observation.report._tag === "ExecutorWorkSafelySuspended" &&
-      event.observation.report.correlation.runId === plannedAttempt.runId &&
-      event.observation.report.correlation.attemptId === plannedAttempt.attemptId
+      record.position > resumePosition &&
+      projectionReportsExactSafeForAttempt(event, plannedAttempt) &&
+      event.commandOrdinal === resumeCommandOrdinal
     )
       reconciled = record
   }
-  if (reconciled?.event._tag !== "PlannedAttemptExecutorCommandProjectionObserved") return undefined
-  const projectionOrdinal = reconciled.event.projectionOrdinal
+  return reconciled
+}
+
+const safeResumeProjectionWasConsumed = (
+  records: JournalRecordEvidence,
+  plannedAttempt: PlannedTaskAttempt,
+  reconciledPosition: JournalPosition,
+  resumeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal,
+  projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal
+): boolean => {
   let consumed = false
   for (const record of journalRecordsForAttemptKind(
     records,
@@ -234,15 +274,23 @@ const reconciledResumeStillSafeBasis = (records: JournalRecordEvidence, plannedA
   )) {
     const event = record.event
     if (
-      record.position > reconciled.position &&
+      record.position > reconciledPosition &&
       event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended" &&
       plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt) &&
       event.commandOrdinal === resumeCommandOrdinal &&
       event.projectionOrdinal === projectionOrdinal &&
-      event.authorization.safeProjectionObservedAt === reconciled.position
+      event.authorization.safeProjectionObservedAt === reconciledPosition
     )
       consumed = true
   }
+  return consumed
+}
+
+const safeResumeProjectionWasSuperseded = (
+  records: JournalRecordEvidence,
+  plannedAttempt: PlannedTaskAttempt,
+  reconciledPosition: JournalPosition
+): boolean => {
   let superseded = false
   for (const record of journalRecordsForAttemptKind(
     records,
@@ -251,13 +299,36 @@ const reconciledResumeStillSafeBasis = (records: JournalRecordEvidence, plannedA
   )) {
     const event = record.event
     if (
-      record.position > reconciled.position &&
+      record.position > reconciledPosition &&
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
       (event.command === "Begin" || event.command === "Resume") &&
       plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
     )
       superseded = true
   }
+  return superseded
+}
+
+const reconciledResumeStillSafeBasis = (records: JournalRecordEvidence, plannedAttempt: PlannedTaskAttempt) => {
+  const resume = latestResumeForAttempt(records, plannedAttempt)
+  if (resume === undefined) return undefined
+  const lifecycleSafe = latestAcceptedPlannedAttemptExecutorEvidence(
+    journalEvidenceBefore(records, resume.position),
+    plannedAttempt
+  )
+  if (lifecycleSafe?.report._tag !== "ExecutorWorkSafelySuspended") return undefined
+  const resumeCommandOrdinal = resume.event.ordinal
+  const reconciled = latestSafeResumeProjection(records, plannedAttempt, resume.position, resumeCommandOrdinal)
+  if (reconciled?.event._tag !== "PlannedAttemptExecutorCommandProjectionObserved") return undefined
+  const projectionOrdinal = reconciled.event.projectionOrdinal
+  const consumed = safeResumeProjectionWasConsumed(
+    records,
+    plannedAttempt,
+    reconciled.position,
+    resumeCommandOrdinal,
+    projectionOrdinal
+  )
+  const superseded = safeResumeProjectionWasSuperseded(records, plannedAttempt, reconciled.position)
   return consumed || superseded
     ? undefined
     : {
@@ -291,6 +362,22 @@ const issueSafeContinuationRevalidationEligibility = (
   return eligibility
 }
 
+const safeEvidenceForRevalidation = (records: JournalRecordEvidence, plannedAttempt: PlannedTaskAttempt) => {
+  const currentAcceptedSafe = latestAcceptedPlannedAttemptExecutorEvidence(records, plannedAttempt)
+  const unconsumedAcceptedSafe = currentUnconsumedAcceptedSafeEvidence(records, plannedAttempt)
+  const retry =
+    currentAcceptedSafe?.report._tag === "ExecutorWorkSafelySuspended"
+      ? reconciledResumeStillSafeBasis(records, plannedAttempt)
+      : undefined
+  return retry === undefined
+    ? {
+        acceptedSafe: unconsumedAcceptedSafe,
+        lifecycleSafe: unconsumedAcceptedSafe,
+        basis: { _tag: "LifecycleReopenAfterAcceptedSafe" as const }
+      }
+    : { acceptedSafe: currentAcceptedSafe, lifecycleSafe: retry.lifecycleSafe, basis: retry.basis }
+}
+
 /**
  * Derives the private capacity permission only from complete recovery history.
  * Structural Ready facts or accepted-report values cannot call the issuer.
@@ -303,14 +390,7 @@ export const safeContinuationRevalidationEligibilityFromRecoveryHistory = (
   opportunity: RunActivationOpportunity
 ): SafeContinuationRevalidationEligibility | undefined => {
   if (opportunity._tag === "ActiveWorkAuthorityRefresh") return undefined
-  const currentAcceptedSafe = latestAcceptedPlannedAttemptExecutorEvidence(records, plannedAttempt)
-  const unconsumedAcceptedSafe = currentUnconsumedAcceptedSafeEvidence(records, plannedAttempt)
-  const retry =
-    currentAcceptedSafe?.report._tag === "ExecutorWorkSafelySuspended"
-      ? reconciledResumeStillSafeBasis(records, plannedAttempt)
-      : undefined
-  const acceptedSafe = retry === undefined ? unconsumedAcceptedSafe : currentAcceptedSafe
-  const lifecycleSafe = retry?.lifecycleSafe ?? unconsumedAcceptedSafe
+  const { acceptedSafe, basis, lifecycleSafe } = safeEvidenceForRevalidation(records, plannedAttempt)
   if (
     acceptedSafe?.report._tag !== "ExecutorWorkSafelySuspended" ||
     acceptedSafe.source.ordinal !== acceptedProgress.ordinal ||
@@ -319,10 +399,5 @@ export const safeContinuationRevalidationEligibilityFromRecoveryHistory = (
   ) {
     return undefined
   }
-  return issueSafeContinuationRevalidationEligibility(
-    plannedAttempt,
-    responsibilityBeganAt,
-    acceptedSafe,
-    retry?.basis ?? { _tag: "LifecycleReopenAfterAcceptedSafe" }
-  )
+  return issueSafeContinuationRevalidationEligibility(plannedAttempt, responsibilityBeganAt, acceptedSafe, basis)
 }

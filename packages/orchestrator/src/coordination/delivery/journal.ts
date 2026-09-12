@@ -41,7 +41,8 @@ import {
   journalGraphSnapshotForObservation
 } from "../../workflow-journal/record-evidence.js"
 import { exactWorkflowRunTargetFor } from "../../workflow-journal/run-target.js"
-import { RunFinalityEvidence, type RunTerminationDisposition } from "../frontier/run-finality.js"
+import type { RunFinalityEvidence, RunTerminationDisposition } from "../frontier/run-finality.js"
+import { acknowledgedTerminationMatches, persistedPrefixMismatch } from "./journal-termination-reconciliation.js"
 
 const latestJournalRecordOffset = -1
 
@@ -398,31 +399,15 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
                     })
                   )
                 }
-                for (let offset = 0; offset < status.value.prefix.records.length; offset += 1) {
-                  const prior = journalRecordAt(status.value.prefix.records, offset)
-                  if (JSON.stringify(prior) !== JSON.stringify(records[offset])) {
-                    return yield* failJournal(
-                      new JournalRecordMismatch({
-                        key: prior?.key ?? workflowRunTerminatedRecordKey,
-                        position: prior?.position ?? JournalPosition.make(offset + 1),
-                        runId
-                      })
-                    )
-                  }
-                }
+                const mismatch = persistedPrefixMismatch(status.value.prefix, records, runId)
+                if (mismatch !== undefined) return yield* failJournal(mismatch)
                 const terminal = acceptedJournalRecordForKey(reduction.prefix, workflowRunTerminatedRecordKey)
                 if (terminal === undefined) return yield* failure
                 return terminal
               })
             )
           )
-          if (
-            record.key !== workflowRunTerminatedRecordKey ||
-            record.runId !== runId ||
-            record.event._tag !== "WorkflowRunTerminated" ||
-            record.event.disposition !== disposition ||
-            !Schema.toEquivalence(RunFinalityEvidence)(record.event.evidence, evidence)
-          ) {
+          if (!acknowledgedTerminationMatches(record, runId, disposition, evidence)) {
             return yield* failJournal(new JournalRecordMismatch({ key: record.key, position: record.position, runId }))
           }
           return yield* acceptAcknowledgedRecord(status, record)

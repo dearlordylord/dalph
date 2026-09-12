@@ -103,6 +103,16 @@ const lineageMatchesCorrelation = (
     { beforePosition }
   ) !== undefined
 
+const runStartOrdinalIssue = (
+  record: JournalRecord,
+  run: IntegratorRunCorrelation,
+  ordinals: HashSet.HashSet<number>
+): string | undefined => {
+  if (run.ordinal > integratorRetryRunOrdinal || record.key !== integratorRunStartedRecordKey(run))
+    return "Integrator run start has a foreign key or exceeds the Retry bound"
+  return HashSet.has(ordinals, run.ordinal) ? "Integrator run start repeats one exact session ordinal" : undefined
+}
+
 const latestStartedRunFor = (
   records: JournalHistorySource,
   session: IntegratorSessionCorrelation
@@ -115,12 +125,8 @@ const latestStartedRunFor = (
   for (const record of journalRecordsOfKind(records, "IntegratorRunStarted")) {
     const { event } = record
     if (event._tag !== "IntegratorRunStarted" || !integratorCorrelationsEqual(event.run.session, session)) continue
-    if (event.run.ordinal > integratorRetryRunOrdinal || record.key !== integratorRunStartedRecordKey(event.run)) {
-      return { _tag: "Invalid", detail: "Integrator run start has a foreign key or exceeds the Retry bound" }
-    }
-    if (HashSet.has(ordinals, event.run.ordinal)) {
-      return { _tag: "Invalid", detail: "Integrator run start repeats one exact session ordinal" }
-    }
+    const issue = runStartOrdinalIssue(record, event.run, ordinals)
+    if (issue !== undefined) return { _tag: "Invalid", detail: issue }
     ordinals = HashSet.add(ordinals, event.run.ordinal)
     /* v8 ignore next -- @preserve validated Journal order records a lower ordinal before its authorized successor. */
     if (latest === undefined || event.run.ordinal > latest.ordinal) latest = event.run
@@ -187,6 +193,22 @@ type CurrentSessionValidation =
   | { readonly _tag: "Invalid"; readonly detail: string }
   | { readonly _tag: "Valid"; readonly record: IntegratorFixedSessionRecord }
 
+const hasCompetingFixedSession = (
+  records: JournalHistorySource,
+  facts: IntegratorResponsibilityFacts,
+  predecessor: IntegratorSessionCorrelation
+): boolean => {
+  for (const { event } of journalRecordsOfKind(records, "IntegratorSessionFixed")) {
+    if (
+      event._tag === "IntegratorSessionFixed" &&
+      integratorResponsibilityFactsEqual(integratorResponsibilityFactsFromCorrelation(event.correlation), facts) &&
+      !integratorCorrelationsEqual(event.correlation, predecessor)
+    )
+      return true
+  }
+  return false
+}
+
 const validateCurrentFixedSession = (
   records: JournalHistorySource,
   facts: IntegratorResponsibilityFacts,
@@ -202,18 +224,7 @@ const validateCurrentFixedSession = (
   if (!lineageMatchesCorrelation(records, predecessor, sessionRecord.position)) {
     return { _tag: "Invalid", detail: "the fixed session does not follow its durable target-lineage observation" }
   }
-  let foreignSession = false
-  for (const { event } of journalRecordsOfKind(records, "IntegratorSessionFixed")) {
-    if (
-      event._tag === "IntegratorSessionFixed" &&
-      integratorResponsibilityFactsEqual(integratorResponsibilityFactsFromCorrelation(event.correlation), facts) &&
-      !integratorCorrelationsEqual(event.correlation, predecessor)
-    ) {
-      foreignSession = true
-      break
-    }
-  }
-  return foreignSession
+  return hasCompetingFixedSession(records, facts, predecessor)
     ? { _tag: "Invalid", detail: "multiple target heads were recorded for one responsibility" }
     : { _tag: "Valid", record: sessionRecord }
 }

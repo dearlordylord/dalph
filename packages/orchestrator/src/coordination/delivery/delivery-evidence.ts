@@ -100,6 +100,14 @@ export const acceptedOperationIdsOf = (records: JournalHistorySource): HashSet.H
   return operationIds
 }
 
+const completedReadOperationId = (event: JournalRecord["event"]): OperationId | undefined =>
+  event._tag === "TaskTrackerFactsObserved" ||
+  event._tag === "PlannedAttemptWorktreeObserved" ||
+  event._tag === "TargetLineageObserved" ||
+  (event._tag === "AttemptRestartAuthorityReadFailed" && event.failure._tag !== "AttemptRestartTaskFactsReadFailure")
+    ? event.operationId
+    : undefined
+
 /** Ordinary tracker or Git read identities whose journal-first intent has no typed outcome yet. */
 export const pendingReadOperationIdsOf = (records: JournalHistorySource): HashSet.HashSet<OperationId> => {
   if (isJournalRecordEvidence(records)) return journalPendingReadOperationIds(records)
@@ -110,15 +118,12 @@ export const pendingReadOperationIdsOf = (records: JournalHistorySource): HashSe
       if (!HashSet.has(completed, event.operation.operationId)) {
         pending = HashSet.add(pending, event.operation.operationId)
       }
-    } else if (
-      event._tag === "TaskTrackerFactsObserved" ||
-      event._tag === "PlannedAttemptWorktreeObserved" ||
-      event._tag === "TargetLineageObserved" ||
-      (event._tag === "AttemptRestartAuthorityReadFailed" &&
-        event.failure._tag !== "AttemptRestartTaskFactsReadFailure")
-    ) {
-      completed = HashSet.add(completed, event.operationId)
-      pending = HashSet.remove(pending, event.operationId)
+    } else {
+      const operationId = completedReadOperationId(event)
+      if (operationId !== undefined) {
+        completed = HashSet.add(completed, operationId)
+        pending = HashSet.remove(pending, operationId)
+      }
     }
   }
   return pending

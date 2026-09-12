@@ -1265,6 +1265,11 @@ export const restartReplacementDisposition = (
   })
 }
 
+/** With no accepted report yet, responsibility may still be crossing the Begin boundary. */
+const executorMayBeRunningBeforeBoundary = (event: JournalRecord["event"] | undefined): boolean =>
+  event === undefined ||
+  (event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkExecuting")
+
 const suspensionIsOwedAfterBoundary = (
   source: JournalRecordEvidence,
   plannedAttempt: PlannedTaskAttempt,
@@ -1283,11 +1288,7 @@ const suspensionIsOwedAfterBoundary = (
     if (position < boundaryPosition) latestReportBeforeBoundary = event
     if (position > boundaryPosition && isSuspensionSettlementFor(event, plannedAttempt)) settledAfterBoundary = true
   }
-  const wasExecutingOrCrossingBeginBoundary =
-    latestReportBeforeBoundary === undefined ||
-    (latestReportBeforeBoundary._tag === "PlannedAttemptExecutorWorkReported" &&
-      latestReportBeforeBoundary.report._tag === "ExecutorWorkExecuting")
-  return wasExecutingOrCrossingBeginBoundary && !settledAfterBoundary
+  return executorMayBeRunningBeforeBoundary(latestReportBeforeBoundary) && !settledAfterBoundary
 }
 
 const suspensionWasOwedAfterPause = (
@@ -2809,6 +2810,27 @@ const trackerGraphReadHasOutcome = (records: JournalHistorySource, operationId: 
   return false
 }
 
+const graphReadIntentForRunTarget = (record: JournalRecord, runId: RunId, targetKey: string) =>
+  record.runId === runId &&
+  record.event._tag === "TaskTrackerReadIntentRecorded" &&
+  record.event.operation._tag === "ReadTrackerGraph" &&
+  taskTrackerTargetKey(record.event.operation.target) === targetKey
+    ? record.event.operation
+    : undefined
+
+const isPendingReconfirmationOf = (
+  records: JournalHistorySource,
+  operation: TrackerGraphObservationOperation,
+  position: JournalPosition,
+  currentGraph: { readonly operationId: OperationId; readonly recordedAt: JournalPosition }
+): boolean =>
+  operation.cause._tag === "PostQuiescenceReconfirmation" &&
+  operation.cause.quiescentGraphOperationId === currentGraph.operationId &&
+  position > currentGraph.recordedAt &&
+  operation.readShape.explicitlyCoveredTaskIds.length === 0 &&
+  operation.predecessorOperationIds.includes(currentGraph.operationId) &&
+  !trackerGraphReadHasOutcome(records, operation.operationId)
+
 /**
  * Finds the one complete graph read that stabilization started after its
  * accepted first graph. Its ordinary operation carries the typed
@@ -2827,31 +2849,15 @@ export const pendingActiveRefreshG2OperationFor = (
   let graphOperationIdsBeforeIntent = HashSet.empty<OperationId>()
   let pending: TrackerGraphObservationOperation | undefined
   for (const record of journalRecordsOfKind(records, "TaskTrackerReadIntentRecorded")) {
-    const { event } = record
-    if (
-      record.runId !== runId ||
-      event._tag !== "TaskTrackerReadIntentRecorded" ||
-      event.operation._tag !== "ReadTrackerGraph" ||
-      taskTrackerTargetKey(event.operation.target) !== targetKey
-    ) {
-      continue
-    }
+    const operation = graphReadIntentForRunTarget(record, runId, targetKey)
+    if (operation === undefined) continue
     const expectedPredecessors = Array.from(
       HashSet.add(graphOperationIdsBeforeIntent, currentGraph.operationId)
     ).toSorted()
-    graphOperationIdsBeforeIntent = HashSet.add(graphOperationIdsBeforeIntent, event.operation.operationId)
-    if (
-      event.operation.cause._tag !== "PostQuiescenceReconfirmation" ||
-      event.operation.cause.quiescentGraphOperationId !== currentGraph.operationId ||
-      record.position <= currentGraph.recordedAt ||
-      event.operation.readShape.explicitlyCoveredTaskIds.length !== 0 ||
-      !event.operation.predecessorOperationIds.includes(currentGraph.operationId) ||
-      trackerGraphReadHasOutcome(records, event.operation.operationId)
-    ) {
-      continue
-    }
-    if (sameStringSequence([...event.operation.predecessorOperationIds].toSorted(), expectedPredecessors)) {
-      pending = event.operation
+    graphOperationIdsBeforeIntent = HashSet.add(graphOperationIdsBeforeIntent, operation.operationId)
+    if (!isPendingReconfirmationOf(records, operation, record.position, currentGraph)) continue
+    if (sameStringSequence([...operation.predecessorOperationIds].toSorted(), expectedPredecessors)) {
+      pending = operation
     }
   }
   return pending
@@ -2943,6 +2949,25 @@ const activeRefreshGraphReadSelectionFor = (
 }
 
 /** A crashed focused read retains its exact identity before a new activation asks for G1. */
+const unresolvedFocusedReadFromPrefix = (
+  initial: JournalRecordEvidence,
+  records: JournalRecordEvidence,
+  target: TrackerTarget,
+  plannedAttempt: PlannedTaskAttempt,
+  kind: "ReadTaskWorkSpecification" | "ReadTaskClaim"
+) => {
+  const intent = journalLatestTaskRead(initial, { taskId: plannedAttempt.taskId, target, kind })
+  if (intent?.event._tag !== "TaskTrackerReadIntentRecorded") return undefined
+  const operation = intent.event.operation
+  if (
+    operation._tag !== kind ||
+    !continuationTrackerReadHasExactPlanPredecessor(initial, operation, plannedAttempt) ||
+    journalRecordByKey(records, outcomeRecordKey(operation.operationId)) !== undefined
+  )
+    return undefined
+  return operation
+}
+
 const pendingFocusedReadAtActivation = (
   records: JournalRecordEvidence,
   baseline: Option.Option<JournalPosition>,
@@ -2953,15 +2978,8 @@ const pendingFocusedReadAtActivation = (
   if (target === undefined) return undefined
   const initial = journalEvidenceBefore(records, baseline.value + 1)
   for (const kind of ["ReadTaskWorkSpecification", "ReadTaskClaim"] as const) {
-    const intent = journalLatestTaskRead(initial, { taskId: plannedAttempt.taskId, target, kind })
-    if (intent?.event._tag !== "TaskTrackerReadIntentRecorded") continue
-    const operation = intent.event.operation
-    if (
-      operation._tag !== kind ||
-      !continuationTrackerReadHasExactPlanPredecessor(initial, operation, plannedAttempt) ||
-      journalRecordByKey(records, outcomeRecordKey(operation.operationId)) !== undefined
-    )
-      continue
+    const operation = unresolvedFocusedReadFromPrefix(initial, records, target, plannedAttempt, kind)
+    if (operation === undefined) continue
     return operation._tag === "ReadTaskWorkSpecification"
       ? RunnableFrontierTransition.ObservePlannedAttemptContinuationSpecification({ operation, plannedAttempt })
       : RunnableFrontierTransition.ObservePlannedAttemptContinuationClaim({ operation, plannedAttempt })

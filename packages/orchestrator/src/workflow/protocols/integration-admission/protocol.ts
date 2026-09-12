@@ -353,10 +353,9 @@ const replayIntegrationAdmissionPrefixIndexes = (
   return next
 }
 
-const acceptedResultIsDurableIn = (
+const hasExactExecutorResponsibility = (
   records: JournalRecordEvidence,
-  plannedAttempt: PlannedTaskAttempt,
-  acceptedResult: AcceptedResult
+  plannedAttempt: PlannedTaskAttempt
 ): boolean => {
   let exactResponsibility = false
   for (const record of journalRecordsForAttemptKind(
@@ -371,7 +370,15 @@ const acceptedResultIsDurableIn = (
       exactResponsibility = true
     }
   }
-  if (!exactResponsibility) return false
+  return exactResponsibility
+}
+
+const acceptedResultIsDurableIn = (
+  records: JournalRecordEvidence,
+  plannedAttempt: PlannedTaskAttempt,
+  acceptedResult: AcceptedResult
+): boolean => {
+  if (!hasExactExecutorResponsibility(records, plannedAttempt)) return false
   for (const record of journalRecordsForAttemptKind(
     records,
     plannedAttempt.attemptId,

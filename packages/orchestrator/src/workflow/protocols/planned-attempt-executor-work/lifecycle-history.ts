@@ -108,20 +108,23 @@ const exactCommandSettlement = (
 ): ExactCommandSettlement | undefined =>
   exactCommandResponseSettlement(record, plannedAttempt) ?? exactCommandProjectionSettlement(record, plannedAttempt)
 
-const exactCommandSettledWith = (
+/** An absent cutoff permits all recorded commands; a supplied cutoff is strictly exclusive. */
+const followsCommandCutoff = (position: JournalPosition, after: JournalPosition | undefined): boolean =>
+  after === undefined || position > after
+
+const latestExactCommandSettlement = (
   records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   after: JournalPosition | undefined,
-  command: "Begin" | "Resume",
   observed: PlannedAttemptExecutorReport
-): boolean => {
+): JournalRecord | undefined => {
   let settlement: JournalRecord | undefined
   for (const kind of [
     "PlannedAttemptExecutorCommandResponseObserved",
     "PlannedAttemptExecutorCommandProjectionObserved"
   ] as const) {
     for (const record of journalRecordsForAttemptKind(records, plannedAttempt.attemptId, kind)) {
-      if (after !== undefined && record.position <= after) continue
+      if (!followsCommandCutoff(record.position, after)) continue
       const exact = exactCommandSettlement(record, plannedAttempt)
       if (
         exact !== undefined &&
@@ -132,6 +135,17 @@ const exactCommandSettledWith = (
       }
     }
   }
+  return settlement
+}
+
+const exactCommandSettledWith = (
+  records: JournalHistorySource,
+  plannedAttempt: PlannedTaskAttempt,
+  after: JournalPosition | undefined,
+  command: "Begin" | "Resume",
+  observed: PlannedAttemptExecutorReport
+): boolean => {
+  const settlement = latestExactCommandSettlement(records, plannedAttempt, after, observed)
   if (settlement === undefined) return false
   const commandOrdinal = exactCommandSettlement(settlement, plannedAttempt)?.commandOrdinal
   if (commandOrdinal === undefined) return false
@@ -141,7 +155,7 @@ const exactCommandSettledWith = (
     "PlannedAttemptExecutorCommandIntended"
   )) {
     if (
-      (after === undefined || record.position > after) &&
+      followsCommandCutoff(record.position, after) &&
       record.position < settlement.position &&
       exactAttemptCommand(record, plannedAttempt, commandOrdinal, command)
     ) {

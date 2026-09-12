@@ -112,6 +112,35 @@ export const latestTaskClaimReacquisitionDirection = (
   )?.event
 }
 
+const exactClaimAcquiredAfterLoss = (
+  records: JournalRecordEvidence,
+  taskId: TaskId,
+  expectedClaim: ActiveTaskClaim,
+  lossPosition: JournalPosition
+): boolean => {
+  const acquired = journalRecordByKey(records, outcomeRecordKey(expectedClaim.operationId))
+  return (
+    acquired?.event._tag === "TaskClaimAcquired" &&
+    acquired.event.claim.taskId === taskId &&
+    isExactTaskClaim(acquired.event.claim, expectedClaim) &&
+    acquired.position > lossPosition
+  )
+}
+
+const unchangedClaimLossBeforeDirection = (
+  through: JournalRecordEvidence,
+  taskId: TaskId,
+  expectedClaim: ActiveTaskClaim,
+  directionPosition: JournalPosition
+) => {
+  const loss = journalTaskClaimObservationAt(journalEvidenceBefore(through, directionPosition), taskId)
+  const current = journalTaskClaimObservationAt(through, taskId)
+  if (loss === undefined || current === undefined || loss.episodeStartedAt !== current.episodeStartedAt) {
+    return undefined
+  }
+  return claimLossEpisodeAt(loss.record, expectedClaim) === undefined ? undefined : loss
+}
+
 const latestIndexedTaskClaimReacquisitionDirection = (
   records: JournalRecordEvidence,
   runId: RunId,
@@ -124,19 +153,9 @@ const latestIndexedTaskClaimReacquisitionDirection = (
   if (direction?.event._tag !== "TaskClaimReacquisitionDirected" || direction.event.subject.runId !== runId) {
     return undefined
   }
-  const loss = journalTaskClaimObservationAt(journalEvidenceBefore(through, direction.position), taskId)
-  const current = journalTaskClaimObservationAt(through, taskId)
-  if (loss === undefined || current === undefined || loss.episodeStartedAt !== current.episodeStartedAt) {
-    return undefined
-  }
-  if (claimLossEpisodeAt(loss.record, expectedClaim) === undefined) return undefined
-  const acquired = journalRecordByKey(through, outcomeRecordKey(expectedClaim.operationId))
-  if (
-    acquired?.event._tag === "TaskClaimAcquired" &&
-    acquired.event.claim.taskId === taskId &&
-    isExactTaskClaim(acquired.event.claim, expectedClaim) &&
-    acquired.position > loss.record.position
-  ) {
+  const loss = unchangedClaimLossBeforeDirection(through, taskId, expectedClaim, direction.position)
+  if (loss === undefined) return undefined
+  if (exactClaimAcquiredAfterLoss(through, taskId, expectedClaim, loss.record.position)) {
     return undefined
   }
   return direction.event

@@ -10,7 +10,7 @@ import { type OperationId } from "../../identity.js"
 import { makeTaskClaimAcquisitionOperation } from "../../registry/operation.js"
 import type { InRunJournal, JournalRecord } from "../../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
-import { journalRecordsForTask } from "../../../workflow-journal/record-evidence.js"
+import { journalRecordsForTask, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import type { TaskClaimAcquisitionPlanner } from "../task-claim-acquisition/plan.js"
 import type { TaskClaimReacquisitionRequestId } from "./events.js"
 import { taskClaimReacquisitionOperationId } from "./plan.js"
@@ -34,6 +34,30 @@ const planningFailureDetail = (failure: unknown): string =>
     : "TaskClaimAcquisitionPlanner.plan failed"
 /* v8 ignore stop -- @preserve */
 
+const isTaskClaimObservation = (
+  event: JournalRecord["event"],
+  taskId: TaskId
+): event is Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }> =>
+  event._tag === "TaskTrackerFactsObserved" &&
+  (event.observation._tag === "FocusedTaskClaimFacts" ||
+    event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
+  event.observation.coverage.taskId === taskId
+
+const reacquisitionPredecessorOperationIds = (records: JournalHistorySource, taskId: TaskId) => {
+  let priorClaim: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }> | undefined
+  let observation: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }> | undefined
+  for (const { event } of journalRecordsForTask(records, taskId)) {
+    if (event._tag === "TaskClaimAcquired" && event.claim.taskId === taskId) priorClaim = event
+    if (isTaskClaimObservation(event, taskId)) observation = event
+  }
+  return [
+    /* v8 ignore next -- @preserve Valid reacquisition history always includes the claim whose authority was lost. */
+    ...(priorClaim === undefined ? [] : [priorClaim.claim.operationId]),
+    /* v8 ignore next -- @preserve Valid reacquisition history always includes the missing or foreign observation. */
+    ...(observation === undefined ? [] : [observation.operationId])
+  ]
+}
+
 /** Executes one graph-selected explicit claim reacquisition through its action-owned protocol. */
 export const runTaskClaimReacquisition = Effect.fn("TaskClaimReacquisition.run")(function* (input: {
   readonly execution: {
@@ -53,18 +77,7 @@ export const runTaskClaimReacquisition = Effect.fn("TaskClaimReacquisition.run")
     onSome: Effect.succeed
   })
   const records = yield* (yield* AcceptedJournalReader).readAccepted(input.runId)
-  let priorClaim: JournalRecord["event"] | undefined
-  let observation: JournalRecord["event"] | undefined
-  for (const { event } of journalRecordsForTask(records, input.taskId)) {
-    if (event._tag === "TaskClaimAcquired" && event.claim.taskId === input.taskId) priorClaim = event
-    if (
-      event._tag === "TaskTrackerFactsObserved" &&
-      (event.observation._tag === "FocusedTaskClaimFacts" ||
-        event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
-      event.observation.coverage.taskId === input.taskId
-    )
-      observation = event
-  }
+  const predecessorOperationIds = reacquisitionPredecessorOperationIds(records, input.taskId)
   const operationId = taskClaimReacquisitionOperationId(input.requestId)
   const operation = makeTaskClaimAcquisitionOperation({
     acquisition: yield* planner.plan(operationId, input.taskId).pipe(
@@ -75,12 +88,7 @@ export const runTaskClaimReacquisition = Effect.fn("TaskClaimReacquisition.run")
       )
     ),
     authority: { _tag: "ExplicitTaskClaimReacquisitionAuthority", requestId: input.requestId },
-    predecessorOperationIds: [
-      /* v8 ignore next -- @preserve Valid reacquisition history always includes the claim whose authority was lost. */
-      ...(priorClaim?._tag === "TaskClaimAcquired" ? [priorClaim.claim.operationId] : []),
-      /* v8 ignore next -- @preserve Valid reacquisition history always includes the missing or foreign observation. */
-      ...(observation?._tag === "TaskTrackerFactsObserved" ? [observation.operationId] : [])
-    ]
+    predecessorOperationIds
   })
   if (Option.isSome(input.trace)) {
     yield* input.trace.value.emit(OperationSelected.make({ operation }))

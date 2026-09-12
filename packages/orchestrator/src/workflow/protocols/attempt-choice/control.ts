@@ -237,6 +237,24 @@ const resultFor = (
           application: { ...application, event: { ...event, choice: "ContinueExistingAttempt" } }
         }
 
+const latestChoiceSpecification = (
+  records: JournalHistorySource,
+  request: ApplyAttemptChoiceRequest,
+  immutableRunTarget: TrackerTarget
+): JournalRecord["event"] | undefined => {
+  let latestSpecification: JournalRecord["event"] | undefined
+  for (const { event } of journalRecordsForTask(records, request.subject.plannedAttempt.taskId)) {
+    if (
+      event._tag === "TaskTrackerFactsObserved" &&
+      event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+      event.observation.factFamily.taskId === request.subject.plannedAttempt.taskId &&
+      taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
+    )
+      latestSpecification = event
+  }
+  return latestSpecification
+}
+
 const choiceIsExposed = (
   records: JournalHistorySource,
   request: ApplyAttemptChoiceRequest,
@@ -274,16 +292,7 @@ const choiceIsExposed = (
   if (currentUnconsumedAcceptedSafeEvidence(records, request.subject.plannedAttempt) === undefined) {
     return "ExecutorNotSafelySuspended"
   }
-  let latestSpecification: JournalRecord["event"] | undefined
-  for (const { event } of journalRecordsForTask(records, request.subject.plannedAttempt.taskId)) {
-    if (
-      event._tag === "TaskTrackerFactsObserved" &&
-      event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
-      event.observation.factFamily.taskId === request.subject.plannedAttempt.taskId &&
-      taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
-    )
-      latestSpecification = event
-  }
+  const latestSpecification = latestChoiceSpecification(records, request, immutableRunTarget)
   return latestSpecificationMatches(latestSpecification, request) ? undefined : "ObservedFingerprintNotCurrent"
 }
 

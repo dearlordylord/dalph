@@ -180,6 +180,21 @@ const hasMatchingCancelledAttemptClaimRead = (
   )
 }
 
+const exactCancelledAttemptRelinquishment = (
+  records: JournalHistorySource,
+  transition: CancelledAttemptClaimNoReleaseTransition
+): CancelledAttemptRelinquishedRecord | undefined => {
+  const candidate = lastJournalRecordForAttemptKind(
+    records,
+    transition.plannedAttempt.attemptId,
+    "CancelledAttemptImplementationResponsibilityRelinquished"
+  )
+  return candidate?.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+    plannedTaskAttemptEquivalence(candidate.event.plannedAttempt, transition.plannedAttempt)
+    ? { ...candidate, event: candidate.event }
+    : undefined
+}
+
 const cancelledAttemptClaimNoReleaseFacts = (
   records: JournalHistorySource,
   transition: CancelledAttemptClaimNoReleaseTransition
@@ -198,16 +213,7 @@ const cancelledAttemptClaimNoReleaseFacts = (
     )
   )
     return undefined
-  const relinquishedCandidate = lastJournalRecordForAttemptKind(
-    records,
-    transition.plannedAttempt.attemptId,
-    "CancelledAttemptImplementationResponsibilityRelinquished"
-  )
-  const relinquished =
-    relinquishedCandidate?.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
-    plannedTaskAttemptEquivalence(relinquishedCandidate.event.plannedAttempt, transition.plannedAttempt)
-      ? ({ ...relinquishedCandidate, event: relinquishedCandidate.event } satisfies CancelledAttemptRelinquishedRecord)
-      : undefined
+  const relinquished = exactCancelledAttemptRelinquishment(records, transition)
   if (relinquished === undefined) return undefined
   const operationRecords = Array.from(journalRecordsForOperationId(records, transition.observationOperationId))
   const observation = operationRecords.findLast(

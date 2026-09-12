@@ -47,6 +47,32 @@ const isAcceptedCompleteGraphOutcome = (
   )
 }
 
+const graphReadIntentBeforeOutcome = (
+  records: JournalHistorySource,
+  runId: RunId,
+  outcome: JournalRecord & {
+    readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>
+  },
+  targetKey: string
+) => {
+  const outcomeOperationId = outcome.event.operationId
+  let intent: JournalRecord | undefined
+  for (const record of journalRecordsForOperationId(records, outcomeOperationId)) {
+    const { event, position, runId: recordRunId } = record
+    if (
+      recordRunId === runId &&
+      position < outcome.position &&
+      event._tag === "TaskTrackerReadIntentRecorded" &&
+      event.operation._tag === "ReadTrackerGraph" &&
+      event.operation.operationId === outcomeOperationId &&
+      taskTrackerTargetKey(event.operation.target) === targetKey
+    ) {
+      intent = record
+    }
+  }
+  return intent
+}
+
 const completeGraphWakeFor = (
   records: JournalHistorySource,
   runId: RunId,
@@ -66,22 +92,7 @@ const completeGraphWakeFor = (
     }
   }
   if (outcome?.event._tag !== "TaskTrackerFactsObserved") return undefined
-  const outcomeOperationId = outcome.event.operationId
-  let intent: JournalRecord | undefined
-  for (const record of journalRecordsForOperationId(records, outcomeOperationId)) {
-    const { event, position, runId: recordRunId } = record
-    if (
-      recordRunId === runId &&
-      position < outcome.position &&
-      event._tag === "TaskTrackerReadIntentRecorded" &&
-      event.operation._tag === "ReadTrackerGraph" &&
-      event.operation.operationId === outcomeOperationId &&
-      taskTrackerTargetKey(event.operation.target) === targetKey
-    ) {
-      intent = record
-    }
-  }
-  return intent
+  return graphReadIntentBeforeOutcome(records, runId, { ...outcome, event: outcome.event }, targetKey)
 }
 
 type FocusedClaimReadRecord = JournalRecord & {
@@ -115,6 +126,22 @@ type FocusedReadAdvance =
   | { readonly _tag: "Retained" }
   | { readonly _tag: "WakeAdvanced"; readonly wakeBaseline: JournalPosition }
 
+const focusedReadOutcomeAfter = (records: JournalHistorySource, read: FocusedClaimReadRecord, runId: RunId) => {
+  const operationId = read.event.operation.operationId
+  let observation: JournalRecord | undefined
+  for (const record of journalRecordsForOperationId(records, operationId)) {
+    if (
+      record.runId === runId &&
+      record.position > read.position &&
+      record.event._tag === "TaskTrackerFactsObserved" &&
+      record.event.operationId === operationId
+    ) {
+      observation = record
+    }
+  }
+  return observation
+}
+
 const advanceFocusedConstraintRead = (
   records: JournalHistorySource,
   read: FocusedClaimReadRecord,
@@ -133,18 +160,7 @@ const advanceFocusedConstraintRead = (
     new Set(read.event.operation.predecessorOperationIds)
   )
   if (graphWake === undefined) return { _tag: "Ignored" }
-  const operationId = read.event.operation.operationId
-  let observation: JournalRecord | undefined
-  for (const record of journalRecordsForOperationId(records, operationId)) {
-    if (
-      record.runId === runId &&
-      record.position > read.position &&
-      record.event._tag === "TaskTrackerFactsObserved" &&
-      record.event.operationId === operationId
-    ) {
-      observation = record
-    }
-  }
+  const observation = focusedReadOutcomeAfter(records, read, runId)
   if (observation?.event._tag !== "TaskTrackerFactsObserved") return { _tag: "Retained" }
   const facts = observation.event.observation
   return facts._tag === "FocusedTaskClaimFacts" && facts.observation._tag === "UnclaimedTask"
@@ -176,6 +192,19 @@ const freshSelectionClaimOperationId = (record: JournalRecord): OperationId | un
     ? record.event.operation.acquisition.operationId
     : undefined
 
+const latestRejectedClaimOutcome = (
+  records: JournalHistorySource,
+  runId: RunId,
+  claimIntentPosition: JournalPosition,
+  claimOperationId: OperationId
+) => {
+  let rejected: JournalRecord | undefined
+  for (const record of journalRecordsForOperationId(records, claimOperationId)) {
+    if (isRejectedClaimOutcome(record, runId, claimIntentPosition, claimOperationId)) rejected = record
+  }
+  return rejected
+}
+
 /**
  * Projects the task-local constraint created by one conclusive fresh claim
  * rejection. Complete graph observations only wake focused reads; only the
@@ -191,10 +220,7 @@ export const rejectedFreshTaskClaimDisposition = (
   const claimOperationId = freshSelectionClaimOperationId(claimIntent)
   if (claimOperationId === undefined) return RejectedFreshTaskClaimDisposition.ConstraintAbsent()
   const runId = claimIntent.runId
-  let rejected: JournalRecord | undefined
-  for (const record of journalRecordsForOperationId(records, claimOperationId)) {
-    if (isRejectedClaimOutcome(record, runId, claimIntent.position, claimOperationId)) rejected = record
-  }
+  const rejected = latestRejectedClaimOutcome(records, runId, claimIntent.position, claimOperationId)
   if (rejected?.event._tag !== "TaskClaimAcquisitionRejected") {
     return RejectedFreshTaskClaimDisposition.ConstraintAbsent()
   }

@@ -380,20 +380,23 @@ const waitsForFreshSuccess = (
   )
 }
 
+const latestFocusedRecordFor = (records: JournalHistorySource, request: CompletionTaskRequest) => {
+  let focusedObservation: JournalRecord | undefined
+  for (const record of journalRecordsForOperationId(records, request.operationId))
+    if (
+      record.event._tag === "TaskTrackerFactsObserved" &&
+      record.event.observation._tag === "FocusedTaskCompletionFacts"
+    )
+      focusedObservation = record
+  return focusedObservation
+}
+
 const focusedSuccessWaitReasonFor = (
   records: JournalHistorySource,
   claim: CompletionTaskClaim
 ): IntegrationFinalityTrackerSuccessWaitReason => {
   const request = completionTaskRequestFor(claim)
-  let focusedObservation: JournalRecord | undefined
-  for (const record of journalRecordsForOperationId(records, request.operationId)) {
-    if (
-      record.event._tag === "TaskTrackerFactsObserved" &&
-      record.event.observation._tag === "FocusedTaskCompletionFacts"
-    ) {
-      focusedObservation = record
-    }
-  }
+  const focusedObservation = latestFocusedRecordFor(records, request)
   if (
     focusedObservation?.event._tag !== "TaskTrackerFactsObserved" ||
     focusedObservation.event.observation._tag !== "FocusedTaskCompletionFacts"

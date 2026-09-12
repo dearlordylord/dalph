@@ -178,8 +178,65 @@ const focusedOutcomeIssue = (
   return exact ? undefined : semantic(`focused completion outcome ${event.operationId} lacks its exact prior intent`)
 }
 
+type AncestryReadIntent = Extract<CompletionTaskEvent, { readonly _tag: "CompletionTaskCandidateAncestryReadIntended" }>
+type AuthorizationFocusedIntentRecord = JournalRecord & {
+  readonly event: FocusedFactsReadIntent & {
+    readonly operation: FocusedFactsReadOperation & {
+      readonly purpose: Extract<FocusedFactsReadOperation["purpose"], { readonly _tag: "Authorization" }>
+    }
+  }
+}
+
+const focusedIntentForAncestry = (
+  accepted: JournalHistorySource,
+  event: AncestryReadIntent,
+  acceptedCycle: ReturnType<typeof journalCompletionReadCycle> | undefined
+): JournalRecord | undefined =>
+  isJournalRecordEvidence(accepted)
+    ? acceptedCycle?.latestIntent
+    : findLast(
+        journalRecordsForOperationIdKind(accepted, event.operationId, "TaskTrackerReadIntentRecorded"),
+        ({ event: candidate }) =>
+          candidate._tag === "TaskTrackerReadIntentRecorded" &&
+          candidate.operation._tag === "ReadCompletionTaskFacts" &&
+          candidate.operation.purpose._tag === "Authorization" &&
+          candidate.operation.purpose.attemptOrdinal === event.attemptOrdinal &&
+          completionTaskRequestEquals(candidate.operation.request, event.request)
+      )
+
+const isAuthorizationFocusedIntent = (record: JournalRecord | undefined): record is AuthorizationFocusedIntentRecord =>
+  record !== undefined &&
+  record.event._tag === "TaskTrackerReadIntentRecorded" &&
+  record.event.operation._tag === "ReadCompletionTaskFacts" &&
+  record.event.operation.purpose._tag === "Authorization"
+
+const focusedOutcomeForAncestry = (
+  accepted: JournalHistorySource,
+  event: AncestryReadIntent,
+  matchingFocusedIntent: AuthorizationFocusedIntentRecord,
+  acceptedCycle: ReturnType<typeof journalCompletionReadCycle> | undefined
+): JournalRecord | undefined =>
+  isJournalRecordEvidence(accepted)
+    ? acceptedCycle?.latestOutcome
+    : findLast(
+        journalRecordsForOperationIdKind(accepted, event.operationId, "TaskTrackerFactsObserved"),
+        ({ event: candidate, position }) =>
+          position > matchingFocusedIntent.position &&
+          isFocusedCompletionFactsObserved(candidate) &&
+          focusedCompletionIntentMatchesOutcome(matchingFocusedIntent.event, candidate)
+      )
+
+const focusedOutcomeFollowsAncestryIntent = (
+  matchingFocusedOutcome: JournalRecord | undefined,
+  matchingFocusedIntent: AuthorizationFocusedIntentRecord
+): boolean =>
+  matchingFocusedOutcome !== undefined &&
+  matchingFocusedOutcome.position > matchingFocusedIntent.position &&
+  isFocusedCompletionFactsObserved(matchingFocusedOutcome.event) &&
+  focusedCompletionIntentMatchesOutcome(matchingFocusedIntent.event, matchingFocusedOutcome.event)
+
 const ancestryIntentIssue = (
-  event: Extract<CompletionTaskEvent, { readonly _tag: "CompletionTaskCandidateAncestryReadIntended" }>,
+  event: AncestryReadIntent,
   record: JournalRecord,
   records: JournalHistorySource
 ): CompletionTaskHistoryIssue | undefined => {
@@ -191,42 +248,17 @@ const ancestryIntentIssue = (
         request: event.request
       })
     : undefined
-  const matchingFocusedIntent = isJournalRecordEvidence(accepted)
-    ? acceptedCycle?.latestIntent
-    : findLast(
-        journalRecordsForOperationIdKind(accepted, event.operationId, "TaskTrackerReadIntentRecorded"),
-        ({ event: candidate }) =>
-          candidate._tag === "TaskTrackerReadIntentRecorded" &&
-          candidate.operation._tag === "ReadCompletionTaskFacts" &&
-          candidate.operation.purpose._tag === "Authorization" &&
-          candidate.operation.purpose.attemptOrdinal === event.attemptOrdinal &&
-          completionTaskRequestEquals(candidate.operation.request, event.request)
-      )
-  const focusedIntent = matchingFocusedIntent?.event
-  if (
-    matchingFocusedIntent === undefined ||
-    focusedIntent?._tag !== "TaskTrackerReadIntentRecorded" ||
-    focusedIntent.operation._tag !== "ReadCompletionTaskFacts" ||
-    focusedIntent.operation.purpose._tag !== "Authorization"
-  ) {
+  const matchingFocusedIntent = focusedIntentForAncestry(accepted, event, acceptedCycle)
+  if (!isAuthorizationFocusedIntent(matchingFocusedIntent))
     return semantic(`completion ancestry read ${event.operationId} lacks its exact replacement-bound identity`)
-  }
-  const matchingFocusedOutcome = isJournalRecordEvidence(accepted)
-    ? acceptedCycle?.latestOutcome
-    : findLast(
-        journalRecordsForOperationIdKind(accepted, event.operationId, "TaskTrackerFactsObserved"),
-        ({ event: candidate, position }) =>
-          position > matchingFocusedIntent.position &&
-          isFocusedCompletionFactsObserved(candidate) &&
-          focusedCompletionIntentMatchesOutcome(focusedIntent, candidate)
-      )
-  return matchingFocusedOutcome !== undefined &&
-    matchingFocusedOutcome.position > matchingFocusedIntent.position &&
-    isFocusedCompletionFactsObserved(matchingFocusedOutcome.event) &&
-    focusedCompletionIntentMatchesOutcome(focusedIntent, matchingFocusedOutcome.event) &&
+  const matchingFocusedOutcome = focusedOutcomeForAncestry(accepted, event, matchingFocusedIntent, acceptedCycle)
+  return focusedOutcomeFollowsAncestryIntent(matchingFocusedOutcome, matchingFocusedIntent) &&
     (!isJournalRecordEvidence(accepted) ||
       event.operationId ===
-        completionTaskCandidateAncestryReadOperationIdFor(event.request, focusedIntent.operation.purpose)) &&
+        completionTaskCandidateAncestryReadOperationIdFor(
+          event.request,
+          matchingFocusedIntent.event.operation.purpose
+        )) &&
     exactReplacementPrior(records, record, event.request)
     ? undefined
     : semantic(`completion ancestry read ${event.operationId} lacks its exact replacement-bound identity`)
@@ -394,27 +426,10 @@ const attemptIssue = (
   return issue === undefined ? undefined : semantic(`completion call ${ordinal} is unauthorized: ${issue.detail}`)
 }
 
-const attemptResultIssue = (
-  event: Extract<
-    CompletionTaskEvent,
-    { readonly _tag: "CompletionTaskAcknowledged" | "CompletionTaskRejected" | "CompletionTaskResponseLost" }
-  >,
-  record: JournalRecord,
-  records: JournalHistorySource
-): CompletionTaskHistoryIssue | undefined => {
-  const accepted = prior(records, record)
-  const attempt = findLast(
-    journalRecordsForOperationIdKind(
-      accepted,
-      completionTaskRequestLookupOperationIdFor(event.request, event.attemptOrdinal),
-      "CompletionTaskAttemptIntended"
-    ),
-    ({ event: candidate }) =>
-      candidate._tag === "CompletionTaskAttemptIntended" &&
-      candidate.attemptOrdinal === event.attemptOrdinal &&
-      completionTaskRequestEquals(candidate.request, event.request)
-  )
-  if (attempt === undefined) return semantic(`${event._tag} lacks its exact prior numbered call intent`)
+const firstCompletionAttemptResult = (
+  accepted: JournalHistorySource,
+  event: CompletionTaskAttemptResult
+): JournalRecord | undefined => {
   const resultOperationId = completionTaskRequestLookupOperationIdFor(event.request, event.attemptOrdinal)
   let priorResult: JournalRecord | undefined
   if (isJournalRecordEvidence(accepted)) {
@@ -439,6 +454,31 @@ const attemptResultIssue = (
         completionTaskRequestEquals(candidate.request, event.request)
     )
   }
+  return priorResult
+}
+
+const attemptResultIssue = (
+  event: Extract<
+    CompletionTaskEvent,
+    { readonly _tag: "CompletionTaskAcknowledged" | "CompletionTaskRejected" | "CompletionTaskResponseLost" }
+  >,
+  record: JournalRecord,
+  records: JournalHistorySource
+): CompletionTaskHistoryIssue | undefined => {
+  const accepted = prior(records, record)
+  const attempt = findLast(
+    journalRecordsForOperationIdKind(
+      accepted,
+      completionTaskRequestLookupOperationIdFor(event.request, event.attemptOrdinal),
+      "CompletionTaskAttemptIntended"
+    ),
+    ({ event: candidate }) =>
+      candidate._tag === "CompletionTaskAttemptIntended" &&
+      candidate.attemptOrdinal === event.attemptOrdinal &&
+      completionTaskRequestEquals(candidate.request, event.request)
+  )
+  if (attempt === undefined) return semantic(`${event._tag} lacks its exact prior numbered call intent`)
+  const priorResult = firstCompletionAttemptResult(accepted, event)
   if (priorResult !== undefined) {
     return semantic(
       `completion call ${event.attemptOrdinal} has mutually exclusive ${priorResult.event._tag} and ${event._tag} outcomes`

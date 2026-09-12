@@ -229,6 +229,26 @@ interface AcceptedReplacementEvidence {
   readonly replacement: ReplacementRecord
 }
 
+const latestReplacementForSuccessor = (
+  records: JournalHistorySource,
+  runId: RunId,
+  plannedAttempt: PlannedTaskAttempt,
+  successorPlanOperationId: OperationId
+): ReplacementRecord | undefined => {
+  let replacement: ReplacementRecord | undefined
+  for (const record of journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptReplaced")) {
+    if (
+      isReplacementRecord(record) &&
+      record.runId === runId &&
+      record.event.requestId.runId === runId &&
+      record.event.successorPlan.operationId === successorPlanOperationId &&
+      plannedTaskAttemptEquivalence(record.event.successorPlan.plannedAttempt, plannedAttempt)
+    )
+      replacement = record
+  }
+  return replacement
+}
+
 const acceptedReplacementEvidenceFor = (
   records: JournalHistorySource,
   runId: RunId,
@@ -242,22 +262,7 @@ const acceptedReplacementEvidenceFor = (
     const history = reduceWorkflowJournalHistory(runId, acceptedRecords)
     if (history._tag !== "ValidWorkflowJournalHistory") return undefined
   }
-  let replacement: ReplacementRecord | undefined
-  for (const record of journalRecordsForAttemptKind(
-    acceptedRecords,
-    plannedAttempt.attemptId,
-    "PlannedAttemptReplaced"
-  )) {
-    if (
-      isReplacementRecord(record) &&
-      record.runId === runId &&
-      record.event.requestId.runId === runId &&
-      record.event.successorPlan.operationId === successorPlanOperationId &&
-      plannedTaskAttemptEquivalence(record.event.successorPlan.plannedAttempt, plannedAttempt)
-    ) {
-      replacement = record
-    }
-  }
+  const replacement = latestReplacementForSuccessor(acceptedRecords, runId, plannedAttempt, successorPlanOperationId)
   const causalClaim = causalClaimForAttempt(acceptedRecords, plannedAttempt.attemptId)
   return replacement === undefined || causalClaim === undefined
     ? undefined

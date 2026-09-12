@@ -32,6 +32,7 @@ import { taskTrackerObservationMatchesRead } from "../../task-tracker-facts/obse
 import { TaskTrackerReadIntentRecordedEvent } from "../../registry/event.js"
 import { completionTaskRequestFor } from "./completion-task-request.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import type { OperationId } from "../../identity.js"
 
 /** The exact durable evidence currently owned by one completion-finality protocol. */
 export const IntegrationFinalityState = Schema.TaggedUnion({
@@ -68,6 +69,80 @@ export type IntegrationFinalityState = typeof IntegrationFinalityState.Type
 export type IntegrationFinalityJournalOccurrence = { readonly event: unknown; readonly position: JournalPosition }
 type IntegrationFinalityHistorySource = ReadonlyArray<JournalRecord> | JournalRecordEvidence
 
+type FocusedCompletionObservation = Extract<
+  Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>["observation"],
+  { readonly _tag: "FocusedTaskCompletionFacts" }
+>
+
+const hasEarlierFocusedRead = (
+  records: JournalRecordEvidence,
+  record: JournalRecord,
+  operationId: OperationId,
+  focused: FocusedCompletionObservation
+): boolean => {
+  let matching = false
+  for (const intent of journalRecordsForOperationId(records, operationId)) {
+    if (intent.position >= record.position) break
+    if (
+      intent.event._tag === "TaskTrackerReadIntentRecorded" &&
+      intent.event.operation._tag === "ReadCompletionTaskFacts" &&
+      taskTrackerObservationMatchesRead(focused, intent.event.operation)
+    )
+      matching = true
+  }
+  return matching
+}
+
+const rawCompletionRequestPrecedes = (
+  chronological: ReadonlyArray<JournalRecord>,
+  record: JournalRecord,
+  request: FocusedCompletionObservation["request"]
+): boolean =>
+  chronological.some((candidate) => {
+    if (candidate.position >= record.position) return false
+    const decodedIntent = Schema.decodeUnknownOption(CompletionTaskIntendedEvent)(candidate.event)
+    return decodedIntent._tag === "Some" && completionTaskRequestEquals(decodedIntent.value.request, request)
+  })
+
+const indexedFocusedSuccessAt = (
+  records: JournalRecordEvidence,
+  record: JournalRecord,
+  query: { readonly taskId: TaskId; readonly afterPosition: JournalPosition; readonly claim: CompletionTaskClaim },
+  matchingRequestIntentSeen: boolean
+): FocusedCompletedTaskObservation | undefined => {
+  const { afterPosition, claim, taskId } = query
+  if (record.position <= afterPosition || record.event._tag !== "TaskTrackerFactsObserved") return undefined
+  const focused = record.event.observation
+  if (focused._tag !== "FocusedTaskCompletionFacts") return undefined
+  const matchingReadIntent = hasEarlierFocusedRead(records, record, record.event.operationId, focused)
+  if (!matchingReadIntent || !matchingRequestIntentSeen) return undefined
+  const { facts, request, target } = focused
+  if (
+    [
+      facts.lifecycle === "CompletedSuccessfully",
+      facts.targetMembership === "Member",
+      facts.operationId === record.event.operationId,
+      facts.taskId === taskId,
+      request.taskId === taskId,
+      facts.taskRevision === request.taskRevision,
+      taskTrackerTargetKey(facts.target) === taskTrackerTargetKey(target),
+      completionTaskClaimEquals(request.claim, claim)
+    ].every(Boolean)
+  ) {
+    return FocusedCompletedTaskObservation.make({
+      claim: request.claim,
+      lifecycle: "CompletedSuccessfully",
+      observedAt: record.position,
+      operationId: record.event.operationId,
+      taskId,
+      taskRevision: facts.taskRevision,
+      target: facts.target,
+      trackerRevision: facts.trackerRevision
+    })
+  }
+  return undefined
+}
+
 const latestFocusedCompletedTaskObservationFromEvidence = (
   records: JournalRecordEvidence,
   taskId: TaskId,
@@ -76,6 +151,7 @@ const latestFocusedCompletedTaskObservationFromEvidence = (
 ): FocusedCompletedTaskObservation | undefined => {
   let latestObservation: FocusedCompletedTaskObservation | undefined
   const operationId = completionTaskRequestFor(claim).operationId
+  const query = { taskId, afterPosition, claim }
   let matchingRequestIntentSeen = false
   for (const record of journalRecordsForOperationId(records, operationId)) {
     if (record.event._tag === "CompletionTaskIntended") {
@@ -84,45 +160,7 @@ const latestFocusedCompletedTaskObservationFromEvidence = (
       }
       continue
     }
-    if (record.position <= afterPosition || record.event._tag !== "TaskTrackerFactsObserved") continue
-    const focused = record.event.observation
-    if (focused._tag !== "FocusedTaskCompletionFacts") continue
-    let matchingReadIntent = false
-    for (const intent of journalRecordsForOperationId(records, record.event.operationId)) {
-      if (intent.position >= record.position) break
-      if (
-        intent.event._tag === "TaskTrackerReadIntentRecorded" &&
-        intent.event.operation._tag === "ReadCompletionTaskFacts" &&
-        taskTrackerObservationMatchesRead(focused, intent.event.operation)
-      ) {
-        matchingReadIntent = true
-      }
-    }
-    if (!matchingReadIntent || !matchingRequestIntentSeen) continue
-    const { facts, request, target } = focused
-    if (
-      [
-        facts.lifecycle === "CompletedSuccessfully",
-        facts.targetMembership === "Member",
-        facts.operationId === record.event.operationId,
-        facts.taskId === taskId,
-        request.taskId === taskId,
-        facts.taskRevision === request.taskRevision,
-        taskTrackerTargetKey(facts.target) === taskTrackerTargetKey(target),
-        completionTaskClaimEquals(request.claim, claim)
-      ].every(Boolean)
-    ) {
-      latestObservation = FocusedCompletedTaskObservation.make({
-        claim: request.claim,
-        lifecycle: "CompletedSuccessfully",
-        observedAt: record.position,
-        operationId: record.event.operationId,
-        taskId,
-        taskRevision: facts.taskRevision,
-        target: facts.target,
-        trackerRevision: facts.trackerRevision
-      })
-    }
+    latestObservation = indexedFocusedSuccessAt(records, record, query, matchingRequestIntentSeen) ?? latestObservation
   }
   return latestObservation
 }
@@ -156,11 +194,7 @@ export const latestFocusedCompletedTaskObservationFor = (
     })
     if (!matchingIntent) continue
     const { facts, operationId, request, target } = focused
-    const matchingRequestIntent = chronological.some((candidate) => {
-      if (candidate.position >= record.position) return false
-      const decodedIntent = Schema.decodeUnknownOption(CompletionTaskIntendedEvent)(candidate.event)
-      return decodedIntent._tag === "Some" && completionTaskRequestEquals(decodedIntent.value.request, request)
-    })
+    const matchingRequestIntent = rawCompletionRequestPrecedes(chronological, record, request)
     if (!matchingRequestIntent) continue
     if (
       [

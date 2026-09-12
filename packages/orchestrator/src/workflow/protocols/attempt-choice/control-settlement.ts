@@ -106,6 +106,24 @@ export const noReleaseAfter = (
   return found
 }
 
+const lastReleaseIntentBetween = (
+  records: JournalHistorySource,
+  taskId: TaskId,
+  released: ClaimReleasedRecord,
+  after: JournalRecord["position"]
+): ClaimReleaseIntentRecord | undefined => {
+  let releaseIntent: ClaimReleaseIntentRecord | undefined
+  for (const candidate of journalRecordsForTask(records, taskId)) {
+    if (
+      candidate.position > after &&
+      candidate.position < released.position &&
+      isReleaseIntentFor(candidate, released.event.release.operationId)
+    )
+      releaseIntent = candidate
+  }
+  return releaseIntent
+}
+
 export const claimReleaseAfter = (
   records: JournalHistorySource,
   abandonment: JournalRecord,
@@ -116,17 +134,7 @@ export const claimReleaseAfter = (
   let found: ClaimReleasedRecord | undefined
   for (const record of journalRecordsForTask(records, plannedAttemptTaskId)) {
     if (record.position <= abandonment.position || !isClaimReleasedRecord(record, expectedClaim)) continue
-    const released = record.event
-    let releaseIntent: ClaimReleaseIntentRecord | undefined
-    for (const candidate of journalRecordsForTask(records, plannedAttemptTaskId)) {
-      const { position } = candidate
-      if (
-        position > abandonment.position &&
-        position < record.position &&
-        isReleaseIntentFor(candidate, released.release.operationId)
-      )
-        releaseIntent = candidate
-    }
+    const releaseIntent = lastReleaseIntentBetween(records, plannedAttemptTaskId, record, abandonment.position)
     if (
       releaseIntent !== undefined &&
       releaseIntent.event.operation.authority._tag === "StoppedAttemptClaimReleaseAuthority" &&

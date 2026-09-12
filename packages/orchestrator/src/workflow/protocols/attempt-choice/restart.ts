@@ -497,6 +497,18 @@ const replacementDispositionBeforeAllocation = Effect.fn("AttemptRestart.disposi
     : undefined
 })
 
+const recordedAttemptCountForTask = (records: JournalHistorySource, taskId: PlannedTaskAttempt["taskId"]): number => {
+  let count = 0
+  for (const { event } of journalRecordsForTask(records, taskId)) {
+    if (
+      (event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.taskId === taskId) ||
+      (event._tag === "PlannedAttemptReplaced" && event.successorPlan.plannedAttempt.taskId === taskId)
+    )
+      count += 1
+  }
+  return count
+}
+
 const recordAttemptReplacement = Effect.fn("AttemptRestart.recordReplacement")(function* (
   facts: RestartAuthorityFacts,
   integrationTarget: IntegrationTarget
@@ -536,16 +548,7 @@ const recordAttemptReplacement = Effect.fn("AttemptRestart.recordReplacement")(f
   if (disposition !== undefined) return disposition
   const planner = yield* PlannedTaskAttemptPlanner
   const allocator = yield* OperationIdAllocator
-  let priorRecordedAttemptCount = 0
-  for (const { event } of journalRecordsForTask(records, subject.plannedAttempt.taskId)) {
-    if (
-      (event._tag === "TaskAttemptPlanned" &&
-        event.operation.plannedAttempt.taskId === subject.plannedAttempt.taskId) ||
-      (event._tag === "PlannedAttemptReplaced" &&
-        event.successorPlan.plannedAttempt.taskId === subject.plannedAttempt.taskId)
-    )
-      priorRecordedAttemptCount += 1
-  }
+  const priorRecordedAttemptCount = recordedAttemptCountForTask(records, subject.plannedAttempt.taskId)
   const successor = yield* planner.plan(
     PlannedTaskAttemptPlanRequest.ExactReplacement({
       baseSha: target.observation.targetHeadSha,

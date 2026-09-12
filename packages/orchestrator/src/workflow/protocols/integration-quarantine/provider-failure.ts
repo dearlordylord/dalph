@@ -474,6 +474,23 @@ export const validateProviderRunPredecessorsFromRecords = (
   return validPredecessor({ session, runStart })
 }
 
+const hasContradictoryAbsence = (
+  records: AcceptedJournalPrefix,
+  run: IntegratorRunCorrelation,
+  detail: IntegrationQuarantineFailureDetail
+): boolean => {
+  for (const record of journalRecordsOfKind(records, "IntegrationProviderRunActivityAbsent")) {
+    if (
+      record.event._tag === "IntegrationProviderRunActivityAbsent" &&
+      integratorCorrelationsEqual(record.event.correlation, run.session) &&
+      integratorRunCorrelationsEqual(record.event.run, run) &&
+      !absenceMatches(record, run, detail)
+    )
+      return true
+  }
+  return false
+}
+
 const appendOrReconcileAbsence = Effect.fn("IntegrationQuarantine.appendOrReconcileProviderActivityAbsence")(function* (
   run: IntegratorRunCorrelation,
   detail: IntegrationQuarantineFailureDetail,
@@ -487,16 +504,8 @@ const appendOrReconcileAbsence = Effect.fn("IntegrationQuarantine.appendOrReconc
     run,
     version: workflowJournalEventVersion
   })
-  for (const record of journalRecordsOfKind(records, "IntegrationProviderRunActivityAbsent")) {
-    if (
-      record.event._tag === "IntegrationProviderRunActivityAbsent" &&
-      integratorCorrelationsEqual(record.event.correlation, run.session) &&
-      integratorRunCorrelationsEqual(record.event.run, run) &&
-      !absenceMatches(record, run, detail)
-    ) {
-      return yield* reject(run, "provider-activity absence evidence is duplicate or contradictory")
-    }
-  }
+  if (hasContradictoryAbsence(records, run, detail))
+    return yield* reject(run, "provider-activity absence evidence is duplicate or contradictory")
   const existing = journalRecordByKey(records, key)
   if (existing !== undefined) {
     if (!absenceMatches(existing, run, detail)) {
@@ -525,6 +534,25 @@ const appendOrReconcileAbsence = Effect.fn("IntegrationQuarantine.appendOrReconc
   const validation = validateProviderRunActivityAbsent(refreshed, appended)
   return validation._tag === "Valid" ? appended : yield* reject(run, validation.detail)
 })
+
+const conflictingQuarantineExists = (
+  records: AcceptedJournalPrefix,
+  run: IntegratorRunCorrelation,
+  expected: IntegrationQuarantinedEvent,
+  key: JournalRecord["key"],
+  retryPriorQuarantineAt: JournalPosition | undefined
+): boolean => {
+  for (const record of journalRecordsOfKind(records, "IntegrationQuarantined")) {
+    if (
+      record.event._tag === "IntegrationQuarantined" &&
+      integratorCorrelationsEqual(record.event.correlation, run.session) &&
+      !quarantineMatches(record, run, expected, key) &&
+      !(retryPriorQuarantineAt !== undefined && record.position === retryPriorQuarantineAt)
+    )
+      return true
+  }
+  return false
+}
 
 /**
  * Appends or recovers provider-absence evidence and its dependent quarantine.
@@ -565,19 +593,7 @@ export const reconcileProviderRunFailureQuarantine = Effect.fn(
           return authorization._tag === "Authorized" ? authorization.authorization.quarantine.position : undefined
         })()
       : undefined
-  let hasConflictingQuarantine = false
-  for (const record of journalRecordsOfKind(afterAbsence, "IntegrationQuarantined")) {
-    if (
-      record.event._tag === "IntegrationQuarantined" &&
-      integratorCorrelationsEqual(record.event.correlation, run.session) &&
-      !quarantineMatches(record, run, expected, key) &&
-      !(retryPriorQuarantineAt !== undefined && record.position === retryPriorQuarantineAt)
-    ) {
-      hasConflictingQuarantine = true
-      break
-    }
-  }
-  if (hasConflictingQuarantine) {
+  if (conflictingQuarantineExists(afterAbsence, run, expected, key, retryPriorQuarantineAt)) {
     return yield* reject(run, "provider-run quarantine contradicts an existing quarantine occurrence")
   }
   const existing = journalRecordByKey(afterAbsence, key)

@@ -169,12 +169,10 @@ const providerRunStartFor = (
   return start !== undefined && start.position > fixedSession.session.position ? start : undefined
 }
 
-const retryAuthorizationIssue = (
+const firstSuccessorSessionFor = (
   history: JournalHistorySource,
-  run: IntegratorRunCorrelation,
-  runStart: JournalRecord
-): string | undefined => {
-  if (run.ordinal !== integratorRetryRunOrdinal) return undefined
+  run: IntegratorRunCorrelation
+): JournalRecord | undefined => {
   let successor: JournalRecord | undefined
   for (const record of journalRecordsOfKind(history, "IntegratorSuccessorSessionFixed")) {
     if (
@@ -185,6 +183,16 @@ const retryAuthorizationIssue = (
       break
     }
   }
+  return successor
+}
+
+const retryAuthorizationIssue = (
+  history: JournalHistorySource,
+  run: IntegratorRunCorrelation,
+  runStart: JournalRecord
+): string | undefined => {
+  if (run.ordinal !== integratorRetryRunOrdinal) return undefined
+  const successor = firstSuccessorSessionFor(history, run)
   if (successor?.event._tag === "IntegratorSuccessorSessionFixed") {
     const authorization = evaluateIntegratorFullRerunAuthorization(
       history,
@@ -301,29 +309,35 @@ type ProviderAbsenceValidation =
     }
   | { readonly _tag: "Invalid"; readonly detail: string }
 
-const indexedProviderRunStart = (
+const indexedSuccessorSession = (
   records: JournalRecordEvidence,
-  run: IntegratorRunCorrelation,
-  beforePosition: JournalRecord["position"]
-): ProviderRunPredecessors | undefined => {
+  run: IntegratorRunCorrelation
+): JournalRecord | undefined => {
+  let session: JournalRecord | undefined
+  for (const candidate of journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")) {
+    if (
+      candidate.event._tag === "IntegratorSuccessorSessionFixed" &&
+      integratorCorrelationsEqual(candidate.event.successor, run.session)
+    ) {
+      if (session !== undefined) return undefined
+      const relation = evaluateIntegratorFullRerunSuccessor(records, candidate, candidate.event.predecessor)
+      if (relation._tag === "Invalid") return undefined
+      session = candidate
+    }
+  }
+  return session
+}
+
+const indexedFixedSession = (
+  records: JournalRecordEvidence,
+  run: IntegratorRunCorrelation
+): JournalRecord | undefined => {
   const direct = journalRecordByKey(records, fixedSessionKey(run.session))
-  let session = direct
   if (
     direct?.event._tag !== "IntegratorSessionFixed" ||
     !integratorCorrelationsEqual(direct.event.correlation, run.session)
   ) {
-    session = undefined
-    for (const candidate of journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")) {
-      if (
-        candidate.event._tag === "IntegratorSuccessorSessionFixed" &&
-        integratorCorrelationsEqual(candidate.event.successor, run.session)
-      ) {
-        if (session !== undefined) return undefined
-        const relation = evaluateIntegratorFullRerunSuccessor(records, candidate, candidate.event.predecessor)
-        if (relation._tag === "Invalid") return undefined
-        session = candidate
-      }
-    }
+    return indexedSuccessorSession(records, run)
   } else {
     const lineage = exactTargetLineageRecord(records, {
       expectedTargetHead: run.session.expectedTargetHead,
@@ -333,6 +347,15 @@ const indexedProviderRunStart = (
     })
     if (lineage === undefined || lineage.observation.position >= direct.position) return undefined
   }
+  return direct
+}
+
+const indexedProviderRunStart = (
+  records: JournalRecordEvidence,
+  run: IntegratorRunCorrelation,
+  beforePosition: JournalRecord["position"]
+): ProviderRunPredecessors | undefined => {
+  const session = indexedFixedSession(records, run)
   if (session === undefined) return undefined
   const start = journalRecordByKey(records, integratorRunStartedRecordKey(run))
   return start?.event._tag === "IntegratorRunStarted" &&
@@ -353,6 +376,22 @@ export const providerRunStartBefore = (
   const history = records.filter((record) => record.position < beforePosition)
   const fixedSession = fixedSessionForRun(history, run)
   return fixedSession._tag === "Valid" ? providerRunStartFor(history, run, fixedSession) : undefined
+}
+
+const indexedRunResultOrCandidateExists = (records: JournalRecordEvidence, run: IntegratorRunCorrelation): boolean => {
+  for (const candidate of journalRecordsOfKind(records, "IntegratorRunResultRecorded")) {
+    if (
+      candidate.event._tag === "IntegratorRunResultRecorded" &&
+      integratorRunCorrelationsEqual(candidate.event.run, run)
+    )
+      return true
+  }
+  for (const kind of ["IntegratorRunCandidateGitReadIntended", "IntegratorRunCandidateGitObserved"] as const) {
+    for (const candidate of journalRecordsOfKind(records, kind)) {
+      if ("run" in candidate.event && integratorRunCorrelationsEqual(candidate.event.run, run)) return true
+    }
+  }
+  return false
 }
 
 const validateIndexedProviderRunActivityAbsent = (
@@ -378,22 +417,29 @@ const validateIndexedProviderRunActivityAbsent = (
   if (!absenceMatches(record, run)) {
     return { _tag: "Invalid", detail: "provider-activity absence has a foreign key or Journal Run" }
   }
-  for (const candidate of journalRecordsOfKind(records, "IntegratorRunResultRecorded")) {
-    if (
-      candidate.event._tag === "IntegratorRunResultRecorded" &&
-      integratorRunCorrelationsEqual(candidate.event.run, run)
-    ) {
-      return { _tag: "Invalid", detail: "provider-activity absence contradicts exact run evidence" }
-    }
-  }
-  for (const kind of ["IntegratorRunCandidateGitReadIntended", "IntegratorRunCandidateGitObserved"] as const) {
+  if (indexedRunResultOrCandidateExists(records, run))
+    return { _tag: "Invalid", detail: "provider-activity absence contradicts exact run evidence" }
+  return { _tag: "Valid", run, record, runStart: predecessors.runStart }
+}
+
+const indexedProviderAbsenceConflict = (
+  records: JournalRecordEvidence,
+  run: IntegratorRunCorrelation
+): string | undefined => {
+  for (const kind of [
+    "IntegratorRunResultRecorded",
+    "IntegratorRunCandidateGitReadIntended",
+    "IntegratorRunCandidateGitObserved"
+  ] as const) {
     for (const candidate of journalRecordsOfKind(records, kind)) {
       if ("run" in candidate.event && integratorRunCorrelationsEqual(candidate.event.run, run)) {
-        return { _tag: "Invalid", detail: "provider-activity absence contradicts exact run evidence" }
+        return kind === "IntegratorRunResultRecorded"
+          ? "provider-run absence contradicts an already recorded Integrator result"
+          : "provider-run absence contradicts run-bound candidate evidence"
       }
     }
   }
-  return { _tag: "Valid", run, record, runStart: predecessors.runStart }
+  return undefined
 }
 
 /** Validates the exact fixed-session and run-start chronology before an absence append. */
@@ -412,23 +458,8 @@ export const validateProviderRunPredecessors = (
   }
   const authorizationIssue = retryAuthorizationIssue(records, run, predecessors.runStart)
   if (authorizationIssue !== undefined) return { _tag: "Invalid", detail: authorizationIssue }
-  for (const kind of [
-    "IntegratorRunResultRecorded",
-    "IntegratorRunCandidateGitReadIntended",
-    "IntegratorRunCandidateGitObserved"
-  ] as const) {
-    for (const candidate of journalRecordsOfKind(records, kind)) {
-      if ("run" in candidate.event && integratorRunCorrelationsEqual(candidate.event.run, run)) {
-        return {
-          _tag: "Invalid",
-          detail:
-            kind === "IntegratorRunResultRecorded"
-              ? "provider-run absence contradicts an already recorded Integrator result"
-              : "provider-run absence contradicts run-bound candidate evidence"
-        }
-      }
-    }
-  }
+  const absenceConflict = indexedProviderAbsenceConflict(records, run)
+  if (absenceConflict !== undefined) return { _tag: "Invalid", detail: absenceConflict }
   return { _tag: "Valid", value: predecessors }
 }
 
@@ -460,6 +491,16 @@ export const validateProviderRunActivityAbsent = (
   return { _tag: "Valid", run, record, runStart: predecessors.value.runStart }
 }
 
+const quarantineMatchesFingerprint = (
+  record: JournalRecord | undefined,
+  fingerprint: IntegrationQuarantineDirectionFingerprint
+): record is QuarantineRecord =>
+  record !== undefined &&
+  record.event._tag === "IntegrationQuarantined" &&
+  record.position === fingerprint.quarantineAt &&
+  record.event.correlation.sessionId === fingerprint.sessionId &&
+  record.key === integrationQuarantinedRecordKey(record.event.correlation.sessionId, record.event.basis)
+
 /** Finds cleanup provenance after the provider-absence or stale-promotion proof has passed. */
 export const quarantineRecordForFingerprint = (
   records: JournalHistorySource,
@@ -469,15 +510,7 @@ export const quarantineRecordForFingerprint = (
     ? [journalRecordByPosition(records, fingerprint.quarantineAt)]
     : records
   return candidates.find((record): record is QuarantineRecord => {
-    if (record === undefined) return false
-    if (
-      record.event._tag !== "IntegrationQuarantined" ||
-      record.position !== fingerprint.quarantineAt ||
-      record.event.correlation.sessionId !== fingerprint.sessionId ||
-      record.key !== integrationQuarantinedRecordKey(record.event.correlation.sessionId, record.event.basis)
-    ) {
-      return false
-    }
+    if (!quarantineMatchesFingerprint(record, fingerprint)) return false
     const basis = record.event.basis
     if (basis._tag === "PromotionStale") {
       return validatePromotionStaleQuarantineEvidence(records, record)._tag === "Valid"

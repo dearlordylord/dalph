@@ -118,29 +118,32 @@ const exactAbandonment = (
 const evidenceProof = (evidence: AcceptedPlannedAttemptExecutorEvidence): AttemptQuiescenceProof =>
   AttemptQuiescenceProof.cases.AcceptedReport.make({ reportOrdinal: evidence.source.ordinal })
 
-const unbrokenQuiescenceEvidence = (
+const commandIntendedAfterSafe = (
   records: JournalHistorySource,
-  plannedAttempt: PlannedTaskAttempt
-): AcceptedPlannedAttemptExecutorEvidence | undefined => {
-  const evidence = latestPlannedAttemptExecutorEvidence(records, plannedAttempt)
-  if (
-    evidence === undefined ||
-    !isAcceptedPlannedAttemptExecutorEvidence(evidence) ||
-    evidence.report._tag !== "ExecutorWorkSafelySuspended"
-  ) {
-    return undefined
-  }
+  plannedAttempt: PlannedTaskAttempt,
+  observedAt: JournalRecord["position"]
+): boolean => {
   let laterCommandExists = false
-  for (const { event, position } of journalRecordsForAttempt(records, plannedAttempt.attemptId)) {
+  for (const { event, position } of journalRecordsForAttempt(records, plannedAttempt.attemptId))
     if (
-      position > evidence.observedAt &&
+      position > observedAt &&
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
       event.plannedAttempt.runId === plannedAttempt.runId &&
       event.plannedAttempt.attemptId === plannedAttempt.attemptId
     )
       laterCommandExists = true
-  }
-  return laterCommandExists ? undefined : evidence
+  return laterCommandExists
+}
+
+const unbrokenQuiescenceEvidence = (
+  records: JournalHistorySource,
+  plannedAttempt: PlannedTaskAttempt
+): AcceptedPlannedAttemptExecutorEvidence | undefined => {
+  const evidence = latestPlannedAttemptExecutorEvidence(records, plannedAttempt)
+  if (evidence === undefined) return undefined
+  if (!isAcceptedPlannedAttemptExecutorEvidence(evidence)) return undefined
+  if (evidence.report._tag !== "ExecutorWorkSafelySuspended") return undefined
+  return commandIntendedAfterSafe(records, plannedAttempt, evidence.observedAt) ? undefined : evidence
 }
 
 const recordAbandonment = Effect.fn("AttemptStop.recordAbandonment")(function* (
@@ -330,6 +333,19 @@ const latestFocusedClaimObservation = (
   return found
 }
 
+const isFocusedClaimReadForObservation = (
+  event: JournalRecord["event"],
+  observationRecord: FocusedClaimObservationRecord,
+  subject: AttemptChoiceSubject,
+  immutableRunTarget: TrackerTarget | undefined
+): boolean =>
+  event._tag === "TaskTrackerReadIntentRecorded" &&
+  event.operation._tag === "ReadTaskClaim" &&
+  event.operation.operationId === observationRecord.event.operationId &&
+  event.operation.taskId === subject.plannedAttempt.taskId &&
+  immutableRunTarget !== undefined &&
+  taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(immutableRunTarget)
+
 const focusedClaimReadIntent = (
   records: JournalHistorySource,
   observationBaseline: JournalRecord["position"],
@@ -338,16 +354,10 @@ const focusedClaimReadIntent = (
   immutableRunTarget: TrackerTarget | undefined
 ) => {
   for (const record of journalRecordsForOperationId(records, observationRecord.event.operationId)) {
-    const { event, position } = record
     if (
-      position > observationBaseline &&
-      position < observationRecord.position &&
-      event._tag === "TaskTrackerReadIntentRecorded" &&
-      event.operation._tag === "ReadTaskClaim" &&
-      event.operation.operationId === observationRecord.event.operationId &&
-      event.operation.taskId === subject.plannedAttempt.taskId &&
-      immutableRunTarget !== undefined &&
-      taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(immutableRunTarget)
+      record.position > observationBaseline &&
+      record.position < observationRecord.position &&
+      isFocusedClaimReadForObservation(record.event, observationRecord, subject, immutableRunTarget)
     )
       return record
   }

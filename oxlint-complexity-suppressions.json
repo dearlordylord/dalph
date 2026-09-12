@@ -4,6 +4,12 @@
       "count": 1
     }
   },
+  "packages/dalph/src/cassettes/catalog.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "deliveryFinalityBase keeps one ordered authored-story transducer: paired graph/read-response suppression, process-death phase tracking, recovery graph substitution, and the exact terminal finality sequence share the same cursor and phase. Splitting these state transitions solely to hide conditions would detach paired occurrences and their ordering; the callback has one direct story consumer and maintained derived scenarios."
+    }
+  },
   "packages/dalph/src/cassettes/disposition-cleanup-cassette.ts": {
     "complexity": {
       "count": 6
@@ -30,6 +36,12 @@
     "complexity": {
       "count": 2,
       "justification": "This controlled A-prefix fixture keeps one exact ordinary-settlement chronology, validating production reconstruction and evidence reseeding before the six-task finality composition; splitting it would detach the seed from the history it proves."
+    }
+  },
+  "packages/orchestrator/src/coordination/admission/fresh-attempt-lineage.ts": {
+    "complexity": {
+      "count": 2,
+      "justification": "After separating graph/specification selection, unique worktree matching, and final lineage construction, the graph-predecessor predicate and readyWorktreeForIntent retain the complete exact Run/target/attempt, causal-position, eligibility, and intent/outcome/plan qualification for their respective evidence pairs. Splitting their remaining identity clauses would obscure one fail-closed pair qualification rather than isolate another decision."
     }
   },
   "packages/orchestrator/src/coordination/delivery/delivery-proposal-derivation.ts": {
@@ -63,12 +75,6 @@
       "count": 1
     }
   },
-  "packages/orchestrator/src/coordination/frontier/safe-continuation-revalidation-eligibility.ts": {
-    "complexity": {
-      "count": 3,
-      "justification": "Each function reads one ordered recovery proof over journal history: exact reopening, reconciled Safe evidence, or eligibility issuance. Their branches are the fail-closed evidence clauses and remain together for auditability."
-    }
-  },
   "packages/orchestrator/src/coordination/frontier/task-claim-authority.ts": {
     "complexity": {
       "count": 1
@@ -81,7 +87,8 @@
   },
   "packages/orchestrator/src/coordination/run/recovery-activation.ts": {
     "complexity": {
-      "count": 7
+      "count": 8,
+      "justification": "The seven existing cohesive recovery functions remain within their previous allowance. After separating pending-read selection, graph deduplication, and suspension boundaries, gitReadIntentHasOutcome retains one closed inventory of exact-operation worktree, lineage, and Restart-authority outcomes, excluding task-facts failure. Splitting those event-family alternatives would fragment one completed-read membership decision."
     }
   },
   "packages/orchestrator/src/coordination/run/run-reactivation-owner.ts": {
@@ -94,9 +101,15 @@
       "count": 1
     }
   },
+  "packages/orchestrator/src/workflow-journal/record-evidence.ts": {
+    "complexity": {
+      "count": 2,
+      "justification": "After separating correlation families, exact predecessor lookup, and immutable bucket publication, integratorSessionIdsOf keeps one bounded inventory of the five session locations named by an occurrence, including predecessor/successor membership and deduplication. promotionRequestId keeps the ordered choice among four existing promotion-identity paths; fragmenting their presence checks would obscure precedence rather than separate an independent decision."
+    }
+  },
   "packages/orchestrator/src/workflow/claim-authority-history.ts": {
     "complexity": {
-      "count": 6
+      "count": 3
     }
   },
   "packages/orchestrator/src/workflow/protocols/attempt-choice/restart-authority-evidence.ts": {
@@ -139,9 +152,15 @@
       "count": 1
     }
   },
+  "packages/orchestrator/src/workflow/protocols/integration-finality/state.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "The decoded-history focused-success scanner retains its ordered exact request/read-predecessor qualification after shared evidence validation and indexed lookup have been separated. Its remaining Run, target, identity, and chronological rejection clauses belong to one fail-closed raw-history boundary, not independent workflow choices."
+    }
+  },
   "packages/orchestrator/src/workflow/protocols/integration-quarantine/canonical-lineage.ts": {
     "complexity": {
-      "count": 3
+      "count": 2
     }
   },
   "packages/orchestrator/src/workflow/protocols/integration-quarantine/canonical-provenance.ts": {
@@ -154,6 +173,12 @@
       "count": 2
     }
   },
+  "packages/orchestrator/src/workflow/protocols/integration-quarantine/promotion-stale.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "sameEvidence is one exact durable quarantine identity comparison over key, Run, session, basis, candidate, head, and stale position. Splitting its equality clauses would obscure the complete idempotency identity; evidence selection and quarantine disposition remain separate."
+    }
+  },
   "packages/orchestrator/src/workflow/protocols/integration-quarantine/provider-failure.ts": {
     "complexity": {
       "count": 1
@@ -162,6 +187,12 @@
   "packages/orchestrator/src/workflow/protocols/integrator/retry-authorization.ts": {
     "complexity": {
       "count": 2
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/integrator/run-state.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "expectedBaseSessionFor keeps the first exact predecessor/successor relation selection in Run chronology, while base-session cardinality validation and foreign-related-session classification are separate. Its remaining ordered event alternatives identify one expected session; fragmenting them would conceal precedence without separating another decision."
     }
   },
   "packages/orchestrator/src/workflow/protocols/integrator/successor-history.ts": {
@@ -177,8 +208,7 @@
   },
   "packages/orchestrator/src/workflow/protocols/planned-attempt-continuation/tracker-read-freshness.ts": {
     "complexity": {
-      "count": 3,
-      "justification": "The two added validators keep the exact same-Run plan, accepted Executing lifecycle, intent predecessor bijection, and covered-task identity checks in their fail-closed record-aware boundaries; the shared durable plan-entry extraction is already separate, while splitting these remaining evidence clauses would obscure the causal proof without changing behavior."
+      "count": 1
     }
   }
 }

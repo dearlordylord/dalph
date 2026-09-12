@@ -448,6 +448,20 @@ const executorResponsibilityStillOwnsTask = (
   )
 }
 
+const claimResponsibilityStillOwnsTask = (
+  responsibility: Extract<WorkflowResponsibilityEntry, { readonly _tag: "TaskClaimResponsibility" }>,
+  records: JournalHistorySource
+): boolean => {
+  const outcome = journalRecordByKey(records, outcomeRecordKey(responsibility.acquisition.operationId))
+  return !(
+    outcome !== undefined &&
+    outcome.position > responsibility.beganAt &&
+    ((outcome.event._tag === "TaskClaimAcquired" && outcome.event.claim.taskId === responsibility.taskId) ||
+      (outcome.event._tag === "TaskClaimAcquisitionRejected" &&
+        outcome.event.operationId === responsibility.acquisition.operationId))
+  )
+}
+
 export const responsibilityStillOwnsTask = (
   responsibility: WorkflowResponsibilityEntry,
   records: JournalHistorySource,
@@ -458,14 +472,7 @@ export const responsibilityStillOwnsTask = (
   }
   if (responsibility._tag === "TaskClaimReleaseResponsibility") return true
   if (responsibility._tag === "TaskClaimResponsibility") {
-    const outcome = journalRecordByKey(records, outcomeRecordKey(responsibility.acquisition.operationId))
-    return !(
-      outcome !== undefined &&
-      outcome.position > responsibility.beganAt &&
-      ((outcome.event._tag === "TaskClaimAcquired" && outcome.event.claim.taskId === responsibility.taskId) ||
-        (outcome.event._tag === "TaskClaimAcquisitionRejected" &&
-          outcome.event.operationId === responsibility.acquisition.operationId))
-    )
+    return claimResponsibilityStillOwnsTask(responsibility, records)
   }
   const outcome = journalRecordByKey(records, outcomeRecordKey(responsibility.operation.operationId))
   return !(

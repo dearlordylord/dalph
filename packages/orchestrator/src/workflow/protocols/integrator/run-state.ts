@@ -248,12 +248,11 @@ const runStartRelationIssue = (
   return valid ? undefined : "IntegratorRunStarted does not follow its exact fixed session and target lineage"
 }
 
-const hasForeignRelatedSession = (
+const expectedBaseSessionFor = (
   records: JournalHistorySource,
   run: IntegratorRunCorrelation,
   dependencies: IntegratorRunStateDependencies
-): boolean => {
-  const requestedFacts = dependencies.responsibilityFactsFromCorrelation(run.session)
+): IntegratorRunCorrelation["session"] => {
   let activeRelation: JournalRecord | undefined
   for (const record of journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")) {
     const { event } = record
@@ -265,8 +264,18 @@ const hasForeignRelatedSession = (
       if (dependencies.correlationsEqual(event.successor, run.session)) activeRelation ??= record
     }
   }
-  const expectedBase =
-    activeRelation?.event._tag === "IntegratorSuccessorSessionFixed" ? activeRelation.event.predecessor : run.session
+  return activeRelation?.event._tag === "IntegratorSuccessorSessionFixed"
+    ? activeRelation.event.predecessor
+    : run.session
+}
+
+const hasUniqueBaseSession = (
+  records: JournalHistorySource,
+  run: IntegratorRunCorrelation,
+  expectedBase: IntegratorRunCorrelation["session"],
+  dependencies: IntegratorRunStateDependencies
+): boolean => {
+  const requestedFacts = dependencies.responsibilityFactsFromCorrelation(run.session)
   let baseSessionCount = 0
   let foreignBaseSession = false
   for (const { event } of journalRecordsOfKind(records, "IntegratorSessionFixed")) {
@@ -281,7 +290,15 @@ const hasForeignRelatedSession = (
       if (!dependencies.correlationsEqual(event.correlation, expectedBase)) foreignBaseSession = true
     }
   }
-  if (baseSessionCount !== 1 || foreignBaseSession) return true
+  return baseSessionCount === 1 && !foreignBaseSession
+}
+
+const hasForeignSuccessorRelation = (
+  records: JournalHistorySource,
+  run: IntegratorRunCorrelation,
+  expectedBase: IntegratorRunCorrelation["session"],
+  dependencies: IntegratorRunStateDependencies
+): boolean => {
   for (const { event } of journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")) {
     if (
       event._tag === "IntegratorSuccessorSessionFixed" &&
@@ -296,6 +313,16 @@ const hasForeignRelatedSession = (
     }
   }
   return false
+}
+
+const hasForeignRelatedSession = (
+  records: JournalHistorySource,
+  run: IntegratorRunCorrelation,
+  dependencies: IntegratorRunStateDependencies
+): boolean => {
+  const expectedBase = expectedBaseSessionFor(records, run, dependencies)
+  if (!hasUniqueBaseSession(records, run, expectedBase, dependencies)) return true
+  return hasForeignSuccessorRelation(records, run, expectedBase, dependencies)
 }
 
 const runHasGitFacts = (related: Iterable<JournalRecord>): boolean => {
@@ -367,6 +394,18 @@ const stateAfterStartedRun = (
   return stateAfterRunResult(records, runRelated, run, resultRecord, dependencies)
 }
 
+const runStartOccurrences = (runRelated: Iterable<JournalRecord>) => {
+  let started: JournalRecord | undefined
+  let startedCount = 0
+  for (const record of runRelated) {
+    if (record.event._tag === "IntegratorRunStarted") {
+      startedCount += 1
+      started ??= record
+    }
+  }
+  return { started, startedCount }
+}
+
 /** Reconstructs only the explicit run vocabulary. Unknown historical event tags are rejected by journal decoding. */
 export const deriveIntegratorRunStateFromHistory = (
   records: JournalHistorySource,
@@ -381,14 +420,7 @@ export const deriveIntegratorRunStateFromHistory = (
       }
     }
   }
-  let started: JournalRecord | undefined
-  let startedCount = 0
-  for (const record of runRelated) {
-    if (record.event._tag === "IntegratorRunStarted") {
-      startedCount += 1
-      started ??= record
-    }
-  }
+  const { started, startedCount } = runStartOccurrences(runRelated)
   if (startedCount === 0) return runStateWithoutStarted(records, run, runRelated, dependencies)
   if (startedCount !== 1) return runContradictionState("an exact Integrator run was started more than once")
   /* v8 ignore next -- @preserve runStarted is filtered by the same event tag above; this guard protects malformed runtime data. */
