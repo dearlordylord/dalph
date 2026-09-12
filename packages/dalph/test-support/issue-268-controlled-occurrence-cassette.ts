@@ -32,7 +32,7 @@ export type Issue268OccurrenceCassetteResult =
   | { readonly _tag: "AcceptedOccurrenceOrderConsumed"; readonly occurrenceCount: number }
   | { readonly _tag: "OccurrenceOrderMismatch"; readonly mismatch: Issue268OccurrenceCassetteMismatch }
 
-const acceptedSourceSha = "b3c9d61100e2c7867625a13950b33375617b2500"
+const acceptedSourceSha = "1e6b3f44bacc3cae6945823abc3d3f92e2a7a48d"
 const occurrenceIdentity = ({ detail, kind, source }: Issue268AcceptedOccurrence): Issue268AcceptedOccurrence => ({
   detail,
   kind,

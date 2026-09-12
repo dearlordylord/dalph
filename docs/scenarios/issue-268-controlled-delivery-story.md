@@ -14,6 +14,25 @@ not workflow actions or provider calls. This supersedes only the former
 1,014-event strict oracle and does not authorize production changes to make a
 guessed order pass.
 
+### Necessary cassette-description adjustment on 2026-09-12
+
+The original acceptance above remains the historical record. Under the
+maintainer's standing permission to correct necessary cassette facts, a
+cassette-free capture at `1e6b3f44bacc3cae6945823abc3d3f92e2a7a48d`
+records the same 1,010 occurrence positions, kinds, and sources. All Journal,
+tracker, Git, executor, trace, and readiness-control payloads and order are
+unchanged. Exactly 29 descriptions change: current Fresh executor-observation
+routes and their live-owner order, position-admission route labels, and eight
+Observe action labels. The exact accepted Executing report now selects that
+attempt's Fresh Observe route rather than the recovered observation route;
+this fixture adjustment changes no Dalph runtime behavior or boundary call.
+
+The adjusted array's digest is
+`6df6b575b41d4ea07d3ac083725cd54b0ddf29fb925936dfd7f1c85a5d90b5c8`.
+The 13 checkpoint table, required causal edges, rejection controls, 20 complete
+C4 repetitions, and final gates remain mandatory. This capture and adjustment
+do not claim that C4 or final qualification has passed.
+
 The 2026-09-05 pre-DS-04 audit corrected two stale read inventories without
 changing a behavioral outcome. Governing issue #266 requires an active refresh
 to stop a subject's authority chain as soon as a current fact conclusively

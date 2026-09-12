@@ -3666,8 +3666,8 @@ it.effect(
         issue268ControlledDeliveryCassetteCatalog.issue268Ds01ThroughDs13
       )
       expect(run.cassette).toMatchObject({
-        acceptedOrderDigest: "0e325a017a42fe58880a357beda49261ed5383ec6c822a4bc93f94976765f9c3",
-        acceptedSourceSha: "b3c9d61100e2c7867625a13950b33375617b2500",
+        acceptedOrderDigest: "6df6b575b41d4ea07d3ac083725cd54b0ddf29fb925936dfd7f1c85a5d90b5c8",
+        acceptedSourceSha: "1e6b3f44bacc3cae6945823abc3d3f92e2a7a48d",
         occurrenceCount: 1_010,
         readinessProfile: "R0ThroughR11",
         schemaVersion: 1,
@@ -3947,8 +3947,8 @@ it.effect(
       )
       const actual = run.characterization.occurrenceEvidence.observedOccurrences
       expect(run.cassette).toMatchObject({
-        acceptedOrderDigest: "0e325a017a42fe58880a357beda49261ed5383ec6c822a4bc93f94976765f9c3",
-        acceptedSourceSha: "b3c9d61100e2c7867625a13950b33375617b2500",
+        acceptedOrderDigest: "6df6b575b41d4ea07d3ac083725cd54b0ddf29fb925936dfd7f1c85a5d90b5c8",
+        acceptedSourceSha: "1e6b3f44bacc3cae6945823abc3d3f92e2a7a48d",
         occurrenceCount: 1_010,
         readinessProfile: "R0ThroughR11",
         schemaVersion: 1,
@@ -4013,9 +4013,9 @@ it.skipIf(c4AlreadyRunsOutsideCoverage)(
   async () => {
     const result = await runIssue268C4()
     expect(result).toMatchObject({
-      acceptedOrderDigest: "0e325a017a42fe58880a357beda49261ed5383ec6c822a4bc93f94976765f9c3",
+      acceptedOrderDigest: "6df6b575b41d4ea07d3ac083725cd54b0ddf29fb925936dfd7f1c85a5d90b5c8",
       iterations: Array.from({ length: 20 }, (_, index) => ({
-        acceptedOrderDigest: "0e325a017a42fe58880a357beda49261ed5383ec6c822a4bc93f94976765f9c3",
+        acceptedOrderDigest: "6df6b575b41d4ea07d3ac083725cd54b0ddf29fb925936dfd7f1c85a5d90b5c8",
         iteration: index + 1,
         occurrenceCount: 1_010,
         status: "PASS"
