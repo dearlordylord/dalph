@@ -31,15 +31,18 @@ const ordinaryTestIncludes = [
   "scripts/run-issue-268-c4.test.mjs",
   "test/**/*.test.ts"
 ]
+// Inline projects do not inherit root Vite aliases. Every test interpretation
+// must keep package imports and relative source imports in one implementation.
+const currentSourceResolution = {
+  alias: {
+    "@dalph/contracts": fileURLToPath(new URL("./packages/contracts/src/index.ts", import.meta.url)),
+    "@dalph/dalph": fileURLToPath(new URL("./packages/dalph/src/index.ts", import.meta.url)),
+    "@dalph/orchestrator": fileURLToPath(new URL("./packages/orchestrator/src/index.ts", import.meta.url))
+  }
+}
 
 export default defineConfig(({ mode }) => ({
-  resolve: {
-    alias: {
-      "@dalph/contracts": fileURLToPath(new URL("./packages/contracts/src/index.ts", import.meta.url)),
-      "@dalph/dalph": fileURLToPath(new URL("./packages/dalph/src/index.ts", import.meta.url)),
-      "@dalph/orchestrator": fileURLToPath(new URL("./packages/orchestrator/src/index.ts", import.meta.url))
-    }
-  },
+  resolve: currentSourceResolution,
   test: {
     coverage: {
       exclude: ["**/*.d.ts", "**/*.test.ts", "**/*.spec.ts", "test/**"],
@@ -70,6 +73,7 @@ export default defineConfig(({ mode }) => ({
           // give that model one worker without weakening either trace budget.
           projects: [
             {
+              resolve: currentSourceResolution,
               test: {
                 exclude: [acceptedResultIntegrationMbtTestPattern],
                 include: [mbtTestPattern],
@@ -79,6 +83,7 @@ export default defineConfig(({ mode }) => ({
               }
             },
             {
+              resolve: currentSourceResolution,
               test: {
                 fileParallelism: false,
                 include: [acceptedResultIntegrationMbtTestPattern],
