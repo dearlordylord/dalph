@@ -236,30 +236,39 @@ it("compares current invalid-history summaries rather than stale equal valid mea
 it("keeps empty sources and unvisited schema-invalid suffixes untouched and shorter final prefixes repeated", () => {
   const records = capacityRecords([2, 3])
   const cassette = Effect.runSync(projectRecordedCassette(records))
+  let entriesReads = 0
   const unvisited: RecordedCassette = {
     ...cassette,
-    get entries(): never {
-      throw new Error("unvisited cassette")
+    get entries() {
+      entriesReads += 1
+      return cassette.entries
     }
   }
   expect(verifyRecordedCassetteRoundTrip([], unvisited)).toEqual([])
-  const first = cassette.entries[0]
-  if (first === undefined) throw new Error("Expected first recorded occurrence")
-  const invalidSuffix = RecordedCassette.make({ ...cassette, entries: [...cassette.entries, first] })
+  expect(entriesReads).toBe(0)
+  const invalidSuffix = RecordedCassette.make({ ...cassette, entries: [...cassette.entries, ...cassette.entries] })
+  let suffixReads = 0
   Object.defineProperty(invalidSuffix.entries, 3, {
     get: () => {
-      throw new Error("unvisited suffix")
+      suffixReads += 1
+      return { _tag: "NotARecordedOccurrence" }
     }
   })
   expect(verifyRecordedCassetteRoundTrip(records, invalidSuffix)).toEqual(coldOracle(records, cassette))
+  expect(suffixReads).toBe(0)
   const visitsSuffix = capacityRecords([2, 3, 4])
-  expect(outcome(() => verifyRecordedCassetteRoundTrip(visitsSuffix, invalidSuffix))).toEqual(
-    outcome(() => coldOracle(visitsSuffix, invalidSuffix))
+  const actualOutcome = outcome(() => verifyRecordedCassetteRoundTrip(visitsSuffix, invalidSuffix))
+  expect(suffixReads).toBe(1)
+  expect(actualOutcome).toEqual(outcome(() => coldOracle(visitsSuffix, invalidSuffix)))
+  expect(suffixReads).toBe(2)
+  expect(actualOutcome).toHaveProperty("defect")
+  expect(actualOutcome).toEqual(
+    outcome(() => {
+      RecordedCassette.make({ ...cassette, entries: invalidSuffix.entries.slice(0, 4) })
+      return []
+    })
   )
-  expect(outcome(() => verifyRecordedCassetteRoundTrip(visitsSuffix, invalidSuffix))).toHaveProperty(
-    "defect",
-    "Error: unvisited suffix"
-  )
+  expect(suffixReads).toBe(3)
   const shorter = RecordedCassette.make({ ...cassette, entries: cassette.entries.slice(0, 1) })
   expect(verifyRecordedCassetteRoundTrip(records, shorter)).toEqual(coldOracle(records, shorter))
 })
