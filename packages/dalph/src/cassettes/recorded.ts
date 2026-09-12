@@ -1577,6 +1577,17 @@ const checkpointComparison = (
   workflowHistoryEquivalent: compareWorkflowHistory()
 })
 
+/** A rejected successor needs the complete cold prefix diagnostic, not only its newly reported issues. */
+const advanceComparisonHistoryOrColdFold = (
+  prior: ReturnType<typeof reduceWorkflowJournalHistory> | undefined,
+  record: JournalRecord,
+  coldFold: () => ReturnType<typeof reduceWorkflowJournalHistory>
+): ReturnType<typeof reduceWorkflowJournalHistory> => {
+  const advanced =
+    prior?._tag === "ValidWorkflowJournalHistory" ? advanceWorkflowJournalHistory(prior, record) : undefined
+  return advanced?._tag === "ValidWorkflowJournalHistory" ? advanced : coldFold()
+}
+
 /** Compares source and recorded folds after every corresponding occurrence. */
 export const verifyRecordedCassetteRoundTrip = (
   records: ReadonlyArray<JournalRecord>,
@@ -1592,14 +1603,9 @@ export const verifyRecordedCassetteRoundTrip = (
     // Validate this source occurrence first from its own accepted predecessor;
     // recorded entries never supply that history. Rejected successors receive
     // the full cold diagnostic, not only their new issues.
-    const sourceAdvanced =
-      sourceHistory?._tag === "ValidWorkflowJournalHistory"
-        ? advanceWorkflowJournalHistory(sourceHistory, sourceRecord)
-        : undefined
-    sourceHistory =
-      sourceAdvanced?._tag === "ValidWorkflowJournalHistory"
-        ? sourceAdvanced
-        : reduceWorkflowJournalHistory(cassette.runId, records.slice(0, checkpoint))
+    sourceHistory = advanceComparisonHistoryOrColdFold(sourceHistory, sourceRecord, () =>
+      reduceWorkflowJournalHistory(cassette.runId, records.slice(0, checkpoint))
+    )
     const prefix = RecordedCassette.make({ ...cassette, entries: cassette.entries.slice(0, checkpoint) })
     const entry = prefix.entries[actualRecords.length]
     let selectedActualRecord: JournalRecord | undefined
@@ -1614,16 +1620,11 @@ export const verifyRecordedCassetteRoundTrip = (
       selectedActualRecord = record
       // eslint-disable-next-line functional/immutable-data -- Pure comparison scratch never escapes; each selected occurrence is reconstructed once.
       actualRecords.push(record)
-      const advanced =
-        actualHistory?._tag === "ValidWorkflowJournalHistory"
-          ? advanceWorkflowJournalHistory(actualHistory, record)
-          : undefined
       // Rejected successors can contain only new issues. Preserve the complete
       // cold diagnostic at this prefix and at subsequent invalid prefixes.
-      actualHistory =
-        advanced?._tag === "ValidWorkflowJournalHistory"
-          ? advanced
-          : reduceWorkflowJournalHistory(prefix.runId, actualRecords)
+      actualHistory = advanceComparisonHistoryOrColdFold(actualHistory, record, () =>
+        reduceWorkflowJournalHistory(prefix.runId, actualRecords)
+      )
     } else if (actualHistory === undefined) {
       actualHistory = reduceWorkflowJournalHistory(prefix.runId, actualRecords)
     }
