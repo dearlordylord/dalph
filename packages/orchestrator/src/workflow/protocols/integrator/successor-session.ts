@@ -40,6 +40,7 @@ import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelati
 import { deriveIntegrationQuarantineState } from "../integration-quarantine/state.js"
 import { integrationQuarantineDirectionSubject } from "../integration-quarantine/events.js"
 import { integrationQuarantineDirectionTargetLineageOperationId } from "../integration-quarantine/direction-lineage-operation.js"
+import { exactWorkflowRunTargetFor } from "../../../workflow-journal/run-target.js"
 
 /** Whether a queued S2 fix still names the lineage read authorized by the latest graph-bound Q/D prefix. */
 export const integratorSuccessorPreparationIsCurrent = (
@@ -47,7 +48,9 @@ export const integratorSuccessorPreparationIsCurrent = (
   input: IntegratorSuccessorPreparationInput
 ): boolean => {
   const evidence = isJournalRecordEvidence(records) ? records : journalEvidenceFrom(records)
-  const currentGraph = journalGraphObservationAt(evidence, { plannedAttempt: input.predecessor.plannedAttempt })
+  const target = exactWorkflowRunTargetFor(evidence)
+  if (target === undefined) return false
+  const currentGraph = journalGraphObservationAt(evidence, { plannedAttempt: input.predecessor.plannedAttempt, target })
   const direction = journalRecordByPosition(records, input.directionAppliedAt)
   const lineage = journalRecordByPosition(records, input.targetLineageObservedAt)
   if (

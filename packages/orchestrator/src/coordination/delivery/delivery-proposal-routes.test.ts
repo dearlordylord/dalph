@@ -2322,7 +2322,7 @@ describe("delivery proposal route matrix", () => {
       const prefixAdvanceOperation = makeTrackerGraphObservationOperation(
         { _tag: "AttemptContinuation" },
         OperationId.make("route-matrix-prefix-advance-during-successor-fix"),
-        target,
+        FixtureTarget.make("route-matrix-unrelated-successor-target"),
         [planned.event.operation.operationId],
         [started.plannedAttempt.taskId]
       )
@@ -2331,6 +2331,21 @@ describe("delivery proposal route matrix", () => {
         intentRecordKey(prefixAdvanceOperation.operationId),
         taskTrackerReadIntent(prefixAdvanceOperation)
       )
+      const foreignTargetGraph = yield* recoveryJournal.append(
+        runId,
+        outcomeRecordKey(prefixAdvanceOperation.operationId),
+        taskTrackerGraphFactsObserved(prefixAdvanceOperation, {
+          revision: TrackerRevision.make("route-matrix-unrelated-successor-graph"),
+          taskIds: [started.plannedAttempt.taskId]
+        })
+      )
+      const prefixAfterForeignGraph = journalEvidenceFrom(yield* recoveryHarness.records)
+      expect(
+        journalGraphObservationAt(prefixAfterForeignGraph, { plannedAttempt: started.plannedAttempt })?.position
+      ).toBe(foreignTargetGraph.position)
+      expect(
+        journalGraphObservationAt(prefixAfterForeignGraph, { plannedAttempt: started.plannedAttempt, target })?.position
+      ).toBe(newerGraph.position)
       yield* Deferred.succeed(releaseConditionalAppend, undefined)
       expect(yield* Fiber.join(racingFix)).toMatchObject({
         _tag: "ActionDeferred",
