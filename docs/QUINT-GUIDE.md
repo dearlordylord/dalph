@@ -152,13 +152,34 @@ run testRunningThenTerminal = { ... }   // silently ignored
 
 Scenarios live in `specs/<name>_test.qnt` and import the model.
 
-## Witnesses prove reachability
+## Reachability evidence and sampled witness diagnostics
 
-An invariant that holds over unreachable states is worthless, so every phase a
-model can enter gets a witness — a `val` that is true only in that phase — passed
-via `--witnesses`. The reported percentage is the share of sampled traces
-reaching it. A witness at zero means the phase is dead and every invariant
-covering it is vacuous.
+An invariant over an unreachable phase can be vacuous. Every modeled phase
+therefore has a named witness predicate passed via `--witnesses`. Nonzero hits
+establish a reaching execution; zero hits mean only that this bounded random
+search did not reach the predicate. They do not establish a dead phase and
+must not trigger retries until a preferred random result appears. Every declared
+witness must still have exactly one well-formed count in command output; missing,
+duplicate, or malformed diagnostics fail the gate. Invariant counterexamples and
+subprocess failures remain failures regardless of witness counts. Failed output,
+including the generated reproduction seed, is retained in the gate log.
+
+Deterministic collected tests establish their explicit paths independently of
+random hit counts. For accepted #66, the mandatory collected
+`safeSuspensionAndExactFreshFactsAtomicallyRecordCleanP2Test` asserts the exact
+named predicates after durable replacement, clean-worktree preparation, ordinary
+admission, and executor start. The gate requires this exact canonical test to
+be collected once and pass; an omitted or uncollected test is not evidence.
+Its authority, atomicity, resource-preservation, and capacity assertions and all
+negative controls remain separate measurements. Other models retain their
+existing deterministic tests; zero sampled hits are not a claim that those
+tests cover every predicate.
+
+Random invariant exploration remains bounded evidence, not induction or an
+exhaustive proof. Complete finite-state exhaustive checks establish their scoped
+graph properties; temporal checks separately establish progress under their
+declared assumptions. Neither a passing deterministic path nor a nonzero
+sample count replaces those checks or establishes universal progress.
 
 ## Quint fails silently
 

@@ -34,7 +34,7 @@ import { quintGateBatchResults, runQuintGateFamily } from "./quint-gate-concurre
 import { plannedAttemptExecutorInitialFamily } from "./quint-gate-production-plan.mjs"
 import { createQuintGateTiming, quintCommandKindForArgs, runWithQuintGateTiming } from "./quint-gate-timing.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
-import { assertQuintSampledCommandWitnessesObserved } from "./quint-witness-coverage.mjs"
+import { validateQuintCommandOutput } from "./quint-witness-coverage.mjs"
 
 if (process.env.npm_execpath === undefined) {
   throw new Error("Run this model gate through pnpm")
@@ -85,15 +85,23 @@ const executeCommand = (command, options = {}) => {
         ...command.options,
         ...commandOptions,
         args: [quintEntryPoint, ...command.args],
-        captureOutput: command.kind === "sampled-run" || commandOptions.captureOutput === true,
+        captureOutput:
+          command.kind === "sampled-run" ||
+          command.name === "task-fact reconciliation deterministic tests" ||
+          commandOptions.captureOutput === true,
         executable: process.execPath,
         name: command.name,
         processGroupAbsenceTimeoutMilliseconds: quintGateProcessGroupAbsenceTimeoutMilliseconds,
         terminationGraceMilliseconds: quintGateTerminationGraceMilliseconds,
         timeoutMilliseconds: remainingSafetyTimeoutMilliseconds(command.name)
       })
-      if (command.kind === "sampled-run") {
-        assertQuintSampledCommandWitnessesObserved({ args: command.args, name: command.name, output: result.output })
+      try {
+        validateQuintCommandOutput({ args: command.args, name: command.name, output: result.output })
+      } catch (error) {
+        if (!deferOutput && commandOptions.forwardOutput === false && typeof error?.output === "string") {
+          process.stdout.write(error.output)
+        }
+        throw error
       }
       return result
     }

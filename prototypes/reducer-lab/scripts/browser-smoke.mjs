@@ -781,7 +781,7 @@ try {
   )
   const eligibleWaves = linkedFrameTruth.map(({ eligible }) => eligible)
   let previousWave = -1
-  for (const wave of ["A", "B+C", "D+X", "E+F", "H+I", "G", ""]) {
+  for (const wave of ["A", "B+C", "D+X", "E+F+X", "H+I", "G", ""]) {
     previousWave = eligibleWaves.indexOf(wave, previousWave + 1)
     assert.ok(
       previousWave >= 0,
@@ -824,7 +824,7 @@ try {
   )
   assert.ok(restartNarrowTruth.restartWidth <= restartNarrowTruth.workbenchWidth)
   await page.setViewportSize({ width: 1440, height: 900 })
-  const heldSequence = ["B+C", "C", "X", "D", "E+F", "F", "H+I", "I", "G"]
+  const heldSequence = ["B+C", "C", "X", "D+X", "E+X", "F+X", "H+I", "I", "G"]
   let previousHeld = -1
   for (const held of heldSequence) {
     previousHeld = linkedFrameTruth.findIndex(({ held: value }, index) => index > previousHeld && value === held)
@@ -844,7 +844,7 @@ try {
       .join("+"))
     landmarkWaves.push(`${await linkedFrameSelector.inputValue()}:${wave}:${await linkedFrameSelector.locator("option:checked").textContent()}`)
   }
-  for (const wave of ["A", "B+C", "B+C+X", "D+X", "E+F", "H+I", "G", ""]) {
+  for (const wave of ["A", "B+C", "B+C+X", "D+X", "E+F+X", "H+I", "G", ""]) {
     assert.ok(
       landmarkWaves.some((value) => value.includes(`:${wave}:`)),
       `missing landmark frontier ${wave || "empty"}: ${JSON.stringify(landmarkWaves)}`

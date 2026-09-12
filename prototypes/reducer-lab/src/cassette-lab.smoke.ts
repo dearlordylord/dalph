@@ -593,7 +593,7 @@ await scenario("shows the staggered double-diamond frontier being consumed on on
     .map(({ taskId }) => taskId)
     .toSorted()
     .join("+"))
-  const positions = ["A", "B+C", "B+C+X", "D+X", "E+F", "H+I", "G", ""].reduce<ReadonlyArray<number>>(
+  const positions = ["A", "B+C", "B+C+X", "D+X", "E+F+X", "H+I", "G", ""].reduce<ReadonlyArray<number>>(
     (found, wave) => [...found, eligible.indexOf(wave, (found.at(-1) ?? -1) + 1)],
     []
   )
@@ -604,7 +604,7 @@ await scenario("shows the staggered double-diamond frontier being consumed on on
   const later = initial === undefined
     ? undefined
     : frames.find((frame) => frame.activationOrdinal > initial.activationOrdinal && heldMiddle(frame))
-  const heldSequence = ["B+C", "C", "X", "D", "E+F", "F", "H+I", "I", "G"].reduce<ReadonlyArray<number>>(
+  const heldSequence = ["B+C", "C", "X", "D+X", "E+X", "F+X", "H+I", "I", "G"].reduce<ReadonlyArray<number>>(
     (found, tasks) => [...found, frames.findIndex((frame, index) =>
       index > (found.at(-1) ?? -1)
       && frame.heldPositions.map(({ taskId }) => taskId).toSorted().join("+") === tasks

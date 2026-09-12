@@ -776,6 +776,7 @@ module taskFactReconciliationTest {
       .then(observeReplacementExactH2)
       .then(recordPlannedAttemptReplacement)
       .expect(and {
+        plannedAttemptReplacementRecordedReached,
         state.replacementPhase == PlannedAttemptReplacementRecorded,
         state.p1Superseded,
         not(state.p1Unsettled),
@@ -798,6 +799,7 @@ module taskFactReconciliationTest {
       })
       .then(prepareCleanSuccessorW2)
       .expect(and {
+        successorWaitingAdmissionReached,
         state.replacementPhase == SuccessorWaitingForAdmission,
         state.successorWorktreeReady,
         not(state.successorPositionHeld),
@@ -805,6 +807,7 @@ module taskFactReconciliationTest {
       })
       .then(admitSuccessorThroughOrdinaryCapacity)
       .expect(and {
+        successorAdmittedReached,
         state.replacementPhase == SuccessorAdmitted,
         state.successorAdmissionCount == 1,
         state.successorPositionHeld,
@@ -812,6 +815,7 @@ module taskFactReconciliationTest {
       })
       .then(startSuccessorExecutor)
       .expect(and {
+        successorExecutingReached,
         state.replacementPhase == SuccessorExecuting,
         state.successorExecutorStartCount == 1,
         state.successorExecutorResponsibilityRetained,
