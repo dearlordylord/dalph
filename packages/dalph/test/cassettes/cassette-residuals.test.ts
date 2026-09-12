@@ -28,7 +28,6 @@ import {
   renameRecordedCassette,
   runAuthoredScenarioCassette,
   singletonTaskCompletesAuthoredCassette,
-  type RecordedCassette as RecordedCassetteType,
   verifyRecordedCassetteRoundTrip,
   verifyRecordedCassetteRoundTripWithRenaming
 } from "../../src/cassettes/index.js"
@@ -188,7 +187,8 @@ it("authors restart-added X only after recovered capacity and its own focused sp
     { _tag: "RestartAddedTaskSpecificationSelected", taskId: "X" },
     { _tag: "RestartAddedTaskPlanSelected", attemptId: "attempt:X:0" },
     { _tag: "RestartAddedTaskWorktreeSelected", attemptId: "attempt:X:0" },
-    { _tag: "RestartAddedAttemptRunning", attemptId: "attempt:X:0" }
+    { _tag: "RestartAddedAttemptRunning", attemptId: "attempt:X:0" },
+    { _tag: "RestartAddedTaskSpecificationSelected", taskId: "X" }
   ])
 })
 
@@ -835,38 +835,30 @@ it("lets an exact operation selection wait for an actively owned sibling executo
   )
 })
 
-it("round-trips restart, release, worktree, Git, and lost-response histories", async () => {
+it.each([
+  "changedAttemptRestartsCleanly",
+  "changedAttemptStopReleaseResponseLost",
+  "lostPlannedWorktreeSafelySuspends",
+  "changedAttemptRestartCancelsHeldResume",
+  "acceptedResultRestartsIntoIntegration"
+] as const)("round-trips restart, release, worktree, Git, and lost-response histories: %s", async (key) => {
   await Effect.runPromise(
     Effect.gen(function* () {
-      const cassettes = [
-        maintainedAuthoredCassetteCatalog.changedAttemptRestartsCleanly,
-        maintainedAuthoredCassetteCatalog.changedAttemptStopReleaseResponseLost,
-        maintainedAuthoredCassetteCatalog.lostPlannedWorktreeSafelySuspends,
-        maintainedAuthoredCassetteCatalog.changedAttemptRestartCancelsHeldResume,
-        maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration
-      ]
-
-      let integrationRecorded: RecordedCassetteType | undefined
-      for (const cassette of cassettes) {
-        const run = yield* runAuthoredScenarioCassette(cassette)
-        const recorded = yield* projectRecordedCassette(run.records)
-        if (cassette === maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration) {
-          integrationRecorded = recorded
-        }
-        expect(foldRecordedCassette(recorded)._tag).toBe("ValidWorkflowJournalHistory")
-        expect(
-          verifyRecordedCassetteRoundTrip(run.records, recorded).every(
-            ({ operationalStateEquivalent, workflowHistoryEquivalent }) =>
-              operationalStateEquivalent && workflowHistoryEquivalent
-          )
-        ).toBe(true)
-        expect(renderRecordedCassetteLyrics(recorded)).toContain("Dalph")
-      }
-
-      if (integrationRecorded === undefined) return yield* Effect.die("accepted-result cassette was not recorded")
+      const cassette = maintainedAuthoredCassetteCatalog[key]
+      const run = yield* runAuthoredScenarioCassette(cassette)
+      const recorded = yield* projectRecordedCassette(run.records)
+      expect(foldRecordedCassette(recorded)._tag).toBe("ValidWorkflowJournalHistory")
+      expect(
+        verifyRecordedCassetteRoundTrip(run.records, recorded).every(
+          ({ operationalStateEquivalent, workflowHistoryEquivalent }) =>
+            operationalStateEquivalent && workflowHistoryEquivalent
+        )
+      ).toBe(true)
+      expect(renderRecordedCassetteLyrics(recorded)).toContain("Dalph")
+      if (key !== "acceptedResultRestartsIntoIntegration") return
       const withoutIntegrationOrigin = RecordedCassette.make({
-        ...integrationRecorded,
-        entries: integrationRecorded.entries.filter(({ _tag }) => _tag !== "IntegrationResponsibilityBegan")
+        ...recorded,
+        entries: recorded.entries.filter(({ _tag }) => _tag !== "IntegrationResponsibilityBegan")
       })
       const missingCause = yield* Effect.exit(Effect.sync(() => foldRecordedCassette(withoutIntegrationOrigin)))
       expect(Exit.isFailure(missingCause)).toBe(true)

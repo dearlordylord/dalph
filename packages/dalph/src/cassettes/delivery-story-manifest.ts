@@ -93,8 +93,14 @@ const ds14ThroughDs17Test = capstoneTest(
   "executes DS-14 through DS-17 from rejected exact-head offer through Operator-authorized successor finality"
 )
 const ds15NegativeTest = capstoneTest("rejects DS-15 evidence when M or M2 lacks exact ordered head-then-C parents")
-const ds16NegativeTest = capstoneTest(
-  "rejects DS16 evidence without the rejected CAS attempt or with a pre-request stale read"
+const ds16NegativeTest = capstoneTest("rejects DS16 evidence without the rejected CAS attempt")
+const ds16AuthoredBoundaryNegativeTest = capstoneTest(
+  "fails immediately when an authored CAS response is replaced by another selection without fabricating provider ambiguity"
+)
+const ds16StaleReadNegativeTest = orchestratorTest(
+  "packages/orchestrator/src/workflow/protocols/integration-quarantine/promotion-stale.test.ts",
+  "it.effect",
+  "rejects quarantine after a stale pre-request read or a missing compare-and-set intent"
 )
 const ds14ThroughDs17PrefixHistoryTest = capstoneTest(
   "accepts every DS-14 through DS-17 checkpoint prefix as valid history with at most one recorded successor, promotion, and completion attempt"
@@ -195,6 +201,8 @@ export const deliveryStoryManifest = {
       ["authored:deliveryStoryDs14ThroughDs17"],
       ds14ThroughDs17Test,
       ds16NegativeTest,
+      ds16AuthoredBoundaryNegativeTest,
+      ds16StaleReadNegativeTest,
       ds14ThroughDs17ComposedRestartTest,
       ds14ThroughDs17PrefixHistoryTest,
       promotionStaleRestartTest

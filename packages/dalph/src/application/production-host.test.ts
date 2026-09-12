@@ -22,6 +22,8 @@ import {
   JournaledRunEstablished,
   JournaledRunObservationSource,
   JournalStore,
+  type JournalRecord,
+  reduceWorkflowJournalHistory,
   intentRecordKey,
   makeTaskClaimAcquisitionOperation,
   makeCompleteTaskTrackerFactsObserved,
@@ -1492,6 +1494,7 @@ it.effect(
         yield* fileSystem.makeDirectory(commonDirectory)
         yield* fileSystem.symlink(commonDirectory, alias)
         const trace = yield* Ref.make<ReadonlyArray<string>>([])
+        const journalReads = yield* Ref.make<ReadonlyArray<ReadonlyArray<JournalRecord>>>([])
         const githubStarted = yield* Deferred.make<void>()
 
         const record = (event: string) => Ref.update(trace, (current) => [...current, event])
@@ -1533,6 +1536,16 @@ it.effect(
               const lifecycle = Context.get(context, RunLifecycleJournal)
               const observedJournal = JournalStore.of({
                 ...journal,
+                read: (runId) =>
+                  journal
+                    .read(runId)
+                    .pipe(
+                      Effect.tap((records) =>
+                        Ref.update(journalReads, (current) => [...current, records]).pipe(
+                          Effect.andThen(record("journal.read"))
+                        )
+                      )
+                    ),
                 scanHot: Effect.fn("ProductionHostOwnershipTest.scanHot")(function* () {
                   yield* record("journal.scan")
                   return yield* journal.scanHot()
@@ -1606,6 +1619,7 @@ it.effect(
         yield* Deferred.await(firstReady)
 
         const afterFirst = yield* Ref.get(trace)
+        const readsAfterFirst = (yield* Ref.get(journalReads)).length
         const count = (event: string, events: ReadonlyArray<string> = afterFirst) =>
           events.filter((observed) => observed === event).length
         // Only the network/process edges are replaceable in this fixture. The default graph owns every
@@ -1692,9 +1706,10 @@ it.effect(
         yield* Fiber.join(firstFiber)
 
         // A fresh H2 invocation may now open SQLite, rediscover, and reuse H1's durable Run.
-        const secondSelection = yield* withProductionRepositoryHost(secondInput, graph, (observation) =>
-          Effect.succeed(observation.selection)
+        const second = yield* withProductionRepositoryHost(secondInput, graph, (observation) =>
+          observation.acceptedHistory.get.pipe(Effect.map((cursor) => ({ cursor, selection: observation.selection })))
         )
+        const secondSelection = second.selection
         expect(secondSelection._tag).toBe("Recovered")
         expect(secondSelection.runId).toBe(yield* Deferred.await(firstSelectionRunId))
         const finalTrace = yield* Ref.get(trace)
@@ -1711,7 +1726,16 @@ it.effect(
         ]) {
           expect(count(event, finalTrace)).toBe(2)
         }
-        expect(count("journal.scan", finalTrace)).toBe(count("journal.scan") + 2)
+        expect(count("journal.scan", finalTrace)).toBe(count("journal.scan") + 1)
+        const recoveredReads = (yield* Ref.get(journalReads)).slice(readsAfterFirst)
+        expect(recoveredReads).toHaveLength(1)
+        const recoveredRecords = recoveredReads[0]
+        if (recoveredRecords === undefined) return yield* Effect.die("recovered host omitted its exact journal read")
+        expect(reduceWorkflowJournalHistory(secondSelection.runId, recoveredRecords)._tag).toBe(
+          "ValidWorkflowJournalHistory"
+        )
+        expect(second.cursor.runId).toBe(secondSelection.runId)
+        expect(second.cursor.position).toBe(recoveredRecords.at(-1)?.position)
         expect(count("journal.begin", finalTrace)).toBe(1)
         expect(finalTrace.indexOf("h2.lock-conflict")).toBeGreaterThan(finalTrace.indexOf("github.execute"))
         expect(finalTrace.lastIndexOf("journal.sqlite.open")).toBeGreaterThan(finalTrace.indexOf("h2.lock-conflict"))

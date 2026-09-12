@@ -12,6 +12,7 @@ import {
   type RunId,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
+  samePlannedAttemptExecutorReport,
   type PlannedAttemptExecutorRequest
 } from "@dalph/contracts"
 import {
@@ -251,6 +252,7 @@ interface Issue268Ds12Controls {
 }
 
 interface Issue268Ds13Controls {
+  readonly recoveredObservations: Ref.Ref<ReadonlyArray<MaterializedDeliveryAction>>
   readonly checkpoint: Deferred.Deferred<DeliveryRelationInputBundle>
   readonly checkpointRelease: Deferred.Deferred<void>
   readonly integrationQueueActionCount: Ref.Ref<number>
@@ -330,10 +332,75 @@ const isExactDs13BPassiveObservationAction = (action: MaterializedDeliveryAction
   ].every(Boolean)
 }
 
-const validateDs13Action = (
+const isExactDs13RecoveredBObservation = (
   action: MaterializedDeliveryAction,
-  controls: Issue268Ds13Controls | undefined
+  records: ReadonlyArray<JournalRecord>
+) => {
+  if (action._tag !== "IdentityFreeAction" || action.proposal.route._tag !== "IdentityFreeWorkflowRoute") return false
+  const transition = action.proposal.route.transition
+  if (transition._tag !== "ObservePlannedAttemptExecutorWork" || !isIssue268ExactB1Plan(transition.plannedAttempt))
+    return false
+  const { admission } = action.proposal
+  const resumeIntent = records.findLast(
+    ({ event }) =>
+      event._tag === "PlannedAttemptExecutorCommandIntended" &&
+      event.command === "Resume" &&
+      isIssue268ExactB1Plan(event.plannedAttempt)
+  )
+  const resumed = records.findLast(
+    ({ event }) =>
+      event._tag === "PlannedAttemptExecutorCommandResponseObserved" &&
+      isIssue268ExactB1Plan(event.plannedAttempt) &&
+      event.report._tag === "ExecutorWorkExecuting"
+  )
+  const report = records.findLast(
+    ({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkReported" &&
+      event.report.correlation.runId === scenario.runId &&
+      event.report.correlation.attemptId === scenario.attempts.B1
+  )
+  return (
+    resumeIntent?.event._tag === "PlannedAttemptExecutorCommandIntended" &&
+    resumed?.event._tag === "PlannedAttemptExecutorCommandResponseObserved" &&
+    resumed.position > resumeIntent.position &&
+    resumed.event.commandOrdinal === resumeIntent.event.ordinal &&
+    report?.event._tag === "PlannedAttemptExecutorWorkReported" &&
+    report.position > resumed.position &&
+    report.event.report._tag === "ExecutorWorkExecuting" &&
+    samePlannedAttemptExecutorReport(report.event.report, resumed.event.report) &&
+    transition.acceptedProgress._tag === "ExecutorReportAccepted" &&
+    transition.acceptedProgress.ordinal === report.event.ordinal &&
+    deliveryProposalOrderTaskId(action.proposal.order) === scenario.taskIds.B &&
+    admission.taskWorkPosition._tag === "TaskWorkPositionRequired" &&
+    admission.taskWorkPosition.mode === "ReserveOrReuse" &&
+    admission.taskWorkPosition.taskId === scenario.taskIds.B &&
+    admission.plannedAttemptProtocol._tag === "PlannedAttemptProtocolRequired" &&
+    plannedAttemptExecutorCorrelationKey(admission.plannedAttemptProtocol.correlation) ===
+      plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(transition.plannedAttempt))
+  )
+}
+
+/** Test observer surfaces the original failed activation while leaving its exit unchanged. */
+export const observeIssue268ActivationFailure = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  failure: Deferred.Deferred<unknown>
+) =>
+  effect.pipe(
+    Effect.onExit((exit) =>
+      exit._tag === "Failure" ? Deferred.succeed(failure, exit.cause).pipe(Effect.asVoid) : Effect.void
+    )
+  )
+
+export const validateIssue268Ds13Action = (
+  action: MaterializedDeliveryAction,
+  controls: Issue268Ds13Controls | undefined,
+  records: ReadonlyArray<JournalRecord>
 ): Effect.Effect<void> => {
+  // B1 was reconstructed, not freshly admitted: its accepted report advances a recovered observation route.
+  if (isExactDs13RecoveredBObservation(action, records))
+    return controls === undefined
+      ? Effect.void
+      : Ref.update(controls.recoveredObservations, (current) => [...current, action])
   if (isExactDs13BResumeAction(action)) return Effect.void
   if (isExactDs13BPassiveObservationAction(action)) return Effect.void
   if (isExactDs13AIntegrationQueueAction(action)) {
@@ -1235,7 +1302,11 @@ const runIssue268StartupCharacterizationFor = (
                 return yield* Effect.die(`#349 materialized unexpected action for ${orderedTaskId ?? "the Run"}`)
               }
               if (ds10Phase === "DS13") {
-                return yield* validateDs13Action(action, ds09Controls.ds10?.ds13)
+                return yield* validateIssue268Ds13Action(
+                  action,
+                  ds09Controls.ds10?.ds13,
+                  yield* sharedJournal.read(scenario.runId)
+                )
               }
               if (ds10Phase === "DS11") {
                 return yield* Effect.die("DS-11 materialized an unexpected delivery action")
@@ -1455,7 +1526,9 @@ const runIssue268StartupCharacterizationFor = (
                     controlledExecutorFactory,
                     source,
                     false
-                  ).pipe(Effect.provide(activationLayer))
+                  ).pipe(Effect.provide(activationLayer), (effect) =>
+                    observeIssue268ActivationFailure(effect, ds09Controls.ownerFailure)
+                  )
                   yield* Ref.set(ds10Controls.activeRefreshDecision, result)
                   yield* recordOccurrence({ detail: "NoDecision", kind: "ActiveRefreshReturned", source: "Control" })
                   if (phase === "DS349" && ds10Controls.issue349 !== undefined) {
@@ -2295,6 +2368,7 @@ const runIssue268RestartCharacterization = (
       const ds13Checkpoint = yield* Deferred.make<DeliveryRelationInputBundle>()
       const ds13CheckpointRelease = yield* Deferred.make<void>()
       const ds13IntegrationQueueActionCount = yield* Ref.make(0)
+      const ds13RecoveredObservations = yield* Ref.make<ReadonlyArray<MaterializedDeliveryAction>>([])
       const idleHandoffCount = yield* Ref.make(0)
       const idleHandoffReleases = [
         yield* Deferred.make<void>(),
@@ -2375,6 +2449,7 @@ const runIssue268RestartCharacterization = (
                   continuation === "DS349"
                     ? {
                         ds13: {
+                          recoveredObservations: ds13RecoveredObservations,
                           checkpoint: ds13Checkpoint,
                           checkpointRelease: ds13CheckpointRelease,
                           integrationQueueActionCount: ds13IntegrationQueueActionCount
@@ -2768,6 +2843,8 @@ const runIssue268RestartCharacterization = (
           ds12,
           ds13,
           ds349: {
+            recoveredBObservations: yield* Ref.get(ds13RecoveredObservations),
+            recoveredBRecords: afterDs13.records,
             activationTimeline: yield* Ref.get(issue349Timeline),
             activeRefreshCount: (yield* Ref.get(activeRefreshCount)) - activeRefreshBaseline,
             after,

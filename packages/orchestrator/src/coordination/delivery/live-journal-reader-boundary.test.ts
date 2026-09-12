@@ -29,7 +29,14 @@ const liveConsumerSources = [
 it("queries accepted live history without calling the array-returning in-Run read", () => {
   for (const source of liveConsumerSources) {
     const contents = readFileSync(fileURLToPath(new URL(source, import.meta.url)), "utf8")
-    expect(contents).toContain("AcceptedJournalReader")
+    expect(contents).toContain(".readAccepted(")
+    if (source === "./integrator-delivery-action.ts") {
+      expect(contents).toContain("const journal = yield* Journal")
+      expect(contents).toContain("journal.appendIfAcceptedPrefixCurrent(")
+      expect(contents).toContain("ExpectedAcceptedPrefixPosition.make(records.lastPosition)")
+    } else {
+      expect(contents).toContain("AcceptedJournalReader")
+    }
     expect(contents).not.toMatch(/\.read\(/)
     expect(contents).not.toContain("materializeJournalRecords")
   }

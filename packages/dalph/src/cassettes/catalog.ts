@@ -4786,7 +4786,7 @@ const doubleDiamondIntegrationReleasingWork = (
 
 /**
  * The runtime reconstructs B/C, observes X in the graph, then gives X capacity only after B's confirmed completion
- * clears the middle wave. The maintainer accepted this controlled chronology on 2026-09-11; it is one legal
+ * clears the middle wave. The maintainer accepted this chronology on 2026-09-11; it is one legal
  * execution, not a universal production ordering (https://github.com/dearlordylord/dalph/issues/350#issuecomment-5640171481).
  */
 export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(

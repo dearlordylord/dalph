@@ -83,7 +83,7 @@ import {
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
-import { journalLayer } from "../../../orchestrator/src/coordination/delivery/journal.js"
+import { Journal, journalLayer } from "../../../orchestrator/src/coordination/delivery/journal.js"
 import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
 import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
@@ -1134,7 +1134,22 @@ it.effect(
                   ),
                 read: liveJournal.read
               })
-              const runtimeJournalContext = acceptedContext.pipe(Context.add(InRunJournal, journal))
+              const liveAcceptedJournal = Context.get(acceptedContext, Journal)
+              const acceptedJournal = Journal.of({
+                ...liveAcceptedJournal,
+                appendIfAcceptedPrefixCurrent: (...args) =>
+                  liveAcceptedJournal.appendIfAcceptedPrefixCurrent(...args).pipe(
+                    Effect.tap((result) =>
+                      Effect.sync(() => {
+                        if (result._tag === "Appended") chronology.push("append:" + result.record.event._tag)
+                      })
+                    )
+                  )
+              })
+              const runtimeJournalContext = acceptedContext.pipe(
+                Context.add(InRunJournal, journal),
+                Context.add(Journal, acceptedJournal)
+              )
               const predecessorLineage = exactlyOne(
                 decodedRecords.filter(
                   ({ event, position }) =>

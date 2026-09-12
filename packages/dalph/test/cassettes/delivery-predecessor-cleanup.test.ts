@@ -9,7 +9,7 @@ import {
   JournalRecordKey,
   type JournalRecord
 } from "@dalph/orchestrator"
-import { Effect } from "effect"
+import { Cause, Effect, Exit } from "effect"
 import { expect } from "vitest"
 import {
   maintainedAuthoredCassetteCatalog,
@@ -142,35 +142,45 @@ it.effect(
 )
 
 it.effect(
-  "does not authorize A's predecessor cleanup without the exact stale-promotion intent",
+  "rejects malformed predecessor history without the exact stale-promotion intent before cleanup effects",
   () =>
     Effect.gen(function* () {
       const delivery = yield* cachedDeliveryRun
       const predecessor = exactlyOne(delivery.records, "IntegratorSessionFixed").event.correlation
+      let observationReads = 0
+      const observation = IntegratorCandidateCleanupObservation.cases.Present.make({
+        locator: predecessor.candidateResource,
+        revision: evidenceRevision,
+        sessionId: predecessor.sessionId,
+        writerQuiescent: true
+      })
+      const observations = [observation]
+      Object.defineProperty(observations, 0, {
+        get: () => {
+          observationReads += 1
+          return observation
+        }
+      })
       const result = yield* runFullRerunPredecessorCleanupFromHistory({
         activations: 1,
         evidenceRevision,
         history: delivery.records.filter(({ event }) => event._tag !== "TargetPromotionAttemptIntended"),
-        observations: [
-          IntegratorCandidateCleanupObservation.cases.Present.make({
-            locator: predecessor.candidateResource,
-            revision: evidenceRevision,
-            sessionId: predecessor.sessionId,
-            writerQuiescent: true
-          })
-        ]
-      })
+        observations
+      }).pipe(Effect.exit)
 
-      expect(result.boundaryCalls).toEqual([])
-      expect(result.outcomes[0]?.candidate).toBeUndefined()
-      expect(result.records.some(({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized")).toBe(false)
-      expect(result.upstreamAfter).toEqual(result.upstreamBefore)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result)) {
+        expect(result.cause.reasons.filter(Cause.isDieReason).map((reason) => reason.defect)).toEqual([
+          "delivery cleanup history is invalid"
+        ])
+      }
+      expect(observationReads).toBe(0)
     }),
   timeout
 )
 
 it.effect(
-  "does not authorize A's predecessor cleanup from wrongly keyed stale-promotion evidence",
+  "rejects wrongly keyed stale-promotion history before predecessor cleanup effects",
   () =>
     Effect.gen(function* () {
       const delivery = yield* cachedDeliveryRun
@@ -180,24 +190,34 @@ it.effect(
           ? { ...record, key: JournalRecordKey.make("foreign-stale-promotion-key") }
           : record
       )
+      let observationReads = 0
+      const observation = IntegratorCandidateCleanupObservation.cases.Present.make({
+        locator: predecessor.candidateResource,
+        revision: evidenceRevision,
+        sessionId: predecessor.sessionId,
+        writerQuiescent: true
+      })
+      const observations = [observation]
+      Object.defineProperty(observations, 0, {
+        get: () => {
+          observationReads += 1
+          return observation
+        }
+      })
       const result = yield* runFullRerunPredecessorCleanupFromHistory({
         activations: 1,
         evidenceRevision,
         history: wronglyKeyedHistory,
-        observations: [
-          IntegratorCandidateCleanupObservation.cases.Present.make({
-            locator: predecessor.candidateResource,
-            revision: evidenceRevision,
-            sessionId: predecessor.sessionId,
-            writerQuiescent: true
-          })
-        ]
-      })
+        observations
+      }).pipe(Effect.exit)
 
-      expect(result.boundaryCalls).toEqual([])
-      expect(result.outcomes[0]?.candidate).toBeUndefined()
-      expect(result.records.some(({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized")).toBe(false)
-      expect(result.upstreamAfter).toEqual(result.upstreamBefore)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result)) {
+        expect(result.cause.reasons.filter(Cause.isDieReason).map((reason) => reason.defect)).toEqual([
+          "delivery cleanup history is invalid"
+        ])
+      }
+      expect(observationReads).toBe(0)
     }),
   timeout
 )

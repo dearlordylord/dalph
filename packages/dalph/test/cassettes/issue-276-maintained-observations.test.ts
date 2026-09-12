@@ -4,15 +4,15 @@ import { Effect } from "effect"
 import { expect } from "vitest"
 import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
 
-it.effect(
-  "preserves maintained authored moments after fresh-claim integration progress",
-  () =>
-    Effect.gen(function* () {
-      for (const key of [
-        "dependentTasksCompleteInOneRun",
-        "productionShapedFiveTaskDiamond",
-        "deliveryInvariantStory"
-      ] as const) {
+for (const key of [
+  "dependentTasksCompleteInOneRun",
+  "productionShapedFiveTaskDiamond",
+  "deliveryInvariantStory"
+] as const) {
+  it.effect(
+    `preserves maintained authored moments after fresh-claim integration progress in ${key}`,
+    () =>
+      Effect.gen(function* () {
         const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog[key]).pipe(
           Effect.mapError((failure) => ({ key, failure }))
         )
@@ -60,7 +60,7 @@ it.effect(
           )
           expect(beganE?.position).toBeLessThan(settledB?.position ?? 0)
         }
-      }
-    }).pipe(Effect.provide(NodeCrypto.layer)),
-  60_000
-)
+      }).pipe(Effect.provide(NodeCrypto.layer)),
+    60_000
+  )
+}

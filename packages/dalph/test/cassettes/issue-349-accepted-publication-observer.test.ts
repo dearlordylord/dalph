@@ -1,8 +1,19 @@
 import { it } from "@effect/vitest"
-import { Effect } from "effect"
+import { AttemptId, PlannedTaskAttempt } from "@dalph/contracts"
+import {
+  PlannedAttemptExecutorReportOrdinal,
+  OperationId,
+  TaskLifecycle,
+  type MaterializedDeliveryAction
+} from "@dalph/orchestrator"
+import { Deferred, Effect } from "effect"
 import { expect } from "vitest"
 import { issue268ControlledDeliveryCharacterization as scenario } from "../../test-support/issue-268-controlled-characterization-catalog.js"
-import { runIssue349AcceptedPublicationObserver } from "../../test-support/issue-268-controlled-characterization.js"
+import {
+  observeIssue268ActivationFailure,
+  runIssue349AcceptedPublicationObserver,
+  validateIssue268Ds13Action
+} from "../../test-support/issue-268-controlled-characterization.js"
 
 // #349 steps 1–4: accepted G4 active refresh -> returned activation -> one trailing Ordinary -> exact waiting C1.
 it.effect(
@@ -10,6 +21,113 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const result = yield* runIssue349AcceptedPublicationObserver
+
+      // Inspect the actual accepted recovered route, not a fabricated fresh continuation.
+      const observed = result.recoveredBObservations[0]
+      expect(observed).toBeDefined()
+      if (
+        observed?._tag !== "IdentityFreeAction" ||
+        observed.proposal.route._tag !== "IdentityFreeWorkflowRoute" ||
+        observed.proposal.route.transition._tag !== "ObservePlannedAttemptExecutorWork"
+      ) {
+        return yield* Effect.die("DS-13 requires an actual recovered B1 observation")
+      }
+      const proposal = observed.proposal
+      const transition = observed.proposal.route.transition
+      expect(transition.plannedAttempt.attemptId).toBe(scenario.attempts.B1)
+      expect(transition.acceptedProgress._tag).toBe("ExecutorReportAccepted")
+      const rejected: ReadonlyArray<readonly [string, MaterializedDeliveryAction]> = [
+        [
+          "wrong B2",
+          {
+            _tag: "IdentityFreeAction",
+            proposal: {
+              ...proposal,
+              route: {
+                _tag: "IdentityFreeWorkflowRoute",
+                transition: {
+                  ...transition,
+                  plannedAttempt: PlannedTaskAttempt.make({
+                    ...transition.plannedAttempt,
+                    attemptId: AttemptId.make("unexpected-B2")
+                  })
+                }
+              }
+            }
+          }
+        ],
+        [
+          "foreign admission",
+          {
+            _tag: "IdentityFreeAction",
+            proposal: {
+              ...proposal,
+              admission: {
+                ...proposal.admission,
+                taskWorkPosition: {
+                  _tag: "TaskWorkPositionRequired",
+                  mode: "ReserveOrReuse",
+                  taskId: scenario.taskIds.C
+                }
+              }
+            }
+          }
+        ],
+        [
+          "wrong progress",
+          {
+            _tag: "IdentityFreeAction",
+            proposal: {
+              ...proposal,
+              route: {
+                _tag: "IdentityFreeWorkflowRoute",
+                transition: {
+                  ...transition,
+                  acceptedProgress: {
+                    _tag: "ExecutorReportAccepted",
+                    ordinal: PlannedAttemptExecutorReportOrdinal.make(999)
+                  }
+                }
+              }
+            }
+          }
+        ],
+        [
+          "unexpected B route",
+          {
+            _tag: "IdentityFreeAction",
+            proposal: {
+              ...proposal,
+              route: {
+                _tag: "FreshExecutorWorkflowRoute",
+                step: {
+                  _tag: "BeginPlannedAttemptExecutorWork",
+                  claimOperationId: OperationId.make("unexpected-B-Begin-claim"),
+                  plannedAttempt: transition.plannedAttempt,
+                  specification: scenario.specifications.F1.B,
+                  task: {
+                    id: scenario.taskIds.B,
+                    lifecycle: TaskLifecycle.cases.Open.make({}),
+                    parentTaskId: null,
+                    prerequisiteIds: []
+                  }
+                }
+              }
+            }
+          }
+        ]
+      ]
+      for (const [name, action] of rejected) {
+        const failed = yield* Deferred.make<unknown>()
+        const exit = yield* Effect.exit(
+          observeIssue268ActivationFailure(
+            validateIssue268Ds13Action(action, undefined, result.recoveredBRecords),
+            failed
+          )
+        )
+        expect(exit._tag, name).toBe("Failure")
+        if (exit._tag === "Failure") expect(yield* Deferred.await(failed), name).toBe(exit.cause)
+      }
 
       expect(result.activationTimeline).toEqual([
         "ActiveWorkAuthorityRefresh:enter",
