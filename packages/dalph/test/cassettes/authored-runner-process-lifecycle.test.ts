@@ -19,7 +19,7 @@ it.effect(
           })
       ).pipe(Effect.provide(NodeCrypto.layer))
 
-      expect(run.activationOrdinals).toEqual([1, 2])
+      expect(run.activationOrdinals).toEqual([1, 2, 3])
       expect(run.records.map(({ position }) => Number(position))).toEqual(
         Array.from({ length: run.records.length }, (_, index) => index + 1)
       )

@@ -4587,11 +4587,11 @@ const doubleDiamondIntegrationPositions = {
   C: { queuedAt: 107, startedAt: 151, targetLineageObservedAt: 153 },
   D: { queuedAt: 204, startedAt: 205, targetLineageObservedAt: 207 },
   E: { queuedAt: 258, startedAt: 261, targetLineageObservedAt: 276 },
-  F: { queuedAt: 346, startedAt: 348, targetLineageObservedAt: 352 },
-  G: { queuedAt: 545, startedAt: 546, targetLineageObservedAt: 548 },
-  H: { queuedAt: 454, startedAt: 456, targetLineageObservedAt: 458 },
-  I: { queuedAt: 455, startedAt: 490, targetLineageObservedAt: 492 },
-  X: { queuedAt: 347, startedAt: 384, targetLineageObservedAt: 386 }
+  F: { queuedAt: 346, startedAt: 348, targetLineageObservedAt: 358 },
+  G: { queuedAt: 551, startedAt: 552, targetLineageObservedAt: 554 },
+  H: { queuedAt: 460, startedAt: 462, targetLineageObservedAt: 464 },
+  I: { queuedAt: 461, startedAt: 496, targetLineageObservedAt: 498 },
+  X: { queuedAt: 347, startedAt: 390, targetLineageObservedAt: 392 }
 } as const satisfies Record<DoubleDiamondTaskId, DoubleDiamondIntegrationPositions>
 
 const integrationPositionsForDiamondTask = (
@@ -4920,6 +4920,18 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     ...doubleDiamondGraphRead(doubleDiamondGraphs.dCompleteBeforeX),
     doubleDiamondPassiveAcceptedReport(doubleDiamondAttempts.x),
     doubleDiamondPassiveAcceptedReport(doubleDiamondAttempts.f),
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "F" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "F" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "X" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "X" },
+    // This activation already paid its one post-quiescence graph read before
+    // the passive terminal reports. The next activation checks current claims
+    // and their later complete graph before integrating those accepted results.
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    },
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.dCompleteBeforeX),
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "F" } },
     { _tag: "TaskClaimCurrentReadReturned", taskId: "F" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "X" } },
@@ -5349,6 +5361,12 @@ export const deliveryStoryDs14ThroughDs17AuthoredCassette: ScenarioCassette = Sc
     }
     if (item._tag === "ExpectedBehavior") {
       return [
+        {
+          _tag: "CoordinatorActivationReturned",
+          decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
+        },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+        { _tag: "TrackerGraphReadReturned", graph: completedSingletonGraph },
         { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
         { _tag: "TrackerGraphReadReturned", graph: completedSingletonGraph },
         { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMayTerminate" } },
