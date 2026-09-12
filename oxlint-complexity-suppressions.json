@@ -4,12 +4,6 @@
       "count": 1
     }
   },
-  "packages/dalph/src/cassettes/catalog.ts": {
-    "complexity": {
-      "count": 1,
-      "justification": "deliveryFinalityBase keeps one ordered authored-story transducer: paired graph/read-response suppression, process-death phase tracking, recovery graph substitution, and the exact terminal finality sequence share the same cursor and phase. Splitting these state transitions solely to hide conditions would detach paired occurrences and their ordering; the callback has one direct story consumer and maintained derived scenarios."
-    }
-  },
   "packages/dalph/src/cassettes/disposition-cleanup-cassette.ts": {
     "complexity": {
       "count": 6
