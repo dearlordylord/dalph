@@ -28,9 +28,6 @@
     }
   },
   "packages/dalph/src/cassettes/authored-runner.ts": {
-    "functional/immutable-data": {
-      "count": 3
-    },
     "functional/prefer-tacit": {
       "count": 2
     },
@@ -184,11 +181,6 @@
       "count": 14
     }
   },
-  "packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts": {
-    "functional/no-throw-statements": {
-      "count": 2
-    }
-  },
   "packages/orchestrator/src/coordination/delivery/ticket-delivery-projection.ts": {
     "functional/immutable-data": {
       "count": 1
@@ -262,16 +254,6 @@
   "packages/orchestrator/src/workflow/interpretation/interpreter.ts": {
     "import-x/no-unused-modules": {
       "count": 3
-    }
-  },
-  "packages/orchestrator/src/workflow/protocols/integration-admission/protocol.ts": {
-    "functional/immutable-data": {
-      "count": 1
-    }
-  },
-  "packages/orchestrator/src/workflow/protocols/integration-admission/responsibility.ts": {
-    "import-x/no-unused-modules": {
-      "count": 1
     }
   },
   "packages/orchestrator/src/workflow/protocols/integration-finality/completion-task-history.test.ts": {
