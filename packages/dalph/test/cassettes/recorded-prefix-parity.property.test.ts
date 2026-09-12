@@ -22,6 +22,7 @@ import {
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
 import { observeWorkflowJournalValidationSteps } from "../../../orchestrator/src/coordination/reconstruction/history.js"
 import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
+import { observeJournalRecordSequenceOperations } from "../../../orchestrator/src/workflow-journal/record-sequence.js"
 import { integrationFinalityFixture } from "../../../orchestrator/src/workflow/protocols/integration-finality/fixtures.js"
 import {
   RecordedCassette,
@@ -213,6 +214,25 @@ it("preserves cold checkpoints through successive distinct invalid source prefix
   ).toBe(true)
 })
 
+it("compares current invalid-history summaries rather than stale equal valid meaning prefixes", () => {
+  const records = capacityRecords([2, 3])
+  const cassette = Effect.runSync(projectRecordedCassette(records))
+  const source = records.map((record, index) =>
+    index === 1 ? { ...record, position: JournalPosition.make(99) } : record
+  )
+  const actual = RecordedCassette.make({
+    ...cassette,
+    entries: cassette.entries.map((entry, index) =>
+      index === 1 && entry._tag === "TaskWorkCapacityChanged"
+        ? { ...entry, previousRevision: RunPolicyRevision.make(99) }
+        : entry
+    )
+  })
+  const checkpoints = verifyRecordedCassetteRoundTrip(source, actual)
+  expect(checkpoints).toEqual(coldOracle(source, actual))
+  expect(checkpoints.slice(1).every(({ workflowHistoryEquivalent }) => !workflowHistoryEquivalent)).toBe(true)
+})
+
 it("keeps empty sources and unvisited schema-invalid suffixes untouched and shorter final prefixes repeated", () => {
   const records = capacityRecords([2, 3])
   const cassette = Effect.runSync(projectRecordedCassette(records))
@@ -242,6 +262,37 @@ it("keeps empty sources and unvisited schema-invalid suffixes untouched and shor
   )
   const shorter = RecordedCassette.make({ ...cassette, entries: cassette.entries.slice(0, 1) })
   expect(verifyRecordedCassetteRoundTrip(records, shorter)).toEqual(coldOracle(records, shorter))
+})
+
+it.each([1, 8, 32])("prepares %i valid history occurrences once without repeated whole-prefix exports", (size) => {
+  const records = capacityRecords(Array.from({ length: size - 1 }, (_entry, index) => (index % 8) + 1))
+  const cassette = Effect.runSync(projectRecordedCassette(records))
+  const materializations: Array<number> = []
+  const restore = observeJournalRecordSequenceOperations((operation) => {
+    if (operation._tag === "HistoricalMaterialization") materializations.push(operation.length)
+  })
+  try {
+    const checkpoints = verifyRecordedCassetteRoundTrip(records, cassette)
+    expect(checkpoints).toHaveLength(size)
+    expect(
+      checkpoints.every(
+        ({
+          appliedOccurrencePositionEquivalent,
+          operationalStateEquivalent,
+          pureSelectionEquivalent,
+          workflowHistoryEquivalent
+        }) =>
+          appliedOccurrencePositionEquivalent &&
+          operationalStateEquivalent &&
+          pureSelectionEquivalent &&
+          workflowHistoryEquivalent
+      )
+    ).toBe(true)
+    expect(materializations).toEqual([1, 1])
+    expect(materializations.reduce((total, length) => total + length, 0)).toBe(2)
+  } finally {
+    restore()
+  }
 })
 
 it("validates every source and recorded occurrence once while retaining all checkpoint comparisons", () => {

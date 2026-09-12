@@ -1535,6 +1535,23 @@ const semanticWorkflowHistory = (history: ReturnType<typeof reduceWorkflowJourna
     ? { _tag: history._tag, issueKinds: history.issues.map(({ _tag }) => _tag) }
     : exportWorkflowHistoryRecords(history.runState.workflowHistory).map(({ event }) => recordedEntryFor(event))
 
+/** Invalid prefixes have no prepared meanings; a later valid cold fold rebuilds its complete history. */
+const prepareWorkflowMeanings = (
+  history: ReturnType<typeof reduceWorkflowJournalHistory>,
+  prior: Array<RecordedCassetteEntry> | undefined,
+  record: JournalRecord | undefined
+): Array<RecordedCassetteEntry> | undefined => {
+  if (history._tag === "InvalidWorkflowJournalHistory") return undefined
+  if (prior === undefined) {
+    return exportWorkflowHistoryRecords(history.runState.workflowHistory).map(({ event }) => recordedEntryFor(event))
+  }
+  if (record !== undefined) {
+    // eslint-disable-next-line functional/immutable-data -- Invocation-local comparison scratch never escapes or mutates accepted history; append avoids copying earlier meanings.
+    prior.push(recordedEntryFor(record.event))
+  }
+  return prior
+}
+
 export interface RecordedCassetteCheckpoint {
   readonly appliedOccurrencePositionEquivalent: boolean
   readonly checkpoint: number
@@ -1546,7 +1563,9 @@ export interface RecordedCassetteCheckpoint {
 const checkpointComparison = (
   checkpoint: number,
   expected: ReturnType<typeof reduceWorkflowJournalHistory>,
-  actual: ReturnType<typeof reduceWorkflowJournalHistory>
+  actual: ReturnType<typeof reduceWorkflowJournalHistory>,
+  compareWorkflowHistory: () => boolean = () =>
+    semanticJson(semanticWorkflowHistory(expected)) === semanticJson(semanticWorkflowHistory(actual))
 ): RecordedCassetteCheckpoint => ({
   appliedOccurrencePositionEquivalent: appliedOccurrencePosition(expected) === appliedOccurrencePosition(actual),
   checkpoint,
@@ -1555,8 +1574,7 @@ const checkpointComparison = (
     actual._tag === "ValidWorkflowJournalHistory" &&
     semanticJson(semanticResponsibilityFacts(expected)) === semanticJson(semanticResponsibilityFacts(actual)),
   operationalStateEquivalent: semanticJson(semanticState(expected)) === semanticJson(semanticState(actual)),
-  workflowHistoryEquivalent:
-    semanticJson(semanticWorkflowHistory(expected)) === semanticJson(semanticWorkflowHistory(actual))
+  workflowHistoryEquivalent: compareWorkflowHistory()
 })
 
 /** Compares source and recorded folds after every corresponding occurrence. */
@@ -1567,6 +1585,8 @@ export const verifyRecordedCassetteRoundTrip = (
   const actualRecords: Array<JournalRecord> = []
   let actualHistory: ReturnType<typeof reduceWorkflowJournalHistory> | undefined
   let sourceHistory: ReturnType<typeof reduceWorkflowJournalHistory> | undefined
+  let sourceMeanings: Array<RecordedCassetteEntry> | undefined
+  let actualMeanings: Array<RecordedCassetteEntry> | undefined
   return records.map((sourceRecord, index) => {
     const checkpoint = index + 1
     // Validate this source occurrence first from its own accepted predecessor;
@@ -1582,6 +1602,7 @@ export const verifyRecordedCassetteRoundTrip = (
         : reduceWorkflowJournalHistory(cassette.runId, records.slice(0, checkpoint))
     const prefix = RecordedCassette.make({ ...cassette, entries: cassette.entries.slice(0, checkpoint) })
     const entry = prefix.entries[actualRecords.length]
+    let selectedActualRecord: JournalRecord | undefined
     if (entry !== undefined) {
       const event = eventForRecordedEntry(entry, prefix.entries, actualRecords.length, prefix.runId)
       const record = {
@@ -1590,6 +1611,7 @@ export const verifyRecordedCassetteRoundTrip = (
         position: JournalPosition.make(actualRecords.length + 1),
         runId: prefix.runId
       }
+      selectedActualRecord = record
       // eslint-disable-next-line functional/immutable-data -- Pure comparison scratch never escapes; each selected occurrence is reconstructed once.
       actualRecords.push(record)
       const advanced =
@@ -1605,7 +1627,18 @@ export const verifyRecordedCassetteRoundTrip = (
     } else if (actualHistory === undefined) {
       actualHistory = reduceWorkflowJournalHistory(prefix.runId, actualRecords)
     }
-    return checkpointComparison(checkpoint, sourceHistory, actualHistory)
+    const expected = sourceHistory
+    const actual = actualHistory
+    return checkpointComparison(checkpoint, expected, actual, () => {
+      // Keep projection after state/selection comparisons, as in the cold path.
+      // The two meaning prefixes belong only to these separately folded inputs.
+      sourceMeanings = prepareWorkflowMeanings(expected, sourceMeanings, sourceRecord)
+      actualMeanings = prepareWorkflowMeanings(actual, actualMeanings, selectedActualRecord)
+      return (
+        semanticJson(sourceMeanings ?? semanticWorkflowHistory(expected)) ===
+        semanticJson(actualMeanings ?? semanticWorkflowHistory(actual))
+      )
+    })
   })
 }
 
