@@ -15,9 +15,13 @@ import { appendPromotionStaleIntegrationQuarantine } from "../../workflow/protoc
 import { deliveryActionCompleted, deliveryActionDeferred } from "./delivery-action-adapter-common.js"
 import type { DeliveryActionExecutionLease, MaterializedDeliveryAction } from "./delivery-action-executor.js"
 import { IntegratorBoundaryUnavailable } from "./integrator-boundary.js"
-import { InRunJournal } from "../../workflow-journal/store.js"
-import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
-import { appendIntegratorSuccessorSessionIfNeeded } from "../../workflow/protocols/integrator/successor-session.js"
+import {
+  integratorSuccessorAppendRecordMatches,
+  integratorSuccessorPreparationIsCurrent,
+  prepareIntegratorSuccessorSessionAppend
+} from "../../workflow/protocols/integrator/successor-session.js"
+import { IntegratorJournalContradiction } from "../../workflow/protocols/integrator/errors.js"
+import { ExpectedAcceptedPrefixPosition, Journal } from "./journal.js"
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
 type RunIntegrator = Extract<RunnableFrontierTransition, { readonly _tag: "RunIntegrator" }>
@@ -99,9 +103,32 @@ export const fixIntegratorSuccessorSession = Effect.fn("DeliveryAction.fixIntegr
   action: IdentityFreeAction,
   transition: FixIntegratorSuccessorSession
 ) {
-  const journal = yield* InRunJournal
-  const records = yield* (yield* AcceptedJournalReader).readAccepted(transition.responsibility.plannedAttempt.runId)
-  yield* appendIntegratorSuccessorSessionIfNeeded(journal, transition.input, records)
+  const journal = yield* Journal
+  const runId = transition.responsibility.plannedAttempt.runId
+  const records = yield* journal.readAccepted(runId)
+  const prepared = yield* prepareIntegratorSuccessorSessionAppend(transition.input, records)
+  if (prepared._tag === "Existing") return deliveryActionCompleted(action.proposal.id)
+  if (!integratorSuccessorPreparationIsCurrent(records, transition.input)) {
+    return deliveryActionDeferred(action.proposal.id, "ContinuationAuthorizationStale")
+  }
+  if (records.lastPosition === null) {
+    return deliveryActionDeferred(action.proposal.id, "ContinuationAuthorizationStale")
+  }
+  const appended = yield* journal.appendIfAcceptedPrefixCurrent(
+    runId,
+    ExpectedAcceptedPrefixPosition.make(records.lastPosition),
+    prepared.key,
+    prepared.event
+  )
+  if (appended._tag === "PrefixAdvanced") {
+    return deliveryActionDeferred(action.proposal.id, "ContinuationAuthorizationStale")
+  }
+  if (!integratorSuccessorAppendRecordMatches(appended.record, prepared.key, prepared.event)) {
+    return yield* new IntegratorJournalContradiction({
+      detail: "FullRerun successor conditional append returned a foreign Journal record",
+      runId
+    })
+  }
   return deliveryActionCompleted(action.proposal.id)
 })
 

@@ -60,6 +60,7 @@ import { preservingDispositionCleanupBoundaryLayer } from "../../workflow/protoc
 import { RunActivationOpportunity } from "./run-activation-opportunity.js"
 import { firstJournalRecordOfKind } from "../../workflow-journal/record-evidence.js"
 import { journalRecordAt } from "../../workflow-journal/record-sequence.js"
+import { Journal } from "../delivery/journal.js"
 
 export const StartupRecoveryIssue = Schema.Union([
   DuplicateUnfinishedTaskAttemptIssue,
@@ -219,6 +220,7 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
   targetPromotion
 }: RunActivationContextInput) {
   const ownership = yield* CoordinatorOwnership
+  const journal = yield* Journal
   const inRunJournal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
   const executor = yield* PlannedAttemptExecutor
@@ -268,6 +270,7 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
     Context.add(RunRecoveryProjection, recovery),
     Context.add(OperationIdAllocator, operationIdAllocator),
     Context.add(PlannedAttemptExecutor, executor),
+    Context.add(Journal, journal),
     Context.add(InRunJournal, inRunJournal),
     Context.add(AttemptChoiceControl, attemptChoiceControl),
     Context.add(PlannedAttemptProtocolController, plannedAttemptProtocolController),

@@ -2506,6 +2506,7 @@ it("orders all public proposal route and admission families deterministically", 
   })
   const acceptedLineage = RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
     operation: acceptedLineageOperation,
+    operationIdentity: "Allocate",
     plannedAttempt: fixture.plannedAttempt
   })
   const recoveredLineageOperation = makeTargetLineageObservationOperation({
@@ -2516,6 +2517,7 @@ it("orders all public proposal route and admission families deterministically", 
   })
   const recoveredLineage = RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
     operation: recoveredLineageOperation,
+    operationIdentity: "Preserve",
     plannedAttempt: fixture.plannedAttempt
   })
   const reacquisition = RunnableFrontierTransition.CommitTaskClaimReacquisitionIntent({

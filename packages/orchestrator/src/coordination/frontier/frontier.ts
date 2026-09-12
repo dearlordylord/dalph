@@ -127,6 +127,8 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly plannedAttempt: PlannedTaskAttempt
   }
   ObservePlannedAttemptContinuationTargetLineage: {
+    /** A graph-bound FullRerun read carries its canonical Q/D/graph identity through materialization. */
+    readonly operationIdentity: "Allocate" | "Preserve"
     readonly operation: typeof WorkflowOperation.cases.ReadTargetLineage.Type
     readonly plannedAttempt: PlannedTaskAttempt
   }

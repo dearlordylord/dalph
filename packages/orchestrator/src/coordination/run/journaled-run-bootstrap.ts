@@ -191,6 +191,7 @@ export type JournaledRuntimeLayer = Layer.Layer<
   | AcceptedJournalReader
   | CoordinatorOwnership
   | InRunJournal
+  | Journal
   | JournaledRunProcessServices
   | PlannedAttemptProtocolController
 >

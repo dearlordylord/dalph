@@ -95,6 +95,7 @@ const samePositionWorktreeTransition = RunnableFrontierTransition.ObservePlanned
 })
 const samePositionLineageTransition = RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
   operation: samePositionLineageOperation,
+  operationIdentity: "Allocate",
   plannedAttempt: samePositionA
 })
 

@@ -13,11 +13,13 @@ import type {
   PassivePlannedAttemptObserver,
   PassivePlannedAttemptProjectionPublication
 } from "../run/passive-planned-attempt-observer.js"
+import type { Journal } from "./journal.js"
 
 /** Services captured once by the closed executor and interpreted only by route-specific leaves. */
 export type DeliveryActionAdapterEnvironment =
   | AcceptedJournalReader
   | InRunJournal
+  | Journal
   | OperationIdAllocator
   | PassivePlannedAttemptObserver
   | PassivePlannedAttemptProjectionPublication

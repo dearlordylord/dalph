@@ -467,6 +467,26 @@ it("keeps authored promotion Git, control, and executor outcomes correlated at t
       yield* beforeAdmissionCursor.completeControlDirectionBeforeDeliveryActionAdmission
       const noMatchCursor = yield* makeStoryCursor([findStoryItem("ExpectedBehavior")])
       expect(Option.isNone(yield* noMatchCursor.consumeControlDirection(ordinaryDirection))).toBe(true)
+      const integrationDirection = findStoryItemOf("OperatorAppliesIntegrationQuarantineDirection")
+      const nonDeathAfterDirection = yield* makeStoryCursor([integrationDirection, findStoryItem("ExpectedBehavior")])
+      expect(Option.isSome(yield* nonDeathAfterDirection.consumeIntegrationQuarantineDirection)).toBe(true)
+      const nonDeathProbe = yield* nonDeathAfterDirection.pauseAtCoordinatorProcessDeath.pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(nonDeathProbe.pollUnsafe()).not.toBeUndefined()
+      yield* nonDeathAfterDirection.completeIntegrationQuarantineDirection
+
+      const deathAfterDirection = yield* makeStoryCursor([
+        integrationDirection,
+        findStoryItem("CoordinatorProcessDies")
+      ])
+      expect(Option.isSome(yield* deathAfterDirection.consumeIntegrationQuarantineDirection)).toBe(true)
+      const heldDeath = yield* deathAfterDirection.pauseAtCoordinatorProcessDeath.pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(heldDeath.pollUnsafe()).toBeUndefined()
+      yield* deathAfterDirection.completeIntegrationQuarantineDirection
+      const heldDeathExit = yield* Fiber.await(heldDeath)
+      expect(Exit.isFailure(heldDeathExit)).toBe(true)
+      if (Exit.isFailure(heldDeathExit)) expect(Cause.hasDies(heldDeathExit.cause)).toBe(true)
       const inFlight = findStoryItemOf("OperatorAppliesControlDirectionWhileExecutorRequestInFlight")
       const inFlightCursor = yield* makeStoryCursor([inFlight])
       expect(Option.isSome(yield* inFlightCursor.consumeInFlightExecutorControlDirection())).toBe(true)

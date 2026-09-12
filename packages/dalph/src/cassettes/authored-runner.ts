@@ -1580,6 +1580,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                     observedHeadSha: result.observedHeadSha
                   })
             ),
+            Effect.catchTag("AuthoredCassetteInteractionMismatch", Effect.die),
             Effect.mapError(
               /* v8 ignore next -- @preserve Maintained promotion cassettes supply the declared compare-and-set occurrence; cursor mismatch behavior is shared. */
               (failure) =>

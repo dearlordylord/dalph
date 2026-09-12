@@ -831,7 +831,11 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
         plannedAttempt,
         predecessorOperationIds: predecessors
       })
-      return RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({ operation, plannedAttempt })
+      return RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+        operation,
+        operationIdentity: "Allocate",
+        plannedAttempt
+      })
     }
     const eligibility = safeContinuationEligibilityFor(tag)
     if (eligibility === undefined) return Effect.runSync(Effect.die(`missing safe continuation eligibility for ${tag}`))

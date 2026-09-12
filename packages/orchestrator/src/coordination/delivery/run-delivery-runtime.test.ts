@@ -1586,6 +1586,7 @@ it.effect("does not repeat one started-integration lineage read after only its c
     })
     const lineageRead = (causalForm: string) => {
       const transition = RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+        operationIdentity: "Allocate",
         operation: makeTargetLineageObservationOperation({
           integrationTarget,
           operationId: OperationId.make(`runtime-integration-lineage:${causalForm}`),
@@ -1635,6 +1636,7 @@ it.effect("admits bounded fresh claims while an unrelated integration lineage re
       startedAt: JournalPosition.make(73)
     })
     const transition = RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+      operationIdentity: "Allocate",
       operation: makeTargetLineageObservationOperation({
         integrationTarget,
         operationId: OperationId.make("runtime-live-integration-with-fresh-lineage"),
@@ -3021,6 +3023,7 @@ it.effect("keeps a same-position worktree completion pending until its lineage s
       })
       const lineageTransition = RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
         operation: lineageOperation,
+        operationIdentity: "Allocate",
         plannedAttempt
       })
       const observationProposals = (
