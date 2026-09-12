@@ -35,7 +35,7 @@ import {
   InRunJournalRunMismatch,
   JournalStore
 } from "../../workflow-journal/store.js"
-import { JournalInitialHistoryInvalid, makeJournal } from "./journal.js"
+import { ExpectedAcceptedPrefixPosition, JournalInitialHistoryInvalid, makeJournal } from "./journal.js"
 import type { JournalState } from "./journal.js"
 
 const runId = RunId.make("journal")
@@ -502,6 +502,176 @@ it.effect("serializes concurrent accepted appends and publishes every position i
 
     expect(Array.from(yield* Fiber.join(positions))).toEqual([1, 2, 3])
     expect((yield* journal.read(concurrentRunId)).map(({ position }) => position)).toEqual([1, 2, 3])
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
+it.effect("conditionally appends and publishes when the accepted prefix is still exact", () =>
+  Effect.gen(function* () {
+    const conditionalRunId = RunId.make("journal-conditional-exact")
+    const storage = yield* JournalStore
+    yield* storage.beginRun(conditionalRunId, target, initialPolicy)
+    const initial = reduceWorkflowJournalHistory(conditionalRunId, yield* storage.read(conditionalRunId))
+    if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
+    const storageAppends = yield* Ref.make(0)
+    const journal = yield* makeJournal(conditionalRunId, target, initial, {
+      ...storage,
+      append: (...args) =>
+        Ref.update(storageAppends, (count) => count + 1).pipe(Effect.andThen(storage.append(...args)))
+    })
+    const attached = yield* Deferred.make<void>()
+    const positions = yield* journal.state.changes.pipe(
+      Stream.tap(() => Deferred.succeed(attached, undefined)),
+      Stream.map(({ position }) => position),
+      Stream.take(2),
+      Stream.runCollect,
+      Effect.forkChild
+    )
+    yield* Deferred.await(attached)
+    const operation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("conditional-exact"),
+      target
+    )
+
+    const result = yield* journal.appendIfAcceptedPrefixCurrent(
+      conditionalRunId,
+      ExpectedAcceptedPrefixPosition.make(1),
+      intentRecordKey(operation.operationId),
+      taskTrackerReadIntent(operation)
+    )
+
+    expect(result).toMatchObject({ _tag: "Appended", record: { position: JournalPosition.make(2) } })
+    expect(Array.from(yield* Fiber.join(positions))).toEqual([1, 2])
+    expect(yield* Ref.get(storageAppends)).toBe(1)
+    expect((yield* journal.state.get).position).toBe(JournalPosition.make(2))
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
+it.effect("returns PrefixAdvanced without storing or publishing a conditional append", () =>
+  Effect.gen(function* () {
+    const advancedRunId = RunId.make("journal-conditional-prefix-advanced")
+    const storage = yield* JournalStore
+    yield* storage.beginRun(advancedRunId, target, initialPolicy)
+    const initial = reduceWorkflowJournalHistory(advancedRunId, yield* storage.read(advancedRunId))
+    if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
+    const storageAppends = yield* Ref.make(0)
+    const acceptedPublications = yield* Ref.make(0)
+    const journal = yield* makeJournal(
+      advancedRunId,
+      target,
+      initial,
+      {
+        ...storage,
+        append: (...args) =>
+          Ref.update(storageAppends, (count) => count + 1).pipe(Effect.andThen(storage.append(...args)))
+      },
+      () => Ref.update(acceptedPublications, (count) => count + 1)
+    )
+    const winner = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("conditional-prefix-winner"),
+      target
+    )
+    yield* journal.append(advancedRunId, intentRecordKey(winner.operationId), taskTrackerReadIntent(winner))
+    yield* Ref.set(storageAppends, 0)
+    yield* Ref.set(acceptedPublications, 0)
+    const stale = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("conditional-prefix-stale"),
+      target
+    )
+
+    const result = yield* journal.appendIfAcceptedPrefixCurrent(
+      advancedRunId,
+      ExpectedAcceptedPrefixPosition.make(1),
+      intentRecordKey(stale.operationId),
+      taskTrackerReadIntent(stale)
+    )
+
+    expect(result).toEqual({
+      _tag: "PrefixAdvanced",
+      currentPosition: JournalPosition.make(2),
+      expectedPosition: ExpectedAcceptedPrefixPosition.make(1)
+    })
+    expect(yield* Ref.get(storageAppends)).toBe(0)
+    expect(yield* Ref.get(acceptedPublications)).toBe(0)
+    expect((yield* journal.state.get).position).toBe(JournalPosition.make(2))
+    expect(yield* storage.read(advancedRunId)).toHaveLength(2)
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
+it.effect("lets an intervening append win before safely declining the conditional append", () =>
+  Effect.gen(function* () {
+    const racingRunId = RunId.make("journal-conditional-race")
+    const storage = yield* JournalStore
+    yield* storage.beginRun(racingRunId, target, initialPolicy)
+    const initial = reduceWorkflowJournalHistory(racingRunId, yield* storage.read(racingRunId))
+    if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
+    const winnerEnteredStorage = yield* Deferred.make<void>()
+    const releaseWinner = yield* Deferred.make<void>()
+    const storageAppends = yield* Ref.make(0)
+    const acceptedPublications = yield* Ref.make(0)
+    const winner = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("conditional-race-winner"),
+      target
+    )
+    const winnerKey = intentRecordKey(winner.operationId)
+    const journal = yield* makeJournal(
+      racingRunId,
+      target,
+      initial,
+      {
+        ...storage,
+        append: (requestedRunId, key, event) =>
+          Ref.update(storageAppends, (count) => count + 1).pipe(
+            Effect.andThen(
+              key === winnerKey
+                ? Deferred.succeed(winnerEnteredStorage, undefined).pipe(
+                    Effect.andThen(Deferred.await(releaseWinner)),
+                    Effect.andThen(storage.append(requestedRunId, key, event))
+                  )
+                : storage.append(requestedRunId, key, event)
+            )
+          )
+      },
+      () => Ref.update(acceptedPublications, (count) => count + 1)
+    )
+    const winningAppend = yield* journal
+      .append(racingRunId, winnerKey, taskTrackerReadIntent(winner))
+      .pipe(Effect.forkChild)
+    yield* Deferred.await(winnerEnteredStorage)
+    const stale = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("conditional-race-stale"),
+      target
+    )
+    const conditionalAppend = yield* journal
+      .appendIfAcceptedPrefixCurrent(
+        racingRunId,
+        ExpectedAcceptedPrefixPosition.make(1),
+        intentRecordKey(stale.operationId),
+        taskTrackerReadIntent(stale)
+      )
+      .pipe(Effect.forkChild)
+
+    yield* Deferred.succeed(releaseWinner, undefined)
+    const winnerRecord = yield* Fiber.join(winningAppend)
+    const conditionalResult = yield* Fiber.join(conditionalAppend)
+
+    expect(winnerRecord.position).toBe(JournalPosition.make(2))
+    expect(conditionalResult).toEqual({
+      _tag: "PrefixAdvanced",
+      currentPosition: JournalPosition.make(2),
+      expectedPosition: ExpectedAcceptedPrefixPosition.make(1)
+    })
+    expect(yield* Ref.get(storageAppends)).toBe(1)
+    expect(yield* Ref.get(acceptedPublications)).toBe(1)
+    expect((yield* journal.state.get).position).toBe(JournalPosition.make(2))
+    const stored = yield* storage.read(racingRunId)
+    expect(stored).toHaveLength(2)
+    expect(stored.at(-1)?.key).toBe(winnerKey)
+    expect(stored.some(({ key }) => key === intentRecordKey(stale.operationId))).toBe(false)
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
