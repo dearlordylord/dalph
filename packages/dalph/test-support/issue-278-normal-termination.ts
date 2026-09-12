@@ -1,4 +1,4 @@
-import { Effect, Queue, Ref } from "effect"
+import { Effect, Queue, Ref, type Crypto, type Scope } from "effect"
 import { TaskId } from "@dalph/contracts"
 import {
   CompletionClaimBoundary,
@@ -16,15 +16,18 @@ import {
   type FocusedTaskCompletionFacts,
   type JournalRecord,
   type DeliveryRuntimeReadyObservation,
+  type InvalidWorkflowJournalHistory,
   type TaskDagSnapshot,
   type TaskClaimObservation,
   type TrackerTarget,
   type WorkflowJournalEvent as WorkflowEvent
 } from "@dalph/orchestrator"
+import type { AuthoredScenarioCassetteRunFailure } from "../src/cassettes/authored-runner.js"
+import type { EmptyJournalCannotBeRecorded } from "../src/cassettes/recorded.js"
 import { makeSixTaskDeliveryFacts } from "./six-task-delivery-facts.js"
-import { makeSixTaskDeliveryRuntime } from "./six-task-delivery-runtime.js"
+import { makeSixTaskDeliveryRuntime, type SixTaskDeliveryRuntime } from "./six-task-delivery-runtime.js"
 import { makeSixTaskFinalityBoundaries } from "./six-task-finality-boundaries.js"
-import { makeIssue278SettledA } from "./issue-278-settled-a.js"
+import { makeIssue278SettledA, type Issue278SettledA } from "./issue-278-settled-a.js"
 
 /** Actual tracker calls, correlated with the pending durable complete-read intent. */
 export interface Issue278GraphRead {
@@ -54,7 +57,30 @@ export type Issue278Cut = "FinalGraphObserved" | "TerminationAppended"
 export type Issue278DeliveryHold = "CompletionClaimReplaced" | "CompletionClaimDeletionIntended"
 const allTaskNames = ["A", "B", "C", "D", "E", "F", "G"] as const
 
-export const makeIssue278NormalTermination = Effect.fn("Issue278.makeNormalTermination")(function* () {
+type Issue278CutState = { readonly _tag: "Disabled" } | { readonly _tag: "Armed"; readonly at: Issue278Cut }
+type Issue278DeliveryHoldState =
+  | { readonly _tag: "Disabled" }
+  | { readonly _tag: "Armed"; readonly at: Issue278DeliveryHold }
+
+export interface Issue278NormalTermination extends SixTaskDeliveryRuntime {
+  readonly facts: ReturnType<typeof makeSixTaskDeliveryFacts>
+  readonly settledA: Issue278SettledA
+  readonly graphReads: Ref.Ref<ReadonlyArray<Issue278GraphRead>>
+  readonly specificationReads: Ref.Ref<ReadonlyArray<{ readonly target: TrackerTarget; readonly taskId: TaskId }>>
+  readonly claimCalls: Ref.Ref<ReadonlyArray<Issue278ClaimCall>>
+  readonly events: Queue.Queue<WorkflowEvent>
+  readonly reached: Queue.Queue<Issue278Cut>
+  readonly terminationCut: Ref.Ref<Issue278CutState>
+  readonly deliveryHold: Ref.Ref<Issue278DeliveryHoldState>
+  readonly heldDelivery: Queue.Queue<Issue278DeliveryHold>
+  readonly releaseDelivery: Queue.Queue<void>
+}
+
+export const makeIssue278NormalTermination = Effect.fn("Issue278.makeNormalTermination")(function* (): Effect.fn.Return<
+  Issue278NormalTermination,
+  AuthoredScenarioCassetteRunFailure | EmptyJournalCannotBeRecorded | InvalidWorkflowJournalHistory,
+  Crypto.Crypto | Scope.Scope
+> {
   const settledA = yield* makeIssue278SettledA()
   if (typeof settledA.target !== "string") return yield* Effect.die("controlled A prefix must use its fixture target")
   const facts = {

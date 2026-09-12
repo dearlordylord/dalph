@@ -11,6 +11,7 @@ import {
   completionReadCycleAt,
   emptyCompletionReadCycles,
   inspectCompletionReadCycleStorage,
+  type CompletionReadCycleState,
   type CompletionReadCycles
 } from "./completion-read-cycles.js"
 import {
@@ -57,6 +58,7 @@ import {
   emptyRetainedExecutorResponsibilitySubjects,
   inspectRetainedExecutorResponsibilityStorage,
   retainedExecutorResponsibilitySubjectsAt,
+  type RetainedExecutorResponsibilitySubject,
   type RetainedExecutorResponsibilitySubjects
 } from "./retained-executor-responsibility.js"
 import {
@@ -64,6 +66,7 @@ import {
   emptySettledCompletionClaimReplacements,
   inspectSettledCompletionClaimReplacementStorage,
   settledCompletionClaimReplacementAt,
+  type SettledCompletionClaimReplacement,
   type SettledCompletionClaimReplacementEvidence
 } from "./settled-completion-claim-replacement.js"
 import {
@@ -899,7 +902,7 @@ export const journalTaskClaimObservationAt = (source: JournalRecordEvidence, tas
 export const journalCompletionReadCycle = (
   source: JournalRecordEvidence,
   query: Omit<Parameters<typeof completionReadCycleAt>[1], "throughPosition">
-) =>
+): CompletionReadCycleState =>
   completionReadCycleAt(indexesFor(source).completionReadCycles, {
     ...query,
     throughPosition: source.lastPosition ?? 0
@@ -967,14 +970,20 @@ export const journalStopRequestDispositionAt = (
   stopRequestDispositionAt(indexesFor(source).stopRequestDisposition, request, source.lastPosition ?? 0)
 
 /** Retained executor responsibilities visible at this immutable evidence cutoff; current execution is a separate fact. */
-export const journalRetainedExecutorResponsibilitySubjects = (source: JournalRecordEvidence, runId: RunId) =>
+export const journalRetainedExecutorResponsibilitySubjects = (
+  source: JournalRecordEvidence,
+  runId: RunId
+): ReadonlyArray<RetainedExecutorResponsibilitySubject> =>
   retainedExecutorResponsibilitySubjectsAt(indexesFor(source).retainedExecutorResponsibilitySubjects, {
     runId,
     throughPosition: source.lastPosition ?? 0
   })
 
 /** The first exact replacement intent and outcome settled for one completion claim at this evidence cutoff. */
-export const journalSettledCompletionClaimReplacement = (source: JournalRecordEvidence, claim: CompletionTaskClaim) =>
+export const journalSettledCompletionClaimReplacement = (
+  source: JournalRecordEvidence,
+  claim: CompletionTaskClaim
+): SettledCompletionClaimReplacement | undefined =>
   settledCompletionClaimReplacementAt(indexesFor(source).settledCompletionClaimReplacements, {
     claim,
     throughPosition: source.lastPosition ?? 0

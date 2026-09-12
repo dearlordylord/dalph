@@ -11,7 +11,7 @@ export interface RetainedExecutorResponsibilitySubjects {
 }
 
 /** One exact retained attempt and the journal position where Dalph assumed its executor responsibility. */
-interface RetainedExecutorResponsibilitySubject {
+export interface RetainedExecutorResponsibilitySubject {
   readonly plannedAttempt: PlannedTaskAttempt
   readonly beganAt: JournalPosition
 }

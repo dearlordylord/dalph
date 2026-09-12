@@ -1,17 +1,40 @@
-import { AcceptedResultEvidenceManifest } from "@dalph/contracts"
-import { Effect } from "effect"
+import { AcceptedResultEvidenceManifest, type RunId } from "@dalph/contracts"
+import { Effect, type Crypto } from "effect"
 import {
   deriveIntegrationFinalityStateFor,
   reduceWorkflowJournalHistory,
+  type CompletionTaskClaim,
   type EvidenceStore,
-  type JournalStore
+  type JournalRecord,
+  type JournalStore,
+  type InvalidWorkflowJournalHistory,
+  type TrackerTarget
 } from "@dalph/orchestrator"
+import type { AuthoredScenarioCassetteRunFailure } from "../src/cassettes/authored-runner.js"
+import type { EmptyJournalCannotBeRecorded } from "../src/cassettes/recorded.js"
 import { runAuthoredScenarioCassette } from "../src/cassettes/authored-runner.js"
 import { projectRecordedCassette, foldRecordedCassette } from "../src/cassettes/index.js"
 import { completeSingletonDeliveryCassette } from "./complete-singleton-delivery.js"
 
+export interface Issue278SettledA {
+  readonly records: ReadonlyArray<JournalRecord>
+  readonly history: ReturnType<typeof reduceWorkflowJournalHistory>
+  readonly folded: ReturnType<typeof reduceWorkflowJournalHistory>
+  readonly claim: CompletionTaskClaim
+  readonly runId: RunId
+  readonly target: TrackerTarget
+  readonly seed: (input: {
+    readonly journal: JournalStore["Service"]
+    readonly evidence: EvidenceStore["Service"]
+  }) => Effect.Effect<void>
+}
+
 /** Exact ordinary A prefix. No FullRerun predecessor exists in this independent starting history. */
-export const makeIssue278SettledA = Effect.fn("Issue278.makeSettledA")(function* () {
+export const makeIssue278SettledA = Effect.fn("Issue278.makeSettledA")(function* (): Effect.fn.Return<
+  Issue278SettledA,
+  AuthoredScenarioCassetteRunFailure | EmptyJournalCannotBeRecorded | InvalidWorkflowJournalHistory,
+  Crypto.Crypto
+> {
   const run = yield* runAuthoredScenarioCassette(completeSingletonDeliveryCassette)
   const settledAt = run.records.findIndex(({ event }) => event._tag === "IntegrationFinalitySettled")
   if (settledAt < 0) return yield* Effect.die("A fixture did not settle")

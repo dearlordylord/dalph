@@ -6,7 +6,12 @@ import {
   IntegrationTargetRef,
   GitRepositoryLocator
 } from "@dalph/contracts"
-import { type InRunJournalService, type JournalRecord } from "../../../orchestrator/src/workflow-journal/store.js"
+import {
+  type InRunJournalService,
+  type JournalAppendError,
+  type JournalReadError,
+  type JournalRecord
+} from "../../../orchestrator/src/workflow-journal/store.js"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
 import { ActiveTaskClaim } from "../../../orchestrator/src/authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../../orchestrator/src/authorities/task-tracker/claim.js"
@@ -37,13 +42,32 @@ import {
 } from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
 import { deriveJournalResponsibilityFacts } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
+import type { SafeContinuationRevalidationEligibility } from "../../../orchestrator/src/coordination/frontier/safe-continuation-revalidation-eligibility.js"
+
+interface ExecutorResumeWitnesses {
+  readonly activeTaskContinuationRead: {
+    readonly graphObservationOperationId: OperationId
+    readonly taskClaimObservationOperationId: OperationId
+    readonly taskWorkSpecificationObservationOperationId: OperationId
+  }
+  readonly worktreeObservationOperationId: OperationId
+  readonly targetLineageObservationOperationId: OperationId
+}
+
+interface ExecutorResumeModelFixture {
+  readonly graph: (
+    lifecycle: "Open" | "TerminalWithoutSuccess"
+  ) => Effect.Effect<OperationId, JournalAppendError | JournalReadError>
+  readonly readWitnesses: () => Effect.Effect<ExecutorResumeWitnesses, JournalAppendError | JournalReadError>
+  readonly eligibility: () => Effect.Effect<SafeContinuationRevalidationEligibility, JournalReadError>
+}
 
 /** Actual tracker/Git observation history behind the executor model's abstract five-witness action. */
 export const makeExecutorResumeModelFixture = (
   journal: InRunJournalService,
   plannedAttempt: PlannedTaskAttempt,
   specification: TaskWorkSpecification
-) => {
+): ExecutorResumeModelFixture => {
   const target = FixtureTarget.make("planned-attempt-executor-model")
   const planId = OperationId.make("planned-attempt-executor-model-plan")
   const integrationTarget = IntegrationTarget.make({
