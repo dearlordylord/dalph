@@ -2472,14 +2472,50 @@ await scenario("offers an explicit reload escape while a runner is still waiting
   assert(reloadCount === 1, "The recovery action must reload the isolated Lab")
 })
 
-await scenario("the real browser entry runs every maintained cassette and retains every terminal result", async () => {
-  const { document, root, settled } = installDom()
+await scenario("the real browser entry runs a selected maintained cassette with fresh production identity", async () => {
+  const { document, settled } = installDom()
   await import("./entry.ts")
+  const selector = document.querySelector<HTMLInputElement>("[data-role='cassette-selector']")
+  const runAll = [...document.querySelectorAll("button")].find(({ textContent }) =>
+    textContent === `Run all ${expectedCatalogSize} cassettes`
+  )
+  assert(selector !== null && runAll !== undefined, "The real entry must expose the complete catalog and counted Run all action")
+  assert(document.querySelectorAll("[data-role='cassette-options'] option").length === expectedCatalogSize, "The real entry must retain every maintained choice")
+  if (selector === null) throw new Error("The real entry selector is missing")
+  chooseCassette(selector, "authored:singletonTaskCompletes")
+  const done = settled(singleCassetteSettledEvent)
+  ;(document.querySelector("article button") as HTMLButtonElement | null)?.click()
+  await done
+  assert(document.querySelector("article")?.dataset.catalogKey === "authored:singletonTaskCompletes", "The real entry must run the selected exact cassette")
+  assert(document.querySelector("article")?.dataset.state === "Completed", "The real entry must retain the production terminal result")
+  const runIdentity = [...document.querySelectorAll("[data-role='execution-evidence'] dt")].find(({ textContent }) => textContent === "Run identity")?.nextElementSibling?.textContent
+  const freshRunId = Schema.decodeUnknownSync(RunId)(runIdentity)
+  const first = resultByKey.get("authored:singletonTaskCompletes")
+  assert(first?._tag === "Completed" && first.runId !== freshRunId, "The real entry must allocate a fresh production Run rather than reuse the first batch's result")
+  assert(document.querySelector("[data-role='raw-execution-result'] pre") !== null, "The real entry must retain its exact production evidence")
+})
+
+await scenario("browser Run all retains every first-batch production result through the controlled runner boundary", async () => {
+  const { document, root, settled } = installDom()
+  const calls: Array<(typeof maintainedCassetteKeys)[number]> = []
+  // Production execution was proved above. This boundary returns those exact
+  // typed results to prove full-catalog UI retention without executing them twice.
+  mountCassetteLab({
+    revision: "acceptance-revision",
+    root,
+    rows: maintainedCassetteRows,
+    runCassette: (key) => {
+      calls.push(key)
+      return cannedRunner(key)
+    }
+  })
   const allSettled = settled(everyCassetteSettledEvent)
   const runAll = [...document.querySelectorAll("button")].find(({ textContent }) => textContent?.startsWith("Run all "))
   runAll?.click()
   await allSettled
-  assert(document.querySelectorAll("article").length === 1, "The real entry must retain one shared cassette UI after Run all")
+  assert(JSON.stringify(calls) === JSON.stringify(maintainedCassetteKeys), "Run all must call every exact catalog key once in catalog order")
+  assert(new Set(calls).size === expectedCatalogSize, "Run all must not repeat or omit a catalog key")
+  assert(document.querySelectorAll("article").length === 1, "The browser must retain one shared cassette UI after Run all")
   assert(document.querySelector("article")?.dataset.state === "Completed", "The selected maintained cassette must project its retained terminal result")
   assert(document.querySelectorAll("[data-role='execution-evidence']").length === 1, "Only the selected cassette's retained evidence may be projected")
   const selector = document.querySelector("[data-role='cassette-selector']") as HTMLInputElement | null
@@ -2491,7 +2527,7 @@ await scenario("the real browser entry runs every maintained cassette and retain
   assert(document.querySelector("[data-role='delivery-workbench'] dalph-delivery-graph") !== null, "The selected cassette's permanent workbench must retain its current graph")
   assert(document.querySelector("details[data-role='all-task-facts']")?.hasAttribute("open") === false, "Run all must keep the secondary all-task matrix collapsed")
   assert([...document.querySelectorAll<HTMLDetailsElement>("[data-role='execution-evidence']")].every(({ open }) => !open), "Run all must keep successful terminal evidence collapsed")
-  assert(root.querySelector("[data-role='catalog-summary']")?.textContent?.startsWith(`${expectedCatalogSize} completed`) === true, "The real entry must show the complete catalog summary")
+  assert(root.querySelector("[data-role='catalog-summary']")?.textContent?.startsWith(`${expectedCatalogSize} completed`) === true, "The browser must show the complete catalog summary")
   const replacement = maintainedCassetteRows.find(({ category }) => category === "IntegrationFinality")
   if (selector === null || replacement === undefined) throw new Error("A completed replacement cassette is required")
   chooseCassette(selector, replacement.catalogKey)

@@ -155,8 +155,18 @@ discards all displayed results.
 
 - `runs every maintained cassette through production to its declared end`
   is the command-independent execution proof for the whole catalog.
-- `the real browser entry runs every maintained cassette and retains every terminal result`
-  checks the browser update path and the exact completed/failed summary.
+- `browser Run all retains every first-batch production result through the controlled runner boundary`
+  returns the first execution proof's exact typed terminal results through the
+  injected browser runner boundary, checks every catalog key is called once in
+  order, and preserves the browser update path, retained evidence, replacement
+  selection, and exact completed/failed summary. It does not claim a second
+  fresh production execution of the catalog.
+- `the real browser entry runs a selected maintained cassette with fresh production identity`
+  imports the unchanged browser entry, checks its complete catalog and counted
+  Run all action, runs the exact selected singleton through production, and
+  requires a fresh Run identity compared with the first batch and retained
+  terminal evidence. `reruns one maintained cassette with fresh production identity`
+  independently checks the production runner's fresh-identity rerun.
 - `browser-smoke drives the real Orb application through every maintained cassette`
   runs through the package's `browser-smoke` command against `REDUCER_LAB_URL`,
   requires the search suggestions' exact five production-catalog labels, completes the
