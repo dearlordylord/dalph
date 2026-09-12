@@ -22,20 +22,20 @@ it.effect(
     Effect.gen(function* () {
       const result = yield* runIssue349AcceptedPublicationObserver
 
-      // Inspect the actual accepted recovered route, not a fabricated fresh continuation.
-      const observed = result.recoveredBObservations[0]
+      // Inspect the actual selected observation and mutate its recorded route for the rejection controls.
+      const observed = result.bObservations[0]
       expect(observed).toBeDefined()
       if (
         observed?._tag !== "IdentityFreeAction" ||
-        observed.proposal.route._tag !== "IdentityFreeWorkflowRoute" ||
-        observed.proposal.route.transition._tag !== "ObservePlannedAttemptExecutorWork"
+        observed.proposal.route._tag !== "FreshExecutorWorkflowRoute" ||
+        observed.proposal.route.step._tag !== "ObservePlannedAttemptExecutorWork"
       ) {
-        return yield* Effect.die("DS-13 requires an actual recovered B1 observation")
+        return yield* Effect.die("DS-13 requires an actual B1 observation")
       }
       const proposal = observed.proposal
-      const transition = observed.proposal.route.transition
-      expect(transition.plannedAttempt.attemptId).toBe(scenario.attempts.B1)
-      expect(transition.acceptedProgress._tag).toBe("ExecutorReportAccepted")
+      const step = observed.proposal.route.step
+      expect(step.plannedAttempt.attemptId).toBe(scenario.attempts.B1)
+      expect(step.acceptedProgress._tag).toBe("ExecutorReportAccepted")
       const rejected: ReadonlyArray<readonly [string, MaterializedDeliveryAction]> = [
         [
           "wrong B2",
@@ -44,11 +44,11 @@ it.effect(
             proposal: {
               ...proposal,
               route: {
-                _tag: "IdentityFreeWorkflowRoute",
-                transition: {
-                  ...transition,
+                _tag: "FreshExecutorWorkflowRoute",
+                step: {
+                  ...step,
                   plannedAttempt: PlannedTaskAttempt.make({
-                    ...transition.plannedAttempt,
+                    ...step.plannedAttempt,
                     attemptId: AttemptId.make("unexpected-B2")
                   })
                 }
@@ -80,9 +80,9 @@ it.effect(
             proposal: {
               ...proposal,
               route: {
-                _tag: "IdentityFreeWorkflowRoute",
-                transition: {
-                  ...transition,
+                _tag: "FreshExecutorWorkflowRoute",
+                step: {
+                  ...step,
                   acceptedProgress: {
                     _tag: "ExecutorReportAccepted",
                     ordinal: PlannedAttemptExecutorReportOrdinal.make(999)
@@ -103,7 +103,7 @@ it.effect(
                 step: {
                   _tag: "BeginPlannedAttemptExecutorWork",
                   claimOperationId: OperationId.make("unexpected-B-Begin-claim"),
-                  plannedAttempt: transition.plannedAttempt,
+                  plannedAttempt: step.plannedAttempt,
                   specification: scenario.specifications.F1.B,
                   task: {
                     id: scenario.taskIds.B,
@@ -120,10 +120,7 @@ it.effect(
       for (const [name, action] of rejected) {
         const failed = yield* Deferred.make<unknown>()
         const exit = yield* Effect.exit(
-          observeIssue268ActivationFailure(
-            validateIssue268Ds13Action(action, undefined, result.recoveredBRecords),
-            failed
-          )
+          observeIssue268ActivationFailure(validateIssue268Ds13Action(action, undefined, result.bRecords), failed)
         )
         expect(exit._tag, name).toBe("Failure")
         if (exit._tag === "Failure") expect(yield* Deferred.await(failed), name).toBe(exit.cause)

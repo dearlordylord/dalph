@@ -78,6 +78,7 @@ import {
   type TraceItem
 } from "@dalph/orchestrator"
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Ref, Scope, Stream } from "effect"
+import type { AcceptedPlannedAttemptExecutorProgress } from "../../orchestrator/src/coordination/frontier/fresh-facts.js"
 import { issue268ControlledDeliveryCharacterization as scenario } from "./issue-268-controlled-characterization-catalog.js"
 import { makeIssue275GraphRefresh, type Issue275GraphRefresh } from "./issue-275-active-graph-refresh.js"
 import type {
@@ -252,7 +253,7 @@ interface Issue268Ds12Controls {
 }
 
 interface Issue268Ds13Controls {
-  readonly recoveredObservations: Ref.Ref<ReadonlyArray<MaterializedDeliveryAction>>
+  readonly bObservations: Ref.Ref<ReadonlyArray<MaterializedDeliveryAction>>
   readonly checkpoint: Deferred.Deferred<DeliveryRelationInputBundle>
   readonly checkpointRelease: Deferred.Deferred<void>
   readonly integrationQueueActionCount: Ref.Ref<number>
@@ -315,32 +316,20 @@ const isExactDs13AIntegrationQueueAction = (action: MaterializedDeliveryAction) 
   )
 }
 
-const isExactDs13BPassiveObservationAction = (action: MaterializedDeliveryAction) => {
-  if (action._tag !== "IdentityFreeAction" || action.proposal.route._tag !== "FreshExecutorWorkflowRoute") {
-    return false
-  }
-  const { admission } = action.proposal
-  const step = action.proposal.route.step
-  return [
-    step._tag === "ObservePlannedAttemptExecutorWork" && isIssue268ExactB1Plan(step.plannedAttempt),
-    admission.taskWorkPosition._tag === "TaskWorkPositionRequired" &&
-      admission.taskWorkPosition.mode === "ReserveOrReuse" &&
-      admission.taskWorkPosition.taskId === scenario.taskIds.B,
-    admission.plannedAttemptProtocol._tag === "PlannedAttemptProtocolRequired" &&
-      admission.plannedAttemptProtocol.correlation.runId === scenario.runId &&
-      admission.plannedAttemptProtocol.correlation.attemptId === scenario.attempts.B1
-  ].every(Boolean)
-}
-
-const isExactDs13RecoveredBObservation = (
+const isExactDs13BPassiveObservationAction = (
   action: MaterializedDeliveryAction,
   records: ReadonlyArray<JournalRecord>
 ) => {
-  if (action._tag !== "IdentityFreeAction" || action.proposal.route._tag !== "IdentityFreeWorkflowRoute") return false
-  const transition = action.proposal.route.transition
-  if (transition._tag !== "ObservePlannedAttemptExecutorWork" || !isIssue268ExactB1Plan(transition.plannedAttempt))
+  if (action._tag !== "IdentityFreeAction" || action.proposal.route._tag !== "FreshExecutorWorkflowRoute") {
     return false
-  const { admission } = action.proposal
+  }
+  const step = action.proposal.route.step
+  if (step._tag !== "ObservePlannedAttemptExecutorWork") return false
+  return exactDs13BObservationMatches(action, step, records)
+}
+
+/** Report ordinal accepted after the exact original B1 Resume response, not the command ordinal. */
+const acceptedDs13ResumeReportOrdinal = (records: ReadonlyArray<JournalRecord>) => {
   const resumeIntent = records.findLast(
     ({ event }) =>
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
@@ -359,25 +348,58 @@ const isExactDs13RecoveredBObservation = (
       event.report.correlation.runId === scenario.runId &&
       event.report.correlation.attemptId === scenario.attempts.B1
   )
-  return (
-    resumeIntent?.event._tag === "PlannedAttemptExecutorCommandIntended" &&
-    resumed?.event._tag === "PlannedAttemptExecutorCommandResponseObserved" &&
-    resumed.position > resumeIntent.position &&
-    resumed.event.commandOrdinal === resumeIntent.event.ordinal &&
-    report?.event._tag === "PlannedAttemptExecutorWorkReported" &&
-    report.position > resumed.position &&
-    report.event.report._tag === "ExecutorWorkExecuting" &&
-    samePlannedAttemptExecutorReport(report.event.report, resumed.event.report) &&
-    transition.acceptedProgress._tag === "ExecutorReportAccepted" &&
-    transition.acceptedProgress.ordinal === report.event.ordinal &&
-    deliveryProposalOrderTaskId(action.proposal.order) === scenario.taskIds.B &&
-    admission.taskWorkPosition._tag === "TaskWorkPositionRequired" &&
-    admission.taskWorkPosition.mode === "ReserveOrReuse" &&
-    admission.taskWorkPosition.taskId === scenario.taskIds.B &&
-    admission.plannedAttemptProtocol._tag === "PlannedAttemptProtocolRequired" &&
-    plannedAttemptExecutorCorrelationKey(admission.plannedAttemptProtocol.correlation) ===
-      plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(transition.plannedAttempt))
+  if (
+    resumeIntent?.event._tag !== "PlannedAttemptExecutorCommandIntended" ||
+    resumed?.event._tag !== "PlannedAttemptExecutorCommandResponseObserved" ||
+    report?.event._tag !== "PlannedAttemptExecutorWorkReported"
   )
+    return undefined
+  const exactResumeReport = [
+    resumed.position > resumeIntent.position,
+    resumed.event.commandOrdinal === resumeIntent.event.ordinal,
+    report.position > resumed.position,
+    report.event.report._tag === "ExecutorWorkExecuting",
+    samePlannedAttemptExecutorReport(report.event.report, resumed.event.report)
+  ].every(Boolean)
+  return exactResumeReport ? report.event.ordinal : undefined
+}
+
+const exactDs13BObservationMatches = (
+  action: Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>,
+  observation: {
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly acceptedProgress: AcceptedPlannedAttemptExecutorProgress
+  },
+  records: ReadonlyArray<JournalRecord>
+) => {
+  const { admission } = action.proposal
+  if (
+    !isIssue268ExactB1Plan(observation.plannedAttempt) ||
+    observation.acceptedProgress._tag !== "ExecutorReportAccepted" ||
+    admission.taskWorkPosition._tag !== "TaskWorkPositionRequired" ||
+    admission.plannedAttemptProtocol._tag !== "PlannedAttemptProtocolRequired"
+  )
+    return false
+  const reportOrdinal = acceptedDs13ResumeReportOrdinal(records)
+  return [
+    reportOrdinal !== undefined,
+    observation.acceptedProgress.ordinal === reportOrdinal,
+    deliveryProposalOrderTaskId(action.proposal.order) === scenario.taskIds.B,
+    admission.taskWorkPosition.mode === "ReserveOrReuse",
+    admission.taskWorkPosition.taskId === scenario.taskIds.B,
+    plannedAttemptExecutorCorrelationKey(admission.plannedAttemptProtocol.correlation) ===
+      plannedAttemptExecutorCorrelationKey(plannedAttemptExecutorCorrelation(observation.plannedAttempt))
+  ].every(Boolean)
+}
+
+const isExactDs13RecoveredBObservation = (
+  action: MaterializedDeliveryAction,
+  records: ReadonlyArray<JournalRecord>
+) => {
+  if (action._tag !== "IdentityFreeAction" || action.proposal.route._tag !== "IdentityFreeWorkflowRoute") return false
+  const transition = action.proposal.route.transition
+  if (transition._tag !== "ObservePlannedAttemptExecutorWork") return false
+  return exactDs13BObservationMatches(action, transition, records)
 }
 
 /** Test observer surfaces the original failed activation while leaving its exit unchanged. */
@@ -396,13 +418,10 @@ export const validateIssue268Ds13Action = (
   controls: Issue268Ds13Controls | undefined,
   records: ReadonlyArray<JournalRecord>
 ): Effect.Effect<void> => {
-  // B1 was reconstructed, not freshly admitted: its accepted report advances a recovered observation route.
-  if (isExactDs13RecoveredBObservation(action, records))
-    return controls === undefined
-      ? Effect.void
-      : Ref.update(controls.recoveredObservations, (current) => [...current, action])
+  // Both observation routes retain B1 and require its exact accepted Resume report; neither admits another Begin.
+  if (isExactDs13RecoveredBObservation(action, records) || isExactDs13BPassiveObservationAction(action, records))
+    return controls === undefined ? Effect.void : Ref.update(controls.bObservations, (current) => [...current, action])
   if (isExactDs13BResumeAction(action)) return Effect.void
-  if (isExactDs13BPassiveObservationAction(action)) return Effect.void
   if (isExactDs13AIntegrationQueueAction(action)) {
     return controls === undefined
       ? Effect.die("DS-13 lacks integration queue controls")
@@ -2368,7 +2387,7 @@ const runIssue268RestartCharacterization = (
       const ds13Checkpoint = yield* Deferred.make<DeliveryRelationInputBundle>()
       const ds13CheckpointRelease = yield* Deferred.make<void>()
       const ds13IntegrationQueueActionCount = yield* Ref.make(0)
-      const ds13RecoveredObservations = yield* Ref.make<ReadonlyArray<MaterializedDeliveryAction>>([])
+      const ds13BObservations = yield* Ref.make<ReadonlyArray<MaterializedDeliveryAction>>([])
       const idleHandoffCount = yield* Ref.make(0)
       const idleHandoffReleases = [
         yield* Deferred.make<void>(),
@@ -2449,7 +2468,7 @@ const runIssue268RestartCharacterization = (
                   continuation === "DS349"
                     ? {
                         ds13: {
-                          recoveredObservations: ds13RecoveredObservations,
+                          bObservations: ds13BObservations,
                           checkpoint: ds13Checkpoint,
                           checkpointRelease: ds13CheckpointRelease,
                           integrationQueueActionCount: ds13IntegrationQueueActionCount
@@ -2843,8 +2862,8 @@ const runIssue268RestartCharacterization = (
           ds12,
           ds13,
           ds349: {
-            recoveredBObservations: yield* Ref.get(ds13RecoveredObservations),
-            recoveredBRecords: afterDs13.records,
+            bObservations: yield* Ref.get(ds13BObservations),
+            bRecords: afterDs13.records,
             activationTimeline: yield* Ref.get(issue349Timeline),
             activeRefreshCount: (yield* Ref.get(activeRefreshCount)) - activeRefreshBaseline,
             after,
