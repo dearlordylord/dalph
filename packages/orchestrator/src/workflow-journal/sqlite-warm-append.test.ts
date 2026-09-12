@@ -161,7 +161,13 @@ describe("SQLite warm append storage checkpoint", () => {
         const first = yield* Effect.forkChild(journal.append(runId, JournalRecordKey.make("first"), intent("first")))
         yield* Deferred.await(firstCommitted)
         const second = yield* Effect.forkChild(journal.append(runId, JournalRecordKey.make("second"), intent("second")))
-        yield* Effect.yieldNow
+        // forkChild queues the append on this fiber's public dispatcher; flush drains it synchronously.
+        // Append encoding is synchronous before serialization.withPermit registers the blocked acquisition.
+        const currentFiber = Fiber.getCurrent()
+        if (currentFiber === undefined) {
+          return yield* Effect.die("expected the Effect test fiber while flushing the second append")
+        }
+        currentFiber.currentDispatcher.flush()
 
         expect(yield* Ref.get(commitOrdinal)).toBe(1)
         expect(second.pollUnsafe()).toBeUndefined()
