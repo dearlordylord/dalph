@@ -162,21 +162,23 @@ const unfinishedTasksFrom = (indexes: FoldIndexes): HashMap.HashMap<TaskId, Unfi
   return unfinished
 }
 
+/** Only acquisition, executor reports, abandonment, and replacement can change an attempt's unfinished status. */
+const unfinishedAttemptAffectedBy = (event: WorkflowJournalEvent): AttemptId | undefined =>
+  event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+    ? event.plannedAttempt.attemptId
+    : event._tag === "PlannedAttemptExecutorWorkReported"
+      ? event.report.correlation.attemptId
+      : event._tag === "AttemptImplementationAbandoned" || event._tag === "PlannedAttemptReplaced"
+        ? event.subject.plannedAttempt.attemptId
+        : undefined
+
 /** Only responsibility acquisition or exact terminal/supersession changes can affect this invariant. */
 const advanceUnfinishedTasks = (
   prior: HashMap.HashMap<TaskId, UnfinishedAttempt>,
   indexes: FoldIndexes,
   record: JournalRecord
 ): HashMap.HashMap<TaskId, UnfinishedAttempt> | undefined => {
-  const event = record.event
-  const attemptId =
-    event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
-      ? event.plannedAttempt.attemptId
-      : event._tag === "PlannedAttemptExecutorWorkReported"
-        ? event.report.correlation.attemptId
-        : event._tag === "AttemptImplementationAbandoned" || event._tag === "PlannedAttemptReplaced"
-          ? event.subject.plannedAttempt.attemptId
-          : undefined
+  const attemptId = unfinishedAttemptAffectedBy(record.event)
   if (attemptId === undefined) return prior
   const responsibility = mapGet(indexes.executorResponsibilitiesBegan, attemptId)
   if (responsibility === undefined) return prior
@@ -331,20 +333,19 @@ const validateClaimRejection = (
   }
 }
 
+const lastAcquiredClaimBefore = (records: JournalHistorySource, taskId: TaskId, before: JournalPosition) =>
+  isJournalRecordEvidence(records)
+    ? lastJournalRecordForTaskKind(journalEvidenceBefore(records, before), taskId, "TaskClaimAcquired")?.event
+    : records.findLast(
+        ({ event, position }) =>
+          position < before && event._tag === "TaskClaimAcquired" && event.claim.taskId === taskId
+      )?.event
+
 const matchingReacquisitionDirection = (record: JournalRecord, runId: RunId, records: JournalHistorySource) => {
   /* v8 ignore next -- @preserve The caller invokes this helper only for an explicit acquisition intent. */
   if (record.event._tag !== "TaskClaimAcquisitionIntended") return undefined
   const { acquisition } = record.event.operation
-  const expectedClaim = isJournalRecordEvidence(records)
-    ? lastJournalRecordForTaskKind(
-        journalEvidenceBefore(records, record.position),
-        acquisition.taskId,
-        "TaskClaimAcquired"
-      )?.event
-    : records.findLast(
-        ({ event, position }) =>
-          position < record.position && event._tag === "TaskClaimAcquired" && event.claim.taskId === acquisition.taskId
-      )?.event
+  const expectedClaim = lastAcquiredClaimBefore(records, acquisition.taskId, record.position)
   /* v8 ignore start -- @preserve Missing prior acquisition authority is rejected by the caller's undefined direction result. */
   const direction =
     expectedClaim?._tag === "TaskClaimAcquired"
@@ -999,6 +1000,18 @@ const reduceRawDiagnosticHistory = (
 export const reduceUnindexedWorkflowJournalHistoryForTesting = (runId: RunId, records: ReadonlyArray<JournalRecord>) =>
   reduceRawDiagnosticHistory(runId, [...records])
 
+/** Only canonical, unique next-record envelopes may enter the indexed history kernel. */
+const hasCanonicalJournalEnvelope = (
+  record: JournalRecord,
+  expectedPosition: number,
+  runId: RunId,
+  indexes: FoldIndexes
+): boolean =>
+  record.position === expectedPosition &&
+  record.runId === runId &&
+  record.key === describeJournalEvent(record.event).expectedKey &&
+  !HashSet.has(indexes.seenKeys, record.key)
+
 /** Cold recovery and live append execute the same indexed chronological record kernel. */
 export const reduceWorkflowJournalHistory = (
   runId: RunId,
@@ -1010,18 +1023,34 @@ export const reduceWorkflowJournalHistory = (
   for (const [index, record] of records.entries()) {
     // Decoded evidence is indexed only after its envelope is canonical. Raw
     // fallback retains duplicate positions/keys and contradictory Run identity.
-    if (
-      record.position !== index + 1 ||
-      record.runId !== runId ||
-      record.key !== describeJournalEvent(record.event).expectedKey ||
-      HashSet.has(indexes.seenKeys, record.key)
-    )
+    if (!hasCanonicalJournalEnvelope(record, index + 1, runId, indexes))
       return reduceRawDiagnosticHistory(runId, records)
     evidence = appendJournalEvidence(evidence, record)
     indexes = validateRecord(record, index, runId, evidence, indexes, collector.report)
     if (!collector.isEmpty()) return reduceRawDiagnosticHistory(runId, records)
   }
   return finishValidation(runId, records, indexes, collector, evidence)
+}
+
+const reportDuplicateUnfinishedAttempt = (
+  unfinished: HashMap.HashMap<TaskId, UnfinishedAttempt>,
+  record: JournalRecord,
+  runId: RunId,
+  issues: WorkflowJournalHistoryIssueReporter
+): void => {
+  if (record.event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") return
+  const existing = mapGet(unfinished, record.event.plannedAttempt.taskId)
+  if (existing !== undefined) {
+    issues(
+      duplicateUnfinishedTaskAttemptIssue(
+        runId,
+        existing.plannedAttempt,
+        existing.position,
+        record.event.plannedAttempt,
+        record.position
+      )
+    )
+  }
 }
 
 /**
@@ -1043,12 +1072,7 @@ export const advanceWorkflowJournalHistory = (
   // Direct callers may deliberately supply nonchronological raw envelopes. Their
   // array-order diagnostics belong to the explicit raw boundary, not live append.
   // Journal publication has already checked the exact next-position envelope.
-  if (
-    record.position !== prior.prefix.records.length + 1 ||
-    record.runId !== prior.runId ||
-    record.key !== describeJournalEvent(record.event).expectedKey ||
-    HashSet.has(indexes.seenKeys, record.key)
-  ) {
+  if (!hasCanonicalJournalEnvelope(record, prior.prefix.records.length + 1, prior.runId, indexes)) {
     return reduceRawDiagnosticHistory(prior.runId, [...materializeJournalRecords(prior.prefix.records), record])
   }
 
@@ -1062,20 +1086,7 @@ export const advanceWorkflowJournalHistory = (
   const candidate = appendJournalEvidence(prior.prefix, record)
   const advancedIndexes = validateRecord(record, prior.prefix.records.length, prior.runId, candidate, indexes, issues)
   const advancedUnfinished = advanceUnfinishedTasks(unfinished, advancedIndexes, record)
-  if (advancedUnfinished === undefined && record.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
-    const existing = mapGet(unfinished, record.event.plannedAttempt.taskId)
-    if (existing !== undefined) {
-      issues(
-        duplicateUnfinishedTaskAttemptIssue(
-          prior.runId,
-          existing.plannedAttempt,
-          existing.position,
-          record.event.plannedAttempt,
-          record.position
-        )
-      )
-    }
-  }
+  if (advancedUnfinished === undefined) reportDuplicateUnfinishedAttempt(unfinished, record, prior.runId, issues)
   validateRunLifecycle(prior.runId, candidate, issues)
   if (!collector.isEmpty()) {
     const rejected: InvalidWorkflowJournalSuccessor = {

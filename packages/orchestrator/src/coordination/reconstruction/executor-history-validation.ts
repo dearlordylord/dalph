@@ -571,6 +571,29 @@ const isSafeToExecutingTransition = (
   priorAccepted.event.report._tag === "ExecutorWorkSafelySuspended" &&
   event.report._tag === "ExecutorWorkExecuting"
 
+/** Accepted keys are unique; malformed raw histories retain the last exact causal Resume match. */
+const exactCausalResumeCommand = (
+  records: JournalHistorySource,
+  event: ExecutorWorkReportedEvent,
+  commandOrdinal: ExecutorCommandIntentEvent["ordinal"] | undefined,
+  evidencePosition: JournalPosition,
+  priorAcceptedPosition: JournalPosition
+): JournalRecord | undefined => {
+  if (commandOrdinal === undefined) return undefined
+  const candidate = isJournalRecordEvidence(records)
+    ? journalRecordByKey(
+        records,
+        plannedAttemptExecutorCommandIntendedRecordKey(event.report.correlation.attemptId, commandOrdinal)
+      )
+    : records.findLast((record) =>
+        isMatchingCausalResume(record, evidencePosition, priorAcceptedPosition, event, commandOrdinal)
+      )
+  return candidate !== undefined &&
+    isMatchingCausalResume(candidate, evidencePosition, priorAcceptedPosition, event, commandOrdinal)
+    ? candidate
+    : undefined
+}
+
 const validateSafeToExecutingCausality = (
   event: ExecutorWorkReportedEvent,
   record: JournalRecord,
@@ -583,23 +606,14 @@ const validateSafeToExecutingCausality = (
   if (!isSafeToExecutingTransition(priorAccepted, event)) return
   const commandOrdinal = causalExecutorCommandOrdinal(latestUnacceptedEvidence)
   const evidencePosition = latestUnacceptedEvidence?.position ?? record.position
-  // Accepted evidence has unique keys; raw cold diagnostics must still select the last malformed duplicate.
-  const resumeCommand =
-    commandOrdinal === undefined
-      ? undefined
-      : isJournalRecordEvidence(records)
-        ? journalRecordByKey(
-            records,
-            plannedAttemptExecutorCommandIntendedRecordKey(event.report.correlation.attemptId, commandOrdinal)
-          )
-        : records.findLast((candidate) =>
-            isMatchingCausalResume(candidate, evidencePosition, priorAccepted.position, event, commandOrdinal)
-          )
-  const matchingResume =
-    commandOrdinal !== undefined &&
-    resumeCommand !== undefined &&
-    isMatchingCausalResume(resumeCommand, evidencePosition, priorAccepted.position, event, commandOrdinal)
-  if (!matchingResume) {
+  const resumeCommand = exactCausalResumeCommand(
+    records,
+    event,
+    commandOrdinal,
+    evidencePosition,
+    priorAccepted.position
+  )
+  if (resumeCommand === undefined) {
     semanticIssue(
       issues,
       runId,

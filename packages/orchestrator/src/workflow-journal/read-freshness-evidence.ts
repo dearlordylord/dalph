@@ -50,40 +50,48 @@ const attemptKey = (plan: PlannedTaskAttempt, kind: AttemptReadKind, target?: In
     target?.repository,
     target?.ref
   ])
-const keysOf = ({ event }: JournalRecord): ReadonlyArray<string> => {
-  if (event._tag === "TaskTrackerFactsObserved") {
-    const facts = event.observation
-    if (
-      facts._tag === "FocusedTaskWorkSpecificationFacts" ||
-      facts._tag === "FocusedTaskClaimFacts" ||
-      facts._tag === "FocusedTaskClaimFactsUnreadable"
-    )
-      return [
-        taskKey(
-          "Observation",
-          facts._tag === "FocusedTaskWorkSpecificationFacts" ? facts.factFamily.taskId : facts.coverage.taskId,
-          facts.target,
-          facts._tag
-        )
-      ]
-  }
-  if (event._tag === "TaskTrackerReadIntentRecorded") {
-    const operation = event.operation
-    if (operation._tag === "ReadTrackerGraph")
-      return operation.readShape.explicitlyCoveredTaskIds.map((taskId) =>
-        taskKey("Read", taskId, operation.target, operation._tag)
-      )
-    if (operation._tag === "ReadTaskWorkSpecification" || operation._tag === "ReadTaskClaim")
-      return [taskKey("Read", operation.taskId, operation.target, operation._tag)]
-  }
-  if (event._tag === "GitReadIntentRecorded") {
-    const operation = event.operation
-    if (operation._tag === "ReadTaskWorktree") return [attemptKey(operation.plannedAttempt, operation._tag)]
+const observationKeys = (
+  facts: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>["observation"]
+): ReadonlyArray<string> => {
+  if (
+    facts._tag === "FocusedTaskWorkSpecificationFacts" ||
+    facts._tag === "FocusedTaskClaimFacts" ||
+    facts._tag === "FocusedTaskClaimFactsUnreadable"
+  )
     return [
-      attemptKey(operation.plannedAttempt, operation._tag),
-      attemptKey(operation.plannedAttempt, operation._tag, operation.integrationTarget)
+      taskKey(
+        "Observation",
+        facts._tag === "FocusedTaskWorkSpecificationFacts" ? facts.factFamily.taskId : facts.coverage.taskId,
+        facts.target,
+        facts._tag
+      )
     ]
-  }
+  return []
+}
+const trackerIntentKeys = (
+  operation: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerReadIntentRecorded" }>["operation"]
+): ReadonlyArray<string> => {
+  if (operation._tag === "ReadTrackerGraph")
+    return operation.readShape.explicitlyCoveredTaskIds.map((taskId) =>
+      taskKey("Read", taskId, operation.target, operation._tag)
+    )
+  if (operation._tag === "ReadTaskWorkSpecification" || operation._tag === "ReadTaskClaim")
+    return [taskKey("Read", operation.taskId, operation.target, operation._tag)]
+  return []
+}
+const gitIntentKeys = (
+  operation: Extract<JournalRecord["event"], { readonly _tag: "GitReadIntentRecorded" }>["operation"]
+): ReadonlyArray<string> => {
+  if (operation._tag === "ReadTaskWorktree") return [attemptKey(operation.plannedAttempt, operation._tag)]
+  return [
+    attemptKey(operation.plannedAttempt, operation._tag),
+    attemptKey(operation.plannedAttempt, operation._tag, operation.integrationTarget)
+  ]
+}
+const keysOf = ({ event }: JournalRecord): ReadonlyArray<string> => {
+  if (event._tag === "TaskTrackerFactsObserved") return observationKeys(event.observation)
+  if (event._tag === "TaskTrackerReadIntentRecorded") return trackerIntentKeys(event.operation)
+  if (event._tag === "GitReadIntentRecorded") return gitIntentKeys(event.operation)
   return []
 }
 

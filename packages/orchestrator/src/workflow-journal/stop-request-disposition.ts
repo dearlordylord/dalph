@@ -1,6 +1,7 @@
 import { HashMap, Option } from "effect"
 import type { OperationId } from "../workflow/identity.js"
 import type { AttemptChoiceRequestId } from "../workflow/protocols/attempt-choice/events.js"
+import type { JournalPosition } from "./identity.js"
 import type { JournalRecord } from "./store.js"
 import {
   appendJournalRecord,
@@ -38,6 +39,20 @@ export const emptyStopRequestDisposition = (): StopRequestDispositionEvidence =>
   retain({ byRequestKind: HashMap.empty(), releaseIntents: HashMap.empty() })
 const keyFor = (request: AttemptChoiceRequestId, kind: DispositionKind) =>
   JSON.stringify([request.runId, request.nonce, kind])
+const priorStopRequestForRelease = (
+  roots: Roots,
+  operationId: OperationId,
+  position: JournalPosition
+): AttemptChoiceRequestId | undefined => {
+  const intents = Option.getOrElse(HashMap.get(roots.releaseIntents, operationId), emptyJournalRecords)
+  const intent = lastVisible(intents, position - 1)
+  return intent !== undefined &&
+    intent.position < position &&
+    intent.event._tag === "TaskClaimReleaseIntended" &&
+    intent.event.operation.authority._tag === "StoppedAttemptClaimReleaseAuthority"
+    ? intent.event.operation.authority.requestId
+    : undefined
+}
 const requestFor = (roots: Roots, record: JournalRecord): AttemptChoiceRequestId | undefined => {
   const event = record.event
   if (event._tag === "AttemptImplementationAbandoned" || event._tag === "StoppedAttemptClaimNoReleaseObserved")
@@ -46,14 +61,8 @@ const requestFor = (roots: Roots, record: JournalRecord): AttemptChoiceRequestId
     return event.operation.authority._tag === "StoppedAttemptClaimReleaseAuthority"
       ? event.operation.authority.requestId
       : undefined
-  if (event._tag !== "TaskClaimReleased") return undefined
-  const intents = Option.getOrElse(HashMap.get(roots.releaseIntents, event.release.operationId), emptyJournalRecords)
-  const intent = lastVisible(intents, record.position - 1)
-  return intent !== undefined &&
-    intent.position < record.position &&
-    intent.event._tag === "TaskClaimReleaseIntended" &&
-    intent.event.operation.authority._tag === "StoppedAttemptClaimReleaseAuthority"
-    ? intent.event.operation.authority.requestId
+  return event._tag === "TaskClaimReleased"
+    ? priorStopRequestForRelease(roots, event.release.operationId, record.position)
     : undefined
 }
 

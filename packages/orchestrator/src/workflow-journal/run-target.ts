@@ -11,6 +11,21 @@ import {
   type JournalHistorySource
 } from "./record-evidence.js"
 import { intentRecordKey } from "./record-key.js"
+import type { JournalRecord } from "./store.js"
+
+const isClaimReadBetween = (
+  { event, position }: JournalRecord,
+  operationId: OperationId,
+  taskId: TaskId,
+  after: JournalPosition,
+  before: JournalPosition
+): boolean =>
+  position > after &&
+  position < before &&
+  event._tag === "TaskTrackerReadIntentRecorded" &&
+  event.operation._tag === "ReadTaskClaim" &&
+  event.operation.operationId === operationId &&
+  event.operation.taskId === taskId
 
 /** The immutable tracker target recorded by exactly one valid Run beginning. */
 export const exactWorkflowRunTargetFor = (records: JournalHistorySource): TrackerTarget | undefined => {
@@ -46,23 +61,12 @@ export const claimReadMatchesTarget = (
   if (target === undefined) return false
   const read = isJournalRecordEvidence(records)
     ? journalRecordByKey(records, intentRecordKey(observationOperationId))
-    : records.find(
-        ({ event, position }) =>
-          position > after &&
-          position < before &&
-          event._tag === "TaskTrackerReadIntentRecorded" &&
-          event.operation._tag === "ReadTaskClaim" &&
-          event.operation.operationId === observationOperationId &&
-          event.operation.taskId === taskId
-      )
+    : records.find((record) => isClaimReadBetween(record, observationOperationId, taskId, after, before))
   return (
     read !== undefined &&
-    read.position > after &&
-    read.position < before &&
+    isClaimReadBetween(read, observationOperationId, taskId, after, before) &&
     read.event._tag === "TaskTrackerReadIntentRecorded" &&
     read.event.operation._tag === "ReadTaskClaim" &&
-    read.event.operation.operationId === observationOperationId &&
-    read.event.operation.taskId === taskId &&
     taskTrackerTargetKey(read.event.operation.target) === taskTrackerTargetKey(target)
   )
 }

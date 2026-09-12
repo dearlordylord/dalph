@@ -162,6 +162,29 @@ const focusedClaimObservationRecord = (
   record.event.observation.coverage.taskId === taskId &&
   taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
 
+const exactClaimObservationAfter = (
+  bounded: JournalHistorySource,
+  operationId: OperationId,
+  taskId: PlannedTaskAttempt["taskId"],
+  after: JournalPosition,
+  immutableRunTarget: TrackerTarget | undefined
+): ClaimObservationRecord | undefined => {
+  const exact = isJournalRecordEvidence(bounded)
+    ? journalRecordByKey(bounded, outcomeRecordKey(operationId))
+    : bounded.findLast(
+        (candidate) =>
+          candidate.position > after &&
+          focusedClaimObservationRecord(candidate, taskId, immutableRunTarget) &&
+          candidate.event.operationId === operationId
+      )
+  return exact !== undefined &&
+    exact.position > after &&
+    focusedClaimObservationRecord(exact, taskId, immutableRunTarget) &&
+    exact.event.operationId === operationId
+    ? exact
+    : undefined
+}
+
 const claimObservationRecordFor = (
   records: JournalHistorySource,
   operationId: OperationId,
@@ -171,21 +194,7 @@ const claimObservationRecordFor = (
   immutableRunTarget: TrackerTarget | undefined
 ): ClaimObservationRecord | undefined => {
   const bounded = priorRecords(records, before)
-  const exact = isJournalRecordEvidence(bounded)
-    ? journalRecordByKey(bounded, outcomeRecordKey(operationId))
-    : bounded.findLast(
-        (candidate) =>
-          candidate.position > after &&
-          focusedClaimObservationRecord(candidate, taskId, immutableRunTarget) &&
-          candidate.event.operationId === operationId
-      )
-  const observation =
-    exact !== undefined &&
-    exact.position > after &&
-    focusedClaimObservationRecord(exact, taskId, immutableRunTarget) &&
-    exact.event.operationId === operationId
-      ? exact
-      : undefined
+  const observation = exactClaimObservationAfter(bounded, operationId, taskId, after, immutableRunTarget)
   const latestFocused = isJournalRecordEvidence(bounded)
     ? Array.from(journalRecordsForTask(bounded, taskId)).findLast((candidate) =>
         focusedClaimObservationRecord(candidate, taskId, immutableRunTarget)
@@ -216,6 +225,27 @@ const claimObservationIsAbsentOrForeign = (
 
 type ClaimReadOperation = typeof WorkflowOperation.cases.ReadTaskClaim.Type
 
+type ClaimReadIntentRecord = JournalRecord & {
+  readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerReadIntentRecorded" }> & {
+    readonly operation: ClaimReadOperation
+  }
+}
+
+const isExactClaimReadIntentAfter = (
+  record: JournalRecord,
+  operationId: OperationId,
+  taskId: PlannedTaskAttempt["taskId"],
+  after: JournalPosition,
+  immutableRunTarget: TrackerTarget | undefined
+): record is ClaimReadIntentRecord =>
+  record.position > after &&
+  record.event._tag === "TaskTrackerReadIntentRecorded" &&
+  record.event.operation._tag === "ReadTaskClaim" &&
+  record.event.operation.operationId === operationId &&
+  record.event.operation.taskId === taskId &&
+  immutableRunTarget !== undefined &&
+  taskTrackerTargetKey(record.event.operation.target) === taskTrackerTargetKey(immutableRunTarget)
+
 const claimReadIntentFor = (
   records: JournalHistorySource,
   operationId: OperationId,
@@ -223,35 +253,17 @@ const claimReadIntentFor = (
   after: JournalPosition,
   before: JournalPosition,
   immutableRunTarget: TrackerTarget | undefined
-): ClaimReadOperation | undefined =>
-  (() => {
-    const bounded = priorRecords(records, before)
-    const intent = isJournalRecordEvidence(bounded)
-      ? journalRecordByKey(bounded, intentRecordKey(operationId))
-      : bounded.findLast(
-          ({ event, position }) =>
-            position > after &&
-            event._tag === "TaskTrackerReadIntentRecorded" &&
-            event.operation._tag === "ReadTaskClaim" &&
-            event.operation.operationId === operationId &&
-            event.operation.taskId === taskId &&
-            immutableRunTarget !== undefined &&
-            taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(immutableRunTarget)
-        )
-    if (intent?.event._tag !== "TaskTrackerReadIntentRecorded") return undefined
-    if (
-      intent.position <= after ||
-      intent.event.operation._tag !== "ReadTaskClaim" ||
-      intent.event.operation.operationId !== operationId ||
-      intent.event.operation.taskId !== taskId ||
-      immutableRunTarget === undefined ||
-      taskTrackerTargetKey(intent.event.operation.target) !== taskTrackerTargetKey(immutableRunTarget)
-    ) {
-      return undefined
-    }
-    if (!claimReadMatchesTarget(records, operationId, taskId, after, before, immutableRunTarget)) return undefined
-    return intent.event.operation
-  })()
+): ClaimReadOperation | undefined => {
+  const bounded = priorRecords(records, before)
+  const intent = isJournalRecordEvidence(bounded)
+    ? journalRecordByKey(bounded, intentRecordKey(operationId))
+    : bounded.findLast((record) => isExactClaimReadIntentAfter(record, operationId, taskId, after, immutableRunTarget))
+  if (intent === undefined || !isExactClaimReadIntentAfter(intent, operationId, taskId, after, immutableRunTarget)) {
+    return undefined
+  }
+  if (!claimReadMatchesTarget(records, operationId, taskId, after, before, immutableRunTarget)) return undefined
+  return intent.event.operation
+}
 
 const cancellationRelinquishmentForRelease = (
   records: JournalHistorySource,
@@ -397,6 +409,17 @@ const claimAcquisitionWasIntendedBeforeCancellation = (
     )
   })()
 
+const integrationResponsibilityPrecedesCancellation = (
+  candidate: JournalRecord,
+  started: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationStarted" }>,
+  startedAt: JournalPosition,
+  cancellationAt: JournalPosition
+): boolean =>
+  candidate.position < cancellationAt &&
+  candidate.position < startedAt &&
+  candidate.event._tag === "IntegrationResponsibilityBegan" &&
+  integrationResponsibilityEquivalence(candidate.event, started)
+
 const integrationResponsibilityWasBeganBeforeCancellation = (
   record: JournalRecord,
   records: JournalHistorySource,
@@ -406,25 +429,16 @@ const integrationResponsibilityWasBeganBeforeCancellation = (
   /* v8 ignore next -- @preserve postCancellationForwardWork calls this helper only for IntegrationStarted records. */
   if (started._tag !== "IntegrationStarted") return false
   if (!isJournalRecordEvidence(records)) {
-    return records.some((candidate) => {
-      const began = candidate.event
-      return (
-        candidate.position < cancellationAt &&
-        candidate.position < record.position &&
+    return records.some(
+      (candidate) =>
         candidate.position === started.responsibilityBeganAt &&
-        began._tag === "IntegrationResponsibilityBegan" &&
-        integrationResponsibilityEquivalence(began, started)
-      )
-    })
+        integrationResponsibilityPrecedesCancellation(candidate, started, record.position, cancellationAt)
+    )
   }
   const candidate = journalRecordByPosition(records, started.responsibilityBeganAt)
-  const began = candidate?.event
   return (
     candidate !== undefined &&
-    candidate.position < cancellationAt &&
-    candidate.position < record.position &&
-    began?._tag === "IntegrationResponsibilityBegan" &&
-    integrationResponsibilityEquivalence(began, started)
+    integrationResponsibilityPrecedesCancellation(candidate, started, record.position, cancellationAt)
   )
 }
 
@@ -846,6 +860,21 @@ const validateCancellationReleaseIntent = (
   validateCancellationReleaseDisposition(prior, operation, record.position, relinquished, onInvalid)
 }
 
+/** The exact cancellation release intent is the last matching raw record, unlike ordinary release diagnostics. */
+const cancellationReleaseIntentFor = (prior: JournalHistorySource, operationId: OperationId) => {
+  const intentCandidate = isJournalRecordEvidence(prior)
+    ? journalRecordByKey(prior, intentRecordKey(operationId))
+    : prior.findLast(
+        (candidate) =>
+          candidate.event._tag === "TaskClaimReleaseIntended" &&
+          candidate.event.operation.release.operationId === operationId
+      )
+  return intentCandidate?.event._tag === "TaskClaimReleaseIntended" &&
+    intentCandidate.event.operation.release.operationId === operationId
+    ? { ...intentCandidate, event: intentCandidate.event }
+    : undefined
+}
+
 const validateCancellationReleaseOutcome = (
   record: JournalRecord,
   runId: RunId,
@@ -855,18 +884,7 @@ const validateCancellationReleaseOutcome = (
   if (record.event._tag !== "TaskClaimReleased") return
   const released = record.event
   const prior = priorRecords(records, record.position)
-  const intentCandidate = isJournalRecordEvidence(prior)
-    ? journalRecordByKey(prior, intentRecordKey(released.release.operationId))
-    : prior.findLast(
-        (candidate) =>
-          candidate.event._tag === "TaskClaimReleaseIntended" &&
-          candidate.event.operation.release.operationId === released.release.operationId
-      )
-  const intent =
-    intentCandidate?.event._tag === "TaskClaimReleaseIntended" &&
-    intentCandidate.event.operation.release.operationId === released.release.operationId
-      ? { ...intentCandidate, event: intentCandidate.event }
-      : undefined
+  const intent = cancellationReleaseIntentFor(prior, released.release.operationId)
   if (intent?.event.operation.authority._tag !== "CancelledAttemptClaimReleaseAuthority") return
   if (intent.runId !== runId || !isExactTaskClaim(intent.event.operation.release.claim, released.release.claim)) {
     onInvalid("cancelled-attempt claim release outcome contradicts its exact intent")

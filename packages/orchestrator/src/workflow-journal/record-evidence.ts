@@ -213,10 +213,12 @@ const operationOf = ({ event }: JournalRecord): WorkflowOperation | undefined =>
 const quarantineDirectionRequestKey = ({ nonce, runId }: IntegrationQuarantineDirectionRequestId): string =>
   `${runId.length}:${runId}${nonce}`
 
-const operationIdsOf = (record: JournalRecord): HashSet.HashSet<OperationId> => {
-  let ids = HashSet.empty<OperationId>()
-  const operation = operationOf(record)
-  if (operation !== undefined) ids = HashSet.add(ids, workflowOperationId(operation))
+/** Completion reads also correlate to the exact ancestry/lookup action derived from their purpose. */
+const completionOperationIds = (
+  record: JournalRecord,
+  initial: HashSet.HashSet<OperationId>
+): HashSet.HashSet<OperationId> => {
+  let ids = initial
   if (
     record.event._tag === "TaskTrackerReadIntentRecorded" &&
     record.event.operation._tag === "ReadCompletionTaskFacts"
@@ -242,6 +244,11 @@ const operationIdsOf = (record: JournalRecord): HashSet.HashSet<OperationId> => 
         : completionTaskRequestLookupOperationIdFor(request, purpose.attemptOrdinal)
     )
   }
+  return completionAttemptOperationIds(record, ids)
+}
+
+const completionAttemptOperationIds = (record: JournalRecord, initial: HashSet.HashSet<OperationId>) => {
+  let ids = initial
   if (
     record.event._tag === "CompletionTaskAttemptIntended" ||
     record.event._tag === "CompletionTaskAcknowledged" ||
@@ -250,17 +257,34 @@ const operationIdsOf = (record: JournalRecord): HashSet.HashSet<OperationId> => 
   ) {
     ids = HashSet.add(ids, completionTaskRequestLookupOperationIdFor(record.event.request, record.event.attemptOrdinal))
   }
+  return ids
+}
+
+const directOperationIds = (record: JournalRecord, initial: HashSet.HashSet<OperationId>) => {
+  let ids = initial
   if ("operationId" in record.event) ids = HashSet.add(ids, record.event.operationId)
   // Claim acquisition outcomes carry their causal operation inside the authoritative claim.
   if (record.event._tag === "TaskClaimAcquired") ids = HashSet.add(ids, record.event.claim.operationId)
+  ids = requestOperationIds(record, ids)
+  if ("deletionOperationId" in record.event) ids = HashSet.add(ids, record.event.deletionOperationId)
+  if ("replacementOperationId" in record.event) ids = HashSet.add(ids, record.event.replacementOperationId)
+  return ids
+}
+
+const requestOperationIds = (record: JournalRecord, initial: HashSet.HashSet<OperationId>) => {
+  let ids = initial
   if ("request" in record.event && "operationId" in record.event.request) {
     ids = HashSet.add(ids, record.event.request.operationId)
   }
   if ("authorization" in record.event && "operationId" in record.event.authorization) {
     ids = HashSet.add(ids, record.event.authorization.operationId)
   }
-  if ("deletionOperationId" in record.event) ids = HashSet.add(ids, record.event.deletionOperationId)
-  if ("replacementOperationId" in record.event) ids = HashSet.add(ids, record.event.replacementOperationId)
+  return ids
+}
+
+/** Release outcomes retain both the release action and the acquisition action of the exact claim. */
+const claimReleaseOperationIds = (record: JournalRecord, initial: HashSet.HashSet<OperationId>) => {
+  let ids = initial
   if ("expectedClaim" in record.event) ids = HashSet.add(ids, record.event.expectedClaim.operationId)
   if ("release" in record.event) {
     ids = HashSet.add(ids, record.event.release.operationId)
@@ -269,6 +293,13 @@ const operationIdsOf = (record: JournalRecord): HashSet.HashSet<OperationId> => 
   if ("operation" in record.event && "release" in record.event.operation) {
     ids = HashSet.add(ids, record.event.operation.release.claim.operationId)
   }
+  return ids
+}
+
+const operationIdsOf = (record: JournalRecord): HashSet.HashSet<OperationId> => {
+  const operation = operationOf(record)
+  const initial = operation === undefined ? HashSet.empty<OperationId>() : HashSet.make(workflowOperationId(operation))
+  let ids = claimReleaseOperationIds(record, directOperationIds(record, completionOperationIds(record, initial)))
   if (
     "observation" in record.event &&
     "request" in record.event.observation &&
@@ -279,7 +310,7 @@ const operationIdsOf = (record: JournalRecord): HashSet.HashSet<OperationId> => 
   return ids
 }
 
-const attemptIdsOf = (record: JournalRecord): HashSet.HashSet<AttemptId> => {
+const descriptorAttemptIds = (record: JournalRecord): HashSet.HashSet<AttemptId> => {
   let ids = HashSet.empty<AttemptId>()
   const descriptor = describeJournalEvent(record.event)
   if (descriptor._tag === "PlannedAttemptExecutorEventDescriptor") {
@@ -289,6 +320,11 @@ const attemptIdsOf = (record: JournalRecord): HashSet.HashSet<AttemptId> => {
   if (descriptor._tag === "OperationEventDescriptor" && descriptor.plannedAttempt._tag === "PlannedAttempt") {
     ids = HashSet.add(ids, descriptor.plannedAttempt.plannedAttempt.attemptId)
   }
+  return ids
+}
+
+const attemptIdsOf = (record: JournalRecord): HashSet.HashSet<AttemptId> => {
+  let ids = descriptorAttemptIds(record)
   const event = record.event
   if ("plannedAttempt" in event) ids = HashSet.add(ids, event.plannedAttempt.attemptId)
   if ("subject" in event && "plannedAttempt" in event.subject) {
@@ -386,7 +422,7 @@ const graphObservationTaskIds = (
   ])
 }
 
-const taskIdsOf = (record: JournalRecord, indexes?: EvidenceIndexes): HashSet.HashSet<TaskId> => {
+const descriptorTaskIds = (record: JournalRecord): HashSet.HashSet<TaskId> => {
   let ids = HashSet.empty<TaskId>()
   const descriptor = describeJournalEvent(record.event)
   if (descriptor._tag === "PlannedAttemptExecutorEventDescriptor" && descriptor.plannedAttempt !== undefined) {
@@ -395,6 +431,11 @@ const taskIdsOf = (record: JournalRecord, indexes?: EvidenceIndexes): HashSet.Ha
   if (descriptor._tag === "OperationEventDescriptor" && descriptor.plannedAttempt._tag === "PlannedAttempt") {
     ids = HashSet.add(ids, descriptor.plannedAttempt.plannedAttempt.taskId)
   }
+  return ids
+}
+
+const trackerObservationTaskIds = (record: JournalRecord, initial: HashSet.HashSet<TaskId>) => {
+  let ids = initial
   const event = record.event
   if (event._tag === "TaskTrackerFactsObserved") {
     const observation = event.observation
@@ -406,35 +447,69 @@ const taskIdsOf = (record: JournalRecord, indexes?: EvidenceIndexes): HashSet.Ha
     }
     if (observation._tag === "FocusedTaskCompletionFacts") ids = HashSet.add(ids, observation.request.taskId)
   }
+  return ids
+}
+
+const subjectTaskIds = ({ event }: JournalRecord, initial: HashSet.HashSet<TaskId>) => {
+  let ids = initial
   if ("plannedAttempt" in event) ids = HashSet.add(ids, event.plannedAttempt.taskId)
   if ("subject" in event) {
     if ("plannedAttempt" in event.subject) ids = HashSet.add(ids, event.subject.plannedAttempt.taskId)
     if ("taskId" in event.subject) ids = HashSet.add(ids, event.subject.taskId)
   }
+  return ids
+}
+
+const claimTaskIds = ({ event }: JournalRecord, initial: HashSet.HashSet<TaskId>) => {
+  let ids = initial
   if ("claim" in event) {
     if ("taskId" in event.claim) ids = HashSet.add(ids, event.claim.taskId)
     if ("plannedAttempt" in event.claim) ids = HashSet.add(ids, event.claim.plannedAttempt.taskId)
   }
   if ("release" in event) ids = HashSet.add(ids, event.release.claim.taskId)
   if ("expectedClaim" in event) ids = HashSet.add(ids, event.expectedClaim.taskId)
+  return ids
+}
+
+const requestTaskIds = ({ event }: JournalRecord, initial: HashSet.HashSet<TaskId>) => {
+  let ids = initial
   if ("request" in event) {
     if ("taskId" in event.request) ids = HashSet.add(ids, event.request.taskId)
     if ("claim" in event.request) ids = HashSet.add(ids, event.request.claim.plannedAttempt.taskId)
   }
-  if ("operation" in event) {
-    const operation = event.operation
-    if ("plannedAttempt" in operation) ids = HashSet.add(ids, operation.plannedAttempt.taskId)
-    if ("taskId" in operation) ids = HashSet.add(ids, operation.taskId)
-    if ("readShape" in operation) {
-      for (const taskId of operation.readShape.explicitlyCoveredTaskIds) ids = HashSet.add(ids, taskId)
-    }
-    if ("acquisition" in operation) ids = HashSet.add(ids, operation.acquisition.taskId)
-    if ("release" in operation) ids = HashSet.add(ids, operation.release.claim.taskId)
-    if ("request" in operation) {
-      if ("taskId" in operation.request) ids = HashSet.add(ids, operation.request.taskId)
-      if ("claim" in operation.request) ids = HashSet.add(ids, operation.request.claim.plannedAttempt.taskId)
-    }
+  return ids
+}
+
+const operationTaskIds = ({ event }: JournalRecord, initial: HashSet.HashSet<TaskId>) => {
+  let ids = initial
+  if (!("operation" in event)) return ids
+  const operation = event.operation
+  if ("plannedAttempt" in operation) ids = HashSet.add(ids, operation.plannedAttempt.taskId)
+  if ("taskId" in operation) ids = HashSet.add(ids, operation.taskId)
+  if ("readShape" in operation) {
+    for (const taskId of operation.readShape.explicitlyCoveredTaskIds) ids = HashSet.add(ids, taskId)
   }
+  if ("acquisition" in operation) ids = HashSet.add(ids, operation.acquisition.taskId)
+  if ("release" in operation) ids = HashSet.add(ids, operation.release.claim.taskId)
+  return operationRequestTaskIds(operation, ids)
+}
+
+const operationRequestTaskIds = (operation: WorkflowOperation, initial: HashSet.HashSet<TaskId>) => {
+  let ids = initial
+  if ("request" in operation) {
+    if ("taskId" in operation.request) ids = HashSet.add(ids, operation.request.taskId)
+    if ("claim" in operation.request) ids = HashSet.add(ids, operation.request.claim.plannedAttempt.taskId)
+  }
+  return ids
+}
+
+const taskIdsOf = (record: JournalRecord, indexes?: EvidenceIndexes): HashSet.HashSet<TaskId> => {
+  let ids = trackerObservationTaskIds(record, descriptorTaskIds(record))
+  ids = subjectTaskIds(record, ids)
+  ids = claimTaskIds(record, ids)
+  ids = requestTaskIds(record, ids)
+  ids = operationTaskIds(record, ids)
+  const event = record.event
   if (event._tag === "PlannedAttemptReplaced") {
     ids = HashSet.add(ids, event.subject.plannedAttempt.taskId)
     ids = HashSet.add(ids, event.successorPlan.plannedAttempt.taskId)
@@ -446,10 +521,9 @@ const taskIdsOf = (record: JournalRecord, indexes?: EvidenceIndexes): HashSet.Ha
   return ids
 }
 
-/** Adds the candidate's indexes without modifying accepted predecessor evidence. */
-export const appendJournalEvidence = (prior: JournalRecordEvidence, record: JournalRecord): JournalRecordEvidence => {
+/** Attempt buckets include worktree outcomes only through their exact already-recorded read. */
+const appendAttemptIndexes = (prior: JournalRecordEvidence, record: JournalRecord) => {
   const indexes = indexesFor(prior)
-  const ofKind = Option.getOrElse(HashMap.get(indexes.byKind, record.event._tag), emptyJournalRecords)
   let byAttempt = indexes.byAttempt
   let byAttemptKind = indexes.byAttemptKind
   let byAttemptCommandKind = indexes.byAttemptCommandKind
@@ -483,6 +557,10 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
       )
     }
   }
+  return { byAttempt, byAttemptKind, byAttemptCommandKind }
+}
+
+const appendTaskIndexes = (indexes: EvidenceIndexes, record: JournalRecord) => {
   let byTask = indexes.byTask
   let byTaskKind = indexes.byTaskKind
   for (const taskId of taskIdsOf(record, indexes)) {
@@ -496,7 +574,10 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
       HashMap.set(priorKinds, record.event._tag, appendJournalRecord(priorKind, record))
     )
   }
-  const operation = operationOf(record)
+  return { byTask, byTaskKind }
+}
+
+const appendOperationIndexes = (indexes: EvidenceIndexes, record: JournalRecord) => {
   let recordsByOperation = indexes.recordsByOperation
   let recordsByOperationKind = indexes.recordsByOperationKind
   for (const operationId of operationIdsOf(record)) {
@@ -510,6 +591,49 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
       HashMap.set(priorKinds, record.event._tag, appendJournalRecord(priorKind, record))
     )
   }
+  return { recordsByOperation, recordsByOperationKind }
+}
+
+/** Exact observed operation progress; malformed outcome-before-intent rows must not become pending later. */
+const appendOperationProgress = (indexes: EvidenceIndexes, record: JournalRecord) => {
+  const acceptedOperationId = acceptedOperationIdOf(record.event)
+  const acceptedOperationIds =
+    acceptedOperationId === undefined
+      ? indexes.acceptedOperationIds
+      : HashSet.add(indexes.acceptedOperationIds, acceptedOperationId)
+  const completedReadOperationId = completedReadOperationIdOf(record)
+  const completedReadOperationIds =
+    completedReadOperationId === undefined
+      ? indexes.completedReadOperationIds
+      : HashSet.add(indexes.completedReadOperationIds, completedReadOperationId)
+  const event = record.event
+  const withIntent =
+    (event._tag === "GitReadIntentRecorded" || event._tag === "TaskTrackerReadIntentRecorded") &&
+    !HashSet.has(completedReadOperationIds, event.operation.operationId)
+      ? HashSet.add(indexes.pendingReadOperationIds, event.operation.operationId)
+      : indexes.pendingReadOperationIds
+  const pendingReadOperationIds =
+    completedReadOperationId === undefined ? withIntent : HashSet.remove(withIntent, completedReadOperationId)
+  return { acceptedOperationIds, completedReadOperationIds, pendingReadOperationIds }
+}
+
+const appendIntegratorSessionIndex = (indexes: EvidenceIndexes, record: JournalRecord) => {
+  let byIntegratorSession = indexes.byIntegratorSession
+  for (const sessionId of integratorSessionIdsOf(record)) {
+    const priorSession = Option.getOrElse(HashMap.get(byIntegratorSession, sessionId), emptyJournalRecords)
+    byIntegratorSession = HashMap.set(byIntegratorSession, sessionId, appendJournalRecord(priorSession, record))
+  }
+  return byIntegratorSession
+}
+
+/** Adds the candidate's indexes without modifying accepted predecessor evidence. */
+export const appendJournalEvidence = (prior: JournalRecordEvidence, record: JournalRecord): JournalRecordEvidence => {
+  const indexes = indexesFor(prior)
+  const ofKind = Option.getOrElse(HashMap.get(indexes.byKind, record.event._tag), emptyJournalRecords)
+  const { byAttempt, byAttemptCommandKind, byAttemptKind } = appendAttemptIndexes(prior, record)
+  const { byTask, byTaskKind } = appendTaskIndexes(indexes, record)
+  const operation = operationOf(record)
+  const { recordsByOperation, recordsByOperationKind } = appendOperationIndexes(indexes, record)
   const promotionRequestId = (() => {
     const event = record.event
     if ("correlation" in event && "requestId" in event.correlation) return event.correlation.requestId
@@ -535,11 +659,7 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
             record
           )
         )
-  let byIntegratorSession = indexes.byIntegratorSession
-  for (const sessionId of integratorSessionIdsOf(record)) {
-    const priorSession = Option.getOrElse(HashMap.get(byIntegratorSession, sessionId), emptyJournalRecords)
-    byIntegratorSession = HashMap.set(byIntegratorSession, sessionId, appendJournalRecord(priorSession, record))
-  }
+  const byIntegratorSession = appendIntegratorSessionIndex(indexes, record)
   const quarantineDirectionRequestId =
     record.event._tag === "IntegrationQuarantineDirectionApplied" ? record.event.requestId : undefined
   const byQuarantineDirectionRequest =
@@ -570,25 +690,10 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
     const operationRecord = journalRecordAt(records, lastSequenceEntryOffset)
     return operationRecord === undefined ? undefined : operationOf(operationRecord)
   })
-  const acceptedOperationId = acceptedOperationIdOf(record.event)
-  const acceptedOperationIds =
-    acceptedOperationId === undefined
-      ? indexes.acceptedOperationIds
-      : HashSet.add(indexes.acceptedOperationIds, acceptedOperationId)
-  const completedReadOperationId = completedReadOperationIdOf(record)
-  const completedReadOperationIds =
-    completedReadOperationId === undefined
-      ? indexes.completedReadOperationIds
-      : HashSet.add(indexes.completedReadOperationIds, completedReadOperationId)
-  const pendingReadOperationIds = (() => {
-    const event = record.event
-    const withIntent =
-      (event._tag === "GitReadIntentRecorded" || event._tag === "TaskTrackerReadIntentRecorded") &&
-      !HashSet.has(completedReadOperationIds, event.operation.operationId)
-        ? HashSet.add(indexes.pendingReadOperationIds, event.operation.operationId)
-        : indexes.pendingReadOperationIds
-    return completedReadOperationId === undefined ? withIntent : HashSet.remove(withIntent, completedReadOperationId)
-  })()
+  const { acceptedOperationIds, completedReadOperationIds, pendingReadOperationIds } = appendOperationProgress(
+    indexes,
+    record
+  )
   return evidence(
     appendJournalRecord(prior.records, record),
     {

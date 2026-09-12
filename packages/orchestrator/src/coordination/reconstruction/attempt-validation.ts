@@ -166,18 +166,13 @@ const validateAttemptChoiceAuthority = (
   }
 }
 
-/** Rejects a direction that was not exposed by the exact prior plan, changed specification, and safe report. */
-export const validateAttemptChoice = (
-  record: JournalRecord,
+const validateAttemptChoiceCutoffs = (
+  record: AttemptChoiceRecord,
   runId: RunId,
-  records: JournalHistorySource,
-  indexes: FoldIndexes,
+  prior: JournalHistorySource,
   issues: WorkflowJournalHistoryIssueReporter
-): FoldIndexes => {
-  if (record.event._tag !== "AttemptChoiceApplied") return indexes
+): void => {
   const { subject } = record.event
-  const prior = historyBefore(records, record.position)
-  validateAttemptChoiceAuthority({ ...record, event: record.event }, runId, prior, issues)
   if (
     hasMatching(
       journalRecordsForAttemptKind(prior, subject.plannedAttempt.attemptId, "PlannedAttemptReplaced"),
@@ -209,6 +204,16 @@ export const validateAttemptChoice = (
       `attempt-choice request ${record.event.requestId.nonce} follows the exact integration-start cutoff`
     )
   }
+}
+
+const validatePriorTerminalAttemptChoice = (
+  record: AttemptChoiceRecord,
+  runId: RunId,
+  prior: JournalHistorySource,
+  indexes: FoldIndexes,
+  issues: WorkflowJournalHistoryIssueReporter
+): void => {
+  const { subject } = record.event
   const priorStop = isJournalRecordEvidence(prior)
     ? mapGet(indexes.attemptStopDirections, subject.plannedAttempt.attemptId)
     : findFirst(
@@ -243,6 +248,23 @@ export const validateAttemptChoice = (
       `Continue request ${record.event.requestId.nonce} follows the terminal Restart direction for the same attempt`
     )
   }
+}
+
+/** Rejects a direction that was not exposed by the exact prior plan, changed specification, and safe report. */
+export const validateAttemptChoice = (
+  record: JournalRecord,
+  runId: RunId,
+  records: JournalHistorySource,
+  indexes: FoldIndexes,
+  issues: WorkflowJournalHistoryIssueReporter
+): FoldIndexes => {
+  if (record.event._tag !== "AttemptChoiceApplied") return indexes
+  const { subject } = record.event
+  const prior = historyBefore(records, record.position)
+  const applied = { ...record, event: record.event }
+  validateAttemptChoiceAuthority(applied, runId, prior, issues)
+  validateAttemptChoiceCutoffs(applied, runId, prior, issues)
+  validatePriorTerminalAttemptChoice(applied, runId, prior, indexes, issues)
   const subjectKey = attemptChoiceSubjectKey(subject)
   if (HashSet.has(indexes.attemptChoiceSubjects, subjectKey)) {
     semanticIssue(
@@ -920,6 +942,28 @@ const restartFailureIntentIsExact = (event: RestartAuthorityReadFailureEvent, in
   return operation !== undefined && restartAuthorityReadOperationMatches(operation, event.failure, event.subject)
 }
 
+const appliedRestartForReadFailure = (prior: JournalHistorySource, event: RestartAuthorityReadFailureEvent) =>
+  findLast(
+    isJournalRecordEvidence(prior)
+      ? indexedRecordCandidate(prior, attemptChoiceAppliedRecordKey(event.requestId))
+      : journalRecordsForAttempt(prior, event.subject.plannedAttempt.attemptId),
+    ({ event: candidate }) =>
+      candidate._tag === "AttemptChoiceApplied" &&
+      candidate.choice === "RestartTaskImplementation" &&
+      sameAttemptChoiceRequestId(candidate.requestId, event.requestId) &&
+      sameAttemptChoiceSubject(candidate.subject, event.subject)
+  )
+
+const readIntentForRestartFailure = (prior: JournalHistorySource, event: RestartAuthorityReadFailureEvent) =>
+  findLast(
+    isJournalRecordEvidence(prior)
+      ? journalRecordsForOperationId(prior, event.operationId)
+      : journalRecordsForTask(prior, event.subject.plannedAttempt.taskId),
+    ({ event: candidate }) =>
+      (candidate._tag === "TaskTrackerReadIntentRecorded" || candidate._tag === "GitReadIntentRecorded") &&
+      candidate.operation.operationId === event.operationId
+  )
+
 /** Rejects a forged failure that is not the result of this exact applied Restart read. */
 export const validateAttemptRestartAuthorityReadFailure = (
   record: JournalRecord,
@@ -930,16 +974,7 @@ export const validateAttemptRestartAuthorityReadFailure = (
   if (record.event._tag !== "AttemptRestartAuthorityReadFailed") return
   const event = record.event
   const prior = historyBefore(records, record.position)
-  const applied = findLast(
-    isJournalRecordEvidence(prior)
-      ? indexedRecordCandidate(prior, attemptChoiceAppliedRecordKey(event.requestId))
-      : journalRecordsForAttempt(prior, event.subject.plannedAttempt.attemptId),
-    ({ event: candidate }) =>
-      candidate._tag === "AttemptChoiceApplied" &&
-      candidate.choice === "RestartTaskImplementation" &&
-      sameAttemptChoiceRequestId(candidate.requestId, event.requestId) &&
-      sameAttemptChoiceSubject(candidate.subject, event.subject)
-  )
+  const applied = appliedRestartForReadFailure(prior, event)
   if (event.subject.plannedAttempt.runId !== runId || applied === undefined) {
     semanticIssue(
       issues,
@@ -948,14 +983,7 @@ export const validateAttemptRestartAuthorityReadFailure = (
       "Restart authority read failure requires its exact prior applied Restart"
     )
   }
-  const intent = findLast(
-    isJournalRecordEvidence(prior)
-      ? journalRecordsForOperationId(prior, event.operationId)
-      : journalRecordsForTask(prior, event.subject.plannedAttempt.taskId),
-    ({ event: candidate }) =>
-      (candidate._tag === "TaskTrackerReadIntentRecorded" || candidate._tag === "GitReadIntentRecorded") &&
-      candidate.operation.operationId === event.operationId
-  )
+  const intent = readIntentForRestartFailure(prior, event)
   if (
     applied === undefined ||
     intent === undefined ||
@@ -1253,6 +1281,31 @@ const isReplacementTargetRecord = (
 ): record is ReplacementTargetRecord =>
   record.event._tag === "TargetLineageObserved" && record.event.operationId === operationId
 
+/** A later read invalidates replacement evidence only for the same fact family, task, and tracker target. */
+const hasLaterReplacementTrackerRead = (
+  prior: JournalHistorySource,
+  query: Parameters<typeof journalLatestTaskRead>[1],
+  after: JournalPosition
+): boolean =>
+  isJournalRecordEvidence(prior)
+    ? (journalLatestTaskRead(prior, query)?.position ?? 0) > after
+    : hasMatching(journalRecordsForTask(prior, query.taskId), ({ event, position }) => {
+        if (position <= after || event._tag !== "TaskTrackerReadIntentRecorded") return false
+        const operation = event.operation
+        if (
+          operation._tag !== query.kind ||
+          taskTrackerTargetKey(operation.target) !== taskTrackerTargetKey(query.target)
+        )
+          return false
+        switch (operation._tag) {
+          case "ReadTrackerGraph":
+            return operation.readShape.explicitlyCoveredTaskIds.includes(query.taskId)
+          case "ReadTaskWorkSpecification":
+          case "ReadTaskClaim":
+            return operation.taskId === query.taskId
+        }
+      })
+
 const replacementGraphIsExact = (
   prior: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
@@ -1268,21 +1321,11 @@ const replacementGraphIsExact = (
   if (record === undefined) return false
   if (record.position <= applicationPosition) return false
   if (
-    isJournalRecordEvidence(prior)
-      ? (journalLatestTaskRead(prior, {
-          taskId: plannedAttempt.taskId,
-          target: record.event.observation.target,
-          kind: "ReadTrackerGraph"
-        })?.position ?? 0) > record.position
-      : hasMatching(
-          journalRecordsForTask(prior, plannedAttempt.taskId),
-          ({ event, position }) =>
-            position > record.position &&
-            event._tag === "TaskTrackerReadIntentRecorded" &&
-            event.operation._tag === "ReadTrackerGraph" &&
-            event.operation.readShape.explicitlyCoveredTaskIds.includes(plannedAttempt.taskId) &&
-            taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(record.event.observation.target)
-        )
+    hasLaterReplacementTrackerRead(
+      prior,
+      { taskId: plannedAttempt.taskId, target: record.event.observation.target, kind: "ReadTrackerGraph" },
+      record.position
+    )
   ) {
     return false
   }
@@ -1316,27 +1359,37 @@ const replacementSpecificationIsExact = (
   const intent = freshReplacementTrackerReadIntent(prior, operationId, applicationPosition)
   if (intent?.event.operation._tag !== "ReadTaskWorkSpecification") return false
   if (
-    isJournalRecordEvidence(prior)
-      ? (journalLatestTaskRead(prior, {
-          taskId: subject.plannedAttempt.taskId,
-          target: intent.event.operation.target,
-          kind: "ReadTaskWorkSpecification"
-        })?.position ?? 0) > record.position
-      : hasMatching(
-          journalRecordsForTask(prior, subject.plannedAttempt.taskId),
-          ({ event, position }) =>
-            position > record.position &&
-            event._tag === "TaskTrackerReadIntentRecorded" &&
-            event.operation._tag === "ReadTaskWorkSpecification" &&
-            event.operation.taskId === subject.plannedAttempt.taskId &&
-            taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(intent.event.operation.target)
-        )
+    hasLaterReplacementTrackerRead(
+      prior,
+      {
+        taskId: subject.plannedAttempt.taskId,
+        target: intent.event.operation.target,
+        kind: "ReadTaskWorkSpecification"
+      },
+      record.position
+    )
   ) {
     return false
   }
   return [
     record.event.observation.factFamily.taskId === subject.plannedAttempt.taskId,
     record.event.observation.factFamily.fingerprint === subject.observedTaskRevision
+  ].every(Boolean)
+}
+
+const replacementClaimMatchesRestartAuthority = (
+  prior: JournalHistorySource,
+  application: RestartApplicationRecord,
+  record: TaskTrackerFactsRecord<ReplacementClaimFacts>,
+  witness: PlannedAttemptReplacementRecord["event"]["witness"]
+): boolean => {
+  const observation = record.event.observation.observation
+  if (observation._tag !== "ActiveTaskClaim") return false
+  const authorizedClaim = restartClaimAuthorityAtApplication(prior, application)
+  if (authorizedClaim === undefined) return false
+  return [
+    isExactTaskClaim(observation, witness.expectedClaim),
+    isExactTaskClaim(authorizedClaim.claim, witness.expectedClaim)
   ].every(Boolean)
 }
 
@@ -1357,32 +1410,15 @@ const replacementClaimIsExact = (
   const intent = freshReplacementTrackerReadIntent(prior, witness.claimObservationOperationId, application.position)
   if (intent?.event.operation._tag !== "ReadTaskClaim") return false
   if (
-    isJournalRecordEvidence(prior)
-      ? (journalLatestTaskRead(prior, {
-          taskId: plannedAttempt.taskId,
-          target: intent.event.operation.target,
-          kind: "ReadTaskClaim"
-        })?.position ?? 0) > record.position
-      : hasMatching(
-          journalRecordsForTask(prior, plannedAttempt.taskId),
-          ({ event, position }) =>
-            position > record.position &&
-            event._tag === "TaskTrackerReadIntentRecorded" &&
-            event.operation._tag === "ReadTaskClaim" &&
-            event.operation.taskId === plannedAttempt.taskId &&
-            taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(intent.event.operation.target)
-        )
+    hasLaterReplacementTrackerRead(
+      prior,
+      { taskId: plannedAttempt.taskId, target: intent.event.operation.target, kind: "ReadTaskClaim" },
+      record.position
+    )
   ) {
     return false
   }
-  const observation = record.event.observation.observation
-  if (observation._tag !== "ActiveTaskClaim") return false
-  const authorizedClaim = restartClaimAuthorityAtApplication(prior, application)
-  if (authorizedClaim === undefined) return false
-  return [
-    isExactTaskClaim(observation, witness.expectedClaim),
-    isExactTaskClaim(authorizedClaim.claim, witness.expectedClaim)
-  ].every(Boolean)
+  return replacementClaimMatchesRestartAuthority(prior, application, record, witness)
 }
 
 export const replacementResourceConflict = (
@@ -1489,6 +1525,20 @@ const isLaterTargetAuthority =
   ({ event, position }: JournalRecord): boolean =>
     position > baselinePosition && isLaterTargetLineageRead(event, target, plannedAttempt)
 
+const hasLaterReplacementTargetRead = (
+  prior: JournalHistorySource,
+  plannedAttempt: PlannedTaskAttempt,
+  integrationTarget: IntegrationTargetAuthority,
+  after: JournalPosition
+): boolean =>
+  isJournalRecordEvidence(prior)
+    ? (journalLatestAttemptRead(prior, { plannedAttempt, kind: "ReadTargetLineage", integrationTarget })?.position ??
+        0) > after
+    : hasMatching(
+        journalRecordsForAttempt(prior, plannedAttempt.attemptId),
+        isLaterTargetAuthority(after, integrationTarget, plannedAttempt)
+      )
+
 const replacementTargetIsExact = (
   prior: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
@@ -1506,18 +1556,7 @@ const replacementTargetIsExact = (
   const intent = freshReplacementGitReadIntent(prior, witness.targetLineageObservationOperationId, applicationPosition)
   if (intent?.event.operation._tag !== "ReadTargetLineage") return false
   const currentTarget = intent.event.operation.integrationTarget
-  if (
-    isJournalRecordEvidence(prior)
-      ? (journalLatestAttemptRead(prior, {
-          plannedAttempt,
-          kind: "ReadTargetLineage",
-          integrationTarget: currentTarget
-        })?.position ?? 0) > record.position
-      : hasMatching(
-          journalRecordsForAttempt(prior, plannedAttempt.attemptId),
-          isLaterTargetAuthority(record.position, currentTarget, plannedAttempt)
-        )
-  ) {
+  if (hasLaterReplacementTargetRead(prior, plannedAttempt, currentTarget, record.position)) {
     return false
   }
   return [

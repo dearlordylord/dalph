@@ -1,4 +1,6 @@
 import type { JournalRecord } from "../../workflow-journal/store.js"
+import type { JournalPosition } from "../../workflow-journal/identity.js"
+import type { OperationId } from "../../workflow/identity.js"
 import {
   isJournalRecordEvidence,
   journalEvidenceBefore,
@@ -15,22 +17,26 @@ const releaseIntentMatchesOutcome = (
   intent.operation.release.claim.taskId === released.claim.taskId &&
   intent.operation.release.claim.token === released.claim.token
 
+/** Raw diagnostic histories retain the first matching intent, including malformed duplicate operation identities. */
+const firstReleaseIntentBefore = (records: JournalHistorySource, operationId: OperationId, before: JournalPosition) => {
+  const accepted = isJournalRecordEvidence(records) ? journalEvidenceBefore(records, before) : records
+  for (const candidate of journalRecordsForOperationId(accepted, operationId)) {
+    if (
+      candidate.position < before &&
+      candidate.event._tag === "TaskClaimReleaseIntended" &&
+      candidate.event.operation.release.operationId === operationId
+    ) {
+      return candidate.event
+    }
+  }
+  return undefined
+}
+
 /** Returns why a release outcome does not match its earlier exact-claim intent. */
 export const invalidTaskClaimRelease = (record: JournalRecord, records: JournalHistorySource): string | undefined => {
   if (record.event._tag !== "TaskClaimReleased") return undefined
   const released = record.event.release
-  const accepted = isJournalRecordEvidence(records) ? journalEvidenceBefore(records, record.position) : records
-  let intent: JournalRecord["event"] | undefined
-  for (const candidate of journalRecordsForOperationId(accepted, released.operationId)) {
-    if (
-      candidate.position < record.position &&
-      candidate.event._tag === "TaskClaimReleaseIntended" &&
-      candidate.event.operation.release.operationId === released.operationId
-    ) {
-      intent = candidate.event
-      break
-    }
-  }
+  const intent = firstReleaseIntentBefore(records, released.operationId, record.position)
   return intent?._tag !== "TaskClaimReleaseIntended" || !releaseIntentMatchesOutcome(intent, released)
     ? `released task claim contradicts operation ${released.operationId}`
     : undefined

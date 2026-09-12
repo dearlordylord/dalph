@@ -105,6 +105,40 @@ const correlatedPlans = (
   return Array.from(HashMap.values(unique))
 }
 
+type GraphObservation = Extract<
+  Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>["observation"],
+  { readonly _tag: "CompleteTaskTrackerFacts" | "UnchangedTaskTrackerFactsReconfirmed" }
+>
+const resolveGraphObservation = (
+  priorComplete: GraphEvidenceRoots["completeByOperation"],
+  observation: GraphObservation,
+  position: JournalPosition
+) => {
+  let completeByOperation = priorComplete
+  let snapshot: Option.Option<TaskDagSnapshot>
+  if (observation._tag === "CompleteTaskTrackerFacts") {
+    // Decoded evidence is indexed before semantic validation; malformed full payloads must reach ordered diagnostics.
+    snapshot = Schema.is(CompleteTaskTrackerFactsObserved)(observation)
+      ? projectCompleteTaskGraph(observation)
+      : Option.none()
+    if (!HashMap.has(completeByOperation, observation.operationId))
+      completeByOperation = HashMap.set(completeByOperation, observation.operationId, {
+        observation,
+        position,
+        snapshot
+      })
+  } else {
+    const prior = Option.getOrUndefined(HashMap.get(completeByOperation, observation.priorFullObservationOperationId))
+    snapshot =
+      prior !== undefined &&
+      prior.position < position &&
+      reconfirmationMatchesPriorFullObservation(observation, prior.observation)
+        ? prior.snapshot
+        : Option.none()
+  }
+  return { completeByOperation, snapshot }
+}
+
 /** Shares persistent observation indexes; only a new complete payload is projected, exact reconfirmations reuse its snapshot. */
 export const appendGraphEvidence = (
   evidence: GraphEvidence,
@@ -116,28 +150,11 @@ export const appendGraphEvidence = (
   if (observation._tag !== "CompleteTaskTrackerFacts" && observation._tag !== "UnchangedTaskTrackerFactsReconfirmed")
     return evidence
   const roots = rootsOf(evidence)
-  let completeByOperation = roots.completeByOperation
-  let snapshot: Option.Option<TaskDagSnapshot>
-  if (observation._tag === "CompleteTaskTrackerFacts") {
-    // Decoded evidence is indexed before semantic validation; malformed full payloads must reach ordered diagnostics.
-    snapshot = Schema.is(CompleteTaskTrackerFactsObserved)(observation)
-      ? projectCompleteTaskGraph(observation)
-      : Option.none()
-    if (!HashMap.has(completeByOperation, observation.operationId))
-      completeByOperation = HashMap.set(completeByOperation, observation.operationId, {
-        observation,
-        position: record.position,
-        snapshot
-      })
-  } else {
-    const prior = Option.getOrUndefined(HashMap.get(completeByOperation, observation.priorFullObservationOperationId))
-    snapshot =
-      prior !== undefined &&
-      prior.position < record.position &&
-      reconfirmationMatchesPriorFullObservation(observation, prior.observation)
-        ? prior.snapshot
-        : Option.none()
-  }
+  const { completeByOperation, snapshot } = resolveGraphObservation(
+    roots.completeByOperation,
+    observation,
+    record.position
+  )
   let byPlan = roots.byPlan
   let byTargetPlan = roots.byTargetPlan
   for (const plan of correlatedPlans(record.event.operationId, operationById)) {

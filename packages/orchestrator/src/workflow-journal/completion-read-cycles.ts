@@ -138,28 +138,31 @@ const appendOutcome = (prior: CycleState, record: JournalRecord, operationId: Op
   }
 }
 
+const completionReadOf = (record: JournalRecord) => {
+  const event = record.event
+  return event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadCompletionTaskFacts"
+    ? {
+        kind: "Intent" as const,
+        operationId: event.operation.operationId,
+        purpose: event.operation.purpose,
+        request: event.operation.request
+      }
+    : event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskCompletionFacts"
+      ? {
+          kind: "Outcome" as const,
+          operationId: event.operationId,
+          purpose: event.observation.purpose,
+          request: event.observation.request
+        }
+      : undefined
+}
+
 /** A later observation settles its exact operation; earlier observations remain visible when diagnosing out-of-order input. */
 export const appendCompletionReadCycleEvidence = (
   index: CompletionReadCycles,
   record: JournalRecord
 ): CompletionReadCycles => {
-  const event = record.event
-  const read =
-    event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadCompletionTaskFacts"
-      ? {
-          kind: "Intent" as const,
-          operationId: event.operation.operationId,
-          purpose: event.operation.purpose,
-          request: event.operation.request
-        }
-      : event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskCompletionFacts"
-        ? {
-            kind: "Outcome" as const,
-            operationId: event.operationId,
-            purpose: event.observation.purpose,
-            request: event.observation.request
-          }
-        : undefined
+  const read = completionReadOf(record)
   if (read === undefined) return index
   const key = keyFor(read.request, read.purpose.attemptOrdinal, read.purpose._tag)
   if (key === undefined || read.request.claim.plannedAttempt.runId !== record.runId) return index
@@ -196,6 +199,22 @@ const entryAt = (history: CycleHistory, offset: number) => {
   for (const observer of observers) observer("SnapshotLookup")
   return Option.getOrUndefined(HashMap.get(history.entries, offset))
 }
+const historicalCycleStateThrough = (history: CycleHistory, throughPosition: number): CompletionReadCycleState => {
+  let low = 0
+  let high = history.length
+  while (low < high) {
+    const middle = Math.floor((low + high) / branchingFactor)
+    const entry = entryAt(history, middle)
+    if (entry !== undefined && entry.position <= throughPosition) low = middle + 1
+    else high = middle
+  }
+  return low === 0 ? emptyState() : (entryAt(history, low - 1)?.state ?? emptyState())
+}
+const cycleStateThrough = (history: CycleHistory, throughPosition: number): CompletionReadCycleState => {
+  const latest = entryAt(history, history.length - 1)
+  if (latest === undefined || latest.position <= throughPosition) return latest?.state ?? emptyState()
+  return historicalCycleStateThrough(history, throughPosition)
+}
 export const completionReadCycleAt = (
   index: CompletionReadCycles,
   query: {
@@ -207,18 +226,7 @@ export const completionReadCycleAt = (
 ): CompletionReadCycleState => {
   const key = keyFor(query.request, query.attemptOrdinal, query.purpose)
   const history = key === undefined ? undefined : Option.getOrUndefined(HashMap.get(rootsOf(index), key))
-  if (history === undefined) return emptyState()
-  const latest = entryAt(history, history.length - 1)
-  if (latest === undefined || latest.position <= query.throughPosition) return latest?.state ?? emptyState()
-  let low = 0
-  let high = history.length
-  while (low < high) {
-    const middle = Math.floor((low + high) / branchingFactor)
-    const entry = entryAt(history, middle)
-    if (entry !== undefined && entry.position <= query.throughPosition) low = middle + 1
-    else high = middle
-  }
-  return low === 0 ? emptyState() : (entryAt(history, low - 1)?.state ?? emptyState())
+  return history === undefined ? emptyState() : cycleStateThrough(history, query.throughPosition)
 }
 
 /** All cutoff snapshots and persistent unresolved-tree roots are reachable here; no predecessor projection is retained. */

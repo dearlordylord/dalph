@@ -53,6 +53,24 @@ const changeFor = ({ event }: JournalRecord): RetentionChange | undefined => {
   return undefined
 }
 
+const applyRetentionChange = (
+  subjects: HashMap.HashMap<AttemptId, RetainedExecutorResponsibilitySubject>,
+  change: RetentionChange,
+  position: JournalPosition
+) => {
+  if (change._tag === "Retain")
+    return HashMap.set(subjects, change.plannedAttempt.attemptId, {
+      plannedAttempt: change.plannedAttempt,
+      beganAt: position
+    })
+  return HashMap.has(subjects, change.attemptId) ? HashMap.remove(subjects, change.attemptId) : undefined
+}
+
+const appendSubjectSnapshot = (prior: RunHistory | undefined, latest: SubjectSnapshot): RunHistory => {
+  const count = prior?.count ?? 0
+  return { count: count + 1, latest, snapshots: HashMap.set(prior?.snapshots ?? HashMap.empty(), count, latest) }
+}
+
 /** One chronological record changes only its exact subject; mere observations, Safe reports, and foreign envelopes cannot retire responsibility. Historical snapshots structurally share the retained-subject maps. */
 export const appendRetainedExecutorResponsibilitySubjects = (
   index: RetainedExecutorResponsibilitySubjects,
@@ -65,23 +83,10 @@ export const appendRetainedExecutorResponsibilitySubjects = (
   const roots = rootsOf(index)
   const prior = Option.getOrUndefined(HashMap.get(roots, record.runId))
   const previousSubjects = prior?.latest.subjects ?? HashMap.empty<AttemptId, RetainedExecutorResponsibilitySubject>()
-  if (change._tag === "Release" && !HashMap.has(previousSubjects, change.attemptId)) return index
-  const subjects =
-    change._tag === "Retain"
-      ? HashMap.set(previousSubjects, change.plannedAttempt.attemptId, {
-          plannedAttempt: change.plannedAttempt,
-          beganAt: record.position
-        })
-      : HashMap.remove(previousSubjects, change.attemptId)
+  const subjects = applyRetentionChange(previousSubjects, change, record.position)
+  if (subjects === undefined) return index
   const latest: SubjectSnapshot = { position: record.position, subjects }
-  const count = prior?.count ?? 0
-  return retain(
-    HashMap.set(roots, record.runId, {
-      count: count + 1,
-      latest,
-      snapshots: HashMap.set(prior?.snapshots ?? HashMap.empty(), count, latest)
-    })
-  )
+  return retain(HashMap.set(roots, record.runId, appendSubjectSnapshot(prior, latest)))
 }
 
 let observers = HashSet.empty<(operation: "TimelineVisit" | "SubjectVisit") => void>()

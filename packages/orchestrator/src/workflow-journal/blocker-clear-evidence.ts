@@ -57,20 +57,16 @@ const boundariesAt = (state: GraphState, taskId: TaskId): Boundaries => {
       : { ...settled, cleared: state.observedAt }
 }
 
-/** Finalizes only the prior selected snapshot's task fanout, then derives the new snapshot's task statuses. Unknown/omitted tasks keep their earlier boundaries. */
-const switchGraph = (
-  prior: GraphState | undefined,
-  snapshot: Option.Option<TaskDagSnapshot>,
-  position: JournalPosition
-): GraphState => {
-  if (prior !== undefined && Option.getOrUndefined(prior.snapshot) === Option.getOrUndefined(snapshot))
-    return { ...prior, observedAt: position }
+const settlePriorBoundaries = (prior: GraphState | undefined): HashMap.HashMap<TaskId, Boundaries> => {
   let settled = prior?.settled ?? HashMap.empty<TaskId, Boundaries>()
   if (prior !== undefined)
     for (const [taskId] of prior.active) {
       visitTask()
       settled = HashMap.set(settled, taskId, boundariesAt(prior, taskId))
     }
+  return settled
+}
+const blockerMembership = (snapshot: Option.Option<TaskDagSnapshot>): HashMap.HashMap<TaskId, boolean> => {
   let active = HashMap.empty<TaskId, boolean>()
   if (Option.isSome(snapshot))
     for (const taskId of snapshot.value.taskIds()) {
@@ -83,6 +79,19 @@ const switchGraph = (
           .some((id) => Option.getOrUndefined(snapshot.value.lifecycleOf(id))?._tag !== "CompletedSuccessfully")
       )
     }
+  return active
+}
+
+/** Finalizes only the prior selected snapshot's task fanout, then derives the new snapshot's task statuses. Unknown/omitted tasks keep their earlier boundaries. */
+const switchGraph = (
+  prior: GraphState | undefined,
+  snapshot: Option.Option<TaskDagSnapshot>,
+  position: JournalPosition
+): GraphState => {
+  if (prior !== undefined && Option.getOrUndefined(prior.snapshot) === Option.getOrUndefined(snapshot))
+    return { ...prior, observedAt: position }
+  const settled = settlePriorBoundaries(prior)
+  const active = blockerMembership(snapshot)
   return { snapshot, active, settled, observedAt: position }
 }
 

@@ -3,6 +3,13 @@ import { taskTrackerTargetKey } from "../authorities/task-tracker/target.js"
 import type { JournalPosition } from "./identity.js"
 import { exactWorkflowRunTargetFor } from "./run-target.js"
 import { journalRecordsOfKind, type JournalHistorySource } from "./record-evidence.js"
+import type { JournalRecord } from "./store.js"
+
+const isCompleteObservationForTarget = (event: JournalRecord["event"], targetKey: string): boolean =>
+  event._tag === "TaskTrackerFactsObserved" &&
+  (event.observation._tag === "CompleteTaskTrackerFacts" ||
+    event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
+  taskTrackerTargetKey(event.observation.target) === targetKey
 
 /** Detects a newer complete graph fact before the proposed terminal journal position. */
 export const hasLaterCompleteObservation = (
@@ -17,10 +24,7 @@ export const hasLaterCompleteObservation = (
     if (
       position > evidence.observedAt &&
       position < terminationPosition &&
-      event._tag === "TaskTrackerFactsObserved" &&
-      (event.observation._tag === "CompleteTaskTrackerFacts" ||
-        event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
-      taskTrackerTargetKey(event.observation.target) === targetKey
+      isCompleteObservationForTarget(event, targetKey)
     )
       return true
   }

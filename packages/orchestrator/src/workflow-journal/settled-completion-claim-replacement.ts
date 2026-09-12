@@ -59,6 +59,29 @@ const operationKey = (record: ReplacementIntent | ReplacementOutcome): string =>
 export const emptySettledCompletionClaimReplacements = (): SettledCompletionClaimReplacementEvidence =>
   retain({ intents: HashMap.empty(), settled: HashMap.empty() })
 
+const matchingReplacement = (
+  roots: Roots,
+  outcome: ReplacementOutcome
+): SettledCompletionClaimReplacement | undefined => {
+  const intent = Option.getOrUndefined(HashMap.get(roots.intents, operationKey(outcome)))
+  return intent !== undefined &&
+    intent.position < outcome.position &&
+    completionTaskClaimEquals(intent.event.claim, outcome.event.claim)
+    ? { intent, outcome }
+    : undefined
+}
+
+const retainFirstSettlement = (
+  evidence: SettledCompletionClaimReplacementEvidence,
+  roots: Roots,
+  key: string,
+  outcome: ReplacementOutcome
+): SettledCompletionClaimReplacementEvidence => {
+  const settlement = matchingReplacement(roots, outcome)
+  if (settlement === undefined || HashMap.has(roots.settled, key)) return evidence
+  return retain({ ...roots, settled: HashMap.set(roots.settled, key, settlement) })
+}
+
 /** Only an earlier exact intent can explain an outcome; future or foreign-run records cannot supply it. */
 export const appendSettledCompletionClaimReplacementEvidence = (
   evidence: SettledCompletionClaimReplacementEvidence,
@@ -74,17 +97,7 @@ export const appendSettledCompletionClaimReplacementEvidence = (
     return retain({ ...roots, intents: HashMap.set(roots.intents, operationKey(record), record) })
   }
   if (!isReplacementOutcome(record)) return evidence
-  const outcome = record
-  const intent = Option.getOrUndefined(HashMap.get(roots.intents, operationKey(outcome)))
-  if (
-    intent === undefined ||
-    intent.position >= record.position ||
-    !completionTaskClaimEquals(intent.event.claim, event.claim)
-  ) {
-    return evidence
-  }
-  if (HashMap.has(roots.settled, key)) return evidence
-  return retain({ ...roots, settled: HashMap.set(roots.settled, key, { intent, outcome }) })
+  return retainFirstSettlement(evidence, roots, key, record)
 }
 
 let observers = HashSet.empty<(event: "SettlementLookup") => void>()
