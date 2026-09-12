@@ -11,6 +11,7 @@ import {
   Fiber,
   Layer,
   Match,
+  MutableList,
   Option,
   Queue,
   Ref,
@@ -1112,11 +1113,14 @@ export const evaluateAuthoredDeliveryPublication = Effect.fn("AuthoredCassette.e
 export const evaluateAuthoredObservationChronology = Effect.fn("AuthoredCassette.evaluateObservationChronology")(
   (captures: ReadonlyArray<AuthoredObservationCapture>) =>
     Effect.gen(function* () {
-      const moments: Array<AuthoredObservationMoment> = []
+      const moments = MutableList.make<AuthoredObservationMoment>()
+      let previousMoment: AuthoredObservationMoment | null = null
       for (const capture of captures) {
-        moments.push(yield* evaluateAuthoredObservationCapture(capture, moments.at(latestArrayElementIndex) ?? null))
+        const moment: AuthoredObservationMoment = yield* evaluateAuthoredObservationCapture(capture, previousMoment)
+        MutableList.append(moments, moment)
+        previousMoment = moment
       }
-      return Object.freeze(moments)
+      return Object.freeze(MutableList.takeAll(moments))
     })
 )
 
@@ -1161,7 +1165,6 @@ export const evaluateAuthoredObservationCapture: (
     } satisfies AuthoredObservationMoment
   })
 
-const latestArrayElementIndex = -1
 const authoredSettlementYieldTurns = 10
 
 const operatorControlFailureMatches = (
@@ -1412,10 +1415,10 @@ const runAuthoredScenarioCassetteWith = (request: {
         AuthoredRunActivationOrdinal.make(1)
       )
       const observationCaptureState = yield* Ref.make<{
-        readonly captures: Array<AuthoredObservationCapture>
+        readonly captures: MutableList.MutableList<AuthoredObservationCapture>
         readonly nextOrder: number
         readonly acceptingPlayback: boolean
-      }>({ captures: [], nextOrder: 1, acceptingPlayback: true })
+      }>({ captures: MutableList.make(), nextOrder: 1, acceptingPlayback: true })
       const observationPlayback = yield* makeAuthoredObservationPlayback(
         evaluateAuthoredObservationCapture,
         options.onObservationMoment
@@ -1437,7 +1440,7 @@ const runAuthoredScenarioCassetteWith = (request: {
               : observation._tag === "DeliveryPublicationCaptured"
                 ? { ...correlation, _tag: observation._tag, publication: observation.publication }
                 : { ...correlation, _tag: observation._tag, liveOwners: observation.liveOwners }
-          captures.push(captured)
+          MutableList.append(captures, captured)
           if (acceptingPlayback) observationPlayback.appendUnsafe(captured)
           return [captured, { captures, nextOrder: nextOrder + 1, acceptingPlayback }]
         })
@@ -3185,7 +3188,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       // Take the same completed-history cut as the former immutable Ref array.
       // A later scope finalizer may notify observers, so never freeze its builder.
       const observationCaptures = yield* Ref.modify(observationCaptureState, (state) => [
-        Object.freeze([...state.captures]),
+        Object.freeze(MutableList.toArray(state.captures)),
         { ...state, acceptingPlayback: false }
       ])
       const { moments: observationMoments, work: observationPlaybackWork } = yield* observationPlayback.finish

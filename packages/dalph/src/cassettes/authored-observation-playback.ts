@@ -1,12 +1,10 @@
-import { Effect, Exit, Fiber, Queue } from "effect"
+import { Effect, Exit, Fiber, MutableList, Queue } from "effect"
 import type { AuthoredObservationCapture, AuthoredObservationMoment } from "./authored-runner.js"
 
 /** Commands in the test-owned projection worker, never workflow occurrences. */
 type PlaybackCommand =
   | { readonly _tag: "Capture"; readonly capture: AuthoredObservationCapture }
   | { readonly _tag: "Finish" }
-
-const previousObservationMomentOffset = -1
 
 export interface AuthoredObservationPlaybackWork {
   readonly enqueuedCaptures: number
@@ -33,23 +31,26 @@ export const makeAuthoredObservationPlayback = Effect.fn("AuthoredCassette.makeO
   let projectedCaptures = 0
   let projectedPublications = 0
   const worker = yield* Effect.gen(function* () {
-    const moments: Array<AuthoredObservationMoment> = []
+    const moments = MutableList.make<AuthoredObservationMoment>()
+    let previousMoment: AuthoredObservationMoment | null = null
     let command = yield* Queue.take(commands)
     while (command._tag === "Capture") {
       projectedCaptures++
       if (command.capture._tag === "DeliveryPublicationCaptured") projectedPublications++
-      const moment = yield* evaluate(command.capture, moments.at(previousObservationMomentOffset) ?? null)
-      moments.push(moment)
+      const moment: AuthoredObservationMoment = yield* evaluate(command.capture, previousMoment)
+      MutableList.append(moments, moment)
+      previousMoment = moment
       if (onMoment !== undefined) yield* onMoment(moment)
       command = yield* Queue.take(commands)
     }
+    const retainedMomentNodes = moments.length
     return {
-      moments: Object.freeze(moments),
+      moments: Object.freeze(MutableList.takeAll(moments)),
       work: Object.freeze({
         enqueuedCaptures,
         projectedCaptures,
         projectedPublications,
-        retainedMomentNodes: moments.length
+        retainedMomentNodes
       }) satisfies AuthoredObservationPlaybackWork
     }
   }).pipe(

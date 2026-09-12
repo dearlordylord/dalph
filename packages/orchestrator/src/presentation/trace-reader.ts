@@ -972,11 +972,22 @@ export type TraceJournalReadSource = JournalReadSourceService
 const preparedTraceTypeId: unique symbol = Symbol("PreparedTrace")
 
 /** One captured committed read, not a claim that every selected prefix is semantically valid. */
-export interface PreparedTrace {
-  readonly [preparedTraceTypeId]: true
+class PreparedTraceSnapshot {
+  readonly [preparedTraceTypeId] = true
   readonly cursors: ReadonlyArray<TraceCursor>
   readonly select: (cursor: TraceCursor) => Result.Result<TraceAtCursor, TraceReaderError>
+
+  constructor(
+    cursors: ReadonlyArray<TraceCursor>,
+    select: (cursor: TraceCursor) => Result.Result<TraceAtCursor, TraceReaderError>
+  ) {
+    this.cursors = Object.freeze(cursors)
+    this.select = select
+    Object.freeze(this)
+  }
 }
+
+export type PreparedTrace = PreparedTraceSnapshot
 
 /** Read-only trace service; it exposes projection reads only. */
 export interface TraceReaderService {
@@ -2480,14 +2491,14 @@ export const makeTraceReader = (source: TraceJournalReadSource): TraceReaderServ
     const indexed = yield* Effect.result(completeTraceIndexFor(runId, records))
     const seal = (
       projectionAt: (cursor: TraceCursor) => Effect.Effect<TraceAtCursor, TraceReaderError>
-    ): PreparedTrace => ({
-      [preparedTraceTypeId]: true,
-      cursors: records.map(({ position }) => TraceCursor.make({ position, runId })),
-      select: (cursor) =>
-        cursor.runId !== runId
-          ? Result.fail(new TraceCursorNotCommitted({ cursor }))
-          : Effect.runSync(Effect.result(projectionAt(cursor)))
-    })
+    ): PreparedTrace =>
+      new PreparedTraceSnapshot(
+        records.map(({ position }) => TraceCursor.make({ position, runId })),
+        (cursor) =>
+          cursor.runId !== runId
+            ? Result.fail(new TraceCursorNotCommitted({ cursor }))
+            : Effect.runSync(Effect.result(projectionAt(cursor)))
+      )
     if (Result.isFailure(indexed)) {
       // These projection effects are synchronous and require no live service or scope.
       // Invalid complete histories retain the exact selected-prefix cold diagnostics.

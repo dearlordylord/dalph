@@ -5,7 +5,7 @@ import type {
   TracePreservationDisposition
 } from "./trace-reader.js"
 import type { JournalPosition } from "../workflow-journal/identity.js"
-import { Option } from "effect"
+import { MutableList, Option } from "effect"
 
 /** Half-open visibility of one immutable accepted facet version. */
 export interface FacetVisibility<Value> {
@@ -41,28 +41,29 @@ const visibilityIndex = <Value>(intervals: ReadonlyArray<FacetVisibility<Value>>
     const center = Option.getOrThrow(
       Option.fromUndefinedOr(input[Math.floor(input.length / binaryPartitionDivisor)])
     ).start
-    const left: Array<FacetVisibility<Value>> = []
-    const right: Array<FacetVisibility<Value>> = []
-    const crossing: Array<FacetVisibility<Value>> = []
+    const left = MutableList.make<FacetVisibility<Value>>()
+    const right = MutableList.make<FacetVisibility<Value>>()
+    const crossing = MutableList.make<FacetVisibility<Value>>()
     for (const interval of input) {
       buildComparisons += 1
-      if (interval.end !== undefined && interval.end <= center) left.push(interval)
-      else if (interval.start > center) right.push(interval)
-      else crossing.push(interval)
+      if (interval.end !== undefined && interval.end <= center) MutableList.append(left, interval)
+      else if (interval.start > center) MutableList.append(right, interval)
+      else MutableList.append(crossing, interval)
     }
     nodes += 1
     retainedIntervalReferences += crossing.length * retainedOrderingsPerInterval
+    const orderedCrossing = MutableList.toArray(crossing)
     return {
       center,
-      byStart: crossing,
-      byEnd: crossing.toSorted((first, second) => {
+      byStart: orderedCrossing,
+      byEnd: orderedCrossing.toSorted((first, second) => {
         buildComparisons += 1
         if (first.end === undefined) return second.end === undefined ? 0 : intervalOrderBefore
         if (second.end === undefined) return intervalOrderAfter
         return second.end - first.end
       }),
-      left: build(left),
-      right: build(right)
+      left: build(MutableList.toArray(left)),
+      right: build(MutableList.toArray(right))
     }
   }
   const root = build(
@@ -75,7 +76,7 @@ const visibilityIndex = <Value>(intervals: ReadonlyArray<FacetVisibility<Value>>
   )
   return {
     at: (position: JournalPosition): ReadonlyArray<Value> => {
-      const selected: Array<FacetVisibility<Value>> = []
+      const selected = MutableList.make<FacetVisibility<Value>>()
       let node = root
       while (node !== undefined) {
         queryComparisons += 1
@@ -83,12 +84,12 @@ const visibilityIndex = <Value>(intervals: ReadonlyArray<FacetVisibility<Value>>
         for (const interval of before ? node.byStart : node.byEnd) {
           queryComparisons += 1
           if (before ? interval.start > position : interval.end !== undefined && interval.end <= position) break
-          selected.push(interval)
+          MutableList.append(selected, interval)
         }
         node = before ? node.left : node.right
       }
-      return selected
-        .sort((left, right) => {
+      return MutableList.toArray(selected)
+        .toSorted((left, right) => {
           queryComparisons += 1
           return left.order - right.order
         })
