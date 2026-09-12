@@ -800,6 +800,7 @@ export {
   validatedRunActivationLayer
 } from "./coordination/run/startup-recovery.js"
 export {
+  ExpectedAcceptedPrefixPosition,
   JournalInitialHistoryInvalid,
   Journal,
   journalLayer,
