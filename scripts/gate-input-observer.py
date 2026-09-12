@@ -98,12 +98,14 @@ def walk(path):
 
 def drain():
     dirty_path = None
+    dirty_mask = None
+    dirty_name = None
     while True:
         try:
             data = os.read(fd, 1024 * 1024)
         except BlockingIOError:
             if dirty_path is not None:
-                send("dirty", reason="input filesystem event", path=dirty_path[:512])
+                send("dirty", reason="input filesystem event mask=" + hex(dirty_mask) + " name=" + repr(dirty_name), path=dirty_path[:512])
             return
         if not data:
             raise OSError("inotify EOF")
@@ -128,6 +130,8 @@ def drain():
                     path = os.path.join(base, name) if name else base
                     if relevant(path):
                         dirty_path = path
+                        dirty_mask = mask
+                        dirty_name = name
                         break
 
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import {
   cpSync,
+  chmodSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
@@ -9,6 +10,7 @@ import {
   renameSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync
 } from "node:fs"
 import { tmpdir } from "node:os"
@@ -266,6 +268,69 @@ test("earlier PATH candidate creation cannot shadow an inventoried stage tool", 
   const guard = await f.guard()
   try {
     writeFileSync(join(earlier, "git"), "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+    await assert.rejects(guard.assertUnchanged())
+  } finally {
+    await guard.close()
+  }
+})
+
+test("strict PATH ancestor permission edit and restore invalidates executable resolution evidence", async () => {
+  const f = fixture()
+  const scaffolding = join(f.outer, "scaffolding")
+  const selected = join(scaffolding, "selected")
+  mkdirSync(selected, { recursive: true })
+  f.environment.PATH = `${selected}:${f.environment.PATH}`
+  const guard = await f.guard()
+  try {
+    chmodSync(scaffolding, 0o700)
+    chmodSync(scaffolding, 0o755)
+    await assert.rejects(guard.assertUnchanged(), /mask=/u)
+  } finally {
+    await guard.close()
+  }
+})
+
+test("selected external tool edit and restore remains an observed input mutation", async () => {
+  const f = fixture()
+  const bin = join(f.outer, "tools", "bin")
+  mkdirSync(bin, { recursive: true })
+  const tool = join(bin, "fixture-tool")
+  writeFileSync(tool, "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+  f.invocation.toolExecutables.push(tool)
+  const guard = await f.guard()
+  try {
+    writeFileSync(tool, "#!/bin/sh\nexit 1\n")
+    writeFileSync(tool, "#!/bin/sh\nexit 0\n")
+    await assert.rejects(guard.assertUnchanged(), /mask=/u)
+  } finally {
+    await guard.close()
+  }
+})
+
+test("creation of a missing intermediate PATH directory invalidates absent candidate evidence", async () => {
+  const f = fixture()
+  const parent = join(f.outer, "missing-path")
+  f.environment.PATH = `${join(parent, "bin")}:${f.environment.PATH}`
+  const guard = await f.guard()
+  try {
+    mkdirSync(parent)
+    await assert.rejects(guard.assertUnchanged())
+  } finally {
+    await guard.close()
+  }
+})
+
+test("protecting a strict ancestor promotes its metadata to observed artifact input", async () => {
+  const f = fixture()
+  const ancestor = join(f.outer, "artifact-parent")
+  const tool = join(ancestor, "bin", "fixture-tool")
+  mkdirSync(join(ancestor, "bin"), { recursive: true })
+  writeFileSync(tool, "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+  f.invocation.toolExecutables.push(tool)
+  const guard = await f.guard()
+  try {
+    await guard.protectArtifacts([ancestor])
+    utimesSync(ancestor, new Date(0), new Date(0))
     await assert.rejects(guard.assertUnchanged())
   } finally {
     await guard.close()
