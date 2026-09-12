@@ -220,16 +220,6 @@ const deliveryFinalityExpectedBehavior = Option.getOrThrow(
 const deliveryFinalityAcquireBStoryPosition = Option.getOrThrow(
   Option.some(deliveryFinalityAcquireBAt).pipe(Option.filter((index) => index !== missingStoryItemIndex))
 )
-const deliveryFinalityCancellationGraph = Option.getOrThrow(
-  Option.fromUndefinedOr(
-    deliveryFinalitySpineAuthoredCassette.story
-      .slice(0, deliveryFinalityAcquireBStoryPosition)
-      .findLast(
-        (item): item is Extract<AuthoredCassetteStoryItem, { readonly _tag: "TrackerGraphReadReturned" }> =>
-          item._tag === "TrackerGraphReadReturned"
-      )
-  ).pipe(Option.map((item) => item.graph))
-)
 
 const followsCompletionMarkerAbsence = (
   item: AuthoredCassetteStoryItem,
@@ -241,16 +231,6 @@ const followsCompletionMarkerAbsence = (
   return previous?._tag === "CompletionClaimReadReturned" && previous.claim === "CompletionMarkerAbsent"
 }
 
-const deliveryFinalityCancellationPrefix = (() => {
-  const beforeAcquireB = deliveryFinalitySpineAuthoredCassette.story.slice(0, deliveryFinalityAcquireBStoryPosition)
-  const cancellationAfter = Option.getOrThrow(
-    Option.some(beforeAcquireB.findIndex(followsCompletionMarkerAbsence)).pipe(
-      Option.filter((index) => index !== missingStoryItemIndex)
-    )
-  )
-  return beforeAcquireB.slice(0, cancellationAfter + 1)
-})()
-
 /**
  * Alice cancels after A's admitted integration compare-and-set.  The existing
  * completion-finality tail settles A and releases its exact completion claim;
@@ -261,10 +241,11 @@ export const integrationRunCancellationAuthoredCassette = Schema.decodeUnknownSy
   ...deliveryFinalitySpineAuthoredCassette,
   name: "Alice cancels while A's admitted integration has settled",
   story: [
-    ...deliveryFinalityCancellationPrefix,
-    { _tag: "OperatorAppliesRunCancellation" },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "RunActivationFinalTrackerGraphReadReturned", graph: deliveryFinalityCancellationGraph },
+    ...deliveryFinalitySpineAuthoredCassette.story
+      .slice(0, deliveryFinalityAcquireBStoryPosition)
+      .flatMap((item, index, story) =>
+        followsCompletionMarkerAbsence(item, index, story) ? [item, { _tag: "OperatorAppliesRunCancellation" }] : [item]
+      ),
     { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMayTerminate" } },
     {
       ...deliveryFinalityExpectedBehavior,
