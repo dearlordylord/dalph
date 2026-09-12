@@ -1566,11 +1566,20 @@ export const verifyRecordedCassetteRoundTrip = (
 ): ReadonlyArray<RecordedCassetteCheckpoint> => {
   const actualRecords: Array<JournalRecord> = []
   let actualHistory: ReturnType<typeof reduceWorkflowJournalHistory> | undefined
-  return records.map((_record, index) => {
+  let sourceHistory: ReturnType<typeof reduceWorkflowJournalHistory> | undefined
+  return records.map((sourceRecord, index) => {
     const checkpoint = index + 1
-    // The source remains an independent cold oracle before selected recorded
-    // entries are checked or reconstructed. An unvisited suffix stays untouched.
-    const expected = reduceWorkflowJournalHistory(cassette.runId, records.slice(0, checkpoint))
+    // Validate this source occurrence first from its own accepted predecessor;
+    // recorded entries never supply that history. Rejected successors receive
+    // the full cold diagnostic, not only their new issues.
+    const sourceAdvanced =
+      sourceHistory?._tag === "ValidWorkflowJournalHistory"
+        ? advanceWorkflowJournalHistory(sourceHistory, sourceRecord)
+        : undefined
+    sourceHistory =
+      sourceAdvanced?._tag === "ValidWorkflowJournalHistory"
+        ? sourceAdvanced
+        : reduceWorkflowJournalHistory(cassette.runId, records.slice(0, checkpoint))
     const prefix = RecordedCassette.make({ ...cassette, entries: cassette.entries.slice(0, checkpoint) })
     const entry = prefix.entries[actualRecords.length]
     if (entry !== undefined) {
@@ -1596,7 +1605,7 @@ export const verifyRecordedCassetteRoundTrip = (
     } else if (actualHistory === undefined) {
       actualHistory = reduceWorkflowJournalHistory(prefix.runId, actualRecords)
     }
-    return checkpointComparison(checkpoint, expected, actualHistory)
+    return checkpointComparison(checkpoint, sourceHistory, actualHistory)
   })
 }
 

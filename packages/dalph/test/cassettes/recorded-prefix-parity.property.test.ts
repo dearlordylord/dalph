@@ -7,6 +7,7 @@ import { RunId } from "@dalph/contracts"
 import {
   InitialControlPolicy,
   JournalPosition,
+  JournalRecordKey,
   RunPolicyRevision,
   TaskWorkCapacity,
   TaskWorkCapacityChangedEvent,
@@ -136,6 +137,82 @@ it("preserves complete cold checkpoint arrays for generated capacities and remov
   )
 })
 
+const sourcePerturbations: ReadonlyArray<
+  readonly [string, (records: ReadonlyArray<JournalRecord>, selected: number) => ReadonlyArray<JournalRecord>]
+> = [
+  ["removed occurrence", (records, selected) => records.filter((_record, index) => index !== selected)],
+  [
+    "duplicate occurrence",
+    (records, selected) => [
+      ...records.slice(0, selected),
+      ...records.slice(selected, selected + 1),
+      ...records.slice(selected)
+    ]
+  ],
+  ["reordered occurrences", (records) => [...records].reverse()],
+  [
+    "noncanonical position",
+    (records, selected) =>
+      records.map((record, index) => (index === selected ? { ...record, position: JournalPosition.make(99) } : record))
+  ],
+  [
+    "noncanonical key",
+    (records, selected) =>
+      records.map((record, index) =>
+        index === selected ? { ...record, key: JournalRecordKey.make("noncanonical-source-key") } : record
+      )
+  ],
+  [
+    "foreign Run",
+    (records, selected) =>
+      records.map((record, index) =>
+        index === selected ? { ...record, runId: RunId.make("foreign-source-run") } : record
+      )
+  ]
+]
+
+it.each(sourcePerturbations)("preserves every cold checkpoint after a source %s", (_name, perturb) => {
+  fc.assert(
+    fc.property(
+      fc.array(fc.integer({ min: 1, max: 8 }), { maxLength: 8 }),
+      fc.nat({ max: 20 }),
+      (capacities, offset) => {
+        const records = capacityRecords(capacities)
+        const cassette = Effect.runSync(projectRecordedCassette(records))
+        const source = perturb(records, offset % records.length)
+        expect(outcome(() => verifyRecordedCassetteRoundTrip(source, cassette))).toEqual(
+          outcome(() => coldOracle(source, cassette))
+        )
+      }
+    )
+  )
+})
+
+it("preserves cold checkpoints through successive distinct invalid source prefixes", () => {
+  const records = capacityRecords([2, 3, 4])
+  const cassette = Effect.runSync(projectRecordedCassette(records))
+  const source = records.map((record, index) =>
+    index === 1
+      ? { ...record, position: JournalPosition.make(99) }
+      : index === 2
+        ? { ...record, key: JournalRecordKey.make("second-source-error") }
+        : index === 3
+          ? { ...record, runId: RunId.make("third-source-error") }
+          : record
+  )
+  const checkpoints = verifyRecordedCassetteRoundTrip(source, cassette)
+  expect(checkpoints).toEqual(coldOracle(source, cassette))
+  expect(checkpoints).toHaveLength(source.length)
+  expect(
+    checkpoints
+      .slice(1)
+      .every(
+        ({ pureSelectionEquivalent, workflowHistoryEquivalent }) =>
+          !pureSelectionEquivalent && !workflowHistoryEquivalent
+      )
+  ).toBe(true)
+})
+
 it("keeps empty sources and unvisited schema-invalid suffixes untouched and shorter final prefixes repeated", () => {
   const records = capacityRecords([2, 3])
   const cassette = Effect.runSync(projectRecordedCassette(records))
@@ -167,7 +244,7 @@ it("keeps empty sources and unvisited schema-invalid suffixes untouched and shor
   expect(verifyRecordedCassetteRoundTrip(records, shorter)).toEqual(coldOracle(records, shorter))
 })
 
-it("retains source cold validation at every cursor while eliminating recorded-side replay", () => {
+it("validates every source and recorded occurrence once while retaining all checkpoint comparisons", () => {
   const records = capacityRecords([2, 3, 4, 5, 6, 7])
   const cassette = Effect.runSync(projectRecordedCassette(records))
   let validations = 0
@@ -191,8 +268,7 @@ it("retains source cold validation at every cursor while eliminating recorded-si
           workflowHistoryEquivalent
       )
     ).toBe(true)
-    const sourceColdVisits = (records.length * (records.length + 1)) / 2
-    expect(validations).toBe(sourceColdVisits + records.length)
+    expect(validations).toBe(2 * records.length)
   } finally {
     restore()
   }
@@ -244,6 +320,20 @@ effectIt.effect(
         expect(outcome(() => verifyRecordedCassetteRoundTrip(run.records, variant))).toEqual(
           outcome(() => coldOracle(run.records, variant))
         )
+      const sourceNestedIdentityFailure = run.records.map((record) =>
+        record.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+          ? {
+              ...record,
+              event: {
+                ...record.event,
+                plannedAttempt: { ...record.event.plannedAttempt, runId: RunId.make("nested-source-foreign-run") }
+              }
+            }
+          : record
+      )
+      expect(outcome(() => verifyRecordedCassetteRoundTrip(sourceNestedIdentityFailure, cassette))).toEqual(
+        outcome(() => coldOracle(sourceNestedIdentityFailure, cassette))
+      )
       const { integrationTarget, plannedAttempt, qualifiedCandidate } = integrationFinalityFixture
       const integrationFields: Omit<Extract<RecordedCassetteEntry, { readonly _tag: "IntegrationStarted" }>, "_tag"> = {
         plannedAttempt,
