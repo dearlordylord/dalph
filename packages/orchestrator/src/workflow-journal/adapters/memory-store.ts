@@ -53,17 +53,6 @@ const sameEvent = (left: WorkflowJournalEvent, right: WorkflowJournalEvent): boo
   JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(left)) ===
   JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(right))
 
-const readColdHistory = (
-  runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
-  operation: "JournalStore.read" | "JournalStore.readRunForRecovery"
-): Effect.Effect<ReadonlyArray<JournalRecord>, JournalHistoryCorruption> => {
-  const decision = decideJournalPartitionHistory("Cold", runId, records)
-  return decision._tag === "ValidPartitionHistory"
-    ? Effect.succeed(records)
-    : Effect.fail(new JournalHistoryCorruption({ detail: decision.issue.detail, operation, partition: "Cold", runId }))
-}
-
 type MemoryAppendError =
   | JournalStoreContradiction
   | WorkflowRunAlreadyTerminated
@@ -194,6 +183,25 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
     JournalStore,
     Effect.gen(function* () {
       const state = yield* Ref.make<MemoryJournalState>(initial)
+      // These immutable roots belong to this layer's Cold partition. Weak identity
+      // retention fits their lifetime; Effect Cache's capacity/TTL eviction does
+      // not. This is neither caller-array acceptance nor mutation isolation.
+      const validatedColdRoots = new WeakMap<ReadonlyArray<JournalRecord>, RunId>()
+      const readColdHistory = (
+        runId: RunId,
+        records: ReadonlyArray<JournalRecord>,
+        operation: "JournalStore.read" | "JournalStore.readRunForRecovery"
+      ): Effect.Effect<ReadonlyArray<JournalRecord>, JournalHistoryCorruption> => {
+        if (validatedColdRoots.get(records) === runId) return Effect.succeed(records)
+        const decision = decideJournalPartitionHistory("Cold", runId, records)
+        if (decision._tag === "InvalidPartitionHistory") {
+          return Effect.fail(
+            new JournalHistoryCorruption({ detail: decision.issue.detail, operation, partition: "Cold", runId })
+          )
+        }
+        validatedColdRoots.set(records, runId)
+        return Effect.succeed(records)
+      }
 
       const beginRun = Effect.fn("JournalStore.Memory.beginRun")(function* (
         runId: RunId,
