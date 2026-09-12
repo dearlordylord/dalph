@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- One driver keeps the model action-to-production-boundary map auditable. */
 import { it } from "@effect/vitest"
+import { isCoverageMode } from "../../test-support/vitest-mode.js"
 import { defineDriver, ITFBigInt, quintRun, stateCheck } from "@firfi/quint-connect/effect"
 import {
   AcceptedResult,
@@ -2875,158 +2876,161 @@ it.effect("a cached live activation sees a newly recorded closed lifecycle befor
   })
 )
 
-it.effect(
-  "re-establishes ordinary provenance after active refresh lifecycle suspension",
-  () =>
-    quintRun({
-      backend: "typescript",
-      driverFactory: taskFactReconciliationDriver,
-      maxSamples: 1,
-      maxSteps: 6,
-      nTraces: 1,
-      seed: "2815",
-      spec: "specs/taskFactReconciliation.qnt",
-      step: "activeRefreshLifecycleReestablishmentMbtStep",
-      stateCheck: taskFactLifecycleStateCheck
-    }),
-  { timeout: 180_000 }
-)
+// Coverage keeps the ordinary production-seam tests; formal replay runs in the other modes.
+if (!isCoverageMode) {
+  it.effect(
+    "re-establishes ordinary provenance after active refresh lifecycle suspension",
+    () =>
+      quintRun({
+        backend: "typescript",
+        driverFactory: taskFactReconciliationDriver,
+        maxSamples: 1,
+        maxSteps: 6,
+        nTraces: 1,
+        seed: "2815",
+        spec: "specs/taskFactReconciliation.qnt",
+        step: "activeRefreshLifecycleReestablishmentMbtStep",
+        stateCheck: taskFactLifecycleStateCheck
+      }),
+    { timeout: 180_000 }
+  )
 
-it.effect(
-  "refreshes Running authority without authorizing another executor command",
-  () =>
-    quintRun({
-      backend: "typescript",
-      driverFactory: taskFactReconciliationDriver,
-      maxSamples: 40,
-      maxSteps: 4,
-      nTraces: 40,
-      seed: "281",
-      spec: "specs/taskFactReconciliation.qnt",
-      step: "activeRefreshMbtStep",
-      stateCheck: taskFactStateCheck
-    }),
-  { timeout: 180_000 }
-)
+  it.effect(
+    "refreshes Running authority without authorizing another executor command",
+    () =>
+      quintRun({
+        backend: "typescript",
+        driverFactory: taskFactReconciliationDriver,
+        maxSamples: 40,
+        maxSteps: 4,
+        nTraces: 40,
+        seed: "281",
+        spec: "specs/taskFactReconciliation.qnt",
+        step: "activeRefreshMbtStep",
+        stateCheck: taskFactStateCheck
+      }),
+    { timeout: 180_000 }
+  )
 
-it.effect(
-  "exercises TrackerNotification as an active refresh source",
-  () =>
-    quintRun({
-      backend: "typescript",
-      driverFactory: taskFactReconciliationDriver,
-      maxSamples: 4,
-      maxSteps: 4,
-      nTraces: 4,
-      seed: "2811",
-      spec: "specs/taskFactReconciliation.qnt",
-      step: "activeRefreshTrackerNotificationMbtStep",
-      stateCheck: taskFactStateCheck
-    }),
-  { timeout: 180_000 }
-)
+  it.effect(
+    "exercises TrackerNotification as an active refresh source",
+    () =>
+      quintRun({
+        backend: "typescript",
+        driverFactory: taskFactReconciliationDriver,
+        maxSamples: 4,
+        maxSteps: 4,
+        nTraces: 4,
+        seed: "2811",
+        spec: "specs/taskFactReconciliation.qnt",
+        step: "activeRefreshTrackerNotificationMbtStep",
+        stateCheck: taskFactStateCheck
+      }),
+    { timeout: 180_000 }
+  )
 
-it.effect(
-  "exercises Timer as an active refresh source",
-  () =>
-    quintRun({
-      backend: "typescript",
-      driverFactory: taskFactReconciliationDriver,
-      maxSamples: 4,
-      maxSteps: 4,
-      nTraces: 4,
-      seed: "2812",
-      spec: "specs/taskFactReconciliation.qnt",
-      step: "activeRefreshTimerMbtStep",
-      stateCheck: taskFactStateCheck
-    }),
-  { timeout: 180_000 }
-)
+  it.effect(
+    "exercises Timer as an active refresh source",
+    () =>
+      quintRun({
+        backend: "typescript",
+        driverFactory: taskFactReconciliationDriver,
+        maxSamples: 4,
+        maxSteps: 4,
+        nTraces: 4,
+        seed: "2812",
+        spec: "specs/taskFactReconciliation.qnt",
+        step: "activeRefreshTimerMbtStep",
+        stateCheck: taskFactStateCheck
+      }),
+    { timeout: 180_000 }
+  )
 
-it.effect(
-  "leaves the ordinary Git intent unsettled after a TrackerNotification read failure",
-  () =>
-    quintRun({
-      backend: "typescript",
-      driverFactory: taskFactReconciliationDriver,
-      maxSamples: 1,
-      maxSteps: 3,
-      nTraces: 1,
-      seed: "2813",
-      spec: "specs/taskFactReconciliation.qnt",
-      step: "activeRefreshGitFailureTrackerNotificationMbtStep",
-      stateCheck: taskFactStateCheck
-    }),
-  { timeout: 180_000 }
-)
+  it.effect(
+    "leaves the ordinary Git intent unsettled after a TrackerNotification read failure",
+    () =>
+      quintRun({
+        backend: "typescript",
+        driverFactory: taskFactReconciliationDriver,
+        maxSamples: 1,
+        maxSteps: 3,
+        nTraces: 1,
+        seed: "2813",
+        spec: "specs/taskFactReconciliation.qnt",
+        step: "activeRefreshGitFailureTrackerNotificationMbtStep",
+        stateCheck: taskFactStateCheck
+      }),
+    { timeout: 180_000 }
+  )
 
-it.effect(
-  "leaves the ordinary Git intent unsettled after a Timer read failure",
-  () =>
-    quintRun({
-      backend: "typescript",
-      driverFactory: taskFactReconciliationDriver,
-      maxSamples: 1,
-      maxSteps: 3,
-      nTraces: 1,
-      seed: "2814",
-      spec: "specs/taskFactReconciliation.qnt",
-      step: "activeRefreshGitFailureTimerMbtStep",
-      stateCheck: taskFactStateCheck
-    }),
-  { timeout: 180_000 }
-)
+  it.effect(
+    "leaves the ordinary Git intent unsettled after a Timer read failure",
+    () =>
+      quintRun({
+        backend: "typescript",
+        driverFactory: taskFactReconciliationDriver,
+        maxSamples: 1,
+        maxSteps: 3,
+        nTraces: 1,
+        seed: "2814",
+        spec: "specs/taskFactReconciliation.qnt",
+        step: "activeRefreshGitFailureTimerMbtStep",
+        stateCheck: taskFactStateCheck
+      }),
+    { timeout: 180_000 }
+  )
 
-it.effect(
-  "replays exact task-fact choices and recovery through production journal and authority seams",
-  () =>
-    quintRun({
-      backend: "typescript",
-      driverFactory: taskFactReconciliationDriver,
-      maxSamples: 100,
-      maxSteps: 34,
-      nTraces: 100,
-      seed: "65",
-      spec: "specs/taskFactReconciliation.qnt",
-      step: "mbtStep",
-      stateCheck: taskFactStateCheck
-    }),
-  { timeout: 180_000 }
-)
+  it.effect(
+    "replays exact task-fact choices and recovery through production journal and authority seams",
+    () =>
+      quintRun({
+        backend: "typescript",
+        driverFactory: taskFactReconciliationDriver,
+        maxSamples: 100,
+        maxSteps: 34,
+        nTraces: 100,
+        seed: "65",
+        spec: "specs/taskFactReconciliation.qnt",
+        step: "mbtStep",
+        stateCheck: taskFactStateCheck
+      }),
+    { timeout: 180_000 }
+  )
 
-it.effect(
-  "replays clean changed-attempt replacement and rejection through production protocols",
-  () =>
-    quintRun({
-      backend: "typescript",
-      driverFactory: taskFactReconciliationDriver,
-      maxSamples: 200,
-      maxSteps: 18,
-      nTraces: 200,
-      seed: "66",
-      spec: "specs/taskFactReconciliation.qnt",
-      step: "restartMbtStep",
-      stateCheck: taskFactStateCheck
-    }),
-  { timeout: 180_000 }
-)
+  it.effect(
+    "replays clean changed-attempt replacement and rejection through production protocols",
+    () =>
+      quintRun({
+        backend: "typescript",
+        driverFactory: taskFactReconciliationDriver,
+        maxSamples: 200,
+        maxSteps: 18,
+        nTraces: 200,
+        seed: "66",
+        spec: "specs/taskFactReconciliation.qnt",
+        step: "restartMbtStep",
+        stateCheck: taskFactStateCheck
+      }),
+    { timeout: 180_000 }
+  )
 
-it.effect(
-  "replays the complete clean P2 worktree, bounded admission, and executor start path",
-  () =>
-    quintRun({
-      backend: "typescript",
-      driverFactory: taskFactReconciliationDriver,
-      maxSamples: 1,
-      maxSteps: 12,
-      nTraces: 1,
-      seed: "6601",
-      spec: "specs/taskFactReconciliation.qnt",
-      step: "restartSuccessMbtStep",
-      stateCheck: taskFactStateCheck
-    }),
-  { timeout: 180_000 }
-)
+  it.effect(
+    "replays the complete clean P2 worktree, bounded admission, and executor start path",
+    () =>
+      quintRun({
+        backend: "typescript",
+        driverFactory: taskFactReconciliationDriver,
+        maxSamples: 1,
+        maxSteps: 12,
+        nTraces: 1,
+        seed: "6601",
+        spec: "specs/taskFactReconciliation.qnt",
+        step: "restartSuccessMbtStep",
+        stateCheck: taskFactStateCheck
+      }),
+    { timeout: 180_000 }
+  )
+}
 
 it.effect("requires command reconciliation before a generic executor-state projection", () =>
   Effect.gen(function* () {

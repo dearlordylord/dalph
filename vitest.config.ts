@@ -11,7 +11,7 @@ const mbtTestPattern = "packages/**/*.mbt.test.ts"
 const acceptedResultIntegrationMbtTestPattern =
   "packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts"
 // These ordinary tests exercise production conformance seams; their exhaustive
-// Quint traces remain mode-gated by quintIt itself.
+// Quint traces are explicitly guarded against coverage mode in those files.
 const coverageExcludedMbtTestPattern =
   "packages/**/!(run-activation|run-cancellation|task-fact-reconciliation).mbt.test.ts"
 const capabilityRegistrationTestPattern = "scripts/capability-registration.test.ts"
