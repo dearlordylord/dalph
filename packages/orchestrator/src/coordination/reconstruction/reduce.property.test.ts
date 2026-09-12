@@ -38,6 +38,14 @@ import { completedRunFinalityFixture } from "../../../test/run-finality.js"
 
 const safeSegment = fc.stringMatching(/^[a-z][a-z0-9-]{0,12}$/)
 
+/** The complete prefix is compared at history.prefix; prove its state alias instead of traversing it twice. */
+const historyWithPrefixComparedOnce = (history: ReturnType<typeof reduceWorkflowJournalHistory>) => {
+  if (history._tag !== "ValidWorkflowJournalHistory") return history
+  const { evidence, ...workflowHistory } = history.runState.workflowHistory
+  expect(evidence).toBe(history.prefix)
+  return { ...history, runState: { ...history.runState, workflowHistory } }
+}
+
 const expectSameRejectedIssues = (
   successor: ReturnType<typeof advanceWorkflowJournalHistory>,
   replay: ReturnType<typeof reduceWorkflowJournalHistory>
@@ -197,7 +205,9 @@ it("advances every generated valid prefix to the same state and frontier as comp
       expect(incremental._tag).toBe("ValidWorkflowJournalHistory")
       if (incremental._tag !== "ValidWorkflowJournalHistory") return
       let accepted = [first]
-      expect(incremental).toEqual(reduceWorkflowJournalHistory(runId, accepted))
+      expect(historyWithPrefixComparedOnce(incremental)).toEqual(
+        historyWithPrefixComparedOnce(reduceWorkflowJournalHistory(runId, accepted))
+      )
       for (const record of records.slice(1)) {
         accepted = [...accepted, record]
         incremental = advanceWorkflowJournalHistory(incremental, record)
@@ -206,13 +216,17 @@ it("advances every generated valid prefix to the same state and frontier as comp
         const cold = reduceWorkflowJournalHistory(runId, accepted)
         expect(inspectWorkflowJournalHistoryValidationPath(cold)).toBe("IndexedCold")
         expect(inspectWorkflowJournalHistoryValidationPath(incremental)).toBe("IndexedSuccessor")
-        expect(incremental).toEqual(cold)
-        expect(cold).toEqual(reduceUnindexedWorkflowJournalHistoryForTesting(runId, accepted))
+        const comparableCold = historyWithPrefixComparedOnce(cold)
+        expect(historyWithPrefixComparedOnce(incremental)).toEqual(comparableCold)
+        expect(comparableCold).toEqual(
+          historyWithPrefixComparedOnce(reduceUnindexedWorkflowJournalHistoryForTesting(runId, accepted))
+        )
       }
     }),
     { numRuns: 100 }
   )
-})
+  // Every prefix gets independent indexed and raw full replay plus complete state equality: quadratic test-oracle work.
+}, 30_000)
 
 it("cold replay derives independent equivalent results without an input-array authority cache", () => {
   const { records, runId } = generatedValidHistory(["same-prefix"])
