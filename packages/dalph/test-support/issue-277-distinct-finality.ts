@@ -1,4 +1,4 @@
-import { Effect, Match, Queue, Ref } from "effect"
+import { Effect, Match, Queue, Ref, type Crypto, type Scope } from "effect"
 import {
   CompletionClaimBoundary,
   CompletionTaskBoundary,
@@ -17,7 +17,7 @@ import {
 } from "@dalph/orchestrator"
 import { type TaskId, type AttemptId } from "@dalph/contracts"
 import { makeSixTaskDeliveryFacts } from "./six-task-delivery-facts.js"
-import { makeSixTaskDeliveryRuntime } from "./six-task-delivery-runtime.js"
+import { makeSixTaskDeliveryRuntime, type SixTaskDeliveryRuntime } from "./six-task-delivery-runtime.js"
 import { makeSixTaskFinalityBoundaries } from "./six-task-finality-boundaries.js"
 
 export type Issue277Cut =
@@ -46,7 +46,23 @@ export type Issue277FinalityCall =
     }
   | { readonly _tag: "Active"; readonly taskId: TaskId; readonly observation: TaskClaimObservation }
 
-export const makeIssue277DistinctFinality = Effect.fn("Issue277.makeDistinctFinality")(function* () {
+type Issue277CutState =
+  | { readonly _tag: "Disabled" }
+  | { readonly _tag: "Armed"; readonly at: Issue277Cut; readonly attemptId: AttemptId }
+
+interface Issue277DistinctFinality extends SixTaskDeliveryRuntime {
+  readonly facts: ReturnType<typeof makeSixTaskDeliveryFacts>
+  readonly calls: Ref.Ref<ReadonlyArray<Issue277FinalityCall>>
+  readonly finalityCut: Ref.Ref<Issue277CutState>
+  readonly reached: Queue.Queue<{ readonly _tag: "Crash"; readonly at: Issue277Cut } | { readonly _tag: "Finished" }>
+  readonly events: Queue.Queue<WorkflowEvent>
+}
+
+export const makeIssue277DistinctFinality = Effect.fn("Issue277.makeDistinctFinality")(function* (): Effect.fn.Return<
+  Issue277DistinctFinality,
+  never,
+  Crypto.Crypto | Scope.Scope
+> {
   const facts = makeSixTaskDeliveryFacts("issue-277")
   const calls = yield* Ref.make<ReadonlyArray<Issue277FinalityCall>>([])
   const cut = yield* Ref.make<

@@ -65,20 +65,24 @@ import {
   type IntegratorRunCorrelation,
   DeliveryRuntimeObservationObserver
 } from "@dalph/orchestrator"
-import { Context, Deferred, Effect, Layer, Queue, Ref, Stream } from "effect"
+import { Context, Deferred, Effect, Layer, Queue, Ref, Stream, type Crypto, type Scope } from "effect"
 import { makeSixTaskGitAndEvidence } from "./six-task-finality-boundaries.js"
 
 import type { makeSixTaskDeliveryFacts } from "./six-task-delivery-facts.js"
 import { makeSixTaskIntegratorGit } from "./six-task-integrator-git.js"
 
-import { makeSixTaskRuntimeObservation, type SixTaskRuntimeControl } from "./six-task-runtime-observation.js"
-export type { SixTaskTerminalCut } from "./six-task-runtime-observation.js"
+import {
+  makeSixTaskRuntimeObservation,
+  type SixTaskRuntimeControl,
+  type SixTaskDeliveryRuntime
+} from "./six-task-runtime-observation.js"
+export type { SixTaskDeliveryRuntime, SixTaskTerminalCut } from "./six-task-runtime-observation.js"
 
 /** Independent G5 boundary controls; all admission and report decisions belong to production. */
 export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime")(function* (
   facts: ReturnType<typeof makeSixTaskDeliveryFacts>,
   control: SixTaskRuntimeControl
-) {
+): Effect.fn.Return<SixTaskDeliveryRuntime, never, Crypto.Crypto | Scope.Scope> {
   const { baseSha, capacity, graph, integrationTarget, namespace, runId, target, taskFacts, taskFactsById, tasks } =
     facts
   if (graph._tag === "Invalid") return yield* Effect.die("invalid controlled G5")

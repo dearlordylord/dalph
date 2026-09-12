@@ -6,6 +6,12 @@ import {
   IntegrationTargetRef,
   GitRepositoryLocator
 } from "@dalph/contracts"
+import type {
+  JournalAppendError,
+  JournalReadError,
+  PlannedAttemptContinuationWitness,
+  SafeContinuationRevalidationEligibility
+} from "@dalph/orchestrator"
 import { type InRunJournalService, type JournalRecord } from "../../../orchestrator/src/workflow-journal/store.js"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
 import { ActiveTaskClaim } from "../../../orchestrator/src/authorities/task-tracker/claim-mutation.js"
@@ -38,12 +44,20 @@ import {
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
 import { deriveJournalResponsibilityFacts } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
 
+interface ExecutorResumeModelFixture {
+  readonly graph: (
+    lifecycle: "Open" | "TerminalWithoutSuccess"
+  ) => Effect.Effect<OperationId, JournalAppendError | JournalReadError>
+  readonly readWitnesses: () => Effect.Effect<PlannedAttemptContinuationWitness, JournalAppendError | JournalReadError>
+  readonly eligibility: () => Effect.Effect<SafeContinuationRevalidationEligibility, JournalReadError>
+}
+
 /** Actual tracker/Git observation history behind the executor model's abstract five-witness action. */
 export const makeExecutorResumeModelFixture = (
   journal: InRunJournalService,
   plannedAttempt: PlannedTaskAttempt,
   specification: TaskWorkSpecification
-) => {
+): ExecutorResumeModelFixture => {
   const target = FixtureTarget.make("planned-attempt-executor-model")
   const planId = OperationId.make("planned-attempt-executor-model-plan")
   const integrationTarget = IntegrationTarget.make({

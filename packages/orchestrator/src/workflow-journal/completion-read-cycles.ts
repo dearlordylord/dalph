@@ -23,7 +23,7 @@ export interface CompletionReadCycles {
   readonly [CompletionReadCyclesTypeId]: true
 }
 
-interface CompletionReadCycleState {
+export interface CompletionReadCycleState {
   readonly intentCount: number
   readonly maximumOrdinal: number
   readonly latestIntent: JournalRecord | undefined

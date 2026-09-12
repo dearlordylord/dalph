@@ -12,6 +12,7 @@ import {
   CompletionClaimReplacementIntendedEvent,
   CompletionClaimRequestOrdinal,
   CompletionTaskClaim,
+  type CompletionTaskRequest,
   completionClaimReplacementOperationIdFor,
   completionTaskRequestFor
 } from "../../src/workflow/protocols/integration-finality/events.js"
@@ -31,8 +32,23 @@ import {
   TargetPromotionAttemptOrdinal,
   TargetPromotionIntendedEvent,
   TargetPromotionObservedSuccessEvent,
+  type TargetPromotionCorrelation,
+  type TargetPromotionObservedSuccessEvent as TargetPromotionObservedSuccessEventType,
   targetPromotionCorrelationFor
 } from "../../src/workflow/protocols/target-promotion/events.js"
+
+interface PromotedIntegrationHistory {
+  readonly claim: CompletionTaskClaim
+  readonly completionRequest: CompletionTaskRequest
+  readonly promotedRecords: ReadonlyArray<JournalRecord>
+  readonly promotionCorrelation: TargetPromotionCorrelation
+  readonly promotionRecord: JournalRecord
+  readonly promotionSuccess: TargetPromotionObservedSuccessEventType
+  readonly qualifiedCandidate: IntegratorRunQualifiedCandidate
+  readonly qualifiedRecords: ReadonlyArray<JournalRecord>
+  readonly replacedRecords: ReadonlyArray<JournalRecord>
+  readonly replacementRecord: JournalRecord
+}
 
 /**
  * Test setup for real completion boundary scenarios. The supplied history must
@@ -46,7 +62,7 @@ export const makePromotedIntegrationHistory = (input: {
   readonly candidateCommit: GitCommitSha
   readonly candidateText: IntegratorCandidateText
   readonly originalClaim: ActiveTaskClaim
-}) => {
+}): PromotedIntegrationHistory => {
   const runId = input.session.plannedAttempt.runId
   const append = (records: ReadonlyArray<JournalRecord>, event: JournalRecord["event"]) => {
     const appended: JournalRecord = {

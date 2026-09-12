@@ -29,7 +29,7 @@ const isReplacementOutcome = (record: JournalRecord): record is ReplacementOutco
   record.event._tag === "CompletionClaimReplaced"
 
 /** Exact chronological pair, including an arbitrary recorded replacement operation identity. */
-interface SettledCompletionClaimReplacement {
+export interface SettledCompletionClaimReplacement {
   readonly intent: ReplacementIntent
   readonly outcome: ReplacementOutcome
 }

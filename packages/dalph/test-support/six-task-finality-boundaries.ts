@@ -14,7 +14,9 @@ import {
   type TargetPromotionGitRequest,
   type CompletionTaskClaim,
   type CompletionTaskRequest,
-  type TrackerMutation
+  type CompletionClaimBoundaryService,
+  type CompletionTaskBoundaryService,
+  type TrackerMutationService
 } from "@dalph/orchestrator"
 import { Effect, Ref } from "effect"
 import type { EvidenceReference, GitCommitSha, TaskId } from "@dalph/contracts"
@@ -67,10 +69,15 @@ export const makeSixTaskGitAndEvidence = Effect.fn("SixTaskDelivery.makeGitAndEv
  * Owns controlled tracker facts for both six-task fixtures. Tests must inspect
  * production records and exact boundary calls rather than infer finality here.
  */
+interface SixTaskFinalityBoundaries {
+  readonly claimBoundary: CompletionClaimBoundaryService
+  readonly taskBoundary: CompletionTaskBoundaryService
+}
+
 export const makeSixTaskFinalityBoundaries = Effect.fn("SixTaskDelivery.makeFinalityBoundaries")(function* (
-  tracker: TrackerMutation["Service"]
-) {
-  const boundaries = yield* Ref.make<ReadonlyMap<TaskId, CompletionClaimBoundary["Service"]>>(new Map())
+  tracker: TrackerMutationService
+): Effect.fn.Return<SixTaskFinalityBoundaries> {
+  const boundaries = yield* Ref.make<ReadonlyMap<TaskId, CompletionClaimBoundaryService>>(new Map())
   const completed = yield* Ref.make<ReadonlyMap<TaskId, CompletionTaskRequest>>(new Map())
   const boundaryFor = (claim: CompletionTaskClaim) =>
     Effect.gen(function* () {
