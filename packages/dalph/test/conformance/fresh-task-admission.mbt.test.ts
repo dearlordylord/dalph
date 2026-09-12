@@ -54,12 +54,20 @@ import {
 } from "../../../orchestrator/src/coordination/delivery/fresh-task-candidate.js"
 import { FreshWorkflowStep } from "../../../orchestrator/src/coordination/delivery/fresh-workflow-step.js"
 import { RunnableFrontierTransition } from "../../../orchestrator/src/coordination/frontier/frontier.js"
-import { InitialControlPolicy, RunPolicyRevision } from "../../../orchestrator/src/control/policy.js"
+import {
+  InitialControlPolicy,
+  RunPolicyRevision,
+  initialRunPolicyRevision
+} from "../../../orchestrator/src/control/policy.js"
 import type { CurrentDeliveryFrame } from "../../../orchestrator/src/coordination/run/current-delivery-frame.js"
 import { RunActivationOpportunity } from "../../../orchestrator/src/coordination/run/run-activation-opportunity.js"
 import { deriveJournalResponsibilityFacts } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
 import { reconstructedTaskGraphFor } from "../../../orchestrator/src/coordination/reconstruction/graph-knowledge.js"
-import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
+import {
+  advanceWorkflowJournalHistory,
+  observeWorkflowJournalValidationSteps,
+  reduceWorkflowJournalHistory
+} from "../../../orchestrator/src/coordination/reconstruction/history.js"
 import { requiredPlannedAttemptPositionsOf } from "../../../orchestrator/src/coordination/run/required-planned-attempt-positions.js"
 import { JournalPosition, type JournalRecordKey } from "../../../orchestrator/src/workflow-journal/identity.js"
 import {
@@ -280,6 +288,370 @@ const actionNames = {
   selectSafeContinuationFor: { task: Schema.Unknown }
 } as const
 
+/** Repeated driver observations may share only this exact journal root and visible cutoff's successful cold fold. */
+const makeExactPrefixReductionReader = () => {
+  type ValidReduction = Extract<
+    ReturnType<typeof reduceWorkflowJournalHistory>,
+    { readonly _tag: "ValidWorkflowJournalHistory" }
+  >
+  let success:
+    | { readonly records: ReadonlyArray<JournalRecord>; readonly cutoff: number; readonly reduction: ValidReduction }
+    | undefined
+  return {
+    read: (records: ReadonlyArray<JournalRecord>, cutoff: number): ValidReduction => {
+      if (success?.records === records && success.cutoff === cutoff) return success.reduction
+      const reduction = reduceWorkflowJournalHistory(runId, records.slice(0, cutoff))
+      if (reduction._tag === "InvalidWorkflowJournalHistory") {
+        return Effect.runSync(
+          Effect.die(`fresh-task admission MBT constructed invalid history: ${JSON.stringify(reduction.issues)}`)
+        )
+      }
+      success = { records, cutoff, reduction }
+      return reduction
+    },
+    reset: () => {
+      success = undefined
+    }
+  }
+}
+
+/** Only an acknowledged append or explicit reveal may advance these two independent driver-owned cold seeds. */
+const makeDriverPrefixPreparation = () => {
+  type Reduction = ReturnType<ReturnType<typeof makeExactPrefixReductionReader>["read"]>
+  type Prepared = {
+    readonly records: ReadonlyArray<JournalRecord>
+    readonly cutoff: number
+    readonly reduction: Reduction
+  }
+  const fullReader = makeExactPrefixReductionReader()
+  const visibleReader = makeExactPrefixReductionReader()
+  let full: Prepared | undefined
+  let visible: Prepared | undefined
+  const samePrefix = (prior: ReadonlyArray<JournalRecord>, records: ReadonlyArray<JournalRecord>, cutoff: number) => {
+    if (records.length < cutoff) return false
+    for (let index = 0; index < cutoff; index += 1) {
+      if (prior[index] !== records[index]) return false
+    }
+    return true
+  }
+  const coldFull = (records: ReadonlyArray<JournalRecord>) => {
+    full = { records, cutoff: records.length, reduction: fullReader.read(records, records.length) }
+  }
+  const coldVisible = (records: ReadonlyArray<JournalRecord>, cutoff: number) => {
+    visible = { records, cutoff, reduction: visibleReader.read(records, cutoff) }
+    return visible.reduction
+  }
+  const advanceVisible = (records: ReadonlyArray<JournalRecord>, cutoff: number) => {
+    const prior = visible
+    if (prior === undefined || cutoff < prior.cutoff || !samePrefix(prior.records, records, prior.cutoff)) {
+      return coldVisible(records, cutoff)
+    }
+    let reduction = prior.reduction
+    for (let index = prior.cutoff; index < cutoff; index += 1) {
+      const record = records[index]
+      if (record === undefined) return coldVisible(records, cutoff)
+      const advanced = advanceWorkflowJournalHistory(reduction, record)
+      if (advanced._tag === "InvalidWorkflowJournalHistory") return coldVisible(records, cutoff)
+      reduction = advanced
+    }
+    visible = { records, cutoff, reduction }
+    return reduction
+  }
+  return {
+    seed: (records: ReadonlyArray<JournalRecord>, cutoff: number) => {
+      coldFull(records)
+      return coldVisible(records, cutoff)
+    },
+    read: (records: ReadonlyArray<JournalRecord>, cutoff: number) =>
+      visible?.records === records && visible.cutoff === cutoff ? visible.reduction : coldVisible(records, cutoff),
+    append: (
+      oldRecords: ReadonlyArray<JournalRecord>,
+      records: ReadonlyArray<JournalRecord>,
+      acknowledged: JournalRecord,
+      cutoff: number
+    ) => {
+      const prior = full
+      if (
+        prior?.records !== oldRecords ||
+        records.length !== oldRecords.length + 1 ||
+        records.at(-1) !== acknowledged ||
+        !samePrefix(oldRecords, records, oldRecords.length)
+      ) {
+        coldFull(records)
+        return coldVisible(records, cutoff)
+      }
+      const advanced = advanceWorkflowJournalHistory(prior.reduction, acknowledged)
+      if (advanced._tag === "InvalidWorkflowJournalHistory") {
+        coldFull(records)
+        return coldVisible(records, cutoff)
+      }
+      full = { records, cutoff: records.length, reduction: advanced }
+      return advanceVisible(records, cutoff)
+    },
+    reveal: (records: ReadonlyArray<JournalRecord>, cutoff: number) => {
+      if (full?.records !== records) {
+        coldFull(records)
+        return coldVisible(records, cutoff)
+      }
+      return advanceVisible(records, cutoff)
+    },
+    reset: () => {
+      full = undefined
+      visible = undefined
+      fullReader.reset()
+      visibleReader.reset()
+    }
+  }
+}
+
+const prefixReaderFixture = (): ReadonlyArray<JournalRecord> => {
+  const revision = RunPolicyRevision.make(initialRunPolicyRevision + 1)
+  return [
+    makeWorkflowRunBeganRecord(runId, target, initialPolicy),
+    {
+      event: TaskWorkCapacityChangedEvent.make({
+        capacity: TaskWorkCapacity.make(2),
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        previousRevision: initialRunPolicyRevision,
+        revision,
+        version: workflowJournalEventVersion
+      }),
+      key: taskWorkCapacityPolicyRecordKey(revision),
+      position: JournalPosition.make(2),
+      runId
+    }
+  ]
+}
+
+it("reuses only an exact driver journal root and cutoff while retaining independent cold results", () => {
+  const records = prefixReaderFixture()
+  const earlierCold = reduceWorkflowJournalHistory(runId, records.slice(0, 1))
+  const fullCold = reduceWorkflowJournalHistory(runId, records)
+  const reader = makeExactPrefixReductionReader()
+  let steps = 0
+  const restore = observeWorkflowJournalValidationSteps(() => {
+    steps += 1
+  })
+  try {
+    const earlier = reader.read(records, 1)
+    expect(earlier).toEqual(earlierCold)
+    expect(reader.read(records, 1)).toBe(earlier)
+    expect(steps).toBe(1)
+    const full = reader.read(records, records.length)
+    expect(full).toEqual(fullCold)
+    expect(reader.read(records, records.length)).toBe(full)
+    expect(steps).toBe(3)
+    expect(reader.read([...records], records.length)).toEqual(fullCold)
+    expect(steps).toBe(5)
+    reader.reset()
+    expect(reader.read(records, records.length)).toEqual(fullCold)
+    expect(steps).toBe(7)
+    expect(makeExactPrefixReductionReader().read(records, records.length)).toEqual(fullCold)
+    expect(steps).toBe(9)
+    expect(earlier).toEqual(earlierCold)
+  } finally {
+    restore()
+  }
+})
+
+it("cold-validates a concealed malformed driver suffix when revealed and never reuses its failure", () => {
+  const valid = prefixReaderFixture()
+  const malformed = valid.map((record, index) =>
+    index === 1 ? { ...record, position: JournalPosition.make(99) } : record
+  )
+  const earlierCold = reduceWorkflowJournalHistory(runId, malformed.slice(0, 1))
+  let invalidColdSteps = 0
+  const restoreColdObserver = observeWorkflowJournalValidationSteps(() => {
+    invalidColdSteps += 1
+  })
+  const invalidCold = reduceWorkflowJournalHistory(runId, malformed)
+  restoreColdObserver()
+  expect(invalidCold._tag).toBe("InvalidWorkflowJournalHistory")
+  const detail =
+    invalidCold._tag === "InvalidWorkflowJournalHistory"
+      ? JSON.stringify(invalidCold.issues)
+      : "expected invalid fixture"
+  const reader = makeExactPrefixReductionReader()
+  let steps = 0
+  const restore = observeWorkflowJournalValidationSteps(() => {
+    steps += 1
+  })
+  try {
+    const earlier = reader.read(malformed, 1)
+    expect(earlier).toEqual(earlierCold)
+    expect(reader.read(malformed, 1)).toBe(earlier)
+    expect(steps).toBe(1)
+    expect(() => reader.read(malformed, malformed.length)).toThrow(
+      `fresh-task admission MBT constructed invalid history: ${detail}`
+    )
+    expect(steps).toBe(1 + invalidColdSteps)
+    expect(() => reader.read(malformed, malformed.length)).toThrow(
+      `fresh-task admission MBT constructed invalid history: ${detail}`
+    )
+    expect(steps).toBe(1 + 2 * invalidColdSteps)
+    expect(reader.read(valid, 1)).toEqual(earlierCold)
+    expect(steps).toBe(2 + 2 * invalidColdSteps)
+    expect(earlier).toEqual(earlierCold)
+  } finally {
+    restore()
+  }
+})
+
+const nextPrefixReaderRecord = (): JournalRecord => {
+  const revision = RunPolicyRevision.make(initialRunPolicyRevision + 2)
+  return {
+    event: TaskWorkCapacityChangedEvent.make({
+      capacity: TaskWorkCapacity.make(3),
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      previousRevision: RunPolicyRevision.make(initialRunPolicyRevision + 1),
+      revision,
+      version: workflowJournalEventVersion
+    }),
+    key: taskWorkCapacityPolicyRecordKey(revision),
+    position: JournalPosition.make(3),
+    runId
+  }
+}
+
+it("advances independent driver full and visible histories only for a proven append and reveal", () => {
+  const records = prefixReaderFixture()
+  const began = records.slice(0, 1)
+  const acknowledged = Option.getOrThrow(Option.fromUndefinedOr(records[1]))
+  const third = nextPrefixReaderRecord()
+  const hidden = [...records, third]
+  const earlierCold = reduceWorkflowJournalHistory(runId, began)
+  const fullCold = reduceWorkflowJournalHistory(runId, records)
+  const hiddenCold = reduceWorkflowJournalHistory(runId, hidden)
+  const preparation = makeDriverPrefixPreparation()
+  let steps = 0
+  const restore = observeWorkflowJournalValidationSteps(() => {
+    steps += 1
+  })
+  try {
+    const earlier = preparation.seed(began, began.length)
+    expect(steps).toBe(2)
+    expect(preparation.append(began, records, acknowledged, records.length)).toEqual(fullCold)
+    expect(steps).toBe(4)
+    expect(preparation.read(records, records.length)).toEqual(fullCold)
+    expect(steps).toBe(4)
+    expect(preparation.append(records, hidden, third, records.length)).toEqual(fullCold)
+    expect(steps).toBe(5)
+    expect(preparation.reveal(hidden, hidden.length)).toEqual(hiddenCold)
+    expect(steps).toBe(6)
+    expect(preparation.read([...hidden], hidden.length)).toEqual(hiddenCold)
+    expect(steps).toBe(9)
+    preparation.reset()
+    expect(preparation.seed(hidden, hidden.length)).toEqual(hiddenCold)
+    expect(steps).toBe(15)
+    expect(earlier).toEqual(earlierCold)
+  } finally {
+    restore()
+  }
+})
+
+it.each(["rewrittenPrefix", "wrongAcknowledgment", "duplicate", "batched"] as const)(
+  "cold-folds the complete driver append observation when %s invalidates its extension proof",
+  (kind) => {
+    const records = prefixReaderFixture()
+    const began = records.slice(0, 1)
+    const last = Option.getOrThrow(Option.fromUndefinedOr(records[1]))
+    const third = nextPrefixReaderRecord()
+    const observed =
+      kind === "rewrittenPrefix"
+        ? records.map((record, index) =>
+            index === 0 ? { ...record, runId: RunId.make("rewritten-driver-run") } : record
+          )
+        : kind === "duplicate"
+          ? [...began]
+          : kind === "batched"
+            ? [...records, third]
+            : records
+    const acknowledged =
+      kind === "wrongAcknowledgment"
+        ? { ...last }
+        : kind === "duplicate"
+          ? Option.getOrThrow(Option.fromUndefinedOr(began[0]))
+          : kind === "batched"
+            ? third
+            : last
+    let coldSteps = 0
+    const restoreColdObserver = observeWorkflowJournalValidationSteps(() => {
+      coldSteps += 1
+    })
+    const cold = reduceWorkflowJournalHistory(runId, observed)
+    restoreColdObserver()
+    const preparation = makeDriverPrefixPreparation()
+    preparation.seed(began, began.length)
+    let steps = 0
+    const restore = observeWorkflowJournalValidationSteps(() => {
+      steps += 1
+    })
+    try {
+      if (cold._tag === "InvalidWorkflowJournalHistory") {
+        expect(() => preparation.append(began, observed, acknowledged, observed.length)).toThrow(
+          `fresh-task admission MBT constructed invalid history: ${JSON.stringify(cold.issues)}`
+        )
+        expect(steps).toBe(coldSteps)
+      } else {
+        expect(preparation.append(began, observed, acknowledged, observed.length)).toEqual(cold)
+        expect(steps).toBe(2 * observed.length)
+      }
+    } finally {
+      restore()
+    }
+    if (kind === "rewrittenPrefix" && cold._tag === "InvalidWorkflowJournalHistory") {
+      const equalWidth = makeDriverPrefixPreparation()
+      const retained = equalWidth.seed(records, records.length)
+      const retainedCold = reduceWorkflowJournalHistory(runId, records)
+      expect(observed).toHaveLength(records.length)
+      let rewrittenSteps = 0
+      const restoreRewriteObserver = observeWorkflowJournalValidationSteps(() => {
+        rewrittenSteps += 1
+      })
+      try {
+        const detail = `fresh-task admission MBT constructed invalid history: ${JSON.stringify(cold.issues)}`
+        expect(() => equalWidth.append(records, observed, acknowledged, observed.length)).toThrow(detail)
+        expect(rewrittenSteps).toBe(coldSteps)
+        expect(() => equalWidth.read(observed, observed.length)).toThrow(detail)
+        expect(rewrittenSteps).toBe(2 * coldSteps)
+        expect(() => equalWidth.reveal(observed, observed.length)).toThrow(detail)
+        expect(rewrittenSteps).toBe(3 * coldSteps)
+        expect(retained).toEqual(retainedCold)
+      } finally {
+        restoreRewriteObserver()
+      }
+    }
+  }
+)
+
+it("cold-folds full invalid successor diagnostics repeatedly and concealed malformed observations on reveal", () => {
+  const valid = prefixReaderFixture()
+  const began = valid.slice(0, 1)
+  const malformed = valid.map((record, index) =>
+    index === 1 ? { ...record, position: JournalPosition.make(99) } : record
+  )
+  const acknowledged = Option.getOrThrow(Option.fromUndefinedOr(malformed[1]))
+  const cold = reduceWorkflowJournalHistory(runId, malformed)
+  expect(cold._tag).toBe("InvalidWorkflowJournalHistory")
+  const detail =
+    cold._tag === "InvalidWorkflowJournalHistory" ? JSON.stringify(cold.issues) : "expected invalid fixture"
+  const preparation = makeDriverPrefixPreparation()
+  const earlier = preparation.seed(began, began.length)
+  expect(() => preparation.append(began, malformed, acknowledged, malformed.length)).toThrow(
+    `fresh-task admission MBT constructed invalid history: ${detail}`
+  )
+  expect(() => preparation.append(began, malformed, acknowledged, malformed.length)).toThrow(
+    `fresh-task admission MBT constructed invalid history: ${detail}`
+  )
+  expect(preparation.read(malformed, 1)).toEqual(earlier)
+  expect(() => preparation.reveal(malformed, malformed.length)).toThrow(
+    `fresh-task admission MBT constructed invalid history: ${detail}`
+  )
+  expect(preparation.read(valid, 1)).toEqual(earlier)
+})
+
 /**
  * Scenario-to-test mapping:
  * - A–C enter from A–E while D/E remain incapable: reserveFreshEntryFor + production candidate evaluation/controller.
@@ -291,6 +663,7 @@ const actionNames = {
  * - Its one reservation survives four exact read routes and hands off only after Resume intent; retry Safe is rederived.
  */
 const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
+  const prefixReader = makeDriverPrefixPreparation()
   let process: "ProcessDown" | "ProcessUp" = "ProcessUp"
   let records: ReadonlyArray<JournalRecord> = [makeWorkflowRunBeganRecord(runId, target, initialPolicy)]
   let controller: DeliveryRuntimeAdmissionController | undefined
@@ -303,6 +676,7 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
   const claimCycles = new Map<TaskTag, number>()
   const ambiguousResponsibilityTags = new Set<TaskTag>()
   const acquireJournalRuntime = (initialRecords: ReadonlyArray<JournalRecord>) => {
+    prefixReader.reset()
     const managed = ManagedRuntime.make(liveJournalTestLayer({ records: initialRecords, runId, target }))
     const context = managed.runSync(Effect.context<AcceptedJournalReader | InRunJournal | Journal>())
     return { context, journal: Context.get(context, InRunJournal), managed }
@@ -311,19 +685,10 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
   const requireJournalRuntime = () =>
     journalRuntime ?? Effect.runSync(Effect.die("fresh-task admission journal used before init"))
   const visibleRecords = () => records.slice(0, visiblePrefixLength)
-  const validReduction = (candidate: ReadonlyArray<JournalRecord>) => {
-    const reduction = reduceWorkflowJournalHistory(runId, candidate)
-    if (reduction._tag === "InvalidWorkflowJournalHistory") {
-      return Effect.runSync(
-        Effect.die(`fresh-task admission MBT constructed invalid history: ${JSON.stringify(reduction.issues)}`)
-      )
-    }
-    return reduction
-  }
-  const currentReduction = () => validReduction(visibleRecords())
+  const currentReduction = () => prefixReader.read(records, visiblePrefixLength)
   const revealAcceptedSuffix = () => {
     visiblePrefixLength = records.length
-    validReduction(visibleRecords())
+    prefixReader.reveal(records, visiblePrefixLength)
   }
 
   const append = (
@@ -334,12 +699,12 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
     if (visibility === "Visible" && visiblePrefixLength !== records.length) {
       return Effect.runSync(Effect.die("cannot append after a process-unobserved accepted Journal suffix"))
     }
+    const oldRecords = records
     const record = Effect.runSync(requireJournalRuntime().journal.append(runId, key, event).pipe(Effect.orDie))
     records = Effect.runSync(requireJournalRuntime().journal.read(runId).pipe(Effect.orDie))
     sequence = Number(record.position)
-    validReduction(records)
     if (visibility === "Visible") visiblePrefixLength = records.length
-    validReduction(visibleRecords())
+    prefixReader.append(oldRecords, records, record, visiblePrefixLength)
     return record
   }
   const appendGraph = (suffix: string, explicitlyCoveredTaskIds: ReadonlyArray<TaskId> = [], snapshot = graph) => {
@@ -900,10 +1265,12 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
       Effect.gen(function* () {
         if (journalRuntime !== undefined) yield* journalRuntime.managed.disposeEffect
         process = "ProcessUp"
+        prefixReader.reset()
         records = [makeWorkflowRunBeganRecord(runId, target, initialPolicy)]
         journalRuntime = acquireJournalRuntime(records)
         sequence = 1
         visiblePrefixLength = 1
+        prefixReader.seed(records, visiblePrefixLength)
         graphSequence = 0
         reservations.clear()
         continuationReservations.clear()
@@ -1251,9 +1618,14 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
       appendCapacityChange(1)
       return synchronize()
     },
-    crash: () => Effect.sync(() => void (process = "ProcessDown")),
+    crash: () =>
+      Effect.sync(() => {
+        prefixReader.reset()
+        process = "ProcessDown"
+      }),
     recover: () =>
       Effect.gen(function* () {
+        prefixReader.reset()
         revealAcceptedSuffix()
         controller = yield* makeController()
         reservations.clear()
