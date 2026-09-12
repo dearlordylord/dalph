@@ -3112,9 +3112,9 @@ const pauseExecutorAndPromotionSuspendA = {
 } as const
 
 const pauseExecutorAndPromotionContinueA = {
-  _tag: "IdentityFreeWorkflowRoute",
-  correlation: { _tag: "PlannedAttempt", attemptId: "attempt:A:0" },
-  proposalId: '["IdentityFreeWorkflowRoute","ObservePlannedAttemptExecutorWork","attempt:A:0",null,"A"]',
+  _tag: "FreshExecutorWorkflowRoute",
+  attemptId: "attempt:A:0",
+  proposalId: '["FreshExecutorWorkflowRoute","ObservePlannedAttemptExecutorWork","attempt:A:0","A"]',
   taskId: "A"
 } as const
 
