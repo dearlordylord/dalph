@@ -4,6 +4,7 @@ import { Effect } from "effect"
 import { makeTaskWorkSpecification, TaskId } from "@dalph/contracts"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { TaskLifecycle, TrackerRevision } from "../../authorities/task-tracker/task.js"
+import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { makeAcceptedIntegrationHistory } from "../../../test/support/accepted-integration-history.js"
 import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
 import { liveJournalTestLayer } from "../delivery/live-journal-test-layer.js"
@@ -30,6 +31,21 @@ import {
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import { makeRunRecoveryProjection } from "./recovery-activation.js"
+
+const journaledPredecessorOperationIds = (
+  records: ReadonlyArray<JournalRecord>,
+  target: TrackerTarget
+): ReadonlyArray<OperationId> => [
+  ...new Set(
+    records.flatMap(({ event }) =>
+      event._tag === "TaskTrackerReadIntentRecorded" &&
+      event.operation._tag === "ReadTrackerGraph" &&
+      taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(target)
+        ? [event.operation.operationId]
+        : []
+    )
+  )
+]
 
 for (const initiallyHeld of [true, false]) {
   it.effect(
@@ -132,21 +148,43 @@ for (const initiallyHeld of [true, false]) {
                 )
               ).toBe(false)
             } else {
-              const selected = beforeRelease.frontier.transitions.find(
-                ({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph"
+              expect(
+                beforeRelease.frontier.transitions.some(({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph")
+              ).toBe(false)
+              expect(
+                beforeRelease.frontier.transitions.some(
+                  ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+                )
+              ).toBe(false)
+              expect(
+                beforeRelease.frontier.transitions.some(({ _tag }) => _tag === "ReleaseStartedIntegrationTarget")
+              ).toBe(false)
+              const predecessorOperationIds = [
+                ...new Set([
+                  ...journaledPredecessorOperationIds(yield* writer.read(fixture.runId), fixture.target),
+                  graph.operationId
+                ])
+              ]
+              const ordinaryG2 = makeTrackerGraphObservationOperation(
+                { _tag: "PostQuiescenceReconfirmation", quiescentGraphOperationId: graph.operationId },
+                OperationId.make("cleared-g2"),
+                fixture.target,
+                predecessorOperationIds
               )
-              if (selected?._tag !== "ObservePlannedAttemptContinuationGraph")
-                return yield* Effect.die("cleared prerequisite must permit post-claim graph")
-              expect(selected.operation.predecessorOperationIds).toContain(claim.operationId)
-              yield* append(taskTrackerReadIntent(selected.operation))
+              yield* append(taskTrackerReadIntent(ordinaryG2))
               yield* append(
                 taskTrackerFactsObservedEvent(
-                  selected.operation.operationId,
-                  makeCompleteTaskTrackerFactsObserved(selected.operation, projected.snapshot)
+                  ordinaryG2.operationId,
+                  makeCompleteTaskTrackerFactsObserved(ordinaryG2, projected.snapshot)
                 )
               )
               yield* resources.acquire(history.responsibility)
               yield* resources.publishAcceptedOwnership(history.responsibility)
+              expect(
+                (yield* recovery.readDeliveryProjection).frontier.transitions.some(
+                  ({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph"
+                )
+              ).toBe(false)
               expect(
                 (yield* recovery.readDeliveryProjection).frontier.transitions.some(
                   ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
@@ -247,29 +285,40 @@ for (const initiallyHeld of [true, false]) {
             if (operation._tag === "HistoricalMaterialization") materializations += 1
           })
           const projection = yield* recovery.readDeliveryProjection.pipe(Effect.ensuring(Effect.sync(stop)))
-          const selected = projection.frontier.transitions.find(
-            ({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph"
+          expect(
+            projection.frontier.transitions.some(({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph")
+          ).toBe(false)
+          expect(
+            projection.frontier.transitions.some(
+              ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+            )
+          ).toBe(false)
+          expect(projection.frontier.transitions.some(({ _tag }) => _tag === "ReleaseStartedIntegrationTarget")).toBe(
+            false
           )
-          if (selected?._tag !== "ObservePlannedAttemptContinuationGraph")
-            return yield* Effect.die("held integration requires graph after its claim check")
-          expect(selected.operation.predecessorOperationIds).toContain(claim.operationId)
           expect(
             integrationTargetResourceSnapshotIncludes(
               (yield* resources.snapshot).heldResponsibilities,
               history.responsibility
             )
           ).toBe(initiallyHeld)
-          expect(
-            projection.frontier.transitions.some(
-              ({ _tag }) =>
-                _tag === "ObservePlannedAttemptContinuationTargetLineage" || _tag === "ReleaseStartedIntegrationTarget"
-            )
-          ).toBe(false)
-          yield* append(taskTrackerReadIntent(selected.operation))
+          const predecessorOperationIds = [
+            ...new Set([
+              ...journaledPredecessorOperationIds(yield* writer.read(fixture.runId), fixture.target),
+              graph.operationId
+            ])
+          ]
+          const ordinaryG2 = makeTrackerGraphObservationOperation(
+            { _tag: "PostQuiescenceReconfirmation", quiescentGraphOperationId: graph.operationId },
+            OperationId.make(`integration-post-quiescence-graph:${count}`),
+            fixture.target,
+            predecessorOperationIds
+          )
+          yield* append(taskTrackerReadIntent(ordinaryG2))
           const graphRecord = yield* append(
             taskTrackerFactsObservedEvent(
-              selected.operation.operationId,
-              makeCompleteTaskTrackerFactsObserved(selected.operation, fixture.graphSnapshot)
+              ordinaryG2.operationId,
+              makeCompleteTaskTrackerFactsObserved(ordinaryG2, fixture.graphSnapshot)
             )
           )
           expect(graphRecord.position).toBeGreaterThan(claimRecord.position)

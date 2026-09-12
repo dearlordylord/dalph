@@ -4277,6 +4277,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
               transition.responsibility.queuedAt === responsibility.queuedAt
           )
         if (
+          quarantineDirection !== undefined &&
           claimIsExact &&
           claimObservedAt !== undefined &&
           !graphWasCheckedAfterClaim &&
