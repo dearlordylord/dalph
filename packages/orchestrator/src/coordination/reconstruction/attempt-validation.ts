@@ -62,6 +62,7 @@ import {
   journalRecordsForOperationId,
   journalRecordsForTask,
   journalRecordsOfKind,
+  journalRecordsAfter,
   journalRecordByKey,
   journalStopRequestDispositionAt,
   lastJournalRecordForAttemptKind,
@@ -827,13 +828,13 @@ export const validateAttemptStop = (
  */
 export const validateAttemptStopHistory = (
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ): ReadonlyArray<WorkflowJournalHistoryIdentityIssue | WorkflowJournalHistorySemanticIssue> => {
   const collector = makeWorkflowJournalHistoryIssueCollector<
     WorkflowJournalHistoryIdentityIssue | WorkflowJournalHistorySemanticIssue
   >()
   let indexes = emptyIndexes()
-  for (const record of records) {
+  for (const record of journalRecordsAfter(records, null)) {
     indexes = validateAttemptStop(record, runId, records, indexes, collector.report)
   }
   return collector.toReadonlyArray()

@@ -1,5 +1,5 @@
 /* eslint-disable functional/immutable-data, max-lines -- Prefix validation and relationship indexes are private read-side scratch. */
-import { Context, Deferred, Effect, HashMap, Layer, Option, Schema } from "effect"
+import { Context, Effect, HashMap, Layer, Option, Result, Schema } from "effect"
 import {
   AcceptedResult,
   AttemptId,
@@ -89,7 +89,10 @@ import {
   type TaskTrackerFactsObservation,
   type UnchangedTaskTrackerFactsReconfirmed
 } from "../workflow/task-tracker-facts/observation.js"
-import { reconstructedTaskGraphFor } from "../coordination/reconstruction/graph-knowledge.js"
+import {
+  advanceDurableGraphKnowledge,
+  reconstructedTaskGraphFor
+} from "../coordination/reconstruction/graph-knowledge.js"
 import {
   makeIntegrationFinalityHistoryIndexes,
   validateIntegrationFinalityHistoryRecord
@@ -100,7 +103,16 @@ import {
   validateAttemptStopHistory,
   validateCancellationMultiplicityHistory
 } from "../coordination/reconstruction/history.js"
-import { validateCancelledAttemptHistoryPrefix } from "../coordination/reconstruction/cancelled-attempt-history.js"
+import {
+  validateCancelledAttemptHistory,
+  validateCancelledAttemptHistoryPrefix
+} from "../coordination/reconstruction/cancelled-attempt-history.js"
+import {
+  isJournalRecordEvidence,
+  journalEvidenceFrom,
+  journalRecordsAfter,
+  type JournalHistorySource
+} from "../workflow-journal/record-evidence.js"
 import {
   workflowJournalHistoryIssueDetail,
   type WorkflowJournalHistoryIdentityIssue,
@@ -109,6 +121,7 @@ import {
 import { makeIntegrationHistoryIndexes } from "../coordination/reconstruction/integration-history.js"
 import type { CurrentSignal } from "../coordination/delivery/relations.js"
 import {
+  prepareTraceHistoricalFacets,
   traceHistoricalFacetsAt,
   traceHistoricalFacetsIssue,
   type HistoricalFacetFactories
@@ -956,6 +969,15 @@ export type TraceReaderError =
 /** Read-only journal capability required by the production trace reader. */
 export type TraceJournalReadSource = JournalReadSourceService
 
+const preparedTraceTypeId: unique symbol = Symbol("PreparedTrace")
+
+/** One captured committed read, not a claim that every selected prefix is semantically valid. */
+export interface PreparedTrace {
+  readonly [preparedTraceTypeId]: true
+  readonly cursors: ReadonlyArray<TraceCursor>
+  readonly select: (cursor: TraceCursor) => Result.Result<TraceAtCursor, TraceReaderError>
+}
+
 /** Read-only trace service; it exposes projection reads only. */
 export interface TraceReaderService {
   readonly causalPredecessor: (
@@ -963,6 +985,7 @@ export interface TraceReaderService {
     successorOperationId: OperationId,
     predecessorOperationId: OperationId
   ) => Effect.Effect<TraceHistoryItem, TraceReaderError | JournalStoreError>
+  readonly prepare: (runId: RunId) => Effect.Effect<PreparedTrace, JournalStoreError>
   readonly read: (runId: RunId) => Effect.Effect<TraceHistory, TraceReaderError | JournalStoreError>
   readonly readAt: (cursor: TraceCursor) => Effect.Effect<TraceAtCursor, TraceReaderError | JournalStoreError>
 }
@@ -1974,21 +1997,59 @@ const cancelledAttemptHistoryIssue = (runId: RunId, records: ReadonlyArray<Journ
   return issue === undefined ? undefined : `${issue.detail} at journal position ${issue.position}`
 }
 
-/** Validates all nested Run identities before any complete or cursor trace is presented. */
-const fullHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRecord>): string | undefined => {
+const canonicalQuerySourceFor = (records: ReadonlyArray<JournalRecord>): JournalHistorySource => {
+  // The diagnostic envelope checks only selected historical key families.
+  // Canonical-key lookups must not change the raw treatment of other malformed keys.
+  if (records.some((record) => record.key !== describeJournalEvent(record.event).expectedKey)) {
+    return records
+  }
+  // This is an exact-source query index, not evidence that the semantic prefix is accepted.
+  return journalEvidenceFrom(records)
+}
+
+const indexedCancelledAttemptHistoryIssue = (runId: RunId, source: JournalHistorySource): string | undefined => {
+  for (const record of journalRecordsAfter(source, null)) {
+    let detail: string | undefined
+    validateCancelledAttemptHistory(record, runId, source, (candidate) => {
+      detail ??= candidate
+    })
+    if (detail !== undefined) return `${detail} at journal position ${record.position}`
+  }
+  return undefined
+}
+
+const nestedWorkflowRunBindingIssue = (runId: RunId, records: ReadonlyArray<JournalRecord>): string | undefined => {
   for (const record of records) {
     const bindingIssue = invalidWorkflowRunBinding(record.event, runId)
     if (bindingIssue !== undefined) return `${bindingIssue} at journal position ${record.position}`
   }
+  return undefined
+}
+
+const orderedWorkflowHistoryIssue = (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  source: JournalHistorySource
+): string | undefined => {
   return (
-    canonicalHistoryIssue(validateAttemptStopHistory(runId, records)) ??
-    canonicalHistoryIssue(validateCancellationMultiplicityHistory(runId, records)) ??
-    cancelledAttemptHistoryIssue(runId, records) ??
+    canonicalHistoryIssue(validateAttemptStopHistory(runId, source)) ??
+    canonicalHistoryIssue(validateCancellationMultiplicityHistory(runId, source)) ??
+    (isJournalRecordEvidence(source)
+      ? indexedCancelledAttemptHistoryIssue(runId, source)
+      : cancelledAttemptHistoryIssue(runId, records)) ??
     cleanupHistoryIssue(records) ??
     integrationHistoryIssue(runId, records) ??
     finalityHistoryIssue(runId, records)
   )
 }
+
+/** Validates all nested Run identities before any complete or cursor trace is presented. */
+const fullHistoryIssue = (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  querySourceFor: (records: ReadonlyArray<JournalRecord>) => JournalHistorySource = (records) => records
+): string | undefined =>
+  nestedWorkflowRunBindingIssue(runId, records) ?? orderedWorkflowHistoryIssue(runId, records, querySourceFor(records))
 
 type CompleteGraphObservation = CompleteTaskTrackerFactsObserved | UnchangedTaskTrackerFactsReconfirmed
 
@@ -2181,7 +2242,7 @@ const historyFromRecords = Effect.fn("TraceReader.historyFromRecords")(function*
 type CompleteTraceIndex = {
   readonly committedThrough: JournalPosition
   readonly committedPositions: ReadonlySet<JournalPosition>
-  readonly facets: TraceHistoricalFacets
+  readonly facets: ReturnType<typeof prepareTraceHistoricalFacets>
   readonly graphObservations: ReadonlyArray<CompleteGraphObservationAt>
   readonly items: ReadonlyArray<TraceHistoryItem>
   readonly operationIndex: ReadonlyMap<OperationId, IndexedOperation>
@@ -2198,7 +2259,7 @@ const completeTraceIndexFromRecords = (
 ): Effect.Effect<CompleteTraceIndex, TraceReaderError> =>
   Effect.gen(function* () {
     yield* validateRecords(runId, records)
-    const historyIssue = fullHistoryIssue(runId, records)
+    const historyIssue = fullHistoryIssue(runId, records, canonicalQuerySourceFor)
     if (historyIssue !== undefined) {
       return yield* new TraceProjectionInvalid({ detail: historyIssue, runId })
     }
@@ -2213,8 +2274,8 @@ const completeTraceIndexFromRecords = (
     const graph = taskGraphAt(records, target)
     const workflowCausalEdges = indexedWorkflowCausalEdgesOf(operationIndex)
     const relationships = relationshipsAt(records, items, graph, operationIndex)
-    const facets = traceHistoricalFacetsAt(items, historicalFacetFactories)
     const committedThrough = Option.getOrThrow(Option.fromUndefinedOr(records[records.length - 1]?.position))
+    const facets = prepareTraceHistoricalFacets(items, historicalFacetFactories)
     yield* Schema.decodeUnknownEffect(TraceAtCursor)({
       cursor: TraceCursor.make({ position: committedThrough, runId }),
       derivedTaskOrder: TraceDerivedTaskOrder.make({
@@ -2224,7 +2285,7 @@ const completeTraceIndexFromRecords = (
       graph,
       items,
       relationships,
-      facets,
+      facets: facets.at(committedThrough),
       version: traceReaderSchemaVersion
     }).pipe(
       /* v8 ignore next -- @preserve validated records and typed projection outputs satisfy TraceAtCursor before this defensive schema error mapping. */
@@ -2275,27 +2336,26 @@ const graphAtIndexedPrefix = (
   const latestIndex = prefixLengthThrough(index.graphObservations, ({ position }) => position, through) - 1
   const latest = index.graphObservations[latestIndex]
   if (latest === undefined) return null
-  const cached = graphByObservationPosition.get(latest.position)
-  if (cached !== undefined) return cached
-  const knowledge = {
-    taskTrackerFacts: index.graphObservations
-      .filter(({ position }) => position <= latest.position)
-      .map(({ observation }) => observation)
+  return graphByObservationPosition.get(latest.position) ?? null
+}
+
+const prepareGraphTimeline = (index: CompleteTraceIndex): Map<JournalPosition, TraceTaskGraph | null> => {
+  const graphs = new Map<JournalPosition, TraceTaskGraph | null>()
+  let knowledge: Parameters<typeof reconstructedTaskGraphFor>[0] = { taskTrackerFacts: [] }
+  for (const { observation, position } of index.graphObservations) {
+    knowledge = advanceDurableGraphKnowledge(knowledge, observation)
+    const snapshot = reconstructedTaskGraphFor(knowledge, index.target)
+    const graph = Option.map(snapshot, (value) => {
+      const wire = value.toWire()
+      return TraceTaskGraph.make({
+        edges: graphEdgesOf(wire),
+        observation: { operationId: observation.operationId, recordedAt: position },
+        snapshot: wire
+      })
+    })
+    graphs.set(position, Option.getOrNull(graph))
   }
-  const snapshot = reconstructedTaskGraphFor(knowledge, index.target)
-  const graph =
-    snapshot._tag === "None"
-      ? null
-      : (() => {
-          const wire = snapshot.value.toWire()
-          return TraceTaskGraph.make({
-            edges: graphEdgesOf(wire),
-            observation: { operationId: latest.observation.operationId, recordedAt: latest.position },
-            snapshot: wire
-          })
-        })()
-  graphByObservationPosition.set(latest.position, graph)
-  return graph
+  return graphs
 }
 
 /**
@@ -2327,7 +2387,8 @@ const indexedTraceAtCursor = (
 const atCursorFromCompleteIndex = Effect.fn("TraceReader.atCursorFromCompleteIndex")(function* (
   cursor: TraceCursor,
   index: CompleteTraceIndex,
-  graphByObservationPosition: Map<JournalPosition, TraceTaskGraph | null>
+  graphByObservationPosition: Map<JournalPosition, TraceTaskGraph | null>,
+  facetsAt: (position: JournalPosition) => TraceHistoricalFacets
 ) {
   const through = cursor.position
   if (!index.committedPositions.has(through)) {
@@ -2338,7 +2399,7 @@ const atCursorFromCompleteIndex = Effect.fn("TraceReader.atCursorFromCompleteInd
     prefixLengthThrough(index.items, ({ identity }) => identity.position, through)
   )
   const graph = graphAtIndexedPrefix(index, through, graphByObservationPosition)
-  const facets = traceHistoricalFacetsAt(items, historicalFacetFactories)
+  const facets = facetsAt(through)
   const relationships: TraceRelationships = {
     outsideAuthorityAcknowledgements: index.outsideAuthorityAcknowledgements.slice(
       0,
@@ -2398,50 +2459,56 @@ const atCursorFromRecords = Effect.fn("TraceReader.atCursorFromRecords")(functio
 export const makeTraceReader = (source: TraceJournalReadSource): TraceReaderService => {
   const readRecords = (runId: RunId) => source.read(runId)
   const completeTraceIndexes = new WeakMap<ReadonlyArray<JournalRecord>, CompleteTraceIndex>()
-  type CompleteTraceIndexBuild = {
-    readonly deferred: Deferred.Deferred<CompleteTraceIndex, TraceReaderError>
-    readonly runId: RunId
-  }
-  const completeTraceIndexBuilds = new WeakMap<ReadonlyArray<JournalRecord>, CompleteTraceIndexBuild>()
-  const graphByIndex = new WeakMap<CompleteTraceIndex, Map<JournalPosition, TraceTaskGraph | null>>()
   const historiesByIndex = new WeakMap<CompleteTraceIndex, TraceHistory>()
-  const viewsByIndex = new WeakMap<CompleteTraceIndex, Map<JournalPosition, TraceAtCursor>>()
-  const fallbackViewsByRecords = new WeakMap<ReadonlyArray<JournalRecord>, Map<string, TraceAtCursor>>()
-  const cursorCacheKey = (cursor: TraceCursor): string => JSON.stringify([cursor.runId, cursor.position])
+  const preparedByIndex = new WeakMap<CompleteTraceIndex, PreparedTrace>()
+  let lastRead: { readonly records: ReadonlyArray<JournalRecord>; readonly view: TraceAtCursor } | undefined
   const completeTraceIndexFor = (runId: RunId, records: ReadonlyArray<JournalRecord>) => {
     const cached = completeTraceIndexes.get(records)
     if (cached !== undefined && cached.runId === runId) return Effect.succeed(cached)
-    const building = completeTraceIndexBuilds.get(records)
-    if (building !== undefined && building.runId === runId) return Deferred.await(building.deferred)
-    const deferred = Deferred.makeUnsafe<CompleteTraceIndex, TraceReaderError>()
-    completeTraceIndexBuilds.set(records, { deferred, runId })
     return completeTraceIndexFromRecords(runId, records).pipe(
       Effect.tap((index) =>
         Effect.sync(() => {
           completeTraceIndexes.set(records, index)
-          graphByIndex.set(index, new Map())
-          viewsByIndex.set(index, new Map())
         })
-      ),
-      Effect.tap((index) => Deferred.succeed(deferred, index)),
-      Effect.tapError((error) => Deferred.fail(deferred, error))
+      )
     )
   }
-  const fallbackViewFor = (cursor: TraceCursor, records: ReadonlyArray<JournalRecord>) => {
-    const views = fallbackViewsByRecords.get(records) ?? new Map<string, TraceAtCursor>()
-    const key = cursorCacheKey(cursor)
-    const cached = views.get(key)
-    return cached === undefined
-      ? atCursorFromRecords(cursor, records).pipe(
-          Effect.tap((view) =>
-            Effect.sync(() => {
-              views.set(key, view)
-              fallbackViewsByRecords.set(records, views)
-            })
-          )
-        )
-      : Effect.succeed(cached)
-  }
+  const preparedFromRecords = Effect.fn("TraceReader.preparedFromRecords")(function* (
+    runId: RunId,
+    records: ReadonlyArray<JournalRecord>
+  ) {
+    const indexed = yield* Effect.result(completeTraceIndexFor(runId, records))
+    const seal = (
+      projectionAt: (cursor: TraceCursor) => Effect.Effect<TraceAtCursor, TraceReaderError>
+    ): PreparedTrace => ({
+      [preparedTraceTypeId]: true,
+      cursors: records.map(({ position }) => TraceCursor.make({ position, runId })),
+      select: (cursor) =>
+        cursor.runId !== runId
+          ? Result.fail(new TraceCursorNotCommitted({ cursor }))
+          : Effect.runSync(Effect.result(projectionAt(cursor)))
+    })
+    if (Result.isFailure(indexed)) {
+      // These projection effects are synchronous and require no live service or scope.
+      // Invalid complete histories retain the exact selected-prefix cold diagnostics.
+      return seal((cursor) => atCursorFromRecords(cursor, records))
+    }
+    const index = indexed.success
+    const cached = preparedByIndex.get(index)
+    if (cached !== undefined) return cached
+    const facets = index.facets
+    const graphs = prepareGraphTimeline(index)
+    const prepared = seal((cursor) =>
+      atCursorFromCompleteIndex(cursor, index, graphs, facets.at).pipe(
+        Effect.catch(() => atCursorFromRecords(cursor, records))
+      )
+    )
+    preparedByIndex.set(index, prepared)
+    return prepared
+  })
+  const prepare = Effect.fn("TraceReader.prepare")((runId: RunId) =>
+    readRecords(runId).pipe(Effect.flatMap((records) => preparedFromRecords(runId, records)))
+  )
   const historyFromIndex = (index: CompleteTraceIndex): TraceHistory =>
     historiesByIndex.get(index) ??
     (() => {
@@ -2463,35 +2530,27 @@ export const makeTraceReader = (source: TraceJournalReadSource): TraceReaderServ
         )
       )
     )
-  const readAt = (cursor: TraceCursor) =>
+  const readAt = Effect.fn("TraceReader.readAt")((cursor: TraceCursor) =>
     readRecords(cursor.runId).pipe(
       Effect.flatMap((records) =>
-        completeTraceIndexFor(cursor.runId, records).pipe(
-          Effect.flatMap((index) => {
-            /* v8 ignore start -- @preserve completeTraceIndexFor installs this map before publishing the index. */
-            const views = viewsByIndex.get(index) ?? new Map<JournalPosition, TraceAtCursor>()
-            /* v8 ignore stop */
-            const cached = views.get(cursor.position)
-            return cached === undefined
-              ? atCursorFromCompleteIndex(
-                  cursor,
-                  index,
-                  /* v8 ignore next -- @preserve completeTraceIndexFor installs the graph map before publishing this index. */
-                  graphByIndex.get(index) ?? new Map()
-                ).pipe(
-                  Effect.tap((view) =>
-                    Effect.sync(() => {
-                      views.set(cursor.position, view)
-                      viewsByIndex.set(index, views)
-                    })
-                  )
-                )
-              : Effect.succeed(cached)
-          }),
-          Effect.catch(() => fallbackViewFor(cursor, records))
-        )
+        lastRead?.records === records &&
+        lastRead.view.cursor.runId === cursor.runId &&
+        lastRead.view.cursor.position === cursor.position
+          ? Effect.succeed(lastRead.view)
+          : preparedFromRecords(cursor.runId, records).pipe(
+              Effect.flatMap((prepared) => {
+                const selected = prepared.select(cursor)
+                return Result.isFailure(selected) ? Effect.fail(selected.failure) : Effect.succeed(selected.success)
+              }),
+              Effect.tap((view) =>
+                Effect.sync(() => {
+                  lastRead = { records, view }
+                })
+              )
+            )
       )
     )
+  )
   const causalPredecessor = (
     cursor: TraceCursor,
     successorOperationId: OperationId,
@@ -2524,7 +2583,7 @@ export const makeTraceReader = (source: TraceJournalReadSource): TraceReaderServ
         return Effect.succeed(item)
       })
     )
-  return { causalPredecessor, read, readAt }
+  return { causalPredecessor, prepare, read, readAt }
 }
 
 /** Public helper for callers that already hold the read-only service. */

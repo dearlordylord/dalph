@@ -549,6 +549,7 @@ export {
   traceControlDispositionFacetVersion,
   traceReaderSchemaVersion,
   type TraceJournalReadSource,
+  type PreparedTrace,
   type TracePresentation,
   type TracePresentationSource,
   type TraceReaderError,

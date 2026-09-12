@@ -1,6 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Effect, Schema } from "effect"
+import { Effect, Result, Schema } from "effect"
 import { expect } from "vitest"
 import { TraceOutputError } from "@dalph/orchestrator"
 import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
@@ -34,8 +34,18 @@ it.effect("settles A's FullRerun and reads both next-activation graphs before th
     expect(
       run.observationCaptures.filter((capture) => capture._tag === "AuthoredStoryOccurrenceCaptured")
     ).toHaveLength(cassette.story.length)
-    expect(run.traceHistories).toHaveLength(run.records.length)
-    expect(run.traceHistories.map(({ cursor }) => cursor.position)).toEqual(run.records.map(({ position }) => position))
+    expect(run.preparedTrace.cursors).toHaveLength(run.records.length)
+    expect(run.preparedTrace.cursors).toEqual(run.records.map(({ position, runId }) => ({ position, runId })))
+    // Every declared cursor remains readable; only this explicit output check
+    // materializes its full view, rather than retaining all prefixes in the Run.
+    for (const cursor of run.preparedTrace.cursors) {
+      const selected = run.preparedTrace.select(cursor)
+      expect(Result.isSuccess(selected)).toBe(true)
+      if (Result.isSuccess(selected)) {
+        expect(selected.success.cursor).toEqual(cursor)
+        expect(selected.success.items.every(({ identity }) => identity.runId === run.runId)).toBe(true)
+      }
+    }
     for (const tag of [
       "IntegratorSuccessorSessionFixed",
       "TargetPromotionObservedSuccess",

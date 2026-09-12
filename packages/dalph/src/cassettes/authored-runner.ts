@@ -110,8 +110,7 @@ import {
   TargetPromotionGitReadObservation,
   targetPromotionCorrelationFor,
   type TargetPromotionGitService,
-  type TraceAtCursor,
-  TraceCursor,
+  type PreparedTrace,
   TraceReader,
   TraceReaderLayer,
   memoryEvidenceStoreLayer,
@@ -156,6 +155,10 @@ import {
   type AuthoredRunReactivationHint
 } from "./authored-reactivation-hint-fifo.js"
 import { controlledTrackerAuthorityLayer } from "./authored-tracker-authority.js"
+import {
+  makeAuthoredObservationPlayback,
+  type AuthoredObservationPlaybackWork
+} from "./authored-observation-playback.js"
 
 export interface AuthoredScenarioCassetteRun {
   readonly activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType>
@@ -167,8 +170,11 @@ export interface AuthoredScenarioCassetteRun {
   readonly observedBehavior: AuthoredObservedBehavior
   readonly records: ReadonlyArray<JournalRecord>
   readonly runId: RunId
-  /** Historical views are read from the production trace reader at exact journal cursors. */
-  readonly traceHistories: ReadonlyArray<TraceAtCursor>
+  /** One captured production trace; selecting an exact cursor materializes its full public payload. */
+  readonly preparedTrace: PreparedTrace
+  readonly observationPlaybackWork: AuthoredObservationPlaybackWork
+  /** One completed-output snapshot copy, separate from capture append/projection work. */
+  readonly observationCaptureSnapshotCopiedReferences: number
 }
 
 interface AuthoredTaggedDiagnostic {
@@ -218,10 +224,10 @@ type AuthoredIntegrationOrderResponsibility = AuthoredIntegrationOrderResponsibi
   )
 
 /** Zero-based count of authored interactions consumed when a production delivery publication was captured. */
-const AuthoredStoryPosition = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+export const AuthoredStoryPosition = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
   Schema.brand("AuthoredStoryPosition")
 )
-type AuthoredStoryPosition = typeof AuthoredStoryPosition.Type
+export type AuthoredStoryPosition = typeof AuthoredStoryPosition.Type
 
 /** One-based order assigned when the Lab passively receives an observation during a cassette run. */
 export const AuthoredObservationCaptureOrder = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
@@ -355,6 +361,8 @@ export interface AuthoredScenarioCassetteRunOptions {
   readonly onDeliveryPublication?: (publication: AuthoredDeliveryPublication) => void
   /** Synchronous raw notification in the same deterministic order retained by the completed run. */
   readonly onObservationCapture?: (capture: AuthoredObservationCapture) => void
+  /** Derived playback notification from the scoped worker, outside the workflow observer turn. */
+  readonly onObservationMoment?: (moment: AuthoredObservationMoment) => Effect.Effect<void>
 }
 
 type AuthoredPauseObservationResult = (typeof AuthoredCassetteStoryItem.cases.PauseProgressObserved.Type)["result"]
@@ -1103,14 +1111,13 @@ export const evaluateAuthoredDeliveryPublication = Effect.fn("AuthoredCassette.e
 /** Projects raw captures into one chronology while retaining the latest observed Delivery and runtime values. */
 export const evaluateAuthoredObservationChronology = Effect.fn("AuthoredCassette.evaluateObservationChronology")(
   (captures: ReadonlyArray<AuthoredObservationCapture>) =>
-    Effect.reduce(
-      captures,
-      (): ReadonlyArray<AuthoredObservationMoment> => [],
-      (moments, capture) =>
-        evaluateAuthoredObservationCapture(capture, moments.at(latestArrayElementIndex) ?? null).pipe(
-          Effect.map((moment) => [...moments, moment])
-        )
-    )
+    Effect.gen(function* () {
+      const moments: Array<AuthoredObservationMoment> = []
+      for (const capture of captures) {
+        moments.push(yield* evaluateAuthoredObservationCapture(capture, moments.at(latestArrayElementIndex) ?? null))
+      }
+      return Object.freeze(moments)
+    })
 )
 
 /** Evaluates one newly captured observation against the immediately preceding playback moment. */
@@ -1405,15 +1412,20 @@ const runAuthoredScenarioCassetteWith = (request: {
         AuthoredRunActivationOrdinal.make(1)
       )
       const observationCaptureState = yield* Ref.make<{
-        readonly captures: ReadonlyArray<AuthoredObservationCapture>
+        readonly captures: Array<AuthoredObservationCapture>
         readonly nextOrder: number
-      }>({ captures: [], nextOrder: 1 })
+        readonly acceptingPlayback: boolean
+      }>({ captures: [], nextOrder: 1, acceptingPlayback: true })
+      const observationPlayback = yield* makeAuthoredObservationPlayback(
+        evaluateAuthoredObservationCapture,
+        options.onObservationMoment
+      )
       const appendObservation = Effect.fn("AuthoredCassette.appendObservation")(function* (
         observation: AuthoredObservationCaptureInput,
         storyPosition: AuthoredStoryPosition
       ) {
         const activationOrdinal = yield* Ref.get(activeDeliveryActivation)
-        const capture = yield* Ref.modify(observationCaptureState, ({ captures, nextOrder }) => {
+        const capture = yield* Ref.modify(observationCaptureState, ({ acceptingPlayback, captures, nextOrder }) => {
           const correlation = {
             activationOrdinal,
             captureOrder: AuthoredObservationCaptureOrder.make(nextOrder),
@@ -1425,7 +1437,9 @@ const runAuthoredScenarioCassetteWith = (request: {
               : observation._tag === "DeliveryPublicationCaptured"
                 ? { ...correlation, _tag: observation._tag, publication: observation.publication }
                 : { ...correlation, _tag: observation._tag, liveOwners: observation.liveOwners }
-          return [captured, { captures: [...captures, captured], nextOrder: nextOrder + 1 }]
+          captures.push(captured)
+          if (acceptingPlayback) observationPlayback.appendUnsafe(captured)
+          return [captured, { captures, nextOrder: nextOrder + 1, acceptingPlayback }]
         })
         yield* Effect.exit(Effect.sync(() => options.onObservationCapture?.(capture)))
         return capture
@@ -1440,7 +1454,6 @@ const runAuthoredScenarioCassetteWith = (request: {
       const offerRunReactivationHint = yield* Ref.make<(hint: AuthoredRunReactivationHint) => Effect.Effect<void>>(() =>
         Effect.die("the authored Run reactivation owner is not active")
       )
-      const capturedDeliveryPublications = yield* Ref.make<ReadonlyArray<AuthoredDeliveryPublication>>([])
       const deliveryPublicationSignals = yield* Queue.unbounded<AuthoredDeliveryPublication>()
       const lastRuntimeOwners = yield* Ref.make<string | null>(null)
       const plannedSuspensionExecutorBoundaryGate = yield* Ref.make<
@@ -1466,7 +1479,6 @@ const runAuthoredScenarioCassetteWith = (request: {
             const activationOrdinal = yield* Ref.get(activeDeliveryActivation)
             const storyPosition = yield* cursor.storyPosition
             const publication = { activationOrdinal, storyPosition: AuthoredStoryPosition.make(storyPosition), bundle }
-            yield* Ref.update(capturedDeliveryPublications, (captured) => [...captured, publication])
             yield* appendObservation({ _tag: "DeliveryPublicationCaptured", publication }, publication.storyPosition)
             yield* Queue.offer(deliveryPublicationSignals, publication)
             // A read-only diagnostic observer defect never changes production cassette execution.
@@ -3152,7 +3164,10 @@ const runAuthoredScenarioCassetteWith = (request: {
         if (currentFirstRunReactivationOwnerStory) return yield* runReactivationOwnerStory
         return yield* standardCoordinatorExecution
       })
-      const execution = yield* processProvidedCoordinatorExecution.pipe(
+      const execution = yield* Effect.raceFirst(
+        processProvidedCoordinatorExecution,
+        observationPlayback.awaitFailure
+      ).pipe(
         Effect.provideService(DeliveryRelationPublicationObserver, publicationObserver),
         Effect.provideService(DeliveryRuntimeObservationObserver, runtimeObservationObserver)
       )
@@ -3167,14 +3182,19 @@ const runAuthoredScenarioCassetteWith = (request: {
         return yield* Effect.failCause(behaviorExit.cause)
       }
       const observedBehavior = behaviorExit.value
-      const observationCaptures = (yield* Ref.get(observationCaptureState)).captures
-      const observationMoments = yield* evaluateAuthoredObservationChronology(observationCaptures)
+      // Take the same completed-history cut as the former immutable Ref array.
+      // A later scope finalizer may notify observers, so never freeze its builder.
+      const observationCaptures = yield* Ref.modify(observationCaptureState, (state) => [
+        Object.freeze([...state.captures]),
+        { ...state, acceptingPlayback: false }
+      ])
+      const { moments: observationMoments, work: observationPlaybackWork } = yield* observationPlayback.finish
       const deliveryFrames = observationMoments.flatMap((moment) =>
         moment._tag === "DeliveryPublicationMoment" ? [moment.deliveryFrame] : []
       )
-      const traceHistories = yield* Effect.gen(function* () {
+      const preparedTrace = yield* Effect.gen(function* () {
         const reader = yield* TraceReader
-        return yield* Effect.forEach(records, ({ position }) => reader.readAt(TraceCursor.make({ position, runId })))
+        return yield* reader.prepare(runId)
       }).pipe(Effect.provide(TraceReaderLayer.pipe(Layer.provide(journalLayer))))
       const run = {
         activationOrdinals,
@@ -3183,10 +3203,12 @@ const runAuthoredScenarioCassetteWith = (request: {
         history: reduceWorkflowJournalHistory(runId, records),
         observationCaptures,
         observationMoments,
+        observationPlaybackWork,
+        observationCaptureSnapshotCopiedReferences: observationCaptures.length,
         observedBehavior,
         records,
         runId,
-        traceHistories
+        preparedTrace
       } satisfies AuthoredScenarioCassetteRun
       const journalContext = Option.getOrThrowWith(
         yield* Ref.get(latestJournalContext),

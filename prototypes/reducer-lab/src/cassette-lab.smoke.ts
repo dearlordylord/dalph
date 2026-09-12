@@ -3,9 +3,11 @@ import { AuthoredCassetteStoryItem } from "../../../packages/dalph/src/cassettes
 import { renderAuthoredStoryItemLandmark } from "../../../packages/dalph/src/cassettes/authored-presentation.ts"
 import {
   AuthoredObservationCaptureOrder,
+  AuthoredStoryPosition,
   type AuthoredObservationMoment
 } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 import "./trace-cursor-selection.test.ts"
+import "./trace-selected-history.test.ts"
 import "./delivery-playback.test.ts"
 import "./trace-history-navigation.test.ts"
 import { foldRepeatedTraceItems } from "./trace-history-navigation.ts"
@@ -34,6 +36,7 @@ import {
   taskTrackerReadIntent,
   TaskWorkCapacity,
   TraceCursor,
+  type PreparedTrace,
   traceControlDispositionFacetVersion,
   traceReaderSchemaVersion,
   workflowJournalEventVersion
@@ -56,7 +59,7 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { Effect, Schema } from "effect"
+import { Effect, Result, Schema } from "effect"
 import { parseHTML } from "linkedom"
 import {
   IntegrationResponsibilityBeganEvent,
@@ -108,7 +111,7 @@ import {
 type CompletedCassette = Extract<CassetteLabResult, { readonly _tag: "Completed" }>
 
 const authoredStoryPosition = (value: number): AuthoredObservationMoment["storyPosition"] =>
-  value as AuthoredObservationMoment["storyPosition"]
+  AuthoredStoryPosition.make(value)
 
 const deliveryMomentIndex = (result: CompletedCassette, deliveryFrameIndex: number): number => {
   const frame = result.deliveryFrames?.[deliveryFrameIndex]
@@ -122,148 +125,150 @@ const assert = (condition: boolean, message: string): void => {
   if (!condition) throw new Error(message)
 }
 
+/** Explicit test output: request every public view without retaining it in the catalog result. */
+const materializeRequestedTraceHistories = (prepared: PreparedTrace) =>
+  prepared.cursors.map((cursor) => Result.getOrThrow(prepared.select(cursor)))
+
+const requestTraceHistoryAt = (prepared: PreparedTrace, index: number) => {
+  const cursor = prepared.cursors.at(index)
+  return cursor === undefined ? undefined : Result.getOrThrow(prepared.select(cursor))
+}
+
 const scenario = async (name: string, body: () => void | Promise<void>): Promise<void> => {
   await body()
   console.log(`✓ ${name}`)
 }
 
-const makeLargeProductionTrace = () => Effect.runPromise(
-  Effect.gen(function* () {
-    const journal = yield* JournalStore
-    const runId = RunId.make("run:lab-large-navigation")
-    const target = FixtureTarget.make("fixture:lab-large-navigation")
-    const taskCount = 105
-    const tasks = Array.from({ length: taskCount }, (_, index) => ({
-      id: TaskId.make(`task-${String(index).padStart(3, "0")}`),
-      lifecycle: { _tag: "Open" as const },
-      parentTaskId: index <= 1 ? null : TaskId.make("task-000"),
-      prerequisiteIds: index === 0 ? [] : [TaskId.make(`task-${String(index - 1).padStart(3, "0")}`)]
-    }))
-    const projected = projectTrackerSnapshot({ revision: "large-navigation-r1", tasks })
-    if (projected._tag === "Invalid") return yield* Effect.die(projected.issues)
-    yield* journal.beginRun(
-      runId,
-      target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(4) })
-    )
-    let predecessorOperationIds: ReadonlyArray<OperationId> = []
-    for (let index = 0; index < 59; index += 1) {
-      const operationId = OperationId.make(`large-navigation-read-${index}`)
-      const operation = makeTrackerGraphObservationOperation(
-        { _tag: "WorkflowEstablishment" },
-        operationId,
+const makeLargeProductionTrace = () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const journal = yield* JournalStore
+      const runId = RunId.make("run:lab-large-navigation")
+      const target = FixtureTarget.make("fixture:lab-large-navigation")
+      const taskCount = 105
+      const tasks = Array.from({ length: taskCount }, (_, index) => ({
+        id: TaskId.make(`task-${String(index).padStart(3, "0")}`),
+        lifecycle: { _tag: "Open" as const },
+        parentTaskId: index <= 1 ? null : TaskId.make("task-000"),
+        prerequisiteIds: index === 0 ? [] : [TaskId.make(`task-${String(index - 1).padStart(3, "0")}`)]
+      }))
+      const projected = projectTrackerSnapshot({ revision: "large-navigation-r1", tasks })
+      if (projected._tag === "Invalid") return yield* Effect.die(projected.issues)
+      yield* journal.beginRun(
+        runId,
         target,
-        predecessorOperationIds
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(4) })
       )
-      const intent = taskTrackerReadIntent(operation)
-      const observation = taskTrackerFactsObservedEvent(
-        operationId,
-        makeCompleteTaskTrackerFactsObserved(operation, projected.snapshot)
-      )
-      yield* journal.append(runId, describeJournalEvent(intent).expectedKey, intent)
-      yield* journal.append(runId, describeJournalEvent(observation).expectedKey, observation)
-      predecessorOperationIds = [operationId]
-    }
-    const plannedAttempt = PlannedTaskAttempt.make({
-      attemptId: AttemptId.make("attempt:lab-large-navigation"),
-      baseSha: GitCommitSha.make("1".repeat(40)),
-      branch: TaskBranchRef.make("refs/heads/dalph/lab-large-navigation"),
-      executor: TaskExecutorLocator.make("executor:lab-large-navigation"),
-      runId,
-      taskId: tasks[0]?.id ?? TaskId.make("task-000"),
-      taskRevision: TaskRevision.make("large-navigation-task-r1"),
-      worktree: WorktreeLocator.make("/tmp/dalph-lab-large-navigation")
-    })
-    const acceptedResult = AcceptedResult.make({
-      commit: GitCommitSha.make("2".repeat(40)),
-      evidenceManifest: EvidenceReference.make({
-        byteLength: 1,
-        digest: EvidenceDigest.make("e".repeat(64))
+      let predecessorOperationIds: ReadonlyArray<OperationId> = []
+      for (let index = 0; index < 59; index += 1) {
+        const operationId = OperationId.make(`large-navigation-read-${index}`)
+        const operation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          operationId,
+          target,
+          predecessorOperationIds
+        )
+        const intent = taskTrackerReadIntent(operation)
+        const observation = taskTrackerFactsObservedEvent(
+          operationId,
+          makeCompleteTaskTrackerFactsObserved(operation, projected.snapshot)
+        )
+        yield* journal.append(runId, describeJournalEvent(intent).expectedKey, intent)
+        yield* journal.append(runId, describeJournalEvent(observation).expectedKey, observation)
+        predecessorOperationIds = [operationId]
+      }
+      const plannedAttempt = PlannedTaskAttempt.make({
+        attemptId: AttemptId.make("attempt:lab-large-navigation"),
+        baseSha: GitCommitSha.make("1".repeat(40)),
+        branch: TaskBranchRef.make("refs/heads/dalph/lab-large-navigation"),
+        executor: TaskExecutorLocator.make("executor:lab-large-navigation"),
+        runId,
+        taskId: tasks[0]?.id ?? TaskId.make("task-000"),
+        taskRevision: TaskRevision.make("large-navigation-task-r1"),
+        worktree: WorktreeLocator.make("/tmp/dalph-lab-large-navigation")
       })
-    })
-    const integrationTarget = IntegrationTarget.make({
-      ref: IntegrationTargetRef.make("refs/heads/main"),
-      repository: GitRepositoryLocator.make("/tmp/dalph-lab-large-navigation.git")
-    })
-    const executorResponsibility = PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
-      plannedAttempt,
-      version: workflowJournalEventVersion
-    })
-    const executingReport = (ordinal: number) => PlannedAttemptExecutorWorkReportedEvent.make({
-      ordinal: PlannedAttemptExecutorReportOrdinal.make(ordinal),
-      report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-        correlation: { attemptId: plannedAttempt.attemptId, runId }
-      }),
-      version: workflowJournalEventVersion
-    })
-    const executorReport = PlannedAttemptExecutorWorkReportedEvent.make({
-      ordinal: PlannedAttemptExecutorReportOrdinal.make(3),
-      report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
-        correlation: { attemptId: plannedAttempt.attemptId, runId },
-        result: { _tag: "Accepted", acceptedResult }
-      }),
-      version: workflowJournalEventVersion
-    })
-    const integrationResponsibility = IntegrationResponsibilityBeganEvent.make({
-      acceptedResult,
-      integrationTarget,
-      plannedAttempt,
-      version: workflowJournalEventVersion
-    })
-    const integrationStarted = IntegrationStartedEvent.make({
-      acceptedResult,
-      integrationTarget,
-      plannedAttempt,
-      responsibilityBeganAt: JournalPosition.make(124),
-      version: workflowJournalEventVersion
-    })
-    for (const event of [
-      executorResponsibility,
-      executingReport(1),
-      executingReport(2),
-      executorReport,
-      integrationResponsibility,
-      integrationStarted
-    ]) {
-      yield* journal.append(runId, describeJournalEvent(event).expectedKey, event)
-    }
-    const reader = makeTraceReader({ read: journal.read })
-    return yield* Effect.all([
-      reader.readAt(TraceCursor.make({ runId, position: JournalPosition.make(1) })),
-      reader.readAt(TraceCursor.make({ runId, position: JournalPosition.make(119) })),
-      reader.readAt(TraceCursor.make({ runId, position: JournalPosition.make(125) }))
-    ])
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
-)
+      const acceptedResult = AcceptedResult.make({
+        commit: GitCommitSha.make("2".repeat(40)),
+        evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("e".repeat(64)) })
+      })
+      const integrationTarget = IntegrationTarget.make({
+        ref: IntegrationTargetRef.make("refs/heads/main"),
+        repository: GitRepositoryLocator.make("/tmp/dalph-lab-large-navigation.git")
+      })
+      const executorResponsibility = PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+      const executingReport = (ordinal: number) =>
+        PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal: PlannedAttemptExecutorReportOrdinal.make(ordinal),
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+            correlation: { attemptId: plannedAttempt.attemptId, runId }
+          }),
+          version: workflowJournalEventVersion
+        })
+      const executorReport = PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(3),
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+          correlation: { attemptId: plannedAttempt.attemptId, runId },
+          result: { _tag: "Accepted", acceptedResult }
+        }),
+        version: workflowJournalEventVersion
+      })
+      const integrationResponsibility = IntegrationResponsibilityBeganEvent.make({
+        acceptedResult,
+        integrationTarget,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+      const integrationStarted = IntegrationStartedEvent.make({
+        acceptedResult,
+        integrationTarget,
+        plannedAttempt,
+        responsibilityBeganAt: JournalPosition.make(124),
+        version: workflowJournalEventVersion
+      })
+      for (const event of [
+        executorResponsibility,
+        executingReport(1),
+        executingReport(2),
+        executorReport,
+        integrationResponsibility,
+        integrationStarted
+      ]) {
+        yield* journal.append(runId, describeJournalEvent(event).expectedKey, event)
+      }
+      const reader = makeTraceReader({ read: journal.read })
+      return yield* reader.prepare(runId)
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
 
-const expectedCatalogSize = Object.keys(maintainedAuthoredCassetteCatalog).length
-  + Object.keys(maintainedTargetPromotionProtocolCassetteCatalog).length
-  + Object.keys(maintainedIntegrationFinalityProtocolCassetteCatalog).length
-  + Object.keys(maintainedApplicationExitProtocolCassetteCatalog).length
-  + Object.keys(maintainedCodexPlannedAttemptExecutorCassetteCatalog).length
-  + Object.keys(dispositionCleanupAuthoredCassetteCatalog).length
+const expectedCatalogSize =
+  Object.keys(maintainedAuthoredCassetteCatalog).length +
+  Object.keys(maintainedTargetPromotionProtocolCassetteCatalog).length +
+  Object.keys(maintainedIntegrationFinalityProtocolCassetteCatalog).length +
+  Object.keys(maintainedApplicationExitProtocolCassetteCatalog).length +
+  Object.keys(maintainedCodexPlannedAttemptExecutorCassetteCatalog).length +
+  Object.keys(dispositionCleanupAuthoredCassetteCatalog).length
 
 let everyResult = await runEveryMaintainedCassette()
 let mismatchedResult: Awaited<ReturnType<typeof runAuthoredCassetteInput>> | undefined
 
 await scenario("does not mark delivery source outputs changed for runtime-only or story-only moments", () => {
-  const result = everyResult.find(({ catalogKey }) =>
-    catalogKey === "authored:acceptedResultRestartsIntoIntegration"
-  )
+  const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:acceptedResultRestartsIntoIntegration")
   if (result?._tag !== "Completed" || result.observationMoments === null) {
     throw new Error("authored observation moments are unavailable")
   }
-  const index = result.observationMoments.findIndex((moment, candidateIndex) =>
-    candidateIndex > 0
-    && moment._tag !== "DeliveryPublicationMoment"
-    && moment.deliveryFrame !== null
+  const index = result.observationMoments.findIndex(
+    (moment, candidateIndex) =>
+      candidateIndex > 0 && moment._tag !== "DeliveryPublicationMoment" && moment.deliveryFrame !== null
   )
   const explanation = deliverySourceExplanationAt(result.observationMoments, index)
   assert(
-    explanation._tag === "DeliverySourceAvailable"
-    && !explanation.publicationObservedAtMoment
-    && explanation.rows.every(({ changed }) => !changed)
-    && explanation.status === "No Delivery publication changed the source explanation at this moment.",
+    explanation._tag === "DeliverySourceAvailable" &&
+      !explanation.publicationObservedAtMoment &&
+      explanation.rows.every(({ changed }) => !changed) &&
+      explanation.status === "No Delivery publication changed the source explanation at this moment.",
     "A story-only or runtime-only moment must carry Delivery values without changed-source highlighting"
   )
 })
@@ -276,9 +281,9 @@ await scenario("marks only source outputs changed by adjacent Delivery publicati
   const firstPublicationIndex = result.observationMoments.findIndex(({ _tag }) => _tag === "DeliveryPublicationMoment")
   const firstExplanation = deliverySourceExplanationAt(result.observationMoments, firstPublicationIndex)
   assert(
-    firstExplanation._tag === "DeliverySourceAvailable"
-    && firstExplanation.rows.every(({ changed }) => !changed)
-    && firstExplanation.status.includes("no preceding Delivery publication"),
+    firstExplanation._tag === "DeliverySourceAvailable" &&
+      firstExplanation.rows.every(({ changed }) => !changed) &&
+      firstExplanation.status.includes("no preceding Delivery publication"),
     "The first Delivery publication has no adjacent predecessor and must not claim changed rows"
   )
   assert(
@@ -297,10 +302,11 @@ await scenario("marks only source outputs changed by adjacent Delivery publicati
 await scenario("keeps selected waiting and excluded ticket cells visibly distinct", () => {
   const match = everyResult.flatMap((result) => {
     if (result._tag !== "Completed" || result.observationMoments === null) return []
-    const index = result.observationMoments.findIndex((moment) =>
-      moment.deliveryFrame?.tickets.some(({ placement }) => placement.kind === "Selected") === true
-      && moment.deliveryFrame.tickets.some(({ placement }) => placement.kind === "EligibleOutsideBound")
-      && moment.deliveryFrame.tickets.some(({ placement }) => placement.kind === "GraphExcluded")
+    const index = result.observationMoments.findIndex(
+      (moment) =>
+        moment.deliveryFrame?.tickets.some(({ placement }) => placement.kind === "Selected") === true &&
+        moment.deliveryFrame.tickets.some(({ placement }) => placement.kind === "EligibleOutsideBound") &&
+        moment.deliveryFrame.tickets.some(({ placement }) => placement.kind === "GraphExcluded")
     )
     return index < 0 ? [] : [{ index, moments: result.observationMoments }]
   })[0]
@@ -309,10 +315,22 @@ await scenario("keeps selected waiting and excluded ticket cells visibly distinc
   if (explanation._tag !== "DeliverySourceAvailable") throw new Error("The source explanation is unavailable")
   const tickets = explanation.rows.find(({ id }) => id === "tickets")?.cells ?? []
   const frontier = explanation.rows.find(({ id }) => id === "frontier")?.cells ?? []
-  assert(tickets.some(({ detail, tone }) => detail === "Selected" && tone === "desired"), "Selected tickets must use desired cells")
-  assert(tickets.some(({ detail, tone }) => detail === "EligibleOutsideBound" && tone === "waiting"), "Outside-bound tickets must remain visibly waiting")
-  assert(tickets.some(({ detail, tone }) => detail === "GraphExcluded" && tone === "blocked"), "Graph-excluded tickets must remain visibly excluded")
-  assert(frontier.some(({ detail, tone }) => detail === "EligibleOutsideBound" && tone === "waiting"), "An eligible frontier task beyond capacity must not be called desired")
+  assert(
+    tickets.some(({ detail, tone }) => detail === "Selected" && tone === "desired"),
+    "Selected tickets must use desired cells"
+  )
+  assert(
+    tickets.some(({ detail, tone }) => detail === "EligibleOutsideBound" && tone === "waiting"),
+    "Outside-bound tickets must remain visibly waiting"
+  )
+  assert(
+    tickets.some(({ detail, tone }) => detail === "GraphExcluded" && tone === "blocked"),
+    "Graph-excluded tickets must remain visibly excluded"
+  )
+  assert(
+    frontier.some(({ detail, tone }) => detail === "EligibleOutsideBound" && tone === "waiting"),
+    "An eligible frontier task beyond capacity must not be called desired"
+  )
 })
 
 await scenario("distinguishes live responsibilities from retained settled evidence", () => {
@@ -320,13 +338,14 @@ await scenario("distinguishes live responsibilities from retained settled eviden
   if (result?._tag !== "Completed" || result.observationMoments === null) {
     throw new Error("The five-task diamond observations are unavailable")
   }
-  const settledIndex = result.observationMoments.findLastIndex((moment) =>
-    moment.deliveryFrame?.deliveries.length === 5
-    && moment.deliveryFrame.deliveries.every(({ obligations }) => obligations.length === 0)
-    && moment.deliveryFrame.settlements.length === 5
+  const settledIndex = result.observationMoments.findLastIndex(
+    (moment) =>
+      moment.deliveryFrame?.deliveries.length === 5 &&
+      moment.deliveryFrame.deliveries.every(({ obligations }) => obligations.length === 0) &&
+      moment.deliveryFrame.settlements.length === 5
   )
-  const liveIndex = result.observationMoments.findIndex((moment) =>
-    moment.deliveryFrame?.deliveries.some(({ obligations }) => obligations.length > 0) === true
+  const liveIndex = result.observationMoments.findIndex(
+    (moment) => moment.deliveryFrame?.deliveries.some(({ obligations }) => obligations.length > 0) === true
   )
   const settled = deliverySourceExplanationAt(result.observationMoments, settledIndex)
   const live = deliverySourceExplanationAt(result.observationMoments, liveIndex)
@@ -336,8 +355,20 @@ await scenario("distinguishes live responsibilities from retained settled eviden
   const settledCells = settled.rows.find(({ id }) => id === "deliveries")?.cells ?? []
   const liveCells = live.rows.find(({ id }) => id === "deliveries")?.cells ?? []
   assert(settledCells.length === 5, "The final frame must retain all five exact Delivery evidence rows")
-  assert(settledCells.every(({ detail, label, tone }) => label === "SETTLED EVIDENCE" && detail.includes("no live obligations") && tone === "settled"), "Finality evidence must not look like five live responsibilities")
-  assert(liveCells.some(({ detail, label, tone }) => label === "RESPONSIBILITY" && detail.includes("live obligation") && tone === "responsibility"), "A nonempty obligation must retain responsibility treatment")
+  assert(
+    settledCells.every(
+      ({ detail, label, tone }) =>
+        label === "SETTLED EVIDENCE" && detail.includes("no live obligations") && tone === "settled"
+    ),
+    "Finality evidence must not look like five live responsibilities"
+  )
+  assert(
+    liveCells.some(
+      ({ detail, label, tone }) =>
+        label === "RESPONSIBILITY" && detail.includes("live obligation") && tone === "responsibility"
+    ),
+    "A nonempty obligation must retain responsibility treatment"
+  )
 })
 
 await scenario("keeps an integration owner live while a newer graph publication changes source stages", () => {
@@ -345,14 +376,15 @@ await scenario("keeps an integration owner live while a newer graph publication 
     if (result._tag !== "Completed" || result.observationMoments === null) return []
     return result.observationMoments.flatMap((moment, index) => {
       if (moment._tag !== "DeliveryPublicationMoment") return []
-      const hasLiveIntegration = moment.liveOwners.some((owner) =>
-        !owner._tag.startsWith("Settled")
-        && owner.proposal.admission.integrationTarget._tag === "IntegrationTargetResourceRequired"
+      const hasLiveIntegration = moment.liveOwners.some(
+        (owner) =>
+          !owner._tag.startsWith("Settled") &&
+          owner.proposal.admission.integrationTarget._tag === "IntegrationTargetResourceRequired"
       )
       const explanation = deliverySourceExplanationAt(result.observationMoments ?? [], index)
-      return hasLiveIntegration
-        && explanation._tag === "DeliverySourceAvailable"
-        && explanation.rows.some(({ changed }) => changed)
+      return hasLiveIntegration &&
+        explanation._tag === "DeliverySourceAvailable" &&
+        explanation.rows.some(({ changed }) => changed)
         ? [{ moment, result }]
         : []
     })
@@ -398,108 +430,149 @@ await scenario("runs every maintained cassette through production to its declare
         `${result.catalogKey} must retain production delivery publications`
       )
       assert(
-        result.observationMoments !== null
-        && result.observationMoments.length > (result.deliveryFrames?.length ?? 0),
+        result.observationMoments !== null && result.observationMoments.length > (result.deliveryFrames?.length ?? 0),
         `${result.catalogKey} must retain story, Delivery, and runtime observations in one chronology`
       )
     } else {
       assert(result.deliveryFrames === null, `${result.catalogKey} must not fabricate graph-level delivery frames`)
-      assert(result.observationMoments === null, `${result.catalogKey} must not fabricate a Delivery runtime chronology`)
+      assert(
+        result.observationMoments === null,
+        `${result.catalogKey} must not fabricate a Delivery runtime chronology`
+      )
     }
   }
 })
 
-await scenario("continues every finality story from an authored promotion and retains its exact terminal evidence", () => {
-  for (const [key, cassette] of Object.entries(maintainedIntegrationFinalityProtocolCassetteCatalog)) {
-    const result = everyResult.find(({ catalogKey }) => catalogKey === `integration-finality:${key}`)
-    if (result?._tag !== "Completed" || !Schema.is(IntegrationFinalityProtocolCassetteRun)(result.executionEvidence)) {
-      throw new Error(`${key} must retain typed finality evidence`)
+await scenario(
+  "continues every finality story from an authored promotion and retains its exact terminal evidence",
+  () => {
+    for (const [key, cassette] of Object.entries(maintainedIntegrationFinalityProtocolCassetteCatalog)) {
+      const result = everyResult.find(({ catalogKey }) => catalogKey === `integration-finality:${key}`)
+      if (
+        result?._tag !== "Completed" ||
+        !Schema.is(IntegrationFinalityProtocolCassetteRun)(result.executionEvidence)
+      ) {
+        throw new Error(`${key} must retain typed finality evidence`)
+      }
+      const run = result.executionEvidence
+      const terminal = cassette.story.at(-1)
+      if (terminal?._tag !== "AwaitSettlement") throw new Error(`${key} must declare terminal evidence`)
+      const promotionIndex = run.journalTags.lastIndexOf("TargetPromotionObservedSuccess")
+      assert(run.journalTags[0] === "WorkflowRunBegan", `${key} must retain the authored Run beginning`)
+      assert(promotionIndex >= 0, `${key} must retain the authored successful promotion`)
+      assert(
+        JSON.stringify(run.journalTags.slice(-terminal.expected.journalTags.length)) ===
+          JSON.stringify(terminal.expected.journalTags),
+        `${key} must retain the declared finality journal suffix`
+      )
+      assert(run.deletionCalls === terminal.expected.deletionCalls, `${key} must preserve exact deletion calls`)
+      assert(run.readCalls === terminal.expected.readCalls, `${key} must preserve exact claim reads`)
+      assert(
+        run.replacementCalls === terminal.expected.replacementCalls,
+        `${key} must preserve exact replacement calls`
+      )
+      assert(run.failureTag === terminal.expected.failureTag, `${key} must preserve the declared failure tag`)
+      assert(
+        run.records.every(({ runId }) => runId === run.records[0]?.runId),
+        `${key} must continue one exact authored Run`
+      )
+      assert(result.journalRecordCount === run.records.length, `${key} must retain the whole continued journal`)
     }
-    const run = result.executionEvidence
-    const terminal = cassette.story.at(-1)
-    if (terminal?._tag !== "AwaitSettlement") throw new Error(`${key} must declare terminal evidence`)
-    const promotionIndex = run.journalTags.lastIndexOf("TargetPromotionObservedSuccess")
-    assert(run.journalTags[0] === "WorkflowRunBegan", `${key} must retain the authored Run beginning`)
-    assert(promotionIndex >= 0, `${key} must retain the authored successful promotion`)
-    assert(
-      JSON.stringify(run.journalTags.slice(-terminal.expected.journalTags.length))
-        === JSON.stringify(terminal.expected.journalTags),
-      `${key} must retain the declared finality journal suffix`
-    )
-    assert(run.deletionCalls === terminal.expected.deletionCalls, `${key} must preserve exact deletion calls`)
-    assert(run.readCalls === terminal.expected.readCalls, `${key} must preserve exact claim reads`)
-    assert(run.replacementCalls === terminal.expected.replacementCalls, `${key} must preserve exact replacement calls`)
-    assert(run.failureTag === terminal.expected.failureTag, `${key} must preserve the declared failure tag`)
-    assert(
-      run.records.every(({ runId }) => runId === run.records[0]?.runId),
-      `${key} must continue one exact authored Run`
-    )
-    assert(result.journalRecordCount === run.records.length, `${key} must retain the whole continued journal`)
   }
-})
+)
 
 await scenario("drives Reducer Lab durable history, graph, and causal navigation from production TraceReader", () => {
   const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
   assert(result?._tag === "Completed", "The authored trace fixture must complete")
   if (result?._tag !== "Completed") return
-  assert(result.traceHistories !== null && result.traceHistories.length > 0, "The Lab must retain production trace views")
-  if (result.traceHistories === null) return
-  const traceHistories = result.traceHistories
-  assert(traceHistories.length === result.journalRecordCount, "The Lab must materialize one production view for every committed journal position")
   assert(
-    traceHistories.every((history, index) =>
-      history.version === traceReaderSchemaVersion
-      && history.cursor.runId === result.runId
-      && history.cursor.position === index + 1
-      && history.items.every(({ identity }) => identity.runId === result.runId)
+    result.preparedTrace !== null && result.preparedTrace.cursors.length > 0,
+    "The Lab must retain every production trace cursor"
+  )
+  if (result.preparedTrace === null) return
+  const traceHistories = materializeRequestedTraceHistories(result.preparedTrace)
+  assert(
+    traceHistories.length === result.journalRecordCount,
+    "Explicit output must materialize one production view for every committed journal position"
+  )
+  assert(
+    traceHistories.every(
+      (history, index) =>
+        history.version === traceReaderSchemaVersion &&
+        history.cursor.runId === result.runId &&
+        history.cursor.position === index + 1 &&
+        history.items.every(({ identity }) => identity.runId === result.runId)
     ),
     "Trace views must retain the schema version and exact (RunId, JournalPosition) identity for every commit"
   )
-  assert(result.traceHistories.some(({ graph }) => graph !== null), "The Lab must consume a production graph-at-history view")
   assert(
-    result.traceHistories.every(({ facets }) =>
-      facets.recovery.observationGaps !== undefined
-      && facets.integration.facts !== undefined
-      && facets.controlDisposition.version === traceControlDispositionFacetVersion
-      && facets.controlDisposition.controls !== undefined
-      && facets.controlDisposition.dispositions !== undefined
-      && facets.controlDisposition.cleanup !== undefined
+    traceHistories.some(({ graph }) => graph !== null),
+    "The Lab must consume a production graph-at-history view"
+  )
+  assert(
+    traceHistories.every(
+      ({ facets }) =>
+        facets.recovery.observationGaps !== undefined &&
+        facets.integration.facts !== undefined &&
+        facets.controlDisposition.version === traceControlDispositionFacetVersion &&
+        facets.controlDisposition.controls !== undefined &&
+        facets.controlDisposition.dispositions !== undefined &&
+        facets.controlDisposition.cleanup !== undefined
     ),
     "The Lab must consume the shared recovery, integration, control, disposition, and cleanup facets"
   )
   assert(
-    result.traceHistories.some(({ relationships }) => relationships.workflowCausalEdges.length > 0),
+    traceHistories.some(({ relationships }) => relationships.workflowCausalEdges.length > 0),
     "The Lab must consume production-proven workflow-causal predecessors"
   )
 })
 
-await scenario("does not derive Lab workflow occurrences or causality from capture order, story position, or frame index", () => {
-  const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
-  assert(result?._tag === "Completed" && result.traceHistories !== null, "The production trace fixture is unavailable")
-  if (result?._tag !== "Completed" || result.traceHistories === null) return
-  const first = result.traceHistories[0]
-  const later = result.traceHistories.at(-1)
-  if (first === undefined || later === undefined) throw new Error("The production cursor fixture is empty")
-  const model = makeTraceCursorSelectionModel(result.traceHistories.map(({ cursor }) => cursor), [
-    auxiliaryTraceCorrelation(
-      "AuthoredStoryOccurrence",
-      AuthoredObservationCaptureOrder.make(9_999),
-      authoredStoryPosition(9_999),
-      null
-    ),
-    auxiliaryTraceCorrelation(
-      "DeliveryRuntimeOwner",
-      AuthoredObservationCaptureOrder.make(1),
-      authoredStoryPosition(0),
-      null
+await scenario(
+  "does not derive Lab workflow occurrences or causality from capture order, story position, or frame index",
+  () => {
+    const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
+    assert(result?._tag === "Completed" && result.preparedTrace !== null, "The production trace fixture is unavailable")
+    if (result?._tag !== "Completed" || result.preparedTrace === null) return
+    const first = requestTraceHistoryAt(result.preparedTrace, 0)
+    const later = requestTraceHistoryAt(result.preparedTrace, -1)
+    if (first === undefined || later === undefined) throw new Error("The production cursor fixture is empty")
+    const model = makeTraceCursorSelectionModel(result.preparedTrace.cursors, [
+      auxiliaryTraceCorrelation(
+        "AuthoredStoryOccurrence",
+        AuthoredObservationCaptureOrder.make(9_999),
+        authoredStoryPosition(9_999),
+        null
+      ),
+      auxiliaryTraceCorrelation(
+        "DeliveryRuntimeOwner",
+        AuthoredObservationCaptureOrder.make(1),
+        authoredStoryPosition(0),
+        null
+      )
+    ])
+    const selected = updateTraceCursorSelection(model, TraceCursorSelected.make({ cursor: first.cursor }))
+    assert(
+      projectTraceCursorSelection(selected).cursor?.position === first.cursor.position,
+      "Selection must use the exact production cursor, not auxiliary chronology"
     )
-  ])
-  const selected = updateTraceCursorSelection(model, TraceCursorSelected.make({ cursor: first.cursor }))
-  assert(projectTraceCursorSelection(selected).cursor?.position === first.cursor.position, "Selection must use the exact production cursor, not auxiliary chronology")
-  assert(projectTraceCursorSelection(selected).cursor?.position !== 9_999, "Authored story position must not become a journal position")
-  assert(projectTraceCursorSelection(updateTraceCursorSelection(selected, TraceCursorSelected.make({ cursor: later.cursor }))).cursor?.position === later.cursor.position, "Frame-like local values must not replace production cursor selection")
-  assert(later.relationships.workflowCausalEdges.every(({ predecessorOperationId, successorOperationId }) => predecessorOperationId !== successorOperationId), "Causal edges must remain the production reader's operation identities")
-})
+    assert(
+      projectTraceCursorSelection(selected).cursor?.position !== 9_999,
+      "Authored story position must not become a journal position"
+    )
+    assert(
+      projectTraceCursorSelection(
+        updateTraceCursorSelection(selected, TraceCursorSelected.make({ cursor: later.cursor }))
+      ).cursor?.position === later.cursor.position,
+      "Frame-like local values must not replace production cursor selection"
+    )
+    assert(
+      later.relationships.workflowCausalEdges.every(
+        ({ predecessorOperationId, successorOperationId }) => predecessorOperationId !== successorOperationId
+      ),
+      "Causal edges must remain the production reader's operation identities"
+    )
+  }
+)
 
 await scenario("runs maintained application Exit stories through the production request boundary", () => {
   const idle = everyResult.find(({ catalogKey }) => catalogKey === "application-exit:idleSuccess")
@@ -542,7 +615,9 @@ await scenario("runs maintained Codex executor stories through the concrete prod
   )
   if (lost?._tag === "Completed") {
     assert(
-      executionSummaryItems(lost).some(({ description }) => description.includes("private behind the generic executor boundary")),
+      executionSummaryItems(lost).some(({ description }) =>
+        description.includes("private behind the generic executor boundary")
+      ),
       "Codex-private facts must not be presented as Run-journal records"
     )
     assert(
@@ -552,25 +627,34 @@ await scenario("runs maintained Codex executor stories through the concrete prod
   }
 })
 
-await scenario("captures every authored delivery frame from the real production publication and delivery composition", () => {
-  const authored = everyResult.filter((result) => result._tag === "Completed" && result.category === "Authored")
-  assert(authored.length === Object.keys(maintainedAuthoredCassetteCatalog).length, "Every authored catalog entry must complete")
-  for (const result of authored) {
-    if (result._tag !== "Completed" || result.deliveryFrames === null) continue
-    assert(result.deliveryFrames[0]?.graph._tag === "NotEstablished", `${result.catalogKey} must retain the current-first production publication`)
+await scenario(
+  "captures every authored delivery frame from the real production publication and delivery composition",
+  () => {
+    const authored = everyResult.filter((result) => result._tag === "Completed" && result.category === "Authored")
     assert(
-      result.deliveryFrames.some(({ graph }) => graph._tag === "Established"),
-      `${result.catalogKey} must retain a production-established graph publication`
+      authored.length === Object.keys(maintainedAuthoredCassetteCatalog).length,
+      "Every authored catalog entry must complete"
     )
-    assert(
-      result.deliveryFrames.every(({ settlements, trackerReflection }) =>
-        trackerReflection._tag === "DeliveryReflection"
-        && trackerReflection.settlementCount === settlements.length
-      ),
-      `${result.catalogKey} must retain the final tracker-reflection layer`
-    )
+    for (const result of authored) {
+      if (result._tag !== "Completed" || result.deliveryFrames === null) continue
+      assert(
+        result.deliveryFrames[0]?.graph._tag === "NotEstablished",
+        `${result.catalogKey} must retain the current-first production publication`
+      )
+      assert(
+        result.deliveryFrames.some(({ graph }) => graph._tag === "Established"),
+        `${result.catalogKey} must retain a production-established graph publication`
+      )
+      assert(
+        result.deliveryFrames.every(
+          ({ settlements, trackerReflection }) =>
+            trackerReflection._tag === "DeliveryReflection" && trackerReflection.settlementCount === settlements.length
+        ),
+        `${result.catalogKey} must retain the final tracker-reflection layer`
+      )
+    }
   }
-})
+)
 
 await scenario("shows the staggered double-diamond frontier being consumed on one graph", () => {
   const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
@@ -585,65 +669,99 @@ await scenario("shows the staggered double-diamond frontier being consumed on on
   const frames = result.deliveryFrames
   const established = frames.filter(({ graph }) => graph._tag === "Established")
   const graph = established.find(({ graph }) => graph._tag === "Established" && graph.tasks.length === 10)?.graph
-  const edges = graph?._tag === "Established"
-    ? graph.tasks.flatMap(({ id, prerequisiteIds }) => prerequisiteIds.map((from) => `${from}->${id}`)).toSorted()
-    : []
-  const eligible = established.map(({ frontier }) => frontier
-    .filter(({ standing }) => standing === "Eligible")
-    .map(({ taskId }) => taskId)
-    .toSorted()
-    .join("+"))
+  const edges =
+    graph?._tag === "Established"
+      ? graph.tasks.flatMap(({ id, prerequisiteIds }) => prerequisiteIds.map((from) => `${from}->${id}`)).toSorted()
+      : []
+  const eligible = established.map(({ frontier }) =>
+    frontier
+      .filter(({ standing }) => standing === "Eligible")
+      .map(({ taskId }) => taskId)
+      .toSorted()
+      .join("+")
+  )
   const positions = ["A", "B+C", "B+C+X", "D+X", "E+F+X", "H+I", "G", ""].reduce<ReadonlyArray<number>>(
     (found, wave) => [...found, eligible.indexOf(wave, (found.at(-1) ?? -1) + 1)],
     []
   )
-  const heldMiddle = (frame: (typeof frames)[number]) => ["B", "C"].every((taskId) =>
-      frame.heldPositions.some((position) => position.taskId === taskId)
-    )
+  const heldMiddle = (frame: (typeof frames)[number]) =>
+    ["B", "C"].every((taskId) => frame.heldPositions.some((position) => position.taskId === taskId))
   const initial = frames.find(heldMiddle)
-  const later = initial === undefined
-    ? undefined
-    : frames.find((frame) => frame.activationOrdinal > initial.activationOrdinal && heldMiddle(frame))
+  const later =
+    initial === undefined
+      ? undefined
+      : frames.find((frame) => frame.activationOrdinal > initial.activationOrdinal && heldMiddle(frame))
   const heldSequence = ["B+C", "C", "X", "D+X", "E+X", "F+X", "H+I", "I", "G"].reduce<ReadonlyArray<number>>(
-    (found, tasks) => [...found, frames.findIndex((frame, index) =>
-      index > (found.at(-1) ?? -1)
-      && frame.heldPositions.map(({ taskId }) => taskId).toSorted().join("+") === tasks
-    )],
+    (found, tasks) => [
+      ...found,
+      frames.findIndex(
+        (frame, index) =>
+          index > (found.at(-1) ?? -1) &&
+          frame.heldPositions
+            .map(({ taskId }) => taskId)
+            .toSorted()
+            .join("+") === tasks
+      )
+    ],
     []
   )
-  const correlations = (frame: NonNullable<typeof initial>) => frame.heldPositions
-    .filter(({ taskId }) => taskId === "B" || taskId === "C")
-    .map(({ attemptId, runId, taskId }) => `${taskId}:${runId}:${attemptId}`)
-    .toSorted()
+  const correlations = (frame: NonNullable<typeof initial>) =>
+    frame.heldPositions
+      .filter(({ taskId }) => taskId === "B" || taskId === "C")
+      .map(({ attemptId, runId, taskId }) => `${taskId}:${runId}:${attemptId}`)
+      .toSorted()
 
   assert(
     edges.join(",") === "A->B,A->C,A->X,B->D,C->D,D->E,D->F,E->H,F->I,H->G,I->G,X->G",
     "The graph must be the staggered double diamond with restart-added X"
   )
-  assert(positions.every((position) => position >= 0), "The production frontier must consume every dependency wave in order")
-  assert(heldSequence.every((position) => position >= 0), "The graph must expose each staggered held-position release in order")
+  assert(
+    positions.every((position) => position >= 0),
+    "The production frontier must consume every dependency wave in order"
+  )
+  assert(
+    heldSequence.every((position) => position >= 0),
+    "The graph must expose each staggered held-position release in order"
+  )
   assert(initial !== undefined && later !== undefined, "B and C must remain held across restart")
   if (initial !== undefined && later !== undefined) {
-    assert(later.heldPositions.map(({ taskId }) => taskId).toSorted().join(",") === "B,C", "The first post-restart frame with reconstructed positions must retain both middle-wave positions")
-    assert(correlations(later).join(",") === correlations(initial).join(","), "A later activation must preserve both exact positions")
+    assert(
+      later.heldPositions
+        .map(({ taskId }) => taskId)
+        .toSorted()
+        .join(",") === "B,C",
+      "The first post-restart frame with reconstructed positions must retain both middle-wave positions"
+    )
+    assert(
+      correlations(later).join(",") === correlations(initial).join(","),
+      "A later activation must preserve both exact positions"
+    )
   }
 })
 
 await scenario("keeps a dependant blocked after executor completion until a later tracker observation", () => {
   const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
-  assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The dependant story must return delivery frames")
-  if (result?._tag !== "Completed" || result.deliveryFrames === null) return
-  const heldA = result.deliveryFrames.findIndex(({ heldPositions }) => heldPositions.some(({ taskId }) => taskId === "A"))
-  const releasedButBlocked = result.deliveryFrames.findIndex((frame, index) =>
-    index > heldA
-    && !frame.heldPositions.some(({ taskId }) => taskId === "A")
-    && frame.frontier.some(({ reasons, standing, taskId }) =>
-      taskId === "B" && standing === "Excluded" && reasons.some(({ kind }) => kind === "PrerequisitesIncomplete")
-    )
+  assert(
+    result?._tag === "Completed" && result.deliveryFrames !== null,
+    "The dependant story must return delivery frames"
   )
-  const dependantEligible = result.deliveryFrames.findIndex((frame, index) =>
-    index > releasedButBlocked
-    && frame.frontier.some(({ standing, taskId }) => taskId === "B" && standing === "Eligible")
+  if (result?._tag !== "Completed" || result.deliveryFrames === null) return
+  const heldA = result.deliveryFrames.findIndex(({ heldPositions }) =>
+    heldPositions.some(({ taskId }) => taskId === "A")
+  )
+  const releasedButBlocked = result.deliveryFrames.findIndex(
+    (frame, index) =>
+      index > heldA &&
+      !frame.heldPositions.some(({ taskId }) => taskId === "A") &&
+      frame.frontier.some(
+        ({ reasons, standing, taskId }) =>
+          taskId === "B" && standing === "Excluded" && reasons.some(({ kind }) => kind === "PrerequisitesIncomplete")
+      )
+  )
+  const dependantEligible = result.deliveryFrames.findIndex(
+    (frame, index) =>
+      index > releasedButBlocked &&
+      frame.frontier.some(({ standing, taskId }) => taskId === "B" && standing === "Eligible")
   )
   assert(heldA >= 0, "A must visibly hold the exact task-work position")
   assert(releasedButBlocked > heldA, "B must remain blocked after A releases its process-local position")
@@ -652,12 +770,16 @@ await scenario("keeps a dependant blocked after executor completion until a late
 
 await scenario("separates desired tickets from exact held task-work positions", () => {
   const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
-  assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The bounded story must return delivery frames")
+  assert(
+    result?._tag === "Completed" && result.deliveryFrames !== null,
+    "The bounded story must return delivery frames"
+  )
   if (result?._tag !== "Completed" || result.deliveryFrames === null) return
   assert(
-    result.deliveryFrames.some((frame) =>
-      frame.tickets.some(({ placement, taskId }) => taskId === "A" && placement.kind === "Selected")
-      && !frame.heldPositions.some(({ taskId }) => taskId === "A")
+    result.deliveryFrames.some(
+      (frame) =>
+        frame.tickets.some(({ placement, taskId }) => taskId === "A" && placement.kind === "Selected") &&
+        !frame.heldPositions.some(({ taskId }) => taskId === "A")
     ),
     "A desired ticket must be visible before a process-local position is held"
   )
@@ -669,27 +791,35 @@ await scenario("separates desired tickets from exact held task-work positions", 
 
 await scenario("separates delivery frames across authored coordinator activations", () => {
   const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:runPauseRestartsPassively")
-  assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The recovery story must return delivery frames")
+  assert(
+    result?._tag === "Completed" && result.deliveryFrames !== null,
+    "The recovery story must return delivery frames"
+  )
   if (result?._tag !== "Completed" || result.deliveryFrames === null) return
   const firstLaterActivation = result.deliveryFrames.findIndex(({ activationOrdinal }) => activationOrdinal === 2)
   assert(firstLaterActivation > 0, "Later-activation publications must follow the initial activation")
-  assert(result.deliveryFrames.slice(0, firstLaterActivation).every(({ activationOrdinal }) => activationOrdinal === 1), "Activation frames must retain their boundary")
+  assert(
+    result.deliveryFrames.slice(0, firstLaterActivation).every(({ activationOrdinal }) => activationOrdinal === 1),
+    "Activation frames must retain their boundary"
+  )
 })
 
 await scenario("keeps a paused task held until the exact safe-suspension report", () => {
   const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:taskPauseLetsIndependentTaskContinue")
-  assert(result?._tag === "Completed" && result.deliveryFrames !== null, "The task-pause story must return delivery frames")
-  if (result?._tag !== "Completed" || result.deliveryFrames === null) return
-  const safeSuspensionPosition = maintainedAuthoredCassetteCatalog.taskPauseLetsIndependentTaskContinue.story
-    .findIndex((item) =>
-      item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "ExecutorWorkSafelySuspended"
-    )
-  assert(safeSuspensionPosition >= 0, "The maintained pause story must declare safe suspension")
-  const beforeSafeSuspension = result.deliveryFrames.find(({ storyPosition }) =>
-    storyPosition === safeSuspensionPosition
+  assert(
+    result?._tag === "Completed" && result.deliveryFrames !== null,
+    "The task-pause story must return delivery frames"
   )
-  const afterSafeSuspension = result.deliveryFrames.find(({ storyPosition }) =>
-    storyPosition === safeSuspensionPosition + 1
+  if (result?._tag !== "Completed" || result.deliveryFrames === null) return
+  const safeSuspensionPosition = maintainedAuthoredCassetteCatalog.taskPauseLetsIndependentTaskContinue.story.findIndex(
+    (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "ExecutorWorkSafelySuspended"
+  )
+  assert(safeSuspensionPosition >= 0, "The maintained pause story must declare safe suspension")
+  const beforeSafeSuspension = result.deliveryFrames.find(
+    ({ storyPosition }) => storyPosition === safeSuspensionPosition
+  )
+  const afterSafeSuspension = result.deliveryFrames.find(
+    ({ storyPosition }) => storyPosition === safeSuspensionPosition + 1
   )
   assert(
     beforeSafeSuspension?.heldPositions.some(({ attemptId }) => attemptId === "attempt:A:0") === true,
@@ -742,19 +872,22 @@ await scenario("formats maintained cassette choices and summaries", () => {
     "The browser model must preserve catalog order"
   )
   assert(
-    maintainedCassetteRows.every(({ controlledBoundaries, runnerName }) =>
-      controlledBoundaries.length > 0 && runnerName.startsWith("run")
+    maintainedCassetteRows.every(
+      ({ controlledBoundaries, runnerName }) => controlledBoundaries.length > 0 && runnerName.startsWith("run")
     ),
     "Every browser choice must identify controlled boundaries and its production runner"
   )
   for (const result of everyResult) {
-    assert(resultStatusText(result).includes(`${result.totalItemCount}/${result.totalItemCount}`), `${result.catalogKey} must render complete progress`)
+    assert(
+      resultStatusText(result).includes(`${result.totalItemCount}/${result.totalItemCount}`),
+      `${result.catalogKey} must render complete progress`
+    )
     assert(resultEvidenceText(result).length > 2, `${result.catalogKey} must render execution evidence`)
   }
   assert(everyResult.length === maintainedCassetteRows.length, "Run all must retain one result per catalog choice")
   assert(
-    runAllSummaryText(everyResult)
-      === `${expectedCatalogSize} completed · 0 failed · 0 Lab defects · ${expectedCatalogSize} total`,
+    runAllSummaryText(everyResult) ===
+      `${expectedCatalogSize} completed · 0 failed · 0 Lab defects · ${expectedCatalogSize} total`,
     "Run all must render the exact completed, failed, and total counts"
   )
 })
@@ -801,39 +934,68 @@ const chooseCassette = (search: HTMLInputElement, value: string): void => {
 
 await scenario("renders and navigates a bounded 105-task 120-occurrence production trace", async () => {
   const histories = await makeLargeProductionTrace()
-  const latest = histories.at(-1)
+  const latest = requestTraceHistoryAt(histories, -1)
   if (latest === undefined || latest.graph === null) throw new Error("The large production trace is unavailable")
   assert(latest.graph.snapshot.tasks.length === 105, "The production reader must return all 105 tracker tasks")
   assert(latest.items.length >= 120, "The production reader must return at least 120 exact workflow occurrences")
   assert(latest.relationships.taskGraphEdges.length > 0, "The production trace must retain task-graph relationships")
-  assert(latest.relationships.workflowCausalEdges.length > 0, "The production trace must retain workflow-causal relationships")
-  assert(latest.relationships.outsideAuthorityAcknowledgements.length > 0, "The production trace must retain outside-authority acknowledgements")
-  assert(latest.relationships.processLocalResourceSerializations.length > 0, "The production trace must retain process-local serialization")
+  assert(
+    latest.relationships.workflowCausalEdges.length > 0,
+    "The production trace must retain workflow-causal relationships"
+  )
+  assert(
+    latest.relationships.outsideAuthorityAcknowledgements.length > 0,
+    "The production trace must retain outside-authority acknowledgements"
+  )
+  assert(
+    latest.relationships.processLocalResourceSerializations.length > 0,
+    "The production trace must retain process-local serialization"
+  )
 
   const { document } = installDom()
   const host = document.createElement("div")
   renderProductionTraceHistory(host, histories, [], { _tag: "NotRun" })
   const panel = host.querySelector<HTMLElement>("[data-role='trace-history']")
-  const graph = panel?.querySelector<HTMLElement & {
-    readonly projection: { readonly tasks: ReadonlyArray<{ readonly id: string }> } | null
-  }>("[data-role='trace-production-graph']")
+  const graph = panel?.querySelector<
+    HTMLElement & { readonly projection: { readonly tasks: ReadonlyArray<{ readonly id: string }> } | null }
+  >("[data-role='trace-production-graph']")
   assert(graph?.projection?.tasks.length === 105, "The bounded graph canvas must receive all production tasks")
-  assert(panel?.querySelector("[data-role='trace-authority-acknowledgements']") !== null, "Outside-authority relationships need a distinct region")
-  assert(panel?.querySelector("[data-role='trace-resource-serializations']") !== null, "Process-local relationships need a distinct region")
-  assert((panel?.querySelectorAll("[data-role='trace-history-item']").length ?? 0) >= 120, "Every exact occurrence must remain available")
+  assert(
+    panel?.querySelector("[data-role='trace-authority-acknowledgements']") !== null,
+    "Outside-authority relationships need a distinct region"
+  )
+  assert(
+    panel?.querySelector("[data-role='trace-resource-serializations']") !== null,
+    "Process-local relationships need a distinct region"
+  )
+  assert(
+    (panel?.querySelectorAll("[data-role='trace-history-item']").length ?? 0) >= 120,
+    "Every exact occurrence must remain available"
+  )
 
-  const exactIdentities = [...panel?.querySelectorAll<HTMLElement>("[data-role='trace-history-item']") ?? []]
-    .map(({ dataset }) => dataset.identity)
+  const exactIdentities = [...(panel?.querySelectorAll<HTMLElement>("[data-role='trace-history-item']") ?? [])].map(
+    ({ dataset }) => dataset.identity
+  )
   panel?.querySelector<HTMLButtonElement>("[data-role='trace-fold-repeated']")?.click()
   const fold = panel?.querySelector<HTMLDetailsElement>("[data-role='trace-history-fold'] details")
-  assert(fold?.querySelector("[data-role='trace-history-fold-summary']")?.textContent?.includes("3 occurrences") === true, "A repeated observed report run must show its count and exact position range")
-  fold?.setAttribute("open", "")
-  assert(fold?.querySelectorAll("[data-role='trace-history-item']").length === 3, "Expanding a fold must retain every exact occurrence payload")
-  panel?.querySelector<HTMLButtonElement>("[data-role='trace-fold-repeated']")?.click()
-  assert(panel?.querySelector("[data-role='trace-history-fold']") === null, "The operator must be able to reverse the fold")
   assert(
-    [...panel?.querySelectorAll<HTMLElement>("[data-role='trace-history-item']") ?? []]
-      .map(({ dataset }) => dataset.identity).join("|") === exactIdentities.join("|"),
+    fold?.querySelector("[data-role='trace-history-fold-summary']")?.textContent?.includes("3 occurrences") === true,
+    "A repeated observed report run must show its count and exact position range"
+  )
+  fold?.setAttribute("open", "")
+  assert(
+    fold?.querySelectorAll("[data-role='trace-history-item']").length === 3,
+    "Expanding a fold must retain every exact occurrence payload"
+  )
+  panel?.querySelector<HTMLButtonElement>("[data-role='trace-fold-repeated']")?.click()
+  assert(
+    panel?.querySelector("[data-role='trace-history-fold']") === null,
+    "The operator must be able to reverse the fold"
+  )
+  assert(
+    [...(panel?.querySelectorAll<HTMLElement>("[data-role='trace-history-item']") ?? [])]
+      .map(({ dataset }) => dataset.identity)
+      .join("|") === exactIdentities.join("|"),
     "Disabling folding must restore the same exact identities in the same order"
   )
 })
@@ -851,44 +1013,123 @@ await scenario("focuses and fits the selected task without moving the journal cu
   panel?.querySelector<HTMLButtonElement>("[data-role='trace-focus-task']")?.click()
   const focusedGraph = panel?.querySelector<HTMLElement>("[data-role='trace-production-graph']")
   assert(focusedGraph?.dataset.focusedTaskId === "task-052", "Focus must center the exact selected task")
-  assert(panel?.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition === cursorBeforeFocus, "Task focus must not move the journal cursor")
+  assert(
+    panel?.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition === cursorBeforeFocus,
+    "Task focus must not move the journal cursor"
+  )
 
-  const latestOccurrenceButton = [...panel?.querySelectorAll<HTMLButtonElement>("[data-role='trace-select-occurrence']") ?? []].at(-1)
+  const latestOccurrenceButton = [
+    ...(panel?.querySelectorAll<HTMLButtonElement>("[data-role='trace-select-occurrence']") ?? [])
+  ].at(-1)
   latestOccurrenceButton?.click()
-  assert(panel?.querySelector("[data-role='trace-selection-inspector']")?.textContent?.includes("run:lab-large-navigation:125") === true, "The inspector must retain the selected exact occurrence identity")
+  assert(
+    panel
+      ?.querySelector("[data-role='trace-selection-inspector']")
+      ?.textContent?.includes("run:lab-large-navigation:125") === true,
+    "The inspector must retain the selected exact occurrence identity"
+  )
   panel?.querySelector<HTMLButtonElement>("[data-role='trace-previous-cursor']")?.click()
-  assert(panel?.querySelector("[data-role='trace-selection-inspector']")?.textContent?.includes("occurrence: none") === true, "Back must clear an occurrence absent from the earlier prefix")
-  assert(panel?.querySelector("[data-role='trace-selection-inspector']")?.textContent?.includes("Task: task-052") === true, "Back must retain a selected task still present in the graph")
+  assert(
+    panel?.querySelector("[data-role='trace-selection-inspector']")?.textContent?.includes("occurrence: none") === true,
+    "Back must clear an occurrence absent from the earlier prefix"
+  )
+  assert(
+    panel?.querySelector("[data-role='trace-selection-inspector']")?.textContent?.includes("Task: task-052") === true,
+    "Back must retain a selected task still present in the graph"
+  )
   panel?.querySelector<HTMLButtonElement>("[data-role='trace-previous-cursor']")?.click()
-  assert(panel?.querySelector("[data-role='trace-selection-inspector']")?.textContent?.includes("Task: none") === true, "A cursor without that graph must clear the selected task")
+  assert(
+    panel?.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition === "123",
+    "Every exact cursor remains navigable, including the second intermediate prefix"
+  )
+  assert(
+    panel?.querySelector("[data-role='trace-selection-inspector']")?.textContent?.includes("Task: task-052") === true,
+    "The second intermediate cursor must retain a task present in its graph"
+  )
+  const cursorSelect = panel?.querySelector<HTMLSelectElement>("[data-role='trace-cursor-selector']")
+  if (cursorSelect === null || cursorSelect === undefined) throw new Error("The exact cursor selector must be available")
+  chooseOption(cursorSelect, "0")
+  assert(
+    panel?.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition === "1",
+    "The selected pregraph cursor must be exact journal position 1"
+  )
+  assert(
+    panel?.querySelector("[data-role='trace-selection-inspector']")?.textContent?.includes("Task: none") === true,
+    "A cursor without that graph must clear the selected task"
+  )
 })
 
 await scenario("shows only information that selects, explains, or diagnoses a maintained cassette", () => {
   const { document, root } = installDom()
-  mountCassetteLab({ revision: "acceptance-revision+dirty", root, rows: maintainedCassetteRows, runCassette: cannedRunner })
+  mountCassetteLab({
+    revision: "acceptance-revision+dirty",
+    root,
+    rows: maintainedCassetteRows,
+    runCassette: cannedRunner
+  })
   assert(document.title === "Dalph reducer lab", "The tab title must name the reducer Lab")
   assert(
-    document.querySelector("[data-role='safety-context']")?.textContent?.includes("no GitHub issue, Git repository, executor process, or durable journal is changed") === true,
+    document
+      .querySelector("[data-role='safety-context']")
+      ?.textContent?.includes("no GitHub issue, Git repository, executor process, or durable journal is changed") ===
+      true,
     "The Lab must state the concrete safety boundary"
   )
-  assert(document.querySelector("[data-role='source-revision']")?.textContent?.includes("acceptance-revision+dirty") === true, "The Lab must identify its source revision")
+  assert(
+    document.querySelector("[data-role='source-revision']")?.textContent?.includes("acceptance-revision+dirty") ===
+      true,
+    "The Lab must identify its source revision"
+  )
   assert(
     document.querySelector("article [data-role='execution-evidence']") === null,
     "An unrun cassette must not expose an empty evidence panel"
   )
-  assert(document.querySelectorAll("[data-role='selected-cassette-surface']").length === 1, "The Lab must expose one shared cassette surface")
+  assert(
+    document.querySelectorAll("[data-role='selected-cassette-surface']").length === 1,
+    "The Lab must expose one shared cassette surface"
+  )
   assert(document.querySelectorAll("article").length === 1, "Only the selected cassette may render a complete UI")
-  assert(document.querySelectorAll("[data-role='cassette-options'] option").length === expectedCatalogSize, "Search suggestions must retain every catalog choice")
+  assert(
+    document.querySelectorAll("[data-role='cassette-options'] option").length === expectedCatalogSize,
+    "Search suggestions must retain every catalog choice"
+  )
   const first = document.querySelector("article")
-  assert(first?.querySelector("h2")?.textContent === maintainedCassetteRows[0]?.storyName, "The human story name must be primary")
-  assert(first?.querySelector("h2")?.textContent?.includes("authored:") === false, "The prefixed key must not duplicate category in the heading")
-  assert(first?.querySelector(".catalog-key")?.textContent?.includes("authored:") === true, "The selected cassette must retain its exact lookup key")
+  assert(
+    first?.querySelector("h2")?.textContent === maintainedCassetteRows[0]?.storyName,
+    "The human story name must be primary"
+  )
+  assert(
+    first?.querySelector("h2")?.textContent?.includes("authored:") === false,
+    "The prefixed key must not duplicate category in the heading"
+  )
+  assert(
+    first?.querySelector(".catalog-key")?.textContent?.includes("authored:") === true,
+    "The selected cassette must retain its exact lookup key"
+  )
   const groupFacts = document.querySelector(".group-facts")?.textContent ?? ""
-  assert(groupFacts.includes("Production runner") && groupFacts.includes("Available controlled boundaries"), "Catalog-level facts must explain execution and safety once without claiming every available boundary is exercised")
-  assert(first?.querySelector("[data-role='declared-chronology']")?.textContent?.includes("not observed execution evidence") === true, "Declared input must be labelled separately from observed output")
-  assert(document.querySelectorAll("[data-role='exact-declared-input'] pre").length === 1, "Only the selected cassette's exact input may be visible")
-  assert(document.querySelector("[data-role='completion-legend']")?.textContent?.includes("matched the declared end") === true, "Completion must not imply that the modeled operation succeeded")
-  assert(document.querySelectorAll("input[data-role='cassette-selector']").length === 1, "One searchable cassette control must own catalog selection")
+  assert(
+    groupFacts.includes("Production runner") && groupFacts.includes("Available controlled boundaries"),
+    "Catalog-level facts must explain execution and safety once without claiming every available boundary is exercised"
+  )
+  assert(
+    first
+      ?.querySelector("[data-role='declared-chronology']")
+      ?.textContent?.includes("not observed execution evidence") === true,
+    "Declared input must be labelled separately from observed output"
+  )
+  assert(
+    document.querySelectorAll("[data-role='exact-declared-input'] pre").length === 1,
+    "Only the selected cassette's exact input may be visible"
+  )
+  assert(
+    document.querySelector("[data-role='completion-legend']")?.textContent?.includes("matched the declared end") ===
+      true,
+    "Completion must not imply that the modeled operation succeeded"
+  )
+  assert(
+    document.querySelectorAll("input[data-role='cassette-selector']").length === 1,
+    "One searchable cassette control must own catalog selection"
+  )
 })
 
 await scenario("uses one shared cassette surface and replaces it when selection changes", async () => {
@@ -897,25 +1138,56 @@ await scenario("uses one shared cassette surface and replaces it when selection 
   const selector = document.querySelector("[data-role='cassette-selector']") as HTMLInputElement | null
   const first = maintainedCassetteRows[0]
   const direct = maintainedCassetteRows.find(({ category }) => category === "TargetPromotion")
-  if (selector === null || first === undefined || direct === undefined) throw new Error("The replacement fixture is incomplete")
-  assert(document.querySelector("article")?.dataset.catalogKey === first.catalogKey, "The first admitted choice must own the shared surface")
-  assert(document.querySelectorAll("[data-role='delivery-workbench']").length === 1, "An authored selection may own one graph workbench")
+  if (selector === null || first === undefined || direct === undefined)
+    throw new Error("The replacement fixture is incomplete")
+  assert(
+    document.querySelector("article")?.dataset.catalogKey === first.catalogKey,
+    "The first admitted choice must own the shared surface"
+  )
+  assert(
+    document.querySelectorAll("[data-role='delivery-workbench']").length === 1,
+    "An authored selection may own one graph workbench"
+  )
   chooseCassette(selector, direct.catalogKey)
   assert(document.querySelectorAll("article").length === 1, "Changing selection must not append a second cassette UI")
-  assert(document.querySelector("article")?.dataset.catalogKey === direct.catalogKey, "The new choice must replace the old cassette identity")
-  assert(document.querySelector("article")?.textContent?.includes(first.storyName) === false, "No prior cassette content may remain visible")
-  assert(document.querySelectorAll("[data-role='declared-chronology']").length === 1, "The shared surface must retain only the new chronology")
-  assert(document.querySelector("[data-role='delivery-workbench']") === null, "A direct protocol choice must replace the authored graph workbench")
-  assert(document.querySelectorAll("article .selected-cassette-controls button").length === 1, "The shared surface must expose one selected-cassette action")
+  assert(
+    document.querySelector("article")?.dataset.catalogKey === direct.catalogKey,
+    "The new choice must replace the old cassette identity"
+  )
+  assert(
+    document.querySelector("article")?.textContent?.includes(first.storyName) === false,
+    "No prior cassette content may remain visible"
+  )
+  assert(
+    document.querySelectorAll("[data-role='declared-chronology']").length === 1,
+    "The shared surface must retain only the new chronology"
+  )
+  assert(
+    document.querySelector("[data-role='delivery-workbench']") === null,
+    "A direct protocol choice must replace the authored graph workbench"
+  )
+  assert(
+    document.querySelectorAll("article .selected-cassette-controls button").length === 1,
+    "The shared surface must expose one selected-cassette action"
+  )
   chooseCassette(selector, first.catalogKey)
   const completed = settled(singleCassetteSettledEvent)
   ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
   await completed
-  assert(document.querySelector("article")?.dataset.state === "Completed", "The selected cassette must expose its retained terminal state")
+  assert(
+    document.querySelector("article")?.dataset.state === "Completed",
+    "The selected cassette must expose its retained terminal state"
+  )
   chooseCassette(selector, direct.catalogKey)
   chooseCassette(selector, first.catalogKey)
-  assert(document.querySelector("article")?.dataset.state === "Completed", "Returning to a completed choice must restore its retained result")
-  assert(document.querySelectorAll("[data-role='execution-evidence']").length === 1, "Restored evidence must remain confined to the shared surface")
+  assert(
+    document.querySelector("article")?.dataset.state === "Completed",
+    "Returning to a completed choice must restore its retained result"
+  )
+  assert(
+    document.querySelectorAll("[data-role='execution-evidence']").length === 1,
+    "Restored evidence must remain confined to the shared surface"
+  )
 })
 
 await scenario("keeps one permanent delivery workbench stable while frames and selections change", async () => {
@@ -926,16 +1198,26 @@ await scenario("keeps one permanent delivery workbench stable while frames and s
   const selector = document.querySelector("[data-role='cassette-selector']") as HTMLInputElement | null
   const selectorLabel = selector?.closest("label")
   if (selector === null) throw new Error("The cassette selector is missing")
-  assert(selectorLabel?.textContent?.includes(`Find cassette by ID or title(${expectedCatalogSize} available)`) === true, "The search control must clearly state its matching fields and available choice count")
+  assert(
+    selectorLabel?.textContent?.includes(`Find cassette by ID or title(${expectedCatalogSize} available)`) === true,
+    "The search control must clearly state its matching fields and available choice count"
+  )
   const cassetteOptions = [...document.querySelectorAll<HTMLOptionElement>("[data-role='cassette-options'] option")]
   const malformedOptions = cassetteOptions.filter((option) => {
     const choice = maintainedCassetteRows.find(({ catalogKey }) => option.value === catalogKey)
-    return choice === undefined
-      || !(option.label.startsWith(choice.storyName)
-        && option.label.includes(choice.categoryLabel)
-        && option.value === choice.catalogKey)
+    return (
+      choice === undefined ||
+      !(
+        option.label.startsWith(choice.storyName) &&
+        option.label.includes(choice.categoryLabel) &&
+        option.value === choice.catalogKey
+      )
+    )
   })
-  assert(malformedOptions.length === 0, `Every search suggestion must expose title, owning catalog, status, and exact ID: ${malformedOptions[0]?.outerHTML ?? "unknown"}`)
+  assert(
+    malformedOptions.length === 0,
+    `Every search suggestion must expose title, owning catalog, status, and exact ID: ${malformedOptions[0]?.outerHTML ?? "unknown"}`
+  )
   const visibleOptionLabels = cassetteOptions.map(({ label }) => label)
   assert(
     new Set(visibleOptionLabels).size === visibleOptionLabels.length,
@@ -947,7 +1229,8 @@ await scenario("keeps one permanent delivery workbench stable while frames and s
     "An authored cassette Run/Rerun action must live inside its delivery workbench"
   )
   assert(
-    document.querySelector("[data-role='delivery-workbench'] > .delivery-capacity-note")?.textContent === "Desired tickets are not held capacity.",
+    document.querySelector("[data-role='delivery-workbench'] > .delivery-capacity-note")?.textContent ===
+      "Desired tickets are not held capacity.",
     "The desired-ticket and held-capacity distinction must remain visible before production runs"
   )
   const completed = settled(singleCassetteSettledEvent)
@@ -955,55 +1238,83 @@ await scenario("keeps one permanent delivery workbench stable while frames and s
   await completed
   const workbench = document.querySelector<HTMLElement>("[data-role='delivery-workbench']")
   if (workbench === null) throw new Error("The completed delivery workbench is missing")
-  assert(workbench.tagName === "SECTION", "The primary delivery workbench must be a permanent section, not a disclosure")
-  assert(workbench.querySelector(":scope > summary") === null, "The primary visualization must not hide behind an accordion control")
+  assert(
+    workbench.tagName === "SECTION",
+    "The primary delivery workbench must be a permanent section, not a disclosure"
+  )
+  assert(
+    workbench.querySelector(":scope > summary") === null,
+    "The primary visualization must not hide behind an accordion control"
+  )
   const readingGuide = workbench.querySelector<HTMLDetailsElement>(".delivery-reading-guide")
   assert(readingGuide?.hasAttribute("open") === false, "The explanatory delivery manual must be collapsed by default")
-  assert(readingGuide?.querySelector(".delivery-provenance") !== null, "The collapsed delivery manual must retain production provenance")
-  assert(readingGuide?.querySelector(".delivery-layer-chain") !== null, "The collapsed delivery manual must retain the production layer chain")
-  assert(readingGuide?.querySelector(".delivery-graph-legend") !== null, "The collapsed delivery manual must retain the graph legend")
+  assert(
+    readingGuide?.querySelector(".delivery-provenance") !== null,
+    "The collapsed delivery manual must retain production provenance"
+  )
+  assert(
+    readingGuide?.querySelector(".delivery-layer-chain") !== null,
+    "The collapsed delivery manual must retain the production layer chain"
+  )
+  assert(
+    readingGuide?.querySelector(".delivery-graph-legend") !== null,
+    "The collapsed delivery manual must retain the graph legend"
+  )
   const descendants = [...workbench.querySelectorAll("*")]
   assert(
     descendants.indexOf(workbench.querySelector(".delivery-timeline-controls")!) < descendants.indexOf(readingGuide!),
     "Playback controls must precede the explanatory delivery manual"
   )
   assert(
-    descendants.indexOf(workbench.querySelector("[data-role='delivery-production-graph']")!) < descendants.indexOf(readingGuide!),
+    descendants.indexOf(workbench.querySelector("[data-role='delivery-production-graph']")!) <
+      descendants.indexOf(readingGuide!),
     "The primary graph must precede the explanatory delivery manual"
   )
   assert(
-    workbench.querySelector(".delivery-playback-shortcuts")?.textContent === "Moment = one captured story, Delivery, or runtime observation · Jump = frontier, held positions, restart, or terminal landmark · Live = follow newest · Keys: ←/→ and [/].",
+    workbench.querySelector(".delivery-playback-shortcuts")?.textContent ===
+      "Moment = one captured story, Delivery, or runtime observation · Jump = frontier, held positions, restart, or terminal landmark · Live = follow newest · Keys: ←/→ and [/].",
     "Visible playback help must distinguish adjacent moments, delivery landmarks, and live following"
   )
   const status = workbench.querySelector(".delivery-timeline-controls output")
   const next = workbench.querySelector<HTMLButtonElement>("button[data-role='next-frame']")
   const previous = workbench.querySelector<HTMLButtonElement>("button[data-role='previous-frame']")
   const total = Number(status?.textContent?.match(/\/ (\d+)/u)?.[1])
-  assert(status?.textContent?.startsWith(`${total} / `) === true, "A completed followed timeline must remain on its newest production publication")
+  assert(
+    status?.textContent?.startsWith(`${total} / `) === true,
+    "A completed followed timeline must remain on its newest production publication"
+  )
   previous?.click()
   assert(status?.textContent?.startsWith(`${total - 1} / `) === true, "Previous frame must rewind the visible timeline")
   const graph = workbench.querySelector("[data-role='delivery-production-graph']")
   graph?.dispatchEvent(new CustomEvent("task-selected", { detail: { taskId: "A" } }))
-  assert(workbench.querySelector("[data-role='selected-task-facts']")?.textContent?.startsWith("Selected task A") === true, "The selected task must be retained with the frame playback state")
+  assert(
+    workbench.querySelector("[data-role='selected-task-facts']")?.textContent?.startsWith("Selected task A") === true,
+    "The selected task must be retained with the frame playback state"
+  )
   next?.click()
-  assert(status?.textContent?.startsWith(`${total} / `) === true, "Next frame must navigate forward without replacing the workbench")
+  assert(
+    status?.textContent?.startsWith(`${total} / `) === true,
+    "Next frame must navigate forward without replacing the workbench"
+  )
   chooseCassette(selector, maintainedCassetteRows.find(({ category }) => category === "TargetPromotion")!.catalogKey)
   chooseCassette(selector, row.catalogKey)
   const restored = document.querySelector<HTMLElement>("[data-role='delivery-workbench']")
   assert(restored !== workbench, "Selecting another cassette must replace the old cassette surface")
-  assert(restored?.querySelector(".delivery-timeline-controls output")?.textContent?.startsWith(`${total} / `) === true, "Returning to a cassette must restore its retained frame selection")
-  assert(restored?.querySelector("[data-role='selected-task-facts']")?.textContent?.startsWith("Selected task A") === true, "Returning to a cassette must restore its retained task selection")
+  assert(
+    restored?.querySelector(".delivery-timeline-controls output")?.textContent?.startsWith(`${total} / `) === true,
+    "Returning to a cassette must restore its retained frame selection"
+  )
+  assert(
+    restored?.querySelector("[data-role='selected-task-facts']")?.textContent?.startsWith("Selected task A") === true,
+    "Returning to a cassette must restore its retained task selection"
+  )
 })
 
 await scenario("shows production delivery frames before the authored cassette settles", async () => {
   const { document, root, settled } = installDom()
   const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
   const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
-  if (
-    row === undefined
-    || result?._tag !== "Completed"
-    || result.observationMoments === null
-  ) {
+  if (row === undefined || result?._tag !== "Completed" || result.observationMoments === null) {
     throw new Error("The live delivery fixture is incomplete")
   }
   const publicationMoments = result.observationMoments.filter((moment) => moment._tag === "DeliveryPublicationMoment")
@@ -1016,7 +1327,9 @@ await scenario("shows production delivery frames before the authored cassette se
     rows: [row],
     runCassette: async (_key, nextObserver) => {
       observer = nextObserver
-      await new Promise<void>((resolve) => { finish = resolve })
+      await new Promise<void>((resolve) => {
+        finish = resolve
+      })
       return result
     }
   })
@@ -1030,9 +1343,18 @@ await scenario("shows production delivery frames before the authored cassette se
   const workbench = document.querySelector<HTMLElement>("[data-role='delivery-workbench']")
   const timeline = workbench?.querySelector(".delivery-timeline-controls")
   const frameHost = workbench?.querySelector("[data-role='delivery-frame']")
-  assert(document.querySelector("article")?.dataset.state === "Running", "A real delivery frame must be visible while the cassette is still running")
-  assert(document.querySelector("article") === article && workbench === permanentWorkbench, "Starting production and receiving its first frame must not remount the selected cassette or permanent workbench")
-  assert(workbench?.querySelectorAll(".delivery-timeline-controls option").length === 1, "The first live publication must create one frame before terminal settlement")
+  assert(
+    document.querySelector("article")?.dataset.state === "Running",
+    "A real delivery frame must be visible while the cassette is still running"
+  )
+  assert(
+    document.querySelector("article") === article && workbench === permanentWorkbench,
+    "Starting production and receiving its first frame must not remount the selected cassette or permanent workbench"
+  )
+  assert(
+    workbench?.querySelectorAll(".delivery-timeline-controls option").length === 1,
+    "The first live publication must create one frame before terminal settlement"
+  )
   observer?.onObservationMoment?.(publicationMoments[1]!)
   const status = workbench?.querySelector(".delivery-timeline-controls output")
   assert(status?.textContent?.startsWith("2 / 2") === true, "Follow live must advance to the newest running frame")
@@ -1042,34 +1364,77 @@ await scenario("shows production delivery frames before the authored cassette se
   const exactEvidence = inspectedFrame?.querySelector<HTMLDetailsElement>("details[data-role='all-task-facts']")
   exactEvidence?.setAttribute("open", "")
   observer?.onObservationMoment?.(publicationMoments[2]!)
-  assert(status?.textContent?.startsWith("1 / 3") === true, "A rewound playhead must not move when another production frame arrives")
-  assert(workbench?.querySelector(".delivery-timeline-controls") === timeline, "Appending a live frame must keep the same timeline controls mounted")
-  assert(workbench?.querySelector("[data-role='delivery-frame']") === frameHost && inspectedFrame === frameHost, "Appending a live frame while paused must keep the inspected frame DOM mounted")
-  assert(exactEvidence?.isConnected === true && exactEvidence.hasAttribute("open"), "Appending a live frame while paused must preserve an open exact-evidence disclosure")
+  assert(
+    status?.textContent?.startsWith("1 / 3") === true,
+    "A rewound playhead must not move when another production frame arrives"
+  )
+  assert(
+    workbench?.querySelector(".delivery-timeline-controls") === timeline,
+    "Appending a live frame must keep the same timeline controls mounted"
+  )
+  assert(
+    workbench?.querySelector("[data-role='delivery-frame']") === frameHost && inspectedFrame === frameHost,
+    "Appending a live frame while paused must keep the inspected frame DOM mounted"
+  )
+  assert(
+    exactEvidence?.isConnected === true && exactEvidence.hasAttribute("open"),
+    "Appending a live frame while paused must preserve an open exact-evidence disclosure"
+  )
   assert(chronology?.hasAttribute("open") === true, "Live publications must not close the declared chronology")
   finish?.()
   await terminal
-  assert(document.querySelector("article") === article && document.querySelector("[data-role='delivery-workbench']") === workbench, "Terminal settlement must not remount the selected cassette or workbench")
-  assert(workbench?.querySelector("[data-role='delivery-frame']") === frameHost && exactEvidence?.isConnected === true && exactEvidence.hasAttribute("open"), "Terminal settlement must preserve the paused frame and its disclosure state")
+  assert(
+    document.querySelector("article") === article &&
+      document.querySelector("[data-role='delivery-workbench']") === workbench,
+    "Terminal settlement must not remount the selected cassette or workbench"
+  )
+  assert(
+    workbench?.querySelector("[data-role='delivery-frame']") === frameHost &&
+      exactEvidence?.isConnected === true &&
+      exactEvidence.hasAttribute("open"),
+    "Terminal settlement must preserve the paused frame and its disclosure state"
+  )
   const follow = workbench?.querySelector<HTMLButtonElement>("[data-role='follow-live']")
   follow?.click()
   const terminalStatus = workbench?.querySelector(".delivery-timeline-controls output")
-  assert(terminalStatus?.textContent?.startsWith(`${result.observationMoments.length} / ${result.observationMoments.length}`) === true, "Follow live must move to the retained newest terminal moment")
-  assert(document.querySelector("[data-role='journal-evidence']")?.hasAttribute("open") === false, "Terminal journal evidence must remain collapsed")
+  assert(
+    terminalStatus?.textContent?.startsWith(
+      `${result.observationMoments.length} / ${result.observationMoments.length}`
+    ) === true,
+    "Follow live must move to the retained newest terminal moment"
+  )
+  assert(
+    document.querySelector("[data-role='journal-evidence']")?.hasAttribute("open") === false,
+    "Terminal journal evidence must remain collapsed"
+  )
 })
 
 await scenario("shows an authored cassette declared graph only as input before production observes it", () => {
   const { document, root } = installDom()
   mountCassetteLab({ revision: "acceptance-revision", root, rows: maintainedCassetteRows, runCassette: cannedRunner })
-  assert(document.querySelectorAll("[data-role='delivery-workbench']").length === 1, "The selected authored cassette must expose one delivery workbench")
-  assert(document.querySelector("[data-role='delivery-frame']") === null, "Declared input must not become an observed delivery frame")
+  assert(
+    document.querySelectorAll("[data-role='delivery-workbench']").length === 1,
+    "The selected authored cassette must expose one delivery workbench"
+  )
+  assert(
+    document.querySelector("[data-role='delivery-frame']") === null,
+    "Declared input must not become an observed delivery frame"
+  )
   const closed = document.querySelector<HTMLElement>("[data-role='delivery-workbench']")
   if (closed === null) throw new Error("The authored workbench is missing")
   assert(closed.tagName === "SECTION", "The pre-run graph must already occupy the permanent workbench")
   const first = document.querySelector("[data-role='delivery-workbench']")
-  assert(first?.textContent?.includes("not yet observed") === true, "Derived delivery facts must remain explicitly unobserved")
-  const graph = first?.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & { projection?: { readonly key: string } }) | null
-  assert(graph?.projection?.key.startsWith("declared:") === true, "The pre-run graph must identify itself as controlled declared input")
+  assert(
+    first?.textContent?.includes("not yet observed") === true,
+    "Derived delivery facts must remain explicitly unobserved"
+  )
+  const graph = first?.querySelector("[data-role='delivery-production-graph']") as
+    | (HTMLElement & { projection?: { readonly key: string } })
+    | null
+  assert(
+    graph?.projection?.key.startsWith("declared:") === true,
+    "The pre-run graph must identify itself as controlled declared input"
+  )
 })
 
 await scenario("shows the production-observed graph frontier bounded tickets and held positions", async () => {
@@ -1082,10 +1447,11 @@ await scenario("shows the production-observed graph frontier bounded tickets and
   await done
   const workbench = document.querySelector("[data-role='delivery-workbench']")
   const result = resultByKey.get(row.catalogKey)
-  if (result?._tag !== "Completed" || result.deliveryFrames === null) throw new Error("The real delivery frames are missing")
-  const establishedIndex = result.deliveryFrames.findIndex((frame) =>
-    frame.graph._tag === "Established"
-    && frame.heldPositions.some(({ attemptId }) => attemptId === "attempt:A:0")
+  if (result?._tag !== "Completed" || result.deliveryFrames === null)
+    throw new Error("The real delivery frames are missing")
+  const establishedIndex = result.deliveryFrames.findIndex(
+    (frame) =>
+      frame.graph._tag === "Established" && frame.heldPositions.some(({ attemptId }) => attemptId === "attempt:A:0")
   )
   const establishedMomentIndex = deliveryMomentIndex(result, establishedIndex)
   const timeline = workbench?.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
@@ -1095,97 +1461,179 @@ await scenario("shows the production-observed graph frontier bounded tickets and
     else option.removeAttribute("selected")
   }
   timeline.dispatchEvent(new Event("change"))
-  const graph = workbench?.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & {
-    projection?: { readonly key: string; readonly tasks: ReadonlyArray<{ readonly id: string }> }
-  }) | null
-  assert(graph?.projection?.key.startsWith("observed:") === true, "The selected graph must come from a production delivery frame")
-  assert(graph?.projection?.tasks.some(({ id }) => id === "A") === true, "The observed graph must render its production tasks")
-  assert(graph?.projection?.tasks.every((task) => !("title" in task)) === true, "Observed graph nodes must not borrow declared task text")
-  const stateTable = workbench?.querySelector("[data-role='delivery-task-state']")
-  assert(stateTable?.textContent?.includes("PrerequisitesIncomplete") === true, "The exhaustive frontier must explain B's exclusion")
-  assert(stateTable?.textContent?.includes("prerequisiteTaskIds") === true, "The exact frontier exclusion must retain its prerequisite payload")
-  assert(stateTable?.textContent?.includes("Selected #0") === true, "The bounded ticket placement must be visible")
-  assert(workbench?.textContent?.includes("tracker reflection") === true, "The workbench must expose the complete production layer chain")
-  const headers = [...stateTable?.querySelectorAll("th") ?? []].map(({ textContent }) => textContent)
-  assert(headers.includes("Desired bounded ticket") && headers.includes("Actual held position"), "Desired tickets and exact held positions must have distinct columns")
-  assert(headers.includes("Ticket-delivery evidence / standing / obligation"), "Every ticket-delivery layer must remain visible")
+  const graph = workbench?.querySelector("[data-role='delivery-production-graph']") as
+    | (HTMLElement & { projection?: { readonly key: string; readonly tasks: ReadonlyArray<{ readonly id: string }> } })
+    | null
   assert(
-    [...workbench?.querySelectorAll("[data-role='delivery-frame'] pre") ?? []].some(({ textContent }) =>
+    graph?.projection?.key.startsWith("observed:") === true,
+    "The selected graph must come from a production delivery frame"
+  )
+  assert(
+    graph?.projection?.tasks.some(({ id }) => id === "A") === true,
+    "The observed graph must render its production tasks"
+  )
+  assert(
+    graph?.projection?.tasks.every((task) => !("title" in task)) === true,
+    "Observed graph nodes must not borrow declared task text"
+  )
+  const stateTable = workbench?.querySelector("[data-role='delivery-task-state']")
+  assert(
+    stateTable?.textContent?.includes("PrerequisitesIncomplete") === true,
+    "The exhaustive frontier must explain B's exclusion"
+  )
+  assert(
+    stateTable?.textContent?.includes("prerequisiteTaskIds") === true,
+    "The exact frontier exclusion must retain its prerequisite payload"
+  )
+  assert(stateTable?.textContent?.includes("Selected #0") === true, "The bounded ticket placement must be visible")
+  assert(
+    workbench?.textContent?.includes("tracker reflection") === true,
+    "The workbench must expose the complete production layer chain"
+  )
+  const headers = [...(stateTable?.querySelectorAll("th") ?? [])].map(({ textContent }) => textContent)
+  assert(
+    headers.includes("Desired bounded ticket") && headers.includes("Actual held position"),
+    "Desired tickets and exact held positions must have distinct columns"
+  )
+  assert(
+    headers.includes("Ticket-delivery evidence / standing / obligation"),
+    "Every ticket-delivery layer must remain visible"
+  )
+  assert(
+    [...(workbench?.querySelectorAll("[data-role='delivery-frame'] pre") ?? [])].some(({ textContent }) =>
       textContent?.includes("attempt:A:0")
     ),
     "Exact responsibility evidence must retain its attempt correlation"
   )
-  assert(workbench?.querySelector(".delivery-frame-change")?.textContent?.includes("held positions changed for A") === true, "The selected frame must explain its change from the prior publication")
-  graph?.dispatchEvent(new CustomEvent("task-selected", { detail: { taskId: "A" } }))
-  assert(workbench?.querySelector("tr[data-task-id='A']")?.classList.contains("selected-task-row") === true, "Graph task selection must highlight the matching exact task row")
-  workbench?.querySelector<HTMLButtonElement>("button[data-role='next-frame']")?.click()
-  assert(workbench?.querySelector("tr[data-task-id='A']")?.getAttribute("aria-current") === "true", "Task selection must remain synchronized across frame navigation")
-
-})
-
-await scenario("selects exact production cursors for Lab back/forward history while keeping authored/runtime moments auxiliary", async () => {
-  const { document, root, settled } = installDom()
-  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
-  const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
-  if (row === undefined || result?._tag !== "Completed" || result.traceHistories === null) {
-    throw new Error("The production trace fixture is missing")
-  }
-  const done = settled(singleCassetteSettledEvent)
-  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
-  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
-  await done
-  const workbench = document.querySelector<HTMLElement>("[data-role='delivery-workbench']")
-  const panel = workbench?.querySelector<HTMLElement>("[data-role='trace-history']")
-  if (panel === undefined || panel === null) throw new Error("The production trace history panel is missing")
-  assert(panel.textContent?.includes("production TraceReader") === true, "The Lab must name the production trace reader")
-  assert(panel.querySelectorAll("[data-role='trace-cursor-selector'] option").length === result.traceHistories.length, "Every committed position must be selectable")
-  assert(panel.querySelector("[data-role='trace-auxiliary-chronology']") !== null, "Authored/runtime chronology must be visibly auxiliary")
-
-  const graphIndex = result.traceHistories.findIndex((history) =>
-    history.graph !== null && history.relationships.workflowCausalEdges.length > 0
-  )
-  if (graphIndex < 0) throw new Error("The trace fixture has no graph and causal history cursor")
-  const traceSelector = panel.querySelector<HTMLSelectElement>("[data-role='trace-cursor-selector']")
-  if (traceSelector === null) throw new Error("The exact production cursor selector is missing")
-  chooseOption(traceSelector, String(graphIndex))
-  const graphHistory = result.traceHistories[graphIndex]
-  if (graphHistory === undefined || graphHistory.graph === null) throw new Error("The selected graph cursor disappeared")
-  const selectedCursor = panel.querySelector<HTMLElement>("[data-role='trace-cursor']")
-  assert(selectedCursor?.dataset.runId === String(graphHistory.cursor.runId), "Selection must retain the production RunId")
-  assert(selectedCursor?.dataset.journalPosition === String(graphHistory.cursor.position), "Selection must retain the exact JournalPosition")
-  assert(panel.querySelector("[data-role='trace-graph']")?.textContent?.includes(String(graphHistory.graph.observation.recordedAt)) === true, "Graph display must come from the selected production history view")
-  const causal = graphHistory.relationships.workflowCausalEdges[0]
-  assert(causal !== undefined && panel.querySelector("[data-role='trace-causal-edges']")?.textContent?.includes(causal.predecessorOperationId) === true, "Causal navigation must display production predecessor evidence")
-  const predecessorItem = causal === undefined
-    ? undefined
-    : graphHistory.items.find((item) => item.operationIds.includes(causal.predecessorOperationId))
-  assert(predecessorItem !== undefined, "The production predecessor operation must be projected to an exact history item")
-  const predecessorButton = panel.querySelector<HTMLButtonElement>("[data-role='trace-causal-predecessor']")
-  predecessorButton?.click()
   assert(
-    panel.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition === String(predecessorItem?.identity.position),
-    "Causal predecessor navigation must select the predecessor item's exact JournalPosition"
+    workbench?.querySelector(".delivery-frame-change")?.textContent?.includes("held positions changed for A") === true,
+    "The selected frame must explain its change from the prior publication"
   )
-
-  const latestIndex = result.traceHistories.length - 1
-  chooseOption(traceSelector, String(latestIndex))
-  assert(panel.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition === String(result.traceHistories[latestIndex]?.cursor.position), "The selector must move to the exact latest production cursor")
-  panel.querySelector<HTMLButtonElement>("button[data-role='trace-previous-cursor']")?.click()
-  assert(panel.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition === String(result.traceHistories[latestIndex - 1]?.cursor.position), "Back must select the preceding production cursor")
-  panel.querySelector<HTMLButtonElement>("button[data-role='trace-next-cursor']")?.click()
-  assert(panel.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition === String(result.traceHistories[latestIndex]?.cursor.position), "Forward must restore the exact later production cursor")
+  graph?.dispatchEvent(new CustomEvent("task-selected", { detail: { taskId: "A" } }))
+  assert(
+    workbench?.querySelector("tr[data-task-id='A']")?.classList.contains("selected-task-row") === true,
+    "Graph task selection must highlight the matching exact task row"
+  )
+  workbench?.querySelector<HTMLButtonElement>("button[data-role='next-frame']")?.click()
+  assert(
+    workbench?.querySelector("tr[data-task-id='A']")?.getAttribute("aria-current") === "true",
+    "Task selection must remain synchronized across frame navigation"
+  )
 })
+
+await scenario(
+  "selects exact production cursors for Lab back/forward history while keeping authored/runtime moments auxiliary",
+  async () => {
+    const { document, root, settled } = installDom()
+    const row = maintainedCassetteRows.find(
+      ({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun"
+    )
+    const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
+    if (row === undefined || result?._tag !== "Completed" || result.preparedTrace === null) {
+      throw new Error("The production trace fixture is missing")
+    }
+    const done = settled(singleCassetteSettledEvent)
+    mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+    ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+    await done
+    const workbench = document.querySelector<HTMLElement>("[data-role='delivery-workbench']")
+    const panel = workbench?.querySelector<HTMLElement>("[data-role='trace-history']")
+    if (panel === undefined || panel === null) throw new Error("The production trace history panel is missing")
+    assert(
+      panel.textContent?.includes("production TraceReader") === true,
+      "The Lab must name the production trace reader"
+    )
+    assert(
+      panel.querySelectorAll("[data-role='trace-cursor-selector'] option").length ===
+        result.preparedTrace.cursors.length,
+      "Every committed position must be selectable"
+    )
+    assert(
+      panel.querySelector("[data-role='trace-auxiliary-chronology']") !== null,
+      "Authored/runtime chronology must be visibly auxiliary"
+    )
+
+    const graphIndex = materializeRequestedTraceHistories(result.preparedTrace).findIndex(
+      (history) => history.graph !== null && history.relationships.workflowCausalEdges.length > 0
+    )
+    if (graphIndex < 0) throw new Error("The trace fixture has no graph and causal history cursor")
+    const traceSelector = panel.querySelector<HTMLSelectElement>("[data-role='trace-cursor-selector']")
+    if (traceSelector === null) throw new Error("The exact production cursor selector is missing")
+    chooseOption(traceSelector, String(graphIndex))
+    const graphHistory = requestTraceHistoryAt(result.preparedTrace, graphIndex)
+    if (graphHistory === undefined || graphHistory.graph === null)
+      throw new Error("The selected graph cursor disappeared")
+    const selectedCursor = panel.querySelector<HTMLElement>("[data-role='trace-cursor']")
+    assert(
+      selectedCursor?.dataset.runId === String(graphHistory.cursor.runId),
+      "Selection must retain the production RunId"
+    )
+    assert(
+      selectedCursor?.dataset.journalPosition === String(graphHistory.cursor.position),
+      "Selection must retain the exact JournalPosition"
+    )
+    assert(
+      panel
+        .querySelector("[data-role='trace-graph']")
+        ?.textContent?.includes(String(graphHistory.graph.observation.recordedAt)) === true,
+      "Graph display must come from the selected production history view"
+    )
+    const causal = graphHistory.relationships.workflowCausalEdges[0]
+    assert(
+      causal !== undefined &&
+        panel
+          .querySelector("[data-role='trace-causal-edges']")
+          ?.textContent?.includes(causal.predecessorOperationId) === true,
+      "Causal navigation must display production predecessor evidence"
+    )
+    const predecessorItem =
+      causal === undefined
+        ? undefined
+        : graphHistory.items.find((item) => item.operationIds.includes(causal.predecessorOperationId))
+    assert(
+      predecessorItem !== undefined,
+      "The production predecessor operation must be projected to an exact history item"
+    )
+    const predecessorButton = panel.querySelector<HTMLButtonElement>("[data-role='trace-causal-predecessor']")
+    predecessorButton?.click()
+    assert(
+      panel.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition ===
+        String(predecessorItem?.identity.position),
+      "Causal predecessor navigation must select the predecessor item's exact JournalPosition"
+    )
+
+    const latestIndex = result.preparedTrace.cursors.length - 1
+    chooseOption(traceSelector, String(latestIndex))
+    assert(
+      panel.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition ===
+        String(result.preparedTrace.cursors[latestIndex]?.position),
+      "The selector must move to the exact latest production cursor"
+    )
+    panel.querySelector<HTMLButtonElement>("button[data-role='trace-previous-cursor']")?.click()
+    assert(
+      panel.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition ===
+        String(result.preparedTrace.cursors[latestIndex - 1]?.position),
+      "Back must select the preceding production cursor"
+    )
+    panel.querySelector<HTMLButtonElement>("button[data-role='trace-next-cursor']")?.click()
+    assert(
+      panel.querySelector<HTMLElement>("[data-role='trace-cursor']")?.dataset.journalPosition ===
+        String(result.preparedTrace.cursors[latestIndex]?.position),
+      "Forward must restore the exact later production cursor"
+    )
+  }
+)
 
 await scenario("renders truthful actors, opaque internals, and distinct repeated promotion identities", async () => {
   const { document, root, settled } = installDom()
-  const row = maintainedCassetteRows.find(({ catalogKey }) =>
-    catalogKey === "authored:targetPromotionAmbiguityExhaustion"
+  const row = maintainedCassetteRows.find(
+    ({ catalogKey }) => catalogKey === "authored:targetPromotionAmbiguityExhaustion"
   )
   const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
-  if (row === undefined || result?._tag !== "Completed" || result.traceHistories === null) {
+  if (row === undefined || result?._tag !== "Completed" || result.preparedTrace === null) {
     throw new Error("The repeated-promotion trace fixture is missing")
   }
-  const latest = result.traceHistories.at(-1)
+  const latest = requestTraceHistoryAt(result.preparedTrace, -1)
   if (latest === undefined) throw new Error("The repeated-promotion trace has no terminal cursor")
   const attempts = latest.items.filter(({ occurrence }) => occurrence._tag === "TargetPromotionAttemptRequested")
   assert(attempts.length === 3, "The terminal trace must retain all three promotion attempts")
@@ -1195,8 +1643,8 @@ await scenario("renders truthful actors, opaque internals, and distinct repeated
   )
   const foldedPromotionHistory = foldRepeatedTraceItems(latest.items)
   assert(
-    !foldedPromotionHistory.some((entry) =>
-      entry._tag === "FoldedTraceItems" && entry.occurrenceTag === "TargetPromotionAttemptRequested"
+    !foldedPromotionHistory.some(
+      (entry) => entry._tag === "FoldedTraceItems" && entry.occurrenceTag === "TargetPromotionAttemptRequested"
     ),
     "Promotion attempts must remain exact while the protocol rereads Git between calls"
   )
@@ -1210,15 +1658,27 @@ await scenario("renders truthful actors, opaque internals, and distinct repeated
   const legend = panel.querySelector<HTMLElement>("[data-role='trace-history-legend']")
   const legendText = legend?.textContent ?? ""
   assert(legendText.includes("initiated action · actor proven"), "The history legend must explain proven actors")
-  assert(legendText.includes("non-action occurrence · no actor is proven"), "The history legend must explain absent actors")
-  assert(legendText.includes("executor and Integrator internals remain opaque"), "The history legend must explain opaque internals")
+  assert(
+    legendText.includes("non-action occurrence · no actor is proven"),
+    "The history legend must explain absent actors"
+  )
+  assert(
+    legendText.includes("executor and Integrator internals remain opaque"),
+    "The history legend must explain opaque internals"
+  )
   assert(legendText.includes("no continuous transcript"), "The history legend must state that streaming is unavailable")
-  assert(panel.querySelector("[data-role='trace-current-status']") !== null, "Passive current status must have a separate region")
+  assert(
+    panel.querySelector("[data-role='trace-current-status']") !== null,
+    "Passive current status must have a separate region"
+  )
   const exactItems = [...panel.querySelectorAll<HTMLElement>("[data-role='trace-history-item']")]
   assert(exactItems.length >= attempts.length, "Each repeated promotion attempt must render one history item")
   for (const attempt of attempts) {
     const identity = `${attempt.identity.runId}:${attempt.identity.position}`
-    assert(exactItems.some((item) => item.dataset.identity === identity), `The Lab must render exact identity ${identity}`)
+    assert(
+      exactItems.some((item) => item.dataset.identity === identity),
+      `The Lab must render exact identity ${identity}`
+    )
   }
 })
 
@@ -1226,7 +1686,7 @@ await scenario("updates only the passive status region when its source disconnec
   const { document } = installDom()
   const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:targetPromotionSuccess")
   const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
-  if (row === undefined || result?._tag !== "Completed" || result.traceHistories === null) {
+  if (row === undefined || result?._tag !== "Completed" || result.preparedTrace === null) {
     throw new Error("The passive-status trace fixture is missing")
   }
   const host = document.createElement("div")
@@ -1239,7 +1699,14 @@ await scenario("updates only the passive status region when its source disconnec
   const panel = host.querySelector<HTMLElement>("[data-role='trace-history']")
   const historyItems = panel?.querySelector<HTMLElement>("[data-role='trace-history-items']")
   const status = panel?.querySelector<HTMLElement>("[data-role='trace-current-status']")
-  if (panel === null || panel === undefined || historyItems === null || historyItems === undefined || status === null || status === undefined) {
+  if (
+    panel === null ||
+    panel === undefined ||
+    historyItems === null ||
+    historyItems === undefined ||
+    status === null ||
+    status === undefined
+  ) {
     throw new Error("The trace history and passive status regions are missing")
   }
   const initialHistoryMarkup = historyItems.innerHTML
@@ -1251,7 +1718,10 @@ await scenario("updates only the passive status region when its source disconnec
   assert(historyItems.innerHTML === initialHistoryMarkup, "Disconnect must retain exact historical item markup")
   controller.updateTraceStatus({ _tag: "Running", deliveryFrames: null, observationMoments: null })
   assert(status.dataset.status === "Running", "A direct passive update must render Running")
-  assert(historyItems.innerHTML === initialHistoryMarkup, "A direct status update must retain exact historical item markup")
+  assert(
+    historyItems.innerHTML === initialHistoryMarkup,
+    "A direct status update must retain exact historical item markup"
+  )
   controller.updateTraceStatus({ _tag: "Settled", result })
   assert(status.dataset.status === "Waiting", "A reconnected settled source must render Waiting")
   assert(historyItems.innerHTML === initialHistoryMarkup, "Reconnect must retain exact historical item markup")
@@ -1271,11 +1741,19 @@ await scenario("keeps the selected browser history and cursor through a running 
   const panel = document.querySelector<HTMLElement>("[data-role='trace-history']")
   const historyHost = panel?.querySelector<HTMLElement>("[data-role='trace-history-items']")
   const selectedCursor = panel?.querySelector<HTMLElement>("[data-role='trace-cursor']")
-  if (panel === null || panel === undefined || historyHost === null || historyHost === undefined || selectedCursor === null || selectedCursor === undefined) {
+  if (
+    panel === null ||
+    panel === undefined ||
+    historyHost === null ||
+    historyHost === undefined ||
+    selectedCursor === null ||
+    selectedCursor === undefined
+  ) {
     throw new Error("The selected browser trace is missing")
   }
-  const historyIdentities = [...historyHost.querySelectorAll<HTMLElement>("[data-role='trace-history-item']")]
-    .map(({ dataset }) => dataset.identity)
+  const historyIdentities = [...historyHost.querySelectorAll<HTMLElement>("[data-role='trace-history-item']")].map(
+    ({ dataset }) => dataset.identity
+  )
   const cursorIdentity = { runId: selectedCursor.dataset.runId, position: selectedCursor.dataset.journalPosition }
   const initialMarkup = historyHost.innerHTML
 
@@ -1289,10 +1767,14 @@ await scenario("keeps the selected browser history and cursor through a running 
   assert(runningHistoryHost === historyHost, "A passive running update must not remount history items")
   assert(runningStatus?.dataset.status === "Running", "The browser must show the running passive status")
   assert(runningCursor?.dataset.runId === cursorIdentity.runId, "Running must retain the selected Run identity")
-  assert(runningCursor?.dataset.journalPosition === cursorIdentity.position, "Running must retain the selected journal position")
+  assert(
+    runningCursor?.dataset.journalPosition === cursorIdentity.position,
+    "Running must retain the selected journal position"
+  )
   assert(
     [...(runningHistoryHost?.querySelectorAll<HTMLElement>("[data-role='trace-history-item']") ?? [])]
-      .map(({ dataset }) => dataset.identity).join("|") === historyIdentities.join("|"),
+      .map(({ dataset }) => dataset.identity)
+      .join("|") === historyIdentities.join("|"),
     "Running must retain every exact historical TraceItemIdentity"
   )
   assert(runningHistoryHost?.innerHTML === initialMarkup, "Running must retain exact historical markup")
@@ -1301,25 +1783,30 @@ await scenario("keeps the selected browser history and cursor through a running 
   const reconnectedCursor = panel.querySelector<HTMLElement>("[data-role='trace-cursor']")
   assert(reconnectedStatus?.dataset.status === "Waiting", "A settled reconnect must restore the passive Waiting status")
   assert(reconnectedCursor?.dataset.runId === cursorIdentity.runId, "Reconnect must retain the selected Run identity")
-  assert(reconnectedCursor?.dataset.journalPosition === cursorIdentity.position, "Reconnect must retain the selected journal position")
+  assert(
+    reconnectedCursor?.dataset.journalPosition === cursorIdentity.position,
+    "Reconnect must retain the selected journal position"
+  )
   assert(historyHost.innerHTML === initialMarkup, "Reconnect must retain exact historical markup")
 })
 
 await scenario("renders exact trace facet payloads and source correlations in the Lab", async () => {
   const { document, root, settled } = installDom()
-  const row = maintainedCassetteRows.find(({ catalogKey }) =>
-    catalogKey === "authored:targetPromotionSuccess"
-  )
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:targetPromotionSuccess")
   const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
-  if (row === undefined || result?._tag !== "Completed" || result.traceHistories === null) {
+  if (row === undefined || result?._tag !== "Completed" || result.preparedTrace === null) {
     throw new Error("The integration trace fixture is missing")
   }
-  const latest = result.traceHistories.at(-1)
+  const latest = requestTraceHistoryAt(result.preparedTrace, -1)
   if (latest === undefined) throw new Error("The integration trace has no terminal cursor")
   const candidate = latest.facets.integration.facts.find((fact) => fact._tag === "CandidateQualification")
   const session = latest.facets.integration.facts.find((fact) => fact._tag === "Session")
   const promotion = latest.facets.integration.facts.find((fact) => fact._tag === "PromotionAttempt")
-  if (candidate?._tag !== "CandidateQualification" || session?._tag !== "Session" || promotion?._tag !== "PromotionAttempt") {
+  if (
+    candidate?._tag !== "CandidateQualification" ||
+    session?._tag !== "Session" ||
+    promotion?._tag !== "PromotionAttempt"
+  ) {
     throw new Error("The integration trace fixture has no exact candidate, session, and promotion facts")
   }
   mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
@@ -1331,7 +1818,7 @@ await scenario("renders exact trace facet payloads and source correlations in th
   if (panel === null || panel === undefined || selector === null || selector === undefined) {
     throw new Error("The exact production trace panel is missing")
   }
-  chooseOption(selector, String(result.traceHistories.length - 1))
+  chooseOption(selector, String(result.preparedTrace.cursors.length - 1))
   const exactFacts = [...panel.querySelectorAll<HTMLElement>("[data-role='trace-facet-exact'] pre")]
     .map(({ textContent }) => textContent ?? "")
     .join("\n")
@@ -1349,9 +1836,14 @@ await scenario("renders exact trace facet payloads and source correlations in th
   ]) {
     assert(exactFacts.includes(String(expected)), `The Lab must render exact trace value ${String(expected)}`)
   }
-  assert(exactItems.includes(String(candidate.candidateCommit)), "Exact projected occurrences must retain candidate payloads")
   assert(
-    panel.querySelector<HTMLElement>("[data-role='trace-control-disposition-summary']")?.textContent?.includes("control-disposition schema v1") === true,
+    exactItems.includes(String(candidate.candidateCommit)),
+    "Exact projected occurrences must retain candidate payloads"
+  )
+  assert(
+    panel
+      .querySelector<HTMLElement>("[data-role='trace-control-disposition-summary']")
+      ?.textContent?.includes("control-disposition schema v1") === true,
     "The Lab must render the shared control-disposition facet summary"
   )
 })
@@ -1360,21 +1852,25 @@ await scenario("fails visibly when a displayed production predecessor is not pro
   const { document, root, settled } = installDom()
   const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
   const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
-  if (row === undefined || result?._tag !== "Completed" || result.traceHistories === null) {
+  if (row === undefined || result?._tag !== "Completed" || result.preparedTrace === null) {
     throw new Error("The production causal fixture is missing")
   }
-  const graphIndex = result.traceHistories.findIndex((history) => history.relationships.workflowCausalEdges.length > 0)
+  const graphIndex = materializeRequestedTraceHistories(result.preparedTrace).findIndex(
+    (history) => history.relationships.workflowCausalEdges.length > 0
+  )
   if (graphIndex < 0) throw new Error("The production causal fixture has no edge")
+  const prepared = result.preparedTrace
   const malformedResult = {
     ...result,
-    traceHistories: result.traceHistories.map((history, index) => index === graphIndex ? { ...history, items: [] } : history)
+    preparedTrace: {
+      ...prepared,
+      select: (cursor: TraceCursor) =>
+        Result.map(prepared.select(cursor), (history) =>
+          history.cursor.position === prepared.cursors[graphIndex]?.position ? { ...history, items: [] } : history
+        )
+    }
   }
-  mountCassetteLab({
-    revision: "acceptance-revision",
-    root,
-    rows: [row],
-    runCassette: async () => malformedResult
-  })
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: async () => malformedResult })
   const done = settled(singleCassetteSettledEvent)
   ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
   await done
@@ -1385,7 +1881,12 @@ await scenario("fails visibly when a displayed production predecessor is not pro
   }
   chooseOption(traceSelector, String(graphIndex))
   panel.querySelector<HTMLButtonElement>("[data-role='trace-causal-predecessor']")?.click()
-  assert(panel.querySelector("[data-role='trace-causal-navigation-error']")?.textContent?.includes("PredecessorNotProjected") === true, "A missing projected predecessor must fail visibly")
+  assert(
+    panel
+      .querySelector("[data-role='trace-causal-navigation-error']")
+      ?.textContent?.includes("PredecessorNotProjected") === true,
+    "A missing projected predecessor must fail visibly"
+  )
 })
 
 await scenario("shows represented and off-graph responsibilities without inventing tracker nodes", async () => {
@@ -1397,9 +1898,7 @@ await scenario("shows represented and off-graph responsibilities without inventi
   }
   mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
   assert(
-    document.querySelector(".delivery-story-scope")?.textContent?.includes(
-      "one outer Integrator session"
-    ) === true,
+    document.querySelector(".delivery-story-scope")?.textContent?.includes("one outer Integrator session") === true,
     "The Lab must present the maintained graph chronology with its outer Integrator evidence"
   )
   const done = settled(singleCassetteSettledEvent)
@@ -1414,42 +1913,89 @@ await scenario("shows represented and off-graph responsibilities without inventi
     }
     select.dispatchEvent(new Event("change"))
   }
-  const beforeRestart = result.deliveryFrames.find((frame) =>
-    frame.heldPositions.map(({ taskId }) => taskId).toSorted().join(",") === "B,C"
+  const beforeRestart = result.deliveryFrames.find(
+    (frame) =>
+      frame.heldPositions
+        .map(({ taskId }) => taskId)
+        .toSorted()
+        .join(",") === "B,C"
   )
-  const restartIndex = beforeRestart === undefined
-    ? -1
-    : result.deliveryFrames.findIndex((frame) =>
-        frame.activationOrdinal > beforeRestart.activationOrdinal
-        && frame.graph._tag === "NotEstablished"
-        && frame.heldPositions.map(({ taskId }) => taskId).toSorted().join(",") === "B,C"
-      )
+  const restartIndex =
+    beforeRestart === undefined
+      ? -1
+      : result.deliveryFrames.findIndex(
+          (frame) =>
+            frame.activationOrdinal > beforeRestart.activationOrdinal &&
+            frame.graph._tag === "NotEstablished" &&
+            frame.heldPositions
+              .map(({ taskId }) => taskId)
+              .toSorted()
+              .join(",") === "B,C"
+        )
   if (restartIndex < 0) throw new Error("The restart frame with reconstructed B/C positions is missing")
   selectFrame(deliveryMomentIndex(result, restartIndex))
   const capacity = document.querySelector("[data-role='delivery-capacity-positions']")
   const rail = document.querySelector("[data-role='delivery-off-graph-responsibilities']")
-  assert(capacity?.textContent?.includes("2 held of capacity 2") === true, "The capacity strip must show both reconstructed positions")
-  assert(capacity?.textContent?.includes("B · attempt:B:0") === true, "The capacity strip must correlate B's exact attempt")
-  assert(capacity?.textContent?.includes("C · attempt:C:1") === true, "The capacity strip must correlate C's exact attempt")
-  assert(capacity?.textContent?.toLowerCase().includes("anonymous") === true, "The capacity strip must not invent durable slot identities")
-  assert(rail?.textContent?.includes("B") === true && rail.textContent.includes("C"), "The off-graph rail must retain both responsibilities")
-  assert(rail?.textContent?.includes("graph not established") === true, "The rail must explain why the responsibilities are outside the graph")
+  assert(
+    capacity?.textContent?.includes("2 held of capacity 2") === true,
+    "The capacity strip must show both reconstructed positions"
+  )
+  assert(
+    capacity?.textContent?.includes("B · attempt:B:0") === true,
+    "The capacity strip must correlate B's exact attempt"
+  )
+  assert(
+    capacity?.textContent?.includes("C · attempt:C:1") === true,
+    "The capacity strip must correlate C's exact attempt"
+  )
+  assert(
+    capacity?.textContent?.toLowerCase().includes("anonymous") === true,
+    "The capacity strip must not invent durable slot identities"
+  )
+  assert(
+    rail?.textContent?.includes("B") === true && rail.textContent.includes("C"),
+    "The off-graph rail must retain both responsibilities"
+  )
+  assert(
+    rail?.textContent?.includes("graph not established") === true,
+    "The rail must explain why the responsibilities are outside the graph"
+  )
   assert(rail?.textContent?.includes(`Run ${result.runId}`) === true, "The rail must retain the exact Run correlation")
-  assert(rail?.textContent?.includes("placement GraphNotEstablished") === true, "The rail must name the exact delivery placement")
-  assert(rail?.textContent?.includes("planned-attempt executor responsibility") === true, "The rail must name the retained obligation")
-  assert(rail?.textContent?.includes("occupies capacity") === true, "The rail must state whether the responsibility holds capacity")
+  assert(
+    rail?.textContent?.includes("placement GraphNotEstablished") === true,
+    "The rail must name the exact delivery placement"
+  )
+  assert(
+    rail?.textContent?.includes("planned-attempt executor responsibility") === true,
+    "The rail must name the retained obligation"
+  )
+  assert(
+    rail?.textContent?.includes("occupies capacity") === true,
+    "The rail must state whether the responsibility holds capacity"
+  )
 
-  const staggeredIndex = result.deliveryFrames.findIndex((frame) =>
-    frame.graph._tag === "Established"
-    && frame.heldPositions.map(({ taskId }) => taskId).join(",") === "C"
+  const staggeredIndex = result.deliveryFrames.findIndex(
+    (frame) => frame.graph._tag === "Established" && frame.heldPositions.map(({ taskId }) => taskId).join(",") === "C"
   )
   if (staggeredIndex < 0) throw new Error("The staggered C-only frame is missing")
   selectFrame(deliveryMomentIndex(result, staggeredIndex))
   const representedCapacity = document.querySelector("[data-role='delivery-capacity-positions']")
-  assert(representedCapacity?.textContent?.includes("1 held of capacity 2") === true, "One released position must be visible before C finishes")
-  assert(representedCapacity?.textContent?.includes("1 unheld position") === true, "Released capacity must remain anonymous and visible")
-  assert(representedCapacity?.textContent?.includes("capacity, not permission") === true, "Unheld capacity must not imply that eligible work is already admitted")
-  assert(document.querySelector("[data-role='delivery-off-graph-responsibilities']") === null, "Graph-represented responsibilities must stay on their graph nodes")
+  assert(
+    representedCapacity?.textContent?.includes("1 held of capacity 2") === true,
+    "One released position must be visible before C finishes"
+  )
+  assert(
+    representedCapacity?.textContent?.includes("1 unheld position") === true,
+    "Released capacity must remain anonymous and visible"
+  )
+  assert(
+    representedCapacity?.textContent?.includes("capacity, not permission") === true,
+    "Unheld capacity must not imply that eligible work is already admitted"
+  )
+  assert(
+    document.querySelector("[data-role='delivery-off-graph-responsibilities']") === null,
+    "Graph-represented responsibilities must stay on their graph nodes"
+  )
 })
 
 await scenario("shows an absent responsibility in the mismatch rail without inventing a graph node", async () => {
@@ -1459,9 +2005,8 @@ await scenario("shows an absent responsibility in the mismatch rail without inve
   if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
     throw new Error("The staggered delivery story is missing")
   }
-  const heldFrame = result.deliveryFrames.find((frame) =>
-    frame.graph._tag === "NotEstablished"
-    && frame.heldPositions.some(({ taskId }) => taskId === "B")
+  const heldFrame = result.deliveryFrames.find(
+    (frame) => frame.graph._tag === "NotEstablished" && frame.heldPositions.some(({ taskId }) => taskId === "B")
   )
   const establishedFrame = result.deliveryFrames.find((frame) => frame.graph._tag === "Established")
   if (heldFrame === undefined || establishedFrame?.graph._tag !== "Established") {
@@ -1483,8 +2028,8 @@ await scenario("shows an absent responsibility in the mismatch rail without inve
     ),
     graph: { ...establishedGraph, tasks: [] }
   }
-  const sourceMoment = result.observationMoments?.find((moment) =>
-    moment._tag === "DeliveryPublicationMoment" && moment.deliveryFrame === heldFrame
+  const sourceMoment = result.observationMoments?.find(
+    (moment) => moment._tag === "DeliveryPublicationMoment" && moment.deliveryFrame === heldFrame
   )
   if (sourceMoment === undefined) throw new Error("The exact responsibility moment is missing")
   const absentResult = {
@@ -1492,38 +2037,54 @@ await scenario("shows an absent responsibility in the mismatch rail without inve
     deliveryFrames: [absentFrame],
     observationMoments: [{ ...sourceMoment, deliveryFrame: absentFrame }]
   }
-  mountCassetteLab({
-    revision: "acceptance-revision",
-    root,
-    rows: [row],
-    runCassette: async () => absentResult
-  })
+  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: async () => absentResult })
   const done = settled(singleCassetteSettledEvent)
   ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
   await done
-  const graph = document.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & {
-    projection?: { readonly tasks: ReadonlyArray<{ readonly id: string }> }
-  }) | null
+  const graph = document.querySelector("[data-role='delivery-production-graph']") as
+    | (HTMLElement & { projection?: { readonly tasks: ReadonlyArray<{ readonly id: string }> } })
+    | null
   const rail = document.querySelector("[data-role='delivery-off-graph-responsibilities']")
-  assert(graph?.projection?.tasks.some(({ id }) => id === "B") === false, "An absent responsibility must not become a topology node")
-  assert(rail?.textContent?.includes("Task B · absent from current tracker graph") === true, "The rail must explain the exact graph mismatch")
-  assert(rail?.textContent?.includes("placement AbsentFromCurrentGraph") === true, "The rail must retain the production placement kind")
-  assert(rail?.textContent?.includes(`Run ${result.runId}`) === true, "The absent responsibility must retain its exact Run")
+  assert(
+    graph?.projection?.tasks.some(({ id }) => id === "B") === false,
+    "An absent responsibility must not become a topology node"
+  )
+  assert(
+    rail?.textContent?.includes("Task B · absent from current tracker graph") === true,
+    "The rail must explain the exact graph mismatch"
+  )
+  assert(
+    rail?.textContent?.includes("placement AbsentFromCurrentGraph") === true,
+    "The rail must retain the production placement kind"
+  )
+  assert(
+    rail?.textContent?.includes(`Run ${result.runId}`) === true,
+    "The absent responsibility must retain its exact Run"
+  )
 })
 
 await scenario("does not fabricate delivery visualization for direct protocol cassettes", () => {
   const { document, root } = installDom()
   const protocolRows = maintainedCassetteRows.filter(({ category }) => category !== "Authored")
   mountCassetteLab({ revision: "acceptance-revision", root, rows: protocolRows, runCassette: cannedRunner })
-  assert(document.querySelector("[data-role='delivery-workbench']") === null, "Direct protocol runners must not display invented graph-level delivery state")
-  assert(document.querySelector(".group-facts")?.textContent?.includes("does not publish the graph-level delivery relation") === true, "The direct protocol group must explain why no graph workbench applies")
+  assert(
+    document.querySelector("[data-role='delivery-workbench']") === null,
+    "Direct protocol runners must not display invented graph-level delivery state"
+  )
+  assert(
+    document
+      .querySelector(".group-facts")
+      ?.textContent?.includes("does not publish the graph-level delivery relation") === true,
+    "The direct protocol group must explain why no graph workbench applies"
+  )
 })
 
 await scenario("renders the prototype source instrument beside its synchronized graph", async () => {
   const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
   const result = everyResult.find(({ catalogKey }) => catalogKey === "authored:deliveryInvariantStory")
   if (row === undefined) throw new Error("The prototype cassette is missing from the maintained catalog")
-  if (result?._tag !== "Completed" || result.observationMoments === null) throw new Error("The prototype cassette observations are missing")
+  if (result?._tag !== "Completed" || result.observationMoments === null)
+    throw new Error("The prototype cassette observations are missing")
   const { document, root, settled } = installDom()
   mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
   const done = settled(singleCassetteSettledEvent)
@@ -1534,23 +2095,59 @@ await scenario("renders the prototype source instrument beside its synchronized 
   const codeWindow = instrument?.querySelector(".delivery-code-window")
   const graphCanvas = instrument?.querySelector(".delivery-graph-canvas")
   assert(instrument !== null, "The source and graph must share the prototype instrument layout")
-  assert(codeWindow?.textContent?.includes("export const delivery = Effect.gen(function* () {") === true, "The source panel must show the prototype production-shaped opening")
-  assert(codeWindow?.textContent?.includes("const trackerGraph = yield* TrackerGraphRelation") === true, "The source panel must show relation acquisition as one literal setup line")
-  assert(codeWindow?.textContent?.includes("const responsibilities = yield* executorResponsibilities(tickets)") === true, "The source panel must retain the prototype responsibility composition")
-  assert(codeWindow?.textContent?.includes("return yield* reflectDeliverySettlements(settlements)") === true, "The source panel must show the production-shaped reflection boundary")
-  assert(codeWindow?.querySelector(".delivery-syntax-keyword") !== null && codeWindow?.querySelector(".delivery-syntax-call") !== null, "The copied code window must retain source-token treatment")
-  assert(codeWindow?.querySelectorAll("[data-source-stage] .delivery-code-gutter").length === 7, "Every prototype source stage must retain its gutter/change marker")
-  assert(codeWindow?.querySelectorAll("[data-source-stage] .delivery-data-rectangle").length !== 0, "Typed live data rectangles must remain visible beside source lines")
-  assert(graphCanvas?.querySelector("dalph-delivery-graph") !== null, "The synchronized Delivery graph must live inside the prototype dotted canvas")
-  assert(instrument?.querySelectorAll(":scope > .delivery-instrument").length === 2, "The source and graph must be peer instrument panels")
+  assert(
+    codeWindow?.textContent?.includes("export const delivery = Effect.gen(function* () {") === true,
+    "The source panel must show the prototype production-shaped opening"
+  )
+  assert(
+    codeWindow?.textContent?.includes("const trackerGraph = yield* TrackerGraphRelation") === true,
+    "The source panel must show relation acquisition as one literal setup line"
+  )
+  assert(
+    codeWindow?.textContent?.includes("const responsibilities = yield* executorResponsibilities(tickets)") === true,
+    "The source panel must retain the prototype responsibility composition"
+  )
+  assert(
+    codeWindow?.textContent?.includes("return yield* reflectDeliverySettlements(settlements)") === true,
+    "The source panel must show the production-shaped reflection boundary"
+  )
+  assert(
+    codeWindow?.querySelector(".delivery-syntax-keyword") !== null &&
+      codeWindow?.querySelector(".delivery-syntax-call") !== null,
+    "The copied code window must retain source-token treatment"
+  )
+  assert(
+    codeWindow?.querySelectorAll("[data-source-stage] .delivery-code-gutter").length === 7,
+    "Every prototype source stage must retain its gutter/change marker"
+  )
+  assert(
+    codeWindow?.querySelectorAll("[data-source-stage] .delivery-data-rectangle").length !== 0,
+    "Typed live data rectangles must remain visible beside source lines"
+  )
+  assert(
+    graphCanvas?.querySelector("dalph-delivery-graph") !== null,
+    "The synchronized Delivery graph must live inside the prototype dotted canvas"
+  )
+  assert(
+    instrument?.querySelectorAll(":scope > .delivery-instrument").length === 2,
+    "The source and graph must be peer instrument panels"
+  )
   const timeline = document.querySelector<HTMLSelectElement>(".delivery-timeline-controls select")
   if (timeline === null) throw new Error("The prototype cassette timeline is missing")
   const publicationIndex = result.observationMoments.findIndex(({ _tag }) => _tag === "DeliveryPublicationMoment")
-  const retainedIndex = result.observationMoments.findIndex((moment) => moment._tag !== "DeliveryPublicationMoment" && moment.deliveryFrame !== null)
+  const retainedIndex = result.observationMoments.findIndex(
+    (moment) => moment._tag !== "DeliveryPublicationMoment" && moment.deliveryFrame !== null
+  )
   chooseOption(timeline, String(publicationIndex))
-  assert(document.querySelector(".delivery-graph-freshness")?.classList.contains("stale") === false, "A coherent publication must retain the prototype fresh treatment")
+  assert(
+    document.querySelector(".delivery-graph-freshness")?.classList.contains("stale") === false,
+    "A coherent publication must retain the prototype fresh treatment"
+  )
   chooseOption(timeline, String(retainedIndex))
-  assert(document.querySelector(".delivery-graph-freshness")?.classList.contains("stale") === true, "A retained frame at a story/runtime moment must use the prototype stale treatment")
+  assert(
+    document.querySelector(".delivery-graph-freshness")?.classList.contains("stale") === true,
+    "A retained frame at a story/runtime moment must use the prototype stale treatment"
+  )
 })
 
 await scenario("keeps current observed moment contained at the bottom of the frame", async () => {
@@ -1570,13 +2167,15 @@ await scenario("keeps current observed moment contained at the bottom of the fra
 await scenario("updates an observed runtime task tone without fabricating a delivery publication", async () => {
   const match = everyResult.flatMap((result) => {
     if (result._tag !== "Completed" || result.observationMoments === null) return []
-    const index = result.observationMoments.findIndex((moment) =>
-      moment._tag === "DeliveryRuntimeOwnersMoment"
-      && moment.deliveryFrame?.graph._tag === "Established"
-      && moment.liveOwners.some((owner) =>
-        owner._tag === "MaterializedDeliveryAction"
-        && owner.proposal.admission.integrationTarget._tag === "IntegrationTargetResourceRequired"
-      )
+    const index = result.observationMoments.findIndex(
+      (moment) =>
+        moment._tag === "DeliveryRuntimeOwnersMoment" &&
+        moment.deliveryFrame?.graph._tag === "Established" &&
+        moment.liveOwners.some(
+          (owner) =>
+            owner._tag === "MaterializedDeliveryAction" &&
+            owner.proposal.admission.integrationTarget._tag === "IntegrationTargetResourceRequired"
+        )
     )
     return index < 0 ? [] : [{ index, result }]
   })[0]
@@ -1591,34 +2190,36 @@ await scenario("updates an observed runtime task tone without fabricating a deli
   const timeline = document.querySelector<HTMLSelectElement>(".delivery-timeline-controls select")
   if (timeline === null) throw new Error("The observed-moment selector is missing")
   chooseOption(timeline, String(match.index))
-  const graph = document.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & {
-    highlightedTaskIds: ReadonlyArray<string>
-    selectedTaskId: string | null
-    projection?: {
-      readonly tasks: ReadonlyArray<{
-        readonly display?: { readonly tone?: string }
-        readonly id: string
-      }>
-    }
-  }) | null
+  const graph = document.querySelector("[data-role='delivery-production-graph']") as
+    | (HTMLElement & {
+        highlightedTaskIds: ReadonlyArray<string>
+        selectedTaskId: string | null
+        projection?: {
+          readonly tasks: ReadonlyArray<{ readonly display?: { readonly tone?: string }; readonly id: string }>
+        }
+      })
+    | null
   const integratingTask = graph?.projection?.tasks.find(({ display }) => display?.tone === "integrating")
   assert(integratingTask !== undefined, "A live integration owner must dominate its task's trace-fill tone")
   assert(
-    document.querySelector(".delivery-moment-evidence")?.textContent?.includes("exact proposal / operation correlation") === true
-    && document.querySelector(".delivery-moment-evidence")?.textContent?.includes("operationId") === true,
+    document
+      .querySelector(".delivery-moment-evidence")
+      ?.textContent?.includes("exact proposal / operation correlation") === true &&
+      document.querySelector(".delivery-moment-evidence")?.textContent?.includes("operationId") === true,
     "A runtime moment must expose the exact proposal and operation correlation behind its live-owner tone"
   )
   assert(
-    document.querySelector(".delivery-source-status")?.textContent
-      === "No Delivery publication changed the source explanation at this moment.",
+    document.querySelector(".delivery-source-status")?.textContent ===
+      "No Delivery publication changed the source explanation at this moment.",
     "A runtime-only moment must not fabricate a Delivery source change"
   )
   assert(
     document.querySelectorAll(".delivery-source-stage-rows .source-output-changed").length === 0,
     "A runtime-only moment must retain every source row without changed-output highlighting"
   )
-  const stageButton = [...document.querySelectorAll<HTMLButtonElement>("[data-source-stage] > button")]
-    .find((button) => button.parentElement?.dataset.taskIds?.split(",").includes(integratingTask?.id ?? ""))
+  const stageButton = [...document.querySelectorAll<HTMLButtonElement>("[data-source-stage] > button")].find((button) =>
+    button.parentElement?.dataset.taskIds?.split(",").includes(integratingTask?.id ?? "")
+  )
   stageButton?.click()
   assert(
     graph?.highlightedTaskIds.includes(integratingTask?.id ?? "") === true,
@@ -1628,7 +2229,9 @@ await scenario("updates an observed runtime task tone without fabricating a deli
     graph?.shadowRoot?.querySelector("li[data-edge-from].selection-related") !== null,
     "Selecting source data must visibly mark a relationship incident to its graph tasks"
   )
-  const sourceTask = document.querySelector<HTMLButtonElement>("[data-source-stage] .delivery-source-task-buttons button")
+  const sourceTask = document.querySelector<HTMLButtonElement>(
+    "[data-source-stage] .delivery-source-task-buttons button"
+  )
   sourceTask?.click()
   assert(
     graph?.selectedTaskId === sourceTask?.textContent,
@@ -1645,29 +2248,34 @@ await scenario("uses an explicit Pause or failed fresh-read occurrence as the co
   const match = everyResult.flatMap((result) => {
     if (result._tag !== "Completed" || result.observationMoments === null) return []
     return result.observationMoments.flatMap((moment) => {
-      if (moment._tag !== "AuthoredStoryOccurrenceMoment" || moment.deliveryFrame?.graph._tag !== "Established") return []
+      if (moment._tag !== "AuthoredStoryOccurrenceMoment" || moment.deliveryFrame?.graph._tag !== "Established")
+        return []
       const occurrence = moment.occurrence
       const graphTaskIds = moment.deliveryFrame.graph.tasks.map(({ id }) => id)
-      const constraintTaskIds = occurrence._tag === "TrackerGraphReadFailed"
-        ? graphTaskIds
-        : occurrence._tag === "OperatorControlDirectionFailed"
-          ? [occurrence.subject.taskId]
-          : ((occurrence._tag === "OperatorAppliesControlDirection"
-          || occurrence._tag === "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission"
-          || occurrence._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight")
-          && occurrence.direction === "Pause")
-            ? occurrence.subject._tag === "Task" ? [occurrence.subject.taskId] : graphTaskIds
-            : []
-      const taskId = constraintTaskIds.find((candidate) =>
-        !moment.deliveryFrame?.settlements.some((settlement) => settlement.taskId === candidate)
-        && !moment.liveOwners.some((owner) => deliveryProposalOrderTaskId(owner.proposal.order) === candidate)
-        && !moment.deliveryFrame?.heldPositions.some((held) => held.taskId === candidate)
-        && !moment.deliveryFrame?.tickets.some((ticket) =>
-          ticket.taskId === candidate && ticket.placement.kind === "Selected"
-        )
-        && !moment.deliveryFrame?.frontier.some((standing) =>
-          standing.taskId === candidate && standing.standing === "Eligible"
-        )
+      const constraintTaskIds =
+        occurrence._tag === "TrackerGraphReadFailed"
+          ? graphTaskIds
+          : occurrence._tag === "OperatorControlDirectionFailed"
+            ? [occurrence.subject.taskId]
+            : (occurrence._tag === "OperatorAppliesControlDirection" ||
+                  occurrence._tag === "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission" ||
+                  occurrence._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight") &&
+                occurrence.direction === "Pause"
+              ? occurrence.subject._tag === "Task"
+                ? [occurrence.subject.taskId]
+                : graphTaskIds
+              : []
+      const taskId = constraintTaskIds.find(
+        (candidate) =>
+          !moment.deliveryFrame?.settlements.some((settlement) => settlement.taskId === candidate) &&
+          !moment.liveOwners.some((owner) => deliveryProposalOrderTaskId(owner.proposal.order) === candidate) &&
+          !moment.deliveryFrame?.heldPositions.some((held) => held.taskId === candidate) &&
+          !moment.deliveryFrame?.tickets.some(
+            (ticket) => ticket.taskId === candidate && ticket.placement.kind === "Selected"
+          ) &&
+          !moment.deliveryFrame?.frontier.some(
+            (standing) => standing.taskId === candidate && standing.standing === "Eligible"
+          )
       )
       return taskId === undefined ? [] : [{ frame: moment.deliveryFrame, taskId }]
     })
@@ -1683,14 +2291,16 @@ await scenario("keeps the graph primary and synchronizes story source data tasks
   const match = everyResult.flatMap((result) => {
     if (result._tag !== "Completed" || result.observationMoments === null) return []
     const index = result.observationMoments.findIndex((moment) => {
-      if (moment._tag !== "AuthoredStoryOccurrenceMoment" || moment.deliveryFrame?.graph._tag !== "Established") return false
+      if (moment._tag !== "AuthoredStoryOccurrenceMoment" || moment.deliveryFrame?.graph._tag !== "Established")
+        return false
       const story = JSON.stringify(moment.occurrence)
       const graph = moment.deliveryFrame.graph
       const firstMentioned = graph.tasks.find(({ id }) => story.includes(`\"${id}\"`))?.id
-      return firstMentioned !== undefined && graph.tasks.some(({ id, parentTaskId, prerequisiteIds }) =>
-        id === firstMentioned && (parentTaskId !== null || prerequisiteIds.length > 0)
-        || parentTaskId === firstMentioned
+      return (
+        firstMentioned !== undefined && graph.tasks.some(({ id, parentTaskId, prerequisiteIds }) =>
+            (id === firstMentioned && (parentTaskId !== null || prerequisiteIds.length > 0)) || parentTaskId === firstMentioned
         || prerequisiteIds.includes(firstMentioned)
+        )
       )
     })
     return index < 0 ? [] : [{ index, result }]
@@ -1706,7 +2316,8 @@ await scenario("keeps the graph primary and synchronizes story source data tasks
   const timeline = document.querySelector<HTMLSelectElement>(".delivery-timeline-controls select")
   if (timeline === null) throw new Error("The observed-moment selector is missing")
   chooseOption(timeline, String(match.index))
-  const graph = document.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & {
+  const graph = document.querySelector("[data-role='delivery-production-graph']") as
+    | (HTMLElement & {
     selectedTaskId: string | null
   }) | null
   const storyTask = document.querySelector<HTMLButtonElement>(
@@ -1754,27 +2365,40 @@ await scenario("shows graph observation provenance quiescence and planned action
       && facts.includes(`recorded at journal ${passiveFrame.graph.observation.recordedAt}`),
     "Observed graph provenance must expose its exact read and journal correlation"
   )
-  assert(facts.includes("passive because RunPaused"), "The exact quiescence reason must explain why desired tickets cannot start")
-  assert(facts.includes("planned action proposals") || facts.includes("planning fails closed"), "The downstream action plan must be summarized without implying execution")
-  assert(facts.includes("Operator paused the Run"), "A batched publication must retain the concrete operator Pause landmark")
+  assert(
+    facts.includes("passive because RunPaused"),
+    "The exact quiescence reason must explain why desired tickets cannot start"
+  )
+  assert(
+    facts.includes("planned action proposals") || facts.includes("planning fails closed"),
+    "The downstream action plan must be summarized without implying execution"
+  )
+  assert(
+    facts.includes("Operator paused the Run"),
+    "A batched publication must retain the concrete operator Pause landmark"
+  )
   assert(
     facts.includes("Attempt attempt:A:0 reported ExecutorWorkExecuting"),
     "A batched publication must retain the exact executor-attempt landmark after Pause"
   )
-  assert(document.querySelector("[data-role='delivery-action-planning']") !== null, "Exact action proposals and isolated planning issues must remain inspectable")
+  assert(
+    document.querySelector("[data-role='delivery-action-planning']") !== null,
+    "Exact action proposals and isolated planning issues must remain inspectable"
+  )
 })
 
 await scenario("explains restart continuity at the first later activation boundary", async () => {
   const { document, root, settled } = installDom()
-  const row = maintainedCassetteRows.find(({ catalogKey }) =>
-    catalogKey === "authored:acceptedResultRestartsIntoIntegration"
+  const row = maintainedCassetteRows.find(
+    ({ catalogKey }) => catalogKey === "authored:acceptedResultRestartsIntoIntegration"
   )
   const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
   if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
     throw new Error("The restart delivery fixture is missing")
   }
-  const recoveredIndex = result.deliveryFrames.findIndex(({ activationOrdinal }, index) =>
-    activationOrdinal === 2 && result.deliveryFrames?.[index - 1]?.activationOrdinal === 1
+  const recoveredIndex = result.deliveryFrames.findIndex(
+    ({ activationOrdinal }, index) =>
+      activationOrdinal === 2 && result.deliveryFrames?.[index - 1]?.activationOrdinal === 1
   )
   if (recoveredIndex < 1) throw new Error("The restart boundary is missing")
   mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
@@ -1790,26 +2414,26 @@ await scenario("explains restart continuity at the first later activation bounda
     "The first later-activation publication must visibly mark the process restart"
   )
   assert(
-    boundary.includes("Changed: none")
-      && boundary.includes("Disappeared:")
-      && boundary.includes("Disappeared: held position · task A")
-      && boundary.includes("obligation · task A · planned-attempt executor responsibility")
-      && boundary.includes("Added: obligation · task A · accepted result awaiting integration"),
+    boundary.includes("Changed: none") &&
+      boundary.includes("Disappeared:") &&
+      boundary.includes("Disappeared: held position · task A") &&
+      boundary.includes("obligation · task A · planned-attempt executor responsibility") &&
+      boundary.includes("Added: obligation · task A · accepted result awaiting integration"),
     "The first later-activation publication must show task A's responsibility and held position disappeared while accepted integration was added"
   )
 })
 
 await scenario("shows integration order separately from task-work capacity", async () => {
   const { document, root, settled } = installDom()
-  const row = maintainedCassetteRows.find(({ catalogKey }) =>
-    catalogKey === "authored:acceptedResultRestartsIntoIntegration"
+  const row = maintainedCassetteRows.find(
+    ({ catalogKey }) => catalogKey === "authored:acceptedResultRestartsIntoIntegration"
   )
   const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
   if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
     throw new Error("The accepted-result integration fixture is missing")
   }
-  const awaitingIndex = result.deliveryFrames.findIndex(({ integrationOrder }) =>
-    integrationOrder.awaitingResponsibility.length === 1
+  const awaitingIndex = result.deliveryFrames.findIndex(
+    ({ integrationOrder }) => integrationOrder.awaitingResponsibility.length === 1
   )
   const queuedIndex = result.deliveryFrames.findIndex(({ integrationOrder }) =>
     integrationOrder.responsibilities.some(({ state }) => state === "QueuedBeforeCutoff")
@@ -1830,27 +2454,54 @@ await scenario("shows integration order separately from task-work capacity", asy
 
   chooseOption(timeline, String(deliveryMomentIndex(result, awaitingIndex)))
   const order = document.querySelector("[data-role='delivery-integration-order']")
-  assert(order?.textContent?.includes("0 ordered · 1 awaiting responsibility") === true, "An accepted result must remain outside integration order until its responsibility is durable")
-  assert(order?.textContent?.includes("Accepted results not ordered yet") === true, "The waiting result must not receive an invented position")
-  assert(order?.textContent?.includes("accepted commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") === true, "The waiting result must retain its exact commit")
+  assert(
+    order?.textContent?.includes("0 ordered · 1 awaiting responsibility") === true,
+    "An accepted result must remain outside integration order until its responsibility is durable"
+  )
+  assert(
+    order?.textContent?.includes("Accepted results not ordered yet") === true,
+    "The waiting result must not receive an invented position"
+  )
+  assert(
+    order?.textContent?.includes("accepted commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") === true,
+    "The waiting result must retain its exact commit"
+  )
 
   chooseOption(timeline, String(deliveryMomentIndex(result, queuedIndex)))
-  assert(order?.textContent?.includes("#1 · Task A · queued before integration cutoff") === true, "The durable responsibility must expose its target-relative position")
-  assert(order?.textContent?.includes("/dalph/cassettes/integration.git · refs/heads/master") === true, "Integration order must be scoped to the exact repository/ref target")
-  assert(order?.textContent?.includes(`Run ${result.runId} · attempt attempt:A:0`) === true, "Integration order must retain its exact Run and attempt")
+  assert(
+    order?.textContent?.includes("#1 · Task A · queued before integration cutoff") === true,
+    "The durable responsibility must expose its target-relative position"
+  )
+  assert(
+    order?.textContent?.includes("/dalph/cassettes/integration.git · refs/heads/master") === true,
+    "Integration order must be scoped to the exact repository/ref target"
+  )
+  assert(
+    order?.textContent?.includes(`Run ${result.runId} · attempt attempt:A:0`) === true,
+    "Integration order must retain its exact Run and attempt"
+  )
 
   chooseOption(timeline, String(deliveryMomentIndex(result, startedIndex)))
-  assert(order?.textContent?.includes("started past integration cutoff at journal") === true, "The durable cutoff must replace the queued state")
-  assert(order?.textContent?.includes("not a persisted queue row or proof that this process holds") === true, "Integration order must not claim process-local ownership")
   assert(
-    document.querySelector("[data-role='delivery-capacity-positions']")?.textContent?.includes("held of capacity") === true,
+    order?.textContent?.includes("started past integration cutoff at journal") === true,
+    "The durable cutoff must replace the queued state"
+  )
+  assert(
+    order?.textContent?.includes("not a persisted queue row or proof that this process holds") === true,
+    "Integration order must not claim process-local ownership"
+  )
+  assert(
+    document.querySelector("[data-role='delivery-capacity-positions']")?.textContent?.includes("held of capacity") ===
+      true,
     "Task-work capacity must remain a separate visible resource"
   )
 })
 
 await scenario("separates every coordinator activation in a multi-restart delivery timeline", async () => {
   const { document, root, settled } = installDom()
-  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:changedAttemptStopReleaseResponseLost")
+  const row = maintainedCassetteRows.find(
+    ({ catalogKey }) => catalogKey === "authored:changedAttemptStopReleaseResponseLost"
+  )
   const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
   if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
     throw new Error("The multi-restart delivery fixture is missing")
@@ -1877,18 +2528,18 @@ await scenario("separates every coordinator activation in a multi-restart delive
 
 await scenario("keeps graph-not-established frames dimensionally stable and truthful", async () => {
   const { document, root, settled } = installDom()
-  const row = maintainedCassetteRows.find(({ catalogKey }) =>
-    catalogKey === "authored:acceptedResultRestartsIntoIntegration"
+  const row = maintainedCassetteRows.find(
+    ({ catalogKey }) => catalogKey === "authored:acceptedResultRestartsIntoIntegration"
   )
   const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
   if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
     throw new Error("The recovery delivery fixture is missing")
   }
-  const emptyIndex = result.deliveryFrames.findIndex(({ activationOrdinal, graph }) =>
-    activationOrdinal > 1 && graph._tag === "NotEstablished"
+  const emptyIndex = result.deliveryFrames.findIndex(
+    ({ activationOrdinal, graph }) => activationOrdinal > 1 && graph._tag === "NotEstablished"
   )
-  const establishedIndex = result.deliveryFrames.findIndex((frame, index) =>
-    index > emptyIndex && frame.graph._tag === "Established"
+  const establishedIndex = result.deliveryFrames.findIndex(
+    (frame, index) => index > emptyIndex && frame.graph._tag === "Established"
   )
   if (emptyIndex < 0 || establishedIndex < 0) throw new Error("The recovery graph transition is missing")
   mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
@@ -1898,45 +2549,59 @@ await scenario("keeps graph-not-established frames dimensionally stable and trut
   const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
   if (timeline === null) throw new Error("The recovery delivery timeline is missing")
   chooseOption(timeline, String(deliveryMomentIndex(result, emptyIndex)))
-  const emptyGraph = document.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & {
-    projection?: { readonly tasks: ReadonlyArray<unknown> }
-  }) | null
-  assert(emptyGraph?.projection?.tasks.length === 0, "The recovery frame must retain the exact graph-not-established projection")
+  const emptyGraph = document.querySelector("[data-role='delivery-production-graph']") as
+    | (HTMLElement & { projection?: { readonly tasks: ReadonlyArray<unknown> } })
+    | null
   assert(
-    document.querySelector("[data-role='selected-task-facts']")?.textContent?.includes("No production-observed task is selectable") === true,
+    emptyGraph?.projection?.tasks.length === 0,
+    "The recovery frame must retain the exact graph-not-established projection"
+  )
+  assert(
+    document
+      .querySelector("[data-role='selected-task-facts']")
+      ?.textContent?.includes("No production-observed task is selectable") === true,
     "An empty recovery graph must not invite impossible task selection"
   )
   assert(
-    document.querySelector("[data-role='delivery-workbench'] .delivery-graph-view-controls button")?.textContent
-      === "Reset graph view",
+    document.querySelector("[data-role='delivery-workbench'] .delivery-graph-view-controls button")?.textContent ===
+      "Reset graph view",
     "The graph reset action must be visible beside the graph"
   )
   const reset = document.querySelector<HTMLButtonElement>(".delivery-graph-view-controls button")
   assert(reset?.disabled === true, "An absent production graph must not offer a no-op reset")
   assert(
-    document.querySelector(".delivery-graph-view-controls")?.textContent?.includes("Drag to pan · pinch, wheel, or trackpad to zoom")
-      === true,
+    document
+      .querySelector(".delivery-graph-view-controls")
+      ?.textContent?.includes("Drag to pan · pinch, wheel, or trackpad to zoom") === true,
     "The graph must visibly explain its pointer gestures"
   )
   chooseOption(timeline, String(deliveryMomentIndex(result, establishedIndex)))
-  const establishedGraph = document.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & {
-    projection?: { readonly tasks: ReadonlyArray<unknown> }
-  }) | null
+  const establishedGraph = document.querySelector("[data-role='delivery-production-graph']") as
+    | (HTMLElement & { projection?: { readonly tasks: ReadonlyArray<unknown> } })
+    | null
   assert(establishedGraph === emptyGraph, "Graph authority changes must keep one dimensionally stable graph element")
-  assert((establishedGraph?.projection?.tasks.length ?? 0) > 0, "A later observed graph must restore its useful task projection")
+  assert(
+    (establishedGraph?.projection?.tasks.length ?? 0) > 0,
+    "A later observed graph must restore its useful task projection"
+  )
   assert(reset?.disabled === false, "An established production graph must enable deterministic reset")
 })
 
 await scenario("names concrete planned transitions and their admission requirements", async () => {
   const summaryFor = async (marker: string, catalogKey?: string): Promise<string> => {
     const match = everyResult.flatMap((result) => {
-      if (result._tag !== "Completed" || result.deliveryFrames === null || (catalogKey !== undefined && result.catalogKey !== catalogKey)) {
+      if (
+        result._tag !== "Completed" ||
+        result.deliveryFrames === null ||
+        (catalogKey !== undefined && result.catalogKey !== catalogKey)
+      ) {
         return []
       }
       return result.deliveryFrames.flatMap((frame, frameIndex) => {
-        const values = frame.actionPlanning._tag === "DeliveryProposalsAvailable"
-          ? frame.actionPlanning.proposals
-          : frame.actionPlanning.conflicts
+        const values =
+          frame.actionPlanning._tag === "DeliveryProposalsAvailable"
+            ? frame.actionPlanning.proposals
+            : frame.actionPlanning.conflicts
         return values.some(({ exact }) => exact.includes(marker)) ? [{ frameIndex, key: result.catalogKey }] : []
       })
     })[0]
@@ -1966,26 +2631,41 @@ await scenario("names concrete planned transitions and their admission requireme
   )
   assert(fresh.includes("waits for live operation"), "A proposal must name the live operation that blocks it")
   const recovered = await summaryFor('"_tag": "RecoveredNewActionRoute"')
-  assert(recovered.startsWith("Read") && !recovered.startsWith("Recovered New Action"), "Recovered proposals must name their concrete authority action")
+  assert(
+    recovered.startsWith("Read") && !recovered.startsWith("Recovered New Action"),
+    "Recovered proposals must name their concrete authority action"
+  )
   const pause = await summaryFor(
     '"_tag": "SuspendPlannedAttemptExecutorWork"',
     "authored:taskPauseLetsIndependentTaskContinue"
   )
-  assert(pause.includes("Request safe suspension of the exact planned-attempt executor work") && pause.includes("task A"), "Pause planning must use the concrete task action")
   assert(
-    pause.includes("attempt ID attempt:A:0")
-      && pause.includes("must serialize this action with executor commands and Continue or Stop"),
+    pause.includes("Request safe suspension of the exact planned-attempt executor work") && pause.includes("task A"),
+    "Pause planning must use the concrete task action"
+  )
+  assert(
+    pause.includes("attempt ID attempt:A:0") &&
+      pause.includes("must serialize this action with executor commands and Continue or Stop"),
     "Pause planning must expose one exact attempt correlation and its process-local executor/Stop exclusion"
   )
-  assert(pause.includes("requires the existing task-work position"), "Pause planning must explain its exact position admission")
+  assert(
+    pause.includes("requires the existing task-work position"),
+    "Pause planning must explain its exact position admission"
+  )
   const queued = await summaryFor('"_tag": "QueueAcceptedResultIntegrationResponsibility"')
-  assert(queued.includes("Queue the accepted result for integration") && queued.includes("task A"), "Accepted-result planning must name the concrete integration action")
-  assert(queued.includes("needs no task-work position") && queued.includes("needs no integration-target resource"), "Accepted-result queueing must state its non-admission requirements")
+  assert(
+    queued.includes("Queue the accepted result for integration") && queued.includes("task A"),
+    "Accepted-result planning must name the concrete integration action"
+  )
+  assert(
+    queued.includes("needs no task-work position") && queued.includes("needs no integration-target resource"),
+    "Accepted-result queueing must state its non-admission requirements"
+  )
   const targetResource = await summaryFor('"_tag": "IntegrationTargetResourceRequired"')
   assert(
-    targetResource.includes("must acquire the integration-target resource")
-      || targetResource.includes("must release the held integration-target resource")
-      || targetResource.includes("requires the held integration-target resource"),
+    targetResource.includes("must acquire the integration-target resource") ||
+      targetResource.includes("must release the held integration-target resource") ||
+      targetResource.includes("requires the held integration-target resource"),
     "Integration proposals must explain their exact target-resource admission"
   )
 })
@@ -1999,10 +2679,12 @@ await scenario("distinguishes competing claim reads and exact responsibilities a
     if (actionPlanning._tag !== "DeliveryProposalsAvailable") return false
     const summaries = actionPlanning.proposals.map(({ summary }) => summary)
     const obligations = deliveries.flatMap((delivery) => delivery.obligations.map(({ summary }) => summary))
-    return summaries.some((summary) => summary.includes("current workflow responsibility"))
-      && summaries.some((summary) => summary.includes("before releasing a stopped attempt"))
-      && obligations.some((summary) => summary.includes("planned-attempt executor responsibility"))
-      && obligations.some((summary) => summary.includes("task-claim release responsibility"))
+    return (
+      summaries.some((summary) => summary.includes("current workflow responsibility")) &&
+      summaries.some((summary) => summary.includes("before releasing a stopped attempt")) &&
+      obligations.some((summary) => summary.includes("planned-attempt executor responsibility")) &&
+      obligations.some((summary) => summary.includes("task-claim release responsibility"))
+    )
   })
   if (frame === undefined || frame.actionPlanning._tag !== "DeliveryProposalsAvailable") {
     throw new Error("The distinct Stop-recovery claim-read frame is missing")
@@ -2015,12 +2697,15 @@ await scenario("distinguishes competing claim reads and exact responsibilities a
     new Set(claimReads.map(({ summary }) => summary)).size === 2,
     "The same tracker boundary call must retain each distinct workflow purpose"
   )
-  const protocolProposal = result.deliveryFrames.flatMap(({ actionPlanning }) =>
-    actionPlanning._tag === "DeliveryProposalsAvailable" ? actionPlanning.proposals : []
-  ).find(({ summary }) =>
-    summary.includes("attempt ID attempt:A:0")
-    && summary.includes("must serialize this action with executor commands and Continue or Stop")
-  )
+  const protocolProposal = result.deliveryFrames
+    .flatMap(({ actionPlanning }) =>
+      actionPlanning._tag === "DeliveryProposalsAvailable" ? actionPlanning.proposals : []
+    )
+    .find(
+      ({ summary }) =>
+        summary.includes("attempt ID attempt:A:0") &&
+        summary.includes("must serialize this action with executor commands and Continue or Stop")
+    )
   assert(
     protocolProposal !== undefined,
     "The Stop chronology must expose the process-local executor/Stop exclusion where production requires it"
@@ -2029,8 +2714,8 @@ await scenario("distinguishes competing claim reads and exact responsibilities a
 
 await scenario("uses production authored prose for current story items", () => {
   const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:changedAttemptChoiceRace")
-  const projectionRow = maintainedCassetteRows.find(({ catalogKey }) =>
-    catalogKey === "authored:coordinatorProcessDeathContinues"
+  const projectionRow = maintainedCassetteRows.find(
+    ({ catalogKey }) => catalogKey === "authored:coordinatorProcessDeathContinues"
   )
   if (row === undefined || projectionRow === undefined) throw new Error("The authored prose fixtures are missing")
   const raceIndex = row.storyItemTags.indexOf("OperatorRacesContinueAndStop")
@@ -2042,8 +2727,8 @@ await scenario("uses production authored prose for current story items", () => {
     "The defining race must use the exhaustive production authored presenter"
   )
   assert(
-    projection.includes("A read-only executor projection returns")
-      && !projection.includes("PlannedAttemptExecutorProjectionReturned"),
+    projection.includes("A read-only executor projection returns") &&
+      !projection.includes("PlannedAttemptExecutorProjectionReturned"),
     "Executor projection input must be described as a readable boundary event rather than a raw tag"
   )
   const activationFinalRead = renderAuthoredStoryItemLandmark(
@@ -2057,25 +2742,32 @@ await scenario("uses production authored prose for current story items", () => {
   )
 })
 
-await scenario("reports the established dependency-story settlements and keeps the direct-protocol caveat secondary", async () => {
-  const { document, root, settled } = installDom()
-  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun")
-  if (row === undefined) throw new Error("The dependency delivery row is missing")
-  mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
-  const done = settled(singleCassetteSettledEvent)
-  ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
-  await done
-  assert(
-    document.querySelector(".delivery-settlement-coverage")?.textContent?.startsWith(
-      "This timeline contains 2 distinct established delivery settlements"
-    ) === true,
-    "The workbench must report the timeline's exact established settlements without unrelated primary explanation"
-  )
-  assert(
-    document.querySelector(".delivery-reading-guide:not([open]) .delivery-direct-protocol-note")?.textContent?.includes("Direct integration-finality cassettes") === true,
-    "The direct-protocol caveat must remain available as collapsed secondary guidance"
-  )
-})
+await scenario(
+  "reports the established dependency-story settlements and keeps the direct-protocol caveat secondary",
+  async () => {
+    const { document, root, settled } = installDom()
+    const row = maintainedCassetteRows.find(
+      ({ catalogKey }) => catalogKey === "authored:dependentTasksCompleteInOneRun"
+    )
+    if (row === undefined) throw new Error("The dependency delivery row is missing")
+    mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
+    const done = settled(singleCassetteSettledEvent)
+    ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
+    await done
+    assert(
+      document
+        .querySelector(".delivery-settlement-coverage")
+        ?.textContent?.startsWith("This timeline contains 2 distinct established delivery settlements") === true,
+      "The workbench must report the timeline's exact established settlements without unrelated primary explanation"
+    )
+    assert(
+      document
+        .querySelector(".delivery-reading-guide:not([open]) .delivery-direct-protocol-note")
+        ?.textContent?.includes("Direct integration-finality cassettes") === true,
+      "The direct-protocol caveat must remain available as collapsed secondary guidance"
+    )
+  }
+)
 
 await scenario("counts one delivery settlement once across repeated production publications", async () => {
   const { document, root, settled } = installDom()
@@ -2101,8 +2793,8 @@ await scenario("counts one delivery settlement once across repeated production p
   await done
   const coverage = document.querySelector(".delivery-settlement-coverage")?.textContent ?? ""
   assert(
-    coverage.includes(`${distinctSettlements} distinct established delivery settlement`)
-      && coverage.includes(`across ${settlementBearingPublications} production publications`),
+    coverage.includes(`${distinctSettlements} distinct established delivery settlement`) &&
+      coverage.includes(`across ${settlementBearingPublications} production publications`),
     "The timeline must distinguish exact settlements from frames that republish them"
   )
   assert(
@@ -2135,13 +2827,14 @@ await scenario("composes simultaneous graph ticket held and delivery encodings",
   if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
     throw new Error("The dependency delivery fixture is missing")
   }
-  const combinedIndex = result.deliveryFrames.findIndex((frame) =>
-    frame.graph._tag === "Established"
-    && frame.graph.tasks.some(({ id }) => {
-      const ticket = frame.tickets.find(({ taskId }) => taskId === id)
-      const delivery = frame.deliveries.find(({ taskId }) => taskId === id)
-      return ticket?.placement.kind === "Selected" && delivery !== undefined
-    })
+  const combinedIndex = result.deliveryFrames.findIndex(
+    (frame) =>
+      frame.graph._tag === "Established" &&
+      frame.graph.tasks.some(({ id }) => {
+        const ticket = frame.tickets.find(({ taskId }) => taskId === id)
+        const delivery = frame.deliveries.find(({ taskId }) => taskId === id)
+        return ticket?.placement.kind === "Selected" && delivery !== undefined
+      })
   )
   if (combinedIndex < 0) throw new Error("No frame combines selected-ticket and delivery standing")
   mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
@@ -2151,17 +2844,24 @@ await scenario("composes simultaneous graph ticket held and delivery encodings",
   const timeline = document.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
   if (timeline === null) throw new Error("The dependency delivery timeline is missing")
   chooseOption(timeline, String(deliveryMomentIndex(result, combinedIndex)))
-  const graph = document.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & {
-    projection?: { readonly tasks: ReadonlyArray<{ readonly display?: { readonly classes?: ReadonlyArray<string> } }> }
-  }) | null
+  const graph = document.querySelector("[data-role='delivery-production-graph']") as
+    | (HTMLElement & {
+        projection?: {
+          readonly tasks: ReadonlyArray<{ readonly display?: { readonly classes?: ReadonlyArray<string> } }>
+        }
+      })
+    | null
   assert(
-    graph?.projection?.tasks.some(({ display }) =>
-      display?.classes?.includes("placement") === true && display.classes.includes("standing")
+    graph?.projection?.tasks.some(
+      ({ display }) => display?.classes?.includes("placement") === true && display.classes.includes("standing")
     ) === true,
     "A task must retain simultaneous selected-ticket and ticket-delivery encodings"
   )
   const legend = document.querySelector(".delivery-graph-legend")?.textContent ?? ""
-  assert(legend.includes("Purple halo") && legend.includes("Gold fill"), "The legend must name composable ticket and delivery encodings")
+  assert(
+    legend.includes("Purple halo") && legend.includes("Gold fill"),
+    "The legend must name composable ticket and delivery encodings"
+  )
 })
 
 await scenario("keeps selected-task feedback separate from delivery encodings", async () => {
@@ -2172,13 +2872,22 @@ await scenario("keeps selected-task feedback separate from delivery encodings", 
   const done = settled(singleCassetteSettledEvent)
   ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
   await done
-  const graph = document.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & {
-    selectedTaskId?: string | null
-  }) | null
+  const graph = document.querySelector("[data-role='delivery-production-graph']") as
+    | (HTMLElement & { selectedTaskId?: string | null })
+    | null
   graph?.dispatchEvent(new CustomEvent("task-selected", { detail: { taskId: "A" } }))
-  assert(graph?.selectedTaskId === "A", "Graph selection must remain controlled without changing its delivery projection")
-  assert(document.querySelector("tr[data-task-id='A']")?.getAttribute("aria-current") === "true", "Selected-task feedback must retain its accessible table correlation")
-  assert(document.querySelector(".delivery-graph-legend")?.textContent?.includes("Cyan outer outline") === true, "The interaction highlight must be explained separately from domain encodings")
+  assert(
+    graph?.selectedTaskId === "A",
+    "Graph selection must remain controlled without changing its delivery projection"
+  )
+  assert(
+    document.querySelector("tr[data-task-id='A']")?.getAttribute("aria-current") === "true",
+    "Selected-task feedback must retain its accessible table correlation"
+  )
+  assert(
+    document.querySelector(".delivery-graph-legend")?.textContent?.includes("Cyan outer outline") === true,
+    "The interaction highlight must be explained separately from domain encodings"
+  )
 })
 
 await scenario("shows grouping relationships exact obligations and settlement state", async () => {
@@ -2191,10 +2900,11 @@ await scenario("shows grouping relationships exact obligations and settlement st
   await done
   const result = resultByKey.get(row.catalogKey)
   if (result?._tag !== "Completed" || result.deliveryFrames === null) throw new Error("Grouping frames are missing")
-  const groupingIndex = result.deliveryFrames.findIndex((frame) =>
-    frame.graph._tag === "Established"
-    && frame.graph.tasks.some(({ parentTaskId }) => parentTaskId !== null)
-    && frame.deliveries.some(({ obligations }) => obligations.length > 0)
+  const groupingIndex = result.deliveryFrames.findIndex(
+    (frame) =>
+      frame.graph._tag === "Established" &&
+      frame.graph.tasks.some(({ parentTaskId }) => parentTaskId !== null) &&
+      frame.deliveries.some(({ obligations }) => obligations.length > 0)
   )
   const workbench = document.querySelector("[data-role='delivery-workbench']")
   const select = workbench?.querySelector(".delivery-timeline-controls select") as HTMLSelectElement | null
@@ -2204,12 +2914,21 @@ await scenario("shows grouping relationships exact obligations and settlement st
     else option.removeAttribute("selected")
   }
   select.dispatchEvent(new Event("change"))
-  const graph = workbench?.querySelector("[data-role='delivery-production-graph']") as (HTMLElement & {
-    projection?: { readonly edges: ReadonlyArray<{ readonly kind: string }> }
-  }) | null
-  assert(graph?.projection?.edges.some(({ kind }) => kind === "Grouping") === true, "The production-observed parent relation must render as a grouping edge")
-  assert(workbench?.textContent?.includes("exact obligations") === true, "Ticket-delivery obligations must be explicitly inspectable and attributable to a task")
-  assert(workbench?.textContent?.includes("Settlement") === true, "Every task must expose its current delivery-settlement state")
+  const graph = workbench?.querySelector("[data-role='delivery-production-graph']") as
+    | (HTMLElement & { projection?: { readonly edges: ReadonlyArray<{ readonly kind: string }> } })
+    | null
+  assert(
+    graph?.projection?.edges.some(({ kind }) => kind === "Grouping") === true,
+    "The production-observed parent relation must render as a grouping edge"
+  )
+  assert(
+    workbench?.textContent?.includes("exact obligations") === true,
+    "Ticket-delivery obligations must be explicitly inspectable and attributable to a task"
+  )
+  assert(
+    workbench?.textContent?.includes("Settlement") === true,
+    "Every task must expose its current delivery-settlement state"
+  )
 })
 
 await scenario("finds and auto-selects cassettes by catalog ID or human title", async () => {
@@ -2230,10 +2949,11 @@ await scenario("finds and auto-selects cassettes by catalog ID or human title", 
   if (search === null || options === null) throw new Error("The searchable cassette selector is missing")
   assert(search.type === "search", "The cassette selector must be a native search input")
   assert(search.getAttribute("aria-label") === "Find cassette by ID or title", "The search purpose must be explicit")
-  assert(options.querySelectorAll("option").length === expectedCatalogSize, "Search suggestions must retain the complete catalog")
-  const invariantOption = options.querySelector<HTMLOptionElement>(
-    'option[value="authored:deliveryInvariantStory"]'
+  assert(
+    options.querySelectorAll("option").length === expectedCatalogSize,
+    "Search suggestions must retain the complete catalog"
   )
+  const invariantOption = options.querySelector<HTMLOptionElement>('option[value="authored:deliveryInvariantStory"]')
   assert(
     invariantOption?.label.includes("staggered double diamond") === true,
     "Every suggestion must pair its exact catalog ID with the human title"
@@ -2244,8 +2964,8 @@ await scenario("finds and auto-selects cassettes by catalog ID or human title", 
     document.querySelector("article")?.dataset.catalogKey === "authored:deliveryInvariantStory",
     "A unique catalog-ID suffix must auto-select the matching cassette"
   )
-  const titleTarget = maintainedCassetteRows.find(({ catalogKey }) =>
-    catalogKey === "authored:productionShapedFiveTaskDiamond"
+  const titleTarget = maintainedCassetteRows.find(
+    ({ catalogKey }) => catalogKey === "authored:productionShapedFiveTaskDiamond"
   )
   if (titleTarget === undefined) throw new Error("The title-search fixture is missing")
   search.value = titleTarget.storyName
@@ -2260,7 +2980,10 @@ await scenario("finds and auto-selects cassettes by catalog ID or human title", 
     document.querySelector("article")?.dataset.catalogKey === titleTarget.catalogKey,
     "No-match text must retain the last valid cassette selection"
   )
-  assert(searchStatus?.textContent?.includes("No maintained cassette matches") === true, "No-match text must be explained")
+  assert(
+    searchStatus?.textContent?.includes("No maintained cassette matches") === true,
+    "No-match text must be explained"
+  )
   const allSettled = settled(everyCassetteSettledEvent)
   const runAll = [...document.querySelectorAll("button")].find(({ textContent }) => textContent?.startsWith("Run all "))
   runAll?.click()
@@ -2280,10 +3003,11 @@ await scenario("runs browser Run all sequentially without changing its complete 
     revision: "acceptance-revision",
     root,
     rows,
-    runCassette: (key) => new Promise((resolve) => {
-      started.push(key)
-      pending.set(key, resolve)
-    })
+    runCassette: (key) =>
+      new Promise((resolve) => {
+        started.push(key)
+        pending.set(key, resolve)
+      })
   })
   const runAll = [...document.querySelectorAll("button")].find(({ textContent }) => textContent?.startsWith("Run all "))
   runAll?.click()
@@ -2321,9 +3045,18 @@ await scenario("keeps batch progress concise for keyboard and nonvisual maintain
   mountCassetteLab({ revision: "acceptance-revision", root, rows: maintainedCassetteRows, runCassette: cannedRunner })
   const rowButtons = [...document.querySelectorAll("article .selected-cassette-controls button")]
   assert(rowButtons.length === 1, "The shared surface must contain one selected-cassette action")
-  assert(rowButtons[0]?.getAttribute("aria-label")?.includes(maintainedCassetteRows[0]?.catalogKey ?? "") === true, "The selected action must name its cassette")
-  assert(document.querySelector("[data-role='catalog-summary']")?.getAttribute("aria-live") === null, "Per-cassette batch settlements must not create a live-region announcement storm")
-  assert(document.querySelector("[data-role='run-announcement'][aria-live='polite']") !== null, "Batch start and finish must have one dedicated announcement channel")
+  assert(
+    rowButtons[0]?.getAttribute("aria-label")?.includes(maintainedCassetteRows[0]?.catalogKey ?? "") === true,
+    "The selected action must name its cassette"
+  )
+  assert(
+    document.querySelector("[data-role='catalog-summary']")?.getAttribute("aria-live") === null,
+    "Per-cassette batch settlements must not create a live-region announcement storm"
+  )
+  assert(
+    document.querySelector("[data-role='run-announcement'][aria-live='polite']") !== null,
+    "Batch start and finish must have one dedicated announcement channel"
+  )
 })
 
 await scenario("replaces stale evidence with live cassette progress and settles cassettes independently", async () => {
@@ -2339,30 +3072,49 @@ await scenario("replaces stale evidence with live cassette progress and settles 
     revision: "acceptance-revision",
     root,
     rows,
-    runCassette: (key) => new Promise((resolve) => {
-      if (key === rows[0]?.catalogKey) resolveFirst = resolve
-      else resolveSecond = resolve
-    })
+    runCassette: (key) =>
+      new Promise((resolve) => {
+        if (key === rows[0]?.catalogKey) resolveFirst = resolve
+        else resolveSecond = resolve
+      })
   })
   const selector = document.querySelector("[data-role='cassette-selector']") as HTMLInputElement | null
   if (selector === null) throw new Error("The cassette selector is missing")
   const runAll = [...document.querySelectorAll("button")].find(({ textContent }) => textContent?.startsWith("Run all "))
   runAll?.click()
   assert(document.querySelectorAll("article").length === 1, "Batch execution must retain one shared cassette surface")
-  assert(document.querySelector("article")?.dataset.state === "Running", "The selected affected cassette must become running immediately")
-  assert(document.querySelectorAll("[data-role='cassette-options'] option").length === 2, "Batch execution must retain both cassette choices")
-  assert(document.querySelector("[data-role='execution-evidence']") === null, "Previous evidence must be absent while rerunning")
+  assert(
+    document.querySelector("article")?.dataset.state === "Running",
+    "The selected affected cassette must become running immediately"
+  )
+  assert(
+    document.querySelectorAll("[data-role='cassette-options'] option").length === 2,
+    "Batch execution must retain both cassette choices"
+  )
+  assert(
+    document.querySelector("[data-role='execution-evidence']") === null,
+    "Previous evidence must be absent while rerunning"
+  )
   const firstSettled = settled(cassetteSettledEvent)
   resolveFirst?.(firstResult)
   await firstSettled
-  assert(document.querySelector("article")?.dataset.state === "Completed", "The selected cassette must show its result as soon as it settles")
+  assert(
+    document.querySelector("article")?.dataset.state === "Completed",
+    "The selected cassette must show its result as soon as it settles"
+  )
   if (rows[1] === undefined) throw new Error("The second batch cassette is missing")
   chooseCassette(selector, rows[1].catalogKey)
-  assert(document.querySelector("article")?.dataset.state === "Running", "The selector must expose the other cassette while it is still running")
+  assert(
+    document.querySelector("article")?.dataset.state === "Running",
+    "The selector must expose the other cassette while it is still running"
+  )
   const everySettled = settled(everyCassetteSettledEvent)
   resolveSecond?.(secondResult)
   await everySettled
-  assert(document.querySelector("article")?.dataset.state === "Completed", "The second selected cassette must show its retained terminal result")
+  assert(
+    document.querySelector("article")?.dataset.state === "Completed",
+    "The second selected cassette must show its retained terminal result"
+  )
 })
 
 await scenario("presents concise execution proof before chronological journal and raw output", async () => {
@@ -2378,12 +3130,32 @@ await scenario("presents concise execution proof before chronological journal an
   assert(facts.includes("runAuthoredScenarioCassette"), "Execution proof must name the exact production runner")
   assert(facts.includes("Activation 1 → Activation 2"), "Execution proof must show later Run activations")
   assert(facts.includes("Run identity"), "Authored execution proof must show its Run identity")
-  assert((evidence?.querySelectorAll("[data-role='journal-chronology'] tbody tr").length ?? 0) > 0, "Journal evidence must be chronological within a Run")
-  assert(evidence?.querySelector("[data-role='journal-chronology'] caption") !== null, "Journal evidence must name its ordering scope")
-  assert([...evidence?.querySelectorAll("[data-role='journal-chronology'] th") ?? []].every((cell) => cell.getAttribute("scope") === "col"), "Journal columns must expose header scope")
-  assert(evidence?.querySelector("[data-role='journal-chronology'] tbody details pre") !== null, "Each journal row must retain its exact event")
-  assert(evidence?.querySelector("[data-role='raw-execution-result']") !== null, "Raw output must remain secondary and explicitly labelled")
-  assert(evidence?.textContent?.includes("Production journal evidence") === false, "The UI must not mislabel the complete execution result")
+  assert(
+    (evidence?.querySelectorAll("[data-role='journal-chronology'] tbody tr").length ?? 0) > 0,
+    "Journal evidence must be chronological within a Run"
+  )
+  assert(
+    evidence?.querySelector("[data-role='journal-chronology'] caption") !== null,
+    "Journal evidence must name its ordering scope"
+  )
+  assert(
+    [...(evidence?.querySelectorAll("[data-role='journal-chronology'] th") ?? [])].every(
+      (cell) => cell.getAttribute("scope") === "col"
+    ),
+    "Journal columns must expose header scope"
+  )
+  assert(
+    evidence?.querySelector("[data-role='journal-chronology'] tbody details pre") !== null,
+    "Each journal row must retain its exact event"
+  )
+  assert(
+    evidence?.querySelector("[data-role='raw-execution-result']") !== null,
+    "Raw output must remain secondary and explicitly labelled"
+  )
+  assert(
+    evidence?.textContent?.includes("Production journal evidence") === false,
+    "The UI must not mislabel the complete execution result"
+  )
 })
 
 await scenario("shows continuation authorization prefixes and retained Run/attempt identity", async () => {
@@ -2395,12 +3167,23 @@ await scenario("shows continuation authorization prefixes and retained Run/attem
   ;(document.querySelector("article button") as HTMLButtonElement | null)?.click()
   await done
   const authorization = document.querySelector("[data-role='continuation-authorization']")
-  assert(authorization !== null, "The selected safely suspended Resume result must render continuation authorization evidence")
+  assert(
+    authorization !== null,
+    "The selected safely suspended Resume result must render continuation authorization evidence"
+  )
   if (authorization === null) return
   const prefixRows = [...authorization.querySelectorAll("[data-role='continuation-prefixes'] tbody tr")]
-  assert(prefixRows.length === 3, "The maintained Resume cassette must render pre-auth, post-auth, and terminal prefixes")
+  assert(
+    prefixRows.length === 3,
+    "The maintained Resume cassette must render pre-auth, post-auth, and terminal prefixes"
+  )
   const prefixText = prefixRows.map(({ textContent }) => textContent ?? "").join("|")
-  assert(prefixText.includes("BeforeAuthorization") && prefixText.includes("AfterAuthorizationBeforeReport") && prefixText.includes("AfterTerminalReport"), "Each durable continuation prefix must remain named")
+  assert(
+    prefixText.includes("BeforeAuthorization") &&
+      prefixText.includes("AfterAuthorizationBeforeReport") &&
+      prefixText.includes("AfterTerminalReport"),
+    "Each durable continuation prefix must remain named"
+  )
   assert(
     authorization.textContent?.includes("no replacement attempt or executor invocation is inferred") === true,
     "The Lab must keep continuation authorization distinct from attempt and executor-invocation identity"
@@ -2413,7 +3196,10 @@ await scenario("shows continuation authorization prefixes and retained Run/attem
     authorization.textContent?.includes("ExecutorReportObserved at journal 41") === true,
     "The Lab must distinguish an observed executor report from a command intent"
   )
-  assert(authorization.querySelectorAll("[data-role='continuation-witness-operations'] li").length === 5, "All five witness operation identities must be visible")
+  assert(
+    authorization.querySelectorAll("[data-role='continuation-witness-operations'] li").length === 5,
+    "All five witness operation identities must be visible"
+  )
 })
 
 await scenario("links, reveals, and retries cassette failures and Lab defects", async () => {
@@ -2438,17 +3224,31 @@ await scenario("links, reveals, and retries cassette failures and Lab defects", 
   runAll?.click()
   await allSettled
   const problemLink = document.querySelector("[data-role='problem-links'] a") as HTMLAnchorElement | null
-  assert(problemLink?.textContent?.includes(rows[0]?.storyName ?? "") === true, "The aggregate must link a failed cassette by human story and exact key")
+  assert(
+    problemLink?.textContent?.includes(rows[0]?.storyName ?? "") === true,
+    "The aggregate must link a failed cassette by human story and exact key"
+  )
   const problemLinks = [...document.querySelectorAll<HTMLAnchorElement>("[data-role='problem-links'] a")]
   assert(problemLinks.length === 2, "Cassette failures and Lab defects must both remain navigable")
-  assert([...document.querySelectorAll("button")].every(({ disabled }) => !disabled), "A Lab defect must restore usable controls")
+  assert(
+    [...document.querySelectorAll("button")].every(({ disabled }) => !disabled),
+    "A Lab defect must restore usable controls"
+  )
   if (problemLink === null) throw new Error("Problem navigation controls are missing")
   problemLink.click()
-  assert(document.querySelector("article")?.dataset.catalogKey === rows[0]?.catalogKey, "Problem navigation must select the failed cassette")
+  assert(
+    document.querySelector("article")?.dataset.catalogKey === rows[0]?.catalogKey,
+    "Problem navigation must select the failed cassette"
+  )
   problemLinks[1]?.click()
-  assert(document.querySelector("article")?.dataset.state === "LabDefect", "Selecting the defect link must replace the failure UI with the Lab defect")
+  assert(
+    document.querySelector("article")?.dataset.state === "LabDefect",
+    "Selecting the defect link must replace the failure UI with the Lab defect"
+  )
   assert(document.querySelectorAll("article").length === 1, "Problem navigation must still use the shared surface")
-  const rerun = [...document.querySelectorAll("button")].find(({ textContent }) => textContent === "Retry problem cassettes")
+  const rerun = [...document.querySelectorAll("button")].find(
+    ({ textContent }) => textContent === "Retry problem cassettes"
+  )
   rerun?.click()
   await Promise.all([settled(cassetteSettledEvent), settled(cassetteSettledEvent)])
   assert(calls.get(rows[0]?.catalogKey ?? "") === 2, "Retry problems must repeat the typed cassette failure")
@@ -2459,81 +3259,154 @@ await scenario("offers an explicit reload escape while a runner is still waiting
   const { document, root } = installDom()
   let reloadCount = 0
   mountCassetteLab({
-    reloadLab: () => { reloadCount += 1 },
+    reloadLab: () => {
+      reloadCount += 1
+    },
     revision: "acceptance-revision",
     root,
     rows: maintainedCassetteRows.slice(0, 1),
     runCassette: () => new Promise(() => undefined)
   })
   ;(document.querySelector("article button") as HTMLButtonElement | null)?.click()
-  const reload = [...document.querySelectorAll("button")].find(({ textContent }) => textContent === "Reload Lab and discard displayed results")
+  const reload = [...document.querySelectorAll("button")].find(
+    ({ textContent }) => textContent === "Reload Lab and discard displayed results"
+  )
   assert(reload?.hidden === false, "A waiting invocation must expose a recovery action")
   reload?.click()
   assert(reloadCount === 1, "The recovery action must reload the isolated Lab")
 })
 
-await scenario("the real browser entry runs a selected maintained cassette with fresh production identity", async () => {
-  const { document, settled } = installDom()
-  await import("./entry.ts")
-  const selector = document.querySelector<HTMLInputElement>("[data-role='cassette-selector']")
-  const runAll = [...document.querySelectorAll("button")].find(({ textContent }) =>
-    textContent === `Run all ${expectedCatalogSize} cassettes`
-  )
-  assert(selector !== null && runAll !== undefined, "The real entry must expose the complete catalog and counted Run all action")
-  assert(document.querySelectorAll("[data-role='cassette-options'] option").length === expectedCatalogSize, "The real entry must retain every maintained choice")
-  if (selector === null) throw new Error("The real entry selector is missing")
-  chooseCassette(selector, "authored:singletonTaskCompletes")
-  const done = settled(singleCassetteSettledEvent)
-  ;(document.querySelector("article button") as HTMLButtonElement | null)?.click()
-  await done
-  assert(document.querySelector("article")?.dataset.catalogKey === "authored:singletonTaskCompletes", "The real entry must run the selected exact cassette")
-  assert(document.querySelector("article")?.dataset.state === "Completed", "The real entry must retain the production terminal result")
-  const runIdentity = [...document.querySelectorAll("[data-role='execution-evidence'] dt")].find(({ textContent }) => textContent === "Run identity")?.nextElementSibling?.textContent
-  const freshRunId = Schema.decodeUnknownSync(RunId)(runIdentity)
-  const first = resultByKey.get("authored:singletonTaskCompletes")
-  assert(first?._tag === "Completed" && first.runId !== freshRunId, "The real entry must allocate a fresh production Run rather than reuse the first batch's result")
-  assert(document.querySelector("[data-role='raw-execution-result'] pre") !== null, "The real entry must retain its exact production evidence")
-})
+await scenario(
+  "the real browser entry runs a selected maintained cassette with fresh production identity",
+  async () => {
+    const { document, settled } = installDom()
+    await import("./entry.ts")
+    const selector = document.querySelector<HTMLInputElement>("[data-role='cassette-selector']")
+    const runAll = [...document.querySelectorAll("button")].find(
+      ({ textContent }) => textContent === `Run all ${expectedCatalogSize} cassettes`
+    )
+    assert(
+      selector !== null && runAll !== undefined,
+      "The real entry must expose the complete catalog and counted Run all action"
+    )
+    assert(
+      document.querySelectorAll("[data-role='cassette-options'] option").length === expectedCatalogSize,
+      "The real entry must retain every maintained choice"
+    )
+    if (selector === null) throw new Error("The real entry selector is missing")
+    chooseCassette(selector, "authored:singletonTaskCompletes")
+    const done = settled(singleCassetteSettledEvent)
+    ;(document.querySelector("article button") as HTMLButtonElement | null)?.click()
+    await done
+    assert(
+      document.querySelector("article")?.dataset.catalogKey === "authored:singletonTaskCompletes",
+      "The real entry must run the selected exact cassette"
+    )
+    assert(
+      document.querySelector("article")?.dataset.state === "Completed",
+      "The real entry must retain the production terminal result"
+    )
+    const runIdentity = [...document.querySelectorAll("[data-role='execution-evidence'] dt")].find(
+      ({ textContent }) => textContent === "Run identity"
+    )?.nextElementSibling?.textContent
+    const freshRunId = Schema.decodeUnknownSync(RunId)(runIdentity)
+    const first = resultByKey.get("authored:singletonTaskCompletes")
+    assert(
+      first?._tag === "Completed" && first.runId !== freshRunId,
+      "The real entry must allocate a fresh production Run rather than reuse the first batch's result"
+    )
+    assert(
+      document.querySelector("[data-role='raw-execution-result'] pre") !== null,
+      "The real entry must retain its exact production evidence"
+    )
+  }
+)
 
-await scenario("browser Run all retains every first-batch production result through the controlled runner boundary", async () => {
-  const { document, root, settled } = installDom()
-  const calls: Array<(typeof maintainedCassetteKeys)[number]> = []
-  // Production execution was proved above. This boundary returns those exact
-  // typed results to prove full-catalog UI retention without executing them twice.
-  mountCassetteLab({
-    revision: "acceptance-revision",
-    root,
-    rows: maintainedCassetteRows,
-    runCassette: (key) => {
-      calls.push(key)
-      return cannedRunner(key)
-    }
-  })
-  const allSettled = settled(everyCassetteSettledEvent)
-  const runAll = [...document.querySelectorAll("button")].find(({ textContent }) => textContent?.startsWith("Run all "))
-  runAll?.click()
-  await allSettled
-  assert(JSON.stringify(calls) === JSON.stringify(maintainedCassetteKeys), "Run all must call every exact catalog key once in catalog order")
-  assert(new Set(calls).size === expectedCatalogSize, "Run all must not repeat or omit a catalog key")
-  assert(document.querySelectorAll("article").length === 1, "The browser must retain one shared cassette UI after Run all")
-  assert(document.querySelector("article")?.dataset.state === "Completed", "The selected maintained cassette must project its retained terminal result")
-  assert(document.querySelectorAll("[data-role='execution-evidence']").length === 1, "Only the selected cassette's retained evidence may be projected")
-  const selector = document.querySelector("[data-role='cassette-selector']") as HTMLInputElement | null
-  const completedOptions = [...document.querySelectorAll<HTMLOptionElement>("[data-role='cassette-options'] option")]
-  assert(completedOptions.length === expectedCatalogSize, "Run all must retain every completed cassette as a searchable result")
-  const incompleteOption = completedOptions.find(({ label }) => !label.includes("completed"))
-  assert(incompleteOption === undefined, `Every selector choice must expose its retained terminal status: ${incompleteOption?.outerHTML ?? "unknown"}`)
-  assert(document.querySelectorAll("section[data-role='delivery-workbench']").length === 1, "Run all must retain one permanent workbench for the selected cassette")
-  assert(document.querySelector("[data-role='delivery-workbench'] dalph-delivery-graph") !== null, "The selected cassette's permanent workbench must retain its current graph")
-  assert(document.querySelector("details[data-role='all-task-facts']")?.hasAttribute("open") === false, "Run all must keep the secondary all-task matrix collapsed")
-  assert([...document.querySelectorAll<HTMLDetailsElement>("[data-role='execution-evidence']")].every(({ open }) => !open), "Run all must keep successful terminal evidence collapsed")
-  assert(root.querySelector("[data-role='catalog-summary']")?.textContent?.startsWith(`${expectedCatalogSize} completed`) === true, "The browser must show the complete catalog summary")
-  const replacement = maintainedCassetteRows.find(({ category }) => category === "IntegrationFinality")
-  if (selector === null || replacement === undefined) throw new Error("A completed replacement cassette is required")
-  chooseCassette(selector, replacement.catalogKey)
-  assert(document.querySelector("article")?.dataset.catalogKey === replacement.catalogKey, "Selecting another completed result must replace the projected cassette")
-  assert(document.querySelectorAll("[data-role='execution-evidence']").length === 1, "The replacement must not append a second evidence tree")
-})
+await scenario(
+  "browser Run all retains every first-batch production result through the controlled runner boundary",
+  async () => {
+    const { document, root, settled } = installDom()
+    const calls: Array<(typeof maintainedCassetteKeys)[number]> = []
+    // Production execution was proved above. This boundary returns those exact
+    // typed results to prove full-catalog UI retention without executing them twice.
+    mountCassetteLab({
+      revision: "acceptance-revision",
+      root,
+      rows: maintainedCassetteRows,
+      runCassette: (key) => {
+        calls.push(key)
+        return cannedRunner(key)
+      }
+    })
+    const allSettled = settled(everyCassetteSettledEvent)
+    const runAll = [...document.querySelectorAll("button")].find(({ textContent }) =>
+      textContent?.startsWith("Run all ")
+    )
+    runAll?.click()
+    await allSettled
+    assert(
+      JSON.stringify(calls) === JSON.stringify(maintainedCassetteKeys),
+      "Run all must call every exact catalog key once in catalog order"
+    )
+    assert(new Set(calls).size === expectedCatalogSize, "Run all must not repeat or omit a catalog key")
+    assert(
+      document.querySelectorAll("article").length === 1,
+      "The browser must retain one shared cassette UI after Run all"
+    )
+    assert(
+      document.querySelector("article")?.dataset.state === "Completed",
+      "The selected maintained cassette must project its retained terminal result"
+    )
+    assert(
+      document.querySelectorAll("[data-role='execution-evidence']").length === 1,
+      "Only the selected cassette's retained evidence may be projected"
+    )
+    const selector = document.querySelector("[data-role='cassette-selector']") as HTMLInputElement | null
+    const completedOptions = [...document.querySelectorAll<HTMLOptionElement>("[data-role='cassette-options'] option")]
+    assert(
+      completedOptions.length === expectedCatalogSize,
+      "Run all must retain every completed cassette as a searchable result"
+    )
+    const incompleteOption = completedOptions.find(({ label }) => !label.includes("completed"))
+    assert(
+      incompleteOption === undefined,
+      `Every selector choice must expose its retained terminal status: ${incompleteOption?.outerHTML ?? "unknown"}`
+    )
+    assert(
+      document.querySelectorAll("section[data-role='delivery-workbench']").length === 1,
+      "Run all must retain one permanent workbench for the selected cassette"
+    )
+    assert(
+      document.querySelector("[data-role='delivery-workbench'] dalph-delivery-graph") !== null,
+      "The selected cassette's permanent workbench must retain its current graph"
+    )
+    assert(
+      document.querySelector("details[data-role='all-task-facts']")?.hasAttribute("open") === false,
+      "Run all must keep the secondary all-task matrix collapsed"
+    )
+    assert(
+      [...document.querySelectorAll<HTMLDetailsElement>("[data-role='execution-evidence']")].every(({ open }) => !open),
+      "Run all must keep successful terminal evidence collapsed"
+    )
+    assert(
+      root
+        .querySelector("[data-role='catalog-summary']")
+        ?.textContent?.startsWith(`${expectedCatalogSize} completed`) === true,
+      "The browser must show the complete catalog summary"
+    )
+    const replacement = maintainedCassetteRows.find(({ category }) => category === "IntegrationFinality")
+    if (selector === null || replacement === undefined) throw new Error("A completed replacement cassette is required")
+    chooseCassette(selector, replacement.catalogKey)
+    assert(
+      document.querySelector("article")?.dataset.catalogKey === replacement.catalogKey,
+      "Selecting another completed result must replace the projected cassette"
+    )
+    assert(
+      document.querySelectorAll("[data-role='execution-evidence']").length === 1,
+      "The replacement must not append a second evidence tree"
+    )
+  }
+)
 
 await scenario("reruns one maintained cassette with fresh production identity", async () => {
   const first = everyResult.find(({ catalogKey }) => catalogKey === "authored:singletonTaskCompletes")

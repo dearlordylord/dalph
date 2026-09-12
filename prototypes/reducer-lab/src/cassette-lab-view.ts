@@ -115,10 +115,10 @@ export const executionSummaryItems = (result: CassetteLabResult): ReadonlyArray<
     })
   } else {
     base.push({ term: "Journal evidence", description: `${result.journalRecordCount} records, ordered within each Run` })
-    if (result.traceHistories !== null) {
+    if (result.preparedTrace !== null) {
       base.push({
         term: "Production trace reader",
-        description: `${result.traceHistories.length} exact (RunId, JournalPosition) history views`
+        description: `${result.preparedTrace.cursors.length} available exact (RunId, JournalPosition) history cursors; selected payloads materialize on demand`
       })
     }
   }

@@ -20,6 +20,7 @@ import {
 } from "./cassette-lab-workbench.ts"
 import { PlaybackRunStarted } from "./delivery-playback.ts"
 import { continuationAuthorizationProjectionOf } from "./continuation-authorization-lab.ts"
+import type { AuthoredDeliveryFrame, AuthoredObservationMoment } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 
 export const singleCassetteSettledEvent = "dalph-cassette-lab:single-settled"
 export const everyCassetteSettledEvent = "dalph-cassette-lab:every-settled"
@@ -553,6 +554,8 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
         if (catalogKey === undefined) return
         let hasRenderedLiveObservation = false
         let liveDeliveryRenderTimer: ReturnType<typeof setTimeout> | undefined
+        const liveFrames: Array<AuthoredDeliveryFrame> = []
+        const liveMoments: Array<AuthoredObservationMoment> = []
         try {
           const renderLatestLiveObservation = (): void => {
             liveDeliveryRenderTimer = undefined
@@ -562,12 +565,20 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
               || latestState.deliveryFrames === null
               || latestState.observationMoments === null
             ) return
-            if (selectedSurface?.catalogKey === catalogKey) selectedSurface.updateDeliveryFrame(latestState)
+            // Export immutable snapshots only when this render is requested;
+            // no earlier UI state retains either growing producer buffer.
+            const renderedState = {
+              _tag: "Running",
+              deliveryFrames: Object.freeze([...liveFrames]),
+              observationMoments: Object.freeze([...liveMoments])
+            } as const
+            states.set(catalogKey, renderedState)
+            if (selectedSurface?.catalogKey === catalogKey) selectedSurface.updateDeliveryFrame(renderedState)
             root.dispatchEvent(new CustomEvent(deliveryFrameEvent, {
               detail: {
                 catalogKey,
-                frameCount: latestState.deliveryFrames.length,
-                momentCount: latestState.observationMoments.length
+                frameCount: renderedState.deliveryFrames.length,
+                momentCount: renderedState.observationMoments.length
               }
             }))
           }
@@ -579,14 +590,8 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
                 || state.deliveryFrames === null
                 || state.observationMoments === null
               ) return
-              const nextState = {
-                _tag: "Running",
-                deliveryFrames: moment._tag === "DeliveryPublicationMoment"
-                  ? [...state.deliveryFrames, moment.deliveryFrame]
-                  : state.deliveryFrames,
-                observationMoments: [...state.observationMoments, moment]
-              } as const
-              states.set(catalogKey, nextState)
+              if (moment._tag === "DeliveryPublicationMoment") liveFrames.push(moment.deliveryFrame)
+              liveMoments.push(moment)
               if (!hasRenderedLiveObservation) {
                 hasRenderedLiveObservation = true
                 renderLatestLiveObservation()

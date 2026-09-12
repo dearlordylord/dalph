@@ -100,7 +100,7 @@ const successorHistory = traceAt(
   [{ predecessorOperationId, successorOperationId }]
 )
 const resolvedPredecessor = resolveTraceCausalPredecessor(
-  [predecessorHistory, successorHistory],
+  [predecessorHistory.cursor, successorHistory.cursor],
   successorHistory,
   successorOperationId,
   predecessorOperationId
@@ -108,7 +108,7 @@ const resolvedPredecessor = resolveTraceCausalPredecessor(
 assert.equal(resolvedPredecessor._tag, "Resolved")
 if (resolvedPredecessor._tag === "Resolved") assert.deepEqual(resolvedPredecessor.cursor, first)
 const notProjectedPredecessor = resolveTraceCausalPredecessor(
-  [traceAt(second, [], [{ predecessorOperationId, successorOperationId }])],
+  [second],
   traceAt(second, [], [{ predecessorOperationId, successorOperationId }]),
   successorOperationId,
   predecessorOperationId

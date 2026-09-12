@@ -1,14 +1,32 @@
 import { NodeCrypto } from "@effect/platform-node"
-import { Effect } from "effect"
+import { Cause, Effect, Exit } from "effect"
 import { expect, it } from "vitest"
 import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
+import type { AuthoredObservationMoment } from "../../src/cassettes/authored-runner.js"
 
 it("captures delivery publications and live runtime owners in one authored observation order", async () => {
+  const observedMoments: Array<AuthoredObservationMoment> = []
+  let firstObservedPayload: string | undefined
   const run = await Effect.runPromise(
-    runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration).pipe(
-      Effect.provide(NodeCrypto.layer)
-    )
+    runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration, {
+      onObservationMoment: (moment) =>
+        Effect.sync(() => {
+          firstObservedPayload ??= JSON.stringify(moment)
+          observedMoments.push(moment)
+        })
+    }).pipe(Effect.provide(NodeCrypto.layer))
   )
+
+  expect(observedMoments).toHaveLength(run.observationCaptures.length)
+  expect(observedMoments.every((moment, index) => moment === run.observationMoments[index])).toBe(true)
+  expect(JSON.stringify(observedMoments[0])).toBe(firstObservedPayload)
+  expect(run.observationCaptureSnapshotCopiedReferences).toBe(run.observationCaptures.length)
+  expect(run.observationPlaybackWork).toEqual({
+    enqueuedCaptures: run.observationCaptures.length,
+    projectedCaptures: run.observationCaptures.length,
+    projectedPublications: run.observationCaptures.filter(({ _tag }) => _tag === "DeliveryPublicationCaptured").length,
+    retainedMomentNodes: run.observationMoments.length
+  })
 
   expect(run.observationMoments.map(({ captureOrder }) => captureOrder)).toEqual(
     run.observationMoments.map((_, index) => index + 1)
@@ -92,4 +110,22 @@ it("captures delivery publications and live runtime owners in one authored obser
   if (settled.owner._tag !== "SettledMaterializedDeliveryAction") return
   expect(intentRecorded.owner.operationId).toBe(materialized.owner.operationId)
   expect(settled.owner.operationId).toBe(materialized.owner.operationId)
+})
+
+it("surfaces the original playback callback defect before the authored workflow completes", async () => {
+  const defect = new Error("authored playback callback failed")
+  let terminalCaptured = false
+  const exit = await Effect.runPromiseExit(
+    runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.dependentTasksCompleteInOneRun, {
+      onObservationCapture: (capture) => {
+        if (capture._tag === "AuthoredStoryOccurrenceCaptured" && capture.occurrence._tag === "ExpectedBehavior") {
+          terminalCaptured = true
+        }
+      },
+      onObservationMoment: () => Effect.die(defect)
+    }).pipe(Effect.provide(NodeCrypto.layer))
+  )
+  expect(Exit.isFailure(exit)).toBe(true)
+  if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBe(defect)
+  expect(terminalCaptured).toBe(false)
 })

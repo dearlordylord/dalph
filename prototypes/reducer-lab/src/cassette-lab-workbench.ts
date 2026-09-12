@@ -9,10 +9,11 @@ import {
   deliveryProposalOrderTaskId,
   describeWorkflowOccurrence,
   makeTracePresentation,
+  type PreparedTrace,
   type TraceAtCursor,
   type TraceItemIdentity
 } from "@dalph/orchestrator"
-import { Match } from "effect"
+import { Match, Result } from "effect"
 import {
   deliveryGraphEncoding,
   deliveryGraphInterpretationNotes,
@@ -53,7 +54,6 @@ import {
   TraceCursorFollowingLive,
   TraceCursorSelected,
   auxiliaryTraceCorrelation,
-  historyAtCursor,
   makeTraceCursorSelectionModel,
   projectTraceCursorSelection,
   resolveTraceCausalPredecessor,
@@ -881,7 +881,7 @@ const restartContinuity = (
  */
 const auxiliaryTraceCorrelations = (
   moments: ReadonlyArray<AuthoredObservationMoment>,
-  histories: ReadonlyArray<TraceAtCursor>
+  cursors: PreparedTrace["cursors"]
 ) => moments.flatMap((moment) => {
   const kind = moment._tag === "AuthoredStoryOccurrenceMoment"
     ? "AuthoredStoryOccurrence" as const
@@ -896,7 +896,7 @@ const auxiliaryTraceCorrelations = (
       : moment.deliveryFrame.acceptedAt
   const nearestJournalCursor = carriedPosition === null
     ? null
-    : histories.find(({ cursor }) => cursor.position === carriedPosition)?.cursor ?? null
+    : cursors.find((cursor) => cursor.position === carriedPosition) ?? null
   return [auxiliaryTraceCorrelation(kind, moment.captureOrder, moment.storyPosition, nearestJournalCursor)]
 })
 
@@ -920,7 +920,7 @@ interface TraceHistoryController {
 
 export const renderProductionTraceHistory = (
   parent: HTMLElement,
-  histories: ReadonlyArray<TraceAtCursor>,
+  preparedTrace: PreparedTrace,
   moments: ReadonlyArray<AuthoredObservationMoment>,
   /** The process-local CassetteState is passive status input, not journal evidence. */
   initialStatus: CassetteState
@@ -964,8 +964,8 @@ export const renderProductionTraceHistory = (
   }
 
   let model = makeTraceCursorSelectionModel(
-    histories.map(({ cursor }) => cursor),
-    auxiliaryTraceCorrelations(moments, histories)
+    preparedTrace.cursors,
+    auxiliaryTraceCorrelations(moments, preparedTrace.cursors)
   )
   const controls = document.createElement("div")
   controls.className = "trace-cursor-controls"
@@ -1090,7 +1090,8 @@ export const renderProductionTraceHistory = (
     cursor.textContent = `Selected production cursor: Run ${projection.cursor.runId} · JournalPosition ${projection.cursor.position}`
     cursor.dataset.runId = projection.cursor.runId
     cursor.dataset.journalPosition = String(projection.cursor.position)
-    const history = historyAtCursor(histories, projection.cursor)
+    const selected = preparedTrace.select(projection.cursor)
+    const history = Result.isSuccess(selected) ? selected.success : undefined
     selectedHistory = history
     renderPassiveStatus()
     graphHost.replaceChildren()
@@ -1098,7 +1099,7 @@ export const renderProductionTraceHistory = (
     itemsHost.replaceChildren()
     facetsHost.replaceChildren()
     if (history === undefined) {
-      appendText(graphHost, "p", "The selected exact production cursor has no returned trace view.")
+      appendText(graphHost, "p", `The selected exact production cursor failed: ${Result.isFailure(selected) ? JSON.stringify(selected.failure) : "unavailable"}`)
       return
     }
 
@@ -1200,7 +1201,7 @@ export const renderProductionTraceHistory = (
         predecessor.dataset.successorOperationId = edge.successorOperationId
         predecessor.addEventListener("click", () => {
           const resolution = resolveTraceCausalPredecessor(
-            histories,
+            preparedTrace.cursors,
             history,
             edge.successorOperationId,
             edge.predecessorOperationId
@@ -2001,9 +2002,9 @@ const observationMomentsFrom = (state: CassetteState): ReadonlyArray<AuthoredObs
   return state._tag === "Settled" && state.result._tag === "Completed" ? state.result.observationMoments : null
 }
 
-const productionTraceHistoriesFrom = (state: CassetteState): ReadonlyArray<TraceAtCursor> | null => {
+const productionPreparedTraceFrom = (state: CassetteState): PreparedTrace | null => {
   if (state._tag !== "Settled" || state.result._tag !== "Completed") return null
-  return state.result.traceHistories
+  return state.result.preparedTrace
 }
 
 export const renderCassetteDeliveryWorkbench = (
@@ -2021,7 +2022,7 @@ export const renderCassetteDeliveryWorkbench = (
   let currentState = state
   let timeline: DeliveryTimelineController | undefined
   let traceHistory: TraceHistoryController | undefined
-  let renderedTraceHistories: ReadonlyArray<TraceAtCursor> | null | undefined
+  let renderedPreparedTrace: PreparedTrace | null | undefined
   const section = document.createElement("section")
   section.className = "delivery-workbench"
   section.dataset.role = "delivery-workbench"
@@ -2047,14 +2048,14 @@ export const renderCassetteDeliveryWorkbench = (
   content.append(historicalTraceHost, deliveryTimelineHost)
   const renderContents = (): void => {
     const moments = observationMomentsFrom(currentState)
-    const traceHistories = productionTraceHistoriesFrom(currentState)
-    const shouldReplaceTraceHistory = traceHistories !== null && traceHistories !== renderedTraceHistories
+    const preparedTrace = productionPreparedTraceFrom(currentState)
+    const shouldReplaceTraceHistory = preparedTrace !== null && preparedTrace !== renderedPreparedTrace
     if (shouldReplaceTraceHistory) {
       historicalTraceHost.replaceChildren()
       traceHistory = undefined
-      renderedTraceHistories = traceHistories
-      if (traceHistories !== null && traceHistories.length > 0) {
-        traceHistory = renderProductionTraceHistory(historicalTraceHost, traceHistories, moments ?? [], currentState)
+      renderedPreparedTrace = preparedTrace
+      if (preparedTrace !== null && preparedTrace.cursors.length > 0) {
+        traceHistory = renderProductionTraceHistory(historicalTraceHost, preparedTrace, moments ?? [], currentState)
       }
     } else {
       traceHistory?.updateStatus(currentState)

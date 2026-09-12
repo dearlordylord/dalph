@@ -41,6 +41,7 @@ import type {
 import { traceControlDispositionFacetVersion } from "./trace-reader-version.js"
 import { sameJson } from "./trace-equality.js"
 import { reduceControlDispositionItem } from "./trace-reader-control-disposition.js"
+import { prepareFacetVisibility, type FacetVisibility } from "./trace-reader-facet-visibility.js"
 
 type HistoricalCaseFactories<Union extends { readonly _tag: string }> = {
   readonly [Tag in Union["_tag"]]: {
@@ -1073,10 +1074,10 @@ export type HistoricalFacetReductionState = {
   readonly items: ReadonlyArray<TraceHistoryItem>
   readonly observationGaps: Array<TraceObservationGap>
   readonly preservationDispositions: Array<TracePreservationDisposition>
-  readonly retainedClaims: Map<OperationId, TraceRetainedResponsibility>
-  readonly retainedExecutorWork: Map<AttemptId, TraceRetainedResponsibility>
-  readonly retainedTaskAttempts: Map<AttemptId, TraceRetainedResponsibility>
-  readonly retainedWorktrees: Map<AttemptId, TraceRetainedResponsibility>
+  readonly retainedClaims: RetainedResponsibilityCollection<OperationId>
+  readonly retainedExecutorWork: RetainedResponsibilityCollection<AttemptId>
+  readonly retainedTaskAttempts: RetainedResponsibilityCollection<AttemptId>
+  readonly retainedWorktrees: RetainedResponsibilityCollection<AttemptId>
 }
 
 const makeHistoricalFacetReductionState = (
@@ -1720,6 +1721,563 @@ const reduceHistoricalFacetItem = (item: TraceHistoryItem, state: HistoricalFace
   reduceBoundaryFacts(item, state)
   reduceCompletionFacts(item, state)
   reduceSettledResponsibilities(item, state)
+}
+
+/** One responsibility's accepted source versions; deletion closes visibility, not its provenance. */
+interface RetainedResponsibilityVersion {
+  readonly at: JournalPosition
+  readonly value: TraceRetainedResponsibility | undefined
+}
+
+const historicalBinaryPartitionDivisor = 2
+const absentCleanupHeadIndex = -1
+
+interface RetainedResponsibilityCollection<Key> {
+  readonly set: (key: Key, value: TraceRetainedResponsibility) => void
+  readonly delete: (key: Key) => boolean
+  readonly values: () => IterableIterator<TraceRetainedResponsibility>
+}
+
+const prepareResponsibilityVersions = <Key>(initialPosition: JournalPosition) => {
+  const current = new Map<Key, TraceRetainedResponsibility>()
+  const versions = new Map<Key, Array<RetainedResponsibilityVersion>>()
+  let position = initialPosition
+  return {
+    versions,
+    get position() {
+      return position
+    },
+    set position(value: JournalPosition) {
+      position = value
+    },
+    set: (key: Key, value: TraceRetainedResponsibility): void => {
+      const accepted = versions.get(key) ?? []
+      accepted.push({ at: position, value })
+      versions.set(key, accepted)
+      current.set(key, value)
+    },
+    delete: (key: Key): boolean => {
+      if (!current.has(key)) return false
+      versions.get(key)?.push({ at: position, value: undefined })
+      return current.delete(key)
+    },
+    values: () => current.values()
+  }
+}
+
+interface PreparedCleanupHead {
+  readonly progress: TraceCleanupProgress
+  readonly previous: PreparedCleanupHead | undefined
+}
+
+const worktreeCleanupAtHead = (
+  head: PreparedCleanupHead,
+  progress: Extract<TraceCleanupProgress, { readonly _tag: "Worktree" }>,
+  factories: HistoricalFacetFactories
+) => {
+  const steps: Array<TraceWorktreeCleanupStep> = []
+  let authorization = progress.authorization
+  for (let current: PreparedCleanupHead | undefined = head; current !== undefined; current = current.previous) {
+    if (current.progress._tag === "Worktree") {
+      steps.push(...current.progress.steps)
+      authorization = current.progress.authorization
+    }
+  }
+  return factories.cleanupProgress.Worktree.make({ ...progress, authorization, steps: steps.reverse() })
+}
+
+const branchCleanupAtHead = (
+  head: PreparedCleanupHead,
+  progress: Extract<TraceCleanupProgress, { readonly _tag: "Branch" }>,
+  factories: HistoricalFacetFactories
+) => {
+  const steps: Array<TraceBranchCleanupStep> = []
+  let authorization = progress.authorization
+  for (let current: PreparedCleanupHead | undefined = head; current !== undefined; current = current.previous) {
+    if (current.progress._tag === "Branch") {
+      steps.push(...current.progress.steps)
+      authorization = current.progress.authorization
+    }
+  }
+  return factories.cleanupProgress.Branch.make({ ...progress, authorization, steps: steps.reverse() })
+}
+
+const candidateCleanupAtHead = (
+  head: PreparedCleanupHead,
+  progress: Extract<TraceCleanupProgress, { readonly _tag: "IntegratorCandidate" }>,
+  factories: HistoricalFacetFactories
+) => {
+  const steps: Array<TraceIntegratorCandidateCleanupStep> = []
+  let authorization = progress.authorization
+  for (let current: PreparedCleanupHead | undefined = head; current !== undefined; current = current.previous) {
+    if (current.progress._tag === "IntegratorCandidate") {
+      steps.push(...current.progress.steps)
+      authorization = current.progress.authorization
+    }
+  }
+  return factories.cleanupProgress.IntegratorCandidate.make({ ...progress, authorization, steps: steps.reverse() })
+}
+
+const cleanupAtHead = (head: PreparedCleanupHead, factories: HistoricalFacetFactories): TraceCleanupProgress => {
+  const progress = head.progress
+  switch (progress._tag) {
+    case "Worktree":
+      return worktreeCleanupAtHead(head, progress, factories)
+    case "Branch":
+      return branchCleanupAtHead(head, progress, factories)
+    case "IntegratorCandidate":
+      return candidateCleanupAtHead(head, progress, factories)
+  }
+}
+
+/** Sealed historical ledgers and source-version timelines owned by one preparation. */
+export const prepareTraceHistoricalFacets = (
+  items: ReadonlyArray<TraceHistoryItem>,
+  factories: HistoricalFacetFactories
+) => {
+  const initialPosition = items[0]?.identity.position
+  const empty = () =>
+    factories.facets.make({
+      controlDisposition: factories.controlDisposition.make({
+        cleanup: [],
+        controls: [],
+        dispositions: [],
+        version: traceControlDispositionFacetVersion
+      }),
+      integration: { facts: [] },
+      recovery: { observationGaps: [], preservationDispositions: [], retainedResponsibilities: [] }
+    })
+  if (initialPosition === undefined) {
+    const visibility = prepareFacetVisibility({ gaps: [], responsibilities: [], dispositions: [], preservation: [] })
+    return {
+      at: (_position: JournalPosition) => empty(),
+      counts: () => ({
+        ...visibility.counts(),
+        lookupVisits: 0,
+        selectionVisits: 0,
+        sourceVisits: 0,
+        cleanupHeads: 0,
+        cleanupStepReferences: 0
+      })
+    }
+  }
+  const claims = prepareResponsibilityVersions<OperationId>(initialPosition)
+  const executorWork = prepareResponsibilityVersions<AttemptId>(initialPosition)
+  const attempts = prepareResponsibilityVersions<AttemptId>(initialPosition)
+  const worktrees = prepareResponsibilityVersions<AttemptId>(initialPosition)
+  let relatedItems: ReadonlyArray<TraceHistoryItem> = []
+  const state: HistoricalFacetReductionState = {
+    ...makeHistoricalFacetReductionState(items, factories),
+    get items() {
+      return relatedItems
+    },
+    retainedClaims: claims,
+    retainedExecutorWork: executorWork,
+    retainedTaskAttempts: attempts,
+    retainedWorktrees: worktrees
+  }
+  const gapState = makeHistoricalFacetReductionState([], factories)
+  const cleanup = new Map<string, Array<PreparedCleanupHead>>()
+  const replacementPositions = new Map<string, JournalPosition>()
+  const replacementSources = new Map<JournalPosition, string>()
+  const replacementKey = (request: Extract<WorkflowOccurrenceValue, { _tag: "AppliedAttemptChoice" }>["requestId"]) =>
+    JSON.stringify([request.runId, request.nonce])
+  const observations = new Map<string, Array<TraceHistoryItem>>()
+  const runKey = (run: IntegratorRunCorrelation) => `${run.session.sessionId}:${run.ordinal}`
+  const byPosition = new Map<JournalPosition, TraceHistoryItem>()
+  const executorBeginnings = new Map<AttemptId, TraceHistoryItem>()
+  const integrationResponsibilities = new Map<string, Array<TraceHistoryItem>>()
+  const graphFullObservations = new Map<OperationId, TraceHistoryItem>()
+  const settlementsByTask = new Map<TaskId, Array<TraceHistoryItem>>()
+  const targetKey = (target: IntegrationTarget) => JSON.stringify([target.repository, target.ref])
+  let lookupVisits = 0
+  let sourceVisits = 0
+  let cleanupHeads = 0
+  let cleanupStepReferences = 0
+  const addObservation = (key: string, item: TraceHistoryItem) => {
+    const bucket = observations.get(key) ?? []
+    bucket.push(item)
+    observations.set(key, bucket)
+  }
+  const indexResponsibilities = (item: TraceHistoryItem) => {
+    const occurrence = item.occurrence
+    if (!byPosition.has(item.identity.position)) byPosition.set(item.identity.position, item)
+    if (
+      occurrence._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+      !executorBeginnings.has(occurrence.plannedAttempt.attemptId)
+    )
+      executorBeginnings.set(occurrence.plannedAttempt.attemptId, item)
+    if (occurrence._tag === "IntegrationResponsibilityBegan") {
+      const key = targetKey(occurrence.integrationTarget)
+      const bucket = integrationResponsibilities.get(key) ?? []
+      bucket.push(item)
+      integrationResponsibilities.set(key, bucket)
+    }
+  }
+  const indexGraphFacts = (item: TraceHistoryItem) => {
+    const occurrence = item.occurrence
+    if (
+      occurrence._tag === "TaskTrackerFactsObserved" &&
+      occurrence.evidence._tag === "CompleteTaskTrackerFacts" &&
+      !graphFullObservations.has(occurrence.evidence.operationId)
+    )
+      graphFullObservations.set(occurrence.evidence.operationId, item)
+    if (occurrence._tag === "IntegrationFinalitySettledOccurred") {
+      const taskId = occurrence.event.claim.plannedAttempt.taskId
+      const bucket = settlementsByTask.get(taskId) ?? []
+      bucket.push(item)
+      settlementsByTask.set(taskId, bucket)
+    }
+  }
+  const indexObservations = (item: TraceHistoryItem) => {
+    const occurrence = item.occurrence
+    for (const operationId of operationIdsOfOccurrence(occurrence)) addObservation(`operation:${operationId}`, item)
+    if (occurrence._tag === "PlannedAttemptExecutorWorkReported")
+      addObservation(`executor:${occurrence.report.correlation.attemptId}`, item)
+    if (occurrence._tag === "IntegratorRunResultRecorded") addObservation(`run:${runKey(occurrence.run)}`, item)
+    if (occurrence._tag === "IntegratorCandidateQualificationObserved")
+      addObservation(`candidate:${runKey(occurrence.originatingActionRun)}:${occurrence.candidateText}`, item)
+    if (isPromotionTerminalOccurrence(occurrence)) addObservation(`promotion:${occurrence.correlation.requestId}`, item)
+  }
+  const indexReplacement = (item: TraceHistoryItem) => {
+    const occurrence = item.occurrence
+    if (occurrence._tag === "PlannedAttemptReplaced" && !replacementPositions.has(replacementKey(occurrence.requestId)))
+      replacementPositions.set(replacementKey(occurrence.requestId), item.identity.position)
+    if (occurrence._tag === "AppliedAttemptChoice")
+      replacementSources.set(item.identity.position, replacementKey(occurrence.requestId))
+  }
+  for (const item of items) {
+    sourceVisits += 1
+    indexResponsibilities(item)
+    indexGraphFacts(item)
+    indexObservations(item)
+    indexReplacement(item)
+  }
+  const earlier = (
+    bucket: ReadonlyArray<TraceHistoryItem>,
+    position: JournalPosition
+  ): TraceHistoryItem | undefined => {
+    let lower = 0
+    let upper = bucket.length
+    while (lower < upper) {
+      lookupVisits += 1
+      const middle = Math.floor((lower + upper) / historicalBinaryPartitionDivisor)
+      if (Option.getOrThrow(Option.fromUndefinedOr(bucket[middle])).occurrence.recordedAt < position) lower = middle + 1
+      else upper = middle
+    }
+    return bucket[lower - 1]
+  }
+  const indexedCandidateItems = (
+    occurrence: Extract<WorkflowOccurrenceValue, { readonly _tag: "IntegratorCandidateQualificationObserved" }>
+  ) =>
+    (observations.get(`run:${runKey(occurrence.originatingActionRun)}`) ?? []).filter((candidate) => {
+      lookupVisits += 1
+      return candidate.occurrence.recordedAt < occurrence.recordedAt
+    })
+  const isLaterSettlement = (candidate: TraceHistoryItem, settlement: TraceHistoryItem | undefined) =>
+    settlement === undefined || candidate.occurrence.recordedAt > settlement.occurrence.recordedAt
+  const indexedGraphItems = (item: TraceHistoryItem, occurrence: CompleteGraphObservationOccurrence) => {
+    let settlement: TraceHistoryItem | undefined
+    for (const taskId of taskIdsOfCompleteGraphObservation(occurrence.evidence)) {
+      lookupVisits += 1
+      const candidate = earlier(settlementsByTask.get(taskId) ?? [], occurrence.recordedAt)
+      if (candidate !== undefined && isLaterSettlement(candidate, settlement)) settlement = candidate
+    }
+    if (settlement === undefined) return []
+    const full =
+      occurrence.evidence._tag === "UnchangedTaskTrackerFactsReconfirmed"
+        ? graphFullObservations.get(occurrence.evidence.priorFullObservationOperationId)
+        : undefined
+    return full === undefined ? [settlement, item] : [settlement, full, item]
+  }
+  const singletonIndexedItem = (item: TraceHistoryItem | undefined) => (item === undefined ? [] : [item])
+  const indexedItemsFor = (item: TraceHistoryItem): ReadonlyArray<TraceHistoryItem> => {
+    lookupVisits += 1
+    const occurrence = item.occurrence
+    if (occurrence._tag === "PlannedAttemptExecutorWorkReported") {
+      const beginning = executorBeginnings.get(occurrence.report.correlation.attemptId)
+      return singletonIndexedItem(beginning)
+    }
+    if (occurrence._tag === "IntegrationStarted") {
+      const responsibility = byPosition.get(occurrence.responsibilityBeganAt)
+      return singletonIndexedItem(responsibility)
+    }
+    if (occurrence._tag === "IntegrationResponsibilityBegan") {
+      const predecessor = earlier(
+        integrationResponsibilities.get(targetKey(occurrence.integrationTarget)) ?? [],
+        occurrence.recordedAt
+      )
+      return singletonIndexedItem(predecessor)
+    }
+    if (occurrence._tag === "IntegratorCandidateQualificationObserved") {
+      return indexedCandidateItems(occurrence)
+    }
+    if (isCompleteGraphObservation(occurrence)) {
+      return indexedGraphItems(item, occurrence)
+    }
+    return []
+  }
+  const reducePreparedFacts = (item: TraceHistoryItem) => {
+    // Each cleanup event produces one immutable step; full chains are selected only on demand.
+    state.cleanup.length = 0
+    const controlState = makeHistoricalFacetReductionState([], factories)
+    reduceControlDispositionItem(item, controlState)
+    state.controls.push(...controlState.controls)
+    state.dispositions.push(...controlState.dispositions.filter((value) => value._tag !== "ReplacementPending"))
+    state.cleanup.push(...controlState.cleanup)
+    reduceDependantReleaseFact(item, state)
+    reduceExecutorResponsibilities(item, state)
+    reduceTaskResponsibilities(item, state)
+    reduceWorktreeLostDisposition(item, state)
+    reduceTaskAuthorityConflictDisposition(item, state)
+    reduceIntegrationQuarantineDisposition(item, state)
+    reduceNonConvergentDisposition(item, state)
+    reduceAcceptedResultFact(item, state)
+    reduceIntegrationResponsibilityFacts(item, state)
+    reduceSessionFact(item, state)
+    if (item.occurrence._tag === "IntegratorRunResultRecorded") reduceIntegratorRunFacts(item, state)
+    reduceCandidateQualificationObservation(item, state)
+    reducePromotionRequestFact(item, state)
+    reducePromotionTerminalFact(item, state)
+    reduceBoundaryFacts(item, state)
+    reduceCompletionFacts(item, state)
+    reduceSettledResponsibilities(item, state)
+  }
+  const retainCleanupHeads = () => {
+    for (const progress of state.cleanup) {
+      const key = `${progress._tag}:${progress.authorization.operationId}`
+      const versions = cleanup.get(key) ?? []
+      const previous = versions.at(absentCleanupHeadIndex)
+      versions.push({ progress, previous })
+      cleanupHeads += 1
+      cleanupStepReferences += progress.steps.length
+      cleanup.set(key, versions)
+    }
+  }
+  const reducePreparedGaps = (item: TraceHistoryItem) => {
+    reduceObservationGaps(item, gapState)
+    if (item.occurrence._tag === "IntegratorRunStarted") reduceIntegratorRunFacts(item, gapState)
+    reduceCandidateQualificationIntent(item, gapState)
+    if (item.occurrence._tag === "TargetPromotionAttemptRequested") {
+      const priorFacts = gapState.integrationFacts.length
+      reducePromotionAttemptFact(item, gapState)
+      state.integrationFacts.push(...gapState.integrationFacts.slice(priorFacts))
+    }
+    if (item.occurrence._tag === "AppliedAttemptChoice") {
+      reduceReplacementPendingDisposition(item, gapState)
+      reduceControlDispositionItem(item, gapState)
+    }
+    if (item.occurrence._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
+      gapState.observationGaps.push(
+        factories.observationGap.ExecutorReport.make({
+          action: item.identity,
+          attemptId: item.occurrence.plannedAttempt.attemptId
+        })
+      )
+    }
+  }
+  for (const item of items) {
+    sourceVisits += 1
+    relatedItems = indexedItemsFor(item)
+    for (const map of [claims, executorWork, attempts, worktrees]) map.position = item.identity.position
+    reducePreparedFacts(item)
+    retainCleanupHeads()
+    reducePreparedGaps(item)
+  }
+  const candidatesForGap = (gap: TraceObservationGap): ReadonlyArray<TraceHistoryItem> => {
+    if (gap._tag === "TrackerObservation" || gap._tag === "GitObservation")
+      return observations.get(`operation:${gap.operationId}`) ?? []
+    const key =
+      gap._tag === "ExecutorReport"
+        ? `executor:${gap.attemptId}`
+        : gap._tag === "IntegratorResult"
+          ? `run:${runKey(gap.run)}`
+          : gap._tag === "CandidateQualification"
+            ? `candidate:${runKey(gap.run)}:${gap.candidateText}`
+            : `promotion:${gap.correlation.requestId}`
+    return observations.get(key) ?? []
+  }
+  const closesExecutorGap = (
+    gap: Extract<TraceObservationGap, { readonly _tag: "ExecutorReport" }>,
+    occurrence: WorkflowOccurrenceValue
+  ) =>
+    occurrence._tag === "PlannedAttemptExecutorWorkReported" &&
+    occurrence.report.correlation.attemptId === gap.attemptId
+  const closesIntegratorGap = (
+    gap: Extract<TraceObservationGap, { readonly _tag: "IntegratorResult" }>,
+    occurrence: WorkflowOccurrenceValue
+  ) => occurrence._tag === "IntegratorRunResultRecorded" && sameIntegratorRun(occurrence.run, gap.run)
+  const closesCandidateGap = (
+    gap: Extract<TraceObservationGap, { readonly _tag: "CandidateQualification" }>,
+    occurrence: WorkflowOccurrenceValue
+  ) =>
+    occurrence._tag === "IntegratorCandidateQualificationObserved" &&
+    occurrence.candidateText === gap.candidateText &&
+    sameIntegratorRun(occurrence.originatingActionRun, gap.run)
+  const closesPromotionGap = (
+    gap: Extract<TraceObservationGap, { readonly _tag: "PromotionResult" }>,
+    occurrence: WorkflowOccurrenceValue
+  ) => isPromotionTerminalOccurrence(occurrence) && samePromotion(occurrence.correlation, gap.correlation)
+  const closesBoundaryGap = (
+    gap: Extract<TraceObservationGap, { readonly _tag: "TrackerObservation" | "GitObservation" }>,
+    occurrence: WorkflowOccurrenceValue
+  ) => {
+    const tags =
+      gap.required === "TaskTrackerFactsObserved"
+        ? ["TaskTrackerFactsObserved", "AttemptRestartAuthorityReadFailed"]
+        : gap.required === "PlannedAttemptWorktreeObserved" || gap.required === "TargetLineageObserved"
+          ? ["PlannedAttemptWorktreeObserved", "TargetLineageObserved", "AttemptRestartAuthorityReadFailed"]
+          : [gap.required]
+    return tags.includes(occurrence._tag)
+  }
+  const closesGap = (gap: TraceObservationGap, item: TraceHistoryItem): boolean => {
+    lookupVisits += 1
+    const occurrence = item.occurrence
+    switch (gap._tag) {
+      case "ExecutorReport":
+        return closesExecutorGap(gap, occurrence)
+      case "IntegratorResult":
+        return closesIntegratorGap(gap, occurrence)
+      case "CandidateQualification":
+        return closesCandidateGap(gap, occurrence)
+      case "PromotionResult":
+        return closesPromotionGap(gap, occurrence)
+      case "TrackerObservation":
+        return closesBoundaryGap(gap, occurrence)
+      case "GitObservation":
+        return closesBoundaryGap(gap, occurrence)
+    }
+  }
+  const gaps = gapState.observationGaps.map((gap) => ({
+    gap,
+    closedAt: candidatesForGap(gap)
+      .filter((item) => closesGap(gap, item))
+      .reduce<JournalPosition | undefined>(
+        (earliest, item) =>
+          earliest === undefined || item.identity.position < earliest ? item.identity.position : earliest,
+        undefined
+      )
+  }))
+  const replacementEnd = (value: TracePreservationDisposition | TraceDispositionFact): JournalPosition | undefined => {
+    if (value._tag !== "ReplacementPending") return undefined
+    const nonce = replacementSources.get(value.source.position)
+    const replacedAt = nonce === undefined ? undefined : replacementPositions.get(nonce)
+    return replacedAt
+  }
+  const responsibilityIntervalsFor = () => {
+    const responsibilityIntervals: Array<FacetVisibility<TraceRetainedResponsibility>> = []
+    for (const map of [claims, executorWork, attempts, worktrees]) {
+      for (const versions of map.versions.values()) {
+        for (let index = 0; index < versions.length; index += 1) {
+          const version = Option.getOrThrow(Option.fromUndefinedOr(versions[index]))
+          if (version.value !== undefined)
+            responsibilityIntervals.push({
+              start: version.at,
+              end: versions[index + 1]?.at,
+              order: version.value.source.position,
+              value: version.value
+            })
+        }
+      }
+    }
+    return responsibilityIntervals
+  }
+  const gapIntervals = gaps.map(({ closedAt, gap }) => ({
+    start: gap.action.position,
+    end: closedAt,
+    order: gap.action.position,
+    value: gap
+  }))
+  let selectionVisits = 0
+  const prefix = <Value extends { readonly source: TraceItemIdentity }>(
+    ledger: ReadonlyArray<Value>,
+    position: JournalPosition
+  ): ReadonlyArray<Value> => {
+    let lower = 0
+    let upper = ledger.length
+    while (lower < upper) {
+      selectionVisits += 1
+      const middle = Math.floor((lower + upper) / historicalBinaryPartitionDivisor)
+      if (Option.getOrThrow(Option.fromUndefinedOr(ledger[middle])).source.position <= position) lower = middle + 1
+      else upper = middle
+    }
+    return ledger.slice(0, lower)
+  }
+  const dispositions = [
+    ...state.dispositions.filter((value) => value._tag !== "ReplacementPending"),
+    ...gapState.dispositions.filter((value) => value._tag === "ReplacementPending")
+  ].sort((left, right) => Number(left.source.position) - Number(right.source.position))
+  const preservationDispositions = [
+    ...state.preservationDispositions.filter((value) => value._tag !== "ReplacementPending"),
+    ...gapState.preservationDispositions
+  ].sort((left, right) => Number(left.source.position) - Number(right.source.position))
+  const visibility = prepareFacetVisibility({
+    gaps: gapIntervals,
+    responsibilities: responsibilityIntervalsFor(),
+    dispositions: dispositions.map((value) => ({
+      start: value.source.position,
+      end: replacementEnd(value),
+      order: value.source.position,
+      value
+    })),
+    preservation: preservationDispositions.map((value) => ({
+      start: value.source.position,
+      end: replacementEnd(value),
+      order: value.source.position,
+      value
+    }))
+  })
+  const cleanupByStart = [...cleanup.values()].map((versions) => ({
+    source: Option.getOrThrow(Option.fromUndefinedOr(versions[0])).progress.status.source,
+    versions
+  }))
+  return {
+    counts: () => ({
+      ...visibility.counts(),
+      lookupVisits,
+      selectionVisits,
+      sourceVisits,
+      cleanupHeads,
+      cleanupStepReferences
+    }),
+    at: (position: JournalPosition): TraceHistoricalFacets => {
+      const selectedCleanup: Array<TraceCleanupProgress> = []
+      for (const { versions } of prefix(cleanupByStart, position)) {
+        let lower = 0
+        let upper = versions.length
+        while (lower < upper) {
+          selectionVisits += 1
+          const middle = Math.floor((lower + upper) / historicalBinaryPartitionDivisor)
+          if (Option.getOrThrow(Option.fromUndefinedOr(versions[middle])).progress.status.source.position <= position)
+            lower = middle + 1
+          else upper = middle
+        }
+        const head = versions[lower - 1]
+        if (head !== undefined) selectedCleanup.push(cleanupAtHead(head, factories))
+      }
+      selectedCleanup.sort(
+        (left, right) => Number(left.steps[0]?.source.position ?? 0) - Number(right.steps[0]?.source.position ?? 0)
+      )
+      const retainedResponsibilities = visibility.responsibilitiesAt(position)
+      const observationGaps = visibility
+        .gapsAt(position)
+        .toSorted((left, right) => Number(left._tag === "ExecutorReport") - Number(right._tag === "ExecutorReport"))
+      return factories.facets.make({
+        controlDisposition: factories.controlDisposition.make({
+          cleanup: selectedCleanup,
+          controls: prefix(state.controls, position),
+          dispositions: visibility.dispositionsAt(position),
+          version: traceControlDispositionFacetVersion
+        }),
+        integration: { facts: prefix(state.integrationFacts, position) },
+        recovery: {
+          observationGaps,
+          preservationDispositions: visibility.preservationAt(position),
+          retainedResponsibilities
+        }
+      })
+    }
+  }
 }
 
 export const traceHistoricalFacetsAt = (

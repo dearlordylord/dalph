@@ -177,7 +177,7 @@ export type TraceCausalPredecessorResolution =
 
 /** Resolves a displayed production causal edge to the predecessor's exact cursor. */
 export const resolveTraceCausalPredecessor = (
-  histories: ReadonlyArray<TraceAtCursor>,
+  cursors: ReadonlyArray<TraceCursorType>,
   selected: TraceAtCursor,
   successorOperationId: OperationId,
   predecessorOperationId: OperationId
@@ -207,7 +207,7 @@ export const resolveTraceCausalPredecessor = (
     position: predecessorItem.identity.position,
     runId: predecessorItem.identity.runId
   })
-  if (historyAtCursor(histories, predecessorCursor) === undefined) {
+  if (!cursors.some((cursor) => sameCursor(cursor, predecessorCursor))) {
     return {
       _tag: "Missing",
       predecessorOperationId,
