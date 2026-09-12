@@ -98,12 +98,14 @@ import {
   TaskClaimReacquisitionDirectedEvent,
   TaskClaimReleaseAuthority,
   TaskLifecycle,
+  TrackerAdapterReadError,
   TaskTrackerFactsObservedEvent,
   TaskTrackerFactsReadFailed,
   TargetPromotionGit,
   TargetPromotionGitReadFailure,
   TargetPromotionGitReadObservation,
   taskTrackerReadIntent,
+  taskTrackerTargetKey,
   taskRevisionFor,
   UntrackedWorktreePath,
   UnclaimedTask,
@@ -1906,6 +1908,18 @@ it.effect("the fresh complete graph blocks before a later edit can release B", (
 it.effect("A tracker client changes A while Dalph's completion request is pending", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(completionTaskConflictAuthoredCassette)
+    const finalExpectedBehaviorAt = run.cassette.story.findLastIndex((item) => item._tag === "ExpectedBehavior")
+    expect(finalExpectedBehaviorAt).toBe(run.cassette.story.length - 1)
+    expect(run.cassette.story.slice(finalExpectedBehaviorAt - 2, finalExpectedBehaviorAt)).toEqual([
+      expect.objectContaining({
+        _tag: "DalphSelects",
+        operation: { _tag: "ReadTrackerGraph", target: "cassette-target" }
+      }),
+      expect.objectContaining({
+        _tag: "TrackerGraphReadReturned",
+        graph: expect.objectContaining({ revision: "delivery-story-S3-terminal" })
+      })
+    ])
     const rejection = run.records.find(({ event }) => event._tag === "CompletionTaskRejected")
     const terminalRead = run.records.find(
       ({ event }) =>
@@ -1917,6 +1931,88 @@ it.effect("A tracker client changes A while Dalph's completion request is pendin
     expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A")])
     expect(rejection).toBeDefined()
     expect(terminalRead).toBeDefined()
+    if (terminalRead === undefined) return yield* Effect.die("missing terminal focused completion confirmation")
+    const graphIntents = run.records.flatMap(({ event, position }) =>
+      event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTrackerGraph"
+        ? [{ operation: event.operation, position }]
+        : []
+    )
+    const targetKey = taskTrackerTargetKey(FixtureTarget.make("cassette-target"))
+    const sameTargetGraphIntents = graphIntents.filter(
+      ({ operation }) => taskTrackerTargetKey(operation.target) === targetKey
+    )
+    const g2Intents = sameTargetGraphIntents.filter(
+      ({ operation }) => operation.cause._tag === "PostQuiescenceReconfirmation"
+    )
+    expect(g2Intents).toHaveLength(1)
+    const g2Intent = g2Intents[0]
+    if (g2Intent === undefined) return yield* Effect.die("missing post-quiescence graph intent")
+    expect(g2Intent.position).toBeGreaterThan(terminalRead.position)
+    if (g2Intent.operation.cause._tag !== "PostQuiescenceReconfirmation") {
+      return yield* Effect.die("post-quiescence graph intent has the wrong cause")
+    }
+    const completeGraphOperationIds = new Set(
+      run.records.flatMap(({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        (event.observation._tag === "CompleteTaskTrackerFacts" ||
+          event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
+          ? [event.operationId]
+          : []
+      )
+    )
+    const earlierCompleteGraphIntents = sameTargetGraphIntents.filter(
+      ({ operation, position }) => position < g2Intent.position && completeGraphOperationIds.has(operation.operationId)
+    )
+    const latestCompleteGraphIntent = earlierCompleteGraphIntents.at(-1)
+    if (latestCompleteGraphIntent === undefined) return yield* Effect.die("missing G2 graph anchor")
+    expect(g2Intent.operation.cause.quiescentGraphOperationId).toBe(latestCompleteGraphIntent.operation.operationId)
+    const expectedG2Predecessors = [
+      ...new Set(
+        sameTargetGraphIntents
+          .filter(({ position }) => position < g2Intent.position)
+          .map(({ operation }) => operation.operationId)
+      )
+    ]
+    expect(g2Intent.operation.predecessorOperationIds).toEqual(expectedG2Predecessors)
+    expect(new Set(g2Intent.operation.predecessorOperationIds).size).toBe(
+      g2Intent.operation.predecessorOperationIds.length
+    )
+    const g2Outcome = run.records.find(
+      ({ event, position }) =>
+        position > g2Intent.position &&
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.operationId === g2Intent.operation.operationId
+    )
+    expect(g2Outcome).toBeDefined()
+    if (g2Outcome === undefined) return yield* Effect.die("missing post-quiescence graph outcome")
+    expect(g2Outcome.position).toBeGreaterThan(g2Intent.position)
+    if (
+      g2Outcome.event._tag !== "TaskTrackerFactsObserved" ||
+      g2Outcome.event.observation._tag !== "CompleteTaskTrackerFacts"
+    ) {
+      return yield* Effect.die("post-quiescence graph outcome is not complete")
+    }
+    expect(g2Outcome.event.observation.operationId).toBe(g2Intent.operation.operationId)
+    const terminalFrame = run.deliveryFrames.find(
+      ({ graph }) => graph._tag === "Established" && String(graph.revision) === "delivery-story-S3-terminal"
+    )
+    if (terminalFrame?.graph._tag !== "Established") return yield* Effect.die("missing terminal conflict graph frame")
+    expect(terminalFrame.graph.observation.operationId).toBe(g2Intent.operation.operationId)
+    expect(terminalFrame.graph.observation.recordedAt).toBe(g2Outcome.position)
+    expect(terminalFrame.graph.tasks.map(({ id }) => id)).toEqual(
+      ["A", "B", "C", "D", "E"].map((taskId) => TaskId.make(taskId))
+    )
+    expect(terminalFrame.graph.tasks).toContainEqual(
+      expect.objectContaining({ id: TaskId.make("A"), lifecycle: "TerminalWithoutSuccess", prerequisiteIds: [] })
+    )
+    expect(terminalFrame.graph.tasks).toContainEqual(
+      expect.objectContaining({ id: TaskId.make("C"), lifecycle: "Open", prerequisiteIds: [] })
+    )
+    for (const taskId of ["B", "D", "E"] as const) {
+      expect(terminalFrame.graph.tasks).toContainEqual(
+        expect.objectContaining({ id: TaskId.make(taskId), lifecycle: "Open", prerequisiteIds: [TaskId.make("A")] })
+      )
+    }
     expect(run.records.filter(({ event }) => event._tag === "CompletionTaskAttemptIntended")).toHaveLength(1)
     expect(run.records.some(({ event }) => event._tag === "CompletionClaimDeletionIntended")).toBe(false)
     const issue61ConflictFrames = run.deliveryFrames.filter(
@@ -1981,6 +2077,38 @@ it.effect("A tracker client changes A while Dalph's completion request is pendin
     ).toBe(true)
     expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
     expect(run.records.some(({ event }) => event._tag === "IntegratorSessionFixed")).toBe(true)
+  })
+)
+
+it.effect("rejects the completion conflict cassette when its terminal G2 response is omitted", () =>
+  Effect.gen(function* () {
+    const finalExpectedBehaviorAt = completionTaskConflictAuthoredCassette.story.findLastIndex(
+      (item) => item._tag === "ExpectedBehavior"
+    )
+    const responseAt = finalExpectedBehaviorAt - 1
+    const selectorAt = responseAt - 1
+    expect(completionTaskConflictAuthoredCassette.story[selectorAt]).toMatchObject({
+      _tag: "DalphSelects",
+      operation: { _tag: "ReadTrackerGraph", target: "cassette-target" }
+    })
+    expect(completionTaskConflictAuthoredCassette.story[responseAt]).toMatchObject({
+      _tag: "TrackerGraphReadReturned",
+      graph: expect.objectContaining({ revision: "delivery-story-S3-terminal" })
+    })
+    const missingResponse = {
+      ...completionTaskConflictAuthoredCassette,
+      story: completionTaskConflictAuthoredCassette.story.filter((_, index) => index !== responseAt)
+    }
+    const failure = yield* runAuthoredScenarioCassette(missingResponse).pipe(Effect.flip)
+    expect(failure).toMatchObject({
+      _tag: "TrackerGraphReader.AdapterReadError",
+      context: { _tag: "Fixture", operation: "TrackerGraphReader.selectAdapter" },
+      reason: { _tag: "BoundaryDecode" }
+    })
+    if (!Schema.is(TrackerAdapterReadError)(failure)) return yield* Effect.die("unexpected tracker adapter failure")
+    expect(failure.detail).toBe(
+      `AuthoredCassetteInteractionMismatch at story position ${responseAt}: expected ExpectedBehavior, received TrackerGraphReadFailed | TrackerGraphReadReturned | RunActivationFinalTrackerGraphReadReturned`
+    )
   })
 )
 

@@ -897,7 +897,6 @@ const unpauseWaitingStory = (): ReadonlyArray<AuthoredCassetteStoryItem> => [
           },
           {
             blockers: [
-              { _tag: "ExecutorSafeSuspensionRequired" as const, attemptId: "attempt:B:1" },
               {
                 _tag: "LiveDeliveryAction" as const,
                 owner: authoredAdmittedOwner(authoredSuspendProposal("B", "attempt:B:1"))
@@ -3098,9 +3097,9 @@ const pauseExecutorAndPromotionSuspendA = {
 } as const
 
 const pauseExecutorAndPromotionContinueA = {
-  _tag: "FreshExecutorWorkflowRoute",
-  attemptId: "attempt:A:0",
-  proposalId: '["FreshExecutorWorkflowRoute","ObservePlannedAttemptExecutorWork","attempt:A:0","A"]',
+  _tag: "IdentityFreeWorkflowRoute",
+  correlation: { _tag: "PlannedAttempt", attemptId: "attempt:A:0" },
+  proposalId: '["IdentityFreeWorkflowRoute","ObservePlannedAttemptExecutorWork","attempt:A:0",null,"A"]',
   taskId: "A"
 } as const
 
@@ -4182,6 +4181,14 @@ const completionTaskConflictStartingGraph = {
   tasks: deliveryFinalityStartingGraph.tasks.map((task) => (task.id === "C" ? { ...task, prerequisiteIds: [] } : task))
 } as const
 
+const completionTaskConflictTerminalGraph = {
+  ...completionTaskConflictStartingGraph,
+  revision: "delivery-story-S3-terminal",
+  tasks: completionTaskConflictStartingGraph.tasks.map((task) =>
+    task.id === "A" ? { ...task, lifecycle: { _tag: "TerminalWithoutSuccess" as const } } : task
+  )
+} as const
+
 const completionTaskConflictExpandedGraph = {
   ...deliveryFinalityExpandedGraph,
   revision: "delivery-story-S3-expanded",
@@ -4318,6 +4325,8 @@ const completionConflictStory = (() => {
     if (!terminalConflictSeen) return [item]
     if (item._tag !== "ExpectedBehavior") return []
     return [
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: completionTaskConflictTerminalGraph },
       {
         ...item,
         orchestration:
