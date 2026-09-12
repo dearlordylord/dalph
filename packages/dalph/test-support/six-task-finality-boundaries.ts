@@ -15,11 +15,11 @@ import {
   type CompletionTaskClaim,
   type CompletionTaskRequest,
   type CompletionClaimBoundaryService,
-  type CompletionTaskBoundaryService
+  type CompletionTaskBoundaryService,
+  type TrackerMutationService
 } from "@dalph/orchestrator"
 import { Effect, Ref } from "effect"
 import type { EvidenceReference, GitCommitSha, TaskId } from "@dalph/contracts"
-import type { TrackerMutationService } from "../../orchestrator/src/authorities/task-tracker/claim-mutation.js"
 
 /** Exact expected-head control shared by the six serialized integration turns. */
 const makeSixTaskPromotionGit = (head: Ref.Ref<GitCommitSha>) =>

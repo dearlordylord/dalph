@@ -9,9 +9,13 @@ import type {
 } from "@dalph/contracts"
 import {
   type DeliveryRelationInputBundle,
+  type EvidenceStoreFailure,
+  type EvidenceStoreService,
   JournalStore,
   type IntegratorRunCorrelation,
+  type JournalStoreService,
   type TrackerGraphReader,
+  type TrackerMutationService,
   type CompletionClaimBoundaryService,
   type CompletionTaskBoundaryService,
   type JournalRecord,
@@ -21,12 +25,6 @@ import {
   type TargetPromotionGitRequest,
   type WorkflowJournalEvent as WorkflowEvent
 } from "@dalph/orchestrator"
-import type {
-  EvidenceStoreFailure,
-  EvidenceStoreService
-} from "../../orchestrator/src/workflow/protocols/evidence-store.js"
-import type { TrackerMutationService } from "../../orchestrator/src/authorities/task-tracker/claim-mutation.js"
-import type { JournalStoreService } from "../../orchestrator/src/workflow-journal/store.js"
 import type { makeSixTaskDeliveryFacts } from "./six-task-delivery-facts.js"
 import type { SixTaskCandidateRead } from "./six-task-integrator-git.js"
 

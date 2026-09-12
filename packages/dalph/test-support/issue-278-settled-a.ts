@@ -8,7 +8,8 @@ import {
   type JournalRecord,
   type JournalStore,
   type InvalidWorkflowJournalHistory,
-  type TrackerTarget
+  type TrackerTarget,
+  type ValidWorkflowJournalHistory
 } from "@dalph/orchestrator"
 import type { AuthoredScenarioCassetteRunFailure } from "../src/cassettes/authored-runner.js"
 import type { EmptyJournalCannotBeRecorded } from "../src/cassettes/recorded.js"
@@ -18,8 +19,8 @@ import { completeSingletonDeliveryCassette } from "./complete-singleton-delivery
 
 export interface Issue278SettledA {
   readonly records: ReadonlyArray<JournalRecord>
-  readonly history: ReturnType<typeof reduceWorkflowJournalHistory>
-  readonly folded: ReturnType<typeof reduceWorkflowJournalHistory>
+  readonly history: ValidWorkflowJournalHistory
+  readonly folded: ValidWorkflowJournalHistory
   readonly claim: CompletionTaskClaim
   readonly runId: RunId
   readonly target: TrackerTarget
