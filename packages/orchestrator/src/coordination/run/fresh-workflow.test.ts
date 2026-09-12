@@ -10,7 +10,8 @@ import {
   TaskId,
   TaskRevision,
   WorktreeLocator,
-  makeTaskWorkSpecification
+  makeTaskWorkSpecification,
+  plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
 import { HashSet, Effect, Layer, Option, Result } from "effect"
 import { expect } from "vitest"
@@ -37,7 +38,11 @@ import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import type { CurrentDeliveryFrame } from "./current-delivery-frame.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { acceptedJournalPrefixFromValidatedHistory } from "../../workflow-journal/accepted-prefix.js"
-import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
+import {
+  journalEvidenceFrom,
+  journalRecordsForTask,
+  lastJournalRecordForAttemptKind
+} from "../../workflow-journal/record-evidence.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
@@ -45,7 +50,10 @@ import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   PlannedAttemptExecutorStateObservation,
   PlannedAttemptExecutorStateObservationOrdinal,
-  PlannedAttemptExecutorStateObservedEvent
+  PlannedAttemptExecutorStateObservedEvent,
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
@@ -71,7 +79,13 @@ import {
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
-import { attemptPlanRecordKey, intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
+import {
+  attemptPlanRecordKey,
+  intentRecordKey,
+  outcomeRecordKey,
+  plannedAttemptExecutorWorkReportedRecordKey,
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
+} from "../../workflow-journal/record-key.js"
 import { OperationId } from "../../workflow/identity.js"
 import { deriveFreshWorkflowDecisions, responsibilityStillOwnsTask } from "./fresh-workflow.js"
 import { JournalStore } from "../../workflow-journal/store.js"
@@ -603,6 +617,96 @@ const selectionFrameWith = (claimRecords: ReadonlyArray<JournalRecord>): Current
     workflowHistory: { evidence: journalEvidenceFrom(records) }
   }
 }
+
+// After Begin's exact Executing report is accepted, keep observing that attempt;
+// a correlation-only report is not a task-bucket occurrence or a second Begin.
+it.each(["ExactReport", "ForeignAttemptReport", "MissingReport"] as const)(
+  "selects existing executor work only from its exact accepted report: %s",
+  (reportCase) => {
+    const specification = makeTaskWorkSpecification({
+      body: "Observe existing work",
+      taskId: selectionTaskId,
+      title: "Observe existing work"
+    })
+    const attempt = PlannedTaskAttempt.make({
+      ...plannedAttempt,
+      runId: selectionRunId,
+      taskId: selectionTaskId,
+      taskRevision: specification.fingerprint
+    })
+    const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+      OperationId.make("existing-executor-specification"),
+      selectionTarget,
+      selectionTaskId,
+      [selectionGraphOperation.operationId]
+    )
+    const ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
+    const correlation = plannedAttemptExecutorCorrelation(attempt)
+    const report = {
+      event: PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal,
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+          correlation:
+            reportCase === "ForeignAttemptReport"
+              ? { ...correlation, attemptId: AttemptId.make("foreign-existing-executor-attempt") }
+              : correlation
+        }),
+        version: workflowJournalEventVersion
+      }),
+      key: plannedAttemptExecutorWorkReportedRecordKey(
+        reportCase === "ForeignAttemptReport" ? AttemptId.make("foreign-existing-executor-attempt") : attempt.attemptId,
+        ordinal
+      ),
+      position: JournalPosition.make(61),
+      runId: selectionRunId
+    }
+    const records: ReadonlyArray<JournalRecord> = [
+      {
+        event: taskTrackerReadIntent(specificationOperation),
+        key: intentRecordKey(specificationOperation.operationId),
+        position: JournalPosition.make(3),
+        runId: selectionRunId
+      },
+      {
+        event: taskTrackerFactsObservedEvent(
+          specificationOperation.operationId,
+          makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, specification)
+        ),
+        key: outcomeRecordKey(specificationOperation.operationId),
+        position: JournalPosition.make(4),
+        runId: selectionRunId
+      },
+      {
+        event: PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+          plannedAttempt: attempt,
+          version: workflowJournalEventVersion
+        }),
+        key: plannedAttemptExecutorWorkResponsibilityBeganRecordKey(attempt.attemptId),
+        position: JournalPosition.make(58),
+        runId: selectionRunId
+      },
+      ...(reportCase === "MissingReport" ? [] : [report])
+    ]
+    for (const source of [records, journalEvidenceFrom(records)]) {
+      expect(Array.from(journalRecordsForTask(source, selectionTaskId))).not.toContain(report)
+      expect(lastJournalRecordForAttemptKind(source, attempt.attemptId, "PlannedAttemptExecutorWorkReported")).toBe(
+        reportCase === "ExactReport" ? report : undefined
+      )
+    }
+    const decisions = deriveFreshWorkflowDecisions(selectionFrameWith(records), new Set(), selectionTarget)
+    if (reportCase === "ExactReport") {
+      expect(decisions).toHaveLength(1)
+      expect(decisions[0]?.step).toMatchObject({
+        _tag: "ObservePlannedAttemptExecutorWork",
+        acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal },
+        plannedAttempt: attempt
+      })
+    } else {
+      expect(decisions.some(({ step }) => step._tag === "ObservePlannedAttemptExecutorWork")).toBe(false)
+    }
+    expect(decisions.some(({ step }) => step._tag === "BeginPlannedAttemptExecutorWork")).toBe(false)
+  }
+)
 
 it.each([
   ["NoCurrentReport", PlannedAttemptExecutorStateObservation.cases.ExecutorStateNoCurrentReport.make({})],

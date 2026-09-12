@@ -190,10 +190,10 @@ const journaledStepFor = (
     executorResponsibility?._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
     !recoveredAttemptIds.has(executorResponsibility.plannedAttempt.attemptId)
   ) {
-    const report = taskRecords.findLast(
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorWorkReported" &&
-        event.report.correlation.attemptId === executorResponsibility.plannedAttempt.attemptId
+    const report = lastJournalRecordForAttemptKind(
+      records,
+      executorResponsibility.plannedAttempt.attemptId,
+      "PlannedAttemptExecutorWorkReported"
     )?.event
     const specification = plannedSpecificationFor(records, executorResponsibility.plannedAttempt, immutableRunTargetKey)
     /* v8 ignore start -- A fresh non-running report already transfers the task to terminal or integration responsibility. */
