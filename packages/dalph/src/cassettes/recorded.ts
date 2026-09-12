@@ -61,6 +61,7 @@ import {
   workflowJournalEventVersion,
   exportWorkflowHistoryRecords,
   reduceWorkflowJournalHistory,
+  advanceWorkflowJournalHistory,
   StoppedAttemptClaimNoReleaseObservedEvent,
   TaskClaimReacquisitionDirectedEvent,
   type BranchCleanupJournalEvent,
@@ -1562,15 +1563,42 @@ const checkpointComparison = (
 export const verifyRecordedCassetteRoundTrip = (
   records: ReadonlyArray<JournalRecord>,
   cassette: RecordedCassetteType
-): ReadonlyArray<RecordedCassetteCheckpoint> =>
-  records.map((_record, index) => {
+): ReadonlyArray<RecordedCassetteCheckpoint> => {
+  const actualRecords: Array<JournalRecord> = []
+  let actualHistory: ReturnType<typeof reduceWorkflowJournalHistory> | undefined
+  return records.map((_record, index) => {
     const checkpoint = index + 1
-    return checkpointComparison(
-      checkpoint,
-      reduceWorkflowJournalHistory(cassette.runId, records.slice(0, checkpoint)),
-      foldRecordedCassette(RecordedCassette.make({ ...cassette, entries: cassette.entries.slice(0, checkpoint) }))
-    )
+    // The source remains an independent cold oracle before selected recorded
+    // entries are checked or reconstructed. An unvisited suffix stays untouched.
+    const expected = reduceWorkflowJournalHistory(cassette.runId, records.slice(0, checkpoint))
+    const prefix = RecordedCassette.make({ ...cassette, entries: cassette.entries.slice(0, checkpoint) })
+    const entry = prefix.entries[actualRecords.length]
+    if (entry !== undefined) {
+      const event = eventForRecordedEntry(entry, prefix.entries, actualRecords.length, prefix.runId)
+      const record = {
+        event,
+        key: describeJournalEvent(event).expectedKey,
+        position: JournalPosition.make(actualRecords.length + 1),
+        runId: prefix.runId
+      }
+      // eslint-disable-next-line functional/immutable-data -- Pure comparison scratch never escapes; each selected occurrence is reconstructed once.
+      actualRecords.push(record)
+      const advanced =
+        actualHistory?._tag === "ValidWorkflowJournalHistory"
+          ? advanceWorkflowJournalHistory(actualHistory, record)
+          : undefined
+      // Rejected successors can contain only new issues. Preserve the complete
+      // cold diagnostic at this prefix and at subsequent invalid prefixes.
+      actualHistory =
+        advanced?._tag === "ValidWorkflowJournalHistory"
+          ? advanced
+          : reduceWorkflowJournalHistory(prefix.runId, actualRecords)
+    } else if (actualHistory === undefined) {
+      actualHistory = reduceWorkflowJournalHistory(prefix.runId, actualRecords)
+    }
+    return checkpointComparison(checkpoint, expected, actualHistory)
   })
+}
 
 /** Applies one declared alpha-renaming before the ordinary prefix comparison. */
 export const verifyRecordedCassetteRoundTripWithRenaming = Effect.fn(
