@@ -9,7 +9,10 @@ import "./trace-cursor-selection.test.ts"
 import "./delivery-playback.test.ts"
 import "./trace-history-navigation.test.ts"
 import { foldRepeatedTraceItems } from "./trace-history-navigation.ts"
-import { maintainedIntegrationFinalityProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/integration-finality-protocol-cassette-domain.ts"
+import {
+  IntegrationFinalityProtocolCassetteRun,
+  maintainedIntegrationFinalityProtocolCassetteCatalog
+} from "../../../packages/dalph/src/cassettes/integration-finality-protocol-cassette-domain.ts"
 import { maintainedTargetPromotionProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/target-promotion-protocol-cassette-domain.ts"
 import { maintainedApplicationExitProtocolCassetteCatalog } from "../../../packages/dalph/src/cassettes/application-exit-protocol-cassette-domain.ts"
 import { maintainedCodexPlannedAttemptExecutorCassetteCatalog } from "../../../packages/dalph/src/cassettes/codex-planned-attempt-executor-cassette-domain.ts"
@@ -53,7 +56,7 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { parseHTML } from "linkedom"
 import {
   IntegrationResponsibilityBeganEvent,
@@ -403,6 +406,35 @@ await scenario("runs every maintained cassette through production to its declare
       assert(result.deliveryFrames === null, `${result.catalogKey} must not fabricate graph-level delivery frames`)
       assert(result.observationMoments === null, `${result.catalogKey} must not fabricate a Delivery runtime chronology`)
     }
+  }
+})
+
+await scenario("continues every finality story from an authored promotion and retains its exact terminal evidence", () => {
+  for (const [key, cassette] of Object.entries(maintainedIntegrationFinalityProtocolCassetteCatalog)) {
+    const result = everyResult.find(({ catalogKey }) => catalogKey === `integration-finality:${key}`)
+    if (result?._tag !== "Completed" || !Schema.is(IntegrationFinalityProtocolCassetteRun)(result.executionEvidence)) {
+      throw new Error(`${key} must retain typed finality evidence`)
+    }
+    const run = result.executionEvidence
+    const terminal = cassette.story.at(-1)
+    if (terminal?._tag !== "AwaitSettlement") throw new Error(`${key} must declare terminal evidence`)
+    const promotionIndex = run.journalTags.lastIndexOf("TargetPromotionObservedSuccess")
+    assert(run.journalTags[0] === "WorkflowRunBegan", `${key} must retain the authored Run beginning`)
+    assert(promotionIndex >= 0, `${key} must retain the authored successful promotion`)
+    assert(
+      JSON.stringify(run.journalTags.slice(-terminal.expected.journalTags.length))
+        === JSON.stringify(terminal.expected.journalTags),
+      `${key} must retain the declared finality journal suffix`
+    )
+    assert(run.deletionCalls === terminal.expected.deletionCalls, `${key} must preserve exact deletion calls`)
+    assert(run.readCalls === terminal.expected.readCalls, `${key} must preserve exact claim reads`)
+    assert(run.replacementCalls === terminal.expected.replacementCalls, `${key} must preserve exact replacement calls`)
+    assert(run.failureTag === terminal.expected.failureTag, `${key} must preserve the declared failure tag`)
+    assert(
+      run.records.every(({ runId }) => runId === run.records[0]?.runId),
+      `${key} must continue one exact authored Run`
+    )
+    assert(result.journalRecordCount === run.records.length, `${key} must retain the whole continued journal`)
   }
 })
 

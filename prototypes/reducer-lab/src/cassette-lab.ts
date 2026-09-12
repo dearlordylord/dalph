@@ -9,7 +9,8 @@ import {
   type AuthoredObservationMoment,
   type AuthoredScenarioCassetteRun,
   evaluateAuthoredObservationCapture,
-  runAuthoredScenarioCassette
+  runAuthoredScenarioCassette,
+  useAuthoredScenarioCassette
 } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 import { maintainedAuthoredCassetteCatalog } from "../../../packages/dalph/src/cassettes/catalog.ts"
 import {
@@ -20,7 +21,7 @@ import {
   maintainedIntegrationFinalityProtocolCassetteCatalog
 } from "../../../packages/dalph/src/cassettes/integration-finality-protocol-cassette-domain.ts"
 import {
-  runIntegrationFinalityProtocolCassette
+  runIntegrationFinalityProtocolCassetteFromPromotedRecords
 } from "../../../packages/dalph/src/cassettes/integration-finality-protocol-cassette.ts"
 import {
   maintainedTargetPromotionProtocolCassetteCatalog
@@ -107,10 +108,10 @@ const cassetteCategoryMetadata = {
     runnerName: "runCodexPlannedAttemptExecutorCassette"
   },
   IntegrationFinality: {
-    controlledBoundaries: "completion-claim tracker boundary and journal",
+    controlledBoundaries: "authored tracker, claims, Git, executor, and promotion; then completion-claim tracker boundary and journal",
     itemName: "steps",
     label: "Integration finality protocol",
-    runnerName: "runIntegrationFinalityProtocolCassette"
+    runnerName: "runIntegrationFinalityProtocolCassetteFromPromotedRecords (via useAuthoredScenarioCassette)"
   },
   TargetPromotion: {
     controlledBoundaries: "target Git boundary, exact target leases, and journal",
@@ -318,7 +319,9 @@ const integrationFinalityDescriptors: ReadonlyArray<MaintainedCassetteDescriptor
   category: "IntegrationFinality",
   execute: async () => {
     const exit = await Effect.runPromiseExit(
-      runIntegrationFinalityProtocolCassette(cassette).pipe(Effect.provide(cassetteRuntimeLayer))
+      useAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.targetPromotionSuccess, (promoted) =>
+        runIntegrationFinalityProtocolCassetteFromPromotedRecords(cassette, promoted.runId)
+      ).pipe(Effect.provide(cassetteRuntimeLayer))
     )
     return Exit.map(exit, (run) => ({
       activationOrdinals: [],
