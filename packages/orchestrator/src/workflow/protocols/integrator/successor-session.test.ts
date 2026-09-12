@@ -1,6 +1,6 @@
 import { describe, expect } from "vitest"
 import { it } from "@effect/vitest"
-import { Effect, Layer, Option, Schema } from "effect"
+import { Effect, Layer, Option, Ref, Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -23,8 +23,11 @@ import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { OperationId } from "../../identity.js"
-import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../registry/event.js"
-import { makeTargetLineageObservationOperation } from "../../registry/operation.js"
+import { GitReadIntentRecordedEvent, TargetLineageObservedEvent, taskTrackerReadIntent } from "../../registry/event.js"
+import {
+  makeTargetLineageObservationOperation,
+  makeTrackerGraphObservationOperation
+} from "../../registry/operation.js"
 import { InRunJournal, JournalStoreContradiction } from "../../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
 import { unpublishedAcceptedJournalReaderTestLayer } from "../../../workflow-journal/test-accepted-reader.js"
@@ -64,7 +67,25 @@ import {
   IntegratorSuccessorSessionFixedEvent,
   firstFullRerunSuccessorGeneration
 } from "./events.js"
-import { appendIntegratorSuccessorSessionIfNeeded, readActiveIntegratorSession } from "./successor-session.js"
+import {
+  appendIntegratorSuccessorSessionIfNeeded,
+  integratorSuccessorPreparationIsCurrent,
+  prepareIntegratorSuccessorSessionAppend,
+  readActiveIntegratorSession
+} from "./successor-session.js"
+import {
+  appendJournalEvidence,
+  emptyJournalEvidence,
+  journalEvidenceFrom,
+  journalGraphObservationAt,
+  journalGraphSnapshotForObservation,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
+import {
+  makeCompleteTaskTrackerFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../task-tracker-facts/observation.js"
+import { integrationQuarantineDirectionTargetLineageOperationId } from "../integration-quarantine/direction-lineage-operation.js"
 import {
   integratorCorrelationFor,
   integratorRunCorrelationForSession,
@@ -397,7 +418,251 @@ const acceptedResponsibilityFor = (predecessor: ReturnType<typeof acceptedSucces
 const acceptedSuccessorLayer = (fixture: ReturnType<typeof acceptedSuccessorFixture>) =>
   liveJournalTestLayer({ records: fixture.records, runId, target: fixture.trackerTarget })
 
+/** A post-claim target read followed by Q/D/L, without a plan-correlated continuation read. */
+const recoveredTargetGraphSuccessorFixture = () => {
+  const initial = acceptedSuccessorFixture()
+  const evidence = journalEvidenceFrom(initial.records)
+  const priorGraph = journalGraphObservationAt(evidence, { target: initial.trackerTarget })
+  const snapshot =
+    priorGraph === undefined
+      ? undefined
+      : Option.getOrUndefined(journalGraphSnapshotForObservation(evidence, priorGraph.position))
+  const priorQuarantine = initial.records.find(({ position }) => position === initial.input.quarantineAt)
+  const priorDirection = initial.records.find(({ position }) => position === initial.input.directionAppliedAt)
+  if (
+    snapshot === undefined ||
+    priorQuarantine?.event._tag !== "IntegrationQuarantined" ||
+    priorDirection?.event._tag !== "IntegrationQuarantineDirectionApplied"
+  )
+    return expect.fail("accepted successor fixture requires graph and Q/D evidence")
+  let records = initial.records.filter(({ position }) => position < initial.input.quarantineAt)
+  const append = (event: JournalRecord["event"]): JournalRecord => {
+    const record = journalRecord(records.length + 1, event, describeJournalEvent(event).expectedKey)
+    records = [...records, record]
+    return record
+  }
+  const graphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("successor-recovered-target-graph"),
+    initial.trackerTarget,
+    [OperationId.make("accepted-successor-claim")],
+    [initial.input.predecessor.plannedAttempt.taskId]
+  )
+  const graphIntent = append(taskTrackerReadIntent(graphOperation))
+  const graph = append(
+    taskTrackerFactsObservedEvent(
+      graphOperation.operationId,
+      makeCompleteTaskTrackerFactsObserved(graphOperation, snapshot)
+    )
+  )
+  const quarantine = append(priorQuarantine.event)
+  const direction = append(
+    IntegrationQuarantineDirectionAppliedEvent.make({
+      ...priorDirection.event,
+      fingerprint: { ...priorDirection.event.fingerprint, quarantineAt: quarantine.position }
+    })
+  )
+  if (direction.event._tag !== "IntegrationQuarantineDirectionApplied") return expect.fail("fixture requires D")
+  const lineageOperation = makeTargetLineageObservationOperation({
+    integrationTarget: target,
+    operationId: integrationQuarantineDirectionTargetLineageOperationId(
+      { direction: direction.event, directionAt: direction.position, quarantineAt: quarantine.position },
+      initial.input.predecessor.plannedAttempt,
+      graph.position
+    ),
+    plannedAttempt: initial.input.predecessor.plannedAttempt,
+    predecessorOperationIds: []
+  })
+  const lineageIntent = append(
+    GitReadIntentRecordedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operation: lineageOperation,
+      version: workflowJournalEventVersion
+    })
+  )
+  const lineage = append(
+    TargetLineageObservedEvent.make({
+      observation: initial.input.targetLineage,
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: lineageOperation.operationId,
+      plannedAttempt: initial.input.predecessor.plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  return {
+    graph,
+    graphIntent,
+    graphOperation,
+    lineageIntent,
+    input: IntegratorSuccessorPreparationInput.make({
+      ...initial.input,
+      directionAppliedAt: direction.position,
+      quarantineAt: quarantine.position,
+      targetLineageObservedAt: lineage.position
+    }),
+    records,
+    trackerTarget: initial.trackerTarget
+  }
+}
+
+const successorEvidenceLanes = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<JournalHistorySource> => [
+  records,
+  journalEvidenceFrom(records),
+  records.reduce(appendJournalEvidence, emptyJournalEvidence())
+]
+
 describe("Integrator FullRerun successor session", () => {
+  it.effect(
+    "fixes one successor from a recovered target graph in raw, cold-indexed, and incrementally accepted history",
+    () => {
+      const fixture = recoveredTargetGraphSuccessorFixture()
+      const beforeDirection = fixture.records.filter(({ position }) => position < fixture.input.quarantineAt)
+      return Effect.gen(function* () {
+        const journal = yield* InRunJournal
+        for (const record of fixture.records.slice(beforeDirection.length)) {
+          if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+            return yield* Effect.die("incremental Q/D/L fixture must not begin or terminate a Run")
+          }
+          yield* journal.append(runId, record.key, record.event)
+        }
+        const current = yield* (yield* AcceptedJournalReader).readAccepted(runId)
+        const lanes: ReadonlyArray<JournalHistorySource> = [
+          fixture.records,
+          journalEvidenceFrom(fixture.records),
+          current
+        ]
+        expect(
+          journalGraphObservationAt(current, { plannedAttempt: fixture.input.predecessor.plannedAttempt })
+        ).toBeUndefined()
+        const preparations = yield* Effect.forEach(lanes, (records) => {
+          expect(integratorSuccessorPreparationIsCurrent(records, fixture.input)).toBe(true)
+          return prepareIntegratorSuccessorSessionAppend(fixture.input, records)
+        })
+        expect(preparations[1]).toEqual(preparations[0])
+        expect(preparations[2]).toEqual(preparations[0])
+        const prepared = preparations[0]
+        if (prepared?._tag !== "Append") return yield* Effect.die("fresh Q/D/L must prepare one successor")
+        yield* journal.append(runId, prepared.key, prepared.event)
+        const appended = yield* (yield* AcceptedJournalReader).readAccepted(runId)
+        const recovered = yield* prepareIntegratorSuccessorSessionAppend(fixture.input, appended)
+        expect(recovered._tag).toBe("Existing")
+        const records = yield* journal.read(runId)
+        expect(records.filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")).toHaveLength(1)
+      }).pipe(Effect.provide(liveJournalTestLayer({ records: beforeDirection, runId, target: fixture.trackerTarget })))
+    }
+  )
+
+  it.effect(
+    "does not fix a successor from missing, foreign, or newer target graphs with old lineage in any evidence lane",
+    () =>
+      Effect.gen(function* () {
+        const fixture = recoveredTargetGraphSuccessorFixture()
+        const snapshot = Option.getOrUndefined(
+          journalGraphSnapshotForObservation(journalEvidenceFrom(fixture.records), fixture.graph.position)
+        )
+        if (snapshot === undefined) return yield* Effect.die("recovered graph fixture requires a snapshot")
+        const graphRecord = (trackerTarget: typeof fixture.trackerTarget, position: number): JournalRecord => {
+          const operation = makeTrackerGraphObservationOperation(
+            { _tag: "WorkflowEstablishment" },
+            OperationId.make(`successor-target-graph:${position}`),
+            trackerTarget,
+            [OperationId.make("accepted-successor-claim")],
+            [fixture.input.predecessor.plannedAttempt.taskId]
+          )
+          const event = taskTrackerFactsObservedEvent(
+            operation.operationId,
+            makeCompleteTaskTrackerFactsObserved(operation, snapshot)
+          )
+          return journalRecord(position, event, describeJournalEvent(event).expectedKey)
+        }
+        const withoutGraphs = fixture.records.filter(
+          ({ event }) =>
+            event._tag !== "TaskTrackerFactsObserved" || event.observation._tag !== "CompleteTaskTrackerFacts"
+        )
+        const invalidHistories = [
+          withoutGraphs,
+          [
+            ...withoutGraphs,
+            graphRecord(FixtureTarget.make("foreign-successor-target"), fixture.graph.position)
+          ].toSorted((left, right) => left.position - right.position),
+          [...fixture.records, graphRecord(fixture.trackerTarget, fixture.records.length + 1)]
+        ]
+        for (const records of invalidHistories) {
+          for (const evidence of successorEvidenceLanes(records)) {
+            expect(integratorSuccessorPreparationIsCurrent(evidence, fixture.input)).toBe(false)
+            const appendCalls = yield* Ref.make(0)
+            if (integratorSuccessorPreparationIsCurrent(evidence, fixture.input)) {
+              yield* appendIntegratorSuccessorSessionIfNeeded(
+                {
+                  append: (requestedRunId, key, event) =>
+                    Ref.update(appendCalls, (count) => count + 1).pipe(
+                      Effect.as({
+                        event,
+                        key,
+                        position: JournalPosition.make(records.length + 1),
+                        runId: requestedRunId
+                      })
+                    ),
+                  read: () => Effect.succeed(records)
+                },
+                fixture.input,
+                evidence
+              )
+            }
+            expect(yield* Ref.get(appendCalls)).toBe(0)
+          }
+        }
+      }).pipe(Effect.provide(rawJournalBoundaryLayer))
+  )
+
+  it.effect(
+    "rejects pre-direction lineage and missing fresh intent before preparing a successor in every evidence lane",
+    () =>
+      Effect.gen(function* () {
+        const fixture = recoveredTargetGraphSuccessorFixture()
+        const preDirectionPosition = JournalPosition.make(fixture.input.directionAppliedAt - 1)
+        const malformed = [
+          {
+            input: IntegratorSuccessorPreparationInput.make({
+              ...fixture.input,
+              targetLineageObservedAt: preDirectionPosition
+            }),
+            records: fixture.records
+              .map((record) =>
+                record.position === fixture.input.targetLineageObservedAt
+                  ? { ...record, position: preDirectionPosition }
+                  : record
+              )
+              .toSorted((left, right) => left.position - right.position)
+          },
+          {
+            input: fixture.input,
+            records: fixture.records.filter(({ position }) => position !== fixture.lineageIntent.position)
+          }
+        ]
+        for (const { input, records } of malformed) {
+          for (const evidence of successorEvidenceLanes(records)) {
+            const appendCalls = yield* Ref.make(0)
+            const result = yield* appendIntegratorSuccessorSessionIfNeeded(
+              {
+                append: (requestedRunId, key, event) =>
+                  Ref.update(appendCalls, (count) => count + 1).pipe(
+                    Effect.as({ event, key, position: JournalPosition.make(records.length + 1), runId: requestedRunId })
+                  ),
+                read: () => Effect.succeed(records)
+              },
+              input,
+              evidence
+            ).pipe(Effect.result)
+            expect(result._tag).toBe("Failure")
+            if (result._tag === "Failure") expect(result.failure).toBeInstanceOf(IntegratorJournalContradiction)
+            expect(yield* Ref.get(appendCalls)).toBe(0)
+          }
+        }
+      }).pipe(Effect.provide(rawJournalBoundaryLayer))
+  )
+
   it.effect("preserves predecessor resources for separately authorized cleanup", () => {
     const fixture = acceptedSuccessorFixture()
     return Effect.gen(function* () {
