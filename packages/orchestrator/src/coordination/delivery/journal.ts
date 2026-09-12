@@ -1,5 +1,5 @@
 import { RunId } from "@dalph/contracts"
-import { Context, Effect, Layer, Option, PubSub, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
+import { Context, Data, Effect, Layer, Option, PubSub, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { advanceWorkflowJournalHistory, reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { ValidWorkflowJournalHistory } from "../reconstruction/history-result.js"
@@ -63,6 +63,22 @@ export interface JournalState {
   readonly prefix: AcceptedJournalPrefix
 }
 
+/** The accepted Journal prefix position that must still be current when a conditional append is serialized. */
+export const ExpectedAcceptedPrefixPosition = JournalPosition.pipe(Schema.brand("ExpectedAcceptedPrefixPosition"))
+export type ExpectedAcceptedPrefixPosition = typeof ExpectedAcceptedPrefixPosition.Type
+
+/** Whether a conditional append committed or proved that its accepted-prefix premise had already advanced. */
+type ConditionalJournalAppendResult = Data.TaggedEnum<{
+  Appended: { readonly record: JournalRecord }
+  /** Storage was not called and the proposed record is definitely absent from this append attempt. */
+  PrefixAdvanced: {
+    readonly currentPosition: JournalPosition
+    readonly expectedPosition: ExpectedAcceptedPrefixPosition
+  }
+}>
+
+const ConditionalJournalAppendResult = Data.taggedEnum<ConditionalJournalAppendResult>()
+
 /** Persistence owned by the Journal; raw reads occur only to reconcile an ambiguous terminal write. */
 export type JournalStorageBoundary = Pick<JournalStoreService, "append" | "read" | "terminateRun">
 
@@ -74,6 +90,12 @@ export interface JournalService {
     key: JournalRecordKey,
     event: AppendableWorkflowJournalEvent
   ) => Effect.Effect<JournalRecord, JournalAppendError>
+  readonly appendIfAcceptedPrefixCurrent: (
+    runId: RunId,
+    expectedPosition: ExpectedAcceptedPrefixPosition,
+    key: JournalRecordKey,
+    event: AppendableWorkflowJournalEvent
+  ) => Effect.Effect<ConditionalJournalAppendResult, JournalAppendError>
   readonly read: (runId: RunId) => Effect.Effect<ReadonlyArray<JournalRecord>, JournalError | InRunJournalRunMismatch>
   readonly readAccepted: (runId: RunId) => Effect.Effect<AcceptedJournalPrefix, JournalError | InRunJournalRunMismatch>
   /** Persists termination and publishes its exact accepted successor under the append publication lock. */
@@ -331,6 +353,29 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
         })
       )
     )
+  const appendIfAcceptedPrefixCurrent: JournalService["appendIfAcceptedPrefixCurrent"] = (
+    run,
+    expectedPosition,
+    key,
+    event
+  ) =>
+    publication.withPermit(
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          if (run !== runId) return yield* new InRunJournalRunMismatch({ expectedRunId: runId, requestedRunId: run })
+          const status = yield* SubscriptionRef.get(publicationState)
+          if (status._tag === "JournalFailed") return yield* status.failure
+          if (status.value.position !== expectedPosition) {
+            return ConditionalJournalAppendResult.PrefixAdvanced({
+              currentPosition: status.value.position,
+              expectedPosition
+            })
+          }
+          const record = yield* storage.append(run, key, event)
+          return ConditionalJournalAppendResult.Appended({ record: yield* acceptAcknowledgedRecord(status, record) })
+        })
+      )
+    )
   const terminate: JournalService["terminate"] = (disposition, evidence) =>
     publication.withPermit(
       Effect.uninterruptible(
@@ -392,7 +437,7 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
     requestedRunId === runId
       ? state.get.pipe(Effect.map(({ prefix }) => prefix))
       : Effect.fail(new InRunJournalRunMismatch({ expectedRunId: runId, requestedRunId }))
-  return { state, append, read, readAccepted, terminate } satisfies JournalService
+  return { state, append, appendIfAcceptedPrefixCurrent, read, readAccepted, terminate } satisfies JournalService
 })
 
 /** Installs the one journal and exposes only its in-Run and descriptive capabilities. */
