@@ -75,7 +75,14 @@ export interface SixTaskRuntimeObservation {
 type SixTaskName = keyof ReturnType<typeof makeSixTaskDeliveryFacts>["taskFacts"]
 type SixTaskCut = { readonly _tag: "Disabled" } | { readonly _tag: "Armed"; readonly at: SixTaskTerminalCut }
 
-export interface SixTaskDeliveryRuntime extends Omit<SixTaskRuntimeObservation, "controlledJournal"> {
+interface SixTaskDeliveryRuntimeOperations {
+  readonly terminal: (name: SixTaskName) => Effect.Effect<void, EvidenceStoreFailure>
+  readonly publish: (name: SixTaskName, projection: PlannedAttemptExecutorProjection) => Effect.Effect<void>
+  readonly unresolved: (kind: "Unavailable" | "Foreign") => Effect.Effect<void, EvidenceStoreFailure>
+}
+
+export interface SixTaskDeliveryRuntime
+  extends Omit<SixTaskRuntimeObservation, "controlledJournal">, SixTaskDeliveryRuntimeOperations {
   readonly activate: Effect.Effect<never, unknown>
   readonly commands: Ref.Ref<ReadonlyArray<PlannedTaskAttempt>>
   readonly integrationEntered: Queue.Queue<IntegratorRunCorrelation>
@@ -91,9 +98,6 @@ export interface SixTaskDeliveryRuntime extends Omit<SixTaskRuntimeObservation, 
   readonly publicationQueue: Queue.Queue<DeliveryRelationInputBundle>
   readonly releaseIntegration: ReadonlyMap<TaskId, Deferred.Deferred<void>>
   readonly runId: RunId
-  readonly terminal: (name: SixTaskName) => Effect.Effect<void, EvidenceStoreFailure>
-  readonly publish: (name: SixTaskName, projection: PlannedAttemptExecutorProjection) => Effect.Effect<void>
-  readonly unresolved: (kind: "Unavailable" | "Foreign") => Effect.Effect<void, EvidenceStoreFailure>
   readonly cut: Ref.Ref<SixTaskCut>
 }
 

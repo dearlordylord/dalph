@@ -17,17 +17,20 @@ import { runAuthoredScenarioCassette } from "../src/cassettes/authored-runner.js
 import { projectRecordedCassette, foldRecordedCassette } from "../src/cassettes/index.js"
 import { completeSingletonDeliveryCassette } from "./complete-singleton-delivery.js"
 
-export interface Issue278SettledA {
+interface Issue278SettledAOperations {
+  readonly seed: (input: {
+    readonly journal: JournalStore["Service"]
+    readonly evidence: EvidenceStore["Service"]
+  }) => Effect.Effect<void>
+}
+
+export interface Issue278SettledA extends Issue278SettledAOperations {
   readonly records: ReadonlyArray<JournalRecord>
   readonly history: ValidWorkflowJournalHistory
   readonly folded: ValidWorkflowJournalHistory
   readonly claim: CompletionTaskClaim
   readonly runId: RunId
   readonly target: TrackerTarget
-  readonly seed: (input: {
-    readonly journal: JournalStore["Service"]
-    readonly evidence: EvidenceStore["Service"]
-  }) => Effect.Effect<void>
 }
 
 /** Exact ordinary A prefix. No FullRerun predecessor exists in this independent starting history. */
