@@ -1,6 +1,7 @@
 export interface EffectTsgoPlatformBinaryOptions {
   readonly architecture?: string
   readonly chmod?: (path: string, mode: number) => void
+  readonly stat?: (path: string) => { readonly mode: number }
   readonly platform?: NodeJS.Platform
   readonly resolvePackageJson?: (platform: NodeJS.Platform, architecture: string) => string
 }

@@ -65,12 +65,20 @@ questions. Reuse guidance already read unless it changed or scope changed.
   there are none. It is separate from `check:all`. Uncollected tests,
   undefined behavior, and unreachable actions can appear green: require a
   negative control.
-- `check:all`, `test:coverage`, and `check:quint` take one of two repository
-  admission slots before they start, so concurrent agents share the machine
-  instead of contending for every core. A waiting run names the current holders
-  and is admitted in order. Take the slot by running the command; never poll for
-  another agent's gate to finish. `DALPH_GATE_SLOTS` sets the slot count for a
-  differently sized machine, and the focused tiers run unadmitted.
+- `check:all`, `check:ci:quality`, `test:coverage`, `check:quint`, and standalone
+  `check:preflight` take the exact worktree lock before a clone-wide admission
+  slot. Nested commands validate their active custody record; a slot environment
+  value alone does not grant admission. Incomplete runs retain durable fences;
+  inspect with `pnpm gate:status <run-id>` and explicitly prove stopped writers
+  with `pnpm gate:reconcile <run-id>`. Missing exits remain unproven. Run the
+  command to wait for ownership; never poll another agent's gate. See the local
+  Linux/cooperative scope in [DEVELOPMENT.md](docs/DEVELOPMENT.md#heavy-gate-admission).
+  `DALPH_GATE_SLOTS` sets clone capacity. `check:fast` and focused tests remain
+  unadmitted; standalone preflight writes artifacts and is admitted.
+- A maintainer can resume only `pnpm check:all --candidate=<base sha> --resume=<run-id>`
+  in the same worktree with complete monitored input/artifact evidence. Fresh and
+  resumed full gates require Python 3 with Linux inotify; failed/unproven stages
+  and the remaining suffix run normally. Never manually skip required stages.
 - Before declaring Playwright environment-blocked, try the documented
   [browser setup](docs/DEVELOPMENT.md#browser-and-real-host-setup); report the exact unrun command
   and missing dependency if privileges block setup.

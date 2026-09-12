@@ -5,6 +5,7 @@ describe("Effect diagnostics platform binary", () => {
   it("makes the selected Unix platform binary executable", () => {
     const chmodCalls: Array<readonly [path: string, mode: number]> = []
     ensureEffectTsgoPlatformBinaryExecutable({
+      stat: () => ({ mode: 0o644 }),
       architecture: "x64",
       chmod: (path, mode) => void chmodCalls.push([path, mode]),
       platform: "linux",
@@ -12,6 +13,17 @@ describe("Effect diagnostics platform binary", () => {
     })
 
     expect(chmodCalls).toEqual([["/packages/@effect/tsgo-linux-x64/lib/tsc", 0o755]])
+  })
+
+  it("leaves an already executable binary untouched", () => {
+    const chmodCalls: Array<readonly [path: string, mode: number]> = []
+    ensureEffectTsgoPlatformBinaryExecutable({
+      stat: () => ({ mode: 0o100755 }),
+      chmod: (path, mode) => void chmodCalls.push([path, mode]),
+      platform: "linux",
+      resolvePackageJson: () => "/packages/platform/package.json"
+    })
+    expect(chmodCalls).toEqual([])
   })
 
   it("does not change executable permissions on Windows", () => {

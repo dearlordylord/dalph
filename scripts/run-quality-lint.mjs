@@ -8,6 +8,8 @@ const options = new Set(process.argv.slice(2).filter((argument) => argument.star
 const explicitFiles = process.argv.slice(2).filter((argument) => !argument.startsWith("--"))
 const staged = options.has("--staged")
 const fix = options.has("--fix")
+const census = options.has("--census")
+let failedChecks = 0
 const changedOnly = options.has("--changed")
 const baseReference = process.env["DALPH_DIAGNOSTICS_BASE"] ?? "origin/master"
 const compatibility = options.has("--compatibility")
@@ -30,8 +32,18 @@ const executable = (name) =>
 
 const run = (command, arguments_, environment = process.env) => {
   const result = spawnSync(command, arguments_, { env: environment, stdio: "inherit" })
-  if (result.error !== undefined) throw result.error
-  if (result.status !== 0) process.exit(result.status ?? 1)
+  if (result.error !== undefined) {
+    if (!census) throw result.error
+    failedChecks += 1
+    console.error(`Lint census could not start: ${command}: ${result.error.message}`)
+    return
+  }
+  if (result.signal !== null) process.exit(1)
+  if (result.status !== 0) {
+    if (!census) process.exit(result.status ?? 1)
+    failedChecks += 1
+    console.error(`Lint census failed: ${command} ${arguments_.join(" ")} (exit ${result.status ?? 1})`)
+  }
 }
 
 const nativeFiles = selectedFiles.filter((file) => lintableExtensions.has(extname(file)))
@@ -71,5 +83,11 @@ const runCompatibility = (files, shouldFix) => {
 runCompatibility(compatibilityFiles, fix && !staged)
 
 if (selectedFiles.length > 0) {
-  run(executable("dprint"), [fix ? "fmt" : "check", ...selectedFiles])
+  run(executable("dprint"), [
+    fix ? "fmt" : "check",
+    ...(process.env.DALPH_DPRINT_INCREMENTAL === "disabled" ? ["--incremental=false"] : []),
+    ...selectedFiles
+  ])
 }
+
+if (failedChecks > 0) process.exitCode = 1

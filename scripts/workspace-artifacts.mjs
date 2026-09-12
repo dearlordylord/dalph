@@ -189,6 +189,7 @@ export const validateWorkspaceArtifacts = async ({
 
 export const prepareWorkspaceArtifacts = async ({
   pnpmEntryPoint = process.env.npm_execpath,
+  report = console.error,
   repositoryRoot = fileURLToPath(new URL("../", import.meta.url)),
   runCommand = runBoundedCommand
 } = {}) => {
@@ -197,14 +198,22 @@ export const prepareWorkspaceArtifacts = async ({
   }
   const packages = await readProductionPackages(repositoryRoot)
   requireBuildScripts(packages)
-  await runCommand({
-    args: [pnpmEntryPoint, "--silent", "build"],
-    cwd: repositoryRoot,
-    executable: process.execPath,
-    name: "Workspace production build",
-    relayParentSignals: true,
-    timeoutMilliseconds: 2 * 60 * SECOND
-  })
+  try {
+    await runCommand({
+      args: [pnpmEntryPoint, "--silent", "build"],
+      cwd: repositoryRoot,
+      executable: process.execPath,
+      name: "Workspace production build",
+      relayParentSignals: true,
+      timeoutMilliseconds: 2 * 60 * SECOND
+    })
+  } catch (error) {
+    report(
+      "Artifact checks blocked by failed production build: production package boundary, " +
+        "artifact declaration resolution, artifact runtime export imports, bin syntax, and package contents."
+    )
+    throw error
+  }
   await validateBuiltWorkspaceArtifacts({ packages, pnpmEntryPoint, repositoryRoot, runCommand })
 }
 

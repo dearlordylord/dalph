@@ -19,11 +19,7 @@ export const resolveGateSlotCount = ({ configured }) => {
 
 export const gateSlots = ({ lockDirectory, slotCount }) =>
   Array.from({ length: slotCount }, (_unusedEntry, index) => ({
-    holder: join(lockDirectory, `dalph-gate-slot-${index + 1}.holder`),
+    fence: join(lockDirectory, `dalph-gate-slot-${index + 1}.fence.json`),
     lock: join(lockDirectory, `dalph-gate-slot-${index + 1}.lock`),
     ordinal: index + 1
   }))
-
-// A gate stage that the full gate spawns already runs inside its parent's slot. Acquiring a second slot for it would
-// consume admission the parent already holds, so an occupied environment marks the run as admitted.
-export const shouldAcquireGateSlot = ({ occupiedSlot }) => occupiedSlot === undefined || occupiedSlot === ""

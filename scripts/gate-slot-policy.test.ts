@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { defaultGateSlotCount, gateSlots, resolveGateSlotCount, shouldAcquireGateSlot } from "./gate-slot-policy.mjs"
+import { defaultGateSlotCount, gateSlots, resolveGateSlotCount } from "./gate-slot-policy.mjs"
 
 describe("gate slot policy", () => {
   it("admits two heavy gates at once by default", () => {
@@ -14,24 +14,18 @@ describe("gate slot policy", () => {
     expect(() => resolveGateSlotCount({ configured: "2.5" })).toThrow(/positive integer/)
   })
 
-  it("names one lock and one holder record per slot inside the shared lock directory", () => {
+  it("names one lock and one durable fence record per slot inside the shared lock directory", () => {
     expect(gateSlots({ lockDirectory: "/repository/.git", slotCount: 2 })).toEqual([
       {
-        holder: "/repository/.git/dalph-gate-slot-1.holder",
+        fence: "/repository/.git/dalph-gate-slot-1.fence.json",
         lock: "/repository/.git/dalph-gate-slot-1.lock",
         ordinal: 1
       },
       {
-        holder: "/repository/.git/dalph-gate-slot-2.holder",
+        fence: "/repository/.git/dalph-gate-slot-2.fence.json",
         lock: "/repository/.git/dalph-gate-slot-2.lock",
         ordinal: 2
       }
     ])
-  })
-
-  it("acquires a slot for a fresh run and reuses the parent's slot for a nested stage", () => {
-    expect(shouldAcquireGateSlot({ occupiedSlot: undefined })).toBe(true)
-    expect(shouldAcquireGateSlot({ occupiedSlot: "" })).toBe(true)
-    expect(shouldAcquireGateSlot({ occupiedSlot: "1" })).toBe(false)
   })
 })

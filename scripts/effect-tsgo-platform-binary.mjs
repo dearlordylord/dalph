@@ -1,4 +1,4 @@
-import { chmodSync } from "node:fs"
+import { chmodSync, statSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
 
@@ -15,9 +15,11 @@ export const ensureEffectTsgoPlatformBinaryExecutable = ({
   architecture = process.arch,
   chmod = chmodSync,
   platform = process.platform,
-  resolvePackageJson = resolvePlatformPackageJson
+  resolvePackageJson = resolvePlatformPackageJson,
+  stat = statSync
 } = {}) => {
   if (platform === "win32") return
   const packageJson = resolvePackageJson(platform, architecture)
-  chmod(join(dirname(packageJson), "lib", "tsc"), 0o755)
+  const binary = join(dirname(packageJson), "lib", "tsc")
+  if ((stat(binary).mode & 0o7777) !== 0o755) chmod(binary, 0o755)
 }

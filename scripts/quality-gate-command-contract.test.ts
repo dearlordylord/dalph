@@ -2,7 +2,7 @@ import { expect, it } from "vitest"
 import { Schema } from "effect"
 import { execFileSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
-import { runQualityGateFixture } from "./quality-gate-test-fixture.js"
+import { qualityGateFixtureTestTimeoutMilliseconds, runQualityGateFixture } from "./quality-gate-test-fixture.js"
 
 const repositoryRoot = new URL("../", import.meta.url)
 const removedToolReference = /optmem|project-memory/iu
@@ -24,27 +24,31 @@ it("startup has no hook: Codex configuration cannot invoke the removed tooling",
   expect(JSON.stringify(readPackageScripts())).not.toMatch(removedToolReference)
 })
 
-it("quality gate has no optmem or submodule: runs declared commands with existing scripts", async () => {
-  const scripts = readPackageScripts()
-  const { invocations, result } = await runQualityGateFixture({ fixtureName: "command-contract" })
+it(
+  "quality gate has no optmem or submodule: runs declared commands with existing scripts",
+  async () => {
+    const scripts = readPackageScripts()
+    const { invocations, result } = await runQualityGateFixture({ fixtureName: "command-contract" })
 
-  expect(result.exitCode).toBe(0)
-  expect(git("ls-files", "--stage", "tools/optmem")).toBe("")
-  if (existsSync(new URL(".gitmodules", repositoryRoot))) {
-    expect(readRepositoryFile(".gitmodules")).not.toMatch(removedToolReference)
-  }
-  for (const scriptName of invocations) {
-    expect(scripts).toHaveProperty(scriptName)
-  }
-  for (const [scriptName, scriptBody] of Object.entries(scripts)) {
-    expect(scriptName).not.toMatch(/^(?:memory(?::|$)|test:memory$)/u)
-    expect(scriptBody).not.toMatch(removedToolReference)
-    // Check file arguments independently of the runner and flags, including node --test.
-    for (const [scriptPath] of scriptBody.matchAll(/\bscripts\/[\w./-]+\.(?:mjs|cjs|js|ts)\b/gu)) {
-      expect(existsSync(new URL(scriptPath, repositoryRoot)), `${scriptName}: ${scriptPath}`).toBe(true)
+    expect(result.exitCode).toBe(0)
+    expect(git("ls-files", "--stage", "tools/optmem")).toBe("")
+    if (existsSync(new URL(".gitmodules", repositoryRoot))) {
+      expect(readRepositoryFile(".gitmodules")).not.toMatch(removedToolReference)
     }
-  }
-})
+    for (const scriptName of invocations) {
+      expect(scripts).toHaveProperty(scriptName)
+    }
+    for (const [scriptName, scriptBody] of Object.entries(scripts)) {
+      expect(scriptName).not.toMatch(/^(?:memory(?::|$)|test:memory$)/u)
+      expect(scriptBody).not.toMatch(removedToolReference)
+      // Check file arguments independently of the runner and flags, including node --test.
+      for (const [scriptPath] of scriptBody.matchAll(/\bscripts\/[\w./-]+\.(?:mjs|cjs|js|ts)\b/gu)) {
+        expect(existsSync(new URL(scriptPath, repositoryRoot)), `${scriptName}: ${scriptPath}`).toBe(true)
+      }
+    }
+  },
+  qualityGateFixtureTestTimeoutMilliseconds
+)
 
 it("clone/search has no active refs and retains unrelated production memory implementations", () => {
   const trackedPaths = git("ls-files", "-z").split("\0").filter(Boolean)

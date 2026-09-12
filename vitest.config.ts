@@ -1,3 +1,4 @@
+import { env as processEnvironment } from "node:process"
 import { defineConfig } from "vitest/config"
 import { fileURLToPath } from "node:url"
 import { coveragePolicy } from "./scripts/coverage-policy.mjs"
@@ -48,6 +49,7 @@ export default defineConfig(({ mode }) => ({
       exclude: ["**/*.d.ts", "**/*.test.ts", "**/*.spec.ts", "test/**"],
       include: ["src/**/*.ts", "packages/*/src/**/*.ts"],
       provider: "v8",
+      reportsDirectory: processEnvironment["DALPH_COVERAGE_DIRECTORY"] ?? "coverage",
       reporter: ["text", "json", "html"],
       thresholds: coverageThresholds
     },

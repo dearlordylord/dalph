@@ -226,3 +226,26 @@ it("rejects a declared bin omitted from the package inventory", async () => {
     })
   ).rejects.toThrow("@dalph/dalph package omits declared artifact: dist/bin/dalph.js")
 })
+
+it("a failed production build reports artifact consumers blocked without absent-output cascades", async () => {
+  const repositoryRoot = artifactWorkspace()
+  const commands: Array<string> = []
+  const diagnostics: Array<string> = []
+  const failure = new Error("controlled production build failure")
+  await expect(
+    prepareWorkspaceArtifacts({
+      pnpmEntryPoint: "/fake/pnpm.cjs",
+      report: (message: string) => diagnostics.push(message),
+      repositoryRoot,
+      runCommand: async (command: Record<string, unknown>) => {
+        commands.push(String(command["name"]))
+        throw failure
+      }
+    })
+  ).rejects.toBe(failure)
+  expect(commands).toEqual(["Workspace production build"])
+  expect(diagnostics).toEqual([
+    "Artifact checks blocked by failed production build: production package boundary, " +
+      "artifact declaration resolution, artifact runtime export imports, bin syntax, and package contents."
+  ])
+})

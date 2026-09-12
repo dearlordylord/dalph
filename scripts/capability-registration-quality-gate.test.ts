@@ -1,28 +1,41 @@
 import { expect, it } from "vitest"
-import { resolveVitestConfig, runQualityGateFixture } from "./quality-gate-test-fixture.js"
+import {
+  qualityGateFixtureTestTimeoutMilliseconds,
+  resolveVitestConfig,
+  runQualityGateFixture
+} from "./quality-gate-test-fixture.js"
 
-it("runs the capability audit exactly once and continues to the next quality stage", async () => {
-  const { invocations, result } = await runQualityGateFixture({ fixtureName: "capability-registration" })
-  const capabilityIndex = invocations.indexOf("test:capability-registration")
+it(
+  "runs the capability audit exactly once and continues to the next quality stage",
+  async () => {
+    const { invocations, result } = await runQualityGateFixture({ fixtureName: "capability-registration" })
+    const capabilityIndex = invocations.indexOf("test:capability-registration")
 
-  expect(result.exitCode).toBe(0)
-  expect(invocations.filter((command) => command === "test:capability-registration")).toHaveLength(1)
-  expect(capabilityIndex).toBeGreaterThan(-1)
-  expect(invocations[capabilityIndex + 1]).toBe("test:ci-change-classification")
-})
+    expect(result.exitCode).toBe(0)
+    expect(invocations.filter((command) => command === "test:capability-registration")).toHaveLength(1)
+    expect(capabilityIndex).toBeGreaterThan(-1)
+    expect(invocations[capabilityIndex + 1]).toBe("test:issue-268-c4")
+  },
+  qualityGateFixtureTestTimeoutMilliseconds
+)
 
-it("fails fast when the capability audit exits nonzero", async () => {
-  const { invocations, result } = await runQualityGateFixture({
-    failureCommand: "test:capability-registration",
-    fixtureName: "capability-registration"
-  })
+it(
+  "finishes the structural census and skips qualification when the capability audit exits nonzero",
+  async () => {
+    const { invocations, result } = await runQualityGateFixture({
+      failureCommand: "test:capability-registration",
+      fixtureName: "capability-registration"
+    })
 
-  expect(result.exitCode).toBe(1)
-  expect(result.output).toContain("Quality gate 'capability registration' failed with exit 23")
-  expect(invocations.filter((command) => command === "test:capability-registration")).toHaveLength(1)
-  expect(invocations.at(-1)).toBe("test:capability-registration")
-  expect(invocations).not.toContain("test:ci-change-classification")
-})
+    expect(result.exitCode).toBe(1)
+    expect(result.output).toContain("Quality gate 'capability registration' failed with exit 23")
+    expect(invocations.filter((command) => command === "test:capability-registration")).toHaveLength(1)
+    expect(invocations.at(-1)).toBe("test:capability-registration")
+    expect(invocations).toContain("test:ci-change-classification")
+    expect(invocations).not.toContain("test:coverage")
+  },
+  qualityGateFixtureTestTimeoutMilliseconds
+)
 
 it("keeps the exact combined exclusions out of ordinary tests and in coverage", () => {
   const ordinary = resolveVitestConfig("test")

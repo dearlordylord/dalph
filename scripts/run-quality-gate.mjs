@@ -1,16 +1,21 @@
+import { execFileSync } from "node:child_process"
+import { executeResumableQualityGate } from "./gate-quality-run.mjs"
+import { inheritedCustody } from "./gate-custody-records.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { addSuccessfulOutputLines } from "./quality-output-budget.mjs"
 import {
   boundedQualityGateCommand,
-  capabilityRegistrationQualityGate,
-  complexityQualityGate,
+  preflightQualityGates,
   qualityGateTestEnvironment,
-  recordedCatalogQualityGate
+  fullQualityGateManifest
 } from "./quality-gate-stage-policy.mjs"
+import { runPreflightCensus } from "./preflight-census.mjs"
 import { resolveQualityGateBase } from "./resolve-quality-gate-base.mjs"
 
-const SECOND = 1_000
 const maximumSuccessfulOutputLines = 550
+// Admitted structural checks always inspect formatter inputs without incremental result reuse.
+process.env.DALPH_DPRINT_INCREMENTAL = "disabled"
+
 const pnpmEntryPoint = process.env.npm_execpath
 const withoutQuint = process.argv.includes("--without-quint")
 const candidateArgument = process.argv.find((argument) => argument.startsWith("--candidate="))
@@ -28,7 +33,7 @@ if (!acknowledgedFullGate) {
     [
       "The full quality gate runs once per frozen candidate.",
       "Development loop: pnpm check:fast",
-      "Before freezing: pnpm typecheck && pnpm lint:code && pnpm test",
+      "Before freezing: pnpm check:preflight --candidate=<base sha> && pnpm test",
       "Frozen candidate: pnpm check:all --candidate=<base sha>"
     ].join("\n")
   )
@@ -42,46 +47,79 @@ const qualityBaseSha = resolveQualityGateBase({
 })
 const testEnvironment = qualityGateTestEnvironment(qualityBaseSha)
 
-const gates = [
-  { args: ["check:artifacts"], name: "build and production artifacts", timeout: 5 * 60 * SECOND },
-  capabilityRegistrationQualityGate,
-  { args: ["test:ci-change-classification"], name: "CI change classification", timeout: 60 * SECOND },
-  { args: ["typecheck"], name: "typecheck", timeout: 2 * 60 * SECOND },
-  { args: ["typecheck:effect"], name: "Effect diagnostics", timeout: 3 * 60 * SECOND },
-  { args: ["check:format"], name: "format and lint", timeout: 5 * 60 * SECOND },
-  { args: ["check:circular"], name: "dependency cycles", timeout: 60 * SECOND },
-  complexityQualityGate(qualityBaseSha),
-  { args: ["check:duplicates"], name: "duplication", timeout: 60 * SECOND },
-  {
-    args: ["test:issue-268-c4"],
-    name: "issue 268 fresh-process repeatability",
-    terminationGrace: 15 * SECOND,
-    timeout: 19 * 60 * SECOND
-  },
-  { args: ["check:lab"], name: "Reducer Lab maintained evaluation", timeout: 5 * 60 * SECOND },
-  ...(withoutQuint
-    ? []
-    : [{ args: ["test:mbt"], name: "Quint-connected model-based tests", timeout: 8 * 60 * SECOND }]),
-  recordedCatalogQualityGate,
-  // The supported-Node hosted matrix is slower than local coverage after the
-  // real process-boundary suites; keep the command bounded without cutting
-  // off Vitest before it can report a concrete failure.
-  { args: ["test:coverage"], environment: testEnvironment, name: "tests and coverage", timeout: 20 * 60 * SECOND },
-  { args: ["check:secrets"], name: "secret scan", timeout: 5 * 60 * SECOND }
-]
-
-let successfulOutputLines = 0
-
-for (const gate of gates) {
-  const result = await runBoundedCommand(
-    boundedQualityGateCommand({ gate, nodeExecutable: process.execPath, pnpmEntryPoint })
+const context = inheritedCustody()
+const resumable = !withoutQuint && context !== undefined && process.env.npm_lifecycle_event === "check:all"
+const candidateHistory = resumable && process.env.CI === undefined
+const candidateHeadSha = candidateHistory
+  ? execFileSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], { encoding: "utf8" }).trim()
+  : undefined
+if (candidateHistory) process.env.DALPH_GATE_GIT_HISTORY = "candidate-ancestry"
+const stageManifest = fullQualityGateManifest(qualityBaseSha, {
+  nodeExecutable: process.execPath,
+  pnpmEntryPoint,
+  candidateHeadSha,
+  worktree: context?.run.worktree ?? process.cwd()
+})
+const gates = stageManifest
+  .filter((stage) => stage.boundary === "qualification" && (!withoutQuint || stage.id !== "model-based-tests"))
+  .map((stage) =>
+    stage.environmentPolicy === "coverage-base-warning" ? { ...stage, environment: testEnvironment } : stage
   )
-  successfulOutputLines = addSuccessfulOutputLines({
-    currentOutputLines: successfulOutputLines,
-    maximumOutputLines: maximumSuccessfulOutputLines,
-    stageName: gate.name,
-    stageOutputLines: result.outputLineCount
+const resumeArguments = process.argv.filter((argument) => argument.startsWith("--resume="))
+if (resumeArguments.length > 1) throw new Error("Name at most one prior run for resume")
+if (resumeArguments.length > 0 && !resumable) throw new Error("Resume is supported only through pnpm check:all")
+if (resumable) {
+  const logicalInvocation = {
+    mode: "check:all",
+    ...(candidateHeadSha === undefined
+      ? {}
+      : { gitHistory: { mode: "candidate-ancestry", headSha: candidateHeadSha } }),
+    baseSha: qualityBaseSha,
+    commandArguments: context.run.commandArguments
+      .filter((argument) => !argument.startsWith("--resume="))
+      .map((argument) => (argument.startsWith("--candidate=") ? `--candidate=${qualityBaseSha}` : argument)),
+    stageManifest,
+    maximumSuccessfulOutputLines,
+    toolExecutables: [
+      "git",
+      "bash",
+      "flock",
+      "gitleaks",
+      ...(process.env.DALPH_OXLINT_BIN ? [process.env.DALPH_OXLINT_BIN] : [])
+    ]
+  }
+  const result = await executeResumableQualityGate({
+    stageManifest,
+    logicalInvocation,
+    resumeRunId: resumeArguments[0]?.slice("--resume=".length),
+    pnpmEntryPoint
   })
-}
+  console.log(
+    `Quality gate emitted ${result.successfulOutputLines}/${maximumSuccessfulOutputLines} successful output lines.`
+  )
+} else {
+  const preflight = await runPreflightCensus({
+    gates: preflightQualityGates(qualityBaseSha),
+    runStage: (gate) =>
+      runBoundedCommand(boundedQualityGateCommand({ gate, nodeExecutable: process.execPath, pnpmEntryPoint }))
+  })
+  if (!preflight.succeeded) {
+    console.error("Preflight failed; qualification stages did not start.")
+    process.exit(1)
+  }
+  let successfulOutputLines = preflight.successfulOutputLines
 
-console.log(`Quality gate emitted ${successfulOutputLines}/${maximumSuccessfulOutputLines} successful output lines.`)
+  for (const gate of gates) {
+    const result = await runBoundedCommand(
+      boundedQualityGateCommand({ gate, nodeExecutable: process.execPath, pnpmEntryPoint })
+    )
+    successfulOutputLines = addSuccessfulOutputLines({
+      currentOutputLines: successfulOutputLines,
+      maximumOutputLines: maximumSuccessfulOutputLines,
+      stageName: gate.name,
+      stageOutputLines: result.outputLineCount
+    })
+  }
+
+  console.log(`Quality gate emitted ${successfulOutputLines}/${maximumSuccessfulOutputLines} successful output lines.`)
+}

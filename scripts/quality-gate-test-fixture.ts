@@ -2,10 +2,21 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+// @ts-expect-error The custody environment helper is an executable JavaScript module.
+import { withoutInheritedCustody } from "./gate-custody-records.mjs"
 import vitestConfig from "../vitest.config.js"
 
 // @ts-expect-error The production quality-gate helper is an executable JavaScript module.
 import { runBoundedCommand } from "./run-bounded-command.mjs"
+
+// The complete inventory launches 20 bounded fake commands. Inside an admitted
+// parallel run, 13 calls measured 7.8s before the old 10s deadline interrupted
+// legitimate registration and evidence publication. Keep this fixture finite,
+// with room for the full inventory and cleanup. Enclosing tests separately
+// reserve cleanup time after one command or two sequential commands.
+const qualityGateFixtureCommandTimeoutMilliseconds = 30_000
+export const qualityGateFixtureTestTimeoutMilliseconds = 45_000
+export const qualityGateFixturePairTestTimeoutMilliseconds = 65_000
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url))
 
@@ -35,11 +46,15 @@ const parseInvocationCoverageBase = (line: string): readonly [string, string] =>
 export const runQualityGateFixture = async ({
   environment,
   failureCommand,
+  failureCommands = [],
   fixtureName,
-  gateArguments = []
+  gateArguments = [],
+  runner = "scripts/run-quality-gate.mjs"
 }: {
   readonly environment?: Readonly<Record<string, string>>
   readonly failureCommand?: string
+  readonly failureCommands?: ReadonlyArray<string>
+  readonly runner?: string
   readonly gateArguments?: ReadonlyArray<string>
   readonly fixtureName: string
 }) => {
@@ -56,7 +71,7 @@ const command = process.argv[3]
 appendFileSync(process.env.DALPH_QUALITY_GATE_INVOCATIONS, command + "\\n")
 appendFileSync(process.env.DALPH_QUALITY_GATE_INVOCATION_ARGUMENTS, JSON.stringify(process.argv.slice(3)) + "\\n")
 appendFileSync(process.env.DALPH_QUALITY_GATE_INVOCATION_COVERAGE_BASES, JSON.stringify([command, process.env.DALPH_COVERAGE_BASE_SHA ?? ""]) + "\\n")
-if (command === process.env.DALPH_QUALITY_GATE_FAILURE_COMMAND) process.exit(23)
+if (JSON.parse(process.env.DALPH_QUALITY_GATE_FAILURE_COMMANDS).includes(command)) process.exit(23)
 `
   )
   await writeFile(invocationLog, "")
@@ -65,13 +80,15 @@ if (command === process.env.DALPH_QUALITY_GATE_FAILURE_COMMAND) process.exit(23)
 
   try {
     const result = await runBoundedCommand({
-      acceptedExitCodes: failureCommand === undefined ? [0] : [1],
-      args: ["scripts/run-quality-gate.mjs", ...gateArguments],
+      acceptedExitCodes: failureCommand === undefined && failureCommands.length === 0 ? [0] : [1],
+      args: [runner, ...gateArguments],
       captureOutput: true,
       cwd: repositoryRoot,
       environment: {
-        ...process.env,
-        DALPH_QUALITY_GATE_FAILURE_COMMAND: failureCommand,
+        ...withoutInheritedCustody(process.env),
+        DALPH_QUALITY_GATE_FAILURE_COMMANDS: JSON.stringify(
+          failureCommand === undefined ? failureCommands : [failureCommand]
+        ),
         DALPH_QUALITY_GATE_INVOCATION_ARGUMENTS: invocationArgumentsLog,
         DALPH_QUALITY_GATE_INVOCATION_COVERAGE_BASES: invocationCoverageBaseLog,
         DALPH_QUALITY_GATE_INVOCATIONS: invocationLog,
@@ -84,7 +101,8 @@ if (command === process.env.DALPH_QUALITY_GATE_FAILURE_COMMAND) process.exit(23)
       executable: process.execPath,
       forwardOutput: false,
       name: `${fixtureName} quality-gate fixture`,
-      timeoutMilliseconds: 10_000
+      relayParentSignals: true,
+      timeoutMilliseconds: qualityGateFixtureCommandTimeoutMilliseconds
     })
     return {
       invocationArguments: (await readInvocations(invocationArgumentsLog)).map(parseInvocationArguments),

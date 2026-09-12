@@ -91,6 +91,7 @@ const executeCommand = (command, options = {}) => {
           commandOptions.captureOutput === true,
         executable: process.execPath,
         name: command.name,
+        relayParentSignals: true,
         processGroupAbsenceTimeoutMilliseconds: quintGateProcessGroupAbsenceTimeoutMilliseconds,
         terminationGraceMilliseconds: quintGateTerminationGraceMilliseconds,
         timeoutMilliseconds: remainingSafetyTimeoutMilliseconds(command.name)

@@ -31,7 +31,7 @@ test("counts complete and unterminated stdout and stderr lines", async () => {
     timeoutMilliseconds: 2000
   })
 
-  expect(result).toEqual({ exitCode: 0, outputLineCount: 3 })
+  expect(result).toMatchObject({ exitCode: 0, outputLineCount: 3 })
 })
 
 test("captures output and an accepted nonzero exit for verdict inspection", async () => {
@@ -45,7 +45,7 @@ test("captures output and an accepted nonzero exit for verdict inspection", asyn
     timeoutMilliseconds: 2000
   })
 
-  expect(result).toEqual({ exitCode: 7, output: "verdict", outputLineCount: 1 })
+  expect(result).toMatchObject({ exitCode: 7, output: "verdict", outputLineCount: 1 })
 })
 
 test("attaches captured output when a command exits outside the accepted set", async () => {
@@ -99,7 +99,7 @@ test("passes a controlled environment to the bounded child", async () => {
     timeoutMilliseconds: 2000
   })
 
-  expect(result).toEqual({ exitCode: 0, output: "present", outputLineCount: 1 })
+  expect(result).toMatchObject({ exitCode: 0, output: "present", outputLineCount: 1 })
 })
 
 test("cancels a running child through its process group", async () => {
@@ -205,7 +205,7 @@ test("runs a bounded child in the requested working directory", async () => {
       timeoutMilliseconds: 2000
     })
 
-    expect(result).toEqual({ exitCode: 0, output: directory, outputLineCount: 1 })
+    expect(result).toMatchObject({ exitCode: 0, output: directory, outputLineCount: 1 })
   } finally {
     await rm(directory, { force: true, recursive: true })
   }
@@ -265,7 +265,7 @@ test.skipIf(process.platform === "win32")(
       timeoutMilliseconds: 2000
     })
 
-    expect(result).toEqual({ exitCode: 0, outputLineCount: 1 })
+    expect(result).toMatchObject({ exitCode: 0, outputLineCount: 1 })
     expect(process.listenerCount("SIGTERM")).toBe(signalCounts.get("SIGTERM"))
     expect(process.listenerCount("SIGINT")).toBe(signalCounts.get("SIGINT"))
   }

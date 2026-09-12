@@ -222,7 +222,7 @@ export const resolveCoverageBase = (explicitBase, runGit = defaultGit) => {
 
 const main = async () => {
   const repositoryRoot = process.cwd()
-  const coveragePath = process.argv[2] ?? "coverage/coverage-final.json"
+  const coveragePath = process.argv[2] ?? `${process.env.DALPH_COVERAGE_DIRECTORY ?? "coverage"}/coverage-final.json`
   const explicitBase = process.env.DALPH_COVERAGE_BASE_SHA
   const baseSha = resolveCoverageBase(explicitBase)
   const changedLines = changedProductionLinesFromGit({ baseSha, repositoryRoot })
