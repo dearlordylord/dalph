@@ -414,6 +414,52 @@ const coverageClaimEvent = taskTrackerFactsObservedEvent(
   makeFocusedTaskClaimFactsObserved(coverageClaimOperation, coverageClaim)
 )
 
+it.each(["Exact", "Foreign"] as const)(
+  "reuses indexed claim ancestry for a pending worktree after observing %s claim authority",
+  (claimState) => {
+    const historicalSpecificationEvent = { ...acceptedCoverageSpecificationEvent }
+    const responsibility = {
+      _tag: "TaskWorktreeResponsibility" as const,
+      beganAt: JournalPosition.make(8),
+      operation: acceptedCoverageWorktreeOperation,
+      taskId: coverageTaskId
+    }
+    const observedClaim =
+      claimState === "Exact"
+        ? coverageClaim
+        : ActiveTaskClaim.make({ ...coverageClaim, token: ClaimToken.make("foreign-worktree-claim") })
+    const records = [
+      ...acceptedCoverageLineageRecords(false)
+        .slice(0, 8)
+        .map((record) => (record.position === 6 ? { ...record, event: historicalSpecificationEvent } : record)),
+      coverageRecord(9, taskTrackerReadIntent(coverageClaimOperation)),
+      coverageRecord(
+        10,
+        taskTrackerFactsObservedEvent(
+          coverageClaimOperation.operationId,
+          makeFocusedTaskClaimFactsObserved(coverageClaimOperation, observedClaim)
+        )
+      )
+    ]
+    const state = coverageRunState(records, [responsibility])
+    // Once history is indexed, deciding claim ancestry must not import old
+    // work-specification payloads again.
+    Object.defineProperty(historicalSpecificationEvent, "observation", {
+      get: () => expect.fail("worktree claim lookup must reuse indexed history")
+    })
+    expect(deriveJournalResponsibilityFacts(state, Option.none(), Option.none(), coverageTarget)).toEqual([
+      {
+        _tag: "WorkflowOperationFreshFacts",
+        disposition:
+          claimState === "Exact"
+            ? { _tag: "Ready" }
+            : { _tag: "WorkflowOperationTaskClaimConstraint", claimState: "Foreign" },
+        responsibility
+      }
+    ])
+  }
+)
+
 it("does not use unrelated acquired claims as fresh integration claim observations", () => {
   const records = coveragePlanRecords()
   expect(latestIntegrationClaimObservationPosition(records, coverageAttempt, coverageTarget, Option.none())).toBe(2)
