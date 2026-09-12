@@ -652,6 +652,36 @@ const deliveryStoryWithRestartAfter = (
 ) => {
   const base = maintainedAuthoredCassetteCatalog.deliveryStoryDs14ThroughDs17
   const story = [...base.story]
+  // Only the crash after Q leaves a direction driver waiting while Run
+  // stabilization pays G2. The other cuts resume a plan-continuation read and
+  // still owe G2 after finality. Their crashed activation cannot return, and
+  // they never enter the happy story's additional activation with its own G1.
+  if (afterJournalEvent !== "IntegrationQuarantined") {
+    const supersededReturnAt = story.findIndex(
+      (item) =>
+        item._tag === "CoordinatorActivationReturned" &&
+        item.decision._tag === "RunMustRemainActive" &&
+        item.decision.reason === "TrackerTargetUnsettled"
+    )
+    const copiedRead = story[supersededReturnAt + 1]
+    const copiedResult = story[supersededReturnAt + 2]
+    const retainedRead = story[supersededReturnAt + 3]
+    const retainedResult = story[supersededReturnAt + 4]
+    if (
+      supersededReturnAt < 0 ||
+      copiedRead?._tag !== "DalphSelects" ||
+      copiedRead.operation._tag !== "ReadTrackerGraph" ||
+      copiedResult?._tag !== "TrackerGraphReadReturned" ||
+      retainedRead?._tag !== "DalphSelects" ||
+      retainedRead.operation._tag !== "ReadTrackerGraph" ||
+      retainedResult?._tag !== "TrackerGraphReadReturned" ||
+      copiedRead.operation.target !== retainedRead.operation.target ||
+      JSON.stringify(copiedResult.graph) !== JSON.stringify(retainedResult.graph)
+    ) {
+      return { ...base, name: `${base.name}; invalid copied final activation boundary`, story: [] }
+    }
+    story.splice(supersededReturnAt, 3)
+  }
   const originalDeathAt = story.findIndex((item) => item._tag === "CoordinatorProcessDies")
   const originalRestartIntegratorRequestAt = story.findIndex(
     (item, index) => index > originalDeathAt && item._tag === "IntegratorRequestReceived"
@@ -743,23 +773,21 @@ const deliveryStoryWithRestartAfter = (
   ) {
     return { ...base, name: `${base.name}; invalid generated authority-read widths`, story: [] }
   }
-  // Recovery after the durable first intent records its reconciliation, the
-  // second attempt intent, and the rejected outcome before quarantine.
-  const reconciledPriorIntentOutcomeShift = afterJournalEvent === "TargetPromotionAttemptIntended" ? 3 : 0
+  // Git reconciles the already-durable first intent without repeating it.
+  // Only the retry's new attempt intent adds a record before the ordinary
+  // stale outcome and quarantine, which the baseline already includes.
+  const retriedPromotionAttemptIntentWidth = afterJournalEvent === "TargetPromotionAttemptIntended" ? 1 : 0
   const recoveredAuthorityAndPostProtocolShift = recoveredAuthorityShift + postProtocolGraphShift
   const quarantineShift =
-    (restartPrecedes("IntegrationQuarantined") ? recoveredAuthorityShift : 0) +
-    (afterJournalEvent === "TargetPromotionAttemptIntended" ? postProtocolGraphShift : 0) +
-    reconciledPriorIntentOutcomeShift
+    (restartPrecedes("IntegrationQuarantined") ? recoveredAuthorityShift : 0) + retriedPromotionAttemptIntentWidth
   const directionShift =
     (restartPrecedes("IntegrationQuarantineDirectionApplied") ? recoveredAuthorityShift : 0) +
-    (afterJournalEvent === "TargetPromotionAttemptIntended" ? postProtocolGraphShift : 0) +
-    reconciledPriorIntentOutcomeShift
+    retriedPromotionAttemptIntentWidth
   const lineageShift =
     afterJournalEvent === "TargetLineageObserved"
       ? replacementLineageShift
       : (restartPrecedes("TargetLineageObserved") ? recoveredAuthorityAndPostProtocolShift : 0) +
-        reconciledPriorIntentOutcomeShift
+        retriedPromotionAttemptIntentWidth
   const quarantineAt = JournalPosition.make(Number(baselineSuccessor.event.quarantineAt) + quarantineShift)
   const directionAppliedAt = JournalPosition.make(Number(baselineSuccessor.event.directionAppliedAt) + directionShift)
   const targetLineageObservedAt = JournalPosition.make(
@@ -791,23 +819,20 @@ const deliveryStoryWithRestartAfter = (
     if (rejected?._tag !== "TargetPromotionCompareAndSetReturned") {
       return { ...base, name: `${base.name}; missing rejected CAS fixture`, story: [] }
     }
-    story.splice(rejectedCompareAndSetAt, 0, death, ...restartAuthorityReads, ...restartPostProtocolGraphRead, {
+    story.splice(rejectedCompareAndSetAt, 0, death, ...restartAuthorityReads, {
       _tag: "TargetPromotionGitReadReturned",
       candidateCommit: rejected.request.candidateCommit,
       observation: { _tag: "CandidateNotInAncestry", currentHeadSha: rejected.request.expectedTargetHead },
       repository: rejected.request.integrationTarget.repository
     })
-    const resumedIntegratorRequestAt = story.findIndex(
-      (item, index) => index > directionAt && item._tag === "IntegratorRequestReceived"
+    const resumedDirectionAt = story.findIndex((item) => item._tag === "OperatorAppliesIntegrationQuarantineDirection")
+    const resumedFreshLineageAt = story.findIndex(
+      (item, index) =>
+        index > resumedDirectionAt && item._tag === "DalphSelects" && item.operation._tag === "ReadTargetLineage"
     )
-    const currentLineageSelection = originalRestartAuthorityReads[6]
-    if (
-      currentLineageSelection?._tag !== "DalphSelects" ||
-      currentLineageSelection.operation._tag !== "ReadTargetLineage"
-    ) {
-      return { ...base, name: `${base.name}; missing current lineage selection fixture`, story: [] }
-    }
-    story.splice(resumedIntegratorRequestAt, 0, currentLineageSelection)
+    // The pending CAS is reconciled against Git before this later tracker
+    // observation; the original fresh lineage then prepares the successor.
+    story.splice(resumedFreshLineageAt, 0, ...restartPostProtocolGraphRead)
   } else if (afterJournalEvent === "TargetPromotionStale" || afterJournalEvent === "IntegrationQuarantined") {
     story.splice(rejectedCompareAndSetAt + 1, 0, death, ...restartAuthorityReads)
     const resumedDirectionAt = story.findIndex((item) => item._tag === "OperatorAppliesIntegrationQuarantineDirection")
@@ -916,7 +941,73 @@ it.effect(
             : []
         )
 
-        expect(run.activationOrdinals).toEqual([1, 2, 3])
+        // The Q-only cut has no accepted direction yet. Its direction driver
+        // waits while activation three pays G2; all other cuts' later read is
+        // plan continuation, leaving that activation's G2 for finality.
+        const paidG2BeforeFinality = checkpoint === "IntegrationQuarantined"
+        expect(run.activationOrdinals).toEqual(paidG2BeforeFinality ? [1, 2, 3, 4] : [1, 2, 3])
+        const expectedReadPositions = {
+          TargetPromotionAttemptIntended: [39, 47, 82],
+          TargetPromotionStale: [40, 46, 81],
+          IntegrationQuarantined: [41, 46, 81, 83],
+          IntegrationQuarantineDirectionApplied: [42, 46, 81],
+          TargetLineageObserved: [44, 48, 83],
+          IntegratorSuccessorSessionFixed: [45, 49, 83]
+        } as const
+        const graphReads = new Map<JournalPosition, { activationOrdinal: number; cause: string }>()
+        for (const capture of run.observationCaptures) {
+          if (capture._tag !== "DeliveryPublicationCaptured" || capture.activationOrdinal < 3) continue
+          const graph = capture.publication.bundle.publication.graph
+          if (graph._tag !== "GraphEstablished") continue
+          graphReads.set(graph.observation.recordedAt, {
+            activationOrdinal: capture.activationOrdinal,
+            cause: graph.observation.cause._tag
+          })
+        }
+        expect([...graphReads.keys()]).toEqual(expectedReadPositions[checkpoint])
+        expect([...graphReads.values()]).toEqual(
+          paidG2BeforeFinality
+            ? [
+                { activationOrdinal: 3, cause: "WorkflowEstablishment" },
+                { activationOrdinal: 3, cause: "PostQuiescenceReconfirmation" },
+                { activationOrdinal: 4, cause: "WorkflowEstablishment" },
+                { activationOrdinal: 4, cause: "PostQuiescenceReconfirmation" }
+              ]
+            : [
+                { activationOrdinal: 3, cause: "WorkflowEstablishment" },
+                { activationOrdinal: 3, cause: "AttemptContinuation" },
+                { activationOrdinal: 3, cause: "PostQuiescenceReconfirmation" }
+              ]
+        )
+        const expectedSuccessorPositions = {
+          TargetPromotionAttemptIntended: [44, 45, 49, 50],
+          TargetPromotionStale: [43, 44, 48, 49],
+          IntegrationQuarantined: [39, 44, 48, 49],
+          IntegrationQuarantineDirectionApplied: [39, 40, 48, 49],
+          TargetLineageObserved: [39, 40, 50, 51],
+          IntegratorSuccessorSessionFixed: [39, 40, 42, 43]
+        } as const
+        const successor = eventRecords(run, "IntegratorSuccessorSessionFixed")[0]
+        expect(successor).toBeDefined()
+        if (successor === undefined) return yield* Effect.die("restart omitted its exact successor session")
+        expect([
+          successor.event.quarantineAt,
+          successor.event.directionAppliedAt,
+          successor.event.successor.targetLineageObservedAt,
+          successor.position
+        ]).toEqual(expectedSuccessorPositions[checkpoint])
+        const predecessorPromotionIntents = eventRecords(run, "TargetPromotionAttemptIntended").filter(
+          ({ event }) =>
+            event.correlation.qualifiedCandidate.run.session.sessionId === successor.event.predecessor.sessionId
+        )
+        expect(predecessorPromotionIntents.map(({ event, position }) => [position, event.attemptOrdinal])).toEqual(
+          checkpoint === "TargetPromotionAttemptIntended"
+            ? [
+                [37, 1],
+                [42, 2]
+              ]
+            : [[37, 1]]
+        )
         expect(resumedOccurrences.slice(0, 4).map(({ _tag }) => _tag)).toEqual([
           "DalphSelects",
           "TrackerGraphReadReturned",
