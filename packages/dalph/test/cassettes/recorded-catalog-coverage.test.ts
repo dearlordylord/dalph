@@ -11,8 +11,7 @@ import {
   renameRecordedCassette,
   renderRecordedCassetteLyrics,
   runAuthoredScenarioCassette,
-  verifyRecordedCassetteRoundTrip,
-  verifyRecordedCassetteRoundTripWithRenaming
+  verifyRecordedCassetteRoundTrip
 } from "../../src/cassettes/index.js"
 
 const allMaintainedCassetteRoundTripTimeout = 600_000
@@ -56,20 +55,24 @@ it.effect(
 
         expect(
           verifyRecordedCassetteRoundTrip(run.records, recorded).every(
-            ({ operationalStateEquivalent, pureSelectionEquivalent, workflowHistoryEquivalent }) =>
-              operationalStateEquivalent && pureSelectionEquivalent && workflowHistoryEquivalent
+            ({
+              appliedOccurrencePositionEquivalent,
+              operationalStateEquivalent,
+              pureSelectionEquivalent,
+              workflowHistoryEquivalent
+            }) =>
+              appliedOccurrencePositionEquivalent &&
+              operationalStateEquivalent &&
+              pureSelectionEquivalent &&
+              workflowHistoryEquivalent
           ),
-          `${name} must preserve state, selection, and history through projection`
+          `${name} must preserve occurrence position, state, selection, and history through projection`
         ).toBe(true)
 
         const renamed = yield* renameRecordedCassette(recorded, emptyRenaming)
-        expect(
-          (yield* verifyRecordedCassetteRoundTripWithRenaming(run.records, renamed, emptyRenaming)).every(
-            ({ operationalStateEquivalent, pureSelectionEquivalent, workflowHistoryEquivalent }) =>
-              operationalStateEquivalent && pureSelectionEquivalent && workflowHistoryEquivalent
-          ),
-          `${name} must preserve state, selection, and history through empty alpha-renaming`
-        ).toBe(true)
+        expect(renamed, `${name} must preserve the entire ordered cassette through empty alpha-renaming`).toEqual(
+          recorded
+        )
       }
     }).pipe(Effect.provide(NodeCrypto.layer)),
   allMaintainedCassetteRoundTripTimeout
