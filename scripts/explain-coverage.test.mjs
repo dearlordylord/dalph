@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { execFileSync, spawnSync } from "node:child_process"
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -13,7 +13,7 @@ import {
   validateCoverageArtifact
 } from "./explain-coverage.mjs"
 
-import { seedQualityFormalBoundary } from "./formal-quality-test-fixture.mjs"
+import { copyQualityRuntimeFixture, seedQualityFormalBoundary } from "./formal-quality-test-fixture.mjs"
 
 const roots = []
 afterEach(() => {
@@ -498,7 +498,7 @@ const resumedCoverageFixture = () => {
   // This coverage-only fixture controls the retained formal boundary while the
   // production reader validates its original complete profile/custody records.
   // Genuine checker dispatch and observation are covered by their own suites.
-  cpSync(fileURLToPath(new URL("./", import.meta.url)), join(f.root, "scripts"), { recursive: true })
+  copyQualityRuntimeFixture(f.root)
   f.put("package.json", JSON.stringify({ type: "module" }))
   f.put("scripts/effect-tsgo-platform-binary.mjs", "export const ensureEffectTsgoPlatformBinaryExecutable=()=>{}")
   f.put(

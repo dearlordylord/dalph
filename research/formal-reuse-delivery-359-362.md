@@ -159,3 +159,33 @@ The latest accepted allowance inventory is explicitly provisional at 106.5
 minutes plus existing quality setup/termination overhead, below the existing
 24-hour custody limit. #362 must validate the measured headroom and maintenance
 assessment before release.
+
+## Qualification corrections after the first committed candidate
+
+The admitted preflight at `3fead985` failed four stages: full lint exceeded
+300 seconds, resume controls exceeded 60 seconds, formal controls inherited
+the outer Git base in disposable server repositories, and capability
+registration exceeded 60 seconds. Candidate edits during the already-failed
+census also make that run unproven; it is not passing handoff evidence.
+
+Corrections remain in test fixtures: the server fixture supplies its own base;
+the pnpm resume fixture now supplies independently validated formal records;
+synthetic original record setup uses ordinary private writes before launch;
+and three quality fixtures copy 30 runtime modules (233,290 bytes) instead of
+all 158 scripts (1,138,621 bytes). Production observation, complete 105-command
+proof, actual atomic publication and publication-crash tests are unchanged.
+Independent scoped review found no weakening in those corrections.
+
+After correction, formal controls passed 90/90 in 13.44 seconds with the outer
+base inherited. The complete resume controls passed 148/148 in 43.05 seconds
+under the unchanged 60-second cap. Earlier longer, overlapping or timed-out
+runs are retained separately and are not represented as passing that cap.
+
+The lint timeout remains unresolved. The unchanged native lint phase passed
+on 1,007 files in 33.58 seconds; an isolated compatibility-lint invocation on
+one unchanged TypeScript file exceeded a 53-second diagnostic watchdog.
+Matching full-lint timeouts, and a capability timeout, were also recorded in
+other active worktrees. This supports investigating the shared compatibility
+phase rather than attributing the failure to the formal module graph, but
+does not establish a root cause or waive final gates. No timeout was increased
+and no failed benchmark was repeated unchanged.

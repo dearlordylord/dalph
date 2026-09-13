@@ -15,6 +15,7 @@ const fixture = (mode) => {
   const git = (...args) => {
     const result = spawnSync("git", args, { cwd: root, encoding: "utf8" })
     assert.equal(result.status, 0, result.stderr)
+    return result.stdout.trim()
   }
   git("init", "-q")
   writeFileSync(join(root, ".gitignore"), ".scratch/\n")
@@ -66,6 +67,9 @@ if(mode!=='success'&&!error)throw Error('failure fixture incorrectly qualified')
 `
   )
   const environment = withoutInheritedCustody(process.env)
+  // This disposable repository owns its candidate base; an admitted parent
+  // may name a commit that does not exist here.
+  environment.DALPH_COVERAGE_BASE_SHA = git("rev-parse", "HEAD^")
   delete environment.npm_execpath
   delete environment.DALPH_QUALIFICATION_ENV_CAPTURE
   delete environment.DALPH_RUN_REAL_CODEX_QUALIFICATION
@@ -133,7 +137,12 @@ test("uses and terminates only the identified owned server", () => {
 test("refuses another process endpoint without checking or stopping the ambient listener", () => {
   const f = fixture("ownership-failure")
   try {
-    assert.match(f.result.error, /another process|stopped before planned shutdown/u)
+    // The colliding child can exit while ownership is being observed. Losing
+    // access to that exact process also refuses checking and preserves ambient.
+    assert.match(
+      f.result.error,
+      /another process|stopped before planned shutdown|EACCES: permission denied, scandir '\/proc\/\d+\/fd'/u
+    )
     assert.equal(f.result.checks, 0)
     assert.equal(f.result.ambientReply, "ambient")
   } finally {

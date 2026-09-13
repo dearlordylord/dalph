@@ -1,23 +1,13 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import {
-  cpSync,
-  chmodSync,
-  statSync,
-  mkdtempSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync
-} from "node:fs"
+import { chmodSync, statSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { withoutInheritedCustody, repositoryLocation } from "./gate-custody-records.mjs"
 import { readRunEvidence } from "./gate-run-evidence.mjs"
-import { seedQualityFormalBoundary } from "./formal-quality-test-fixture.mjs"
+import { copyQualityRuntimeFixture, seedQualityFormalBoundary } from "./formal-quality-test-fixture.mjs"
 
 const wrapper = fileURLToPath(new URL("./with-gate-slot.mjs", import.meta.url))
 const bounded = new URL("./run-bounded-command.mjs", import.meta.url).href
@@ -29,7 +19,7 @@ const fixture = () => {
     return result.stdout.trim()
   }
   git("init", "-q")
-  cpSync(fileURLToPath(new URL("./", import.meta.url)), join(root, "scripts"), { recursive: true })
+  copyQualityRuntimeFixture(root)
   writeFileSync(join(root, "package.json"), JSON.stringify({ type: "module" }))
   writeFileSync(
     join(root, "scripts", "effect-tsgo-platform-binary.mjs"),

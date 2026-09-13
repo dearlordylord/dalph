@@ -1,9 +1,9 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import {
   atomicRecord,
   digest,
@@ -20,6 +20,13 @@ import {
   readFormalSuccess,
   readReferencedFormalSuccess
 } from "./formal-success-evidence.mjs"
+
+// These original receipts are fabricated fixtures, not publications under test.
+// Keep their correct bytes/modes without syncing the entire filesystem per seed.
+const seedRecord = (path, value) => {
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, `${JSON.stringify(value)}\n`, { mode: 0o600 })
+}
 
 const fixture = () => {
   const root = mkdtempSync(join(tmpdir(), "dalph-formal-evidence-"))
@@ -53,13 +60,13 @@ const fixture = () => {
     slotFence: join(location.commonDirectory, "dalph-gate-slot-1.fence.json"),
     reportDirectory: join(root, ".scratch", "quality-gates", runId)
   }
-  atomicRecord(join(runDirectory, "run.json"), run)
-  atomicRecord(join(runDirectory, "identity.json"), { version: 1, inputDigest: "custody-digest" })
+  seedRecord(join(runDirectory, "run.json"), run)
+  seedRecord(join(runDirectory, "identity.json"), { version: 1, inputDigest: "custody-digest" })
   const helperObligationId = newIdentity()
   const ids = []
   const add = (id, parentId, command, outcome = "passed", code = 0) => {
     ids.push(id)
-    atomicRecord(join(runDirectory, "obligations", `${id}.json`), {
+    seedRecord(join(runDirectory, "obligations", `${id}.json`), {
       version: 1,
       runId,
       obligationId: id,
@@ -68,7 +75,7 @@ const fixture = () => {
       state: "observed",
       processGroup: 2147483647
     })
-    atomicRecord(join(runDirectory, "receipts", `${id}.json`), {
+    seedRecord(join(runDirectory, "receipts", `${id}.json`), {
       version: 1,
       runId,
       obligationId: id,
@@ -129,7 +136,7 @@ const fixture = () => {
     "cancelled"
   )
   const stopPath = join(runDirectory, "owned-server-stops", `${serverId}.json`)
-  atomicRecord(stopPath, {
+  seedRecord(stopPath, {
     version: 1,
     runId,
     obligationId: serverId,
@@ -138,14 +145,14 @@ const fixture = () => {
     disposition: "profile-complete",
     requestedAt: wallClockTimestamp()
   })
-  atomicRecord(join(runDirectory, "absence", `${serverId}.json`), {
+  seedRecord(join(runDirectory, "absence", `${serverId}.json`), {
     version: 1,
     runId,
     obligationId: serverId,
     processGroup: 2147483647,
     state: "observed"
   })
-  atomicRecord(join(runDirectory, "registration.json"), { version: 1, runId, state: "open", obligations: ids })
+  seedRecord(join(runDirectory, "registration.json"), { version: 1, runId, state: "open", obligations: ids })
   const report = {
     version: 1,
     profileResult: { profile, commands, serverEndpoint, entryPoint: "quint-cli.js" },
@@ -159,7 +166,7 @@ const fixture = () => {
   }
   const reportPath = join(runDirectory, "formal-report.json")
   const saveReport = () => {
-    atomicRecord(reportPath, report)
+    seedRecord(reportPath, report)
     return digest(`${JSON.stringify(report)}\n`)
   }
   const execution = { helperObligationId, reportPath, reportDigest: saveReport() }
