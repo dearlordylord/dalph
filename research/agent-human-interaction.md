@@ -1,5 +1,13 @@
 # Human interaction with Dalph workers
 
+Scope clarification from the later interview: the requirement is organic
+provider-native access where supported. The message routing, queue accounting
+and manual ownership protocols explored below are not accepted Dalph features
+or prerequisites for the first milestone. See the
+[coverage audit](invokee-spec-readiness-audit.md) and
+[accepted milestone](invokee-first-milestone.md).
+
+
 Research dated 2026-09-13. This is an Astra investigation of the user's standing
 requirement: the person should be able to open an individual worker, converse
 with it, help it, and take over when its execution host supports that operation.

@@ -1,5 +1,13 @@
 # Executors when agents operate Dalph
 
+Later scope clarification: caller-started workers remain a separate research
+track. The scoped credentials, controller generations, message operations and
+helper-agent budgets below are alternatives, not accepted first-milestone
+requirements. No mandatory handback or parent/child conversation was agreed.
+See the [coverage audit](invokee-spec-readiness-audit.md) and
+[accepted milestone](invokee-first-milestone.md).
+
+
 Research date: 2026-09-13. This is a documentation-only investigation: it changes no executable code, accepted workflow, or provider configuration. The scenarios below are proposals and test seams, not accepted implementation requirements or claims of passing tests.
 
 ## Start with what happens

@@ -1,5 +1,10 @@
 # Client interruption and graph subscription validation
 
+Follow-up: [research conclusion](invokee-research-conclusion.md) covers the
+subsequent callback recovery, actual MCP-host composition, changing graph,
+slow-watcher candidate and scope review.
+
+
 Status: research and disposable validation, 2026-09-13. No Dalph runtime change,
 implementation task, public API, or deployment architecture is introduced.
 Work is isolated on `research/invoker-invokee-interview`, from source commit

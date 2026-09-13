@@ -1,5 +1,16 @@
 # Agents that subdivide their assigned work
 
+Later interview decisions govern scope: planners initially edit the tracker
+directly and send only refresh hints to Dalph. Q17 accepts execution from a
+complete intermediate tracker state before blockers are authored; the publication
+barriers and Dalph-authored graph proposals below are exploratory alternatives,
+not initial requirements. Q24 retains unfinished implementer yielding as later
+core work. Parent conversation, handback, grants and non-executable container
+tasks are not required. See the [coverage audit](invokee-spec-readiness-audit.md)
+and [accepted milestone](invokee-first-milestone.md) before deriving work from
+these older candidate scenarios.
+
+
 Status: research and candidate design, 2026-09-13. The user has added preserving
 recursive planning as a requirement for the ongoing design exploration. The
 specific protocols below remain proposals. This file changes no Dalph runtime

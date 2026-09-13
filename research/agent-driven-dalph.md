@@ -1,5 +1,13 @@
 # Dalph operated by agents
 
+Reading order: the [accepted first milestone](invokee-first-milestone.md) and
+[later coverage audit](invokee-spec-readiness-audit.md) govern the exploratory
+proposals below. In particular, Q17 permits an intermediate complete tracker
+state to become eligible before blockers are authored; a publication barrier,
+Dalph-owned graph editing, and custom conversation/handback are not initial
+requirements.
+
+
 Status: design exploration, 2026-09-13. These are candidate behaviors, not an
 accepted specification or an implementation plan. This change adds research
 prose only; it changes no executable source, configuration, or Dalph runtime

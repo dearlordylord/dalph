@@ -3,6 +3,14 @@
 This worktree carries the research notes created in the invoker/invokee
 conversation. Research is evidence, not accepted runtime behavior.
 
+- [Research conclusion and specification inputs](./invokee-research-conclusion.md)
+- [Scope and specification-readiness audit](./invokee-spec-readiness-audit.md)
+- [Command callback recovery](./invokee-command-recovery-results.md)
+- [Changing tracker graph validation](./invokee-changing-graph-results.md)
+- [Actual MCP-to-host composition](./invokee-mcp-host-results.md)
+- [Slow-watcher candidate](./invokee-slow-watch-results.md)
+- [Attached-operation semantics](./invokee-operation-contract-research.md)
+- [External worker participation](./invokee-external-worker-participation.md)
 - [Command, graph subscription, and MCP process validation](./invokee-attachment-validation.md)
 - [SQLite command interruption results](./invokee-command-interruption-results.md)
 - [Live graph subscription results](./invokee-graph-stream-results.md)
