@@ -458,6 +458,83 @@ it.live(
         const journal = yield* readJournal(fixture, child)
         expect(journal.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
         expect(journal.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toHaveLength(1)
+        const eventIndex = (tag: (typeof journal)[number]["event"]["_tag"]) =>
+          journal.findIndex(({ event }) => event._tag === tag)
+        const expectCausalOrder = (indices: ReadonlyArray<number>) => {
+          for (const [index, current] of indices.entries()) {
+            expect(current).toBeGreaterThanOrEqualTo(0)
+            const next = indices[index + 1]
+            if (next !== undefined) expect(current).toBeLessThan(next)
+          }
+        }
+        // These edges follow accepted authority observations, not a total order of independent runtime work.
+        expectCausalOrder([
+          eventIndex("TaskClaimAcquisitionIntended"),
+          eventIndex("TaskClaimAcquired"),
+          eventIndex("TaskAttemptPlanned"),
+          eventIndex("TaskWorktreeReconciliationIntended"),
+          eventIndex("TaskWorktreeReady"),
+          eventIndex("PlannedAttemptExecutorCommandIntended")
+        ])
+        expectCausalOrder([
+          journal.findIndex(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorWorkReported" &&
+              event.report._tag === "ExecutorWorkTerminal" &&
+              event.report.result._tag === "Accepted"
+          ),
+          eventIndex("IntegrationStarted"),
+          eventIndex("IntegratorRunStarted"),
+          eventIndex("IntegratorRunResultRecorded"),
+          eventIndex("IntegratorRunCandidateGitObserved"),
+          eventIndex("TargetPromotionAttemptIntended"),
+          eventIndex("TargetPromotionObservedSuccess")
+        ])
+        const completionProof = journal.findIndex(
+          ({ event }) =>
+            event._tag === "TaskTrackerFactsObserved" &&
+            event.observation._tag === "FocusedTaskCompletionFacts" &&
+            event.observation.purpose._tag === "Confirmation" &&
+            event.observation.facts.lifecycle === "CompletedSuccessfully"
+        )
+        expectCausalOrder([
+          eventIndex("TargetPromotionObservedSuccess"),
+          eventIndex("CompletionClaimReplacementIntended"),
+          eventIndex("CompletionClaimReplaced"),
+          eventIndex("CompletionTaskIntended"),
+          eventIndex("CompletionTaskAttemptIntended"),
+          eventIndex("CompletionTaskAcknowledged"),
+          completionProof,
+          eventIndex("CompletionClaimDeletionIntended"),
+          eventIndex("TaskClaimReleased"),
+          eventIndex("CompletionClaimDeleted"),
+          eventIndex("IntegrationFinalitySettled")
+        ])
+        const finality = eventIndex("IntegrationFinalitySettled")
+        expectCausalOrder([
+          finality,
+          journal.findIndex(
+            ({ event }, index) =>
+              index > finality &&
+              event._tag === "TaskTrackerReadIntentRecorded" &&
+              event.operation._tag === "ReadTrackerGraph"
+          ),
+          journal.findIndex(
+            ({ event }, index) =>
+              index > finality &&
+              event._tag === "TaskTrackerFactsObserved" &&
+              event.observation._tag === "CompleteTaskTrackerFacts"
+          ),
+          eventIndex("WorkflowRunTerminated")
+        ])
+        expect(MutableList.toArray(controller.boundaryLog).map(({ _tag }) => _tag)).toEqual([
+          "PromotionCompareAndSet",
+          "CompletionResponse"
+        ])
+        const originalCounts = (yield* controller.providerSnapshot).operationCounts
+        expect(closeCount(originalCounts)).toBe(1)
+        expect(originalCounts.find(({ tag }) => tag === "CreateClaimLabel")?.count).toBe(2)
+        expect(originalCounts.find(({ tag }) => tag === "DeleteClaimLabel")?.count).toBe(2)
         const acceptedCommits = journal.flatMap(({ event }) =>
           event._tag === "PlannedAttemptExecutorWorkReported" &&
           event.report._tag === "ExecutorWorkTerminal" &&
