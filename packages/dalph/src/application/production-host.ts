@@ -489,6 +489,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const workflowLayer = productionWorkflowInterpreterLayer(
           selection.runId,
           GitCommonDirectoryTarget.make(configuration.commonDirectory),
+          configuration.repository,
           IntegrationTarget.make({ repository: configuration.repository, ref: configuration.integrationRef }),
           Layer.succeed(TrackerMutation, tracker),
           Layer.merge(

@@ -1,11 +1,11 @@
-# Alice's integration reads the configured target through its actual Git directory
+# Alice's integration reads the exact configured Git target
 
 ## Governing behavior
 
 This accepted #339 repair preserves the configured IntegrationTarget identity,
 the declared Base and the ordinary lineage, candidate and promotion protocols.
 The configured repository worktree and its resolved common Git directory are
-different existing facts. Translating the exact configured repository locator
+different existing facts. Translating the exact configured working-repository locator
 at the Node Git command boundary does not redefine the target or create a
 second authority. No model transition, retry policy or timeout changes.
 
@@ -27,8 +27,10 @@ repair the independently constructed lineage Layer.
 ## Ordered calls and visible result
 
 1. The production workflow composition retains the exact IntegrationTarget.
-   Its real Git command boundary translates only that target's configured
-   repository locator to the already resolved common Git directory for `run`.
+   Its real Git command boundary receives the working-repository locator
+   explicitly alongside its already resolved common Git directory. It translates
+   only that working-repository locator to that directory for `run`. The semantic
+   IntegrationTarget repository is not the source of this translation rule.
    Other locators and `runInWorktree` retain their existing interpretation.
 2. The ordinary lineage adapter reads the actual target head and ancestry.
    It returns the existing observation with the original target identity.
@@ -44,6 +46,27 @@ the same declared target, plan and ordinary authority checks. This locator
 translation is not ownership proof, permission to adopt a foreign worktree,
 or permission to repeat an ambiguous mutation.
 
+## A separate bare or unreadable integration target
+
+Alice's maintained no-crash, concurrent and restart fixtures execute tasks in a
+working repository whose common directory is `repository/.git`, but integrate
+into the distinct bare repository `target.git`. Both initially contain H. The
+executor produces C in the working repository; the existing Integrator and real
+promotion boundary operate on the bare target. The workflow must read that same
+bare target, not substitute the working repository merely because the locator
+is the declared IntegrationTarget. After promotion, Git owns M at the bare ref
+with ordered parents H,C. After an applied promotion whose response is lost,
+restart checks that same bare ref and does not repeat the successful CAS.
+
+In the unreadable-target refresh scenario the declared target is `missing.git`,
+while the working repository remains healthy. Each autonomous notification can
+acknowledge the existing target-read intent, but Git cannot supply a target
+observation. Dalph retains the running responsibility and starts no executor.
+Reading the healthy source instead and publishing TargetLineageObserved is
+forbidden. No additional Git read, retry, model transition or timeout change is
+introduced to resolve these locators. The existing resolved working-repository
+and common-directory facts are explicit composition inputs, not new authority.
+
 ## Scenario-to-test mapping
 
 - Configured repository versus common-directory locator → focused production
@@ -51,6 +74,17 @@ or permission to repeat an ambiguous mutation.
   retain the original IntegrationTarget.
 - Other command locators and worktree commands → focused controls retain their
   existing behavior; no global PATH shim or fabricated command result.
+- Separate bare and missing targets → `production-workflow-git.integration.test.ts`
+  proves real bare head/ancestry and preserves a missing-target failure in both
+  default and observed compositions; working-repository translation still works.
+- Separate bare target lifecycle → `hermetic-mvp.test.ts`'s no-crash lifecycle
+  and crash-after-promotion restart tests retain exact target heads, parents,
+  journal observations and no-repeat assertions.
+- Separate bare target concurrency → `hermetic-concurrency.test.ts` retains
+  actual overlapping children, serialized integration and exact target lineage.
+- Unreadable target during autonomous refresh → `production-reactivation.test.ts`'s
+  unreadable-boundary test retains acknowledged target-read intent without a
+  fabricated target observation or new executor.
 - Complete ordinary built command → existing #339 controller proves actual
   ready worktree, Accepted C and real CAS with exact M parents H,C.
 - Foreign target move → existing stale-CAS chronology proves F remains current,

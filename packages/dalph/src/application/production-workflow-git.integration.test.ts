@@ -41,7 +41,7 @@ const proveCommands = (mode: "Default" | "Observed") =>
       const calls = yield* Ref.make<ReadonlyArray<ProductionWorkflowGitCommand>>([])
       const layer = productionWorkflowGitCommandLayer(
         GitCommonDirectoryTarget.make(`${repository}/.git`),
-        target,
+        GitRepositoryLocator.make(repository),
         mode === "Default" ? undefined : (call) => Ref.update(calls, (previous) => [...previous, call])
       )
       const context = yield* Layer.build(layer)
@@ -70,4 +70,55 @@ const proveCommands = (mode: "Default" | "Observed") =>
 it.effect("ordinary target Git reads use the common directory without an observer", () => proveCommands("Default"))
 it.effect("observed target Git reads preserve real results and unrelated command locators", () =>
   proveCommands("Observed")
+)
+
+const proveSeparateTargets = (mode: "Default" | "Observed") =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const rawGit = yield* GitCommand
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-production-separate-target-" })
+      const repository = `${directory}/source`
+      const targetSource = `${directory}/target-source`
+      const sourceHead = yield* makeRepository(repository)
+      const targetHead = yield* makeRepository(targetSource)
+      expect(targetHead).not.toBe(sourceHead)
+      const bare = `${directory}/target.git`
+      expect((yield* rawGit.runInWorktree(directory, ["clone", "--bare", targetSource, bare])).exitCode).toBe(0)
+      const calls = yield* Ref.make<ReadonlyArray<ProductionWorkflowGitCommand>>([])
+      const layer = productionWorkflowGitCommandLayer(
+        GitCommonDirectoryTarget.make(`${repository}/.git`),
+        GitRepositoryLocator.make(repository),
+        mode === "Default" ? undefined : (call) => Ref.update(calls, (previous) => [...previous, call])
+      )
+      const lineage = yield* GitTargetLineage.pipe(Effect.provide(nodeGitTargetLineageLayer), Effect.provide(layer))
+      const target = IntegrationTarget.make({
+        repository: GitRepositoryLocator.make(bare),
+        ref: IntegrationTargetRef.make("refs/heads/master")
+      })
+      expect(yield* lineage.read(targetHead, target)).toEqual({
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: targetHead,
+        targetHeadSha: targetHead
+      })
+      const missing = IntegrationTarget.make({
+        ...target,
+        repository: GitRepositoryLocator.make(`${directory}/missing.git`)
+      })
+      const failure = yield* lineage.read(sourceHead, missing).pipe(Effect.flip)
+      expect(failure._tag).toBe("GitTargetLineageReadFailure")
+      expect(failure.target).toEqual(missing)
+      const git = Context.get(yield* Layer.build(layer), GitCommand)
+      const workingHead = yield* git.run(repository, ["rev-parse", "HEAD"])
+      expect(workingHead.exitCode).toBe(0)
+      expect(workingHead.stdout.trim()).toBe(sourceHead)
+      expect(yield* Ref.get(calls)).toEqual(mode === "Default" ? [] : ["run", "run", "run", "run"])
+    })
+  ).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+
+it.effect("ordinary Git composition preserves separate bare and unreadable targets", () =>
+  proveSeparateTargets("Default")
+)
+it.effect("observed Git composition preserves separate bare and unreadable targets", () =>
+  proveSeparateTargets("Observed")
 )

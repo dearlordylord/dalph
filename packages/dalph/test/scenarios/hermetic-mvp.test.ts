@@ -386,6 +386,7 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       const application = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(`${repository}/.git`),
+        GitRepositoryLocator.make(repository),
         integrationTarget,
         Layer.succeed(TrackerMutation, trackerMutation),
         controlledSynchronousPlannedAttemptExecutorLayer(Layer.succeed(PlannedAttemptExecutor, executor)),
