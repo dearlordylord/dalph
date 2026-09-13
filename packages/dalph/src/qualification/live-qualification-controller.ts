@@ -1,4 +1,5 @@
 /* eslint-disable import/no-nodejs-modules -- The protected qualification owns one built Node child. */
+import nodePath from "node:path"
 import nodeProcess from "node:process"
 import type { GitCommitSha, RunId } from "@dalph/contracts"
 import type { GithubIssueTarget, JournalRecord } from "@dalph/orchestrator"
@@ -10,11 +11,68 @@ import {
   ProductionCliRecord,
   type ProductionConfigurationLocator
 } from "../application/production-cli.js"
+import { ProductionCodexStateDirectory } from "../application/production-configuration.js"
+
+const canonicalAbsoluteLocator = (subject: string) =>
+  Schema.NonEmptyString.check(
+    Schema.makeFilter((value) =>
+      nodePath.isAbsolute(value) && nodePath.normalize(value) === value
+        ? undefined
+        : `${subject} must be normalized and absolute`
+    )
+  )
+
+/** Locates the already-built shipped Dalph entry invoked by the protected controller. */
+export const ProductionLiveBuiltEntry = canonicalAbsoluteLocator("live qualification built entry").pipe(
+  Schema.brand("ProductionLiveBuiltEntry")
+)
+export type ProductionLiveBuiltEntry = typeof ProductionLiveBuiltEntry.Type
+
+/** Locates the exact private Codex home made for this qualification invocation. */
+export const ProductionLiveCodexHome = ProductionCodexStateDirectory
+export type ProductionLiveCodexHome = ProductionCodexStateDirectory
+
+/** Locates the exact Node executable used to start the shipped Dalph entry. */
+export const ProductionLiveChildExecutable = canonicalAbsoluteLocator("live qualification child executable").pipe(
+  Schema.brand("ProductionLiveChildExecutable")
+)
+export type ProductionLiveChildExecutable = typeof ProductionLiveChildExecutable.Type
+
+/** Identifies the one positive operating-system process created for the shipped command. */
+export const ProductionLiveQualificationProcessId = Schema.Int.check(
+  Schema.makeFilter((value) => (value > 0 ? undefined : "process identity must be positive"))
+).pipe(Schema.brand("ProductionLiveQualificationProcessId"))
+export type ProductionLiveQualificationProcessId = typeof ProductionLiveQualificationProcessId.Type
+
+const qualificationBoundaryOperations = ["Spawn", "ReadStdout", "ReadStderr", "WaitForExit"] as const
+
+/** A sanitized failure while controlling or observing the one shipped child process. */
+export class ProductionLiveQualificationBoundaryFailure extends Schema.TaggedError<ProductionLiveQualificationBoundaryFailure>()(
+  "ProductionLiveQualificationBoundaryFailure",
+  {
+    operation: Schema.Literals(qualificationBoundaryOperations),
+    reason: Schema.Literals(["Unavailable", "InvalidProcessIdentity"])
+  }
+) {}
+
+/** A sanitized failure while accepting the shipped child's canonical public records. */
+export class ProductionLiveQualificationRecordFailure extends Schema.TaggedError<ProductionLiveQualificationRecordFailure>()(
+  "ProductionLiveQualificationRecordFailure",
+  {
+    reason: Schema.Literals([
+      "InvalidUtf8",
+      "MissingFinalDelimiter",
+      "EmptyFrame",
+      "MalformedFrame",
+      "NonCanonicalFrame"
+    ])
+  }
+) {}
 
 /** Secrets needed by the one shipped child; no controller result or callback receives these values. */
 export interface ProductionLiveQualificationInvocation {
-  readonly builtEntry: string
-  readonly codexHome: string
+  readonly builtEntry: ProductionLiveBuiltEntry
+  readonly codexHome: ProductionLiveCodexHome
   readonly configuration: ProductionConfigurationLocator
   readonly target: GithubIssueTarget
   readonly githubToken: Redacted.Redacted<string>
@@ -23,23 +81,23 @@ export interface ProductionLiveQualificationInvocation {
 
 /** Exact process request for the one public production command. */
 export interface ProductionLiveQualificationChildRequest {
-  readonly executable: string
+  readonly executable: ProductionLiveChildExecutable
   readonly arguments: ReadonlyArray<string>
   readonly environment: Readonly<Record<string, string>>
 }
 
 export interface ProductionLiveQualificationChild {
-  readonly pid: number
-  readonly stdout: Stream.Stream<Uint8Array, unknown>
-  readonly stderr: Stream.Stream<Uint8Array, unknown>
-  readonly exitCode: Effect.Effect<number, unknown>
+  readonly pid: ProductionLiveQualificationProcessId
+  readonly stdout: Stream.Stream<Uint8Array, ProductionLiveQualificationBoundaryFailure>
+  readonly stderr: Stream.Stream<Uint8Array, ProductionLiveQualificationBoundaryFailure>
+  readonly exitCode: Effect.Effect<number, ProductionLiveQualificationBoundaryFailure>
 }
 
 /** The controller owns spawning; the supplied implementation cannot select a workflow operation. */
 export interface ProductionLiveQualificationBoundary {
   readonly spawn: (
     request: ProductionLiveQualificationChildRequest
-  ) => Effect.Effect<ProductionLiveQualificationChild, unknown, Scope.Scope>
+  ) => Effect.Effect<ProductionLiveQualificationChild, ProductionLiveQualificationBoundaryFailure, Scope.Scope>
 }
 
 /** Safe owning-authority observations collected only after the original child has stopped. */
@@ -49,7 +107,7 @@ export interface ProductionLiveQualificationFinalFacts {
   readonly integrationTargetCount: number
   readonly journal: ReadonlyArray<JournalRecord>
   readonly github: unknown
-  readonly targetHead: GitCommitSha | string
+  readonly targetHead: GitCommitSha
 }
 
 export type ProductionLiveQualificationStage =
@@ -61,7 +119,7 @@ export type ProductionLiveQualificationStage =
   | "Publish"
 
 export interface ProductionLiveQualificationCompletion {
-  readonly processId: number
+  readonly processId: ProductionLiveQualificationProcessId
   readonly processStatus: 0
   readonly runId: RunId
   readonly records: ReadonlyArray<ProductionCliRecord>
@@ -70,12 +128,18 @@ export interface ProductionLiveQualificationCompletion {
 
 export interface ProductionLiveQualificationFailureObservation {
   readonly stage: ProductionLiveQualificationStage
-  readonly processId?: number
+  readonly processId?: ProductionLiveQualificationProcessId
   readonly runId?: RunId
   readonly spawnCount: 0 | 1
 }
 
-export interface ProductionLiveQualificationCallbacks<EPublish = never, EGather = never, EValidate = never, R = never> {
+export interface ProductionLiveQualificationCallbacks<
+  EPublish = never,
+  EGather = never,
+  EValidate = never,
+  ERetain = never,
+  R = never
+> {
   /** Rejects unsafe source atoms before the record enters the accepted transcript. */
   readonly validateRecord: (record: ProductionCliRecord) => Effect.Effect<void, EValidate, R>
   readonly gatherFinalFacts: (
@@ -85,7 +149,7 @@ export interface ProductionLiveQualificationCallbacks<EPublish = never, EGather 
   /** Reports retained Q resources; it must not start another child or infer cleanup authority. */
   readonly retainAfterFailure: (
     failure: ProductionLiveQualificationFailureObservation
-  ) => Effect.Effect<void, unknown, R>
+  ) => Effect.Effect<void, ERetain, R>
 }
 
 export type ProductionLiveQualificationResult =
@@ -95,7 +159,7 @@ export type ProductionLiveQualificationResult =
 export const productionLiveQualificationChildRequest = (
   invocation: ProductionLiveQualificationInvocation
 ): ProductionLiveQualificationChildRequest => ({
-  executable: nodeProcess.execPath,
+  executable: ProductionLiveChildExecutable.make(nodeProcess.execPath),
   arguments: [
     invocation.builtEntry,
     "run",
@@ -117,14 +181,49 @@ export const makeProductionLiveQualificationNodeBoundary = (
   spawner: Pick<ChildProcessSpawner.ChildProcessSpawner["Service"], "spawn">
 ): ProductionLiveQualificationBoundary => ({
   spawn: (request) =>
-    spawner.spawn(
-      ChildProcess.make(request.executable, request.arguments, {
-        env: request.environment,
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe"
-      })
-    )
+    spawner
+      .spawn(
+        ChildProcess.make(request.executable, request.arguments, {
+          env: request.environment,
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe"
+        })
+      )
+      .pipe(
+        Effect.mapError(
+          () => new ProductionLiveQualificationBoundaryFailure({ operation: "Spawn", reason: "Unavailable" })
+        ),
+        Effect.flatMap((child) =>
+          Schema.decodeUnknownEffect(ProductionLiveQualificationProcessId)(child.pid).pipe(
+            Effect.mapError(
+              () =>
+                new ProductionLiveQualificationBoundaryFailure({ operation: "Spawn", reason: "InvalidProcessIdentity" })
+            ),
+            Effect.map((pid) => ({
+              pid,
+              stdout: child.stdout.pipe(
+                Stream.mapError(
+                  () =>
+                    new ProductionLiveQualificationBoundaryFailure({ operation: "ReadStdout", reason: "Unavailable" })
+                )
+              ),
+              stderr: child.stderr.pipe(
+                Stream.mapError(
+                  () =>
+                    new ProductionLiveQualificationBoundaryFailure({ operation: "ReadStderr", reason: "Unavailable" })
+                )
+              ),
+              exitCode: child.exitCode.pipe(
+                Effect.mapError(
+                  () =>
+                    new ProductionLiveQualificationBoundaryFailure({ operation: "WaitForExit", reason: "Unavailable" })
+                )
+              )
+            }))
+          )
+        )
+      )
 })
 
 const decodeFrame = <EValidate, R>(
@@ -135,16 +234,17 @@ const decodeFrame = <EValidate, R>(
     reportInput: false,
     onExcessProperty: "error"
   }).pipe(
+    Effect.mapError(() => new ProductionLiveQualificationRecordFailure({ reason: "MalformedFrame" })),
     Effect.filterOrFail(
       (record) => frame === encodeProductionCliRecord(record),
-      () => undefined
+      () => new ProductionLiveQualificationRecordFailure({ reason: "NonCanonicalFrame" })
     ),
     Effect.tap(validate)
   )
 
 /** Accepts only complete canonical LF frames and never returns rejected source bytes. */
 const readCanonicalRecords = Effect.fn("ProductionLiveQualification.readCanonicalRecords")(function* <EValidate, R>(
-  stdout: Stream.Stream<Uint8Array, unknown>,
+  stdout: Stream.Stream<Uint8Array, ProductionLiveQualificationBoundaryFailure>,
   validate: (record: ProductionCliRecord) => Effect.Effect<void, EValidate, R>
 ) {
   const chunks = yield* stdout.pipe(Stream.runCollect)
@@ -155,11 +255,16 @@ const readCanonicalRecords = Effect.fn("ProductionLiveQualification.readCanonica
     joined.set(chunk, offset)
     offset += chunk.length
   }
-  const source = yield* Effect.try(() => new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(joined))
-  if (!source.endsWith("\n")) return yield* Effect.fail(undefined)
+  const source = yield* Effect.try({
+    try: () => new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(joined),
+    catch: () => new ProductionLiveQualificationRecordFailure({ reason: "InvalidUtf8" })
+  })
+  if (!source.endsWith("\n"))
+    return yield* new ProductionLiveQualificationRecordFailure({ reason: "MissingFinalDelimiter" })
   const finalDelimiterWidth = 1
   const frames = source.slice(0, -finalDelimiterWidth).split("\n")
-  if (frames.some((frame) => frame.length === 0)) return yield* Effect.fail(undefined)
+  if (frames.some((frame) => frame.length === 0))
+    return yield* new ProductionLiveQualificationRecordFailure({ reason: "EmptyFrame" })
   return yield* Effect.forEach(frames, (frame) => decodeFrame(frame, validate))
 })
 
@@ -185,16 +290,17 @@ const runProductionLiveQualificationScoped = Effect.fn("ProductionLiveQualificat
   EPublish,
   EGather,
   EValidate,
+  ERetain,
   R
 >(
   invocation: ProductionLiveQualificationInvocation,
   boundary: ProductionLiveQualificationBoundary,
-  callbacks: ProductionLiveQualificationCallbacks<EPublish, EGather, EValidate, R>
+  callbacks: ProductionLiveQualificationCallbacks<EPublish, EGather, EValidate, ERetain, R>
 ) {
   let spawnCount: 0 | 1 = 0
   // Mutable only to let the single failure funnel report facts learned after spawn.
   // eslint-disable-next-line prefer-const
-  let processId: number | undefined
+  let processId: ProductionLiveQualificationProcessId | undefined
   // eslint-disable-next-line prefer-const
   let runId: RunId | undefined
   const fail = Effect.fn("ProductionLiveQualification.retainFailure")(function* (
@@ -215,7 +321,7 @@ const runProductionLiveQualificationScoped = Effect.fn("ProductionLiveQualificat
   if (spawned._tag === "Failure") return yield* fail("Spawn")
   const child = spawned.success
   processId = child.pid
-  const [output, , process] = yield* Effect.all(
+  const [output, stderr, process] = yield* Effect.all(
     [
       readCanonicalRecords(child.stdout, callbacks.validateRecord).pipe(Effect.result),
       child.stderr.pipe(Stream.runDrain, Effect.result),
@@ -223,7 +329,7 @@ const runProductionLiveQualificationScoped = Effect.fn("ProductionLiveQualificat
     ] as const,
     { concurrency: "unbounded" }
   )
-  if (output._tag === "Failure") return yield* fail("ReadOutput")
+  if (output._tag === "Failure" || stderr._tag === "Failure") return yield* fail("ReadOutput")
   const records = output.success
   runId = selectedRun(records)
   if (
@@ -243,9 +349,9 @@ const runProductionLiveQualificationScoped = Effect.fn("ProductionLiveQualificat
   return { _tag: "Completed" as const, spawnCount: 1 as const, ...completion }
 })
 
-export const runProductionLiveQualification = <EPublish, EGather, EValidate, R>(
+export const runProductionLiveQualification = <EPublish, EGather, EValidate, ERetain, R>(
   invocation: ProductionLiveQualificationInvocation,
   boundary: ProductionLiveQualificationBoundary,
-  callbacks: ProductionLiveQualificationCallbacks<EPublish, EGather, EValidate, R>
+  callbacks: ProductionLiveQualificationCallbacks<EPublish, EGather, EValidate, ERetain, R>
 ): Effect.Effect<ProductionLiveQualificationResult, never, R> =>
   Effect.scoped(runProductionLiveQualificationScoped(invocation, boundary, callbacks))

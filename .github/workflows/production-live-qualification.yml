@@ -36,6 +36,7 @@ jobs:
       DALPH_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
       DALPH_COVERAGE_BASE_SHA: ${{ inputs.reviewed_base_sha }}
       DALPH_FORMAL_PROFILE_KIND: dedicated
+      DALPH_FORMAL_RUNNER_LABEL: ubuntu-24.04-arm
       DALPH_FORMAL_EVIDENCE_DIR: ${{ runner.temp }}/dalph-live-formal/dedicated
       NODE_OPTIONS: --max-old-space-size=8192
     steps:
@@ -79,6 +80,9 @@ jobs:
       - name: Run dedicated formal evidence
         run: |
           set -o pipefail
+          effective_parallelism=$(node -p 'require("node:os").availableParallelism()')
+          test "$effective_parallelism" -gt 0
+          echo "DALPH_FORMAL_EFFECTIVE_PARALLELISM=$effective_parallelism" >> "$GITHUB_ENV"
           pnpm check:ci:formal 2>&1 | tee "$DALPH_FORMAL_EVIDENCE_DIR/formal.log"
 
       - name: Record formal completion timing
@@ -113,6 +117,11 @@ jobs:
           })
           const fields = {
             profile: process.env.DALPH_FORMAL_PROFILE_KIND,
+            condition: {
+              kind: "dedicated-hosted-job",
+              runnerLabel: process.env.DALPH_FORMAL_RUNNER_LABEL,
+              effectiveParallelism: Number(process.env.DALPH_FORMAL_EFFECTIVE_PARALLELISM)
+            },
             sourceSha: process.env.DALPH_CANDIDATE_SHA,
             reviewedBaseSha: process.env.DALPH_COVERAGE_BASE_SHA,
             nodeVersion: process.version,
@@ -148,6 +157,8 @@ jobs:
       DALPH_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
       DALPH_COVERAGE_BASE_SHA: ${{ inputs.reviewed_base_sha }}
       DALPH_FORMAL_PROFILE_KIND: stressed
+      DALPH_FORMAL_RUNNER_LABEL: ubuntu-latest
+      DALPH_FORMAL_STRESS_CPU_LIST: 0-1
       DALPH_FORMAL_EVIDENCE_DIR: ${{ runner.temp }}/dalph-live-formal/stressed
       NODE_OPTIONS: --max-old-space-size=8192
     steps:
@@ -191,7 +202,13 @@ jobs:
       - name: Run stressed formal evidence
         run: |
           set -o pipefail
-          pnpm check:ci:formal 2>&1 | tee "$DALPH_FORMAL_EVIDENCE_DIR/formal.log"
+          host_parallelism=$(node -p 'require("node:os").availableParallelism()')
+          effective_parallelism=$(taskset --cpu-list "$DALPH_FORMAL_STRESS_CPU_LIST" node -p 'require("node:os").availableParallelism()')
+          test "$host_parallelism" -gt "$effective_parallelism"
+          test "$effective_parallelism" -eq 2
+          echo "DALPH_FORMAL_HOST_PARALLELISM=$host_parallelism" >> "$GITHUB_ENV"
+          echo "DALPH_FORMAL_EFFECTIVE_PARALLELISM=$effective_parallelism" >> "$GITHUB_ENV"
+          taskset --cpu-list "$DALPH_FORMAL_STRESS_CPU_LIST" pnpm check:ci:formal 2>&1 | tee "$DALPH_FORMAL_EVIDENCE_DIR/formal.log"
 
       - name: Record formal completion timing
         if: always()
@@ -225,6 +242,13 @@ jobs:
           })
           const fields = {
             profile: process.env.DALPH_FORMAL_PROFILE_KIND,
+            condition: {
+              kind: "cpu-affinity",
+              runnerLabel: process.env.DALPH_FORMAL_RUNNER_LABEL,
+              cpuList: process.env.DALPH_FORMAL_STRESS_CPU_LIST,
+              hostParallelism: Number(process.env.DALPH_FORMAL_HOST_PARALLELISM),
+              effectiveParallelism: Number(process.env.DALPH_FORMAL_EFFECTIVE_PARALLELISM)
+            },
             sourceSha: process.env.DALPH_CANDIDATE_SHA,
             reviewedBaseSha: process.env.DALPH_COVERAGE_BASE_SHA,
             nodeVersion: process.version,
@@ -356,6 +380,7 @@ jobs:
           name: production-live-qualification-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/dalph-live-qualification/qualification.json
+            ${{ runner.temp }}/dalph-live-qualification/qualification.json.pre-cleanup
             ${{ runner.temp }}/dalph-live-publication/retained-locators.json
             ${{ runner.temp }}/dalph-live-qualification/manifest.json
           if-no-files-found: warn

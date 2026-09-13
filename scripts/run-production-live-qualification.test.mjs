@@ -34,6 +34,16 @@ const fixture = async () => {
       formal[`${name}Metadata`],
       `${JSON.stringify({
         profile: name,
+        condition:
+          name === "dedicated"
+            ? { kind: "dedicated-hosted-job", runnerLabel: "ubuntu-24.04-arm", effectiveParallelism: 4 }
+            : {
+                kind: "cpu-affinity",
+                runnerLabel: "ubuntu-latest",
+                cpuList: "0-1",
+                hostParallelism: 4,
+                effectiveParallelism: 2
+              },
         sourceSha: candidateSha,
         reviewedBaseSha,
         nodeVersion: "24.20.0",
@@ -68,9 +78,11 @@ const fixture = async () => {
 const formalForManifest = Object.freeze({
   _tag: "DedicatedAndStressed",
   dedicated: {
+    profileKind: "dedicated",
+    condition: { kind: "dedicated-hosted-job", runnerLabel: "ubuntu-24.04-arm", effectiveParallelism: 4 },
     sourceSha: candidateSha,
     nodeVersion: "24.20.0",
-    job: { workflow: "Candidate qualification", runId: 701, jobId: 812 },
+    job: { workflow: "Production live qualification", runId: 701, jobId: 812 },
     logDigest: "0".repeat(64),
     setupInstallSeconds: 12,
     formalSeconds: 105,
@@ -81,9 +93,17 @@ const formalForManifest = Object.freeze({
     negativeControls: ["formal negative control"]
   },
   stressed: {
+    profileKind: "stressed",
+    condition: {
+      kind: "cpu-affinity",
+      runnerLabel: "ubuntu-latest",
+      cpuList: "0-1",
+      hostParallelism: 4,
+      effectiveParallelism: 2
+    },
     sourceSha: candidateSha,
     nodeVersion: "24.20.0",
-    job: { workflow: "Candidate qualification", runId: 701, jobId: 813 },
+    job: { workflow: "Production live qualification", runId: 701, jobId: 813 },
     logDigest: "1".repeat(64),
     setupInstallSeconds: 12,
     formalSeconds: 105,
@@ -341,8 +361,16 @@ test("resolves unique numeric formal job IDs and enriches only safe profile fiel
     const metadata = JSON.parse(await readFile(f.formal[`${name}Metadata`], "utf8"))
     assert.equal(metadata.job.jobId, name === "dedicated" ? 812 : 813)
     assert.equal(typeof metadata.job.jobId, "number")
+    assert.equal(metadata.job.workflow, "Production live qualification")
     assert.equal(metadata.setupInstallSeconds, 12)
     assert.equal(metadata.completeJobSeconds, 120)
+    assert.equal(metadata.profile, name)
+    assert.equal(metadata.condition.kind, name === "dedicated" ? "dedicated-hosted-job" : "cpu-affinity")
+    if (name === "stressed") {
+      assert.equal(metadata.condition.cpuList, "0-1")
+      assert.equal(metadata.condition.hostParallelism, 4)
+      assert.equal(metadata.condition.effectiveParallelism, 2)
+    }
     assert.equal(metadata.rawPayloadSecret, undefined)
     assert.equal(JSON.stringify(metadata).includes("must-not-be-written"), false)
   }
@@ -440,4 +468,51 @@ test("rejects an unbounded formal timing input before enriching its job", async 
       })
     })
   )
+})
+
+test("rejects mislabeled or non-constraining formal profile conditions", async () => {
+  for (const mutate of [
+    (metadata) => ({ ...metadata, profile: "dedicated" }),
+    (metadata) => ({
+      ...metadata,
+      condition: { kind: "dedicated-hosted-job", runnerLabel: "ubuntu-24.04-arm", effectiveParallelism: 4 }
+    }),
+    (metadata) => ({ ...metadata, condition: { ...metadata.condition, hostParallelism: 2 } }),
+    (metadata) => ({ ...metadata, condition: { ...metadata.condition, effectiveParallelism: 3 } })
+  ]) {
+    const f = await fixture()
+    const environment = { ...environmentFor(f), GITHUB_TOKEN: "github-secret" }
+    const metadata = JSON.parse(await readFile(f.formal.stressedMetadata, "utf8"))
+    await writeFile(f.formal.stressedMetadata, `${JSON.stringify(mutate(metadata))}\n`)
+    await assert.rejects(
+      resolveFormalQualificationJobs({
+        environment,
+        fetchImpl: async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            jobs: [
+              {
+                id: 812,
+                name: "Dedicated formal evidence",
+                run_id: 701,
+                run_attempt: 1,
+                status: "completed",
+                conclusion: "success"
+              },
+              {
+                id: 813,
+                name: "Stressed formal evidence",
+                run_id: 701,
+                run_attempt: 1,
+                status: "completed",
+                conclusion: "success"
+              }
+            ]
+          })
+        })
+      }),
+      /stressed formal provenance/u
+    )
+  }
 })

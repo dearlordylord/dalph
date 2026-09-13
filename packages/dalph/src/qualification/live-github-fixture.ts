@@ -122,8 +122,7 @@ const decode = <S extends Schema.Constraint>(schema: S, body: unknown) =>
     return yield* Schema.decodeUnknownEffect(schema)(body)
   }).pipe(Effect.mapError(() => new ProductionLiveGithubFixtureFailure({ operation: "DecodeResponse" })))
 
-const digestText = Effect.fn("ProductionLiveGithubFixture.digestText")(function* (text: string) {
-  const crypto = yield* Crypto.Crypto
+const digestText = Effect.fn("ProductionLiveGithubFixture.digestText")(function* (crypto: Crypto.Crypto, text: string) {
   const bytes = yield* crypto.digest("SHA-256", new TextEncoder().encode(text))
   return EvidenceDigest.make(
     Array.from(bytes, (byte) => byte.toString(hexadecimalRadix).padStart(hexadecimalByteWidth, "0")).join("")
@@ -132,7 +131,8 @@ const digestText = Effect.fn("ProductionLiveGithubFixture.digestText")(function*
 
 export const productionLiveGithubIssueFingerprint = Effect.fn("ProductionLiveGithubFixture.issueFingerprint")(
   function* (invocationId: LiveQualificationInvocationId, title: string, body: string) {
-    return yield* digestText(JSON.stringify({ invocationId, specification: { title, body } }))
+    const crypto = yield* Crypto.Crypto
+    return yield* digestText(crypto, JSON.stringify({ invocationId, specification: { title, body } }))
   }
 )
 
@@ -164,12 +164,7 @@ export const makeProductionLiveGithubCleanupAdapter = Effect.fn("ProductionLiveG
       )
     const nextOperationId = Effect.map(crypto.randomUUIDv7, (value) => OperationId.make(value))
     const digestObserved = Effect.fn("ProductionLiveGithubFixture.digestObserved")(function* (text: string) {
-      const bytes = yield* crypto
-        .digest("SHA-256", new TextEncoder().encode(text))
-        .pipe(Effect.mapError(cleanupFailure))
-      return EvidenceDigest.make(
-        Array.from(bytes, (byte) => byte.toString(hexadecimalRadix).padStart(hexadecimalByteWidth, "0")).join("")
-      )
+      return yield* digestText(crypto, text).pipe(Effect.mapError(cleanupFailure))
     })
     const readRepository: DisposableGithubCleanupAdapter["readRepository"] = Effect.fn(
       "ProductionLiveGithubFixture.readRepository"

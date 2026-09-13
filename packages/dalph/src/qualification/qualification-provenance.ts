@@ -18,6 +18,7 @@ const hexadecimalRadix = 16
 const hexadecimalByteWidth = 2
 const hostedJobLimitSeconds = 960
 const formalGateLimitSeconds = 750
+const stressedFormalParallelism = 2
 
 type QualificationScriptModules = {
   readonly parseProfileLog: QualificationProfileParser
@@ -174,7 +175,7 @@ export const measureQualificationBuild = Effect.fn("Qualification.measureBuild")
 )
 
 export const QualificationHostedJob = Schema.Struct({
-  workflow: Schema.Literals(["CI", "Candidate qualification"]),
+  workflow: Schema.Literal("Production live qualification"),
   runId: Schema.Int.check(Schema.isGreaterThan(0)),
   jobId: Schema.Int.check(Schema.isGreaterThan(0))
 })
@@ -184,7 +185,22 @@ const ProfileCommand = Schema.Struct({
   durationSeconds: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
   result: Schema.Literals(["exit:0", "exit:1"])
 })
-export const QualificationFormalProfile = Schema.Struct({
+/** An otherwise unconstrained, formal-only hosted job establishes the dedicated reference profile. */
+const DedicatedFormalCondition = Schema.Struct({
+  kind: Schema.Literal("dedicated-hosted-job"),
+  runnerLabel: Schema.Literal("ubuntu-24.04-arm"),
+  effectiveParallelism: Schema.Int.check(Schema.isGreaterThan(0))
+})
+/** A measured two-CPU affinity below the host's available CPUs establishes the stressed profile. */
+const StressedFormalCondition = Schema.Struct({
+  kind: Schema.Literal("cpu-affinity"),
+  runnerLabel: Schema.Literal("ubuntu-latest"),
+  cpuList: Schema.Literal("0-1"),
+  hostParallelism: Schema.Int.check(Schema.isGreaterThan(stressedFormalParallelism)),
+  effectiveParallelism: Schema.Literal(stressedFormalParallelism)
+})
+const FormalProfileCondition = Schema.Union([DedicatedFormalCondition, StressedFormalCondition])
+const FormalProfileFields = {
   sourceSha: GitCommitSha,
   nodeVersion: Schema.NonEmptyString,
   job: QualificationHostedJob,
@@ -196,21 +212,38 @@ export const QualificationFormalProfile = Schema.Struct({
   hostedLimitSeconds: Schema.Literal(hostedJobLimitSeconds),
   commands: Schema.Array(ProfileCommand),
   negativeControls: Schema.NonEmptyArray(Schema.NonEmptyString)
+}
+const DedicatedQualificationFormalProfile = Schema.Struct({
+  profileKind: Schema.Literal("dedicated"),
+  condition: DedicatedFormalCondition,
+  ...FormalProfileFields
 })
+const StressedQualificationFormalProfile = Schema.Struct({
+  profileKind: Schema.Literal("stressed"),
+  condition: StressedFormalCondition,
+  ...FormalProfileFields
+})
+export const QualificationFormalProfile = Schema.Union([
+  DedicatedQualificationFormalProfile,
+  StressedQualificationFormalProfile
+])
 export const QualificationFormalProvenance = Schema.TaggedUnion({
   NotSupplied: { reason: Schema.Literal("LocalHermeticInvocation") },
-  DedicatedAndStressed: { dedicated: QualificationFormalProfile, stressed: QualificationFormalProfile }
+  DedicatedAndStressed: { dedicated: DedicatedQualificationFormalProfile, stressed: StressedQualificationFormalProfile }
 })
 export type QualificationFormalProvenance = typeof QualificationFormalProvenance.Type
 export const RequiredQualificationFormalProvenance = QualificationFormalProvenance.cases.DedicatedAndStressed
 export type RequiredQualificationFormalProvenance = typeof RequiredQualificationFormalProvenance.Type
 
 export interface SuppliedQualificationProfile {
+  readonly profileKind: "dedicated" | "stressed"
+  readonly condition: typeof FormalProfileCondition.Type
   readonly sourceSha: GitCommitSha
   readonly nodeVersion: string
   readonly job: typeof QualificationHostedJob.Type
   readonly log: string
   readonly setupInstallSeconds: number
+  readonly formalSeconds: number
   readonly completeJobSeconds: number
   readonly negativeControls: ReadonlyArray<string>
 }
@@ -225,12 +258,20 @@ const profileTimingExceedsBudgets = (
   formalBudgetSeconds !== formalGateLimitSeconds ||
   formalSeconds > formalGateLimitSeconds ||
   profile.completeJobSeconds < profile.setupInstallSeconds + formalSeconds ||
-  profile.completeJobSeconds > hostedJobLimitSeconds
+  profile.completeJobSeconds >= hostedJobLimitSeconds
 
 /** Existing inventory parser owns command order/counts; this seam additionally binds actual source/job/negative controls. */
 const validateProfile = Effect.fn("Qualification.validateProfile")(
-  function* (sourceSha: GitCommitSha, profile: SuppliedQualificationProfile) {
-    if (profile.sourceSha !== sourceSha || !supportedQualificationNode(profile.nodeVersion))
+  function* (sourceSha: GitCommitSha, profileKind: "dedicated" | "stressed", profile: SuppliedQualificationProfile) {
+    const conditionMatchesKind =
+      (profileKind === "dedicated" && profile.condition.kind === "dedicated-hosted-job") ||
+      (profileKind === "stressed" && profile.condition.kind === "cpu-affinity")
+    if (
+      profile.profileKind !== profileKind ||
+      !conditionMatchesKind ||
+      profile.sourceSha !== sourceSha ||
+      !supportedQualificationNode(profile.nodeVersion)
+    )
       return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
     const scripts = yield* qualificationScriptModules()
     const parsed = yield* Effect.try({
@@ -259,9 +300,13 @@ const validateProfile = Effect.fn("Qualification.validateProfile")(
       negativeNames.some((name, index) => name !== profile.negativeControls[index])
     )
       return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
+    if (profile.formalSeconds !== parsed.formalSeconds)
+      return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
     if (profileTimingExceedsBudgets(parsed.budgetSeconds, parsed.formalSeconds, profile))
       return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
     return yield* Schema.decodeUnknownEffect(QualificationFormalProfile)({
+      profileKind,
+      condition: profile.condition,
       sourceSha,
       nodeVersion: profile.nodeVersion,
       job: profile.job,
@@ -282,12 +327,24 @@ export const requiredQualificationFormalProvenance = Effect.fn("Qualification.re
   sourceSha: GitCommitSha,
   supplied: { readonly dedicated: SuppliedQualificationProfile; readonly stressed: SuppliedQualificationProfile }
 ) {
-  if (supplied.dedicated.job.jobId === supplied.stressed.job.jobId)
+  if (
+    supplied.dedicated.job.jobId === supplied.stressed.job.jobId ||
+    supplied.dedicated.job.runId !== supplied.stressed.job.runId
+  )
     return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
-  return RequiredQualificationFormalProvenance.make({
-    dedicated: yield* validateProfile(sourceSha, supplied.dedicated),
-    stressed: yield* validateProfile(sourceSha, supplied.stressed)
-  })
+  const dedicated = yield* validateProfile(sourceSha, "dedicated", supplied.dedicated)
+  const stressed = yield* validateProfile(sourceSha, "stressed", supplied.stressed)
+  if (dedicated.profileKind !== "dedicated" || stressed.profileKind !== "stressed") {
+    return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
+  }
+  const commandIdentity = (profile: typeof QualificationFormalProfile.Type) =>
+    profile.commands.map(({ kind, name, result }) => ({ kind, name, result }))
+  if (
+    JSON.stringify(commandIdentity(dedicated)) !== JSON.stringify(commandIdentity(stressed)) ||
+    JSON.stringify(dedicated.negativeControls) !== JSON.stringify(stressed.negativeControls)
+  )
+    return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
+  return RequiredQualificationFormalProvenance.make({ dedicated, stressed })
 })
 
 export const qualificationFormalProvenance = Effect.fn("Qualification.formalProvenance")(function* (

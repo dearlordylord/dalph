@@ -7,6 +7,11 @@ const workflow = await readFile(
   "utf8"
 )
 const ciWorkflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")
+const dedicatedFormalJob = workflow.slice(
+  workflow.indexOf("  formal-dedicated:\n"),
+  workflow.indexOf("  formal-stressed:\n")
+)
+const stressedFormalJob = workflow.slice(workflow.indexOf("  formal-stressed:\n"), workflow.indexOf("  qualify:\n"))
 
 test("production live qualification is a protected manually dispatched workflow", () => {
   assert.match(workflow, /^name: Production live qualification$/mu)
@@ -40,7 +45,8 @@ test("dispatch inputs and worker toolchain are exact and immutable", () => {
     "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED_METADATA",
     "setupInstallSeconds",
     "completeJobSeconds",
-    "negativeControls"
+    "negativeControls",
+    "condition"
   ]) {
     assert.match(workflow, new RegExp(field, "u"))
   }
@@ -49,8 +55,20 @@ test("dispatch inputs and worker toolchain are exact and immutable", () => {
 test("formal evidence is captured in dedicated and stressed jobs before one live job", () => {
   assert.match(workflow, /^  formal-dedicated:$/mu)
   assert.match(workflow, /^  formal-stressed:$/mu)
-  assert.match(workflow, /formal-dedicated[\s\S]*?pnpm check:ci:formal/u)
-  assert.match(workflow, /formal-stressed[\s\S]*?pnpm check:ci:formal/u)
+  assert.match(dedicatedFormalJob, /pnpm check:ci:formal/u)
+  assert.match(stressedFormalJob, /pnpm check:ci:formal/u)
+  assert.equal((workflow.match(/pnpm check:ci:formal/gu) ?? []).length, 2)
+  assert.match(dedicatedFormalJob, /DALPH_FORMAL_PROFILE_KIND: dedicated/u)
+  assert.match(dedicatedFormalJob, /DALPH_FORMAL_RUNNER_LABEL: ubuntu-24\.04-arm/u)
+  assert.doesNotMatch(dedicatedFormalJob, /taskset/u)
+  assert.match(stressedFormalJob, /DALPH_FORMAL_PROFILE_KIND: stressed/u)
+  assert.match(stressedFormalJob, /DALPH_FORMAL_STRESS_CPU_LIST: 0-1/u)
+  assert.match(
+    stressedFormalJob,
+    /taskset --cpu-list "\$DALPH_FORMAL_STRESS_CPU_LIST" pnpm check:ci:formal 2>&1 \| tee/u
+  )
+  assert.match(stressedFormalJob, /test "\$host_parallelism" -gt "\$effective_parallelism"/u)
+  assert.match(stressedFormalJob, /test "\$effective_parallelism" -eq 2/u)
   assert.match(workflow, /upload-artifact@v4/u)
   assert.match(workflow, /needs:\s*\[formal-dedicated, formal-stressed\]/u)
   assert.match(workflow, /Resolve current formal job provenance[\s\S]*?GITHUB_TOKEN: \$\{\{ github\.token \}\}/u)
@@ -70,6 +88,7 @@ test("provider credentials occur only on the one live command and artifacts uplo
   assert.match(workflow, /Run one protected live qualification[\s\S]*?DALPH_LIVE_CODEX_PROVIDER_CREDENTIAL/u)
   assert.doesNotMatch(workflow, /Run one protected live qualification[\s\S]*?^\s+GITHUB_TOKEN:/mu)
   assert.match(workflow, /Upload redacted qualification outputs[\s\S]*?if: always\(\)/u)
+  assert.match(workflow, /qualification\.json\.pre-cleanup/u)
   assert.doesNotMatch(workflow, /retry:/u)
   assert.doesNotMatch(workflow, /continue-on-error:/u)
   assert.doesNotMatch(ciWorkflow, /production-live|qualify:production-live/u)

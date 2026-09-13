@@ -1,12 +1,21 @@
 import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { AttemptId, EvidenceDigest, GitCommitSha, RunId, TaskId } from "@dalph/contracts"
-import { GithubIssueNodeId, GithubLabelNodeId, GithubRepositoryNodeId, JournalPosition } from "@dalph/orchestrator"
+import { AttemptId, EvidenceDigest, GitCommitSha, IntegrationTargetRef, RunId, TaskId } from "@dalph/contracts"
+import {
+  GithubIssueNodeId,
+  GithubLabelNodeId,
+  GithubRepositoryNodeId,
+  IntegratorRunOrdinal,
+  IntegratorSessionId,
+  JournalPosition,
+  TargetPromotionRequestId
+} from "@dalph/orchestrator"
 import { Effect, FileSystem, Schema } from "effect"
 import { expect } from "vitest"
 import {
   makeProductionLiveQualificationEvidence,
   ProductionLiveQualificationEvidence,
+  captureProductionLiveQualificationPreCleanupEvidence,
   publishProductionLiveQualificationEvidence,
   qualificationFailed
 } from "../src/qualification/live-qualification-evidence.js"
@@ -16,6 +25,7 @@ import {
   qualificationTranscriptDigest
 } from "../src/qualification/qualification-artifact.js"
 import { QualificationFormalProvenance } from "../src/qualification/qualification-provenance.js"
+import { CodexProcessIdentity } from "../src/application/codex-attempt-store.js"
 
 const sha = (digit: string) => GitCommitSha.make(digit.repeat(40))
 const digest = (digit: string) => EvidenceDigest.make(digit.repeat(64))
@@ -29,11 +39,16 @@ const attemptId = AttemptId.make("live-attempt")
 const repositoryNodeId = GithubRepositoryNodeId.make("live-repository")
 const issueNodeId = GithubIssueNodeId.make("live-issue")
 const labelNodeId = GithubLabelNodeId.make("live-label")
+const targetRef = IntegrationTargetRef.make("refs/heads/master")
+const sessionId = IntegratorSessionId.make("live-integration")
+const runOrdinal = IntegratorRunOrdinal.make(1)
+const promotionRequestId = TargetPromotionRequestId.make("live-promotion")
+const applicationServerIdentity = CodexProcessIdentity.make("linux:307:pid:730")
 
-const formalProfile = (jobId: number) => ({
+const formalProfileFields = (jobId: number) => ({
   sourceSha,
   nodeVersion: "24.20.0",
-  job: { workflow: "Candidate qualification" as const, runId: 71, jobId },
+  job: { workflow: "Production live qualification" as const, runId: 71, jobId },
   logDigest: digest(String(jobId % 10)),
   setupInstallSeconds: 10,
   formalSeconds: 105,
@@ -43,20 +58,35 @@ const formalProfile = (jobId: number) => ({
   commands: [],
   negativeControls: ["collected temporal mutant"] as const
 })
+const dedicatedFormalProfile = (jobId: number) => ({
+  profileKind: "dedicated" as const,
+  condition: {
+    kind: "dedicated-hosted-job" as const,
+    runnerLabel: "ubuntu-24.04-arm" as const,
+    effectiveParallelism: 4
+  },
+  ...formalProfileFields(jobId)
+})
+const stressedFormalProfile = (jobId: number) => ({
+  profileKind: "stressed" as const,
+  condition: {
+    kind: "cpu-affinity" as const,
+    runnerLabel: "ubuntu-latest" as const,
+    cpuList: "0-1" as const,
+    hostParallelism: 4,
+    effectiveParallelism: 2 as const
+  },
+  ...formalProfileFields(jobId)
+})
 
 const validInput = Effect.fn("LiveEvidenceTest.validInput")(function* () {
   const records = [
     { _tag: "RunSelected" as const, runId, selection: "Allocated" as const, version: 1 as const },
-    { _tag: "RunDisposition" as const, runId, disposition: "Completed" as const, version: 1 as const },
-    {
-      _tag: "ApplicationExitDisposition" as const,
-      runId,
-      disposition: { _tag: "Succeeded" as const, requestedStatus: 0 as const },
-      version: 1 as const
-    }
+    { _tag: "RunDisposition" as const, runId, disposition: "Completed" as const, version: 1 as const }
   ]
   return {
     schemaVersion: 1,
+    artifactStage: "Final",
     mode: "Live",
     invocationId: "live-Q",
     build: {
@@ -78,10 +108,15 @@ const validInput = Effect.fn("LiveEvidenceTest.validInput")(function* () {
       protectedEnvironment: "production-live-qualification"
     },
     formal: QualificationFormalProvenance.cases.DedicatedAndStressed.make({
-      dedicated: formalProfile(72),
-      stressed: formalProfile(73)
+      dedicated: dedicatedFormalProfile(72),
+      stressed: stressedFormalProfile(73)
     }),
     fixture: { repositoryNodeId, issueNodeId, labelNodeIds: [labelNodeId] },
+    composition: {
+      applicationServerProcessIdentities: [applicationServerIdentity],
+      taskWorktreeCount: 1,
+      integrationTargetCount: 1
+    },
     delivery: {
       runId,
       taskId,
@@ -91,6 +126,9 @@ const validInput = Effect.fn("LiveEvidenceTest.validInput")(function* () {
       acceptedEvidence: { digest: digest("7"), byteLength: 91 },
       candidateCommit: m,
       candidateParents: [h, c],
+      targetRef,
+      integration: { sessionId, runOrdinal },
+      promotionRequestId,
       initialTargetCommit: h,
       finalTargetCommit: m
     },
@@ -98,28 +136,38 @@ const validInput = Effect.fn("LiveEvidenceTest.validInput")(function* () {
       positions: [JournalPosition.make(1), JournalPosition.make(2)],
       occurrences: [
         "RunSelected",
+        "ClaimAcquired",
         "AttemptPlanned",
         "ExecutorAccepted",
+        "IntegrationStarted",
         "CandidateQualified",
         "TargetPromoted",
         "TaskCompleted",
+        "ClaimsReleased",
         "RunCompleted"
       ]
     },
     boundaryCalls: [
       { tag: "TaskTracker", count: 1 },
+      { tag: "Git", count: 4 },
+      { tag: "Journal", count: 30 },
+      { tag: "EvidenceStore", count: 1 },
       { tag: "Executor", count: 1 },
       { tag: "Integrator", count: 1 },
       { tag: "TargetPromotion", count: 1 },
-      { tag: "ApplicationExit", count: 1 }
+      { tag: "TaskCompletion", count: 1 },
+      { tag: "PublicOutput", count: 2 },
+      { tag: "Responses", count: 4 },
+      { tag: "Process", count: 1 }
     ],
     publicRecords: { values: records, digest: yield* qualificationTranscriptDigest(records) },
     final: {
       tracker: { lifecycle: "Completed", claims: [] },
       run: { runId, disposition: "Completed" },
-      application: { disposition: "Succeeded", status: 0 }
+      process: { status: 0 }
     },
     cleanup: {
+      _tag: "Completed",
       github: {
         removedIssueNodeId: issueNodeId,
         resolvedLabels: [{ _tag: "AlreadyAbsent", nodeId: labelNodeId }],
@@ -137,7 +185,11 @@ it.effect("Alice can qualify only exact version-one live evidence with no privat
     expect(evidence.mode).toBe("Live")
     expect(evidence.schemaVersion).toBe(1)
     expect(evidence.delivery).toEqual(input.delivery)
-    expect(JSON.stringify(evidence)).not.toMatch(/thread|session|worktree|candidateResource|privateStore/u)
+    expect(evidence.delivery).toMatchObject({ targetRef, integration: { sessionId, runOrdinal }, promotionRequestId })
+    expect(evidence.journal.occurrences).toEqual(input.journal.occurrences)
+    expect(evidence.boundaryCalls).toEqual(input.boundaryCalls)
+    expect(evidence.publicRecords.values.every(({ _tag }) => _tag !== "ApplicationExitDisposition")).toBe(true)
+    expect(JSON.stringify(evidence)).not.toMatch(/thread|worktree|candidateResource|privateStore/u)
     const rejected = yield* makeProductionLiveQualificationEvidence({
       ...input,
       privateStore: "/home/alice/private.json",
@@ -181,7 +233,7 @@ it.effect("Alice receives only same-source protected hosted and required dedicat
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
-it.effect("Alice's H C M and final target are accepted only with exact causal equality", () =>
+it.effect("Alice's exact H C M T and branded integration and promotion identities survive validation", () =>
   Effect.gen(function* () {
     const input = yield* validInput()
     for (const delivery of [
@@ -201,10 +253,30 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const input = yield* validInput()
+      const applicationExitRecords = [
+        ...input.publicRecords.values,
+        {
+          _tag: "ApplicationExitDisposition" as const,
+          runId,
+          disposition: { _tag: "Succeeded" as const, requestedStatus: 0 as const },
+          version: 1 as const
+        }
+      ]
       const invalid = [
         { ...input, final: { ...input.final, tracker: { lifecycle: "Completed", claims: ["claim"] } } },
         { ...input, final: { ...input.final, run: { runId, disposition: "Blocked" } } },
-        { ...input, final: { ...input.final, application: { disposition: "Failed", status: 1 } } },
+        { ...input, final: { ...input.final, process: { status: 1 } } },
+        {
+          ...input,
+          composition: {
+            ...input.composition,
+            applicationServerProcessIdentities: [
+              applicationServerIdentity,
+              CodexProcessIdentity.make("linux:308:pid:731")
+            ]
+          }
+        },
+        { ...input, composition: { ...input.composition, applicationServerProcessIdentities: [] } },
         {
           ...input,
           publicRecords: {
@@ -212,6 +284,13 @@ it.effect(
             values: [
               { _tag: "Failure", version: 1, code: "configuration.invalid", detail: "secret", subject: "secret" }
             ]
+          }
+        },
+        {
+          ...input,
+          publicRecords: {
+            values: applicationExitRecords,
+            digest: yield* qualificationTranscriptDigest(applicationExitRecords)
           }
         },
         { ...input, publicRecords: { ...input.publicRecords, digest: digest("0") } },
@@ -253,6 +332,35 @@ it.effect("Alice receives one write-once artifact outside Q only after the compl
         (yield* publishProductionLiveQualificationEvidence(container, inside, input).pipe(Effect.flip)).phase
       ).toBe("Publication")
       expect(yield* fs.exists(inside)).toBe(false)
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer), Effect.provide(NodeServices.layer))
+)
+
+it.effect("pre-cleanup evidence survives a final-artifact publication failure without claiming cleanup", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-live-two-phase-" })
+      const container = QualificationPublicationContainer.make(`${root}/Q`)
+      yield* fs.makeDirectory(container)
+      const preCleanup = QualificationArtifactLocator.make(`${root}/live.pre-cleanup.json`)
+      const final = QualificationArtifactLocator.make(`${root}/live.json`)
+      const input = yield* validInput()
+      const captured = yield* captureProductionLiveQualificationPreCleanupEvidence(container, preCleanup, {
+        ...input,
+        artifactStage: "PreCleanup",
+        cleanup: { _tag: "Pending" }
+      })
+      expect(captured.evidence.cleanup).toEqual({ _tag: "Pending" })
+      yield* fs.writeFileString(final, "occupied\n")
+      expect((yield* publishProductionLiveQualificationEvidence(container, final, input).pipe(Effect.flip)).phase).toBe(
+        "Publication"
+      )
+      expect(yield* fs.exists(preCleanup)).toBe(true)
+      expect(JSON.parse(yield* fs.readFileString(preCleanup))).toMatchObject({
+        artifactStage: "PreCleanup",
+        cleanup: { _tag: "Pending" }
+      })
     })
   ).pipe(Effect.provide(NodeCrypto.layer), Effect.provide(NodeServices.layer))
 )

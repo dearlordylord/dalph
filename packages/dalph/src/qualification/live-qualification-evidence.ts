@@ -1,6 +1,23 @@
-import { AttemptId, EvidenceDigest, EvidenceReference, GitCommitSha, RunId, TaskId } from "@dalph/contracts"
-import { GithubIssueNodeId, GithubLabelNodeId, GithubRepositoryNodeId, JournalPosition } from "@dalph/orchestrator"
+import {
+  AttemptId,
+  EvidenceDigest,
+  EvidenceReference,
+  GitCommitSha,
+  IntegrationTargetRef,
+  RunId,
+  TaskId
+} from "@dalph/contracts"
+import {
+  GithubIssueNodeId,
+  GithubLabelNodeId,
+  GithubRepositoryNodeId,
+  IntegratorRunOrdinal,
+  IntegratorSessionId,
+  JournalPosition,
+  TargetPromotionRequestId
+} from "@dalph/orchestrator"
 import { Effect, HashSet, Schema, type Crypto, type FileSystem } from "effect"
+import { CodexProcessIdentity } from "../application/codex-attempt-store.js"
 import { ProductionCliRecord } from "../application/production-cli.js"
 import {
   qualificationTranscriptDigest,
@@ -31,7 +48,7 @@ const GithubActionsHostedProvenance = Schema.Struct({
   protectedEnvironment: GithubProtectedEnvironmentName
 })
 
-const LiveQualificationOccurrenceTag = Schema.Literals([
+const liveQualificationOccurrenceTags = [
   "RunSelected",
   "ClaimAcquired",
   "AttemptPlanned",
@@ -41,11 +58,11 @@ const LiveQualificationOccurrenceTag = Schema.Literals([
   "TargetPromoted",
   "TaskCompleted",
   "ClaimsReleased",
-  "RunCompleted",
-  "ApplicationExited"
-])
+  "RunCompleted"
+] as const
+const LiveQualificationOccurrenceTag = Schema.Literals(liveQualificationOccurrenceTags)
 
-const LiveQualificationBoundaryTag = Schema.Literals([
+const liveQualificationBoundaryTags = [
   "TaskTracker",
   "Git",
   "Journal",
@@ -54,8 +71,11 @@ const LiveQualificationBoundaryTag = Schema.Literals([
   "Integrator",
   "TargetPromotion",
   "TaskCompletion",
-  "ApplicationExit"
-])
+  "PublicOutput",
+  "Responses",
+  "Process"
+] as const
+const LiveQualificationBoundaryTag = Schema.Literals(liveQualificationBoundaryTags)
 
 const uniqueBy = <A>(values: ReadonlyArray<A>, key: (value: A) => string): boolean => {
   let keys = HashSet.empty<string>()
@@ -71,9 +91,20 @@ const UniqueLabelNodeIds = Schema.NonEmptyArray(GithubLabelNodeId).check(
   Schema.makeFilter((ids) => (uniqueBy(ids, String) ? undefined : "label node IDs must be unique"))
 )
 
-const NonFailureProductionCliRecord = ProductionCliRecord.check(
+const NormalRunProductionCliRecord = ProductionCliRecord.check(
   Schema.makeFilter((record) =>
-    record._tag === "Failure" ? "live qualification evidence cannot contain a failure record" : undefined
+    record._tag === "Failure" || record._tag === "ApplicationExitDisposition"
+      ? "normal Run qualification evidence cannot contain failure or application Exit records"
+      : undefined
+  )
+)
+
+const ExactLiveQualificationOccurrences = Schema.NonEmptyArray(LiveQualificationOccurrenceTag).check(
+  Schema.makeFilter((occurrences) =>
+    occurrences.length === liveQualificationOccurrenceTags.length &&
+    occurrences.every((tag, index) => tag === liveQualificationOccurrenceTags[index])
+      ? undefined
+      : "live qualification occurrences must be the exact observed normal-Run chronology"
   )
 )
 
@@ -86,6 +117,9 @@ const DeliveryEvidence = Schema.Struct({
   acceptedEvidence: EvidenceReference,
   candidateCommit: GitCommitSha,
   candidateParents: Schema.Tuple([GitCommitSha, GitCommitSha]),
+  targetRef: IntegrationTargetRef,
+  integration: Schema.Struct({ sessionId: IntegratorSessionId, runOrdinal: IntegratorRunOrdinal }),
+  promotionRequestId: TargetPromotionRequestId,
   initialTargetCommit: GitCommitSha,
   finalTargetCommit: GitCommitSha
 }).check(
@@ -102,7 +136,21 @@ const DeliveryEvidence = Schema.Struct({
 const BoundaryCalls = Schema.NonEmptyArray(
   Schema.Struct({ tag: LiveQualificationBoundaryTag, count: Schema.Int.check(Schema.isGreaterThan(0)) })
 ).check(
-  Schema.makeFilter((calls) => (uniqueBy(calls, ({ tag }) => tag) ? undefined : "boundary call tags must be unique"))
+  Schema.makeFilter((calls) =>
+    uniqueBy(calls, ({ tag }) => tag) &&
+    calls.length === liveQualificationBoundaryTags.length &&
+    liveQualificationBoundaryTags.every((tag) => calls.some((call) => call.tag === tag))
+      ? undefined
+      : "boundary call tags must contain every exact observed source once"
+  )
+)
+
+export const LiveCodexAppServerProcessIdentity = CodexProcessIdentity.check(
+  Schema.makeFilter((identity) =>
+    /^linux:\d+:pid:\d+$/u.test(identity)
+      ? undefined
+      : "live Codex app-server identity must contain the observed Linux start time and pid"
+  )
 )
 
 const ResolvedLabel = Schema.TaggedUnion({
@@ -123,13 +171,17 @@ const SuccessfulCleanup = Schema.Struct({
   })
 })
 
+const QualificationArtifactStage = Schema.Literals(["PreCleanup", "Final"])
+const QualificationCleanup = Schema.TaggedUnion({ Pending: {}, Completed: SuccessfulCleanup.fields })
+
 /**
  * Safe success evidence for the single protected live journey. It deliberately
- * contains no worktree, candidate-resource, session, thread, configuration,
- * environment, provider-response, prompt, or private-store representation.
+ * contains no worktree, candidate-resource, provider-private session/thread,
+ * configuration, environment, provider-response, prompt, or private-store representation.
  */
 export const ProductionLiveQualificationEvidence = Schema.Struct({
   schemaVersion: Schema.Literal(1),
+  artifactStage: QualificationArtifactStage,
   mode: Schema.Literal("Live"),
   invocationId: LiveQualificationInvocationId,
   build: QualificationBuild,
@@ -140,19 +192,24 @@ export const ProductionLiveQualificationEvidence = Schema.Struct({
     issueNodeId: GithubIssueNodeId,
     labelNodeIds: UniqueLabelNodeIds
   }),
+  composition: Schema.Struct({
+    applicationServerProcessIdentities: Schema.NonEmptyArray(LiveCodexAppServerProcessIdentity),
+    taskWorktreeCount: Schema.Literal(1),
+    integrationTargetCount: Schema.Literal(1)
+  }),
   delivery: DeliveryEvidence,
   journal: Schema.Struct({
     positions: Schema.NonEmptyArray(JournalPosition),
-    occurrences: Schema.NonEmptyArray(LiveQualificationOccurrenceTag)
+    occurrences: ExactLiveQualificationOccurrences
   }),
   boundaryCalls: BoundaryCalls,
-  publicRecords: Schema.Struct({ values: Schema.NonEmptyArray(NonFailureProductionCliRecord), digest: EvidenceDigest }),
+  publicRecords: Schema.Struct({ values: Schema.NonEmptyArray(NormalRunProductionCliRecord), digest: EvidenceDigest }),
   final: Schema.Struct({
     tracker: Schema.Struct({ lifecycle: Schema.Literal("Completed"), claims: Schema.Tuple([]) }),
     run: Schema.Struct({ runId: RunId, disposition: Schema.Literal("Completed") }),
-    application: Schema.Struct({ disposition: Schema.Literal("Succeeded"), status: Schema.Literal(0) })
+    process: Schema.Struct({ status: Schema.Literal(0) })
   }),
-  cleanup: SuccessfulCleanup
+  cleanup: QualificationCleanup
 }).check(
   Schema.makeFilter((evidence) => {
     if (
@@ -166,6 +223,21 @@ export const ProductionLiveQualificationEvidence = Schema.Struct({
     if (evidence.final.run.runId !== evidence.delivery.runId) {
       return "live qualification finality must belong to the delivered Run"
     }
+    if (evidence.composition.applicationServerProcessIdentities.length !== 1) {
+      return "live qualification must observe exactly one Codex app-server process identity"
+    }
+    const publicOutput = evidence.boundaryCalls.find(({ tag }) => tag === "PublicOutput")
+    const process = evidence.boundaryCalls.find(({ tag }) => tag === "Process")
+    if (publicOutput?.count !== evidence.publicRecords.values.length || process?.count !== 1) {
+      return "public-output and process counts must match the observed transcript and one child exit"
+    }
+    if (
+      (evidence.artifactStage === "PreCleanup" && evidence.cleanup._tag !== "Pending") ||
+      (evidence.artifactStage === "Final" && evidence.cleanup._tag !== "Completed")
+    ) {
+      return "live qualification artifact stage must agree with observed cleanup"
+    }
+    if (evidence.cleanup._tag === "Pending") return undefined
     if (evidence.cleanup.github.removedIssueNodeId !== evidence.fixture.issueNodeId) {
       return "live qualification cleanup must remove the exact fixture issue"
     }
@@ -257,6 +329,7 @@ export const publishProductionLiveQualificationEvidence: (
   input: unknown
 ) {
   const evidence = yield* makeProductionLiveQualificationEvidence(input)
+  if (evidence.artifactStage !== "Final") return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
   const encoded = yield* Schema.encodeUnknownEffect(ProductionLiveQualificationEvidence)(evidence).pipe(
     Effect.mapError(() => qualificationFailed("EvidenceValidation"))
   )
@@ -264,4 +337,29 @@ export const publishProductionLiveQualificationEvidence: (
     Effect.mapError(() => qualificationFailed("Publication"))
   )
   return { _tag: "Qualified" as const, evidence, artifact: locator }
+})
+
+/** Captures immutable evidence outside Q before any destructive fixture cleanup is authorized. */
+export const captureProductionLiveQualificationPreCleanupEvidence: (
+  container: QualificationPublicationContainer,
+  locator: QualificationArtifactLocator,
+  input: unknown
+) => Effect.Effect<
+  { readonly evidence: ProductionLiveQualificationEvidence; readonly artifact: QualificationArtifactLocator },
+  QualificationFailed,
+  Crypto.Crypto | FileSystem.FileSystem
+> = Effect.fn("LiveQualification.capturePreCleanupEvidence")(function* (
+  container: QualificationPublicationContainer,
+  locator: QualificationArtifactLocator,
+  input: unknown
+) {
+  const evidence = yield* makeProductionLiveQualificationEvidence(input)
+  if (evidence.artifactStage !== "PreCleanup") return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
+  const encoded = yield* Schema.encodeUnknownEffect(ProductionLiveQualificationEvidence)(evidence).pipe(
+    Effect.mapError(() => qualificationFailed("EvidenceValidation"))
+  )
+  yield* writeQualificationArtifact(container, locator, JSON.stringify(encoded)).pipe(
+    Effect.mapError(() => qualificationFailed("Publication"))
+  )
+  return { evidence, artifact: locator }
 })

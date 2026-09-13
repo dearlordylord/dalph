@@ -1,9 +1,10 @@
 /* eslint-disable import/no-nodejs-modules -- The protected qualification owns one loopback model endpoint. */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import type { Socket } from "node:net"
+import nodePath from "node:path"
+import { GitCommitSha } from "@dalph/contracts"
 import { Effect, Ref, Schema } from "effect"
 
-const CommitShaText = Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/u))
 const baseUrlPattern = /^http:\/\/127\.0\.0\.1:\d+\/v1$/u
 const secondTurn = 2
 const successStatus = 200
@@ -15,6 +16,22 @@ export class ProductionLiveResponsesEndpointFailure extends Schema.TaggedError<P
   { operation: Schema.Literals(["Listen", "ReadRequest", "Request", "ReadHead", "Close"]) }
 ) {}
 
+/** Locates one canonical worktree named by the executor or Integrator prompt. */
+export const ProductionLiveResponsesWorktreeLocator = Schema.NonEmptyString.check(
+  Schema.makeFilter((value) =>
+    nodePath.isAbsolute(value) && nodePath.normalize(value) === value
+      ? undefined
+      : "Responses worktree locator must be normalized and absolute"
+  )
+).pipe(Schema.brand("ProductionLiveResponsesWorktreeLocator"))
+export type ProductionLiveResponsesWorktreeLocator = typeof ProductionLiveResponsesWorktreeLocator.Type
+
+/** Locates the one loopback-only Responses API owned by the qualification scope. */
+export const ProductionLiveResponsesEndpointLocator = Schema.String.check(
+  Schema.makeFilter((value) => (baseUrlPattern.test(value) ? undefined : "Responses endpoint must be loopback-only"))
+).pipe(Schema.brand("ProductionLiveResponsesEndpointLocator"))
+export type ProductionLiveResponsesEndpointLocator = typeof ProductionLiveResponsesEndpointLocator.Type
+
 export interface ProductionLiveResponsesCounts {
   readonly executor: number
   readonly integrator: number
@@ -22,7 +39,7 @@ export interface ProductionLiveResponsesCounts {
 }
 
 export interface ProductionLiveResponsesEndpoint {
-  readonly baseUrl: string
+  readonly baseUrl: ProductionLiveResponsesEndpointLocator
   readonly counts: () => ProductionLiveResponsesCounts
 }
 
@@ -45,7 +62,7 @@ const responseCompleted = (id: string) => ({
   type: "response.completed",
   response: { id, usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } }
 })
-const functionCall = (id: string, command: string, workdir: string) => ({
+const functionCall = (id: string, command: string, workdir: ProductionLiveResponsesWorktreeLocator) => ({
   type: "response.output_item.done",
   item: {
     type: "function_call",
@@ -106,11 +123,11 @@ const send = (response: ServerResponse, id: string, item: unknown) => {
  * Starts one Q-scoped Responses endpoint. It retains counts only; prompts,
  * tool output, provider response bodies, thread IDs and turn IDs are discarded.
  */
-export const makeProductionLiveResponsesEndpoint = Effect.fn("ProductionLiveResponsesEndpoint.make")(function* (
-  readHead: (worktree: string) => Effect.Effect<string, unknown>
+export const makeProductionLiveResponsesEndpoint = Effect.fn("ProductionLiveResponsesEndpoint.make")(function* <E, R>(
+  readHead: (worktree: ProductionLiveResponsesWorktreeLocator) => Effect.Effect<string, E, R>
 ) {
   const counts = yield* Ref.make({ executor: 0, integrator: 0, total: 0 })
-  const context = yield* Effect.context<never>()
+  const context = yield* Effect.context<R>()
   const runPromise = Effect.runPromiseWith(context)
   const sockets = new Set<Socket>()
   const server = createServer((request, response) => {
@@ -125,14 +142,15 @@ export const makeProductionLiveResponsesEndpoint = Effect.fn("ProductionLiveResp
         const input = yield* readRequest(request)
         const prompt = promptOf(input)
         if (prompt === undefined) return yield* new ProductionLiveResponsesEndpointFailure({ operation: "Request" })
+        const worktree = yield* Schema.decodeUnknownEffect(ProductionLiveResponsesWorktreeLocator)(
+          lineValue(prompt.text, prompt.kind === "Executor" ? "worktree" : "Candidate worktree")
+        ).pipe(Effect.mapError(() => new ProductionLiveResponsesEndpointFailure({ operation: "Request" })))
         const ordinal = yield* Ref.modify(counts, (current) => {
           const field = prompt.kind === "Executor" ? "executor" : "integrator"
           const next = { ...current, [field]: current[field] + 1, total: current.total + 1 }
           return [next[field], next] as const
         })
         const id = `${prompt.kind.toLowerCase()}-${ordinal}`
-        const worktree = lineValue(prompt.text, prompt.kind === "Executor" ? "worktree" : "Candidate worktree")
-        if (worktree === undefined) return yield* new ProductionLiveResponsesEndpointFailure({ operation: "Request" })
         if (ordinal === 1) {
           if (prompt.kind === "Executor") {
             send(
@@ -147,7 +165,7 @@ export const makeProductionLiveResponsesEndpoint = Effect.fn("ProductionLiveResp
             return
           }
           const accepted = lineValue(prompt.text, "Accepted commit C")
-          const commit = yield* Schema.decodeUnknownEffect(CommitShaText)(accepted).pipe(
+          const commit = yield* Schema.decodeUnknownEffect(GitCommitSha)(accepted).pipe(
             Effect.mapError(() => new ProductionLiveResponsesEndpointFailure({ operation: "Request" }))
           )
           send(
@@ -159,7 +177,7 @@ export const makeProductionLiveResponsesEndpoint = Effect.fn("ProductionLiveResp
         }
         if (ordinal !== secondTurn) return yield* new ProductionLiveResponsesEndpointFailure({ operation: "Request" })
         const head = yield* readHead(worktree).pipe(
-          Effect.flatMap(Schema.decodeUnknownEffect(CommitShaText)),
+          Effect.flatMap(Schema.decodeUnknownEffect(GitCommitSha)),
           Effect.mapError(() => new ProductionLiveResponsesEndpointFailure({ operation: "ReadHead" }))
         )
         if (prompt.kind === "Integrator") {
@@ -188,14 +206,14 @@ export const makeProductionLiveResponsesEndpoint = Effect.fn("ProductionLiveResp
   const baseUrl = yield* Effect.acquireRelease(
     Effect.tryPromise({
       try: () =>
-        new Promise<string>((resolve, reject) => {
+        new Promise<ProductionLiveResponsesEndpointLocator>((resolve, reject) => {
           server.once("error", reject)
           server.listen(0, "127.0.0.1", () => {
             const address = server.address()
             if (address === null || typeof address === "string") return reject(new Error("missing loopback address"))
             const selected = `http://127.0.0.1:${address.port}/v1`
             if (!baseUrlPattern.test(selected)) return reject(new Error("invalid loopback address"))
-            resolve(selected)
+            resolve(ProductionLiveResponsesEndpointLocator.make(selected))
           })
         }),
       catch: () => new ProductionLiveResponsesEndpointFailure({ operation: "Listen" })

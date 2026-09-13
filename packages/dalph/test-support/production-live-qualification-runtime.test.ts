@@ -5,7 +5,8 @@ import { describe, expect, it } from "vitest"
 import {
   createProductionLiveLocalFixture,
   decodeProductionLiveQualificationManifest,
-  productionLiveQualificationChronologyIsExact
+  productionLiveQualificationChronologyIsExact,
+  writeProductionLiveQualificationFailureRetentionReport
 } from "../src/qualification/live-qualification-runtime.js"
 
 const layer = nodeGitCommandLayer.pipe(Layer.provideMerge(NodeServices.layer), Layer.merge(NodeCrypto.layer))
@@ -33,9 +34,11 @@ const input = {
   formal: {
     _tag: "DedicatedAndStressed",
     dedicated: {
+      profileKind: "dedicated",
+      condition: { kind: "dedicated-hosted-job", runnerLabel: "ubuntu-24.04-arm", effectiveParallelism: 4 },
       sourceSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       nodeVersion: "24.20.0",
-      job: { workflow: "CI", runId: 1, jobId: 1 },
+      job: { workflow: "Production live qualification", runId: 1, jobId: 1 },
       logDigest: "0".repeat(64),
       setupInstallSeconds: 1,
       formalSeconds: 1,
@@ -46,9 +49,17 @@ const input = {
       negativeControls: ["negative"]
     },
     stressed: {
+      profileKind: "stressed",
+      condition: {
+        kind: "cpu-affinity",
+        runnerLabel: "ubuntu-latest",
+        cpuList: "0-1",
+        hostParallelism: 4,
+        effectiveParallelism: 2
+      },
       sourceSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       nodeVersion: "24.20.0",
-      job: { workflow: "CI", runId: 1, jobId: 2 },
+      job: { workflow: "Production live qualification", runId: 1, jobId: 2 },
       logDigest: "1".repeat(64),
       setupInstallSeconds: 1,
       formalSeconds: 1,
@@ -118,6 +129,12 @@ describe("#307 production live qualification runtime", () => {
         expect(yield* fs.readFileString(`${fixture.configuration.codexStateDirectory}/config.toml`)).toContain(
           'base_url = "http://127.0.0.1:4307/v1"'
         )
+        expect(fixture.configuration.codexExecutable).not.toBe(input.codexExecutable)
+        expect(yield* fs.readFileString(fixture.configuration.codexExecutable)).toContain(
+          `exec '${input.codexExecutable}' "$@"`
+        )
+        expect(yield* fs.readFileString(fixture.configuration.codexExecutable)).toContain('test "${1-}" = "app-server"')
+        expect(yield* fs.readFileString(fixture.applicationServerObservationPath)).toBe("")
         const document = yield* fs.readFileString(fixture.configurationPath)
         expect(document).not.toContain("github-secret")
         expect(document).not.toContain("provider-secret")
@@ -148,6 +165,50 @@ describe("#307 production live qualification runtime", () => {
         if (observedContainer !== undefined)
           yield* (yield* FileSystem.FileSystem).remove(observedContainer, { recursive: true })
       }).pipe(Effect.provide(layer))
+    )
+  })
+
+  it("an unfinished recoverable Run retains every exact local locator for manual cleanup", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const output = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-live-retention-" })
+          const publicationContainer = `${output}/Q`
+          yield* fs.makeDirectory(publicationContainer)
+          const manifest = yield* decodeProductionLiveQualificationManifest({
+            ...input,
+            publicationContainer,
+            artifact: `${output}/evidence.json`,
+            retentionReport: `${publicationContainer}/retained-locators.json`
+          })
+          const fixture = yield* createProductionLiveLocalFixture(
+            manifest,
+            { owner: "dalph-live", repository: "qualification", issueNumber: 307 },
+            "http://127.0.0.1:4307/v1",
+            "http://127.0.0.1:4308/graphql",
+            Redacted.make("github-secret"),
+            Redacted.make("provider-secret")
+          )
+          yield* writeProductionLiveQualificationFailureRetentionReport(
+            manifest,
+            "Execution",
+            undefined,
+            undefined,
+            fixture,
+            undefined,
+            {}
+          )
+          const report = JSON.parse(yield* fs.readFileString(manifest.retentionReport)) as {
+            readonly local: ReadonlyArray<{ readonly locator: string; readonly disposition: string }>
+          }
+          expect(report.local).toHaveLength(fixture.localManifest.resources.length + 1)
+          expect(report.local.every(({ disposition }) => disposition === "Retained")).toBe(true)
+          expect(report.local.map(({ locator }) => locator)).toContain(fixture.localManifest.container.locator)
+          expect(yield* fs.exists(fixture.configuration.repository)).toBe(true)
+          yield* fs.remove(fixture.localManifest.container.locator, { recursive: true })
+        })
+      ).pipe(Effect.provide(layer))
     )
   })
 })

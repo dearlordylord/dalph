@@ -1,8 +1,8 @@
 /* eslint-disable import/no-nodejs-modules -- The focused test compares the exact Node executable. */
 import nodeProcess from "node:process"
-import { RunId } from "@dalph/contracts"
+import { GitCommitSha, RunId } from "@dalph/contracts"
 import { GithubIssueNumber, GithubIssueTarget, GithubRepositoryName, GithubRepositoryOwner } from "@dalph/orchestrator"
-import { Effect, MutableList, Redacted, Stream } from "effect"
+import { Effect, MutableList, Redacted, Schema, Stream } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   encodeProductionCliRecord,
@@ -10,16 +10,21 @@ import {
   type ProductionCliRecord
 } from "../src/application/production-cli.js"
 import {
+  ProductionLiveBuiltEntry,
+  ProductionLiveChildExecutable,
+  ProductionLiveCodexHome,
+  ProductionLiveQualificationBoundaryFailure,
+  ProductionLiveQualificationProcessId,
   runProductionLiveQualification,
   type ProductionLiveQualificationBoundary,
   type ProductionLiveQualificationFinalFacts
 } from "../src/qualification/live-qualification-controller.js"
 
-const builtEntry = "/workspace/dalph/packages/dalph/dist/bin/dalph.js"
+const builtEntry = ProductionLiveBuiltEntry.make("/workspace/dalph/packages/dalph/dist/bin/dalph.js")
 const configuration = ProductionConfigurationLocator.make("/tmp/dalph-live-q/production.json")
 const invocation = {
   builtEntry,
-  codexHome: "/tmp/dalph-live-q/codex",
+  codexHome: ProductionLiveCodexHome.make("/tmp/dalph-live-q/codex"),
   configuration,
   target: GithubIssueTarget.make({
     owner: GithubRepositoryOwner.make("fixture-owner"),
@@ -51,7 +56,7 @@ const facts: ProductionLiveQualificationFinalFacts = {
   taskWorktreeCount: 1,
   journal: [],
   github: { lifecycle: "Completed", claims: [] },
-  targetHead: "2222222222222222222222222222222222222222"
+  targetHead: GitCommitSha.make("2222222222222222222222222222222222222222")
 }
 
 const boundary = (spawn: ProductionLiveQualificationBoundary["spawn"]): ProductionLiveQualificationBoundary => ({
@@ -68,7 +73,7 @@ describe("#307 production live qualification controller", () => {
         boundary((request) => {
           MutableList.append(requests, request)
           return Effect.succeed({
-            pid: 701,
+            pid: ProductionLiveQualificationProcessId.make(701),
             stdout: Stream.make(encoded(selected, disposition)),
             stderr: Stream.empty,
             exitCode: Effect.succeed(0)
@@ -116,7 +121,7 @@ describe("#307 production live qualification controller", () => {
           boundary(() => {
             spawns += 1
             return Effect.succeed({
-              pid: 702,
+              pid: ProductionLiveQualificationProcessId.make(702),
               stdout: Stream.make(encoded(selected, disposition)),
               stderr: Stream.empty,
               exitCode: Effect.succeed(0)
@@ -150,7 +155,7 @@ describe("#307 production live qualification controller", () => {
         boundary(() => {
           spawns += 1
           return Effect.succeed({
-            pid: 703,
+            pid: ProductionLiveQualificationProcessId.make(703),
             stdout: Stream.make(
               encoded(selected, {
                 _tag: "Failure",
@@ -188,7 +193,7 @@ describe("#307 production live qualification controller", () => {
           boundary(() => {
             spawns += 1
             return Effect.succeed({
-              pid: 704,
+              pid: ProductionLiveQualificationProcessId.make(704),
               stdout: Stream.make(encoded(selected, disposition)),
               stderr: Stream.empty,
               exitCode: Effect.succeed(0)
@@ -204,6 +209,71 @@ describe("#307 production live qualification controller", () => {
       )
       expect(result).toMatchObject({ _tag: "Failed", stage: "ValidateComposition", spawnCount: 1 })
       expect(spawns).toBe(1)
+    }
+  })
+
+  it("rejects malformed child locators and process identities before invocation", () => {
+    expect(Schema.is(ProductionLiveBuiltEntry)("dist/bin/dalph.js")).toBe(false)
+    expect(Schema.is(ProductionLiveBuiltEntry)("/workspace/dalph/../other/dalph.js")).toBe(false)
+    expect(Schema.is(ProductionLiveCodexHome)("relative/codex-home")).toBe(false)
+    expect(Schema.is(ProductionLiveChildExecutable)("node")).toBe(false)
+    expect(Schema.is(ProductionLiveQualificationProcessId)(0)).toBe(false)
+    expect(Schema.is(ProductionLiveQualificationProcessId)(1.5)).toBe(false)
+  })
+
+  it("maps a typed spawn-boundary failure to the exact safe stage", async () => {
+    const result = await Effect.runPromise(
+      runProductionLiveQualification(
+        invocation,
+        boundary(() =>
+          Effect.fail(new ProductionLiveQualificationBoundaryFailure({ operation: "Spawn", reason: "Unavailable" }))
+        ),
+        {
+          validateRecord: () => Effect.void,
+          gatherFinalFacts: () => Effect.succeed(facts),
+          publish: () => Effect.void,
+          retainAfterFailure: () => Effect.void
+        }
+      )
+    )
+
+    expect(result).toEqual({ _tag: "Failed", stage: "Spawn", spawnCount: 1 })
+  })
+
+  it("maps typed child observation failures to their exact safe stages", async () => {
+    for (const expected of [
+      { operation: "ReadStdout" as const, stage: "ReadOutput" as const },
+      { operation: "ReadStderr" as const, stage: "ReadOutput" as const },
+      { operation: "WaitForExit" as const, stage: "Process" as const }
+    ]) {
+      const failure = new ProductionLiveQualificationBoundaryFailure({
+        operation: expected.operation,
+        reason: "Unavailable"
+      })
+      const result = await Effect.runPromise(
+        runProductionLiveQualification(
+          invocation,
+          boundary(() =>
+            Effect.succeed({
+              pid: ProductionLiveQualificationProcessId.make(705),
+              stdout:
+                expected.operation === "ReadStdout"
+                  ? Stream.fail(failure)
+                  : Stream.make(encoded(selected, disposition)),
+              stderr: expected.operation === "ReadStderr" ? Stream.fail(failure) : Stream.empty,
+              exitCode: expected.operation === "WaitForExit" ? Effect.fail(failure) : Effect.succeed(0)
+            })
+          ),
+          {
+            validateRecord: () => Effect.void,
+            gatherFinalFacts: () => Effect.succeed(facts),
+            publish: () => Effect.void,
+            retainAfterFailure: () => Effect.void
+          }
+        )
+      )
+
+      expect(result).toMatchObject({ _tag: "Failed", stage: expected.stage, processId: 705, spawnCount: 1 })
     }
   })
 })

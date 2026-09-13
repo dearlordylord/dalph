@@ -35,7 +35,9 @@ import {
   GithubActionsRunId,
   GithubActionsWorkflowName,
   GithubProtectedEnvironmentName,
+  LiveCodexAppServerProcessIdentity,
   LiveQualificationInvocationId,
+  captureProductionLiveQualificationPreCleanupEvidence,
   publishProductionLiveQualificationEvidence,
   qualificationFailed,
   type QualificationFailed,
@@ -56,6 +58,7 @@ import {
 } from "./live-fixture-cleanup.js"
 import {
   makeProductionLiveQualificationNodeBoundary,
+  ProductionLiveBuiltEntry,
   runProductionLiveQualification,
   type ProductionLiveQualificationCompletion
 } from "./live-qualification-controller.js"
@@ -91,7 +94,7 @@ export const ProductionLiveQualificationManifest = Schema.Struct({
     )
   ),
   sourceBaseSha: GitCommitSha,
-  builtEntry: canonicalAbsolute("built entry"),
+  builtEntry: ProductionLiveBuiltEntry,
   lockfile: canonicalAbsolute("lockfile"),
   codexExecutable: canonicalAbsolute("Codex executable"),
   publicationContainer: QualificationPublicationContainer,
@@ -130,6 +133,7 @@ export interface ProductionLiveLocalFixture {
   readonly configuration: ProductionRepositoryHostConfiguration
   readonly configurationPath: ProductionConfigurationLocator
   readonly initialTargetCommit: GitCommitSha
+  readonly applicationServerObservationPath: string
   readonly localManifest: ProductionLiveLocalFixtureManifest
 }
 
@@ -158,6 +162,20 @@ const codexConfiguration = (baseUrl: string, container: string) =>
     ""
   ].join("\n")
 
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
+
+const codexAppServerObservationWrapper = (codexExecutable: string, observationPath: string) =>
+  [
+    "#!/bin/sh",
+    "set -eu",
+    'test "${1-}" = "app-server"',
+    "test -r /proc/self/stat",
+    "start_identity=$(awk '{ print $22 }' /proc/$$/stat)",
+    `printf 'linux:%s:pid:%s\\n' "$start_identity" "$$" >> ${shellQuote(observationPath)}`,
+    `exec ${shellQuote(codexExecutable)} "$@"`,
+    ""
+  ].join("\n")
+
 /** Creates Q's one local repository and all exact direct-child cleanup receipts. */
 export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualification.createLocalFixture")(function* (
   manifest: ProductionLiveQualificationManifest,
@@ -180,6 +198,8 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
   const evidenceStoreRoot = at("evidence")
   const plannedAttemptWorktreeRoot = at("tasks")
   const codexStateDirectory = at("codex")
+  const codexAppServerObservationPath = nodePath.join(codexStateDirectory, "app-server-processes")
+  const codexAppServerWrapper = nodePath.join(codexStateDirectory, "codex-app-server-observer")
   const integratorCandidateWorktreeRoot = at("candidates")
   const integratorPrivateStore = at("private.json")
   const configurationPath = ProductionConfigurationLocator.make(at("production.json"))
@@ -208,6 +228,12 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
     (locator) => fs.makeDirectory(locator)
   )
   yield* fs.chmod(codexStateDirectory, privateDirectoryMode)
+  yield* fs.writeFileString(codexAppServerObservationPath, "")
+  yield* fs.writeFileString(
+    codexAppServerWrapper,
+    codexAppServerObservationWrapper(manifest.codexExecutable, codexAppServerObservationPath)
+  )
+  yield* fs.chmod(codexAppServerWrapper, privateDirectoryMode)
   yield* fs.writeFileString(journalDatabase, "")
   yield* fs.writeFileString(integratorPrivateStore, "[]\n")
   yield* fs.writeFileString(
@@ -237,7 +263,7 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
     integratorPrivateStore,
     activationInterval: "1 second",
     failureCooldown: "1 second",
-    codexExecutable: manifest.codexExecutable,
+    codexExecutable: codexAppServerWrapper,
     codexClientName: "dalph-live-qualification",
     codexClientVersion: "1",
     codexProvider: "dalph-live-qualification"
@@ -280,7 +306,13 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
     container: { locator: container, identity: yield* captureProductionLiveLocalIdentity(container) },
     resources
   })
-  return { configuration, configurationPath, initialTargetCommit, localManifest } satisfies ProductionLiveLocalFixture
+  return {
+    configuration,
+    configurationPath,
+    initialTargetCommit,
+    applicationServerObservationPath: codexAppServerObservationPath,
+    localManifest
+  } satisfies ProductionLiveLocalFixture
 })
 
 export interface ProductionLiveQualificationSecrets {
@@ -298,8 +330,7 @@ const liveOccurrenceTags = [
   "TargetPromoted",
   "TaskCompleted",
   "ClaimsReleased",
-  "RunCompleted",
-  "ApplicationExited"
+  "RunCompleted"
 ] as const
 
 const eventIndices = (journal: ProductionLiveQualificationCompletion["facts"]["journal"], tag: string) =>
@@ -403,17 +434,33 @@ export const deriveProductionLiveQualificationEvidenceObservations = (
     selectedRunsCompleted: true as const,
     boundaryCalls: [
       { tag: "TaskTracker" as const, count: forwardedGithubRequestCount },
-      { tag: "Git" as const, count: observedGitReads + 1 },
+      { tag: "Git" as const, count: observedGitReads },
       { tag: "Journal" as const, count: journal.length },
       { tag: "EvidenceStore" as const, count: accepted.length },
-      { tag: "Executor" as const, count: final.value.responses.executor },
-      { tag: "Integrator" as const, count: final.value.responses.integrator },
-      { tag: "TargetPromotion" as const, count: eventIndices(journal, "TargetPromotionObservedSuccess").length },
-      { tag: "TaskCompletion" as const, count: eventIndices(journal, "CompletionTaskAcknowledged").length },
-      { tag: "ApplicationExit" as const, count: 1 }
+      { tag: "Executor" as const, count: eventIndices(journal, "PlannedAttemptExecutorCommandIntended").length },
+      { tag: "Integrator" as const, count: eventIndices(journal, "IntegratorRunStarted").length },
+      { tag: "TargetPromotion" as const, count: eventIndices(journal, "TargetPromotionAttemptIntended").length },
+      { tag: "TaskCompletion" as const, count: eventIndices(journal, "CompletionTaskAttemptIntended").length },
+      { tag: "PublicOutput" as const, count: completion.records.length },
+      { tag: "Responses" as const, count: final.value.responses.total },
+      { tag: "Process" as const, count: 1 }
     ]
   })
 }
+
+const readApplicationServerProcessIdentities = Effect.fn(
+  "ProductionLiveQualification.readApplicationServerProcessIdentities"
+)(function* (fixture: ProductionLiveLocalFixture) {
+  const fs = yield* FileSystem.FileSystem
+  const source = yield* fs.readFileString(fixture.applicationServerObservationPath)
+  return yield* Effect.forEach(
+    source.split("\n").filter((line) => line.length > 0),
+    (line) => Schema.decodeUnknownEffect(LiveCodexAppServerProcessIdentity)(line)
+  )
+})
+
+export const productionLivePreCleanupArtifactLocator = (artifact: QualificationArtifactLocator) =>
+  QualificationArtifactLocator.make(`${artifact}.pre-cleanup`)
 
 const publishCompletedQualification = Effect.fn("ProductionLiveQualification.publishCompleted")(function* (
   manifest: ProductionLiveQualificationManifest,
@@ -453,6 +500,9 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
   const planned = plannedRecord.event.operation.plannedAttempt
   const accepted = acceptedRecord.event.report.result.acceptedResult
   const candidate = promotionRecord.event.correlation.qualifiedCandidate
+  const applicationServerProcessIdentities = yield* readApplicationServerProcessIdentities(fixture).pipe(
+    Effect.mapError(() => qualificationFailed("EvidenceValidation"))
+  )
   const githubFinal = Schema.decodeUnknownOption(
     Schema.Struct({
       lifecycle: Schema.Literal("CompletedSuccessfully"),
@@ -464,7 +514,8 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
       })
     })
   )(completion.facts.github)
-  const responseCounts = completion.facts.applicationServerCount === 1
+  const responseCounts =
+    completion.facts.applicationServerCount === 1 && applicationServerProcessIdentities.length === 1
   if (Option.isNone(githubFinal) || !responseCounts)
     return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
   const forwardObservation = yield* forwarder.observation
@@ -478,6 +529,54 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
     ...githubFixture.manifest,
     resources: [...githubFixture.manifest.resources, ...labelResources]
   }
+  const publicDigest = yield* qualificationTranscriptDigest(completion.records)
+  const evidenceBeforeCleanup = {
+    schemaVersion: 1,
+    artifactStage: "PreCleanup",
+    mode: "Live",
+    invocationId: manifest.invocationId,
+    build,
+    hosted: manifest.hosted,
+    formal: manifest.formal,
+    fixture: {
+      repositoryNodeId: githubFixture.manifest.repository.nodeId,
+      issueNodeId: githubFixture.issue.nodeId,
+      labelNodeIds: labelResources.map(({ nodeId }) => nodeId)
+    },
+    composition: { applicationServerProcessIdentities, taskWorktreeCount: 1, integrationTargetCount: 1 },
+    delivery: {
+      runId: completion.runId,
+      taskId: planned.taskId,
+      attemptId: planned.attemptId,
+      baseCommit: planned.baseSha,
+      acceptedCommit: accepted.commit,
+      acceptedEvidence: accepted.evidenceManifest,
+      candidateCommit: candidate.candidateCommit,
+      candidateParents: candidate.directParents,
+      targetRef: candidate.run.session.integrationTarget.ref,
+      integration: { sessionId: candidate.run.session.sessionId, runOrdinal: candidate.run.ordinal },
+      promotionRequestId: promotionRecord.event.correlation.requestId,
+      initialTargetCommit: fixture.initialTargetCommit,
+      finalTargetCommit: completion.facts.targetHead
+    },
+    journal: {
+      positions: completion.facts.journal.map(({ position }) => position),
+      occurrences: observed.value.occurrences
+    },
+    boundaryCalls: observed.value.boundaryCalls,
+    publicRecords: { values: completion.records, digest: publicDigest },
+    final: {
+      tracker: { lifecycle: "Completed", claims: [] },
+      run: { runId: completion.runId, disposition: "Completed" },
+      process: { status: 0 }
+    },
+    cleanup: { _tag: "Pending" }
+  } as const
+  yield* captureProductionLiveQualificationPreCleanupEvidence(
+    manifest.publicationContainer,
+    productionLivePreCleanupArtifactLocator(manifest.artifact),
+    evidenceBeforeCleanup
+  )
   const cleanupAdapter = yield* makeProductionLiveGithubCleanupAdapter(manifest.invocationId)
   const githubCleanup = yield* cleanupProductionLiveGithubFixture(
     githubManifest,
@@ -501,43 +600,11 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
       : ("AlreadyAbsent" as const),
     nodeId
   }))
-  const publicDigest = yield* qualificationTranscriptDigest(completion.records)
   return yield* publishProductionLiveQualificationEvidence(manifest.publicationContainer, manifest.artifact, {
-    schemaVersion: 1,
-    mode: "Live",
-    invocationId: manifest.invocationId,
-    build,
-    hosted: manifest.hosted,
-    formal: manifest.formal,
-    fixture: {
-      repositoryNodeId: githubFixture.manifest.repository.nodeId,
-      issueNodeId: githubFixture.issue.nodeId,
-      labelNodeIds: labelResources.map(({ nodeId }) => nodeId)
-    },
-    delivery: {
-      runId: completion.runId,
-      taskId: planned.taskId,
-      attemptId: planned.attemptId,
-      baseCommit: planned.baseSha,
-      acceptedCommit: accepted.commit,
-      acceptedEvidence: accepted.evidenceManifest,
-      candidateCommit: candidate.candidateCommit,
-      candidateParents: candidate.directParents,
-      initialTargetCommit: fixture.initialTargetCommit,
-      finalTargetCommit: completion.facts.targetHead
-    },
-    journal: {
-      positions: completion.facts.journal.map(({ position }) => position),
-      occurrences: observed.value.occurrences
-    },
-    boundaryCalls: observed.value.boundaryCalls,
-    publicRecords: { values: completion.records, digest: publicDigest },
-    final: {
-      tracker: { lifecycle: "Completed", claims: [] },
-      run: { runId: completion.runId, disposition: "Completed" },
-      application: { disposition: "Succeeded", status: 0 }
-    },
+    ...evidenceBeforeCleanup,
+    artifactStage: "Final",
     cleanup: {
+      _tag: "Completed",
       github: { removedIssueNodeId: removedIssue.nodeId, resolvedLabels, retained: [] },
       local: {
         _tag: "RemovedFixture",
@@ -597,7 +664,9 @@ type GithubForwarder = Effect.Success<ReturnType<typeof makeProductionLiveGithub
 type GithubCleanup = Effect.Success<ReturnType<typeof cleanupProductionLiveGithubFixture>>
 type LocalCleanup = Effect.Success<ReturnType<typeof cleanupProductionLiveFixture>>
 
-const writeFailureRetentionReport = Effect.fn("ProductionLiveQualification.writeRetentionReport")(function* (
+export const writeProductionLiveQualificationFailureRetentionReport = Effect.fn(
+  "ProductionLiveQualification.writeRetentionReport"
+)(function* (
   manifest: ProductionLiveQualificationManifest,
   phase: QualificationFailed["phase"],
   githubFixture: GithubFixture | undefined,
@@ -607,32 +676,13 @@ const writeFailureRetentionReport = Effect.fn("ProductionLiveQualification.write
   cleanupState: { github?: GithubCleanup; local?: LocalCleanup }
 ) {
   const fs = yield* FileSystem.FileSystem
-  let githubCleanup = cleanupState.github
+  const githubCleanup = cleanupState.github
   const observedLabels = forwarder === undefined ? [] : (yield* forwarder.observation).createdLabels
   const labelResources = observedLabels.map(({ fingerprint, name, nodeId }) =>
     DisposableGithubQualificationResource.cases.Label.make({ nodeId, name, fingerprint })
   )
   const githubResources = githubFixture === undefined ? [] : [...githubFixture.manifest.resources, ...labelResources]
-  if (githubFixture !== undefined && githubCleanup === undefined) {
-    const cleanup = yield* Effect.gen(function* () {
-      const adapter = yield* makeProductionLiveGithubCleanupAdapter(manifest.invocationId)
-      return yield* cleanupProductionLiveGithubFixture(
-        { ...githubFixture.manifest, resources: githubResources },
-        { invocationId: manifest.invocationId, repository: githubFixture.manifest.repository },
-        adapter
-      )
-    }).pipe(Effect.result)
-    if (cleanup._tag === "Success") githubCleanup = cleanup.success
-  }
-  let localCleanup = cleanupState.local
-  if (localFixture !== undefined && localCleanup === undefined) {
-    const cleanup = yield* cleanupProductionLiveFixture(localFixture.localManifest, {
-      invocationId: manifest.invocationId,
-      ownedChildrenStopped: Effect.succeed(true),
-      selectedRunsCompleted: Effect.succeed(false)
-    }).pipe(Effect.result)
-    if (cleanup._tag === "Success") localCleanup = cleanup.success
-  }
+  const localCleanup = cleanupState.local
   const dispositionOf = (resource: (typeof githubResources)[number]) =>
     githubCleanup?.removed.some(({ nodeId }) => nodeId === resource.nodeId)
       ? ("Removed" as const)
@@ -640,18 +690,36 @@ const writeFailureRetentionReport = Effect.fn("ProductionLiveQualification.write
         ? ("AlreadyAbsent" as const)
         : ("Retained" as const)
   const removedLocal = new Set(localCleanup?.removed.map(({ locator }) => locator) ?? [])
+  const removedLocalContainer =
+    localCleanup?._tag === "Removed" && localFixture !== undefined
+      ? [
+          {
+            locator: localFixture.localManifest.container.locator,
+            disposition: "Removed" as const,
+            manualCommand: `stat -- '${localFixture.localManifest.container.locator.replaceAll("'", "'\\''")}'`
+          }
+        ]
+      : []
   const retainedLocal =
     localCleanup?.retained.map(({ locator, manualCommand }) => ({
       locator,
       disposition: "Retained" as const,
       manualCommand
     })) ??
-    localFixture?.localManifest.resources.map(({ locator }) => ({
-      locator,
-      disposition: "Retained" as const,
-      manualCommand: `stat -- '${locator.replaceAll("'", "'\\''")}'`
-    })) ??
-    []
+    (localFixture === undefined
+      ? []
+      : [
+          {
+            locator: localFixture.localManifest.container.locator,
+            disposition: "Retained" as const,
+            manualCommand: `find '${localFixture.localManifest.container.locator.replaceAll("'", "'\\''")}' -mindepth 1 -maxdepth 1 -print`
+          },
+          ...localFixture.localManifest.resources.map(({ locator }) => ({
+            locator,
+            disposition: "Retained" as const,
+            manualCommand: `stat -- '${locator.replaceAll("'", "'\\''")}'`
+          }))
+        ])
   const containerFallback =
     localFixture === undefined && localContainer !== undefined
       ? [
@@ -677,6 +745,7 @@ const writeFailureRetentionReport = Effect.fn("ProductionLiveQualification.write
       manualCommand: githubReadCommand(resource.nodeId)
     })),
     local: [
+      ...removedLocalContainer,
       ...(localFixture?.localManifest.resources
         .filter(({ locator }) => removedLocal.has(locator))
         .map(({ locator }) => ({ locator, disposition: "Removed" as const, manualCommand: `stat -- '${locator}'` })) ??
@@ -795,8 +864,9 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
               if (plannedAttempt === undefined) return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
               const lifecycle = Option.getOrUndefined(graph.lifecycleOf(plannedAttempt.taskId))
               const claim = yield* trackerMutation.readTaskClaim(plannedAttempt.taskId)
+              const applicationServerProcessIdentities = yield* readApplicationServerProcessIdentities(fixture)
               return {
-                applicationServerCount: responses.counts().total > 0 ? 1 : 0,
+                applicationServerCount: applicationServerProcessIdentities.length,
                 taskWorktreeCount: new Set(
                   planned.map(({ event }) =>
                     event._tag === "TaskAttemptPlanned" ? event.operation.plannedAttempt.worktree : ""
@@ -848,7 +918,7 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
     attempt._tag === "Success" && attempt.success._tag === "QualificationFailed"
       ? attempt.success
       : qualificationFailed("Setup")
-  yield* writeFailureRetentionReport(
+  yield* writeProductionLiveQualificationFailureRetentionReport(
     manifest,
     failure.phase,
     githubFixture,

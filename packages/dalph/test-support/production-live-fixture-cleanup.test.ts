@@ -1,6 +1,6 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Effect, FileSystem, PlatformError } from "effect"
+import { Effect, FileSystem, PlatformError, Schema } from "effect"
 import { expect } from "vitest"
 import { LiveQualificationInvocationId } from "../src/qualification/live-qualification-evidence.js"
 import {
@@ -8,15 +8,16 @@ import {
   captureProductionLiveLocalIdentity,
   ProductionLiveLocalContainer,
   ProductionLiveLocalFixtureManifest,
-  ProductionLiveLocalResource
+  ProductionLiveLocalResource,
+  ProductionLiveLocalResourceLocator
 } from "../src/qualification/live-fixture-cleanup.js"
 
 const makeFixture = Effect.fn("ProductionLiveCleanupTest.makeFixture")(function* () {
   const fs = yield* FileSystem.FileSystem
   const root = ProductionLiveLocalContainer.make(yield* fs.makeTempDirectory({ prefix: "dalph-live-cleanup-" }))
-  const repository = `${root}/repository`
-  const journal = `${root}/journal.sqlite`
-  const privateStore = `${root}/private.json`
+  const repository = ProductionLiveLocalResourceLocator.make(`${root}/repository`)
+  const journal = ProductionLiveLocalResourceLocator.make(`${root}/journal.sqlite`)
+  const privateStore = ProductionLiveLocalResourceLocator.make(`${root}/private.json`)
   yield* fs.makeDirectory(repository)
   yield* fs.writeFileString(`${repository}/owned.txt`, "owned\n")
   yield* fs.writeFileString(journal, "journal\n")
@@ -56,6 +57,40 @@ it.effect("Alice removes exact Q leaves, then the exact empty container, and rer
       const result = yield* cleanupProductionLiveFixture(manifest, completedController(manifest.invocationId))
       expect(result).toEqual({ _tag: "Removed", removed: manifest.resources, retained: [] })
       expect(yield* fs.exists(manifest.container.locator)).toBe(false)
+    })
+  ).pipe(Effect.provide(NodeServices.layer))
+)
+
+it("rejects non-canonical cleanup locators before they can authorize deletion", () => {
+  expect(Schema.is(ProductionLiveLocalContainer)("relative/Q")).toBe(false)
+  expect(Schema.is(ProductionLiveLocalResourceLocator)("/tmp/Q/../foreign")).toBe(false)
+  expect(
+    Schema.is(ProductionLiveLocalFixtureManifest)({
+      invocationId: "Q-malformed",
+      container: { locator: "/tmp/Q/../foreign", identity: { device: 1, inode: 1, kind: "Directory" } },
+      resources: []
+    })
+  ).toBe(false)
+})
+
+it.effect("malformed locator facts fail with a typed manifest error before cleanup", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const manifest = yield* makeFixture()
+      const malformed = {
+        ...manifest,
+        resources: manifest.resources.map((resource, index) =>
+          index === 0 ? { ...resource, locator: "relative/foreign" } : resource
+        )
+      }
+      const failure = yield* cleanupProductionLiveFixture(malformed, completedController(manifest.invocationId)).pipe(
+        Effect.flip
+      )
+
+      expect(failure).toMatchObject({ _tag: "ProductionLiveCleanupManifestFailure", reason: "InvalidManifest" })
+      expect(yield* fs.exists(manifest.container.locator)).toBe(true)
+      for (const resource of manifest.resources) expect(yield* fs.exists(resource.locator)).toBe(true)
     })
   ).pipe(Effect.provide(NodeServices.layer))
 )

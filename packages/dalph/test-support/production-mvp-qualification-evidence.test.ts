@@ -230,12 +230,24 @@ const formalLog = () =>
     "Complete Quint model gate: 105.00s (budget 750s)"
   ].join("\n")
 
-const profile = (jobId: number): SuppliedQualificationProfile => ({
+const profile = (profileKind: "dedicated" | "stressed", jobId: number): SuppliedQualificationProfile => ({
+  profileKind,
+  condition:
+    profileKind === "dedicated"
+      ? { kind: "dedicated-hosted-job", runnerLabel: "ubuntu-24.04-arm", effectiveParallelism: 4 }
+      : {
+          kind: "cpu-affinity",
+          runnerLabel: "ubuntu-latest",
+          cpuList: "0-1",
+          hostParallelism: 4,
+          effectiveParallelism: 2
+        },
   sourceSha,
   nodeVersion: "24.20.0",
-  job: { workflow: "Candidate qualification", runId: 1, jobId },
+  job: { workflow: "Production live qualification", runId: 1, jobId },
   log: formalLog(),
   setupInstallSeconds: 10,
+  formalSeconds: 105,
   completeJobSeconds: 115,
   negativeControls: quintGateCommandManifest
     .filter(({ name }) => name.includes("negative mutation profile") || name.includes("temporal mutant"))
@@ -261,8 +273,8 @@ it.effect("same-source supported dedicated and stressed evidence retains every o
   Effect.gen(function* () {
     const result = yield* qualificationFormalProvenance(sourceSha, {
       _tag: "SuppliedProfiles",
-      dedicated: profile(2),
-      stressed: profile(3)
+      dedicated: profile("dedicated", 2),
+      stressed: profile("stressed", 3)
     })
     expect(result._tag).toBe("DedicatedAndStressed")
     if (result._tag !== "DedicatedAndStressed") return yield* Effect.die("supplied profiles must be present")
@@ -282,23 +294,40 @@ it.effect("same-source supported dedicated and stressed evidence retains every o
       expect(value.setupInstallSeconds).toBe(10)
     }
     expect(result.dedicated.job.jobId).not.toBe(result.stressed.job.jobId)
+    expect(result.dedicated.profileKind).toBe("dedicated")
+    expect(result.dedicated.condition.kind).toBe("dedicated-hosted-job")
+    expect(result.stressed.profileKind).toBe("stressed")
+    expect(result.stressed.condition).toEqual({
+      kind: "cpu-affinity",
+      runnerLabel: "ubuntu-latest",
+      cpuList: "0-1",
+      hostParallelism: 4,
+      effectiveParallelism: 2
+    })
   })
 )
 
 it.effect("live qualification provenance requires two independent same-source formal jobs", () =>
   Effect.gen(function* () {
     const result = yield* requiredQualificationFormalProvenance(sourceSha, {
-      dedicated: profile(2),
-      stressed: profile(3)
+      dedicated: profile("dedicated", 2),
+      stressed: profile("stressed", 3)
     })
     expect(result._tag).toBe("DedicatedAndStressed")
     expect(result.dedicated.sourceSha).toBe(sourceSha)
     expect(result.stressed.sourceSha).toBe(sourceSha)
     expect(result.dedicated.job.jobId).not.toBe(result.stressed.job.jobId)
     expect(
-      (yield* requiredQualificationFormalProvenance(sourceSha, { dedicated: profile(2), stressed: profile(2) }).pipe(
-        Effect.flip
-      )).operation
+      (yield* requiredQualificationFormalProvenance(sourceSha, {
+        dedicated: profile("dedicated", 2),
+        stressed: profile("stressed", 2)
+      }).pipe(Effect.flip)).operation
+    ).toBe("ValidateProvenance")
+    expect(
+      (yield* requiredQualificationFormalProvenance(sourceSha, {
+        dedicated: profile("dedicated", 2),
+        stressed: { ...profile("stressed", 3), job: { ...profile("stressed", 3).job, runId: 2 } }
+      }).pipe(Effect.flip)).operation
     ).toBe("ValidateProvenance")
   })
 )
@@ -306,14 +335,17 @@ it.effect("live qualification provenance requires two independent same-source fo
 it.effect("stale substituted unsupported incomplete or over-budget provenance grants no qualification claim", () =>
   Effect.gen(function* () {
     for (const changed of [
-      { ...profile(2), sourceSha: otherSha },
-      { ...profile(2), nodeVersion: "22.22.2" },
-      { ...profile(2), nodeVersion: "24.15.0" },
-      { ...profile(2), completeJobSeconds: 104 },
-      { ...profile(2), completeJobSeconds: 961 },
-      { ...profile(2), negativeControls: [] },
+      { ...profile("dedicated", 2), sourceSha: otherSha },
+      { ...profile("dedicated", 2), nodeVersion: "22.22.2" },
+      { ...profile("dedicated", 2), nodeVersion: "24.15.0" },
+      { ...profile("dedicated", 2), completeJobSeconds: 104 },
+      { ...profile("dedicated", 2), completeJobSeconds: 960 },
+      { ...profile("dedicated", 2), formalSeconds: 104 },
+      { ...profile("dedicated", 2), negativeControls: [] },
+      { ...profile("dedicated", 2), profileKind: "stressed" as const },
+      { ...profile("dedicated", 2), condition: profile("stressed", 2).condition },
       {
-        ...profile(2),
+        ...profile("dedicated", 2),
         log: formalLog().replace(
           "Quint command timing: typecheck planned-attempt executor model typecheck 1.00s result=exit:0\n",
           ""
@@ -323,15 +355,22 @@ it.effect("stale substituted unsupported incomplete or over-budget provenance gr
       const failure = yield* qualificationFormalProvenance(sourceSha, {
         _tag: "SuppliedProfiles",
         dedicated: changed,
-        stressed: profile(3)
+        stressed: profile("stressed", 3)
       }).pipe(Effect.flip)
       expect(failure.operation).toBe("ValidateProvenance")
     }
     expect(
       (yield* qualificationFormalProvenance(sourceSha, {
         _tag: "SuppliedProfiles",
-        dedicated: profile(2),
-        stressed: profile(2)
+        dedicated: profile("dedicated", 2),
+        stressed: profile("stressed", 2)
+      }).pipe(Effect.flip)).operation
+    ).toBe("ValidateProvenance")
+    expect(
+      (yield* qualificationFormalProvenance(sourceSha, {
+        _tag: "SuppliedProfiles",
+        dedicated: profile("dedicated", 2),
+        stressed: { ...profile("stressed", 3), condition: profile("dedicated", 2).condition }
       }).pipe(Effect.flip)).operation
     ).toBe("ValidateProvenance")
   })

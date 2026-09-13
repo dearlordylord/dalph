@@ -3,8 +3,24 @@ import nodePath from "node:path"
 import { Effect, FileSystem, HashSet, MutableList, Option, Schema } from "effect"
 import { LiveQualificationInvocationId } from "./live-qualification-evidence.js"
 
+const canonicalAbsoluteLocator = Schema.NonEmptyString.check(
+  Schema.makeFilter((value) =>
+    nodePath.isAbsolute(value) && nodePath.normalize(value) === value
+      ? undefined
+      : "live qualification local resource locator must be normalized and absolute"
+  )
+)
+
+/** Locates one exact canonical local object recorded as owned by Q. */
+export const ProductionLiveLocalResourceLocator = canonicalAbsoluteLocator.pipe(
+  Schema.brand("ProductionLiveLocalResourceLocator")
+)
+export type ProductionLiveLocalResourceLocator = typeof ProductionLiveLocalResourceLocator.Type
+
 /** Locates the exact Q-owned live fixture container, not a shared temporary root. */
-export const ProductionLiveLocalContainer = Schema.NonEmptyString.pipe(Schema.brand("ProductionLiveLocalContainer"))
+export const ProductionLiveLocalContainer = ProductionLiveLocalResourceLocator.pipe(
+  Schema.brand("ProductionLiveLocalContainer")
+)
 export type ProductionLiveLocalContainer = typeof ProductionLiveLocalContainer.Type
 
 const LocalDevice = Schema.Int.pipe(Schema.brand("ProductionLiveLocalDevice"))
@@ -27,7 +43,7 @@ export const ProductionLiveLocalIdentity = Schema.Struct({
 })
 export type ProductionLiveLocalIdentity = typeof ProductionLiveLocalIdentity.Type
 
-const localResourceFields = { locator: Schema.NonEmptyString, identity: ProductionLiveLocalIdentity }
+const localResourceFields = { locator: ProductionLiveLocalResourceLocator, identity: ProductionLiveLocalIdentity }
 const OriginalRegularFileIdentity = ProductionLiveLocalIdentity.check(
   Schema.makeFilter((identity) =>
     identity.kind === "File" ? undefined : "original atomic-replacement resource was not a file"
@@ -43,7 +59,7 @@ export const ProductionLiveLocalResource = Schema.TaggedUnion({
   CodexStateDirectory: localResourceFields,
   CandidateRoot: localResourceFields,
   /** The Integrator publishes this exact direct-child file by atomic rename, so its final inode is expected to differ. */
-  ExpectedAtomicReplacement: { locator: Schema.NonEmptyString, identity: OriginalRegularFileIdentity },
+  ExpectedAtomicReplacement: { locator: ProductionLiveLocalResourceLocator, identity: OriginalRegularFileIdentity },
   ConfigurationDocument: localResourceFields,
   ManifestDocument: localResourceFields,
   OwnershipMarker: localResourceFields
@@ -73,9 +89,15 @@ export type ProductionLiveLocalFixtureManifest = typeof ProductionLiveLocalFixtu
 
 export interface ProductionLiveCleanupController {
   readonly invocationId: LiveQualificationInvocationId
-  readonly ownedChildrenStopped: Effect.Effect<boolean, unknown>
-  readonly selectedRunsCompleted: Effect.Effect<boolean, unknown>
+  readonly ownedChildrenStopped: Effect.Effect<boolean, ProductionLiveCleanupStatusFailure>
+  readonly selectedRunsCompleted: Effect.Effect<boolean, ProductionLiveCleanupStatusFailure>
 }
+
+/** A sanitized failure to read one prerequisite for fixture cleanup authority. */
+export class ProductionLiveCleanupStatusFailure extends Schema.TaggedError<ProductionLiveCleanupStatusFailure>()(
+  "ProductionLiveCleanupStatusFailure",
+  { operation: Schema.Literals(["ObserveOwnedChildren", "ObserveSelectedRuns"]) }
+) {}
 
 const RetentionReason = Schema.Literals([
   "ForeignInvocation",
@@ -93,7 +115,7 @@ const RetentionReason = Schema.Literals([
 type RetentionReason = typeof RetentionReason.Type
 
 const RetainedLocator = Schema.Struct({
-  locator: Schema.NonEmptyString,
+  locator: ProductionLiveLocalResourceLocator,
   reason: RetentionReason,
   manualCommand: Schema.NonEmptyString
 })
@@ -108,16 +130,19 @@ export type ProductionLiveFixtureCleanup = typeof ProductionLiveFixtureCleanup.T
 
 export class ProductionLiveCleanupManifestFailure extends Schema.TaggedError<ProductionLiveCleanupManifestFailure>()(
   "ProductionLiveCleanupManifestFailure",
-  {}
+  { reason: Schema.Literals(["InvalidManifest", "IdentityUnavailable"]) }
 ) {}
 
 /** Captures the immutable device/inode/kind receipt immediately after creation. */
 export const captureProductionLiveLocalIdentity = Effect.fn("ProductionLiveFixture.captureIdentity")(function* (
-  locator: string
+  input: unknown
 ) {
   const fs = yield* FileSystem.FileSystem
+  const locator = yield* Schema.decodeUnknownEffect(ProductionLiveLocalResourceLocator)(input).pipe(
+    Effect.mapError(() => new ProductionLiveCleanupManifestFailure({ reason: "InvalidManifest" }))
+  )
   const stat = yield* fs.stat(locator)
-  if (Option.isNone(stat.ino)) return yield* new ProductionLiveCleanupManifestFailure()
+  if (Option.isNone(stat.ino)) return yield* new ProductionLiveCleanupManifestFailure({ reason: "IdentityUnavailable" })
   return ProductionLiveLocalIdentity.make({
     device: LocalDevice.make(stat.dev),
     inode: LocalInode.make(stat.ino.value),
@@ -126,9 +151,14 @@ export const captureProductionLiveLocalIdentity = Effect.fn("ProductionLiveFixtu
 })
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
-const inspection = (locator: string) => `stat -- ${shellQuote(locator)}`
-const containerInspection = (locator: string) => `find ${shellQuote(locator)} -mindepth 1 -maxdepth 1 -print`
-const retained = (locator: string, reason: RetentionReason, container = false): RetainedLocator => ({
+const inspection = (locator: ProductionLiveLocalResourceLocator) => `stat -- ${shellQuote(locator)}`
+const containerInspection = (locator: ProductionLiveLocalResourceLocator) =>
+  `find ${shellQuote(locator)} -mindepth 1 -maxdepth 1 -print`
+const retained = (
+  locator: ProductionLiveLocalResourceLocator,
+  reason: RetentionReason,
+  container = false
+): RetainedLocator => ({
   locator,
   reason,
   manualCommand: container ? containerInspection(locator) : inspection(locator)
@@ -137,7 +167,9 @@ const retained = (locator: string, reason: RetentionReason, container = false): 
 const sameIdentity = (left: ProductionLiveLocalIdentity, right: ProductionLiveLocalIdentity) =>
   left.device === right.device && left.inode === right.inode && left.kind === right.kind
 
-const observeIdentity = Effect.fn("ProductionLiveFixture.observeIdentity")(function* (locator: string) {
+const observeIdentity = Effect.fn("ProductionLiveFixture.observeIdentity")(function* (
+  locator: ProductionLiveLocalResourceLocator
+) {
   return yield* captureProductionLiveLocalIdentity(locator).pipe(Effect.result)
 })
 
@@ -154,7 +186,7 @@ export const cleanupProductionLiveFixture = Effect.fn("ProductionLiveFixture.cle
   const manifest = yield* Schema.decodeUnknownEffect(ProductionLiveLocalFixtureManifest, {
     onExcessProperty: "error",
     reportInput: false
-  })(input).pipe(Effect.mapError(() => new ProductionLiveCleanupManifestFailure()))
+  })(input).pipe(Effect.mapError(() => new ProductionLiveCleanupManifestFailure({ reason: "InvalidManifest" })))
   if (controller.invocationId !== manifest.invocationId)
     return ProductionLiveFixtureCleanup.cases.Retained.make({
       removed: [],
@@ -222,7 +254,10 @@ export const cleanupProductionLiveFixture = Effect.fn("ProductionLiveFixture.cle
       removed: [],
       retained: [
         ...unexpected.map((entry) =>
-          retained(nodePath.join(manifest.container.locator, entry), "UnexpectedContainerEntry")
+          retained(
+            ProductionLiveLocalResourceLocator.make(nodePath.join(manifest.container.locator, entry)),
+            "UnexpectedContainerEntry"
+          )
         ),
         ...allLocators(manifest, "BlockedByUnprovedResource")
       ]

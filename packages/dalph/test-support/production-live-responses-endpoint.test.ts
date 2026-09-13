@@ -1,14 +1,18 @@
 /* eslint-disable import/no-nodejs-modules -- The focused test calls one loopback endpoint. */
 import { request } from "node:http"
 import { Buffer } from "node:buffer"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { expect, it } from "vitest"
-import { makeProductionLiveResponsesEndpoint } from "../src/qualification/live-responses-endpoint.js"
+import {
+  makeProductionLiveResponsesEndpoint,
+  ProductionLiveResponsesEndpointLocator,
+  ProductionLiveResponsesWorktreeLocator
+} from "../src/qualification/live-responses-endpoint.js"
 
 const post = (endpoint: string, input: string) =>
   Effect.tryPromise(
     () =>
-      new Promise<string>((resolve, reject) => {
+      new Promise<{ readonly status: number | undefined; readonly text: string }>((resolve, reject) => {
         const body = JSON.stringify({ input })
         const outgoing = request(
           `${endpoint}/responses`,
@@ -22,7 +26,7 @@ const post = (endpoint: string, input: string) =>
             response.on("data", (chunk: string) => {
               text += chunk
             })
-            response.on("end", () => resolve(text))
+            response.on("end", () => resolve({ status: response.statusCode, text }))
           }
         )
         outgoing.on("error", reject)
@@ -56,11 +60,47 @@ it("serves one controlled task turn and one controlled Integrator turn without r
     )
   )
 
-  expect(result.taskCommand).toContain("LIVE-QUALIFICATION.md")
-  expect(result.taskResult).toContain(`\\"commit\\":\\"${head}\\"`)
-  expect(result.taskResult).toContain("run-q")
-  expect(result.integrationCommand).toContain("git merge --no-ff")
-  expect(result.integrationResult).toContain(`\\"candidate\\":\\"${head}\\"`)
+  expect(result.taskCommand.text).toContain("LIVE-QUALIFICATION.md")
+  expect(result.taskResult.text).toContain(`\\"commit\\":\\"${head}\\"`)
+  expect(result.taskResult.text).toContain("run-q")
+  expect(result.integrationCommand.text).toContain("git merge --no-ff")
+  expect(result.integrationResult.text).toContain(`\\"candidate\\":\\"${head}\\"`)
   expect(result.counts()).toEqual({ executor: 2, integrator: 2, total: 4 })
   expect(JSON.stringify(result.counts())).not.toContain("/tmp/q")
+})
+
+it("rejects malformed worktree and Git head facts before returning an accepted response", async () => {
+  const result = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const endpoint = yield* makeProductionLiveResponsesEndpoint(() => Effect.succeed("not-a-git-sha"))
+        const malformedWorktree = yield* post(
+          endpoint.baseUrl,
+          ["Dalph immutable attempt facts:", "run_id: run-q", "attempt_id: attempt-q", "worktree: relative/task"].join(
+            "\n"
+          )
+        )
+        const firstValidTurn = yield* post(
+          endpoint.baseUrl,
+          ["Dalph immutable attempt facts:", "run_id: run-q", "attempt_id: attempt-q", "worktree: /tmp/q/task"].join(
+            "\n"
+          )
+        )
+        const invalidHead = yield* post(
+          endpoint.baseUrl,
+          ["Dalph immutable attempt facts:", "run_id: run-q", "attempt_id: attempt-q", "worktree: /tmp/q/task"].join(
+            "\n"
+          )
+        )
+        return { malformedWorktree, firstValidTurn, invalidHead }
+      })
+    )
+  )
+
+  expect(result.malformedWorktree.status).toBe(500)
+  expect(result.firstValidTurn.status).toBe(200)
+  expect(result.invalidHead.status).toBe(500)
+  expect(result.invalidHead.text).not.toContain("not-a-git-sha")
+  expect(Schema.is(ProductionLiveResponsesWorktreeLocator)("relative/task")).toBe(false)
+  expect(Schema.is(ProductionLiveResponsesEndpointLocator)("http://example.com/v1")).toBe(false)
 })

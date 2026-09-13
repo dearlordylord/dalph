@@ -159,6 +159,32 @@ const readFormalProfileMetadata = async ({ environment, kind, logPath, metadataP
   const metadata = await readJsonObject(metadataPath, `${kind} formal provenance`)
   const { runAttempt, runId } = githubRunInputs(environment)
   if (metadata.profile !== kind) throw new Error(`${kind} formal provenance profile is incorrect`)
+  const expectedCondition =
+    kind === "dedicated"
+      ? { kind: "dedicated-hosted-job", runnerLabel: "ubuntu-24.04-arm" }
+      : { kind: "cpu-affinity", runnerLabel: "ubuntu-latest", cpuList: "0-1" }
+  if (
+    metadata.condition === null ||
+    typeof metadata.condition !== "object" ||
+    Array.isArray(metadata.condition) ||
+    Object.entries(expectedCondition).some(([name, value]) => metadata.condition[name] !== value)
+  ) {
+    throw new Error(`${kind} formal provenance execution condition is incorrect`)
+  }
+  const effectiveParallelism = positiveSafeInteger(
+    metadata.condition.effectiveParallelism,
+    `${kind} formal effective parallelism`
+  )
+  let condition
+  if (kind === "dedicated") {
+    condition = { ...expectedCondition, effectiveParallelism }
+  } else {
+    const hostParallelism = positiveSafeInteger(metadata.condition.hostParallelism, `${kind} formal host parallelism`)
+    if (effectiveParallelism !== 2 || hostParallelism <= effectiveParallelism) {
+      throw new Error(`${kind} formal provenance does not prove the declared CPU-affinity stress`)
+    }
+    condition = { ...expectedCondition, hostParallelism, effectiveParallelism }
+  }
   if (metadata.sourceSha !== valueOf(environment, "DALPH_LIVE_QUALIFICATION_SOURCE_SHA")) {
     throw new Error(`${kind} formal provenance source SHA does not match the candidate`)
   }
@@ -196,6 +222,7 @@ const readFormalProfileMetadata = async ({ environment, kind, logPath, metadataP
   }
   await requireReadableFile(logPath, `${kind} formal evidence`)
   return {
+    condition,
     completeJobSeconds,
     formalSeconds,
     log: logPath,
@@ -271,9 +298,10 @@ const resolveFormalJob = (jobs, kind, runId, runAttempt) => {
 const enrichFormalMetadata = async ({ environment, job, kind, logPath, metadataPath }) => {
   const profile = await readFormalProfileMetadata({ environment, kind, logPath, metadataPath })
   const enriched = {
+    condition: profile.condition,
     completeJobSeconds: profile.completeJobSeconds,
     formalSeconds: profile.formalSeconds,
-    job: { jobId: job.id, runId: profile.runId, workflow: "Candidate qualification" },
+    job: { jobId: job.id, runId: profile.runId, workflow: "Production live qualification" },
     log: profile.log,
     negativeControls: profile.negativeControls,
     nodeVersion: profile.nodeVersion,
@@ -299,7 +327,7 @@ const suppliedFormalProfile = async ({ environment, kind, logPath, metadataPath 
   if (job === null || typeof job !== "object" || Array.isArray(job)) {
     throw new Error(`${kind} formal provenance is missing the resolved Actions job`)
   }
-  if (job.workflow !== "Candidate qualification") {
+  if (job.workflow !== "Production live qualification") {
     throw new Error(`${kind} formal provenance job workflow is invalid`)
   }
   const jobId = positiveSafeInteger(job.jobId, `${kind} formal Actions job ID`)
@@ -314,11 +342,14 @@ const suppliedFormalProfile = async ({ environment, kind, logPath, metadataPath 
     throw new Error(`${kind} formal evidence log is not readable`, { cause: error })
   }
   return {
+    condition: profile.condition,
     completeJobSeconds: profile.completeJobSeconds,
+    formalSeconds: profile.formalSeconds,
     job: { jobId, runId: jobRunId, workflow: job.workflow },
     log,
     negativeControls: profile.negativeControls,
     nodeVersion: profile.nodeVersion,
+    profileKind: profile.profile,
     setupInstallSeconds: profile.setupInstallSeconds,
     sourceSha: profile.sourceSha
   }
