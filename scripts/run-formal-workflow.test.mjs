@@ -19,7 +19,11 @@ const fixture = async () => {
     "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
     ".github/workflows/ci.yml",
-    "scripts/runner.mjs",
+    "scripts/with-gate-slot.mjs",
+    "scripts/run-formal-gate.mjs",
+    "scripts/run-formal-workflow.mjs",
+    "scripts/run-formal-profile.mjs",
+    "scripts/check-quint-models.mjs",
     "source/app.ts"
   ])
     writeFileSync(join(root, file), "original\n")
@@ -28,7 +32,11 @@ const fixture = async () => {
   writeFileSync(runtime, "original\n")
   const guard = await startFormalInputGuard({
     worktree: root,
-    profile: { obligations: ["controlled fixture"], seed: 153000 },
+    profile: {
+      obligations: ["controlled fixture"],
+      seed: 153000,
+      commands: [{ args: ["typecheck", "specs/model.qnt"] }]
+    },
     effectiveEnvironment: createFormalEnvironment({ PATH: process.env.PATH, HOME: outer }),
     toolchain: {
       version: formalInputPolicyVersion,

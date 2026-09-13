@@ -4,13 +4,15 @@ import { access, lstat, readFile, readdir, realpath } from "node:fs/promises"
 import { accessSync, constants, lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "node:fs"
 import { createRequire } from "node:module"
 import { arch, platform } from "node:os"
-import { delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path"
+import { delimiter, dirname, extname, isAbsolute, join, resolve, sep } from "node:path"
 import { performance } from "node:perf_hooks"
+import { fileURLToPath } from "node:url"
+import { parse } from "acorn"
 import { localHostIdentity } from "./gate-custody-records.mjs"
 import { inputObserverScript, startInputObserver } from "./gate-input-observer.mjs"
 import { apalacheVersion } from "./quint-temporal-gate.mjs"
 
-export const formalInputPolicyVersion = 1
+export const formalInputPolicyVersion = 2
 const digest = (value) => createHash("sha256").update(value).digest("hex")
 const below = (path, root) => path === root || path.startsWith(`${root}${sep}`)
 const retainedEnvironmentKeys = [
@@ -101,11 +103,16 @@ const environmentIdentity = (environment) =>
     ])
   )
 const requiredFile = async (path, executable = false) => {
-  const status = await lstat(await realpath(path))
-  if (!status.isFile() || status.size === 0)
-    throw new Error(`Required prepared formal artifact is not a nonempty file: ${path}`)
-  await access(path, executable ? constants.R_OK | constants.X_OK : constants.R_OK)
-  return path
+  try {
+    const status = await lstat(await realpath(path))
+    if (!status.isFile() || status.size === 0)
+      throw new Error(`Required prepared formal artifact is not a nonempty file: ${path}`)
+    await access(path, executable ? constants.R_OK | constants.X_OK : constants.R_OK)
+    return path
+  } catch (error) {
+    if (error.message?.startsWith("Required prepared formal artifact")) throw error
+    throw new Error(`Unreadable or missing required formal input: ${path}`, { cause: error })
+  }
 }
 const executable = async (name, environment, worktree) => {
   const candidates =
@@ -160,6 +167,9 @@ export const resolveFormalToolchain = async ({ effectiveEnvironment, timeoutMill
   if (!below(quintRoot, await realpath(storeRoot)))
     throw new Error("Incoherent formal installation: Quint is outside this worktree's pnpm store")
   const metadata = JSON.parse(await readFile(quintPackage, "utf8"))
+  const acornPackage = require.resolve("acorn/package.json")
+  const acornRoot = dirname(await realpath(acornPackage))
+  const acornMetadata = JSON.parse(await readFile(acornPackage, "utf8"))
   const project = JSON.parse(await readFile(join(root, "package.json"), "utf8"))
   const expected =
     project.devDependencies?.["@informalsystems/quint"] ?? project.dependencies?.["@informalsystems/quint"]
@@ -170,9 +180,7 @@ export const resolveFormalToolchain = async ({ effectiveEnvironment, timeoutMill
     throw new Error("Incoherent formal installation: installed pnpm differs from packageManager")
   const quintEntryPoint = join(quintRoot, "dist", "src", "cli.js")
   await requiredFile(quintEntryPoint)
-  const { QUINT_EVALUATOR_VERSION: evaluatorVersion } = require(
-    join(quintRoot, "dist", "src", "rust", "binaryManager.js")
-  )
+  const { QUINT_EVALUATOR_VERSION: evaluatorVersion } = require("@informalsystems/quint/dist/src/rust/binaryManager.js")
   const quintHome = resolve(
     root,
     environment.QUINT_HOME ??
@@ -272,6 +280,7 @@ export const resolveFormalToolchain = async ({ effectiveEnvironment, timeoutMill
     pnpmExecutable,
     pnpmRoot,
     dirname(dirname(quintRoot)),
+    acornRoot,
     javaRoot,
     evaluatorDirectory,
     apalacheDirectory,
@@ -301,7 +310,8 @@ export const resolveFormalToolchain = async ({ effectiveEnvironment, timeoutMill
           evaluatorDirectory,
           apalacheDirectory,
           pythonExecutable,
-          storeRoot
+          storeRoot,
+          acornRoot
         ]))
       ])
     ],
@@ -309,6 +319,7 @@ export const resolveFormalToolchain = async ({ effectiveEnvironment, timeoutMill
       nodeRoot,
       pnpmRoot,
       dirname(dirname(quintRoot)),
+      acornRoot,
       javaRoot,
       evaluatorDirectory,
       apalacheDirectory,
@@ -339,6 +350,7 @@ export const resolveFormalToolchain = async ({ effectiveEnvironment, timeoutMill
       node: process.version,
       pnpm: pnpmMetadata.version,
       quint: metadata.version,
+      acorn: acornMetadata.version,
       evaluator: evaluatorVersion,
       apalache: apalacheVersion,
       java: await readFile(join(javaRoot, "release"), "utf8"),
@@ -457,7 +469,16 @@ const manifest = async (roots, allowedRoots, requiredRoots, deadline) => {
       for (const child of readdirSync(path).sort()) await visit(join(path, child), new Set([...chain, path]))
     } else if (status.isFile()) {
       accessSync(path, constants.R_OK)
-      entries.set(path, { path, type: "file", mode, sha256: digest(readFileSync(path)) })
+      const resolved = realpathSync(path)
+      if (!allowed.some((root) => below(resolved, root)))
+        throw new Error(`Undeclared external formal input target: ${path} -> ${resolved}`)
+      entries.set(path, {
+        path,
+        type: "file",
+        mode,
+        ...(resolved === path ? {} : { resolved }),
+        sha256: digest(readFileSync(path))
+      })
     } else throw new Error(`Unsupported formal input kind: ${path}`)
     deadline.assert()
   }
@@ -470,7 +491,7 @@ export const quintImportSources = (text, sourceLocation) => {
   const require = createRequire(import.meta.url)
   const lexerFile = require.resolve("@informalsystems/quint/dist/src/generated/QuintLexer.js")
   const quintRequire = createRequire(lexerFile)
-  const { QuintLexer } = require(lexerFile)
+  const { QuintLexer } = require("@informalsystems/quint/dist/src/generated/QuintLexer.js")
   const { CharStreams } = quintRequire("antlr4ts/CharStreams")
   const lexer = new QuintLexer(CharStreams.fromString(text))
   const errors = []
@@ -488,23 +509,149 @@ export const quintImportSources = (text, sourceLocation) => {
   }
   return sources
 }
-const validateQuintImports = async (entries, declaredRoots, deadline) => {
+const quintImportedPath = (() => {
   const require = createRequire(import.meta.url)
   const { fileSourceResolver } = require("@informalsystems/quint/dist/src/parsing/sourceResolver.js")
   const resolver = fileSourceResolver()
-  for (const entry of entries) {
-    if (entry.type !== "file" || !entry.path.endsWith(".qnt")) continue
-    const text = await readFile(entry.path, { encoding: "utf8", signal: deadline.signal })
-    for (const source of quintImportSources(text, entry.path)) {
-      // Matches ToIrListener's literal slicing and parsePhase2sourceResolution's suffix/resolver.
-      const locator = resolver.lookupPath(dirname(entry.path), `${source}.qnt`).normalizedPath
-      if (!declaredRoots.some((root) => below(locator, root)))
-        throw new Error(`Undeclared Quint import input: ${entry.path} -> ${locator}`)
-      await requiredFile(locator)
+  return (sourcePath, source) => resolver.lookupPath(dirname(sourcePath), `${source}.qnt`).normalizedPath
+})()
+
+const selectedQuintRoots = (profile, worktree) => {
+  if (!Array.isArray(profile?.commands)) throw new Error("Formal profile has no identifiable command list")
+  const roots = []
+  for (const command of profile.commands) {
+    if (!Array.isArray(command?.args)) throw new Error("Formal profile command has no identifiable arguments")
+    for (const argument of command.args) {
+      if (typeof argument !== "string" || !argument.endsWith(".qnt")) continue
+      const path = resolve(worktree, argument)
+      if (!below(path, worktree))
+        throw new Error(`Formal profile selects a Quint input outside the worktree: ${argument}`)
+      roots.push(path)
     }
+  }
+  if (roots.length === 0) throw new Error("Formal profile selects no Quint inputs")
+  return [...new Set(roots)]
+}
+
+const discoverQuintClosure = async (profile, worktree, deadline) => {
+  const pending = selectedQuintRoots(profile, worktree)
+  const visited = new Set()
+  const parsed = new Set()
+  while (pending.length > 0) {
     deadline.assert()
+    const path = resolve(pending.pop())
+    if (visited.has(path)) continue
+    if (!below(path, worktree)) throw new Error(`Quint import leaves the worktree: ${path}`)
+    await requiredFile(path)
+    visited.add(path)
+    const canonical = await realpath(path)
+    if (parsed.has(canonical)) continue
+    parsed.add(canonical)
+    const text = await readFile(path, { encoding: "utf8", signal: deadline.signal })
+    for (const source of quintImportSources(text, path)) pending.push(quintImportedPath(path, source))
+  }
+  return [...visited].sort((left, right) => left.localeCompare(right))
+}
+
+const formalJavaScriptEntries = (worktree) =>
+  [
+    "scripts/with-gate-slot.mjs",
+    "scripts/run-formal-gate.mjs",
+    "scripts/run-formal-workflow.mjs",
+    "scripts/run-formal-profile.mjs",
+    "scripts/check-quint-models.mjs"
+  ].map((path) => join(worktree, path))
+
+const walkSyntax = (node, visit) => {
+  if (node === null || typeof node !== "object") return
+  if (typeof node.type === "string") visit(node)
+  for (const [key, child] of Object.entries(node)) {
+    if (key === "start" || key === "end" || key === "loc") continue
+    if (Array.isArray(child)) for (const item of child) walkSyntax(item, visit)
+    else walkSyntax(child, visit)
   }
 }
+
+const literalModuleSources = (text, sourcePath) => {
+  let tree
+  try {
+    tree = parse(text, { allowHashBang: true, ecmaVersion: "latest", sourceType: "module" })
+  } catch (error) {
+    throw new Error(`Unidentifiable JavaScript formal input in ${sourcePath}: ${error.message}`, { cause: error })
+  }
+  const sources = []
+  const literal = (node, kind) => {
+    if (node?.type !== "Literal" || typeof node.value !== "string")
+      throw new Error(`Unsupported non-literal ${kind} in formal source: ${sourcePath}`)
+    sources.push(node.value)
+  }
+  walkSyntax(tree, (node) => {
+    if (["ImportDeclaration", "ExportNamedDeclaration", "ExportAllDeclaration"].includes(node.type) && node.source)
+      literal(node.source, "module source")
+    else if (node.type === "ImportExpression") literal(node.source, "dynamic import")
+    else if (
+      node.type === "CallExpression" &&
+      ((node.callee?.type === "Identifier" && node.callee.name === "require") ||
+        (node.callee?.type === "MemberExpression" &&
+          node.callee.computed === false &&
+          node.callee.object?.type === "Identifier" &&
+          node.callee.object.name === "require" &&
+          node.callee.property?.type === "Identifier" &&
+          node.callee.property.name === "resolve"))
+    ) {
+      if (node.arguments.length !== 1) throw new Error(`Unsupported require call in formal source: ${sourcePath}`)
+      literal(node.arguments[0], "require source")
+    }
+  })
+  return sources
+}
+
+const localJavaScriptPath = async (specifier, importer, worktree) => {
+  if (!(specifier.startsWith(".") || specifier.startsWith("/") || specifier.startsWith("file:"))) return undefined
+  const requested = specifier.startsWith("file:") ? fileURLToPath(specifier) : resolve(dirname(importer), specifier)
+  if (!below(requested, worktree))
+    throw new Error(`Repository formal source imports outside the worktree: ${importer} -> ${requested}`)
+  const candidates =
+    extname(requested) === ""
+      ? [requested, ...[".mjs", ".js", ".cjs", ".json"].map((suffix) => `${requested}${suffix}`)]
+      : [requested]
+  for (const candidate of candidates) {
+    try {
+      const status = await lstat(candidate)
+      if (status.isFile() || status.isSymbolicLink()) return candidate
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error
+    }
+  }
+  throw new Error(`Missing repository formal source import: ${importer} -> ${specifier}`)
+}
+
+const discoverJavaScriptClosure = async (worktree, deadline) => {
+  const pending = formalJavaScriptEntries(worktree)
+  const visited = new Set()
+  while (pending.length > 0) {
+    deadline.assert()
+    const path = resolve(pending.pop())
+    if (visited.has(path)) continue
+    await requiredFile(path)
+    visited.add(path)
+    if (path.endsWith(".json")) continue
+    const text = await readFile(path, { encoding: "utf8", signal: deadline.signal })
+    for (const source of literalModuleSources(text, path)) {
+      const dependency = await localJavaScriptPath(source, path, worktree)
+      if (dependency !== undefined) pending.push(dependency)
+    }
+  }
+  return [...visited].sort((left, right) => left.localeCompare(right))
+}
+
+const discoverFormalSources = async (profile, worktree, deadline) =>
+  [
+    ...new Set([
+      ...(await discoverJavaScriptClosure(worktree, deadline)),
+      ...(await discoverQuintClosure(profile, worktree, deadline))
+    ])
+  ].sort((left, right) => left.localeCompare(right))
 // Apalache's ConfigManager searches these paths even without caller configuration arguments.
 const apalacheConfigurationPaths = (worktree, javaUserHome) => {
   const paths = [join(javaUserHome, ".tlaplus", "apalache.cfg")]
@@ -532,17 +679,6 @@ const refuseApalacheConfiguration = async (paths, deadline) => {
     )
   }
 }
-const sourceRoots = (worktree) =>
-  [
-    "specs",
-    "scripts",
-    "package.json",
-    "pnpm-lock.yaml",
-    "pnpm-workspace.yaml",
-    ".npmrc",
-    "patches",
-    ".github/workflows/ci.yml"
-  ].map((path) => join(worktree, path))
 const validateToolchain = (toolchain) => {
   if (
     toolchain?.version !== formalInputPolicyVersion ||
@@ -576,16 +712,9 @@ export const startFormalInputGuard = async ({
   if (JSON.stringify(environment) !== JSON.stringify(effectiveEnvironment))
     throw new Error("Formal child environment must be the sanitized formal environment")
   const root = await realpath(worktree)
-  const source = sourceRoots(root)
   const configPaths = apalacheConfigurationPaths(root, toolchain.javaUserHome)
-  const requiredSource = [
-    "specs",
-    "scripts",
-    "package.json",
-    "pnpm-lock.yaml",
-    "pnpm-workspace.yaml",
-    ".github/workflows/ci.yml"
-  ].map((path) => join(root, path))
+  const discoveryRoots = [root, ...toolchain.roots, ...configPaths]
+  const discoveryExcludedRoots = [".git", ".scratch", "coverage", "node_modules"].map((path) => join(root, path))
   const originalEffectiveEnvironment = JSON.stringify(effectiveEnvironment)
   const originalEnvironment = JSON.stringify(environmentIdentity(environment))
   const originalProfile = JSON.stringify(profile)
@@ -593,9 +722,11 @@ export const startFormalInputGuard = async ({
   const controller = new AbortController()
   let phaseTimer = setTimeout(() => controller.abort(), deadline.remaining())
   const timings = { observerSetupMilliseconds: 0, initialSnapshotMilliseconds: 0, qualificationMilliseconds: [] }
-  const observerStarted = performance.now()
-  const observer = await startObserver({
-    roots: [...source, ...toolchain.roots, ...configPaths],
+  const broadObserverStarted = performance.now()
+  const broadObserver = await startObserver({
+    roots: discoveryRoots,
+    excludedRoots: discoveryExcludedRoots,
+    protectedRoots: [...toolchain.roots, ...configPaths],
     pythonExecutable: toolchain.pythonExecutable,
     pythonArguments: ["-I", "-S"],
     environment,
@@ -605,14 +736,41 @@ export const startFormalInputGuard = async ({
     clearTimeout(phaseTimer)
     throw error
   })
-  timings.observerSetupMilliseconds = performance.now() - observerStarted
+  let source
+  let observer
+  try {
+    source = await discoverFormalSources(profile, root, deadline)
+    observer = await startObserver({
+      roots: [...source, ...toolchain.roots, ...configPaths],
+      pythonExecutable: toolchain.pythonExecutable,
+      pythonArguments: ["-I", "-S"],
+      environment,
+      signal: controller.signal,
+      timeoutMilliseconds: deadline.remaining()
+    })
+    await broadObserver.assertUnchanged()
+    const rediscovered = await discoverFormalSources(profile, root, deadline)
+    await broadObserver.assertUnchanged()
+    if (JSON.stringify(rediscovered) !== JSON.stringify(source))
+      throw new Error("Formal source dependency closure changed during discovery")
+    source = rediscovered
+    await observer.assertUnchanged()
+    await broadObserver.close()
+  } catch (error) {
+    await Promise.allSettled([observer?.close(), broadObserver.close()])
+    clearTimeout(phaseTimer)
+    throw error
+  }
+  timings.observerSetupMilliseconds = performance.now() - broadObserverStarted
   deadline.signal = controller.signal
   let failed
   const snapshot = async (phase) => {
     await refuseApalacheConfiguration(configPaths, phase)
     if (toolchain.runtimePolicy === "debian12") await validateRuntimeConfiguration(toolchain.runtimeRoots, phase)
-    const sourceManifest = await manifest(source, source, requiredSource, phase)
-    await validateQuintImports(sourceManifest, source, phase)
+    const currentSource = await discoverFormalSources(profile, root, phase)
+    if (JSON.stringify(currentSource) !== JSON.stringify(source))
+      throw new Error("Formal source dependency closure changed during verification")
+    const sourceManifest = await manifest(source, [root], source, phase)
     const toolManifest = await manifest(
       [...toolchain.roots, ...configPaths],
       [...toolchain.allowedRoots, ...configPaths],
@@ -668,7 +826,7 @@ export const startFormalInputGuard = async ({
     clearTimeout(phaseTimer)
   } catch (error) {
     clearTimeout(phaseTimer)
-    await observer.close()
+    await Promise.allSettled([observer.close(), broadObserver.close()])
     throw error
   }
   return {
@@ -709,7 +867,7 @@ export const startFormalInputGuard = async ({
     },
     close: async () => {
       clearTimeout(phaseTimer)
-      await observer.close()
+      await Promise.allSettled([observer.close(), broadObserver.close()])
     }
   }
 }

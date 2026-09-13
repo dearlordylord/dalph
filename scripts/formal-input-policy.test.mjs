@@ -29,7 +29,7 @@ const fixture = () => {
   const outer = mkdtempSync(join(tmpdir(), "dalph-formal-input-"))
   cleanups.push(() => rmSync(outer, { force: true, recursive: true }))
   const root = join(outer, "repo")
-  for (const directory of ["specs", "scripts", ".github/workflows", "source", ".git", "tools"])
+  for (const directory of ["specs", "scripts", ".github/workflows", "docs", "source", ".git", "tools"])
     mkdirSync(join(root, directory), { recursive: true })
   for (const file of [
     "package.json",
@@ -37,8 +37,13 @@ const fixture = () => {
     "pnpm-workspace.yaml",
     ".github/workflows/ci.yml",
     "specs/model.qnt",
-    "scripts/runner.mjs",
+    "scripts/with-gate-slot.mjs",
+    "scripts/run-formal-gate.mjs",
+    "scripts/run-formal-workflow.mjs",
+    "scripts/run-formal-profile.mjs",
+    "scripts/check-quint-models.mjs",
     "source/app.ts",
+    "docs/formal-notes.md",
     ".git/HEAD",
     ".git/index",
     "tools/runtime.so"
@@ -57,7 +62,12 @@ const fixture = () => {
     versions: { fixture: "1" }
   }
   const environment = createFormalEnvironment({ PATH: process.env.PATH, HOME: outer })
-  const profile = { obligations: ["one", "two"], seed: 153000, budget: 720000 }
+  const profile = {
+    obligations: ["one", "two"],
+    seed: 153000,
+    budget: 720000,
+    commands: [{ args: ["typecheck", "specs/model.qnt"] }]
+  }
   const guard = async (options = {}) => {
     const g = await startFormalInputGuard({
       worktree: root,
@@ -82,26 +92,99 @@ test("retains formal reuse across unrelated edits without binding HEAD index or 
   const f = fixture(),
     original = await f.identity()
   for (const file of ["source/app.ts", ".git/HEAD", ".git/index"]) writeFileSync(join(f.root, file), "unrelated\n")
+  for (const file of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".github/workflows/ci.yml"])
+    writeFileSync(join(f.root, file), "unrelated raw metadata\n")
+  const unrelatedScript = join(f.root, "scripts/repair.test.mjs")
+  writeFileSync(unrelatedScript, "assert.equal(actual, expected)\n")
+  writeFileSync(unrelatedScript, "assert.equal(actual, corrected)\n")
+  rmSync(unrelatedScript)
+  writeFileSync(join(f.root, "specs/experiment.qnt"), "module experiment {}\n")
+  writeFileSync(join(f.root, "docs/formal-notes.md"), "updated notes\n")
   assert.equal((await f.identity()).inputDigest, original.inputDigest)
   assert.equal("head" in original, false)
   assert.equal("index" in original, false)
 })
 
-test("reruns after input membership content mode or link changes", async () => {
+test("discovers direct and transitive JavaScript helpers without including their siblings", async () => {
+  const f = fixture()
+  writeFileSync(join(f.root, "scripts/run-formal-gate.mjs"), 'import "./direct.mjs"\nimport "./required.cjs"\n')
+  writeFileSync(
+    join(f.root, "scripts/direct.mjs"),
+    'export { value } from "./transitive.mjs"\nexport const dynamic = import("./transitive.mjs")\n'
+  )
+  writeFileSync(join(f.root, "scripts/transitive.mjs"), "export const value = 1\n")
+  writeFileSync(
+    join(f.root, "scripts/required.cjs"),
+    'require("./required-helper.cjs"); require.resolve("./resolved-helper.cjs")\n'
+  )
+  writeFileSync(join(f.root, "scripts/required-helper.cjs"), "exports.required = true\n")
+  writeFileSync(join(f.root, "scripts/resolved-helper.cjs"), "exports.resolved = true\n")
+  writeFileSync(join(f.root, "scripts/sibling.test.mjs"), "throw new Error('not executed')\n")
+  const original = await f.identity()
+  for (const selected of ["direct.mjs", "transitive.mjs", "required.cjs", "required-helper.cjs", "resolved-helper.cjs"])
+    assert.equal(
+      original.sourceManifest.some((entry) => entry.path.endsWith(selected)),
+      true
+    )
+  writeFileSync(join(f.root, "scripts/transitive.mjs"), "export const value = 2\n")
+  assert.notEqual((await f.identity()).inputDigest, original.inputDigest)
+  const changed = await f.identity()
+  writeFileSync(join(f.root, "scripts/sibling.test.mjs"), "export const repaired = true\n")
+  assert.equal((await f.identity()).inputDigest, changed.inputDigest)
+})
+
+test("discovers selected, negative-control, and recursively imported Quint inputs only", async () => {
+  const f = fixture()
+  writeFileSync(join(f.root, "specs/model.qnt"), 'module fixture { import helper.* from "./helper" }\n')
+  writeFileSync(join(f.root, "specs/helper.qnt"), "module helper {}\n")
+  writeFileSync(join(f.root, "specs/negative-control.qnt"), "module negative {}\n")
+  f.profile.commands.push({ args: ["test", "specs/negative-control.qnt", "--main", "negative"] })
+  const original = await f.identity()
+  writeFileSync(join(f.root, "specs/helper.qnt"), "module helper { val changed = true }\n")
+  assert.notEqual((await f.identity()).inputDigest, original.inputDigest)
+  const transitive = await f.identity()
+  writeFileSync(join(f.root, "specs/negative-control.qnt"), "module negative { val changed = true }\n")
+  assert.notEqual((await f.identity()).inputDigest, transitive.inputDigest)
+  const selected = await f.identity()
+  writeFileSync(join(f.root, "specs/experiment.qnt"), "module experiment { val changed = true }\n")
+  assert.equal((await f.identity()).inputDigest, selected.inputDigest)
+})
+
+test("retained exact observation ignores unrelated script mutation but rejects imported dependency disappearance", async () => {
+  const f = fixture()
+  writeFileSync(join(f.root, "scripts/run-formal-gate.mjs"), 'import "./helper.mjs"\n')
+  writeFileSync(join(f.root, "scripts/helper.mjs"), "export const helper = true\n")
+  const g = await f.guard()
+  const sibling = join(f.root, "scripts/unrelated.test.mjs")
+  writeFileSync(sibling, "assert(false)\n")
+  writeFileSync(sibling, "assert(true)\n")
+  rmSync(sibling)
+  assert.equal((await g.finish()).inputDigest, g.identity.inputDigest)
+  rmSync(join(f.root, "scripts/helper.mjs"))
+  await assert.rejects(g.finish(), /dirty|error|missing/u)
+})
+
+test("rejects non-literal repository dependency discovery", async () => {
+  const f = fixture()
+  writeFileSync(
+    join(f.root, "scripts/run-formal-gate.mjs"),
+    "const dependency = './helper.mjs'; await import(dependency)\n"
+  )
+  await assert.rejects(f.guard(), /Unsupported non-literal dynamic import/u)
+})
+
+test("reruns after selected content, mode, or newly imported target changes", async () => {
   const f = fixture(),
     original = await f.identity()
-  writeFileSync(join(f.root, ".npmrc"), "new optional config\n")
+  writeFileSync(join(f.root, "scripts/run-formal-gate.mjs"), "export const changed = true\n")
   assert.notEqual((await f.identity()).inputDigest, original.inputDigest)
   const next = await f.identity()
   chmodSync(join(f.root, "specs/model.qnt"), 0o755)
   assert.notEqual((await f.identity()).inputDigest, next.inputDigest)
   const mode = await f.identity()
-  symlinkSync("model.qnt", join(f.root, "specs/alias.qnt"))
+  writeFileSync(join(f.root, "scripts/helper.mjs"), "export const helper = 1\n")
+  writeFileSync(join(f.root, "scripts/run-formal-gate.mjs"), 'export { helper } from "./helper.mjs"\n')
   assert.notEqual((await f.identity()).inputDigest, mode.inputDigest)
-  const linked = await f.identity()
-  renameSync(join(f.root, "specs/model.qnt"), join(f.root, "specs/renamed.qnt"))
-  rmSync(join(f.root, "specs/alias.qnt"))
-  assert.notEqual((await f.identity()).inputDigest, linked.inputDigest)
 })
 
 test("invalidates changed effective tools environment profile or policy", async () => {
@@ -130,17 +213,21 @@ for (const [phase, change] of [
   [
     "reuse membership create delete",
     (f) => {
-      const p = join(f.root, "specs/temporary.qnt")
-      writeFileSync(p, "temporary\n")
-      rmSync(p)
+      const p = join(f.root, "specs/model.qnt")
+      const original = readFileSync(p)
+      writeFileSync(p, "module temporary {}\n")
+      writeFileSync(p, original)
     }
   ],
   [
     "reuse link replacement",
     (f) => {
-      const p = join(f.root, "specs/link.qnt")
-      symlinkSync("model.qnt", p)
+      const p = join(f.root, "scripts/run-formal-gate.mjs")
+      const original = readFileSync(p)
       rmSync(p)
+      symlinkSync("run-formal-workflow.mjs", p)
+      rmSync(p)
+      writeFileSync(p, original)
     }
   ]
 ])
@@ -154,12 +241,15 @@ for (const [phase, change] of [
 
 test("refuses unidentifiable current inputs: undeclared target and cycle", async () => {
   const f = fixture()
-  writeFileSync(join(f.outer, "external.qnt"), "external\n")
+  writeFileSync(join(f.outer, "external.qnt"), "module external {}\n")
   symlinkSync(join(f.outer, "external.qnt"), join(f.root, "specs/external.qnt"))
+  writeFileSync(join(f.root, "specs/model.qnt"), 'module fixture { import external.* from "./external" }\n')
   await assert.rejects(f.guard(), /Undeclared external/u)
+  writeFileSync(join(f.root, "specs/model.qnt"), "module fixture {}\n")
   rmSync(join(f.root, "specs/external.qnt"))
-  symlinkSync(".", join(f.root, "specs/cycle"))
-  await assert.rejects(f.guard(), /Cyclic/u)
+  symlinkSync("cycle.mjs", join(f.root, "scripts/cycle.mjs"))
+  writeFileSync(join(f.root, "scripts/run-formal-gate.mjs"), 'import "./cycle.mjs"\n')
+  await assert.rejects(f.guard(), /levels of symbolic links|loop|ELOOP/u)
 })
 
 test("shared dependencies are visited without admitting a filesystem cycle", async () => {
@@ -175,7 +265,7 @@ test("unsupported prerequisites never yield verified success", async () => {
   await assert.rejects(f.guard({ toolchain: { ...f.toolchain, platform: "unsupported" } }), /Unsupported/u)
   await assert.rejects(f.guard({ setupTimeoutMilliseconds: Infinity }), /finite/u)
   await assert.rejects(f.guard({ setupTimeoutMilliseconds: 1 }), /deadline|aborted|timeout/u)
-  rmSync(join(f.root, "pnpm-lock.yaml"))
+  rmSync(join(f.root, "specs/model.qnt"))
   await assert.rejects(f.guard(), /missing required/u)
 })
 
@@ -237,7 +327,7 @@ test("rejects a Quint import outside the conservative formal boundary", async ()
   const f = fixture()
   writeFileSync(join(f.outer, "external.qnt"), "module external {}\n")
   writeFileSync(join(f.root, "specs/model.qnt"), 'module fixture { import external.* from "../../external" }\n')
-  await assert.rejects(f.guard(), /Undeclared Quint import/u)
+  await assert.rejects(f.guard(), /Quint import leaves the worktree/u)
 })
 
 test("unreadable current inputs refuse qualification without a hash fallback", async () => {
@@ -255,7 +345,7 @@ for (const [name, source] of [
   test(`parser rejects external imports: ${name}`, async () => {
     const f = fixture()
     writeFileSync(join(f.root, "specs/model.qnt"), source)
-    await assert.rejects(f.guard(), /Undeclared Quint import/u)
+    await assert.rejects(f.guard(), /Quint import leaves the worktree/u)
   })
 
 test("parser respects comments and quoted strings without manufacturing source imports", async () => {
@@ -404,30 +494,36 @@ test(
   { timeout: 2_000 },
   async () => {
     const f = fixture()
+    let observers = 0
     let drains = 0
     let aborted = false
     const g = await f.guard({
-      startObserver: async ({ signal }) => ({
-        assertUnchanged: async () => {
-          drains += 1
-          if (drains === 1) return
-          await new Promise((resolve, reject) => {
-            signal.addEventListener(
-              "abort",
-              () => {
-                aborted = true
-                reject(new Error("observer drain aborted at remaining deadline"))
-              },
-              { once: true }
-            )
-          })
-        },
-        close: async () => {}
-      })
+      startObserver: async ({ signal }) => {
+        observers += 1
+        const exact = observers === 2
+        return {
+          assertUnchanged: async () => {
+            if (!exact) return
+            drains += 1
+            if (drains <= 2) return
+            await new Promise((resolve, reject) => {
+              signal.addEventListener(
+                "abort",
+                () => {
+                  aborted = true
+                  reject(new Error("observer drain aborted at remaining deadline"))
+                },
+                { once: true }
+              )
+            })
+          },
+          close: async () => {}
+        }
+      }
     })
     await assert.rejects(g.finish({ timeoutMilliseconds: 25 }), /remaining deadline/u)
     assert.equal(aborted, true)
-    assert.equal(drains, 2)
+    assert.equal(drains, 3)
     await assert.rejects(g.assertUnchanged(), /remaining deadline/u)
   }
 )

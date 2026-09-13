@@ -76,7 +76,7 @@ const fixture = () => {
     profileIdentity: formalSuccess.profileIdentity,
     outputLineCount: 0,
     observation: {
-      version: 1,
+      version: 2,
       observerVersion: 1,
       ready: true,
       drained: true,

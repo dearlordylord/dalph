@@ -222,7 +222,7 @@ export const seedQualityFormalBoundary = (worktree) => {
   const reportPath = join(runDirectory, "formal-executions", "controlled.json")
   initializeRecord(reportPath, report)
   const observation = {
-    version: 1,
+    version: 2,
     observerVersion: 1,
     ready: true,
     drained: true,

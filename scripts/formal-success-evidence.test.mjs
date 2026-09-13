@@ -38,7 +38,7 @@ const fixture = () => {
   const profile = createQuintEffectiveProfile({ purpose: "local-guarded" })
   const profileIdentity = digest(JSON.stringify(profile))
   const identity = {
-    version: 1,
+    version: 2,
     worktree: root,
     inputDigest: digest("formal inputs"),
     profileDigest: profileIdentity,
@@ -181,7 +181,7 @@ const fixture = () => {
   }
   const execution = { helperObligationId, reportPath, reportDigest: saveReport() }
   const observation = {
-    version: 1,
+    version: 2,
     observerVersion: 1,
     ready: true,
     drained: true,
@@ -237,7 +237,7 @@ test("publication crash accepts only complete stopped evidence", () =>
     assert.equal(readFormalSuccess(f.options).status, "miss")
   }))
 
-test("reruns when required evidence is malformed truncated obsolete or mismatched; distinguishes optional logs", () =>
+test("reruns when required evidence is malformed truncated old-policy or mismatched; distinguishes optional logs", () =>
   withFixture((f) => {
     const attempt = beginFormalAttempt(f.options)
     publishFormalSuccess({ attempt, execution: f.execution, observation: f.observation })
@@ -248,7 +248,7 @@ test("reruns when required evidence is malformed truncated obsolete or mismatche
       "{",
       "{}",
       JSON.stringify({ ...pointer, version: 2 }),
-      JSON.stringify({ ...pointer, policyVersion: 999 }),
+      JSON.stringify({ ...pointer, policyVersion: 1 }),
       JSON.stringify({ ...pointer, attemptId: newIdentity() })
     ]) {
       writeFileSync(attempt.pointerPath, invalid)

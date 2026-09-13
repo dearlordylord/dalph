@@ -19,7 +19,8 @@ const same = (left, right) => JSON.stringify(left) === JSON.stringify(right)
 const requireFact = (fact, message) => {
   if (!fact) throw new Error(message)
 }
-const policyVersion = 1
+export const formalSuccessPolicyVersion = 2
+const policyVersion = formalSuccessPolicyVersion
 const scope = ({ identity, location, profileIdentity }) => {
   requireFact(
     typeof identity?.inputDigest === "string" && identity.worktree === location.worktree,
@@ -273,7 +274,7 @@ export const validateFormalExecution = ({ attempt, execution }) => {
 
 export const publishFormalSuccess = ({ attempt, execution, observation }) => {
   requireFact(
-    observation?.version === 1 &&
+    observation?.version === formalSuccessPolicyVersion &&
       observation.observerVersion === 1 &&
       observation.unchanged === true &&
       observation.ready === true &&
@@ -374,7 +375,7 @@ export const readReferencedFormalSuccess = ({ identity, profileIdentity, recordP
     "Invalid referenced formal provenance"
   )
   requireFact(
-    success.observation?.version === 1 &&
+    success.observation?.version === formalSuccessPolicyVersion &&
       success.observation.observerVersion === 1 &&
       success.observation.unchanged === true &&
       success.observation.ready === true &&

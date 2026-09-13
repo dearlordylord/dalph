@@ -39,6 +39,7 @@ import {join} from 'node:path'
 import {digest} from './gate-custody-records.mjs'
 const event=(root,value)=>appendFileSync(join(root,'.scratch','events'),value+'\\n')
 export const createFormalEnvironment=(environment)=>({...environment})
+export const formalInputPolicyVersion=2
 export const resolveFormalToolchain=async({worktree})=>{
  event(worktree,'prepare');return {nodeExecutable:process.execPath,quintEntryPoint:join(worktree,'node_modules','@informalsystems','quint','dist','src','cli.js'),javaExecutable:join(worktree,'fake-java.cjs'),javaUserHome:worktree,javaArguments:['-Duser.home='+worktree],
  apalacheJar:join(worktree,'.quint','apalache-dist-0.56.1','apalache','lib','apalache.jar'),
@@ -48,11 +49,11 @@ export const startFormalInputGuard=async({worktree,profile,toolchain})=>{
  event(worktree,'guard-start')
  const bytes=readFileSync(join(worktree,'formal-input'))
  const profileDigest=digest(JSON.stringify(profile))
- const identity={version:1,worktree,profileDigest,toolchain,inputDigest:digest(Buffer.concat([bytes,Buffer.from(profileDigest)]))}
+ const identity={version:2,worktree,profileDigest,toolchain,inputDigest:digest(Buffer.concat([bytes,Buffer.from(profileDigest)]))}
  return {identity,assertUnchanged:async()=>{},finish:async()=>{
  event(worktree,'guard-finish')
  if(!bytes.equals(readFileSync(join(worktree,'formal-input'))))throw Error('fixture input changed')
- return {version:1,observerVersion:1,ready:true,drained:true,unchanged:true,inputDigest:identity.inputDigest}
+ return {version:2,observerVersion:1,ready:true,drained:true,unchanged:true,inputDigest:identity.inputDigest}
  },close:async()=>event(worktree,'guard-close')}
 }
 `
@@ -133,7 +134,7 @@ import {join} from 'node:path'
 import {platform,arch} from 'node:os'
 import {createFormalEnvironment,startFormalInputGuard as originalGuard,formalInputPolicyVersion} from './controlled-original-formal-input-policy.mjs'
 import {startInputObserver} from './gate-input-observer.mjs'
-export {createFormalEnvironment}
+export {createFormalEnvironment,formalInputPolicyVersion}
 const event=(root,value)=>appendFileSync(join(root,'.scratch','events'),value+'\\n')
 const control=root=>JSON.parse(readFileSync(join(root,'.scratch','control.json'),'utf8'))
 export const resolveFormalToolchain=async({worktree})=>{
@@ -197,10 +198,14 @@ const fixture = ({ omitObligation = false, publicationCrashes = false, realObser
     )
     put("scripts/formal-input-policy.mjs", observedInputAdapter)
     const require = createRequire(import.meta.url)
+    const acornRoot = dirname(require.resolve("acorn/package.json"))
+    cpSync(acornRoot, join(root, "node_modules", "acorn"), { recursive: true })
     const resolverPath = require.resolve("@informalsystems/quint/dist/src/parsing/sourceResolver.js")
     const quintRequire = createRequire(resolverPath)
     put("node_modules/@informalsystems/quint/dist/src/parsing/sourceResolver.js", readFileSync(resolverPath, "utf8"))
-    for (const dependency of ["eol", "@sweet-monads/either"]) {
+    const lexerPath = require.resolve("@informalsystems/quint/dist/src/generated/QuintLexer.js")
+    put("node_modules/@informalsystems/quint/dist/src/generated/QuintLexer.js", readFileSync(lexerPath, "utf8"))
+    for (const dependency of ["eol", "@sweet-monads/either", "antlr4ts"]) {
       let packageRoot = dirname(quintRequire.resolve(dependency))
       while (!existsSync(join(packageRoot, "package.json"))) {
         assert.notEqual(packageRoot, dirname(packageRoot), `Cannot identify installed fixture dependency ${dependency}`)
@@ -208,7 +213,8 @@ const fixture = ({ omitObligation = false, publicationCrashes = false, realObser
       }
       cpSync(packageRoot, join(root, "node_modules", dependency), { recursive: true })
     }
-    put("specs/.keep", "")
+    for (const command of createQuintEffectiveProfile({ purpose: "local-guarded" }).commands)
+      for (const argument of command.args) if (argument.endsWith(".qnt")) put(argument, "module fixture {}\n")
     put("pnpm-lock.yaml", "lockfileVersion: '9.0'\n")
     put("pnpm-workspace.yaml", "packages: []\n")
     put(".github/workflows/ci.yml", "name: controlled\n")
@@ -476,6 +482,30 @@ test(
       assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 105)
       assert.equal(f.events().filter((event) => event === "server-start").length, 1)
       assert.equal(f.saved().success.finishedAt, original.success.finishedAt)
+    } finally {
+      f.cleanup()
+    }
+  }
+)
+
+test(
+  "unrelated test-only repair reuses complete formal success with zero checker or server launches",
+  { timeout: 120000 },
+  async () => {
+    const f = fixture({ realObservation: true })
+    try {
+      const first = await launch(f).completion
+      assert.equal(first.code, 0, first.stderr)
+      const checkerCount = f.events().filter((event) => event.startsWith("checker ")).length
+      const serverCount = f.events().filter((event) => event === "server-start").length
+      assert.equal(checkerCount, 105)
+      assert.equal(serverCount, 1)
+      f.put("scripts/unrelated-repair.test.mjs", "assert.equal(actual, corrected)\n")
+      const second = await launch(f).completion
+      assert.equal(second.code, 0, second.stderr)
+      assert.match(second.stdout, /zero checkers or servers started/u)
+      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, checkerCount)
+      assert.equal(f.events().filter((event) => event === "server-start").length, serverCount)
     } finally {
       f.cleanup()
     }
