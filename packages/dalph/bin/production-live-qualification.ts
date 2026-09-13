@@ -17,7 +17,7 @@ const application = Effect.scoped(
       ProductionLiveQualificationManifestLocator,
       "DALPH_LIVE_QUALIFICATION_MANIFEST"
     )
-    const githubToken = yield* Config.redacted("GITHUB_TOKEN")
+    const githubToken = yield* Config.redacted("DALPH_LIVE_GITHUB_TOKEN")
     const codexProviderCredential = yield* Config.redacted("DALPH_CODEX_PROVIDER_CREDENTIAL")
     const fs = yield* FileSystem.FileSystem
     const input = yield* fs
