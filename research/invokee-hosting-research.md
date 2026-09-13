@@ -54,8 +54,8 @@ needs only these behaviors:
 | Read capacity | `operatorControl.readTaskWorkCapacity` | Return capacity and `RunPolicyRevision`. |
 | Set capacity | `operatorControl.setTaskWorkCapacity` | Require the caller's `expectedRevision`; return the new complete policy or the typed current-policy conflict. |
 | Wake | `RunReactivationOwner.hint(OperatorWake)` | Ask an already-unpaused Run to enter its ordinary activation. Do not clear a durable Pause. |
-| Unpause | `operatorControl.applyControlDirection` | Durably apply explicit Run Unpause. The accepted-control observer already starts the timer and queues one ordinary activation. |
-| Refresh | `RunReactivationOwner.hint(TrackerNotification)` | Accept whole-graph or task-ID advisory scope and initially perform a sufficient full-root active tracker refresh. The request carries no graph facts. |
+| Unpause | `operatorControl.applyControlDirection` | Durably apply explicit Run Unpause. A paused-to-unpaused owner transition starts the timer and offers one ordinary wake; a repeat while still unpaused does not. |
+| Refresh | `RunReactivationOwner.hint(TrackerNotification)` | Map whole-graph or task-ID advisory scope to a payload-free hint. Later processing, if any, uses full-root active refresh. Returning from the hint proves no completed read; the request carries no graph facts. |
 | Exit host | existing application Exit request boundary | Remain an explicit host-management operation. Transport disconnect never invokes it. |
 
 The current runtime observation contains a coherent `trackerGraph` and proposed
@@ -72,24 +72,28 @@ not need.
 ### Wake and Unpause are different requests
 
 An agent asking Dalph to look for work must not silently override Alice's
-durable Pause. For the prototype, expose the distinction directly:
+durable Pause. `wake` submits `OperatorWake`, a non-authoritative process-local
+request for ordinary Run entry. The current `hint` result cannot tell the caller
+whether the owner queued, coalesced, or discarded it while paused or stopped.
+Unpause remains a separate durable control direction.
 
-- If the Run is unpaused, `wake` sends `OperatorWake`. It asks the ordinary Run
-  entry to reconsider current accepted facts.
-- If the Run is paused, `wake` reports that no activation was admitted. Alice
-  or her instructed agent must explicitly apply `Unpause`.
-- Accepted `Unpause` already starts the timer and queues exactly one ordinary
-  activation ([run-reactivation-owner.ts](../packages/orchestrator/src/coordination/run/run-reactivation-owner.ts#L318)).
+When accepted Unpause changes the live owner from paused to unpaused, its
+callback starts the timer and offers one `OperatorWake`. Repeating Unpause while
+still unpaused produces another journal record but no additional owner wake.
+An intervening Pause makes a later Unpause a new state-changing instruction;
+there is no capacity-style expected revision on that direction request. A client
+must not blindly retry an ambiguous Unpause: the replay can override another
+client's intervening Pause. Capacity's exact-replay behavior does not generalize
+to every command.
 
-The existing `hint` method returns `void` and drops hints when the owner is
-paused or stopped. A production-facing operation therefore needs a typed
-response such as accepted, paused, or closed. The prototype may wrap an
-instrumented owner to establish this desired behavior; it must not claim the
-current method already proves the response.
+The existing `hint` method returns `void`; it exposes no accepted/paused/closed
+disposition. A boundary can report submission/handling of that call, but must
+not translate `void` into admission or completed activation/refresh. Tracker
+refresh hints are also silently suppressed while paused or stopped; the current
+result cannot report that condition or claim a fresh graph. See the more precise
+[command semantics research](./invokee-command-semantics.md).
 
-Tracker refresh is also suppressed while paused, by the same owner gate. The
-prototype should report that condition rather than claim a fresh graph. The
-current tracker hint is payload-free. The application operation may accept a
+The current tracker hint is payload-free. The application operation may accept a
 whole-graph request or task IDs while initially satisfying both with a
 sufficient full-root reread; the IDs remain an advisory scope, never supplied
 graph facts. The first prototype can exercise only whole-root refresh, provided
@@ -215,7 +219,7 @@ the independent attachment question.
 
 - A stable public task-graph/frontier schema and whether real-time delivery uses
   streaming, long polling, or repeated snapshots.
-- Typed wake/refresh admission results; the current ephemeral owner accepts no
+- Typed wake/refresh disposition or completion results; the current ephemeral owner accepts no
   request identity and returns no disposition.
 - Targeted refresh optimization and result detail. Current production's hint is
   payload-free; a sufficient full-root reread can initially serve an ID-scoped

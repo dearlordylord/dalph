@@ -1,9 +1,15 @@
 # Dalph design research
 
-This worktree carries the eight research notes created in the invoker/invokee
+This worktree carries the research notes created in the invoker/invokee
 conversation. Research is evidence, not accepted runtime behavior.
 
+- [Latest targeted-validation findings](./invokee-validation-round.md)
+- [Research continuation and targeted validation](./invokee-research-next.md)
 - [Runnable hosting experiment](./prototypes/invokee-hosting/README.md)
+- [MCP lifecycle and SDK cancellation probe](./invokee-mcp-lifecycle.md)
+- [Command response-loss and cancellation semantics](./invokee-command-semantics.md)
+- [Task graph observation evidence](./invokee-graph-observation.md)
+- [Actual host lifetime validation](./invokee-host-lifetime-validation.md)
 - [Hosting research](./invokee-hosting-research.md) and [experiment evidence](./invokee-hosting-results.md)
 - [Consolidated first invokee milestone](./invokee-first-milestone.md)
 - [Active invoker/invokee interview](./invoker-invokee-interview.md)

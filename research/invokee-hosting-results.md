@@ -140,10 +140,11 @@ allowance expired during cold module loading. The corrected 60-second bound
 also detects early host exit. No retry was added. Final independent review found
 no remaining material issue within the documented experimental scope.
 
-Recommended next step: expose a narrow operations value from the existing
-production host's built Run context, then prove the same attachment chronology
-with controlled production boundaries. The experiment supports that direction;
-it does not yet qualify the first invokee milestone for production.
+Recommended next step: research the existing host composition and command
+semantics, then use a disposable composition experiment only where source
+inspection cannot resolve the uncertainty. Convert the findings into proposed
+tasks before implementation. The experiment does not qualify the first invokee
+milestone for production. See [research continuation](./invokee-research-next.md).
 
 The first commit attempt correctly rejected the scripts outside the repository's
 existing disposable `prototypes/` classification. They were moved to
