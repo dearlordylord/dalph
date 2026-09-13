@@ -56,7 +56,9 @@ export const stabilizeVerificationEnvironment = ({
 export const formalVerificationExecutables = (environment, commandExecutable = process.execPath) => [
   commandExecutable,
   process.execPath,
+  "node",
   environment.npm_execpath ?? "pnpm",
+  "pnpm",
   environment.JAVA_HOME === undefined ? "java" : join(environment.JAVA_HOME, "bin", "java"),
   "python3",
   "bash",

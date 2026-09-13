@@ -159,17 +159,19 @@ test("quality admission wrapper stabilizes PATH before its custody child", () =>
   assert.equal(calls[0].childPath, calls[0].effectivePath)
 })
 
-test("quality admission wrapper refuses shim-supplied nested Java before custody or executor launch", () => {
-  const { calls, custodyRuns, result } = dispatch({
-    arguments: ["--local-handoff", "--candidate=HEAD^"],
-    argvZeroTool: "java",
-    throughWrapper: true
+for (const tool of ["java", "node", "pnpm"]) {
+  test(`quality admission wrapper refuses shim-supplied ${tool} before custody or executor launch`, () => {
+    const { calls, custodyRuns, result } = dispatch({
+      arguments: ["--local-handoff", "--candidate=HEAD^"],
+      argvZeroTool: tool,
+      throughWrapper: true
+    })
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, new RegExp(`declared tool resolution changes: ${tool}`))
+    assert.equal(custodyRuns, 0)
+    assert.deepEqual(calls, [])
   })
-  assert.equal(result.status, 1)
-  assert.match(result.stderr, /declared tool resolution changes: java/u)
-  assert.equal(custodyRuns, 0)
-  assert.deepEqual(calls, [])
-})
+}
 
 test("quality purposes reject omitted duplicate conflicting and unsupported bypass arguments", () => {
   for (const args of [
