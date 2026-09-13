@@ -1,7 +1,17 @@
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -15,7 +25,14 @@ const resume = "12345678-1234-1234-1234-123456789012"
 
 /** Execute the unchanged command source against controlled process/stage boundaries.
  * Full admitted formal execution is covered by quality/formal integration fixtures. */
-const dispatch = ({ admitted = true, arguments: args, argvZeroTool, environment = {}, failLocal = false }) => {
+const dispatch = ({
+  admitted = true,
+  arguments: args,
+  argvZeroTool,
+  environment = {},
+  failLocal = false,
+  throughWrapper = false
+}) => {
   const root = mkdtempSync(join(tmpdir(), "dalph-quality-routing-"))
   const log = join(root, "dispatch.jsonl")
   const pnpmRoot = join(root, "pnpm")
@@ -55,6 +72,15 @@ const dispatch = ({ admitted = true, arguments: args, argvZeroTool, environment 
     )
     for (const file of ["quality-gate-stage-policy.mjs", "preflight-census.mjs", "resolve-quality-gate-base.mjs"])
       writeFileSync(join(root, file), `export * from ${JSON.stringify(new URL(file, import.meta.url).href)};`)
+    if (throughWrapper) {
+      writeFileSync(join(root, ".gitignore"), ".scratch/\ndispatch.jsonl\nhome/\nidentity-worktree/\npnpm/\n")
+      execFileSync("git", ["init", "-q"], { cwd: root })
+      execFileSync("git", ["config", "user.name", "Wrapped Quality"], { cwd: root })
+      execFileSync("git", ["config", "user.email", "wrapped@example.invalid"], { cwd: root })
+      execFileSync("git", ["add", "."], { cwd: root })
+      execFileSync("git", ["commit", "-qm", "wrapped base"], { cwd: root })
+      execFileSync("git", ["commit", "--allow-empty", "-qm", "wrapped candidate"], { cwd: root })
+    }
     const clean = withoutInheritedCustody(process.env)
     for (const key of [
       "CI",
@@ -77,11 +103,15 @@ const dispatch = ({ admitted = true, arguments: args, argvZeroTool, environment 
       clean.PATH = `${shim}:/usr/local/bin:/usr/bin:/bin`
       if (argvZeroTool === false) clean.DALPH_TEST_CAPTURE_IDENTITY = "1"
     }
-    const result = spawnSync(process.execPath, [join(root, "run-quality-gate.mjs"), ...args], {
-      cwd: repository,
+    const qualityCommand = [process.execPath, join(root, "run-quality-gate.mjs"), ...args]
+    const invocation = throughWrapper
+      ? [fileURLToPath(new URL("with-gate-slot.mjs", import.meta.url)), "--", ...qualityCommand]
+      : qualityCommand.slice(1)
+    const result = spawnSync(process.execPath, invocation, {
+      cwd: throughWrapper ? root : repository,
       env: { ...clean, npm_execpath: pnpmEntryPoint, ...environment },
       encoding: "utf8",
-      timeout: 10000
+      timeout: 30000
     })
     let calls = []
     try {
@@ -93,7 +123,8 @@ const dispatch = ({ admitted = true, arguments: args, argvZeroTool, environment 
     } catch (error) {
       if (error.code !== "ENOENT") throw error
     }
-    return { calls, result }
+    const runs = join(root, ".git", "dalph-gates", "runs")
+    return { calls, custodyRuns: existsSync(runs) ? readdirSync(runs).length : 0, result }
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -112,6 +143,31 @@ test("full quality entry refuses a shim-supplied nested Java before any child bo
   const { calls, result } = dispatch({ arguments: ["--local-handoff", `--candidate=${base}`], argvZeroTool: "java" })
   assert.equal(result.status, 1)
   assert.match(result.stderr, /declared tool resolution changes: java/u)
+  assert.deepEqual(calls, [])
+})
+
+test("quality admission wrapper stabilizes PATH before its custody child", () => {
+  const { calls, custodyRuns, result } = dispatch({
+    arguments: ["--local-handoff", "--candidate=HEAD^"],
+    argvZeroTool: false,
+    throughWrapper: true
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(custodyRuns, 1)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].effectivePath.includes("/.codex/tmp/arg0/"), false)
+  assert.equal(calls[0].childPath, calls[0].effectivePath)
+})
+
+test("quality admission wrapper refuses shim-supplied nested Java before custody or executor launch", () => {
+  const { calls, custodyRuns, result } = dispatch({
+    arguments: ["--local-handoff", "--candidate=HEAD^"],
+    argvZeroTool: "java",
+    throughWrapper: true
+  })
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /declared tool resolution changes: java/u)
+  assert.equal(custodyRuns, 0)
   assert.deepEqual(calls, [])
 })
 
