@@ -66,12 +66,14 @@ describe("hosted formal-model contract", () => {
     const jobs = parseWorkflowJobs(ciWorkflow)
     const formalJob = jobs.get("formal-models")?.join("\n")
     expect(formalJob).toBeDefined()
+    expect(formalJob).toContain("\n    runs-on: ubuntu-24.04-arm")
     expect(formalJob).toContain("\n    timeout-minutes: 16")
     expect(formalJob).toMatch(/\n\s+node-version: \$\{\{ matrix\.node-version \}\}/)
     expect(formalJob).toContain("\n        run: pnpm check:quint")
     expect(formalJob).toContain(
       "\n      matrix:\n        node-version: ${{ fromJSON(needs.change-plan.outputs.versions) }}"
     )
+    expect(jobs.get("quality")?.join("\n")).toContain("\n    runs-on: ubuntu-latest")
     expect(jobs.get("quality")?.join("\n")).not.toContain("pnpm check:quint")
     expect(quintGate).toContain("remainingSafetyTimeoutMilliseconds")
     expect(quintGate).toContain("createQuintGateTiming")

@@ -217,9 +217,11 @@ imports each package in a fresh Node process through its normal
 [`exports` entry point](https://nodejs.org/api/packages.html#package-entry-points),
 validates every declared bin, and checks the
 [`pnpm pack --dry-run`](https://pnpm.io/10.x/cli/pack) inventory. Missing,
-malformed, or unpackaged artifacts fail the command. The preflight census checks
-source structure before this operation; artifact validation stops at failed
-prerequisites rather than interpreting absent build output. `check:all` runs
+malformed, or unpackaged artifacts fail the command. The preflight census prepares
+production artifacts before source checks so a fresh checkout does not lint
+unresolved distributable declarations. Artifact validation stops at failed
+prerequisites rather than interpreting absent build output. Preflight control
+tests cover this ordering; it changes no Dalph runtime behavior. `check:all` runs
 the same census once and starts qualification suites only when it passes.
 Standalone preflight is evidence for repairs before freezing; the final full
 gate repeats the census on its frozen candidate. Use `check:fast` during edits.

@@ -42,8 +42,9 @@ export const boundedQualityGateCommand = ({ gate, nodeExecutable, pnpmEntryPoint
   timeoutMilliseconds: gate.timeout
 })
 
-/** Structural checks run once before qualification; source checks do not consume dist artifacts. */
+/** Structural checks run once before qualification; production artifacts are prepared before source checks. */
 export const preflightQualityGates = (baseSha) => [
+  { args: ["check:artifacts"], name: "build and production artifacts", timeout: 5 * 60 * SECOND },
   { args: ["typecheck"], name: "typecheck", timeout: 2 * 60 * SECOND },
   { args: ["typecheck:effect"], name: "Effect diagnostics", timeout: 3 * 60 * SECOND },
   { args: ["lint:code", "--census"], name: "format and lint", timeout: 5 * 60 * SECOND },
@@ -57,7 +58,6 @@ export const preflightQualityGates = (baseSha) => [
   { args: ["test:ci-change-classification"], name: "CI change classification", timeout: 60 * SECOND },
   { args: ["test:quint:selection"], name: "final formal selection controls", timeout: 60 * SECOND },
   { args: ["check:secrets"], name: "secret scan", timeout: 5 * 60 * SECOND },
-  { args: ["check:artifacts"], name: "build and production artifacts", timeout: 5 * 60 * SECOND },
   capabilityRegistrationQualityGate
 ]
 
@@ -66,6 +66,7 @@ export const fullQualityGateManifest = (baseSha, invocation) => {
   if (invocation?.candidateHeadSha !== undefined && !/^[0-9a-f]{40}$/u.test(invocation.candidateHeadSha))
     throw new Error("Candidate secret scan requires a canonical HEAD SHA")
   const preflightIds = [
+    "production-artifacts",
     "typecheck",
     "effect-diagnostics",
     "format-lint",
@@ -79,7 +80,6 @@ export const fullQualityGateManifest = (baseSha, invocation) => {
     "ci-classification",
     "formal-selection-controls",
     "secrets",
-    "production-artifacts",
     "capability-registration"
   ]
   const prefix = preflightQualityGates(baseSha).map((gate, ordinal) => ({

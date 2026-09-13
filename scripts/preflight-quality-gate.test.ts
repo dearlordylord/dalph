@@ -6,6 +6,7 @@ import {
 } from "./quality-gate-test-fixture.js"
 
 const structuralCommands = [
+  "check:artifacts",
   "typecheck",
   "typecheck:effect",
   "lint:code",
@@ -19,7 +20,6 @@ const structuralCommands = [
   "test:ci-change-classification",
   "test:quint:selection",
   "check:secrets",
-  "check:artifacts",
   "test:capability-registration"
 ]
 
