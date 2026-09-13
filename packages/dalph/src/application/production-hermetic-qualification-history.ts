@@ -408,7 +408,10 @@ const validateHistoricalActionAttribution = Effect.fn("HermeticQualification.val
 )
 
 /** Checks the existing original cursor view once; its existing invariants recompute every historical facet from items. */
-export const validateHermeticQualificationHistoricalSource = Effect.fn(
+export const validateHermeticQualificationHistoricalSource: (
+  snapshot: TraceAtCursor,
+  context: QualificationContext
+) => Effect.Effect<TraceAtCursor, HermeticQualificationSourceRejected> = Effect.fn(
   "HermeticQualification.validateHistoricalSource"
 )(function* (
   snapshot: TraceAtCursor,

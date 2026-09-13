@@ -22,7 +22,13 @@ type FreshStep = Extract<
   { readonly _tag: "FreshWorkflowRoute" | "FreshExecutorWorkflowRoute" }
 >["step"]
 
-export const validateFreshStep = Effect.fn("HermeticQualification.validateFreshStep")(function* (
+export const validateFreshStep: (
+  step: FreshStep,
+  context: QualificationContext
+) => Effect.Effect<
+  Exclude<FreshStep, { readonly _tag: "ReadRejectedTaskClaim" }>,
+  HermeticQualificationSourceRejected
+> = Effect.fn("HermeticQualification.validateFreshStep")(function* (
   step: FreshStep,
   context: QualificationContext
 ): Effect.fn.Return<
