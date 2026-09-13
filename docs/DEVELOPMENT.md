@@ -31,9 +31,9 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
 - Develop with `pnpm check:fast` and focused tests. Repair a failed stage and
   check affected behavior before rerunning the full gate. Reconcile the accepted scenario-to-test mapping
   and close [scoped reviews](CODE_REVIEW.md#review-closure) before the final gate.
-  Freeze that candidate, then run `pnpm check:all` and applicable
-  `pnpm check:quint`. Intermediate commits need no handoff ceremony; earlier
-  passing stages are not a final green gate.
+  Freeze that candidate, then run `pnpm check:all --candidate=<base-sha>` before
+  implementation handoff. Intermediate commits need no handoff ceremony;
+  earlier passing stages are not a final green gate.
 - Bounded commands use detached process groups so timeout cleanup can reach
   descendants. A timeout settles only after the direct child closes and the
   Unix process group is absent, or after a bounded explicit failure to prove
@@ -93,14 +93,26 @@ All commands below use `pnpm`. Script definitions live in
 | `check:lab` | Reducer Lab typecheck, maintained-cassette smoke, build; no browser. |
 | `check:lab:browser` | Host an ephemeral Lab, run Chromium against every maintained cassette, stop the host. |
 | `qualify:codex` | Opt-in real app-server contract; prerequisites below. |
-| `check:quint` | Deterministic, sampled, exhaustive model checks. Run after final relevant changes and before integration; during development only for model, conformance-adapter, or governed-behavior changes. |
-| `check:quint:changed` | Report model-governed changes against `origin/master` and run `check:quint` for them; report and stop when there are none. |
+| `check:quint` | Obtains the complete required formal profile through guarded local execution or applicable recorded success. It reports which occurred and names the original evidence. `--force` requests fresh execution under the same guards. |
 | `check:secrets` | Scan Git history with gitleaks. |
 | `gate:status <run-id>` | Read durable command results, unresolved custody and per-run logs/report paths without the previous terminal. Missing or malformed receipts cannot prove success. |
 | `gate:reconcile <run-id>` | Close registration and prove every recorded writer group absent before clearing exact worktree/slot fences. Missing exits stay unproven. |
 | `check:all --candidate=<base sha> --resume=<run-id>` | Reuse a contiguous proven full-gate prefix in the same worktree on identical monitored inputs; failed/unproven stage and remaining suffix execute normally. |
-| `check:all` | Bounded handoff gate for a frozen candidate, including non-browser Lab; excludes MBT and exhaustive model checks. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
+| `check:all` | Bounded handoff gate for a frozen candidate. It includes the complete formal requirement and application checks, including non-browser Lab; automatic MBT is excluded pending #363. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
 | `check:ci` | Hosted gate; MBT remains excluded pending #363. |
+
+`check:quint` obtains the complete required formal profile through guarded local
+execution or applicable recorded success. It reports which occurred and names
+the original evidence. `--force` requests fresh execution under the same
+guards. `check:all` includes this formal requirement as well as required
+application checks; automatic MBT is excluded pending #363. It runs stale or missing
+formal work and cannot pass after a required formal failure. Existing candidate
+acknowledgement, base selection, admission and resume prerequisites remain
+required.
+
+Hosted CI keeps separate quality and formal entry points: hosted formal runs the
+complete profile fresh, while hosted quality retains its current Quint-connected
+MBT exclusion. A local success record is not hosted formal evidence.
 
 ### Heavy-gate admission
 
@@ -143,8 +155,13 @@ A failed child receipt retains its historical absence observation. If its enclos
 test later stops the group, a separate exact group-absence record can prove stopped
 custody without rewriting that child result. Missing terminal receipts remain
 `UNPROVEN`; successful earlier stages are not a
-final green gate. Only `check:all --candidate=<base sha> --resume=<run-id>` enables
-explicit prefix reuse; other commands retain normal execution.
+final green gate. `check:all --candidate=<base sha> --resume=<run-id>` still
+resumes only a contiguous proven application-gate prefix. The formal profile
+has its own guarded local success record: a missing or stale record executes the
+profile, while an applicable record can be reused and names its original
+evidence. `pnpm check:quint --force` requests fresh formal reproduction or
+timing. Reuse never replaces model-adequacy review. Automatic MBT is temporarily
+excluded pending #363; `test:mbt` remains an explicit manual command.
 
 Fresh full gates prepare the Effect diagnostics platform binary executable bit
 before observing inputs; resume retains changed installation modes and refuses
@@ -191,7 +208,8 @@ for secrets, including removed ancestor content; it binds that SHA in the actual
 scanner command and input identity. Standalone, preflight and hosted secret scans
 retain the default all-ref history. Unrelated loose branch updates do not change
 the locally selected candidate; selected refs and history controls remain observed.
-Original output counts consume the same 550-line budget as new stages.
+Original output counts consume the same shared `successfulOutputLineLimit` of
+550 lines as new stages.
 
 A composite receipt links original prefix stages and newly executed suffix stages;
 it never invents execution receipts for skipped commands. Verified reused coverage
@@ -222,7 +240,11 @@ production artifacts before source checks so a fresh checkout does not lint
 unresolved distributable declarations. Artifact validation stops at failed
 prerequisites rather than interpreting absent build output. Preflight control
 tests cover this ordering; it changes no Dalph runtime behavior. `check:all` runs
-the same census once and starts qualification suites only when it passes.
+the same census once. After successful preflight it executes or reuses the
+complete formal profile before expensive qualification, keeps the external-tool
+observation through the final application stage, and performs final no-checker
+applicability validation before handoff success. It starts application
+qualification only when its prerequisites pass.
 Standalone preflight is evidence for repairs before freezing; the final full
 gate repeats the census on its frozen candidate. Use `check:fast` during edits.
 
@@ -723,25 +745,75 @@ Status 1 means analysis is unproven, stale, incomplete or unavailable. Neither
 status certifies coverage compliance or replaces `test:coverage`/`check:all`;
 the production 95% and maintained-evaluation 75% floors remain unchanged.
 
-### Final formal selection
+### Formal reuse and handoff
 
-A maintainer with a frozen candidate may run
-`pnpm check:quint:final --candidate=<exact base sha>`. It prints the exact base,
-HEAD and complete changed-path inventory, including committed, staged,
-unstaged, renamed, deleted and untracked files. Only the explicit development
-and presentation documentation and exact console-output helper allowlist in
-[scripts/final-quint-selection.mjs](../scripts/final-quint-selection.mjs) can
-skip exhaustive models, with a visible reason. Governing scenarios, invariants,
-formal documentation, runtime, models, adapters, other tooling, dependencies,
-configuration, mixed or unknown paths run the unchanged `check:quint` command.
-An empty diff or unreadable/inexact comparison also runs the full command.
-Only `scripts/quality-output-budget.mjs` and its exact test path are tooling
-exemptions: they count quality/preflight console lines against a supplied limit,
-and neither participates in `check:quint` or hosted formal dispatch. Their
-callers, all runners, CI classifiers and output-limit policy remain governed;
-a mixed helper/formal change runs the full command. Existing development selection and hosted
-full verification remain unchanged; this final policy does not use the narrow
-development classifier as evidence that runtime changes are unrelated.
+The local formal command uses one complete profile and one guarded applicability
+boundary. The local handoff obtains this result after successful preflight.
+The formal command runs missing or stale work, or reuses
+an applicable local success record while naming that record. A complete changed
+path inventory includes committed, staged, unstaged, deleted, rename-source,
+and untracked paths; coverage explanation and raw debugging retain that complete
+inventory, while formal applicability comes from the guarded input, toolchain
+and profile identity plus full observation. It is never inferred from the
+narrower development-loop classifier. A final applicability check still runs
+after the external tool observation reaches the end of the application stage,
+so a final input change fails the handoff. A final check failure does not
+silently start a second formal profile.
+
+Local reuse requires supported cooperative Linux, exact worktree admission and
+custody, prepared coherent pnpm/Quint/Apalache/Java roots, and the conservative
+environment and input boundary enforced by the formal policy. Unresolved
+custody, reconciliation or observer evidence fails closed. The local boundary
+does not coordinate arbitrary external processes, other clones, distributed
+filesystems, non-Linux hosts, or tool roots outside the identified installation.
+
+The supported runtime policy currently identifies Debian 12 on x64 or arm64,
+with finite dedicated Node and Java installation roots and a checkout-local
+pinned pnpm/Quint installation. It fingerprints all of `specs/` and `scripts/`,
+package/lock/workspace configuration, patches and the formal CI workflow. It
+also fingerprints installed Node, pnpm, Quint dependencies, Rust evaluator,
+Apalache, Java, observer Python, and the declared system library, locale,
+certificate and runtime configuration roots. Unknown import targets, external
+or cyclic links, unsupported runtime configuration and unreadable inputs fail
+instead of permitting reuse. Implicit Apalache configuration locations are
+observed even when absent; present unsupported configurations are refused.
+Application source and ordinary documentation outside these roots, and Git
+HEAD/index/base changes alone, do not change formal identity. Independent
+candidate verification still applies. Automatic MBT is temporarily excluded
+pending #363; formal reuse does not prove application conformance.
+
+Current allowances in [formal-gate-policy.mjs](../scripts/formal-gate-policy.mjs)
+were retained after [local qualification](../research/formal-reuse-qualification-362.md): 2,100 seconds for
+formal acquisition and 30 seconds for final handoff validation. Acquisition
+charges tool identification, observer setup, hashing, execution, evidence and
+qualification to one decreasing allowance; phase caps do not restart it. The
+local execution allowance is 1,800 seconds with a 1,850-second regression
+ceiling, following the maintainer-authorized extension after the original
+720-second attempt timed out. Hosted execution and regression remain 720/750
+seconds. Both retain 5-second termination plus 2-second absence proof. See the
+[local qualification scenario](scenarios/formal-reuse-local-qualification-budget.md)
+for the observed cost and bounded allowance rationale. The 30-second final allowance follows a 7.333-second complete
+snapshot probe and reserves the remainder for evidence reads and observer
+drains; it is not the withdrawn 60-second final estimate. Final qualification measured
+560.085 seconds fresh, a 4.329-second median across ten warm commands, and
+2.629 seconds for final no-checker validation.
+
+The local stage inventory is 30 minutes of preflight plus 51 minutes of
+application qualification, now plus 35 minutes of formal acquisition and
+0.5 minutes of final validation: 116.5 minutes before existing
+quality setup and termination overhead. This fits the existing 24-hour admitted
+command limit. These are ceilings, not measured duration or claimed savings.
+The qualification report records each sample, phase headroom, final handoff
+and the decision to retain these allowances. Hosted matrix, job deadlines
+and the 16-minute/210-second-reserve formal policy remain unchanged; their
+pre-existing quality-budget discrepancy is outside this change.
+
+The former `check:quint:changed` and `check:quint:final` aliases and their
+dedicated selector runners are retired. Use focused checks during development,
+then `pnpm check:all --candidate=<base-sha>` for continuous and final handoff
+validation. Use `pnpm check:quint --force` only when fresh formal reproduction
+or timing is required. Hosted formal verification remains a complete fresh
+profile; hosted quality retains its current Quint-connected MBT exclusion.
 
 ## Safety and supply chain
 

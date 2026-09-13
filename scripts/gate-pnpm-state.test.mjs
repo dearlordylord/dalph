@@ -10,11 +10,11 @@ import { startInputGuard } from "./gate-resume-inputs.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { repositoryLocation, withoutInheritedCustody } from "./gate-custody-records.mjs"
 import { readRunEvidence } from "./gate-run-evidence.mjs"
+import { copyQualityRuntimeFixture, seedQualityFormalBoundary } from "./formal-quality-test-fixture.mjs"
 
 const pnpmEntryPoint = process.env.npm_execpath
 if (pnpmEntryPoint === undefined) throw new Error("Run pnpm workspace-state controls through pnpm")
 const wrapper = fileURLToPath(new URL("./with-gate-slot.mjs", import.meta.url))
-const execute = new URL("./gate-quality-run.mjs", import.meta.url).href
 const bounded = new URL("./run-bounded-command.mjs", import.meta.url).href
 const fixture = () => {
   const outer = mkdtempSync(join(tmpdir(), "dalph-pnpm-state-"))
@@ -144,14 +144,27 @@ test("actual admitted resume does not refresh altered pnpm workspace-state input
     git("config", "user.name", "Fixture")
     git("config", "user.email", "fixture@example.invalid")
     writeFileSync(join(f.root, ".gitignore"), "node_modules/\n.scratch/\n")
+    // Control only formal verification for this pnpm input-state scenario;
+    // retain the production quality workflow, candidate observer and receipts.
+    copyQualityRuntimeFixture(f.root)
+    writeFileSync(
+      join(f.root, "scripts", "run-formal-workflow.mjs"),
+      `
+import {readFileSync} from 'node:fs';import {join} from 'node:path';import {readReferencedFormalSuccess} from './formal-success-evidence.mjs';
+export const runFormalWorkflow=async({report})=>{const evidencePath=readFileSync(join(process.cwd(),'.scratch','controlled-formal-path'),'utf8');
+const success=readReferencedFormalSuccess({recordPath:evidencePath,worktree:process.cwd()});report('Formal: controlled original evidence');
+return {status:'reused',success,evidencePath,finalizeApplicability:async()=>({success,evidencePath,observation:success.observation}),assertUnchanged:async()=>{},close:async()=>{}}};
+`
+    )
     git("add", ".")
     git("commit", "-qm", "base")
     git("commit", "--allow-empty", "-qm", "candidate")
     mkdirSync(join(f.root, ".scratch"))
+    writeFileSync(join(f.root, ".scratch", "controlled-formal-path"), seedQualityFormalBoundary(f.root))
     const script = join(f.root, ".scratch", "quality.mjs")
     writeFileSync(
       script,
-      `import {executeResumableQualityGate} from ${JSON.stringify(execute)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
+      `import {executeResumableQualityGate} from ${JSON.stringify(new URL(`file://${join(f.root, "scripts", "gate-quality-run.mjs")}`).href)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
 const manifest=[{id:'nested',name:'nested',boundary:'qualification',args:[${JSON.stringify(pnpmEntryPoint)},'--silent','run','nested'],timeout:15000,artifactRoots:[],execution:{executable:process.execPath,args:[${JSON.stringify(pnpmEntryPoint)},'--silent','run','nested'],cwd:process.cwd(),name:'nested',timeoutMilliseconds:15000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}},{id:'late',name:'late',boundary:'qualification',args:['-e','process.exit(23)'],timeout:15000,artifactRoots:[],execution:{executable:process.execPath,args:['-e','process.exit(23)'],cwd:process.cwd(),name:'late',timeoutMilliseconds:15000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}];
 await executeResumableQualityGate({pnpmEntryPoint:${JSON.stringify(pnpmEntryPoint)},prepareFreshInputs:()=>{},logicalInvocation:{mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]},stageManifest:manifest,resumeRunId:process.argv[2]?.slice('--resume='.length),runStage:stage=>runBoundedCommand({executable:process.execPath,args:stage.args,name:stage.name,timeoutMilliseconds:15000})});`
     )
@@ -165,7 +178,9 @@ await executeResumableQualityGate({pnpmEntryPoint:${JSON.stringify(pnpmEntryPoin
     const fresh = launch()
     assert.equal(fresh.status, 1, fresh.stderr)
     const runsDirectory = join(repositoryLocation(f.root).custodyRoot, "runs")
-    const runId = readdirSync(runsDirectory)[0]
+    const runId = readdirSync(runsDirectory).find(
+      (id) => JSON.parse(readFileSync(join(runsDirectory, id, "run.json"), "utf8")).fixtureFormalSeed !== true
+    )
     const prior = readRunEvidence({ runId, runDirectory: join(runsDirectory, runId) })
     const late = prior.stages.find((stage) => stage.command.name === "late")
     assert.ok(late, `Expected intentional late child failure, not admission refusal: ${fresh.stderr}`)

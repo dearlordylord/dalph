@@ -5,12 +5,23 @@ export const inputObserverScript = fileURLToPath(new URL("./gate-input-observer.
 
 /** The helper shares the registered parent process group and exits on control EOF. Any lost observation is sticky. */
 export const startInputObserver = async ({
+  environment,
   excludedRoots = [],
   protectedRoots = [],
+  pythonArguments = [],
   pythonExecutable = "python3",
-  roots
+  roots,
+  signal,
+  timeoutMilliseconds = 30_000
 }) => {
-  const child = spawn(pythonExecutable, [inputObserverScript], { stdio: ["pipe", "pipe", "pipe"], detached: false })
+  if (!Number.isSafeInteger(timeoutMilliseconds) || timeoutMilliseconds <= 0)
+    throw new Error("Input observer requires a finite positive response timeout")
+  if (signal?.aborted) throw new Error("Input observer aborted before setup")
+  const child = spawn(pythonExecutable, [...pythonArguments, inputObserverScript], {
+    stdio: ["pipe", "pipe", "pipe"],
+    detached: false,
+    env: environment
+  })
   let failure
   let readyResolve
   let readyReject
@@ -79,7 +90,7 @@ export const startInputObserver = async ({
         pending.delete(requestId)
         fail("Input observer response timeout")
         reject(new Error(failure))
-      }, 30_000)
+      }, timeoutMilliseconds)
       pending.set(requestId, {
         resolve: () => {
           clearTimeout(timer)
@@ -92,21 +103,32 @@ export const startInputObserver = async ({
       })
       child.stdin.write(`${JSON.stringify({ command, requestId, ...fields })}\n`)
     })
-  const close = async () => {
-    if (closed) return
-    closed = true
-    child.stdin.end()
-    if (child.exitCode === null && child.signalCode === null) {
-      await new Promise((resolve) => {
-        child.once("close", resolve)
-        setTimeout(() => {
-          child.kill("SIGKILL")
-        }, 1000).unref()
-      })
-    }
+  let closePromise
+  const close = () => {
+    if (closePromise) return closePromise
+    closePromise = (async () => {
+      closed = true
+      signal?.removeEventListener("abort", abort)
+      child.stdin.end()
+      if (child.exitCode === null && child.signalCode === null) {
+        await new Promise((resolve) => {
+          child.once("close", resolve)
+          setTimeout(() => {
+            child.kill("SIGKILL")
+          }, 1000).unref()
+        })
+      }
+    })()
+    return closePromise
   }
+  const abort = () => {
+    fail("Input observer aborted")
+    void close()
+  }
+  signal?.addEventListener("abort", abort, { once: true })
+  if (signal?.aborted) abort()
   child.stdin.write(`${JSON.stringify({ roots, excludedRoots, protectedRoots })}\n`)
-  const setupTimer = setTimeout(() => fail("Input observer readiness timeout"), 30_000)
+  const setupTimer = setTimeout(() => fail("Input observer readiness timeout"), timeoutMilliseconds)
   try {
     await ready
     clearTimeout(setupTimer)

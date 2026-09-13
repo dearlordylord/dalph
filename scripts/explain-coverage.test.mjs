@@ -13,6 +13,8 @@ import {
   validateCoverageArtifact
 } from "./explain-coverage.mjs"
 
+import { copyQualityRuntimeFixture, seedQualityFormalBoundary } from "./formal-quality-test-fixture.mjs"
+
 const roots = []
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
@@ -493,8 +495,24 @@ test("relative coverage traversal is resolved before repository containment", ()
 
 const resumedCoverageFixture = () => {
   const f = fixture()
+  // This coverage-only fixture controls the retained formal boundary while the
+  // production reader validates its original complete profile/custody records.
+  // Genuine checker dispatch and observation are covered by their own suites.
+  copyQualityRuntimeFixture(f.root)
+  f.put("package.json", JSON.stringify({ type: "module" }))
+  f.put("scripts/effect-tsgo-platform-binary.mjs", "export const ensureEffectTsgoPlatformBinaryExecutable=()=>{}")
+  f.put(
+    "scripts/run-formal-workflow.mjs",
+    `
+import {readFileSync} from 'node:fs';import {join} from 'node:path';import {readReferencedFormalSuccess} from './formal-success-evidence.mjs';
+export const runFormalWorkflow=async({report})=>{const evidencePath=readFileSync(join(process.cwd(),'.scratch','controlled-formal-path'),'utf8');
+const success=readReferencedFormalSuccess({recordPath:evidencePath,worktree:process.cwd()});report('Formal: controlled original evidence');
+return {status:'reused',success,evidencePath,finalizeApplicability:async()=>({success,evidencePath,observation:success.observation}),assertUnchanged:async()=>{},close:async()=>{}}};
+`
+  )
   f.put(".gitignore", "coverage/\n.scratch/\n")
   f.git("commit", "--allow-empty", "-qm", "candidate")
+  f.put(".scratch/controlled-formal-path", seedQualityFormalBoundary(f.root))
   const counter = join(f.root, ".scratch", "counters")
   const release = join(f.root, ".scratch", "release")
   const script = join(f.root, ".scratch", "quality.mjs")
@@ -502,7 +520,7 @@ const resumedCoverageFixture = () => {
   const lateSource = `import fs from 'node:fs';fs.appendFileSync(${JSON.stringify(counter)},'late\\n');if(!fs.existsSync(${JSON.stringify(release)}))process.exit(24);`
   f.put(
     ".scratch/quality.mjs",
-    `import {executeResumableQualityGate} from ${JSON.stringify(new URL("./gate-quality-run.mjs", import.meta.url).href)};import {runBoundedCommand} from ${JSON.stringify(new URL("./run-bounded-command.mjs", import.meta.url).href)};
+    `import {executeResumableQualityGate} from ${JSON.stringify(new URL(`file://${join(f.root, "scripts", "gate-quality-run.mjs")}`).href)};import {runBoundedCommand} from ${JSON.stringify(new URL("./run-bounded-command.mjs", import.meta.url).href)};
 const sources=${JSON.stringify([coverageSource, lateSource])};
 const manifest=sources.map((source,ordinal)=>({id:['coverage','late'][ordinal],name:'fixture '+ordinal,boundary:'qualification',args:[source],timeout:10000,artifactRoots:ordinal===0?['@coverage']:[],execution:{executable:process.execPath,args:['--input-type=module','-e',source],cwd:process.cwd(),name:'fixture '+ordinal,timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
 const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.baseSha)},stageManifest:manifest,toolExecutables:[]};
@@ -530,11 +548,15 @@ await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,resu
   const first = launch()
   assert.equal(first.status, 1, first.stderr)
   const runRoot = join(f.root, ".git", "dalph-gates", "runs")
-  const originalRunId = readdirSync(runRoot)[0]
+  const qualityRuns = () =>
+    readdirSync(runRoot).filter(
+      (id) => JSON.parse(readFileSync(join(runRoot, id, "run.json"), "utf8")).fixtureFormalSeed !== true
+    )
+  const originalRunId = qualityRuns()[0]
   writeFileSync(release, "released")
   const resumed = launch(originalRunId)
   assert.equal(resumed.status, 0, resumed.stderr)
-  const runId = readdirSync(runRoot).find((id) => id !== originalRunId)
+  const runId = qualityRuns().find((id) => id !== originalRunId)
   return {
     ...f,
     runId,

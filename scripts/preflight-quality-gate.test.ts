@@ -18,7 +18,7 @@ const structuralCommands = [
   "test:gate-resume",
   "test:preflight",
   "test:ci-change-classification",
-  "test:quint:selection",
+  "test:formal:controls",
   "check:secrets",
   "test:capability-registration"
 ]
@@ -59,15 +59,15 @@ it(
 )
 
 it(
-  "does not qualify a candidate when the final formal selection controls fail",
+  "does not qualify a candidate when the focused formal controls fail",
   async () => {
     const { invocations, result } = await runQualityGateFixture({
-      fixtureName: "formal-selection-controls-failure",
-      failureCommand: "test:quint:selection"
+      fixtureName: "formal-controls-failure",
+      failureCommand: "test:formal:controls"
     })
     expect(invocations).toEqual(structuralCommands)
     expect(result.exitCode).toBe(1)
-    expect(result.output).toContain("Preflight failed: pnpm test:quint:selection")
+    expect(result.output).toContain("Preflight failed: pnpm test:formal:controls")
     expect(invocations).not.toContain("test:coverage")
     expect(invocations).not.toContain("check:quint")
   },

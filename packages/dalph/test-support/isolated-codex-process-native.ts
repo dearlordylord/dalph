@@ -11,10 +11,10 @@ export const processEntryReadIsUnavailable = (error: unknown): boolean => {
   return code === "EACCES" || code === "ENOENT" || code === "ESRCH"
 }
 
-const processEntryIsReadable = async (entry: string): Promise<boolean> => {
+const processEntryIsReadable = async (entry: string, native: CodexProcessNativeService): Promise<boolean> => {
   if (!/^[0-9]+$/.test(entry)) return true
   try {
-    await nodeCodexProcessNativeService.readFile(`/proc/${entry}/environ`)
+    await native.readFile(`/proc/${entry}/environ`)
     return true
   } catch (error) {
     // A process can disappear after `/proc` enumeration but before this
@@ -30,12 +30,36 @@ const processEntryIsReadable = async (entry: string): Promise<boolean> => {
  * used by the supported-host qualification fixture. Protocol tests do not own
  * unrelated runner processes and therefore must not census them.
  */
-export const isolatedCodexProcessNativeService: CodexProcessNativeService = {
-  ...nodeCodexProcessNativeService,
+export const makeIsolatedCodexProcessNativeService = (
+  native: CodexProcessNativeService
+): CodexProcessNativeService => ({
+  ...native,
+  readFile: async (filename) => {
+    try {
+      return await native.readFile(filename)
+    } catch (error) {
+      // The runner can make an unrelated entry unreadable after enumeration.
+      // Keep this fixture's readable directory view consistent at the later
+      // token read; production retains its stricter ownership observations.
+      if (
+        native.platform === "linux" &&
+        /^\/proc\/\d+\/environ$/.test(filename) &&
+        processEntryReadIsUnavailable(error)
+      ) {
+        return Promise.reject(
+          Object.assign(new Error(`entry unavailable in fixture process view: ${filename}`), { code: "ENOENT" })
+        )
+      }
+      return Promise.reject(error)
+    }
+  },
   readdir: async (directory) => {
-    const entries = await nodeCodexProcessNativeService.readdir(directory)
-    if (nodeCodexProcessNativeService.platform !== "linux" || directory !== "/proc") return entries
-    const readable = await Promise.all(entries.map(processEntryIsReadable))
+    const entries = await native.readdir(directory)
+    if (native.platform !== "linux" || directory !== "/proc") return entries
+    const readable = await Promise.all(entries.map((entry) => processEntryIsReadable(entry, native)))
     return entries.filter((_, index) => readable[index] === true)
   }
-}
+})
+
+export const isolatedCodexProcessNativeService: CodexProcessNativeService =
+  makeIsolatedCodexProcessNativeService(nodeCodexProcessNativeService)

@@ -122,7 +122,8 @@ def drain():
             if mask & OVERFLOW:
                 send("error", reason="IN_Q_OVERFLOW: input observation lost events")
             elif mask & (IGNORED | 0x2000):
-                send("error", reason="unexpected watch removal or unmount")
+                send("error", reason="unexpected watch removal or unmount mask=" + hex(mask),
+                     path=", ".join(sorted(watches.get(wd, {"<unknown watch>"})))[:1024])
             elif wd not in watches:
                 raise OSError("unknown inotify watch")
             else:

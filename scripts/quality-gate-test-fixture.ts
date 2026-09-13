@@ -9,7 +9,7 @@ import vitestConfig from "../vitest.config.js"
 // @ts-expect-error The production quality-gate helper is an executable JavaScript module.
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 
-// The complete inventory launches 19 bounded fake commands. Inside an admitted
+// The hosted inventory launches 19 bounded fake commands. Inside an admitted
 // parallel run, 13 calls measured 7.8s before the old 10s deadline interrupted
 // legitimate registration and evidence publication. Keep this fixture finite,
 // with room for the full inventory and cleanup. Enclosing tests separately
@@ -81,7 +81,7 @@ if (JSON.parse(process.env.DALPH_QUALITY_GATE_FAILURE_COMMANDS).includes(command
   try {
     const result = await runBoundedCommand({
       acceptedExitCodes: failureCommand === undefined && failureCommands.length === 0 ? [0] : [1],
-      args: [runner, ...gateArguments],
+      args: [runner, ...(runner === "scripts/run-quality-gate.mjs" ? ["--hosted-quality"] : []), ...gateArguments],
       captureOutput: true,
       cwd: repositoryRoot,
       environment: {
@@ -92,8 +92,8 @@ if (JSON.parse(process.env.DALPH_QUALITY_GATE_FAILURE_COMMANDS).includes(command
         DALPH_QUALITY_GATE_INVOCATION_ARGUMENTS: invocationArgumentsLog,
         DALPH_QUALITY_GATE_INVOCATION_COVERAGE_BASES: invocationCoverageBaseLog,
         DALPH_QUALITY_GATE_INVOCATIONS: invocationLog,
-        // The fixture intentionally exercises the complete stage list, so it
-        // acknowledges the same full-gate boundary required of a local caller.
+        // The fixture exercises hosted structural/application dispatch with controlled commands;
+        // dedicated admitted integration fixtures own the required local formal handoff.
         DALPH_FULL_GATE: "1",
         ...environment,
         npm_execpath: entryPoint

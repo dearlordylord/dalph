@@ -9,7 +9,10 @@ and what each owns. This guide covers how to write one.
 
 ## What runs a model
 
-`pnpm check:quint` supplies four independent kinds of evidence for every
+`pnpm check:quint` obtains the complete required formal profile through guarded
+local execution or applicable recorded success. It reports which occurred and
+names the original evidence. `--force` requests fresh execution under the same
+guards. The profile supplies four independent kinds of evidence for every
 governed subject:
 
 - `quint typecheck`
@@ -262,3 +265,6 @@ binary; in that state even `pnpm exec node mutate-specs.mjs` reports
 `npm_execpath` as unset and the mutation script also falls back to `PATH`.
 Install the worktree dependencies or invoke the repository's exact installed
 binary. Never describe a run as pinned based on the `pnpm exec` spelling alone.
+The raw version check does not replace `pnpm check:quint`'s guarded identity and
+formal-evidence rules. Hosted formal verification runs the complete profile
+fresh; local success reuse applies only within the guarded local workflow.

@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process"
 import { executeResumableQualityGate } from "./gate-quality-run.mjs"
 import { inheritedCustody } from "./gate-custody-records.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
-import { addSuccessfulOutputLines } from "./quality-output-budget.mjs"
+import { parseQualityCommandArguments } from "./quality-command-policy.mjs"
+import { addSuccessfulOutputLines, successfulOutputLineLimit } from "./quality-output-budget.mjs"
 import {
   boundedQualityGateCommand,
   preflightQualityGates,
@@ -12,12 +13,12 @@ import {
 import { runPreflightCensus } from "./preflight-census.mjs"
 import { resolveQualityGateBase } from "./resolve-quality-gate-base.mjs"
 
-const maximumSuccessfulOutputLines = 550
+const maximumSuccessfulOutputLines = successfulOutputLineLimit
 // Admitted structural checks always inspect formatter inputs without incremental result reuse.
 process.env.DALPH_DPRINT_INCREMENTAL = "disabled"
 
 const pnpmEntryPoint = process.env.npm_execpath
-const candidateArgument = process.argv.find((argument) => argument.startsWith("--candidate="))
+const { candidateArgument, purpose, resumeRunId } = parseQualityCommandArguments(process.argv.slice(2))
 // The full gate rebuilds the whole program several times and runs every suite, so it belongs to a frozen candidate and
 // to hosted verification. Development uses the focused tiers instead, which is why local runs state their intent.
 const acknowledgedFullGate =
@@ -47,7 +48,8 @@ const qualityBaseSha = resolveQualityGateBase({
 const testEnvironment = qualityGateTestEnvironment(qualityBaseSha)
 
 const context = inheritedCustody()
-const resumable = context !== undefined && process.env.npm_lifecycle_event === "check:all"
+const resumable = purpose === "local-handoff"
+if (resumable && context === undefined) throw new Error("Use the admitted pnpm check:all entry point")
 const candidateHistory = resumable && process.env.CI === undefined
 const candidateHeadSha = candidateHistory
   ? execFileSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], { encoding: "utf8" }).trim()
@@ -64,9 +66,6 @@ const gates = stageManifest
   .map((stage) =>
     stage.environmentPolicy === "coverage-base-warning" ? { ...stage, environment: testEnvironment } : stage
   )
-const resumeArguments = process.argv.filter((argument) => argument.startsWith("--resume="))
-if (resumeArguments.length > 1) throw new Error("Name at most one prior run for resume")
-if (resumeArguments.length > 0 && !resumable) throw new Error("Resume is supported only through pnpm check:all")
 if (resumable) {
   const logicalInvocation = {
     mode: "check:all",
@@ -87,12 +86,7 @@ if (resumable) {
       ...(process.env.DALPH_OXLINT_BIN ? [process.env.DALPH_OXLINT_BIN] : [])
     ]
   }
-  const result = await executeResumableQualityGate({
-    stageManifest,
-    logicalInvocation,
-    resumeRunId: resumeArguments[0]?.slice("--resume=".length),
-    pnpmEntryPoint
-  })
+  const result = await executeResumableQualityGate({ stageManifest, logicalInvocation, resumeRunId, pnpmEntryPoint })
   console.log(
     `Quality gate emitted ${result.successfulOutputLines}/${maximumSuccessfulOutputLines} successful output lines.`
   )

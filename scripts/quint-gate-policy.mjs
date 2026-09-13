@@ -8,6 +8,11 @@ const second = 1000
 // This replaces the 600s budget calibrated on an unspecified local ARM host.
 export const quintGateRegressionBudgetMilliseconds = 750 * second
 
+// Finite provisional guarded-local qualification allowance after the measured
+// 720s timeout; hosted policy and the complete command inventory remain unchanged.
+export const quintLocalSafetyTimeoutMilliseconds = 1800 * second
+export const quintLocalRegressionBudgetMilliseconds = 1850 * second
+
 export const quintHostedJobTimeoutMinutes = 16
 export const quintHostedReserveMilliseconds = 210 * second
 export const quintGateTerminationGraceMilliseconds = 5 * second
@@ -56,8 +61,17 @@ export const assertQuintHostedDeadlineContract = (workflow) => {
 }
 
 /** One monotonic execution deadline; an expired gate must not admit another child. */
-export const createQuintGateDeadline = ({ now = () => performance.now(), startedAt = now() } = {}) => {
-  const deadline = startedAt + quintGateSafetyTimeoutMilliseconds
+export const createQuintGateDeadline = ({
+  now = () => performance.now(),
+  startedAt = now(),
+  allowanceMilliseconds = quintGateSafetyTimeoutMilliseconds
+} = {}) => {
+  if (
+    allowanceMilliseconds !== quintGateSafetyTimeoutMilliseconds &&
+    allowanceMilliseconds !== quintLocalSafetyTimeoutMilliseconds
+  )
+    throw new Error("Quint gate requires a supported finite execution allowance")
+  const deadline = startedAt + allowanceMilliseconds
   return (name) => {
     const remaining = deadline - now()
     if (remaining > 0) return remaining

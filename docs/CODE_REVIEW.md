@@ -65,6 +65,17 @@ no runtime behavior changes. Aggregate totals are not scenario evidence.
    local fixes/commits need neither every axis restarted nor fresh reviewers.
    Investigate recurring defect classes' shared cause before more local repairs.
 5. Resolve scoped blockers and pass affected checks before the final full gate.
-   Freeze the candidate, then run `pnpm check:all` before handoff and applicable
-   `pnpm check:quint` before integration. Failures reopen affected work under
-   step 4; green gates need no new broad review. See [development checks](DEVELOPMENT.md#commands).
+   Run `pnpm check:all --candidate=<base-sha>` before implementation handoff,
+   preserving the existing frozen-candidate acknowledgement and base rules. It
+   obtains required complete formal verification automatically: it runs
+   missing/stale work or reuses applicable local success, and fails if required
+   verification fails. During development use focused checks; invoke
+   `pnpm check:quint` when changing a Quint model, its executable conformance
+   adapter, or behavior governed by that model. After the final relevant
+   changes, `check:all` establishes formal applicability before integration; a
+   separate repeated exhaustive run is unnecessary. Use
+   `pnpm check:quint --force` only for fresh reproduction or fresh timing.
+   Reuse never substitutes for model-adequacy review. Automatic MBT is
+   temporarily excluded pending #363; `test:mbt` remains manual. Failures
+   reopen affected work under step 4; green gates need no new broad review. See
+   [development checks](DEVELOPMENT.md#commands).
