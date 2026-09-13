@@ -35,6 +35,7 @@ import {
   ProductionMvpQualificationEvidence,
   QualificationArtifactLocator
 } from "../../test-support/production-mvp-qualification-evidence.js"
+import { candidateWorktreePathFor, CodexIntegratorConfiguration } from "./codex-integrator-private-store.js"
 import { encodeProductionCliRecord } from "./production-cli.js"
 
 const builtEntry = new URL("../../dist/bin/production-hermetic-qualification.js", import.meta.url).pathname
@@ -927,15 +928,27 @@ it.live(
             `${fixture.manifest.evidenceRoot}/${acceptedResult.evidenceManifest.digest.slice(0, 2)}/${acceptedResult.evidenceManifest.digest}`
           )
         ).toBe(true)
-        expect((yield* fs.readDirectory(fixture.manifest.candidateRoot)).length).toBeGreaterThan(0)
+        const integratorConfiguration = CodexIntegratorConfiguration.make({
+          candidateWorktreeRoot: fixture.configuration.integratorCandidateWorktreeRoot,
+          commonDirectory: fixture.configuration.commonDirectory,
+          privateStoreLocator: fixture.configuration.integratorPrivateStore,
+          repository: fixture.configuration.repository
+        })
+        expect(
+          yield* fs.exists(
+            candidateWorktreePathFor(integratorConfiguration, session.event.correlation.candidateResource)
+          )
+        ).toBe(true)
         expect(yield* fs.exists(fixture.manifest.privateStore)).toBe(true)
-        const claim = originalJournal.find(({ event }) => event._tag === "TaskClaimAcquired")
-        if (claim?.event._tag !== "TaskClaimAcquired")
-          return yield* Effect.die("stale promotion must retain the exact active claim")
+        const creation = yield* controller.providerCreationManifest
+        const activeClaimReceipts = creation.resources.filter((resource) => resource._tag === "Label")
+        expect(activeClaimReceipts).toHaveLength(1)
+        const activeClaimReceipt = activeClaimReceipts[0]
+        if (activeClaimReceipt === undefined)
+          return yield* Effect.die("stale promotion must retain the provider's exact active-claim receipt")
         const trackerBeforeExit = yield* controller.finalTrackerFacts
         expect(trackerBeforeExit).toMatchObject({ issuePresent: true, taskLifecycle: "Open" })
-        expect(trackerBeforeExit.claims).toHaveLength(1)
-        expect(trackerBeforeExit.claims[0]?.nodeId).toBe(`hermetic-label:${claim.event.claim.operationId}`)
+        expect(trackerBeforeExit.claims).toEqual([activeClaimReceipt])
         const countsBeforeExit = (yield* controller.providerSnapshot).operationCounts
         expect(countsBeforeExit.find(({ tag }) => tag === "CreateClaimLabel")?.count).toBe(1)
         expect(countsBeforeExit.find(({ tag }) => tag === "DeleteClaimLabel")).toBeUndefined()
@@ -1015,11 +1028,23 @@ it.live(
           { _tag: "Exit", processId: child.handle.pid, status: 0 },
           { _tag: "Exit", processId: second.handle.pid, status: 0 }
         ])
+        const trackerAfterRecovery = yield* controller.finalTrackerFacts
+        expect(trackerAfterRecovery).toEqual(trackerBeforeExit)
+        expect(trackerAfterRecovery.claims).toEqual([activeClaimReceipt])
         const after = yield* git.runInWorktree(fixture.manifest.repository, [
           "rev-parse",
           fixture.manifest.integrationRef
         ])
+        expect(after.exitCode).toBe(0)
         expect(after.stdout.trim()).toBe(foreignHead)
+        const candidateParents = yield* git.runInWorktree(fixture.manifest.repository, [
+          "show",
+          "-s",
+          "--format=%P",
+          boundary.candidateCommit
+        ])
+        expect(candidateParents.exitCode).toBe(0)
+        expect(candidateParents.stdout.trim().split(" ")).toEqual([boundary.expectedTargetHead, acceptedResult.commit])
         expect(closeCount((yield* controller.providerSnapshot).operationCounts)).toBe(0)
         expect(
           (yield* publishEvidence(fixture, controller, "PromotionCompareAndSet", startedAt, [child, second]))._tag
