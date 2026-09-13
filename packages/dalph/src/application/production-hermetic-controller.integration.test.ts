@@ -558,7 +558,7 @@ it.live(
 )
 
 it.live(
-  "completion-response cut kills P1 and recovers the same Run with parent provider state",
+  "built public CLI recovers the same Run after completed close response loss and sends no second close",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -568,6 +568,7 @@ it.live(
         const first = yield* controller.startChild()
         const boundary = yield* controller.awaitBoundary("CompletionResponse", first).pipe(Effect.timeout("20 seconds"))
         expect(boundary._tag).toBe("CompletionResponse")
+        if (boundary._tag !== "CompletionResponse") return yield* Effect.die("wrong concrete completion cut")
         const before = yield* controller.providerSnapshot
         expect(yield* controller.activeRequestCount).toBeGreaterThan(0)
         expect(before.taskLifecycle).toBe("Completed")
@@ -575,13 +576,133 @@ it.live(
         const original = yield* selectedOf(first)
         yield* controller.killChild(first)
         yield* controller.releaseBoundary()
+        expect(yield* controller.processOutcomes).toEqual([
+          { _tag: "ControllerKilled", processId: first.handle.pid, signal: "SIGKILL" }
+        ])
+        const cutJournal = yield* readJournal(fixture, first)
+        const cut = cutJournal.at(-1)
+        if (cut === undefined) return yield* Effect.die("the killed process must retain its journal prefix")
+        expect(
+          cutJournal.some(
+            ({ event }) =>
+              event._tag === "TaskTrackerFactsObserved" &&
+              event.observation._tag === "FocusedTaskCompletionFacts" &&
+              event.observation.facts.lifecycle === "CompletedSuccessfully"
+          )
+        ).toBe(false)
+        expect(cutJournal.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+        expect(MutableList.toArray(first.recordLog).some((record) => record._tag === "RunDisposition")).toBe(false)
+        expect(
+          MutableList.toArray(first.recordLog).some((record) => record._tag === "ApplicationExitDisposition")
+        ).toBe(false)
         const second = yield* controller.startChild()
         expect(yield* controller.awaitChild(second).pipe(Effect.timeout("20 seconds"))).toBe(0)
         expect(yield* selectedOf(second)).toMatchObject({ runId: original.runId, selection: "Recovered" })
-        expect(closeCount((yield* controller.providerSnapshot).operationCounts)).toBe(1)
+        const after = yield* controller.providerSnapshot
+        expect(closeCount(after.operationCounts)).toBe(1)
+        expect(after.operationCounts.find(({ tag }) => tag === "DeleteClaimLabel")?.count).toBe(2)
+        expect((yield* controller.finalTrackerFacts).claims).toEqual([])
         const journal = yield* readJournal(fixture, second)
         expect(journal.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
         expect(journal.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toHaveLength(1)
+        const originalRequest = cutJournal.find(({ event }) => event._tag === "CompletionTaskIntended")
+        const originalAttempt = cutJournal.find(({ event }) => event._tag === "CompletionTaskAttemptIntended")
+        if (
+          originalRequest?.event._tag !== "CompletionTaskIntended" ||
+          originalAttempt?.event._tag !== "CompletionTaskAttemptIntended"
+        )
+          return yield* Effect.die("the killed process must retain its exact completion request and attempt")
+        expect(
+          Schema.toEquivalence(CompletionTaskRequest)(originalAttempt.event.request, originalRequest.event.request)
+        ).toBe(true)
+        expect(boundary.operationId).toBe(originalAttempt.event.request.operationId)
+        const replacement = cutJournal.find(({ event }) => event._tag === "CompletionClaimReplaced")
+        if (replacement?.event._tag !== "CompletionClaimReplaced")
+          return yield* Effect.die("the killed process must retain its exact completion claim")
+        expect(cutJournal.some(({ event }) => event._tag === "CompletionClaimDeletionIntended")).toBe(false)
+        const focusedSuccess = journal.find(
+          ({ event, position }) =>
+            position > cut.position &&
+            event._tag === "TaskTrackerFactsObserved" &&
+            event.observation._tag === "FocusedTaskCompletionFacts" &&
+            event.observation.facts.lifecycle === "CompletedSuccessfully"
+        )
+        if (
+          focusedSuccess?.event._tag !== "TaskTrackerFactsObserved" ||
+          focusedSuccess.event.observation._tag !== "FocusedTaskCompletionFacts"
+        )
+          return yield* Effect.die("recovery must record focused completed lifecycle facts")
+        expect(focusedSuccess.event.observation.purpose).toMatchObject({
+          _tag: "Confirmation",
+          attemptOrdinal: originalAttempt.event.attemptOrdinal
+        })
+        expect(
+          Schema.toEquivalence(CompletionTaskRequest)(
+            focusedSuccess.event.observation.request,
+            originalRequest.event.request
+          )
+        ).toBe(true)
+        expect(
+          journal.filter(
+            ({ event, position }) =>
+              position > cut.position &&
+              (event._tag === "CompletionTaskRequestLookupIntended" ||
+                event._tag === "CompletionTaskRequestLookupObserved")
+          )
+        ).toHaveLength(0)
+        const deletionIntent = journal.find(
+          ({ event, position }) =>
+            position > focusedSuccess.position && event._tag === "CompletionClaimDeletionIntended"
+        )
+        const claimReleased = journal.find(
+          ({ event, position }) => position > focusedSuccess.position && event._tag === "TaskClaimReleased"
+        )
+        const claimDeleted = journal.find(
+          ({ event, position }) => position > focusedSuccess.position && event._tag === "CompletionClaimDeleted"
+        )
+        if (
+          deletionIntent?.event._tag !== "CompletionClaimDeletionIntended" ||
+          claimReleased?.event._tag !== "TaskClaimReleased" ||
+          claimDeleted?.event._tag !== "CompletionClaimDeleted"
+        )
+          return yield* Effect.die("recovery must finish exact active and completion claim cleanup")
+        expect(deletionIntent.position).toBeLessThan(claimReleased.position)
+        expect(claimReleased.position).toBeLessThan(claimDeleted.position)
+        expect(deletionIntent.event.successObservation).toMatchObject({
+          lifecycle: "CompletedSuccessfully",
+          observedAt: focusedSuccess.position,
+          operationId: focusedSuccess.event.observation.operationId
+        })
+        expect(deletionIntent.event.claim).toEqual(replacement.event.claim)
+        expect(claimReleased.event.release.claim).toEqual(replacement.event.claim.originalClaim)
+        expect(claimDeleted.event).toMatchObject({
+          claim: deletionIntent.event.claim,
+          operationId: deletionIntent.event.operationId,
+          successObservation: deletionIntent.event.successObservation
+        })
+        expect(journal.filter(({ event }) => event._tag === "TaskClaimReleased")).toHaveLength(1)
+        expect(journal.filter(({ event }) => event._tag === "CompletionClaimDeleted")).toHaveLength(1)
+        const settlements = journal.filter(({ event }) => event._tag === "IntegrationFinalitySettled")
+        expect(settlements).toHaveLength(1)
+        expect(settlements[0]?.event).toMatchObject({
+          claim: replacement.event.claim,
+          deletionOperationId: deletionIntent.event.operationId,
+          replacementOperationId: replacement.event.operationId,
+          successObservation: deletionIntent.event.successObservation
+        })
+        const terminations = journal.filter(({ event }) => event._tag === "WorkflowRunTerminated")
+        expect(terminations).toHaveLength(1)
+        expect(terminations[0]?.event).toMatchObject({ disposition: "Completed" })
+        expect(MutableList.toArray(second.recordLog).filter((record) => record._tag === "RunDisposition")).toEqual([
+          { _tag: "RunDisposition", disposition: "Completed", runId: original.runId, version: 1 }
+        ])
+        expect(
+          MutableList.toArray(second.recordLog).some((record) => record._tag === "ApplicationExitDisposition")
+        ).toBe(false)
+        expect(yield* controller.processOutcomes).toEqual([
+          { _tag: "ControllerKilled", processId: first.handle.pid, signal: "SIGKILL" },
+          { _tag: "Exit", processId: second.handle.pid, status: 0 }
+        ])
         expect(
           (yield* publishEvidence(fixture, controller, "CompletionResponse", startedAt, [first, second]))._tag
         ).toBe("RetainedFixture")
