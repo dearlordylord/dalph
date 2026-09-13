@@ -9,7 +9,11 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { expect } from "vitest"
 import { createHermeticFixture } from "../../test-support/production-hermetic-fixture.js"
 import { makeHermeticController } from "../../test-support/production-hermetic-controller.js"
-import { HermeticFixtureAuthorizationFailure, HermeticFixtureManifest } from "./production-hermetic-contract.js"
+import {
+  HermeticFixtureAuthorizationFailure,
+  HermeticFixtureManifest,
+  HermeticRegistrationScopeId
+} from "./production-hermetic-contract.js"
 
 const builtEntry = new URL("../../dist/bin/production-hermetic-qualification.js", import.meta.url).pathname
 const sourceBaseSha = GitCommitSha.make("bf027ef1588d0ec0d0e749b812d6652343682c3b")
@@ -95,6 +99,7 @@ it.live(
                 GITHUB_TOKEN: "controlled-hermetic-github-token",
                 DALPH_CODEX_PROVIDER_CREDENTIAL: "controlled-hermetic-codex-credential",
                 DALPH_HERMETIC_CONTROLLER: "http://127.0.0.1:9",
+                DALPH_HERMETIC_REGISTRATION_SCOPE: HermeticRegistrationScopeId.make("original-authorization-spawn"),
                 DALPH_HERMETIC_EXPECTED_MANIFEST: yield* Schema.encodeEffect(
                   Schema.fromJsonString(HermeticFixtureManifest)
                 )(fixture.manifest),
