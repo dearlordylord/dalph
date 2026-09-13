@@ -14,7 +14,8 @@ test("production live qualification is a protected manually dispatched workflow"
   assert.doesNotMatch(workflow, /^  (?:pull_request|push):/mu)
   assert.match(workflow, /environment:\s*\n\s+name: production-live-qualification/u)
   assert.match(workflow, /group: production-live-qualification\s*\n\s+cancel-in-progress: false/u)
-  assert.match(workflow, /permissions:\s*\n\s+contents: read\s*\n\s+issues: write/u)
+  assert.match(workflow, /permissions:\s*\n\s+contents: read\s*\n\s+actions: read/u)
+  assert.doesNotMatch(workflow, /issues:\s*(?:write|read)/u)
 })
 
 test("dispatch inputs and worker toolchain are exact and immutable", () => {
@@ -33,9 +34,13 @@ test("dispatch inputs and worker toolchain are exact and immutable", () => {
     "DALPH_LIVE_QUALIFICATION_WORKFLOW",
     "DALPH_LIVE_QUALIFICATION_RUN_ID",
     "DALPH_LIVE_QUALIFICATION_JOB_ID",
+    "DALPH_LIVE_QUALIFICATION_SHIPPED_ENTRY",
     "DALPH_LIVE_QUALIFICATION_PROTECTED_ENVIRONMENT",
     "DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED_METADATA",
-    "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED_METADATA"
+    "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED_METADATA",
+    "setupInstallSeconds",
+    "completeJobSeconds",
+    "negativeControls"
   ]) {
     assert.match(workflow, new RegExp(field, "u"))
   }
@@ -48,6 +53,13 @@ test("formal evidence is captured in dedicated and stressed jobs before one live
   assert.match(workflow, /formal-stressed[\s\S]*?pnpm check:ci:formal/u)
   assert.match(workflow, /upload-artifact@v4/u)
   assert.match(workflow, /needs:\s*\[formal-dedicated, formal-stressed\]/u)
+  assert.match(workflow, /Resolve current formal job provenance[\s\S]*?GITHUB_TOKEN: \$\{\{ github\.token \}\}/u)
+  assert.match(workflow, /Resolve current formal job provenance[\s\S]*?--resolve-formal-jobs/u)
+  assert.match(
+    workflow,
+    /DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS:\s*\$\{\{ runner\.temp \}\}\/dalph-live-publication\/retained-locators\.json/u
+  )
+  assert.match(workflow, /mkdir -p "\$RUNNER_TEMP\/dalph-live-publication"/u)
   assert.match(workflow, /qualify:production-live/u)
 })
 
@@ -56,6 +68,7 @@ test("provider credentials occur only on the one live command and artifacts uplo
   assert.equal((workflow.match(/secrets\.DALPH_LIVE_CODEX_PROVIDER_CREDENTIAL/gu) ?? []).length, 1)
   assert.match(workflow, /Run one protected live qualification[\s\S]*?DALPH_LIVE_GITHUB_TOKEN/u)
   assert.match(workflow, /Run one protected live qualification[\s\S]*?DALPH_LIVE_CODEX_PROVIDER_CREDENTIAL/u)
+  assert.doesNotMatch(workflow, /Run one protected live qualification[\s\S]*?^\s+GITHUB_TOKEN:/mu)
   assert.match(workflow, /Upload redacted qualification outputs[\s\S]*?if: always\(\)/u)
   assert.doesNotMatch(workflow, /retry:/u)
   assert.doesNotMatch(workflow, /continue-on-error:/u)

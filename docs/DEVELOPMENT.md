@@ -372,15 +372,24 @@ invokes this command.
 
 Two preceding jobs capture dedicated and stressed formal evidence independently
 with `pnpm check:ci:formal`; their logs and provenance files are downloaded by
-the approved job. The checked-in controller receives those absolute evidence
-locators, the candidate-bound source SHA, branded workflow/run/job/protected-
-environment provenance, and these strict formal/output locators:
+the approved job. Each formal job records truthful setup/install and complete-job
+durations and derives its ordered negative-control names from the validated log.
+Before the live command, the approved job uses the current repository's
+automatic Actions token (`GITHUB_TOKEN`, with only `actions: read`) to resolve
+exactly one successful numeric Actions job ID for each formal job in this run
+attempt. That token is used only for this read; it is not the disposable
+repository credential.
+
+The checked-in controller receives the downloaded evidence locators, the
+candidate-bound source SHA, branded workflow/run/job/protected-environment
+provenance, and these strict formal/output locators:
 
 ```text
 DALPH_LIVE_QUALIFICATION_SOURCE_SHA
 DALPH_LIVE_QUALIFICATION_SOURCE_REPOSITORY
 DALPH_LIVE_QUALIFICATION_SOURCE_BASE_SHA
 DALPH_LIVE_QUALIFICATION_BUILT_ENTRY
+DALPH_LIVE_QUALIFICATION_SHIPPED_ENTRY
 DALPH_LIVE_QUALIFICATION_LOCKFILE
 DALPH_LIVE_QUALIFICATION_CODEX_EXECUTABLE
 DALPH_LIVE_QUALIFICATION_PUBLICATION_CONTAINER
@@ -389,7 +398,7 @@ DALPH_LIVE_QUALIFICATION_RUN_ID
 DALPH_LIVE_QUALIFICATION_JOB_ID
 DALPH_LIVE_QUALIFICATION_MANIFEST
 DALPH_LIVE_QUALIFICATION_ARTIFACT
-DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS
+DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS (under DALPH_LIVE_QUALIFICATION_PUBLICATION_CONTAINER)
 DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED
 DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED
 DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED_METADATA
@@ -401,6 +410,16 @@ The root command is:
 ```bash
 pnpm qualify:production-live
 ```
+
+Before that one launch, the wrapper creates the absolute manifest file with a
+fresh invocation and issue-operation identity, the exact candidate/Base and
+hosted provenance, the shipped `packages/dalph/dist/bin/dalph.js` entry, the
+lockfile/Codex locators, the outside-Q artifact and retained-report locators,
+and the two formal profiles processed by the built provenance validator. The
+controller locator (`packages/dalph/dist/bin/production-live-qualification.js`)
+is intentionally separate from the shipped Dalph entry. The retained report is
+under the pre-created publication container and remains distinct from the
+qualification artifact.
 
 It validates `DALPH_RUN_PRODUCTION_LIVE_QUALIFICATION=1`, the exact checked-out
 candidate, the reviewed Base, the protected environment, the provenance shape,
@@ -416,7 +435,10 @@ second command.
 The final step uploads `qualification.json`, `retained-locators.json`, and the
 manifest locator with `if: always()`, so a successful result and a failed live
 attempt have the same explicit artifact boundary. The artifact must contain no
-credential, raw environment, provider-private session, prompt, or response.
+credential, raw environment, provider-private session, prompt, response, or
+raw Actions API payload. The disposable-repository secret remains named
+`DALPH_LIVE_GITHUB_TOKEN` until the runtime maps it to the shipped child’s
+`GITHUB_TOKEN` boundary.
 
 The focused contract mapping is:
 

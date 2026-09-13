@@ -20,7 +20,7 @@ on:
 # token is separately scoped to issue and label mutation in the named repo.
 permissions:
   contents: read
-  issues: write
+  actions: read
 
 # Every live mutation shares one lane, regardless of dispatch ref or candidate.
 concurrency:
@@ -36,8 +36,14 @@ jobs:
       DALPH_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
       DALPH_COVERAGE_BASE_SHA: ${{ inputs.reviewed_base_sha }}
       DALPH_FORMAL_PROFILE_KIND: dedicated
+      DALPH_FORMAL_EVIDENCE_DIR: ${{ runner.temp }}/dalph-live-formal/dedicated
       NODE_OPTIONS: --max-old-space-size=8192
     steps:
+      - name: Start formal timing
+        run: |
+          mkdir -p "$DALPH_FORMAL_EVIDENCE_DIR"
+          date +%s%3N > "$DALPH_FORMAL_EVIDENCE_DIR/started-ms"
+
       - name: Checkout exact candidate
         uses: actions/checkout@v7
         with:
@@ -67,11 +73,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Record setup timing
+        run: date +%s%3N > "$DALPH_FORMAL_EVIDENCE_DIR/install-complete-ms"
+
       - name: Run dedicated formal evidence
         run: |
           set -o pipefail
-          mkdir -p "$RUNNER_TEMP/dalph-live-formal/dedicated"
-          pnpm check:ci:formal 2>&1 | tee "$RUNNER_TEMP/dalph-live-formal/dedicated/formal.log"
+          pnpm check:ci:formal 2>&1 | tee "$DALPH_FORMAL_EVIDENCE_DIR/formal.log"
+
+      - name: Record formal completion timing
+        if: always()
+        run: date +%s%3N > "$DALPH_FORMAL_EVIDENCE_DIR/completed-ms"
 
       - name: Record dedicated formal provenance
         if: always()
@@ -79,19 +91,42 @@ jobs:
           DALPH_FORMAL_METADATA: ${{ runner.temp }}/dalph-live-formal/dedicated/provenance.json
         run: |
           node --input-type=module <<'NODE'
-          import { writeFileSync } from "node:fs"
+          import { readFileSync, writeFileSync } from "node:fs"
+          import { parseProfileLog } from "./scripts/generate-quint-profile-evidence.mjs"
+          const timing = (name) => Number(readFileSync(`${process.env.DALPH_FORMAL_EVIDENCE_DIR}/${name}`, "utf8"))
+          const started = timing("started-ms")
+          const installed = timing("install-complete-ms")
+          const completed = timing("completed-ms")
+          const setupInstallSeconds = (installed - started) / 1000
+          const completeJobSeconds = (completed - started) / 1000
+          if (![started, installed, completed].every(Number.isFinite) || setupInstallSeconds < 0 || completeJobSeconds < setupInstallSeconds) {
+            throw new Error("formal timing markers are not monotonic")
+          }
+          const log = `${process.env.DALPH_FORMAL_EVIDENCE_DIR}/formal.log`
+          const parsed = parseProfileLog({
+            id: process.env.GITHUB_JOB,
+            node: process.version,
+            repeat: "1",
+            installSeconds: String(setupInstallSeconds),
+            log: readFileSync(log, "utf8"),
+            sourcePath: log
+          })
           const fields = {
             profile: process.env.DALPH_FORMAL_PROFILE_KIND,
             sourceSha: process.env.DALPH_CANDIDATE_SHA,
             reviewedBaseSha: process.env.DALPH_COVERAGE_BASE_SHA,
             nodeVersion: process.version,
             workflowName: process.env.GITHUB_WORKFLOW,
-            workflow: process.env.GITHUB_WORKFLOW,
-            runId: process.env.GITHUB_RUN_ID,
-            runAttempt: process.env.GITHUB_RUN_ATTEMPT,
-            jobId: process.env.GITHUB_JOB,
-            job: process.env.GITHUB_JOB,
-            log: `${process.env.RUNNER_TEMP}/dalph-live-formal/dedicated/formal.log`
+            runId: Number(process.env.GITHUB_RUN_ID),
+            runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+            jobName: process.env.GITHUB_JOB,
+            log,
+            setupInstallSeconds,
+            completeJobSeconds,
+            formalSeconds: parsed.formalSeconds,
+            negativeControls: parsed.commands
+              .filter(({ name }) => name.includes("negative mutation profile") || name.includes("temporal mutant"))
+              .map(({ name }) => name)
           }
           writeFileSync(process.env.DALPH_FORMAL_METADATA, `${JSON.stringify(fields, null, 2)}\n`, { mode: 0o600 })
           NODE
@@ -113,8 +148,14 @@ jobs:
       DALPH_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
       DALPH_COVERAGE_BASE_SHA: ${{ inputs.reviewed_base_sha }}
       DALPH_FORMAL_PROFILE_KIND: stressed
+      DALPH_FORMAL_EVIDENCE_DIR: ${{ runner.temp }}/dalph-live-formal/stressed
       NODE_OPTIONS: --max-old-space-size=8192
     steps:
+      - name: Start formal timing
+        run: |
+          mkdir -p "$DALPH_FORMAL_EVIDENCE_DIR"
+          date +%s%3N > "$DALPH_FORMAL_EVIDENCE_DIR/started-ms"
+
       - name: Checkout exact candidate
         uses: actions/checkout@v7
         with:
@@ -144,11 +185,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Record setup timing
+        run: date +%s%3N > "$DALPH_FORMAL_EVIDENCE_DIR/install-complete-ms"
+
       - name: Run stressed formal evidence
         run: |
           set -o pipefail
-          mkdir -p "$RUNNER_TEMP/dalph-live-formal/stressed"
-          pnpm check:ci:formal 2>&1 | tee "$RUNNER_TEMP/dalph-live-formal/stressed/formal.log"
+          pnpm check:ci:formal 2>&1 | tee "$DALPH_FORMAL_EVIDENCE_DIR/formal.log"
+
+      - name: Record formal completion timing
+        if: always()
+        run: date +%s%3N > "$DALPH_FORMAL_EVIDENCE_DIR/completed-ms"
 
       - name: Record stressed formal provenance
         if: always()
@@ -156,19 +203,42 @@ jobs:
           DALPH_FORMAL_METADATA: ${{ runner.temp }}/dalph-live-formal/stressed/provenance.json
         run: |
           node --input-type=module <<'NODE'
-          import { writeFileSync } from "node:fs"
+          import { readFileSync, writeFileSync } from "node:fs"
+          import { parseProfileLog } from "./scripts/generate-quint-profile-evidence.mjs"
+          const timing = (name) => Number(readFileSync(`${process.env.DALPH_FORMAL_EVIDENCE_DIR}/${name}`, "utf8"))
+          const started = timing("started-ms")
+          const installed = timing("install-complete-ms")
+          const completed = timing("completed-ms")
+          const setupInstallSeconds = (installed - started) / 1000
+          const completeJobSeconds = (completed - started) / 1000
+          if (![started, installed, completed].every(Number.isFinite) || setupInstallSeconds < 0 || completeJobSeconds < setupInstallSeconds) {
+            throw new Error("formal timing markers are not monotonic")
+          }
+          const log = `${process.env.DALPH_FORMAL_EVIDENCE_DIR}/formal.log`
+          const parsed = parseProfileLog({
+            id: process.env.GITHUB_JOB,
+            node: process.version,
+            repeat: "1",
+            installSeconds: String(setupInstallSeconds),
+            log: readFileSync(log, "utf8"),
+            sourcePath: log
+          })
           const fields = {
             profile: process.env.DALPH_FORMAL_PROFILE_KIND,
             sourceSha: process.env.DALPH_CANDIDATE_SHA,
             reviewedBaseSha: process.env.DALPH_COVERAGE_BASE_SHA,
             nodeVersion: process.version,
             workflowName: process.env.GITHUB_WORKFLOW,
-            workflow: process.env.GITHUB_WORKFLOW,
-            runId: process.env.GITHUB_RUN_ID,
-            runAttempt: process.env.GITHUB_RUN_ATTEMPT,
-            jobId: process.env.GITHUB_JOB,
-            job: process.env.GITHUB_JOB,
-            log: `${process.env.RUNNER_TEMP}/dalph-live-formal/stressed/formal.log`
+            runId: Number(process.env.GITHUB_RUN_ID),
+            runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+            jobName: process.env.GITHUB_JOB,
+            log,
+            setupInstallSeconds,
+            completeJobSeconds,
+            formalSeconds: parsed.formalSeconds,
+            negativeControls: parsed.commands
+              .filter(({ name }) => name.includes("negative mutation profile") || name.includes("temporal mutant"))
+              .map(({ name }) => name)
           }
           writeFileSync(process.env.DALPH_FORMAL_METADATA, `${JSON.stringify(fields, null, 2)}\n`, { mode: 0o600 })
           NODE
@@ -198,6 +268,7 @@ jobs:
       DALPH_LIVE_QUALIFICATION_SOURCE_REPOSITORY: ${{ github.workspace }}
       DALPH_LIVE_QUALIFICATION_SOURCE_BASE_SHA: ${{ inputs.reviewed_base_sha }}
       DALPH_LIVE_QUALIFICATION_BUILT_ENTRY: ${{ github.workspace }}/packages/dalph/dist/bin/production-live-qualification.js
+      DALPH_LIVE_QUALIFICATION_SHIPPED_ENTRY: ${{ github.workspace }}/packages/dalph/dist/bin/dalph.js
       DALPH_LIVE_QUALIFICATION_LOCKFILE: ${{ github.workspace }}/pnpm-lock.yaml
       DALPH_LIVE_QUALIFICATION_CODEX_EXECUTABLE: ${{ github.workspace }}/node_modules/.bin/codex
       DALPH_LIVE_QUALIFICATION_PUBLICATION_CONTAINER: ${{ runner.temp }}/dalph-live-publication
@@ -208,7 +279,7 @@ jobs:
       DALPH_LIVE_QUALIFICATION_PROTECTED_ENVIRONMENT: production-live-qualification
       DALPH_LIVE_QUALIFICATION_MANIFEST: ${{ runner.temp }}/dalph-live-qualification/manifest.json
       DALPH_LIVE_QUALIFICATION_ARTIFACT: ${{ runner.temp }}/dalph-live-qualification/qualification.json
-      DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS: ${{ runner.temp }}/dalph-live-qualification/retained-locators.json
+      DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS: ${{ runner.temp }}/dalph-live-publication/retained-locators.json
       DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED: ${{ runner.temp }}/dalph-live-formal/dedicated/formal.log
       DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED: ${{ runner.temp }}/dalph-live-formal/stressed/formal.log
       DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED_METADATA: ${{ runner.temp }}/dalph-live-formal/dedicated/provenance.json
@@ -262,12 +333,19 @@ jobs:
           path: ${{ runner.temp }}/dalph-live-formal/stressed
 
       - name: Prepare redacted output locations
-        run: mkdir -p "$RUNNER_TEMP/dalph-live-qualification"
+        run: |
+          mkdir -p "$RUNNER_TEMP/dalph-live-qualification"
+          mkdir -p "$RUNNER_TEMP/dalph-live-publication"
+
+      - name: Resolve current formal job provenance
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/run-production-live-qualification.mjs --resolve-formal-jobs
 
       # The protected environment secrets enter only this one controller command.
       - name: Run one protected live qualification
         env:
-          GITHUB_TOKEN: ${{ secrets.DALPH_LIVE_GITHUB_TOKEN }}
+          DALPH_LIVE_GITHUB_TOKEN: ${{ secrets.DALPH_LIVE_GITHUB_TOKEN }}
           DALPH_CODEX_PROVIDER_CREDENTIAL: ${{ secrets.DALPH_LIVE_CODEX_PROVIDER_CREDENTIAL }}
         run: pnpm qualify:production-live
 
@@ -278,7 +356,7 @@ jobs:
           name: production-live-qualification-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/dalph-live-qualification/qualification.json
-            ${{ runner.temp }}/dalph-live-qualification/retained-locators.json
+            ${{ runner.temp }}/dalph-live-publication/retained-locators.json
             ${{ runner.temp }}/dalph-live-qualification/manifest.json
           if-no-files-found: warn
           retention-days: 30
