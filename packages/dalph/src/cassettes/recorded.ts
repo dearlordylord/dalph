@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Projection, inverse fold, and presentation share one exhaustive cassette boundary. */
-import { Effect, Match, Schema } from "effect"
+import { Effect, Match, Schema, SchemaParser } from "effect"
 import {
   AttemptChoiceAppliedEvent,
   AttemptRestartAuthorityReadFailedEvent,
@@ -971,6 +971,11 @@ export class RecordedCausalPositionMissing extends Schema.TaggedError<RecordedCa
   { entryIndex: Schema.Int, relation: Schema.String }
 ) {}
 
+// These internal projections already contain every tag and constructor default.
+// Validate the complete decoded shape without searching for omitted defaults.
+const validateCompleteRecordedCassette: (input: RecordedCassetteType) => RecordedCassetteType =
+  SchemaParser.decodeUnknownSync(Schema.toType(RecordedCassette))
+
 /** Projects a valid one-run journal without exposing a partial cassette. */
 export const projectRecordedCassette = Effect.fn("ScenarioCassette.projectRecorded")(function* (
   records: ReadonlyArray<JournalRecord>
@@ -980,7 +985,12 @@ export const projectRecordedCassette = Effect.fn("ScenarioCassette.projectRecord
   const history = reduceWorkflowJournalHistory(runId, records)
   if (history._tag === "InvalidWorkflowJournalHistory") return yield* Effect.fail(history)
   const entries = records.map(({ event }) => recordedEntryFor(event))
-  return RecordedCassette.make({ entries, runId, schemaVersion: recordedCassetteVersion })
+  return validateCompleteRecordedCassette({
+    _tag: "RecordedCassette",
+    entries,
+    runId,
+    schemaVersion: recordedCassetteVersion
+  })
 })
 
 const eventForTaskBoundaryEntry = (
@@ -1606,7 +1616,7 @@ export const verifyRecordedCassetteRoundTrip = (
     sourceHistory = advanceComparisonHistoryOrColdFold(sourceHistory, sourceRecord, () =>
       reduceWorkflowJournalHistory(cassette.runId, records.slice(0, checkpoint))
     )
-    const prefix = RecordedCassette.make({ ...cassette, entries: cassette.entries.slice(0, checkpoint) })
+    const prefix = validateCompleteRecordedCassette({ ...cassette, entries: cassette.entries.slice(0, checkpoint) })
     const entry = prefix.entries[actualRecords.length]
     let selectedActualRecord: JournalRecord | undefined
     if (entry !== undefined) {
@@ -1662,7 +1672,9 @@ export const compareRecordedCassetteCheckpoints = (
   expected.entries.map((_entry, index) => {
     const checkpoint = index + 1
     const prefix = (cassette: RecordedCassetteType) =>
-      foldRecordedCassette(RecordedCassette.make({ ...cassette, entries: cassette.entries.slice(0, checkpoint) }))
+      foldRecordedCassette(
+        validateCompleteRecordedCassette({ ...cassette, entries: cassette.entries.slice(0, checkpoint) })
+      )
     return checkpointComparison(checkpoint, prefix(expected), prefix(actual))
   })
 
