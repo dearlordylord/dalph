@@ -625,6 +625,16 @@ const localJavaScriptPath = async ({ dependencyKind, specifier }, importer, work
   if (dependencyKind === "commonjs") {
     if (specifier.startsWith("file:"))
       throw new Error(`Unsupported repository CommonJS file URL in formal source: ${importer} -> ${specifier}`)
+    let requestedStatus
+    try {
+      requestedStatus = await lstat(requested)
+      if (requestedStatus.isDirectory())
+        throw new Error(`Unsupported repository CommonJS directory import: ${importer} -> ${specifier}`)
+      if (requestedStatus.isSymbolicLink() && (await lstat(await realpath(requested))).isDirectory())
+        throw new Error(`Unsupported repository CommonJS symlinked directory import: ${importer} -> ${specifier}`)
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error
+    }
     let selected
     try {
       selected = createRequire(canonicalImporter).resolve(specifier)
@@ -635,15 +645,22 @@ const localJavaScriptPath = async ({ dependencyKind, specifier }, importer, work
       throw new Error(`Repository formal source imports outside the worktree: ${importer} -> ${selected}`)
     if (extname(selected) === ".node")
       throw new Error(`Unsupported repository native CommonJS input: ${importer} -> ${selected}`)
-    try {
-      const requestedStatus = await lstat(requested)
-      if (requestedStatus.isDirectory())
-        throw new Error(`Unsupported repository CommonJS directory import: ${importer} -> ${specifier}`)
-      if ((requestedStatus.isFile() || requestedStatus.isSymbolicLink()) && (await realpath(requested)) === selected)
-        return requested
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error
-    }
+    if (requestedStatus === undefined && extname(requested) === "")
+      for (const suffix of [".js", ".json", ".node"])
+        try {
+          const candidateStatus = await lstat(`${requested}${suffix}`)
+          if (candidateStatus.isSymbolicLink())
+            throw new Error(
+              `Unsupported repository extensionless CommonJS symlink resolution: ${importer} -> ${specifier}`
+            )
+          if (!candidateStatus.isFile())
+            throw new Error(`Unsupported repository CommonJS resolution candidate: ${requested}${suffix}`)
+          break
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error
+        }
+    if ((requestedStatus?.isFile() || requestedStatus?.isSymbolicLink()) && (await realpath(requested)) === selected)
+      return requested
     return selected
   }
   if (extname(requested) === ".node")

@@ -222,6 +222,25 @@ test("uses distinct exact ESM and Node CommonJS resolution rules", async () => {
   await assert.rejects(f.guard(), /Unsupported repository native CommonJS input/u)
 })
 
+test("fails closed when extensionless CommonJS selection would lose a lexical symlink", async () => {
+  const f = fixture()
+  writeFileSync(join(f.root, "scripts/run-formal-gate.mjs"), 'import "./selector.cjs"\n')
+  writeFileSync(join(f.root, "scripts/selector.cjs"), 'require("./helper")\n')
+  writeFileSync(join(f.root, "scripts/actual-helper.js"), "exports.actual = true\n")
+  symlinkSync("actual-helper.js", join(f.root, "scripts/helper.js"))
+  await assert.rejects(f.guard(), /Unsupported repository extensionless CommonJS symlink resolution/u)
+})
+
+test("fails closed when CommonJS selection starts through a symlinked directory", async () => {
+  const f = fixture()
+  writeFileSync(join(f.root, "scripts/run-formal-gate.mjs"), 'import "./selector.cjs"\n')
+  writeFileSync(join(f.root, "scripts/selector.cjs"), 'require("./linked-package")\n')
+  mkdirSync(join(f.root, "scripts/actual-package"))
+  writeFileSync(join(f.root, "scripts/actual-package/index.js"), "exports.actual = true\n")
+  symlinkSync("actual-package", join(f.root, "scripts/linked-package"))
+  await assert.rejects(f.guard(), /Unsupported repository CommonJS symlinked directory import/u)
+})
+
 test("discovers selected, negative-control, and recursively imported Quint inputs only", async () => {
   const f = fixture()
   writeFileSync(join(f.root, "specs/model.qnt"), 'module fixture { import helper.* from "./helper" }\n')
