@@ -250,6 +250,7 @@ describe("#307 production live qualification controller", () => {
         operation: expected.operation,
         reason: "Unavailable"
       })
+      let retainedRunId: string | undefined
       const result = await Effect.runPromise(
         runProductionLiveQualification(
           invocation,
@@ -268,12 +269,19 @@ describe("#307 production live qualification controller", () => {
             validateRecord: () => Effect.void,
             gatherFinalFacts: () => Effect.succeed(facts),
             publish: () => Effect.void,
-            retainAfterFailure: () => Effect.void
+            retainAfterFailure: (observation) =>
+              Effect.sync(() => {
+                retainedRunId = observation.runId
+              })
           }
         )
       )
 
       expect(result).toMatchObject({ _tag: "Failed", stage: expected.stage, processId: 705, spawnCount: 1 })
+      if (expected.operation === "WaitForExit") {
+        expect(result).toMatchObject({ runId: "run-live-q" })
+        expect(retainedRunId).toBe("run-live-q")
+      }
     }
   })
 })

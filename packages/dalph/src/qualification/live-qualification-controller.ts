@@ -342,7 +342,8 @@ const runProductionLiveQualificationScoped = Effect.fn("ProductionLiveQualificat
   )
   if (output._tag === "Failure" || stderr._tag === "Failure") return yield* fail("ReadOutput")
   const records = output.success
-  const completedRunId = exactCompletedRun(process, records, selectedRun(records))
+  runId = selectedRun(records)
+  const completedRunId = exactCompletedRun(process, records, runId)
   if (completedRunId === undefined) return yield* fail("Process")
   runId = completedRunId
   const finalInput = { processId, processStatus: 0 as const, records, runId }
