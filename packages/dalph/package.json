@@ -23,7 +23,7 @@
   "dependencies": {
     "@dalph/contracts": "workspace:*",
     "@dalph/orchestrator": "workspace:*",
-    "@effect/platform-node": "4.0.0-beta.106",
+    "@effect/platform-node": "4.0.0-rc.109",
     "effect": "4.0.0-beta.106",
     "fs-ext-extra-prebuilt": "2.2.9"
   }
