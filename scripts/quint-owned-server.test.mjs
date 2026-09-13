@@ -87,6 +87,8 @@ if(mode!=='success'&&!mode.startsWith('output-route')&&!error)throw Error('failu
   // This disposable repository owns its candidate base; an admitted parent
   // may name a commit that does not exist here.
   environment.DALPH_COVERAGE_BASE_SHA = git("rev-parse", "HEAD^")
+  // The parent's secret-scan history contract does not describe this fixture.
+  delete environment.DALPH_GATE_GIT_HISTORY
   delete environment.npm_execpath
   delete environment.DALPH_QUALIFICATION_ENV_CAPTURE
   delete environment.DALPH_RUN_REAL_CODEX_QUALIFICATION
