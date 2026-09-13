@@ -3,7 +3,8 @@ import { join } from "node:path"
 import { digest, readRecord } from "./gate-custody-records.mjs"
 import { inputGuardProven } from "./gate-resume-policy.mjs"
 import { captureResumeArtifacts } from "./gate-resume-artifacts.mjs"
-import { addSuccessfulOutputLines } from "./quality-output-budget.mjs"
+import { addSuccessfulOutputLines, successfulOutputLineLimit } from "./quality-output-budget.mjs"
+import { readReferencedFormalSuccess } from "./formal-success-evidence.mjs"
 
 export const qualitySubtreeProven = (stages, obligationId) => {
   const descendants = new Set([obligationId])
@@ -20,7 +21,15 @@ export const qualitySubtreeProven = (stages, obligationId) => {
 }
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right)
 /** A composite proves skipped stage references without inventing new child executions. */
-export const readQualityEvidence = ({ baseSha, readPrior, run, runDirectory, runId, stages }) => {
+export const readQualityEvidence = ({
+  baseSha,
+  readFormalSuccess = readReferencedFormalSuccess,
+  readPrior,
+  run,
+  runDirectory,
+  runId,
+  stages
+}) => {
   const contractPath = join(runDirectory, "resume-contract.json")
   if (!existsSync(contractPath)) {
     if (
@@ -34,7 +43,7 @@ export const readQualityEvidence = ({ baseSha, readPrior, run, runDirectory, run
   if (
     contract.runId !== runId ||
     !Array.isArray(contract.manifest) ||
-    contract.maximumSuccessfulOutputLines !== 550 ||
+    contract.maximumSuccessfulOutputLines !== successfulOutputLineLimit ||
     contract.logicalInvocation?.mode !== "check:all" ||
     contract.logicalInvocation.baseSha !== baseSha ||
     !same(contract.logicalInvocation.stageManifest, contract.manifest) ||
@@ -156,14 +165,56 @@ export const readQualityEvidence = ({ baseSha, readPrior, run, runDirectory, run
     if (stage.outcome === "passed")
       outputLines = addSuccessfulOutputLines({
         currentOutputLines: outputLines,
-        maximumOutputLines: 550,
+        maximumOutputLines: successfulOutputLineLimit,
         stageName: stage.stageId,
         stageOutputLines: stage.outputLineCount
       })
+  const formalOutputLineCount = composite?.formalOutputLineCount ?? 0
+  if (!Number.isSafeInteger(formalOutputLineCount) || formalOutputLineCount < 0) {
+    throw new Error("Invalid current formal output accounting")
+  }
+  outputLines = addSuccessfulOutputLines({
+    currentOutputLines: outputLines,
+    maximumOutputLines: successfulOutputLineLimit,
+    stageName: "formal verification",
+    stageOutputLines: formalOutputLineCount
+  })
+  let formalProven = false
+  const formal = composite?.formal
+  if (formal !== undefined) {
+    if (
+      formal.version !== 1 ||
+      !["executed", "reused"].includes(formal.disposition) ||
+      formal.outputLineCount !== formalOutputLineCount
+    )
+      throw new Error("Invalid composite formal execution accounting")
+    const original = readFormalSuccess({
+      recordPath: formal.recordPath,
+      worktree: run.worktree,
+      identity: formal.identity,
+      profileIdentity: formal.profileIdentity
+    })
+    const observation = formal.observation
+    if (
+      original.attemptId !== formal.attemptId ||
+      original.runId !== formal.runId ||
+      !same(original.identity, formal.identity) ||
+      original.profileIdentity !== formal.profileIdentity ||
+      observation?.version !== 1 ||
+      observation.observerVersion !== 1 ||
+      observation.ready !== true ||
+      observation.drained !== true ||
+      observation.unchanged !== true ||
+      observation.inputDigest !== original.identity.inputDigest
+    )
+      throw new Error("Invalid final formal applicability evidence")
+    formalProven = true
+  }
   if (composite !== undefined && composite.successfulOutputLines !== outputLines)
     throw new Error("Composite output accounting does not match stage evidence")
   const complete =
     composite !== undefined &&
+    formalProven &&
     inputGuardProven(identity, guard) &&
     effectiveStages.every((stage) => stage.outcome === "passed" && stage.subtreeProven === true)
   let coverageProvenance
@@ -205,10 +256,34 @@ export const readQualityEvidence = ({ baseSha, readPrior, run, runDirectory, run
     guard,
     manifest: contract.manifest,
     logicalInvocation: contract.logicalInvocation,
-    maximumSuccessfulOutputLines: 550,
+    maximumSuccessfulOutputLines: successfulOutputLineLimit,
     stages: effectiveStages,
     composite,
+    formal,
+    formalProven,
     complete,
     ...(coverageProvenance === undefined ? {} : { coverageProvenance })
   }
+}
+
+/** Only verdict reports independently validated against original custody can
+ * classify their exact checker/helper/server diagnostic logs as optional. */
+export const formalOptionalLogObligations = ({ run, runDirectory, runId }) => {
+  const directory = join(runDirectory, "formal-attempts")
+  const ids = new Set()
+  if (!existsSync(directory)) return ids
+  for (const file of readdirSync(directory)) {
+    if (!file.endsWith(".json")) continue
+    try {
+      const success = readReferencedFormalSuccess({ recordPath: join(directory, file), worktree: run.worktree })
+      if (success.runId !== runId || success.runDirectory !== runDirectory) continue
+      const report = readRecord(success.execution.reportPath)
+      ids.add(success.execution.helperObligationId)
+      ids.add(report.serverEvidence.obligationId)
+      for (const command of report.profileResult.commands) ids.add(command.obligationId)
+    } catch {
+      // Corrupt, incomplete or obsolete required proof grants no log exemption.
+    }
+  }
+  return ids
 }

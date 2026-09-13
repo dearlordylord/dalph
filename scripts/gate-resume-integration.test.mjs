@@ -1,15 +1,25 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { chmodSync, statSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import {
+  cpSync,
+  chmodSync,
+  statSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { withoutInheritedCustody, repositoryLocation } from "./gate-custody-records.mjs"
 import { readRunEvidence } from "./gate-run-evidence.mjs"
+import { seedQualityFormalBoundary } from "./formal-quality-test-fixture.mjs"
 
 const wrapper = fileURLToPath(new URL("./with-gate-slot.mjs", import.meta.url))
-const execute = new URL("./gate-quality-run.mjs", import.meta.url).href
 const bounded = new URL("./run-bounded-command.mjs", import.meta.url).href
 const fixture = () => {
   const root = mkdtempSync(join(tmpdir(), "dalph-resume-"))
@@ -19,6 +29,25 @@ const fixture = () => {
     return result.stdout.trim()
   }
   git("init", "-q")
+  cpSync(fileURLToPath(new URL("./", import.meta.url)), join(root, "scripts"), { recursive: true })
+  writeFileSync(join(root, "package.json"), JSON.stringify({ type: "module" }))
+  writeFileSync(
+    join(root, "scripts", "effect-tsgo-platform-binary.mjs"),
+    "export const ensureEffectTsgoPlatformBinaryExecutable=()=>{}"
+  )
+  writeFileSync(
+    join(root, "scripts", "run-formal-workflow.mjs"),
+    `
+import {readFileSync} from 'node:fs';import {join} from 'node:path';
+import {readReferencedFormalSuccess} from './formal-success-evidence.mjs';
+export const runFormalWorkflow=async({report})=>{
+ const evidencePath=readFileSync(join(process.cwd(),'.scratch','controlled-formal-path'),'utf8');
+ const success=readReferencedFormalSuccess({recordPath:evidencePath,worktree:process.cwd()});
+ report('Formal: controlled boundary reuses independently validated synthetic records');
+ return {status:'reused',success,evidencePath,finalizeApplicability:async()=>({success,evidencePath,observation:success.observation}),assertUnchanged:async()=>{},close:async()=>{}}
+}`
+  )
+
   writeFileSync(join(root, ".gitignore"), ".scratch/\ndist/\n")
   git("add", ".gitignore")
   git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "base")
@@ -33,6 +62,7 @@ const fixture = () => {
     "candidate"
   )
   mkdirSync(join(root, ".scratch"))
+  writeFileSync(join(root, ".scratch", "controlled-formal-path"), seedQualityFormalBoundary(root))
   return { root, git, cleanup: () => rmSync(root, { recursive: true, force: true }) }
 }
 const launch = (root, script, resumeRunId, reap = false) => {
@@ -73,9 +103,13 @@ sys.exit(code if code is not None else 1)
 }
 const runs = (root) => {
   const location = repositoryLocation(root)
-  return readdirSync(join(location.custodyRoot, "runs")).map((runId) =>
-    readRunEvidence({ runId, runDirectory: join(location.custodyRoot, "runs", runId) })
-  )
+  return readdirSync(join(location.custodyRoot, "runs"))
+    .filter(
+      (runId) =>
+        JSON.parse(readFileSync(join(location.custodyRoot, "runs", runId, "run.json"), "utf8")).fixtureFormalSeed !==
+        true
+    )
+    .map((runId) => readRunEvidence({ runId, runDirectory: join(location.custodyRoot, "runs", runId) }))
 }
 test("admitted late failure resumes proven stages once and copies reused whole-coverage bytes with provenance", () => {
   const f = fixture()
@@ -92,7 +126,7 @@ test("admitted late failure resumes proven stages once and copies reused whole-c
     ]
     writeFileSync(
       script,
-      `import {executeResumableQualityGate} from ${JSON.stringify(execute)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
+      `import {executeResumableQualityGate} from ${JSON.stringify(new URL(`file://${join(f.root, "scripts", "gate-quality-run.mjs")}`).href)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
 const sources=${JSON.stringify(stageSources)};
 const executableSources=sources.map(source=>"import {createRequire} from 'node:module';const require=createRequire(import.meta.url);"+source);
 const manifest=sources.map((source,ordinal)=>({execution:{executable:process.execPath,args:['--input-type=module','-e',executableSources[ordinal]],cwd:process.cwd(),name:'fixture '+ordinal,timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000},id:['build','negative','coverage','late'][ordinal],name:'fixture '+ordinal,boundary:'qualification',args:[source],timeout:10000,artifactRoots:ordinal===0?['dist']:ordinal===2?['@coverage']:[]}));
@@ -182,7 +216,7 @@ test("admitted census failure reruns later successful checks instead of treating
     ]
     writeFileSync(
       script,
-      `import {executeResumableQualityGate} from ${JSON.stringify(execute)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
+      `import {executeResumableQualityGate} from ${JSON.stringify(new URL(`file://${join(f.root, "scripts", "gate-quality-run.mjs")}`).href)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
 const sources=${JSON.stringify(sources)};const manifest=sources.map((source,ordinal)=>({id:['first','later','suffix'][ordinal],name:'census '+ordinal,boundary:ordinal<2?'preflight':'qualification',args:[source],timeout:10000,artifactRoots:[],execution:{executable:process.execPath,args:['-e',source],cwd:process.cwd(),name:'census '+ordinal,timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
 const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,resumeRunId:process.argv[2]?.slice('--resume='.length),runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`
     )
@@ -210,7 +244,7 @@ test("resumed suffix consumes the original successful output budget", () => {
     ]
     writeFileSync(
       script,
-      `import {executeResumableQualityGate} from ${JSON.stringify(execute)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
+      `import {executeResumableQualityGate} from ${JSON.stringify(new URL(`file://${join(f.root, "scripts", "gate-quality-run.mjs")}`).href)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
 const sources=${JSON.stringify(sources)};const manifest=sources.map((source,ordinal)=>({id:['prefix','suffix'][ordinal],name:'budget '+ordinal,boundary:'qualification',args:[source],timeout:10000,artifactRoots:[],execution:{executable:process.execPath,args:['-e',source],cwd:process.cwd(),name:'budget '+ordinal,timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
 const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,resumeRunId:process.argv[2]?.slice('--resume='.length),runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`
     )
@@ -223,7 +257,7 @@ const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,pro
     assert.ok(resumed.stderr.includes("successful output exceeded 550"))
     const evidence = runs(f.root).find((run) => run.runId !== prior.runId)
     assert.equal(evidence.qualification, "UNPROVEN")
-    assert.equal(evidence.resume.composite.successfulOutputLines, 300)
+    assert.equal(evidence.resume.composite.successfulOutputLines, 301)
   } finally {
     f.cleanup()
   }
@@ -240,7 +274,7 @@ test("a real edit-and-restore during a designated stage forbids later launches a
     ]
     writeFileSync(
       script,
-      `import {executeResumableQualityGate} from ${JSON.stringify(execute)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
+      `import {executeResumableQualityGate} from ${JSON.stringify(new URL(`file://${join(f.root, "scripts", "gate-quality-run.mjs")}`).href)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
 const sources=${JSON.stringify(sources)};const manifest=sources.map((source,ordinal)=>({id:['mutation','next'][ordinal],name:'mutation '+ordinal,boundary:'qualification',args:[source],timeout:10000,artifactRoots:[],execution:{executable:process.execPath,args:['-e',source],cwd:process.cwd(),name:'mutation '+ordinal,timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
 const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`
     )
@@ -268,7 +302,7 @@ test("an enclosing negative test proves later cleanup while preserving the child
     const late = `import fs from 'node:fs';fs.appendFileSync(${JSON.stringify(counter)},'late\\n');if(!fs.existsSync(${JSON.stringify(release)}))process.exit(23)`
     writeFileSync(
       script,
-      `import {executeResumableQualityGate} from ${JSON.stringify(execute)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
+      `import {executeResumableQualityGate} from ${JSON.stringify(new URL(`file://${join(f.root, "scripts", "gate-quality-run.mjs")}`).href)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
 const sources=${JSON.stringify([negative, late])};const manifest=sources.map((source,ordinal)=>({id:['negative-cleanup','late'][ordinal],name:'cleanup '+ordinal,boundary:'qualification',args:[source],timeout:10000,artifactRoots:[],execution:{executable:process.execPath,args:['--input-type=module','-e',source],cwd:process.cwd(),name:'cleanup '+ordinal,timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
 const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,resumeRunId:process.argv[2]?.slice('--resume='.length),runStage:stage=>runBoundedCommand({executable:process.execPath,args:['--input-type=module','-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`
     )
@@ -304,7 +338,7 @@ test("a fresh build protects its produced artifacts against consumer edit-and-re
     ]
     writeFileSync(
       script,
-      `import {executeResumableQualityGate} from ${JSON.stringify(execute)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
+      `import {executeResumableQualityGate} from ${JSON.stringify(new URL(`file://${join(f.root, "scripts", "gate-quality-run.mjs")}`).href)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
 const sources=${JSON.stringify(sources)};const manifest=sources.map((source,ordinal)=>({id:['build','consumer','next'][ordinal],name:'artifact '+ordinal,boundary:'qualification',args:[source],timeout:10000,artifactRoots:ordinal===0?['dist']:[],execution:{executable:process.execPath,args:['-e',source],cwd:process.cwd(),name:'artifact '+ordinal,timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
 const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`
     )
@@ -336,7 +370,7 @@ test("fresh platform setup precedes observation, ready diagnostics do not mutate
     const late = "process.exit(23)"
     writeFileSync(
       script,
-      `import {executeResumableQualityGate} from ${JSON.stringify(execute)};import {ensureEffectTsgoPlatformBinaryExecutable} from ${JSON.stringify(helper)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
+      `import {executeResumableQualityGate} from ${JSON.stringify(new URL(`file://${join(f.root, "scripts", "gate-quality-run.mjs")}`).href)};import {ensureEffectTsgoPlatformBinaryExecutable} from ${JSON.stringify(helper)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
 const sources=${JSON.stringify([source, late])};
 const manifest=sources.map((source,ordinal)=>({id:'stage-'+ordinal,name:'stage '+ordinal,boundary:'qualification',args:[source],timeout:10000,artifactRoots:[],execution:{executable:process.execPath,args:['--input-type=module','-e',source],cwd:process.cwd(),name:'stage '+ordinal,timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
 await executeResumableQualityGate({logicalInvocation:{mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]},stageManifest:manifest,resumeRunId:process.argv[2]?.slice('--resume='.length),prepareFreshInputs:()=>ensureEffectTsgoPlatformBinaryExecutable({platform:'linux',resolvePackageJson:()=>${JSON.stringify(packageJson)}}),runStage:stage=>runBoundedCommand({executable:process.execPath,args:['--input-type=module','-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`

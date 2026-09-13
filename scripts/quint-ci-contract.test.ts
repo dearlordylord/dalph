@@ -20,7 +20,7 @@ const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.me
   scripts: Record<string, string>
 }
 const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")
-const qualityGate = readFileSync(new URL("./run-quality-gate.mjs", import.meta.url), "utf8")
+const formalGate = readFileSync(new URL("./run-formal-gate.mjs", import.meta.url), "utf8")
 const quintGate = readFileSync(new URL("./check-quint-models.mjs", import.meta.url), "utf8")
 const profileEvidence = readFileSync(new URL("../research/quint-hosted-equivalent-profile.md", import.meta.url), "utf8")
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url))
@@ -57,9 +57,14 @@ describe("hosted formal-model contract", () => {
   it("exposes complete CI and independently runnable quality/formal subgates", () => {
     expect(packageJson.scripts["check:ci"]).toBe("pnpm check:ci:quality && pnpm check:ci:formal")
     expect(packageJson.scripts["check:ci:quality"]).toBe(
-      "node scripts/with-gate-slot.mjs -- node scripts/run-quality-gate.mjs --without-quint"
+      "node scripts/with-gate-slot.mjs -- node scripts/run-quality-gate.mjs --hosted-quality"
     )
-    expect(packageJson.scripts["check:ci:formal"]).toBe("pnpm check:quint")
+    expect(packageJson.scripts["check:quint"]).toBe(
+      "node scripts/with-gate-slot.mjs -- node scripts/run-formal-gate.mjs"
+    )
+    expect(packageJson.scripts["check:ci:formal"]).toBe(
+      "node scripts/with-gate-slot.mjs -- node scripts/check-quint-models.mjs"
+    )
     expect(packageJson.engines.node).toBe("^24.20.0")
 
     const jobs = parseWorkflowJobs(ciWorkflow)
@@ -67,19 +72,23 @@ describe("hosted formal-model contract", () => {
     expect(formalJob).toBeDefined()
     expect(formalJob).toContain("\n    timeout-minutes: 16")
     expect(formalJob).toMatch(/\n\s+node-version: \$\{\{ matrix\.node-version \}\}/)
-    expect(formalJob).toContain("\n        run: pnpm check:quint")
+    expect(formalJob).toContain("\n        run: pnpm check:ci:formal")
     expect(formalJob).toContain(
       "\n      matrix:\n        node-version: ${{ fromJSON(needs.change-plan.outputs.versions) }}"
     )
     expect(jobs.get("quality")?.join("\n")).not.toContain("pnpm check:quint")
-    expect(quintGate).toContain("remainingSafetyTimeoutMilliseconds")
+    expect(formalGate).toContain("Use the admitted pnpm check:quint entry point")
+    expect(formalGate).toContain("run-formal-workflow.mjs")
+    expect(formalGate).toContain("formalGatePolicy.outerMilliseconds")
     expect(quintGate).toContain("createQuintGateTiming")
     expect(quintGate).toContain("assertQuintGateCommandContract")
     expect(quintGate).toContain(
       'assertQuintHostedDeadlineContract(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"))'
     )
     expect(quintGate).toContain("createQuintGateDeadline({ startedAt })")
-    expect(quintGate).toContain("remainingSafetyTimeoutMilliseconds(command.name)")
+    expect(quintGate).toContain("const timeoutFor = (name) =>")
+    expect(quintGate).toContain("remainingExecutionMilliseconds(name)")
+    expect(quintGate).toContain("timeoutMilliseconds: timeoutFor(command.name)")
     expect(profileEvidence).toContain("Node 22.22.2 and Node 24.15.0")
     expect(profileEvidence).toContain("retained historical evidence")
     expect(profileEvidence).toContain("Node 24.20.0 run")
@@ -94,16 +103,14 @@ describe("hosted formal-model contract", () => {
     expect(profileEvidence).toContain("intentionally exits 1")
   })
 
-  it("keeps exhaustive formal checking out of check:all", () => {
+  it("preserves required application checks alongside automatic local formal handoff", () => {
     expect(packageJson.scripts["check:all"]).toBe(
-      "node scripts/with-gate-slot.mjs -- node scripts/run-quality-gate.mjs"
+      "node scripts/with-gate-slot.mjs -- node scripts/run-quality-gate.mjs --local-handoff"
     )
-    expect(qualityGate).not.toContain('args: ["check:quint"]')
     const stageCommands = fullQualityGateManifest("fixture-base").map(
       (stage: { args: ReadonlyArray<string> }) => stage.args[0]
     )
     expect(stageCommands).toContain("test:mbt")
-    expect(stageCommands).not.toContain("check:quint")
   })
 
   it("uses the hosted regression budget with a distinct safety stop", () => {

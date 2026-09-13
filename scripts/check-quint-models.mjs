@@ -1,18 +1,9 @@
 import { createRequire } from "node:module"
 import { performance } from "node:perf_hooks"
 import { readFile } from "node:fs/promises"
+import { pathToFileURL } from "node:url"
 
-import { applicationExitCheckRegistry } from "./application-exit-model-registry.mjs"
-import {
-  acceptedResultIntegrationObligations,
-  acceptedResultIntegrationQuarantineProofObligations,
-  freshTaskAdmissionObligations,
-  freshTaskAdmissionProofObligations,
-  plannedAttemptExecutorProofObligations,
-  runCancellationObligations,
-  runActivationObligations,
-  taskFactReconciliationObligations
-} from "./quint-model-obligations.mjs"
+import { createQuintEffectiveProfile, assertQuintEffectiveProfile } from "./quint-effective-profile.mjs"
 import {
   assertQuintHostedDeadlineContract,
   createQuintGateDeadline,
@@ -20,1194 +11,212 @@ import {
   quintGateRegressionBudgetMilliseconds,
   quintGateTerminationGraceMilliseconds
 } from "./quint-gate-policy.mjs"
-import { quintGateCommandManifest } from "./quint-gate-command-manifest.mjs"
-import { assertQuintGateCommandContract, withQuintGateSampleThreadContract } from "./quint-gate-command-contract.mjs"
+import { assertQuintGateCommandContract } from "./quint-gate-command-contract.mjs"
 import { readQuintEvaluatorProvenance, renderQuintEvaluatorProvenance } from "./quint-evaluator-provenance.mjs"
 import {
-  apalacheVersion,
   assertCleanTemporalVerdict,
   assertTlcArtifactPrepared,
-  assertViolatedTemporalVerdict,
-  runPreparedTemporalCheck
+  assertViolatedTemporalVerdict
 } from "./quint-temporal-gate.mjs"
 import { quintGateBatchResults, runQuintGateFamily } from "./quint-gate-concurrency.mjs"
-import { plannedAttemptExecutorInitialFamily } from "./quint-gate-production-plan.mjs"
-import { createQuintGateTiming, quintCommandKindForArgs, runWithQuintGateTiming } from "./quint-gate-timing.mjs"
+import { createQuintGateTiming, runWithQuintGateTiming } from "./quint-gate-timing.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { validateQuintCommandOutput } from "./quint-witness-coverage.mjs"
 
-if (process.env.npm_execpath === undefined) {
-  throw new Error("Run this model gate through pnpm")
-}
-
 const quintEntryPoint = createRequire(import.meta.url).resolve("@informalsystems/quint/dist/src/cli.js")
 
-const startedAt = performance.now()
-const remainingSafetyTimeoutMilliseconds = createQuintGateDeadline({ startedAt })
-assertQuintHostedDeadlineContract(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"))
-const timing = createQuintGateTiming()
-let manifestPosition = 0
-
-const reserveCommand = (name, args, options = {}) => {
-  const kind = quintCommandKindForArgs(args)
-  if (manifestPosition >= quintGateCommandManifest.length) {
-    throw new Error(`Quint gate command manifest has no entry at ${manifestPosition}; received ${kind} ${name}`)
+/**
+ * Execute the complete pre-materialized plan. Local callers provide the sanitized
+ * environment, invocation-owned endpoint and the deadline already spent on server
+ * readiness; hosted callers retain the independently executing raw checker.
+ * Captured output is required verdict evidence, separate from optional log files.
+ */
+export const runQuintEffectiveProfile = async ({
+  profile = createQuintEffectiveProfile(),
+  environment,
+  serverEndpoint,
+  evaluatorPath,
+  remainingExecutionMilliseconds,
+  signal,
+  write = (report) => process.stdout.write(report),
+  compact = false,
+  runCommand = runBoundedCommand,
+  readProvenance = readQuintEvaluatorProvenance,
+  assertArtifactPrepared = assertTlcArtifactPrepared
+} = {}) => {
+  assertQuintEffectiveProfile(profile)
+  // Execute a fresh frozen canonical copy, so caller mutation after validation
+  // cannot change the admitted plan while a preceding command is awaited.
+  profile = createQuintEffectiveProfile()
+  if (serverEndpoint !== undefined && environment === undefined) {
+    throw new Error("An owned Quint endpoint requires an explicit sanitized environment")
   }
-  const expected = quintGateCommandManifest[manifestPosition]
-  if (expected.kind !== kind || expected.name !== name) {
-    throw new Error(
-      `Quint gate command manifest mismatch at ${manifestPosition}: expected ${expected.kind} ${expected.name}, received ${kind} ${name}`
-    )
+  if (serverEndpoint !== undefined && evaluatorPath === undefined) {
+    throw new Error("An owned Quint endpoint requires the identified prepared evaluator path")
   }
-  const position = manifestPosition
-  manifestPosition += 1
-  // Collected tests are exact examples or mutation witnesses. Execute every
-  // declaration once with a stable identity-derived seed; unconstrained
-  // exploration remains in the separately named sampled-run commands.
-  const executionArgs =
-    kind === "test"
-      ? [...args, "--max-samples", "1", "--seed", String(153_000 + position)]
-      : kind === "sampled-run"
-        ? withQuintGateSampleThreadContract(args)
-        : args
-  return { args: executionArgs, kind, name, options, position }
-}
-
-const executeCommand = (command, options = {}) => {
-  const { deferOutput = false, ...commandOptions } = options
-  if (!deferOutput) process.stdout.write(`\n== ${command.name} ==\n`)
-  return timing.measure({
-    kind: command.kind,
-    name: command.name,
-    order: command.position,
-    run: async () => {
-      const result = await runBoundedCommand({
-        ...command.options,
-        ...commandOptions,
-        args: [quintEntryPoint, ...command.args],
-        captureOutput:
-          command.kind === "sampled-run" ||
-          command.name === "task-fact reconciliation deterministic tests" ||
-          commandOptions.captureOutput === true,
-        executable: process.execPath,
-        name: command.name,
-        relayParentSignals: true,
-        processGroupAbsenceTimeoutMilliseconds: quintGateProcessGroupAbsenceTimeoutMilliseconds,
-        terminationGraceMilliseconds: quintGateTerminationGraceMilliseconds,
-        timeoutMilliseconds: remainingSafetyTimeoutMilliseconds(command.name)
+  const startedAt = performance.now()
+  const localDeadline = createQuintGateDeadline({ startedAt })
+  const timeoutFor = (name) => {
+    const localRemaining = localDeadline(name)
+    const sharedRemaining =
+      remainingExecutionMilliseconds === undefined ? localRemaining : remainingExecutionMilliseconds(name)
+    if (!Number.isFinite(sharedRemaining) || sharedRemaining <= 0) {
+      throw Object.assign(new Error(`${name} exceeded the Quint gate execution deadline before launch`), {
+        quintCommandResult: "timed-out"
       })
-      try {
-        validateQuintCommandOutput({ args: command.args, name: command.name, output: result.output })
-      } catch (error) {
-        if (!deferOutput && commandOptions.forwardOutput === false && typeof error?.output === "string") {
-          process.stdout.write(error.output)
-        }
-        throw error
-      }
-      return result
     }
-  })
-}
-
-const run = (name, args, options = {}) => executeCommand(reserveCommand(name, args, options), options)
-
-const renderFamily = (commands, outcomes) => {
-  for (const [index, command] of commands.entries()) {
-    const outcome = outcomes?.[index]
-    if (outcome === undefined) continue
-    process.stdout.write(`\n== ${command.name} ==\n`)
-    const output =
-      outcome.status === "fulfilled"
-        ? outcome.value?.output
-        : outcome.reason instanceof Error
-          ? outcome.reason.output
-          : undefined
-    if (typeof output === "string" && output.length > 0) process.stdout.write(output)
+    return Math.min(localRemaining, sharedRemaining)
   }
-}
-
-const runFamily = async (commands, { concurrency, serializedPrefix = 0 } = {}) => {
-  const reserved = commands.map(({ args, name, options = {} }) => reserveCommand(name, args, options))
-  try {
-    const values = await runQuintGateFamily({
-      commands: reserved,
-      concurrency,
-      serializedPrefix,
-      run: (command, signal) =>
-        executeCommand(command, {
+  const timing = createQuintGateTiming()
+  const commands = new Array(profile.commands.length)
+  let provenance
+  const buildReport = () => ({
+    version: 1,
+    entryPoint: quintEntryPoint,
+    profile,
+    serverEndpoint: serverEndpoint ?? null,
+    commands: commands.filter((command) => command !== undefined),
+    timing: { records: timing.records(), aggregates: timing.aggregates() },
+    provenance,
+    elapsedMilliseconds: performance.now() - startedAt
+  })
+  const renderedPositions = new Set()
+  const renderedOutputs = new Set()
+  const renderFamily = (reserved, outcomes, { failure = false } = {}) => {
+    if (compact && !failure) return
+    for (const [index, command] of reserved.entries()) {
+      const outcome = outcomes?.[index]
+      if (outcome === undefined) continue
+      renderedPositions.add(command.position)
+      write(`\n== ${command.name} ==\n`)
+      const output = outcome.status === "fulfilled" ? outcome.value?.output : outcome.reason?.output
+      if (typeof output === "string" && output.length > 0) {
+        renderedOutputs.add(output)
+        write(output)
+      }
+    }
+  }
+  const executeCommand = (command, familySignal) =>
+    timing.measure({
+      kind: command.kind,
+      name: command.name,
+      order: command.position,
+      run: async () => {
+        const args =
+          serverEndpoint !== undefined && command.kind === "verify"
+            ? [...command.args, "--server-endpoint", serverEndpoint]
+            : [...command.args]
+        const result = await runCommand({
           ...command.options,
+          args: [quintEntryPoint, ...args],
+          environment,
+          executable: process.execPath,
+          name: command.name,
           captureOutput: true,
-          deferOutput: true,
           forwardOutput: false,
-          signal
+          relayParentSignals: true,
+          signal: signal === undefined ? familySignal : AbortSignal.any([signal, familySignal]),
+          processGroupAbsenceTimeoutMilliseconds: quintGateProcessGroupAbsenceTimeoutMilliseconds,
+          terminationGraceMilliseconds: quintGateTerminationGraceMilliseconds,
+          timeoutMilliseconds: timeoutFor(command.name)
         })
+        const evidence = {
+          position: command.position,
+          name: command.name,
+          kind: command.kind,
+          executable: process.execPath,
+          args,
+          obligationId: result.gateObligationId,
+          exitCode: result.exitCode,
+          output: result.output,
+          verdict: command.verdict
+        }
+        commands[command.position] = evidence
+        try {
+          if (!command.verdict.acceptedExitCodes.includes(result.exitCode)) {
+            throw new Error(`${command.name} returned unsupported exit ${result.exitCode}`)
+          }
+          validateQuintCommandOutput({ args: command.args, name: command.name, output: result.output })
+          const property = command.args[command.args.indexOf("--temporal") + 1]
+          if (command.verdict.temporal === "clean") assertCleanTemporalVerdict(result, property)
+          if (command.verdict.temporal === "violation") assertViolatedTemporalVerdict(result, property)
+          if (command.verdict.artifactPreparedAfter) await assertArtifactPrepared(environment?.QUINT_HOME)
+        } catch (error) {
+          if (error instanceof Error) Object.assign(error, { output: result.output })
+          throw error
+        }
+        return result
+      }
     })
-    renderFamily(
-      reserved,
-      values.map((value) => ({ status: "fulfilled", value }))
+  try {
+    await runWithQuintGateTiming({
+      timing,
+      run: async () => {
+        for (const step of profile.steps) {
+          if (step.kind === "evaluator-provenance") {
+            // Local preparation/identification happens before observation; supplying
+            // the identified path avoids the binary manager's cold-download branch.
+            provenance = await readProvenance(evaluatorPath)
+            if (!compact) write(`${renderQuintEvaluatorProvenance(provenance)}\n`)
+            continue
+          }
+          const reserved = step.positions.map((position) => profile.commands[position])
+          try {
+            const values = await runQuintGateFamily({
+              commands: reserved,
+              concurrency: step.concurrency,
+              serializedPrefix: step.serializedPrefix,
+              run: executeCommand
+            })
+            renderFamily(
+              reserved,
+              values.map((value) => ({ status: "fulfilled", value }))
+            )
+          } catch (error) {
+            renderFamily(reserved, quintGateBatchResults(error), { failure: true })
+            throw error
+          }
+        }
+      },
+      write: compact ? () => {} : write
+    })
+    const phases = timing.aggregates()
+    assertQuintGateCommandContract({
+      manifest: profile.commands,
+      executed: {
+        total: commands.filter((command) => command !== undefined).length,
+        typecheck: phases.typecheck.count,
+        test: phases.test.count,
+        "sampled-run": phases["sampled-run"].count,
+        verify: phases.verify.count
+      }
+    })
+    const report = buildReport()
+    write(
+      `\nComplete Quint model gate: ${(report.elapsedMilliseconds / 1000).toFixed(2)}s (budget ${quintGateRegressionBudgetMilliseconds / 1000}s)\n`
     )
-    return values
+    if (report.elapsedMilliseconds > quintGateRegressionBudgetMilliseconds) {
+      throw new Error("Quint models exceeded their regression budget")
+    }
+    return report
   } catch (error) {
-    renderFamily(reserved, quintGateBatchResults(error))
+    if (compact) {
+      for (const record of commands) {
+        if (record?.output && !renderedPositions.has(record.position)) {
+          renderedOutputs.add(record.output)
+          write(`\n== ${record.name} ==\n${record.output}`)
+        }
+      }
+      if (typeof error?.output === "string" && !renderedOutputs.has(error.output)) write(error.output)
+    }
+    if (error instanceof Error) Object.assign(error, { formalProfileReport: buildReport() })
     throw error
   }
 }
 
-await runWithQuintGateTiming({
-  timing,
-  run: async () => {
-    await run("planned-attempt executor model typecheck", ["typecheck", "specs/plannedAttemptExecutor.qnt"])
-    await runFamily(plannedAttemptExecutorInitialFamily.commands, plannedAttemptExecutorInitialFamily)
-    process.stdout.write(`${renderQuintEvaluatorProvenance(await readQuintEvaluatorProvenance())}\n`)
-    await runPreparedTemporalCheck({
-      assertArtifactPrepared: () => assertTlcArtifactPrepared(),
-      // Quint's TLC backend loads TLC from the Apalache distribution. On a cold
-      // runner this existing default-backend verification prepares/downloads that
-      // versioned artifact before the temporal command is allowed to start.
-      prepareArtifact: () =>
-        run("planned-attempt executor TLC artifact preparation", [
-          "verify",
-          "specs/plannedAttemptExecutor_proof.qnt",
-          "--main",
-          "plannedAttemptExecutorEvidenceProof",
-          "--invariants",
-          "evidenceProofTypeOk",
-          "--max-steps",
-          "1",
-          "--apalache-version",
-          apalacheVersion,
-          "--verbosity",
-          "1"
-        ]),
-      verifyTemporal: async () => {
-        const property = "releasableEvidenceEventuallyReleasesPosition"
-        const verdict = await run(
-          `planned-attempt executor temporal ${property} (TLC)`,
-          [
-            "verify",
-            "specs/plannedAttemptExecutor.qnt",
-            "--backend",
-            "tlc",
-            "--apalache-version",
-            apalacheVersion,
-            "--step",
-            "releasableEvidenceStep",
-            "--temporal",
-            property,
-            "--verbosity",
-            "1"
-          ],
-          { captureOutput: true }
-        )
-        assertCleanTemporalVerdict(verdict, property)
-      }
-    })
-
-    {
-      const property = "releasableEvidenceNeverReleasesPosition"
-      const verdict = await run(
-        `planned-attempt executor temporal mutant ${property} (TLC)`,
-        [
-          "verify",
-          "specs/plannedAttemptExecutor_temporal_negative.qnt",
-          "--main",
-          "plannedAttemptExecutorTemporalNegative",
-          "--backend",
-          "tlc",
-          "--apalache-version",
-          apalacheVersion,
-          "--step",
-          "releasableEvidenceStep",
-          "--temporal",
-          property,
-          "--verbosity",
-          "1"
-        ],
-        { acceptedExitCodes: [1], captureOutput: true }
-      )
-      assertViolatedTemporalVerdict(verdict, property)
-    }
-
-    const plannedAttemptExecutorProofs = [
-      {
-        main: "plannedAttemptExecutorEvidenceProof",
-        testMain: "plannedAttemptExecutorEvidenceProofTest",
-        negativeTestMain: "plannedAttemptExecutorEvidenceProofNegativeTest",
-        title: "planned-attempt executor evidence proof",
-        maxSteps: "16",
-        seed: "6511",
-        invariants: plannedAttemptExecutorProofObligations.evidence.invariants,
-        witnesses: plannedAttemptExecutorProofObligations.evidence.witnesses
-      },
-      {
-        main: "plannedAttemptExecutorSuspendBoundProof",
-        testMain: "plannedAttemptExecutorSuspendBoundProofTest",
-        negativeTestMain: "plannedAttemptExecutorSuspendBoundProofNegativeTest",
-        title: "planned-attempt executor Suspend-bound proof",
-        maxSteps: "24",
-        seed: "6513",
-        invariants: plannedAttemptExecutorProofObligations.suspendBound.invariants,
-        witnesses: plannedAttemptExecutorProofObligations.suspendBound.witnesses
-      }
-    ]
-
-    await run("planned-attempt executor proof projection typecheck", [
-      "typecheck",
-      "specs/plannedAttemptExecutor_proof.qnt"
-    ])
-    for (const proof of plannedAttemptExecutorProofs) {
-      // TLC enumerates each complete finite projection graph without imposing the
-      // sampled runner's depth bound; sampled exploration remains a separate seeded check.
-      await runFamily([
-        {
-          name: `${proof.title} deterministic tests`,
-          args: ["test", "specs/plannedAttemptExecutor_proof_test.qnt", "--main", proof.testMain]
-        },
-        {
-          name: `${proof.title} negative mutation profile`,
-          args: ["test", "specs/plannedAttemptExecutor_proof_negative_test.qnt", "--main", proof.negativeTestMain]
-        },
-        {
-          name: `${proof.title} sampled model`,
-          args: [
-            "run",
-            "specs/plannedAttemptExecutor_proof.qnt",
-            "--main",
-            proof.main,
-            "--invariants",
-            ...proof.invariants,
-            "--witnesses",
-            ...proof.witnesses,
-            "--max-steps",
-            proof.maxSteps,
-            "--max-samples",
-            "5000",
-            "--seed",
-            proof.seed,
-            "--verbosity",
-            "1"
-          ]
-        },
-        {
-          name: `${proof.title} exhaustive model`,
-          args: [
-            "verify",
-            "specs/plannedAttemptExecutor_proof.qnt",
-            "--main",
-            proof.main,
-            "--backend",
-            "tlc",
-            "--invariants",
-            ...proof.invariants,
-            "--verbosity",
-            "1"
-          ]
-        }
-      ])
-    }
-
-    const applicationExitCheck = applicationExitCheckRegistry.canonical
-
-    await run("application Exit model typecheck", ["typecheck", applicationExitCheck.file])
-    await runFamily([
-      {
-        name: "application Exit deterministic tests",
-        args: ["test", applicationExitCheck.testFile, "--main", applicationExitCheck.testMain]
-      },
-      {
-        name: "application Exit negative mutation profile",
-        args: ["test", applicationExitCheck.negativeTestFile, "--main", applicationExitCheck.negativeTestMain]
-      },
-      {
-        name: "application Exit sampled model",
-        args: [
-          "run",
-          applicationExitCheck.file,
-          "--invariants",
-          ...applicationExitCheck.invariants,
-          "--witnesses",
-          ...applicationExitCheck.witnesses,
-          "--max-steps",
-          applicationExitCheck.maxSteps,
-          "--max-samples",
-          applicationExitCheck.maxSamples,
-          "--seed",
-          applicationExitCheck.seed,
-          "--verbosity",
-          "1"
-        ]
-      }
-    ])
-
-    // The canonical state product deliberately keeps the two owners, two executor
-    // attempts, five ticks, drain resources, process endings, and restart in one
-    // production-backed model. ADR 0010 permits these smaller acyclic projections
-    // to own complete enumeration while the canonical model retains behavior.
-    await run("application Exit proof projection typecheck", ["typecheck", applicationExitCheckRegistry.proofFile])
-    for (const proof of applicationExitCheckRegistry.proofs) {
-      // Each finite projection graph is completely enumerated without a depth
-      // token. A future diameter increase therefore remains visible to the gate.
-      await runFamily([
-        {
-          name: `${proof.title} deterministic tests`,
-          args: ["test", applicationExitCheckRegistry.proofTestFile, "--main", proof.testMain]
-        },
-        {
-          name: `${proof.title} negative mutation profile`,
-          args: ["test", applicationExitCheckRegistry.proofNegativeTestFile, "--main", proof.negativeTestMain]
-        },
-        {
-          name: `${proof.title} sampled model`,
-          args: [
-            "run",
-            applicationExitCheckRegistry.proofFile,
-            "--main",
-            proof.main,
-            "--invariants",
-            ...proof.invariants,
-            "--witnesses",
-            ...proof.witnesses,
-            "--max-steps",
-            proof.maxSteps,
-            "--max-samples",
-            proof.maxSamples,
-            "--seed",
-            proof.seed,
-            "--verbosity",
-            "1"
-          ]
-        },
-        {
-          name: `${proof.title} exhaustive model`,
-          args: [
-            "verify",
-            applicationExitCheckRegistry.proofFile,
-            "--main",
-            proof.main,
-            "--backend",
-            "tlc",
-            "--invariants",
-            ...proof.invariants,
-            "--verbosity",
-            "1"
-          ]
-        }
-      ])
-    }
-
-    const controlDirectionApplicationInvariants = [
-      "appliedDirectionIsOperatorInitiated",
-      "applicationClaimsNoLaterEffects",
-      "rejectedTaskControlPreservesPauseState",
-      "typeOk"
-    ]
-
-    await run("control-direction application model typecheck", ["typecheck", "specs/controlDirectionApplication.qnt"])
-    // TLC checks the complete state graph: 476 generated / 175 distinct states,
-    // depth 10, ~0.7s (Quint 0.32.0, linux-aarch64). The graph is finite because
-    // `appliedCount` saturates in the spec; unbounded it diverged past 36M states.
-    // No --max-steps: a future regression shows as a diameter change, not truncation.
-    await runFamily([
-      {
-        name: "control-direction application deterministic tests",
-        args: ["test", "specs/controlDirectionApplication_test.qnt", "--main", "controlDirectionApplicationTest"]
-      },
-      {
-        name: "control-direction application negative mutation profile",
-        args: [
-          "test",
-          "specs/controlDirectionApplication_negative_test.qnt",
-          "--main",
-          "controlDirectionApplicationNegativeTest"
-        ]
-      },
-      {
-        name: "control-direction application sampled model",
-        args: [
-          "run",
-          "specs/controlDirectionApplication.qnt",
-          "--invariants",
-          ...controlDirectionApplicationInvariants,
-          "--witnesses",
-          "runPauseAppliedReached",
-          "taskPauseAppliedReached",
-          "taskUnpauseAppliedReached",
-          "staleTaskRejectedReached",
-          "unreadableMembershipReached",
-          "--max-steps",
-          "8",
-          "--max-samples",
-          "5000",
-          "--verbosity",
-          "1"
-        ]
-      },
-      {
-        name: "control-direction application exhaustive model",
-        args: [
-          "verify",
-          "specs/controlDirectionApplication.qnt",
-          "--backend",
-          "tlc",
-          "--invariants",
-          ...controlDirectionApplicationInvariants,
-          "--verbosity",
-          "1"
-        ]
-      }
-    ])
-
-    const runActivationInvariants = runActivationObligations.invariants
-    const runActivationWitnesses = runActivationObligations.witnesses
-
-    await run("Run activation model typecheck", ["typecheck", "specs/runActivation.qnt"])
-    // TLC checks the complete finite state graph without a depth token. The model
-    // bounds process loss and activation cycles explicitly, so a future diameter
-    // increase remains visible instead of being truncated by the gate.
-    await runFamily([
-      {
-        name: "Run activation deterministic tests",
-        args: ["test", "specs/runActivation_test.qnt", "--main", "runActivationTest"]
-      },
-      {
-        name: "Run activation negative mutation profile",
-        args: ["test", "specs/runActivation_negative_test.qnt", "--main", "runActivationNegativeTest"]
-      },
-      {
-        name: "Run activation sampled model",
-        args: [
-          "run",
-          "specs/runActivation.qnt",
-          "--invariants",
-          ...runActivationInvariants,
-          "--witnesses",
-          ...runActivationWitnesses,
-          "--max-steps",
-          "28",
-          "--max-samples",
-          "10000",
-          "--verbosity",
-          "1"
-        ]
-      },
-      {
-        name: "Run activation exhaustive model",
-        args: [
-          "verify",
-          "specs/runActivation.qnt",
-          "--backend",
-          "tlc",
-          "--invariants",
-          ...runActivationInvariants,
-          "--verbosity",
-          "1"
-        ]
-      }
-    ])
-
-    const freshTaskAdmissionInvariants = freshTaskAdmissionObligations.invariants
-    const freshTaskAdmissionWitnesses = freshTaskAdmissionObligations.witnesses
-
-    await run("fresh-task admission model typecheck", ["typecheck", "specs/freshTaskAdmission.qnt"])
-    await runFamily([
-      {
-        name: "fresh-task admission deterministic tests",
-        args: ["test", "specs/freshTaskAdmission_test.qnt", "--main", "freshTaskAdmissionTest"]
-      },
-      {
-        name: "fresh-task admission negative mutation profile",
-        args: ["test", "specs/freshTaskAdmission_negative_test.qnt", "--main", "freshTaskAdmissionNegativeTest"]
-      },
-      {
-        name: "fresh-task admission sampled model",
-        args: [
-          "run",
-          "specs/freshTaskAdmission.qnt",
-          "--invariants",
-          ...freshTaskAdmissionInvariants,
-          "--witnesses",
-          ...freshTaskAdmissionWitnesses,
-          "--max-steps",
-          "45",
-          "--max-samples",
-          "10000",
-          "--seed",
-          "315",
-          "--verbosity",
-          "1"
-        ]
-      }
-    ])
-
-    await run("fresh-task admission proof projection typecheck", ["typecheck", "specs/freshTaskAdmission_proof.qnt"])
-    const freshTaskAdmissionProofs = [
-      {
-        key: "capacity",
-        title: "fresh-task admission capacity proof",
-        main: "freshTaskAdmissionCapacityProof",
-        testMain: "freshTaskAdmissionCapacityProofTest",
-        negativeTestMain: "freshTaskAdmissionCapacityProofNegativeTest",
-        maxSteps: "20",
-        seed: "3151"
-      },
-      {
-        key: "ambiguity",
-        title: "fresh-task admission ambiguity proof",
-        main: "freshTaskAdmissionAmbiguityProof",
-        testMain: "freshTaskAdmissionAmbiguityProofTest",
-        negativeTestMain: "freshTaskAdmissionAmbiguityProofNegativeTest",
-        maxSteps: "36",
-        seed: "3152"
-      }
-    ]
-    for (const proof of freshTaskAdmissionProofs) {
-      const obligations = freshTaskAdmissionProofObligations[proof.key]
-      // TLC enumerates each complete finite projection graph without a depth
-      // token; the canonical five-task model retains the richer sampled behavior.
-      await runFamily([
-        {
-          name: `${proof.title} deterministic tests`,
-          args: ["test", "specs/freshTaskAdmission_proof_test.qnt", "--main", proof.testMain]
-        },
-        {
-          name: `${proof.title} negative mutation profile`,
-          args: ["test", "specs/freshTaskAdmission_proof_negative_test.qnt", "--main", proof.negativeTestMain]
-        },
-        {
-          name: `${proof.title} sampled model`,
-          args: [
-            "run",
-            "specs/freshTaskAdmission_proof.qnt",
-            "--main",
-            proof.main,
-            "--invariants",
-            ...obligations.invariants,
-            "--witnesses",
-            ...obligations.witnesses,
-            "--max-steps",
-            proof.maxSteps,
-            "--max-samples",
-            "5000",
-            "--seed",
-            proof.seed,
-            "--verbosity",
-            "1"
-          ]
-        },
-        {
-          name: `${proof.title} exhaustive model`,
-          args: [
-            "verify",
-            "specs/freshTaskAdmission_proof.qnt",
-            "--main",
-            proof.main,
-            "--backend",
-            "tlc",
-            "--invariants",
-            ...obligations.invariants,
-            "--verbosity",
-            "1"
-          ]
-        }
-      ])
-    }
-
-    const runCancellationInvariants = runCancellationObligations.invariants
-    const runCancellationWitnesses = runCancellationObligations.witnesses
-
-    await run("Run cancellation model typecheck", ["typecheck", "specs/runCancellation.qnt"])
-    // TLC enumerates this finite cancellation boundary without a depth token;
-    // every counter is explicitly bounded in the model so an accidental new
-    // retry cycle changes the complete state graph rather than being truncated.
-    await runFamily([
-      {
-        name: "Run cancellation deterministic tests",
-        args: ["test", "specs/runCancellation_test.qnt", "--main", "runCancellationTest"]
-      },
-      {
-        name: "Run cancellation negative mutation profile",
-        args: ["test", "specs/runCancellation_negative_test.qnt", "--main", "runCancellationNegativeTest"]
-      },
-      {
-        name: "Run cancellation sampled model",
-        args: [
-          "run",
-          "specs/runCancellation.qnt",
-          "--invariants",
-          ...runCancellationInvariants,
-          "--witnesses",
-          ...runCancellationWitnesses,
-          "--max-steps",
-          "45",
-          "--max-samples",
-          "10000",
-          "--seed",
-          "102",
-          "--verbosity",
-          "1"
-        ]
-      },
-      {
-        name: "Run cancellation exhaustive model",
-        args: [
-          "verify",
-          "specs/runCancellation.qnt",
-          "--backend",
-          "tlc",
-          "--invariants",
-          ...runCancellationInvariants,
-          "--verbosity",
-          "1"
-        ]
-      }
-    ])
-
-    const taskFactReconciliationInvariants = taskFactReconciliationObligations.invariants
-    const taskFactReconciliationWitnesses = taskFactReconciliationObligations.witnesses
-
-    await run("task-fact reconciliation model typecheck", ["typecheck", "specs/taskFactReconciliation.qnt"])
-    await runFamily([
-      {
-        name: "task-fact reconciliation deterministic tests",
-        args: ["test", "specs/taskFactReconciliation_test.qnt", "--main", "taskFactReconciliationTest"]
-      },
-      {
-        name: "task-fact reconciliation negative mutation profile",
-        args: ["test", "specs/taskFactReconciliation_negative_test.qnt", "--main", "taskFactReconciliationNegativeTest"]
-      },
-      {
-        name: "task-fact reconciliation sampled model",
-        args: [
-          "run",
-          "specs/taskFactReconciliation.qnt",
-          "--invariants",
-          ...taskFactReconciliationInvariants,
-          "--witnesses",
-          ...taskFactReconciliationWitnesses,
-          "--max-steps",
-          "55",
-          "--max-samples",
-          "10000",
-          "--verbosity",
-          "1"
-        ]
-      }
-    ])
-
-    // The canonical subject model deliberately keeps #136/#137 task facts and the
-    // #65 choice, current terminal-choice cancellation, claim-disposition, and
-    // independent-task sentinels
-    // together. Its production-backed MBT and sampled run stay canonical. ADR 0010
-    // permits the following smaller projections of the same accepted chronology
-    // to own exhaustive proof without becoming another runtime behavior source.
-    // The active-work entry below is the #218/#281 proof slice: it keeps Running
-    // establishment distinct from a tracker/timer refresh offer and checks source
-    // provenance plus the healthy/unreadable observation obligations.
-    const taskFactProofs = [
-      {
-        main: "taskFactChoiceProof",
-        testMain: "taskFactChoiceProofTest",
-        negativeTestMain: "taskFactChoiceProofNegativeTest",
-        title: "task-fact choice proof",
-        maxSteps: "18",
-        seed: "6501",
-        invariants: [
-          "firstChoiceAndExactRedeliveryAreIdempotent",
-          "requestIdentityErrorsStayDistinct",
-          "continueUsesSixFreshReadsForImmutableP",
-          "laterF3RequiresItsOwnChoiceAndFreshReads",
-          "postCutoffChoiceHasNoDownstreamEffect",
-          "choiceProofTypeOk"
-        ],
-        witnesses: [
-          "exactRedeliveryReached",
-          "bothIdentityErrorsReached",
-          "stopWinnerReached",
-          "immutableAttemptPResumedReached",
-          "continueF3Reached",
-          "postCutoffContinueRejectionReached",
-          "postCutoffStopRejectionReached"
-        ]
-      },
-      {
-        main: "historicalTaskFactStopRecoveryProof",
-        testMain: "historicalTaskFactStopRecoveryProofTest",
-        negativeTestMain: "historicalTaskFactStopRecoveryProofNegativeTest",
-        title: "historical task-fact Stop recovery proof",
-        maxSteps: "22",
-        seed: "6502",
-        invariants: [
-          "stopCallsFollowExactDurableIntents",
-          "historicalExecutingRequiresAcceptedCommandReport",
-          "stoppageAndRecoveryAreBounded",
-          "thirdRunningResultLeavesOnlyReadOnlyRecovery",
-          "abandonmentRequiresExactUnbrokenQuiescence",
-          "unprovedWriterRetainsPositionAndClaim",
-          "stopPreservesArtifactsAndNeverIntegrates",
-          "readOnlyRecoveryIssuesNoFourthCommand"
-        ],
-        witnesses: [
-          "retainedSafeProofAbandonedReached",
-          "ambiguousSafeProjectionReached",
-          "thirdRunningProjectionReached",
-          "readOnlySafeRecoveryReached"
-        ]
-      },
-      {
-        main: "taskFactClaimProof",
-        testMain: "taskFactClaimProofTest",
-        negativeTestMain: "taskFactClaimProofNegativeTest",
-        title: "task-fact stopped-claim proof",
-        maxSteps: "18",
-        seed: "6503",
-        invariants: [
-          "claimChangesOnlyAfterAbandonmentExactReadAndIntent",
-          "absentForeignUnreadableClaimsAreNeverMutated",
-          "unreadableClaimRetainsSeparateResponsibility",
-          "claimReleaseIsBoundedAndReconciled",
-          "unrelatedTaskRemainsEligible"
-        ],
-        witnesses: [
-          "exactReleaseReached",
-          "absentDispositionReached",
-          "foreignDispositionReached",
-          "unreadableDispositionReached",
-          "ambiguousReleaseSettledReached",
-          "laterReadAfterAmbiguityReached",
-          "unrelatedTaskSelectedReached"
-        ]
-      },
-      {
-        main: "taskFactActiveRefreshProof",
-        testMain: "taskFactActiveRefreshProofTest",
-        negativeTestMain: "taskFactActiveRefreshProofNegativeTest",
-        title: "task-fact active-work refresh proof",
-        maxSteps: "8",
-        seed: "6504",
-        invariants: [
-          "activeRefreshUnreadableAuthorizesNoExecutorAction",
-          "healthyActiveRefreshAuthorizesNoExecutorAction",
-          "runningEstablishmentRetainsAuthority",
-          "activeRefreshOfferRequiresRunningEstablished",
-          "activeRefreshSourceIsTrackerOrTimer",
-          "ordinaryUnreadableStillRequestsSafeSuspension",
-          "positionReleasesOnlyOnExactSafeEvidence",
-          "independentTaskRemainsEligible",
-          "activeRefreshProofTypeOk"
-        ],
-        witnesses: [
-          "activeRefreshOfferedReached",
-          "activeRefreshRunningEstablishedReached",
-          "activeRefreshTrackerOfferedReached",
-          "activeRefreshTimerOfferedReached",
-          "activeRefreshHealthyReached",
-          "activeRefreshUnreadableReached",
-          "lifecycleClosedReached",
-          "ordinaryUnreadableReached",
-          "safelySuspendedReached",
-          "lifecycleReopenedReached",
-          "independentTaskSelectedReached"
-        ]
-      }
-    ]
-
-    await run("task-fact proof projection typecheck", ["typecheck", "specs/taskFactReconciliation_proof.qnt"])
-    for (const proof of taskFactProofs) {
-      // TLC enumerates the complete finite projection graph with no depth token.
-      await runFamily([
-        {
-          name: `${proof.title} deterministic tests`,
-          args: ["test", "specs/taskFactReconciliation_proof_test.qnt", "--main", proof.testMain]
-        },
-        {
-          name: `${proof.title} negative mutation profile`,
-          args: ["test", "specs/taskFactReconciliation_proof_negative_test.qnt", "--main", proof.negativeTestMain]
-        },
-        {
-          name: `${proof.title} sampled model`,
-          args: [
-            "run",
-            "specs/taskFactReconciliation_proof.qnt",
-            "--main",
-            proof.main,
-            "--invariants",
-            ...proof.invariants,
-            "--witnesses",
-            ...proof.witnesses,
-            "--max-steps",
-            proof.maxSteps,
-            "--max-samples",
-            "5000",
-            "--seed",
-            proof.seed,
-            "--verbosity",
-            "1"
-          ]
-        },
-        {
-          name: `${proof.title} exhaustive model`,
-          args: [
-            "verify",
-            "specs/taskFactReconciliation_proof.qnt",
-            "--main",
-            proof.main,
-            "--backend",
-            "tlc",
-            "--invariants",
-            ...proof.invariants,
-            "--verbosity",
-            "1"
-          ]
-        }
-      ])
-    }
-
-    const gitReconciliationInvariants = [
-      "compatibleTargetAdvanceDoesNotConstrainAttempt",
-      "incompatibleRewriteConstrainsOnlyAffectedAttempt",
-      "gitConstraintPreservesIndependentEligibility",
-      "lostWorktreeNeverAuthorizesRepair",
-      "registrationConflictNeverAuthorizesRepair",
-      "positionHeldUntilSafeSuspension",
-      "rejectedResultPreservesWorktree",
-      "staleTargetNeverOverwrites",
-      "ambiguousTargetNeverPromotes",
-      "promotionRequiresExactExpectedHead",
-      "unqualifiedCandidateNeverPromotes",
-      "prePromotionBlockerPreservesCandidate",
-      "prePromotionBlockerReleasesTarget",
-      "postPromotionBlockerPreservesProof",
-      "postPromotionBlockerNeverRollsBack",
-      "clearedPromotionRequiresFreshAncestry",
-      "clearedPromotionNeverReintegrates",
-      "incompleteFactsReleaseTarget",
-      "oneSuccessorRequiresDurableSupersession",
-      "onePriorSessionHasOneSupersession",
-      "successorIdentityUsesOwnSessionChain",
-      "completionRacePreservesAcceptedCompletion",
-      "completionWarningIsDerivedOnly"
-    ]
-
-    await run("Git reconciliation model typecheck", ["typecheck", "specs/gitReconciliation.qnt"])
-    // TLC checks the complete state graph: 101 generated / 44 distinct states,
-    // depth 5, ~0.7s (Quint 0.32.0, linux-aarch64) — replacing a 7-step Apalache
-    // BMC with exhaustive checking. No --max-steps: TLC reports the diameter, so
-    // "is the bound binding" stops being a separate investigation.
-    await runFamily([
-      {
-        name: "Git reconciliation deterministic tests",
-        args: ["test", "specs/gitReconciliation_test.qnt", "--main", "gitReconciliationTest"]
-      },
-      {
-        name: "Git reconciliation negative mutation profile",
-        args: ["test", "specs/gitReconciliation_negative_test.qnt", "--main", "gitReconciliationNegativeTest"]
-      },
-      {
-        name: "Git reconciliation sampled model",
-        args: [
-          "run",
-          "specs/gitReconciliation.qnt",
-          "--step",
-          "gitReconciliationStep",
-          "--invariants",
-          ...gitReconciliationInvariants,
-          "--witnesses",
-          "compatibleAdvanceReached",
-          "targetRewriteWaitReached",
-          "lostWorktreeWaitReached",
-          "registrationConflictWaitReached",
-          "independentTaskSelectedReached",
-          "missingResultRejectedReached",
-          "nonDescendantResultRejectedReached",
-          "eligibleResultReached",
-          "exactCompareAndSetReached",
-          "staleTargetReconciliationReached",
-          "ambiguousTargetRereadReached",
-          "unqualifiedCandidateRejectionReached",
-          "prePromotionBlockerReached",
-          "prePromotionRereadReached",
-          "unrelatedSupersessionReached",
-          "sessionSupersessionReached",
-          "successorStartedReached",
-          "postPromotionBlockerReached",
-          "promotedAncestryProvenReached",
-          "completionAuthorizedReached",
-          "completionAcceptedReached",
-          "completionWarningReached",
-          "incompleteFactsWaitReached",
-          "--max-steps",
-          "24",
-          "--max-samples",
-          "5000",
-          "--seed",
-          "6511",
-          "--verbosity",
-          "1"
-        ]
-      },
-      {
-        name: "Git reconciliation exhaustive model",
-        args: [
-          "verify",
-          "specs/gitReconciliation.qnt",
-          "--backend",
-          "tlc",
-          "--step",
-          "gitReconciliationStep",
-          "--invariants",
-          ...gitReconciliationInvariants,
-          "--verbosity",
-          "1"
-        ]
-      }
-    ])
-
-    const acceptedResultIntegrationInvariants = acceptedResultIntegrationObligations.invariants
-    const acceptedResultIntegrationWitnesses = acceptedResultIntegrationObligations.witnesses
-    const acceptedResultIntegrationQuarantineProofInvariants =
-      acceptedResultIntegrationQuarantineProofObligations.invariants
-    const acceptedResultIntegrationQuarantineProofWitnesses =
-      acceptedResultIntegrationQuarantineProofObligations.witnesses
-
-    await run("accepted-result integration model typecheck", ["typecheck", "specs/acceptedResultIntegration.qnt"])
-    await runFamily([
-      {
-        name: "accepted-result integration deterministic tests",
-        args: ["test", "specs/acceptedResultIntegration_test.qnt", "--main", "acceptedResultIntegrationTest"]
-      },
-      {
-        name: "accepted-result integration negative mutation profile",
-        args: [
-          "test",
-          "specs/acceptedResultIntegration_negative_test.qnt",
-          "--main",
-          "acceptedResultIntegrationNegativeTest"
-        ]
-      },
-      {
-        name: "accepted-result integration sampled model",
-        args: [
-          "run",
-          "specs/acceptedResultIntegration.qnt",
-          "--invariants",
-          ...acceptedResultIntegrationInvariants,
-          "--witnesses",
-          ...acceptedResultIntegrationWitnesses,
-          "--step",
-          "acceptedResultIntegrationSampleStep",
-          "--max-steps",
-          "35",
-          "--max-samples",
-          "10000",
-          "--seed",
-          "270",
-          "--verbosity",
-          "1"
-        ]
-      }
-    ])
-    // The canonical model retains the full accepted-result vocabulary, collected
-    // scenarios, and sampled obligations. Its issue #68 quarantine product is
-    // exhaustively enumerated by the subject-scoped projection below, as allowed
-    // by ADR 0010.
-    await run("accepted-result integration quarantine proof typecheck", [
-      "typecheck",
-      "specs/acceptedResultIntegration_proof.qnt"
-    ])
-    // TLC checks the complete finite projection graph. No --max-steps is used:
-    // future growth shows up as a diameter change rather than silent truncation.
-    await runFamily([
-      {
-        name: "accepted-result integration quarantine proof deterministic tests",
-        args: [
-          "test",
-          "specs/acceptedResultIntegration_proof_test.qnt",
-          "--main",
-          "acceptedResultIntegrationQuarantineProofTest"
-        ]
-      },
-      {
-        name: "accepted-result integration quarantine proof negative mutation profile",
-        args: [
-          "test",
-          "specs/acceptedResultIntegration_proof_negative_test.qnt",
-          "--main",
-          "acceptedResultIntegrationQuarantineProofNegativeTest"
-        ]
-      },
-      {
-        name: "accepted-result integration quarantine proof sampled model",
-        args: [
-          "run",
-          "specs/acceptedResultIntegration_proof.qnt",
-          "--invariants",
-          ...acceptedResultIntegrationQuarantineProofInvariants,
-          "--witnesses",
-          ...acceptedResultIntegrationQuarantineProofWitnesses,
-          "--max-steps",
-          "24",
-          "--max-samples",
-          "5000",
-          "--seed",
-          "6801",
-          "--verbosity",
-          "1"
-        ]
-      },
-      {
-        name: "accepted-result integration quarantine proof exhaustive model",
-        args: [
-          "verify",
-          "specs/acceptedResultIntegration_proof.qnt",
-          "--main",
-          "acceptedResultIntegrationQuarantineProof",
-          "--backend",
-          "tlc",
-          "--invariants",
-          ...acceptedResultIntegrationQuarantineProofInvariants,
-          "--verbosity",
-          "1"
-        ]
-      }
-    ])
-
-    const integrationFinalityInvariants = [
-      "exactProofAndBinding",
-      "completionClaimRequiresExactPromotionProof",
-      "completionProofCarriesAcceptedEvidenceAndNoReturnedRefs",
-      "noLegacyEvidenceAuthorizesFinality",
-      "clearedPromotionRequiresFreshAncestry",
-      "replacementIntentPrecedesRequest",
-      "deletionIntentPrecedesRequest",
-      "replacementRereadPrecedesRetry",
-      "deletionRereadPrecedesRetry",
-      "completionClaimRequestsAreBounded",
-      "completionClaimDeletionRequestsAreBounded",
-      "completionIntentPrecedesRequest",
-      "completionAttemptIntentPrecedesRequest",
-      "completionRequestsAreBoundedForIssue61",
-      "completionRetryRequiresExactRequestLookup",
-      "completionLookupRequiresPostLossConfirmation",
-      "completionRequestUsesExactPremises",
-      "completionAcknowledgementIsApplied",
-      "focusedSuccessRequiresCompletionObservation",
-      "trackerSuccessRequiresFocusedObservation",
-      "humanFocusedSuccessIsAccepted",
-      "dependantReleaseRequiresLaterCompleteGraph",
-      "foreignClaimIsNeverMutated",
-      "noReintegration",
-      "successfulTaskNeverReopens",
-      "freshTrackerSuccessPrecedesCompletionClaimDeletion",
-      "completionClaimDeletionTargetsExactClaim",
-      "currentCompletionClaimIsExact",
-      "settledTaskRequiresExactCleanup",
-      "subjectSettlementIsLocal",
-      "emptyFrontierDoesNotSettleRetainedResponsibility",
-      "runTerminationRemainsOwnedByIssue102",
-      "dependantReleaseBoundaryRemainsExternal"
-    ]
-
-    await run("integration finality model typecheck", ["typecheck", "specs/integrationFinality.qnt"])
-    await runFamily([
-      {
-        name: "integration finality deterministic tests",
-        args: ["test", "specs/integrationFinality_test.qnt", "--main", "integrationFinalityTest"]
-      },
-      {
-        name: "integration finality negative mutation profile",
-        args: ["test", "specs/integrationFinality_negative_test.qnt", "--main", "integrationFinalityNegativeTest"]
-      },
-      {
-        name: "integration finality sampled model",
-        args: [
-          "run",
-          "specs/integrationFinality.qnt",
-          "--invariants",
-          ...integrationFinalityInvariants,
-          "--witnesses",
-          "promotedProofReached",
-          "blockerWaitReached",
-          "postPromotionAncestryPendingReached",
-          "postPromotionAncestryWaitReached",
-          "postPromotionAncestryReached",
-          "replacementIntentPendingReached",
-          "replacementIntentReached",
-          "replacementRequestedReached",
-          "replacementResponseLostReached",
-          "replacementRetryReadyReached",
-          "replacementWaitReached",
-          "replacementExhaustedReached",
-          "completionClaimCurrentReached",
-          "completionFactsReached",
-          "completionAncestryReached",
-          "completionEvidenceReached",
-          "completionIntentReached",
-          "completionAttemptIntentReached",
-          "completionRequestedReached",
-          "completionResponseLostReached",
-          "completionConfirmationReached",
-          "completionAcknowledgedReached",
-          "completionRetryReadyReached",
-          "completionWaitReached",
-          "trackerSuccessReached",
-          "focusedCompletionSuccessReached",
-          "humanSuccessWithAbsentClaimReached",
-          "humanSuccessWithForeignClaimReached",
-          "completeGraphBlockedReached",
-          "completeGraphReleasedReached",
-          "deleteIntentReached",
-          "deleteRequestedReached",
-          "deleteResponseLostReached",
-          "deleteRetryReadyReached",
-          "deleteResponseObservedReached",
-          "cleanupWaitReached",
-          "settledReached",
-          "emptyFrontierReached",
-          "unrelatedResponsibilityReached",
-          "--max-steps",
-          "35",
-          "--max-samples",
-          "10000",
-          "--verbosity",
-          "1"
-        ]
-      },
-      {
-        name: "integration finality exhaustive model",
-        args: [
-          "verify",
-          "specs/integrationFinality.qnt",
-          "--backend",
-          "tlc",
-          "--invariants",
-          ...integrationFinalityInvariants,
-          "--verbosity",
-          "1"
-        ]
-      }
-    ])
-  },
-  write: (report) => process.stdout.write(report)
-})
-
-const phaseCounts = timing.aggregates()
-assertQuintGateCommandContract({
-  manifest: quintGateCommandManifest,
-  executed: {
-    total: manifestPosition,
-    typecheck: phaseCounts.typecheck.count,
-    test: phaseCounts.test.count,
-    "sampled-run": phaseCounts["sampled-run"].count,
-    verify: phaseCounts.verify.count
-  }
-})
-
-const elapsedMilliseconds = performance.now() - startedAt
-process.stdout.write(
-  `\nComplete Quint model gate: ${(elapsedMilliseconds / 1000).toFixed(
-    2
-  )}s (budget ${quintGateRegressionBudgetMilliseconds / 1000}s)\n`
-)
-if (elapsedMilliseconds > quintGateRegressionBudgetMilliseconds) {
-  throw new Error("Quint models exceeded their regression budget")
+// Importing this module constructs no child process and executes no checker.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  if (process.env.npm_execpath === undefined) throw new Error("Run this model gate through pnpm")
+  assertQuintHostedDeadlineContract(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"))
+  await runQuintEffectiveProfile()
 }

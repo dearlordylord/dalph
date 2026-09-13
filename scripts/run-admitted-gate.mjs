@@ -87,9 +87,8 @@ const run = {
   ownerPid: process.pid,
   commandArguments,
   requiresQualityComposite:
-    process.env.npm_lifecycle_event === "check:all" &&
-    resolve(commandArguments[1] ?? "") === join(location.worktree, "scripts", "run-quality-gate.mjs") &&
-    !commandArguments.includes("--without-quint"),
+    commandArguments.includes("--local-handoff") &&
+    resolve(commandArguments[1] ?? "") === join(location.worktree, "scripts", "run-quality-gate.mjs"),
   startedAt: wallClockTimestamp(),
   queueMilliseconds: epochMilliseconds() - startedWaiting
 }

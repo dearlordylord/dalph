@@ -6,7 +6,8 @@ import { captureResumeArtifacts } from "./gate-resume-artifacts.mjs"
 import { selectResumePrefix } from "./gate-resume-policy.mjs"
 import { readRunEvidence } from "./gate-run-evidence.mjs"
 import { qualitySubtreeProven } from "./gate-quality-evidence.mjs"
-import { addSuccessfulOutputLines } from "./quality-output-budget.mjs"
+import { addSuccessfulOutputLines, successfulOutputLineLimit } from "./quality-output-budget.mjs"
+import { runFormalWorkflow } from "./run-formal-workflow.mjs"
 import { runPreflightCensus } from "./preflight-census.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { boundedQualityGateCommand, qualityGateTestEnvironment } from "./quality-gate-stage-policy.mjs"
@@ -98,7 +99,7 @@ export const executeResumableQualityGate = async ({
     runId: run.runId,
     logicalInvocation,
     manifest: stageManifest,
-    maximumSuccessfulOutputLines: 550,
+    maximumSuccessfulOutputLines: successfulOutputLineLimit,
     disposableCacheRoots,
     identityReceiptDigest: digest(JSON.stringify(identity))
   }
@@ -106,6 +107,9 @@ export const executeResumableQualityGate = async ({
   atomicRecord(join(runDirectory, "resume-inputs.json"), { version: 1, identity })
   mkdirSync(join(runDirectory, "quality-stages"), { recursive: true })
   let successfulOutputLines = 0
+  let formalOutputLineCount = 0
+  let retainedFormal
+  let formal
   const entries = stageManifest.map(() => ({ kind: "pending" }))
   try {
     let prefix = []
@@ -146,7 +150,7 @@ export const executeResumableQualityGate = async ({
       for (const stage of prefix) {
         successfulOutputLines = addSuccessfulOutputLines({
           currentOutputLines: successfulOutputLines,
-          maximumOutputLines: 550,
+          maximumOutputLines: successfulOutputLineLimit,
           stageName: stage.stageId,
           stageOutputLines: stage.outputLineCount
         })
@@ -203,7 +207,7 @@ export const executeResumableQualityGate = async ({
         await guard.assertUnchanged()
         successfulOutputLines = addSuccessfulOutputLines({
           currentOutputLines: successfulOutputLines,
-          maximumOutputLines: 550,
+          maximumOutputLines: successfulOutputLineLimit,
           stageName: stage.id,
           stageOutputLines: result.outputLineCount
         })
@@ -243,11 +247,45 @@ export const executeResumableQualityGate = async ({
         report
       })
       if (!preflight.succeeded) throw new Error("Preflight failed; qualification stages did not start")
+      // Formal work is outside the credited stage prefix: even an entirely
+      // resumed application gate obtains current applicability after preflight.
+      retainedFormal = await runFormalWorkflow({
+        retainGuard: true,
+        report: (text) => {
+          const lines = String(text).split(/\r\n|\r|\n/u).length
+          formalOutputLineCount += lines
+          successfulOutputLines = addSuccessfulOutputLines({
+            currentOutputLines: successfulOutputLines,
+            maximumOutputLines: successfulOutputLineLimit,
+            stageName: "formal verification",
+            stageOutputLines: lines
+          })
+          report(text)
+        }
+      })
       for (const stage of suffix.filter((stage) => stage.boundary === "qualification")) await executeStage(stage)
     } catch (error) {
       failure = error
     }
     const finalGuard = await guard.finish()
+    if (retainedFormal !== undefined) {
+      const finalized = await retainedFormal.finalizeApplicability()
+      // The candidate observer catches edits made during the complete final
+      // formal snapshot; the retained formal observer then drains its own roots.
+      await guard.assertUnchanged()
+      await retainedFormal.assertUnchanged()
+      formal = {
+        version: 1,
+        disposition: retainedFormal.status,
+        recordPath: finalized.evidencePath,
+        attemptId: finalized.success.attemptId,
+        runId: finalized.success.runId,
+        identity: finalized.success.identity,
+        profileIdentity: finalized.success.profileIdentity,
+        observation: finalized.observation,
+        outputLineCount: formalOutputLineCount
+      }
+    }
     atomicRecord(join(runDirectory, "input-guard.json"), finalGuard)
     atomicRecord(join(runDirectory, "composite.json"), {
       version: 1,
@@ -255,11 +293,17 @@ export const executeResumableQualityGate = async ({
       logicalInvocation,
       manifest: stageManifest,
       entries,
-      successfulOutputLines
+      successfulOutputLines,
+      formalOutputLineCount,
+      formal
     })
     if (failure !== undefined) throw failure
     return { successfulOutputLines }
   } finally {
-    await guard.close()
+    try {
+      await retainedFormal?.close()
+    } finally {
+      await guard.close()
+    }
   }
 }

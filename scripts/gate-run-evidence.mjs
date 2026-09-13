@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
-import { readQualityEvidence } from "./gate-quality-evidence.mjs"
+import { formalOptionalLogObligations, readQualityEvidence } from "./gate-quality-evidence.mjs"
 import { validateObligation } from "./gate-registration.mjs"
 import { digest, readRecord, validateRun } from "./gate-custody-records.mjs"
 
@@ -101,6 +101,7 @@ export const readRunEvidence = ({ runDirectory, runId, visited = new Set() }) =>
       JSON.stringify(registration.obligations.map((id) => `${id}.json`).sort())
   )
     throw new Error("Invalid complete obligation inventory")
+  const optionalFormalLogs = formalOptionalLogObligations({ run, runDirectory, runId })
   const rootObligations = []
   const stages = registration.obligations.map((obligationId) => {
     const obligation = readRecord(join(runDirectory, "obligations", `${obligationId}.json`))
@@ -174,7 +175,10 @@ export const readRunEvidence = ({ runDirectory, runId, visited = new Set() }) =>
         Number.isSafeInteger(absence.processGroup) &&
         absence.processGroup === obligation.processGroup)
     const currentLog = artifactEvidence(receipt.logPath)
-    if (currentLog?.sha256 !== receipt.log.sha256 || currentLog?.bytes !== receipt.log.bytes)
+    if (
+      !optionalFormalLogs.has(obligationId) &&
+      (currentLog?.sha256 !== receipt.log.sha256 || currentLog?.bytes !== receipt.log.bytes)
+    )
       return {
         ...receipt,
         parentId: obligation.parentId,

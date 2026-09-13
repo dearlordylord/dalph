@@ -8,6 +8,9 @@ patchedDependencies:
   '@firfi/quint-connect@2.0.2-effect4.1':
     hash: 144cc09f77ba5364fe273a8842caa15a4598a5937bd41b0cdeb851333eefffb2
     path: patches/@firfi__quint-connect@2.0.2-effect4.1.patch
+  '@informalsystems/quint@0.32.0':
+    hash: 45e9e1046beda69ccabbdc6c70e3ffb676e609797aae617d74896c39458b148c
+    path: patches/@informalsystems__quint@0.32.0.patch
 
 importers:
 
@@ -33,7 +36,7 @@ importers:
         version: 2.0.2-effect4.1(patch_hash=144cc09f77ba5364fe273a8842caa15a4598a5937bd41b0cdeb851333eefffb2)(effect@4.0.0-beta.106)(vitest@4.1.10)(zod@4.1.12)
       '@informalsystems/quint':
         specifier: 0.32.0
-        version: 0.32.0
+        version: 0.32.0(patch_hash=45e9e1046beda69ccabbdc6c70e3ffb676e609797aae617d74896c39458b148c)
       '@openai/codex':
         specifier: 0.149.0
         version: 0.149.0
@@ -3404,7 +3407,7 @@ snapshots:
 
   '@humanwhocodes/retry@0.4.3': {}
 
-  '@informalsystems/quint@0.32.0':
+  '@informalsystems/quint@0.32.0(patch_hash=45e9e1046beda69ccabbdc6c70e3ffb676e609797aae617d74896c39458b148c)':
     dependencies:
       '@grpc/grpc-js': 1.14.4
       '@grpc/proto-loader': 0.7.15

@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { coverageBracketForPath, coveragePolicy } from "./coverage-policy.mjs"
-import { completeFormalChangedPaths } from "./final-quint-selection.mjs"
+import { completeFormalChangedPaths } from "./changed-files.mjs"
 import { readRunEvidence } from "./gate-run-evidence.mjs"
 import { currentSourceInputDigest } from "./gate-run-identity.mjs"
 import {

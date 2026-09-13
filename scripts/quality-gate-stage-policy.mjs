@@ -55,7 +55,7 @@ export const preflightQualityGates = (baseSha) => [
   { args: ["test:gate-resume"], name: "gate resume controls", timeout: 60 * SECOND },
   { args: ["test:preflight"], name: "preflight controls", timeout: 60 * SECOND },
   { args: ["test:ci-change-classification"], name: "CI change classification", timeout: 60 * SECOND },
-  { args: ["test:quint:selection"], name: "final formal selection controls", timeout: 60 * SECOND },
+  { args: ["test:formal:controls"], name: "formal verification controls", timeout: 60 * SECOND },
   { args: ["check:secrets"], name: "secret scan", timeout: 5 * 60 * SECOND },
   { args: ["check:artifacts"], name: "build and production artifacts", timeout: 5 * 60 * SECOND },
   capabilityRegistrationQualityGate
@@ -77,7 +77,7 @@ export const fullQualityGateManifest = (baseSha, invocation) => {
     "resume-controls",
     "preflight-controls",
     "ci-classification",
-    "formal-selection-controls",
+    "formal-controls",
     "secrets",
     "production-artifacts",
     "capability-registration"

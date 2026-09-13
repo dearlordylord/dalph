@@ -1,0 +1,94 @@
+--- a/dist/src/apalache.js
++++ b/dist/src/apalache.js
+@@ -47,6 +47,7 @@
+ exports.serverEndpointToConnectionString = serverEndpointToConnectionString;
+ exports.fetchApalache = fetchApalache;
+ exports.connect = connect;
++exports.ownedServerReadiness = ownedServerReadiness;
+ /**
+  * Interface to Apalache
+  *
+@@ -253,7 +254,7 @@
+         let fileDescriptorProtos = protoDefResponse.file_descriptor_response.file_descriptor_proto.map(bytes => protobufDescriptor.FileDescriptorProto.decode(bytes));
+         // Use proto-loader to load the FileDescriptorProto wrapped in a FileDescriptorSet
+         return (0, either_1.right)(proto.loadFileDescriptorSetFromObject({ file: fileDescriptorProtos }, grpcStubOptions));
+-    }));
++    })).finally(() => reflectionClient.close());
+ }
+ function loadGrpcClient(serverEndpoint, protoDef) {
+     const protoDescriptor = grpc.loadPackageDefinition(protoDef);
+@@ -303,6 +304,13 @@
+  *    - a `left<ApalacheError>` indicating an error.
+  */
+ async function fetchApalache(apalacheVersion, verbosityLevel) {
++    if (process.env.DALPH_QUINT_OWNED_SERVER_ENDPOINT !== undefined) {
++        const dist = path_1.default.join((0, config_1.apalacheDistDir)(apalacheVersion), 'apalache');
++        const launcher = path_1.default.join(dist, 'bin', process.platform === 'win32' ? 'apalache-mc.bat' : 'apalache-mc');
++        if (!fs_1.default.existsSync(launcher) || !fs_1.default.existsSync(path_1.default.join(dist, 'lib', 'apalache.jar'))) {
++            return err('Owned-server verification requires prepared Apalache artifacts; downloading is disabled');
++        }
++    }
+     const filename = process.platform === 'win32' ? 'apalache-mc.bat' : 'apalache-mc';
+     const apalacheBinary = path_1.default.join((0, config_1.apalacheDistDir)(apalacheVersion), 'apalache', 'bin', filename);
+     if (fs_1.default.existsSync(apalacheBinary)) {
+@@ -371,7 +379,22 @@
+  *    - a `right<Apalache>` equal to the path the Apalache dist was unpacked to,
+  *    - a `left<ApalacheError>` indicating an error.
+  */
++async function ownedServerReadiness(serverEndpoint) {
++    const ownedEndpoint = process.env.DALPH_QUINT_OWNED_SERVER_ENDPOINT;
++    if (ownedEndpoint === undefined || serverEndpointToConnectionString(serverEndpoint) !== ownedEndpoint) {
++        return err('Owned Apalache endpoint does not match runner transport metadata');
++    }
++    return loadProtoDefViaReflection(serverEndpoint, false);
++}
+ async function connect(serverEndpoint, apalacheVersion, verbosityLevel) {
++    const ownedEndpoint = process.env.DALPH_QUINT_OWNED_SERVER_ENDPOINT;
++    if (ownedEndpoint !== undefined) {
++        if (serverEndpointToConnectionString(serverEndpoint) !== ownedEndpoint) {
++            return err('Owned Apalache endpoint does not match runner transport metadata');
++        }
++        // The admitted runner owns server launch and custody. Never replace it.
++        return tryConnect(serverEndpoint, false);
++    }
+     // Try to connect to Shai, and try to ping it
+     const connectionResult = await tryConnect(serverEndpoint);
+     // We managed to connect, simply return this connection
+--- a/dist/src/rust/binaryManager.js
++++ b/dist/src/rust/binaryManager.js
+@@ -40,6 +40,9 @@
+     const executablePath = path_1.default.join(evaluatorDir, executable);
+     if (await exists(executablePath)) {
+         return executablePath;
++    }
++    if (process.env.DALPH_QUINT_OWNED_SERVER_ENDPOINT !== undefined) {
++        throw new Error('Owned-server verification requires the prepared Rust evaluator; downloading is disabled');
+     }
+     // Otherwise, fetch it from GitHub releases
+     return await fetchEvaluator(version, assetName, executable);
+--- a/dist/src/tlc.js
++++ b/dist/src/tlc.js
+@@ -103,6 +103,13 @@
+     return { explanation, errors: [], isViolation };
+ }
+ async function verify(config, apalacheVersion, runtimeConfig = {}, verbosityLevel = 2) {
++    const owned = process.env.DALPH_QUINT_OWNED_SERVER_ENDPOINT !== undefined;
++    const javaExecutable = owned ? process.env.DALPH_QUINT_JAVA_EXECUTABLE : 'java';
++    const javaUserHome = owned ? process.env.DALPH_QUINT_JAVA_USER_HOME : undefined;
++    if (owned && (typeof javaExecutable !== 'string' || !path_1.default.isAbsolute(javaExecutable) ||
++        typeof javaUserHome !== 'string' || !path_1.default.isAbsolute(javaUserHome))) {
++        return (0, either_1.left)(tlcErr('Owned TLC requires the identified absolute Java executable and user.home; PATH fallback is disabled', false));
++    }
+     const jarResult = findApalacheJar(apalacheVersion);
+     if (jarResult.isLeft()) {
+         return (0, either_1.left)(tlcErr(jarResult.value, false));
+@@ -117,7 +124,8 @@
+     fs_1.default.writeFileSync(tlaFile, config.tlaCode);
+     fs_1.default.writeFileSync(cfgFile, generateCfg(config));
+     return new Promise(resolve => {
+-        const proc = (0, child_process_1.spawn)('java', [
++        const proc = (0, child_process_1.spawn)(javaExecutable, [
++            ...(owned ? [`-Duser.home=${javaUserHome}`] : []),
+             maxHeap,
+             stackSize,
+             '-cp',

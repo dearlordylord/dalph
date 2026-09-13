@@ -60,13 +60,39 @@ const fixture = () => {
     artifacts: {}
   }
   atomicRecord(join(runDirectory, "quality-stages", "0.json"), record)
+  const formalSuccess = {
+    attemptId: "original-formal",
+    runId: "formal-origin",
+    identity: { worktree: runDirectory, inputDigest: "formal-input" },
+    profileIdentity: "formal-profile"
+  }
+  const formal = {
+    version: 1,
+    disposition: "reused",
+    recordPath: "controlled-formal-reference",
+    attemptId: formalSuccess.attemptId,
+    runId: formalSuccess.runId,
+    identity: formalSuccess.identity,
+    profileIdentity: formalSuccess.profileIdentity,
+    outputLineCount: 0,
+    observation: {
+      version: 1,
+      observerVersion: 1,
+      ready: true,
+      drained: true,
+      unchanged: true,
+      inputDigest: "formal-input"
+    }
+  }
   const composite = {
     version: 1,
     runId,
     manifest: [stage],
     logicalInvocation,
     entries: [{ kind: "executed" }],
-    successfulOutputLines: 7
+    successfulOutputLines: 7,
+    formalOutputLineCount: 0,
+    formal
   }
   atomicRecord(join(runDirectory, "composite.json"), composite)
   const stages = [
@@ -82,7 +108,8 @@ const fixture = () => {
   ]
   return {
     baseSha: "base",
-    run: { commandArguments: ["node", "quality"] },
+    readFormalSuccess: () => formalSuccess,
+    run: { worktree: runDirectory, commandArguments: ["node", "quality"] },
     runDirectory,
     runId,
     stages,
@@ -127,6 +154,43 @@ for (const [name, mutate, rejects] of [
   [
     "wrong output accounting",
     (f) => atomicRecord(join(f.runDirectory, "composite.json"), { ...f.composite, successfulOutputLines: 0 }),
+    true
+  ],
+  [
+    "missing formal link",
+    (f) => atomicRecord(join(f.runDirectory, "composite.json"), { ...f.composite, formal: undefined }),
+    false
+  ],
+  [
+    "undrained formal observer",
+    (f) =>
+      atomicRecord(join(f.runDirectory, "composite.json"), {
+        ...f.composite,
+        formal: { ...f.composite.formal, observation: { ...f.composite.formal.observation, drained: false } }
+      }),
+    true
+  ],
+  [
+    "wrong original formal run",
+    (f) =>
+      atomicRecord(join(f.runDirectory, "composite.json"), {
+        ...f.composite,
+        formal: { ...f.composite.formal, runId: "other" }
+      }),
+    true
+  ],
+  [
+    "wrong effective formal profile",
+    (f) =>
+      atomicRecord(join(f.runDirectory, "composite.json"), {
+        ...f.composite,
+        formal: { ...f.composite.formal, profileIdentity: "other" }
+      }),
+    true
+  ],
+  [
+    "wrong current formal output count",
+    (f) => atomicRecord(join(f.runDirectory, "composite.json"), { ...f.composite, formalOutputLineCount: 1 }),
     true
   ],
   ["missing suffix receipt", (f) => rmSync(join(f.runDirectory, "quality-stages", "0.json")), true],
