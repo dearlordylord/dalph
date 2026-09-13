@@ -12,8 +12,9 @@ import {
   watch,
   writeFileSync
 } from "node:fs"
+import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import { atomicRecord, readRecord, repositoryLocation, withoutInheritedCustody } from "./gate-custody-records.mjs"
@@ -23,7 +24,8 @@ import { createQuintEffectiveProfile } from "./quint-effective-profile.mjs"
 // The production command, workflow, profile execution, admission, publication and
 // evidence validation execute unchanged in disposable repositories. Only installed
 // checker/server and input-observation boundaries are controlled here. S7's actual
-// Linux observer is proved by the separate observer/input suites, not this adapter.
+// Linux observer is used by the realObservation fixture variant below; the
+// smaller adapter continues to isolate admission/publication-only scenarios.
 const rootScripts = fileURLToPath(new URL("./", import.meta.url))
 const inputAdapter = `
 import {readFileSync,appendFileSync} from 'node:fs'
@@ -113,7 +115,61 @@ if(configuration.hold&&args[0]==='typecheck'){
  if(fs.existsSync(release)){observer.close();execute()}
 }else execute()
 `
-const fixture = ({ publicationCrashes = false } = {}) => {
+
+// S5/S7/S12 use the production filesystem enumeration and native inotify
+// observer. Controlled installed tool identities avoid provider/checker work;
+// their declared external roots remain outside the candidate source boundary.
+const observedInputAdapter = `
+import {readFileSync,writeFileSync,appendFileSync} from 'node:fs'
+import {spawnSync} from 'node:child_process'
+import {join} from 'node:path'
+import {platform,arch} from 'node:os'
+import {createFormalEnvironment,startFormalInputGuard as originalGuard,formalInputPolicyVersion} from './controlled-original-formal-input-policy.mjs'
+import {startInputObserver} from './gate-input-observer.mjs'
+export {createFormalEnvironment}
+const event=(root,value)=>appendFileSync(join(root,'.scratch','events'),value+'\\n')
+const control=root=>JSON.parse(readFileSync(join(root,'.scratch','control.json'),'utf8'))
+export const resolveFormalToolchain=async({worktree})=>{
+ event(worktree,'prepare');const roots=[join(worktree,'node_modules'),join(worktree,'.quint'),join(worktree,'fake-java.cjs'),worktree+'-tools'];
+ return {version:formalInputPolicyVersion,platform:platform(),architecture:arch(),roots,allowedRoots:roots,requiredRoots:roots,pythonExecutable:'/usr/bin/python3',versions:{quint:'0.32.0',fixture:'1'},
+ nodeExecutable:process.execPath,quintEntryPoint:join(worktree,'node_modules','@informalsystems','quint','dist','src','cli.js'),javaExecutable:join(worktree,'fake-java.cjs'),javaUserHome:worktree,
+ javaArguments:['-Duser.home='+worktree],apalacheJar:join(worktree,'.quint','apalache-dist-0.56.1','apalache','lib','apalache.jar'),evaluatorPath:join(worktree,'.quint','evaluator')}
+}
+export const startFormalInputGuard=async(options)=>{
+ const root=options.worktree;event(root,'guard-start');let observer;
+ const guard=await originalGuard({...options,startObserver:async configuration=>{observer=await startInputObserver(configuration);return observer}})
+ if(control(root).overflow){
+  await observer.pause();event(root,'native-observer-paused');
+  const path=join(root+'-tools','runtime.so');const peer=join(root+'-tools','overflow-peer.so');const bytes=readFileSync(path);const peerBytes=readFileSync(peer);
+  const limit=Number(readFileSync('/proc/sys/fs/inotify/max_queued_events','utf8'));
+  const result=spawnSync('/usr/bin/python3',['-I','-S','-c','import os,sys; a=os.open(sys.argv[1],os.O_WRONLY); b=os.open(sys.argv[2],os.O_WRONLY); [(os.pwrite(a,b"x",0),os.pwrite(b,b"y",0)) for _ in range(int(sys.argv[3]))]; os.close(a); os.close(b)',path,peer,String(limit+64)],{timeout:10000,encoding:'utf8'});
+  writeFileSync(path,bytes);writeFileSync(peer,peerBytes);if(result.status!==0)throw Error('overflow burst failed: '+result.stderr)
+ }
+ let finishes=0;
+ return {...guard,finish:async options=>{
+  const result=await guard.finish(options);event(root,'guard-finish');finishes++;
+  if(control(root).postFormal==='final-drain'&&finishes===2){
+   writeFileSync(join(root,'.scratch','final-snapshot-ready'),'ready')
+  }
+  return result
+ },close:async()=>{await guard.close();event(root,'guard-close')}}
+}
+`
+const omittedExecutionAdapter = `
+import {appendFileSync} from 'node:fs'
+import {runBoundedCommand as original} from './controlled-original-bounded.mjs'
+export * from './controlled-original-bounded.mjs'
+let omitted=false;
+export const runBoundedCommand=async options=>{
+ if(!omitted&&options.args?.[1]==='typecheck'){
+  omitted=true;appendFileSync('.scratch/events','omitted-checker-obligation\\n');
+  return {exitCode:0,output:'',gateObligationId:'omitted-no-receipt'}
+ }
+ return original(options)
+}
+`
+
+const fixture = ({ omitObligation = false, publicationCrashes = false, realObservation = false } = {}) => {
   const root = mkdtempSync(join(tmpdir(), "dalph-formal-dispatch-"))
   const git = (...args) => {
     const result = spawnSync("git", args, { cwd: root, encoding: "utf8" })
@@ -127,7 +183,38 @@ const fixture = ({ publicationCrashes = false } = {}) => {
     mkdirSync(join(root, file, ".."), { recursive: true })
     writeFileSync(join(root, file), content)
   }
-  put("scripts/formal-input-policy.mjs", inputAdapter)
+  if (realObservation) {
+    put(
+      "scripts/controlled-original-formal-input-policy.mjs",
+      readFileSync(join(rootScripts, "formal-input-policy.mjs"), "utf8")
+    )
+    put("scripts/formal-input-policy.mjs", observedInputAdapter)
+    const require = createRequire(import.meta.url)
+    const resolverPath = require.resolve("@informalsystems/quint/dist/src/parsing/sourceResolver.js")
+    const quintRequire = createRequire(resolverPath)
+    put("node_modules/@informalsystems/quint/dist/src/parsing/sourceResolver.js", readFileSync(resolverPath, "utf8"))
+    for (const dependency of ["eol", "@sweet-monads/either"]) {
+      let packageRoot = dirname(quintRequire.resolve(dependency))
+      while (!existsSync(join(packageRoot, "package.json"))) {
+        assert.notEqual(packageRoot, dirname(packageRoot), `Cannot identify installed fixture dependency ${dependency}`)
+        packageRoot = dirname(packageRoot)
+      }
+      cpSync(packageRoot, join(root, "node_modules", dependency), { recursive: true })
+    }
+    put("specs/.keep", "")
+    put("pnpm-lock.yaml", "lockfileVersion: '9.0'\n")
+    put("pnpm-workspace.yaml", "packages: []\n")
+    put(".github/workflows/ci.yml", "name: controlled\n")
+    mkdirSync(root + "-tools", { recursive: true })
+    writeFileSync(join(root + "-tools", "runtime.so"), "identified external tool")
+    writeFileSync(join(root + "-tools", "overflow-peer.so"), "identified peer tool")
+  } else put("scripts/formal-input-policy.mjs", inputAdapter)
+  if (omitObligation) {
+    // Only the disposable installed execution boundary is altered. Canonical
+    // expected105 profile and production evidence/publication stay unchanged.
+    put("scripts/controlled-original-bounded.mjs", readFileSync(join(rootScripts, "run-bounded-command.mjs"), "utf8"))
+    put("scripts/run-bounded-command.mjs", omittedExecutionAdapter)
+  }
   put("scripts/quint-owned-server.mjs", serverAdapter)
   put(
     "fake-java.cjs",
@@ -170,11 +257,11 @@ const fixture = ({ publicationCrashes = false } = {}) => {
       .split("\n")
       .filter(Boolean)
   const controls = (settings) => put(".scratch/control.json", JSON.stringify({ fail: false, hold: false, ...settings }))
-  const saved = () => {
+  const saved = (excludedAttemptId) => {
     const pointer = readdirSync(join(location.custodyRoot, "formal"))
       .filter((file) => file.endsWith(".json"))
       .map((file) => readRecord(join(location.custodyRoot, "formal", file)))
-      .find((item) => readRecord(item.recordPath).worktree === root)
+      .find((item) => readRecord(item.recordPath).worktree === root && item.attemptId !== excludedAttemptId)
     assert.ok(pointer)
     return { pointer, success: readRecord(pointer.recordPath) }
   }
@@ -187,7 +274,10 @@ const fixture = ({ publicationCrashes = false } = {}) => {
     controls,
     saved,
     put,
-    cleanup: () => rmSync(root, { recursive: true, force: true })
+    cleanup: () => {
+      rmSync(root, { recursive: true, force: true })
+      rmSync(root + "-tools", { recursive: true, force: true })
+    }
   }
 }
 const launch = (
@@ -721,3 +811,140 @@ runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.
     f.cleanup()
   }
 })
+
+// S1/#362 omission: actual installed execution adapter leaves exactly one
+// command without a process/receipt. Complete canonical profile stays105.
+test("an omitted actual checker obligation cannot publish complete formal success", { timeout: 90000 }, async () => {
+  const f = fixture({ omitObligation: true })
+  try {
+    const result = await launch(f).completion
+    assert.equal(result.code, 1, result.stdout + result.stderr)
+    assert.match(result.stderr, /Missing or duplicate formal checker receipt/u)
+    assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 104)
+    assert.equal(f.events().filter((event) => event === "omitted-checker-obligation").length, 1)
+    assert.equal(f.events().filter((event) => event === "server-start").length, 1)
+    assert.equal(f.events().filter((event) => event === "server-stopped").length, 1)
+    assert.equal(f.saved().pointer.state, "started")
+    assert.equal(f.saved().success.state, "started")
+  } finally {
+    f.cleanup()
+  }
+})
+
+// S5: unchanged advertised package version cannot hide changed installed bytes.
+test(
+  "same-version installed checker bytes invalidate actual reuse and run every obligation",
+  { timeout: 120000 },
+  async () => {
+    const f = fixture({ realObservation: true })
+    try {
+      const fresh = await launch(f).completion
+      assert.equal(fresh.code, 0, fresh.stderr)
+      const original = f.saved()
+      const packageFile = join(f.root, "node_modules/@informalsystems/quint/package.json")
+      const packageBytes = readFileSync(packageFile)
+      const checker = join(f.root, "node_modules/@informalsystems/quint/dist/src/cli.js")
+      writeFileSync(checker, readFileSync(checker, "utf8") + "\n// changed installed bytes under the same version\n")
+      const changed = await launch(f).completion
+      assert.equal(changed.code, 0, changed.stderr)
+      assert.match(changed.stdout, /running complete profile/u)
+      assert.deepEqual(readFileSync(packageFile), packageBytes)
+      assert.equal(JSON.parse(packageBytes).version, "0.32.0")
+      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 210)
+      assert.equal(f.events().filter((event) => event === "server-start").length, 2)
+      const next = f.saved(original.pointer.attemptId)
+      assert.notEqual(next.pointer.attemptId, original.pointer.attemptId)
+      assert.notEqual(next.success.identity.inputDigest, original.success.identity.inputDigest)
+      assert.equal(readRecord(next.success.execution.reportPath).profileResult.commands.length, 105)
+      const warm = await launch(f).completion
+      assert.equal(warm.code, 0, warm.stderr)
+      assert.match(warm.stdout, /zero checkers or servers started/u)
+      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 210)
+      assert.deepEqual(f.saved(original.pointer.attemptId), next)
+    } finally {
+      f.cleanup()
+    }
+  }
+)
+
+// S7: pause is the existing native observer control, not a simulated dirty
+// verdict. The real kernel queue is overflowed without changing sysctl policy.
+test("native observer overflow refuses actual warm and fresh qualification", { timeout: 120000 }, async () => {
+  const f = fixture({ realObservation: true })
+  try {
+    const fresh = await launch(f).completion
+    assert.equal(fresh.code, 0, fresh.stderr)
+    const original = f.saved()
+    f.controls({ overflow: true })
+    const warm = await launch(f).completion
+    assert.equal(warm.code, 1, warm.stdout + warm.stderr)
+    assert.match(warm.stderr, /IN_Q_OVERFLOW/u)
+    assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 105)
+    assert.equal(f.events().filter((event) => event === "server-start").length, 1)
+    assert.deepEqual(f.saved(), original)
+    const forced = await launch(f, { force: true }).completion
+    assert.equal(forced.code, 1, forced.stdout + forced.stderr)
+    assert.match(forced.stderr, /IN_Q_OVERFLOW/u)
+    assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 210)
+    assert.equal(f.events().filter((event) => event === "server-start").length, 2)
+    assert.equal(f.events().filter((event) => event === "server-stopped").length, 2)
+    assert.equal(f.events().filter((event) => event === "native-observer-paused").length, 2)
+    assert.equal(f.saved().pointer.state, "started")
+  } finally {
+    f.cleanup()
+  }
+})
+
+// S12: production quality retains the real formal observer for declared tool
+// roots outside candidate source. Test both stage-time and final-drain races.
+test(
+  "external tool edit and revert after formal completion rejects actual quality handoff",
+  { timeout: 120000 },
+  async () => {
+    const f = fixture({ realObservation: true })
+    try {
+      f.put(
+        "scripts/controlled-external-quality.mjs",
+        `
+import {readFileSync,writeFileSync,existsSync,rmSync,appendFileSync} from 'node:fs';import {join} from 'node:path';
+import {executeResumableQualityGate} from './gate-quality-run.mjs';import {runBoundedCommand} from './run-bounded-command.mjs';
+const sources=["require('fs').appendFileSync('.scratch/events','preflight\\\\n')", "const fs=require('fs');fs.appendFileSync('.scratch/events','application-check\\\\n');if(JSON.parse(fs.readFileSync('.scratch/control.json','utf8')).postFormal==='stage'){const path=process.cwd()+'-tools/runtime.so';const bytes=fs.readFileSync(path);fs.writeFileSync(path,'changed after formal');fs.writeFileSync(path,bytes);fs.appendFileSync('.scratch/events','external-edit-revert-stage\\\\n')}"];
+const manifest=sources.map((source,ordinal)=>({id:['preflight','application-check'][ordinal],name:['preflight','application-check'][ordinal],boundary:ordinal===0?'preflight':'qualification',args:[source],timeout:10000,artifactRoots:[],execution:{executable:process.execPath,args:['-e',source],cwd:process.cwd(),name:['preflight','application-check'][ordinal],timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
+const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.base)},stageManifest:manifest,toolExecutables:[]};
+rmSync('.scratch/final-snapshot-ready',{force:true});
+await executeResumableQualityGate({logicalInvocation,stageManifest:manifest,prepareFreshInputs:()=>{},
+startGuard:async({logicalInvocation})=>{const identity={version:2,observerVersion:1,inputDigest:'controlled-external-quality',sourceInputDigest:'controlled-source',logicalInvocation};return {identity,assertUnchanged:async()=>{
+ if(existsSync('.scratch/final-snapshot-ready')){rmSync('.scratch/final-snapshot-ready');const path=process.cwd()+'-tools/runtime.so';const bytes=readFileSync(path);writeFileSync(path,'changed after final formal snapshot');writeFileSync(path,bytes);appendFileSync('.scratch/events','external-edit-revert-final-drain\\n')}
+},protectArtifacts:async()=>{},finish:async()=>({version:1,observerVersion:1,ready:true,drained:true,unchanged:true,inputDigest:identity.inputDigest,sourceInputDigest:identity.sourceInputDigest}),close:async()=>{}}},
+runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});
+`
+      )
+      const quality = () => launch(f, { gateFile: "controlled-external-quality.mjs" }).completion
+      const fresh = await quality()
+      assert.equal(fresh.code, 0, fresh.stderr)
+      const original = f.saved()
+      const composites = () =>
+        readdirSync(join(f.location.custodyRoot, "runs")).filter((runId) =>
+          existsSync(join(f.location.custodyRoot, "runs", runId, "composite.json"))
+        )
+      assert.equal(composites().length, 1)
+      const tool = join(f.root + "-tools", "runtime.so")
+      const bytes = readFileSync(tool)
+      for (const phase of ["stage", "final-drain"]) {
+        f.controls({ postFormal: phase })
+        const rejected = await quality()
+        assert.equal(rejected.code, 1, rejected.stdout + rejected.stderr)
+        assert.match(rejected.stderr, /dirty:.*runtime\.so/u)
+        assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 105)
+        assert.equal(f.events().filter((event) => event === "server-start").length, 1)
+        assert.deepEqual(readFileSync(tool), bytes)
+        assert.deepEqual(f.saved(), original)
+        assert.equal(composites().length, 1)
+        assert.equal(f.events().filter((event) => event === "external-edit-revert-" + phase).length, 1)
+      }
+      assert.equal(f.events().filter((event) => event === "application-check").length, 3)
+    } finally {
+      f.cleanup()
+    }
+  }
+)
