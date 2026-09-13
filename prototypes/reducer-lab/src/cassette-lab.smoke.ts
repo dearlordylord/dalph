@@ -1041,7 +1041,7 @@ await scenario("discards local playback, selection, cursor, and execution eviden
   )
   if (establishedIndex < 0) throw new Error("The capstone has no established graph frame for selection proof")
   chooseOption(timeline, String(establishedIndex))
-  const graph = workbench.querySelector<HTMLElement>("dalph-delivery-graph")
+  const graph = workbench.querySelector<HTMLElement>("[data-role='delivery-production-graph']")
   const taskId = firstResult.observationMoments[establishedIndex]?.deliveryFrame?.graph._tag === "Established"
     ? firstResult.observationMoments[establishedIndex].deliveryFrame.graph.tasks[0]?.id
     : undefined
