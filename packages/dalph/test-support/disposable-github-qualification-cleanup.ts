@@ -11,12 +11,12 @@ import {
 import { Data, Effect, HashSet, MutableList, Schema } from "effect"
 import { HermeticInvocationId } from "../src/application/production-hermetic-contract.js"
 
-const RepositoryIdentity = Schema.Struct({
+export const DisposableGithubQualificationRepositoryIdentity = Schema.Struct({
   owner: GithubRepositoryOwner,
   name: GithubRepositoryName,
   nodeId: GithubRepositoryNodeId
 })
-type RepositoryIdentity = typeof RepositoryIdentity.Type
+type RepositoryIdentity = typeof DisposableGithubQualificationRepositoryIdentity.Type
 
 /** Original fixture-created issue or label identity and its measured ownership fingerprint. */
 export const DisposableGithubQualificationResource = Schema.TaggedUnion({
@@ -26,7 +26,7 @@ export const DisposableGithubQualificationResource = Schema.TaggedUnion({
 export type DisposableGithubQualificationResource = typeof DisposableGithubQualificationResource.Type
 
 /** The issue and label variants share one GitHub node-id namespace in a manifest. */
-const UniqueDisposableGithubQualificationResources = Schema.Array(DisposableGithubQualificationResource).check(
+export const UniqueDisposableGithubQualificationResources = Schema.Array(DisposableGithubQualificationResource).check(
   Schema.makeFilter(
     (resources) => {
       let nodeIds = HashSet.empty<string>()
@@ -40,10 +40,10 @@ const UniqueDisposableGithubQualificationResources = Schema.Array(DisposableGith
   )
 )
 
-/** Creation receipts for one invocation, never reconstructed from cleanup-time provider state. */
+/** Creation receipts for one hermetic invocation, never reconstructed from cleanup-time provider state. */
 export const DisposableGithubQualificationManifest = Schema.Struct({
   invocationId: HermeticInvocationId,
-  repository: RepositoryIdentity,
+  repository: DisposableGithubQualificationRepositoryIdentity,
   resources: UniqueDisposableGithubQualificationResources
 })
 export type DisposableGithubQualificationManifest = typeof DisposableGithubQualificationManifest.Type
@@ -51,7 +51,7 @@ export type DisposableGithubQualificationManifest = typeof DisposableGithubQuali
 /** A fresh exact repository read proves either its identity or its absence. */
 export const DisposableGithubRepositoryObservation = Schema.TaggedUnion({
   Absent: {},
-  Present: { repository: RepositoryIdentity }
+  Present: { repository: DisposableGithubQualificationRepositoryIdentity }
 })
 /** A fresh exact issue/label read proves either its current identity or its absence. */
 export const DisposableGithubResourceObservation = Schema.TaggedUnion({
@@ -96,7 +96,7 @@ type RetainedResource = typeof RetainedResource.Type
 
 /** Reports only proven deletion or absence; unresolved resources keep their original exact receipts. */
 export const DisposableGithubQualificationCleanup = Schema.Struct({
-  repository: RepositoryIdentity,
+  repository: DisposableGithubQualificationRepositoryIdentity,
   removed: Schema.Array(DisposableGithubQualificationResource),
   alreadyAbsent: Schema.Array(DisposableGithubQualificationResource),
   retained: Schema.Array(RetainedResource)
@@ -172,6 +172,54 @@ const repositoryRetentionReason = Effect.fn("DisposableGithubQualification.readR
     : null
 })
 
+/** Runs the exact cleanup protocol while preserving the caller's invocation-id brand. */
+export const cleanupDisposableGithubQualificationCore = Effect.fn("DisposableGithubQualification.cleanupCore")(
+  function* <InvocationId>(
+    manifest: {
+      readonly invocationId: InvocationId
+      readonly repository: RepositoryIdentity
+      readonly resources: ReadonlyArray<DisposableGithubQualificationResource>
+    },
+    expected: { readonly invocationId: InvocationId; readonly repository: RepositoryIdentity },
+    adapter: DisposableGithubCleanupAdapter
+  ) {
+    const removed = MutableList.make<DisposableGithubQualificationResource>()
+    const alreadyAbsent = MutableList.make<DisposableGithubQualificationResource>()
+    const retained = MutableList.make<RetainedResource>()
+    const retain = (resource: DisposableGithubQualificationResource, reason: RetainedResource["reason"]) =>
+      MutableList.append(retained, retention(resource, reason))
+    const authorization =
+      manifest.invocationId !== expected.invocationId
+        ? "ForeignInvocation"
+        : !sameRepository(manifest.repository, expected.repository)
+          ? "ForeignRepository"
+          : null
+    if (authorization !== null) {
+      for (const resource of manifest.resources) retain(resource, authorization)
+    } else {
+      const repositoryReason = yield* repositoryRetentionReason(manifest.repository, adapter)
+      if (repositoryReason !== null) {
+        for (const resource of manifest.resources) retain(resource, repositoryReason)
+      } else {
+        for (const resource of manifest.resources) {
+          const outcome = yield* removeResource(manifest.repository, resource, adapter)
+          RemovalOutcome.$match(outcome, {
+            Removed: ({ resource }) => MutableList.append(removed, resource),
+            AlreadyAbsent: ({ resource }) => MutableList.append(alreadyAbsent, resource),
+            Retained: ({ entry }) => MutableList.append(retained, entry)
+          })
+        }
+      }
+    }
+    return DisposableGithubQualificationCleanup.make({
+      repository: manifest.repository,
+      removed: MutableList.toArray(removed),
+      alreadyAbsent: MutableList.toArray(alreadyAbsent),
+      retained: MutableList.toArray(retained)
+    })
+  }
+)
+
 export const cleanupDisposableGithubQualification = Effect.fn("DisposableGithubQualification.cleanup")(function* (
   input: unknown,
   expected: { readonly invocationId: HermeticInvocationId; readonly repository: RepositoryIdentity },
@@ -181,38 +229,5 @@ export const cleanupDisposableGithubQualification = Effect.fn("DisposableGithubQ
     onExcessProperty: "error",
     reportInput: false
   })(input).pipe(Effect.mapError(() => new DisposableGithubCleanupManifestFailure()))
-  const removed = MutableList.make<DisposableGithubQualificationResource>()
-  const alreadyAbsent = MutableList.make<DisposableGithubQualificationResource>()
-  const retained = MutableList.make<RetainedResource>()
-  const retain = (resource: DisposableGithubQualificationResource, reason: RetainedResource["reason"]) =>
-    MutableList.append(retained, retention(resource, reason))
-  const authorization =
-    manifest.invocationId !== expected.invocationId
-      ? "ForeignInvocation"
-      : !sameRepository(manifest.repository, expected.repository)
-        ? "ForeignRepository"
-        : null
-  if (authorization !== null) {
-    for (const resource of manifest.resources) retain(resource, authorization)
-  } else {
-    const repositoryReason = yield* repositoryRetentionReason(manifest.repository, adapter)
-    if (repositoryReason !== null) {
-      for (const resource of manifest.resources) retain(resource, repositoryReason)
-    } else {
-      for (const resource of manifest.resources) {
-        const outcome = yield* removeResource(manifest.repository, resource, adapter)
-        RemovalOutcome.$match(outcome, {
-          Removed: ({ resource }) => MutableList.append(removed, resource),
-          AlreadyAbsent: ({ resource }) => MutableList.append(alreadyAbsent, resource),
-          Retained: ({ entry }) => MutableList.append(retained, entry)
-        })
-      }
-    }
-  }
-  return DisposableGithubQualificationCleanup.make({
-    repository: manifest.repository,
-    removed: MutableList.toArray(removed),
-    alreadyAbsent: MutableList.toArray(alreadyAbsent),
-    retained: MutableList.toArray(retained)
-  })
+  return yield* cleanupDisposableGithubQualificationCore(manifest, expected, adapter)
 })
