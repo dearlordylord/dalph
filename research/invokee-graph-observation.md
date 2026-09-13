@@ -1,5 +1,9 @@
 # Task graph observation from the current production runtime
 
+Later evidence: [command interruption, live graph subscription, and MCP process
+validation](./invokee-attachment-validation.md). This note records the earlier
+research stage; see that round for the subsequently exercised boundaries.
+
 Status: research only, 2026-09-13. This note inspects the restored production
 runtime and its existing status projection. It proposes no API and records no
 implementation task.

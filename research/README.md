@@ -3,6 +3,10 @@
 This worktree carries the research notes created in the invoker/invokee
 conversation. Research is evidence, not accepted runtime behavior.
 
+- [Command, graph subscription, and MCP process validation](./invokee-attachment-validation.md)
+- [SQLite command interruption results](./invokee-command-interruption-results.md)
+- [Live graph subscription results](./invokee-graph-stream-results.md)
+- [MCP process cancellation and reconnection](./invokee-mcp-process-results.md)
 - [Real-host disconnection/reconnection evidence](./invokee-real-host-results.md)
 - [Earlier targeted-validation findings](./invokee-validation-round.md)
 - [Research continuation and targeted validation](./invokee-research-next.md)

@@ -6,8 +6,10 @@ create a task breakdown or implementation tickets during this phase.
 
 The [real-host composition experiment](./invokee-real-host-results.md) now
 validates the five-step observation-client disconnect/reconnect chronology with
-controlled providers. Command cancellation and live graph streaming remain
-separate uncertainties; no tasks have been created.
+controlled providers. The subsequent [attachment validation round](./invokee-attachment-validation.md)
+examines command interruption, live graph subscriptions, and actual MCP child
+process replacement. Its evidence and explicit limits supersede the open
+questions below where covered; no tasks have been created.
 
 ## Alice reconnects to ongoing delivery
 

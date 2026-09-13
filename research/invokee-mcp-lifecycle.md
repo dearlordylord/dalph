@@ -1,5 +1,9 @@
 # MCP lifecycle: specification and installed SDK probe
 
+Later evidence: [command interruption, live graph subscription, and MCP process
+validation](./invokee-attachment-validation.md). This note records the earlier
+research stage; see that round for the subsequently exercised boundaries.
+
 Status: research and targeted validation only, 2026-09-13. No Dalph production
 changes, SDK installation, manifest/lock changes, or implementation tasks.
 This note uses the versioned 2025-11-25 specification and the locally installed

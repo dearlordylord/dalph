@@ -9,10 +9,11 @@ means the command effect completed but its caller did not receive the result.
 “Caller cancelled” means interruption may occur while the command effect is
 still running. Those are different events and have different evidence.
 
-No focused test was rerun for this note. The cited focused tests cover capacity
-convergence and persistence of an acknowledged control direction after its
-response is discarded. Exact Unpause replay and cancellation behavior that
-they do not exercise are identified as source-derived, inferred, or open.
+This note began as source research and was subsequently checked with the
+[control replay probe](./prototypes/invokee-control-replay/README.md) and the
+[real SQLite interruption probe](./invokee-command-interruption-results.md).
+The latter corrects the original inference about cancellation during append:
+the live Journal masks interruption across storage and accepted publication.
 
 ## Existing command boundaries
 
@@ -50,7 +51,16 @@ which disconnected caller wrote an equal capacity.
 
 Production currently reaches capacity through a runtime control lease
 ([journaled-run-bootstrap.ts](../packages/orchestrator/src/coordination/run/journaled-run-bootstrap.ts#L1129)). A lease is acquired only while that exact runtime accepts control, and Run closing waits for acquired leases to release
-([journaled-run-bootstrap.ts](../packages/orchestrator/src/coordination/run/journaled-run-bootstrap.ts#L499), [journaled-run-bootstrap.ts](../packages/orchestrator/src/coordination/run/journaled-run-bootstrap.ts#L637)). The following cancellation conclusion is **inferred** from the `Effect.acquireUseRelease` composition: cancellation while `apply` is running can interrupt the use effect even though its lease finalizer runs. The caller can therefore observe neither whether the append was reached nor whether it committed. Repeating the exact request remains the safe recovery action: it either performs the still-missing revision or receives the current winning policy. A host adapter that detaches an accepted mutation from a request fiber would provide a stronger lifetime guarantee; the capacity service itself does not.
+([journaled-run-bootstrap.ts](../packages/orchestrator/src/coordination/run/journaled-run-bootstrap.ts#L499), [journaled-run-bootstrap.ts](../packages/orchestrator/src/coordination/run/journaled-run-bootstrap.ts#L637)). The live Journal masks interruption across storage append and accepted-record
+publication, inside its publication permit. The
+[SQLite interruption probe](./invokee-command-interruption-results.md)
+confirms that cancellation requested at the post-INSERT or post-COMMIT hook
+remains pending until append and accepted publication finish. Cancellation can
+still prevent invocation or interrupt work outside that protected region; lease
+finalization alone does not explain command lifetime. Repeating the exact
+capacity request either performs the still-missing revision or returns the
+current policy as a revision conflict. Forking the command into an existing
+host scope can additionally keep pre-append work alive when a request ends.
 
 ### Unpause records a direction; it has no replay identity
 
@@ -87,22 +97,22 @@ A more consequential chronology is also allowed by the source:
 
 Unlike capacity, Unpause has no `expectedRevision` check that could reject this
 blind replay and return the intervening state. This chronology is
-**source-derived and not directly covered by the cited tests**.
+**validated by the disposable control replay probe below**, although not by
+the cited package tests.
 
 The source test deliberately applies four directions, including distinct Run
 and Task Unpause commands, and proves four records without claiming downstream
 effects ([protocol.test.ts](../packages/orchestrator/src/workflow/protocols/control-direction-application/protocol.test.ts#L103)). A SQLite test proves an acknowledged direction remains reconstructable when the caller discards its response
 ([protocol.test.ts](../packages/orchestrator/src/workflow/protocols/control-direction-application/protocol.test.ts#L223)). It does not test retrying a lost Unpause response.
 
-Cancellation exposes a narrower open interval than ordinary response loss. An
-interruption may arrive before append, during append, or after append but before
-the bootstrap’s accepted-control callback completes. The existing request has
-no durable identity with which a retry could reopen “the same” application.
-Therefore the durable final pause state can be recovered from history, but
-exactly-once direction occurrence and exactly-once callback publication are
-**not proven**. Whether the concrete journal append implementation masks
-interruption across its commit/acknowledgement interval is also **open** at this
-service boundary.
+Cancellation differs from ordinary response loss. An interruption can prevent
+append from starting, but the live Journal defers it across storage append and
+accepted publication. After that protected region, interruption can prevent the
+bootstrap's accepted-control callback from running. The
+[SQLite interruption results](./invokee-command-interruption-results.md)
+distinguish these cuts. The existing request has no durable identity with which
+a retry could reopen the same application. Durable final direction can be read
+from history; exactly-once occurrence and callback publication are not provided.
 
 ### Wake is an ephemeral hint, not an admission result
 
@@ -200,11 +210,11 @@ semantics; it does not establish how many activations the live owner would run.
 - Tracker notification and timer use the active-work authority-refresh path;
   `OperatorWake` uses ordinary Run entry.
 
-**Inferred from the current Effect composition**
+**Lifetime boundaries checked in the later interruption probe**
 
-- Request-fiber interruption can cancel capacity, control, or hint work while
-  their use effects are in flight; resource finalization does not itself make
-  the command complete.
+- Interruption can prevent a command from reaching append or affect callbacks
+  outside the protected append. The SQLite probe establishes that the live
+  Journal itself defers interruption across storage and accepted publication.
 - An adapter that forks a command into the existing host scope can make client
   disconnection independent from command completion, but that guarantee must
   be stated and tested at the adapter boundary.
@@ -218,7 +228,8 @@ semantics; it does not establish how many activations the live owner would run.
 
 **Open in the current boundaries**
 
-- Whether an interrupted journal append committed when no result was observed.
+- Recovery after a host crash or storage failure at an ambiguous commit boundary;
+  request cancellation inside the live Journal is now covered by the later probe.
 - Durable per-request identity and exactly-once replay for Unpause.
 - A truthful queued/coalesced/paused/stopped disposition for wake or refresh.
 - A task-ID-scoped refresh request and a result proving that its fresh read

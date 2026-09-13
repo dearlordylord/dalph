@@ -1,5 +1,9 @@
 # Invokee research: targeted validation round
 
+Later evidence: [command interruption, live graph subscription, and MCP process
+validation](./invokee-attachment-validation.md). This note records the earlier
+research stage; see that round for the subsequently exercised boundaries.
+
 Follow-up: the [real-host composition experiment](./invokee-real-host-results.md)
 now passes the previously open five-step client-disconnection chronology. The
 limits below describe this earlier validation round.
