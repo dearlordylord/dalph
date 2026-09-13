@@ -217,6 +217,22 @@ test("fails closed on lost observation and supports bounded abort", async () => 
   await assert.rejects(g.finish(), /dirty|error/u)
 })
 
+test("watch removal reports the exact lost input path and refuses qualification", async () => {
+  const f = fixture()
+  const path = join(f.root, "tools/runtime.so")
+  const observer = await startInputObserver({ roots: [path] })
+  try {
+    await observer.pause()
+    rmSync(path)
+    await assert.rejects(
+      observer.assertUnchanged(),
+      (error) => error.message.includes("unexpected watch removal or unmount") && error.message.includes(path)
+    )
+  } finally {
+    await observer.close()
+  }
+})
+
 test("rejects a Quint import outside the conservative formal boundary", async () => {
   const f = fixture()
   writeFileSync(join(f.outer, "external.qnt"), "module external {}\n")

@@ -44,3 +44,12 @@ This changes no Dalph workflow or outside-system protocol.
 | Saved server command points outside its exact original helper output directory | `formal-success-evidence.test.mjs`: wrong owned-server output destination cannot attest complete success |
 | Ordinary fresh and warm wrappers retain exact command evidence and zero warm launches | `formal-gate.integration.test.mjs`: complete-success/reuse and quality-handoff cases |
 | Combined candidate completes all stages and final no-checker validation | Final `pnpm check:all --candidate=06d1661f8a2af9a65022e3807643e3f58b5ab969`, then ordinary `pnpm check:quint` before master integration |
+
+During subsequent merge qualification, an independent writer replaced the
+shared Git configuration while the candidate observer was active. The observer
+must continue refusing a lost watch and report its exact path and event mask,
+so the maintainer can distinguish an input replacement from generated output.
+`formal-input-policy.test.mjs`: `watch removal reports the exact lost input path
+and refuses qualification` removes a watched input and proves both refusal and
+the path diagnostic. This diagnostic-only change alters no Dalph runtime
+behavior or input-observation policy.
