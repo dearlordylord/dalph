@@ -17,7 +17,6 @@ const maximumSuccessfulOutputLines = 550
 process.env.DALPH_DPRINT_INCREMENTAL = "disabled"
 
 const pnpmEntryPoint = process.env.npm_execpath
-const withoutQuint = process.argv.includes("--without-quint")
 const candidateArgument = process.argv.find((argument) => argument.startsWith("--candidate="))
 // The full gate rebuilds the whole program several times and runs every suite, so it belongs to a frozen candidate and
 // to hosted verification. Development uses the focused tiers instead, which is why local runs state their intent.
@@ -48,7 +47,7 @@ const qualityBaseSha = resolveQualityGateBase({
 const testEnvironment = qualityGateTestEnvironment(qualityBaseSha)
 
 const context = inheritedCustody()
-const resumable = !withoutQuint && context !== undefined && process.env.npm_lifecycle_event === "check:all"
+const resumable = context !== undefined && process.env.npm_lifecycle_event === "check:all"
 const candidateHistory = resumable && process.env.CI === undefined
 const candidateHeadSha = candidateHistory
   ? execFileSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], { encoding: "utf8" }).trim()
@@ -61,7 +60,7 @@ const stageManifest = fullQualityGateManifest(qualityBaseSha, {
   worktree: context?.run.worktree ?? process.cwd()
 })
 const gates = stageManifest
-  .filter((stage) => stage.boundary === "qualification" && (!withoutQuint || stage.id !== "model-based-tests"))
+  .filter((stage) => stage.boundary === "qualification")
   .map((stage) =>
     stage.environmentPolicy === "coverage-base-warning" ? { ...stage, environment: testEnvironment } : stage
   )

@@ -13,7 +13,7 @@ import {
 // @ts-expect-error The production quality-gate helper is an executable JavaScript module.
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 // @ts-expect-error The production stage inventory is an executable JavaScript module.
-import { fullQualityGateManifest } from "./quality-gate-stage-policy.mjs"
+import { fullQualityGateManifest, preflightQualityGates } from "./quality-gate-stage-policy.mjs"
 
 const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
   engines: { node: string }
@@ -57,9 +57,10 @@ describe("hosted formal-model contract", () => {
   it("exposes complete CI and independently runnable quality/formal subgates", () => {
     expect(packageJson.scripts["check:ci"]).toBe("pnpm check:ci:quality && pnpm check:ci:formal")
     expect(packageJson.scripts["check:ci:quality"]).toBe(
-      "node scripts/with-gate-slot.mjs -- node scripts/run-quality-gate.mjs --without-quint"
+      "node scripts/with-gate-slot.mjs -- node scripts/run-quality-gate.mjs"
     )
     expect(packageJson.scripts["check:ci:formal"]).toBe("pnpm check:quint")
+    expect(packageJson.scripts["test:mbt"]).toBe("vitest run --mode mbt")
     expect(packageJson.engines.node).toBe("^24.20.0")
 
     const jobs = parseWorkflowJobs(ciWorkflow)
@@ -102,8 +103,13 @@ describe("hosted formal-model contract", () => {
     const stageCommands = fullQualityGateManifest("fixture-base").map(
       (stage: { args: ReadonlyArray<string> }) => stage.args[0]
     )
-    expect(stageCommands).toContain("test:mbt")
+    const structuralCommands = preflightQualityGates("fixture-base").map(
+      (stage: { args: ReadonlyArray<string> }) => stage.args[0]
+    )
+    expect(structuralCommands).not.toContain("test:mbt")
+    expect(stageCommands).not.toContain("test:mbt")
     expect(stageCommands).not.toContain("check:quint")
+    expect(packageJson.scripts["check:ci:quality"]).not.toContain("test:mbt")
   })
 
   it("uses the hosted regression budget with a distinct safety stop", () => {

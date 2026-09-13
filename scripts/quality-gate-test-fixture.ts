@@ -9,7 +9,7 @@ import vitestConfig from "../vitest.config.js"
 // @ts-expect-error The production quality-gate helper is an executable JavaScript module.
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 
-// The complete inventory launches 20 bounded fake commands. Inside an admitted
+// The complete inventory launches 19 bounded fake commands. Inside an admitted
 // parallel run, 13 calls measured 7.8s before the old 10s deadline interrupted
 // legitimate registration and evidence publication. Keep this fixture finite,
 // with room for the full inventory and cleanup. Enclosing tests separately

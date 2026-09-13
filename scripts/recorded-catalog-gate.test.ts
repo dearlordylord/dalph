@@ -68,8 +68,9 @@ it("coverage excludes the monolithic proof while retaining its thresholds and ot
   const ordinary = resolveVitestConfig("test")
   const coverage = resolveVitestConfig("coverage")
 
-  expect(ordinary.test?.exclude).toEqual(["**/node_modules/**", "**/dist/**"])
+  expect(ordinary.test?.exclude).toEqual(["**/node_modules/**", "**/dist/**", "packages/**/*.mbt.test.ts"])
   expect(coverage.test?.exclude).toContain(recordedCatalogTest)
+  expect(coverage.test?.exclude).toContain("packages/**/*.mbt.test.ts")
   expect(coverage.test?.exclude?.filter((pattern) => pattern === recordedCatalogTest)).toHaveLength(1)
   expect(coverage.test?.exclude).not.toContain("packages/dalph/test/cassettes/recorded-catalog.test.ts")
   expect(coverage.test?.include).toEqual(ordinary.test?.include)

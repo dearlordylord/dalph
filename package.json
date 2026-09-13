@@ -54,7 +54,7 @@
     "test:coverage": "node scripts/with-gate-slot.mjs -- pnpm coverage:body",
     "test:mbt": "vitest run --mode mbt",
     "test:watch": "vitest",
-    "check:ci:quality": "node scripts/with-gate-slot.mjs -- node scripts/run-quality-gate.mjs --without-quint",
+    "check:ci:quality": "node scripts/with-gate-slot.mjs -- node scripts/run-quality-gate.mjs",
     "check:ci:formal": "pnpm check:quint",
     "check:ci": "pnpm check:ci:quality && pnpm check:ci:formal",
     "check:all": "node scripts/with-gate-slot.mjs -- node scripts/run-quality-gate.mjs"

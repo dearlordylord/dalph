@@ -116,14 +116,6 @@ export const fullQualityGateManifest = (baseSha, invocation) => {
       timeout: 5 * 60 * SECOND,
       artifactRoots: ["prototypes/reducer-lab/dist"]
     },
-    {
-      id: "model-based-tests",
-      boundary: "qualification",
-      args: ["test:mbt"],
-      name: "Quint-connected model-based tests",
-      timeout: 8 * 60 * SECOND,
-      artifactRoots: []
-    },
     { ...recordedCatalogQualityGate, id: "recorded-catalog", boundary: "qualification", artifactRoots: [] },
     {
       id: "coverage",

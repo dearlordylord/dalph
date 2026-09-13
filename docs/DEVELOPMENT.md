@@ -87,7 +87,7 @@ All commands below use `pnpm`. Script definitions live in
 | `check:duplicates` | Enforce the configured duplication budget. |
 | `coverage:body` | Coverage suites and their verifiers, without taking an admission slot. |
 | `test:coverage` | Enforce separate production/evaluation coverage and changed-line floors below; takes an admission slot. |
-| `test:mbt` | Quint-connected executable conformance suites. |
+| `test:mbt` | Explicit manual Quint-connected conformance run; temporarily excluded from automatic verification pending [#363](https://github.com/dearlordylord/dalph/issues/363), which restores replay from pre-generated traces. |
 | `test:issue-268-c4` | Run the accepted DS01–DS13 table and strict occurrence order in twenty consecutive fresh processes; stop at the first incomplete or divergent run. |
 | `test:ci-change-classification` | Prove the docs-only CI allowlist and fail-closed classification. |
 | `check:lab` | Reducer Lab typecheck, maintained-cassette smoke, build; no browser. |
@@ -99,8 +99,8 @@ All commands below use `pnpm`. Script definitions live in
 | `gate:status <run-id>` | Read durable command results, unresolved custody and per-run logs/report paths without the previous terminal. Missing or malformed receipts cannot prove success. |
 | `gate:reconcile <run-id>` | Close registration and prove every recorded writer group absent before clearing exact worktree/slot fences. Missing exits stay unproven. |
 | `check:all --candidate=<base sha> --resume=<run-id>` | Reuse a contiguous proven full-gate prefix in the same worktree on identical monitored inputs; failed/unproven stage and remaining suffix execute normally. |
-| `check:all` | Bounded handoff gate for a frozen candidate, including MBT and non-browser Lab; excludes exhaustive model checks. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
-| `check:ci` | Hosted gate; currently omits only Quint-connected MBT. |
+| `check:all` | Bounded handoff gate for a frozen candidate, including non-browser Lab; excludes MBT and exhaustive model checks. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
+| `check:ci` | Hosted gate; MBT remains excluded pending #363. |
 
 ### Heavy-gate admission
 

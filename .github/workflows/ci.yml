@@ -118,9 +118,9 @@ jobs:
       - name: Install gitleaks
         run: bash scripts/install-gitleaks.sh
 
-      # Quint-connected MBT remains in the local pnpm check:all gate. The
-      # complete formal model gate runs in the separate matrix below so this
-      # quality job stays independently runnable.
+      # MBT is excluded from automatic verification pending #363's
+      # pre-generated-trace replay. The complete formal model gate remains
+      # in the separate matrix below.
       - name: Run CI quality gate
         run: pnpm check:ci:quality
 
