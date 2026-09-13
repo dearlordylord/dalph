@@ -12,6 +12,8 @@ import {
   EvidenceStoreLocator,
   GitCommand,
   GitCommonDirectoryLocator,
+  GithubIssueNodeId,
+  GithubRepositoryNodeId,
   JournalDatabaseLocator,
   OperationId
 } from "@dalph/orchestrator"
@@ -20,6 +22,22 @@ import { IntegratorCandidateWorktreeRoot, IntegratorPrivateStoreLocator } from "
 import { ProductionCodexStateDirectory, ProductionPlannedAttemptWorktreeRoot } from "./production-configuration.js"
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 import { ProductionConfigurationLocator } from "./production-cli.js"
+
+/** Correlates presentation registration with one original child spawn, even when an OS PID is reused. */
+export const HermeticRegistrationScopeId = Schema.NonEmptyString.pipe(Schema.brand("HermeticRegistrationScopeId"))
+export type HermeticRegistrationScopeId = typeof HermeticRegistrationScopeId.Type
+
+/** Exact public tracker specification supplied by the controlled qualification fixture, not a Codex prompt. */
+export const hermeticQualificationPublicTaskSpecification = {
+  title: "Hermetic task",
+  body: "Create the exact controlled qualification result."
+} as const
+
+/** Exact provider nodes initialized by the controlled fixture, not identities discovered from output. */
+export const hermeticQualificationTrackerIdentity = {
+  repositoryNodeId: GithubRepositoryNodeId.make("hermetic-repository"),
+  issueNodeId: GithubIssueNodeId.make("hermetic-issue")
+} as const
 
 const canonicalAbsolutePath = (subject: string) =>
   Schema.makeFilter<string>((value) => {

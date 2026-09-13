@@ -238,7 +238,7 @@ export {
   githubTrackerGraphReaderLayer,
   githubTrackerGraphReaderNodeLayer
 } from "./authorities/task-tracker/github/graph-reader.js"
-export { githubTaskIdFor } from "./authorities/task-tracker/github/task-identity.js"
+export { githubTaskIdFor, trackerRevisionFor } from "./authorities/task-tracker/github/task-identity.js"
 export {
   githubTrackerMutationLayer,
   githubTrackerMutationNodeLayer
@@ -430,6 +430,11 @@ export * from "./workflow/protocols/target-promotion/runtime.js"
 export { TargetPromotionRuntimeUnavailable } from "./coordination/delivery/target-promotion-boundary.js"
 export * from "./workflow/protocols/integration-finality/events.js"
 export * from "./workflow/protocols/integration-finality/completion-task-operation-identity.js"
+export { completionOriginalTaskClaimReleaseFor } from "./workflow/protocols/integration-finality/completion-claim.js"
+export {
+  completionTaskCandidateAncestryReadOperationIdFor,
+  completionTaskRequestLookupOperationIdFor
+} from "./workflow/protocols/integration-finality/completion-task-operation-identity.js"
 export * from "./workflow/protocols/integration-finality/protocol.js"
 export * from "./workflow/protocols/integration-finality/history.js"
 export * from "./workflow/protocols/integration-finality/state.js"
@@ -819,6 +824,7 @@ export {
   DeliveryProposalId,
   DeliveryProposalOrdinal,
   deliveryProposalOrderTaskId,
+  deliveryProposalIdOf,
   FreshDecisionPartitionInvalid,
   trackerGraphReadProposalOf
 } from "./coordination/delivery/delivery-action-proposal.js"

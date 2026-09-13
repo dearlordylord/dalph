@@ -1,9 +1,10 @@
+/* eslint-disable import/no-nodejs-modules -- Qualification hashes canonical records and binds them to the actual child PID. */
 import { NodeHttpClient } from "@effect/platform-node"
-import { PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
+import { EvidenceDigest, PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import { githubGraphqlClientLayer, type TargetPromotionGitRequest } from "@dalph/orchestrator"
 import { Effect, Layer, Schema, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
-import { BoundaryReached } from "./production-hermetic-contract.js"
+import { BoundaryReached, type HermeticRegistrationScopeId } from "./production-hermetic-contract.js"
 import { CodexAppServer, CodexAppServerFailure, CodexThreadWorkingDirectory } from "./codex-app-server.js"
 import {
   CodexOwnedTurnToken,
@@ -13,6 +14,11 @@ import {
   CodexTurnId
 } from "./codex-attempt-store.js"
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
+import { HermeticQualificationSourceRejected } from "./production-hermetic-qualification-attempt-source.js"
+import type { ValidatedHermeticRecordToken } from "./production-hermetic-qualification-source.js"
+import { encodeProductionCliRecord, type ProductionCliRecord } from "./production-cli.js"
+import { createHash } from "node:crypto"
+import nodeProcess from "node:process"
 
 type CodexAppServerOperation = CodexAppServerFailure["operation"]
 
@@ -40,6 +46,32 @@ export const HermeticControllerEndpoint = Schema.NonEmptyString.check(
   })
 ).pipe(Schema.brand("HermeticControllerEndpoint"))
 export type HermeticControllerEndpoint = typeof HermeticControllerEndpoint.Type
+
+/** Binds one validated canonical record to the actual registered child that will publish it. */
+export const HermeticExpectedRecordRegistration = Schema.Struct({
+  processId: Schema.Int.check(Schema.isGreaterThan(0)),
+  digest: EvidenceDigest
+})
+
+/** The existing public encoder defines the exact record bytes bound to one child. */
+export const hermeticCanonicalRecordDigest = (record: ProductionCliRecord): EvidenceDigest =>
+  EvidenceDigest.make(createHash("sha256").update(encodeProductionCliRecord(record)).digest("hex"))
+
+export const registerHermeticExpectedRecord = Effect.fn("HermeticProviderBridge.registerExpectedRecord")(function* (
+  endpoint: HermeticControllerEndpoint,
+  scopeId: HermeticRegistrationScopeId,
+  record: ValidatedHermeticRecordToken
+) {
+  const client = yield* HttpClient.HttpClient
+  const registration = HermeticExpectedRecordRegistration.make({ processId: nodeProcess.pid, digest: record.digest })
+  yield* HttpClientRequest.post(`${endpoint}/expected-record`).pipe(
+    HttpClientRequest.setHeader("x-dalph-registration-scope", scopeId),
+    HttpClientRequest.bodyJson(registration),
+    Effect.flatMap(client.execute),
+    Effect.flatMap(HttpClientResponse.filterStatusOk),
+    Effect.mapError(() => new HermeticQualificationSourceRejected())
+  )
+}, Effect.provide(NodeHttpClient.layerUndici))
 
 /** Only the existing Codex outer boundary methods cross this qualification transport. */
 export const HermeticCodexRequest = Schema.TaggedUnion({

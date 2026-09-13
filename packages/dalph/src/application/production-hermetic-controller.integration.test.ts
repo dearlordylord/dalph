@@ -1,27 +1,192 @@
+/* eslint-disable import/no-nodejs-modules -- Qualification selects an exact artifact outside Q and measures the actual source/lockfile locations. */
+import nodePath from "node:path"
+import { createHash } from "node:crypto"
 import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { GitCommitSha } from "@dalph/contracts"
+import { GitCommitSha, GitRepositoryLocator, makeTaskWorkSpecification } from "@dalph/contracts"
 import {
   GitCommand,
+  githubTaskIdFor,
   CompletionTaskRequest,
   JournalDatabaseLocator,
   JournalStore,
   nodeGitCommandLayer,
   sqliteJournalStoreLayer
 } from "@dalph/orchestrator"
-import { Context, Effect, Layer, MutableList, Queue, Schema } from "effect"
+import { Clock, Context, Effect, FileSystem, Layer, MutableList, Queue, Schema } from "effect"
 import { expect } from "vitest"
 import { createHermeticFixture } from "../../test-support/production-hermetic-fixture.js"
 import {
   makeHermeticController,
+  type HermeticController,
   type HermeticControllerFixture,
   type HermeticPublicChild
 } from "../../test-support/production-hermetic-controller.js"
 import { disposeHermeticFixture } from "../../test-support/production-hermetic-fixture-cleanup.js"
+import { cleanupDisposableGithubQualification } from "../../test-support/disposable-github-qualification-cleanup.js"
+import {
+  hermeticQualificationPublicTaskSpecification,
+  hermeticQualificationTrackerIdentity
+} from "./production-hermetic-contract.js"
+import {
+  completeQualificationEvidence,
+  ProductionMvpQualificationEvidence,
+  QualificationArtifactLocator
+} from "../../test-support/production-mvp-qualification-evidence.js"
+import { encodeProductionCliRecord } from "./production-cli.js"
 
 const builtEntry = new URL("../../dist/bin/production-hermetic-qualification.js", import.meta.url).pathname
 const fixtureLayer = nodeGitCommandLayer.pipe(Layer.provideMerge(NodeServices.layer), Layer.merge(NodeCrypto.layer))
-const sourceBaseSha = GitCommitSha.make("bf027ef1588d0ec0d0e749b812d6652343682c3b")
+const sourceBaseSha = GitCommitSha.make("06d1661f8a2af9a65022e3807643e3f58b5ab969")
+
+const publishEvidence = Effect.fn("HermeticQualification.publishEvidence")(function* (
+  fixture: HermeticControllerFixture,
+  controller: HermeticController,
+  scenario: ProductionMvpQualificationEvidence["scenario"],
+  startedAt: string,
+  children: ReadonlyArray<HermeticPublicChild>
+) {
+  const child = children.at(-1)
+  if (child === undefined) return yield* Effect.die("qualification requires its actual owned child")
+  const artifact = QualificationArtifactLocator.make(
+    nodePath.join(nodePath.dirname(fixture.container), `${fixture.manifest.invocationId}.qualification.json`)
+  )
+  const fs = yield* FileSystem.FileSystem
+  const git = yield* GitCommand
+  const sourceRepository = GitRepositoryLocator.make(
+    nodePath.resolve(new URL("../../../../", import.meta.url).pathname)
+  )
+  const lockfile = new URL("../../../../pnpm-lock.yaml", import.meta.url).pathname
+  const sourceHead = yield* git.runInWorktree(sourceRepository, ["rev-parse", "HEAD"])
+  expect(sourceHead.exitCode).toBe(0)
+  const digestOriginalFile = (locator: string) =>
+    fs.readFile(locator).pipe(Effect.map((bytes) => createHash("sha256").update(bytes).digest("hex")))
+  const originalDigests = {
+    builtEntryDigest: yield* digestOriginalFile(fixture.manifest.builtEntry),
+    lockfileDigest: yield* digestOriginalFile(lockfile),
+    configurationDigest: yield* digestOriginalFile(fixture.configurationPath)
+  }
+  const journal = yield* readJournal(fixture, child)
+  const finalRecord = journal.at(-1)
+  if (finalRecord === undefined) return yield* Effect.die("qualification requires its original committed journal")
+  const selected = yield* selectedOf(child)
+  const plans = journal.flatMap(({ event }) =>
+    event._tag === "TaskAttemptPlanned" ? [event.operation.plannedAttempt] : []
+  )
+  const firstPlan = plans[0]
+  if (firstPlan === undefined) return yield* Effect.die("qualification requires its original task attempt")
+  const termination = journal.findLast(({ event }) => event._tag === "WorkflowRunTerminated")
+  const acceptedResults = journal.flatMap(({ event }) =>
+    event._tag === "PlannedAttemptExecutorWorkReported" &&
+    event.report._tag === "ExecutorWorkTerminal" &&
+    event.report.result._tag === "Accepted"
+      ? [{ attemptId: event.report.correlation.attemptId, commit: event.report.result.acceptedResult.commit }]
+      : []
+  )
+  const sessions = journal.flatMap(({ event }) => (event._tag === "IntegratorSessionFixed" ? [event.correlation] : []))
+  const integratorRuns = journal.flatMap(({ event }) => (event._tag === "IntegratorRunStarted" ? [event.run] : []))
+  const promotions = journal.flatMap(({ event }) =>
+    event._tag === "TargetPromotionIntended" ? [event.correlation] : []
+  )
+  const originalTracker = yield* controller.finalTrackerFacts
+  const originalCreation = yield* controller.providerCreationManifest
+  const originalProcesses = yield* controller.processOutcomes
+  const originalBoundaries = MutableList.toArray(controller.boundaryLog)
+  const originalRecords = children.flatMap((owned) => MutableList.toArray(owned.recordLog))
+  const originalTranscriptDigest = createHash("sha256")
+    .update(originalRecords.map((record) => `${encodeProductionCliRecord(record)}\n`).join(""))
+    .digest("hex")
+  const originalTarget = yield* git.runInWorktree(fixture.manifest.repository, [
+    "rev-parse",
+    fixture.manifest.integrationRef
+  ])
+  expect(originalTarget.exitCode).toBe(0)
+  const outcome = yield* completeQualificationEvidence(fixture, controller, {
+    scenario,
+    startedAt,
+    sourceRepository,
+    lockfile,
+    children,
+    journal,
+    artifact
+  })
+  expect(outcome._tag).toBe("Published")
+  const evidence = outcome.evidence
+  const published = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ProductionMvpQualificationEvidence), {
+    reportInput: false,
+    onExcessProperty: "error"
+  })(yield* fs.readFileString(artifact))
+  expect(published).toEqual(evidence)
+  expect(published.build.sourceSha).toBe(sourceHead.stdout.trim())
+  expect(published.build).toMatchObject(originalDigests)
+  expect(published.fixture).toEqual(fixture.manifest)
+  expect(published.taskId).toBe(firstPlan.taskId)
+  expect(published.plannedAttempts).toEqual(plans)
+  expect(published.runs).toEqual([
+    termination?.event._tag === "WorkflowRunTerminated"
+      ? { _tag: "Terminated", runId: selected.runId, disposition: termination.event.disposition }
+      : { _tag: "Unfinished", runId: selected.runId }
+  ])
+  expect(published.processes).toEqual(originalProcesses)
+  expect(published.transcript).toEqual({ records: originalRecords, digest: originalTranscriptDigest })
+  expect(published.executor).toEqual(
+    acceptedResults.length === 0
+      ? { _tag: "NotReached", reason: "NoAcceptedExecutorResult" }
+      : { _tag: "Accepted", results: acceptedResults }
+  )
+  expect(published.integration).toEqual(
+    sessions.length === 0
+      ? { _tag: "NotReached", reason: "NoIntegratorSession" }
+      : { _tag: "Observed", sessions, runs: integratorRuns }
+  )
+  expect(published.promotion).toEqual(
+    promotions.length === 0
+      ? { _tag: "NotReached", reason: "NoPromotionRequest" }
+      : { _tag: "Observed", requests: promotions }
+  )
+  expect(published.journal).toEqual({
+    cursor: { runId: selected.runId, position: finalRecord.position },
+    positions: journal.map(({ position }) => position)
+  })
+  expect(published.boundaries).toEqual(originalBoundaries)
+  expect(published.finalTargetHead).toBe(originalTarget.stdout.trim())
+  expect(published.finalTracker).toEqual({
+    original: originalCreation,
+    issuePresent: originalTracker.issuePresent,
+    lifecycle: originalTracker.taskLifecycle,
+    claims: originalTracker.claims
+  })
+  expect(published.cleanupDisposition).toEqual(outcome.cleanupDisposition)
+  if (published.localCleanup._tag === "RetainedFixture") {
+    expect(outcome.cleanupDisposition._tag).toBe("QualificationCleanupIncomplete")
+    if (outcome.cleanupDisposition._tag === "QualificationCleanupIncomplete") {
+      expect(outcome.cleanupDisposition.github).toEqual(published.githubCleanup)
+      expect(outcome.cleanupDisposition.local).toEqual(published.localCleanup)
+      expect(outcome.cleanupDisposition.localInspectionCommands.map(({ resource }) => resource)).toEqual(
+        published.localCleanup.retained
+      )
+      for (const { command, resource } of outcome.cleanupDisposition.localInspectionCommands) {
+        expect(fixture.creation.createdResources).toContainEqual(resource)
+        expect(command).toContain("lstatSync(process.argv[1])")
+        expect(command).toContain(`-- '${resource.locator}'`)
+      }
+    }
+  } else {
+    expect(outcome.cleanupDisposition).toEqual({
+      _tag: "QualificationCleanupComplete",
+      retainedContainer: fixture.container,
+      reason: "EmptyDisposableContainerIntentionallyRetained"
+    })
+  }
+  expect(evidence.build.sourceBaseSha).toBe(sourceBaseSha)
+  expect(evidence.build.sourceSha).not.toBe(fixture.manifest.baseSha)
+  expect(evidence.formal).toEqual({ _tag: "NotSupplied", reason: "LocalHermeticInvocation" })
+  expect(evidence.githubCleanup.retained).toEqual([])
+  expect(evidence.githubCleanup.removed.some((resource) => resource._tag === "Issue")).toBe(true)
+  expect(yield* controller.activeRequestCount).toBe(0)
+  expect(yield* controller.activeRegistrationCount).toBe(0)
+  return evidence.localCleanup
+})
 
 const selectedOf = Effect.fn("HermeticQualification.selectedRun")(function* (child: HermeticPublicChild) {
   const selected = MutableList.toArray(child.recordLog).find((record) => record._tag === "RunSelected")
@@ -57,10 +222,154 @@ const closeCount = (counts: ReadonlyArray<{ readonly tag: string; readonly count
   counts.find(({ tag }) => tag === "CloseIssue")?.count ?? 0
 
 it.live(
+  "rejects the changed original tracker source before unsafe publication and retains its changed creation identity after joined teardown",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* createHermeticFixture(builtEntry, sourceBaseSha)
+        const controller = yield* makeHermeticController(fixture, { _tag: "Unpaused" })
+        const original = yield* controller.providerCreationManifest
+        const specification = makeTaskWorkSpecification({
+          taskId: githubTaskIdFor(
+            hermeticQualificationTrackerIdentity.repositoryNodeId,
+            hermeticQualificationTrackerIdentity.issueNodeId
+          ),
+          title: hermeticQualificationPublicTaskSpecification.title,
+          body: "qualification-private-source-sentinel"
+        })
+        yield* controller.setPublicTaskSpecification(specification)
+        const child = yield* controller.startChild()
+        expect(yield* controller.awaitChild(child).pipe(Effect.timeout("20 seconds"))).toBe(1)
+        const records = MutableList.toArray(child.recordLog)
+        expect(JSON.stringify(records).includes(specification.body)).toBe(false)
+        expect(JSON.stringify(records).includes(specification.fingerprint)).toBe(false)
+        expect(records.some((record) => record._tag === "Failure")).toBe(false)
+        const stderr = MutableList.toArray(child.stderrLog)
+          .map((bytes) => new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes))
+          .join("")
+        expect(stderr === "Dalph failed because of an unexpected runtime defect.\n").toBe(true)
+        yield* controller.stopTransport
+        expect(yield* controller.ownedChildrenStopped).toBe(true)
+        expect(yield* controller.activeRequestCount).toBe(0)
+        expect(yield* controller.activeRegistrationCount).toBe(0)
+        const journal = yield* readJournal(fixture, child)
+        expect(journal.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+        const githubCleanup = yield* cleanupDisposableGithubQualification(
+          original,
+          { invocationId: fixture.manifest.invocationId, repository: original.repository },
+          controller.githubCleanupAdapter
+        )
+        const issue = original.resources.find((resource) => resource._tag === "Issue")
+        expect(issue).toBeDefined()
+        const retainedIssue = githubCleanup.retained.filter(({ resource }) => resource._tag === "Issue")
+        expect(retainedIssue).toHaveLength(1)
+        expect(retainedIssue[0]?.resource).toBe(issue)
+        expect(retainedIssue[0]?.reason).toBe("ChangedIdentity")
+        expect(githubCleanup.removed.some((resource) => resource._tag === "Issue")).toBe(false)
+        expect((yield* controller.finalTrackerFacts).issuePresent).toBe(true)
+        expect(yield* controller.providerCreationManifest).toEqual(original)
+        const localCleanup = yield* disposeHermeticFixture(fixture, controller)
+        expect(localCleanup).toEqual({
+          _tag: "RetainedFixture",
+          cause: { _tag: "UnfinishedRun" },
+          retained: fixture.creation.createdResources,
+          removed: [],
+          retainedContainer: fixture.container
+        })
+        expect(yield* controller.processOutcomes).toEqual([{ _tag: "Exit", processId: child.handle.pid, status: 1 }])
+        const counts = (yield* controller.providerSnapshot).operationCounts
+        expect(counts.find(({ tag }) => tag === "QualificationReadIssue")?.count).toBe(1)
+        expect(counts.find(({ tag }) => tag === "QualificationDeleteIssue")).toBeUndefined()
+        expect(counts.find(({ tag }) => tag === "CodexStartTurn")).toBeUndefined()
+      })
+    ).pipe(Effect.provide(fixtureLayer)),
+  { timeout: 60_000 }
+)
+
+it.live(
+  "artifact write failure after actual cleanup retains the original Run, process and exact cleanup receipts without retry",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const startedAt = yield* Clock.currentTimeMillis.pipe(Effect.map((millis) => new Date(millis).toISOString()))
+        const fixture = yield* createHermeticFixture(builtEntry, sourceBaseSha)
+        const controller = yield* makeHermeticController(fixture, { _tag: "Unpaused" })
+        const child = yield* controller.startChild()
+        expect(yield* controller.awaitChild(child).pipe(Effect.timeout("20 seconds"))).toBe(0)
+        const journal = yield* readJournal(fixture, child)
+        const selected = yield* selectedOf(child)
+        const snapshot = yield* controller.providerSnapshot
+        const artifact = QualificationArtifactLocator.make(
+          nodePath.join(
+            nodePath.dirname(fixture.container),
+            `${fixture.manifest.invocationId}-missing`,
+            "qualification.json"
+          )
+        )
+        const fs = yield* FileSystem.FileSystem
+        expect(yield* fs.exists(nodePath.dirname(artifact))).toBe(false)
+        const outcome = yield* completeQualificationEvidence(fixture, controller, {
+          scenario: "ProductionHappy",
+          startedAt,
+          sourceRepository: GitRepositoryLocator.make(
+            nodePath.resolve(new URL("../../../../", import.meta.url).pathname)
+          ),
+          lockfile: new URL("../../../../pnpm-lock.yaml", import.meta.url).pathname,
+          children: [child],
+          journal,
+          artifact
+        })
+        expect(outcome._tag).toBe("PublicationFailed")
+        expect(Object.hasOwn(outcome, "artifact")).toBe(false)
+        expect(outcome.cleanupDisposition._tag).toBe("QualificationCleanupIncomplete")
+        if (outcome.cleanupDisposition._tag === "QualificationCleanupIncomplete") {
+          expect(outcome.cleanupDisposition.github).toEqual(outcome.evidence.githubCleanup)
+          expect(outcome.cleanupDisposition.local).toEqual(outcome.evidence.localCleanup)
+          expect(outcome.cleanupDisposition.localInspectionCommands.map(({ resource }) => resource)).toEqual(
+            fixture.creation.createdResources
+          )
+        }
+        if (outcome._tag === "PublicationFailed") {
+          expect(outcome.failure.operation).toBe("WriteArtifact")
+          expect(JSON.parse(JSON.stringify(outcome.failure))).toEqual({
+            operation: "WriteArtifact",
+            _tag: "QualificationEvidenceFailure"
+          })
+        }
+        expect(yield* fs.exists(artifact)).toBe(false)
+        expect(outcome.evidence.runs).toEqual([{ _tag: "Terminated", runId: selected.runId, disposition: "Completed" }])
+        expect(outcome.evidence.processes).toEqual([{ _tag: "Exit", processId: child.handle.pid, status: 0 }])
+        expect(outcome.evidence.githubCleanup.removed.filter((resource) => resource._tag === "Issue")).toHaveLength(1)
+        expect(outcome.evidence.githubCleanup.retained).toEqual([])
+        expect(outcome.evidence.localCleanup).toEqual({
+          _tag: "RetainedFixture",
+          cause: {
+            _tag: "ChangedIdentity",
+            resource: { _tag: "PrivateStore", locator: fixture.manifest.privateStore }
+          },
+          retained: fixture.creation.createdResources,
+          removed: [],
+          retainedContainer: fixture.container
+        })
+        const after = yield* controller.providerSnapshot
+        expect(closeCount(after.operationCounts)).toBe(closeCount(snapshot.operationCounts))
+        expect(after.operationCounts.find(({ tag }) => tag === "QualificationDeleteIssue")?.count).toBe(1)
+        expect(after.operationCounts.find(({ tag }) => tag === "QualificationReadIssue")?.count).toBe(2)
+        expect(yield* controller.providerSnapshot).toEqual(after)
+        expect(yield* controller.activeRequestCount).toBe(0)
+        expect(yield* controller.activeRegistrationCount).toBe(0)
+        expect(yield* controller.ownedChildrenStopped).toBe(true)
+      })
+    ).pipe(Effect.provide(fixtureLayer)),
+  { timeout: 60_000 }
+)
+
+it.live(
   "built hermetic production CLI uses real SQLite and local Git with controlled outer providers",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
+        const startedAt = yield* Clock.currentTimeMillis.pipe(Effect.map((millis) => new Date(millis).toISOString()))
         const fixture = yield* createHermeticFixture(builtEntry, sourceBaseSha)
         const controller = yield* makeHermeticController(fixture, {
           _tag: "PauseAt",
@@ -118,7 +427,7 @@ it.live(
         )
         expect(acceptedCommits).toHaveLength(1)
         expect(parents.stdout.trim().split(" ")).toEqual([fixture.manifest.baseSha, acceptedCommits[0]])
-        const disposal = yield* disposeHermeticFixture(fixture, controller)
+        const disposal = yield* publishEvidence(fixture, controller, "ProductionHappy", startedAt, [child])
         expect(yield* controller.activeRequestCount).toBe(0)
         expect(disposal._tag).toBe("RetainedFixture")
         if (disposal._tag === "RetainedFixture") {
@@ -136,6 +445,7 @@ it.live(
   () =>
     Effect.scoped(
       Effect.gen(function* () {
+        const startedAt = yield* Clock.currentTimeMillis.pipe(Effect.map((millis) => new Date(millis).toISOString()))
         const fixture = yield* createHermeticFixture(builtEntry, sourceBaseSha)
         const controller = yield* makeHermeticController(fixture, { _tag: "PauseAt", boundary: "CompletionResponse" })
         const first = yield* controller.startChild()
@@ -155,7 +465,9 @@ it.live(
         const journal = yield* readJournal(fixture, second)
         expect(journal.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
         expect(journal.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toHaveLength(1)
-        expect((yield* disposeHermeticFixture(fixture, controller))._tag).toBe("RetainedFixture")
+        expect(
+          (yield* publishEvidence(fixture, controller, "CompletionResponse", startedAt, [first, second]))._tag
+        ).toBe("RetainedFixture")
         expect(yield* controller.activeRequestCount).toBe(0)
       })
     ).pipe(Effect.provide(fixtureLayer)),
@@ -167,6 +479,7 @@ it.live(
   () =>
     Effect.scoped(
       Effect.gen(function* () {
+        const startedAt = yield* Clock.currentTimeMillis.pipe(Effect.map((millis) => new Date(millis).toISOString()))
         const fixture = yield* createHermeticFixture(builtEntry, sourceBaseSha)
         const controller = yield* makeHermeticController(fixture, {
           _tag: "PauseAt",
@@ -228,7 +541,9 @@ it.live(
         ])
         expect(after.stdout.trim()).toBe(foreignHead)
         expect(closeCount((yield* controller.providerSnapshot).operationCounts)).toBe(0)
-        expect((yield* disposeHermeticFixture(fixture, controller))._tag).toBe("RetainedFixture")
+        expect(
+          (yield* publishEvidence(fixture, controller, "PromotionCompareAndSet", startedAt, [child, second]))._tag
+        ).toBe("RetainedFixture")
       })
     ).pipe(Effect.provide(fixtureLayer)),
   { timeout: 60_000 }
@@ -239,6 +554,7 @@ it.live(
   () =>
     Effect.scoped(
       Effect.gen(function* () {
+        const startedAt = yield* Clock.currentTimeMillis.pipe(Effect.map((millis) => new Date(millis).toISOString()))
         const fixture = yield* createHermeticFixture(builtEntry, sourceBaseSha)
         const controller = yield* makeHermeticController(fixture, { _tag: "PauseAt", boundary: "CompletionThrottle" })
         yield* controller.setCompletionResponse("Throttled")
@@ -353,7 +669,7 @@ it.live(
         )
         expect(recovered.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
         expect(recovered.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
-        const disposal = yield* disposeHermeticFixture(fixture, controller)
+        const disposal = yield* publishEvidence(fixture, controller, "CompletionThrottle", startedAt, [first, second])
         expect(disposal._tag).toBe("RetainedFixture")
         if (disposal._tag === "RetainedFixture") expect(disposal.cause._tag).toBe("UnfinishedRun")
         expect(yield* controller.activeRequestCount).toBe(0)

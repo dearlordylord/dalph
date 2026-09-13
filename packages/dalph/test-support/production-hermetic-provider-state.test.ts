@@ -1,14 +1,20 @@
-import { NodeServices } from "@effect/platform-node"
+import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { GitCommitSha } from "@dalph/contracts"
-import { GitCommand, nodeGitCommandLayer } from "@dalph/orchestrator"
+import { GitCommitSha, makeTaskWorkSpecification } from "@dalph/contracts"
+import { GitCommand, githubTaskIdFor, nodeGitCommandLayer } from "@dalph/orchestrator"
 import { Deferred, Effect, Exit, FileSystem, Fiber, Layer, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import { CodexOwnedTurnToken, CodexThreadOwnershipToken } from "../src/application/codex-attempt-store.js"
 import { decodeProductionRepositoryHostConfiguration } from "../src/application/production-configuration.js"
 import { makeHermeticProviderState } from "./production-hermetic-provider-state.js"
+import {
+  HermeticInvocationId,
+  hermeticQualificationPublicTaskSpecification,
+  hermeticQualificationTrackerIdentity
+} from "../src/application/production-hermetic-contract.js"
 
-const fixtureLayer = nodeGitCommandLayer.pipe(Layer.provideMerge(NodeServices.layer))
+const fixtureLayer = nodeGitCommandLayer.pipe(Layer.provideMerge(NodeServices.layer), Layer.merge(NodeCrypto.layer))
+const invocationId = HermeticInvocationId.make("q-provider-evidence")
 
 const setup = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
@@ -60,14 +66,68 @@ const request = (operation: string, variables: Readonly<Record<string, unknown>>
   variables
 })
 
+it.effect(
+  "keeps the original issue receipt while the actual tracker source and fresh ownership fingerprint change",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { configuration } = yield* setup
+        const provider = yield* makeHermeticProviderState(configuration, () => Effect.void, invocationId)
+        const original = yield* provider.creationManifest
+        const issue = original.resources.find((resource) => resource._tag === "Issue")
+        if (issue === undefined) return yield* Effect.die("the actual issue creation receipt must exist")
+        expect(yield* provider.cleanupAdapter.readResource(original.repository, issue)).toEqual({
+          _tag: "Present",
+          resource: issue
+        })
+        const specification = makeTaskWorkSpecification({
+          taskId: githubTaskIdFor(
+            hermeticQualificationTrackerIdentity.repositoryNodeId,
+            hermeticQualificationTrackerIdentity.issueNodeId
+          ),
+          title: hermeticQualificationPublicTaskSpecification.title,
+          body: "qualification-private-source-sentinel"
+        })
+        yield* provider.setPublicTaskSpecification(specification)
+        const response = yield* provider.github(request("ReadTaskWorkSpecification", { issueNodeId: issue.nodeId }))
+        expect(response).toEqual({
+          status: 200,
+          body: {
+            data: {
+              node: {
+                __typename: "Issue",
+                id: issue.nodeId,
+                repository: { id: original.repository.nodeId },
+                title: specification.title,
+                body: specification.body
+              }
+            }
+          }
+        })
+        const observed = yield* provider.cleanupAdapter.readResource(original.repository, issue)
+        expect(observed._tag).toBe("Present")
+        if (observed._tag === "Present") {
+          expect(observed.resource.nodeId).toBe(issue.nodeId)
+          expect(observed.resource.fingerprint).not.toBe(issue.fingerprint)
+          expect(JSON.stringify(observed).includes(specification.body)).toBe(false)
+        }
+        expect((yield* provider.creationManifest).resources[0]).toBe(issue)
+        expect(yield* provider.creationManifest).toEqual(original)
+        expect((yield* provider.finalTrackerFacts).issuePresent).toBe(true)
+      })
+    ).pipe(Effect.provide(fixtureLayer))
+)
+
 it.effect("keeps exact claims and applied completion in parent state while the response is withheld", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const { configuration } = yield* setup
       const reached = yield* Deferred.make<void>()
       const release = yield* Deferred.make<void>()
-      const provider = yield* makeHermeticProviderState(configuration, () =>
-        Deferred.succeed(reached, undefined).pipe(Effect.andThen(Deferred.await(release)))
+      const provider = yield* makeHermeticProviderState(
+        configuration,
+        () => Deferred.succeed(reached, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        invocationId
       )
       expect(
         (yield* provider.github(request("ResolveIssue", { owner: "hermetic", repository: "fixture", issueNumber: 1 })))
@@ -96,6 +156,15 @@ it.effect("keeps exact claims and applied completion in parent state while the r
           operationId: "completion-one"
         })
       )
+      const originals = yield* provider.creationManifest
+      expect(originals.invocationId).toBe(invocationId)
+      expect(originals.resources.map(({ _tag, nodeId }) => ({ _tag, nodeId }))).toEqual([
+        { _tag: "Issue", nodeId: "hermetic-issue" },
+        { _tag: "Label", nodeId: "hermetic-label:claim-one" },
+        { _tag: "Label", nodeId: "hermetic-label:completion-one" }
+      ])
+      expect(JSON.stringify(originals)).not.toContain("exact claim")
+      expect(JSON.stringify(originals)).not.toContain("exact completion")
       const closing = yield* provider
         .github(request("CloseIssue", { issueNodeId: "hermetic-issue", operationId: "close-one" }))
         .pipe(Effect.forkScoped)
@@ -133,6 +202,18 @@ it.effect("keeps exact claims and applied completion in parent state while the r
         )).body
       ).toEqual({ data: { node: { id: "hermetic-repository", label: null } } })
       expect(yield* provider.snapshot()).toMatchObject({ activeClaimCount: 0, completionClaimCount: 0 })
+      expect(yield* provider.creationManifest).toEqual(originals)
+      expect((yield* provider.finalTrackerFacts).claims).toEqual([])
+      for (const resource of originals.resources) {
+        const observed = yield* provider.cleanupAdapter.readResource(originals.repository, resource)
+        expect(observed._tag).toBe(resource._tag === "Issue" ? "Present" : "Absent")
+      }
+      const issue = originals.resources.find((resource) => resource._tag === "Issue")
+      expect(issue).toBeDefined()
+      if (issue === undefined) return yield* Effect.die("the original issue receipt must be retained")
+      yield* provider.cleanupAdapter.deleteResource(originals.repository, issue)
+      expect(yield* provider.cleanupAdapter.readResource(originals.repository, issue)).toEqual({ _tag: "Absent" })
+      expect(yield* provider.creationManifest).toEqual(originals)
     })
   ).pipe(Effect.provide(fixtureLayer))
 )
@@ -144,11 +225,14 @@ it.effect("returns one actual HTTP throttle response without closing and rejects
       const boundaries = yield* Ref.make<ReadonlyArray<string>>([])
       const reached = yield* Deferred.make<void>()
       const release = yield* Deferred.make<void>()
-      const provider = yield* makeHermeticProviderState(configuration, (boundary) =>
-        Ref.update(boundaries, (values) => [...values, boundary._tag]).pipe(
-          Effect.andThen(Deferred.succeed(reached, undefined)),
-          Effect.andThen(Deferred.await(release))
-        )
+      const provider = yield* makeHermeticProviderState(
+        configuration,
+        (boundary) =>
+          Ref.update(boundaries, (values) => [...values, boundary._tag]).pipe(
+            Effect.andThen(Deferred.succeed(reached, undefined)),
+            Effect.andThen(Deferred.await(release))
+          ),
+        invocationId
       )
       yield* provider.setCompletionResponse("Throttled")
       const throttled = yield* provider
@@ -177,7 +261,7 @@ it.effect("creates real accepted and two-parent candidate commits through owned 
   Effect.scoped(
     Effect.gen(function* () {
       const { configuration, head, repository, runGit } = yield* setup
-      const provider = yield* makeHermeticProviderState(configuration, () => Effect.void)
+      const provider = yield* makeHermeticProviderState(configuration, () => Effect.void, invocationId)
       const worktree = `${configuration.plannedAttemptWorktreeRoot}/task-one`
       const candidate = `${configuration.integratorCandidateWorktreeRoot}/candidate-one`
       yield* runGit(repository, ["worktree", "add", "-b", "task-one", worktree, head])
