@@ -132,7 +132,17 @@ const fixture = () => {
   add(
     serverId,
     helperObligationId,
-    { executable: "java", args: ["-jar", "apalache.jar", "server", "--port=34567"], acceptedExitCodes: [0] },
+    {
+      executable: "java",
+      args: [
+        "-jar",
+        "apalache.jar",
+        `--out-dir=${join(runDirectory, "owned-server-output", helperObligationId)}`,
+        "server",
+        "--port=34567"
+      ],
+      acceptedExitCodes: [0]
+    },
     "cancelled"
   )
   const stopPath = join(runDirectory, "owned-server-stops", `${serverId}.json`)
@@ -325,4 +335,29 @@ test("historical handoff success remains valid after a later failed force attemp
     assert.equal(recorded.attemptId, original.attemptId)
     rmSync(f.execution.reportPath)
     assert.throws(() => readReferencedFormalSuccess({ recordPath: original.recordPath, worktree: f.location.worktree }))
+  }))
+
+test("wrong owned-server output destination cannot attest complete success", () =>
+  withFixture((f) => {
+    const attempt = beginFormalAttempt(f.options)
+    const id = f.report.serverEvidence.obligationId
+    const paths = ["obligations", "receipts"].map((directory) => join(f.location.runDirectory, directory, `${id}.json`))
+    const records = paths.map((path) => JSON.parse(readFileSync(path, "utf8")))
+    for (const destination of [
+      undefined,
+      join(f.location.worktree, "_apalache-out"),
+      join(f.location.runDirectory, "owned-server-output", newIdentity())
+    ]) {
+      for (const [index, path] of paths.entries()) {
+        const original = records[index]
+        const args = original.command.args.filter((argument) => !argument.startsWith("--out-dir="))
+        if (destination !== undefined) args.splice(2, 0, `--out-dir=${destination}`)
+        atomicRecord(path, { ...original, command: { ...original.command, args } })
+      }
+      assert.throws(
+        () => publishFormalSuccess({ attempt, execution: f.execution, observation: f.observation }),
+        /Owned server installed command changed/u
+      )
+      assert.equal(readFormalSuccess(f.options).status, "miss")
+    }
   }))

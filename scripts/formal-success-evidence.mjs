@@ -243,6 +243,7 @@ export const validateFormalExecution = ({ attempt, execution }) => {
         ...attempt.identity.toolchain.javaArguments,
         "-jar",
         attempt.identity.toolchain.apalacheJar,
+        `--out-dir=${join(attempt.runDirectory, "owned-server-output", execution.helperObligationId)}`,
         "server",
         `--port=${endpointMatch[1]}`
       ]),

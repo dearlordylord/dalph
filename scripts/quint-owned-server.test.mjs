@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -10,6 +10,9 @@ import { ownedQuintServerEnvironment } from "./quint-owned-server.mjs"
 
 const wrapper = fileURLToPath(new URL("./with-gate-slot.mjs", import.meta.url))
 const helper = new URL("./quint-owned-server.mjs", import.meta.url).href
+const inputGuard = new URL("./gate-resume-inputs.mjs", import.meta.url).href
+const boundedCommand = new URL("./run-bounded-command.mjs", import.meta.url).href
+const custodyModule = new URL("./gate-custody-records.mjs", import.meta.url).href
 const fixture = (mode) => {
   const root = mkdtempSync(join(tmpdir(), "dalph-owned-quint-"))
   const git = (...args) => {
@@ -35,6 +38,12 @@ const fixture = (mode) => {
   writeFileSync(
     server,
     `import {createServer} from 'node:net';
+import {mkdirSync,writeFileSync} from 'node:fs';import {join} from 'node:path';
+if(${JSON.stringify(mode.startsWith("output-route"))}){
+ const outputArgument=process.argv.find(argument=>argument.startsWith('--out-dir='));
+ const output=join(outputArgument?outputArgument.slice('--out-dir='.length):'_apalache-out','server','fresh-session');
+ mkdirSync(output,{recursive:true});writeFileSync(join(output,'diagnostics.log'),'fresh server diagnostics');
+}
 const port=Number(process.argv.find(a=>a.startsWith('--port=')).slice(7));
 const server=createServer(socket=>{socket.write('owned');socket.on('data',data=>{if(data.toString()==='die'){socket.end();server.close(()=>process.exit(9));}})});
 server.listen(port,'127.0.0.1');
@@ -47,6 +56,9 @@ process.on('SIGTERM',()=>server.close(()=>process.exit(0)));
     `import {withOwnedQuintServer} from ${JSON.stringify(helper)};
 import {createServer,connect} from 'node:net';
 import {writeFileSync} from 'node:fs';
+import {startInputGuard} from ${JSON.stringify(inputGuard)};
+import {runBoundedCommand} from ${JSON.stringify(boundedCommand)};
+import {inheritedCustody} from ${JSON.stringify(custodyModule)};
 const mode=${JSON.stringify(mode)};
 const ambient=createServer(socket=>socket.end('ambient'));
 await new Promise(resolve=>ambient.listen(0,'127.0.0.1',resolve));
@@ -57,13 +69,18 @@ const controller=new AbortController();
 const boundaries={assertPrerequisites:()=>{if(mode==='prerequisite-failure')throw Error('missing patched owned-server readiness');},readiness:async({port})=>{if(mode==='readiness-timeout')await new Promise(()=>{});if(mode==='readiness-failure')throw Error('fixture reflection refused');if(await exchange(port)!=='owned')throw Error('wrong readiness responder');}};
 if(mode==='ownership-failure')boundaries.reservePort=async()=>ambientPort;
 if(mode==='shutdown-failure')boundaries.listeningSockets=()=>[{family:'tcp',address:'fixture',inode:'retained'}];
-let result,error;
+let result,error,qualification,qualificationError;
+if(mode==='output-route-old')boundaries.runBoundedCommand=options=>runBoundedCommand({...options,args:options.args.filter(argument=>!argument.startsWith('--out-dir='))});
+const guard=mode.startsWith('output-route')?await startInputGuard({worktree:process.cwd(),effectiveEnvironment:process.env,generatedOutputRoots:[inheritedCustody().run.reportDirectory],logicalInvocation:{mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:process.env.DALPH_COVERAGE_BASE_SHA,stageManifest:[],toolExecutables:[]}}):undefined;
 try{result=await withOwnedQuintServer({javaExecutable:process.execPath,javaArguments:[${JSON.stringify(server)},mode==='wrong-java-home'?'-Duser.home=/forged':${JSON.stringify("-Duser.home=" + root)}],javaUserHome:mode==='missing-java-home'?undefined:${JSON.stringify(root)},apalacheJar:'fixture-identified-jar',environment:{...process.env,DALPH_QUINT_OWNED_SERVER_ENDPOINT:'caller-forged:8822',DALPH_QUINT_JAVA_EXECUTABLE:'/caller-forged/java',DALPH_QUINT_JAVA_USER_HOME:'/caller-forged/home'},remainingExecutionMilliseconds:()=>mode==='readiness-timeout'?400:5000,terminationGraceMilliseconds:50,processGroupAbsenceTimeoutMilliseconds:1000,boundaries,signal:controller.signal,runProfile:async({serverEndpoint,environment,signal})=>{checks++;if(mode==='interruption'){await new Promise((resolve,reject)=>{signal.addEventListener('abort',()=>reject(Error('profile interrupted')),{once:true});controller.abort(Error('fixture interrupted'));});}if(environment.DALPH_QUINT_OWNED_SERVER_ENDPOINT!==serverEndpoint||environment.DALPH_QUINT_JAVA_EXECUTABLE!==process.execPath||environment.DALPH_QUINT_JAVA_USER_HOME!==${JSON.stringify(root)})throw Error('caller transport retained');if(mode==='early-death'){await exchange(Number(serverEndpoint.split(':')[1]),'die');await new Promise((resolve,reject)=>{signal.addEventListener('abort',()=>reject(Error('profile cancelled on server death')),{once:true});});}return {obligations:1};}});}catch(e){error=e.message;}
+try{if(guard)qualification=await guard.finish();}catch(e){qualificationError=e.message;}finally{await guard?.close();}
 const ambientReply=await exchange(ambientPort);
 await new Promise(resolve=>ambient.close(resolve));
-writeFileSync(${JSON.stringify(join(root, ".scratch", "result.json"))},JSON.stringify({result,error,checks,ambientReply}));
-if(mode==='success'&&!result)throw Error(error);
-if(mode!=='success'&&!error)throw Error('failure fixture incorrectly qualified');
+writeFileSync(${JSON.stringify(join(root, ".scratch", "result.json"))},JSON.stringify({result,error,checks,ambientReply,qualification,qualificationError,cwd:process.cwd()}));
+if((mode==='success'||mode.startsWith('output-route'))&&!result)throw Error(error);
+if(mode==='output-route'&&qualificationError)throw Error(qualificationError);
+if(mode==='output-route-old'&&!qualificationError)throw Error('old output route incorrectly qualified');
+if(mode!=='success'&&!mode.startsWith('output-route')&&!error)throw Error('failure fixture incorrectly qualified');
 `
   )
   const environment = withoutInheritedCustody(process.env)
@@ -79,7 +96,7 @@ if(mode!=='success'&&!error)throw Error('failure fixture incorrectly qualified')
     encoding: "utf8",
     timeout: 15000
   })
-  assert.equal(processResult.status, 0, processResult.stdout + processResult.stderr)
+  assert.equal(processResult.status, mode === "output-route-old" ? 1 : 0, processResult.stdout + processResult.stderr)
   const result = JSON.parse(readFileSync(join(root, ".scratch", "result.json")))
   const location = repositoryLocation(root)
   const runs = readdirSync(join(location.custodyRoot, "runs"))
@@ -87,7 +104,7 @@ if(mode!=='success'&&!error)throw Error('failure fixture incorrectly qualified')
   const receipts = readdirSync(join(runDirectory, "receipts")).map((file) =>
     JSON.parse(readFileSync(join(runDirectory, "receipts", file)))
   )
-  return { result, receipts, runDirectory, cleanup: () => rmSync(root, { recursive: true, force: true }) }
+  return { root, result, receipts, runDirectory, cleanup: () => rmSync(root, { recursive: true, force: true }) }
 }
 
 test("replaces caller authored owned-server transport metadata", () => {
@@ -271,6 +288,51 @@ test("Java arguments with another user.home refuse server launch", () => {
     assert.match(f.result.error, /arguments do not enforce the identified user.home/u)
     assert.equal(f.result.checks, 0)
     assert.equal(f.receipts.filter((r) => r.command.name.startsWith("owned Apalache server")).length, 0)
+  } finally {
+    f.cleanup()
+  }
+})
+
+// Fresh output must respect the same candidate observer that surrounds handoff.
+// Only the native socket child replaces Java; custody and observation are real.
+test("fresh owned server output stays in its admitted helper directory without changing candidate inputs", () => {
+  const f = fixture("output-route")
+  try {
+    assert.equal(f.result.cwd, f.root)
+    assert.equal(f.result.checks, 1)
+    assert.equal(f.result.qualification.unchanged, true)
+    const serverReceipt = f.result.result.serverEvidence.receipt
+    const obligation = JSON.parse(
+      readFileSync(join(f.runDirectory, "obligations", serverReceipt.obligationId + ".json"))
+    )
+    const output = join(f.runDirectory, "owned-server-output", obligation.parentId)
+    assert.equal(serverReceipt.command.cwd, f.root)
+    assert.equal(serverReceipt.command.args.filter((argument) => argument.startsWith("--out-dir=")).length, 1)
+    assert.ok(serverReceipt.command.args.indexOf("--out-dir=" + output) < serverReceipt.command.args.indexOf("server"))
+    assert.equal(
+      readFileSync(join(output, "server", "fresh-session", "diagnostics.log"), "utf8"),
+      "fresh server diagnostics"
+    )
+    assert.equal(existsSync(join(f.root, "_apalache-out")), false)
+    assert.equal(serverReceipt.groupAbsent, true)
+  } finally {
+    f.cleanup()
+  }
+})
+
+test("dropping only the owned server output argument makes native candidate observation refuse fresh qualification", () => {
+  const f = fixture("output-route-old")
+  try {
+    assert.equal(f.result.result.serverEvidence.receipt.groupAbsent, true)
+    assert.equal(f.result.checks, 1)
+    assert.equal(f.result.cwd, f.root)
+    assert.match(f.result.qualificationError, /dirty:.*_apalache-out/u)
+    assert.equal(f.result.qualification, undefined)
+    assert.equal(existsSync(join(f.root, "_apalache-out", "server", "fresh-session", "diagnostics.log")), true)
+    assert.equal(
+      f.result.result.serverEvidence.receipt.command.args.some((argument) => argument.startsWith("--out-dir=")),
+      false
+    )
   } finally {
     f.cleanup()
   }

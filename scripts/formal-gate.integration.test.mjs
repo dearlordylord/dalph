@@ -61,7 +61,7 @@ export const withOwnedQuintServer=async({environment,remainingExecutionMilliseco
  const name='controlled invocation-owned server'
  const controller=new AbortController()
  const serverEndpoint='127.0.0.1:34567'
- const promise=runBoundedCommand({executable:javaExecutable,args:[...javaArguments,'-jar',apalacheJar,'server','--port=34567'],
+ const promise=runBoundedCommand({executable:javaExecutable,args:[...javaArguments,'-jar',apalacheJar,'--out-dir='+join(context.runDirectory,'owned-server-output',context.parentId),'server','--port=34567'],
  environment:{...environment,DALPH_FIXTURE_SERVER_READY:ready},name,signal:controller.signal,captureOutput:true,forwardOutput:false,
  timeoutMilliseconds:remainingExecutionMilliseconds(name),terminationGraceMilliseconds:5000,
  processGroupAbsenceTimeoutMilliseconds:2000}).catch(error=>error)

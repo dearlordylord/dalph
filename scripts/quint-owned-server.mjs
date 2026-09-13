@@ -215,7 +215,16 @@ export const withOwnedQuintServer = async ({
   const serverPromise = boundaries
     .runBoundedCommand({
       executable: javaExecutable,
-      args: [...javaArguments, "-jar", apalacheJar, "server", `--port=${port}`],
+      // Apalache otherwise writes _apalache-out in the observed checkout.
+      // The original admitted helper owns these generated diagnostics.
+      args: [
+        ...javaArguments,
+        "-jar",
+        apalacheJar,
+        `--out-dir=${join(context.runDirectory, "owned-server-output", context.parentId)}`,
+        "server",
+        `--port=${port}`
+      ],
       environment: childEnvironment,
       name,
       captureOutput: true,

@@ -178,7 +178,13 @@ export const seedQualityFormalBoundary = (worktree) => {
     helperObligationId,
     {
       executable: toolchain.javaExecutable,
-      args: ["-jar", toolchain.apalacheJar, "server", "--port=34567"],
+      args: [
+        "-jar",
+        toolchain.apalacheJar,
+        `--out-dir=${join(runDirectory, "owned-server-output", helperObligationId)}`,
+        "server",
+        "--port=34567"
+      ],
       acceptedExitCodes: [0]
     },
     "cancelled",
