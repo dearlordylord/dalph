@@ -54,6 +54,56 @@ as when application Exit leaves an unfinished recoverable Run.
    controller records or publishing it as evidence or user-visible stdout.
    Validation includes the original input fields; decoding must not silently
    discard forbidden unknown fields and then call the result safe.
+   Each original complete LF frame must exactly equal the existing
+   `encodeProductionCliRecord(decoded)` bytes. Blank, whitespace-altered, and
+   reordered frames are rejected before publication; normal canonical payloads
+   remain unchanged. The transcript digest covers these accepted original bytes.
+   The existing exact controller-SIGKILL rule still excludes an unterminated tail
+   without turning it into a record or a Run outcome.
+   The existing qualification host callback observes the original typed current
+   source before handing it to the ordinary presenter. Before registering any
+   expected public record, it validates the source atoms against Q's authorized
+   repository/target/plan and the controlled provider's exact public task
+   specification, lifecycle, claim and operation facts. A public GitHub task
+   specification is distinct from a private Codex prompt: this fixture permits
+   its exact fixed public title/body, not arbitrary supplied task text.
+   The existing canonical constructors/projector then produce the expected
+   public identities and record; the parent receives its digest through the
+   existing qualification transport before the observation is released to the
+   presenter. The parent still validates the original raw NDJSON fields and
+   checks the expected-record binding before recordLog or Queue publication.
+   Observing an opaque identity is not proof it is safe: proposal identities,
+   entry identities, obligation references and tracker revisions can embed
+   source text. Registering those original strings without validating their
+   constituent source facts is forbidden. No additional live SQLite reader,
+   opaque-identity parser, journal-only whitelist, public output variant or
+   persisted status authority is introduced. RunSelected remains available
+   during P1's live controlled wait, so the existing death-cut synchronization
+   does not wait for child termination.
+   The same host wrapper validates the original typed `TraceAtCursor` returned
+   by its existing `traceReader.readAt` before the ordinary history presenter
+   encodes each HistoricalSnapshot, then registers that exact safe-record
+   digest. It validates every public/identity-contributing source atom there
+   too; current-status attestation alone does not approve historical output.
+
+   Alice's P1 uses original spawn registration scope S1 and actual PID p.
+   After P1 and its output readers are joined, P2 uses fresh scope S2; a
+   controlled component test reuses numeric PID p for a distinct spawn handle.
+   A delayed S1 request arriving while the P2 spawn gate is open is rejected
+   without adding any digest to P2. An unknown scope is rejected without a
+   digest cache. Only S2 with P2's actual owned handle PID receives the ACK
+   before the presenter emits its record. The non-secret scope is supplied by
+   the parent for that original spawn through qualification transport metadata;
+   the request body remains `{processId, digest}`. No scope is recorded in the
+   workflow journal or used to authorize a provider mutation or cleanup.
+
+   When GitHub's actual CompleteTask call returns HTTP429, the qualification
+   callback reads its existing original `observation.current.get` before the
+   ordinary failure mapper publishes the literal throttle record. It binds
+   the actual typed failure operation to the original completion request with
+   the existing request constructor, validates the remaining public source
+   atoms, and obtains the safe token and ACK. It never substitutes a fresh UUID
+   or invents a request if the current source or Closed final source is absent.
 2. It constructs schema-versioned `ProductionMvpQualificationEvidence` with the
    scenario and hermetic tags, Q and start/end times, exact qualification source
    SHA/Base, binary and lockfile digests, OS/architecture/Node/pnpm versions, and
@@ -119,6 +169,28 @@ Alice sees a safe qualification failure and truthful retained resources, not
 the sentinel or private identity. A valid record's original safe payload is
 preserved rather than silently rewritten.
 
+The built-controller negative control starts with Q's original fixed public
+GitHub issue and immutable creation receipt. Before the child reads the task,
+the controlled GitHub fixture changes that issue's actual title/body to a
+sentinel-bearing `TaskWorkSpecification`. Its ordinary tracker read returns
+those changed facts; no projected status or public record is fabricated.
+The qualification callback rejects the original typed source before registering
+or publishing an unsafe CurrentStatus. The ordinary task protocol can create
+its claim label before reading that specification; that successful creation
+adds an immutable original label receipt and does not revise the issue receipt.
+The test binds every such receipt to the actual creation boundary. The
+controller joins that original child and both readers and stops its transport.
+It then captures the complete creation inventory and performs exact cleanup
+once: it removes the proven unchanged label, retains the changed issue, and
+leaves local unfinished-Run resources retained. It must not omit the later label
+or assume rejection means no earlier authorized boundary was crossed.
+The fresh issue fingerprint differs from the original creation receipt, so
+cleanup retains the changed issue as `ChangedIdentity` rather than deleting it.
+The acceptance test requires no sentinel in accepted output, a static safe
+failure, the actual child result, and truthful removed/retained receipts. The
+fixture setter changes no production provider interpretation or workflow rule;
+it does not grant a replacement child, mutation retry, or cleanup permission.
+
 ## Scenario 3 — exact cleanup succeeds or preserves an unproved resource
 
 After the scenario's final tracker/Git reads, the controller has original local
@@ -167,15 +239,70 @@ evidence of success; publication is best-effort, not workflow authority.
 
 These are planned focused acceptance seams, not passing-test receipts.
 
+The Scenario 2 built-controller source-change test uses the existing provider
+fixture's typed specification setter and original creation receipts. It maps
+the original tracker read to source rejection before publication, joined-child
+teardown, and `ChangedIdentity` retention after one exact cleanup pass.
+
 | Scenario | Minimum module/caller and acceptance proof |
 | --- | --- |
 | 1: exact safe artifact | `production-mvp-qualification-evidence.ts` and adjacent tests decode actual built-controller output; prove complete applicable identities, source SHA distinct from fixture H, exact digests, unchanged safe payload, canonical transcript digest, and artifact outside Q. Existing controller built-child tests consume the same helper. |
 | 1: provenance | Evidence tests prove honest local N/A, supplied same-SHA hosted/profile binding, supported Node 24.20, current independent inventory and negative controls, and setup/install margin; reject stale/substituted evidence without fabricating missing data. |
 | 2: prepublication rejection | Evidence tests and the existing controller caller seed sentinel/private values in free failure text and unknown fields; prove rejection before record/evidence/user-output publication, safe failure reporting, unchanged child/Run truth, and no rerun. |
+| 2: original canonical bytes | Framing component tests reject blank, whitespace-altered, and reordered complete frames before publication; preserve the original canonical payload and existing real-Node SIGKILL tail controls. Transcript digest tests bind the accepted original LF bytes, not a normalized substitute. |
+| 2: opaque source and record binding | Qualification host/current-source tests seed a sentinel in a source atom and inside an opaque identity; reject before expected-record registration or public presentation. Parent tests reject an otherwise canonical counterfeit record without the exact safe-source record binding. All four built-controller chronologies retain live RunSelected and original P1/P2 synchronization. |
+| 2: original spawn registration | Controller component tests use distinct original spawn handles with the same numeric PID and a delayed S1 request during the S2 spawn gate. Prove zero stale/unknown-scope digest adoption or cache, and one owned S2/PID ACK before record publication. Actual built-child tests preserve startup synchronization without a provider retry. |
+| 2: actual completion throttle | The built throttle chronology uses the production HTTP429 classification and the original current/final runtime request to bind the deterministic CompleteTask operation before safe-token registration and literal Failure publication; absent or mismatched request source is rejected without a UUID substitute. |
+| 2: callback and outer host failures | `production-hermetic-qualification-source.test.ts` drives the actual-used qualification host wrapper through callback and host-delivered errors using its original source fixtures; proves original-observation/current-or-closed-final validation and registration acknowledgement before error propagation, and safe rejection when the original source is absent. |
 | 3: exact GitHub cleanup | `disposable-github-qualification-cleanup.ts` and adjacent controlled tests prove fresh exact repository/issue/label ownership, one exact deletion, and absence reread; foreign, changed, unreadable, and throttled cases prove preservation and exact retained commands. No live provider is called. |
 | 3: local cleanup | Reuse existing `disposeHermeticFixture` tests and its controller caller; prove changed same-locator identity retained, partial removal truthful, and `RemovedResources` still reports the retained container. |
 | 4: publication failure | Evidence/controller writer-failure tests preserve independent Run/process dispositions and actual cleanup results, claim no artifact success, and prove no automatic child/provider/cleanup rerun. |
 
-The minimum implementation is the two qualification-only modules and their
+The implementation is qualification-only source/evidence helpers and their
 focused tests plus narrow existing-controller wiring. This is not a new
-controller, package API, artifact framework, legacy migration, or MBT lane.
+controller, generic package API, artifact framework, legacy migration, or MBT lane.
+The qualification source validator reuses the existing canonical
+`trackerRevisionFor`, `deliveryProposalIdOf`,
+`completionOriginalTaskClaimReleaseFor`,
+`completionTaskRequestLookupOperationIdFor`, and
+`completionTaskCandidateAncestryReadOperationIdFor` constructors through narrow
+orchestrator root exports. These recompute the existing snapshot revision,
+proposal identity, nested original-claim release operation, historical completion
+request lookup operation from its actual attempt ordinal, and historical candidate
+ancestry read operation from its actual authorization purpose from validated
+source atoms; they introduce no new codec or authority. Existing constructor
+tests and qualification source-binding tests cover that reuse.
+
+When Alice's child reads the task again before or after closing it, the GitHub
+focused completion reader returns the original current claim, lifecycle, target,
+membership, task identity, work-specification revision and unfinished prerequisite
+identities. Its revision encodes those facts, not the whole task graph. The
+qualification callback checks every contributing fact and recomputes that
+revision with the same constructor used by the ordinary reader. It must not
+compare it with a graph revision, accept an arbitrary opaque string, or invent
+a replacement observation. A deleted completion claim still refers to the
+original focused facts that authorized its deletion. Focused reader and source
+tests cover unchanged, completed and released-claim observations, and reject a
+private or substituted contributing fact before token registration.
+
+When the controlled GitHub transport returns HTTP 429, the production host can
+receive the activation failure outside the presenter's callback. The
+qualification wrapper must validate and acknowledge the mapped literal failure
+before the ordinary CLI writes it, whichever host branch delivers the error.
+It uses the original selected observation and its original current or closed
+final source; missing facts remain a safe rejection, not a fabricated request.
+The built throttle test proves one request, safe bound Failure publication and
+recovery without a second close. Focused wrapper tests cover both callback and
+host-delivered failure paths and rejection when the original source is absent.
+
+The current-status checks may live in a qualification-only status-source helper;
+the source facade still alone constructs the validated record token. Recovered
+claim reads and focused specification/claim checks remain their existing typed
+boundaries. Splitting these functions changes no actor action, boundary call,
+workflow rule or accepted/rejected source. The original source vectors and six
+built chronologies must retain their exact results. Controller process/record
+registries and provider receipt accumulation are private scratch only; using
+Effect's explicit mutable collections must preserve original handle ownership,
+reader settlement, insertion order and receipt identity without persisting facts.
+Existing binding/provider tests and the six built cases cover those invariants;
+provenance tests keep the same formal and hosted timing budgets.

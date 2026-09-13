@@ -92,6 +92,23 @@ const CanonicalFocusedCompletionRevisionContent = Schema.fromJsonString(
   Schema.toCodecJson(FocusedCompletionRevisionContent)
 )
 
+/** A task-local revision includes the exact current claim and focused facts, not complete graph coverage. */
+export const githubFocusedCompletionRevisionFor = (
+  content: Pick<
+    FocusedTaskCompletionFacts,
+    | "currentClaim"
+    | "lifecycle"
+    | "target"
+    | "targetMembership"
+    | "taskId"
+    | "taskRevision"
+    | "unfinishedPrerequisiteTaskIds"
+  >
+): Effect.Effect<TrackerRevision, Schema.SchemaError> =>
+  Schema.encodeUnknownEffect(CanonicalFocusedCompletionRevisionContent)(content).pipe(
+    Effect.map((revision) => TrackerRevision.make(revision))
+  )
+
 const focusedFailure = (taskId: TaskId, detail: string): FocusedTaskCompletionReadFailure =>
   new FocusedTaskCompletionReadFailure({ detail, taskId })
 
@@ -301,13 +318,13 @@ const makeFocusedFacts = Effect.fn("GithubCompletionTask.makeFocusedFacts")(func
   context: FocusedReadContext,
   revisionContent: typeof FocusedCompletionRevisionContent.Type
 ) {
-  const trackerRevision = yield* Schema.encodeUnknownEffect(CanonicalFocusedCompletionRevisionContent)(
-    revisionContent
-  ).pipe(Effect.mapError((cause) => focusedFailure(context.request.taskId, String(cause))))
+  const trackerRevision = yield* githubFocusedCompletionRevisionFor(revisionContent).pipe(
+    Effect.mapError((cause) => focusedFailure(context.request.taskId, String(cause)))
+  )
   return yield* Schema.decodeUnknownEffect(FocusedTaskCompletionFacts)({
     ...revisionContent,
     operationId: context.request.operationId,
-    trackerRevision: TrackerRevision.make(trackerRevision)
+    trackerRevision
   }).pipe(
     Effect.mapError((cause) =>
       focusedFailure(context.request.taskId, `GitHub returned contradictory focused completion facts: ${String(cause)}`)

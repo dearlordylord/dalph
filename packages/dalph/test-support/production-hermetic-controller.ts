@@ -4,38 +4,44 @@ import { createServer, type IncomingMessage, type Server } from "node:http"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import {
   Deferred,
+  Crypto,
   Effect,
   Fiber,
   FiberSet,
   FileSystem,
-  HashSet,
   Match,
   MutableList,
+  MutableHashMap,
   Option,
   Queue,
-  Redacted,
   Ref,
   Schema,
   Stream
 } from "effect"
 import {
-  authorizeHermeticFixture,
   BoundaryReached,
-  HermeticFixtureResource,
+  HermeticRegistrationScopeId,
+  type HermeticFixtureResource,
   type HermeticFixtureCreationFacts,
   HermeticFixtureManifest
 } from "../src/application/production-hermetic-contract.js"
 import {
   HermeticCodexRequest,
-  HermeticControllerEndpoint
+  HermeticControllerEndpoint,
+  HermeticExpectedRecordRegistration
 } from "../src/application/production-hermetic-provider-bridge.js"
 import type { ProductionCliRecord } from "../src/application/production-cli.js"
-import {
-  decodeProductionRepositoryHostConfiguration,
-  type ProductionRepositoryHostConfiguration
-} from "../src/application/production-configuration.js"
+import type { ProductionRepositoryHostConfiguration } from "../src/application/production-configuration.js"
+import { authorizeHermeticControllerFixture } from "./production-hermetic-fixture-authorization.js"
 import { makeHermeticProviderState } from "./production-hermetic-provider-state.js"
-import { makeHermeticChildOutput } from "./production-hermetic-child-output.js"
+import {
+  HermeticControllerFailure,
+  type HermeticProcessOutcome,
+  killedProcessOutcome,
+  makeHermeticRecordBindings,
+  settleHermeticChild
+} from "./production-hermetic-child-lifetime.js"
+import { makeHermeticChildOutput, validateQualificationRecordBinding } from "./production-hermetic-child-output.js"
 
 export interface HermeticControllerFixture {
   readonly container: HermeticFixtureContainer
@@ -94,66 +100,19 @@ export const readHermeticFileIdentity = Effect.fn("HermeticFixture.readIdentity"
 /** A child process owns its public streams; these observations never authorize a provider retry. */
 export interface HermeticPublicChild {
   readonly handle: ChildProcessSpawner.ChildProcessHandle
+  readonly registrationScope: HermeticRegistrationScopeId
   readonly records: Queue.Queue<ProductionCliRecord>
   readonly recordLog: MutableList.MutableList<ProductionCliRecord>
   readonly stdout: Fiber.Fiber<void, unknown>
   readonly stderr: Fiber.Fiber<void, unknown>
+  readonly stderrLog: MutableList.MutableList<Uint8Array>
 }
 
 export type HermeticControllerPause =
   | { readonly _tag: "Unpaused" }
   | { readonly _tag: "PauseAt"; readonly boundary: BoundaryReached["_tag"] }
 
-class HermeticControllerFailure extends Schema.TaggedError<HermeticControllerFailure>()("HermeticControllerFailure", {
-  operation: Schema.NonEmptyString
-}) {}
-
 const providerFailureHttpStatus = 500
-
-const resourceBelongsToFixture = (fixture: HermeticControllerFixture, resource: HermeticFixtureResource) =>
-  Match.valueTags(resource, {
-    Repository: ({ locator }) => locator === fixture.manifest.repository,
-    CommonDirectory: ({ locator }) => locator === fixture.manifest.commonDirectory,
-    ConfigurationDocument: ({ locator }) => locator === fixture.configurationPath,
-    ManifestDocument: ({ locator }) => locator === fixture.manifestPath,
-    JournalDatabase: ({ locator }) => locator === fixture.manifest.journalDatabase,
-    EvidenceRoot: ({ locator }) => locator === fixture.manifest.evidenceRoot,
-    AttemptWorktreeRoot: ({ locator }) => locator === fixture.manifest.attemptWorktreeRoot,
-    CodexStateDirectory: ({ locator }) => locator === fixture.manifest.codexStateDirectory,
-    CandidateRoot: ({ locator }) => locator === fixture.manifest.candidateRoot,
-    PrivateStore: ({ locator }) => locator === fixture.manifest.privateStore,
-    OwnershipMarker: ({ locator }) => locator === fixture.manifest.ownershipMarker
-  })
-
-const resourceKey = (resource: HermeticFixtureResource) => `${resource._tag}:${resource.locator}`
-
-const creationMatchesManifest = ({ creation, manifest }: HermeticControllerFixture) =>
-  creation.invocationId === manifest.invocationId &&
-  creation.repository === manifest.repository &&
-  creation.commonDirectory === manifest.commonDirectory &&
-  creation.ownershipMarker === manifest.ownershipMarker
-
-/** A matching configuration never substitutes for the successful creation ledger. */
-const validateCreationLedger = Effect.fn("HermeticController.validateCreation")(function* (
-  fixture: HermeticControllerFixture
-) {
-  const creation = fixture.creation
-  const resources = creation.createdResources
-  const resourceKeys = HashSet.fromIterable(resources.map(resourceKey))
-  const identityKeys = HashSet.fromIterable(fixture.identities.map(({ resource }) => resourceKey(resource)))
-  if (!creationMatchesManifest(fixture) || resources.some((resource) => !resourceBelongsToFixture(fixture, resource))) {
-    return yield* new HermeticControllerFailure({ operation: "fixture.foreignCreation" })
-  }
-  if (
-    HashSet.size(resourceKeys) !== Object.keys(HermeticFixtureResource.cases).length ||
-    HashSet.size(resourceKeys) !== resources.length ||
-    HashSet.size(identityKeys) !== fixture.identities.length ||
-    !HashSet.isSubset(resourceKeys, identityKeys) ||
-    !HashSet.isSubset(identityKeys, resourceKeys)
-  ) {
-    return yield* new HermeticControllerFailure({ operation: "fixture.invalidCreationLedger" })
-  }
-})
 
 const readBody = Effect.fn("HermeticController.readBody")(function* (request: IncomingMessage) {
   const text = yield* Effect.tryPromise({
@@ -186,31 +145,6 @@ const closeServer = (server: Server) =>
     catch: () => new HermeticControllerFailure({ operation: "server.close" })
   })
 
-/** Reads owning boundaries now; cached configuration and marker bytes cannot authorize a child. */
-export const authorizeHermeticControllerFixture = Effect.fn("HermeticController.authorize")(function* (
-  fixture: HermeticControllerFixture
-) {
-  yield* validateCreationLedger(fixture)
-  const fs = yield* FileSystem.FileSystem
-  const manifestDocument = yield* fs
-    .readFileString(fixture.manifestPath)
-    .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(HermeticFixtureManifest))))
-  if (!Schema.toEquivalence(HermeticFixtureManifest)(fixture.manifest, manifestDocument))
-    return yield* new HermeticControllerFailure({ operation: "fixture.changedManifest" })
-  const document = yield* fs
-    .readFileString(fixture.configurationPath)
-    .pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))))
-    )
-  const c = yield* decodeProductionRepositoryHostConfiguration({
-    ...document,
-    target: fixture.configuration.target,
-    githubToken: Redacted.value(fixture.configuration.githubToken),
-    codexProviderCredential: Redacted.value(fixture.configuration.codexProviderCredential)
-  })
-  return yield* authorizeHermeticFixture(fixture.manifest, c)
-})
-
 /** One fixed provider fixture and its three concrete gates survive every child started by this controller. */
 export const makeHermeticController = Effect.fn("HermeticController.make")(function* (
   fixture: HermeticControllerFixture,
@@ -218,10 +152,16 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
 ) {
   yield* authorizeHermeticControllerFixture(fixture)
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const crypto = yield* Crypto.Crypto
   const children = MutableList.make<HermeticPublicChild>()
+  const recordBindings = yield* makeHermeticRecordBindings()
   const childOutputs = new WeakMap<HermeticPublicChild, Effect.Success<ReturnType<typeof makeHermeticChildOutput>>>()
   const boundaries = yield* Queue.unbounded<BoundaryReached>()
   const boundaryLog = MutableList.make<BoundaryReached>()
+  const processOutcomes = MutableHashMap.empty<
+    HermeticRegistrationScopeId,
+    { readonly child: HermeticPublicChild; readonly outcome: HermeticProcessOutcome }
+  >()
   const release = yield* Deferred.make<void>()
   const paused = yield* Ref.make(false)
   const observeBoundary = Effect.fn("HermeticController.observeBoundary")(function* (boundary: BoundaryReached) {
@@ -232,7 +172,11 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
     }
   })
   yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined).pipe(Effect.asVoid))
-  const provider = yield* makeHermeticProviderState(fixture.configuration, observeBoundary)
+  const provider = yield* makeHermeticProviderState(
+    fixture.configuration,
+    observeBoundary,
+    fixture.manifest.invocationId
+  )
   const codexRequest = Effect.fn("HermeticController.codexRequest")(function* (input: unknown) {
     const request = yield* Schema.decodeUnknownEffect(HermeticCodexRequest)(input)
     return yield* Match.valueTags(request, {
@@ -260,6 +204,18 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
       case "/boundary": {
         const boundary = yield* Schema.decodeUnknownEffect(BoundaryReached)(body)
         yield* observeBoundary(boundary)
+        return { status: 200, body: {} }
+      }
+      case "/expected-record": {
+        const scope = yield* Schema.decodeUnknownEffect(HermeticRegistrationScopeId)(
+          request.headers["x-dalph-registration-scope"],
+          { reportInput: false }
+        ).pipe(Effect.mapError(() => new HermeticControllerFailure({ operation: "record.foreignScope" })))
+        const registration = yield* Schema.decodeUnknownEffect(HermeticExpectedRecordRegistration)(body, {
+          reportInput: false,
+          onExcessProperty: "error"
+        }).pipe(Effect.mapError(() => new HermeticControllerFailure({ operation: "record.registration" })))
+        yield* recordBindings.register(scope, registration)
         return { status: 200, body: {} }
       }
       default:
@@ -298,7 +254,9 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
       }),
     catch: () => new HermeticControllerFailure({ operation: "server.listen" })
   })
-  const startChild = Effect.fn("HermeticController.startChild")(function* () {
+  const spawnOwnedChild = Effect.fn("HermeticController.spawnOwnedChild")(function* (
+    registrationScope: HermeticRegistrationScopeId
+  ) {
     if (!server.listening) return yield* new HermeticControllerFailure({ operation: "controller.disposed" })
     yield* authorizeHermeticControllerFixture(fixture)
     const target = fixture.configuration.target
@@ -321,22 +279,45 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
               Schema.fromJsonString(HermeticFixtureManifest)
             )(fixture.manifest),
             DALPH_HERMETIC_CONTROLLER: endpoint,
+            DALPH_HERMETIC_REGISTRATION_SCOPE: registrationScope,
             GIT_OPTIONAL_LOCKS: "0"
           }
         }
       )
     )
+    yield* recordBindings.bind(registrationScope, handle)
     const records = yield* Queue.unbounded<ProductionCliRecord>()
     const recordLog = MutableList.make<ProductionCliRecord>()
     const output = yield* makeHermeticChildOutput(handle, (record) =>
-      Effect.sync(() => MutableList.append(recordLog, record)).pipe(Effect.andThen(Queue.offer(records, record)))
+      Effect.gen(function* () {
+        yield* validateQualificationRecordBinding(record, yield* recordBindings.digestsFor(registrationScope, handle))
+        MutableList.append(recordLog, record)
+        yield* Queue.offer(records, record)
+      })
     )
     const stdout = yield* output.read().pipe(Effect.forkScoped)
-    const stderr = yield* handle.stderr.pipe(Stream.runDrain, Effect.forkScoped)
-    const child = { handle, records, recordLog, stdout, stderr } satisfies HermeticPublicChild
+    const stderrLog = MutableList.make<Uint8Array>()
+    const stderr = yield* handle.stderr.pipe(
+      Stream.runForEach((bytes) => Effect.sync(() => MutableList.append(stderrLog, new Uint8Array(bytes)))),
+      Effect.forkScoped
+    )
+    const child = {
+      handle,
+      registrationScope,
+      records,
+      recordLog,
+      stdout,
+      stderr,
+      stderrLog
+    } satisfies HermeticPublicChild
     childOutputs.set(child, output)
     MutableList.append(children, child)
     return child
+  })
+  const startChild = Effect.fn("HermeticController.startChild")(function* () {
+    const scope = HermeticRegistrationScopeId.make(yield* crypto.randomUUIDv7)
+    yield* recordBindings.begin(scope)
+    return yield* spawnOwnedChild(scope).pipe(Effect.ensuring(recordBindings.end(scope)))
   })
   const awaitBoundary = Effect.fn("HermeticController.awaitBoundary")(function* (
     tag: BoundaryReached["_tag"],
@@ -354,15 +335,28 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
     )
     return yield* Effect.raceFirst(observedBoundary, exited)
   })
+  const forgetRecordBindings = (child: HermeticPublicChild) =>
+    recordBindings.forget(child.registrationScope, child.handle)
   return {
     invocationId: fixture.manifest.invocationId,
     startChild,
     awaitBoundary,
     releaseBoundary: () => Deferred.succeed(release, undefined).pipe(Effect.asVoid),
     boundaryLog,
+    processOutcomes: Effect.sync(() =>
+      MutableList.toArray(children).flatMap((child) => {
+        const receipt = Option.getOrUndefined(MutableHashMap.get(processOutcomes, child.registrationScope))
+        return receipt === undefined || receipt.child !== child ? [] : [receipt.outcome]
+      })
+    ),
     providerSnapshot: provider.snapshot(),
+    providerCreationManifest: provider.creationManifest,
+    finalTrackerFacts: provider.finalTrackerFacts,
+    githubCleanupAdapter: provider.cleanupAdapter,
     setCompletionResponse: provider.setCompletionResponse,
+    setPublicTaskSpecification: provider.setPublicTaskSpecification,
     activeRequestCount: FiberSet.size(requests),
+    activeRegistrationCount: recordBindings.count,
     stopTransport: closeServer(server).pipe(Effect.andThen(FiberSet.clear(requests))),
     selectedRunsCompleted: Effect.sync(() => {
       const owned = MutableList.toArray(children)
@@ -381,15 +375,36 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
       Effect.gen(function* () {
         const output = childOutputs.get(child)
         if (output === undefined) return yield* new HermeticControllerFailure({ operation: "child.foreignKill" })
-        const exit = yield* output.kill()
-        yield* Effect.all([Fiber.join(child.stdout), Fiber.join(child.stderr)])
-        return exit
+        return yield* settleHermeticChild(
+          child,
+          output.kill().pipe(
+            Effect.flatMap((exit) => {
+              const outcome = killedProcessOutcome(child.handle.pid, exit)
+              return outcome === undefined
+                ? Effect.fail(new HermeticControllerFailure({ operation: "child.unobservedKillOutcome" }))
+                : Effect.succeed({ exit, outcome })
+            })
+          ),
+          ({ outcome }) => {
+            MutableHashMap.set(processOutcomes, child.registrationScope, { child, outcome })
+          },
+          forgetRecordBindings(child)
+        ).pipe(Effect.map(({ exit }) => exit))
       }),
     awaitChild: (child: HermeticPublicChild) =>
       Effect.gen(function* () {
-        const exit = yield* child.handle.exitCode
-        yield* Effect.all([Fiber.join(child.stdout), Fiber.join(child.stderr)])
-        return exit
+        if (!childOutputs.has(child)) return yield* new HermeticControllerFailure({ operation: "child.foreignAwait" })
+        return yield* settleHermeticChild(
+          child,
+          child.handle.exitCode,
+          (status) => {
+            MutableHashMap.set(processOutcomes, child.registrationScope, {
+              child,
+              outcome: { _tag: "Exit", processId: child.handle.pid, status }
+            })
+          },
+          forgetRecordBindings(child)
+        )
       })
   }
 })

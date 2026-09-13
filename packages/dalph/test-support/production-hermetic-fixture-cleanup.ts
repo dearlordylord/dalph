@@ -1,13 +1,13 @@
 import { Effect, FileSystem, MutableList, Schema } from "effect"
 import { HermeticFixtureResource } from "../src/application/production-hermetic-contract.js"
 import {
-  authorizeHermeticControllerFixture,
   HermeticFixtureContainer,
   readHermeticFileIdentity,
   type HermeticController,
   type HermeticControllerFixture,
   type HermeticCreatedResourceIdentity
 } from "./production-hermetic-controller.js"
+import { authorizeHermeticControllerFixture } from "./production-hermetic-fixture-authorization.js"
 
 /** The exact cause of retaining the entire fixture, including its explanatory journal and documents. */
 const RetentionCause = Schema.TaggedUnion({
