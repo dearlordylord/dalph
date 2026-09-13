@@ -28,12 +28,10 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
   the existing issue/specification/scenario. Link it from parent issues. Record
   deadlines with units and timezone; dependencies, reviews, and renamed
   checkpoints do not reset the parent budget or its accepted stop rule.
-- Develop with `pnpm check:fast` and focused tests. Repair a failed stage and
-  check affected behavior before rerunning the full gate. Reconcile the accepted scenario-to-test mapping
-  and close [scoped reviews](CODE_REVIEW.md#review-closure) before the final gate.
-  Freeze that candidate, then run `pnpm check:all --candidate=<base-sha>` before
-  implementation handoff. Intermediate commits need no handoff ceremony;
-  earlier passing stages are not a final green gate.
+- Use [choosing checks](#choosing-checks). Repair failures and check affected
+  behavior before rerunning. Reconcile scenario-to-test mappings and close
+  [scoped reviews](CODE_REVIEW.md#review-closure) before handoff; intermediate
+  commits need no handoff ceremony.
 - Bounded commands use detached process groups so timeout cleanup can reach
   descendants. A timeout settles only after the direct child closes and the
   Unix process group is absent, or after a bounded explicit failure to prove
@@ -45,6 +43,38 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
   scenario evidence survives and reproduced accepted-path defects still block
   closure. Fewer rounds alone do not demonstrate improvement. Use the existing
   task record, not another ledger.
+
+## Choosing checks
+
+Choose checks by affected behavior, not by commit or handoff alone:
+
+- **Documentation/history cleanup:** check formatting, links, and remaining
+  references. Explain why runtime behavior is unchanged; no local full gate.
+- **Tooling-only changes:** run affected tool tests, consumer/path checks, and
+  relevant lint/typechecks. Moving a script alone does not require the full gate.
+- **Runtime/model behavior changes:** use focused acceptance tests and `pnpm check:fast`
+  during development; run the full gate before integration. Model or conformance
+  changes also require adequacy review and a negative control.
+- **Shared qualification changes:** run the full gate before integration when
+  changing shared build/dependency configuration, gate orchestration, or validity of
+  qualification evidence. Uncertain impact requires investigation, not exemption.
+
+Accepted task requirements still apply. Handoffs name the affected scenarios,
+checks run or unrun, and why broader checks add no relevant coverage. Unused-code
+removal needs consumer evidence and affected type/build checks; changed behavior
+follows the runtime rule.
+Hosted CI keeps its existing classification and required jobs.
+
+When required, freeze the candidate and run
+`pnpm check:all --candidate=<base-sha>` with the existing exact-base,
+acknowledgement, admission, and resume rules. Never skip stages inside a full run
+or claim incomplete evidence as qualification. It obtains complete formal
+verification through fresh execution or guarded reuse; a separate repeated
+`check:quint` is unnecessary. Use focused model/adapter checks during development;
+reserve `pnpm check:quint --force` for fresh reproduction or timing.
+
+Compatibility lint and the project-wide Effect pass build the entire program;
+use repository commands, not per-file substitutes.
 
 ## Domain language
 
@@ -98,17 +128,8 @@ All commands below use `pnpm`. Script definitions live in
 | `gate:status <run-id>` | Read durable command results, unresolved custody and per-run logs/report paths without the previous terminal. Missing or malformed receipts cannot prove success. |
 | `gate:reconcile <run-id>` | Close registration and prove every recorded writer group absent before clearing exact worktree/slot fences. Missing exits stay unproven. |
 | `check:all --candidate=<base sha> --resume=<run-id>` | Reuse a contiguous proven full-gate prefix in the same worktree on identical monitored inputs; failed/unproven stage and remaining suffix execute normally. |
-| `check:all` | Bounded handoff gate for a frozen candidate. It includes the complete formal requirement and application checks, including non-browser Lab; automatic MBT is excluded pending #363. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
+| `check:all` | Complete qualification when required by [choosing checks](#choosing-checks), for a frozen candidate. It includes the complete formal requirement and application checks, including non-browser Lab; automatic MBT is excluded pending #363. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
 | `check:ci` | Hosted gate; MBT remains excluded pending #363. |
-
-`check:quint` obtains the complete required formal profile through guarded local
-execution or applicable recorded success. It reports which occurred and names
-the original evidence. `--force` requests fresh execution under the same
-guards. `check:all` includes this formal requirement as well as required
-application checks; automatic MBT is excluded pending #363. It runs stale or missing
-formal work and cannot pass after a required formal failure. Existing candidate
-acknowledgement, base selection, admission and resume prerequisites remain
-required.
 
 Hosted CI keeps separate quality and formal entry points: hosted formal runs the
 complete profile fresh, while hosted quality retains its current Quint-connected
@@ -747,7 +768,7 @@ the production 95% and maintained-evaluation 75% floors remain unchanged.
 ### Formal reuse and handoff
 
 The local formal command uses one complete profile and one guarded applicability
-boundary. The local handoff obtains this result after successful preflight.
+boundary. The full gate obtains this result after successful preflight.
 The formal command runs missing or stale work, or reuses
 an applicable local success record while naming that record. A complete changed
 path inventory includes committed, staged, unstaged, deleted, rename-source,
@@ -805,12 +826,8 @@ command limit. These are ceilings, not measured duration or claimed savings.
 Hosted formal verification has a 16-minute job deadline and reserves
 210 seconds for checkout, setup, network, and final reporting.
 
-The former `check:quint:changed` and `check:quint:final` aliases and their
-dedicated selector runners are retired. Use focused checks during development,
-then `pnpm check:all --candidate=<base-sha>` for continuous and final handoff
-validation. Use `pnpm check:quint --force` only when fresh formal reproduction
-or timing is required. Hosted formal verification remains a complete fresh
-profile; hosted quality retains its current Quint-connected MBT exclusion.
+The former `check:quint:changed` and `check:quint:final` aliases are retired.
+Select local checks through [choosing checks](#choosing-checks).
 
 ## Safety and supply chain
 

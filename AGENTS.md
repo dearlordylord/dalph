@@ -48,31 +48,10 @@ questions. Reuse guidance already read unless it changed or scope changed.
 
 - Use minimal live-provider fixtures, controlled tests for bulk behavior, and
   never retry throttled mutations.
-- Develop with `pnpm check:fast` and focused tests. The full gate belongs to a
-  frozen candidate and to hosted verification, and states its candidate:
-  `pnpm check:all --candidate=<base sha>`. The compatibility lint and the
-  project-wide Effect pass build the entire program, so run them through the
-  repository commands rather than per edited file. Target repositories'
-  application-specific typecheck, model-checking, and MBT gates are not Dalph
-  implementation gates.
-- Before the final `pnpm check:all`, close domain/spec, architecture/connascence,
-  and code-correctness reviews under the scoped closure rules in
-  [CODE_REVIEW.md](docs/CODE_REVIEW.md). Passing the final gate remains required
-  before handoff.
-- Run `pnpm check:all --candidate=<base-sha>` before implementation handoff,
-  preserving the existing frozen-candidate acknowledgement and base rules. It
-  obtains required complete formal verification automatically: it runs
-  missing/stale work or reuses applicable local success, and fails if required
-  verification fails. During development use focused checks; invoke
-  `pnpm check:quint` when changing a Quint model, its executable conformance
-  adapter, or behavior governed by that model. After the final relevant
-  changes, `check:all` establishes formal applicability before integration; a
-  separate repeated exhaustive run is unnecessary. Use
-  `pnpm check:quint --force` only for fresh reproduction or fresh timing.
-  Reuse never substitutes for model-adequacy review. Automatic MBT is
-  temporarily excluded pending #363; `test:mbt` remains manual.
-  Uncollected tests, undefined behavior, and unreachable actions can appear
-  green; require a negative control.
+- Select checks using [choosing checks](docs/DEVELOPMENT.md#choosing-checks);
+  close [scoped reviews](docs/CODE_REVIEW.md#review-closure) before handoff.
+- Target repositories' application-specific typecheck, model-checking, and MBT
+  gates are not Dalph implementation gates.
 - `check:all`, `check:ci:quality`, `test:coverage`, `check:quint`, and standalone
   `check:preflight` take the exact worktree lock before a clone-wide admission
   slot. Nested commands validate their active custody record; a slot environment
