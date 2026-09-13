@@ -684,15 +684,70 @@ it.live(
         expect(journal.filter(({ event }) => event._tag === "CompletionClaimDeleted")).toHaveLength(1)
         const settlements = journal.filter(({ event }) => event._tag === "IntegrationFinalitySettled")
         expect(settlements).toHaveLength(1)
-        expect(settlements[0]?.event).toMatchObject({
+        const settlement = settlements[0]
+        if (settlement?.event._tag !== "IntegrationFinalitySettled")
+          return yield* Effect.die("recovery must settle integration finality exactly once")
+        expect(settlement.event).toMatchObject({
           claim: replacement.event.claim,
           deletionOperationId: deletionIntent.event.operationId,
           replacementOperationId: replacement.event.operationId,
           successObservation: deletionIntent.event.successObservation
         })
+        const finalityRead = journal.find(
+          ({ event, position }) =>
+            position > settlement.position &&
+            event._tag === "TaskTrackerReadIntentRecorded" &&
+            event.operation._tag === "ReadTrackerGraph"
+        )
+        if (
+          finalityRead?.event._tag !== "TaskTrackerReadIntentRecorded" ||
+          finalityRead.event.operation._tag !== "ReadTrackerGraph"
+        )
+          return yield* Effect.die("settled recovery must request a later complete tracker graph")
+        const finalityObservation = journal.find(
+          ({ event, position }) =>
+            position > finalityRead.position &&
+            event._tag === "TaskTrackerFactsObserved" &&
+            event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
+        )
+        if (
+          finalityObservation?.event._tag !== "TaskTrackerFactsObserved" ||
+          finalityObservation.event.observation._tag !== "UnchangedTaskTrackerFactsReconfirmed"
+        )
+          return yield* Effect.die("settled recovery must observe the later complete tracker graph")
+        const reconfirmation = finalityObservation.event.observation
+        expect(reconfirmation.operationId).toBe(finalityRead.event.operation.operationId)
+        expect(finalityObservation.event.operationId).toBe(finalityRead.event.operation.operationId)
+        expect(reconfirmation.factFamilies.map(({ _tag }) => _tag)).toEqual([
+          "TaskIdentitiesReconfirmed",
+          "TaskLifecyclesReconfirmed",
+          "TaskPrerequisitesReconfirmed",
+          "TaskGroupingsReconfirmed",
+          "TaskTargetMembershipReconfirmed"
+        ])
+        const priorFullObservation = journal.find(
+          ({ event, position }) =>
+            position > cut.position &&
+            position < finalityObservation.position &&
+            event._tag === "TaskTrackerFactsObserved" &&
+            event.observation._tag === "CompleteTaskTrackerFacts" &&
+            event.observation.operationId === reconfirmation.priorFullObservationOperationId
+        )
+        if (
+          priorFullObservation?.event._tag !== "TaskTrackerFactsObserved" ||
+          priorFullObservation.event.observation._tag !== "CompleteTaskTrackerFacts"
+        )
+          return yield* Effect.die("the finality reconfirmation must link P2's exact prior complete graph")
+        expect(reconfirmation.priorFullObservationOperationId).toBe(priorFullObservation.event.observation.operationId)
         const terminations = journal.filter(({ event }) => event._tag === "WorkflowRunTerminated")
         expect(terminations).toHaveLength(1)
-        expect(terminations[0]?.event).toMatchObject({ disposition: "Completed" })
+        const termination = terminations[0]
+        if (termination?.event._tag !== "WorkflowRunTerminated")
+          return yield* Effect.die("settled recovery must terminate its Run exactly once")
+        expect(termination.event).toMatchObject({ disposition: "Completed" })
+        expect(settlement.position).toBeLessThan(finalityRead.position)
+        expect(finalityRead.position).toBeLessThan(finalityObservation.position)
+        expect(finalityObservation.position).toBeLessThan(termination.position)
         expect(MutableList.toArray(second.recordLog).filter((record) => record._tag === "RunDisposition")).toEqual([
           { _tag: "RunDisposition", disposition: "Completed", runId: original.runId, version: 1 }
         ])
