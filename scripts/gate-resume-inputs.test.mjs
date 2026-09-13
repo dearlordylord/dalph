@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url"
 import { afterEach, test } from "node:test"
 import { startInputGuard } from "./gate-resume-inputs.mjs"
 import { startInputObserver } from "./gate-input-observer.mjs"
+import { stabilizeVerificationEnvironment } from "./stabilize-verification-path.mjs"
 
 const roots = []
 afterEach(() => {
@@ -273,6 +274,55 @@ test("earlier PATH candidate creation cannot shadow an inventoried stage tool", 
   } finally {
     await guard.close()
   }
+})
+
+test("stabilizes an unused Codex argv-zero PATH entry before guarded input observation", async () => {
+  const f = fixture()
+  const arg0 = join(f.outer, ".codex", "tmp", "arg0")
+  const shim = join(arg0, "codex-arg0Ab12Cd")
+  mkdirSync(shim, { recursive: true })
+  writeFileSync(join(shim, ".lock"), "owned by another shell\n")
+  f.environment.PATH = `${shim}:${f.environment.PATH}`
+  const stabilized = stabilizeVerificationEnvironment({
+    environment: f.environment,
+    requiredExecutables: [process.execPath, "python3", "git"]
+  })
+  Object.assign(f.environment, stabilized)
+  const guard = await f.guard()
+  try {
+    assert.equal(f.environment.PATH.split(":").includes(shim), false)
+    assert.equal(
+      guard.identity.manifests.tools.some((entry) => entry.path === shim || entry.path.startsWith(`${shim}/`)),
+      false
+    )
+    const childPath = execFileSync(process.execPath, ["-e", "process.stdout.write(process.env.PATH)"], {
+      env: f.environment,
+      encoding: "utf8"
+    })
+    assert.equal(childPath, f.environment.PATH)
+    chmodSync(arg0, 0o700)
+    chmodSync(arg0, 0o755)
+    assert.equal((await guard.finish()).unchanged, true)
+  } finally {
+    await guard.close()
+  }
+})
+
+test("refuses to remove a Codex argv-zero PATH entry that supplies a declared tool", () => {
+  const f = fixture()
+  const shim = join(f.outer, ".codex", "tmp", "arg0", "codex-arg0Ef34Gh")
+  mkdirSync(shim, { recursive: true })
+  writeFileSync(join(shim, "fixture-tool"), "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+  let stageLaunches = 0
+  assert.throws(() => {
+    const environment = stabilizeVerificationEnvironment({
+      environment: { ...f.environment, PATH: `${shim}:${f.environment.PATH}` },
+      requiredExecutables: ["fixture-tool"]
+    })
+    stageLaunches++
+    execFileSync("fixture-tool", [], { env: environment })
+  }, /declared tool resolution changes: fixture-tool/u)
+  assert.equal(stageLaunches, 0)
 })
 
 test("strict PATH ancestor permission edit and restore invalidates executable resolution evidence", async () => {

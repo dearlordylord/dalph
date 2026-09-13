@@ -19,7 +19,12 @@ const dispatch = ({ admitted = true, arguments: args, environment = {}, failLoca
   const log = join(root, "dispatch.jsonl")
   const append = `import {appendFileSync} from 'node:fs';const record=value=>appendFileSync(${JSON.stringify(log)},JSON.stringify(value)+'\\n');\n`
   try {
-    for (const file of ["run-quality-gate.mjs", "quality-command-policy.mjs", "quality-output-budget.mjs"])
+    for (const file of [
+      "run-quality-gate.mjs",
+      "quality-command-policy.mjs",
+      "quality-output-budget.mjs",
+      "stabilize-verification-path.mjs"
+    ])
       copyFileSync(new URL(file, import.meta.url), join(root, file))
     writeFileSync(
       join(root, "gate-quality-run.mjs"),

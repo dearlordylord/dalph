@@ -13,6 +13,7 @@ import {
 import { createQuintEffectiveProfile } from "./quint-effective-profile.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { formalGatePolicy } from "./formal-gate-policy.mjs"
+import { stabilizeVerificationEnvironment } from "./stabilize-verification-path.mjs"
 
 export const parseFormalArguments = (args) => {
   if (args.length === 0) return { force: false }
@@ -91,7 +92,19 @@ export const runFormalWorkflow = async ({ force = false, report = console.log, r
   if (context === undefined) throw new Error("Formal verification requires admitted worktree custody")
   const location = { ...repositoryLocation(), runDirectory: context.runDirectory, runId: context.run.runId }
   if (location.worktree !== context.run.worktree) throw new Error("Formal custody belongs to another worktree")
-  const effectiveEnvironment = createFormalEnvironment(process.env)
+  const declaredPnpm = process.env["npm_execpath"]
+  const declaredJavaHome = process.env["JAVA_HOME"]
+  const formalEnvironment = createFormalEnvironment(process.env)
+  const effectiveEnvironment = stabilizeVerificationEnvironment({
+    environment: formalEnvironment,
+    requiredExecutables: [
+      process.execPath,
+      declaredPnpm ?? "pnpm",
+      declaredJavaHome === undefined ? "java" : join(declaredJavaHome, "bin", "java"),
+      "python3"
+    ],
+    worktree: location.worktree
+  })
   const toolResolutionStartedAt = performance.now()
   const toolchain = await resolveFormalToolchain({
     worktree: location.worktree,

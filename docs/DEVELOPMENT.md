@@ -272,6 +272,15 @@ These are repository-tooling rules only. They do not change a Dalph command,
 workflow decision, external request, journal fact, retry, concurrency rule,
 cleanup action, or user-visible delivery outcome.
 
+Codex adds a per-shell argv-zero shim directory under
+`$HOME/.codex/tmp/arg0/codex-arg0XXXXXX` to `PATH`. Before the full quality gate
+or standalone formal verification observes inputs or launches guarded children,
+the harness removes that component only after proving that every declared tool
+resolves to the same executable without it. A shim that supplies a declared
+tool refuses the gate before launch. All guarded children and recorded input
+identity use the resulting `PATH`; ordinary `PATH` candidates and their strict
+ancestors remain observed.
+
 Effect tests use `it.effect`, test Layers, `TestClock`, and deterministic
 synchronization instead of module mocks, ambient time, or sleeps. Name property tests
 `*.property.test.ts`.
