@@ -324,3 +324,18 @@ checker receipts and zero warm launches. Typecheck, exact-file lint, formatting
 and whitespace checks pass. These prove the longer local policy is wired
 consistently while the hosted contract remains intact; new real measurements
 and final handoff still remain to be collected.
+
+The admitted preflight at `84056f501` (run
+`ec9271f4-63c1-4c06-8e79-e003682ccba8`) passed 14 of 15 stages with unchanged
+source and stopped custody. Full lint took 83.763 seconds and capability
+registration 35.000 seconds, within their existing caps. Formal controls passed
+92 of 93 tests; their missing-admission negative control inherited the real
+preflight admission, so it reached the subsequent missing-Java-home check.
+The corrected S13 fixture removes custody in a separate Node child, supplies
+valid Java identity and asserts exact admission refusal with zero prerequisite,
+deadline, launch or profile boundary calls. It passes both standalone and
+through the actual admitted entry (run
+`6aebbe05-5650-4139-a7b1-d756d5c97a5f`). Production behavior is unchanged.
+The original preflight remains failed evidence; final handoff must rerun its
+complete census. New raw logs are retained under
+`.scratch/formal-reuse-qualification/local-budget/`.

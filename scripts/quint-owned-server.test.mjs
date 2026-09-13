@@ -188,21 +188,25 @@ test("owned-server shutdown absence failure refuses success", () => {
   }
 })
 
-test("missing inherited admission refuses owned-server launch", async () => {
-  const { withOwnedQuintServer } = await import("./quint-owned-server.mjs")
-  await assert.rejects(
-    withOwnedQuintServer({
-      javaExecutable: process.execPath,
-      javaArguments: [],
-      apalacheJar: "absent",
-      environment: {},
-      remainingExecutionMilliseconds: () => 100,
-      runProfile: async () => {
-        throw Error("must not run")
-      }
-    }),
-    /inherited exact-worktree admission/u
+test("missing inherited admission refuses owned-server launch", () => {
+  // The test suite itself can run inside admitted preflight custody. This
+  // separate child removes that custody without changing other tests' context.
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `import assert from 'node:assert/strict';
+import {withOwnedQuintServer} from ${JSON.stringify(helper)};
+let calls=0;
+const forbidden=()=>{calls++;throw Error('must not cross boundary');};
+await assert.rejects(withOwnedQuintServer({javaExecutable:process.execPath,javaUserHome:'/identified/home',javaArguments:['-Duser.home=/identified/home'],apalacheJar:'absent',environment:{},remainingExecutionMilliseconds:forbidden,runProfile:forbidden,boundaries:{assertPrerequisites:forbidden,runBoundedCommand:forbidden}}),/inherited exact-worktree admission/u);
+assert.equal(calls,0);
+`
+    ],
+    { env: withoutInheritedCustody(process.env), encoding: "utf8", timeout: 5000 }
   )
+  assert.equal(result.status, 0, result.stdout + result.stderr)
 })
 
 test("unsupported owned-server prerequisites refuse launch before custody registration", () => {
