@@ -3,7 +3,6 @@ import {
   ApplicationExitResult,
   completionOriginalTaskClaimReleaseFor,
   completionTaskRequestFor,
-  type CompletionTaskClaim,
   deliveryStatusOf,
   DeliveryStatusSubject,
   FocusedTaskCompletionFactsObserved,
@@ -15,7 +14,6 @@ import {
   TrackerTarget,
   WorkflowResponsibilityEntry,
   type CurrentDeliveryStatus,
-  type DeliveryActionProposal,
   type DeliveryRuntimeObservationState,
   type DeliveryStatusEntry
 } from "@dalph/orchestrator"
@@ -51,7 +49,9 @@ import {
   validateResponsibility,
   validateCompletionClaim,
   validateCompletionRequest,
-  validateGraph
+  validateCompletionFacts,
+  validateGraph,
+  completionClaimOfProposal
 } from "./production-hermetic-qualification-fixture-source.js"
 
 import { validateProposal } from "./production-hermetic-qualification-proposal-source.js"
@@ -231,19 +231,6 @@ const validateObligation = Effect.fn("HermeticQualification.validateObligation")
   }
 })
 
-const completionClaimOfProposal = (proposal: DeliveryActionProposal): CompletionTaskClaim | null => {
-  if (proposal.route._tag !== "IdentityFreeWorkflowRoute") return null
-  const transition = proposal.route.transition
-  if (
-    transition._tag === "ReplacePromotedTaskClaim" ||
-    transition._tag === "CompletePromotedTask" ||
-    transition._tag === "ObserveFocusedTaskCompletion" ||
-    transition._tag === "DeleteCompletedTaskCompletionClaim"
-  )
-    return transition.request.claim
-  return null
-}
-
 const completionReleaseOperationIds = Effect.fn("HermeticQualification.completionReleaseOperationIds")(function* (
   entries: ReadonlyArray<DeliveryStatusEntry>,
   context: QualificationContext
@@ -278,6 +265,7 @@ const focusedCompletionOperationIds = Effect.fn("HermeticQualification.focusedCo
         strictSource
       )(item.observed.observation).pipe(Effect.mapError(sourceRejected))
       yield* validateCompletionRequest(original.request, context)
+      yield* validateCompletionFacts(original.facts, context)
       if (!Schema.toEquivalence(TrackerTarget)(original.target, context.configuration.target))
         return yield* sourceRejected()
       return [original.operationId]

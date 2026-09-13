@@ -17,9 +17,11 @@ import {
   completionClaimDeletionRequestFor,
   completionTaskRequestFor,
   trackerRevisionFor,
+  githubFocusedCompletionRevisionFor,
   TaskDagWire,
   TaskTrackerFactsObservation,
   type TrackerRevision,
+  type DeliveryActionProposal,
   type FocusedTaskCompletionFacts
 } from "@dalph/orchestrator"
 import { Effect, Schema } from "effect"
@@ -98,8 +100,18 @@ export const validateCompletionFacts = Effect.fn("HermeticQualification.validate
     !Schema.toEquivalence(TrackerTarget)(facts.target, context.configuration.target)
   )
     return yield* sourceRejected()
-  yield* validateTrackerRevision(facts.trackerRevision, context)
   yield* validateCompletionFactsClaim(facts.currentClaim, context)
+  if (facts.lifecycle === "TerminalWithoutSuccess") return yield* sourceRejected()
+  const revision = yield* githubFocusedCompletionRevisionFor({
+    currentClaim: facts.currentClaim,
+    lifecycle: facts.lifecycle,
+    target: facts.target,
+    targetMembership: facts.targetMembership,
+    taskId: facts.taskId,
+    taskRevision: facts.taskRevision,
+    unfinishedPrerequisiteTaskIds: facts.unfinishedPrerequisiteTaskIds
+  }).pipe(Effect.mapError(sourceRejected))
+  if (facts.trackerRevision !== revision) return yield* sourceRejected()
 })
 
 const validateCompletionFactsClaim = Effect.fn("HermeticQualification.validateCompletionFactsClaim")(function* (
@@ -325,6 +337,26 @@ export const validateCandidate = Effect.fn("HermeticQualification.validateCandid
   return decoded
 })
 
+export const completionClaimOfProposal = (
+  proposal: DeliveryActionProposal
+):
+  | Extract<
+      Extract<DeliveryActionProposal["route"], { readonly _tag: "IdentityFreeWorkflowRoute" }>["transition"],
+      { readonly _tag: "CompletePromotedTask" }
+    >["request"]["claim"]
+  | null => {
+  if (proposal.route._tag !== "IdentityFreeWorkflowRoute") return null
+  const transition = proposal.route.transition
+  if (
+    transition._tag === "ReplacePromotedTaskClaim" ||
+    transition._tag === "CompletePromotedTask" ||
+    transition._tag === "ObserveFocusedTaskCompletion" ||
+    transition._tag === "DeleteCompletedTaskCompletionClaim"
+  )
+    return transition.request.claim
+  return null
+}
+
 export const validateCompletionClaim = Effect.fn("HermeticQualification.validateCompletionClaim")(function* (
   claim: CompletionTaskClaim,
   context: QualificationContext
@@ -377,14 +409,17 @@ export const validateDeletionRequest = Effect.fn("HermeticQualification.validate
   const claim = yield* validateCompletionClaim(decoded.claim, context)
   const success = decoded.successObservation
   yield* validateWorkflowOperationId(success.operationId, context)
-  if (
-    !Schema.toEquivalence(TrackerTarget)(success.target, context.configuration.target) ||
-    success.trackerRevision !==
-      trackerRevisionFor([
-        { id: context.taskId, lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }
-      ])
-  )
-    return yield* sourceRejected()
+  if (!Schema.toEquivalence(TrackerTarget)(success.target, context.configuration.target)) return yield* sourceRejected()
+  const revision = yield* githubFocusedCompletionRevisionFor({
+    currentClaim: claim,
+    lifecycle: success.lifecycle,
+    target: success.target,
+    targetMembership: "Member",
+    taskId: success.taskId,
+    taskRevision: success.taskRevision,
+    unfinishedPrerequisiteTaskIds: []
+  }).pipe(Effect.mapError(sourceRejected))
+  if (success.trackerRevision !== revision) return yield* sourceRejected()
   const expected = completionClaimDeletionRequestFor(claim, success)
   if (!Schema.toEquivalence(CompletionClaimDeletionRequest)(decoded, expected)) return yield* sourceRejected()
   return expected

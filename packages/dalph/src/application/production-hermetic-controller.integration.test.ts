@@ -110,6 +110,8 @@ const publishEvidence = Effect.fn("HermeticQualification.publishEvidence")(funct
     journal,
     artifact
   })
+  if (outcome._tag === "PublicationFailed")
+    return yield* Effect.die(new Error(`qualification publication failed: ${outcome.failure.operation}`))
   expect(outcome._tag).toBe("Published")
   const evidence = outcome.evidence
   const published = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ProductionMvpQualificationEvidence), {
@@ -263,7 +265,7 @@ it.live(
         expect(issue).toBeDefined()
         const retainedIssue = githubCleanup.retained.filter(({ resource }) => resource._tag === "Issue")
         expect(retainedIssue).toHaveLength(1)
-        expect(retainedIssue[0]?.resource).toBe(issue)
+        expect(retainedIssue[0]?.resource).toStrictEqual(issue)
         expect(retainedIssue[0]?.reason).toBe("ChangedIdentity")
         expect(githubCleanup.removed.some((resource) => resource._tag === "Issue")).toBe(false)
         expect((yield* controller.finalTrackerFacts).issuePresent).toBe(true)

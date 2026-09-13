@@ -239,6 +239,7 @@ export {
   githubTrackerGraphReaderNodeLayer
 } from "./authorities/task-tracker/github/graph-reader.js"
 export { githubTaskIdFor, trackerRevisionFor } from "./authorities/task-tracker/github/task-identity.js"
+export { githubFocusedCompletionRevisionFor } from "./authorities/task-tracker/github/focused-completion-reader.js"
 export {
   githubTrackerMutationLayer,
   githubTrackerMutationNodeLayer

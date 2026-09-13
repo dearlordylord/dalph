@@ -83,6 +83,10 @@ import {
   TrackerTask,
   trackerGraphReadProposalOf,
   trackerRevisionFor,
+  githubFocusedCompletionRevisionFor,
+  currentSignalOf,
+  ProductionRunSelection,
+  TaskTrackerMutationThrottled,
   UnqueuedAcceptedResult,
   WorkflowJournalEvent,
   WorkflowOperation,
@@ -98,16 +102,34 @@ import { makeTestJournaledTrackerGraphObservation } from "../../../orchestrator/
 import { ticketOwnerSnapshotForTest } from "../../../orchestrator/test/support/delivery-runtime-live-owner.js"
 import {
   contextFor,
+  HermeticQualificationSourceRejected,
   qualificationPlannedAttemptFor,
   type QualificationContext
 } from "./production-hermetic-qualification-attempt-source.js"
 import { validateProposal } from "./production-hermetic-qualification-proposal-source.js"
-import { Effect, Schema } from "effect"
+import { validateCompletionFacts } from "./production-hermetic-qualification-fixture-source.js"
+import { Cause, Effect, Option, Result, Schema } from "effect"
 import { describe, expect, it } from "vitest"
 import { decodeProductionRepositoryHostConfiguration } from "./production-configuration.js"
-import { HermeticFixtureManifest } from "./production-hermetic-contract.js"
-import { currentDeliveryStatusRecord, ProductionCliDeliveryError } from "./production-cli.js"
-import { hermeticCanonicalRecordDigest } from "./production-hermetic-provider-bridge.js"
+import { HermeticFixtureManifest, HermeticRegistrationScopeId } from "./production-hermetic-contract.js"
+import {
+  currentDeliveryStatusRecord,
+  productionCliFailureForSelectedRun,
+  productionCliFailureRecord,
+  ProductionCliDeliveryError,
+  ProductionCliLifecycleError,
+  type ProductionCliHostObservation
+} from "./production-cli.js"
+import {
+  hermeticCanonicalRecordDigest,
+  HermeticControllerEndpoint,
+  HermeticExpectedRecordRegistration
+} from "./production-hermetic-provider-bridge.js"
+import { withHermeticQualificationFailureRegistration } from "./production-hermetic-qualification-host.js"
+import type { ProductionCliHostRunner } from "./live-cli.js"
+// The fixture observes a real qualification HTTP ACK, never a live provider.
+// eslint-disable-next-line import/no-nodejs-modules
+import { createServer, type ServerResponse } from "node:http"
 import {
   validateHermeticQualificationDeliveryFailure,
   validateHermeticQualificationHistory,
@@ -334,7 +356,17 @@ const routeFixtures = (
     taskId: context.taskId,
     taskRevision: context.specification.fingerprint,
     target: context.configuration.target,
-    trackerRevision: trackerRevisionFor([{ ...task, lifecycle: { _tag: "CompletedSuccessfully" } }])
+    trackerRevision: Effect.runSync(
+      githubFocusedCompletionRevisionFor({
+        currentClaim: fixture.claim,
+        lifecycle: "CompletedSuccessfully",
+        target: context.configuration.target,
+        targetMembership: "Member",
+        taskId: context.taskId,
+        taskRevision: context.specification.fingerprint,
+        unfinishedPrerequisiteTaskIds: []
+      })
+    )
   })
   const deletion = completionClaimDeletionRequestFor(fixture.claim, success)
   const routes: ReadonlyArray<DeliveryActionProposal["route"]> = [
@@ -543,9 +575,17 @@ const lookupHistory = (context: QualificationContext, detail: string, acknowledg
     operationId: operation.operationId,
     taskId: context.taskId,
     taskRevision: context.specification.fingerprint,
-    trackerRevision: trackerRevisionFor([
-      TrackerTask.make({ id: context.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] })
-    ]),
+    trackerRevision: Effect.runSync(
+      githubFocusedCompletionRevisionFor({
+        currentClaim: claim,
+        lifecycle: "Open",
+        target: context.configuration.target,
+        targetMembership: "Member",
+        taskId: context.taskId,
+        taskRevision: context.specification.fingerprint,
+        unfinishedPrerequisiteTaskIds: []
+      })
+    ),
     target: context.configuration.target,
     lifecycle: "Open",
     targetMembership: "Member",
@@ -849,7 +889,186 @@ const coherentCompletionMutation = (
     }
   })
 
+const controlledRegistrationServer = async () => {
+  let calls = 0
+  let receive: (registration: {
+    readonly response: ServerResponse
+    readonly body: unknown
+    readonly scope: string | Array<string> | undefined
+  }) => void = () => undefined
+  const captured = new Promise<{
+    readonly response: ServerResponse
+    readonly body: unknown
+    readonly scope: string | Array<string> | undefined
+  }>((resolve) => {
+    receive = resolve
+  })
+  const server = createServer((request, response) => {
+    calls += 1
+    let body = ""
+    request.setEncoding("utf8")
+    request.on("data", (chunk) => {
+      body += chunk
+    })
+    request.on("end", () =>
+      receive({ response, body: JSON.parse(body), scope: request.headers["x-dalph-registration-scope"] })
+    )
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const address = server.address()
+  if (address === null || typeof address === "string") throw new Error("controlled HTTP server has no TCP address")
+  return {
+    endpoint: HermeticControllerEndpoint.make(`http://127.0.0.1:${address.port}`),
+    captured,
+    calls: () => calls,
+    close: async () => {
+      server.closeAllConnections()
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error === undefined ? resolve() : reject(error)))
+      )
+    }
+  }
+}
+
 describe("qualification original source boundary", () => {
+  it("acknowledges an outer host throttle using the original Ready or closed final source before propagation", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const completion = completionFixture(context)
+    const ready = readyFor(context, [completion.proposal])
+    if (ready._tag !== "Ready") throw new Error("pure source fixture must be ready")
+    const throttle = new TaskTrackerMutationThrottled({
+      operation: "CompleteTask",
+      operationId: completion.request.operationId,
+      retry: null,
+      detail: "controlled HTTP429"
+    })
+    const mapped = productionCliFailureForSelectedRun(throttle, runId)
+    if (mapped?._tag !== "ProductionCliDeliveryError")
+      throw new Error("controlled throttle must map to the literal delivery failure")
+    const scope = HermeticRegistrationScopeId.make("controlled-registration-scope")
+    for (const state of [ready, { _tag: "Closed" as const, final: ready }]) {
+      const transport = await controlledRegistrationServer()
+      try {
+        const observation: ProductionCliHostObservation = {
+          current: currentSignalOf(state),
+          acceptedHistory: currentSignalOf(TraceCursor.make({ runId, position: JournalPosition.make(1) })),
+          selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+          runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
+          traceReader: { readAt: () => Effect.die(new Error("history is not read by this failure fixture")) }
+        }
+        const ordinary: ProductionCliHostRunner<TaskTrackerMutationThrottled, never> = (_configuration, use) =>
+          use(observation, { requestExit: Effect.never }).pipe(Effect.andThen(Effect.fail(throttle)))
+        const host = withHermeticQualificationFailureRegistration(manifest, transport.endpoint, scope, ordinary)
+        let propagated = false
+        const result = Effect.runPromiseExit(host(configuration, () => Effect.void)).then((exit) => {
+          propagated = true
+          return exit
+        })
+        const captured = await transport.captured
+        expect(propagated).toBe(false)
+        expect(captured.scope).toBe(scope)
+        const registration = Schema.decodeUnknownSync(HermeticExpectedRecordRegistration, {
+          onExcessProperty: "error"
+        })(captured.body)
+        expect(registration.digest).toBe(hermeticCanonicalRecordDigest(productionCliFailureRecord(mapped)))
+        captured.response.end("{}")
+        const exit = await result
+        if (exit._tag !== "Failure") throw new Error("original throttle must propagate")
+        expect(Option.getOrThrow(Cause.findErrorOption(exit.cause))).toBe(throttle)
+        expect(transport.calls()).toBe(1)
+      } finally {
+        await transport.close()
+      }
+    }
+  })
+
+  it("preserves an observed callback error without fabricating a delivery registration", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const transport = await controlledRegistrationServer()
+    try {
+      const error = new ProductionCliLifecycleError({
+        code: "lifecycle.exit_failed",
+        detail: "controlled exit failure",
+        subject: runId
+      })
+      const observation: ProductionCliHostObservation = {
+        current: currentSignalOf({ _tag: "NotReady" }),
+        acceptedHistory: currentSignalOf(TraceCursor.make({ runId, position: JournalPosition.make(1) })),
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
+        traceReader: { readAt: () => Effect.never }
+      }
+      const ordinary: ProductionCliHostRunner<never, never> = (_configuration, use) =>
+        use(observation, { requestExit: Effect.never })
+      const host = withHermeticQualificationFailureRegistration(
+        manifest,
+        transport.endpoint,
+        HermeticRegistrationScopeId.make("controlled-registration-scope"),
+        ordinary
+      )
+      const observed = await Effect.runPromise(host(configuration, () => Effect.fail(error)).pipe(Effect.flip))
+      expect(observed).toBe(error)
+      expect(transport.calls()).toBe(0)
+    } finally {
+      await transport.close()
+    }
+  })
+
+  it("rejects absent original observations and missing current or closed final completion sources without registration", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const completion = completionFixture(context)
+    const raw = new TaskTrackerMutationThrottled({
+      operation: "CompleteTask",
+      operationId: completion.request.operationId,
+      retry: null,
+      detail: "controlled HTTP429"
+    })
+    const mapped = productionCliFailureForSelectedRun(raw, runId)
+    if (mapped?._tag !== "ProductionCliDeliveryError") throw new Error("controlled throttle must map")
+    const transport = await controlledRegistrationServer()
+    try {
+      const scope = HermeticRegistrationScopeId.make("controlled-registration-scope")
+      for (const error of [raw, mapped]) {
+        const ordinary: ProductionCliHostRunner<typeof error, never> = () => Effect.fail(error)
+        const exit = await Effect.runPromiseExit(
+          withHermeticQualificationFailureRegistration(
+            manifest,
+            transport.endpoint,
+            scope,
+            ordinary
+          )(configuration, () => Effect.void)
+        )
+        if (exit._tag !== "Failure") throw new Error("missing source must reject")
+        expect(Result.getOrThrow(Cause.findDefect(exit.cause))).toBeInstanceOf(HermeticQualificationSourceRejected)
+      }
+      for (const state of [{ _tag: "NotReady" } as const, { _tag: "Closed", final: null } as const]) {
+        const observation: ProductionCliHostObservation = {
+          current: currentSignalOf(state),
+          acceptedHistory: currentSignalOf(TraceCursor.make({ runId, position: JournalPosition.make(1) })),
+          selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+          runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
+          traceReader: { readAt: () => Effect.never }
+        }
+        const ordinary: ProductionCliHostRunner<TaskTrackerMutationThrottled, never> = (_configuration, use) =>
+          use(observation, { requestExit: Effect.never }).pipe(Effect.andThen(Effect.fail(raw)))
+        const exit = await Effect.runPromiseExit(
+          withHermeticQualificationFailureRegistration(
+            manifest,
+            transport.endpoint,
+            scope,
+            ordinary
+          )(configuration, () => Effect.void)
+        )
+        if (exit._tag !== "Failure") throw new Error("missing final source must reject")
+        expect(Result.getOrThrow(Cause.findDefect(exit.cause))).toBeInstanceOf(HermeticQualificationSourceRejected)
+      }
+      expect(transport.calls()).toBe(0)
+    } finally {
+      await transport.close()
+    }
+  })
   it("binds the actual selected Run before a not-ready or closed status is presented", async () => {
     const { configuration, manifest, runId } = await Effect.runPromise(fixture)
     for (const state of [{ _tag: "NotReady" } as const, { _tag: "Closed", final: null } as const]) {
@@ -922,6 +1141,50 @@ describe("qualification original source boundary", () => {
       ).pipe(Effect.flip)
     )
     expect(JSON.stringify(rejected)).not.toContain("private-session-sentinel")
+  })
+
+  it("binds focused revisions to original claim and lifecycle facts rather than graph revisions", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const { claim } = completionFixture(context)
+    const variants: ReadonlyArray<Pick<FocusedTaskCompletionFacts, "lifecycle" | "currentClaim">> = [
+      { lifecycle: "Open", currentClaim: claim },
+      { lifecycle: "CompletedSuccessfully", currentClaim: claim },
+      { lifecycle: "CompletedSuccessfully", currentClaim: { _tag: "UnclaimedTask", taskId: context.taskId } }
+    ]
+    const revisions = []
+    for (const variant of variants) {
+      const content = {
+        ...variant,
+        target: configuration.target,
+        targetMembership: "Member" as const,
+        taskId: context.taskId,
+        taskRevision: context.specification.fingerprint,
+        unfinishedPrerequisiteTaskIds: []
+      }
+      const trackerRevision = await Effect.runPromise(githubFocusedCompletionRevisionFor(content))
+      const facts = FocusedTaskCompletionFacts.make({
+        ...content,
+        operationId: claim.originalClaim.operationId,
+        trackerRevision
+      })
+      await Effect.runPromise(validateCompletionFacts(facts, context))
+      revisions.push(trackerRevision)
+      const privateTaskId = TaskId.make("private-session-sentinel")
+      const privateContent = {
+        ...content,
+        taskId: privateTaskId,
+        currentClaim: { _tag: "UnclaimedTask" as const, taskId: privateTaskId }
+      }
+      const privateFacts = FocusedTaskCompletionFacts.make({
+        ...facts,
+        ...privateContent,
+        trackerRevision: await Effect.runPromise(githubFocusedCompletionRevisionFor(privateContent))
+      })
+      const rejected = await Effect.runPromise(validateCompletionFacts(privateFacts, context).pipe(Effect.flip))
+      expect(JSON.stringify(rejected)).not.toContain("private-session-sentinel")
+    }
+    expect(new Set(revisions).size).toBe(variants.length)
   })
 
   it("checks a pure Ready source fixture and rejects counterfeit opaque proposal identity before a token", async () => {

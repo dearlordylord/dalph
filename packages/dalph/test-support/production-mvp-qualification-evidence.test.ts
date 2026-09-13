@@ -157,7 +157,19 @@ it.effect("complete artifact schema rejects original unknown fields and free fai
         schemaEvidence(container, abcDigest)
       )
       const digest = yield* qualificationTranscriptDigest(initial.transcript.records)
-      const evidence = { ...initial, transcript: { ...initial.transcript, digest } }
+      if (initial.localCleanup._tag !== "RetainedFixture")
+        return yield* Effect.die("unit fixture requires retained cleanup")
+      const resource = Schema.decodeUnknownSync(HermeticFixtureResource)({
+        _tag: "ConfigurationDocument",
+        locator: `${container}/configuration.json`
+      })
+      const localCleanup = { ...initial.localCleanup, retained: [resource] }
+      const evidence = {
+        ...initial,
+        localCleanup,
+        cleanupDisposition: qualificationCleanupDisposition(initial.githubCleanup, localCleanup),
+        transcript: { ...initial.transcript, digest }
+      }
       const output = QualificationArtifactLocator.make(`${root}/complete.json`)
       const unknownInput = { ...evidence, private_configuration: "qualification-private-sentinel" }
       const rejected = yield* publishQualificationEvidence(container, output, unknownInput).pipe(Effect.flip)
@@ -196,7 +208,7 @@ it.effect("complete artifact schema rejects original unknown fields and free fai
       expect(yield* fs.exists(unavailable)).toBe(false)
       expect(evidence.runs).toEqual(initial.runs)
       expect(evidence.processes).toEqual(initial.processes)
-      expect(evidence.localCleanup).toEqual(initial.localCleanup)
+      expect(evidence.localCleanup).toEqual(localCleanup)
       expect(evidence.githubCleanup).toEqual(initial.githubCleanup)
     })
   ).pipe(Effect.provide(NodeServices.layer), Effect.provide(NodeCrypto.layer))

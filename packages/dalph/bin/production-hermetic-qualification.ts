@@ -10,11 +10,9 @@ import {
   HermeticFixtureManifest,
   HermeticRegistrationScopeId
 } from "../src/application/production-hermetic-contract.js"
-import { productionCliFailureForSelectedRun } from "../src/application/production-cli.js"
-import { HermeticQualificationSourceRejected } from "../src/application/production-hermetic-qualification-attempt-source.js"
+import { withHermeticQualificationFailureRegistration } from "../src/application/production-hermetic-qualification-host.js"
 import {
   validateHermeticQualificationApplicationExit,
-  validateHermeticQualificationDeliveryFailure,
   validateHermeticQualificationHistory,
   validateHermeticQualificationRunDisposition,
   validateHermeticQualificationSelection,
@@ -37,12 +35,17 @@ const application = Effect.gen(function* () {
   )
   const endpoint = yield* Config.schema(HermeticControllerEndpoint, "DALPH_HERMETIC_CONTROLLER")
   const scope = yield* Config.schema(HermeticRegistrationScopeId, "DALPH_HERMETIC_REGISTRATION_SCOPE")
-  const host = makeProductionCliHostRunner({
-    githubClient: (configuration) => hermeticGithubClientLayer(endpoint, configuration),
-    codexAppServer: () =>
-      hermeticCodexAppServerLayer(endpoint, CodexServerIncarnation.make("hermetic-provider-incarnation")),
-    targetPromotionCompareAndSetObserver: hermeticPromotionCompareAndSetObserver(endpoint)
-  })
+  const host = withHermeticQualificationFailureRegistration(
+    manifest,
+    endpoint,
+    scope,
+    makeProductionCliHostRunner({
+      githubClient: (configuration) => hermeticGithubClientLayer(endpoint, configuration),
+      codexAppServer: () =>
+        hermeticCodexAppServerLayer(endpoint, CodexServerIncarnation.make("hermetic-provider-incarnation")),
+      targetPromotionCompareAndSetObserver: hermeticPromotionCompareAndSetObserver(endpoint)
+    })
+  )
   return yield* makeProductionCliApplicationFromHost((configuration, use) =>
     authorizeHermeticFixture(manifest, configuration).pipe(
       Effect.andThen(
@@ -132,23 +135,6 @@ const application = Effect.gen(function* () {
                   )
                 )
               }
-            ).pipe(
-              Effect.tapError((error) => {
-                const failure = productionCliFailureForSelectedRun(error, runId)
-                if (failure?._tag !== "ProductionCliDeliveryError") return Effect.void
-                return observation.current.get.pipe(
-                  Effect.mapError(() => new HermeticQualificationSourceRejected({})),
-                  Effect.orDie,
-                  Effect.flatMap((state) =>
-                    validateHermeticQualificationDeliveryFailure(manifest, configuration, failure, runId, state).pipe(
-                      Effect.flatMap((checked) =>
-                        registerHermeticExpectedRecord(endpoint, scope, checked.registration)
-                      ),
-                      Effect.orDie
-                    )
-                  )
-                )
-              })
             )
           })
         )

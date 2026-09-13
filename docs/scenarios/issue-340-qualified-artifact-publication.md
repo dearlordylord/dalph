@@ -246,11 +246,12 @@ teardown, and `ChangedIdentity` retention after one exact cleanup pass.
 | 2: opaque source and record binding | Qualification host/current-source tests seed a sentinel in a source atom and inside an opaque identity; reject before expected-record registration or public presentation. Parent tests reject an otherwise canonical counterfeit record without the exact safe-source record binding. All four built-controller chronologies retain live RunSelected and original P1/P2 synchronization. |
 | 2: original spawn registration | Controller component tests use distinct original spawn handles with the same numeric PID and a delayed S1 request during the S2 spawn gate. Prove zero stale/unknown-scope digest adoption or cache, and one owned S2/PID ACK before record publication. Actual built-child tests preserve startup synchronization without a provider retry. |
 | 2: actual completion throttle | The built throttle chronology uses the production HTTP429 classification and the original current/final runtime request to bind the deterministic CompleteTask operation before safe-token registration and literal Failure publication; absent or mismatched request source is rejected without a UUID substitute. |
+| 2: callback and outer host failures | `production-hermetic-qualification-source.test.ts` drives the actual-used qualification host wrapper through callback and host-delivered errors using its original source fixtures; proves original-observation/current-or-closed-final validation and registration acknowledgement before error propagation, and safe rejection when the original source is absent. |
 | 3: exact GitHub cleanup | `disposable-github-qualification-cleanup.ts` and adjacent controlled tests prove fresh exact repository/issue/label ownership, one exact deletion, and absence reread; foreign, changed, unreadable, and throttled cases prove preservation and exact retained commands. No live provider is called. |
 | 3: local cleanup | Reuse existing `disposeHermeticFixture` tests and its controller caller; prove changed same-locator identity retained, partial removal truthful, and `RemovedResources` still reports the retained container. |
 | 4: publication failure | Evidence/controller writer-failure tests preserve independent Run/process dispositions and actual cleanup results, claim no artifact success, and prove no automatic child/provider/cleanup rerun. |
 
-The minimum implementation is the two qualification-only modules and their
+The implementation is qualification-only source/evidence helpers and their
 focused tests plus narrow existing-controller wiring. This is not a new
 controller, generic package API, artifact framework, legacy migration, or MBT lane.
 The qualification source validator reuses the existing canonical
@@ -264,3 +265,25 @@ request lookup operation from its actual attempt ordinal, and historical candida
 ancestry read operation from its actual authorization purpose from validated
 source atoms; they introduce no new codec or authority. Existing constructor
 tests and qualification source-binding tests cover that reuse.
+
+When Alice's child reads the task again before or after closing it, the GitHub
+focused completion reader returns the original current claim, lifecycle, target,
+membership, task identity, work-specification revision and unfinished prerequisite
+identities. Its revision encodes those facts, not the whole task graph. The
+qualification callback checks every contributing fact and recomputes that
+revision with the same constructor used by the ordinary reader. It must not
+compare it with a graph revision, accept an arbitrary opaque string, or invent
+a replacement observation. A deleted completion claim still refers to the
+original focused facts that authorized its deletion. Focused reader and source
+tests cover unchanged, completed and released-claim observations, and reject a
+private or substituted contributing fact before token registration.
+
+When the controlled GitHub transport returns HTTP 429, the production host can
+receive the activation failure outside the presenter's callback. The
+qualification wrapper must validate and acknowledge the mapped literal failure
+before the ordinary CLI writes it, whichever host branch delivers the error.
+It uses the original selected observation and its original current or closed
+final source; missing facts remain a safe rejection, not a fabricated request.
+The built throttle test proves one request, safe bound Failure publication and
+recovery without a second close. Focused wrapper tests cover both callback and
+host-delivered failure paths and rejection when the original source is absent.
