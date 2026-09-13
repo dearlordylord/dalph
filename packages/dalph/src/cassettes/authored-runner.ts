@@ -1357,12 +1357,32 @@ const isOnlyAuthoredCoordinatorProcessDeath = (exit: Exit.Failure<unknown, unkno
       (Cause.isDieReason(reason) && reason.defect instanceof AuthoredCoordinatorProcessDies)
   )
 
+/** A delayed return observation belongs to its exiting entry, not the currently running entry. */
+const authoredCoordinatorReturnObservationOrigin = Context.Reference<Option.Option<AuthoredRunActivationOrdinalType>>(
+  "AuthoredCoordinatorReturnObservationOrigin",
+  { defaultValue: Option.none }
+)
+
+/** Preserve valid-marker consumption timing, but reject an independently declared owed return's omission. */
+const validateDeclaredCoordinatorActivationReturn = Effect.fnUntraced(function* (cursor: StoryCursor) {
+  if ((yield* cursor.currentStoryItem)?._tag === "CoordinatorActivationReturned") return
+  if (yield* cursor.atTerminalAssertions) return
+  yield* cursor.consumeCoordinatorActivationReturned
+})
+
 type AuthoredOwnerExitBoundary =
   | { readonly _tag: "DeclaredProcessDeath"; readonly exit: Exit.Failure<unknown, unknown> }
-  | { readonly _tag: "ActivationExited"; readonly exit: Exit.Exit<CoordinatorFinalityDecision, unknown> }
+  | { readonly _tag: "OwnerFailed"; readonly cause: Cause.Cause<unknown> }
+  | {
+      readonly _tag: "ActivationExited"
+      /** The actual exiting entry is captured before a later owner entry can start. */
+      readonly activationOrdinal: AuthoredRunActivationOrdinalType
+      readonly exit: Exit.Exit<CoordinatorFinalityDecision, unknown>
+    }
 
 /** Untraced classification preserves the original failure Cause without adding helper metadata. */
 const classifyAuthoredOwnerBoundaryExit = Effect.fnUntraced(function* (boundary: AuthoredOwnerExitBoundary) {
+  if (boundary._tag === "OwnerFailed") return yield* Effect.failCause(boundary.cause)
   if (boundary._tag === "DeclaredProcessDeath") {
     if (isAuthoredCoordinatorProcessDeath(boundary.exit)) return "CoordinatorDied" as const
     return yield* Effect.failCause(boundary.exit.cause)
@@ -1481,7 +1501,13 @@ const runAuthoredScenarioCassetteWith = (request: {
         observation: AuthoredObservationCaptureInput,
         storyPosition: AuthoredStoryPosition
       ) {
-        const activationOrdinal = yield* Ref.get(activeDeliveryActivation)
+        const returnOrigin = yield* authoredCoordinatorReturnObservationOrigin
+        const activationOrdinal =
+          observation._tag === "AuthoredStoryOccurrenceCaptured" &&
+          observation.occurrence._tag === "CoordinatorActivationReturned" &&
+          Option.isSome(returnOrigin)
+            ? returnOrigin.value
+            : yield* Ref.get(activeDeliveryActivation)
         const capture = yield* Ref.modify(observationCaptureState, ({ acceptingPlayback, captures, nextOrder }) => {
           const correlation = {
             activationOrdinal,
@@ -3094,9 +3120,33 @@ const runAuthoredScenarioCassetteWith = (request: {
         const { application, applicationExit } = yield* makeApplicationProcess
         const applicationContext = yield* Layer.build(application)
         const bootstrap = Context.get(applicationContext, JournaledRunBootstrap)
-        const activationExits = yield* Queue.unbounded<Exit.Exit<CoordinatorFinalityDecision, unknown>>()
+        const activationExits = yield* Queue.unbounded<AuthoredOwnerExitBoundary>()
         const reportActivationExit = <E, R>(activation: Effect.Effect<CoordinatorFinalityDecision, E, R>) =>
-          activation.pipe(Effect.onExit((exit) => Queue.offer(activationExits, exit).pipe(Effect.asVoid)))
+          Effect.suspend(() => {
+            const startingPosition = cursor.storyPositionUnsafe()
+            return activation.pipe(
+              Effect.onExit((exit) =>
+                Effect.gen(function* () {
+                  const activationOrdinal = Ref.getUnsafe(activeDeliveryActivation)
+                  const declaredReturn = cassette.story
+                    .slice(startingPosition, cursor.storyPositionUnsafe())
+                    .some(
+                      (item) =>
+                        item._tag === "DalphSelects" &&
+                        item.causalAnchor?.expectedBoundary === "CoordinatorActivationReturned"
+                    )
+                  if (Exit.isSuccess(exit) && declaredReturn) {
+                    const validated = yield* Effect.exit(validateDeclaredCoordinatorActivationReturn(cursor))
+                    if (Exit.isFailure(validated)) {
+                      yield* Queue.offer(activationExits, { _tag: "OwnerFailed", cause: validated.cause })
+                      return yield* Effect.failCause(validated.cause)
+                    }
+                  }
+                  yield* Queue.offer(activationExits, { _tag: "ActivationExited", activationOrdinal, exit })
+                })
+              )
+            )
+          })
         const quietInterval = Duration.hours(1)
         const currentFirstNotification =
           (yield* cursor.currentStoryItem)?._tag === "CassettePublishesCurrentTrackerNotification"
@@ -3156,7 +3206,8 @@ const runAuthoredScenarioCassetteWith = (request: {
               acceptedFactPublication: () => acceptedFactPublication
             }),
           isTerminationFailure: (cause) => cause instanceof WorkflowRunAlreadyTerminated,
-          onFailure: (cause) => Queue.offer(activationExits, Exit.fail(cause)).pipe(Effect.asVoid),
+          onFailure: (failure) =>
+            Queue.offer(activationExits, { _tag: "OwnerFailed", cause: Cause.fail(failure) }).pipe(Effect.asVoid),
           readControl: bootstrap.readRunReactivationControl(command.target, runId),
           runId,
           ...(currentFirstNotification ? { trackerNotificationSource } : {})
@@ -3186,7 +3237,7 @@ const runAuthoredScenarioCassetteWith = (request: {
             )
             for (;;) {
               const boundary = yield* Effect.raceFirst(
-                Queue.take(activationExits).pipe(Effect.map((exit) => ({ _tag: "ActivationExited" as const, exit }))),
+                Queue.take(activationExits),
                 Effect.raceFirst(
                   cursor.awaitTerminalAssertions.pipe(Effect.as({ _tag: "AssertionsReached" as const })),
                   declaredProcessDeath
@@ -3198,7 +3249,12 @@ const runAuthoredScenarioCassetteWith = (request: {
               const exit = yield* classifyAuthoredOwnerBoundaryExit(boundary)
               if (exit === "CoordinatorDied") return exit
               if ((yield* cursor.currentStoryItem)?._tag === "CoordinatorActivationReturned") {
-                yield* settleCoordinatorActivationReturn(cursor, exit)
+                yield* settleCoordinatorActivationReturn(cursor, exit).pipe(
+                  Effect.provideService(
+                    authoredCoordinatorReturnObservationOrigin,
+                    boundary._tag === "ActivationExited" ? Option.some(boundary.activationOrdinal) : Option.none()
+                  )
+                )
               }
             }
           }),

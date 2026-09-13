@@ -476,6 +476,13 @@ reconciliation, and reaches at most one post-quiescence tracker
 reconfirmation before returning or recording termination.
 _Avoid_: Process lifetime, recovery activation, continuous coordinator loop
 
+**Authored return obligation**:
+A recording's explicit requirement that the coordinator activation which
+selected one named operation returns before the next activation's graph read.
+Partial observations make no such claim; the obligation is not production
+lifecycle authority.
+_Avoid_: Complete lifecycle recording, production return permission
+
 **Workflow-finality premise change**:
 A journal occurrence other than capacity-only bookkeeping that may invalidate
 an earlier finality proof for the same Run. Its position supports checking a

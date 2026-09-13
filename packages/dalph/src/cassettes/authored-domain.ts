@@ -84,7 +84,11 @@ const AuthoredCausalRole = Schema.NonEmptyString.pipe(Schema.brand("AuthoredCaus
  * ancestry is outside this causal check. Later batch members may name this
  * exact raw operation identity as an immediate predecessor.
  */
-const AuthoredCausalAnchor = Schema.Struct({ occurrenceRole: AuthoredCausalRole })
+const AuthoredCausalAnchor = Schema.Struct({
+  occurrenceRole: AuthoredCausalRole,
+  /** This selected operation owes an actual activation return; absence leaves that boundary unasserted. */
+  expectedBoundary: Schema.optionalKey(Schema.Literal("CoordinatorActivationReturned"))
+})
 
 /** Exact symbolic predecessor contract for one authored operation selection. */
 export const AuthoredCausalSelection = Schema.Struct({

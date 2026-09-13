@@ -16,6 +16,34 @@ import {
   deliveryInvariantStoryAuthoredCassette
 } from "../../src/cassettes/catalog.js"
 
+it("accepts a causal anchor that leaves activation return outside its assertion", () => {
+  const selected = {
+    _tag: "DalphSelects",
+    causalAnchor: { occurrenceRole: "paid-G2" },
+    operation: { _tag: "ReadTrackerGraph", target: "cassette-target" }
+  }
+  expect(Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.DalphSelects)(selected)).toEqual(selected)
+})
+
+it("accepts an independently declared activation return owed by the selected operation", () => {
+  const selected = {
+    _tag: "DalphSelects",
+    causalAnchor: { occurrenceRole: "paid-G2", expectedBoundary: "CoordinatorActivationReturned" },
+    operation: { _tag: "ReadTrackerGraph", target: "cassette-target" }
+  }
+  expect(Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.DalphSelects)(selected)).toEqual(selected)
+})
+
+it("rejects an unsupported causal-anchor return boundary", () => {
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.DalphSelects)({
+      _tag: "DalphSelects",
+      causalAnchor: { occurrenceRole: "paid-G2", expectedBoundary: "CoordinatorProcessDies" },
+      operation: { _tag: "ReadTrackerGraph", target: "cassette-target" }
+    })
+  ).toThrow()
+})
+
 it("accepts an exact in-flight prefix of the completion-finality boundary chronology", () => {
   const withoutDeletion = {
     ...deliveryFinalitySpineAuthoredCassette,
