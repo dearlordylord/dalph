@@ -38,9 +38,20 @@ export interface ProductionLiveResponsesCounts {
   readonly total: number
 }
 
+export type ProductionLiveResponsesObservationTag =
+  | "ExecutorRequest"
+  | "ExecutorGitReadHead"
+  | "IntegratorRequest"
+  | "IntegratorGitReadHead"
+
+export interface ProductionLiveResponsesObservation {
+  readonly counts: ProductionLiveResponsesCounts
+  readonly orderedTags: ReadonlyArray<ProductionLiveResponsesObservationTag>
+}
+
 export interface ProductionLiveResponsesEndpoint {
   readonly baseUrl: ProductionLiveResponsesEndpointLocator
-  readonly counts: () => ProductionLiveResponsesCounts
+  readonly observation: Effect.Effect<ProductionLiveResponsesObservation>
 }
 
 const stringsIn = (value: unknown): ReadonlyArray<string> => {
@@ -120,13 +131,17 @@ const send = (response: ServerResponse, id: string, item: unknown) => {
 }
 
 /**
- * Starts one Q-scoped Responses endpoint. It retains counts only; prompts,
- * tool output, provider response bodies, thread IDs and turn IDs are discarded.
+ * Starts one Q-scoped Responses endpoint. It retains only safe ordered request
+ * and Git-read tags plus their counts; prompts, tool output, provider response
+ * bodies, thread IDs and turn IDs are discarded.
  */
 export const makeProductionLiveResponsesEndpoint = Effect.fn("ProductionLiveResponsesEndpoint.make")(function* <E, R>(
   readHead: (worktree: ProductionLiveResponsesWorktreeLocator) => Effect.Effect<string, E, R>
 ) {
-  const counts = yield* Ref.make({ executor: 0, integrator: 0, total: 0 })
+  const observations = yield* Ref.make<ProductionLiveResponsesObservation>({
+    counts: { executor: 0, integrator: 0, total: 0 },
+    orderedTags: []
+  })
   const context = yield* Effect.context<R>()
   const runPromise = Effect.runPromiseWith(context)
   const sockets = new Set<Socket>()
@@ -145,10 +160,10 @@ export const makeProductionLiveResponsesEndpoint = Effect.fn("ProductionLiveResp
         const worktree = yield* Schema.decodeUnknownEffect(ProductionLiveResponsesWorktreeLocator)(
           lineValue(prompt.text, prompt.kind === "Executor" ? "worktree" : "Candidate worktree")
         ).pipe(Effect.mapError(() => new ProductionLiveResponsesEndpointFailure({ operation: "Request" })))
-        const ordinal = yield* Ref.modify(counts, (current) => {
+        const ordinal = yield* Ref.modify(observations, (current) => {
           const field = prompt.kind === "Executor" ? "executor" : "integrator"
-          const next = { ...current, [field]: current[field] + 1, total: current.total + 1 }
-          return [next[field], next] as const
+          const counts = { ...current.counts, [field]: current.counts[field] + 1, total: current.counts.total + 1 }
+          return [counts[field], { counts, orderedTags: [...current.orderedTags, `${prompt.kind}Request`] }] as const
         })
         const id = `${prompt.kind.toLowerCase()}-${ordinal}`
         if (ordinal === 1) {
@@ -180,6 +195,12 @@ export const makeProductionLiveResponsesEndpoint = Effect.fn("ProductionLiveResp
           Effect.flatMap(Schema.decodeUnknownEffect(GitCommitSha)),
           Effect.mapError(() => new ProductionLiveResponsesEndpointFailure({ operation: "ReadHead" }))
         )
+        const readHeadTag: ProductionLiveResponsesObservationTag =
+          prompt.kind === "Executor" ? "ExecutorGitReadHead" : "IntegratorGitReadHead"
+        yield* Ref.update(observations, (current) => ({
+          ...current,
+          orderedTags: [...current.orderedTags, readHeadTag]
+        }))
         if (prompt.kind === "Integrator") {
           send(
             response,
@@ -228,11 +249,5 @@ export const makeProductionLiveResponsesEndpoint = Effect.fn("ProductionLiveResp
         catch: () => new ProductionLiveResponsesEndpointFailure({ operation: "Close" })
       }).pipe(Effect.ignore)
   )
-  return {
-    baseUrl,
-    counts: () => {
-      const snapshot = Ref.getUnsafe(counts)
-      return { executor: snapshot.executor, integrator: snapshot.integrator, total: snapshot.total }
-    }
-  } satisfies ProductionLiveResponsesEndpoint
+  return { baseUrl, observation: Ref.get(observations) } satisfies ProductionLiveResponsesEndpoint
 })

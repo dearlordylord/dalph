@@ -15,6 +15,21 @@ import { GithubLabelName, GithubLabelNodeId } from "@dalph/orchestrator"
 import { Effect, MutableHashSet, Option, Ref, Schema } from "effect"
 
 const RequestShape = Schema.Struct({ query: Schema.String })
+export const productionLiveGithubOperationTags = [
+  "ResolveIssue",
+  "ResolveRepository",
+  "ReadIssue",
+  "ReadIssueDetails",
+  "ReadTaskWorkSpecification",
+  "ReadSubIssues",
+  "ReadBlockedBy",
+  "FindClaimLabel",
+  "CreateClaimLabel",
+  "DeleteClaimLabel",
+  "CloseIssue",
+  "Unrecognized"
+] as const
+export type ProductionLiveGithubOperationTag = (typeof productionLiveGithubOperationTags)[number]
 const CreateClaimLabelResponse = Schema.Struct({
   data: Schema.Struct({
     createLabel: Schema.Struct({
@@ -31,6 +46,7 @@ export interface ProductionLiveCreatedLabelReceipt {
 
 export interface ProductionLiveGithubForwarderObservation {
   readonly requestCount: number
+  readonly orderedOperations: ReadonlyArray<ProductionLiveGithubOperationTag>
   readonly createdLabels: ReadonlyArray<ProductionLiveCreatedLabelReceipt>
 }
 
@@ -90,6 +106,16 @@ const isCreateClaimLabel = (bytes: Uint8Array) => {
   }
 }
 
+const operationTag = (bytes: Uint8Array): ProductionLiveGithubOperationTag => {
+  try {
+    const decoded = Schema.decodeUnknownSync(RequestShape)(JSON.parse(new TextDecoder().decode(bytes)))
+    const operation = /\b(?:query|mutation)\s+([A-Za-z_][A-Za-z0-9_]*)/u.exec(decoded.query)?.[1]
+    return productionLiveGithubOperationTags.find((tag) => tag === operation) ?? "Unrecognized"
+  } catch {
+    return "Unrecognized"
+  }
+}
+
 const decodeCreateReceipt = (bytes: Uint8Array) => {
   try {
     return Schema.decodeUnknownOption(CreateClaimLabelResponse)(JSON.parse(new TextDecoder().decode(bytes)))
@@ -98,11 +124,11 @@ const decodeCreateReceipt = (bytes: Uint8Array) => {
   }
 }
 
-/** Forwards one GraphQL exchange without retry and retains only decoded label receipts plus a count. */
+/** Forwards once and retains only safe operation tags, counts, and decoded label receipts. */
 export const makeProductionLiveGithubForwarder = Effect.fn("ProductionLiveGithubForwarder.make")(function* (
   upstream: string
 ) {
-  const requests = yield* Ref.make(0)
+  const operations = yield* Ref.make<ReadonlyArray<ProductionLiveGithubOperationTag>>([])
   const labels = new Map<GithubLabelNodeId, ProductionLiveCreatedLabelReceipt>()
   const sockets = MutableHashSet.empty<Socket>()
   const context = yield* Effect.context<never>()
@@ -113,7 +139,7 @@ export const makeProductionLiveGithubForwarder = Effect.fn("ProductionLiveGithub
     runPromise(
       Effect.gen(function* () {
         const body = yield* readBytes(request)
-        yield* Ref.update(requests, (count) => count + 1)
+        yield* Ref.update(operations, (current) => [...current, operationTag(body)])
         const forwarded = yield* forwardBytes(
           upstream,
           {
@@ -175,7 +201,8 @@ export const makeProductionLiveGithubForwarder = Effect.fn("ProductionLiveGithub
   return {
     endpoint: `http://127.0.0.1:${address.port}/graphql`,
     observation: Effect.all({
-      requestCount: Ref.get(requests),
+      requestCount: Ref.get(operations).pipe(Effect.map((tags) => tags.length)),
+      orderedOperations: Ref.get(operations),
       createdLabels: Effect.sync(() => Array.from(labels.values()))
     })
   } satisfies ProductionLiveGithubForwarder

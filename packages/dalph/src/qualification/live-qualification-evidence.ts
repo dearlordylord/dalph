@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- One live evidence schema keeps cross-field validation and publication atomic. */
 import {
   AttemptId,
   EvidenceDigest,
@@ -19,6 +20,7 @@ import {
 import { Effect, HashSet, Schema, type Crypto, FileSystem } from "effect"
 import { CodexProcessIdentity } from "../application/codex-attempt-store.js"
 import { ProductionCliRecord } from "../application/production-cli.js"
+import { productionLiveGithubOperationTags } from "./live-github-forwarder.js"
 import {
   QualificationArtifactLocator,
   qualificationTranscriptDigest,
@@ -88,6 +90,7 @@ const ControllerFinalBoundaryTags = Schema.Tuple([
   Schema.Literal("TaskTrackerReadClaim")
 ])
 const ProcessBoundaryTags = Schema.Tuple([Schema.Literal("Spawn"), Schema.Literal("Exit")])
+const GithubOperationTag = Schema.Literals(productionLiveGithubOperationTags)
 
 const ExactResponsesBoundaryTags = Schema.NonEmptyArray(ResponsesBoundaryTag).check(
   Schema.makeFilter((tags) =>
@@ -221,7 +224,7 @@ const productionLiveQualificationEvidenceFields = {
     )
   ),
   orderedBoundaryTags: Schema.Struct({
-    shippedGithub: Schema.NonEmptyArray(Schema.Literal("GraphqlRequest")),
+    shippedGithub: Schema.NonEmptyArray(GithubOperationTag),
     responses: ExactResponsesBoundaryTags,
     controllerFinal: ControllerFinalBoundaryTags,
     process: ProcessBoundaryTags
@@ -296,6 +299,39 @@ export const ProductionLiveQualificationEvidence: Schema.Codec<
       Array.from(expectedCounts).some(([tag, count]) => suppliedCounts.get(tag) !== count)
     ) {
       return "operation counts must exactly count every ordered journal, public, Responses, and final-controller observation"
+    }
+    const githubMutations = evidence.orderedBoundaryTags.shippedGithub.filter(
+      (tag) => tag === "CreateClaimLabel" || tag === "CloseIssue" || tag === "DeleteClaimLabel"
+    )
+    const expectedGithubMutations = [
+      "CreateClaimLabel",
+      "CreateClaimLabel",
+      "CloseIssue",
+      "DeleteClaimLabel",
+      "DeleteClaimLabel"
+    ]
+    if (
+      evidence.orderedBoundaryTags.shippedGithub.includes("Unrecognized") ||
+      JSON.stringify(githubMutations) !== JSON.stringify(expectedGithubMutations)
+    ) {
+      return "live qualification must observe exactly the accepted claim, completion, and deletion mutations"
+    }
+    const firstCreate = evidence.orderedBoundaryTags.shippedGithub.indexOf("CreateClaimLabel")
+    const secondCreate = evidence.orderedBoundaryTags.shippedGithub.indexOf("CreateClaimLabel", firstCreate + 1)
+    const close = evidence.orderedBoundaryTags.shippedGithub.indexOf("CloseIssue")
+    const finalDelete = evidence.orderedBoundaryTags.shippedGithub.lastIndexOf("DeleteClaimLabel")
+    const firstClaimReread = evidence.orderedBoundaryTags.shippedGithub.indexOf("FindClaimLabel", firstCreate + 1)
+    const completionClaimReread = evidence.orderedBoundaryTags.shippedGithub.indexOf("FindClaimLabel", secondCreate + 1)
+    const laterFinalityRead = evidence.orderedBoundaryTags.shippedGithub.indexOf("ReadIssue", finalDelete + 1)
+    if (
+      firstCreate < 0 ||
+      firstClaimReread <= firstCreate ||
+      firstClaimReread >= secondCreate ||
+      completionClaimReread <= secondCreate ||
+      completionClaimReread >= close ||
+      laterFinalityRead <= finalDelete
+    ) {
+      return "live qualification must reread each claim and perform the later tracker finality read in order"
     }
     if (evidence.cleanup._tag === "Pending") return undefined
     if (evidence.cleanup.github.removedIssueNodeId !== evidence.fixture.issueNodeId) {

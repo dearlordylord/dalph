@@ -115,9 +115,19 @@ describe("#307 production live qualification runtime", () => {
   })
 
   it("records every final controller reread and Responses Git call as ordered per-operation evidence", () => {
-    const boundaries = productionLiveQualificationBoundaryObservations(3, { executor: 2, integrator: 2 })
+    const boundaries = productionLiveQualificationBoundaryObservations(
+      ["ReadIssue", "CreateClaimLabel", "FindClaimLabel"],
+      [
+        "ExecutorRequest",
+        "ExecutorRequest",
+        "ExecutorGitReadHead",
+        "IntegratorRequest",
+        "IntegratorRequest",
+        "IntegratorGitReadHead"
+      ]
+    )
     expect(boundaries).toEqual({
-      shippedGithub: ["GraphqlRequest", "GraphqlRequest", "GraphqlRequest"],
+      shippedGithub: ["ReadIssue", "CreateClaimLabel", "FindClaimLabel"],
       responses: [
         "ExecutorRequest",
         "ExecutorRequest",
@@ -132,7 +142,9 @@ describe("#307 production live qualification runtime", () => {
     expect(productionLiveQualificationOperationCounts(["Read", "Read"], ["RunSelected"], boundaries)).toEqual(
       expect.arrayContaining([
         { tag: "JournalEvent.Read", count: 2 },
-        { tag: "ShippedGithub.GraphqlRequest", count: 3 },
+        { tag: "ShippedGithub.ReadIssue", count: 1 },
+        { tag: "ShippedGithub.CreateClaimLabel", count: 1 },
+        { tag: "ShippedGithub.FindClaimLabel", count: 1 },
         { tag: "Responses.ExecutorGitReadHead", count: 1 },
         { tag: "Responses.IntegratorGitReadHead", count: 1 },
         { tag: "ControllerFinal.GitReadTargetHead", count: 1 },

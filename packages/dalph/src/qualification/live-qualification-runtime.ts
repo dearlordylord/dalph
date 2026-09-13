@@ -64,8 +64,12 @@ import {
   runProductionLiveQualification,
   type ProductionLiveQualificationCompletion
 } from "./live-qualification-controller.js"
-import { makeProductionLiveGithubForwarder } from "./live-github-forwarder.js"
-import { makeProductionLiveResponsesEndpoint } from "./live-responses-endpoint.js"
+import { makeProductionLiveGithubForwarder, type ProductionLiveGithubOperationTag } from "./live-github-forwarder.js"
+import {
+  makeProductionLiveResponsesEndpoint,
+  type ProductionLiveResponsesObservation,
+  type ProductionLiveResponsesObservationTag
+} from "./live-responses-endpoint.js"
 
 const canonicalAbsolute = (subject: string) =>
   Schema.NonEmptyString.check(
@@ -87,9 +91,14 @@ const CompletedLiveGithubObservation = Schema.Struct({
   lifecycle: Schema.Literal("CompletedSuccessfully"),
   claim: Schema.Literal("Unclaimed"),
   responses: Schema.Struct({
-    executor: Schema.Literal(expectedExecutorTurns),
-    integrator: Schema.Literal(expectedIntegratorTurns),
-    total: Schema.Literal(expectedTotalTurns)
+    counts: Schema.Struct({
+      executor: Schema.Literal(expectedExecutorTurns),
+      integrator: Schema.Literal(expectedIntegratorTurns),
+      total: Schema.Literal(expectedTotalTurns)
+    }),
+    orderedTags: Schema.Array(
+      Schema.Literals(["ExecutorRequest", "ExecutorGitReadHead", "IntegratorRequest", "IntegratorGitReadHead"])
+    )
   })
 })
 
@@ -369,16 +378,11 @@ interface ProductionLiveQualificationChronologyObservation {
 
 /** Ordered calls observed outside the shipped child, including its controlled Responses endpoint. */
 export const productionLiveQualificationBoundaryObservations = (
-  forwardedGithubRequestCount: number,
-  responses: { readonly executor: number; readonly integrator: number }
+  shippedGithub: ReadonlyArray<ProductionLiveGithubOperationTag>,
+  responses: ReadonlyArray<ProductionLiveResponsesObservationTag>
 ) => ({
-  shippedGithub: Array.from({ length: forwardedGithubRequestCount }, () => "GraphqlRequest" as const),
-  responses: [
-    ...Array.from({ length: responses.executor }, () => "ExecutorRequest" as const),
-    "ExecutorGitReadHead" as const,
-    ...Array.from({ length: responses.integrator }, () => "IntegratorRequest" as const),
-    "IntegratorGitReadHead" as const
-  ],
+  shippedGithub,
+  responses,
   controllerFinal: ["GitReadTargetHead", "TaskTrackerReadGraph", "TaskTrackerReadClaim"] as const,
   process: ["Spawn", "Exit"] as const
 })
@@ -421,8 +425,8 @@ export const productionLiveQualificationChronologyIsExact = (
 /** Derives chronology and call counts only from exact public and owning-boundary observations. */
 export const deriveProductionLiveQualificationEvidenceObservations = (
   completion: ProductionLiveQualificationCompletion,
-  forwardedGithubRequestCount: number,
-  responses: { readonly executor: number; readonly integrator: number }
+  shippedGithub: ReadonlyArray<ProductionLiveGithubOperationTag>,
+  responses: ProductionLiveResponsesObservation
 ) => {
   const journal = completion.facts.journal
   const accepted = journal.flatMap(({ event }, index) =>
@@ -465,7 +469,7 @@ export const deriveProductionLiveQualificationEvidenceObservations = (
       orderedJournalIndices: required,
       processStatus: completion.processStatus
     }) ||
-    forwardedGithubRequestCount <= 0
+    shippedGithub.length <= 0
   )
     return Option.none()
   const final = Schema.decodeUnknownOption(CompletedLiveGithubObservation)(completion.facts.github)
@@ -479,7 +483,7 @@ export const deriveProductionLiveQualificationEvidenceObservations = (
   const observedGitReads = journal.filter(({ event }) => gitObservationTags.has(event._tag)).length
   if (observedGitReads === 0) return Option.none()
   const journalEventTags = journal.map(({ event }) => event._tag)
-  const orderedBoundaryTags = productionLiveQualificationBoundaryObservations(forwardedGithubRequestCount, responses)
+  const orderedBoundaryTags = productionLiveQualificationBoundaryObservations(shippedGithub, responses.orderedTags)
   const operationCounts = productionLiveQualificationOperationCounts(
     journalEventTags,
     completion.records.map(({ _tag }) => _tag),
@@ -555,7 +559,7 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
   const forwardObservation = yield* forwarder.observation
   const observed = deriveProductionLiveQualificationEvidenceObservations(
     completion,
-    forwardObservation.requestCount,
+    forwardObservation.orderedOperations,
     githubFinal.value.responses
   )
   if (forwardObservation.createdLabels.length === 0 || Option.isNone(observed))
@@ -914,6 +918,7 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
               const lifecycle = Option.getOrUndefined(graph.lifecycleOf(plannedAttempt.taskId))
               const claim = yield* trackerMutation.readTaskClaim(plannedAttempt.taskId)
               const applicationServerProcessIdentities = yield* readApplicationServerProcessIdentities(fixture)
+              const responsesObservation = yield* responses.observation
               return {
                 applicationServerCount: applicationServerProcessIdentities.length,
                 taskWorktreeCount: new Set(
@@ -929,7 +934,7 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
                   )
                 ).size,
                 journal,
-                github: { lifecycle: lifecycle?._tag, claim: claim._tag, responses: responses.counts() },
+                github: { lifecycle: lifecycle?._tag, claim: claim._tag, responses: responsesObservation },
                 targetHead: yield* Schema.decodeUnknownEffect(GitCommitSha)(headResult.stdout.trim())
               }
             })

@@ -55,7 +55,13 @@ it("serves one controlled task turn and one controlled Integrator turn without r
         ].join("\n")
         const integrationCommand = yield* post(endpoint.baseUrl, integratorPrompt)
         const integrationResult = yield* post(endpoint.baseUrl, integratorPrompt)
-        return { taskCommand, taskResult, integrationCommand, integrationResult, counts: endpoint.counts }
+        return {
+          taskCommand,
+          taskResult,
+          integrationCommand,
+          integrationResult,
+          observation: yield* endpoint.observation
+        }
       })
     )
   )
@@ -65,8 +71,18 @@ it("serves one controlled task turn and one controlled Integrator turn without r
   expect(result.taskResult.text).toContain("run-q")
   expect(result.integrationCommand.text).toContain("git merge --no-ff")
   expect(result.integrationResult.text).toContain(`\\"candidate\\":\\"${head}\\"`)
-  expect(result.counts()).toEqual({ executor: 2, integrator: 2, total: 4 })
-  expect(JSON.stringify(result.counts())).not.toContain("/tmp/q")
+  expect(result.observation).toEqual({
+    counts: { executor: 2, integrator: 2, total: 4 },
+    orderedTags: [
+      "ExecutorRequest",
+      "ExecutorRequest",
+      "ExecutorGitReadHead",
+      "IntegratorRequest",
+      "IntegratorRequest",
+      "IntegratorGitReadHead"
+    ]
+  })
+  expect(JSON.stringify(result.observation)).not.toContain("/tmp/q")
 })
 
 it("rejects malformed worktree and Git head facts before returning an accepted response", async () => {
@@ -92,7 +108,7 @@ it("rejects malformed worktree and Git head facts before returning an accepted r
             "\n"
           )
         )
-        return { malformedWorktree, firstValidTurn, invalidHead }
+        return { malformedWorktree, firstValidTurn, invalidHead, observation: yield* endpoint.observation }
       })
     )
   )
@@ -101,6 +117,10 @@ it("rejects malformed worktree and Git head facts before returning an accepted r
   expect(result.firstValidTurn.status).toBe(200)
   expect(result.invalidHead.status).toBe(500)
   expect(result.invalidHead.text).not.toContain("not-a-git-sha")
+  expect(result.observation).toEqual({
+    counts: { executor: 2, integrator: 0, total: 2 },
+    orderedTags: ["ExecutorRequest", "ExecutorRequest"]
+  })
   expect(Schema.is(ProductionLiveResponsesWorktreeLocator)("relative/task")).toBe(false)
   expect(Schema.is(ProductionLiveResponsesEndpointLocator)("http://example.com/v1")).toBe(false)
 })

@@ -154,7 +154,18 @@ const validInput = Effect.fn("LiveEvidenceTest.validInput")(function* () {
       orderedEventTags: ["WorkflowRunBegan", "WorkflowRunTerminated"]
     },
     orderedBoundaryTags: {
-      shippedGithub: ["GraphqlRequest", "GraphqlRequest", "GraphqlRequest"],
+      shippedGithub: [
+        "ResolveIssue",
+        "ReadIssue",
+        "CreateClaimLabel",
+        "FindClaimLabel",
+        "CreateClaimLabel",
+        "FindClaimLabel",
+        "CloseIssue",
+        "DeleteClaimLabel",
+        "DeleteClaimLabel",
+        "ReadIssue"
+      ],
       responses: [
         "ExecutorRequest",
         "ExecutorRequest",
@@ -171,7 +182,12 @@ const validInput = Effect.fn("LiveEvidenceTest.validInput")(function* () {
       { tag: "JournalEvent.WorkflowRunTerminated", count: 1 },
       { tag: "PublicRecord.RunSelected", count: 1 },
       { tag: "PublicRecord.RunDisposition", count: 1 },
-      { tag: "ShippedGithub.GraphqlRequest", count: 3 },
+      { tag: "ShippedGithub.ResolveIssue", count: 1 },
+      { tag: "ShippedGithub.ReadIssue", count: 2 },
+      { tag: "ShippedGithub.CreateClaimLabel", count: 2 },
+      { tag: "ShippedGithub.FindClaimLabel", count: 2 },
+      { tag: "ShippedGithub.CloseIssue", count: 1 },
+      { tag: "ShippedGithub.DeleteClaimLabel", count: 2 },
       { tag: "Responses.ExecutorRequest", count: 2 },
       { tag: "Responses.ExecutorGitReadHead", count: 1 },
       { tag: "Responses.IntegratorRequest", count: 2 },
@@ -248,6 +264,27 @@ it.effect(
           operationCounts: input.operationCounts.map((count) =>
             count.tag === "Responses.IntegratorGitReadHead" ? { ...count, count: 2 } : count
           )
+        },
+        {
+          ...input,
+          orderedBoundaryTags: {
+            ...input.orderedBoundaryTags,
+            shippedGithub: [
+              ...input.orderedBoundaryTags.shippedGithub.slice(0, 7),
+              "CloseIssue",
+              ...input.orderedBoundaryTags.shippedGithub.slice(7)
+            ]
+          },
+          operationCounts: input.operationCounts.map((count) =>
+            count.tag === "ShippedGithub.CloseIssue" ? { ...count, count: 2 } : count
+          )
+        },
+        {
+          ...input,
+          orderedBoundaryTags: {
+            ...input.orderedBoundaryTags,
+            shippedGithub: [...input.orderedBoundaryTags.shippedGithub.slice(0, 8), "ReadIssue", "DeleteClaimLabel"]
+          }
         },
         { ...input, startedAt: "2026-09-13T14:05:00.000Z", endedAt: "2026-09-13T14:00:00.000Z" },
         { ...input, startedAt: "not-a-timestamp" }
