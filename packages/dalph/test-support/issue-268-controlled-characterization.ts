@@ -2308,7 +2308,8 @@ type Issue268RestartContinuation = "DS09" | "DS10" | "DS11" | "DS12" | "DS13" | 
 const runIssue268RestartCharacterization = (
   continuation: Issue268RestartContinuation,
   resumeResponse: "Return" | "Lose" = "Return",
-  retainedCheckpoint?: Issue274CrashCheckpoint
+  retainedCheckpoint?: Issue274CrashCheckpoint,
+  refreshCheckpoint?: "Intent" | "Observation"
 ) =>
   Effect.scoped(
     // eslint-disable-next-line complexity -- One restart scenario owns process loss, fresh owner startup, three observation gates, and exact settlement.
@@ -2911,7 +2912,8 @@ const runIssue268RestartCharacterization = (
           projectedReports,
           outerScope,
           resumeResponse,
-          continuation === "DS20"
+          continuation === "DS20",
+          refreshCheckpoint
         )
         return { ds09, ds10, ds11, ds12, ds13, ds19, occurrenceEvidence: yield* occurrenceRecorder.snapshot }
       }
@@ -3104,7 +3106,8 @@ const continueRetainedC = Effect.fn("Issue274.continueRetainedC")(function* (
   projectedReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>,
   outerScope: Scope.Scope,
   resumeResponse: "Return" | "Lose",
-  discoverNewTasks = false
+  discoverNewTasks = false,
+  refreshCheckpoint?: "Intent" | "Observation"
 ) {
   const retained = yield* sharedAuthorities.journal.read(scenario.runId)
   const resourcesBefore = yield* readRetainedCResources(sharedAuthorities)
@@ -3113,11 +3116,33 @@ const continueRetainedC = Effect.fn("Issue274.continueRetainedC")(function* (
   const graphRefresh = discoverNewTasks
     ? yield* makeIssue275GraphRefresh(sharedAuthorities.trackerGraphReader, sharedAuthorities.testTrackerGraphReader)
     : undefined
+  const refreshReached = yield* Deferred.make<void>()
+  const journal = JournalStore.of({
+    ...sharedAuthorities.journal,
+    append: (runId, key, event) =>
+      sharedAuthorities.journal.append(runId, key, event).pipe(
+        Effect.tap(() => {
+          const matches =
+            refreshCheckpoint === "Intent"
+              ? event._tag === "TaskTrackerReadIntentRecorded" &&
+                event.operation._tag === "ReadTrackerGraph" &&
+                event.operation.cause._tag === "ExecutingWorkAuthorityCheck"
+              : refreshCheckpoint === "Observation" &&
+                event._tag === "TaskTrackerFactsObserved" &&
+                event.observation._tag === "CompleteTaskTrackerFacts" &&
+                event.observation.factFamilies[0].contentIdentity === "G5"
+          return matches
+            ? Deferred.succeed(refreshReached, undefined).pipe(Effect.andThen(Effect.never.pipe(Effect.interruptible)))
+            : Effect.void
+        })
+      )
+  })
   const controls = yield* startRetainedC(
     graphRefresh === undefined
       ? sharedAuthorities
       : {
           ...sharedAuthorities,
+          journal,
           trackerGraphReader: TrackerGraphReader.of({
             ...sharedAuthorities.trackerGraphReader,
             read: graphRefresh.read
@@ -3144,7 +3169,28 @@ const continueRetainedC = Effect.fn("Issue274.continueRetainedC")(function* (
       ? yield* Deferred.await(lostResponse).pipe(Effect.as(undefined))
       : yield* controls.awaitSnapshot(cExecutingSince(retained.length))
   const after = yield* controls.snapshot().pipe(Effect.orDie)
-  const refreshed = yield* controls.refreshed
+  const refreshed = refreshCheckpoint === undefined ? yield* controls.refreshed : undefined
+  let restartResult
+  if (refreshCheckpoint !== undefined) {
+    yield* Deferred.await(refreshReached)
+    const prefix = yield* controls.snapshot().pipe(Effect.orDie)
+    yield* controls.stop
+    const restarted = yield* startRetainedC(
+      sharedAuthorities,
+      projectedReports,
+      outerScope,
+      `G5Restart:${refreshCheckpoint}`
+    )
+    const recoveredRefresh = yield* restarted.awaitSnapshot((snapshot) => {
+      const publication = snapshot.publications[snapshot.publications.length - 1]
+      return (
+        publication?.publication.graph._tag === "GraphEstablished" &&
+        publication.publication.graph.observation.snapshot.revision === "G5"
+      )
+    })
+    yield* restarted.stop
+    restartResult = { before: after, after: recoveredRefresh, cut: refreshCheckpoint, prefix }
+  }
   yield* controls.stop
   const recovered =
     resumeResponse === "Lose"
@@ -3161,7 +3207,8 @@ const continueRetainedC = Effect.fn("Issue274.continueRetainedC")(function* (
     recovered,
     resourcesBefore,
     resourcesAfter,
-    refreshed
+    refreshed,
+    restartResult
   }
 })
 
@@ -3183,6 +3230,16 @@ export const runIssue275ActiveGraphRefresh = runIssue268RestartCharacterization(
       : Effect.die("DS-20 was not reached")
   )
 )
+
+/** Stops the actual notification-selected G5 read at its committed boundary, then reconstructs the same Run. */
+export const runIssue275ActiveGraphRefreshRestart = (cut: "Intent" | "Observation") =>
+  runIssue268RestartCharacterization("DS20", "Return", undefined, cut).pipe(
+    Effect.flatMap((result) =>
+      "ds19" in result && result.ds19.restartResult !== undefined
+        ? Effect.succeed(result.ds19.restartResult)
+        : Effect.die("G5 restart was not reached")
+    )
+  )
 
 const recoverRetainedC = Effect.fn("Issue274.recoverRetainedC")(function* (
   sharedAuthorities: Issue268SharedAuthorities,
