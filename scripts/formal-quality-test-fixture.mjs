@@ -24,6 +24,7 @@ export const copyQualityRuntimeFixture = (worktree) => {
   for (const name of [
     "application-exit-model-registry.mjs",
     "effect-tsgo-platform-binary.mjs",
+    "formal-evidence-contract.mjs",
     "formal-success-evidence.mjs",
     "gate-custody-records.mjs",
     "gate-input-observer.mjs",
