@@ -1,5 +1,5 @@
 import { expect } from "vitest"
-import { Effect } from "effect"
+import { Chunk, Effect } from "effect"
 import {
   deliveryStatusOf,
   evaluateDeliveryRelationAndRuntimeInputBundle,
@@ -139,7 +139,7 @@ export const assertDeliveryCapstoneCheckpoints = Effect.fn("Test.assertDeliveryC
     (capture): capture is Publication => capture._tag === "DeliveryPublicationCaptured"
   )
   const inventory = deliveryCapstoneCheckpointWindowInventory(run)
-  const checkpoints: Array<DeliveryCapstoneCheckpoint> = []
+  let checkpoints = Chunk.empty<DeliveryCapstoneCheckpoint>()
   let previousOrder = 0
   let previousJournalPosition: JournalRecord["position"] | null = null
   for (const row of rowsFor(run)) {
@@ -151,12 +151,12 @@ export const assertDeliveryCapstoneCheckpoints = Effect.fn("Test.assertDeliveryC
           previousJournalPosition
         )
       previousJournalPosition = checkpoint.cursor.position
-      checkpoints.push(checkpoint)
+      checkpoints = Chunk.append(checkpoints, checkpoint)
       if (row.beat === DS.reopenedC) assertReopenedCapacityWait(run, checkpoint.cursor)
       if (row.beat === DS.lowered) {
         const unavailable = unavailableCheckpoint(run, checkpoint)
         expect(unavailable.death.captureOrder).toBeGreaterThan(previousOrder)
-        checkpoints.push(unavailable)
+        checkpoints = Chunk.append(checkpoints, unavailable)
         previousOrder = unavailable.closedOwners.captureOrder
       }
       continue
@@ -395,7 +395,7 @@ export const assertDeliveryCapstoneCheckpoints = Effect.fn("Test.assertDeliveryC
         expect(stale.state.observation).toEqual({ _tag: "CompareAndSetRejected", observedHeadSha: changedHead })
       }
     }
-    checkpoints.push({
+    checkpoints = Chunk.append(checkpoints, {
       beat: row.beat,
       frame,
       captureOrder:
@@ -410,6 +410,7 @@ export const assertDeliveryCapstoneCheckpoints = Effect.fn("Test.assertDeliveryC
           .toSorted()
       ).toEqual(["F", "G"])
   }
-  expect(checkpoints.map(({ beat }) => beat)).toEqual(Object.values(DS))
-  return checkpoints
+  const orderedCheckpoints = Chunk.toArray(checkpoints)
+  expect(orderedCheckpoints.map(({ beat }) => beat)).toEqual(Object.values(DS))
+  return orderedCheckpoints
 })

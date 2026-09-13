@@ -9,14 +9,13 @@ import { comparisonValue, firstDifference } from "./delivery-capstone-replay-com
 const declaredStoryLength = 402
 /** Descriptor substitution is permitted only after independently checking the original exact bytes. */
 const verifiedManifestReferences = (run: AuthoredScenarioCassetteRun, referenceRun: RunId) => {
-  const references = new Map<string, EvidenceReference>()
-  for (const { event } of run.records) {
+  const references = run.records.reduce((previousReferences, { event }) => {
     if (
       event._tag !== "PlannedAttemptExecutorWorkReported" ||
       event.report._tag !== "ExecutorWorkTerminal" ||
       event.report.result._tag !== "Accepted"
     )
-      continue
+      return previousReferences
     const { correlation, result } = event.report
     expect(correlation.runId).toBe(run.runId)
     const original = acceptedManifestReferenceFor(correlation, result.acceptedResult.commit)
@@ -25,7 +24,10 @@ const verifiedManifestReferences = (run: AuthoredScenarioCassetteRun, referenceR
       { ...correlation, runId: referenceRun },
       result.acceptedResult.commit
     )
-    references.set(`${original.byteLength}:${original.digest}`, reference)
+    const references = new Map<string, EvidenceReference>([
+      ...previousReferences,
+      [`${original.byteLength}:${original.digest}`, reference] as const
+    ])
     expect(comparisonValue({ evidenceManifest: original }, run.runId, referenceRun, "", references)).toEqual({
       evidenceManifest: reference
     })
@@ -50,7 +52,8 @@ const verifiedManifestReferences = (run: AuthoredScenarioCassetteRun, referenceR
         references
       )
     ).not.toEqual({ evidenceManifest: reference })
-  }
+    return references
+  }, new Map<string, EvidenceReference>())
   expect(references.size).toBeGreaterThan(0)
   return references
 }
