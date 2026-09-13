@@ -40,6 +40,7 @@ import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identi
 import { acceptedJournalPrefixFromValidatedHistory } from "../../workflow-journal/accepted-prefix.js"
 import {
   journalEvidenceFrom,
+  journalRecordByKey,
   journalRecordsForTask,
   lastJournalRecordForAttemptKind
 } from "../../workflow-journal/record-evidence.js"
@@ -617,6 +618,66 @@ const selectionFrameWith = (claimRecords: ReadonlyArray<JournalRecord>): Current
     workflowHistory: { evidence: journalEvidenceFrom(records) }
   }
 }
+
+it("reuses the indexed global graph without decoding historical events during fresh selection", () => {
+  const frame = selectionFrameWith([])
+  const observation = journalRecordByKey(
+    frame.workflowHistory.evidence,
+    outcomeRecordKey(selectionGraphOperation.operationId)
+  )
+  if (observation === undefined) return expect.fail("missing global graph observation")
+  Object.defineProperty(observation.event, "version", {
+    get: () => expect.fail("fresh selection must reuse the indexed graph")
+  })
+  expect(deriveFreshWorkflowDecisions(frame, new Set(), selectionTarget)).toMatchObject([
+    { step: { _tag: "ReadCurrentTaskGraph", task: { id: selectionTaskId } } }
+  ])
+})
+
+it.each(["Focused", "Global"] as const)(
+  "keeps new tasks behind the global graph boundary after a later %s read",
+  (readScope) => {
+    const newTaskId = TaskId.make("fresh-workflow-new-child")
+    const projected = projectTrackerSnapshot({
+      revision: "fresh-workflow-later-graph",
+      tasks: [
+        { id: selectionTaskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+        { id: newTaskId, lifecycle: { _tag: "Open" }, parentTaskId: selectionTaskId, prerequisiteIds: [] }
+      ]
+    })
+    if (projected._tag !== "Valid") return expect.fail("invalid later graph")
+    const operation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make(`fresh-workflow-later-${readScope}`),
+      selectionTarget,
+      [],
+      readScope === "Focused" ? [newTaskId] : []
+    )
+    const frame = selectionFrameWith([
+      {
+        event: taskTrackerReadIntent(operation),
+        key: intentRecordKey(operation.operationId),
+        position: JournalPosition.make(3),
+        runId: selectionRunId
+      },
+      {
+        event: taskTrackerFactsObservedEvent(
+          operation.operationId,
+          makeCompleteTaskTrackerFactsObserved(operation, projected.snapshot)
+        ),
+        key: outcomeRecordKey(operation.operationId),
+        position: JournalPosition.make(4),
+        runId: selectionRunId
+      }
+    ])
+    const decisions = deriveFreshWorkflowDecisions(
+      { ...frame, currentGraph: projected.snapshot },
+      new Set(),
+      selectionTarget
+    )
+    expect(decisions.some(({ step }) => step.task.id === newTaskId)).toBe(readScope === "Global")
+  }
+)
 
 // After Begin's exact Executing report is accepted, keep observing that attempt;
 // a correlation-only report is not a task-bucket occurrence or a second Begin.

@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- One driver keeps the cancellation model-to-runtime seam map auditable. */
 /* eslint-disable functional/immutable-data -- The driver owns a short-lived mutable test projection. */
 import { it } from "@effect/vitest"
+import { isCoverageMode } from "../../test-support/vitest-mode.js"
 import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import {
@@ -2966,34 +2967,37 @@ it.effect("reconstructs the exact applied cancellation after process loss", () =
   )
 )
 
-quintIt(
-  (name, test, options) =>
-    it.effect(
-      name,
-      () =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            const scope = yield* Effect.scope
-            runCancellationMbtScope = scope
-            yield* Effect.addFinalizer(() =>
-              Effect.sync(() => {
-                if (runCancellationMbtScope === scope) runCancellationMbtScope = undefined
-              })
-            )
-            return yield* test()
-          })
-        ),
-      options
-    ),
-  "replays Run cancellation through the production bootstrap and journal reconstruction",
-  {
-    backend: "typescript",
-    driverFactory: runCancellationDriver,
-    maxSteps: 24,
-    nTraces: 100,
-    seed: "102",
-    spec: "specs/runCancellation.qnt",
-    stateCheck: stateCheckProjection
-  },
-  120_000
-)
+// Coverage keeps the ordinary production-seam tests; formal replay runs in the other modes.
+if (!isCoverageMode) {
+  quintIt(
+    (name, test, options) =>
+      it.effect(
+        name,
+        () =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const scope = yield* Effect.scope
+              runCancellationMbtScope = scope
+              yield* Effect.addFinalizer(() =>
+                Effect.sync(() => {
+                  if (runCancellationMbtScope === scope) runCancellationMbtScope = undefined
+                })
+              )
+              return yield* test()
+            })
+          ),
+        options
+      ),
+    "replays Run cancellation through the production bootstrap and journal reconstruction",
+    {
+      backend: "typescript",
+      driverFactory: runCancellationDriver,
+      maxSteps: 24,
+      nTraces: 100,
+      seed: "102",
+      spec: "specs/runCancellation.qnt",
+      stateCheck: stateCheckProjection
+    },
+    120_000
+  )
+}

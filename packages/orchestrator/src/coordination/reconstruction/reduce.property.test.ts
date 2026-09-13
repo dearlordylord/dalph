@@ -1,3 +1,5 @@
+// eslint-disable-next-line import/no-nodejs-modules -- Node-only property tests compare complete replay structures without matcher traversal overhead.
+import { deepStrictEqual } from "node:assert"
 import { taskTrackerGraphFactsObserved } from "../../../test/task-tracker-facts.js"
 import { Option } from "effect"
 import * as fc from "fast-check"
@@ -205,7 +207,8 @@ it("advances every generated valid prefix to the same state and frontier as comp
       expect(incremental._tag).toBe("ValidWorkflowJournalHistory")
       if (incremental._tag !== "ValidWorkflowJournalHistory") return
       let accepted = [first]
-      expect(historyWithPrefixComparedOnce(incremental)).toEqual(
+      deepStrictEqual(
+        historyWithPrefixComparedOnce(incremental),
         historyWithPrefixComparedOnce(reduceWorkflowJournalHistory(runId, accepted))
       )
       for (const record of records.slice(1)) {
@@ -217,15 +220,17 @@ it("advances every generated valid prefix to the same state and frontier as comp
         expect(inspectWorkflowJournalHistoryValidationPath(cold)).toBe("IndexedCold")
         expect(inspectWorkflowJournalHistoryValidationPath(incremental)).toBe("IndexedSuccessor")
         const comparableCold = historyWithPrefixComparedOnce(cold)
-        expect(historyWithPrefixComparedOnce(incremental)).toEqual(comparableCold)
-        expect(comparableCold).toEqual(
+        deepStrictEqual(historyWithPrefixComparedOnce(incremental), comparableCold)
+        deepStrictEqual(
+          comparableCold,
           historyWithPrefixComparedOnce(reduceUnindexedWorkflowJournalHistoryForTesting(runId, accepted))
         )
       }
     }),
     { numRuns: 100 }
   )
-  // Every prefix gets independent indexed and raw full replay plus complete state equality: quadratic test-oracle work.
+  // Keep independent indexed/raw replay and complete structural equality at every prefix.
+  // Node compares these large persistent structures without Vitest matcher traversal overhead.
 }, 30_000)
 
 it("cold replay derives independent equivalent results without an input-array authority cache", () => {

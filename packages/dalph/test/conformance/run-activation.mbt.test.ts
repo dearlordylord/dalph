@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- One driver keeps the Run-entry action-to-production-seam map auditable. */
 import { it } from "@effect/vitest"
+import { isCoverageMode } from "../../test-support/vitest-mode.js"
 import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import {
@@ -2035,126 +2036,129 @@ it.effect("permits only one final tracker read in each unified Run activation", 
   )
 )
 
-quintIt(
-  (name, test, options) =>
-    it.effect(
-      name,
-      () =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            runActivationMbtScope = yield* Effect.scope
-            yield* Effect.addFinalizer(() => Effect.sync(() => (runActivationMbtScope = undefined)))
-            return yield* test()
-          })
-        ),
-      options
-    ),
-  "replays idempotent Run establishment and bounded activation through production seams",
-  {
-    backend: "typescript",
-    driverFactory: runActivationDriver,
-    maxSteps: 20,
-    nTraces: 100,
-    seed: "195",
-    spec: "specs/runActivation.qnt",
-    stateCheck: stateCheck(
-      (raw) =>
-        Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
-          Effect.map(
-            ({ state }): DriverProjection => ({
-              activationsStarted: Number(state.trace.activationsStarted),
-              beginningAppends: Number(state.trace.beginningAppends),
-              cancellationAppends: Number(state.trace.cancellationAppends),
-              cancellationRedeliveries: Number(state.trace.cancellationRedeliveries),
-              cancellationApplied: state.durable.cancellationApplied,
-              establishedCapacity:
-                state.process.establishedRun.tag === "ExactEstablishedRun"
-                  ? state.process.establishedRun.value.latestPolicy.taskCapacity.tag
-                  : "NoEstablishedCapacity",
-              establishedInitialCapacity:
-                state.process.establishedRun.tag === "ExactEstablishedRun"
-                  ? state.process.establishedRun.value.initialPolicy.taskCapacity.tag
-                  : "NoEstablishedCapacity",
-              establishedRunId:
-                state.process.establishedRun.tag === "ExactEstablishedRun"
-                  ? state.process.establishedRun.value.runId.tag
-                  : "NoEstablishedRun",
-              establishedTarget:
-                state.process.establishedRun.tag === "ExactEstablishedRun"
-                  ? state.process.establishedRun.value.target.tag
-                  : "NoEstablishedTarget",
-              establishmentSource: state.process.establishmentSource.tag,
-              entryFailure: state.process.entryFailure.tag,
-              executorCalls: Number(state.trace.executorCalls),
-              heldPosition:
-                state.process.heldPosition.tag === "ExactTaskPosition"
-                  ? state.process.heldPosition.value.attemptId.tag
-                  : "NoTaskPosition",
-              history: state.durable.history.tag,
-              independentTaskAdmitted: state.process.independentTaskAdmitted,
-              independentTaskSettled: state.durable.independentTaskSettled,
-              initialPolicyEvaluated: state.process.initialPolicyEvaluated,
-              initialPolicyEvaluations: Number(state.trace.initialPolicyEvaluations),
-              initialTrackerObserved: state.process.initialTrackerObserved,
-              otherHeldPositions: state.process.otherHeldPosition.tag === "ExactTaskPosition" ? 1 : 0,
-              phase: state.process.phase.tag,
-              postQuiescenceReads: Number(state.process.postQuiescenceReads),
-              processLosses: Number(state.trace.processLosses),
-              quiescent: state.process.quiescent,
-              requestedRunId: state.requestedRunId.tag,
-              requestedTarget: state.requestedTarget.tag,
-              terminationAppends: Number(state.trace.terminationAppends),
-              terminationAppendAttempts: Number(state.trace.terminationAppendAttempts),
-              trackerCalls: Number(state.trace.trackerCalls),
-              trackerSettled: state.trackerFinality.targetSettled,
-              terminationDisposition: state.durable.terminationDisposition.tag,
-              terminalDisposition: state.process.terminalDisposition.tag,
-              graphOutcome: state.trackerFinality.graphOutcome.tag,
-              trackerContentIdentity: state.trackerFinality.contentIdentity.tag,
-              trackerObservationPosition: Number(state.trackerFinality.observationPosition),
-              trackerRootTaskId: state.trackerFinality.rootTaskId.tag
+// Coverage keeps the ordinary production-seam tests; formal replay runs in the other modes.
+if (!isCoverageMode) {
+  quintIt(
+    (name, test, options) =>
+      it.effect(
+        name,
+        () =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              runActivationMbtScope = yield* Effect.scope
+              yield* Effect.addFinalizer(() => Effect.sync(() => (runActivationMbtScope = undefined)))
+              return yield* test()
             })
           ),
-          Effect.orDie
-        ),
-      (spec, implementation) =>
-        spec.activationsStarted === implementation.activationsStarted &&
-        spec.beginningAppends === implementation.beginningAppends &&
-        spec.cancellationAppends === implementation.cancellationAppends &&
-        spec.cancellationRedeliveries === implementation.cancellationRedeliveries &&
-        spec.cancellationApplied === implementation.cancellationApplied &&
-        spec.establishedCapacity === implementation.establishedCapacity &&
-        spec.establishedInitialCapacity === implementation.establishedInitialCapacity &&
-        spec.establishedRunId === implementation.establishedRunId &&
-        spec.establishedTarget === implementation.establishedTarget &&
-        spec.establishmentSource === implementation.establishmentSource &&
-        spec.entryFailure === implementation.entryFailure &&
-        spec.executorCalls === implementation.executorCalls &&
-        spec.heldPosition === implementation.heldPosition &&
-        spec.history === implementation.history &&
-        spec.independentTaskAdmitted === implementation.independentTaskAdmitted &&
-        spec.independentTaskSettled === implementation.independentTaskSettled &&
-        spec.initialPolicyEvaluated === implementation.initialPolicyEvaluated &&
-        spec.initialPolicyEvaluations === implementation.initialPolicyEvaluations &&
-        spec.initialTrackerObserved === implementation.initialTrackerObserved &&
-        spec.otherHeldPositions === implementation.otherHeldPositions &&
-        spec.phase === implementation.phase &&
-        spec.postQuiescenceReads === implementation.postQuiescenceReads &&
-        spec.processLosses === implementation.processLosses &&
-        spec.quiescent === implementation.quiescent &&
-        spec.requestedRunId === implementation.requestedRunId &&
-        spec.requestedTarget === implementation.requestedTarget &&
-        spec.terminationAppends === implementation.terminationAppends &&
-        spec.terminationAppendAttempts === implementation.terminationAppendAttempts &&
-        spec.terminationDisposition === implementation.terminationDisposition &&
-        spec.terminalDisposition === implementation.terminalDisposition &&
-        spec.graphOutcome === implementation.graphOutcome &&
-        spec.trackerContentIdentity === implementation.trackerContentIdentity &&
-        spec.trackerObservationPosition === implementation.trackerObservationPosition &&
-        spec.trackerRootTaskId === implementation.trackerRootTaskId &&
-        spec.trackerCalls === implementation.trackerCalls &&
-        spec.trackerSettled === implementation.trackerSettled
-    )
-  },
-  120_000
-)
+        options
+      ),
+    "replays idempotent Run establishment and bounded activation through production seams",
+    {
+      backend: "typescript",
+      driverFactory: runActivationDriver,
+      maxSteps: 20,
+      nTraces: 100,
+      seed: "195",
+      spec: "specs/runActivation.qnt",
+      stateCheck: stateCheck(
+        (raw) =>
+          Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
+            Effect.map(
+              ({ state }): DriverProjection => ({
+                activationsStarted: Number(state.trace.activationsStarted),
+                beginningAppends: Number(state.trace.beginningAppends),
+                cancellationAppends: Number(state.trace.cancellationAppends),
+                cancellationRedeliveries: Number(state.trace.cancellationRedeliveries),
+                cancellationApplied: state.durable.cancellationApplied,
+                establishedCapacity:
+                  state.process.establishedRun.tag === "ExactEstablishedRun"
+                    ? state.process.establishedRun.value.latestPolicy.taskCapacity.tag
+                    : "NoEstablishedCapacity",
+                establishedInitialCapacity:
+                  state.process.establishedRun.tag === "ExactEstablishedRun"
+                    ? state.process.establishedRun.value.initialPolicy.taskCapacity.tag
+                    : "NoEstablishedCapacity",
+                establishedRunId:
+                  state.process.establishedRun.tag === "ExactEstablishedRun"
+                    ? state.process.establishedRun.value.runId.tag
+                    : "NoEstablishedRun",
+                establishedTarget:
+                  state.process.establishedRun.tag === "ExactEstablishedRun"
+                    ? state.process.establishedRun.value.target.tag
+                    : "NoEstablishedTarget",
+                establishmentSource: state.process.establishmentSource.tag,
+                entryFailure: state.process.entryFailure.tag,
+                executorCalls: Number(state.trace.executorCalls),
+                heldPosition:
+                  state.process.heldPosition.tag === "ExactTaskPosition"
+                    ? state.process.heldPosition.value.attemptId.tag
+                    : "NoTaskPosition",
+                history: state.durable.history.tag,
+                independentTaskAdmitted: state.process.independentTaskAdmitted,
+                independentTaskSettled: state.durable.independentTaskSettled,
+                initialPolicyEvaluated: state.process.initialPolicyEvaluated,
+                initialPolicyEvaluations: Number(state.trace.initialPolicyEvaluations),
+                initialTrackerObserved: state.process.initialTrackerObserved,
+                otherHeldPositions: state.process.otherHeldPosition.tag === "ExactTaskPosition" ? 1 : 0,
+                phase: state.process.phase.tag,
+                postQuiescenceReads: Number(state.process.postQuiescenceReads),
+                processLosses: Number(state.trace.processLosses),
+                quiescent: state.process.quiescent,
+                requestedRunId: state.requestedRunId.tag,
+                requestedTarget: state.requestedTarget.tag,
+                terminationAppends: Number(state.trace.terminationAppends),
+                terminationAppendAttempts: Number(state.trace.terminationAppendAttempts),
+                trackerCalls: Number(state.trace.trackerCalls),
+                trackerSettled: state.trackerFinality.targetSettled,
+                terminationDisposition: state.durable.terminationDisposition.tag,
+                terminalDisposition: state.process.terminalDisposition.tag,
+                graphOutcome: state.trackerFinality.graphOutcome.tag,
+                trackerContentIdentity: state.trackerFinality.contentIdentity.tag,
+                trackerObservationPosition: Number(state.trackerFinality.observationPosition),
+                trackerRootTaskId: state.trackerFinality.rootTaskId.tag
+              })
+            ),
+            Effect.orDie
+          ),
+        (spec, implementation) =>
+          spec.activationsStarted === implementation.activationsStarted &&
+          spec.beginningAppends === implementation.beginningAppends &&
+          spec.cancellationAppends === implementation.cancellationAppends &&
+          spec.cancellationRedeliveries === implementation.cancellationRedeliveries &&
+          spec.cancellationApplied === implementation.cancellationApplied &&
+          spec.establishedCapacity === implementation.establishedCapacity &&
+          spec.establishedInitialCapacity === implementation.establishedInitialCapacity &&
+          spec.establishedRunId === implementation.establishedRunId &&
+          spec.establishedTarget === implementation.establishedTarget &&
+          spec.establishmentSource === implementation.establishmentSource &&
+          spec.entryFailure === implementation.entryFailure &&
+          spec.executorCalls === implementation.executorCalls &&
+          spec.heldPosition === implementation.heldPosition &&
+          spec.history === implementation.history &&
+          spec.independentTaskAdmitted === implementation.independentTaskAdmitted &&
+          spec.independentTaskSettled === implementation.independentTaskSettled &&
+          spec.initialPolicyEvaluated === implementation.initialPolicyEvaluated &&
+          spec.initialPolicyEvaluations === implementation.initialPolicyEvaluations &&
+          spec.initialTrackerObserved === implementation.initialTrackerObserved &&
+          spec.otherHeldPositions === implementation.otherHeldPositions &&
+          spec.phase === implementation.phase &&
+          spec.postQuiescenceReads === implementation.postQuiescenceReads &&
+          spec.processLosses === implementation.processLosses &&
+          spec.quiescent === implementation.quiescent &&
+          spec.requestedRunId === implementation.requestedRunId &&
+          spec.requestedTarget === implementation.requestedTarget &&
+          spec.terminationAppends === implementation.terminationAppends &&
+          spec.terminationAppendAttempts === implementation.terminationAppendAttempts &&
+          spec.terminationDisposition === implementation.terminationDisposition &&
+          spec.terminalDisposition === implementation.terminalDisposition &&
+          spec.graphOutcome === implementation.graphOutcome &&
+          spec.trackerContentIdentity === implementation.trackerContentIdentity &&
+          spec.trackerObservationPosition === implementation.trackerObservationPosition &&
+          spec.trackerRootTaskId === implementation.trackerRootTaskId &&
+          spec.trackerCalls === implementation.trackerCalls &&
+          spec.trackerSettled === implementation.trackerSettled
+      )
+    },
+    120_000
+  )
+}
