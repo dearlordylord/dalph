@@ -2795,6 +2795,27 @@ it.each([
   }
 )
 
+it("rejects replacement when an Accepted executor result arrives after Alice requests Restart", () => {
+  const correlation = plannedAttemptExecutorCorrelation(coverageAttempt)
+  const records = [
+    ...coveragePlanRecords(),
+    executorReport(5, PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })),
+    restartChoiceRecord(6),
+    executorReport(
+      7,
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+        correlation,
+        result: { _tag: "Accepted", acceptedResult: acceptedResultFixture(GitCommitSha.make("b".repeat(40))) }
+      })
+    )
+  ]
+  for (const source of [records, journalEvidenceFrom(records)]) {
+    expect(
+      restartReplacementDisposition(source, coverageAttempt, Option.none(), Option.none(), coverageTarget)
+    ).toEqual({ _tag: "AttemptRestartRejected", reason: "AcceptedDoesNotAuthorizeReplacement" })
+  }
+})
+
 it("uses only the immutable Run target for restart graph eligibility", () => {
   const foreignTarget = FixtureTarget.make("recovery-activation-restart-foreign-target")
   const graphFor = (target: typeof coverageTarget, lifecycle: "Open" | "TerminalWithoutSuccess") => {
@@ -4782,6 +4803,27 @@ effectIt.effect(
         coverageRecord(14, continuationCoverageSpecificationEvent),
         coverageRecord(15, intentFor(exactCausalWorktreeOperation))
       ]
+      const missingPlanPredecessor = [
+        ...acceptedCoverageLineageRecords(),
+        ...acceptedCoverageContinuationRecords(),
+        coverageRecord(
+          17,
+          intentFor({
+            ...exactCausalWorktreeOperation,
+            predecessorOperationIds: exactCausalWorktreeOperation.predecessorOperationIds.filter(
+              (operationId) => operationId !== acceptedCoveragePlanOperation.operationId
+            )
+          })
+        )
+      ]
+      const withoutPlanPredecessor = yield* projectionFor(coverageRecordsWithBeginning(missingPlanPredecessor))
+      expect(
+        withoutPlanPredecessor.filter(
+          ({ _tag }) =>
+            _tag === "ObservePlannedAttemptContinuationWorktree" ||
+            _tag === "ObservePlannedAttemptContinuationTargetLineage"
+        )
+      ).toEqual([])
       for (const malformedCausalPrefix of [missingSpecification, missingClaim]) {
         const transitions = yield* projectionFor(
           coverageRecordsWithBeginning(malformedCausalPrefix),

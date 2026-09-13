@@ -484,56 +484,67 @@ it.effect("treats a settled Resume intent as consuming Safe authority even when 
   }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
-it.effect("rejects Continue after Restart even when a newer fingerprint exposes another terminal choice", () =>
-  Effect.gen(function* () {
-    yield* appendExposedChoice()
-    const control = yield* AttemptChoiceControl
-    yield* control.apply(request("RestartTaskImplementation", "terminal-restart-F2"))
+it.effect.each(["RestartTaskImplementation", "ContinueExistingAttempt"] as const)(
+  "checks a new-fingerprint Continue after %s before Resume is dispatched",
+  (priorChoice) =>
+    Effect.gen(function* () {
+      yield* appendExposedChoice()
+      const control = yield* AttemptChoiceControl
+      yield* control.apply(request(priorChoice, "prior-choice-F2"))
 
-    const target = FixtureTarget.make("attempt-choice-target")
-    const changedAgain = makeTaskWorkSpecification({ body: "Changed body F3", taskId, title: "Changed title F3" })
-    const operation = makeTaskWorkSpecificationObservationOperation(
-      OperationId.make("attempt-choice-observe-after-restart-F3"),
-      target,
-      taskId,
-      []
-    )
-    const journal = yield* InRunJournal
-    yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
-    yield* journal.append(
-      runId,
-      outcomeRecordKey(operation.operationId),
-      taskTrackerFactsObservedEvent(
-        operation.operationId,
-        makeFocusedTaskWorkSpecificationFactsObserved(operation, changedAgain)
+      const target = FixtureTarget.make("attempt-choice-target")
+      const changedAgain = makeTaskWorkSpecification({ body: "Changed body F3", taskId, title: "Changed title F3" })
+      const operation = makeTaskWorkSpecificationObservationOperation(
+        OperationId.make("attempt-choice-observe-after-restart-F3"),
+        target,
+        taskId,
+        []
       )
-    )
-
-    const continueRequest = {
-      choice: "ContinueExistingAttempt" as const,
-      requestId: AttemptChoiceRequestId.make({ nonce: "continue-after-restart-F3", runId }),
-      subject: { observedTaskRevision: changedAgain.fingerprint, plannedAttempt }
-    }
-    const rejection = yield* control.apply(continueRequest).pipe(Effect.flip)
-    expect(rejection).toMatchObject({ _tag: "AttemptChoiceNotAvailable", reason: "TerminalChoiceAlreadyApplied" })
-
-    const forgedAppend = yield* journal
-      .append(
+      const journal = yield* InRunJournal
+      yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+      yield* journal.append(
         runId,
-        attemptChoiceAppliedRecordKey(continueRequest.requestId),
-        AttemptChoiceAppliedEvent.make({
-          ...continueRequest,
-          initiatedBy: { _tag: "Operator" },
-          occurrenceClassification: "InitiatedAction",
-          version: workflowJournalEventVersion
-        })
+        outcomeRecordKey(operation.operationId),
+        taskTrackerFactsObservedEvent(
+          operation.operationId,
+          makeFocusedTaskWorkSpecificationFactsObserved(operation, changedAgain)
+        )
       )
-      .pipe(Effect.flip)
-    expect(forgedAppend).toMatchObject({
-      _tag: "JournalHistoryInvalid",
-      detail: expect.stringContaining("follows the terminal Restart direction")
-    })
-  }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
+
+      const continueRequest = {
+        choice: "ContinueExistingAttempt" as const,
+        requestId: AttemptChoiceRequestId.make({ nonce: "continue-after-restart-F3", runId }),
+        subject: { observedTaskRevision: changedAgain.fingerprint, plannedAttempt }
+      }
+      if (priorChoice === "ContinueExistingAttempt") {
+        const applied = yield* control.apply(continueRequest)
+        expect(applied).toMatchObject({
+          _tag: "ContinueApplied",
+          application: { event: { choice: "ContinueExistingAttempt", subject: continueRequest.subject } }
+        })
+        expect(yield* control.apply(continueRequest)).toEqual(applied)
+        return
+      }
+      const rejection = yield* control.apply(continueRequest).pipe(Effect.flip)
+      expect(rejection).toMatchObject({ _tag: "AttemptChoiceNotAvailable", reason: "TerminalChoiceAlreadyApplied" })
+
+      const forgedAppend = yield* journal
+        .append(
+          runId,
+          attemptChoiceAppliedRecordKey(continueRequest.requestId),
+          AttemptChoiceAppliedEvent.make({
+            ...continueRequest,
+            initiatedBy: { _tag: "Operator" },
+            occurrenceClassification: "InitiatedAction",
+            version: workflowJournalEventVersion
+          })
+        )
+        .pipe(Effect.flip)
+      expect(forgedAppend).toMatchObject({
+        _tag: "JournalHistoryInvalid",
+        detail: expect.stringContaining("follows the terminal Restart direction")
+      })
+    }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(testJournalLayer))
 )
 
 it.effect("rejects an attempt-choice request identity bound to another Run", () =>
