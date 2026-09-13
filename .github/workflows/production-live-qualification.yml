@@ -1,0 +1,284 @@
+name: Production live qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact 40-character candidate commit SHA to qualify
+        required: true
+        type: string
+      reviewed_base_sha:
+        description: Exact 40-character reviewed Base SHA for this candidate
+        required: true
+        type: string
+      repository:
+        description: Disposable GitHub repository in owner/repository form
+        required: true
+        type: string
+
+# Checkout needs read-only source access; the configured disposable-repository
+# token is separately scoped to issue and label mutation in the named repo.
+permissions:
+  contents: read
+  issues: write
+
+# Every live mutation shares one lane, regardless of dispatch ref or candidate.
+concurrency:
+  group: production-live-qualification
+  cancel-in-progress: false
+
+jobs:
+  formal-dedicated:
+    name: Dedicated formal evidence
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 16
+    env:
+      DALPH_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      DALPH_COVERAGE_BASE_SHA: ${{ inputs.reviewed_base_sha }}
+      DALPH_FORMAL_PROFILE_KIND: dedicated
+      NODE_OPTIONS: --max-old-space-size=8192
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify candidate and reviewed Base
+        run: |
+          [[ "$DALPH_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$DALPH_COVERAGE_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$DALPH_CANDIDATE_SHA"
+          git cat-file -e "$DALPH_COVERAGE_BASE_SHA^{commit}"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+          version: 10.29.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          cache: pnpm
+          node-version: 24.20.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run dedicated formal evidence
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/dalph-live-formal/dedicated"
+          pnpm check:ci:formal 2>&1 | tee "$RUNNER_TEMP/dalph-live-formal/dedicated/formal.log"
+
+      - name: Record dedicated formal provenance
+        if: always()
+        env:
+          DALPH_FORMAL_METADATA: ${{ runner.temp }}/dalph-live-formal/dedicated/provenance.json
+        run: |
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from "node:fs"
+          const fields = {
+            profile: process.env.DALPH_FORMAL_PROFILE_KIND,
+            sourceSha: process.env.DALPH_CANDIDATE_SHA,
+            reviewedBaseSha: process.env.DALPH_COVERAGE_BASE_SHA,
+            nodeVersion: process.version,
+            workflowName: process.env.GITHUB_WORKFLOW,
+            workflow: process.env.GITHUB_WORKFLOW,
+            runId: process.env.GITHUB_RUN_ID,
+            runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            jobId: process.env.GITHUB_JOB,
+            job: process.env.GITHUB_JOB,
+            log: `${process.env.RUNNER_TEMP}/dalph-live-formal/dedicated/formal.log`
+          }
+          writeFileSync(process.env.DALPH_FORMAL_METADATA, `${JSON.stringify(fields, null, 2)}\n`, { mode: 0o600 })
+          NODE
+
+      - name: Upload dedicated formal evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-live-formal-dedicated-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/dalph-live-formal/dedicated
+          if-no-files-found: error
+          retention-days: 30
+
+  formal-stressed:
+    name: Stressed formal evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    env:
+      DALPH_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      DALPH_COVERAGE_BASE_SHA: ${{ inputs.reviewed_base_sha }}
+      DALPH_FORMAL_PROFILE_KIND: stressed
+      NODE_OPTIONS: --max-old-space-size=8192
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify candidate and reviewed Base
+        run: |
+          [[ "$DALPH_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$DALPH_COVERAGE_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$DALPH_CANDIDATE_SHA"
+          git cat-file -e "$DALPH_COVERAGE_BASE_SHA^{commit}"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+          version: 10.29.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          cache: pnpm
+          node-version: 24.20.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run stressed formal evidence
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/dalph-live-formal/stressed"
+          pnpm check:ci:formal 2>&1 | tee "$RUNNER_TEMP/dalph-live-formal/stressed/formal.log"
+
+      - name: Record stressed formal provenance
+        if: always()
+        env:
+          DALPH_FORMAL_METADATA: ${{ runner.temp }}/dalph-live-formal/stressed/provenance.json
+        run: |
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from "node:fs"
+          const fields = {
+            profile: process.env.DALPH_FORMAL_PROFILE_KIND,
+            sourceSha: process.env.DALPH_CANDIDATE_SHA,
+            reviewedBaseSha: process.env.DALPH_COVERAGE_BASE_SHA,
+            nodeVersion: process.version,
+            workflowName: process.env.GITHUB_WORKFLOW,
+            workflow: process.env.GITHUB_WORKFLOW,
+            runId: process.env.GITHUB_RUN_ID,
+            runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            jobId: process.env.GITHUB_JOB,
+            job: process.env.GITHUB_JOB,
+            log: `${process.env.RUNNER_TEMP}/dalph-live-formal/stressed/formal.log`
+          }
+          writeFileSync(process.env.DALPH_FORMAL_METADATA, `${JSON.stringify(fields, null, 2)}\n`, { mode: 0o600 })
+          NODE
+
+      - name: Upload stressed formal evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-live-formal-stressed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/dalph-live-formal/stressed
+          if-no-files-found: error
+          retention-days: 30
+
+  qualify:
+    name: One protected live qualification
+    needs: [formal-dedicated, formal-stressed]
+    if: needs.formal-dedicated.result == 'success' && needs.formal-stressed.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production-live-qualification
+    env:
+      DALPH_RUN_PRODUCTION_LIVE_QUALIFICATION: "1"
+      DALPH_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      DALPH_COVERAGE_BASE_SHA: ${{ inputs.reviewed_base_sha }}
+      DALPH_LIVE_QUALIFICATION_SOURCE_SHA: ${{ inputs.candidate_sha }}
+      DALPH_LIVE_QUALIFICATION_SOURCE_REPOSITORY: ${{ github.workspace }}
+      DALPH_LIVE_QUALIFICATION_SOURCE_BASE_SHA: ${{ inputs.reviewed_base_sha }}
+      DALPH_LIVE_QUALIFICATION_BUILT_ENTRY: ${{ github.workspace }}/packages/dalph/dist/bin/production-live-qualification.js
+      DALPH_LIVE_QUALIFICATION_LOCKFILE: ${{ github.workspace }}/pnpm-lock.yaml
+      DALPH_LIVE_QUALIFICATION_CODEX_EXECUTABLE: ${{ github.workspace }}/node_modules/.bin/codex
+      DALPH_LIVE_QUALIFICATION_PUBLICATION_CONTAINER: ${{ runner.temp }}/dalph-live-publication
+      DALPH_LIVE_QUALIFICATION_WORKFLOW: ${{ github.workflow }}
+      DALPH_LIVE_QUALIFICATION_RUN_ID: ${{ github.run_id }}
+      DALPH_LIVE_QUALIFICATION_JOB_ID: ${{ github.job }}
+      DALPH_LIVE_QUALIFICATION_REPOSITORY: ${{ inputs.repository }}
+      DALPH_LIVE_QUALIFICATION_PROTECTED_ENVIRONMENT: production-live-qualification
+      DALPH_LIVE_QUALIFICATION_MANIFEST: ${{ runner.temp }}/dalph-live-qualification/manifest.json
+      DALPH_LIVE_QUALIFICATION_ARTIFACT: ${{ runner.temp }}/dalph-live-qualification/qualification.json
+      DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS: ${{ runner.temp }}/dalph-live-qualification/retained-locators.json
+      DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED: ${{ runner.temp }}/dalph-live-formal/dedicated/formal.log
+      DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED: ${{ runner.temp }}/dalph-live-formal/stressed/formal.log
+      DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED_METADATA: ${{ runner.temp }}/dalph-live-formal/dedicated/provenance.json
+      DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED_METADATA: ${{ runner.temp }}/dalph-live-formal/stressed/provenance.json
+      DALPH_SOURCE: ${{ github.workspace }}
+      GIT_OPTIONAL_LOCKS: "0"
+      NODE_OPTIONS: --max-old-space-size=8192
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify candidate and reviewed Base
+        run: |
+          [[ "$DALPH_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$DALPH_COVERAGE_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$DALPH_CANDIDATE_SHA"
+          git cat-file -e "$DALPH_COVERAGE_BASE_SHA^{commit}"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+          version: 10.29.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          cache: pnpm
+          node-version: 24.20.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shipped controller
+        run: pnpm build
+
+      - name: Download dedicated formal evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: production-live-formal-dedicated-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/dalph-live-formal/dedicated
+
+      - name: Download stressed formal evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: production-live-formal-stressed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/dalph-live-formal/stressed
+
+      - name: Prepare redacted output locations
+        run: mkdir -p "$RUNNER_TEMP/dalph-live-qualification"
+
+      # The protected environment secrets enter only this one controller command.
+      - name: Run one protected live qualification
+        env:
+          GITHUB_TOKEN: ${{ secrets.DALPH_LIVE_GITHUB_TOKEN }}
+          DALPH_CODEX_PROVIDER_CREDENTIAL: ${{ secrets.DALPH_LIVE_CODEX_PROVIDER_CREDENTIAL }}
+        run: pnpm qualify:production-live
+
+      - name: Upload redacted qualification outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-live-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/dalph-live-qualification/qualification.json
+            ${{ runner.temp }}/dalph-live-qualification/retained-locators.json
+            ${{ runner.temp }}/dalph-live-qualification/manifest.json
+          if-no-files-found: warn
+          retention-days: 30

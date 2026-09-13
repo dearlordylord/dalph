@@ -351,6 +351,82 @@ once with the frozen `candidate_sha`. Choose `quint` (default, ARM) or `all`
 `coverage_base_sha`. It runs the same gate on a fresh worker. Diagnose stage
 failures before retrying; different hardware is not a calibrated baseline.
 
+### Protected disposable live qualification
+
+Alice dispatches [Production live qualification](../.github/workflows/production-live-qualification.yml)
+only for one accepted candidate and one dedicated disposable repository. The
+dispatch supplies `candidate_sha`, `reviewed_base_sha`, and `repository`; the
+first two values must each be exactly 40 lowercase hexadecimal characters.
+The workflow checks out that candidate, verifies the reviewed Base exists,
+installs with pnpm 10.29.3 on Node 24.20.0, and runs `pnpm build` before any
+provider credential is made available.
+
+The workflow has one constant concurrency group,
+`production-live-qualification`, with `cancel-in-progress: false`, regardless
+of dispatch ref or SHA. The `qualify` job requires approval from the protected
+GitHub environment named `production-live-qualification`. Its two protected
+secrets are mapped only into the single live-command step:
+`DALPH_LIVE_GITHUB_TOKEN` (scoped to issue and label mutation in the configured
+repository) and `DALPH_LIVE_CODEX_PROVIDER_CREDENTIAL`. Ordinary CI never
+invokes this command.
+
+Two preceding jobs capture dedicated and stressed formal evidence independently
+with `pnpm check:ci:formal`; their logs and provenance files are downloaded by
+the approved job. The checked-in controller receives those absolute evidence
+locators, the candidate-bound source SHA, branded workflow/run/job/protected-
+environment provenance, and these strict formal/output locators:
+
+```text
+DALPH_LIVE_QUALIFICATION_SOURCE_SHA
+DALPH_LIVE_QUALIFICATION_SOURCE_REPOSITORY
+DALPH_LIVE_QUALIFICATION_SOURCE_BASE_SHA
+DALPH_LIVE_QUALIFICATION_BUILT_ENTRY
+DALPH_LIVE_QUALIFICATION_LOCKFILE
+DALPH_LIVE_QUALIFICATION_CODEX_EXECUTABLE
+DALPH_LIVE_QUALIFICATION_PUBLICATION_CONTAINER
+DALPH_LIVE_QUALIFICATION_WORKFLOW
+DALPH_LIVE_QUALIFICATION_RUN_ID
+DALPH_LIVE_QUALIFICATION_JOB_ID
+DALPH_LIVE_QUALIFICATION_MANIFEST
+DALPH_LIVE_QUALIFICATION_ARTIFACT
+DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS
+DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED
+DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED
+DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED_METADATA
+DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED_METADATA
+```
+
+The root command is:
+
+```bash
+pnpm qualify:production-live
+```
+
+It validates `DALPH_RUN_PRODUCTION_LIVE_QUALIFICATION=1`, the exact checked-out
+candidate, the reviewed Base, the protected environment, the provenance shape,
+the formal evidence files, and the built entry
+`packages/dalph/dist/bin/production-live-qualification.js`. It then starts that
+controller once with one absolute `--manifest` locator. The controller owns
+fixture creation, the one shipped production Run, build/hash/provenance
+evidence, exact cleanup, and the redacted artifact; this wrapper has no retry
+or resume path. A failed or ambiguous provider boundary therefore leaves the
+Run and exact retained locators for manual inspection rather than launching a
+second command.
+
+The final step uploads `qualification.json`, `retained-locators.json`, and the
+manifest locator with `if: always()`, so a successful result and a failed live
+attempt have the same explicit artifact boundary. The artifact must contain no
+credential, raw environment, provider-private session, prompt, or response.
+
+The focused contract mapping is:
+
+| Scenario | Acceptance test |
+| --- | --- |
+| Alice's approved workflow is manually dispatched with exact candidate/Base inputs, one serialized lane, Node 24.20.0, build, and dedicated/stressed evidence | `scripts/production-live-qualification-workflow.test.mjs` structural workflow cases |
+| The command rejects missing opt-in, malformed inputs, or a changed candidate before any provider child starts | `scripts/run-production-live-qualification.test.mjs` validation cases |
+| The built controller receives one manifest locator and secrets only through one child launch | `scripts/run-production-live-qualification.test.mjs` exact launch case |
+| A child/provider failure is reported without a retry and without secret bytes in the wrapper error | `scripts/run-production-live-qualification.test.mjs` single-launch failure case and workflow artifact `if: always()` contract |
+
 ### Disposable production repository walkthrough
 
 This walkthrough lets Alice run the shipped production command against one
