@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { atomicRecord, digest } from "./gate-custody-records.mjs"
 import { readQualityEvidence } from "./gate-quality-evidence.mjs"
+import { formalEvidenceContract } from "./formal-evidence-contract.mjs"
 
 const fixture = () => {
   const runDirectory = mkdtempSync(join(tmpdir(), "dalph-quality-proof-"))
@@ -76,7 +77,7 @@ const fixture = () => {
     profileIdentity: formalSuccess.profileIdentity,
     outputLineCount: 0,
     observation: {
-      version: 2,
+      version: formalEvidenceContract.inputPolicyVersion,
       observerVersion: 1,
       ready: true,
       drained: true,

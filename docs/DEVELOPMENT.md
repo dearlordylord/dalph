@@ -819,18 +819,27 @@ filesystems, non-Linux hosts, or tool roots outside the identified installation.
 
 The supported runtime policy currently identifies Debian 12 on x64 or arm64,
 with finite dedicated Node and Java installation roots and a checkout-local
-pinned pnpm/Quint installation. It fingerprints all of `specs/` and `scripts/`,
-package/lock/workspace configuration, patches and the formal CI workflow. It
-also fingerprints installed Node, pnpm, Quint dependencies, Rust evaluator,
-Apalache, Java, observer Python, and the declared system library, locale,
-certificate and runtime configuration roots. Unknown import targets, external
-or cyclic links, unsupported runtime configuration and unreadable inputs fail
-instead of permitting reuse. Implicit Apalache configuration locations are
-observed even when absent; present unsupported configurations are refused.
-Application source and ordinary documentation outside these roots, and Git
-HEAD/index/base changes alone, do not change formal identity. Independent
-candidate verification still applies. Automatic MBT is temporarily excluded
-pending #363; formal reuse does not prove application conformance.
+pinned pnpm/Quint installation. The affected-input rule in the
+[formal affected-input reuse scenario](scenarios/formal-affected-input-reuse.md)
+supersedes the former whole-`specs/`, whole-`scripts/`, and raw-configuration
+fingerprint. The policy parses the actual admitted/formal process entries and
+recursively follows their repository JavaScript dependencies. It selects Quint
+roots from the effective profile command arguments and follows imports with the
+pinned Quint resolver. Unselected scripts, experimental models, documentation,
+raw package/lock/workspace/npm/patch metadata, and the hosted CI workflow do not
+change local formal identity merely because their bytes changed.
+
+The identity retains the consumed profile/toolchain projections and resolved
+Node, pnpm, Quint, parser, Rust evaluator, Apalache, Java, observer Python, and
+declared system library, locale, certificate, and runtime configuration roots.
+Unknown or non-literal dynamic source imports, external or cyclic links,
+unsupported native repository inputs, unsupported runtime configuration, and
+unreadable inputs fail instead of permitting reuse. Implicit Apalache
+configuration locations are observed even when absent; present unsupported
+configurations are refused. Git HEAD/index/base changes alone do not change
+formal identity. Independent candidate verification still applies. Automatic
+MBT is temporarily excluded pending #363; formal reuse does not prove
+application conformance.
 
 Current allowances in [formal-gate-policy.mjs](../scripts/formal-gate-policy.mjs)
 are 2,100 seconds for

@@ -17,6 +17,7 @@ import {
   createFormalEnvironment,
   formalInputPolicyVersion,
   quintImportSources,
+  resolveFormalExecutable,
   startFormalInputGuard
 } from "./formal-input-policy.mjs"
 import { localHostIdentity } from "./gate-custody-records.mjs"
@@ -38,6 +39,7 @@ const fixture = () => {
     ".github/workflows/ci.yml",
     "specs/model.qnt",
     "scripts/with-gate-slot.mjs",
+    "scripts/run-admitted-gate.mjs",
     "scripts/run-formal-gate.mjs",
     "scripts/run-formal-workflow.mjs",
     "scripts/run-formal-profile.mjs",
@@ -49,6 +51,7 @@ const fixture = () => {
     "tools/runtime.so"
   ])
     writeFileSync(join(root, file), "original\n")
+  writeFileSync(join(root, "package.json"), JSON.stringify({ type: "module" }))
   writeFileSync(join(root, "specs/model.qnt"), "module fixture {}\n")
   const toolchain = {
     version: formalInputPolicyVersion,
@@ -87,6 +90,21 @@ const fixture = () => {
   }
   return { root, outer, toolchain, environment, profile, guard, identity }
 }
+
+test("formal executable lookup continues from a missing PATH entry to the later executable", async () => {
+  const root = mkdtempSync(join(tmpdir(), "dalph-formal-path-"))
+  cleanups.push(() => rmSync(root, { force: true, recursive: true }))
+  const missing = join(root, "missing")
+  const available = join(root, "available")
+  mkdirSync(available)
+  const executable = join(available, "formal-tool")
+  writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+  assert.equal(await resolveFormalExecutable("formal-tool", { PATH: `${missing}:${available}` }, root), executable)
+  await assert.rejects(
+    resolveFormalExecutable("absent-tool", { PATH: missing }, root),
+    (error) => error.code === "ENOENT" && error.cause?.code === "ENOENT"
+  )
+})
 
 test("retains formal reuse across unrelated edits without binding HEAD index or base", async () => {
   const f = fixture(),
@@ -131,6 +149,77 @@ test("discovers direct and transitive JavaScript helpers without including their
   const changed = await f.identity()
   writeFileSync(join(f.root, "scripts/sibling.test.mjs"), "export const repaired = true\n")
   assert.equal((await f.identity()).inputDigest, changed.inputDigest)
+})
+
+test("tracks the spawned admission entry and its transitive helpers", async () => {
+  const f = fixture()
+  const original = await f.identity()
+  writeFileSync(join(f.root, "scripts/run-admitted-gate.mjs"), 'import "./gate-run-identity.mjs"\n')
+  writeFileSync(join(f.root, "scripts/gate-run-identity.mjs"), 'export { policy } from "./gate-slot-policy.mjs"\n')
+  writeFileSync(join(f.root, "scripts/gate-slot-policy.mjs"), "export const policy = 1\n")
+  assert.notEqual((await f.identity()).inputDigest, original.inputDigest)
+  const entry = await f.identity()
+  writeFileSync(join(f.root, "scripts/gate-slot-policy.mjs"), "export const policy = 2\n")
+  assert.notEqual((await f.identity()).inputDigest, entry.inputDigest)
+})
+
+test("resolves a symlink-imported module's children from the real importer", async () => {
+  const f = fixture()
+  mkdirSync(join(f.root, "scripts/alias"))
+  mkdirSync(join(f.root, "scripts/real"))
+  writeFileSync(join(f.root, "scripts/run-formal-gate.mjs"), 'import "./alias/entry.mjs"\n')
+  writeFileSync(join(f.root, "scripts/real/entry.mjs"), 'import "./helper.mjs"\n')
+  writeFileSync(join(f.root, "scripts/real/helper.mjs"), "export const actual = 1\n")
+  writeFileSync(join(f.root, "scripts/alias/helper.mjs"), "export const conflicting = 1\n")
+  symlinkSync("../real/entry.mjs", join(f.root, "scripts/alias/entry.mjs"))
+  const original = await f.identity()
+  assert.equal(
+    original.sourceManifest.some((entry) => entry.path.endsWith("scripts/real/helper.mjs")),
+    true
+  )
+  assert.equal(
+    original.sourceManifest.some((entry) => entry.path.endsWith("scripts/alias/helper.mjs")),
+    false
+  )
+  writeFileSync(join(f.root, "scripts/alias/helper.mjs"), "export const conflicting = 2\n")
+  assert.equal((await f.identity()).inputDigest, original.inputDigest)
+  writeFileSync(join(f.root, "scripts/real/helper.mjs"), "export const actual = 2\n")
+  assert.notEqual((await f.identity()).inputDigest, original.inputDigest)
+})
+
+test("uses distinct exact ESM and Node CommonJS resolution rules", async () => {
+  const f = fixture()
+  writeFileSync(join(f.root, "scripts/run-formal-gate.mjs"), 'import "./selector.cjs"\n')
+  writeFileSync(join(f.root, "scripts/selector.cjs"), 'require("./helper"); require.resolve("./data")\n')
+  writeFileSync(join(f.root, "scripts/helper.js"), "exports.selected = true\n")
+  writeFileSync(join(f.root, "scripts/helper.mjs"), "export const unselected = true\n")
+  writeFileSync(join(f.root, "scripts/data.json"), '{"selected":true}\n')
+  const original = await f.identity()
+  assert.equal(
+    original.sourceManifest.some((entry) => entry.path.endsWith("scripts/helper.js")),
+    true
+  )
+  assert.equal(
+    original.sourceManifest.some((entry) => entry.path.endsWith("scripts/helper.mjs")),
+    false
+  )
+  assert.equal(
+    original.sourceManifest.some((entry) => entry.path.endsWith("scripts/data.json")),
+    true
+  )
+  writeFileSync(join(f.root, "scripts/helper.mjs"), "export const unselected = false\n")
+  assert.equal((await f.identity()).inputDigest, original.inputDigest)
+  writeFileSync(join(f.root, "scripts/helper.js"), "exports.selected = false\n")
+  assert.notEqual((await f.identity()).inputDigest, original.inputDigest)
+
+  writeFileSync(join(f.root, "scripts/run-formal-gate.mjs"), 'import "./extensionless"\n')
+  writeFileSync(join(f.root, "scripts/extensionless.js"), "export const notExact = true\n")
+  await assert.rejects(f.guard(), /Missing repository formal source import/u)
+
+  writeFileSync(join(f.root, "scripts/run-formal-gate.mjs"), 'import "./native-selector.cjs"\n')
+  writeFileSync(join(f.root, "scripts/native-selector.cjs"), 'require("./native")\n')
+  writeFileSync(join(f.root, "scripts/native.node"), "not a native module\n")
+  await assert.rejects(f.guard(), /Unsupported repository native CommonJS input/u)
 })
 
 test("discovers selected, negative-control, and recursively imported Quint inputs only", async () => {

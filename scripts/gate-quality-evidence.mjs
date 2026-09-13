@@ -4,7 +4,8 @@ import { digest, readRecord } from "./gate-custody-records.mjs"
 import { inputGuardProven } from "./gate-resume-policy.mjs"
 import { captureResumeArtifacts } from "./gate-resume-artifacts.mjs"
 import { addSuccessfulOutputLines, successfulOutputLineLimit } from "./quality-output-budget.mjs"
-import { formalSuccessPolicyVersion, readReferencedFormalSuccess } from "./formal-success-evidence.mjs"
+import { readReferencedFormalSuccess } from "./formal-success-evidence.mjs"
+import { formalEvidenceContract } from "./formal-evidence-contract.mjs"
 
 export const qualitySubtreeProven = (stages, obligationId) => {
   const descendants = new Set([obligationId])
@@ -200,8 +201,8 @@ export const readQualityEvidence = ({
       original.runId !== formal.runId ||
       !same(original.identity, formal.identity) ||
       original.profileIdentity !== formal.profileIdentity ||
-      observation?.version !== formalSuccessPolicyVersion ||
-      observation.observerVersion !== 1 ||
+      observation?.version !== formalEvidenceContract.inputPolicyVersion ||
+      observation.observerVersion !== formalEvidenceContract.observerVersion ||
       observation.ready !== true ||
       observation.drained !== true ||
       observation.unchanged !== true ||

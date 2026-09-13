@@ -13,13 +13,16 @@ import {
   wallClockTimestamp
 } from "./gate-custody-records.mjs"
 import { createQuintEffectiveProfile } from "./quint-effective-profile.mjs"
+import { formalEvidenceContract } from "./formal-evidence-contract.mjs"
 import {
   beginFormalAttempt,
+  formalSuccessPolicyVersion,
   invalidateFormalAttempt,
   publishFormalSuccess,
   readFormalSuccess,
   readReferencedFormalSuccess
 } from "./formal-success-evidence.mjs"
+import { formalInputPolicyVersion } from "./formal-input-policy.mjs"
 
 // These original receipts are fabricated fixtures, not publications under test.
 // Keep their correct bytes/modes without syncing the entire filesystem per seed.
@@ -27,6 +30,12 @@ const seedRecord = (path, value) => {
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, `${JSON.stringify(value)}\n`, { mode: 0o600 })
 }
+
+test("shared formal evidence contract owns input observation and success generations", () => {
+  assert.equal(formalInputPolicyVersion, formalEvidenceContract.inputPolicyVersion)
+  assert.equal(formalSuccessPolicyVersion, formalEvidenceContract.successPolicyVersion)
+  assert.notEqual(formalEvidenceContract.inputPolicyVersion, 2)
+})
 
 const fixture = () => {
   const root = mkdtempSync(join(tmpdir(), "dalph-formal-evidence-"))
@@ -38,7 +47,7 @@ const fixture = () => {
   const profile = createQuintEffectiveProfile({ purpose: "local-guarded" })
   const profileIdentity = digest(JSON.stringify(profile))
   const identity = {
-    version: 2,
+    version: formalEvidenceContract.inputPolicyVersion,
     worktree: root,
     inputDigest: digest("formal inputs"),
     profileDigest: profileIdentity,
@@ -181,7 +190,7 @@ const fixture = () => {
   }
   const execution = { helperObligationId, reportPath, reportDigest: saveReport() }
   const observation = {
-    version: 2,
+    version: formalEvidenceContract.inputPolicyVersion,
     observerVersion: 1,
     ready: true,
     drained: true,
@@ -242,6 +251,11 @@ test("reruns when required evidence is malformed truncated old-policy or mismatc
     const attempt = beginFormalAttempt(f.options)
     publishFormalSuccess({ attempt, execution: f.execution, observation: f.observation })
     assert.equal(readFormalSuccess(f.options).status, "hit") // No diagnostic log exists.
+    assert.equal(
+      readFormalSuccess({ ...f.options, identity: { ...f.identity, version: 2 } }).status,
+      "miss",
+      "an identity from the former input policy cannot reuse current evidence"
+    )
     const original = readFileSync(attempt.pointerPath, "utf8")
     const pointer = JSON.parse(original)
     for (const invalid of [

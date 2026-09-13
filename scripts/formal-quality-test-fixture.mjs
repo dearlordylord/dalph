@@ -12,6 +12,7 @@ import {
   wallClockTimestamp
 } from "./gate-custody-records.mjs"
 import { beginFormalAttempt, publishFormalSuccess } from "./formal-success-evidence.mjs"
+import { formalEvidenceContract } from "./formal-evidence-contract.mjs"
 import { createQuintEffectiveProfile } from "./quint-effective-profile.mjs"
 
 // Explicit runtime dependencies of the copied quality runner and original
@@ -222,7 +223,7 @@ export const seedQualityFormalBoundary = (worktree) => {
   const reportPath = join(runDirectory, "formal-executions", "controlled.json")
   initializeRecord(reportPath, report)
   const observation = {
-    version: 2,
+    version: formalEvidenceContract.inputPolicyVersion,
     observerVersion: 1,
     ready: true,
     drained: true,

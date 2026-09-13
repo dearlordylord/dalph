@@ -20,6 +20,7 @@ const fixture = async () => {
     "pnpm-workspace.yaml",
     ".github/workflows/ci.yml",
     "scripts/with-gate-slot.mjs",
+    "scripts/run-admitted-gate.mjs",
     "scripts/run-formal-gate.mjs",
     "scripts/run-formal-workflow.mjs",
     "scripts/run-formal-profile.mjs",

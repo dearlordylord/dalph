@@ -39,7 +39,7 @@ import {join} from 'node:path'
 import {digest} from './gate-custody-records.mjs'
 const event=(root,value)=>appendFileSync(join(root,'.scratch','events'),value+'\\n')
 export const createFormalEnvironment=(environment)=>({...environment})
-export const formalInputPolicyVersion=2
+export const formalInputPolicyVersion=3
 export const resolveFormalToolchain=async({worktree})=>{
  event(worktree,'prepare');return {nodeExecutable:process.execPath,quintEntryPoint:join(worktree,'node_modules','@informalsystems','quint','dist','src','cli.js'),javaExecutable:join(worktree,'fake-java.cjs'),javaUserHome:worktree,javaArguments:['-Duser.home='+worktree],
  apalacheJar:join(worktree,'.quint','apalache-dist-0.56.1','apalache','lib','apalache.jar'),
@@ -49,11 +49,11 @@ export const startFormalInputGuard=async({worktree,profile,toolchain})=>{
  event(worktree,'guard-start')
  const bytes=readFileSync(join(worktree,'formal-input'))
  const profileDigest=digest(JSON.stringify(profile))
- const identity={version:2,worktree,profileDigest,toolchain,inputDigest:digest(Buffer.concat([bytes,Buffer.from(profileDigest)]))}
+ const identity={version:3,worktree,profileDigest,toolchain,inputDigest:digest(Buffer.concat([bytes,Buffer.from(profileDigest)]))}
  return {identity,assertUnchanged:async()=>{},finish:async()=>{
  event(worktree,'guard-finish')
  if(!bytes.equals(readFileSync(join(worktree,'formal-input'))))throw Error('fixture input changed')
- return {version:2,observerVersion:1,ready:true,drained:true,unchanged:true,inputDigest:identity.inputDigest}
+ return {version:3,observerVersion:1,ready:true,drained:true,unchanged:true,inputDigest:identity.inputDigest}
  },close:async()=>event(worktree,'guard-close')}
 }
 `
@@ -500,6 +500,12 @@ test(
       const serverCount = f.events().filter((event) => event === "server-start").length
       assert.equal(checkerCount, 105)
       assert.equal(serverCount, 1)
+      const formalSources = f.saved().success.identity.sourceManifest.map((entry) => entry.path)
+      for (const source of ["run-admitted-gate.mjs", "gate-run-identity.mjs", "gate-slot-policy.mjs"])
+        assert.equal(
+          formalSources.some((path) => path.endsWith(`/scripts/${source}`)),
+          true
+        )
       f.put("scripts/unrelated-repair.test.mjs", "assert.equal(actual, corrected)\n")
       const second = await launch(f).completion
       assert.equal(second.code, 0, second.stderr)

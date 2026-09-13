@@ -8,8 +8,9 @@ effective profile are unchanged. GitHub, Dalph executors, and the workflow
 journal do not participate because this is repository verification tooling,
 not Dalph runtime behavior.
 
-When the maintainer runs the formal gate again, it parses the JavaScript formal
-entry points and follows their repository-local imports. It reads model paths
+When the maintainer runs the formal gate again, it parses the JavaScript admission
+runner, formal entry points, and spawned profile helper, then follows their
+repository-local imports. It reads model paths
 from the effective Quint command arguments and follows the pinned Quint
 resolver recursively. It compares those files, resolved installed tools,
 environment, profile, absent Apalache configuration, and custody evidence with
@@ -38,17 +39,23 @@ The final snapshot derives the closure again. A missing import target, changed
 symlink resolution, or newly introduced dependency fails closed.
 
 There is no new crash, retry, or outside-system protocol. Existing observer,
-custody, success-publication, and final-comparison rules apply. Input-policy and
-success-policy versions advance together, so evidence recorded by the former
-broad policy is a clean miss rather than compatibility state.
+custody, success-publication, and final-comparison rules apply. One shared
+evidence contract owns the input, observer, and success-policy generations;
+observation validation always uses the input-policy generation. Evidence
+recorded by a former input policy is a clean miss rather than compatibility
+state.
 
 | Event and required outcome | Acceptance test |
 | --- | --- |
+| Resolve a formal executable when the first `PATH` directory is absent | `formal-input-policy.test.mjs`: `formal executable lookup continues from a missing PATH entry to the later executable` |
 | Add, edit, or delete an unrelated `scripts/*.test.*`; edit docs, raw workspace metadata, or an unselected model | `formal-input-policy.test.mjs`: `retains formal reuse across unrelated edits without binding HEAD index or base` |
 | Edit a direct or transitive JavaScript helper; add a new static import target | `formal-input-policy.test.mjs`: `discovers direct and transitive JavaScript helpers without including their siblings`; `reruns after selected content, mode, or newly imported target changes` |
+| Edit the spawned admission runner or one of its transitive identity/slot helpers | `formal-input-policy.test.mjs`: `tracks the spawned admission entry and its transitive helpers`; the zero-launch integration also asserts the actual closure contains all three files |
+| Import through a symlink or use extensionless CommonJS resolution | `formal-input-policy.test.mjs`: `resolves a symlink-imported module's children from the real importer`; `uses distinct exact ESM and Node CommonJS resolution rules` |
 | Edit a selected model, selected negative-control model, or recursively imported model; leave an experiment unselected | `formal-input-policy.test.mjs`: `discovers selected, negative-control, and recursively imported Quint inputs only` |
 | Edit an unrelated sibling while retained observation is active; remove an imported dependency | `formal-input-policy.test.mjs`: `retained exact observation ignores unrelated script mutation but rejects imported dependency disappearance` |
 | Replace and restore a relevant file during discovery | `formal-input-policy.test.mjs`: `rejects edit and revert before initial hashing returns any formal identity` |
 | Use an unidentifiable dynamic dependency or a symlink outside the worktree | `formal-input-policy.test.mjs`: `rejects non-literal repository dependency discovery`; `refuses unidentifiable current inputs: undeclared target and cycle` |
 | Read success evidence written under the old policy | `formal-success-evidence.test.mjs`: `reruns when required evidence is malformed truncated old-policy or mismatched; distinguishes optional logs` |
+| Validate input/observer/success generations at publication and handoff | `formal-success-evidence.test.mjs`: `shared formal evidence contract owns input observation and success generations`; `gate-quality-evidence.test.mjs` composite cases |
 | Retry after an unrelated test-only repair | `formal-gate.integration.test.mjs`: complete-success/reuse scenario asserts the reuse message and zero checker/server launches |

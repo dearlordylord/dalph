@@ -47,6 +47,11 @@ export interface FormalInputObservation {
   readonly inputDigest: string
 }
 export declare const formalInputPolicyVersion: number
+export declare const resolveFormalExecutable: (
+  name: string,
+  environment: NodeJS.ProcessEnv,
+  worktree: string
+) => Promise<string>
 export declare const createFormalEnvironment: (callerEnvironment?: NodeJS.ProcessEnv) => Record<string, string>
 export declare const resolveFormalToolchain: (options: {
   readonly worktree: string

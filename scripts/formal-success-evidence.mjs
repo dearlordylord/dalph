@@ -14,12 +14,13 @@ import { groupIsAbsent, validateObligation } from "./gate-registration.mjs"
 import { createQuintEffectiveProfile } from "./quint-effective-profile.mjs"
 import { validateQuintCommandOutput } from "./quint-witness-coverage.mjs"
 import { assertCleanTemporalVerdict, assertViolatedTemporalVerdict } from "./quint-temporal-gate.mjs"
+import { formalEvidenceContract } from "./formal-evidence-contract.mjs"
 
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right)
 const requireFact = (fact, message) => {
   if (!fact) throw new Error(message)
 }
-export const formalSuccessPolicyVersion = 2
+export const formalSuccessPolicyVersion = formalEvidenceContract.successPolicyVersion
 const policyVersion = formalSuccessPolicyVersion
 const scope = ({ identity, location, profileIdentity }) => {
   requireFact(
@@ -274,8 +275,8 @@ export const validateFormalExecution = ({ attempt, execution }) => {
 
 export const publishFormalSuccess = ({ attempt, execution, observation }) => {
   requireFact(
-    observation?.version === formalSuccessPolicyVersion &&
-      observation.observerVersion === 1 &&
+    observation?.version === formalEvidenceContract.inputPolicyVersion &&
+      observation.observerVersion === formalEvidenceContract.observerVersion &&
       observation.unchanged === true &&
       observation.ready === true &&
       observation.drained === true &&
@@ -375,8 +376,8 @@ export const readReferencedFormalSuccess = ({ identity, profileIdentity, recordP
     "Invalid referenced formal provenance"
   )
   requireFact(
-    success.observation?.version === formalSuccessPolicyVersion &&
-      success.observation.observerVersion === 1 &&
+    success.observation?.version === formalEvidenceContract.inputPolicyVersion &&
+      success.observation.observerVersion === formalEvidenceContract.observerVersion &&
       success.observation.unchanged === true &&
       success.observation.ready === true &&
       success.observation.drained === true &&

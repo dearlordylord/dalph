@@ -8,11 +8,12 @@ import { delimiter, dirname, extname, isAbsolute, join, resolve, sep } from "nod
 import { performance } from "node:perf_hooks"
 import { fileURLToPath } from "node:url"
 import { parse } from "acorn"
+import { formalEvidenceContract } from "./formal-evidence-contract.mjs"
 import { localHostIdentity } from "./gate-custody-records.mjs"
 import { inputObserverScript, startInputObserver } from "./gate-input-observer.mjs"
 import { apalacheVersion } from "./quint-temporal-gate.mjs"
 
-export const formalInputPolicyVersion = 2
+export const formalInputPolicyVersion = formalEvidenceContract.inputPolicyVersion
 const digest = (value) => createHash("sha256").update(value).digest("hex")
 const below = (path, root) => path === root || path.startsWith(`${root}${sep}`)
 const retainedEnvironmentKeys = [
@@ -111,23 +112,29 @@ const requiredFile = async (path, executable = false) => {
     return path
   } catch (error) {
     if (error.message?.startsWith("Required prepared formal artifact")) throw error
-    throw new Error(`Unreadable or missing required formal input: ${path}`, { cause: error })
+    const failure = new Error(`Unreadable or missing required formal input: ${path}`, { cause: error })
+    if (typeof error.code === "string") failure.code = error.code
+    throw failure
   }
 }
-const executable = async (name, environment, worktree) => {
+export const resolveFormalExecutable = async (name, environment, worktree) => {
   const candidates =
     isAbsolute(name) || name.includes(sep)
       ? [resolve(worktree, name)]
       : (environment.PATH ?? "").split(delimiter).map((directory) => resolve(worktree, directory, name))
+  let lastFailure
   for (const candidate of candidates) {
     try {
       await requiredFile(candidate, true)
       return candidate
     } catch (error) {
       if (error.code !== "ENOENT" && error.code !== "EACCES") throw error
+      lastFailure = error
     }
   }
-  throw new Error(`Required formal executable is unavailable: ${name}`)
+  const failure = new Error(`Required formal executable is unavailable: ${name}`, { cause: lastFailure })
+  if (typeof lastFailure?.code === "string") failure.code = lastFailure.code
+  throw failure
 }
 const packageRoot = async (launcher, name) => {
   let directory = dirname(await realpath(launcher))
@@ -156,7 +163,7 @@ export const resolveFormalToolchain = async ({ effectiveEnvironment, timeoutMill
     throw new Error("Unsupported Node installation: cannot identify a finite complete runtime directory")
   const pnpmExecutable =
     environment.npm_execpath === undefined
-      ? await executable("pnpm", environment, root)
+      ? await resolveFormalExecutable("pnpm", environment, root)
       : resolve(root, environment.npm_execpath)
   await requiredFile(pnpmExecutable)
   const pnpmRoot = await packageRoot(pnpmExecutable, "pnpm")
@@ -201,7 +208,7 @@ export const resolveFormalToolchain = async ({ effectiveEnvironment, timeoutMill
   await requiredFile(join(apalacheDirectory, "bin", "apalache-mc"), true)
   const javaExecutable =
     environment.JAVA_HOME === undefined
-      ? await executable("java", environment, root)
+      ? await resolveFormalExecutable("java", environment, root)
       : join(resolve(root, environment.JAVA_HOME), "bin", "java")
   await requiredFile(javaExecutable, true)
   const javaRoot = dirname(dirname(await realpath(javaExecutable)))
@@ -220,7 +227,7 @@ export const resolveFormalToolchain = async ({ effectiveEnvironment, timeoutMill
     throw new Error("Unsupported JVM user.home property")
   const javaUserHome = resolve(homeSettings[0][1])
   const configPaths = apalacheConfigurationPaths(root, javaUserHome)
-  const pythonExecutable = await executable("python3", environment, root)
+  const pythonExecutable = await resolveFormalExecutable("python3", environment, root)
   const pythonVersion = execFileSync(
     pythonExecutable,
     ["-I", "-S", "-c", "import sys; print(str(sys.version_info.major)+'.'+str(sys.version_info.minor))"],
@@ -556,6 +563,7 @@ const discoverQuintClosure = async (profile, worktree, deadline) => {
 const formalJavaScriptEntries = (worktree) =>
   [
     "scripts/with-gate-slot.mjs",
+    "scripts/run-admitted-gate.mjs",
     "scripts/run-formal-gate.mjs",
     "scripts/run-formal-workflow.mjs",
     "scripts/run-formal-profile.mjs",
@@ -580,15 +588,15 @@ const literalModuleSources = (text, sourcePath) => {
     throw new Error(`Unidentifiable JavaScript formal input in ${sourcePath}: ${error.message}`, { cause: error })
   }
   const sources = []
-  const literal = (node, kind) => {
+  const literal = (node, dependencyKind, syntaxKind) => {
     if (node?.type !== "Literal" || typeof node.value !== "string")
-      throw new Error(`Unsupported non-literal ${kind} in formal source: ${sourcePath}`)
-    sources.push(node.value)
+      throw new Error(`Unsupported non-literal ${syntaxKind} in formal source: ${sourcePath}`)
+    sources.push({ dependencyKind, specifier: node.value })
   }
   walkSyntax(tree, (node) => {
     if (["ImportDeclaration", "ExportNamedDeclaration", "ExportAllDeclaration"].includes(node.type) && node.source)
-      literal(node.source, "module source")
-    else if (node.type === "ImportExpression") literal(node.source, "dynamic import")
+      literal(node.source, "esm", "module source")
+    else if (node.type === "ImportExpression") literal(node.source, "esm", "dynamic import")
     else if (
       node.type === "CallExpression" &&
       ((node.callee?.type === "Identifier" && node.callee.name === "require") ||
@@ -600,28 +608,52 @@ const literalModuleSources = (text, sourcePath) => {
           node.callee.property.name === "resolve"))
     ) {
       if (node.arguments.length !== 1) throw new Error(`Unsupported require call in formal source: ${sourcePath}`)
-      literal(node.arguments[0], "require source")
+      literal(node.arguments[0], "commonjs", "require source")
     }
   })
   return sources
 }
 
-const localJavaScriptPath = async (specifier, importer, worktree) => {
+const localJavaScriptPath = async ({ dependencyKind, specifier }, importer, worktree) => {
   if (!(specifier.startsWith(".") || specifier.startsWith("/") || specifier.startsWith("file:"))) return undefined
-  const requested = specifier.startsWith("file:") ? fileURLToPath(specifier) : resolve(dirname(importer), specifier)
+  const canonicalImporter = await realpath(importer)
+  const requested = specifier.startsWith("file:")
+    ? fileURLToPath(specifier)
+    : resolve(dirname(canonicalImporter), specifier)
   if (!below(requested, worktree))
     throw new Error(`Repository formal source imports outside the worktree: ${importer} -> ${requested}`)
-  const candidates =
-    extname(requested) === ""
-      ? [requested, ...[".mjs", ".js", ".cjs", ".json"].map((suffix) => `${requested}${suffix}`)]
-      : [requested]
-  for (const candidate of candidates) {
+  if (dependencyKind === "commonjs") {
+    if (specifier.startsWith("file:"))
+      throw new Error(`Unsupported repository CommonJS file URL in formal source: ${importer} -> ${specifier}`)
+    let selected
     try {
-      const status = await lstat(candidate)
-      if (status.isFile() || status.isSymbolicLink()) return candidate
+      selected = createRequire(canonicalImporter).resolve(specifier)
+    } catch (error) {
+      throw new Error(`Missing repository formal source import: ${importer} -> ${specifier}`, { cause: error })
+    }
+    if (!below(selected, worktree))
+      throw new Error(`Repository formal source imports outside the worktree: ${importer} -> ${selected}`)
+    if (extname(selected) === ".node")
+      throw new Error(`Unsupported repository native CommonJS input: ${importer} -> ${selected}`)
+    try {
+      const requestedStatus = await lstat(requested)
+      if (requestedStatus.isDirectory())
+        throw new Error(`Unsupported repository CommonJS directory import: ${importer} -> ${specifier}`)
+      if ((requestedStatus.isFile() || requestedStatus.isSymbolicLink()) && (await realpath(requested)) === selected)
+        return requested
     } catch (error) {
       if (error.code !== "ENOENT") throw error
     }
+    return selected
+  }
+  if (extname(requested) === ".node")
+    throw new Error(`Unsupported repository native ESM input: ${importer} -> ${requested}`)
+  try {
+    const status = await lstat(requested)
+    if (status.isFile() || status.isSymbolicLink()) return requested
+    throw new Error(`Unsupported repository ESM directory import: ${importer} -> ${specifier}`)
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error
   }
   throw new Error(`Missing repository formal source import: ${importer} -> ${specifier}`)
 }
@@ -779,7 +811,7 @@ export const startFormalInputGuard = async ({
     )
     const result = {
       version: formalInputPolicyVersion,
-      observerVersion: 1,
+      observerVersion: formalEvidenceContract.observerVersion,
       host: localHostIdentity(),
       worktree: root,
       sourceDigest: digest(JSON.stringify(sourceManifest)),
@@ -851,7 +883,7 @@ export const startFormalInputGuard = async ({
           throw new Error("Complete formal inputs changed during verification")
         return {
           version: formalInputPolicyVersion,
-          observerVersion: 1,
+          observerVersion: formalEvidenceContract.observerVersion,
           ready: true,
           drained: true,
           unchanged: true,
