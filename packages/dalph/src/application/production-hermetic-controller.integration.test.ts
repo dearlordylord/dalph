@@ -607,7 +607,17 @@ it.live(
           .awaitBoundary("PromotionCompareAndSet", child)
           .pipe(Effect.timeout("20 seconds"))
         if (boundary._tag !== "PromotionCompareAndSet") return yield* Effect.die("wrong concrete CAS cut")
+        expect(boundary).toMatchObject({
+          expectedTargetHead: fixture.manifest.baseSha,
+          integrationTarget: { ref: fixture.manifest.integrationRef, repository: fixture.manifest.repository }
+        })
         const git = yield* GitCommand
+        const originalTarget = yield* git.runInWorktree(fixture.manifest.repository, [
+          "rev-parse",
+          fixture.manifest.integrationRef
+        ])
+        expect(originalTarget.exitCode).toBe(0)
+        expect(originalTarget.stdout.trim()).toBe(boundary.expectedTargetHead)
         const foreign = yield* git.runInWorktree(fixture.manifest.repository, [
           "commit-tree",
           `${fixture.manifest.baseSha}^{tree}`,
@@ -635,23 +645,200 @@ it.live(
           }
         }).pipe(Effect.timeout("20 seconds"))
         expect(stale.occurrence).toMatchObject({
+          basis: { _tag: "AfterAttempt", attemptOrdinal: 1 },
+          correlation: { qualifiedCandidate: { candidateCommit: boundary.candidateCommit } },
           observation: { _tag: "CompareAndSetRejected", observedHeadSha: foreignHead }
         })
+        const original = yield* selectedOf(child)
         expect(yield* child.handle.isRunning).toBe(true)
         yield* controller.terminateChild(child)
         expect(yield* controller.awaitChild(child).pipe(Effect.timeout("20 seconds"))).toBe(0)
-        const journal = yield* readJournal(fixture, child)
-        expect(journal.find(({ event }) => event._tag === "TargetPromotionStale")?.position).toBe(
+        expect(MutableList.toArray(child.recordLog).filter(({ _tag }) => _tag === "RunDisposition")).toEqual([])
+        expect(
+          MutableList.toArray(child.recordLog).filter(({ _tag }) => _tag === "ApplicationExitDisposition")
+        ).toEqual([
+          {
+            _tag: "ApplicationExitDisposition",
+            disposition: { _tag: "Succeeded", requestedStatus: 0 },
+            runId: original.runId,
+            version: 1
+          }
+        ])
+        const originalJournal = yield* readJournal(fixture, child)
+        const promotionIntents = originalJournal.filter(({ event }) => event._tag === "TargetPromotionIntended")
+        const promotionAttempts = originalJournal.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")
+        const staleRecords = originalJournal.filter(({ event }) => event._tag === "TargetPromotionStale")
+        const accepted = originalJournal.find(
+          ({ event }) =>
+            event._tag === "PlannedAttemptExecutorWorkReported" &&
+            event.report._tag === "ExecutorWorkTerminal" &&
+            event.report.result._tag === "Accepted"
+        )
+        const session = originalJournal.find(({ event }) => event._tag === "IntegratorSessionFixed")
+        const integratorRun = originalJournal.find(({ event }) => event._tag === "IntegratorRunStarted")
+        const integratorResult = originalJournal.find(({ event }) => event._tag === "IntegratorRunResultRecorded")
+        const candidateObservation = originalJournal.find(
+          ({ event }) => event._tag === "IntegratorRunCandidateGitObserved"
+        )
+        expect(promotionIntents).toHaveLength(1)
+        expect(promotionAttempts).toHaveLength(1)
+        expect(staleRecords).toHaveLength(1)
+        expect(
+          originalJournal.filter(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorWorkReported" &&
+              event.report._tag === "ExecutorWorkTerminal" &&
+              event.report.result._tag === "Accepted"
+          )
+        ).toHaveLength(1)
+        expect(originalJournal.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
+        expect(originalJournal.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(1)
+        expect(originalJournal.filter(({ event }) => event._tag === "IntegratorRunResultRecorded")).toHaveLength(1)
+        expect(originalJournal.filter(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")).toHaveLength(
+          1
+        )
+        if (
+          promotionIntents[0]?.event._tag !== "TargetPromotionIntended" ||
+          promotionAttempts[0]?.event._tag !== "TargetPromotionAttemptIntended" ||
+          staleRecords[0]?.event._tag !== "TargetPromotionStale" ||
+          accepted?.event._tag !== "PlannedAttemptExecutorWorkReported" ||
+          accepted.event.report._tag !== "ExecutorWorkTerminal" ||
+          accepted.event.report.result._tag !== "Accepted" ||
+          session?.event._tag !== "IntegratorSessionFixed" ||
+          integratorRun?.event._tag !== "IntegratorRunStarted" ||
+          integratorResult?.event._tag !== "IntegratorRunResultRecorded" ||
+          candidateObservation?.event._tag !== "IntegratorRunCandidateGitObserved"
+        ) {
+          return yield* Effect.die("stale promotion must retain its exact executor, Integrator and Git facts")
+        }
+        const acceptedResult = accepted.event.report.result.acceptedResult
+        const promotion = promotionIntents[0].event.correlation
+        expect(promotionAttempts[0].event).toMatchObject({
+          attemptOrdinal: 1,
+          correlation: promotion,
+          reason: { _tag: "Initial", observedHeadSha: boundary.expectedTargetHead }
+        })
+        expect(staleRecords[0].event).toMatchObject({
+          basis: { _tag: "AfterAttempt", attemptOrdinal: promotionAttempts[0].event.attemptOrdinal },
+          correlation: promotion,
+          observation: { _tag: "CompareAndSetRejected", observedHeadSha: foreignHead }
+        })
+        expect(staleRecords[0].event.version).toBe(promotionIntents[0].event.version)
+        expect(stale.identity).toEqual({ position: staleRecords[0].position, runId: original.runId })
+        expect(stale.occurrence.recordedAt).toBe(staleRecords[0].position)
+        expect(promotion.qualifiedCandidate).toMatchObject({
+          candidateCommit: boundary.candidateCommit,
+          directParents: [boundary.expectedTargetHead, acceptedResult.commit],
+          run: integratorRun.event.run
+        })
+        expect(session.event.correlation).toEqual(integratorRun.event.run.session)
+        expect(session.event.correlation.acceptedResult).toEqual(acceptedResult)
+        expect(integratorResult.event.run).toEqual(integratorRun.event.run)
+        expect(integratorResult.event.result).toMatchObject({ correlation: integratorRun.event.run })
+        expect(candidateObservation.event).toMatchObject({
+          candidateText: promotion.qualifiedCandidate.candidateText,
+          observation: {
+            _tag: "Commit",
+            candidateText: promotion.qualifiedCandidate.candidateText,
+            commit: boundary.candidateCommit,
+            directParents: [boundary.expectedTargetHead, acceptedResult.commit]
+          },
+          run: integratorRun.event.run
+        })
+        const fs = yield* FileSystem.FileSystem
+        expect(
+          yield* fs.exists(
+            `${fixture.manifest.evidenceRoot}/${acceptedResult.evidenceManifest.digest.slice(0, 2)}/${acceptedResult.evidenceManifest.digest}`
+          )
+        ).toBe(true)
+        expect((yield* fs.readDirectory(fixture.manifest.candidateRoot)).length).toBeGreaterThan(0)
+        expect(yield* fs.exists(fixture.manifest.privateStore)).toBe(true)
+        const claim = originalJournal.find(({ event }) => event._tag === "TaskClaimAcquired")
+        if (claim?.event._tag !== "TaskClaimAcquired")
+          return yield* Effect.die("stale promotion must retain the exact active claim")
+        const trackerBeforeExit = yield* controller.finalTrackerFacts
+        expect(trackerBeforeExit).toMatchObject({ issuePresent: true, taskLifecycle: "Open" })
+        expect(trackerBeforeExit.claims).toHaveLength(1)
+        expect(trackerBeforeExit.claims[0]?.nodeId).toBe(`hermetic-label:${claim.event.claim.operationId}`)
+        const countsBeforeExit = (yield* controller.providerSnapshot).operationCounts
+        expect(countsBeforeExit.find(({ tag }) => tag === "CreateClaimLabel")?.count).toBe(1)
+        expect(countsBeforeExit.find(({ tag }) => tag === "DeleteClaimLabel")).toBeUndefined()
+        expect(closeCount(countsBeforeExit)).toBe(0)
+        for (const tag of [
+          "TargetPromotionObservedSuccess",
+          "CompletionClaimReplacementIntended",
+          "CompletionClaimReplaced",
+          "CompletionTaskIntended",
+          "CompletionTaskAttemptIntended",
+          "CompletionClaimDeletionIntended",
+          "CompletionClaimDeleted",
+          "TaskClaimReleaseIntended",
+          "TaskClaimReleased",
+          "IntegrationFinalitySettled",
+          "WorkflowRunTerminated"
+        ] as const) {
+          expect(
+            originalJournal.some(({ event }) => event._tag === tag),
+            tag
+          ).toBe(false)
+        }
+        expect(originalJournal.find(({ event }) => event._tag === "TargetPromotionStale")?.position).toBe(
           stale.identity.position
         )
-        expect(journal.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
-        const original = yield* selectedOf(child)
+        expect(originalJournal.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+        const beforeRecovery = yield* controller.providerSnapshot
+        const boundaryLogBeforeRecovery = MutableList.toArray(controller.boundaryLog)
         const second = yield* controller.startChild()
         const waiting = yield* awaitWaitingStatus(second).pipe(Effect.timeout("20 seconds"))
         expect(waiting.subject).toEqual({ _tag: "Run", runId: original.runId })
         expect(yield* selectedOf(second)).toMatchObject({ runId: original.runId, selection: "Recovered" })
         yield* controller.terminateChild(second)
         expect(yield* controller.awaitChild(second).pipe(Effect.timeout("20 seconds"))).toBe(0)
+        expect(MutableList.toArray(second.recordLog).filter(({ _tag }) => _tag === "RunDisposition")).toEqual([])
+        expect(
+          MutableList.toArray(second.recordLog).filter(({ _tag }) => _tag === "ApplicationExitDisposition")
+        ).toEqual([
+          {
+            _tag: "ApplicationExitDisposition",
+            disposition: { _tag: "Succeeded", requestedStatus: 0 },
+            runId: original.runId,
+            version: 1
+          }
+        ])
+        const recovered = yield* readJournal(fixture, second)
+        expect(recovered.slice(0, originalJournal.length)).toEqual(originalJournal)
+        const quarantine = recovered.find(({ event }) => event._tag === "IntegrationQuarantined")
+        if (quarantine?.event._tag !== "IntegrationQuarantined")
+          return yield* Effect.die("recovered stale promotion must retain its linked integration quarantine")
+        expect(quarantine.event).toMatchObject({
+          basis: {
+            _tag: "PromotionStale",
+            candidateCommit: boundary.candidateCommit,
+            observedTargetHead: foreignHead,
+            targetPromotionStaleAt: staleRecords[0].position
+          },
+          correlation: session.event.correlation
+        })
+        expect(recovered.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+        expect(recovered.filter(({ event }) => event._tag === "TaskAttemptPlanned")).toHaveLength(1)
+        expect(recovered.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
+        expect(recovered.filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")).toHaveLength(0)
+        expect(recovered.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(1)
+        expect(recovered.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")).toHaveLength(1)
+        const afterRecovery = yield* controller.providerSnapshot
+        expect(closeCount(afterRecovery.operationCounts)).toBe(closeCount(beforeRecovery.operationCounts))
+        for (const tag of ["CreateClaimLabel", "DeleteClaimLabel", "CodexStartThread", "CodexStartTurn"] as const) {
+          expect(
+            afterRecovery.operationCounts.find((count) => count.tag === tag),
+            tag
+          ).toEqual(beforeRecovery.operationCounts.find((count) => count.tag === tag))
+        }
+        expect(MutableList.toArray(controller.boundaryLog)).toEqual(boundaryLogBeforeRecovery)
+        expect(boundaryLogBeforeRecovery).toEqual([boundary])
+        expect(yield* controller.processOutcomes).toEqual([
+          { _tag: "Exit", processId: child.handle.pid, status: 0 },
+          { _tag: "Exit", processId: second.handle.pid, status: 0 }
+        ])
         const after = yield* git.runInWorktree(fixture.manifest.repository, [
           "rev-parse",
           fixture.manifest.integrationRef
