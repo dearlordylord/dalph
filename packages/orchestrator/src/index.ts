@@ -227,11 +227,13 @@ export {
 } from "./authorities/git/worktree.js"
 export {
   GithubGraphqlClient,
+  GithubGraphqlEndpointLocator,
   GithubGraphqlRequest,
   GithubIssueNodeId,
   GithubLabelName,
   GithubLabelNodeId,
   GithubRepositoryNodeId,
+  defaultGithubGraphqlEndpoint,
   githubGraphqlClientLayer
 } from "./authorities/task-tracker/github/graphql-client.js"
 export {

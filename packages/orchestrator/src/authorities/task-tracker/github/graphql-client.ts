@@ -92,7 +92,26 @@ export class GithubGraphqlClient extends Context.Service<GithubGraphqlClient, Gi
   "@dalph/GithubGraphqlClient"
 ) {}
 
-const graphqlEndpoint = "https://api.github.com/graphql"
+/** Locates the exact HTTP(S) GraphQL transport boundary; it carries no repository or tracker authority. */
+export const GithubGraphqlEndpointLocator = Schema.NonEmptyString.check(
+  Schema.makeFilter((value) => {
+    try {
+      const parsed = new URL(value)
+      return (parsed.protocol === "https:" || parsed.protocol === "http:") &&
+        parsed.username === "" &&
+        parsed.password === "" &&
+        parsed.hash === "" &&
+        parsed.toString() === value
+        ? undefined
+        : "GitHub GraphQL endpoint must be a canonical credential-free HTTP(S) URL"
+    } catch {
+      return "GitHub GraphQL endpoint must be a canonical credential-free HTTP(S) URL"
+    }
+  })
+).pipe(Schema.brand("GithubGraphqlEndpointLocator"))
+export type GithubGraphqlEndpointLocator = typeof GithubGraphqlEndpointLocator.Type
+
+export const defaultGithubGraphqlEndpoint = GithubGraphqlEndpointLocator.make("https://api.github.com/graphql")
 const githubUserAgent = "dalph-orchestrator"
 const connectionPageSize = 100
 // Stable identity format guidance:
@@ -345,10 +364,13 @@ const readOperation = Schema.decodeUnknownOption(GithubGraphqlReadOperation)
 const isReadRequest = (request: GithubGraphqlRequest): request is GithubGraphqlReadRequest =>
   Option.isSome(readOperation(request._tag))
 
-const makeClient = Effect.fn("GithubGraphqlClient.make")(function* (token: Redacted.Redacted<string>) {
+const makeClient = Effect.fn("GithubGraphqlClient.make")(function* (
+  token: Redacted.Redacted<string>,
+  endpoint: GithubGraphqlEndpointLocator
+) {
   const httpClient = yield* HttpClient.HttpClient
   const executeHttp = Effect.fn("GithubGraphqlClient.executeHttp")(function* (request: GithubGraphqlRequest) {
-    const httpRequest = HttpClientRequest.post(graphqlEndpoint).pipe(
+    const httpRequest = HttpClientRequest.post(endpoint).pipe(
       HttpClientRequest.acceptJson,
       HttpClientRequest.bearerToken(token),
       HttpClientRequest.setHeader("user-agent", githubUserAgent),
@@ -396,8 +418,9 @@ const makeClient = Effect.fn("GithubGraphqlClient.make")(function* (token: Redac
 
 export const githubGraphqlClientLayer = (options: {
   readonly token: Redacted.Redacted<string>
+  readonly endpoint?: GithubGraphqlEndpointLocator
 }): Layer.Layer<GithubGraphqlClient, never, HttpClient.HttpClient> =>
-  Layer.effect(GithubGraphqlClient, makeClient(options.token))
+  Layer.effect(GithubGraphqlClient, makeClient(options.token, options.endpoint ?? defaultGithubGraphqlEndpoint))
 
 export const githubGraphqlClientConfigLayer: Layer.Layer<
   GithubGraphqlClient,
@@ -407,7 +430,7 @@ export const githubGraphqlClientConfigLayer: Layer.Layer<
   GithubGraphqlClient,
   Effect.gen(function* () {
     const token = yield* Config.redacted("GITHUB_TOKEN")
-    return yield* makeClient(token)
+    return yield* makeClient(token, defaultGithubGraphqlEndpoint)
   })
 )
 

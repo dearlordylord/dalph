@@ -5,6 +5,7 @@
   "type": "module",
   "bin": {
     "dalph": "dist/bin/dalph.js",
+    "dalph-production-live-qualification": "dist/bin/production-live-qualification.js",
     "dalph-linux-exit-host-fixture": "dist/bin/linux-application-exit-host-fixture.js",
     "dalph-codex-qualification-host": "dist/bin/codex-qualification-host.js"
   },

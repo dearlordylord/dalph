@@ -176,7 +176,9 @@ export interface ProductionRepositoryHostAdapters<ECodex = never, EGithub = neve
 const defaultWorkflowTraceLayer = Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
 
 const defaultGithubClientLayer = (configuration: ProductionRepositoryHostConfiguration) =>
-  githubGraphqlClientLayer({ token: configuration.githubToken }).pipe(Layer.provide(NodeHttpClient.layerUndici))
+  githubGraphqlClientLayer({ token: configuration.githubToken, endpoint: configuration.githubGraphqlEndpoint }).pipe(
+    Layer.provide(NodeHttpClient.layerUndici)
+  )
 
 const defaultCodexAppServerLayer = (
   configuration: ProductionRepositoryHostConfiguration,

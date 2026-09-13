@@ -9,6 +9,7 @@ import { OperationId } from "../../../workflow/identity.js"
 import {
   GithubCursor,
   GithubGraphqlClient,
+  GithubGraphqlEndpointLocator,
   githubGraphqlClientConfigLayer,
   githubGraphqlClientLayer,
   GithubGraphqlRequest,
@@ -31,6 +32,43 @@ const target = GithubIssueTarget.make({
   owner: GithubRepositoryOwner.make("octo"),
   repository: GithubRepositoryName.make("dalph")
 })
+
+it.effect("sends an unchanged request through an explicitly selected qualification endpoint", () =>
+  Effect.gen(function* () {
+    const observed = yield* Ref.make<ReadonlyArray<{ readonly url: string; readonly body: string }>>([])
+    const httpClient = HttpClient.make((request) =>
+      Effect.gen(function* () {
+        const body = Schema.decodeUnknownSync(EncodedRequestBody)(request.body.toJSON()).body
+        yield* Ref.update(observed, (values) => [...values, { url: request.url, body }])
+        return HttpClientResponse.fromWeb(
+          request,
+          new Response(JSON.stringify({ data: { repository: { id: "repo" } } }), { status: 200 })
+        )
+      })
+    )
+    yield* Effect.gen(function* () {
+      const client = yield* GithubGraphqlClient
+      yield* client.execute(
+        GithubGraphqlRequest.cases.ResolveRepository.make({
+          owner: GithubRepositoryOwner.make("octo"),
+          repository: GithubRepositoryName.make("dalph")
+        })
+      )
+    }).pipe(
+      Effect.provide(
+        githubGraphqlClientLayer({
+          token: Redacted.make("forwarded-secret"),
+          endpoint: GithubGraphqlEndpointLocator.make("http://127.0.0.1:4307/graphql")
+        }).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, httpClient)))
+      )
+    )
+    const requests = yield* Ref.get(observed)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.url).toBe("http://127.0.0.1:4307/graphql")
+    expect(requests[0]?.body).toContain("query ResolveRepository")
+    expect(requests[0]?.body).not.toContain("forwarded-secret")
+  })
+)
 
 it.effect("executes authenticated GitHub GraphQL requests", () =>
   Effect.gen(function* () {
