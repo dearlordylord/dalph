@@ -22,7 +22,6 @@ const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.me
 const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")
 const formalGate = readFileSync(new URL("./run-formal-gate.mjs", import.meta.url), "utf8")
 const quintGate = readFileSync(new URL("./check-quint-models.mjs", import.meta.url), "utf8")
-const profileEvidence = readFileSync(new URL("../research/quint-hosted-equivalent-profile.md", import.meta.url), "utf8")
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url))
 
 // The retained stressed profile measured 36.26s through the three commands
@@ -94,18 +93,6 @@ describe("hosted formal-model contract", () => {
     expect(quintGate).toContain("const timeoutFor = (name) =>")
     expect(quintGate).toContain("remainingExecutionMilliseconds(name)")
     expect(quintGate).toContain("timeoutMilliseconds: timeoutFor(command.name)")
-    expect(profileEvidence).toContain("Node 22.22.2 and Node 24.15.0")
-    expect(profileEvidence).toContain("retained historical evidence")
-    expect(profileEvidence).toContain("Node 24.20.0 run")
-    expect(profileEvidence).toContain("105 commands: 15 typechecks, 46 tests, 23")
-    expect(profileEvidence).toContain("| 24.15.0 | final post-change |")
-    expect(profileEvidence).toContain("| Node 22.22.2 repeat 1 | planned-attempt executor | 20 |")
-    expect(profileEvidence).toContain("| Node 24.15.0 final post-change | integration finality | 5 |")
-    expect(profileEvidence).toContain("572.29")
-    expect(profileEvidence).toContain("210.000s hosted checkout/setup/network/final-reporting allowance")
-    expect(profileEvidence).toContain("The allowance is reserved, not measured")
-    expect(profileEvidence).toContain("outer `pnpm check:quint` command exited 0")
-    expect(profileEvidence).toContain("intentionally exits 1")
   })
 
   it("preserves required application checks alongside automatic local formal handoff", () => {

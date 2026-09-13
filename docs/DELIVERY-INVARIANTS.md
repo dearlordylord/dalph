@@ -1,9 +1,6 @@
 # Delivery invariants
 
 The properties Dalph's delivery behavior must hold. This is the specification.
-`research/verification-bakeoff/INVARIANTS.md` is a benchmark projected from it,
-carries weakened forms chosen so seven verification tools could all encode them,
-and is temporary.
 
 Sources swept: `docs/ARCHITECTURE.md`, `docs/CONTEXT.md`,
 `docs/OPERATIONAL-SCENARIOS.md`, the forbidden-result sections of
@@ -16,24 +13,25 @@ here — D25 is the clearest — while their rules about recording fidelity,
 evidence lenses, and catalog maintenance govern the test corpus and belong with
 it rather than in a delivery invariant list.
 
-**Encoding** records whether the study can express the invariant:
+## Current verification index
 
-| | |
-|---|---|
-| `Iₙ` | projected into the benchmark as that entry |
-| `Iₙ (weakened)` | projected, in a form that loses something — the loss is stated |
-| `statable, not stated` | a tool could express it at benchmark size and none does |
-| `—` | no tool in the study expresses it, and the reason is stated |
+The model notes below describe each subject model's scope, not a claim that
+model checking alone verifies production. Production projections and relations
+have direct tests; executable conformance adapters compare subject models with
+production transitions.
 
-`Encoding` describes the verification study and not production coverage. Six of
-the seven tools are bound to no Dalph code at all, so `→ I10` means a model
-states the invariant, never that the shipped code is checked against it. What
-checks production is indexed per function under "Coverage per production
-surface" in `../research/verification-bakeoff/INVARIANTS.md`, and the seven
-subject-scoped models under `specs/` that reach production do so through
-`packages/dalph/test/conformance/*.mbt.test.ts`. `integrationFinality` covers
-post-promotion claim cleanup and task-local settlement without claiming Run
-termination.
+| Production surface | Current tests |
+| --- | --- |
+| Graph classification, deterministic selection, exact obligation retention | [Projection examples](../packages/orchestrator/src/coordination/delivery/ticket-delivery-projection.test.ts) and [permutation/retention properties](../packages/orchestrator/src/coordination/delivery/ticket-delivery-projection.property.test.ts) |
+| Journal/graph publication and exact task-work position reconstruction | [Reactive delivery relations](../packages/orchestrator/src/coordination/delivery/reactive-delivery-relations.test.ts) |
+| Fresh-task admission and exact executor responsibility | [Admission conformance](../packages/dalph/test/conformance/fresh-task-admission.mbt.test.ts) and [executor conformance](../packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts) |
+| Tracker facts, operator directions, and Git reconciliation | [Task-fact conformance](../packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts), [direction conformance](../packages/dalph/test/conformance/control-direction-application.mbt.test.ts), and [Git conformance](../packages/dalph/test/conformance/git-reconciliation.mbt.test.ts) |
+| Accepted-result integration and task-local completion settlement | [Integration conformance](../packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts) and [finality conformance](../packages/dalph/test/conformance/integration-finality.mbt.test.ts) |
+| Run activation, cancellation, and application Exit | [Activation conformance](../packages/dalph/test/conformance/run-activation.mbt.test.ts), [cancellation conformance](../packages/dalph/test/conformance/run-cancellation.mbt.test.ts), and [Exit conformance](../packages/dalph/test/conformance/application-exit.mbt.test.ts) |
+
+`integrationFinality` covers post-promotion claim cleanup and task-local
+settlement without claiming Run termination. Scenario-specific acceptance tests
+remain attached to the corresponding scenarios under `docs/scenarios/`.
 
 ## Identity
 
@@ -44,33 +42,26 @@ identity is not an attempt identity, and an operation name is not a
 classification. Executor-internal structure is invisible outside the executor
 boundary: generic orchestration neither allocates a second executor identity nor
 exposes an executor-internal step.
-→ `integrationFinality` carries exact Run/task/attempt/claim/proof bindings;
-`I9` remains weakened to correlation in the benchmark's fast-check journal arm.
+→ `integrationFinality` carries exact Run/task/attempt/claim/proof bindings.
 
 **D2 Attempt immutability.** A planned attempt's recorded facts — task revision
 fingerprint, Base SHA, branch, worktree, executor locator — never change after
 it is planned. A later observation of changed instructions is recorded beside
 the attempt, never absorbed into it.
-→ `—` the six L1/L2 models treat an attempt as a counter. The fast-check
-journal arm carries `(runId, attemptId)` but no attempt-local facts, so
-immutability of those facts is unstated everywhere.
 
 **D3 One unsettled attempt per task.** At most one planned attempt per task is
 unsettled, across crash and recovery. Process loss is not executor completion
 and authorizes no replacement.
-→ `I10`
 
 **D4 Exclusive claim.** At most one active claim per task. A release or
 replacement names the exact current owner and token. A token from an earlier
 claim authorizes nothing.
-→ `integrationFinality` exact active/completion/foreign claim identity; `I11`
-(Alloy only) remains the broader benchmark projection.
+→ `integrationFinality` carries exact active/completion/foreign claim identity.
 
 **D5 Foreign ownership is never mutated.** A claim Dalph does not currently own
 is preserved and reported as a typed conflict. Dalph never edits, removes, or
 reacquires it, and never infers who created it.
-→ `integrationFinality` foreign-claim isolation; the broader benchmark
-projection remains unwriteable outside Alloy.
+→ `integrationFinality` states foreign-claim isolation.
 
 ## Graph and selection
 
@@ -80,31 +71,25 @@ graph-policy placement is descriptive: it grants no runtime admission
 capability. A task described as `EligibleOutsideBound` can become the next
 fresh entrant only through D13a after a release or capacity expansion
 establishes free capacity.
-→ `I1 (weakened: Quint checks `selected.size() <= capacity`, an upper bound, not the equality I1 states, and neither states graph order)`
 
 **D7 Order independence.** Selection is invariant under permutation of the
 tracker's task order.
-→ `I2`
 
 **D8 Exhaustive classification with stated reasons.** Every task in an observed
 graph is eligible, or excluded with at least one graph-owned reason. A
 reason-free exclusion does not exist.
-→ `—` unwriteable in every encoding, so no tool needs a property for it.
 
 **D9 Eligibility changes only from fresh authoritative graph facts.** A
 dependant is released by a fresh complete read proving its prerequisite
 satisfied — never by an executor result, a claim removal, or Dalph's own
 inference.
-→ `—` no model separates the graph fact from the event that caused it.
 
 **D10 Retention.** A task carrying an exact outstanding obligation stays in the
 delivery relation under every placement, including absence from the current
 graph. Losing positive selection never erases it.
-→ `I4`
 
 **D11 No invention.** Obligations are a function of exact evidence. Placement
 alone never creates one.
-→ `I6`
 
 ## Admission and capacity
 
@@ -114,16 +99,12 @@ or terminal report, and on nothing else — not a stopped inner process, not a
 timeout, not process death.
 → `plannedAttemptExecutor` states exact-correlated position discipline; its
 canonical invariants and TLC temporal check cover causally requested direct or
-reconciled safe evidence and autonomous terminal evidence. Benchmark `I7` remains
-weaker because it has no report correlation.
+reconciled safe evidence and autonomous terminal evidence.
 
 **D13 The ceiling binds admission only.** A new admission respects the current
 capacity. A capacity reduction never evicts, cancels, suspends, or discards an
 existing holder; the ceiling applies to the next reservation. Held positions may
 exceed capacity, including across restart.
-→ `I8 (weakened unevenly: Quint, TLA+ and fast-check maintain a history flag,
-which the benchmark counts as evidence; Alloy, Dafny, Lean and Agda have only
-an admission guard, which nothing tests)`
 
 **D13a Fresh-task admission is continuous through executor-responsibility
 handoff.** Before a fresh task records its first claim intent, its exact live
@@ -161,24 +142,15 @@ adapter.
 **D14 One position per attempt, added and released by the exact holder.** An
 attempt occupies at most one task-work position at a time, and an
 executor-internal identity may neither add nor release one.
-→ `—` positions are a set of task ids in every model, so a second position for
-the same attempt is unwriteable.
 
 **D15 Admission is the only entry to work.** No worker starts before admission.
 An applied operator direction is not capacity admission.
-→ `guard` — the work-starting action carries `positions < capacity` as a
-precondition in Quint, Dafny, Lean and Agda, so starting unadmitted is
-unwriteable. No encoding states the second sentence, because no model has an
-operator direction that could be confused with admission.
 
 ## Preservation
 
 **D16 Work in progress survives every constraint.** No reconciliation,
 constraint, pause, suspension, capacity change, or restart deletes or resets a
 worktree, discards work in progress, or treats preserved work as disposable.
-→ `—` the journal arm models worktree *existence* — intent, reconciliation
-outcome, pending state — and no arm models worktree *contents*, so preservation
-of work in progress is unstated.
 
 **D17 Cleanup is disposition-typed, exact, recoverable, and fail-closed.**
 Cleanup names what it disposes of and why. Nothing is repaired, abandoned, or
@@ -203,20 +175,15 @@ worktree remains. Deletion still requires a separate exact cleanup disposition.
 **D18 A constraint is local to its subject.** A constraint on one task never
 stops another task, never becomes a Run-wide stop, and never isolates unrelated
 responsibilities. Independent work remains selectable throughout.
-→ `statable, not stated` — the benchmark's two-task model can express it and no
-encoding does.
 
 **D19 Constraints clear independently.** Clearing one constraint clears only
 that one. A reopened task clears its lifecycle wait and nothing else; every
 other continuation fact must independently authorize resumption.
-→ `—` no model carries more than one constraint per task, so independence has
-nothing to range over.
 
 **D20 Pause scope is exactly what was directed.** Pause applies to the named
 subject. It does not follow prerequisite or dependant edges, does not pause
 siblings, and does not manufacture descendant directions. Pause is not
 cancellation, and unpause is not cancellation.
-→ `I17 (weakened: run-wide pause only, no subject scoping)`
 
 ## Ambiguity and evidence
 
@@ -227,8 +194,7 @@ observed result.
 → `plannedAttemptExecutor` separates every exact command intent, call, and
 observation; its focused evidence and Suspend-bound projections enumerate their
 named finite subgraphs. `integrationFinality` records replacement
-and deletion intents before their bounded requests; the fast-check journal arm
-also has the intent/outcome split for claim, worktree and promotion.
+and deletion intents before their bounded requests.
 
 **D22 Reconcile before retry.** After an ambiguous outcome, Dalph rereads the
 owning system before acting again. A lost response never proves the effect did
@@ -264,13 +230,11 @@ an ambiguous request; neither authorizes mutation or absence.
 implies success at another. An executor terminal report is not tracker
 completion, claim removal is not completion, and terminal-without-success is not
 successful completion. D28 owns the Git-side form of this.
-→ `I5 (weakened: settlement-drop only)` and `integrationFinality`'s fresh
-tracker-success-before-cleanup invariant.
+→ `integrationFinality` states fresh tracker success before cleanup.
 
 **D25 Dalph never invents an actor.** An initiated action names its actor. A
 non-action occurrence — a tracker read, an executor report — carries no actor,
 and Dalph does not attribute an unauthenticated outside edit to a person.
-→ `—`
 
 ## Integration and promotion
 
@@ -321,29 +285,21 @@ consumes only the exact promotion proof.
 provider pages, and integration-target ownership are process-local and never
 persisted. The journal holds accepted workflow history only. Process loss clears
 every process-local resource and no durable one.
-→ `I14`
 
 **D30 Crash is absence, not an event.** Dalph never journals a synthetic crash
 occurrence. Recovery accepts every retained journal prefix, trusts no pre-crash
 volatile state, and infers nothing from abandoned process memory.
 → `integrationFinality` models the post-crash ambiguity as a lost response
-followed by a fresh authority read; older models still encode crash as an
-action.
+followed by a fresh authority read.
 
 **D31 Recovery continues the same work.** After process loss, restart
 reconstructs the existing responsibility and continues that exact attempt. D3
 and D4 already forbid the replacement attempt and the second claim; the
 recovery-specific clause is that no second worktree is created for a
 reconstructed attempt.
-→ `I16 (weakened: the six L1/L2 models carry no identity, so "same attempt" is
-unstateable there; the fast-check journal arm carries `attemptId` and correlates
-on it)`
 
 **D32 Journal reduction.** Append-only. Reduction is a pure fold, total over
 contradictory histories, and idempotent under replay.
-→ `I15`, checked in `fastcheck/journal.mjs` over the 23-event alphabet, with the
-four propositions in `journal-run.mjs` and negative controls in
-`journal-mutants.mjs`.
 
 **D32a Journal record admission.** Records are scoped to their Run: none
 precedes the Run's beginning fact, none follows its termination fact, there is
@@ -351,8 +307,7 @@ exactly one beginning in every nonempty valid history, at most one termination,
 and no record for another target is placed under a Run. The lifecycle Journal
 rejects a direct second beginning even though application-level establishment
 is idempotent.
-→ `checked` in `fastcheck/journal.mjs`, as fold guards rather than as a stated
-property. `runActivation.oneBeginningPerRun` checks that same guard through the
+→ `runActivation.oneBeginningPerRun` checks the beginning guard through the
 application entry, including the ambiguous-beginning retry. This is a property
 of which records may be admitted, not of the reduction function, which is why
 it is separate from D32.
@@ -362,9 +317,7 @@ it is separate from D32.
 **D33 No silent drop.** Once the run stops crashing, is not paused, has
 capacity, and receives no further tracker facts, every begun responsibility
 eventually settles or is retained together with an exact stated reason.
-→ `I18 (weakened: the no-new-facts hypothesis is inexpressible — the task set is
-a fixed constant in every model)`; `integrationFinality` retains cleanup waits
-after failed or ambiguous deletion.
+→ `integrationFinality` retains cleanup waits after failed or ambiguous deletion.
 
 **D34 Quiescence is not completion.** With no new tracker facts the run reaches
 quiescence only when the executable proposal frontier is empty and no admitted
@@ -380,7 +333,7 @@ safe-suspension report and is absorbing: it cannot authorize Stop abandonment
 or Restart replacement. An `Accepted` terminal outcome follows ordinary
 integration admission; `Completed` and `Failed` retain their distinct terminal
 outcomes. D35 owns termination.
-→ `I19` and `integrationFinality`'s empty-frontier witness with a retained
+→ `integrationFinality` has an empty-frontier witness with a retained
 unrelated responsibility. `runActivation.finalityReadRequiresQuiescence` and
 `runActivation.establishmentSourceDoesNotChangeActivationBounds` check the
 single later read for both newly established and reconstructed Runs.
@@ -457,17 +410,6 @@ The **bounded** form assumes a ceiling on the closure instead:
 which implies `◇□¬insert`, since only finitely many insertions can occur. The
 bounded form is strictly stronger and is what a finite-state checker needs.
 
-The L1 and L2 models take a third, degenerate position: `T` is a fixed
-constant, so `N = |T|` and *zero* insertions are permitted. That is stronger
-than either usable form.
-
-`research/verification-bakeoff/tlaplus/DeliveryArrival.tla` is the exception and
-models arrival directly, with a task arriving and the graph later sealing. What
-it establishes is that arrival is *undecidable at this size*, not inexpressible:
-TLC returns no verdict on the uncapped run, and capping the run makes the
-liveness claim unsound. So a ticket arriving mid-run is writeable and unchecked,
-which is a statement about tractability rather than about expressiveness.
-
 ## Run boundaries
 
 **D37a Complete host configuration validation precedes every live boundary.**
@@ -535,7 +477,6 @@ Issues 222, 68, 138, 224, and 225 provide the accepted operational scenarios.
 Queued or started integration is not counted against task-work capacity, and
 acquiring task-work capacity is not acquiring the serialized integration
 resource.
-→ `—` no model separates the two resources.
 
 **D42 The integration queue is single and its order is acceptance-derived.**
 Order follows accepted-result acceptance, not task identity, completion time, or
@@ -545,11 +486,9 @@ waiting. Every current accepted result follows the ordinary accepted-result
 path and creates one responsibility exactly once. Historical cassette decoders
 may preserve records written under the former late-Resume design, but those
 records do not define current integration admission.
-→ `—` no model has a queue.
 
 **D43 The serialized target resource is released while only waiting.** Process-local
 target ownership is not retained across a wait on tracker facts.
-→ `—`
 
 **D44 At most one unsettled integration session per accepted result.** A stale
 expected target may establish integration-session supersession; only then may a
@@ -567,7 +506,6 @@ one correlated successor, and performs no premature Integrator delivery.
 
 **D45 Conflict work is isolated from the planned worktree.** Integration and
 conflict resolution never apply edits to the planned task worktree.
-→ `—` no model has a worktree.
 
 **D46 A withdrawn capability stays withdrawn.** Once a recorded cutoff removes a
 capability — pre-integration cancellation after integration starts — it is not
@@ -595,8 +533,7 @@ applying one exact direction is a durable action. Command receipt is never
 recorded as an applied policy change.
 → `controlDirectionApplication` separates `receive` from durable application;
 `applicationClaimsNoLaterEffects` also prevents application from claiming the
-later executor or tracker work. Benchmark `I17` remains weaker because its
-cross-tool projection omits receipt.
+later executor or tracker work.
 
 **D48 An applied direction authorizes exactly one matching later action.** A
 reacquisition intent requires a prior matching applied direction. A direction

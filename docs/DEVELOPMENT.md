@@ -699,8 +699,7 @@ of retained files is a separate, deliberate operator action.
   adapters use production. Mixed production/fixture files remain production
   until split behind a dedicated evaluation seam.
 - Lab assertions run through its maintained check and enter line coverage only
-  when instrumented. Other disposable research prototypes are excluded from
-  the production gate. Tooling scripts have focused tests and gate execution,
+  when instrumented. Tooling scripts have focused tests and gate execution,
   not executable-source coverage. Model checks remain separately required.
 - Changed-line coverage uses `DALPH_COVERAGE_BASE_SHA` (CI: PR target or previous
   push SHA), falling back on missing/all-zero input to the merge base with
@@ -783,7 +782,7 @@ candidate verification still applies. Automatic MBT is temporarily excluded
 pending #363; formal reuse does not prove application conformance.
 
 Current allowances in [formal-gate-policy.mjs](../scripts/formal-gate-policy.mjs)
-were retained after [local qualification](../research/formal-reuse-qualification-362.md): 2,100 seconds for
+are 2,100 seconds for
 formal acquisition and 30 seconds for final handoff validation. Acquisition
 charges tool identification, observer setup, hashing, execution, evidence and
 qualification to one decreasing allowance; phase caps do not restart it. The
@@ -803,10 +802,8 @@ application qualification, now plus 35 minutes of formal acquisition and
 0.5 minutes of final validation: 116.5 minutes before existing
 quality setup and termination overhead. This fits the existing 24-hour admitted
 command limit. These are ceilings, not measured duration or claimed savings.
-The qualification report records each sample, phase headroom, final handoff
-and the decision to retain these allowances. Hosted matrix, job deadlines
-and the 16-minute/210-second-reserve formal policy remain unchanged; their
-pre-existing quality-budget discrepancy is outside this change.
+Hosted formal verification has a 16-minute job deadline and reserves
+210 seconds for checkout, setup, network, and final reporting.
 
 The former `check:quint:changed` and `check:quint:final` aliases and their
 dedicated selector runners are retired. Use focused checks during development,

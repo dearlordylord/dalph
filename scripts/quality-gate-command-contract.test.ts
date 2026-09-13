@@ -20,7 +20,6 @@ it("startup has no hook: Codex configuration cannot invoke the removed tooling",
   // Git does not track empty directories left behind in an existing worktree.
   expect(git("ls-files", "--", ".codex/memory")).toBe("")
   expect(readRepositoryFile(".codex/config.toml")).not.toMatch(removedToolReference)
-  expect(existsSync(new URL(".codex/worktree-ledger.md", repositoryRoot))).toBe(true)
   expect(JSON.stringify(readPackageScripts())).not.toMatch(removedToolReference)
 })
 

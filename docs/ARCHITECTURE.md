@@ -63,11 +63,6 @@ The governing design and chronology are specified by
 implementation status; this document records the architecture rather than
 mirroring ticket state.
 
-This section states that governing destination. During the #191–#195 migration,
-temporary runtime-relation, revision, invalidation, quiescence-probe, and
-environment-named seams may still exist in source. They are implementation
-gaps, not alternate architecture.
-
 ## Protected Compositions
 
 The following Effects are the readable account of delivery at their respective
@@ -213,6 +208,11 @@ intent with the system that owns the result before retrying. Invalid shared
 journal history fails the affected Run closed. A contradiction local to one
 task, attempt, or resource prevents action only in the region that needs that
 fact when independent regions can still proceed safely.
+
+Dalph retains this Journal-backed architecture rather than adding Effect
+Workflow as a replacement runtime. Its evaluated durable replay did not remove
+the required Journal chronology, reconciliation, or recovery responsibilities
+enough to justify that additional runtime.
 
 The detailed establishment, journal publication, reduction, crash, and
 reconstruction rules are in
@@ -496,7 +496,6 @@ depart from the community knowledge base.
 | [CONTEXT.md](CONTEXT.md) | canonical domain vocabulary |
 | [scenarios/](scenarios/) | chronological behavior and acceptance-test mappings |
 | [adr/](adr/) | accepted design decisions and their trade-offs |
-| [research/](../research/) | investigation and evidence, not accepted architecture by itself |
 
 The configured tracker owns roadmap and implementation status. This document
 and its grouped architecture pages state stable structure and invariants only.

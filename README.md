@@ -31,12 +31,13 @@ after process loss are also available.
 - `packages/contracts/` — exact contracts shared by orchestration and executor implementations.
 - `packages/orchestrator/` — generic Effect V4 workflow coordination and authority adapters.
 - `packages/dalph/` — the CLI, application composition, and concrete presentation.
-- `research/` — completed Wayfinder decisions and market/tool evaluations.
-- `prototypes/control-plane/` — disposable Effect V4 seam evidence.
-- `prototypes/execution-trace/` — disposable multi-actor trace presentation.
+- `prototypes/reducer-lab/` — maintained evaluation and visualization of production cassettes.
 
-The prototypes are evidence, not production architecture or compatibility
-targets.
+Current requirements live in the architecture, ADRs, scenarios, and executable
+contracts. Completed investigations, handoff logs, and discarded prototypes
+belong in Git history rather than a second searchable source of guidance.
+Use `git log --all -- <path>` and `git show <commit>:<path>` when investigating
+a historical decision. `.references` remains the retained source library.
 
 ## Try the current implementation
 
@@ -99,21 +100,6 @@ nonzero. The controlled `--dry` interpreter keeps its existing output error
 type. Graceful application Exit does not itself terminate the selected Run. If
 that Run was not independently and durably terminated, it remains available to
 the ordinary recovery path on the next invocation.
-
-For a visual preview of the intended experience, run the disposable historical
-execution-trace prototype:
-
-```sh
-pnpm install --dir prototypes/execution-trace --ignore-workspace
-pnpm --dir prototypes/execution-trace dev
-```
-
-Open `http://localhost:5173`. The workbench provides synchronized task and
-causal graphs, cursor replay, actor spans, dependency focus, pan/zoom/fit, a
-minimap, convergence collapsing, and both focused and large-run fixtures. Its
-execution occurrences are simulated decision evidence. This isolated app has
-its own fixtures and projection code; it neither imports nor executes
-`packages/orchestrator`.
 
 ## Development
 

@@ -178,4 +178,5 @@ integration responsibility remains the same-target FIFO blocker for later
 tracker completion and settlement, while work for another target can proceed.
 
 See
-[issue-60-promote-or-reconcile.md](../scenarios/issue-60-promote-or-reconcile.md).
+[the reported candidate reaching promotion](../scenarios/issue-223-migrate-promotion-and-finality.md#the-reported-and-git-qualified-candidate-reaches-promotion)
+and [ambiguous or stale promotion](../scenarios/issue-223-migrate-promotion-and-finality.md#an-ambiguous-or-stale-promotion-preserves-the-exact-work).
