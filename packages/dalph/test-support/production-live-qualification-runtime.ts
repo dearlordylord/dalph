@@ -41,6 +41,7 @@ import {
   LiveQualificationInvocationId,
   publishProductionLiveQualificationEvidence,
   qualificationFailed,
+  type QualificationFailed,
   type ProductionLiveQualificationOutcome
 } from "./production-live-qualification-evidence.js"
 import { DisposableGithubQualificationResource } from "./disposable-github-qualification-cleanup.js"
@@ -74,6 +75,7 @@ const privateDirectoryMode = 0o700
 const expectedExecutorTurns = 2
 const expectedIntegratorTurns = 2
 const expectedTotalTurns = 4
+const missingChronologyIndex = -1
 
 /** Locates the one operator-selected safe manifest file; it is not Q itself. */
 export const ProductionLiveQualificationManifestLocator = canonicalAbsolute("live qualification manifest").pipe(
@@ -97,6 +99,8 @@ export const ProductionLiveQualificationManifest = Schema.Struct({
   codexExecutable: canonicalAbsolute("Codex executable"),
   publicationContainer: QualificationPublicationContainer,
   artifact: QualificationArtifactLocator,
+  /** Outside-Q destination for an exact, secret-free cleanup or retention report. */
+  retentionReport: canonicalAbsolute("retention report"),
   repository: Schema.Struct({ owner: GithubRepositoryOwner, name: GithubRepositoryName }),
   createIssueOperationId: OperationId,
   hosted: Schema.Struct({
@@ -110,9 +114,11 @@ export const ProductionLiveQualificationManifest = Schema.Struct({
 }).check(
   Schema.makeFilter((value) =>
     value.builtEntry === nodePath.join(value.sourceRepository, "packages/dalph/dist/bin/dalph.js") &&
-    value.lockfile === nodePath.join(value.sourceRepository, "pnpm-lock.yaml")
+    value.lockfile === nodePath.join(value.sourceRepository, "pnpm-lock.yaml") &&
+    nodePath.dirname(value.retentionReport) === value.publicationContainer &&
+    value.retentionReport !== value.artifact
       ? undefined
-      : "live qualification must invoke the shipped Dalph entry and measured workspace lockfile"
+      : "live qualification must invoke the shipped Dalph entry, use the measured lockfile, and keep distinct outputs"
   )
 )
 export type ProductionLiveQualificationManifest = typeof ProductionLiveQualificationManifest.Type
@@ -162,13 +168,15 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
   responsesBaseUrl: string,
   githubGraphqlEndpoint: string,
   githubToken: Redacted.Redacted<string>,
-  codexProviderCredential: Redacted.Redacted<string>
+  codexProviderCredential: Redacted.Redacted<string>,
+  observeContainer: (container: ProductionLiveLocalContainer) => Effect.Effect<void> = () => Effect.void
 ) {
   const fs = yield* FileSystem.FileSystem
   const git = yield* GitCommand
   const container = ProductionLiveLocalContainer.make(
     yield* fs.makeTempDirectory({ prefix: `dalph-live-${manifest.invocationId}-` })
   )
+  yield* observeContainer(container)
   const at = (name: string) => nodePath.join(container, name)
   const repository = at("repository")
   const journalDatabase = at("journal.sqlite")
@@ -283,13 +291,144 @@ export interface ProductionLiveQualificationSecrets {
   readonly codexProviderCredential: Redacted.Redacted<string>
 }
 
+const liveOccurrenceTags = [
+  "RunSelected",
+  "ClaimAcquired",
+  "AttemptPlanned",
+  "ExecutorAccepted",
+  "IntegrationStarted",
+  "CandidateQualified",
+  "TargetPromoted",
+  "TaskCompleted",
+  "ClaimsReleased",
+  "RunCompleted",
+  "ApplicationExited"
+] as const
+
+const eventIndices = (journal: ProductionLiveQualificationCompletion["facts"]["journal"], tag: string) =>
+  journal.flatMap(({ event }, index) => (event._tag === tag ? [index] : []))
+
+interface ProductionLiveQualificationChronologyObservation {
+  readonly selectedCount: number
+  readonly completedDispositionCount: number
+  readonly applicationExitDispositionCount: number
+  readonly orderedJournalIndices: ReadonlyArray<ReadonlyArray<number>>
+  readonly processStatus: number
+}
+
+/** Exact chronology rejects a missing, duplicate, reordered, or non-completed source event. */
+export const productionLiveQualificationChronologyIsExact = (
+  observation: ProductionLiveQualificationChronologyObservation
+) =>
+  observation.selectedCount === 1 &&
+  observation.completedDispositionCount === 1 &&
+  observation.applicationExitDispositionCount === 0 &&
+  observation.processStatus === 0 &&
+  observation.orderedJournalIndices.every(
+    (indices, index) =>
+      indices.length === 1 &&
+      (index === 0 ||
+        (observation.orderedJournalIndices[index - 1]?.[0] ?? missingChronologyIndex) <
+          (indices[0] ?? missingChronologyIndex))
+  )
+
+/** Derives chronology and call counts only from exact public and owning-boundary observations. */
+export const deriveProductionLiveQualificationEvidenceObservations = (
+  completion: ProductionLiveQualificationCompletion,
+  forwardedGithubRequestCount: number
+) => {
+  const journal = completion.facts.journal
+  const accepted = journal.flatMap(({ event }, index) =>
+    event._tag === "PlannedAttemptExecutorWorkReported" &&
+    event.report._tag === "ExecutorWorkTerminal" &&
+    event.report.result._tag === "Accepted"
+      ? [index]
+      : []
+  )
+  const prepared = journal.flatMap(({ event }, index) =>
+    event._tag === "IntegratorRunResultRecorded" && event.result._tag === "PreparedCandidate" ? [index] : []
+  )
+  const completed = journal.flatMap(({ event }, index) =>
+    event._tag === "WorkflowRunTerminated" && event.disposition === "Completed" ? [index] : []
+  )
+  const selected = completion.records.flatMap((record, index) => (record._tag === "RunSelected" ? [index] : []))
+  const disposition = completion.records.flatMap((record, index) =>
+    record._tag === "RunDisposition" && record.runId === completion.runId && record.disposition === "Completed"
+      ? [index]
+      : []
+  )
+  const required = [
+    eventIndices(journal, "TaskClaimAcquired"),
+    eventIndices(journal, "TaskAttemptPlanned"),
+    accepted,
+    eventIndices(journal, "IntegrationStarted"),
+    prepared,
+    eventIndices(journal, "TargetPromotionObservedSuccess"),
+    eventIndices(journal, "CompletionTaskAcknowledged"),
+    eventIndices(journal, "TaskClaimReleased"),
+    eventIndices(journal, "CompletionClaimDeleted"),
+    completed
+  ]
+  if (
+    !productionLiveQualificationChronologyIsExact({
+      selectedCount: selected.length,
+      completedDispositionCount: disposition.length,
+      applicationExitDispositionCount: completion.records.filter(({ _tag }) => _tag === "ApplicationExitDisposition")
+        .length,
+      orderedJournalIndices: required,
+      processStatus: completion.processStatus
+    }) ||
+    forwardedGithubRequestCount <= 0
+  )
+    return Option.none()
+  const final = Schema.decodeUnknownOption(
+    Schema.Struct({
+      lifecycle: Schema.Literal("CompletedSuccessfully"),
+      claim: Schema.Literal("Unclaimed"),
+      responses: Schema.Struct({
+        executor: Schema.Literal(expectedExecutorTurns),
+        integrator: Schema.Literal(expectedIntegratorTurns),
+        total: Schema.Literal(expectedTotalTurns)
+      })
+    })
+  )(completion.facts.github)
+  if (Option.isNone(final)) return Option.none()
+  const gitObservationTags = new Set([
+    "PlannedAttemptWorktreeObserved",
+    "TargetLineageObserved",
+    "IntegratorRunCandidateGitObserved",
+    "CompletionTaskCandidateAncestryObserved"
+  ])
+  const observedGitReads = journal.filter(({ event }) => gitObservationTags.has(event._tag)).length
+  if (observedGitReads === 0) return Option.none()
+  return Option.some({
+    occurrences: liveOccurrenceTags,
+    selectedRunsCompleted: true as const,
+    boundaryCalls: [
+      { tag: "TaskTracker" as const, count: forwardedGithubRequestCount },
+      { tag: "Git" as const, count: observedGitReads + 1 },
+      { tag: "Journal" as const, count: journal.length },
+      { tag: "EvidenceStore" as const, count: accepted.length },
+      { tag: "Executor" as const, count: final.value.responses.executor },
+      { tag: "Integrator" as const, count: final.value.responses.integrator },
+      { tag: "TargetPromotion" as const, count: eventIndices(journal, "TargetPromotionObservedSuccess").length },
+      { tag: "TaskCompletion" as const, count: eventIndices(journal, "CompletionTaskAcknowledged").length },
+      { tag: "ApplicationExit" as const, count: 1 }
+    ]
+  })
+}
+
 const publishCompletedQualification = Effect.fn("ProductionLiveQualification.publishCompleted")(function* (
   manifest: ProductionLiveQualificationManifest,
   fixture: ProductionLiveLocalFixture,
   githubFixture: Effect.Success<ReturnType<typeof createProductionLiveGithubFixture>>,
   forwarder: Effect.Success<ReturnType<typeof makeProductionLiveGithubForwarder>>,
   build: Effect.Success<ReturnType<typeof measureQualificationBuild>>,
-  completion: ProductionLiveQualificationCompletion
+  completion: ProductionLiveQualificationCompletion,
+  cleanupState: {
+    github?: Effect.Success<ReturnType<typeof cleanupProductionLiveGithubFixture>>
+    local?: Effect.Success<ReturnType<typeof cleanupProductionLiveFixture>>
+  }
 ) {
   const plannedRecords = completion.facts.journal.filter(({ event }) => event._tag === "TaskAttemptPlanned")
   const acceptedRecords = completion.facts.journal.filter(
@@ -309,7 +448,9 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
     acceptedRecord.event.report._tag !== "ExecutorWorkTerminal" ||
     acceptedRecord.event.report.result._tag !== "Accepted" ||
     promotionRecord?.event._tag !== "TargetPromotionIntended" ||
-    terminationRecords.length !== 1
+    terminationRecords.length !== 1 ||
+    terminationRecords[0]?.event._tag !== "WorkflowRunTerminated" ||
+    terminationRecords[0].event.disposition !== "Completed"
   )
     return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
   const planned = plannedRecord.event.operation.plannedAttempt
@@ -330,7 +471,8 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
   if (Option.isNone(githubFinal) || !responseCounts)
     return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
   const forwardObservation = yield* forwarder.observation
-  if (forwardObservation.createdLabels.length === 0)
+  const observed = deriveProductionLiveQualificationEvidenceObservations(completion, forwardObservation.requestCount)
+  if (forwardObservation.createdLabels.length === 0 || Option.isNone(observed))
     return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
   const labelResources = forwardObservation.createdLabels.map(({ fingerprint, name, nodeId }) =>
     DisposableGithubQualificationResource.cases.Label.make({ nodeId, name, fingerprint })
@@ -345,11 +487,13 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
     { invocationId: manifest.invocationId, repository: githubFixture.manifest.repository },
     cleanupAdapter
   )
+  cleanupState.github = githubCleanup
   const localCleanup = yield* cleanupProductionLiveFixture(fixture.localManifest, {
     invocationId: manifest.invocationId,
     ownedChildrenStopped: Effect.succeed(true),
-    selectedRunsCompleted: Effect.succeed(true)
+    selectedRunsCompleted: Effect.succeed(observed.value.selectedRunsCompleted)
   })
+  cleanupState.local = localCleanup
   if (githubCleanup.retained.length > 0 || localCleanup._tag !== "Removed" || localCleanup.retained.length > 0)
     return yield* Effect.fail(qualificationFailed("Cleanup"))
   const removedIssue = githubCleanup.removed.find((resource) => resource._tag === "Issue")
@@ -387,31 +531,9 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
     },
     journal: {
       positions: completion.facts.journal.map(({ position }) => position),
-      occurrences: [
-        "RunSelected",
-        "ClaimAcquired",
-        "AttemptPlanned",
-        "ExecutorAccepted",
-        "IntegrationStarted",
-        "CandidateQualified",
-        "TargetPromoted",
-        "TaskCompleted",
-        "ClaimsReleased",
-        "RunCompleted",
-        "ApplicationExited"
-      ]
+      occurrences: observed.value.occurrences
     },
-    boundaryCalls: [
-      { tag: "TaskTracker", count: 1 },
-      { tag: "Git", count: 1 },
-      { tag: "Journal", count: 1 },
-      { tag: "EvidenceStore", count: 1 },
-      { tag: "Executor", count: 1 },
-      { tag: "Integrator", count: 1 },
-      { tag: "TargetPromotion", count: 1 },
-      { tag: "TaskCompletion", count: 1 },
-      { tag: "ApplicationExit", count: 1 }
-    ],
+    boundaryCalls: observed.value.boundaryCalls,
     publicRecords: { values: completion.records, digest: publicDigest },
     final: {
       tracker: { lifecycle: "Completed", claims: [] },
@@ -440,6 +562,135 @@ const safeRecord = (secrets: ProductionLiveQualificationSecrets, record: unknown
     : Effect.void
 }
 
+const githubReadCommand = (nodeId: string) =>
+  `gh api graphql -f query='query($id: ID!) { node(id: $id) { id __typename } }' -f id='${nodeId.replaceAll("'", "'\\''")}'`
+
+/** Exact outside-Q report emitted for every non-qualified result. */
+export const ProductionLiveQualificationRetentionReport = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
+  invocationId: LiveQualificationInvocationId,
+  outcome: Schema.Literal("NotQualified"),
+  phase: Schema.Literals([
+    "Setup",
+    "Execution",
+    "EvidenceValidation",
+    "ProvenanceValidation",
+    "Cleanup",
+    "Publication"
+  ]),
+  github: Schema.Array(
+    Schema.Struct({
+      _tag: Schema.Literals(["Issue", "Label"]),
+      nodeId: Schema.NonEmptyString,
+      disposition: Schema.Literals(["Removed", "AlreadyAbsent", "Retained"]),
+      manualCommand: Schema.NonEmptyString
+    })
+  ),
+  local: Schema.Array(
+    Schema.Struct({
+      locator: Schema.NonEmptyString,
+      disposition: Schema.Literals(["Removed", "Retained"]),
+      manualCommand: Schema.NonEmptyString
+    })
+  )
+})
+
+type GithubFixture = Effect.Success<ReturnType<typeof createProductionLiveGithubFixture>>
+type GithubForwarder = Effect.Success<ReturnType<typeof makeProductionLiveGithubForwarder>>
+type GithubCleanup = Effect.Success<ReturnType<typeof cleanupProductionLiveGithubFixture>>
+type LocalCleanup = Effect.Success<ReturnType<typeof cleanupProductionLiveFixture>>
+
+const writeFailureRetentionReport = Effect.fn("ProductionLiveQualification.writeRetentionReport")(function* (
+  manifest: ProductionLiveQualificationManifest,
+  phase: QualificationFailed["phase"],
+  githubFixture: GithubFixture | undefined,
+  forwarder: GithubForwarder | undefined,
+  localFixture: ProductionLiveLocalFixture | undefined,
+  localContainer: ProductionLiveLocalContainer | undefined,
+  cleanupState: { github?: GithubCleanup; local?: LocalCleanup }
+) {
+  const fs = yield* FileSystem.FileSystem
+  let githubCleanup = cleanupState.github
+  const observedLabels = forwarder === undefined ? [] : (yield* forwarder.observation).createdLabels
+  const labelResources = observedLabels.map(({ fingerprint, name, nodeId }) =>
+    DisposableGithubQualificationResource.cases.Label.make({ nodeId, name, fingerprint })
+  )
+  const githubResources = githubFixture === undefined ? [] : [...githubFixture.manifest.resources, ...labelResources]
+  if (githubFixture !== undefined && githubCleanup === undefined) {
+    const cleanup = yield* Effect.gen(function* () {
+      const adapter = yield* makeProductionLiveGithubCleanupAdapter(manifest.invocationId)
+      return yield* cleanupProductionLiveGithubFixture(
+        { ...githubFixture.manifest, resources: githubResources },
+        { invocationId: manifest.invocationId, repository: githubFixture.manifest.repository },
+        adapter
+      )
+    }).pipe(Effect.result)
+    if (cleanup._tag === "Success") githubCleanup = cleanup.success
+  }
+  let localCleanup = cleanupState.local
+  if (localFixture !== undefined && localCleanup === undefined) {
+    const cleanup = yield* cleanupProductionLiveFixture(localFixture.localManifest, {
+      invocationId: manifest.invocationId,
+      ownedChildrenStopped: Effect.succeed(true),
+      selectedRunsCompleted: Effect.succeed(false)
+    }).pipe(Effect.result)
+    if (cleanup._tag === "Success") localCleanup = cleanup.success
+  }
+  const dispositionOf = (resource: (typeof githubResources)[number]) =>
+    githubCleanup?.removed.some(({ nodeId }) => nodeId === resource.nodeId)
+      ? ("Removed" as const)
+      : githubCleanup?.alreadyAbsent.some(({ nodeId }) => nodeId === resource.nodeId)
+        ? ("AlreadyAbsent" as const)
+        : ("Retained" as const)
+  const removedLocal = new Set(localCleanup?.removed.map(({ locator }) => locator) ?? [])
+  const retainedLocal =
+    localCleanup?.retained.map(({ locator, manualCommand }) => ({
+      locator,
+      disposition: "Retained" as const,
+      manualCommand
+    })) ??
+    localFixture?.localManifest.resources.map(({ locator }) => ({
+      locator,
+      disposition: "Retained" as const,
+      manualCommand: `stat -- '${locator.replaceAll("'", "'\\''")}'`
+    })) ??
+    []
+  const containerFallback =
+    localFixture === undefined && localContainer !== undefined
+      ? [
+          {
+            locator: localContainer,
+            disposition: "Retained" as const,
+            manualCommand: `find '${localContainer.replaceAll("'", "'\\''")}' -mindepth 1 -maxdepth 1 -print`
+          }
+        ]
+      : []
+  const report = yield* Schema.decodeUnknownEffect(ProductionLiveQualificationRetentionReport, {
+    onExcessProperty: "error",
+    reportInput: false
+  })({
+    schemaVersion: 1,
+    invocationId: manifest.invocationId,
+    outcome: "NotQualified",
+    phase,
+    github: githubResources.map((resource) => ({
+      _tag: resource._tag,
+      nodeId: resource.nodeId,
+      disposition: dispositionOf(resource),
+      manualCommand: githubReadCommand(resource.nodeId)
+    })),
+    local: [
+      ...(localFixture?.localManifest.resources
+        .filter(({ locator }) => removedLocal.has(locator))
+        .map(({ locator }) => ({ locator, disposition: "Removed" as const, manualCommand: `stat -- '${locator}'` })) ??
+        []),
+      ...retainedLocal,
+      ...containerFallback
+    ]
+  })
+  yield* fs.writeFileString(manifest.retentionReport, JSON.stringify(report))
+})
+
 /**
  * Runs Alice's one protected journey through the shipped CLI. The real GitHub
  * client creates Q, the child uses the Q forwarding endpoint, and every
@@ -449,145 +700,169 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
   manifest: ProductionLiveQualificationManifest,
   secrets: ProductionLiveQualificationSecrets
 ) {
+  let githubFixture: GithubFixture | undefined
+  let forwarder: GithubForwarder | undefined
+  let local: ProductionLiveLocalFixture | undefined
+  let localContainer: ProductionLiveLocalContainer | undefined
+  const cleanupState: { github?: GithubCleanup; local?: LocalCleanup } = {}
   const git = yield* GitCommand
   const fs = yield* FileSystem.FileSystem
   const crypto = yield* Crypto.Crypto
   const githubClient = yield* GithubGraphqlClient
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-  const githubFixture = yield* createProductionLiveGithubFixture({
-    invocationId: manifest.invocationId,
-    repository: manifest.repository,
-    createIssueOperationId: manifest.createIssueOperationId
-  })
-  const forwarder = yield* makeProductionLiveGithubForwarder(defaultGithubGraphqlEndpoint)
-  const responses = yield* makeProductionLiveResponsesEndpoint((worktree) =>
-    git
-      .runInWorktree(GitRepositoryLocator.make(worktree), ["rev-parse", "HEAD"])
-      .pipe(
-        Effect.flatMap((result) =>
-          result.exitCode === 0 ? Effect.succeed(result.stdout.trim()) : Effect.fail(undefined)
-        )
-      )
-  )
-  const local = yield* createProductionLiveLocalFixture(
-    manifest,
-    { owner: manifest.repository.owner, repository: manifest.repository.name, issueNumber: githubFixture.issue.number },
-    responses.baseUrl,
-    forwarder.endpoint,
-    secrets.githubToken,
-    secrets.codexProviderCredential
-  )
-  const fixture = local
-  const build = yield* measureQualificationBuild(manifest.sourceRepository, manifest.sourceBaseSha, {
-    builtEntry: manifest.builtEntry,
-    lockfile: manifest.lockfile,
-    configuration: fixture.configurationPath
-  }).pipe(Effect.mapError(() => qualificationFailed("Setup")))
-  const qualified = yield* Ref.make<ProductionLiveQualificationOutcome>(qualificationFailed("Execution"))
-  const githubAuthorities = yield* Layer.build(
-    githubDeliveryAuthorityLayer.pipe(
-      Layer.provide(Layer.succeed(GithubGraphqlClient, githubClient)),
-      Layer.provide(NodeCrypto.layer)
-    )
-  )
-  const trackerReader = Context.get(githubAuthorities, TrackerGraphReader)
-  const trackerMutation = Context.get(githubAuthorities, TrackerMutation)
-  const target = GithubIssueTarget.make({
-    owner: manifest.repository.owner,
-    repository: manifest.repository.name,
-    issueNumber: githubFixture.issue.number
-  })
-  const result = yield* runProductionLiveQualification(
-    {
-      builtEntry: manifest.builtEntry,
-      codexHome: fixture.configuration.codexStateDirectory,
-      configuration: fixture.configurationPath,
-      target,
-      githubToken: secrets.githubToken,
-      codexProviderCredential: secrets.codexProviderCredential
-    },
-    makeProductionLiveQualificationNodeBoundary(spawner),
-    {
-      validateRecord: (record) => safeRecord(secrets, record),
-      gatherFinalFacts: ({ runId }) =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            const journalContext = yield* Layer.build(
-              sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(fixture.configuration.journalDatabase) })
-            )
-            const journal = yield* Context.get(journalContext, JournalStore).read(runId)
-            const planned = journal.filter(({ event }) => event._tag === "TaskAttemptPlanned")
-            const sessions = journal.filter(({ event }) => event._tag === "IntegratorSessionFixed")
-            const headResult = yield* git.runInWorktree(fixture.configuration.repository, [
-              "rev-parse",
-              fixture.configuration.integrationRef
-            ])
-            if (headResult.exitCode !== 0) return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
-            const graph = yield* trackerReader.read(target)
-            const plannedAttempt =
-              planned[0]?.event._tag === "TaskAttemptPlanned" ? planned[0].event.operation.plannedAttempt : undefined
-            if (plannedAttempt === undefined) return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
-            const lifecycle = Option.getOrUndefined(graph.lifecycleOf(plannedAttempt.taskId))
-            const claim = yield* trackerMutation.readTaskClaim(plannedAttempt.taskId)
-            return {
-              applicationServerCount: responses.counts().total > 0 ? 1 : 0,
-              taskWorktreeCount: new Set(
-                planned.map(({ event }) =>
-                  event._tag === "TaskAttemptPlanned" ? event.operation.plannedAttempt.worktree : ""
-                )
-              ).size,
-              integrationTargetCount: new Set(
-                sessions.map(({ event }) =>
-                  event._tag === "IntegratorSessionFixed"
-                    ? `${event.correlation.integrationTarget.repository}:${event.correlation.integrationTarget.ref}`
-                    : ""
-                )
-              ).size,
-              journal,
-              github: { lifecycle: lifecycle?._tag, claim: claim._tag, responses: responses.counts() },
-              targetHead: yield* Schema.decodeUnknownEffect(GitCommitSha)(headResult.stdout.trim())
-            }
-          })
-        ),
-      publish: (completion) =>
-        Effect.gen(function* () {
-          const outcome = yield* publishCompletedQualification(
-            manifest,
-            fixture,
-            githubFixture,
-            forwarder,
-            build,
-            completion
-          ).pipe(
-            Effect.provideService(GithubGraphqlClient, githubClient),
-            Effect.provideService(FileSystem.FileSystem, fs),
-            Effect.provideService(Crypto.Crypto, crypto)
+  const attempt = yield* Effect.gen(function* () {
+    const createdGithubFixture = yield* createProductionLiveGithubFixture({
+      invocationId: manifest.invocationId,
+      repository: manifest.repository,
+      createIssueOperationId: manifest.createIssueOperationId
+    })
+    githubFixture = createdGithubFixture
+    const runningForwarder = yield* makeProductionLiveGithubForwarder(defaultGithubGraphqlEndpoint)
+    forwarder = runningForwarder
+    const responses = yield* makeProductionLiveResponsesEndpoint((worktree) =>
+      git
+        .runInWorktree(GitRepositoryLocator.make(worktree), ["rev-parse", "HEAD"])
+        .pipe(
+          Effect.flatMap((result) =>
+            result.exitCode === 0 ? Effect.succeed(result.stdout.trim()) : Effect.fail(undefined)
           )
-          yield* Ref.set(qualified, outcome)
-        }),
-      retainAfterFailure: (failure) =>
-        cleanupProductionLiveFixture(fixture.localManifest, {
-          invocationId: manifest.invocationId,
-          ownedChildrenStopped: Effect.succeed(true),
-          selectedRunsCompleted: Effect.succeed(false)
-        }).pipe(
-          Effect.flatMap((cleanup) =>
-            Effect.logWarning("production live qualification retained exact Q resources", {
-              failure,
-              retained: cleanup.retained.map(({ locator, manualCommand, reason }) => ({
-                locator,
-                manualCommand,
-                reason
-              })),
-              github: {
-                issueNodeId: githubFixture.issue.nodeId,
-                repositoryNodeId: githubFixture.manifest.repository.nodeId
+        )
+    )
+    local = yield* createProductionLiveLocalFixture(
+      manifest,
+      {
+        owner: manifest.repository.owner,
+        repository: manifest.repository.name,
+        issueNumber: createdGithubFixture.issue.number
+      },
+      responses.baseUrl,
+      runningForwarder.endpoint,
+      secrets.githubToken,
+      secrets.codexProviderCredential,
+      (container) =>
+        Effect.sync(() => {
+          localContainer = container
+        })
+    )
+    const fixture = local
+    const build = yield* measureQualificationBuild(manifest.sourceRepository, manifest.sourceBaseSha, {
+      builtEntry: manifest.builtEntry,
+      lockfile: manifest.lockfile,
+      configuration: fixture.configurationPath
+    }).pipe(Effect.mapError(() => qualificationFailed("Setup")))
+    const qualified = yield* Ref.make<ProductionLiveQualificationOutcome>(qualificationFailed("Execution"))
+    const githubAuthorities = yield* Layer.build(
+      githubDeliveryAuthorityLayer.pipe(
+        Layer.provide(Layer.succeed(GithubGraphqlClient, githubClient)),
+        Layer.provide(NodeCrypto.layer)
+      )
+    )
+    const trackerReader = Context.get(githubAuthorities, TrackerGraphReader)
+    const trackerMutation = Context.get(githubAuthorities, TrackerMutation)
+    const target = GithubIssueTarget.make({
+      owner: manifest.repository.owner,
+      repository: manifest.repository.name,
+      issueNumber: createdGithubFixture.issue.number
+    })
+    const result = yield* runProductionLiveQualification(
+      {
+        builtEntry: manifest.builtEntry,
+        codexHome: fixture.configuration.codexStateDirectory,
+        configuration: fixture.configurationPath,
+        target,
+        githubToken: secrets.githubToken,
+        codexProviderCredential: secrets.codexProviderCredential
+      },
+      makeProductionLiveQualificationNodeBoundary(spawner),
+      {
+        validateRecord: (record) => safeRecord(secrets, record),
+        gatherFinalFacts: ({ runId }) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const journalContext = yield* Layer.build(
+                sqliteJournalStoreLayer({
+                  filename: JournalDatabaseLocator.make(fixture.configuration.journalDatabase)
+                })
+              )
+              const journal = yield* Context.get(journalContext, JournalStore).read(runId)
+              const planned = journal.filter(({ event }) => event._tag === "TaskAttemptPlanned")
+              const sessions = journal.filter(({ event }) => event._tag === "IntegratorSessionFixed")
+              const headResult = yield* git.runInWorktree(fixture.configuration.repository, [
+                "rev-parse",
+                fixture.configuration.integrationRef
+              ])
+              if (headResult.exitCode !== 0) return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
+              const graph = yield* trackerReader.read(target)
+              const plannedAttempt =
+                planned[0]?.event._tag === "TaskAttemptPlanned" ? planned[0].event.operation.plannedAttempt : undefined
+              if (plannedAttempt === undefined) return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
+              const lifecycle = Option.getOrUndefined(graph.lifecycleOf(plannedAttempt.taskId))
+              const claim = yield* trackerMutation.readTaskClaim(plannedAttempt.taskId)
+              return {
+                applicationServerCount: responses.counts().total > 0 ? 1 : 0,
+                taskWorktreeCount: new Set(
+                  planned.map(({ event }) =>
+                    event._tag === "TaskAttemptPlanned" ? event.operation.plannedAttempt.worktree : ""
+                  )
+                ).size,
+                integrationTargetCount: new Set(
+                  sessions.map(({ event }) =>
+                    event._tag === "IntegratorSessionFixed"
+                      ? `${event.correlation.integrationTarget.repository}:${event.correlation.integrationTarget.ref}`
+                      : ""
+                  )
+                ).size,
+                journal,
+                github: { lifecycle: lifecycle?._tag, claim: claim._tag, responses: responses.counts() },
+                targetHead: yield* Schema.decodeUnknownEffect(GitCommitSha)(headResult.stdout.trim())
               }
             })
           ),
-          Effect.provideService(FileSystem.FileSystem, fs)
-        )
-    }
+        publish: (completion) =>
+          Effect.gen(function* () {
+            const outcome = yield* publishCompletedQualification(
+              manifest,
+              fixture,
+              createdGithubFixture,
+              runningForwarder,
+              build,
+              completion,
+              cleanupState
+            ).pipe(
+              Effect.mapError((failure) =>
+                failure._tag === "QualificationFailed" ? failure : qualificationFailed("Cleanup")
+              ),
+              Effect.tapError((failure) => Ref.set(qualified, failure)),
+              Effect.provideService(GithubGraphqlClient, githubClient),
+              Effect.provideService(FileSystem.FileSystem, fs),
+              Effect.provideService(Crypto.Crypto, crypto)
+            )
+            yield* Ref.set(qualified, outcome)
+          }),
+        retainAfterFailure: () => Effect.void
+      }
+    )
+    if (result._tag === "Failed" && result.stage === "GatherFinalFacts")
+      yield* Ref.set(qualified, qualificationFailed("EvidenceValidation"))
+    return yield* Ref.get(qualified)
+  }).pipe(Effect.result)
+  if (attempt._tag === "Success" && attempt.success._tag === "Qualified") return attempt.success
+  const failure =
+    attempt._tag === "Success" && attempt.success._tag === "QualificationFailed"
+      ? attempt.success
+      : qualificationFailed("Setup")
+  yield* writeFailureRetentionReport(
+    manifest,
+    failure.phase,
+    githubFixture,
+    forwarder,
+    local,
+    localContainer,
+    cleanupState
+  ).pipe(
+    Effect.provideService(GithubGraphqlClient, githubClient),
+    Effect.provideService(FileSystem.FileSystem, fs),
+    Effect.provideService(Crypto.Crypto, crypto)
   )
-  return result._tag === "Completed" ? yield* Ref.get(qualified) : qualificationFailed("Execution")
+  return failure
 })
