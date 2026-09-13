@@ -144,6 +144,19 @@ worktree can use it. Nested admitted commands validate the active run and regist
 beneath it rather than acquiring again. `DALPH_GATE_SLOT` alone grants no admission.
 Set `DALPH_GATE_SLOTS` for another machine size. Development tiers remain unadmitted.
 
+#### Parallel work during a full gate
+
+Freeze the full gate's exact candidate worktree. Independent work may continue
+in other worktrees, but a declared blocking edge still forbids implementation;
+read-only planning may continue. Do not change tools, dependencies, Git
+configuration, or packed refs shared with the candidate. Run candidate Git
+reads with `GIT_OPTIONAL_LOCKS=0`, and defer a write when its shared scope is
+unknown. The input observer and final comparison decide whether the candidate's
+qualification evidence remains valid.
+
+This is a cooperative operating rule. It adds no dispatcher, scheduler state,
+active-gate file, new command, or automatic prompt injection.
+
 The runner prints its run ID and `.scratch/quality-gates/<run-id>` report directory.
 Each bounded child records spawn intent before launch, its observed process group,
 logs, and genuine terminal result. Coverage writes below that run's `coverage/`
@@ -196,6 +209,10 @@ membership. It detects ordinary edit-and-restore and replacement, fails closed o
 queue overflow, watch loss, setup/observer failure, and drains before final hashing.
 It remains in the registered gate process group and exits on control-pipe EOF.
 Transient memory-mapped mutation is outside the cooperative filesystem guarantee.
+Metadata-only events on a path that is only a strict ancestor of an input do not
+invalidate the run by themselves. Membership, rename, and replacement events on
+the same path still invalidate, and the final comparison rejects any lasting
+change that alters resolved identity.
 
 Guarded full-gate children use `GIT_OPTIONAL_LOCKS=0`, so read-only status checks
 leave index stat-cache metadata untouched. Required Git writes still acquire
@@ -302,7 +319,9 @@ inventory includes its nested formal Java resolution. A shim that supplies a
 declared tool refuses the gate before launch. The entry points recheck the same
 rule before observation and guarded children. All guarded children and recorded
 input identity use the resulting `PATH`; ordinary `PATH` candidates and their
-strict ancestors remain observed.
+strict ancestors remain observed for resolution-changing events. Metadata-only
+churn on an ancestor is ignored when that ancestor is not itself a declared
+input.
 
 Effect tests use `it.effect`, test Layers, `TestClock`, and deterministic
 synchronization instead of module mocks, ambient time, or sleeps. Name property tests

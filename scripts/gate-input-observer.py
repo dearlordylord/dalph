@@ -14,6 +14,8 @@ fd = libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
 if fd < 0:
     raise OSError(ctypes.get_errno(), "inotify_init1 failed")
 MASK = 0x2 | 0x4 | 0x8 | 0x40 | 0x80 | 0x100 | 0x200 | 0x400 | 0x800 | 0x2000
+ATTRIB = 0x4
+ISDIR = 0x40000000
 OVERFLOW = 0x4000
 IGNORED = 0x8000
 watches = {}
@@ -42,6 +44,26 @@ def skip(path):
 
 def relevant(path):
     return not skip(path) and any(below(path, root) or below(root, path) for root in roots + protected)
+
+
+def declared_input(path):
+    if any(below(path, root) for root in protected):
+        return True
+    return any(below(path, root) for root in roots) and not any(below(path, root) for root in excluded)
+
+
+def only_strict_ancestor(path):
+    inputs = roots + protected
+    return any(path != root and below(root, path) for root in inputs) and not declared_input(path)
+
+
+def invalidates(path, mask):
+    # Directory timestamps and restored permissions can churn above an input
+    # without changing its final bytes, modes, links, or resolution. Membership
+    # and replacement events still invalidate, and the final snapshot catches
+    # a lasting ancestor change that alters the resolved input identity.
+    metadata_only = mask & ~ISDIR == ATTRIB
+    return relevant(path) and not (metadata_only and only_strict_ancestor(path))
 
 
 def watch(path):
@@ -129,7 +151,7 @@ def drain():
             else:
                 for base in watches[wd]:
                     path = os.path.join(base, name) if name else base
-                    if relevant(path):
+                    if invalidates(path, mask):
                         dirty_path = path
                         dirty_mask = mask
                         dirty_name = name

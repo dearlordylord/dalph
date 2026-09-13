@@ -62,6 +62,12 @@ questions. Reuse guidance already read unless it changed or scope changed.
   Linux/cooperative scope in [DEVELOPMENT.md](docs/DEVELOPMENT.md#heavy-gate-admission).
   `DALPH_GATE_SLOTS` sets clone capacity. `check:fast` and focused tests remain
   unadmitted; standalone preflight writes artifacts and is admitted.
+- During a full gate, freeze its exact worktree and follow the
+  [parallel-work rules](docs/DEVELOPMENT.md#parallel-work-during-a-full-gate):
+  independent work uses other worktrees; candidate Git reads set
+  `GIT_OPTIONAL_LOCKS=0`; shared tools, dependencies, Git configuration, packed
+  refs, and unknown shared writes wait. Blocking edges still forbid
+  implementation, though read-only planning may continue.
 - A maintainer can resume only `pnpm check:all --candidate=<base sha> --resume=<run-id>`
   in the same worktree with complete monitored input/artifact evidence. Fresh and
   resumed full gates require Python 3 with Linux inotify; failed/unproven stages

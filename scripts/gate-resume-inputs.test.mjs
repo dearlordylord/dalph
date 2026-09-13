@@ -166,6 +166,24 @@ test("generated outputs are excluded until protected as credited artifact inputs
   }
 })
 
+test("metadata churn on an excluded ancestor of a protected artifact remains reusable", async () => {
+  const f = fixture()
+  const scratch = join(f.root, ".scratch")
+  const artifact = join(scratch, "dist")
+  mkdirSync(artifact, { recursive: true })
+  writeFileSync(join(artifact, "out.js"), "generated\n")
+  const guard = await f.guard()
+  try {
+    await guard.protectArtifacts([artifact])
+    utimesSync(scratch, new Date(0), new Date(0))
+    utimesSync(scratch, new Date(1), new Date(1))
+    await guard.assertUnchanged()
+    assert.equal((await guard.finish()).unchanged, true)
+  } finally {
+    await guard.close()
+  }
+})
+
 test("observer process death fails closed and cleanup alone never establishes success", async () => {
   const f = fixture()
   const observer = await startInputObserver({ roots: [f.root], excludedRoots: [join(f.root, ".git")] })
@@ -323,16 +341,57 @@ test("refuses to remove a Codex argv-zero PATH entry that supplies a declared to
   )
 })
 
-test("strict PATH ancestor permission edit and restore invalidates executable resolution evidence", async () => {
+test("Mise-style strict ancestor metadata churn preserves executable resolution evidence", async () => {
   const f = fixture()
-  const scaffolding = join(f.outer, "scaffolding")
-  const selected = join(scaffolding, "selected")
+  const miseRoot = join(f.outer, ".local", "share", "mise")
+  const selected = join(miseRoot, "installs", "fixture-tool", "1.0.0", "bin")
+  const tool = join(selected, "fixture-tool")
   mkdirSync(selected, { recursive: true })
-  f.environment.PATH = `${selected}:${f.environment.PATH}`
+  writeFileSync(tool, "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+  f.invocation.toolExecutables.push(tool)
   const guard = await f.guard()
   try {
-    chmodSync(scaffolding, 0o700)
-    chmodSync(scaffolding, 0o755)
+    utimesSync(miseRoot, new Date(0), new Date(0))
+    utimesSync(miseRoot, new Date(1), new Date(1))
+    await guard.assertUnchanged()
+    assert.equal((await guard.finish()).unchanged, true)
+  } finally {
+    await guard.close()
+  }
+})
+
+test("lasting strict ancestor metadata that breaks tool resolution fails final comparison", async () => {
+  const f = fixture()
+  const miseRoot = join(f.outer, ".local", "share", "mise")
+  const selected = join(miseRoot, "installs", "fixture-tool", "1.0.0", "bin")
+  const tool = join(selected, "fixture-tool")
+  mkdirSync(selected, { recursive: true })
+  writeFileSync(tool, "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+  f.invocation.toolExecutables.push(tool)
+  const guard = await f.guard()
+  try {
+    chmodSync(miseRoot, 0o000)
+    await guard.assertUnchanged()
+    await assert.rejects(guard.finish(), /unavailable/u)
+  } finally {
+    chmodSync(miseRoot, 0o755)
+    await guard.close()
+  }
+})
+
+test("Mise-style executable path-component rename and restore invalidates resolution evidence", async () => {
+  const f = fixture()
+  const install = join(f.outer, ".local", "share", "mise", "installs", "fixture-tool", "1.0.0")
+  const selected = join(install, "bin")
+  const moved = join(install, "bin-moving")
+  const tool = join(selected, "fixture-tool")
+  mkdirSync(selected, { recursive: true })
+  writeFileSync(tool, "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+  f.invocation.toolExecutables.push(tool)
+  const guard = await f.guard()
+  try {
+    renameSync(selected, moved)
+    renameSync(moved, selected)
     await assert.rejects(guard.assertUnchanged(), /mask=/u)
   } finally {
     await guard.close()
