@@ -3,6 +3,7 @@
 This worktree carries the research notes created in the invoker/invokee
 conversation. Research is evidence, not accepted runtime behavior.
 
+- [Fresh-session handoff and to-spec prompt](./FRESH-SESSION-HANDOFF.md)
 - [Research conclusion and specification inputs](./invokee-research-conclusion.md)
 - [Scope and specification-readiness audit](./invokee-spec-readiness-audit.md)
 - [Command callback recovery](./invokee-command-recovery-results.md)
