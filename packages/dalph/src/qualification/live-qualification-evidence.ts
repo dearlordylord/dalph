@@ -285,18 +285,22 @@ export const ProductionLiveQualificationEvidence: Schema.Codec<
     if (evidence.composition.applicationServerProcessIdentities.length !== 1) {
       return "live qualification must observe exactly one Codex app-server process identity"
     }
-    const expectedCounts = new Map<string, number>()
-    const observe = (tag: string) => expectedCounts.set(tag, (expectedCounts.get(tag) ?? 0) + 1)
-    evidence.journal.orderedEventTags.forEach((tag) => observe(`JournalEvent.${tag}`))
-    evidence.publicRecords.values.forEach(({ _tag }) => observe(`PublicRecord.${_tag}`))
-    evidence.orderedBoundaryTags.shippedGithub.forEach((tag) => observe(`ShippedGithub.${tag}`))
-    evidence.orderedBoundaryTags.responses.forEach((tag) => observe(`Responses.${tag}`))
-    evidence.orderedBoundaryTags.controllerFinal.forEach((tag) => observe(`ControllerFinal.${tag}`))
-    evidence.orderedBoundaryTags.process.forEach((tag) => observe(`Process.${tag}`))
-    const suppliedCounts = new Map(evidence.operationCounts.map(({ count, tag }) => [tag, count]))
+    const observedTags = [
+      ...evidence.journal.orderedEventTags.map((tag) => `JournalEvent.${tag}`),
+      ...evidence.publicRecords.values.map(({ _tag }) => `PublicRecord.${_tag}`),
+      ...evidence.orderedBoundaryTags.shippedGithub.map((tag) => `ShippedGithub.${tag}`),
+      ...evidence.orderedBoundaryTags.responses.map((tag) => `Responses.${tag}`),
+      ...evidence.orderedBoundaryTags.controllerFinal.map((tag) => `ControllerFinal.${tag}`),
+      ...evidence.orderedBoundaryTags.process.map((tag) => `Process.${tag}`)
+    ]
+    const expectedCounts = observedTags.reduce<Readonly<Record<string, number>>>(
+      (counts, tag) => ({ ...counts, [tag]: (counts[tag] ?? 0) + 1 }),
+      {}
+    )
+    const suppliedCounts = Object.fromEntries(evidence.operationCounts.map(({ count, tag }) => [tag, count]))
     if (
-      suppliedCounts.size !== expectedCounts.size ||
-      Array.from(expectedCounts).some(([tag, count]) => suppliedCounts.get(tag) !== count)
+      Object.keys(suppliedCounts).length !== Object.keys(expectedCounts).length ||
+      Object.entries(expectedCounts).some(([tag, count]) => suppliedCounts[tag] !== count)
     ) {
       return "operation counts must exactly count every ordered journal, public, Responses, and final-controller observation"
     }

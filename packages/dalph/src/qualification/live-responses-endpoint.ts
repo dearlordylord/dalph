@@ -1,9 +1,10 @@
 /* eslint-disable import/no-nodejs-modules -- The protected qualification owns one loopback model endpoint. */
+/* eslint-disable import-x/no-unused-modules -- Shipped qualification and external test-support consume these boundary contracts outside the production lint graph. */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import type { Socket } from "node:net"
 import nodePath from "node:path"
 import { GitCommitSha } from "@dalph/contracts"
-import { Effect, Ref, Schema } from "effect"
+import { Effect, MutableHashSet, Ref, Schema } from "effect"
 
 const baseUrlPattern = /^http:\/\/127\.0\.0\.1:\d+\/v1$/u
 const secondTurn = 2
@@ -144,10 +145,10 @@ export const makeProductionLiveResponsesEndpoint = Effect.fn("ProductionLiveResp
   })
   const context = yield* Effect.context<R>()
   const runPromise = Effect.runPromiseWith(context)
-  const sockets = new Set<Socket>()
+  const sockets = MutableHashSet.empty<Socket>()
   const server = createServer((request, response) => {
-    request.socket.once("close", () => sockets.delete(request.socket))
-    sockets.add(request.socket)
+    request.socket.once("close", () => MutableHashSet.remove(sockets, request.socket))
+    MutableHashSet.add(sockets, request.socket)
     void runPromise(
       Effect.gen(function* () {
         if (request.method !== "POST" || request.url?.split("?", 1)[0] !== "/v1/responses") {

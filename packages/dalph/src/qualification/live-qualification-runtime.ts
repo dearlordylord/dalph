@@ -1,4 +1,5 @@
 /* eslint-disable import/no-nodejs-modules, max-lines -- The protected runner owns the complete Q lifecycle. */
+/* eslint-disable import-x/no-unused-modules -- Shipped qualification and external test-support consume these boundary contracts outside the production lint graph. */
 import nodePath from "node:path"
 import { GitCommitSha, GitRepositoryLocator } from "@dalph/contracts"
 import {
@@ -401,8 +402,11 @@ export const productionLiveQualificationOperationCounts = (
     ...boundaries.controllerFinal.map((tag) => `ControllerFinal.${tag}`),
     ...boundaries.process.map((tag) => `Process.${tag}`)
   ]
-  return Array.from(
-    operationTags.reduce((counts, tag) => counts.set(tag, (counts.get(tag) ?? 0) + 1), new Map<string, number>())
+  return Object.entries(
+    operationTags.reduce<Readonly<Record<string, number>>>(
+      (counts, tag) => ({ ...counts, [tag]: (counts[tag] ?? 0) + 1 }),
+      {}
+    )
   ).map(([tag, count]) => ({ tag, count }))
 }
 
@@ -633,12 +637,14 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
     { invocationId: manifest.invocationId, repository: githubFixture.manifest.repository },
     cleanupAdapter
   )
+  // eslint-disable-next-line functional/immutable-data -- Retention reporting must retain the last observed partial cleanup receipt if a later boundary fails.
   cleanupState.github = githubCleanup
   const localCleanup = yield* cleanupProductionLiveFixture(fixture.localManifest, {
     invocationId: manifest.invocationId,
     ownedChildrenStopped: Effect.succeed(true),
     selectedRunsCompleted: Effect.succeed(observed.value.selectedRunsCompleted)
   })
+  // eslint-disable-next-line functional/immutable-data -- Retention reporting must retain the last observed partial cleanup receipt if evidence publication fails.
   cleanupState.local = localCleanup
   if (githubCleanup.retained.length > 0 || localCleanup._tag !== "Removed" || localCleanup.retained.length > 0)
     return yield* Effect.fail(qualificationFailed("Cleanup"))

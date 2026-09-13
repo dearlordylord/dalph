@@ -1,3 +1,4 @@
+/* eslint-disable import-x/no-unused-modules -- Shipped qualification and external test-support consume these boundary contracts outside the production lint graph. */
 import { EvidenceDigest } from "@dalph/contracts"
 import {
   GithubGraphqlClient,

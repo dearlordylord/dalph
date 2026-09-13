@@ -1,4 +1,5 @@
 /* eslint-disable import/no-nodejs-modules -- Qualification cleanup validates exact local path relationships. */
+/* eslint-disable import-x/no-unused-modules -- Shipped qualification and external test-support consume these boundary contracts outside the production lint graph. */
 import nodePath from "node:path"
 import { Effect, FileSystem, HashSet, MutableList, Option, Schema } from "effect"
 import { LiveQualificationInvocationId } from "./live-qualification-evidence.js"

@@ -1,4 +1,5 @@
 /* eslint-disable import/no-nodejs-modules -- Qualification measures original build and process provenance. */
+/* eslint-disable import-x/no-unused-modules -- Qualification schemas are consumed by external test-support outside the production lint graph. */
 import nodeProcess from "node:process"
 import { existsSync } from "node:fs"
 import { arch, platform } from "node:os"

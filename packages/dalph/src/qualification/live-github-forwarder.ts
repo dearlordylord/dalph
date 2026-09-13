@@ -1,4 +1,5 @@
 /* eslint-disable import/no-nodejs-modules -- Q owns one loopback forwarding endpoint. */
+/* eslint-disable import-x/no-unused-modules -- Shipped qualification and external test-support consume these boundary contracts outside the production lint graph. */
 import {
   createServer,
   request as httpRequest,
@@ -69,6 +70,7 @@ const forwardBytes = (upstream: string, headers: Readonly<Record<string, string>
           const selected = upstream.startsWith("https:") ? httpsRequest : httpRequest
           const outgoing = selected(upstream, { method: "POST", headers }, (incoming) => {
             const chunks: Array<Uint8Array> = []
+            // eslint-disable-next-line functional/immutable-data -- Node delivers one response body as incremental stream chunks.
             incoming.on("data", (chunk: Uint8Array) => chunks.push(chunk))
             incoming.on("end", () =>
               resolve({
@@ -90,6 +92,7 @@ const readBytes = (request: IncomingMessage) =>
     try: () =>
       new Promise<Uint8Array>((resolve, reject) => {
         const chunks: Array<Uint8Array> = []
+        // eslint-disable-next-line functional/immutable-data -- Node delivers one request body as incremental stream chunks.
         request.on("data", (chunk: Uint8Array) => chunks.push(chunk))
         request.on("end", () => resolve(Buffer.concat(chunks)))
         request.on("error", reject)
@@ -129,7 +132,7 @@ export const makeProductionLiveGithubForwarder = Effect.fn("ProductionLiveGithub
   upstream: string
 ) {
   const operations = yield* Ref.make<ReadonlyArray<ProductionLiveGithubOperationTag>>([])
-  const labels = new Map<GithubLabelNodeId, ProductionLiveCreatedLabelReceipt>()
+  const labels = yield* Ref.make<ReadonlyMap<GithubLabelNodeId, ProductionLiveCreatedLabelReceipt>>(new Map())
   const sockets = MutableHashSet.empty<Socket>()
   const context = yield* Effect.context<never>()
   const runPromise = Effect.runPromiseWith(context)
@@ -157,11 +160,21 @@ export const makeProductionLiveGithubForwarder = Effect.fn("ProductionLiveGithub
           if (Option.isSome(receipt)) {
             const decoded = receipt.value
             const label = decoded.data.createLabel.label
-            labels.set(label.id, {
-              nodeId: label.id,
-              name: label.name,
-              fingerprint: EvidenceDigest.make(createHash("sha256").update(label.description).digest("hex"))
-            })
+            yield* Ref.update(
+              labels,
+              (current) =>
+                new Map([
+                  ...current,
+                  [
+                    label.id,
+                    {
+                      nodeId: label.id,
+                      name: label.name,
+                      fingerprint: EvidenceDigest.make(createHash("sha256").update(label.description).digest("hex"))
+                    }
+                  ]
+                ])
+            )
           }
         }
         response.writeHead(forwarded.status, forwarded.headers)
@@ -203,7 +216,7 @@ export const makeProductionLiveGithubForwarder = Effect.fn("ProductionLiveGithub
     observation: Effect.all({
       requestCount: Ref.get(operations).pipe(Effect.map((tags) => tags.length)),
       orderedOperations: Ref.get(operations),
-      createdLabels: Effect.sync(() => Array.from(labels.values()))
+      createdLabels: Ref.get(labels).pipe(Effect.map((receipts) => Array.from(receipts.values())))
     })
   } satisfies ProductionLiveGithubForwarder
 })

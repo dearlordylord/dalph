@@ -1,4 +1,5 @@
 /* eslint-disable import/no-nodejs-modules -- The protected qualification owns one built Node child. */
+/* eslint-disable import-x/no-unused-modules -- Shipped qualification and external test-support consume these boundary contracts outside the production lint graph. */
 import nodePath from "node:path"
 import nodeProcess from "node:process"
 import type { GitCommitSha, RunId } from "@dalph/contracts"
