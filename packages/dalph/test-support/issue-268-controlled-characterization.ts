@@ -3106,7 +3106,7 @@ const continueRetainedC = Effect.fn("Issue274.continueRetainedC")(function* (
   projectedReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>,
   outerScope: Scope.Scope,
   resumeResponse: "Return" | "Lose",
-  discoverNewTasks = false,
+  discoverNewTasks: boolean,
   refreshCheckpoint?: "Intent" | "Observation"
 ) {
   const retained = yield* sharedAuthorities.journal.read(scenario.runId)

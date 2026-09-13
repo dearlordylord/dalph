@@ -1147,14 +1147,17 @@ export const evaluateAuthoredObservationCapture: (
     capture: AuthoredObservationCapture,
     previous: AuthoredObservationMoment | null
   ) {
+    const carried: Pick<AuthoredObservationMoment, "deliveryStatusRead" | "deliveryFrame" | "liveOwners"> =
+      previous === null
+        ? { deliveryStatusRead: AuthoredDeliveryStatusRead.Unobserved(), deliveryFrame: null, liveOwners: [] }
+        : previous
     const correlation = {
       activationOrdinal: capture.activationOrdinal,
       captureOrder: capture.captureOrder,
       storyPosition: capture.storyPosition,
-      deliveryStatusRead: previous === null ? AuthoredDeliveryStatusRead.Unobserved() : previous.deliveryStatusRead
+      deliveryStatusRead: carried.deliveryStatusRead
     }
-    const deliveryFrame = previous?.deliveryFrame ?? null
-    const liveOwners = previous?.liveOwners ?? []
+    const { deliveryFrame, liveOwners } = carried
     if (capture._tag === "DeliveryStatusCaptured") {
       return {
         ...correlation,

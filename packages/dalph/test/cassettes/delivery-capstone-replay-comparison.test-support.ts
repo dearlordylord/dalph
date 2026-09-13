@@ -1,4 +1,4 @@
-import { Option, Schema } from "effect"
+import { MutableList, Option, Schema } from "effect"
 import { type EvidenceReference, RunId, TaskId, TaskRevision } from "@dalph/contracts"
 
 const diagnosticIndent = 2
@@ -188,7 +188,7 @@ const comparisonStatusEntryIdentity = (
   referenceRun: string,
   manifests?: ReadonlyMap<string, EvidenceReference>
 ): string => {
-  const components: Array<{ readonly kind: string; readonly value: string }> = []
+  const components = MutableList.make<{ readonly kind: string; readonly value: string }>()
   let offset = 0
   while (offset < value.length) {
     const header = /^([sn])(0|[1-9][0-9]*):/u.exec(value.slice(offset))
@@ -200,10 +200,10 @@ const comparisonStatusEntryIdentity = (
     const start = offset + header[0].length
     const end = start + length
     if (!Number.isSafeInteger(length) || end > value.length) return value
-    components.push({ kind, value: value.slice(start, end) })
+    MutableList.append(components, { kind, value: value.slice(start, end) })
     offset = end
   }
-  return components
+  return MutableList.toArray(components)
     .map((component) => {
       const normalized =
         component.kind === "s" && component.value.startsWith("delivery:")
