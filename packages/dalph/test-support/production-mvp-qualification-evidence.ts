@@ -364,9 +364,19 @@ export const QualificationArtifactLocator = Schema.NonEmptyString.check(
 ).pipe(Schema.brand("QualificationArtifactLocator"))
 export type QualificationArtifactLocator = typeof QualificationArtifactLocator.Type
 
+/** Exact disposable qualification container that an artifact must remain outside. */
+export const QualificationPublicationContainer = Schema.NonEmptyString.check(
+  Schema.makeFilter((value) =>
+    nodePath.isAbsolute(value) && nodePath.normalize(value) === value
+      ? undefined
+      : "qualification container must be normalized and absolute"
+  )
+).pipe(Schema.brand("QualificationPublicationContainer"))
+export type QualificationPublicationContainer = typeof QualificationPublicationContainer.Type
+
 /** A write failure never claims publication or retries completed qualification/cleanup work. */
 export const writeQualificationArtifact = Effect.fn("Qualification.writeArtifact")(function* (
-  container: HermeticFixtureContainer,
+  container: HermeticFixtureContainer | QualificationPublicationContainer,
   locator: QualificationArtifactLocator,
   validatedJson: string
 ) {

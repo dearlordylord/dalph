@@ -118,7 +118,7 @@ export const measureQualificationBuild = Effect.fn("Qualification.measureBuild")
   Effect.mapError(() => new QualificationEvidenceFailure({ operation: "MeasureBuild" }))
 )
 
-const HostedJob = Schema.Struct({
+export const QualificationHostedJob = Schema.Struct({
   workflow: Schema.Literals(["CI", "Candidate qualification"]),
   runId: Schema.Int.check(Schema.isGreaterThan(0)),
   jobId: Schema.Int.check(Schema.isGreaterThan(0))
@@ -129,10 +129,10 @@ const ProfileCommand = Schema.Struct({
   durationSeconds: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
   result: Schema.Literals(["exit:0", "exit:1"])
 })
-const FormalProfile = Schema.Struct({
+export const QualificationFormalProfile = Schema.Struct({
   sourceSha: GitCommitSha,
   nodeVersion: Schema.NonEmptyString,
-  job: HostedJob,
+  job: QualificationHostedJob,
   logDigest: EvidenceDigest,
   setupInstallSeconds: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
   formalSeconds: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -144,14 +144,16 @@ const FormalProfile = Schema.Struct({
 })
 export const QualificationFormalProvenance = Schema.TaggedUnion({
   NotSupplied: { reason: Schema.Literal("LocalHermeticInvocation") },
-  DedicatedAndStressed: { dedicated: FormalProfile, stressed: FormalProfile }
+  DedicatedAndStressed: { dedicated: QualificationFormalProfile, stressed: QualificationFormalProfile }
 })
 export type QualificationFormalProvenance = typeof QualificationFormalProvenance.Type
+export const RequiredQualificationFormalProvenance = QualificationFormalProvenance.cases.DedicatedAndStressed
+export type RequiredQualificationFormalProvenance = typeof RequiredQualificationFormalProvenance.Type
 
 export interface SuppliedQualificationProfile {
   readonly sourceSha: GitCommitSha
   readonly nodeVersion: string
-  readonly job: typeof HostedJob.Type
+  readonly job: typeof QualificationHostedJob.Type
   readonly log: string
   readonly setupInstallSeconds: number
   readonly completeJobSeconds: number
@@ -203,7 +205,7 @@ const validateProfile = Effect.fn("Qualification.validateProfile")(
       return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
     if (profileTimingExceedsBudgets(parsed.budgetSeconds, parsed.formalSeconds, profile))
       return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
-    return yield* Schema.decodeUnknownEffect(FormalProfile)({
+    return yield* Schema.decodeUnknownEffect(QualificationFormalProfile)({
       sourceSha,
       nodeVersion: profile.nodeVersion,
       job: profile.job,
@@ -220,6 +222,18 @@ const validateProfile = Effect.fn("Qualification.validateProfile")(
   Effect.mapError(() => new QualificationEvidenceFailure({ operation: "ValidateProvenance" }))
 )
 
+export const requiredQualificationFormalProvenance = Effect.fn("Qualification.requiredFormalProvenance")(function* (
+  sourceSha: GitCommitSha,
+  supplied: { readonly dedicated: SuppliedQualificationProfile; readonly stressed: SuppliedQualificationProfile }
+) {
+  if (supplied.dedicated.job.jobId === supplied.stressed.job.jobId)
+    return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
+  return RequiredQualificationFormalProvenance.make({
+    dedicated: yield* validateProfile(sourceSha, supplied.dedicated),
+    stressed: yield* validateProfile(sourceSha, supplied.stressed)
+  })
+})
+
 export const qualificationFormalProvenance = Effect.fn("Qualification.formalProvenance")(function* (
   sourceSha: GitCommitSha,
   supplied:
@@ -232,12 +246,7 @@ export const qualificationFormalProvenance = Effect.fn("Qualification.formalProv
 ) {
   if (supplied._tag === "LocalHermetic")
     return QualificationFormalProvenance.cases.NotSupplied.make({ reason: "LocalHermeticInvocation" })
-  if (supplied.dedicated.job.jobId === supplied.stressed.job.jobId)
-    return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
-  return QualificationFormalProvenance.cases.DedicatedAndStressed.make({
-    dedicated: yield* validateProfile(sourceSha, supplied.dedicated),
-    stressed: yield* validateProfile(sourceSha, supplied.stressed)
-  })
+  return yield* requiredQualificationFormalProvenance(sourceSha, supplied)
 })
 
 /** Explicitly selected artifact outside the disposable Q container, never a fixture cleanup resource. */

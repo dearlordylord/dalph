@@ -19,6 +19,7 @@ import {
   measureQualificationBuild,
   qualificationDigest,
   qualificationFormalProvenance,
+  requiredQualificationFormalProvenance,
   type SuppliedQualificationProfile
 } from "./production-mvp-qualification-provenance.js"
 
@@ -279,6 +280,24 @@ it.effect("same-source supported dedicated and stressed evidence retains every o
       expect(value.setupInstallSeconds).toBe(10)
     }
     expect(result.dedicated.job.jobId).not.toBe(result.stressed.job.jobId)
+  })
+)
+
+it.effect("live qualification provenance requires two independent same-source formal jobs", () =>
+  Effect.gen(function* () {
+    const result = yield* requiredQualificationFormalProvenance(sourceSha, {
+      dedicated: profile(2),
+      stressed: profile(3)
+    })
+    expect(result._tag).toBe("DedicatedAndStressed")
+    expect(result.dedicated.sourceSha).toBe(sourceSha)
+    expect(result.stressed.sourceSha).toBe(sourceSha)
+    expect(result.dedicated.job.jobId).not.toBe(result.stressed.job.jobId)
+    expect(
+      (yield* requiredQualificationFormalProvenance(sourceSha, { dedicated: profile(2), stressed: profile(2) }).pipe(
+        Effect.flip
+      )).operation
+    ).toBe("ValidateProvenance")
   })
 )
 
