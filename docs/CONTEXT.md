@@ -579,6 +579,19 @@ its grouping descendants. A later accepted read can produce a changed Run task
 graph; the graph is not immutable Run input or persisted derived frontier state.
 _Avoid_: Task-tracker target closure, initial closure, Run root task, delivery frontier
 
+**Task prerequisite**:
+A tracker-declared blocking relationship: task B cannot become eligible until
+its prerequisite A is completed successfully. Satisfying B's prerequisites does
+not complete B; it only removes those dependency blockers.
+_Avoid_: Grouping parent, grouping child, automatic dependent completion
+
+**Task grouping**:
+Tracker-declared containment used for Run graph membership and grouping-scoped
+controls such as task Pause; a containing task remains an ordinary task.
+Grouping alone neither creates a prerequisite nor completes the containing
+task when its grouped tasks complete.
+_Avoid_: Implicit blocker, parent completion rule, agent conversation ancestry
+
 **Supporting prerequisite**:
 A task that enters a Run task graph through a prerequisite edge rather than as
 the Run root task or one of its grouping descendants. It is ordinary Run work
