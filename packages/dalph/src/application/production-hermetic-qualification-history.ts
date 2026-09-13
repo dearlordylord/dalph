@@ -22,6 +22,7 @@ import {
   validateTarget,
   validateWorkflowOperationId,
   qualificationPlannedAttemptFor,
+  type HermeticQualificationSourceRejected,
   type QualificationContext
 } from "./production-hermetic-qualification-attempt-source.js"
 import {
@@ -409,7 +410,10 @@ const validateHistoricalActionAttribution = Effect.fn("HermeticQualification.val
 /** Checks the existing original cursor view once; its existing invariants recompute every historical facet from items. */
 export const validateHermeticQualificationHistoricalSource = Effect.fn(
   "HermeticQualification.validateHistoricalSource"
-)(function* (snapshot: TraceAtCursor, context: QualificationContext) {
+)(function* (
+  snapshot: TraceAtCursor,
+  context: QualificationContext
+): Effect.fn.Return<TraceAtCursor, HermeticQualificationSourceRejected> {
   const original = yield* Schema.decodeUnknownEffect(
     TraceAtCursor,
     strictSource

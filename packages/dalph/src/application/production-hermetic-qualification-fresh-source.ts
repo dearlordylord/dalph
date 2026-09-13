@@ -7,6 +7,7 @@ import {
   validateClaimOperation,
   validateSpecification,
   validatePlannedAttempt,
+  type HermeticQualificationSourceRejected,
   type QualificationContext
 } from "./production-hermetic-qualification-attempt-source.js"
 import { validateTask } from "./production-hermetic-qualification-fixture-source.js"
@@ -24,7 +25,10 @@ type FreshStep = Extract<
 export const validateFreshStep = Effect.fn("HermeticQualification.validateFreshStep")(function* (
   step: FreshStep,
   context: QualificationContext
-) {
+): Effect.fn.Return<
+  Exclude<FreshStep, { readonly _tag: "ReadRejectedTaskClaim" }>,
+  HermeticQualificationSourceRejected
+> {
   if (step._tag === "BeginPlannedAttemptExecutorWork" || step._tag === "ObservePlannedAttemptExecutorWork")
     return yield* validateExecutorStep(step, context)
   if (step._tag === "ReadRejectedTaskClaim") return yield* sourceRejected()

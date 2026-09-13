@@ -437,7 +437,10 @@ export const validateHermeticQualificationHistory = Effect.fn("HermeticQualifica
   configuration: ProductionRepositoryHostConfiguration,
   snapshot: TraceAtCursor,
   selectedRunId: RunId
-) {
+): Effect.fn.Return<
+  { readonly snapshot: TraceAtCursor; readonly registration: ValidatedHermeticRecordToken },
+  HermeticQualificationSourceRejected
+> {
   const context = yield* contextFor(manifest, configuration, selectedRunId)
   yield* validateHermeticQualificationHistoricalSource(snapshot, context)
   return { snapshot, registration: yield* validatedRecordToken({ _tag: "HistoricalSnapshot", snapshot, version: 1 }) }
