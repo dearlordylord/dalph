@@ -7,6 +7,10 @@ const workflow = await readFile(
   "utf8"
 )
 const ciWorkflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")
+const qualificationResolver = await readFile(
+  new URL("./run-production-live-qualification.mjs", import.meta.url),
+  "utf8"
+)
 const dedicatedFormalJob = workflow.slice(
   workflow.indexOf("  formal-dedicated:\n"),
   workflow.indexOf("  formal-stressed:\n")
@@ -44,7 +48,6 @@ test("dispatch inputs and worker toolchain are exact and immutable", () => {
     "DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED_METADATA",
     "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED_METADATA",
     "setupInstallSeconds",
-    "completeJobSeconds",
     "negativeControls",
     "condition"
   ]) {
@@ -81,6 +84,16 @@ test("formal evidence is captured in dedicated and stressed jobs before one live
   assert.match(workflow, /qualify:production-live/u)
 })
 
+test("successful Actions jobs supply the complete duration after their final uploads", () => {
+  assert.equal((workflow.match(/timeout-minutes: 16/gu) ?? []).length, 2)
+  assert.doesNotMatch(dedicatedFormalJob, /completeJobSeconds|completed-ms/u)
+  assert.doesNotMatch(stressedFormalJob, /completeJobSeconds|completed-ms/u)
+  assert.equal((workflow.match(/const log = "formal\.log"/gu) ?? []).length, 2)
+  assert.match(qualificationResolver, /Date\.parse\(job\.started_at\)/u)
+  assert.match(qualificationResolver, /Date\.parse\(job\.completed_at\)/u)
+  assert.match(qualificationResolver, /completeJobSeconds: \(completed - started\) \/ 1000/u)
+})
+
 test("provider credentials occur only on the one live command and artifacts upload on failure", () => {
   assert.equal((workflow.match(/secrets\.DALPH_LIVE_GITHUB_TOKEN/gu) ?? []).length, 1)
   assert.equal((workflow.match(/secrets\.DALPH_LIVE_CODEX_PROVIDER_CREDENTIAL/gu) ?? []).length, 1)
@@ -88,7 +101,11 @@ test("provider credentials occur only on the one live command and artifacts uplo
   assert.match(workflow, /Run one protected live qualification[\s\S]*?DALPH_LIVE_CODEX_PROVIDER_CREDENTIAL/u)
   assert.doesNotMatch(workflow, /Run one protected live qualification[\s\S]*?^\s+GITHUB_TOKEN:/mu)
   assert.match(workflow, /Upload redacted qualification outputs[\s\S]*?if: always\(\)/u)
-  assert.match(workflow, /qualification\.json\.pre-cleanup/u)
+  const uploadedOutputs = workflow.slice(workflow.indexOf("      - name: Upload redacted qualification outputs\n"))
+  assert.match(uploadedOutputs, /dalph-live-qualification\/qualification\.json/u)
+  assert.match(uploadedOutputs, /dalph-live-publication\/retained-locators\.json/u)
+  assert.doesNotMatch(uploadedOutputs, /qualification\.json\.pre-cleanup/u)
+  assert.doesNotMatch(uploadedOutputs, /manifest\.json/u)
   assert.doesNotMatch(workflow, /retry:/u)
   assert.doesNotMatch(workflow, /continue-on-error:/u)
   assert.doesNotMatch(ciWorkflow, /production-live|qualify:production-live/u)

@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest"
 import {
   createProductionLiveLocalFixture,
   decodeProductionLiveQualificationManifest,
+  productionLiveQualificationBoundaryObservations,
   productionLiveQualificationChronologyIsExact,
+  productionLiveQualificationOperationCounts,
   writeProductionLiveQualificationFailureRetentionReport
 } from "../src/qualification/live-qualification-runtime.js"
 
@@ -110,6 +112,34 @@ describe("#307 production live qualification runtime", () => {
       productionLiveQualificationChronologyIsExact({ ...exact, orderedJournalIndices: [[1], [3], [2], [4]] })
     ).toBe(false)
     expect(productionLiveQualificationChronologyIsExact({ ...exact, completedDispositionCount: 0 })).toBe(false)
+  })
+
+  it("records every final controller reread and Responses Git call as ordered per-operation evidence", () => {
+    const boundaries = productionLiveQualificationBoundaryObservations(3, { executor: 2, integrator: 2 })
+    expect(boundaries).toEqual({
+      shippedGithub: ["GraphqlRequest", "GraphqlRequest", "GraphqlRequest"],
+      responses: [
+        "ExecutorRequest",
+        "ExecutorRequest",
+        "ExecutorGitReadHead",
+        "IntegratorRequest",
+        "IntegratorRequest",
+        "IntegratorGitReadHead"
+      ],
+      controllerFinal: ["GitReadTargetHead", "TaskTrackerReadGraph", "TaskTrackerReadClaim"],
+      process: ["Spawn", "Exit"]
+    })
+    expect(productionLiveQualificationOperationCounts(["Read", "Read"], ["RunSelected"], boundaries)).toEqual(
+      expect.arrayContaining([
+        { tag: "JournalEvent.Read", count: 2 },
+        { tag: "ShippedGithub.GraphqlRequest", count: 3 },
+        { tag: "Responses.ExecutorGitReadHead", count: 1 },
+        { tag: "Responses.IntegratorGitReadHead", count: 1 },
+        { tag: "ControllerFinal.GitReadTargetHead", count: 1 },
+        { tag: "ControllerFinal.TaskTrackerReadGraph", count: 1 },
+        { tag: "ControllerFinal.TaskTrackerReadClaim", count: 1 }
+      ])
+    )
   })
 
   it("creates one local repository H, one configuration, and one isolated Codex home", async () => {

@@ -25,6 +25,7 @@ export const formalQualificationJobNames = Object.freeze({
 const exactSha = /^[0-9a-f]{40}$/u
 const repository = /^[^\s/]+\/[^\s/]+$/u
 const positiveInteger = /^[1-9][0-9]*$/u
+const hostedFormalJobLimitSeconds = 16 * 60
 const secretEnvironmentNames = new Set(["GITHUB_TOKEN", "DALPH_LIVE_GITHUB_TOKEN", "DALPH_CODEX_PROVIDER_CREDENTIAL"])
 const secretEnvironmentPattern = /(TOKEN|SECRET|CREDENTIAL|PASSWORD|PRIVATE_KEY)/iu
 
@@ -138,13 +139,6 @@ const readJsonObject = async (path, name) => {
   return value
 }
 
-const exactAbsoluteInput = (value, name) => {
-  if (typeof value !== "string" || !nodePath.isAbsolute(value) || nodePath.normalize(value) !== value) {
-    throw new Error(`qualification input ${name} must be a normalized absolute path`)
-  }
-  return value
-}
-
 const githubRunInputs = (environment) => ({
   repository: valueOf(environment, "GITHUB_REPOSITORY"),
   runAttempt: positiveSafeInteger(
@@ -203,16 +197,11 @@ const readFormalProfileMetadata = async ({ environment, kind, logPath, metadataP
   if (typeof metadata.nodeVersion !== "string" || !/^24\.20\.\d+$/u.test(metadata.nodeVersion)) {
     throw new Error(`${kind} formal provenance Node version is unsupported`)
   }
-  const metadataLog = exactAbsoluteInput(metadata.log, `${kind} formal log locator`)
-  if (nodePath.basename(metadataLog) !== nodePath.basename(logPath)) {
-    throw new Error(`${kind} formal provenance log locator is not the downloaded log`)
+  if (metadata.log !== "formal.log" || nodePath.basename(logPath) !== metadata.log) {
+    throw new Error(`${kind} formal provenance log name is not the downloaded formal log`)
   }
   const setupInstallSeconds = nonnegativeSeconds(metadata.setupInstallSeconds, `${kind} setup/install duration`)
-  const completeJobSeconds = nonnegativeSeconds(metadata.completeJobSeconds, `${kind} complete-job duration`)
   const formalSeconds = nonnegativeSeconds(metadata.formalSeconds, `${kind} formal duration`)
-  if (completeJobSeconds < setupInstallSeconds) {
-    throw new Error(`${kind} complete-job duration cannot precede setup/install completion`)
-  }
   if (
     !Array.isArray(metadata.negativeControls) ||
     metadata.negativeControls.length === 0 ||
@@ -223,7 +212,6 @@ const readFormalProfileMetadata = async ({ environment, kind, logPath, metadataP
   await requireReadableFile(logPath, `${kind} formal evidence`)
   return {
     condition,
-    completeJobSeconds,
     formalSeconds,
     log: logPath,
     negativeControls: metadata.negativeControls,
@@ -292,17 +280,35 @@ const resolveFormalJob = (jobs, kind, runId, runAttempt) => {
   if (job.status !== "completed" || job.conclusion !== "success") {
     throw new Error(`${kind} formal Actions job did not complete successfully`)
   }
-  return { id: positiveSafeInteger(job.id, `${kind} formal Actions job ID`), name }
+  if (typeof job.started_at !== "string" || typeof job.completed_at !== "string") {
+    throw new Error(`${kind} formal Actions job timestamps are invalid`)
+  }
+  const started = Date.parse(job.started_at)
+  const completed = Date.parse(job.completed_at)
+  if (!Number.isFinite(started) || !Number.isFinite(completed) || completed < started) {
+    throw new Error(`${kind} formal Actions job timestamps are invalid`)
+  }
+  return {
+    completeJobSeconds: (completed - started) / 1000,
+    id: positiveSafeInteger(job.id, `${kind} formal Actions job ID`),
+    name
+  }
 }
 
 const enrichFormalMetadata = async ({ environment, job, kind, logPath, metadataPath }) => {
   const profile = await readFormalProfileMetadata({ environment, kind, logPath, metadataPath })
+  if (
+    job.completeJobSeconds < profile.setupInstallSeconds + profile.formalSeconds ||
+    job.completeJobSeconds >= hostedFormalJobLimitSeconds
+  ) {
+    throw new Error(`${kind} formal Actions job duration does not satisfy the hosted timing contract`)
+  }
   const enriched = {
     condition: profile.condition,
-    completeJobSeconds: profile.completeJobSeconds,
+    completeJobSeconds: job.completeJobSeconds,
     formalSeconds: profile.formalSeconds,
     job: { jobId: job.id, runId: profile.runId, workflow: "Production live qualification" },
-    log: profile.log,
+    log: "formal.log",
     negativeControls: profile.negativeControls,
     nodeVersion: profile.nodeVersion,
     profile: profile.profile,
@@ -332,6 +338,7 @@ const suppliedFormalProfile = async ({ environment, kind, logPath, metadataPath 
   }
   const jobId = positiveSafeInteger(job.jobId, `${kind} formal Actions job ID`)
   const jobRunId = positiveSafeInteger(job.runId, `${kind} formal Actions run ID`)
+  const completeJobSeconds = nonnegativeSeconds(metadata.completeJobSeconds, `${kind} complete-job duration`)
   if (jobRunId !== profile.runId) {
     throw new Error(`${kind} formal provenance Actions run does not match the current attempt`)
   }
@@ -343,7 +350,7 @@ const suppliedFormalProfile = async ({ environment, kind, logPath, metadataPath 
   }
   return {
     condition: profile.condition,
-    completeJobSeconds: profile.completeJobSeconds,
+    completeJobSeconds,
     formalSeconds: profile.formalSeconds,
     job: { jobId, runId: jobRunId, workflow: job.workflow },
     log,

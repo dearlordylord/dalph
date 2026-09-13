@@ -85,10 +85,6 @@ jobs:
           echo "DALPH_FORMAL_EFFECTIVE_PARALLELISM=$effective_parallelism" >> "$GITHUB_ENV"
           pnpm check:ci:formal 2>&1 | tee "$DALPH_FORMAL_EVIDENCE_DIR/formal.log"
 
-      - name: Record formal completion timing
-        if: always()
-        run: date +%s%3N > "$DALPH_FORMAL_EVIDENCE_DIR/completed-ms"
-
       - name: Record dedicated formal provenance
         if: always()
         env:
@@ -100,19 +96,17 @@ jobs:
           const timing = (name) => Number(readFileSync(`${process.env.DALPH_FORMAL_EVIDENCE_DIR}/${name}`, "utf8"))
           const started = timing("started-ms")
           const installed = timing("install-complete-ms")
-          const completed = timing("completed-ms")
           const setupInstallSeconds = (installed - started) / 1000
-          const completeJobSeconds = (completed - started) / 1000
-          if (![started, installed, completed].every(Number.isFinite) || setupInstallSeconds < 0 || completeJobSeconds < setupInstallSeconds) {
+          if (![started, installed].every(Number.isFinite) || setupInstallSeconds < 0) {
             throw new Error("formal timing markers are not monotonic")
           }
-          const log = `${process.env.DALPH_FORMAL_EVIDENCE_DIR}/formal.log`
+          const log = "formal.log"
           const parsed = parseProfileLog({
             id: process.env.GITHUB_JOB,
             node: process.version,
             repeat: "1",
             installSeconds: String(setupInstallSeconds),
-            log: readFileSync(log, "utf8"),
+            log: readFileSync(`${process.env.DALPH_FORMAL_EVIDENCE_DIR}/${log}`, "utf8"),
             sourcePath: log
           })
           const fields = {
@@ -131,7 +125,6 @@ jobs:
             jobName: process.env.GITHUB_JOB,
             log,
             setupInstallSeconds,
-            completeJobSeconds,
             formalSeconds: parsed.formalSeconds,
             negativeControls: parsed.commands
               .filter(({ name }) => name.includes("negative mutation profile") || name.includes("temporal mutant"))
@@ -210,10 +203,6 @@ jobs:
           echo "DALPH_FORMAL_EFFECTIVE_PARALLELISM=$effective_parallelism" >> "$GITHUB_ENV"
           taskset --cpu-list "$DALPH_FORMAL_STRESS_CPU_LIST" pnpm check:ci:formal 2>&1 | tee "$DALPH_FORMAL_EVIDENCE_DIR/formal.log"
 
-      - name: Record formal completion timing
-        if: always()
-        run: date +%s%3N > "$DALPH_FORMAL_EVIDENCE_DIR/completed-ms"
-
       - name: Record stressed formal provenance
         if: always()
         env:
@@ -225,19 +214,17 @@ jobs:
           const timing = (name) => Number(readFileSync(`${process.env.DALPH_FORMAL_EVIDENCE_DIR}/${name}`, "utf8"))
           const started = timing("started-ms")
           const installed = timing("install-complete-ms")
-          const completed = timing("completed-ms")
           const setupInstallSeconds = (installed - started) / 1000
-          const completeJobSeconds = (completed - started) / 1000
-          if (![started, installed, completed].every(Number.isFinite) || setupInstallSeconds < 0 || completeJobSeconds < setupInstallSeconds) {
+          if (![started, installed].every(Number.isFinite) || setupInstallSeconds < 0) {
             throw new Error("formal timing markers are not monotonic")
           }
-          const log = `${process.env.DALPH_FORMAL_EVIDENCE_DIR}/formal.log`
+          const log = "formal.log"
           const parsed = parseProfileLog({
             id: process.env.GITHUB_JOB,
             node: process.version,
             repeat: "1",
             installSeconds: String(setupInstallSeconds),
-            log: readFileSync(log, "utf8"),
+            log: readFileSync(`${process.env.DALPH_FORMAL_EVIDENCE_DIR}/${log}`, "utf8"),
             sourcePath: log
           })
           const fields = {
@@ -258,7 +245,6 @@ jobs:
             jobName: process.env.GITHUB_JOB,
             log,
             setupInstallSeconds,
-            completeJobSeconds,
             formalSeconds: parsed.formalSeconds,
             negativeControls: parsed.commands
               .filter(({ name }) => name.includes("negative mutation profile") || name.includes("temporal mutant"))
@@ -380,8 +366,6 @@ jobs:
           name: production-live-qualification-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/dalph-live-qualification/qualification.json
-            ${{ runner.temp }}/dalph-live-qualification/qualification.json.pre-cleanup
             ${{ runner.temp }}/dalph-live-publication/retained-locators.json
-            ${{ runner.temp }}/dalph-live-qualification/manifest.json
           if-no-files-found: warn
           retention-days: 30

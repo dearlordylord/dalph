@@ -16,12 +16,12 @@ import {
   JournalPosition,
   TargetPromotionRequestId
 } from "@dalph/orchestrator"
-import { Effect, HashSet, Schema, type Crypto, type FileSystem } from "effect"
+import { Effect, HashSet, Schema, type Crypto, FileSystem } from "effect"
 import { CodexProcessIdentity } from "../application/codex-attempt-store.js"
 import { ProductionCliRecord } from "../application/production-cli.js"
 import {
+  QualificationArtifactLocator,
   qualificationTranscriptDigest,
-  type QualificationArtifactLocator,
   type QualificationPublicationContainer,
   writeQualificationArtifact
 } from "./qualification-artifact.js"
@@ -30,6 +30,12 @@ import { QualificationBuild, RequiredQualificationFormalProvenance } from "./qua
 /** Identifies one operator-approved live qualification invocation, not a hermetic fixture. */
 export const LiveQualificationInvocationId = Schema.NonEmptyString.pipe(Schema.brand("LiveQualificationInvocationId"))
 export type LiveQualificationInvocationId = typeof LiveQualificationInvocationId.Type
+
+/** Wall-clock observation made by the protected controller, encoded as canonical UTC ISO milliseconds. */
+export const LiveQualificationObservedTimestamp = Schema.String.check(
+  Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u)
+).pipe(Schema.brand("LiveQualificationObservedTimestamp"))
+export type LiveQualificationObservedTimestamp = typeof LiveQualificationObservedTimestamp.Type
 
 /** Identifies the protected GitHub Actions workflow that admitted the live provider mutations. */
 export const GithubActionsWorkflowName = Schema.NonEmptyString.pipe(Schema.brand("GithubActionsWorkflowName"))
@@ -62,20 +68,41 @@ const liveQualificationOccurrenceTags = [
 ] as const
 const LiveQualificationOccurrenceTag = Schema.Literals(liveQualificationOccurrenceTags)
 
-const liveQualificationBoundaryTags = [
-  "TaskTracker",
-  "Git",
-  "Journal",
-  "EvidenceStore",
-  "Executor",
-  "Integrator",
-  "TargetPromotion",
-  "TaskCompletion",
-  "PublicOutput",
-  "Responses",
-  "Process"
+const responsesBoundaryTags = [
+  "ExecutorRequest",
+  "ExecutorRequest",
+  "ExecutorGitReadHead",
+  "IntegratorRequest",
+  "IntegratorRequest",
+  "IntegratorGitReadHead"
 ] as const
-const LiveQualificationBoundaryTag = Schema.Literals(liveQualificationBoundaryTags)
+const ResponsesBoundaryTag = Schema.Literals([
+  "ExecutorRequest",
+  "ExecutorGitReadHead",
+  "IntegratorRequest",
+  "IntegratorGitReadHead"
+])
+const ControllerFinalBoundaryTags = Schema.Tuple([
+  Schema.Literal("GitReadTargetHead"),
+  Schema.Literal("TaskTrackerReadGraph"),
+  Schema.Literal("TaskTrackerReadClaim")
+])
+const ProcessBoundaryTags = Schema.Tuple([Schema.Literal("Spawn"), Schema.Literal("Exit")])
+
+const ExactResponsesBoundaryTags = Schema.NonEmptyArray(ResponsesBoundaryTag).check(
+  Schema.makeFilter((tags) =>
+    tags.length === responsesBoundaryTags.length && tags.every((tag, index) => tag === responsesBoundaryTags[index])
+      ? undefined
+      : "Responses boundary tags must contain the exact request and Git-read chronology"
+  )
+)
+
+const OperationCount = Schema.Struct({ tag: Schema.NonEmptyString, count: Schema.Int.check(Schema.isGreaterThan(0)) })
+const OperationCounts = Schema.NonEmptyArray(OperationCount).check(
+  Schema.makeFilter((counts) =>
+    uniqueBy(counts, ({ tag }) => tag) ? undefined : "operation counts must contain each observed operation once"
+  )
+)
 
 const uniqueBy = <A>(values: ReadonlyArray<A>, key: (value: A) => string): boolean => {
   let keys = HashSet.empty<string>()
@@ -133,18 +160,6 @@ const DeliveryEvidence = Schema.Struct({
   )
 )
 
-const BoundaryCalls = Schema.NonEmptyArray(
-  Schema.Struct({ tag: LiveQualificationBoundaryTag, count: Schema.Int.check(Schema.isGreaterThan(0)) })
-).check(
-  Schema.makeFilter((calls) =>
-    uniqueBy(calls, ({ tag }) => tag) &&
-    calls.length === liveQualificationBoundaryTags.length &&
-    liveQualificationBoundaryTags.every((tag) => calls.some((call) => call.tag === tag))
-      ? undefined
-      : "boundary call tags must contain every exact observed source once"
-  )
-)
-
 export const LiveCodexAppServerProcessIdentity = CodexProcessIdentity.check(
   Schema.makeFilter((identity) =>
     /^linux:\d+:pid:\d+$/u.test(identity)
@@ -175,8 +190,11 @@ const QualificationCleanup = Schema.TaggedUnion({ Pending: {}, Completed: Succes
 
 const productionLiveQualificationEvidenceFields = {
   schemaVersion: Schema.Literal(1),
+  scenario: Schema.Literal("ProductionHappy"),
   mode: Schema.Literal("Live"),
   invocationId: LiveQualificationInvocationId,
+  startedAt: LiveQualificationObservedTimestamp,
+  endedAt: LiveQualificationObservedTimestamp,
   build: QualificationBuild,
   hosted: GithubActionsHostedProvenance,
   formal: RequiredQualificationFormalProvenance,
@@ -193,9 +211,22 @@ const productionLiveQualificationEvidenceFields = {
   delivery: DeliveryEvidence,
   journal: Schema.Struct({
     positions: Schema.NonEmptyArray(JournalPosition),
-    occurrences: ExactLiveQualificationOccurrences
+    occurrences: ExactLiveQualificationOccurrences,
+    orderedEventTags: Schema.NonEmptyArray(Schema.NonEmptyString)
+  }).check(
+    Schema.makeFilter((journal) =>
+      journal.positions.length === journal.orderedEventTags.length
+        ? undefined
+        : "each observed journal position must have one ordered event tag"
+    )
+  ),
+  orderedBoundaryTags: Schema.Struct({
+    shippedGithub: Schema.NonEmptyArray(Schema.Literal("GraphqlRequest")),
+    responses: ExactResponsesBoundaryTags,
+    controllerFinal: ControllerFinalBoundaryTags,
+    process: ProcessBoundaryTags
   }),
-  boundaryCalls: BoundaryCalls,
+  operationCounts: OperationCounts,
   publicRecords: Schema.Struct({ values: Schema.NonEmptyArray(NormalRunProductionCliRecord), digest: EvidenceDigest }),
   final: Schema.Struct({
     tracker: Schema.Struct({ lifecycle: Schema.Literal("Completed"), claims: Schema.Tuple([]) }),
@@ -245,13 +276,26 @@ export const ProductionLiveQualificationEvidence: Schema.Codec<
     if (evidence.final.run.runId !== evidence.delivery.runId) {
       return "live qualification finality must belong to the delivered Run"
     }
+    if (evidence.startedAt > evidence.endedAt) {
+      return "live qualification observations must end at or after they start"
+    }
     if (evidence.composition.applicationServerProcessIdentities.length !== 1) {
       return "live qualification must observe exactly one Codex app-server process identity"
     }
-    const publicOutput = evidence.boundaryCalls.find(({ tag }) => tag === "PublicOutput")
-    const process = evidence.boundaryCalls.find(({ tag }) => tag === "Process")
-    if (publicOutput?.count !== evidence.publicRecords.values.length || process?.count !== 1) {
-      return "public-output and process counts must match the observed transcript and one child exit"
+    const expectedCounts = new Map<string, number>()
+    const observe = (tag: string) => expectedCounts.set(tag, (expectedCounts.get(tag) ?? 0) + 1)
+    evidence.journal.orderedEventTags.forEach((tag) => observe(`JournalEvent.${tag}`))
+    evidence.publicRecords.values.forEach(({ _tag }) => observe(`PublicRecord.${_tag}`))
+    evidence.orderedBoundaryTags.shippedGithub.forEach((tag) => observe(`ShippedGithub.${tag}`))
+    evidence.orderedBoundaryTags.responses.forEach((tag) => observe(`Responses.${tag}`))
+    evidence.orderedBoundaryTags.controllerFinal.forEach((tag) => observe(`ControllerFinal.${tag}`))
+    evidence.orderedBoundaryTags.process.forEach((tag) => observe(`Process.${tag}`))
+    const suppliedCounts = new Map(evidence.operationCounts.map(({ count, tag }) => [tag, count]))
+    if (
+      suppliedCounts.size !== expectedCounts.size ||
+      Array.from(expectedCounts).some(([tag, count]) => suppliedCounts.get(tag) !== count)
+    ) {
+      return "operation counts must exactly count every ordered journal, public, Responses, and final-controller observation"
     }
     if (evidence.cleanup._tag === "Pending") return undefined
     if (evidence.cleanup.github.removedIssueNodeId !== evidence.fixture.issueNodeId) {
@@ -299,6 +343,41 @@ const writeValidatedProductionLiveQualificationEvidence = Effect.fn("LiveQualifi
     return evidence
   }
 )
+
+const comparableEvidence = (evidence: ProductionLiveQualificationEvidence) => {
+  const { artifactStage: _artifactStage, cleanup: _cleanup, ...comparable } = evidence
+  return comparable
+}
+
+/** Atomically replaces the exact pre-cleanup artifact after factual cleanup, preserving it if publication fails. */
+const replacePreCleanupWithFinalEvidence = Effect.fn("LiveQualification.replacePreCleanupEvidence")(function* (
+  container: QualificationPublicationContainer,
+  locator: QualificationArtifactLocator,
+  evidence: Extract<ProductionLiveQualificationEvidence, { readonly artifactStage: "Final" }>
+) {
+  const fs = yield* FileSystem.FileSystem
+  const currentSource = yield* fs
+    .readFileString(locator)
+    .pipe(Effect.mapError(() => qualificationFailed("Publication")))
+  const current = yield* Effect.try({
+    try: () => JSON.parse(currentSource),
+    catch: () => qualificationFailed("Publication")
+  }).pipe(Effect.flatMap(makeProductionLiveQualificationEvidence))
+  if (
+    current.artifactStage !== "PreCleanup" ||
+    JSON.stringify(comparableEvidence(current)) !== JSON.stringify(comparableEvidence(evidence))
+  ) {
+    return yield* Effect.fail(qualificationFailed("Publication"))
+  }
+  const encoded = yield* Schema.encodeUnknownEffect(ProductionLiveQualificationEvidence)(evidence).pipe(
+    Effect.mapError(() => qualificationFailed("EvidenceValidation"))
+  )
+  const replacement = QualificationArtifactLocator.make(`${locator}.replacement`)
+  yield* writeQualificationArtifact(container, replacement, JSON.stringify(encoded)).pipe(
+    Effect.mapError(() => qualificationFailed("Publication"))
+  )
+  yield* fs.rename(replacement, locator).pipe(Effect.mapError(() => qualificationFailed("Publication")))
+})
 export type QualificationFailed = typeof QualificationFailed.Type
 
 export const qualificationFailed = (phase: QualificationFailed["phase"]): QualificationFailed =>
@@ -362,7 +441,9 @@ export const publishProductionLiveQualificationEvidence: (
   locator: QualificationArtifactLocator,
   input: unknown
 ) {
-  const evidence = yield* writeValidatedProductionLiveQualificationEvidence("Final", container, locator, input)
+  const evidence = yield* makeProductionLiveQualificationEvidence(input)
+  if (evidence.artifactStage !== "Final") return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
+  yield* replacePreCleanupWithFinalEvidence(container, locator, evidence)
   return { _tag: "Qualified" as const, evidence, artifact: locator }
 })
 

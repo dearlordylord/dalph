@@ -17,7 +17,7 @@ import {
   sqliteJournalStoreLayer
 } from "@dalph/orchestrator"
 import { NodeCrypto } from "@effect/platform-node"
-import { Context, Crypto, Effect, FileSystem, Layer, Option, Redacted, Ref, Schema } from "effect"
+import { Context, Crypto, DateTime, Effect, FileSystem, Layer, Option, Redacted, Ref, Schema } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { ProductionConfigurationLocator } from "../application/production-cli.js"
 import {
@@ -37,6 +37,7 @@ import {
   GithubProtectedEnvironmentName,
   LiveCodexAppServerProcessIdentity,
   LiveQualificationInvocationId,
+  LiveQualificationObservedTimestamp,
   captureProductionLiveQualificationPreCleanupEvidence,
   publishProductionLiveQualificationEvidence,
   qualificationFailed,
@@ -77,6 +78,10 @@ const expectedExecutorTurns = 2
 const expectedIntegratorTurns = 2
 const expectedTotalTurns = 4
 const missingChronologyIndex = -1
+const observeLiveQualificationTimestamp = DateTime.now.pipe(
+  Effect.map(DateTime.formatIso),
+  Effect.flatMap(Schema.decodeUnknownEffect(LiveQualificationObservedTimestamp))
+)
 
 const CompletedLiveGithubObservation = Schema.Struct({
   lifecycle: Schema.Literal("CompletedSuccessfully"),
@@ -362,6 +367,41 @@ interface ProductionLiveQualificationChronologyObservation {
   readonly processStatus: number
 }
 
+/** Ordered calls observed outside the shipped child, including its controlled Responses endpoint. */
+export const productionLiveQualificationBoundaryObservations = (
+  forwardedGithubRequestCount: number,
+  responses: { readonly executor: number; readonly integrator: number }
+) => ({
+  shippedGithub: Array.from({ length: forwardedGithubRequestCount }, () => "GraphqlRequest" as const),
+  responses: [
+    ...Array.from({ length: responses.executor }, () => "ExecutorRequest" as const),
+    "ExecutorGitReadHead" as const,
+    ...Array.from({ length: responses.integrator }, () => "IntegratorRequest" as const),
+    "IntegratorGitReadHead" as const
+  ],
+  controllerFinal: ["GitReadTargetHead", "TaskTrackerReadGraph", "TaskTrackerReadClaim"] as const,
+  process: ["Spawn", "Exit"] as const
+})
+
+/** Counts each concrete observed operation tag; it does not substitute boundary-family aggregates. */
+export const productionLiveQualificationOperationCounts = (
+  journalEventTags: ReadonlyArray<string>,
+  publicRecordTags: ReadonlyArray<string>,
+  boundaries: ReturnType<typeof productionLiveQualificationBoundaryObservations>
+) => {
+  const operationTags = [
+    ...journalEventTags.map((tag) => `JournalEvent.${tag}`),
+    ...publicRecordTags.map((tag) => `PublicRecord.${tag}`),
+    ...boundaries.shippedGithub.map((tag) => `ShippedGithub.${tag}`),
+    ...boundaries.responses.map((tag) => `Responses.${tag}`),
+    ...boundaries.controllerFinal.map((tag) => `ControllerFinal.${tag}`),
+    ...boundaries.process.map((tag) => `Process.${tag}`)
+  ]
+  return Array.from(
+    operationTags.reduce((counts, tag) => counts.set(tag, (counts.get(tag) ?? 0) + 1), new Map<string, number>())
+  ).map(([tag, count]) => ({ tag, count }))
+}
+
 /** Exact chronology rejects a missing, duplicate, reordered, or non-completed source event. */
 export const productionLiveQualificationChronologyIsExact = (
   observation: ProductionLiveQualificationChronologyObservation
@@ -381,7 +421,8 @@ export const productionLiveQualificationChronologyIsExact = (
 /** Derives chronology and call counts only from exact public and owning-boundary observations. */
 export const deriveProductionLiveQualificationEvidenceObservations = (
   completion: ProductionLiveQualificationCompletion,
-  forwardedGithubRequestCount: number
+  forwardedGithubRequestCount: number,
+  responses: { readonly executor: number; readonly integrator: number }
 ) => {
   const journal = completion.facts.journal
   const accepted = journal.flatMap(({ event }, index) =>
@@ -437,22 +478,19 @@ export const deriveProductionLiveQualificationEvidenceObservations = (
   ])
   const observedGitReads = journal.filter(({ event }) => gitObservationTags.has(event._tag)).length
   if (observedGitReads === 0) return Option.none()
+  const journalEventTags = journal.map(({ event }) => event._tag)
+  const orderedBoundaryTags = productionLiveQualificationBoundaryObservations(forwardedGithubRequestCount, responses)
+  const operationCounts = productionLiveQualificationOperationCounts(
+    journalEventTags,
+    completion.records.map(({ _tag }) => _tag),
+    orderedBoundaryTags
+  )
   return Option.some({
     occurrences: liveOccurrenceTags,
+    journalEventTags,
     selectedRunsCompleted: true as const,
-    boundaryCalls: [
-      { tag: "TaskTracker" as const, count: forwardedGithubRequestCount },
-      { tag: "Git" as const, count: observedGitReads },
-      { tag: "Journal" as const, count: journal.length },
-      { tag: "EvidenceStore" as const, count: accepted.length },
-      { tag: "Executor" as const, count: eventIndices(journal, "PlannedAttemptExecutorCommandIntended").length },
-      { tag: "Integrator" as const, count: eventIndices(journal, "IntegratorRunStarted").length },
-      { tag: "TargetPromotion" as const, count: eventIndices(journal, "TargetPromotionAttemptIntended").length },
-      { tag: "TaskCompletion" as const, count: eventIndices(journal, "CompletionTaskAttemptIntended").length },
-      { tag: "PublicOutput" as const, count: completion.records.length },
-      { tag: "Responses" as const, count: final.value.responses.total },
-      { tag: "Process" as const, count: 1 }
-    ]
+    orderedBoundaryTags,
+    operationCounts
   })
 }
 
@@ -467,9 +505,6 @@ const readApplicationServerProcessIdentities = Effect.fn(
   )
 })
 
-export const productionLivePreCleanupArtifactLocator = (artifact: QualificationArtifactLocator) =>
-  QualificationArtifactLocator.make(`${artifact}.pre-cleanup`)
-
 const publishCompletedQualification = Effect.fn("ProductionLiveQualification.publishCompleted")(function* (
   manifest: ProductionLiveQualificationManifest,
   fixture: ProductionLiveLocalFixture,
@@ -477,6 +512,7 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
   forwarder: Effect.Success<ReturnType<typeof makeProductionLiveGithubForwarder>>,
   build: Effect.Success<ReturnType<typeof measureQualificationBuild>>,
   completion: ProductionLiveQualificationCompletion,
+  startedAt: LiveQualificationObservedTimestamp,
   cleanupState: {
     github?: Effect.Success<ReturnType<typeof cleanupProductionLiveGithubFixture>>
     local?: Effect.Success<ReturnType<typeof cleanupProductionLiveFixture>>
@@ -517,7 +553,11 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
   if (Option.isNone(githubFinal) || !responseCounts)
     return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
   const forwardObservation = yield* forwarder.observation
-  const observed = deriveProductionLiveQualificationEvidenceObservations(completion, forwardObservation.requestCount)
+  const observed = deriveProductionLiveQualificationEvidenceObservations(
+    completion,
+    forwardObservation.requestCount,
+    githubFinal.value.responses
+  )
   if (forwardObservation.createdLabels.length === 0 || Option.isNone(observed))
     return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
   const labelResources = forwardObservation.createdLabels.map(({ fingerprint, name, nodeId }) =>
@@ -528,11 +568,17 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
     resources: [...githubFixture.manifest.resources, ...labelResources]
   }
   const publicDigest = yield* qualificationTranscriptDigest(completion.records)
+  const endedAt = yield* observeLiveQualificationTimestamp.pipe(
+    Effect.mapError(() => qualificationFailed("EvidenceValidation"))
+  )
   const evidenceBeforeCleanup = {
     schemaVersion: 1,
     artifactStage: "PreCleanup",
+    scenario: "ProductionHappy",
     mode: "Live",
     invocationId: manifest.invocationId,
+    startedAt,
+    endedAt,
     build,
     hosted: manifest.hosted,
     formal: manifest.formal,
@@ -559,9 +605,11 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
     },
     journal: {
       positions: completion.facts.journal.map(({ position }) => position),
-      occurrences: observed.value.occurrences
+      occurrences: observed.value.occurrences,
+      orderedEventTags: observed.value.journalEventTags
     },
-    boundaryCalls: observed.value.boundaryCalls,
+    orderedBoundaryTags: observed.value.orderedBoundaryTags,
+    operationCounts: observed.value.operationCounts,
     publicRecords: { values: completion.records, digest: publicDigest },
     final: {
       tracker: { lifecycle: "Completed", claims: [] },
@@ -572,7 +620,7 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
   } as const
   yield* captureProductionLiveQualificationPreCleanupEvidence(
     manifest.publicationContainer,
-    productionLivePreCleanupArtifactLocator(manifest.artifact),
+    manifest.artifact,
     evidenceBeforeCleanup
   )
   const cleanupAdapter = yield* makeProductionLiveGithubCleanupAdapter(manifest.invocationId)
@@ -764,6 +812,7 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
   manifest: ProductionLiveQualificationManifest,
   secrets: ProductionLiveQualificationSecrets
 ) {
+  const startedAt = yield* observeLiveQualificationTimestamp
   let githubFixture: GithubFixture | undefined
   let forwarder: GithubForwarder | undefined
   let local: ProductionLiveLocalFixture | undefined
@@ -894,6 +943,7 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
               runningForwarder,
               build,
               completion,
+              startedAt,
               cleanupState
             ).pipe(
               Effect.mapError((failure) =>

@@ -44,6 +44,8 @@ const sessionId = IntegratorSessionId.make("live-integration")
 const runOrdinal = IntegratorRunOrdinal.make(1)
 const promotionRequestId = TargetPromotionRequestId.make("live-promotion")
 const applicationServerIdentity = CodexProcessIdentity.make("linux:307:pid:730")
+const startedAt = "2026-09-13T14:00:00.000Z"
+const endedAt = "2026-09-13T14:05:00.000Z"
 
 const formalProfileFields = (jobId: number) => ({
   sourceSha,
@@ -87,8 +89,11 @@ const validInput = Effect.fn("LiveEvidenceTest.validInput")(function* () {
   return {
     schemaVersion: 1,
     artifactStage: "Final",
+    scenario: "ProductionHappy",
     mode: "Live",
     invocationId: "live-Q",
+    startedAt,
+    endedAt,
     build: {
       sourceSha,
       sourceBaseSha: sha("b"),
@@ -145,20 +150,37 @@ const validInput = Effect.fn("LiveEvidenceTest.validInput")(function* () {
         "TaskCompleted",
         "ClaimsReleased",
         "RunCompleted"
-      ]
+      ],
+      orderedEventTags: ["WorkflowRunBegan", "WorkflowRunTerminated"]
     },
-    boundaryCalls: [
-      { tag: "TaskTracker", count: 1 },
-      { tag: "Git", count: 4 },
-      { tag: "Journal", count: 30 },
-      { tag: "EvidenceStore", count: 1 },
-      { tag: "Executor", count: 1 },
-      { tag: "Integrator", count: 1 },
-      { tag: "TargetPromotion", count: 1 },
-      { tag: "TaskCompletion", count: 1 },
-      { tag: "PublicOutput", count: 2 },
-      { tag: "Responses", count: 4 },
-      { tag: "Process", count: 1 }
+    orderedBoundaryTags: {
+      shippedGithub: ["GraphqlRequest", "GraphqlRequest", "GraphqlRequest"],
+      responses: [
+        "ExecutorRequest",
+        "ExecutorRequest",
+        "ExecutorGitReadHead",
+        "IntegratorRequest",
+        "IntegratorRequest",
+        "IntegratorGitReadHead"
+      ],
+      controllerFinal: ["GitReadTargetHead", "TaskTrackerReadGraph", "TaskTrackerReadClaim"],
+      process: ["Spawn", "Exit"]
+    },
+    operationCounts: [
+      { tag: "JournalEvent.WorkflowRunBegan", count: 1 },
+      { tag: "JournalEvent.WorkflowRunTerminated", count: 1 },
+      { tag: "PublicRecord.RunSelected", count: 1 },
+      { tag: "PublicRecord.RunDisposition", count: 1 },
+      { tag: "ShippedGithub.GraphqlRequest", count: 3 },
+      { tag: "Responses.ExecutorRequest", count: 2 },
+      { tag: "Responses.ExecutorGitReadHead", count: 1 },
+      { tag: "Responses.IntegratorRequest", count: 2 },
+      { tag: "Responses.IntegratorGitReadHead", count: 1 },
+      { tag: "ControllerFinal.GitReadTargetHead", count: 1 },
+      { tag: "ControllerFinal.TaskTrackerReadGraph", count: 1 },
+      { tag: "ControllerFinal.TaskTrackerReadClaim", count: 1 },
+      { tag: "Process.Spawn", count: 1 },
+      { tag: "Process.Exit", count: 1 }
     ],
     publicRecords: { values: records, digest: yield* qualificationTranscriptDigest(records) },
     final: {
@@ -183,11 +205,15 @@ it.effect("Alice can qualify only exact version-one live evidence with no privat
     const input = yield* validInput()
     const evidence = yield* makeProductionLiveQualificationEvidence(input)
     expect(evidence.mode).toBe("Live")
+    expect(evidence.scenario).toBe("ProductionHappy")
+    expect(evidence.startedAt).toBe(startedAt)
+    expect(evidence.endedAt).toBe(endedAt)
     expect(evidence.schemaVersion).toBe(1)
     expect(evidence.delivery).toEqual(input.delivery)
     expect(evidence.delivery).toMatchObject({ targetRef, integration: { sessionId, runOrdinal }, promotionRequestId })
     expect(evidence.journal.occurrences).toEqual(input.journal.occurrences)
-    expect(evidence.boundaryCalls).toEqual(input.boundaryCalls)
+    expect(evidence.orderedBoundaryTags).toEqual(input.orderedBoundaryTags)
+    expect(evidence.operationCounts).toEqual(input.operationCounts)
     expect(evidence.publicRecords.values.every(({ _tag }) => _tag !== "ApplicationExitDisposition")).toBe(true)
     expect(JSON.stringify(evidence)).not.toMatch(/thread|worktree|candidateResource|privateStore/u)
     const rejected = yield* makeProductionLiveQualificationEvidence({
@@ -198,6 +224,39 @@ it.effect("Alice can qualify only exact version-one live evidence with no privat
     expect(rejected).toEqual(qualificationFailed("EvidenceValidation"))
     expect(JSON.stringify(rejected)).not.toContain("secret-response")
   }).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect(
+  "Alice sees complete ordered live observations and exact counts including final rereads and Responses Git calls",
+  () =>
+    Effect.gen(function* () {
+      const input = yield* validInput()
+      for (const changed of [
+        {
+          ...input,
+          orderedBoundaryTags: {
+            ...input.orderedBoundaryTags,
+            responses: [...input.orderedBoundaryTags.responses].reverse()
+          }
+        },
+        {
+          ...input,
+          operationCounts: input.operationCounts.filter(({ tag }) => tag !== "ControllerFinal.TaskTrackerReadClaim")
+        },
+        {
+          ...input,
+          operationCounts: input.operationCounts.map((count) =>
+            count.tag === "Responses.IntegratorGitReadHead" ? { ...count, count: 2 } : count
+          )
+        },
+        { ...input, startedAt: "2026-09-13T14:05:00.000Z", endedAt: "2026-09-13T14:00:00.000Z" },
+        { ...input, startedAt: "not-a-timestamp" }
+      ]) {
+        expect(yield* makeProductionLiveQualificationEvidence(changed).pipe(Effect.flip)).toEqual(
+          qualificationFailed("EvidenceValidation")
+        )
+      }
+    }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
 it.effect("Alice receives only same-source protected hosted and required dedicated plus stressed provenance", () =>
@@ -312,7 +371,7 @@ it.effect(
     }).pipe(Effect.provide(NodeCrypto.layer), Effect.provide(NodeServices.layer))
 )
 
-it.effect("Alice receives one write-once artifact outside Q only after the complete live success validates", () =>
+it.effect("Alice receives one schema-versioned artifact replaced at the same path after factual cleanup", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -321,12 +380,21 @@ it.effect("Alice receives one write-once artifact outside Q only after the compl
       yield* fs.makeDirectory(container)
       const artifact = QualificationArtifactLocator.make(`${root}/live.json`)
       const input = yield* validInput()
+      yield* captureProductionLiveQualificationPreCleanupEvidence(container, artifact, {
+        ...input,
+        artifactStage: "PreCleanup",
+        cleanup: { _tag: "Pending" }
+      })
+      expect(JSON.parse(yield* fs.readFileString(artifact))).toMatchObject({ artifactStage: "PreCleanup" })
       const outcome = yield* publishProductionLiveQualificationEvidence(container, artifact, input)
       expect(outcome._tag).toBe("Qualified")
       expect(yield* fs.exists(artifact)).toBe(true)
-      expect(
-        (yield* publishProductionLiveQualificationEvidence(container, artifact, input).pipe(Effect.flip)).phase
-      ).toBe("Publication")
+      expect(JSON.parse(yield* fs.readFileString(artifact))).toMatchObject({
+        artifactStage: "Final",
+        cleanup: { _tag: "Completed" }
+      })
+      expect(yield* fs.exists(`${artifact}.pre-cleanup`)).toBe(false)
+      expect(yield* fs.exists(`${artifact}.replacement`)).toBe(false)
       const inside = QualificationArtifactLocator.make(`${container}/live.json`)
       expect(
         (yield* publishProductionLiveQualificationEvidence(container, inside, input).pipe(Effect.flip)).phase
@@ -336,28 +404,29 @@ it.effect("Alice receives one write-once artifact outside Q only after the compl
   ).pipe(Effect.provide(NodeCrypto.layer), Effect.provide(NodeServices.layer))
 )
 
-it.effect("pre-cleanup evidence survives a final-artifact publication failure without claiming cleanup", () =>
+it.effect("same-path pre-cleanup evidence survives a mismatched final replacement without claiming cleanup", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-live-two-phase-" })
       const container = QualificationPublicationContainer.make(`${root}/Q`)
       yield* fs.makeDirectory(container)
-      const preCleanup = QualificationArtifactLocator.make(`${root}/live.pre-cleanup.json`)
-      const final = QualificationArtifactLocator.make(`${root}/live.json`)
+      const artifact = QualificationArtifactLocator.make(`${root}/live.json`)
       const input = yield* validInput()
-      const captured = yield* captureProductionLiveQualificationPreCleanupEvidence(container, preCleanup, {
+      const captured = yield* captureProductionLiveQualificationPreCleanupEvidence(container, artifact, {
         ...input,
         artifactStage: "PreCleanup",
         cleanup: { _tag: "Pending" }
       })
       expect(captured.evidence.cleanup).toEqual({ _tag: "Pending" })
-      yield* fs.writeFileString(final, "occupied\n")
-      expect((yield* publishProductionLiveQualificationEvidence(container, final, input).pipe(Effect.flip)).phase).toBe(
-        "Publication"
-      )
-      expect(yield* fs.exists(preCleanup)).toBe(true)
-      expect(JSON.parse(yield* fs.readFileString(preCleanup))).toMatchObject({
+      expect(
+        (yield* publishProductionLiveQualificationEvidence(container, artifact, {
+          ...input,
+          endedAt: "2026-09-13T14:06:00.000Z"
+        }).pipe(Effect.flip)).phase
+      ).toBe("Publication")
+      expect(yield* fs.exists(artifact)).toBe(true)
+      expect(JSON.parse(yield* fs.readFileString(artifact))).toMatchObject({
         artifactStage: "PreCleanup",
         cleanup: { _tag: "Pending" }
       })

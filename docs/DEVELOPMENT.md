@@ -372,13 +372,18 @@ invokes this command.
 
 Two preceding jobs capture dedicated and stressed formal evidence independently
 with `pnpm check:ci:formal`; their logs and provenance files are downloaded by
-the approved job. Each formal job records truthful setup/install and complete-job
-durations and derives its ordered negative-control names from the validated log.
+the approved job. Each formal job records its setup/install duration and derives
+its ordered negative-control names from the validated log. Its uploaded provenance
+names only the relative `formal.log`, never the worker's absolute log or home path.
 Before the live command, the approved job uses the current repository's
 automatic Actions token (`GITHUB_TOKEN`, with only `actions: read`) to resolve
 exactly one successful numeric Actions job ID for each formal job in this run
-attempt. That token is used only for this read; it is not the disposable
-repository credential.
+attempt. It derives each complete-job duration from that successful Actions
+job's `started_at` and `completed_at`; unlike a timestamp written by the formal
+job itself, this interval covers provenance generation and the final formal
+artifact upload. The literal 16-minute job timeout and this resolved duration
+prove the complete-job limit. That token is used only for this read; it is not
+the disposable repository credential.
 
 The checked-in controller receives the downloaded evidence locators, the
 candidate-bound source SHA, branded workflow/run/job/protected-environment
@@ -432,11 +437,14 @@ or resume path. A failed or ambiguous provider boundary therefore leaves the
 Run and exact retained locators for manual inspection rather than launching a
 second command.
 
-The final step uploads `qualification.json`, `retained-locators.json`, and the
-manifest locator with `if: always()`, so a successful result and a failed live
-attempt have the same explicit artifact boundary. The artifact must contain no
-credential, raw environment, provider-private session, prompt, response, or
-raw Actions API payload. The disposable-repository secret remains named
+The final step uploads only `qualification.json` and `retained-locators.json`
+with `if: always()`, so a successful result and a failed live attempt use the
+same explicit redacted artifact boundary. It does not upload the controller
+manifest or a pre-cleanup snapshot: those contain private absolute workspace or
+temporary locators and are local controller inputs, not publication artifacts.
+The uploaded artifact must contain no credential, raw environment,
+provider-private session, prompt, response, raw Actions API payload, or private
+absolute workspace/home locator. The disposable-repository secret remains named
 `DALPH_LIVE_GITHUB_TOKEN` until the runtime maps it to the shipped child’s
 `GITHUB_TOKEN` boundary.
 
@@ -444,9 +452,10 @@ The focused contract mapping is:
 
 | Scenario | Acceptance test |
 | --- | --- |
-| Alice's approved workflow is manually dispatched with exact candidate/Base inputs, one serialized lane, Node 24.20.0, build, and dedicated/stressed evidence | `scripts/production-live-qualification-workflow.test.mjs` structural workflow cases |
+| Alice's approved workflow is manually dispatched with exact candidate/Base inputs, one serialized lane, Node 24.20.0, build, and dedicated/stressed evidence; GitHub's successful whole-job timestamps prove each job finishes below its 16-minute cutoff after its final upload | `scripts/production-live-qualification-workflow.test.mjs` whole-job structural case; `scripts/run-production-live-qualification.test.mjs` successful timestamp derivation and 16-minute rejection cases |
 | The command rejects missing opt-in, malformed inputs, or a changed candidate before any provider child starts | `scripts/run-production-live-qualification.test.mjs` validation cases |
 | The built controller receives one manifest locator and secrets only through one child launch | `scripts/run-production-live-qualification.test.mjs` exact launch case |
+| Uploaded formal provenance and live failure evidence disclose no private absolute worker/controller locator | `scripts/run-production-live-qualification.test.mjs` absolute formal-log rejection case; `scripts/production-live-qualification-workflow.test.mjs` manifest/pre-cleanup exclusion case |
 | A child/provider failure is reported without a retry and without secret bytes in the wrapper error | `scripts/run-production-live-qualification.test.mjs` single-launch failure case and workflow artifact `if: always()` contract |
 
 ### Disposable production repository walkthrough

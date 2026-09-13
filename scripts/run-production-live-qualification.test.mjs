@@ -26,9 +26,9 @@ const fixture = async () => {
   await writeFile(shippedEntry, "#!/usr/bin/env node\n")
   const formal = {}
   for (const name of ["dedicated", "stressed"]) {
-    formal[name] = join(root, "formal", `${name}.log`)
-    formal[`${name}Metadata`] = join(root, "formal", `${name}.json`)
-    await mkdir(join(root, "formal"), { recursive: true })
+    formal[name] = join(root, "formal", name, "formal.log")
+    formal[`${name}Metadata`] = join(root, "formal", name, "provenance.json")
+    await mkdir(join(root, "formal", name), { recursive: true })
     await writeFile(formal[name], `${name} formal evidence\n`)
     await writeFile(
       formal[`${name}Metadata`],
@@ -51,9 +51,8 @@ const fixture = async () => {
         runId: 701,
         runAttempt: 1,
         jobName: `formal-${name}`,
-        log: formal[name],
+        log: "formal.log",
         setupInstallSeconds: 12,
-        completeJobSeconds: 120,
         formalSeconds: 108,
         negativeControls: ["formal negative control"]
       })}\n`
@@ -159,6 +158,17 @@ const environmentFor = (f, overrides = {}) => ({
   DALPH_LIVE_GITHUB_TOKEN: "github-secret",
   DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret",
   ...overrides
+})
+
+const completedFormalJob = (id, name, completeJobSeconds = 120) => ({
+  id,
+  name,
+  run_id: 701,
+  run_attempt: 1,
+  status: "completed",
+  conclusion: "success",
+  started_at: "2026-09-13T12:00:00Z",
+  completed_at: new Date(Date.parse("2026-09-13T12:00:00Z") + completeJobSeconds * 1000).toISOString()
 })
 
 afterEach(async () => {
@@ -322,23 +332,8 @@ test("resolves unique numeric formal job IDs and enriches only safe profile fiel
   const environment = { ...environmentFor(f), GITHUB_TOKEN: "github-secret" }
   const apiPayload = {
     jobs: [
-      {
-        id: 812,
-        name: "Dedicated formal evidence",
-        run_id: 701,
-        run_attempt: 1,
-        status: "completed",
-        conclusion: "success",
-        rawPayloadSecret: "must-not-be-written"
-      },
-      {
-        id: 813,
-        name: "Stressed formal evidence",
-        run_id: 701,
-        run_attempt: 1,
-        status: "completed",
-        conclusion: "success"
-      }
+      { ...completedFormalJob(812, "Dedicated formal evidence"), rawPayloadSecret: "must-not-be-written" },
+      completedFormalJob(813, "Stressed formal evidence")
     ]
   }
   let request
@@ -352,8 +347,8 @@ test("resolves unique numeric formal job IDs and enriches only safe profile fiel
   })
 
   assert.deepEqual(result, {
-    dedicated: { id: 812, name: "Dedicated formal evidence" },
-    stressed: { id: 813, name: "Stressed formal evidence" }
+    dedicated: { completeJobSeconds: 120, id: 812, name: "Dedicated formal evidence" },
+    stressed: { completeJobSeconds: 120, id: 813, name: "Stressed formal evidence" }
   })
   assert.match(request.url, /\/actions\/runs\/701\/attempts\/1\/jobs\?per_page=100$/u)
   assert.equal(request.options.headers.Authorization, "Bearer github-secret")
@@ -364,6 +359,7 @@ test("resolves unique numeric formal job IDs and enriches only safe profile fiel
     assert.equal(metadata.job.workflow, "Production live qualification")
     assert.equal(metadata.setupInstallSeconds, 12)
     assert.equal(metadata.completeJobSeconds, 120)
+    assert.equal(metadata.log, "formal.log")
     assert.equal(metadata.profile, name)
     assert.equal(metadata.condition.kind, name === "dedicated" ? "dedicated-hosted-job" : "cpu-affinity")
     if (name === "stressed") {
@@ -373,6 +369,7 @@ test("resolves unique numeric formal job IDs and enriches only safe profile fiel
     }
     assert.equal(metadata.rawPayloadSecret, undefined)
     assert.equal(JSON.stringify(metadata).includes("must-not-be-written"), false)
+    assert.equal(JSON.stringify(metadata).includes(f.root), false)
   }
 })
 
@@ -434,11 +431,9 @@ test("fails closed for duplicate or nonnumeric formal Actions job identities", a
   }
 })
 
-test("rejects an unbounded formal timing input before enriching its job", async () => {
+test("rejects an Actions-reported formal job duration at the 16-minute cutoff", async () => {
   const f = await fixture()
   const environment = { ...environmentFor(f), GITHUB_TOKEN: "github-secret" }
-  const metadata = JSON.parse(await readFile(f.formal.dedicatedMetadata, "utf8"))
-  await writeFile(f.formal.dedicatedMetadata, `${JSON.stringify({ ...metadata, completeJobSeconds: 11 })}\n`)
   await assert.rejects(
     resolveFormalQualificationJobs({
       environment,
@@ -447,26 +442,36 @@ test("rejects an unbounded formal timing input before enriching its job", async 
         status: 200,
         json: async () => ({
           jobs: [
-            {
-              id: 812,
-              name: "Dedicated formal evidence",
-              run_id: 701,
-              run_attempt: 1,
-              status: "completed",
-              conclusion: "success"
-            },
-            {
-              id: 813,
-              name: "Stressed formal evidence",
-              run_id: 701,
-              run_attempt: 1,
-              status: "completed",
-              conclusion: "success"
-            }
+            completedFormalJob(812, "Dedicated formal evidence", 960),
+            completedFormalJob(813, "Stressed formal evidence")
           ]
         })
       })
-    })
+    }),
+    /Actions job duration does not satisfy the hosted timing contract/u
+  )
+})
+
+test("rejects an absolute formal log path from uploaded provenance", async () => {
+  const f = await fixture()
+  const environment = { ...environmentFor(f), GITHUB_TOKEN: "github-secret" }
+  const metadata = JSON.parse(await readFile(f.formal.dedicatedMetadata, "utf8"))
+  await writeFile(f.formal.dedicatedMetadata, `${JSON.stringify({ ...metadata, log: f.formal.dedicated })}\n`)
+  await assert.rejects(
+    resolveFormalQualificationJobs({
+      environment,
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          jobs: [
+            completedFormalJob(812, "Dedicated formal evidence"),
+            completedFormalJob(813, "Stressed formal evidence")
+          ]
+        })
+      })
+    }),
+    /formal provenance log name is not the downloaded formal log/u
   )
 })
 
@@ -492,22 +497,8 @@ test("rejects mislabeled or non-constraining formal profile conditions", async (
           status: 200,
           json: async () => ({
             jobs: [
-              {
-                id: 812,
-                name: "Dedicated formal evidence",
-                run_id: 701,
-                run_attempt: 1,
-                status: "completed",
-                conclusion: "success"
-              },
-              {
-                id: 813,
-                name: "Stressed formal evidence",
-                run_id: 701,
-                run_attempt: 1,
-                status: "completed",
-                conclusion: "success"
-              }
+              completedFormalJob(812, "Dedicated formal evidence"),
+              completedFormalJob(813, "Stressed formal evidence")
             ]
           })
         })
