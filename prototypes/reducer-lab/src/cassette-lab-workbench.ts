@@ -2057,7 +2057,7 @@ export const renderCassetteDeliveryWorkbench = (
   const renderContents = (): void => {
     const moments = observationMomentsFrom(currentState)
     const preparedTrace = productionPreparedTraceFrom(currentState)
-    const shouldReplaceTraceHistory = preparedTrace !== null && preparedTrace !== renderedPreparedTrace
+    const shouldReplaceTraceHistory = preparedTrace !== renderedPreparedTrace
     if (shouldReplaceTraceHistory) {
       historicalTraceHost.replaceChildren()
       traceHistory = undefined

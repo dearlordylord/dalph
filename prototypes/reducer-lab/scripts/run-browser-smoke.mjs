@@ -24,7 +24,7 @@ try {
     throw new Error("Reducer Lab browser check could not determine its HTTP port")
   }
   const labUrl = `http://${host}:${address.port}/`
-  const child = spawn(process.execPath, [browserSmoke], {
+  const child = spawn(process.execPath, [browserSmoke, ...process.argv.slice(2)], {
     cwd: labRoot,
     env: { ...process.env, REDUCER_LAB_URL: labUrl },
     stdio: "inherit"
