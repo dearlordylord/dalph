@@ -1,7 +1,7 @@
 /**
  * Mutation analysis of the gated Quint models under specs/.
  *
- *   node mutate-specs.mjs [--spec <name>] [--samples 20000] [--steps 20]
+ *   node scripts/quint-mutate-specs.mjs [--spec <name>] [--samples 20000] [--steps 20]
  *     [--seed 31337] [--max-mutants <count>]
  *
  * For each spec it perturbs the *model* -- actions, init, and the derivations
@@ -24,7 +24,7 @@ import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { promisify } from "node:util"
 
-import { applicationExitMutationRegistry } from "../../scripts/application-exit-model-registry.mjs"
+import { applicationExitMutationRegistry } from "./application-exit-model-registry.mjs"
 import {
   acceptedResultIntegrationObligations,
   freshTaskAdmissionObligations,
@@ -32,7 +32,7 @@ import {
   runCancellationObligations,
   runActivationObligations,
   taskFactReconciliationObligations
-} from "../../scripts/quint-model-obligations.mjs"
+} from "./quint-model-obligations.mjs"
 
 const run = promisify(execFile)
 
@@ -226,7 +226,13 @@ const generate = (lines, blocked) => {
     for (const operator of OPERATORS) {
       const mutated = operator.apply(line)
       if (mutated === null || mutated === line) continue
-      mutants.push({ index, operator: operator.name, original: line.trim(), mutated: mutated.trim(), lines: lines.with(index, mutated) })
+      mutants.push({
+        index,
+        operator: operator.name,
+        original: line.trim(),
+        mutated: mutated.trim(),
+        lines: lines.with(index, mutated)
+      })
     }
   })
   return mutants
@@ -234,7 +240,7 @@ const generate = (lines, blocked) => {
 
 const quint = async (args, timeoutMilliseconds) => {
   try {
-    const { stdout, stderr } = await run(quintExecutable, [...quintPrefix, ...args], {
+    const { stderr, stdout } = await run(quintExecutable, [...quintPrefix, ...args], {
       maxBuffer: 32 * 1024 * 1024,
       ...(timeoutMilliseconds === undefined ? {} : { timeout: timeoutMilliseconds, killSignal: "SIGKILL" })
     })
@@ -268,10 +274,7 @@ if (!Number.isSafeInteger(maxMutants) || maxMutants < 0) {
 // historical behavior and checks every generated mutant.
 const selectMutants = (mutants) => {
   if (maxMutants === 0 || mutants.length <= maxMutants) return mutants
-  return Array.from(
-    { length: maxMutants },
-    (_, index) => mutants[Math.floor(index * mutants.length / maxMutants)]
-  )
+  return Array.from({ length: maxMutants }, (_, index) => mutants[Math.floor((index * mutants.length) / maxMutants)])
 }
 
 /**
@@ -292,124 +295,157 @@ const budgetMilliseconds = Number(arg("timeout", "90")) * 1000
 const workDir = await mkdtemp(join(tmpdir(), "quint-mutation-"))
 
 try {
-for (const spec of SPECS) {
-  if (only && spec.name !== only) continue
+  for (const spec of SPECS) {
+    if (only && spec.name !== only) continue
 
-  const source = await readFile(spec.file, "utf8")
-  const lines = source.split("\n")
-  const blocked = protectedLines(lines, new Set([...spec.invariants, ...spec.witnesses]))
-  const generatedMutants = generate(lines, blocked)
-  const mutants = selectMutants(generatedMutants)
+    const source = await readFile(spec.file, "utf8")
+    const lines = source.split("\n")
+    const blocked = protectedLines(lines, new Set([...spec.invariants, ...spec.witnesses]))
+    const generatedMutants = generate(lines, blocked)
+    const mutants = selectMutants(generatedMutants)
 
-  const kills = Object.fromEntries(spec.invariants.map((name) => [name, 0]))
-  const witnessKills = {}
-  const survivors = []
-  let compiled = 0
-  let killedByWitness = 0
-  let timedOut = 0
-  let errored = 0
+    const kills = Object.fromEntries(spec.invariants.map((name) => [name, 0]))
+    const witnessKills = {}
+    const survivors = []
+    let compiled = 0
+    let killedByWitness = 0
+    let timedOut = 0
+    let errored = 0
 
-  for (const [ordinal, mutant] of mutants.entries()) {
-    const file = join(workDir, `${spec.name}-${ordinal}.qnt`)
-    await writeFile(file, mutant.lines.join("\n"))
+    for (const [ordinal, mutant] of mutants.entries()) {
+      const file = join(workDir, `${spec.name}-${ordinal}.qnt`)
+      await writeFile(file, mutant.lines.join("\n"))
 
-    if (!(await quint(["typecheck", file])).ok) continue
-    compiled += 1
+      if (!(await quint(["typecheck", file])).ok) continue
+      compiled += 1
 
-    const all = useVerify
-      ? await quint(
-          ["verify", file, "--invariants", ...spec.invariants, "--max-steps", verifySteps, "--verbosity", "0"],
-          budgetMilliseconds
-        )
-      : await quint([
-          "run", file, "--invariants", ...spec.invariants,
-          "--max-samples", samples, "--max-steps", steps, "--seed", seed, "--verbosity", "0"
-        ])
-    if (all.timedOut === true) {
-      timedOut += 1
-      continue
-    }
-    if (all.ok) {
-      // The gate also asserts reachability. A mutant that leaves every
-      // invariant true but makes a witnessed state unreachable is still caught
-      // by the gate, and attributing that to "survived" would flatter the
-      // invariants at the witnesses' expense.
-      if (spec.witnesses.length > 0) {
-        const witnessed = await quint([
-          "run", file, "--witnesses", ...spec.witnesses,
-          "--max-samples", samples, "--max-steps", steps, "--seed", seed, "--verbosity", "1"
-        ])
-        // Fail closed: a witness run that errors, times out, or whose output
-        // does not parse is an error, never an "unreached" and never a
-        // "survived".
-        if (witnessed.timedOut === true) {
-          timedOut += 1
-          continue
-        }
-        const counts = spec.witnesses.map((witness) =>
-          new RegExp(`${witness} was witnessed in (\\d+) trace`).exec(witnessed.output))
-        if (!witnessed.ok || counts.some((found) => found === null)) {
-          errored += 1
-          continue
-        }
-        const unreached = spec.witnesses.filter((_, position) => Number(counts[position][1]) === 0)
-        if (unreached.length > 0) {
-          for (const witness of unreached) witnessKills[witness] = (witnessKills[witness] ?? 0) + 1
-          killedByWitness += 1
-          continue
-        }
-      }
-      survivors.push(mutant)
-      continue
-    }
-
-    // Attribute the kill to the specific invariants that fire.
-    for (const invariant of spec.invariants) {
-      const single = useVerify
+      const all = useVerify
         ? await quint(
-            ["verify", file, "--invariant", invariant, "--max-steps", verifySteps, "--verbosity", "0"],
+            ["verify", file, "--invariants", ...spec.invariants, "--max-steps", verifySteps, "--verbosity", "0"],
             budgetMilliseconds
           )
         : await quint([
-            "run", file, "--invariant", invariant,
-            "--max-samples", samples, "--max-steps", steps, "--seed", seed, "--verbosity", "0"
+            "run",
+            file,
+            "--invariants",
+            ...spec.invariants,
+            "--max-samples",
+            samples,
+            "--max-steps",
+            steps,
+            "--seed",
+            seed,
+            "--verbosity",
+            "0"
           ])
-      if (!single.ok && single.timedOut !== true) kills[invariant] += 1
+      if (all.timedOut === true) {
+        timedOut += 1
+        continue
+      }
+      if (all.ok) {
+        // The gate also asserts reachability. A mutant that leaves every
+        // invariant true but makes a witnessed state unreachable is still caught
+        // by the gate, and attributing that to "survived" would flatter the
+        // invariants at the witnesses' expense.
+        if (spec.witnesses.length > 0) {
+          const witnessed = await quint([
+            "run",
+            file,
+            "--witnesses",
+            ...spec.witnesses,
+            "--max-samples",
+            samples,
+            "--max-steps",
+            steps,
+            "--seed",
+            seed,
+            "--verbosity",
+            "1"
+          ])
+          // Fail closed: a witness run that errors, times out, or whose output
+          // does not parse is an error, never an "unreached" and never a
+          // "survived".
+          if (witnessed.timedOut === true) {
+            timedOut += 1
+            continue
+          }
+          const counts = spec.witnesses.map((witness) =>
+            new RegExp(`${witness} was witnessed in (\\d+) trace`).exec(witnessed.output)
+          )
+          if (!witnessed.ok || counts.some((found) => found === null)) {
+            errored += 1
+            continue
+          }
+          const unreached = spec.witnesses.filter((_, position) => Number(counts[position][1]) === 0)
+          if (unreached.length > 0) {
+            for (const witness of unreached) witnessKills[witness] = (witnessKills[witness] ?? 0) + 1
+            killedByWitness += 1
+            continue
+          }
+        }
+        survivors.push(mutant)
+        continue
+      }
+
+      // Attribute the kill to the specific invariants that fire.
+      for (const invariant of spec.invariants) {
+        const single = useVerify
+          ? await quint(
+              ["verify", file, "--invariant", invariant, "--max-steps", verifySteps, "--verbosity", "0"],
+              budgetMilliseconds
+            )
+          : await quint([
+              "run",
+              file,
+              "--invariant",
+              invariant,
+              "--max-samples",
+              samples,
+              "--max-steps",
+              steps,
+              "--seed",
+              seed,
+              "--verbosity",
+              "0"
+            ])
+        if (!single.ok && single.timedOut !== true) kills[invariant] += 1
+      }
     }
-  }
 
-  const dead = spec.invariants.filter((name) => kills[name] === 0)
+    const dead = spec.invariants.filter((name) => kills[name] === 0)
 
-  const killed = compiled - survivors.length - timedOut - errored
-  console.log(`\n## ${basename(spec.file)}${useVerify ? " (Apalache)" : ""} (seed ${seed})`)
-  console.log(`\n${mutants.length} of ${generatedMutants.length} generated mutants selected, ` +
-              `${compiled} typecheck, ` +
-              `${killed} killed (${killed - killedByWitness} by an invariant, ` +
-              `${killedByWitness} by a witness only), ${survivors.length} survive` +
-              `${timedOut > 0 ? `, ${timedOut} exceeded the ${budgetMilliseconds / 1000}s budget` : ""}` +
-              `${errored > 0 ? `, ${errored} errored (fail-closed, no verdict recorded)` : ""}.\n`)
-  console.log("| Invariant | mutants killed |")
-  console.log("|---|---|")
-  for (const invariant of spec.invariants) {
-    const count = kills[invariant]
-    console.log(`| ${invariant} | ${count === 0 ? "**0**" : count} |`)
-  }
-  const witnessRows = Object.entries(witnessKills).sort((left, right) => right[1] - left[1])
-  if (witnessRows.length > 0) {
-    console.log("\n| Witness | mutants it alone caught |")
+    const killed = compiled - survivors.length - timedOut - errored
+    console.log(`\n## ${basename(spec.file)}${useVerify ? " (Apalache)" : ""} (seed ${seed})`)
+    console.log(
+      `\n${mutants.length} of ${generatedMutants.length} generated mutants selected, ` +
+        `${compiled} typecheck, ` +
+        `${killed} killed (${killed - killedByWitness} by an invariant, ` +
+        `${killedByWitness} by a witness only), ${survivors.length} survive` +
+        `${timedOut > 0 ? `, ${timedOut} exceeded the ${budgetMilliseconds / 1000}s budget` : ""}` +
+        `${errored > 0 ? `, ${errored} errored (fail-closed, no verdict recorded)` : ""}.\n`
+    )
+    console.log("| Invariant | mutants killed |")
     console.log("|---|---|")
-    for (const [witness, count] of witnessRows) console.log(`| ${witness} | ${count} |`)
-  }
-  if (dead.length > 0) {
-    console.log(`\nKilling nothing: ${dead.map((name) => `\`${name}\``).join(", ")}`)
-  }
-  if (survivors.length > 0) {
-    console.log(`\nSurviving mutants (first 12):\n`)
-    for (const survivor of survivors.slice(0, 12)) {
-      console.log(`- line ${survivor.index + 1}, ${survivor.operator}: \`${survivor.original}\``)
+    for (const invariant of spec.invariants) {
+      const count = kills[invariant]
+      console.log(`| ${invariant} | ${count === 0 ? "**0**" : count} |`)
+    }
+    const witnessRows = Object.entries(witnessKills).sort((left, right) => right[1] - left[1])
+    if (witnessRows.length > 0) {
+      console.log("\n| Witness | mutants it alone caught |")
+      console.log("|---|---|")
+      for (const [witness, count] of witnessRows) console.log(`| ${witness} | ${count} |`)
+    }
+    if (dead.length > 0) {
+      console.log(`\nKilling nothing: ${dead.map((name) => `\`${name}\``).join(", ")}`)
+    }
+    if (survivors.length > 0) {
+      console.log(`\nSurviving mutants (first 12):\n`)
+      for (const survivor of survivors.slice(0, 12)) {
+        console.log(`- line ${survivor.index + 1}, ${survivor.operator}: \`${survivor.original}\``)
+      }
     }
   }
-}
 } finally {
   await rm(workDir, { recursive: true, force: true })
 }

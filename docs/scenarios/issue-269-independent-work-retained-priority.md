@@ -325,13 +325,10 @@ local action can free a position. [D12 Position
 discipline](../DELIVERY-INVARIANTS.md#admission-and-capacity) requires admission
 to respect every position currently held by unfinished exact work, while [D29
 Authority separation](../DELIVERY-INVARIANTS.md#process-and-durability) keeps
-derived positions process-local and out of workflow history. At the formal
-abstraction, [`deliveryCore.qnt`'s `positionDiscipline` and `admissionRule`
-laws](../../research/verification-bakeoff/quint/deliveryCore.qnt) require
-positions to follow outstanding work and prevent admission past capacity. That
-model does not represent the short in-process interval in which the runtime's
-admission controller has bound a newly accepted exact position but the
-descriptive relation still lists the earlier held-position prefix.
+derived positions process-local and out of workflow history. This scenario covers
+the short in-process interval in which the runtime's admission controller has
+bound a newly accepted exact position but the descriptive relation still lists
+the earlier held-position prefix.
 
 This scenario refines only quiescence during that interval. It does not make
 the admission controller a durable or outside authority, replace the delivery
@@ -732,12 +729,8 @@ durable fact.
 
 [D33 No silent drop and D34 Quiescence is not
 completion](../DELIVERY-INVARIANTS.md#progress) require accepted work not to be
-silently dropped and forbid quiescence while an admitted owner remains. At the
-formal abstraction, [`deliveryCore.qnt`'s `everyBegunSettles`
-law](../../research/verification-bakeoff/quint/deliveryCore.qnt) constrains the
-no-silent-drop outcome; that model deliberately does not represent
-in-process graph/planning publication pairing. The executable `runs work
-published after G2 before phase two subscribes` scenario in
+silently dropped and forbid quiescence while an admitted owner remains.
+The executable `runs work published after G2 before phase two subscribes` scenario in
 [`run-stabilization.test.ts`](../../packages/orchestrator/src/coordination/run/run-stabilization.test.ts)
 governs the current-first later-publication handoff. The direct consistency
 test below owns exact graph/planning pairing within one stable publication.
@@ -810,13 +803,10 @@ executor action returns its ordinary result.
 
 [D33 No silent drop and D34 Quiescence is not
 completion](../DELIVERY-INVARIANTS.md#progress) prohibit losing successor work
-or claiming quiescence while its predecessor still owns a live action. At the
-formal abstraction, [`deliveryCore.qnt`'s exact `everyBegunSettles` temporal
-law](../../research/verification-bakeoff/quint/deliveryCore.qnt#L622) requires
-every begun action eventually to settle. That model deliberately excludes the
-activation-local handoff from an executor's ordinary result, through the
-runtime's accepted-publication boundary call, to its process-local completion
-queue; the runtime tests below govern that finer ordering. This refinement adds
+or claiming quiescence while its predecessor still owns a live action. The runtime
+tests below govern the activation-local handoff from an
+executor's ordinary result, through the runtime's accepted-publication boundary
+call, to its process-local completion queue. This refinement adds
 no Journal record, authority read, retry, persisted queue, or scheduling
 priority.
 
@@ -929,11 +919,8 @@ poll, durable relation revision, or second planning authority.
 [D33 No silent drop and D34 Quiescence is not
 completion](../DELIVERY-INVARIANTS.md#progress) prohibit losing the planning
 successor or treating the predecessor's completion as permission to stop. The
-formal [`deliveryCore.qnt` `everyBegunSettles`
-law](../../research/verification-bakeoff/quint/deliveryCore.qnt#L622) constrains
-the no-silent-drop outcome but does not model this process-local
-same-position evaluation-to-runtime handoff. The direct tests below own that
-finer chronology.
+direct tests below govern this process-local same-position
+evaluation-to-runtime handoff.
 
 ### Shared position-80 planning facts
 

@@ -167,20 +167,15 @@ adapter, and the invariants in `../DELIVERY-INVARIANTS.md` that the model
 projects, together. The adapter, projections, and controls remain test support;
 they are not production package APIs, workflow stages, or states.
 
-`pnpm check:quint` runs the exhaustive checks and reports per-command and
-phase timing against its provisional 600-second internal regression budget.
-Repeated Node 22/24 phase and frozen-install measurements are recorded in
-[`../../research/quint-hosted-equivalent-profile.md`](../../research/quint-hosted-equivalent-profile.md);
-they are local Linux arm64 evidence and explicitly reserve 300 seconds for
-hosted checkout/action/network setup until a pushed workflow supplies direct
-hosted timing. The complete hosted contract is `pnpm check:ci`, which composes the independent
-`check:ci:quality` and `check:ci:formal` subgates. The GitHub workflow runs the
-quality and formal subgates as separate jobs on every supported Node version;
-the formal job invokes `pnpm check:quint` with a 16-minute job timeout. The
-local `pnpm check:all` gate remains non-exhaustive and therefore does not
-duplicate formal model checking. A change to a model or to behavior a model
-governs must run `pnpm check:quint` before integration.
+The current verification commands, supported runtimes, and execution allowances
+are specified in [DEVELOPMENT.md](../DEVELOPMENT.md#formal-reuse-and-handoff).
+Local `pnpm check:all` acquires complete formal evidence or reuses validated
+success for unchanged formal inputs, then validates it again before handoff.
+`pnpm check:quint` independently uses the same guarded formal workflow. Hosted
+`pnpm check:ci:formal` always runs the complete fresh profile; `pnpm check:ci`
+composes it with the independent `check:ci:quality` subgate. Automatic
+model-based conformance execution is paused under #363; the adapters remain
+available through `pnpm test:mbt`.
 
-`../DELIVERY-INVARIANTS.md` is the specification these models project from, and
-`research/verification-bakeoff/INVARIANTS.md` is a separate benchmark for
-comparing verification tools rather than a source of Dalph behavior.
+[DELIVERY-INVARIANTS.md](../DELIVERY-INVARIANTS.md) is the specification these
+models project from.

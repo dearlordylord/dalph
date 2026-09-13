@@ -60,7 +60,7 @@ describe("coverage brackets", () => {
     expect(coverageBracketForPath("packages/dalph/src/application.test.ts")).toBeUndefined()
     expect(coverageBracketForPath("packages/dalph/src/disposable-prototypes/fixture.ts")).toBeUndefined()
     expect(
-      coverageBracketForPath("/workspace/typescript/dalph/prototypes/control-plane/src/task-dag.ts")
+      coverageBracketForPath("/workspace/typescript/dalph/prototypes/disposable-example/src/example.ts")
     ).toBeUndefined()
   })
 

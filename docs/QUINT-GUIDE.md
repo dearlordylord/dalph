@@ -83,7 +83,7 @@ Invariant and witness names are explicit gate inputs. The canonical
 `plannedAttemptExecutor` and `taskFactReconciliation` lists live in
 `scripts/quint-model-obligations.mjs`, which both
 `scripts/check-quint-models.mjs` and
-`research/verification-bakeoff/mutate-specs.mjs` import. Other models list the
+`scripts/quint-mutate-specs.mjs` import. Other models list the
 same names in both scripts. A model may declare an invariant the gate never
 checks, and nothing reports that, so adding or renaming an observation means
 updating its shared manifest or every explicit checking profile.
@@ -137,7 +137,7 @@ Write the comparison out inside the invariant, even where that duplicates a
 predicate the actions use. The duplication is the measurement.
 
 For the same reason, a helper read only by an invariant belongs inside the
-invariant. `mutate-specs.mjs` protects invariant and witness declarations from
+invariant. `quint-mutate-specs.mjs` protects invariant and witness declarations from
 mutation; a predicate outside one is mutated, and the resulting kill measures
 nothing.
 
@@ -240,7 +240,7 @@ field name must be quoted.
 
 ## Mutation analysis
 
-`research/verification-bakeoff/mutate-specs.mjs` perturbs a model one token at a
+`scripts/quint-mutate-specs.mjs` perturbs a model one token at a
 time and reports which gated invariant kills each mutant, per invariant rather
 than in aggregate. An invariant killing nothing is contributing nothing to the
 gate, which is worth knowing even when the invariant is correct.
@@ -261,7 +261,7 @@ implementation handoff gate.
 Before any Quint result, run `pnpm exec quint --version` and compare it with the
 version pinned in `package.json`. A Git worktree without its own installed
 `node_modules` can make `pnpm exec quint` fall through to a globally installed
-binary; in that state even `pnpm exec node mutate-specs.mjs` reports
+binary; in that state even `pnpm exec node scripts/quint-mutate-specs.mjs` reports
 `npm_execpath` as unset and the mutation script also falls back to `PATH`.
 Install the worktree dependencies or invoke the repository's exact installed
 binary. Never describe a run as pinned based on the `pnpm exec` spelling alone.

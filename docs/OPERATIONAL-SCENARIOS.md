@@ -41,10 +41,11 @@ remains the readable register of both.
 `DELIVERY-STORY.md` is the same three-register split applied to one long
 chronology that spans many issues rather than one.
 
-`scenarios/README.md` classifies each file by whether its owning issue is
-closed as completed or still open. Ten of the sixteen issue-backed files belong
-to open issues and state required behavior rather than describing what Dalph
-does today.
+The [scenario catalog](scenarios/README.md) groups chronologies by the action
+or boundary they explain. It does not duplicate tracker status or infer
+implementation from issue closure. Each scenario states its scope and maps its
+required outcomes to acceptance tests; those sources establish the behavior
+and evidence being claimed.
 
 ## Required scenario fields
 

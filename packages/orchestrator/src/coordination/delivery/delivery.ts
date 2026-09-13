@@ -15,10 +15,8 @@ import { frontierOf } from "./ticket-delivery-projection.js"
  *
  * Architecture catalogue: [Protected Compositions](../../../../../docs/ARCHITECTURE.md#protected-compositions).
  *
- * Every arrow below is a pure projection, so none of them is a model-based
- * testing target; what covers each one is recorded per surface in
- * `research/verification-bakeoff/INVARIANTS.md`, under "Coverage per production
- * surface".
+ * Direct projection/relation tests and production-backed conformance adapters
+ * are indexed in `docs/DELIVERY-INVARIANTS.md`, under "Current verification index".
  */
 export const delivery = Effect.gen(function* () {
   const trackerGraph = yield* TrackerGraphRelation
