@@ -158,7 +158,10 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
   const childOutputs = new WeakMap<HermeticPublicChild, Effect.Success<ReturnType<typeof makeHermeticChildOutput>>>()
   const boundaries = yield* Queue.unbounded<BoundaryReached>()
   const boundaryLog = MutableList.make<BoundaryReached>()
-  const processOutcomes = MutableHashMap.empty<HermeticPublicChild, HermeticProcessOutcome>()
+  const processOutcomes = MutableHashMap.empty<
+    HermeticRegistrationScopeId,
+    { readonly child: HermeticPublicChild; readonly outcome: HermeticProcessOutcome }
+  >()
   const release = yield* Deferred.make<void>()
   const paused = yield* Ref.make(false)
   const observeBoundary = Effect.fn("HermeticController.observeBoundary")(function* (boundary: BoundaryReached) {
@@ -342,8 +345,8 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
     boundaryLog,
     processOutcomes: Effect.sync(() =>
       MutableList.toArray(children).flatMap((child) => {
-        const outcome = Option.getOrUndefined(MutableHashMap.get(processOutcomes, child))
-        return outcome === undefined ? [] : [outcome]
+        const receipt = Option.getOrUndefined(MutableHashMap.get(processOutcomes, child.registrationScope))
+        return receipt === undefined || receipt.child !== child ? [] : [receipt.outcome]
       })
     ),
     providerSnapshot: provider.snapshot(),
@@ -383,20 +386,26 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
             })
           ),
           ({ outcome }) => {
-            MutableHashMap.set(processOutcomes, child, outcome)
+            MutableHashMap.set(processOutcomes, child.registrationScope, { child, outcome })
           },
           forgetRecordBindings(child)
         ).pipe(Effect.map(({ exit }) => exit))
       }),
     awaitChild: (child: HermeticPublicChild) =>
-      settleHermeticChild(
-        child,
-        child.handle.exitCode,
-        (status) => {
-          MutableHashMap.set(processOutcomes, child, { _tag: "Exit", processId: child.handle.pid, status })
-        },
-        forgetRecordBindings(child)
-      )
+      Effect.gen(function* () {
+        if (!childOutputs.has(child)) return yield* new HermeticControllerFailure({ operation: "child.foreignAwait" })
+        return yield* settleHermeticChild(
+          child,
+          child.handle.exitCode,
+          (status) => {
+            MutableHashMap.set(processOutcomes, child.registrationScope, {
+              child,
+              outcome: { _tag: "Exit", processId: child.handle.pid, status }
+            })
+          },
+          forgetRecordBindings(child)
+        )
+      })
   }
 })
 

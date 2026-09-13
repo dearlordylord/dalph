@@ -24,6 +24,7 @@ import {
   type HermeticPublicChild
 } from "../../test-support/production-hermetic-controller.js"
 import { disposeHermeticFixture } from "../../test-support/production-hermetic-fixture-cleanup.js"
+import { HermeticControllerFailure } from "../../test-support/production-hermetic-child-lifetime.js"
 import { cleanupDisposableGithubQualification } from "../../test-support/disposable-github-qualification-cleanup.js"
 import {
   hermeticQualificationPublicTaskSpecification,
@@ -410,6 +411,16 @@ it.live(
           .pipe(Effect.timeout("20 seconds"))
         expect(boundary._tag).toBe("PromotionCompareAndSet")
         if (boundary._tag !== "PromotionCompareAndSet") return yield* Effect.die("wrong concrete promotion boundary")
+        const foreignChild = {
+          ...child,
+          handle: { ...child.handle, exitCode: Effect.die("foreign child exit must not be observed") }
+        }
+        const foreignAwait = yield* controller.awaitChild(foreignChild).pipe(Effect.flip)
+        expect(foreignAwait).toBeInstanceOf(HermeticControllerFailure)
+        if (foreignAwait instanceof HermeticControllerFailure) {
+          expect(foreignAwait.operation).toBe("child.foreignAwait")
+        }
+        expect(yield* controller.processOutcomes).toEqual([])
         expect(yield* controller.activeRequestCount).toBeGreaterThan(0)
         const liveDisposal = yield* disposeHermeticFixture(fixture, controller)
         expect(liveDisposal._tag).toBe("RetainedFixture")
