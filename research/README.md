@@ -3,7 +3,8 @@
 This worktree carries the research notes created in the invoker/invokee
 conversation. Research is evidence, not accepted runtime behavior.
 
-- [Latest targeted-validation findings](./invokee-validation-round.md)
+- [Real-host disconnection/reconnection evidence](./invokee-real-host-results.md)
+- [Earlier targeted-validation findings](./invokee-validation-round.md)
 - [Research continuation and targeted validation](./invokee-research-next.md)
 - [Runnable hosting experiment](./prototypes/invokee-hosting/README.md)
 - [MCP lifecycle and SDK cancellation probe](./invokee-mcp-lifecycle.md)

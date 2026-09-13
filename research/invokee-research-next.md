@@ -4,6 +4,11 @@ Status: research and targeted validation only. This document changes no Dalph
 runtime behavior. The user will explicitly request tasks when ready. Do not
 create a task breakdown or implementation tickets during this phase.
 
+The [real-host composition experiment](./invokee-real-host-results.md) now
+validates the five-step observation-client disconnect/reconnect chronology with
+controlled providers. Command cancellation and live graph streaming remain
+separate uncertainties; no tasks have been created.
+
 ## Alice reconnects to ongoing delivery
 
 Alice starts autonomous Dalph for one repository and tracker root. Her agent

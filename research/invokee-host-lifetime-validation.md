@@ -1,5 +1,9 @@
 # Host lifetime: source inspection and targeted validation
 
+Follow-up: the [real-host composition experiment](./invokee-real-host-results.md)
+now passes the previously open five-step client-disconnection chronology. The
+limits below describe this earlier validation round.
+
 Status: research only, 2026-09-13. No production source changes or implementation
 tasks. Source baseline is research commit `0b9c9d2b3` in the isolated interview
 worktree. These checks use controlled provider boundaries, not live GitHub or

@@ -1,5 +1,9 @@
 # Invokee research: targeted validation round
 
+Follow-up: the [real-host composition experiment](./invokee-real-host-results.md)
+now passes the previously open five-step client-disconnection chronology. The
+limits below describe this earlier validation round.
+
 Status: research only, 2026-09-13. No implementation tasks or production changes.
 The user will request tasks explicitly. Work remains on the isolated
 `research/invoker-invokee-interview` branch.
