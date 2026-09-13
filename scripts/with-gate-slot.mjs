@@ -1,8 +1,14 @@
 import { spawn } from "node:child_process"
+import { basename } from "node:path"
 import { fileURLToPath } from "node:url"
 import { epochMilliseconds, inheritedCustody, repositoryLocation, withFileLock } from "./gate-custody-records.mjs"
 import { ensureRegistrationOpen, registrationLockPath } from "./gate-registration.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
+import {
+  formalVerificationExecutables,
+  qualityVerificationExecutables,
+  stabilizeVerificationEnvironment
+} from "./stabilize-verification-path.mjs"
 
 const separator = process.argv.indexOf("--")
 const commandArguments = separator === -1 ? [] : process.argv.slice(separator + 1)
@@ -15,6 +21,18 @@ if (process.env.DALPH_QUALIFICATION_ENV_CAPTURE !== undefined)
   throw new Error(
     "Ambient qualification environment capture is outside supported gate custody; tests set only disposable fixture paths"
   )
+const entryName = basename(commandArguments[1] ?? "")
+const requiredExecutables =
+  entryName === "run-quality-gate.mjs"
+    ? qualityVerificationExecutables(process.env, commandArguments[0])
+    : entryName === "run-formal-gate.mjs"
+      ? formalVerificationExecutables(process.env, commandArguments[0])
+      : undefined
+const effectiveEnvironment =
+  requiredExecutables === undefined
+    ? process.env
+    : stabilizeVerificationEnvironment({ environment: process.env, requiredExecutables })
+if (effectiveEnvironment.PATH !== undefined) process.env.PATH = effectiveEnvironment.PATH
 const context = inheritedCustody()
 const location = repositoryLocation()
 if (context !== undefined) {
@@ -25,6 +43,7 @@ if (context !== undefined) {
     const result = await runBoundedCommand({
       args: commandArguments.slice(1),
       executable: commandArguments[0],
+      environment: effectiveEnvironment,
       name: "nested admitted gate",
       relayParentSignals: true,
       timeoutMilliseconds: 24 * 60 * 60 * 1000
@@ -49,7 +68,7 @@ if (context !== undefined) {
   mkdirSync(location.custodyRoot, { recursive: true })
   const child = spawn("bash", ["-c", shell, "gate-custody", process.execPath, runner, "--", ...commandArguments], {
     env: {
-      ...process.env,
+      ...effectiveEnvironment,
       DALPH_WORKTREE_LOCK: location.worktreeLock,
       DALPH_GATE_WAIT_STARTED_MILLISECONDS: String(epochMilliseconds())
     },

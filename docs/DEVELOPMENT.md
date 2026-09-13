@@ -273,13 +273,15 @@ workflow decision, external request, journal fact, retry, concurrency rule,
 cleanup action, or user-visible delivery outcome.
 
 Codex adds a per-shell argv-zero shim directory under
-`$HOME/.codex/tmp/arg0/codex-arg0XXXXXX` to `PATH`. Before the full quality gate
-or standalone formal verification observes inputs or launches guarded children,
-the harness removes that component only after proving that every declared tool
-resolves to the same executable without it. A shim that supplies a declared
-tool refuses the gate before launch. All guarded children and recorded input
-identity use the resulting `PATH`; ordinary `PATH` candidates and their strict
-ancestors remain observed.
+`$HOME/.codex/tmp/arg0/codex-arg0XXXXXX` to `PATH`. Before the admission wrapper
+launches the full quality gate or standalone formal verification, the harness
+removes that component only after proving that every declared tool in the whole
+child tree resolves to the same executable without it. The full-quality
+inventory includes its nested formal Java resolution. A shim that supplies a
+declared tool refuses the gate before launch. The entry points recheck the same
+rule before observation and guarded children. All guarded children and recorded
+input identity use the resulting `PATH`; ordinary `PATH` candidates and their
+strict ancestors remain observed.
 
 Effect tests use `it.effect`, test Layers, `TestClock`, and deterministic
 synchronization instead of module mocks, ambient time, or sleeps. Name property tests

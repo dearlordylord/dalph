@@ -12,7 +12,7 @@ import {
 } from "./quality-gate-stage-policy.mjs"
 import { runPreflightCensus } from "./preflight-census.mjs"
 import { resolveQualityGateBase } from "./resolve-quality-gate-base.mjs"
-import { stabilizeVerificationEnvironment } from "./stabilize-verification-path.mjs"
+import { qualityVerificationExecutables, stabilizeVerificationEnvironment } from "./stabilize-verification-path.mjs"
 
 const maximumSuccessfulOutputLines = successfulOutputLineLimit
 // Admitted structural checks always inspect formatter inputs without incremental result reuse.
@@ -29,16 +29,7 @@ if (pnpmEntryPoint === undefined) {
   throw new Error("Run the quality gate through pnpm so its executable can be resolved safely")
 }
 
-const declaredGateTools = [
-  process.execPath,
-  pnpmEntryPoint,
-  "python3",
-  "git",
-  "bash",
-  "flock",
-  "gitleaks",
-  ...(process.env.DALPH_OXLINT_BIN ? [process.env.DALPH_OXLINT_BIN] : [])
-]
+const declaredGateTools = qualityVerificationExecutables(process.env)
 const effectiveEnvironment = stabilizeVerificationEnvironment({
   environment: process.env,
   requiredExecutables: declaredGateTools

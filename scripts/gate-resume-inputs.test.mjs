@@ -313,16 +313,14 @@ test("refuses to remove a Codex argv-zero PATH entry that supplies a declared to
   const shim = join(f.outer, ".codex", "tmp", "arg0", "codex-arg0Ef34Gh")
   mkdirSync(shim, { recursive: true })
   writeFileSync(join(shim, "fixture-tool"), "#!/bin/sh\nexit 0\n", { mode: 0o755 })
-  let stageLaunches = 0
-  assert.throws(() => {
-    const environment = stabilizeVerificationEnvironment({
-      environment: { ...f.environment, PATH: `${shim}:${f.environment.PATH}` },
-      requiredExecutables: ["fixture-tool"]
-    })
-    stageLaunches++
-    execFileSync("fixture-tool", [], { env: environment })
-  }, /declared tool resolution changes: fixture-tool/u)
-  assert.equal(stageLaunches, 0)
+  assert.throws(
+    () =>
+      stabilizeVerificationEnvironment({
+        environment: { ...f.environment, PATH: `${shim}:${f.environment.PATH}` },
+        requiredExecutables: ["fixture-tool"]
+      }),
+    /declared tool resolution changes: fixture-tool/u
+  )
 })
 
 test("strict PATH ancestor permission edit and restore invalidates executable resolution evidence", async () => {

@@ -17,7 +17,13 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
-import { atomicRecord, readRecord, repositoryLocation, withoutInheritedCustody } from "./gate-custody-records.mjs"
+import {
+  atomicRecord,
+  digest,
+  readRecord,
+  repositoryLocation,
+  withoutInheritedCustody
+} from "./gate-custody-records.mjs"
 import { readRunEvidence } from "./gate-run-evidence.mjs"
 import { createQuintEffectiveProfile } from "./quint-effective-profile.mjs"
 
@@ -95,6 +101,7 @@ const pointerDirectory=path.join(process.env.DALPH_GATE_RUN_DIRECTORY,'..','..',
 const pointers=fs.readdirSync(pointerDirectory).map(file=>JSON.parse(fs.readFileSync(path.join(pointerDirectory,file),'utf8')))
 if(!pointers.some(pointer=>pointer.state==='started'))throw Error('checker launched before durable attempt')
 fs.appendFileSync(path.join(root,'.scratch','events'),'checker '+args[0]+' '+args[1]+'\\n')
+try{fs.writeFileSync(path.join(root,'.scratch','checker-path'),process.env.PATH,{flag:'wx'})}catch(error){if(error.code!=='EEXIST')throw error}
 const execute=()=>{
  if(configuration.fail){console.error('controlled checker failure');process.exit(23)}
  if(args[0]==='run'){
@@ -282,7 +289,15 @@ const fixture = ({ omitObligation = false, publicationCrashes = false, realObser
 }
 const launch = (
   f,
-  { force = false, gateArguments = [], gateFile = "run-formal-gate.mjs", nested = false, reaped = false, slots } = {}
+  {
+    environment: environmentOverrides = {},
+    force = false,
+    gateArguments = [],
+    gateFile = "run-formal-gate.mjs",
+    nested = false,
+    reaped = false,
+    slots
+  } = {}
 ) => {
   const environment = withoutInheritedCustody(process.env)
   for (const name of ["DALPH_QUALIFICATION_ENV_CAPTURE", "DALPH_RUN_REAL_CODEX_QUALIFICATION", "npm_execpath"])
@@ -290,6 +305,7 @@ const launch = (
   if (slots !== undefined) environment.DALPH_GATE_SLOTS = String(slots)
   environment.DALPH_COVERAGE_BASE_SHA = f.base
   environment.QUINT_HOME = join(f.root, ".quint")
+  Object.assign(environment, environmentOverrides)
   const wrapper = join(f.root, "scripts", "with-gate-slot.mjs")
   const gate = join(f.root, "scripts", gateFile)
   const arguments_ = [
@@ -329,6 +345,71 @@ sys.exit(code)
   })
   return { child, completion, output: () => ({ stdout, stderr }) }
 }
+
+test("standalone formal entry stabilizes PATH before its guarded workflow child", async () => {
+  const f = fixture()
+  try {
+    const home = join(f.root, "codex-home")
+    const shim = join(home, ".codex", "tmp", "arg0", "codex-arg0Cd34Ef")
+    mkdirSync(shim, { recursive: true })
+    writeFileSync(join(shim, ".lock"), "controlled shim\n")
+    f.put(
+      "scripts/run-formal-workflow.mjs",
+      `import {writeFileSync} from 'node:fs';import {pathToFileURL} from 'node:url';export const parseFormalArguments=args=>{if(args.length)throw Error('unexpected argument')};if(process.argv[1]&&pathToFileURL(process.argv[1]).href===import.meta.url)writeFileSync('.scratch/formal-entry.json',JSON.stringify({path:process.env.PATH,identity:{environmentPath:process.env.PATH}}));`
+    )
+    const result = await launch(f, { environment: { HOME: home, PATH: `${shim}:/usr/local/bin:/usr/bin:/bin` } })
+      .completion
+    assert.equal(result.code, 0, result.stderr)
+    const observation = JSON.parse(readFileSync(join(f.root, ".scratch", "formal-entry.json"), "utf8"))
+    assert.equal(observation.path.includes("/.codex/tmp/arg0/"), false)
+    assert.equal(observation.identity.environmentPath, observation.path)
+  } finally {
+    f.cleanup()
+  }
+})
+
+test(
+  "standalone formal entry gives actual formal identity and checker child one stabilized PATH",
+  { timeout: 90000 },
+  async () => {
+    const f = fixture({ realObservation: true })
+    try {
+      const home = join(f.root, "codex-home")
+      const shim = join(home, ".codex", "tmp", "arg0", "codex-arg0Kl78Mn")
+      mkdirSync(shim, { recursive: true })
+      writeFileSync(join(shim, ".lock"), "controlled shim\n")
+      const result = await launch(f, { environment: { HOME: home, PATH: `${shim}:/usr/local/bin:/usr/bin:/bin` } })
+        .completion
+      assert.equal(result.code, 0, result.stderr)
+      const childPath = readFileSync(join(f.root, ".scratch", "checker-path"), "utf8")
+      assert.equal(childPath.includes("/.codex/tmp/arg0/"), false)
+      assert.equal(f.saved().success.identity.environmentDigests.PATH.digest, digest(childPath))
+    } finally {
+      f.cleanup()
+    }
+  }
+)
+
+test("standalone formal entry refuses a shim-supplied Java before launching its workflow child", async () => {
+  const f = fixture()
+  try {
+    const home = join(f.root, "codex-home")
+    const shim = join(home, ".codex", "tmp", "arg0", "codex-arg0Gh56Ij")
+    mkdirSync(shim, { recursive: true })
+    writeFileSync(join(shim, "java"), "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+    f.put(
+      "scripts/run-formal-workflow.mjs",
+      `import {writeFileSync} from 'node:fs';import {pathToFileURL} from 'node:url';export const parseFormalArguments=()=>{};if(process.argv[1]&&pathToFileURL(process.argv[1]).href===import.meta.url)writeFileSync('.scratch/forbidden-formal-child','launched')`
+    )
+    const result = await launch(f, { environment: { HOME: home, PATH: `${shim}:/usr/local/bin:/usr/bin:/bin` } })
+      .completion
+    assert.equal(result.code, 1)
+    assert.match(result.stderr, /declared tool resolution changes: java/u)
+    assert.equal(existsSync(join(f.root, ".scratch", "forbidden-formal-child")), false)
+  } finally {
+    f.cleanup()
+  }
+})
 const waitForFile = async (file, process_) => {
   if (existsSync(file)) return
   await new Promise((resolve, reject) => {

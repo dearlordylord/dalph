@@ -1,5 +1,5 @@
 import { accessSync, constants, lstatSync, realpathSync } from "node:fs"
-import { delimiter, dirname, isAbsolute, resolve, sep } from "node:path"
+import { delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path"
 
 const selectedExecutable = (name, environment, worktree) => {
   const candidates =
@@ -8,8 +8,8 @@ const selectedExecutable = (name, environment, worktree) => {
       : (environment.PATH ?? "").split(delimiter).map((directory) => resolve(worktree, directory, name))
   for (const candidate of candidates) {
     try {
-      const authored = lstatSync(candidate)
-      if (!authored.isFile() && !authored.isSymbolicLink()) continue
+      const candidateEntry = lstatSync(candidate)
+      if (!candidateEntry.isFile() && !candidateEntry.isSymbolicLink()) continue
       if (!lstatSync(realpathSync(candidate)).isFile()) continue
       accessSync(candidate, constants.X_OK)
       return resolve(candidate)
@@ -20,7 +20,7 @@ const selectedExecutable = (name, environment, worktree) => {
   return undefined
 }
 
-const codexArgvZeroDirectory = (directory, environment) => {
+const isCodexArgvZeroDirectory = (directory, environment) => {
   if (environment.HOME === undefined || !isAbsolute(environment.HOME) || !isAbsolute(directory)) return false
   const parent = resolve(environment.HOME, ".codex", "tmp", "arg0")
   return (
@@ -39,7 +39,7 @@ export const stabilizeVerificationEnvironment = ({
   const path = environment.PATH
   if (path === undefined) return { ...environment }
   const components = path.split(delimiter)
-  const retained = components.filter((directory) => !codexArgvZeroDirectory(directory, environment))
+  const retained = components.filter((directory) => !isCodexArgvZeroDirectory(directory, environment))
   if (retained.length === components.length) return { ...environment }
   const stabilized = { ...environment, PATH: retained.join(delimiter) }
   for (const tool of requiredExecutables) {
@@ -52,3 +52,21 @@ export const stabilizeVerificationEnvironment = ({
   }
   return stabilized
 }
+
+export const formalVerificationExecutables = (environment, commandExecutable = process.execPath) => [
+  commandExecutable,
+  process.execPath,
+  environment.npm_execpath ?? "pnpm",
+  environment.JAVA_HOME === undefined ? "java" : join(environment.JAVA_HOME, "bin", "java"),
+  "python3",
+  "bash",
+  "flock"
+]
+
+/** Full quality can invoke formal verification, so its inventory is the union of both child trees. */
+export const qualityVerificationExecutables = (environment, commandExecutable = process.execPath) => [
+  ...formalVerificationExecutables(environment, commandExecutable),
+  "git",
+  "gitleaks",
+  ...(environment.DALPH_OXLINT_BIN ? [environment.DALPH_OXLINT_BIN] : [])
+]

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -14,11 +15,25 @@ const resume = "12345678-1234-1234-1234-123456789012"
 
 /** Execute the unchanged command source against controlled process/stage boundaries.
  * Full admitted formal execution is covered by quality/formal integration fixtures. */
-const dispatch = ({ admitted = true, arguments: args, environment = {}, failLocal = false }) => {
+const dispatch = ({ admitted = true, arguments: args, argvZeroTool, environment = {}, failLocal = false }) => {
   const root = mkdtempSync(join(tmpdir(), "dalph-quality-routing-"))
   const log = join(root, "dispatch.jsonl")
+  const pnpmRoot = join(root, "pnpm")
+  const pnpmEntryPoint = join(pnpmRoot, "bin", "pnpm.cjs")
+  const identityWorktree = join(root, "identity-worktree")
   const append = `import {appendFileSync} from 'node:fs';const record=value=>appendFileSync(${JSON.stringify(log)},JSON.stringify(value)+'\\n');\n`
   try {
+    mkdirSync(join(pnpmRoot, "bin"), { recursive: true })
+    writeFileSync(join(pnpmRoot, "package.json"), JSON.stringify({ name: "pnpm" }))
+    writeFileSync(pnpmEntryPoint, "#!/usr/bin/env node\n")
+    chmodSync(pnpmEntryPoint, 0o755)
+    mkdirSync(identityWorktree)
+    execFileSync("git", ["init", "-q"], { cwd: identityWorktree })
+    execFileSync("git", ["config", "user.name", "Quality Identity"], { cwd: identityWorktree })
+    execFileSync("git", ["config", "user.email", "identity@example.invalid"], { cwd: identityWorktree })
+    writeFileSync(join(identityWorktree, "source.js"), "export const identity = true\n")
+    execFileSync("git", ["add", "."], { cwd: identityWorktree })
+    execFileSync("git", ["commit", "-qm", "identity fixture"], { cwd: identityWorktree })
     for (const file of [
       "run-quality-gate.mjs",
       "quality-command-policy.mjs",
@@ -28,7 +43,7 @@ const dispatch = ({ admitted = true, arguments: args, environment = {}, failLoca
       copyFileSync(new URL(file, import.meta.url), join(root, file))
     writeFileSync(
       join(root, "gate-quality-run.mjs"),
-      `${append}export const executeResumableQualityGate=async options=>{record({boundary:'local-handoff',options});${failLocal ? "throw Error('controlled required formal verification failed');" : "return {successfulOutputLines:0};"}};`
+      `${append}import {execFileSync} from 'node:child_process';export const executeResumableQualityGate=async options=>{let identity={environmentPath:process.env.PATH};let environment=process.env;let guard;if(process.env.DALPH_TEST_CAPTURE_IDENTITY==='1'){environment={...process.env,GIT_OPTIONAL_LOCKS:'0'};delete environment.DALPH_GATE_GIT_HISTORY;const {startInputGuard}=await import(${JSON.stringify(new URL("gate-resume-inputs.mjs", import.meta.url).href)});guard=await startInputGuard({worktree:${JSON.stringify(identityWorktree)},logicalInvocation:{mode:'controlled check:all identity',baseSha:options.logicalInvocation.baseSha,dprintIncremental:'disabled',toolExecutables:[]},effectiveEnvironment:environment,generatedOutputRoots:[]});identity=guard.identity;}try{const childPath=execFileSync(process.execPath,['-e','process.stdout.write(process.env.PATH)'],{env:environment,encoding:'utf8'});record({boundary:'local-handoff',options,effectivePath:environment.PATH,childPath,identity});${failLocal ? "throw Error('controlled required formal verification failed');" : "return {successfulOutputLines:0};"}}finally{if(guard){await guard.finish();await guard.close();}}};`
     )
     writeFileSync(
       join(root, "gate-custody-records.mjs"),
@@ -49,9 +64,22 @@ const dispatch = ({ admitted = true, arguments: args, environment = {}, failLoca
       "npm_lifecycle_event"
     ])
       delete clean[key]
+    if (argvZeroTool !== undefined) {
+      const home = join(root, "home")
+      const shim = join(home, ".codex", "tmp", "arg0", "codex-arg0Ab12Cd")
+      mkdirSync(shim, { recursive: true })
+      writeFileSync(join(shim, ".lock"), "controlled shim\n")
+      if (argvZeroTool !== false) {
+        writeFileSync(join(shim, argvZeroTool), "#!/bin/sh\nexit 0\n")
+        chmodSync(join(shim, argvZeroTool), 0o755)
+      }
+      clean.HOME = home
+      clean.PATH = `${shim}:/usr/local/bin:/usr/bin:/bin`
+      if (argvZeroTool === false) clean.DALPH_TEST_CAPTURE_IDENTITY = "1"
+    }
     const result = spawnSync(process.execPath, [join(root, "run-quality-gate.mjs"), ...args], {
       cwd: repository,
-      env: { ...clean, npm_execpath: "/controlled/pnpm.cjs", ...environment },
+      env: { ...clean, npm_execpath: pnpmEntryPoint, ...environment },
       encoding: "utf8",
       timeout: 10000
     })
@@ -70,6 +98,22 @@ const dispatch = ({ admitted = true, arguments: args, environment = {}, failLoca
     rmSync(root, { recursive: true, force: true })
   }
 }
+
+test("full quality entry gives its identity and real child one stabilized PATH", () => {
+  const { calls, result } = dispatch({ arguments: ["--local-handoff", `--candidate=${base}`], argvZeroTool: false })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].effectivePath.includes("/.codex/tmp/arg0/"), false)
+  assert.equal(calls[0].identity.environmentDigests.PATH, createHash("sha256").update(calls[0].childPath).digest("hex"))
+  assert.equal(calls[0].childPath, calls[0].effectivePath)
+})
+
+test("full quality entry refuses a shim-supplied nested Java before any child boundary", () => {
+  const { calls, result } = dispatch({ arguments: ["--local-handoff", `--candidate=${base}`], argvZeroTool: "java" })
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /declared tool resolution changes: java/u)
+  assert.deepEqual(calls, [])
+})
 
 test("quality purposes reject omitted duplicate conflicting and unsupported bypass arguments", () => {
   for (const args of [
