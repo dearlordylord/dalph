@@ -1915,15 +1915,16 @@ const renderTimeline = (
     next.disabled = !projection.nextFrameAvailable
     previousLandmark.disabled = !projection.previousLandmarkAvailable
     nextLandmark.disabled = !projection.nextLandmarkAvailable
+    const existingOptions = Array.from(select.options)
     for (const frameOption of projection.frameOptions) {
       const index = frameOption.frameIndex
-      const option = select.options[index] ?? document.createElement("option")
+      const option = existingOptions[index] ?? document.createElement("option")
       option.value = String(index)
       option.textContent = frameOption.landmarkLabel === null
         ? frameOption.label
         : `${frameOption.label} · Landmark: ${frameOption.landmarkLabel}`
       option.dataset.landmark = frameOption.landmarkLabel ?? ""
-      if (select.options[index] === undefined) select.append(option)
+      if (existingOptions[index] === undefined) select.append(option)
     }
     const selectedIndex = projection.currentFrameIndex
     if (selectedIndex !== null) {
