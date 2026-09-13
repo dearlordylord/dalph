@@ -10,6 +10,73 @@ const fixture = new URL("../../dist/bin/node-main-signal-fixture.js", import.met
 const dalphPackageDirectory = new URL("../../", import.meta.url).pathname
 const FixtureEvent = Schema.Struct({ event: Schema.String })
 
+const assertFailureChannels = (application: string, expectedStderr: string, unavailable = false) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const script = `
+        import nodeProcess from "node:process";
+        import { closeSync } from "node:fs";
+        import { Effect } from "effect";
+        import { OperationId, TaskTrackerMutationThrottled } from "@dalph/orchestrator";
+        import { runDalphNodeMain } from "./dist/src/application/node-main.js";
+        const privateSentinel = "private-provider-payload-must-not-be-printed";
+        ${unavailable ? 'nodeProcess.stderr.on("error", () => {}); closeSync(2);' : ""}
+        runDalphNodeMain(${application});
+      `
+      const handle = yield* spawner.spawn(
+        ChildProcess.make(nodeProcess.execPath, ["--input-type=module", "--eval", script], {
+          cwd: dalphPackageDirectory
+        })
+      )
+      const [stdout, stderr, exitCode] = yield* Effect.all(
+        [
+          handle.stdout.pipe(Stream.decodeText(), Stream.mkString),
+          handle.stderr.pipe(Stream.decodeText(), Stream.mkString),
+          handle.exitCode
+        ],
+        { concurrency: "unbounded" }
+      )
+      expect(stdout).toBe("")
+      expect(stderr).toBe(expectedStderr)
+      expect(exitCode).toBe(1)
+    })
+  ).pipe(Effect.provide(NodeServices.layer))
+
+const safeDiagnostic = "Dalph failed because of an unexpected runtime defect.\n"
+
+it.live(
+  "a known typed command failure adds no terminal cause dump or private payload",
+  () =>
+    assertFailureChannels(
+      'Effect.fail(new TaskTrackerMutationThrottled({ detail: privateSentinel, operation: "AcquireTaskClaim", operationId: OperationId.make("node-main-private-throttle"), retry: null }))',
+      ""
+    ),
+  30_000
+)
+
+it.live(
+  "an unexpected defect writes only a static stderr diagnostic and fails the process",
+  () => assertFailureChannels("Effect.die(new Error(privateSentinel))", safeDiagnostic),
+  30_000
+)
+
+it.live(
+  "a failing scoped finalizer writes only a static stderr diagnostic and fails the process",
+  () =>
+    assertFailureChannels(
+      "Effect.scoped(Effect.addFinalizer(() => Effect.die(new Error(privateSentinel))))",
+      safeDiagnostic
+    ),
+  30_000
+)
+
+it.live(
+  "an unavailable defect diagnostic does not prevent the original failed host result",
+  () => assertFailureChannels("Effect.die(new Error(privateSentinel))", "", true),
+  30_000
+)
+
 it.live(
   "the shipped Node runner leaves SIGTERM to the host Exit boundary until result and scope finalization",
   () =>

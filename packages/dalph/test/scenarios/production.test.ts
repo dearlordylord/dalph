@@ -343,6 +343,7 @@ const runFreshGithubInstructionVertical = (scenario: string, focusedBody: unknow
     const application = productionWorkflowInterpreterLayer(
       runId,
       GitCommonDirectoryTarget.make(`${directory}/.git`),
+      GitRepositoryLocator.make(directory),
       productionIntegrationTarget(`${directory}/.git`),
       controlledTrackerMutationLayer,
       controlledSynchronousPlannedAttemptExecutorLayer(executorLayer),
@@ -703,6 +704,7 @@ const makePublicRunFixture = (projectionPlan: PublicExecutorProjectionPlan, opti
       return productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
+        GitRepositoryLocator.make(directory),
         productionIntegrationTarget(`${directory}/.git`),
         trackerLayer,
         completeExecutorLayer,
@@ -2462,6 +2464,7 @@ it.effect(absentHistoryApplicationScenario, () =>
       const application = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
+        GitRepositoryLocator.make(directory),
         productionIntegrationTarget(`${directory}/.git`),
         controlledTrackerMutationLayer,
         productionControlledFakePlannedAttemptExecutorLayer,
@@ -2591,6 +2594,7 @@ it.effect("ticket delivery checks the tracker after a lost claim response and re
       const application = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
+        GitRepositoryLocator.make(directory),
         productionIntegrationTarget(`${directory}/.git`),
         trackerLayer,
         productionControlledFakePlannedAttemptExecutorLayer,
@@ -2805,6 +2809,7 @@ it.effect("ticket delivery reads Git after ambiguous worktree creation and prese
       const application = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
+        GitRepositoryLocator.make(directory),
         productionIntegrationTarget(`${directory}/.git`),
         trackerLayer,
         productionControlledFakePlannedAttemptExecutorLayer,
@@ -2906,6 +2911,7 @@ it.effect("records an Operator capacity change through the production compositio
       const application = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
+        GitRepositoryLocator.make(directory),
         productionIntegrationTarget(`${directory}/.git`),
         controlledTrackerMutationLayer,
         productionControlledFakePlannedAttemptExecutorLayer,
@@ -3012,6 +3018,7 @@ it.effect("terminates once only after G2 proves the target complete and responsi
       const application = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
+        GitRepositoryLocator.make(directory),
         productionIntegrationTarget(`${directory}/.git`),
         controlledTrackerMutationLayer,
         productionControlledFakePlannedAttemptExecutorLayer,
@@ -3100,6 +3107,7 @@ it.effect("rejects re-entry after fresh tracker facts conclusively block the Run
       const application = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
+        GitRepositoryLocator.make(directory),
         productionIntegrationTarget(`${directory}/.git`),
         controlledTrackerMutationLayer,
         productionControlledFakePlannedAttemptExecutorLayer,
@@ -3368,6 +3376,7 @@ it.effect("publishes a changed terminal observation before continuing", () =>
       const application = productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
+        GitRepositoryLocator.make(directory),
         continuationTarget,
         trackerLayer,
         controlledSynchronousPlannedAttemptExecutorLayer(terminalExecutorLayer),
@@ -3498,6 +3507,7 @@ it.effect("blocks Run establishment before activation when preserved history has
       const application = productionWorkflowInterpreterLayer(
         requestedRunId,
         GitCommonDirectoryTarget.make(directory),
+        GitRepositoryLocator.make(directory),
         productionIntegrationTarget(directory),
         controlledTrackerMutationLayer,
         productionControlledFakePlannedAttemptExecutorLayer,
@@ -3572,6 +3582,7 @@ it.effect(
         const application = productionWorkflowInterpreterLayer(
           requestedRunId,
           GitCommonDirectoryTarget.make(directory),
+          GitRepositoryLocator.make(directory),
           productionIntegrationTarget(directory),
           controlledTrackerMutationLayer,
           productionControlledFakePlannedAttemptExecutorLayer,
@@ -3631,6 +3642,7 @@ it.effect("blocks a new Run when another Run crashed immediately after recording
       const application = productionWorkflowInterpreterLayer(
         requestedRunId,
         GitCommonDirectoryTarget.make(directory),
+        GitRepositoryLocator.make(directory),
         productionIntegrationTarget(directory),
         controlledTrackerMutationLayer,
         productionControlledFakePlannedAttemptExecutorLayer,
@@ -3712,6 +3724,7 @@ it.effect("establishes a Run when another Run's responsibility is completed", ()
       const application = productionWorkflowInterpreterLayer(
         requestedRunId,
         GitCommonDirectoryTarget.make(directory),
+        GitRepositoryLocator.make(directory),
         productionIntegrationTarget(directory),
         controlledTrackerMutationLayer,
         productionControlledFakePlannedAttemptExecutorLayer,

@@ -2,6 +2,34 @@ import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
 import { issue275ActiveGraphRefreshCassetteCatalog } from "../../test-support/issue-275-active-graph-refresh-cassette.js"
+import { runIssue275ActiveGraphRefreshRestart } from "../../test-support/issue-268-controlled-characterization.js"
+
+for (const cut of ["Intent", "Observation"] as const) {
+  it.effect(`recovers the same Run after G5 ${cut} while B C D remain held and F G remain unadmitted`, () =>
+    Effect.gen(function* () {
+      const result = yield* runIssue275ActiveGraphRefreshRestart(cut)
+      const prefix = result.prefix.records
+      expect(prefix.at(-1)?.event._tag).toBe(
+        cut === "Intent" ? "TaskTrackerReadIntentRecorded" : "TaskTrackerFactsObserved"
+      )
+      expect(result.after.records.slice(0, prefix.length)).toEqual(prefix)
+      expect(result.after.records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+      expect(new Set(result.after.records.map(({ runId }) => runId))).toEqual(new Set(prefix.map(({ runId }) => runId)))
+      // Boundary counters are process-local; recovery must issue no new work command or admission.
+      expect(result.after.commands).toEqual([])
+      expect(result.after.claimRequests).toEqual([])
+      expect(result.after.plans).toEqual([])
+      expect(result.after.worktreeCreateRequests).toEqual(result.prefix.worktreeCreateRequests)
+      const final = result.after.publications.at(-1)
+      if (final?.publication.graph._tag !== "GraphEstablished") return expect.fail("missing recovered G5 publication")
+      expect(final.publication.graph.observation.snapshot.taskIds()).toEqual(["A", "B", "C", "D", "E", "F", "G"])
+      expect(
+        final.actionInputs.runtimeFacts.taskWork.held.map(({ correlation }) => correlation.attemptId).toSorted()
+      ).toEqual(["attempt:B:1", "attempt:C:1", "attempt:D:1"])
+      expect(result.after.records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+    })
+  )
+}
 
 it.effect("observes F and G without admitting either while B C and D retain every exact position", () =>
   Effect.gen(function* () {

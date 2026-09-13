@@ -128,7 +128,7 @@ jobs:
     name: Formal model gate (Node ${{ matrix.node-version }})
     needs: change-plan
     if: needs.change-plan.outputs.docs-only != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     # quint-gate-policy.mjs checks this literal against 720s execution + 7s
     # termination + 210s setup/reporting reserve < this 960s outer cutoff.
     timeout-minutes: 16

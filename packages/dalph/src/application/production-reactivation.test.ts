@@ -129,7 +129,7 @@ type IsExactly<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : fals
 type Assert<T extends true> = T
 type ProductionExecutorCapabilitiesAreMandatory = Assert<
   IsExactly<
-    Layer.Success<Parameters<typeof productionWorkflowInterpreterLayer>[4]>,
+    Layer.Success<Parameters<typeof productionWorkflowInterpreterLayer>[5]>,
     PlannedAttemptExecutor | PlannedAttemptExecutorLifecycleObservation
   >
 >
@@ -1557,6 +1557,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             const application = productionWorkflowInterpreterLayer(
               runId,
               GitCommonDirectoryTarget.make(`${directory}/.git`),
+              GitRepositoryLocator.make(directory),
               integrationTarget,
               Layer.succeed(TrackerMutation, trackerMutation),
               controlledSynchronousPlannedAttemptExecutorLayer(Layer.succeed(PlannedAttemptExecutor, executor)),

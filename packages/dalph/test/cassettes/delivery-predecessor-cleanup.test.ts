@@ -11,6 +11,7 @@ import {
 } from "@dalph/orchestrator"
 import { Cause, Effect, Exit } from "effect"
 import { expect } from "vitest"
+import { restartPredecessorCleanupAfterRemoval } from "./delivery-predecessor-cleanup-restart.test-support.js"
 import {
   maintainedAuthoredCassetteCatalog,
   runAuthoredScenarioCassette,
@@ -27,6 +28,70 @@ const cachedDeliveryRun = Effect.runSync(
       Effect.provide(NodeCrypto.layer)
     )
   )
+)
+
+const cachedCapstoneCleanupRun = Effect.runSync(
+  Effect.cached(
+    runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStoryCapstone).pipe(
+      Effect.provide(NodeCrypto.layer)
+    )
+  )
+)
+
+it.effect(
+  "reopens A cleanup after exact removal before response and settles only after owning-boundary absence",
+  () =>
+    Effect.gen(function* () {
+      const delivery = yield* cachedCapstoneCleanupRun
+      const cleanupIndex = delivery.records.findIndex(
+        ({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized"
+      )
+      expect(cleanupIndex).toBeGreaterThan(0)
+      const retained = delivery.records.slice(0, cleanupIndex)
+      const result = yield* restartPredecessorCleanupAfterRemoval(retained)
+      expect(result.prefix.at(-1)?.event._tag).toBe("IntegratorCandidateCleanupMutationIntended")
+      expect(
+        result.prefix.some(
+          ({ event }) =>
+            event._tag === "IntegratorCandidateCleanupMutationResultRecorded" ||
+            event._tag === "IntegratorCandidateCleanupSettled"
+        )
+      ).toBe(false)
+      expect(result.reopened).toEqual(result.prefix)
+      expect(result.records.slice(0, result.prefix.length)).toEqual(result.prefix)
+      const predecessor = exactlyOne(
+        retained.filter(
+          ({ event }) => event._tag === "IntegratorSessionFixed" && event.correlation.plannedAttempt.taskId === "A"
+        ),
+        "IntegratorSessionFixed"
+      ).event.correlation
+      const successor = exactlyOne(
+        retained.filter(
+          ({ event }) =>
+            event._tag === "IntegratorSuccessorSessionFixed" && event.predecessor.plannedAttempt.taskId === "A"
+        ),
+        "IntegratorSuccessorSessionFixed"
+      )
+      expect(result.calls.map(({ tag }) => tag)).toEqual(["Observe", "Remove", "Observe"])
+      expect(
+        result.calls.every(
+          ({ locator, sessionId }) => locator === predecessor.candidateResource && sessionId === predecessor.sessionId
+        )
+      ).toBe(true)
+      const absent = exactlyOne(result.records, "IntegratorCandidateCleanupAbsenceConfirmed")
+      const settled = exactlyOne(result.records, "IntegratorCandidateCleanupSettled")
+      expect(absent.event.cause).toBe("MutationResponseReconciliation")
+      expect(settled.position).toBeGreaterThan(absent.position)
+      expect(absent.position).toBeGreaterThan(result.prefix.length)
+      expect(result.records.filter(({ event }) => !event._tag.startsWith("IntegratorCandidateCleanup"))).toEqual(
+        retained
+      )
+      expect(result.records).toContainEqual(successor)
+      expect(absent.event.authorization.disposition.predecessor).toEqual(predecessor)
+      expect(absent.event.authorization.disposition.successor).toEqual(successor.event.successor)
+      expect(result.result.remaining.candidate).toEqual([])
+    }),
+  timeout
 )
 
 const exactlyOne = <Tag extends JournalRecord["event"]["_tag"]>(

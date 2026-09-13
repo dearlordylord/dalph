@@ -1,6 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Effect, Schema } from "effect"
+import { Effect, Result, Schema } from "effect"
 import { expect } from "vitest"
 import {
   AuthoredCassetteInteractionMismatch,
@@ -20,6 +20,11 @@ it.effect(
   () =>
     Effect.gen(function* () {
       expect(cassette.story[returnAt]).toEqual(declaredReturn)
+      expect(cassette.story[233]).toEqual({
+        _tag: "DalphSelects",
+        causalAnchor: { occurrenceRole: "double-diamond-paid-G2", expectedBoundary: "CoordinatorActivationReturned" },
+        operation: { _tag: "ReadTrackerGraph", target: "double-diamond-target" }
+      })
       expect(cassette.story.slice(returnAt + 1, returnAt + 10).map((item) => item._tag)).toEqual([
         "DalphSelects",
         "TrackerGraphReadReturned",
@@ -65,7 +70,11 @@ it.effect("rejects omission of the actual double-diamond activation return befor
       operation: { _tag: "ReadTrackerGraph", target: "double-diamond-target" }
     })
     const missingReturn = { ...cassette, story: cassette.story.filter((_, index) => index !== returnAt) }
-    const failure = yield* runAuthoredScenarioCassette(missingReturn).pipe(Effect.flip)
+    const outcome = yield* runAuthoredScenarioCassette(missingReturn).pipe(Effect.result)
+    if (Result.isSuccess(outcome)) {
+      return yield* Effect.die("omitted activation return unexpectedly completed the double diamond")
+    }
+    const failure = outcome.failure
     if (!Schema.is(AuthoredCassetteInteractionMismatch)(failure)) {
       return yield* Effect.die("omitted activation return did not fail at its exact authored cursor")
     }

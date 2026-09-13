@@ -12,7 +12,18 @@ const viteServer = await createServer({
   root: labRoot,
   server: { middlewareMode: true }
 })
-const httpServer = createHttpServer(viteServer.middlewares)
+// The prototype intentionally has no favicon; keep the browser smoke focused on application failures.
+const httpServer = createHttpServer((request, response) => {
+  if (request.url === "/favicon.ico") {
+    response.statusCode = 204
+    response.end()
+    return
+  }
+  viteServer.middlewares(request, response, () => {
+    response.statusCode = 404
+    response.end()
+  })
+})
 
 try {
   await new Promise((resolve, reject) => {
@@ -24,7 +35,7 @@ try {
     throw new Error("Reducer Lab browser check could not determine its HTTP port")
   }
   const labUrl = `http://${host}:${address.port}/`
-  const child = spawn(process.execPath, [browserSmoke], {
+  const child = spawn(process.execPath, [browserSmoke, ...process.argv.slice(2)], {
     cwd: labRoot,
     env: { ...process.env, REDUCER_LAB_URL: labUrl },
     stdio: "inherit"

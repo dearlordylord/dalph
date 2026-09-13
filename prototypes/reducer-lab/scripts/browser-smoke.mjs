@@ -10,6 +10,8 @@ const framedCassette = "authored:dependentTasksCompleteInOneRun"
 const acceptedIntegrationCassette = "authored:acceptedResultRestartsIntoIntegration"
 const targetPromotionCassette = "authored:targetPromotionSuccess"
 const linkedDeliveryStoryCassette = "authored:deliveryInvariantStory"
+const capstoneCassette = "authored:deliveryInvariantStoryCapstone"
+const capstoneTimeoutMs = 600_000
 
 const selectCassette = async (page, catalogKey) => {
   const search = page.locator('[data-role="cassette-selector"]')
@@ -17,8 +19,226 @@ const selectCassette = async (page, catalogKey) => {
   await search.dispatchEvent("change")
 }
 
-const browser = await chromium.launch({ headless: true })
+const runCapstoneBrowserSmoke = async (browser) => {
+  const page = await browser.newPage()
+  const browserErrors = []
+  const nonReadRequests = []
+  page.on("console", (message) => {
+    if (message.type() === "error") browserErrors.push(message.text())
+  })
+  page.on("pageerror", (error) => browserErrors.push(String(error)))
+  page.on("request", (request) => {
+    if (!new Set(["GET", "HEAD"]).has(request.method())) {
+      nonReadRequests.push(`${request.method()} ${request.url()}`)
+    }
+  })
+
+  await page.goto(labUrl, { waitUntil: "networkidle" })
+  const selector = page.locator('[data-role="cassette-selector"]')
+  const capstoneOption = page.locator(`[data-role="cassette-options"] option[value="${capstoneCassette}"]`)
+  assert.equal(await capstoneOption.count(), 1, "The maintained capstone must be a real Lab catalog option")
+  const maintainedCassetteCount = await page.locator('[data-role="cassette-options"] option').count()
+  assert.ok(maintainedCassetteCount > 0)
+  await selectCassette(page, capstoneCassette)
+  assert.equal(await page.locator("#selected-cassette").getAttribute("data-catalog-key"), capstoneCassette)
+  const article = page.locator("#selected-cassette")
+  const workbench = page.locator('[data-role="delivery-workbench"]')
+  assert.equal(await workbench.count(), 1)
+
+  const runSelected = page.getByRole("button", { name: /Run selected cassette:/u })
+  await runSelected.click()
+  await page.waitForFunction(
+    (catalogKey) => document.querySelector("#selected-cassette")?.getAttribute("data-catalog-key") === catalogKey
+      && document.querySelector("#selected-cassette")?.getAttribute("data-state") === "Completed",
+    capstoneCassette,
+    { timeout: capstoneTimeoutMs }
+  )
+  assert.equal(await article.getAttribute("data-state"), "Completed")
+  assert.match(await article.textContent() ?? "", /402\/402/u)
+  assert.equal(await article.locator('[data-role="delivery-workbench"]').count(), 1)
+
+  const timeline = workbench.locator('[data-role="delivery-timeline-host"]')
+  const timelineSelector = workbench.locator('.delivery-timeline-controls select')
+  const timelineOptionCount = await timelineSelector.locator("option").count()
+  assert.ok(timelineOptionCount > 22, `The capstone must expose all captured checkpoints, got ${timelineOptionCount}`)
+  const statusIndexes = await timelineSelector.locator('option:has-text("canonical delivery status read")').evaluateAll(
+    (options) => options.map((option) => Number(option.value))
+  )
+  assert.ok(statusIndexes.length > 0, "The capstone timeline must expose canonical status moments")
+  const statusSampleIndexes = [...new Set([
+    statusIndexes[0],
+    statusIndexes[Math.floor(statusIndexes.length / 2)],
+    statusIndexes.at(-1)
+  ].filter((index) => index !== undefined))]
+  let renderedStatusCount = 0
+  for (const index of statusSampleIndexes) {
+    await timelineSelector.selectOption(String(index))
+    const canonicalStatus = workbench.locator('[data-role="delivery-canonical-status"]')
+    const statusView = await canonicalStatus.evaluate((host) => {
+      const exact = host.querySelector("details > pre")?.textContent ?? ""
+      const status = host.getAttribute("data-status")
+      const parsed = exact.length === 0 ? null : JSON.parse(exact)
+      const entries = [...host.querySelectorAll('[data-role="delivery-status-entry"]')].map((entry) => ({
+        tag: entry.getAttribute("data-entry-tag"),
+        classification: entry.getAttribute("data-classification"),
+        exact: entry.querySelector("pre")?.textContent ?? ""
+      }))
+      return { entries, exact, parsed, status }
+    })
+    assert.notEqual(statusView.status, "Unobserved")
+    assert.ok(statusView.exact.length > 0)
+    assert.ok(statusView.parsed !== null)
+    const expectedEntries = statusView.parsed?._tag === "DeliveryStatusAvailable"
+      ? statusView.parsed.entries
+      : statusView.parsed?._tag === "DeliveryStatusClosed" && statusView.parsed.final?._tag === "DeliveryStatusAvailable"
+        ? statusView.parsed.final.entries
+        : []
+    assert.equal(statusView.entries.length, expectedEntries.length)
+    assert.deepEqual(
+      statusView.entries.map(({ tag, classification }) => ({ _tag: tag, classification })),
+      expectedEntries.map(({ _tag, classification }) => ({ _tag, classification }))
+    )
+    assert.deepEqual(
+      statusView.entries.map(({ exact }) => JSON.parse(exact)),
+      expectedEntries,
+      "Every rendered status entry must preserve its complete canonical JSON fact"
+    )
+    assert.deepEqual(JSON.parse(statusView.exact), statusView.parsed)
+    assert.equal(await canonicalStatus.locator("button, input, select").count(), 0)
+    renderedStatusCount += 1
+  }
+  assert.ok(renderedStatusCount > 0)
+  console.log(`✓ capstone reaches Completed with 402/402 and renders ${renderedStatusCount} exact canonical status reads`)
+
+  const firstFrame = await timelineSelector.inputValue()
+  const lastFrame = String(timelineOptionCount - 1)
+  await timelineSelector.selectOption(lastFrame)
+  assert.equal(await timelineSelector.inputValue(), lastFrame)
+  await timelineSelector.selectOption(firstFrame)
+  assert.equal(await timelineSelector.inputValue(), firstFrame)
+  await timelineSelector.selectOption(lastFrame)
+
+  const deliveryGraph = workbench.locator('[data-role="delivery-production-graph"]')
+  const graphTask = deliveryGraph.locator("button[data-task-id]").first()
+  assert.equal(await graphTask.count(), 1, "The capstone must render a selectable delivery graph task")
+  const selectedTaskId = await graphTask.getAttribute("data-task-id")
+  if (selectedTaskId === null) throw new Error("The capstone graph task has no task identity")
+  const frameBeforeSelection = await timelineSelector.inputValue()
+  await graphTask.evaluate((button) => button.click())
+  assert.equal(await timelineSelector.inputValue(), frameBeforeSelection, "Task selection must not move playback")
+  assert.match(
+    await workbench.locator('[data-role="selected-task-facts"]').textContent() ?? "",
+    new RegExp(`\\b${selectedTaskId}\\b`, "u")
+  )
+  const graphCanvas = deliveryGraph.locator("#canvas")
+  await graphCanvas.scrollIntoViewIfNeeded()
+  const canvasBounds = await graphCanvas.boundingBox()
+  assert.notEqual(canvasBounds, null, "The capstone delivery graph must expose its canvas")
+  const viewportBefore = await deliveryGraph.evaluate((graph) => graph.captureViewport())
+  await page.mouse.move(canvasBounds.x + canvasBounds.width / 2, canvasBounds.y + canvasBounds.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(
+    canvasBounds.x + canvasBounds.width / 2 + 36,
+    canvasBounds.y + canvasBounds.height / 2 + 24,
+    { steps: 4 }
+  )
+  await page.mouse.up()
+  await page.mouse.wheel(0, 360)
+  await page.waitForFunction(
+    (before) => {
+      const graph = document.querySelector('[data-role="delivery-production-graph"]')
+      if (graph === null || typeof graph.captureViewport !== "function") return false
+      const viewport = graph.captureViewport()
+      return viewport !== null && JSON.stringify(viewport) !== JSON.stringify(before)
+    },
+    viewportBefore
+  )
+  const viewportAfter = await deliveryGraph.evaluate((graph) => graph.captureViewport())
+  assert.notDeepEqual(viewportAfter, viewportBefore, "Playback selection must leave graph viewport under user control")
+  await workbench.getByRole("button", { name: "Reset graph view" }).click()
+  const viewportAfterReset = await deliveryGraph.evaluate((graph) => graph.captureViewport())
+  assert.notDeepEqual(viewportAfterReset, viewportAfter, "Reset must restore the fitted graph viewport")
+  await workbench.getByRole("button", { name: "Reset graph view" }).click()
+  assert.deepEqual(
+    await deliveryGraph.evaluate((graph) => graph.captureViewport()),
+    viewportAfterReset,
+    "Graph reset must leave a stable fitted viewport"
+  )
+  console.log("✓ keeps capstone playback, task selection, and delivery graph viewport independent")
+
+  const tracePanel = workbench.locator('[data-role="trace-history"]')
+  assert.equal(await tracePanel.count(), 1)
+  assert.equal(await tracePanel.locator('[data-role="trace-current-status"]').count(), 1)
+  assert.equal(await tracePanel.locator('[data-role="trace-auxiliary-chronology"]').count(), 1)
+  assert.equal(await timeline.count(), 1)
+  const surfaceParents = await page.evaluate(() => ({
+    trace: document.querySelector('[data-role="trace-history"]')?.parentElement?.getAttribute("data-role"),
+    timeline: document.querySelector('[data-role="delivery-timeline-host"]')?.parentElement?.getAttribute("data-role")
+  }))
+  assert.notEqual(surfaceParents.trace, surfaceParents.timeline)
+  const traceSelector = tracePanel.locator('[data-role="trace-cursor-selector"]')
+  const traceCount = await traceSelector.locator("option").count()
+  assert.ok(traceCount > 1, "The capstone must expose multiple production journal cursors")
+  await traceSelector.selectOption(String(traceCount - 1))
+  const beforeBack = await tracePanel.locator('[data-role="trace-cursor"]').evaluate((cursor) => ({
+    runId: cursor.getAttribute("data-run-id"),
+    position: Number(cursor.getAttribute("data-journal-position"))
+  }))
+  const beforeGraphKey = await tracePanel.locator('[data-role="trace-production-graph"]').evaluate((graph) => graph.projection?.key ?? null)
+  await tracePanel.getByRole("button", { name: "Select previous production journal cursor" }).click()
+  const afterBack = await tracePanel.locator('[data-role="trace-cursor"]').evaluate((cursor) => ({
+    runId: cursor.getAttribute("data-run-id"),
+    position: Number(cursor.getAttribute("data-journal-position"))
+  }))
+  const afterGraphKey = await tracePanel.locator('[data-role="trace-production-graph"]').evaluate((graph) => graph.projection?.key ?? null)
+  assert.equal(afterBack.runId, beforeBack.runId)
+  assert.ok(afterBack.position < beforeBack.position)
+  assert.notEqual(afterGraphKey, beforeGraphKey, "Back must move the trace graph with the production cursor")
+  console.log("✓ keeps historical Back navigation separate from delivery playback and status presentation")
+
+  const oldRunId = beforeBack.runId
+  const oldEvidence = await article.locator('[data-role="execution-evidence"]').textContent()
+  await runSelected.click()
+  await page.waitForFunction(
+    () => document.querySelector("#selected-cassette")?.getAttribute("data-state") === "Running",
+    undefined,
+    { timeout: capstoneTimeoutMs }
+  )
+  assert.equal(await article.getAttribute("data-state"), "Running")
+  assert.equal(await article.locator('[data-role="execution-evidence"]').count(), 0)
+  assert.equal(await workbench.locator('[data-role="trace-history"]').count(), 0)
+  assert.equal(await workbench.locator('[data-role="trace-cursor"]').count(), 0)
+  assert.equal(await article.textContent().then((value) => value?.includes(oldRunId ?? "") ?? false), false)
+  assert.equal(await article.textContent().then((value) => value?.includes(oldEvidence ?? "") ?? false), false)
+  await page.waitForFunction(
+    (catalogKey) => document.querySelector("#selected-cassette")?.getAttribute("data-catalog-key") === catalogKey
+      && document.querySelector("#selected-cassette")?.getAttribute("data-state") === "Completed",
+    capstoneCassette,
+    { timeout: capstoneTimeoutMs }
+  )
+  const secondRunId = await page.locator('[data-role="trace-cursor"]').getAttribute("data-run-id")
+  assert.ok(secondRunId)
+  assert.notEqual(secondRunId, oldRunId, "A rerun must have a fresh production Run identity")
+  const traceRunIds = await page.locator('[data-role="trace-history-item"]').evaluateAll((items) =>
+    [...new Set(items.map((item) => item.getAttribute("data-run-id") ?? ""))]
+  )
+  assert.deepEqual(traceRunIds, [secondRunId])
+  assert.equal(await page.locator('[data-role="execution-evidence"]').count(), 1)
+  assert.deepEqual(nonReadRequests, [])
+  assert.deepEqual(browserErrors, [])
+  console.log("✓ discards the first capstone presentation on rerun and retains only the fresh Run trace")
+}
+
+const browser = await chromium.launch({
+  headless: true,
+  ...(process.env.REDUCER_LAB_CHROMIUM === undefined
+    ? {}
+    : { executablePath: process.env.REDUCER_LAB_CHROMIUM })
+})
 try {
+  if (process.argv.includes("--capstone")) {
+    await runCapstoneBrowserSmoke(browser)
+  } else {
   const page = await browser.newPage()
   const browserErrors = []
   page.on("console", (message) => {
@@ -938,6 +1158,7 @@ try {
   console.log(
     `✓ browser-smoke drives the real Orb application through every maintained cassette (${maintainedCassetteCount} at ${labUrl})`
   )
+  }
 } finally {
   await browser.close()
 }

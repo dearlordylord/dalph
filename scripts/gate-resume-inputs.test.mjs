@@ -6,6 +6,7 @@ import {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -562,8 +563,14 @@ test("installed dprint check with disabled incremental cache preserves real guar
   cpSync(join(originalCache, process.env.DPRINT_CACHE_DIR === undefined ? "cache/plugins" : "plugins"), plugins, {
     recursive: true
   })
-  const metadata = JSON.parse(readFileSync(join(plugins, "387f76cd16d3839d.json"), "utf8"))
-  assert.equal(metadata.source, "remote:https://plugins.dprint.dev/oxc-0.32.0.wasm")
+  const expectedPluginSource = "remote:https://plugins.dprint.dev/oxc-0.32.0.wasm"
+  const metadataEntry = readdirSync(plugins)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => ({ name, metadata: JSON.parse(readFileSync(join(plugins, name), "utf8")) }))
+    .find(({ metadata }) => metadata.source === expectedPluginSource)
+  assert.ok(metadataEntry, `missing cached dprint metadata for ${expectedPluginSource}`)
+  const metadata = metadataEntry.metadata
+  assert.equal(metadata.source, expectedPluginSource)
   writeFileSync(join(f.root, "source.ts"), "const value = 1;\n")
   writeFileSync(join(f.root, "dprint.json"), JSON.stringify({ plugins: [metadata.source.slice(7)] }))
   f.invocation.toolExecutables.push(installed)
@@ -577,7 +584,7 @@ test("installed dprint check with disabled incremental cache preserves real guar
       timeout: 10000
     })
     await guard.finish()
-    const plugin = join(plugins, "387f76cd16d3839d.cwasm")
+    const plugin = join(plugins, `${metadataEntry.name.slice(0, -".json".length)}.cwasm`)
     const original = readFileSync(plugin)
     writeFileSync(plugin, "changed")
     writeFileSync(plugin, original)

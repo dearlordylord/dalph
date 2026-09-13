@@ -113,7 +113,7 @@ describe("capability registration gate", () => {
     }
   )
 
-  it("registers the real tracker and Integrator authorities and keeps unavailable providers typed N/A", () => {
+  it("registers the real tracker, Integrator, and Git target-promotion authorities", () => {
     const graph = capabilityRegistrationInventory.capabilities.find(
       ({ family }) => family === "task-tracker-graph-read"
     )
@@ -146,9 +146,18 @@ describe("capability registration gate", () => {
     expect(integrator?.production).toEqual(
       expect.objectContaining({ _tag: "Implementation", identity: "nodeCodexIntegratorLayer" })
     )
-    expect(promotion?.production).toEqual(
-      expect.objectContaining({ _tag: "NotApplicable", reason: "application-supplied-boundary" })
-    )
+    expect(promotion?.production).toEqual({
+      _tag: "Implementation",
+      identity: "nodeGitTargetPromotionLayer",
+      source: "packages/orchestrator/src/authorities/git/target-promotion.ts",
+      marker: "nodeGitTargetPromotionLayer",
+      composition: {
+        _tag: "Assembled",
+        identity: "nodeGitTargetPromotionLayer",
+        source: "packages/dalph/src/application/production-host.ts",
+        marker: "nodeGitTargetPromotionLayer"
+      }
+    })
   })
 
   it("rejects a missing family even when the inventory is otherwise unchanged", () => {
@@ -706,7 +715,7 @@ describe("capability registration gate", () => {
 
   it("rejects a registered implementation identity that is not consumed by its declared composition", () => {
     const original = capabilityRegistrationInventory.capabilities.find(({ family }) => family === "git-worktree")
-    if (original === undefined || original.production._tag !== "Implementation") {
+    if (original === undefined) {
       throw new Error("Git worktree production registration fixture is missing")
     }
     const production = original.production

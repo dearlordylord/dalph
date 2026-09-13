@@ -178,8 +178,55 @@ describe("production planned-attempt location codec", () => {
       PlannedTaskAttemptOrdinal.make(3)
     )
     expect(first).not.toEqual(second)
-    expect(first.branch).toMatch(/^refs\/heads\/dalph\/[a-z0-9-]+$/)
-    expect(second.branch).toMatch(/^refs\/heads\/dalph\/[a-z0-9-]+$/)
+    expect(first.branch).toMatch(/^refs\/heads\/dalph\/(part-[a-z0-9-]+\/)+_leaf$/)
+    expect(second.branch).toMatch(/^refs\/heads\/dalph\/(part-[a-z0-9-]+\/)+_leaf$/)
+  })
+
+  it("keeps the full UTF-8 AttemptId while bounding long and Unicode resource components", () => {
+    const runId = RunId.make(`production/${"r".repeat(230)}/雪😀`)
+    const taskId = TaskId.make("github:dearlordylord/dalph/issues/339/*:?[\\")
+    const locations = deriveProductionPlannedAttemptLocations(root, runId, taskId, PlannedTaskAttemptOrdinal.make(12))
+    const hex = (value: string) =>
+      Array.from(new TextEncoder().encode(value), (byte) => byte.toString(16).padStart(2, "0")).join("")
+    const runHex = hex(runId)
+    const taskHex = hex(taskId)
+    const originalResource = `run-${runHex.length}-${runHex}-task-${taskHex.length}-${taskHex}-attempt-12`
+    expect(originalResource.length).toBeGreaterThan(528)
+    expect(locations.attemptId).toBe(`attempt:${originalResource}`)
+    const components = locations.worktree.slice(`${root}/`.length).split("/")
+    expect(components.at(-1)).toBe("_leaf")
+    expect(
+      components
+        .slice(0, -1)
+        .map((part) => part.slice("part-".length))
+        .join("")
+    ).toBe(originalResource)
+    expect(components.every((part) => new TextEncoder().encode(part).length <= 133)).toBe(true)
+    expect(locations.branch).toBe(`refs/heads/dalph/${components.join("/")}`)
+    const moved = deriveProductionPlannedAttemptLocations(
+      ProductionPlannedAttemptWorktreeRoot.make("/other/planned-attempts"),
+      runId,
+      taskId,
+      PlannedTaskAttemptOrdinal.make(12)
+    )
+    expect(moved.attemptId).toBe(locations.attemptId)
+    expect(moved.branch).toBe(locations.branch)
+    expect(moved.worktree).not.toBe(locations.worktree)
+  })
+
+  it("keeps ordinal leaves disjoint at chunk boundaries", () => {
+    // These lengths put the final ordinal around the 128-character boundary.
+    for (const length of [49, 50, 51, 52, 113, 114, 115, 116]) {
+      const runId = RunId.make("r".repeat(length))
+      const taskId = TaskId.make("task")
+      const first = deriveProductionPlannedAttemptLocations(root, runId, taskId, PlannedTaskAttemptOrdinal.make(1))
+      const extended = deriveProductionPlannedAttemptLocations(root, runId, taskId, PlannedTaskAttemptOrdinal.make(10))
+      expect(extended.attemptId).toBe(`${first.attemptId}0`)
+      expect(extended.worktree.startsWith(`${first.worktree}/`)).toBe(false)
+      expect(first.worktree.startsWith(`${extended.worktree}/`)).toBe(false)
+      expect(extended.branch.startsWith(`${first.branch}/`)).toBe(false)
+      expect(first.branch.startsWith(`${extended.branch}/`)).toBe(false)
+    }
   })
 
   it("keeps fresh ordinals task-local and consumes exact replacement Base and ordinal", async () => {

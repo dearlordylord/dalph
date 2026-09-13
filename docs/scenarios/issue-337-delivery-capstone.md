@@ -127,15 +127,15 @@ Accepted reports, and Dalph reads F's and X's current claims. The journal keeps
 both accepted-result integration responsibilities unsettled.
 
 Dalph's current activation returns `RunMustRemainActive(UnsettledResponsibility)`.
-The cassette adapter queues that actual exit with its exiting activation
-ordinal and the captured facts that the graph publication names
-`PostQuiescenceReconfirmation` and the passive Accepted reports followed that
-paid graph. The owner may admit a trailing entry before the exit consumer
+The cassette's paid graph selection independently declares
+`expectedBoundary: CoordinatorActivationReturned` in its causal anchor. The
+adapter checks that declared return at the actual exit, then queues the exit
+with its original activation ordinal. The owner may admit a trailing entry before the exit consumer
 runs; the consumer records the return with the exit's original ordinal. The
 next queued ordinary activation reads the current complete graph,
 check F/X claims again, read the later complete graph, and integrate F then X.
 The maintainer sees activation 7's return followed by activation 8's graph and
-claim calls. Removing the return declaration must fail at the next authored
+claim calls. Removing the return marker must fail at the next authored
 Dalph selection; the adapter must not silently discard an exit that precedes
 an owed boundary call or attribute it to the successor activation.
 
@@ -143,9 +143,11 @@ Some owner exits happen while the cassette is waiting at an operator command,
 explicit hint, process death, or terminal assertion. An active-work refresh
 can also return after its graph read before a queued ordinary entry reads
 its own graph. Those seams may leave their finality reason unasserted. The
-post-quiescence case above is distinct: its captured passive Accepted reports
-follow the paid graph and still require a later activation graph, so the
-return before that owed graph remains mandatory.
+post-quiescence case above explicitly declares its owed return on the paid
+graph selection. The passive Accepted reports follow that graph and still
+require a later activation graph; removing the return marker therefore leaves
+the independently declared return obligation unsatisfied. This preserves the
+same chronology under master's `bf027ef15` return-ownership implementation.
 The controlled responses are definite; there is no added crash or provider
 retry, and this amendment changes cassette validation only, not the Dalph
 workflow or outside-system protocol.

@@ -234,6 +234,8 @@ export interface StoryCursor {
   readonly pauseAfterIntegrationQuarantineDirectionAppend: Effect.Effect<void>
   /** Current zero-based position after all successfully consumed authored items. */
   readonly storyPosition: Effect.Effect<number>
+  /** Synchronous passive position read for harness capture inside an existing atomic observer turn. */
+  readonly storyPositionUnsafe: () => number
   /** Current unconsumed authored item for the one sequential harness driver. */
   readonly currentStoryItem: Effect.Effect<StoryItem | undefined>
   /** Waits until the current authored boundary has been consumed by its production adapter. */
@@ -2348,6 +2350,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     pauseAfterIntegrationQuarantineDirectionAppend,
     pauseAtCoordinatorProcessDeathAfterJournalEvent,
     storyPosition: SubscriptionRef.get(position),
+    storyPositionUnsafe: () => SubscriptionRef.getUnsafe(position),
     currentStoryItem: SubscriptionRef.get(position).pipe(Effect.map((index) => story[index])),
     awaitCurrentStoryAdvance: SubscriptionRef.get(position).pipe(
       Effect.flatMap((index) => awaitsLaterStoryItem(position, index))

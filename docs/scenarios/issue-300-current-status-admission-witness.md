@@ -19,7 +19,8 @@ It replaces only the unconditional requirement that every live owner's exact
 proposal still occur in the current frontier. One genuine opaque admission
 witness issued by this process for that complete exact proposal is sufficient
 when the proposal is absent. If the same proposal identity remains in the
-current frontier, its complete value must still equal the owner's proposal.
+current frontier, its complete value must still equal the owner's proposal,
+except for the narrowly defined evaluation-prefix refinements below.
 Duplicate owners, mismatched proposals, and untrusted witnesses remain typed
 `DeliveryStatusProjectionConflict` results.
 
@@ -74,7 +75,8 @@ the trigger; Alice makes no workflow request.
    in this process for P's complete exact value.
 3. If P is absent from the current frontier, that genuine witness permits its
    actual owner entry. If P's identity is present, a different complete
-   proposal remains a contradiction even with a genuine witness.
+   proposal remains a contradiction even with a genuine witness, except for
+   the evaluation-prefix refinements below.
 4. Alice's Run view shows the actual live action, or its actual settled owner
    awaiting accepted publication, alongside B and every applicable latest
    accepted fact. Owner ordering uses the exact admitted proposal evidence
@@ -141,3 +143,151 @@ production-runtime, pure-projection, and real-process boundaries.
 This mapping refines #217's existing scenarios 3, 8, and 9 and supports #260
 scenarios 3 through 5 through #300. All other #217 acceptance requirements and
 native blocking edges remain applicable.
+
+## Alice sees the original graph-read owner after its intent advances history
+
+This accepted #339 qualification refinement supersedes only complete
+owner-versus-current equality for the graph-read ordering position. Complete
+admission-witness-versus-owner equality remains unchanged. It adds no workflow
+transition, request, retry, durable ownership, or status authority. The
+governing boundaries remain #217's passive observation and #269's owner
+handoff; the existing admission and recovery models do not model this passive
+ordering comparison.
+
+### Starting facts and trigger
+
+Alice watches built production child P1 for Run R. SQLite has acknowledged
+R's beginning at position 1. Git remains at the fixture's initial head; no
+task claim, worktree, executor session, or integration has started because the
+first complete tracker graph read has not returned. The runtime has admitted
+one graph-read proposal P, retained its complete original admission witness,
+and registered its actual process-local owner. P's tracker graph-read ordering
+position is 1.
+
+The owning graph-read protocol acknowledges its existing G1 read intent at
+position 2 and starts the controlled GitHub read. GitHub holds the response.
+The current coherent evaluation now has accepted position 2 and derives the
+same graph-read proposal identity, target, route, admission requirements,
+action identity, and wait correlation. Only the frontier's tracker graph-read
+ordering position has advanced to 2. That publication triggers Alice's passive
+status update.
+
+### Ordered calls, visible result, and forbidden result
+
+1. The pure status projection checks the original complete witness against the
+   original complete owner proposal. It does not replace or modify either.
+2. For an otherwise identical tracker graph-read action, it accepts only a
+   non-regressing tracker graph-read ordering position from the coherent
+   current evaluation. It compares all other proposal fields exactly. Other
+   The recovered-workflow refinement below extends this distinction only to
+   that variant's evaluation position; its other ordering fields remain exact.
+3. Alice sees the latest accepted position 2 beside the actual owner with its
+   original ordering position 1 and actual operation correlation. Status makes
+   no additional GitHub, Git, executor, admission, or journal call and starts
+   no second graph read.
+4. When GitHub returns and ordinary successor publication completes, runtime
+   removes the owner. Status does not manufacture or settle it.
+
+A changed target, route, admission requirement, action identity, wait
+correlation, order tag, regressing prefix, duplicate owner, or forged/rebound
+witness remains a typed projection conflict. Comparing by identity alone,
+discarding every ordering field, freezing the latest evaluation, or rewriting
+the admitted owner's ordering evidence is forbidden.
+
+### Crash and test mapping
+
+If P1 dies at the held response, its owner and witness disappear. Ordinary
+SQLite discovery and the graph-read protocol determine P2's recovery; this
+refinement reconstructs no old owner and authorizes no retry.
+
+- Actual read intent advances history while the response is held → focused
+  runtime/status regression proves accepted position 2, original owner order
+  1, one graph boundary/operation, and no projection conflict.
+- Response and accepted successor publication → ordinary runtime regression
+  proves owner disappearance.
+- Invalid ownership or changed action → focused status negative controls cover
+  owner-order tampering against its witness, current payload/admission/target/
+  wait changes, changed order tag, regression, duplicates, and forged/rebound
+  witnesses.
+- Same real trigger through built production entry → #339's real SQLite/Git
+  controller test proceeds beyond the first graph read without the false
+  projection conflict. The remaining #339 and downstream qualification
+  scenarios and blocking edges are unchanged.
+
+## Alice sees the original claim-read owner after its intent advances history
+
+This accepted #339 refinement extends the preceding graph-read rule only to
+the evaluation position in `RecoveredWorkflowOrder`. Its constructor takes
+that position from the current evaluation for every recovered transition;
+task, transition, frontier ordinal and responsibility beginning are separate
+facts. This is not a new claim-read permission or a route-specific recovery
+rule. The preceding governing behavior and opaque admission checks remain
+applicable, and no Quint transition or outside request is added.
+
+### Starting facts and trigger
+
+Alice watches built production child P1 for Run R. SQLite's accepted prefix at
+position 15 leads Dalph to check the responsible task's claim. A claim label
+exists in controlled GitHub; its existence alone does not prove that Dalph has
+accepted a claim observation. Git has not promoted the integration target,
+and no executor command is started by this status check.
+
+The runtime admits exact proposal P for `ObserveResponsibleTaskClaim` and
+retains its original witness and owner. P has recovered-workflow order position
+15, frontier ordinal 0 and null responsibility beginning. The production
+journaled claim-read interpreter acknowledges `TaskTrackerReadIntentRecorded`
+for its exact `ReadTaskClaim` operation at position 16, records the owner's
+intent, then calls GitHub. The acceptance test holds that original read's
+response. The latest coherent evaluation derives the same proposal at position
+16. Only `order.acceptedAt` differs; all other ordering and proposal fields
+remain identical. This publication triggers Alice's passive status update.
+
+The positions 15 and 16 identify the built diagnostic chronology. A smaller
+controlled runtime fixture may use consecutive positions p and p+1, but must
+assert the actual acknowledged read-intent event and exact operation rather
+than manufacture an unexplained evaluation change.
+
+### Ordered calls, visible result, and forbidden result
+
+1. Status checks the complete original owner against its complete original
+   opaque witness, including every original order field.
+2. If complete owner-versus-current equality fails, only matching
+   `TrackerGraphOrder` or matching `RecoveredWorkflowOrder` may compare their
+   evaluation positions separately. Current position must equal the coherent
+   evaluation's position and must not regress. Null is an initial position,
+   not a permitted return from an acknowledged non-null position.
+3. Status compares the complete proposals after replacing only the current
+   order's evaluation position with the original position. The graph owner
+   and graph-read route checks remain. Every other recovered order field,
+   owner, route, identity, payload, admission requirement and wait correlation
+   remains exact. Other order variants still require complete equality.
+4. Alice sees the latest accepted prefix beside the actual original owner.
+   Status does not rewrite that owner or witness, freeze the evaluation,
+   append history, create a claim, read GitHub again, or authorize a retry.
+5. GitHub returns to the original call. Ordinary accepted successor
+   publication removes the owner; status cannot settle or reconstruct it.
+
+Changed semantic order fields, incoherent or regressing evaluation positions,
+changed actions, duplicate owners and invalid witnesses remain typed
+projection conflicts. Comparing by proposal identity alone or discarding the
+entire order is forbidden. On P1 crash, the original owner and witness vanish;
+ordinary journal discovery and boundary reconciliation govern P2. This rule
+adds no recovery request or automatic qualification rerun.
+
+### Scenario-to-test mapping
+
+- Held original production claim read after its acknowledged intent → runtime
+  regression asserts the actual read-intent row and operation, current prefix
+  p+1, original order p, exact other recovered order fields and witness, one
+  outside read, successful projection and ordinary successor owner removal.
+- Evaluation position is descriptive for both typed variants → pure status
+  tests cover forward/null-initial positions while preserving the graph case.
+- Changed recovered task, transition, frontier ordinal or responsibility
+  beginning → independent negative controls still report projection conflict.
+- Invalid owner/current chronology or action → existing and extended controls
+  reject witness/order tampering, duplicate/forged/copied/rebound witnesses,
+  changed route/payload/admission/identity/wait, order tag, regression and
+  mixed-time position. Other order variants remain strict.
+- Actual built chronology → #339's real SQLite/Git controller proceeds past
+  the responsible-task claim read with no extra provider operation. Remaining
+  #339 acceptance scenarios and native blocking edges are unchanged.

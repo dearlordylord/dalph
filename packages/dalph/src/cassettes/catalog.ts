@@ -4918,7 +4918,12 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
       decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
     },
     ...doubleDiamondGraphRead(doubleDiamondGraphs.dCompleteBeforeX),
-    ...doubleDiamondGraphRead(doubleDiamondGraphs.dCompleteBeforeX),
+    {
+      _tag: "DalphSelects",
+      causalAnchor: { occurrenceRole: "double-diamond-paid-G2", expectedBoundary: "CoordinatorActivationReturned" },
+      operation: { _tag: "ReadTrackerGraph", target: "double-diamond-target" }
+    },
+    { _tag: "TrackerGraphReadReturned", graph: doubleDiamondGraphs.dCompleteBeforeX },
     doubleDiamondPassiveAcceptedReport(doubleDiamondAttempts.x),
     doubleDiamondPassiveAcceptedReport(doubleDiamondAttempts.f),
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "F" } },

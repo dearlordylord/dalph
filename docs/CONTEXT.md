@@ -476,6 +476,13 @@ reconciliation, and reaches at most one post-quiescence tracker
 reconfirmation before returning or recording termination.
 _Avoid_: Process lifetime, recovery activation, continuous coordinator loop
 
+**Authored return obligation**:
+A recording's explicit requirement that the coordinator activation which
+selected one named operation returns before the next activation's graph read.
+Partial observations make no such claim; the obligation is not production
+lifecycle authority.
+_Avoid_: Complete lifecycle recording, production return permission
+
 **Workflow-finality premise change**:
 A journal occurrence other than capacity-only bookkeeping that may invalidate
 an earlier finality proof for the same Run. Its position supports checking a
@@ -705,6 +712,22 @@ route, domain order evidence, and complete task-work, planned-attempt protocol,
 or integration-resource requirements. Constructing, comparing, or observing a
 proposal performs no action and acquires no process-local resource.
 _Avoid_: Workflow occurrence, admitted action, runtime ownership
+
+**Proposal evaluation position**:
+The accepted workflow-journal position at which a tracker graph or recovered
+workflow proposal was evaluated. It is distinct from the admitted owner's
+original ordering evidence and from the task, transition, ordinal and
+responsibility positions that identify and order its work.
+_Avoid_: Graph-read identity, replacement admission, current owner revision
+
+**Integration frontier listing position**:
+The current transition-list index represented by IntegrationOrder.frontierOrdinal.
+It is derived ordering metadata, not an integration responsibility identity or
+journal occurrence. Nested recovery work can move an unchanged admitted action
+within the current list. Its original position remains bound by the complete
+admission witness; task identity and integration queue/start positions remain
+distinct causal facts.
+_Avoid_: Responsibility ordinal, operation identity, replacement admission
 
 **Planned-attempt protocol guard**:
 The process-local exclusion held while Dalph either records an executor command

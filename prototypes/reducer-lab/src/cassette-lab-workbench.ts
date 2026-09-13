@@ -28,6 +28,7 @@ import {
 } from "./delivery-source-explanation.ts"
 import type { maintainedCassetteRows } from "./cassette-lab.ts"
 import { cassetteStateStatusText, type CassetteState } from "./cassette-lab-view.ts"
+import { renderDeliveryStatusRead } from "./delivery-status-presentation.ts"
 import {
   DeliveryFrameIndex,
   deliveryPlaybackShortcutMessage,
@@ -143,6 +144,8 @@ const momentLabel = (moment: AuthoredObservationMoment, index: number): string =
     ? "Delivery publication"
     : moment._tag === "DeliveryRuntimeOwnersMoment"
       ? "runtime owners"
+      : moment._tag === "DeliveryStatusMoment"
+        ? "canonical delivery status read"
       : `story · ${moment.occurrence._tag}`
   return `${index + 1}. ${activationLabel(moment.activationOrdinal)} · capture ${moment.captureOrder} · ${kind} · story position ${moment.storyPosition}`
 }
@@ -1555,6 +1558,8 @@ const renderTimeline = (
   const restart = appendText(frameHost, "p", "", "delivery-restart-boundary")
   restart.hidden = true
   const factsHost = document.createElement("div")
+  const canonicalStatus = document.createElement("section")
+  canonicalStatus.dataset.role = "delivery-canonical-status"
   const selectedTask = appendText(frameHost, "aside", "", "selected-task-facts")
   selectedTask.dataset.role = "selected-task-facts"
   const taskFactsDisclosure = document.createElement("details")
@@ -1571,7 +1576,7 @@ const renderTimeline = (
     settlementCoverage
   )
   settlementCoverage.after(readingGuide)
-  frameHost.append(factsHost, taskFactsDisclosure, momentEvidence)
+  frameHost.append(canonicalStatus, factsHost, taskFactsDisclosure, momentEvidence)
   let moments = initialMoments
   let running = initiallyRunning
   let renderedFrame: AuthoredDeliveryFrame | undefined
@@ -1613,6 +1618,8 @@ const renderTimeline = (
       momentEvidence.append(details)
     } else if (moment._tag === "DeliveryPublicationMoment") {
       appendText(momentEvidence, "p", "Observed one coherent production Delivery publication.")
+    } else if (moment._tag === "DeliveryStatusMoment") {
+      appendText(momentEvidence, "p", "Read canonical status from one exact coherent production runtime observation.")
     } else {
       appendText(
         momentEvidence,
@@ -1840,6 +1847,7 @@ const renderTimeline = (
   const show = (index: number): void => {
     const moment = moments[index]
     if (moment === undefined) return
+    renderDeliveryStatusRead(canonicalStatus, moment.deliveryStatusRead)
     graphFreshness.textContent = moment.deliveryFrame === null
       ? "declared cassette input"
       : moment._tag === "DeliveryPublicationMoment"
@@ -1907,15 +1915,16 @@ const renderTimeline = (
     next.disabled = !projection.nextFrameAvailable
     previousLandmark.disabled = !projection.previousLandmarkAvailable
     nextLandmark.disabled = !projection.nextLandmarkAvailable
+    const existingOptions = Array.from(select.options)
     for (const frameOption of projection.frameOptions) {
       const index = frameOption.frameIndex
-      const option = select.options[index] ?? document.createElement("option")
+      const option = existingOptions[index] ?? document.createElement("option")
       option.value = String(index)
       option.textContent = frameOption.landmarkLabel === null
         ? frameOption.label
         : `${frameOption.label} · Landmark: ${frameOption.landmarkLabel}`
       option.dataset.landmark = frameOption.landmarkLabel ?? ""
-      if (select.options[index] === undefined) select.append(option)
+      if (existingOptions[index] === undefined) select.append(option)
     }
     const selectedIndex = projection.currentFrameIndex
     if (selectedIndex !== null) {
@@ -2049,7 +2058,7 @@ export const renderCassetteDeliveryWorkbench = (
   const renderContents = (): void => {
     const moments = observationMomentsFrom(currentState)
     const preparedTrace = productionPreparedTraceFrom(currentState)
-    const shouldReplaceTraceHistory = preparedTrace !== null && preparedTrace !== renderedPreparedTrace
+    const shouldReplaceTraceHistory = preparedTrace !== renderedPreparedTrace
     if (shouldReplaceTraceHistory) {
       historicalTraceHost.replaceChildren()
       traceHistory = undefined

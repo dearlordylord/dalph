@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- Production workflow assembly keeps its capability topology co-located for auditability. */
 import { NodeServices } from "@effect/platform-node"
 import {
+  type GitRepositoryLocator,
   type IntegrationTarget,
   PlannedAttemptExecutor,
   type PlannedAttemptExecutorLifecycleObservation,
@@ -195,14 +196,31 @@ const observedWorkflowGitCommand = (service: GitCommandService, observe: Product
       observe("runBytesInWorktree").pipe(Effect.andThen(service.runBytesInWorktree(...args)))
   })
 
-const observedWorkflowGitCommandLayer = (observe: ProductionWorkflowGitCommandObserver | undefined) => {
+/** Translate only the resolved working repository; separate integration targets keep their own Git authority. */
+export const productionTargetGitCommands = (
+  commands: GitCommandService,
+  target: GitCommonDirectoryTarget,
+  repository: GitRepositoryLocator
+) =>
+  GitCommand.of({ ...commands, run: (locator, args) => commands.run(locator === repository ? target : locator, args) })
+
+export const productionWorkflowGitCommandLayer = (
+  target: GitCommonDirectoryTarget,
+  workingRepository: GitRepositoryLocator,
+  observe: ProductionWorkflowGitCommandObserver | undefined
+) => {
   const layer = nodeGitCommandLayer.pipe(Layer.provide(NodeServices.layer))
-  if (observe === undefined) return layer
   return Layer.fromBuildMemo((memoMap, scope) =>
     Layer.buildWithMemoMap(layer, memoMap, scope).pipe(
-      Effect.map((context) =>
-        Context.add(context, GitCommand, observedWorkflowGitCommand(Context.get(context, GitCommand), observe))
-      )
+      Effect.map((context) => {
+        const commands = Context.get(context, GitCommand)
+        const canonical = productionTargetGitCommands(commands, target, workingRepository)
+        return Context.add(
+          context,
+          GitCommand,
+          observe === undefined ? canonical : observedWorkflowGitCommand(canonical, observe)
+        )
+      })
     )
   )
 }
@@ -359,6 +377,7 @@ type ProductionWorkflowLayer<TrackerError, TrackerRequirements> = Layer.Layer<
 export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirements>(
   runId: RunId,
   target: GitCommonDirectoryTarget,
+  workingRepository: GitRepositoryLocator,
   integrationTarget: IntegrationTarget,
   trackerMutationAdapterLayer: Layer.Layer<TrackerMutation, TrackerError, TrackerRequirements>,
   plannedAttemptExecutorLayer: Layer.Layer<PlannedAttemptExecutor | PlannedAttemptExecutorLifecycleObservation>,
@@ -383,7 +402,11 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     runtimeBoundaries.coordinatorOwnership === undefined
       ? productionCoordinatorOwnershipLayer(target)
       : Layer.succeed(CoordinatorOwnership, runtimeBoundaries.coordinatorOwnership)
-  const workflowGitCommandLayer = observedWorkflowGitCommandLayer(runtimeBoundaries.workflowGitCommandObserver)
+  const workflowGitCommandLayer = productionWorkflowGitCommandLayer(
+    target,
+    workingRepository,
+    runtimeBoundaries.workflowGitCommandObserver
+  )
   const trackerMutationLayer = coordinatorOwnedTrackerMutationLayer(trackerMutationAdapterLayer).pipe(
     Layer.provide(ownershipLayer)
   )

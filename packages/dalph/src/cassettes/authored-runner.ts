@@ -59,6 +59,7 @@ import {
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
   type DeliveryRuntimeLiveOwnerSnapshot,
+  type DeliveryRuntimeReadyObservation,
   deliveryProposalOrderTaskId,
   type JournaledTrackerGraphObservation,
   type RunActivationOpportunityValue,
@@ -162,6 +163,7 @@ import {
   type AuthoredObservationPlaybackWork
 } from "./authored-observation-playback.js"
 import { authoredCandidateCleanupBoundaryLayer } from "./authored-candidate-cleanup.js"
+import { authoredDeliveryStatusReadOf, AuthoredDeliveryStatusRead } from "./authored-delivery-status.js"
 
 export interface AuthoredScenarioCassetteRun {
   readonly activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType>
@@ -249,6 +251,7 @@ export type AuthoredObservationCapture = AuthoredObservationCorrelation &
   (
     | { readonly _tag: "AuthoredStoryOccurrenceCaptured"; readonly occurrence: AuthoredCassetteStoryItem }
     | { readonly _tag: "DeliveryPublicationCaptured"; readonly publication: AuthoredDeliveryPublication }
+    | { readonly _tag: "DeliveryStatusCaptured"; readonly deliveryStatusRead: AuthoredDeliveryStatusRead }
     | {
         readonly _tag: "DeliveryRuntimeOwnersCaptured"
         readonly liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
@@ -258,12 +261,15 @@ export type AuthoredObservationCapture = AuthoredObservationCorrelation &
 type AuthoredObservationCaptureInput =
   | { readonly _tag: "AuthoredStoryOccurrenceCaptured"; readonly occurrence: AuthoredCassetteStoryItem }
   | { readonly _tag: "DeliveryPublicationCaptured"; readonly publication: AuthoredDeliveryPublication }
+  | { readonly _tag: "DeliveryStatusCaptured"; readonly deliveryStatusRead: AuthoredDeliveryStatusRead }
   | {
       readonly _tag: "DeliveryRuntimeOwnersCaptured"
       readonly liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
     }
 
 interface AuthoredObservationMomentContext extends AuthoredObservationCorrelation {
+  /** Latest canonical read made from an actual coherent Ready observation, or explicit absence before the first read. */
+  readonly deliveryStatusRead: AuthoredDeliveryStatusRead
   /** Last coherent Delivery value at this moment; null until the first Delivery publication. */
   readonly deliveryFrame: AuthoredDeliveryFrame | null
   /** Current process-local owner view carried forward from the latest runtime publication. */
@@ -276,6 +282,7 @@ export type AuthoredObservationMoment = AuthoredObservationMomentContext &
     | { readonly _tag: "AuthoredStoryOccurrenceMoment"; readonly occurrence: AuthoredCassetteStoryItem }
     | { readonly _tag: "DeliveryPublicationMoment"; readonly deliveryFrame: AuthoredDeliveryFrame }
     | { readonly _tag: "DeliveryRuntimeOwnersMoment" }
+    | { readonly _tag: "DeliveryStatusMoment"; readonly deliveryStatusRead: AuthoredDeliveryStatusRead }
   )
 
 export interface AuthoredDeliveryFrame {
@@ -360,6 +367,11 @@ export interface AuthoredDeliveryPublication {
 }
 
 export interface AuthoredScenarioCassetteRunOptions {
+  /** Synchronous passive diagnostic at the exact Ready-to-canonical-read boundary; no projection is recomputed by Lab. */
+  readonly onDeliveryStatusRead?: (
+    observation: DeliveryRuntimeReadyObservation,
+    read: AuthoredDeliveryStatusRead
+  ) => void
   /** Synchronous read-only notification; callers must move expensive projection outside the runtime turn. */
   readonly onDeliveryPublication?: (publication: AuthoredDeliveryPublication) => void
   /** Synchronous raw notification in the same deterministic order retained by the completed run. */
@@ -1135,13 +1147,26 @@ export const evaluateAuthoredObservationCapture: (
     capture: AuthoredObservationCapture,
     previous: AuthoredObservationMoment | null
   ) {
+    const carried: Pick<AuthoredObservationMoment, "deliveryStatusRead" | "deliveryFrame" | "liveOwners"> =
+      previous === null
+        ? { deliveryStatusRead: AuthoredDeliveryStatusRead.Unobserved(), deliveryFrame: null, liveOwners: [] }
+        : previous
     const correlation = {
       activationOrdinal: capture.activationOrdinal,
       captureOrder: capture.captureOrder,
-      storyPosition: capture.storyPosition
+      storyPosition: capture.storyPosition,
+      deliveryStatusRead: carried.deliveryStatusRead
     }
-    const deliveryFrame = previous?.deliveryFrame ?? null
-    const liveOwners = previous?.liveOwners ?? []
+    const { deliveryFrame, liveOwners } = carried
+    if (capture._tag === "DeliveryStatusCaptured") {
+      return {
+        ...correlation,
+        _tag: "DeliveryStatusMoment",
+        deliveryFrame,
+        liveOwners,
+        deliveryStatusRead: capture.deliveryStatusRead
+      } satisfies AuthoredObservationMoment
+    }
     if (capture._tag === "DeliveryPublicationCaptured") {
       return {
         _tag: "DeliveryPublicationMoment",
@@ -1305,43 +1330,6 @@ const coordinatorFinalityMatches = (
   return actual._tag === "RunMustRemainActive" && expected.reason === actual.reason
 }
 
-interface AuthoredActivationGraphAndAcceptancePositions {
-  readonly activationOrdinal: AuthoredRunActivationOrdinalType
-  readonly graph:
-    | {
-        readonly storyPosition: AuthoredStoryPosition
-        readonly cause: "Unpublished" | "Other" | "PostQuiescenceReconfirmation"
-      }
-    | undefined
-  readonly lastPassiveAcceptance: AuthoredStoryPosition | undefined
-}
-
-const isPassiveAcceptedOccurrence = (item: AuthoredCassetteStoryItem): boolean =>
-  item._tag === "PlannedAttemptExecutorPassiveLifecycleChanged" &&
-  item.report._tag === "ExecutorWorkTerminal" &&
-  item.report.result._tag === "Accepted"
-
-const graphAndAcceptancePositionsAfterOccurrence = (
-  previous: AuthoredActivationGraphAndAcceptancePositions | undefined,
-  activationOrdinal: AuthoredRunActivationOrdinalType,
-  storyPosition: AuthoredStoryPosition,
-  isGraph: boolean
-): AuthoredActivationGraphAndAcceptancePositions => ({
-  activationOrdinal,
-  graph: isGraph ? { storyPosition, cause: "Unpublished" } : previous?.graph,
-  lastPassiveAcceptance: isGraph ? previous?.lastPassiveAcceptance : storyPosition
-})
-
-/** A captured post-quiescence graph predates exact passive Accepted reports. */
-const acceptedResultsNeedLaterGraph = (
-  positions: AuthoredActivationGraphAndAcceptancePositions | undefined,
-  activationOrdinal: AuthoredRunActivationOrdinalType
-): boolean =>
-  positions?.activationOrdinal === activationOrdinal &&
-  positions.graph?.cause === "PostQuiescenceReconfirmation" &&
-  positions.lastPassiveAcceptance !== undefined &&
-  positions.lastPassiveAcceptance > positions.graph.storyPosition
-
 const settleCoordinatorActivationReturn = <E>(cursor: StoryCursor, exit: Exit.Exit<CoordinatorFinalityDecision, E>) =>
   Effect.gen(function* () {
     if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause)
@@ -1369,12 +1357,32 @@ const isOnlyAuthoredCoordinatorProcessDeath = (exit: Exit.Failure<unknown, unkno
       (Cause.isDieReason(reason) && reason.defect instanceof AuthoredCoordinatorProcessDies)
   )
 
+/** A delayed return observation belongs to its exiting entry, not the currently running entry. */
+const authoredCoordinatorReturnObservationOrigin = Context.Reference<Option.Option<AuthoredRunActivationOrdinalType>>(
+  "AuthoredCoordinatorReturnObservationOrigin",
+  { defaultValue: Option.none }
+)
+
+/** Preserve valid-marker consumption timing, but reject an independently declared owed return's omission. */
+const validateDeclaredCoordinatorActivationReturn = Effect.fnUntraced(function* (cursor: StoryCursor) {
+  if ((yield* cursor.currentStoryItem)?._tag === "CoordinatorActivationReturned") return
+  if (yield* cursor.atTerminalAssertions) return
+  yield* cursor.consumeCoordinatorActivationReturned
+})
+
 type AuthoredOwnerExitBoundary =
   | { readonly _tag: "DeclaredProcessDeath"; readonly exit: Exit.Failure<unknown, unknown> }
-  | { readonly _tag: "ActivationExited"; readonly exit: Exit.Exit<CoordinatorFinalityDecision, unknown> }
+  | { readonly _tag: "OwnerFailed"; readonly cause: Cause.Cause<unknown> }
+  | {
+      readonly _tag: "ActivationExited"
+      /** The actual exiting entry is captured before a later owner entry can start. */
+      readonly activationOrdinal: AuthoredRunActivationOrdinalType
+      readonly exit: Exit.Exit<CoordinatorFinalityDecision, unknown>
+    }
 
 /** Untraced classification preserves the original failure Cause without adding helper metadata. */
 const classifyAuthoredOwnerBoundaryExit = Effect.fnUntraced(function* (boundary: AuthoredOwnerExitBoundary) {
+  if (boundary._tag === "OwnerFailed") return yield* Effect.failCause(boundary.cause)
   if (boundary._tag === "DeclaredProcessDeath") {
     if (isAuthoredCoordinatorProcessDeath(boundary.exit)) return "CoordinatorDied" as const
     return yield* Effect.failCause(boundary.exit.cause)
@@ -1480,14 +1488,6 @@ const runAuthoredScenarioCassetteWith = (request: {
       const activeDeliveryActivation = yield* Ref.make<AuthoredRunActivationOrdinalType>(
         AuthoredRunActivationOrdinal.make(1)
       )
-      const activationGraphAndAcceptancePositions = yield* Ref.make<
-        AuthoredActivationGraphAndAcceptancePositions | undefined
-      >(undefined)
-      // Only the exit consumer supplies this process-local observation correlation.
-      const exitingActivationOrdinal = Context.Reference<AuthoredRunActivationOrdinalType | undefined>(
-        "AuthoredCassetteExitingActivationOrdinal",
-        { defaultValue: () => undefined }
-      )
       const observationCaptureState = yield* Ref.make<{
         readonly captures: MutableList.MutableList<AuthoredObservationCapture>
         readonly nextOrder: number
@@ -1501,40 +1501,13 @@ const runAuthoredScenarioCassetteWith = (request: {
         observation: AuthoredObservationCaptureInput,
         storyPosition: AuthoredStoryPosition
       ) {
-        const exitOrdinal = yield* exitingActivationOrdinal
-        const activationOrdinal = exitOrdinal ?? (yield* Ref.get(activeDeliveryActivation))
-        if (observation._tag === "AuthoredStoryOccurrenceCaptured") {
-          const item = observation.occurrence
-          const isGraph = item._tag === "TrackerGraphReadReturned"
-          const isPassiveAcceptance = isPassiveAcceptedOccurrence(item)
-          if (isGraph || isPassiveAcceptance) {
-            yield* Ref.update(activationGraphAndAcceptancePositions, (positions) => {
-              const previous = positions?.activationOrdinal === activationOrdinal ? positions : undefined
-              return graphAndAcceptancePositionsAfterOccurrence(previous, activationOrdinal, storyPosition, isGraph)
-            })
-          }
-        }
-        if (observation._tag === "DeliveryPublicationCaptured") {
-          const graph = observation.publication.bundle.publication.graph
-          if (graph._tag === "GraphEstablished") {
-            yield* Ref.update(
-              activationGraphAndAcceptancePositions,
-              (positions): AuthoredActivationGraphAndAcceptancePositions | undefined =>
-                positions?.activationOrdinal === activationOrdinal && positions.graph !== undefined
-                  ? {
-                      ...positions,
-                      graph: {
-                        storyPosition: positions.graph.storyPosition,
-                        cause:
-                          graph.observation.cause._tag === "PostQuiescenceReconfirmation"
-                            ? "PostQuiescenceReconfirmation"
-                            : "Other"
-                      }
-                    }
-                  : positions
-            )
-          }
-        }
+        const returnOrigin = yield* authoredCoordinatorReturnObservationOrigin
+        const activationOrdinal =
+          observation._tag === "AuthoredStoryOccurrenceCaptured" &&
+          observation.occurrence._tag === "CoordinatorActivationReturned" &&
+          Option.isSome(returnOrigin)
+            ? returnOrigin.value
+            : yield* Ref.get(activeDeliveryActivation)
         const capture = yield* Ref.modify(observationCaptureState, ({ acceptingPlayback, captures, nextOrder }) => {
           const correlation = {
             activationOrdinal,
@@ -1546,7 +1519,9 @@ const runAuthoredScenarioCassetteWith = (request: {
               ? { ...correlation, _tag: observation._tag, occurrence: observation.occurrence }
               : observation._tag === "DeliveryPublicationCaptured"
                 ? { ...correlation, _tag: observation._tag, publication: observation.publication }
-                : { ...correlation, _tag: observation._tag, liveOwners: observation.liveOwners }
+                : observation._tag === "DeliveryStatusCaptured"
+                  ? { ...correlation, _tag: observation._tag, deliveryStatusRead: observation.deliveryStatusRead }
+                  : { ...correlation, _tag: observation._tag, liveOwners: observation.liveOwners }
           MutableList.append(captures, captured)
           if (acceptingPlayback) observationPlayback.appendUnsafe(captured)
           return [captured, { captures, nextOrder: nextOrder + 1, acceptingPlayback }]
@@ -1598,10 +1573,32 @@ const runAuthoredScenarioCassetteWith = (request: {
           })
       })
       const runtimeObservationObserver = DeliveryRuntimeObservationObserver.of({
-        observe: ({ liveOwners }) =>
+        observe: (observation) =>
           Effect.gen(function* () {
+            const { liveOwners } = observation
             const identity = JSON.stringify(liveOwners)
-            const previous = yield* Ref.get(lastRuntimeOwners)
+            // This synchronous local capture occupies the existing owner-read
+            // turn. Adding a yielded observer append here changes the authored
+            // executor interleaving; no workflow boundary may depend on status.
+            const previous = yield* Ref.modify(observationCaptureState, (state) => {
+              const capture: AuthoredObservationCapture = {
+                _tag: "DeliveryStatusCaptured",
+                activationOrdinal: Ref.getUnsafe(activeDeliveryActivation),
+                captureOrder: AuthoredObservationCaptureOrder.make(state.nextOrder),
+                storyPosition: AuthoredStoryPosition.make(cursor.storyPositionUnsafe()),
+                deliveryStatusRead: authoredDeliveryStatusReadOf({ _tag: "Run", runId }, observation)
+              }
+              MutableList.append(state.captures, capture)
+              if (state.acceptingPlayback) observationPlayback.appendUnsafe(capture)
+              try {
+                options.onDeliveryStatusRead?.(observation, capture.deliveryStatusRead)
+                options.onObservationCapture?.(capture)
+              } catch {
+                // Like the other raw diagnostic callbacks, this callback has
+                // no permission to change cassette execution on failure.
+              }
+              return [Ref.getUnsafe(lastRuntimeOwners), { ...state, nextOrder: state.nextOrder + 1 }]
+            })
             if (previous === identity) return
             yield* Ref.set(lastRuntimeOwners, identity)
             if (previous === null && liveOwners.length === 0) return
@@ -3123,38 +3120,33 @@ const runAuthoredScenarioCassetteWith = (request: {
         const { application, applicationExit } = yield* makeApplicationProcess
         const applicationContext = yield* Layer.build(application)
         const bootstrap = Context.get(applicationContext, JournaledRunBootstrap)
-        const activationExits = yield* Queue.unbounded<{
-          readonly exit: Exit.Exit<CoordinatorFinalityDecision, unknown>
-          readonly activationOrdinal: AuthoredRunActivationOrdinalType
-        }>()
+        const activationExits = yield* Queue.unbounded<AuthoredOwnerExitBoundary>()
         const reportActivationExit = <E, R>(activation: Effect.Effect<CoordinatorFinalityDecision, E, R>) =>
-          activation.pipe(
-            Effect.onExit((exit) =>
-              Effect.gen(function* () {
-                const activationOrdinal = yield* Ref.get(activeDeliveryActivation)
-                const positions = yield* Ref.get(activationGraphAndAcceptancePositions)
-                const next = yield* cursor.currentStoryItem
-                // Passive acceptance after the paid graph needs another entry's
-                // graph. Capture a missing required return at this exact exit,
-                // before that next entry can advance the authored cursor.
-                const missingReturn =
-                  Exit.isSuccess(exit) &&
-                  acceptedResultsNeedLaterGraph(positions, activationOrdinal) &&
-                  next?._tag === "DalphSelects" &&
-                  next.operation._tag === "ReadTrackerGraph"
-                const observedExit = missingReturn
-                  ? Exit.fail(
-                      new AuthoredCassetteInteractionMismatch({
-                        actual: "CoordinatorActivationReturned",
-                        expected: "DalphSelects",
-                        storyPosition: yield* cursor.storyPosition
-                      })
+          Effect.suspend(() => {
+            const startingPosition = cursor.storyPositionUnsafe()
+            return activation.pipe(
+              Effect.onExit((exit) =>
+                Effect.gen(function* () {
+                  const activationOrdinal = Ref.getUnsafe(activeDeliveryActivation)
+                  const declaredReturn = cassette.story
+                    .slice(startingPosition, cursor.storyPositionUnsafe())
+                    .some(
+                      (item) =>
+                        item._tag === "DalphSelects" &&
+                        item.causalAnchor?.expectedBoundary === "CoordinatorActivationReturned"
                     )
-                  : exit
-                yield* Queue.offer(activationExits, { exit: observedExit, activationOrdinal })
-              })
+                  if (Exit.isSuccess(exit) && declaredReturn) {
+                    const validated = yield* Effect.exit(validateDeclaredCoordinatorActivationReturn(cursor))
+                    if (Exit.isFailure(validated)) {
+                      yield* Queue.offer(activationExits, { _tag: "OwnerFailed", cause: validated.cause })
+                      return yield* Effect.failCause(validated.cause)
+                    }
+                  }
+                  yield* Queue.offer(activationExits, { _tag: "ActivationExited", activationOrdinal, exit })
+                })
+              )
             )
-          )
+          })
         const quietInterval = Duration.hours(1)
         const currentFirstNotification =
           (yield* cursor.currentStoryItem)?._tag === "CassettePublishesCurrentTrackerNotification"
@@ -3214,13 +3206,8 @@ const runAuthoredScenarioCassetteWith = (request: {
               acceptedFactPublication: () => acceptedFactPublication
             }),
           isTerminationFailure: (cause) => cause instanceof WorkflowRunAlreadyTerminated,
-          onFailure: (cause) =>
-            Ref.get(activeDeliveryActivation).pipe(
-              Effect.flatMap((activationOrdinal) =>
-                Queue.offer(activationExits, { exit: Exit.fail(cause), activationOrdinal })
-              ),
-              Effect.asVoid
-            ),
+          onFailure: (failure) =>
+            Queue.offer(activationExits, { _tag: "OwnerFailed", cause: Cause.fail(failure) }).pipe(Effect.asVoid),
           readControl: bootstrap.readRunReactivationControl(command.target, runId),
           runId,
           ...(currentFirstNotification ? { trackerNotificationSource } : {})
@@ -3250,9 +3237,7 @@ const runAuthoredScenarioCassetteWith = (request: {
             )
             for (;;) {
               const boundary = yield* Effect.raceFirst(
-                Queue.take(activationExits).pipe(
-                  Effect.map((boundary) => ({ _tag: "ActivationExited" as const, ...boundary }))
-                ),
+                Queue.take(activationExits),
                 Effect.raceFirst(
                   cursor.awaitTerminalAssertions.pipe(Effect.as({ _tag: "AssertionsReached" as const })),
                   declaredProcessDeath
@@ -3263,13 +3248,13 @@ const runAuthoredScenarioCassetteWith = (request: {
               if (interactionFailure !== undefined) return yield* interactionFailure
               const exit = yield* classifyAuthoredOwnerBoundaryExit(boundary)
               if (exit === "CoordinatorDied") return exit
-              if (boundary._tag === "ActivationExited") {
-                const next = yield* cursor.currentStoryItem
-                if (next?._tag === "CoordinatorActivationReturned") {
-                  yield* settleCoordinatorActivationReturn(cursor, exit).pipe(
-                    Effect.provideService(exitingActivationOrdinal, boundary.activationOrdinal)
+              if ((yield* cursor.currentStoryItem)?._tag === "CoordinatorActivationReturned") {
+                yield* settleCoordinatorActivationReturn(cursor, exit).pipe(
+                  Effect.provideService(
+                    authoredCoordinatorReturnObservationOrigin,
+                    boundary._tag === "ActivationExited" ? Option.some(boundary.activationOrdinal) : Option.none()
                   )
-                }
+                )
               }
             }
           }),
