@@ -2,14 +2,14 @@ import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Effect, FileSystem, PlatformError } from "effect"
 import { expect } from "vitest"
-import { LiveQualificationInvocationId } from "./production-live-github-fixture.js"
+import { LiveQualificationInvocationId } from "../src/qualification/live-qualification-evidence.js"
 import {
   cleanupProductionLiveFixture,
   captureProductionLiveLocalIdentity,
   ProductionLiveLocalContainer,
   ProductionLiveLocalFixtureManifest,
   ProductionLiveLocalResource
-} from "./production-live-fixture-cleanup.js"
+} from "../src/qualification/live-fixture-cleanup.js"
 
 const makeFixture = Effect.fn("ProductionLiveCleanupTest.makeFixture")(function* () {
   const fs = yield* FileSystem.FileSystem

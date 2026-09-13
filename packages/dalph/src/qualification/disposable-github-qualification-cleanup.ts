@@ -9,7 +9,7 @@ import {
   GithubRepositoryOwner
 } from "@dalph/orchestrator"
 import { Data, Effect, HashSet, MutableList, Schema } from "effect"
-import { HermeticInvocationId } from "../src/application/production-hermetic-contract.js"
+import { HermeticInvocationId } from "../application/production-hermetic-contract.js"
 
 export const DisposableGithubQualificationRepositoryIdentity = Schema.Struct({
   owner: GithubRepositoryOwner,

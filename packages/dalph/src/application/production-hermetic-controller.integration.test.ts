@@ -25,16 +25,16 @@ import {
 } from "../../test-support/production-hermetic-controller.js"
 import { disposeHermeticFixture } from "../../test-support/production-hermetic-fixture-cleanup.js"
 import { HermeticControllerFailure } from "../../test-support/production-hermetic-child-lifetime.js"
-import { cleanupDisposableGithubQualification } from "../../test-support/disposable-github-qualification-cleanup.js"
+import { cleanupDisposableGithubQualification } from "../qualification/disposable-github-qualification-cleanup.js"
 import {
   hermeticQualificationPublicTaskSpecification,
   hermeticQualificationTrackerIdentity
 } from "./production-hermetic-contract.js"
 import {
   completeQualificationEvidence,
-  ProductionMvpQualificationEvidence,
-  QualificationArtifactLocator
+  ProductionMvpQualificationEvidence
 } from "../../test-support/production-mvp-qualification-evidence.js"
+import { QualificationArtifactLocator } from "../qualification/qualification-artifact.js"
 import { candidateWorktreePathFor, CodexIntegratorConfiguration } from "./codex-integrator-private-store.js"
 import { encodeProductionCliRecord } from "./production-cli.js"
 

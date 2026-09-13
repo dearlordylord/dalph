@@ -13,10 +13,10 @@ import { githubGraphqlTestClient } from "../../orchestrator/src/authorities/task
 import {
   createProductionLiveGithubFixture,
   cleanupProductionLiveGithubFixture,
-  LiveQualificationInvocationId,
   makeProductionLiveGithubCleanupAdapter,
   ProductionLiveGithubRepository
-} from "./production-live-github-fixture.js"
+} from "../src/qualification/live-github-fixture.js"
+import { LiveQualificationInvocationId } from "../src/qualification/live-qualification-evidence.js"
 
 const invocationId = LiveQualificationInvocationId.make("Q-307-fixture")
 const repository = ProductionLiveGithubRepository.make({

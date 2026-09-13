@@ -19,20 +19,17 @@ import {
 import { NodeCrypto } from "@effect/platform-node"
 import { Context, Crypto, Effect, FileSystem, Layer, Option, Redacted, Ref, Schema } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
-import { ProductionConfigurationLocator } from "../src/application/production-cli.js"
+import { ProductionConfigurationLocator } from "../application/production-cli.js"
 import {
   decodeProductionRepositoryHostConfiguration,
   type ProductionRepositoryHostConfiguration
-} from "../src/application/production-configuration.js"
+} from "../application/production-configuration.js"
 import {
   QualificationArtifactLocator,
   QualificationPublicationContainer,
   qualificationTranscriptDigest
-} from "./production-mvp-qualification-evidence.js"
-import {
-  measureQualificationBuild,
-  RequiredQualificationFormalProvenance
-} from "./production-mvp-qualification-provenance.js"
+} from "./qualification-artifact.js"
+import { measureQualificationBuild, RequiredQualificationFormalProvenance } from "./qualification-provenance.js"
 import {
   GithubActionsJobId,
   GithubActionsRunId,
@@ -43,27 +40,27 @@ import {
   qualificationFailed,
   type QualificationFailed,
   type ProductionLiveQualificationOutcome
-} from "./production-live-qualification-evidence.js"
+} from "./live-qualification-evidence.js"
 import { DisposableGithubQualificationResource } from "./disposable-github-qualification-cleanup.js"
 import {
   cleanupProductionLiveGithubFixture,
   createProductionLiveGithubFixture,
   makeProductionLiveGithubCleanupAdapter
-} from "./production-live-github-fixture.js"
+} from "./live-github-fixture.js"
 import {
   cleanupProductionLiveFixture,
   captureProductionLiveLocalIdentity,
   ProductionLiveLocalContainer,
   ProductionLiveLocalFixtureManifest,
   ProductionLiveLocalResource
-} from "./production-live-fixture-cleanup.js"
+} from "./live-fixture-cleanup.js"
 import {
   makeProductionLiveQualificationNodeBoundary,
   runProductionLiveQualification,
   type ProductionLiveQualificationCompletion
-} from "./production-live-qualification-controller.js"
-import { makeProductionLiveGithubForwarder } from "./production-live-github-forwarder.js"
-import { makeProductionLiveResponsesEndpoint } from "./production-live-responses-endpoint.js"
+} from "./live-qualification-controller.js"
+import { makeProductionLiveGithubForwarder } from "./live-github-forwarder.js"
+import { makeProductionLiveResponsesEndpoint } from "./live-responses-endpoint.js"
 
 const canonicalAbsolute = (subject: string) =>
   Schema.NonEmptyString.check(

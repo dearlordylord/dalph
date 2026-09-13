@@ -1,17 +1,72 @@
 /* eslint-disable import/no-nodejs-modules -- Qualification measures original build and process provenance. */
 import nodeProcess from "node:process"
+import { existsSync } from "node:fs"
 import { arch, platform } from "node:os"
+import nodePath from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { EvidenceDigest, GitCommitSha, type GitRepositoryLocator } from "@dalph/contracts"
 import { GitCommand } from "@dalph/orchestrator"
 import { Crypto, Effect, FileSystem, Schema } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import { parseProfileLog } from "../../../scripts/generate-quint-profile-evidence.mjs"
-import { assertAcceptedQuintGateCommands } from "../../../scripts/quint-gate-command-contract.mjs"
+import type { parseProfileLog as parseQualificationProfileLog } from "../../../../scripts/generate-quint-profile-evidence.mjs"
+import type { assertAcceptedQuintGateCommands as assertQualificationGateCommands } from "../../../../scripts/quint-gate-command-contract.mjs"
+
+type QualificationProfileParser = typeof parseQualificationProfileLog
+type QualificationCommandValidator = typeof assertQualificationGateCommands
 
 const hexadecimalRadix = 16
 const hexadecimalByteWidth = 2
 const hostedJobLimitSeconds = 960
 const formalGateLimitSeconds = 750
+
+type QualificationScriptModules = {
+  readonly parseProfileLog: QualificationProfileParser
+  readonly assertAcceptedQuintGateCommands: QualificationCommandValidator
+}
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null
+const QualificationProfileModule = Schema.declare<Pick<QualificationScriptModules, "parseProfileLog">>(
+  (value): value is Pick<QualificationScriptModules, "parseProfileLog"> =>
+    isRecord(value) && typeof value["parseProfileLog"] === "function"
+)
+const QualificationCommandModule = Schema.declare<Pick<QualificationScriptModules, "assertAcceptedQuintGateCommands">>(
+  (value): value is Pick<QualificationScriptModules, "assertAcceptedQuintGateCommands"> =>
+    isRecord(value) && typeof value["assertAcceptedQuintGateCommands"] === "function"
+)
+
+/** Loads the workspace-owned formal evidence parsers from either source or emitted package layout. */
+const qualificationScriptModules = Effect.fn("Qualification.loadScriptModules")(function* () {
+  const moduleFile = fileURLToPath(import.meta.url)
+  const moduleDirectory = nodePath.dirname(moduleFile)
+  const candidates = [
+    nodePath.resolve(nodeProcess.cwd(), "scripts"),
+    nodePath.resolve(moduleDirectory, "../../../../scripts"),
+    nodePath.resolve(moduleDirectory, "../../../../../scripts")
+  ]
+  const root = candidates.find((candidate) => existsSync(`${candidate}/generate-quint-profile-evidence.mjs`))
+  if (root === undefined) return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
+  const [profile, contract] = yield* Effect.all([
+    Effect.tryPromise({
+      try: () => import(pathToFileURL(`${root}/generate-quint-profile-evidence.mjs`).href),
+      catch: () => new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
+    }).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(QualificationProfileModule)),
+      Effect.mapError(() => new QualificationEvidenceFailure({ operation: "ValidateProvenance" }))
+    ),
+    Effect.tryPromise({
+      try: () => import(pathToFileURL(`${root}/quint-gate-command-contract.mjs`).href),
+      catch: () => new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
+    }).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(QualificationCommandModule)),
+      Effect.mapError(() => new QualificationEvidenceFailure({ operation: "ValidateProvenance" }))
+    )
+  ])
+  return {
+    parseProfileLog: profile.parseProfileLog,
+    assertAcceptedQuintGateCommands: contract.assertAcceptedQuintGateCommands
+  } satisfies QualificationScriptModules
+})
 
 /** A qualification failure carries no rejected transcript, configuration, provider data or filesystem diagnostic. */
 export class QualificationEvidenceFailure extends Schema.TaggedError<QualificationEvidenceFailure>()(
@@ -126,7 +181,7 @@ export const QualificationHostedJob = Schema.Struct({
 const ProfileCommand = Schema.Struct({
   kind: Schema.Literals(["typecheck", "test", "sampled-run", "verify"]),
   name: Schema.NonEmptyString,
-  durationSeconds: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
+  durationSeconds: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
   result: Schema.Literals(["exit:0", "exit:1"])
 })
 export const QualificationFormalProfile = Schema.Struct({
@@ -134,10 +189,10 @@ export const QualificationFormalProfile = Schema.Struct({
   nodeVersion: Schema.NonEmptyString,
   job: QualificationHostedJob,
   logDigest: EvidenceDigest,
-  setupInstallSeconds: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
-  formalSeconds: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
-  completeJobSeconds: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
-  remainingHostedSeconds: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
+  setupInstallSeconds: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
+  formalSeconds: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
+  completeJobSeconds: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
+  remainingHostedSeconds: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
   hostedLimitSeconds: Schema.Literal(hostedJobLimitSeconds),
   commands: Schema.Array(ProfileCommand),
   negativeControls: Schema.NonEmptyArray(Schema.NonEmptyString)
@@ -177,9 +232,10 @@ const validateProfile = Effect.fn("Qualification.validateProfile")(
   function* (sourceSha: GitCommitSha, profile: SuppliedQualificationProfile) {
     if (profile.sourceSha !== sourceSha || !supportedQualificationNode(profile.nodeVersion))
       return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
+    const scripts = yield* qualificationScriptModules()
     const parsed = yield* Effect.try({
       try: () =>
-        parseProfileLog({
+        scripts.parseProfileLog({
           id: String(profile.job.jobId),
           node: profile.nodeVersion,
           repeat: "1",
@@ -192,7 +248,7 @@ const validateProfile = Effect.fn("Qualification.validateProfile")(
     if (commands.some(({ name, result }) => result !== (name.includes("temporal mutant") ? "exit:1" : "exit:0")))
       return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
     yield* Effect.try({
-      try: () => assertAcceptedQuintGateCommands(commands),
+      try: () => scripts.assertAcceptedQuintGateCommands(commands),
       catch: () => new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
     })
     const negativeNames = parsed.commands

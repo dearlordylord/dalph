@@ -6,7 +6,7 @@ import {
   createProductionLiveLocalFixture,
   decodeProductionLiveQualificationManifest,
   productionLiveQualificationChronologyIsExact
-} from "./production-live-qualification-runtime.js"
+} from "../src/qualification/live-qualification-runtime.js"
 
 const layer = nodeGitCommandLayer.pipe(Layer.provideMerge(NodeServices.layer), Layer.merge(NodeCrypto.layer))
 

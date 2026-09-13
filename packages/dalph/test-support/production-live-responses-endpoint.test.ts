@@ -3,7 +3,7 @@ import { request } from "node:http"
 import { Buffer } from "node:buffer"
 import { Effect } from "effect"
 import { expect, it } from "vitest"
-import { makeProductionLiveResponsesEndpoint } from "./production-live-responses-endpoint.js"
+import { makeProductionLiveResponsesEndpoint } from "../src/qualification/live-responses-endpoint.js"
 
 const post = (endpoint: string, input: string) =>
   Effect.tryPromise(

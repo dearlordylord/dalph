@@ -9,13 +9,13 @@ import {
   ProductionLiveQualificationEvidence,
   publishProductionLiveQualificationEvidence,
   qualificationFailed
-} from "./production-live-qualification-evidence.js"
+} from "../src/qualification/live-qualification-evidence.js"
 import {
   QualificationArtifactLocator,
   QualificationPublicationContainer,
   qualificationTranscriptDigest
-} from "./production-mvp-qualification-evidence.js"
-import { QualificationFormalProvenance } from "./production-mvp-qualification-provenance.js"
+} from "../src/qualification/qualification-artifact.js"
+import { QualificationFormalProvenance } from "../src/qualification/qualification-provenance.js"
 
 const sha = (digit: string) => GitCommitSha.make(digit.repeat(40))
 const digest = (digit: string) => EvidenceDigest.make(digit.repeat(64))

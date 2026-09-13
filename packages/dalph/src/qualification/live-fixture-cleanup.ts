@@ -1,7 +1,7 @@
 /* eslint-disable import/no-nodejs-modules -- Qualification cleanup validates exact local path relationships. */
 import nodePath from "node:path"
 import { Effect, FileSystem, HashSet, MutableList, Option, Schema } from "effect"
-import { LiveQualificationInvocationId } from "./production-live-github-fixture.js"
+import { LiveQualificationInvocationId } from "./live-qualification-evidence.js"
 
 /** Locates the exact Q-owned live fixture container, not a shared temporary root. */
 export const ProductionLiveLocalContainer = Schema.NonEmptyString.pipe(Schema.brand("ProductionLiveLocalContainer"))

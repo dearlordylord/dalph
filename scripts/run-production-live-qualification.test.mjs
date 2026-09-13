@@ -97,7 +97,7 @@ const formalForManifest = Object.freeze({
 
 const decodeWithBuiltRuntimeSchema = async (manifest) => {
   const runtime = await import(
-    pathToFileURL(join(process.cwd(), "packages/dalph/dist/test-support/production-live-qualification-runtime.js")).href
+    pathToFileURL(join(process.cwd(), "packages/dalph/dist/src/qualification/live-qualification-runtime.js")).href
   )
   const { Effect } = await import("effect")
   return Effect.runPromise(runtime.decodeProductionLiveQualificationManifest(manifest))

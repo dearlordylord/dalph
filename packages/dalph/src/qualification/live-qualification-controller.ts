@@ -9,7 +9,7 @@ import {
   encodeProductionCliRecord,
   ProductionCliRecord,
   type ProductionConfigurationLocator
-} from "../src/application/production-cli.js"
+} from "../application/production-cli.js"
 
 /** Secrets needed by the one shipped child; no controller result or callback receives these values. */
 export interface ProductionLiveQualificationInvocation {

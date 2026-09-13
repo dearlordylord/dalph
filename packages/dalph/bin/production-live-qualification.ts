@@ -7,7 +7,7 @@ import {
   decodeProductionLiveQualificationManifest,
   ProductionLiveQualificationManifestLocator,
   runProductionLiveQualificationRuntime
-} from "../test-support/production-live-qualification-runtime.js"
+} from "../src/qualification/live-qualification-runtime.js"
 
 const runtimeLayer = nodeGitCommandLayer.pipe(Layer.provideMerge(NodeServices.layer), Layer.merge(NodeCrypto.layer))
 

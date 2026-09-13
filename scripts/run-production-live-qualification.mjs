@@ -14,7 +14,7 @@ export const productionLiveQualificationBin = "packages/dalph/dist/bin/productio
 export const productionLiveQualificationShippedBin = "packages/dalph/dist/bin/dalph.js"
 /** The built formal-provenance validator that processes both downloaded logs. */
 export const productionLiveQualificationFormalValidatorBin =
-  "packages/dalph/dist/test-support/production-mvp-qualification-provenance.js"
+  "packages/dalph/dist/src/qualification/qualification-provenance.js"
 export const productionLiveQualificationEnvironment = "production-live-qualification"
 export const productionLiveQualificationOptIn = "DALPH_RUN_PRODUCTION_LIVE_QUALIFICATION"
 export const formalQualificationJobNames = Object.freeze({

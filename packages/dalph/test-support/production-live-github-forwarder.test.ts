@@ -2,7 +2,7 @@
 import { createServer, request } from "node:http"
 import { Effect } from "effect"
 import { describe, expect, it } from "vitest"
-import { makeProductionLiveGithubForwarder } from "./production-live-github-forwarder.js"
+import { makeProductionLiveGithubForwarder } from "../src/qualification/live-github-forwarder.js"
 
 describe("#307 live GitHub forwarding observer", () => {
   it("returns the upstream bytes and records only the decoded label node receipt", async () => {

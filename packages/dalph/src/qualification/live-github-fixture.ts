@@ -23,10 +23,7 @@ import {
   DisposableGithubResourceObservation,
   UniqueDisposableGithubQualificationResources
 } from "./disposable-github-qualification-cleanup.js"
-
-/** Identifies one protected live qualification invocation, never a hermetic controller invocation. */
-export const LiveQualificationInvocationId = Schema.NonEmptyString.pipe(Schema.brand("LiveQualificationInvocationId"))
-export type LiveQualificationInvocationId = typeof LiveQualificationInvocationId.Type
+import { LiveQualificationInvocationId } from "./live-qualification-evidence.js"
 
 export const ProductionLiveGithubRepository = Schema.Struct({
   owner: GithubRepositoryOwner,

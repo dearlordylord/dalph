@@ -8,12 +8,9 @@ import { quintGateCommandManifest } from "../../../scripts/quint-gate-command-ma
 import { HermeticFixtureContainer } from "./production-hermetic-controller.js"
 import { HermeticFixtureResource } from "../src/application/production-hermetic-contract.js"
 import {
-  QualificationArtifactLocator,
   ProductionMvpQualificationEvidence,
   publishQualificationEvidence,
-  qualificationTranscriptDigest,
-  qualificationCleanupDisposition,
-  writeQualificationArtifact
+  qualificationCleanupDisposition
 } from "./production-mvp-qualification-evidence.js"
 import {
   measureQualificationBuild,
@@ -21,7 +18,12 @@ import {
   qualificationFormalProvenance,
   requiredQualificationFormalProvenance,
   type SuppliedQualificationProfile
-} from "./production-mvp-qualification-provenance.js"
+} from "../src/qualification/qualification-provenance.js"
+import {
+  QualificationArtifactLocator,
+  qualificationTranscriptDigest,
+  writeQualificationArtifact
+} from "../src/qualification/qualification-artifact.js"
 
 const sourceSha = GitCommitSha.make("06d1661f8a2af9a65022e3807643e3f58b5ab969")
 const otherSha = GitCommitSha.make("bf027ef1588d0ec0d0e749b812d6652343682c3b")

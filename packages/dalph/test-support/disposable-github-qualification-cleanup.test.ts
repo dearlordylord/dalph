@@ -21,7 +21,7 @@ import {
   DisposableGithubRepositoryObservation,
   DisposableGithubResourceObservation,
   type DisposableGithubCleanupAdapter
-} from "./disposable-github-qualification-cleanup.js"
+} from "../src/qualification/disposable-github-qualification-cleanup.js"
 
 const repository = {
   owner: GithubRepositoryOwner.make("fixture-owner"),

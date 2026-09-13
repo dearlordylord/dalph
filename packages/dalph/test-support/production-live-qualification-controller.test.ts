@@ -13,7 +13,7 @@ import {
   runProductionLiveQualification,
   type ProductionLiveQualificationBoundary,
   type ProductionLiveQualificationFinalFacts
-} from "./production-live-qualification-controller.js"
+} from "../src/qualification/live-qualification-controller.js"
 
 const builtEntry = "/workspace/dalph/packages/dalph/dist/bin/dalph.js"
 const configuration = ProductionConfigurationLocator.make("/tmp/dalph-live-q/production.json")

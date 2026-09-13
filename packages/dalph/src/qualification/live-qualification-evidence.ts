@@ -1,14 +1,14 @@
 import { AttemptId, EvidenceDigest, EvidenceReference, GitCommitSha, RunId, TaskId } from "@dalph/contracts"
 import { GithubIssueNodeId, GithubLabelNodeId, GithubRepositoryNodeId, JournalPosition } from "@dalph/orchestrator"
-import { Effect, HashSet, Schema } from "effect"
-import { ProductionCliRecord } from "../src/application/production-cli.js"
+import { Effect, HashSet, Schema, type Crypto, type FileSystem } from "effect"
+import { ProductionCliRecord } from "../application/production-cli.js"
 import {
   qualificationTranscriptDigest,
   type QualificationArtifactLocator,
   type QualificationPublicationContainer,
   writeQualificationArtifact
-} from "./production-mvp-qualification-evidence.js"
-import { QualificationBuild, RequiredQualificationFormalProvenance } from "./production-mvp-qualification-provenance.js"
+} from "./qualification-artifact.js"
+import { QualificationBuild, RequiredQualificationFormalProvenance } from "./qualification-provenance.js"
 
 /** Identifies one operator-approved live qualification invocation, not a hermetic fixture. */
 export const LiveQualificationInvocationId = Schema.NonEmptyString.pipe(Schema.brand("LiveQualificationInvocationId"))
@@ -225,9 +225,11 @@ const provenanceMatches = (input: unknown): boolean => {
 }
 
 /** Strictly validates one complete success and independently verifies its canonical public-record digest. */
-export const makeProductionLiveQualificationEvidence = Effect.fn("LiveQualification.makeEvidence")(function* (
+export const makeProductionLiveQualificationEvidence: (
   input: unknown
-) {
+) => Effect.Effect<ProductionLiveQualificationEvidence, QualificationFailed, Crypto.Crypto> = Effect.fn(
+  "LiveQualification.makeEvidence"
+)(function* (input: unknown) {
   if (!provenanceMatches(input)) return yield* Effect.fail(qualificationFailed("ProvenanceValidation"))
   const evidence = yield* Schema.decodeUnknownEffect(ProductionLiveQualificationEvidence, {
     onExcessProperty: "error",
@@ -241,7 +243,15 @@ export const makeProductionLiveQualificationEvidence = Effect.fn("LiveQualificat
 })
 
 /** Publishes one validated success once; validation or writing failure never returns partial evidence. */
-export const publishProductionLiveQualificationEvidence = Effect.fn("LiveQualification.publishEvidence")(function* (
+export const publishProductionLiveQualificationEvidence: (
+  container: QualificationPublicationContainer,
+  locator: QualificationArtifactLocator,
+  input: unknown
+) => Effect.Effect<
+  Extract<ProductionLiveQualificationOutcome, { readonly _tag: "Qualified" }>,
+  QualificationFailed,
+  Crypto.Crypto | FileSystem.FileSystem
+> = Effect.fn("LiveQualification.publishEvidence")(function* (
   container: QualificationPublicationContainer,
   locator: QualificationArtifactLocator,
   input: unknown
