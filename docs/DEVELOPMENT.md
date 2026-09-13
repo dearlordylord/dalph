@@ -781,7 +781,7 @@ candidate verification still applies. Automatic MBT is temporarily excluded
 pending #363; formal reuse does not prove application conformance.
 
 Current allowances in [formal-gate-policy.mjs](../scripts/formal-gate-policy.mjs)
-are provisional pending final qualification measurements: 2,100 seconds for
+were retained after [local qualification](../research/formal-reuse-qualification-362.md): 2,100 seconds for
 formal acquisition and 30 seconds for final handoff validation. Acquisition
 charges tool identification, observer setup, hashing, execution, evidence and
 qualification to one decreasing allowance; phase caps do not restart it. The
@@ -792,15 +792,17 @@ seconds. Both retain 5-second termination plus 2-second absence proof. See the
 [local qualification scenario](scenarios/formal-reuse-local-qualification-budget.md)
 for the observed cost and bounded allowance rationale. The 30-second final allowance follows a 7.333-second complete
 snapshot probe and reserves the remainder for evidence reads and observer
-drains; it is not the withdrawn 60-second final estimate.
+drains; it is not the withdrawn 60-second final estimate. Final qualification measured
+560.085 seconds fresh, a 4.329-second median across ten warm commands, and
+2.629 seconds for final no-checker validation.
 
 The local stage inventory is 30 minutes of preflight plus 51 minutes of
 application qualification, now plus 35 minutes of formal acquisition and
-0.5 minutes of final validation: provisionally 116.5 minutes before existing
+0.5 minutes of final validation: 116.5 minutes before existing
 quality setup and termination overhead. This fits the existing 24-hour admitted
 command limit. These are ceilings, not measured duration or claimed savings.
-Final qualification must record fresh and warm costs, measured headroom and
-the resulting allowance decision before release. Hosted matrix, job deadlines
+The qualification report records each sample, phase headroom, final handoff
+and the decision to retain these allowances. Hosted matrix, job deadlines
 and the 16-minute/210-second-reserve formal policy remain unchanged; their
 pre-existing quality-budget discrepancy is outside this change.
 

@@ -3,8 +3,10 @@
 A developer first verifies the integrated checkout, then runs the complete formal
 profile or reuses its original stopped execution, and finally obtains that same
 requirement during normal application handoff. This is the ordered #359 → #360 →
-#361 → #362 feature, not four independent releases. The feature is not yet
-qualified for handoff or integration.
+#361 → #362 feature, not four independent releases. This document retains chronological
+intermediate checkpoints; the [final qualification report](formal-reuse-qualification-362.md)
+records successful local acceptance at `49dc0dad7`. Earlier pending or failed
+statements below describe their original checkpoint.
 
 The accepted behavior remains in [#358's approved specification](https://github.com/dearlordylord/dalph/issues/358#issuecomment-5649238628)
 and [#357's command/evidence contract](https://github.com/dearlordylord/dalph/issues/357#issuecomment-5649197858).
@@ -339,3 +341,45 @@ through the actual admitted entry (run
 The original preflight remains failed evidence; final handoff must rerun its
 complete census. New raw logs are retained under
 `.scratch/formal-reuse-qualification/local-budget/`.
+
+
+## Final local qualification on 2026-09-13
+
+The complete implementation is qualified at
+`49dc0dad73a41e30581be866018fda1bad55111e`, with merged master base
+`9a76772a7bcf2548767968906cde7693aba6757a`. The separately retained
+[final report](formal-reuse-qualification-362.md) contains all ten warm samples,
+original evidence, phase costs, selected bounds, S1–S14 mappings, review closure
+and the benefit-versus-maintenance decision.
+
+Three intermediate successful F/R sequences preceded final-source qualification:
+548.697s/5.014s/6.170s, 731.606s/4.822s/6.247s and
+544.990s/5.009s/5.918s (fresh/median warm/maximum warm). Each qualifies only its
+own source and effective environment. The first two handoff attempts refused
+Git index-lock and temporary Codex PATH observation events. Stable preparation
+removed only the temporary PATH entry while preserving executable resolution.
+A later handoff reached coverage and exposed a process-view fixture race, two
+real cassette chronology failures, and two stale tooling assertions. The
+corrections preserve production ownership refusal and the original chronology
+and omission assertions. Independent review also required combining graph
+position and cause in one record; that correction passed review and focused
+checks.
+
+The final acceptance audit required four lower-seam negative controls to run
+through production wrappers. The expanded suite now proves omitted actual
+execution cannot qualify, same-version tool-byte changes cause a full rerun,
+real observer overflow refuses success, and post-formal external edit/revert
+rejects handoff at both application and final-drain boundaries. All twelve
+wrapper integration cases passed in 149.089s. These test edits changed the
+conservative formal input identity, so their preceding F/R sequence remains
+historical and the final sequence was recollected afterward.
+
+Final fresh verification passed all 105 commands in 560.085s; ten unchanged
+warm commands had median 4.329s and maximum 4.854s, with zero checker/server
+launches and the same original evidence. The complete final `check:all` passed
+in 739.883s with 3,917 tests, all coverage thresholds, 112/112 changed evaluation
+lines and 451/550 successful output lines. Its formal reuse stage launched no
+new checker/server; preflight retained two intentional broken-model CLI checks.
+Final no-checker applicability validation took 2.629s. Full details and limits
+are in the final report. These report-only updates change no implementation or
+formal inputs.
