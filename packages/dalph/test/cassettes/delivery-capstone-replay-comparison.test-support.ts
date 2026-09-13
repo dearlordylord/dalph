@@ -181,6 +181,40 @@ const comparisonFreshTaskCandidateId = (value: object, id: string, freshRun: str
     : id
 }
 
+/** Decode the canonical length-prefixed status identity before changing only a typed proposal's Run. */
+const comparisonStatusEntryIdentity = (
+  value: string,
+  freshRun: string,
+  referenceRun: string,
+  manifests?: ReadonlyMap<string, EvidenceReference>
+): string => {
+  const components: Array<{ readonly kind: string; readonly value: string }> = []
+  let offset = 0
+  while (offset < value.length) {
+    const header = /^([sn])(0|[1-9][0-9]*):/u.exec(value.slice(offset))
+    if (header === null) return value
+    const kind = header[1]
+    const lengthText = header[2]
+    if (kind === undefined || lengthText === undefined) return value
+    const length = Number(lengthText)
+    const start = offset + header[0].length
+    const end = start + length
+    if (!Number.isSafeInteger(length) || end > value.length) return value
+    components.push({ kind, value: value.slice(start, end) })
+    offset = end
+  }
+  return components
+    .map((component) => {
+      const normalized =
+        component.kind === "s" && component.value.startsWith("delivery:")
+          ? comparisonValue(component.value, freshRun, referenceRun, "id", manifests)
+          : component.value
+      const exact = typeof normalized === "string" ? normalized : component.value
+      return `${component.kind}${exact.length}:${exact}`
+    })
+    .join("")
+}
+
 /** Structural comparison copy, never a global replacement in mutable text. */
 export const comparisonValue = (
   value: unknown,
@@ -191,6 +225,7 @@ export const comparisonValue = (
 ): unknown => {
   if (typeof value === "string") {
     if (field === "runId") return value === freshRun ? referenceRun : value
+    if (field === "entryIdentity") return comparisonStatusEntryIdentity(value, freshRun, referenceRun, manifests)
     // This named capability field retains the complete constructor tuple. The
     // ordinary candidate.id path below still requires its paired sibling facts.
     if (field === "freshCandidateId") return comparisonEmbeddedFreshTaskCandidateId(value, freshRun, referenceRun)

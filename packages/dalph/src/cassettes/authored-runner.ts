@@ -59,6 +59,7 @@ import {
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
   type DeliveryRuntimeLiveOwnerSnapshot,
+  type DeliveryRuntimeReadyObservation,
   deliveryProposalOrderTaskId,
   type JournaledTrackerGraphObservation,
   type RunActivationOpportunityValue,
@@ -162,6 +163,7 @@ import {
   type AuthoredObservationPlaybackWork
 } from "./authored-observation-playback.js"
 import { authoredCandidateCleanupBoundaryLayer } from "./authored-candidate-cleanup.js"
+import { authoredDeliveryStatusReadOf, AuthoredDeliveryStatusRead } from "./authored-delivery-status.js"
 
 export interface AuthoredScenarioCassetteRun {
   readonly activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType>
@@ -249,6 +251,7 @@ export type AuthoredObservationCapture = AuthoredObservationCorrelation &
   (
     | { readonly _tag: "AuthoredStoryOccurrenceCaptured"; readonly occurrence: AuthoredCassetteStoryItem }
     | { readonly _tag: "DeliveryPublicationCaptured"; readonly publication: AuthoredDeliveryPublication }
+    | { readonly _tag: "DeliveryStatusCaptured"; readonly deliveryStatusRead: AuthoredDeliveryStatusRead }
     | {
         readonly _tag: "DeliveryRuntimeOwnersCaptured"
         readonly liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
@@ -258,12 +261,15 @@ export type AuthoredObservationCapture = AuthoredObservationCorrelation &
 type AuthoredObservationCaptureInput =
   | { readonly _tag: "AuthoredStoryOccurrenceCaptured"; readonly occurrence: AuthoredCassetteStoryItem }
   | { readonly _tag: "DeliveryPublicationCaptured"; readonly publication: AuthoredDeliveryPublication }
+  | { readonly _tag: "DeliveryStatusCaptured"; readonly deliveryStatusRead: AuthoredDeliveryStatusRead }
   | {
       readonly _tag: "DeliveryRuntimeOwnersCaptured"
       readonly liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
     }
 
 interface AuthoredObservationMomentContext extends AuthoredObservationCorrelation {
+  /** Latest canonical read made from an actual coherent Ready observation, or explicit absence before the first read. */
+  readonly deliveryStatusRead: AuthoredDeliveryStatusRead
   /** Last coherent Delivery value at this moment; null until the first Delivery publication. */
   readonly deliveryFrame: AuthoredDeliveryFrame | null
   /** Current process-local owner view carried forward from the latest runtime publication. */
@@ -276,6 +282,7 @@ export type AuthoredObservationMoment = AuthoredObservationMomentContext &
     | { readonly _tag: "AuthoredStoryOccurrenceMoment"; readonly occurrence: AuthoredCassetteStoryItem }
     | { readonly _tag: "DeliveryPublicationMoment"; readonly deliveryFrame: AuthoredDeliveryFrame }
     | { readonly _tag: "DeliveryRuntimeOwnersMoment" }
+    | { readonly _tag: "DeliveryStatusMoment"; readonly deliveryStatusRead: AuthoredDeliveryStatusRead }
   )
 
 export interface AuthoredDeliveryFrame {
@@ -360,6 +367,11 @@ export interface AuthoredDeliveryPublication {
 }
 
 export interface AuthoredScenarioCassetteRunOptions {
+  /** Synchronous passive diagnostic at the exact Ready-to-canonical-read boundary; no projection is recomputed by Lab. */
+  readonly onDeliveryStatusRead?: (
+    observation: DeliveryRuntimeReadyObservation,
+    read: AuthoredDeliveryStatusRead
+  ) => void
   /** Synchronous read-only notification; callers must move expensive projection outside the runtime turn. */
   readonly onDeliveryPublication?: (publication: AuthoredDeliveryPublication) => void
   /** Synchronous raw notification in the same deterministic order retained by the completed run. */
@@ -1138,10 +1150,20 @@ export const evaluateAuthoredObservationCapture: (
     const correlation = {
       activationOrdinal: capture.activationOrdinal,
       captureOrder: capture.captureOrder,
-      storyPosition: capture.storyPosition
+      storyPosition: capture.storyPosition,
+      deliveryStatusRead: previous === null ? AuthoredDeliveryStatusRead.Unobserved() : previous.deliveryStatusRead
     }
     const deliveryFrame = previous?.deliveryFrame ?? null
     const liveOwners = previous?.liveOwners ?? []
+    if (capture._tag === "DeliveryStatusCaptured") {
+      return {
+        ...correlation,
+        _tag: "DeliveryStatusMoment",
+        deliveryFrame,
+        liveOwners,
+        deliveryStatusRead: capture.deliveryStatusRead
+      } satisfies AuthoredObservationMoment
+    }
     if (capture._tag === "DeliveryPublicationCaptured") {
       return {
         _tag: "DeliveryPublicationMoment",
@@ -1468,7 +1490,9 @@ const runAuthoredScenarioCassetteWith = (request: {
               ? { ...correlation, _tag: observation._tag, occurrence: observation.occurrence }
               : observation._tag === "DeliveryPublicationCaptured"
                 ? { ...correlation, _tag: observation._tag, publication: observation.publication }
-                : { ...correlation, _tag: observation._tag, liveOwners: observation.liveOwners }
+                : observation._tag === "DeliveryStatusCaptured"
+                  ? { ...correlation, _tag: observation._tag, deliveryStatusRead: observation.deliveryStatusRead }
+                  : { ...correlation, _tag: observation._tag, liveOwners: observation.liveOwners }
           MutableList.append(captures, captured)
           if (acceptingPlayback) observationPlayback.appendUnsafe(captured)
           return [captured, { captures, nextOrder: nextOrder + 1, acceptingPlayback }]
@@ -1520,10 +1544,32 @@ const runAuthoredScenarioCassetteWith = (request: {
           })
       })
       const runtimeObservationObserver = DeliveryRuntimeObservationObserver.of({
-        observe: ({ liveOwners }) =>
+        observe: (observation) =>
           Effect.gen(function* () {
+            const { liveOwners } = observation
             const identity = JSON.stringify(liveOwners)
-            const previous = yield* Ref.get(lastRuntimeOwners)
+            // This synchronous local capture occupies the existing owner-read
+            // turn. Adding a yielded observer append here changes the authored
+            // executor interleaving; no workflow boundary may depend on status.
+            const previous = yield* Ref.modify(observationCaptureState, (state) => {
+              const capture: AuthoredObservationCapture = {
+                _tag: "DeliveryStatusCaptured",
+                activationOrdinal: Ref.getUnsafe(activeDeliveryActivation),
+                captureOrder: AuthoredObservationCaptureOrder.make(state.nextOrder),
+                storyPosition: AuthoredStoryPosition.make(cursor.storyPositionUnsafe()),
+                deliveryStatusRead: authoredDeliveryStatusReadOf({ _tag: "Run", runId }, observation)
+              }
+              MutableList.append(state.captures, capture)
+              if (state.acceptingPlayback) observationPlayback.appendUnsafe(capture)
+              try {
+                options.onDeliveryStatusRead?.(observation, capture.deliveryStatusRead)
+                options.onObservationCapture?.(capture)
+              } catch {
+                // Like the other raw diagnostic callbacks, this callback has
+                // no permission to change cassette execution on failure.
+              }
+              return [Ref.getUnsafe(lastRuntimeOwners), { ...state, nextOrder: state.nextOrder + 1 }]
+            })
             if (previous === identity) return
             yield* Ref.set(lastRuntimeOwners, identity)
             if (previous === null && liveOwners.length === 0) return
