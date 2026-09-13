@@ -462,7 +462,7 @@ it.live(
           journal.findIndex(({ event }) => event._tag === tag)
         const expectCausalOrder = (indices: ReadonlyArray<number>) => {
           for (const [index, current] of indices.entries()) {
-            expect(current).toBeGreaterThanOrEqualTo(0)
+            expect(current).toBeGreaterThanOrEqual(0)
             const next = indices[index + 1]
             if (next !== undefined) expect(current).toBeLessThan(next)
           }
