@@ -37,6 +37,7 @@ interface DeliveryStoryAcceptanceTest {
     | "packages/orchestrator/src/workflow/protocols/integrator/successor-session.test.ts"
     | "packages/dalph/test/cassettes/scenario.test.ts"
     | "packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts"
+    | "packages/dalph/test/cassettes/issue-337-capstone.execution.test.ts"
     | "packages/dalph/test/cassettes/issue-274-lifecycle-resume.test.ts"
     | "packages/dalph/test/cassettes/issue-275-active-graph-refresh.test.ts"
     | "prototypes/reducer-lab/src/cassette-lab.smoke.ts"
@@ -108,6 +109,20 @@ const ds14ThroughDs17PrefixHistoryTest = capstoneTest(
 const ds14ThroughDs17ComposedRestartTest = capstoneTest(
   "resumes the composed DS-14 through DS-17 path after every CAS-to-successor durable checkpoint"
 )
+const issue337CapstoneTest = (name: string): DeliveryStoryAcceptanceTest => ({
+  declaration: "it.effect",
+  name,
+  sourceFile: "packages/dalph/test/cassettes/issue-337-capstone.execution.test.ts"
+})
+const issue337CapstoneExecutionTest = issue337CapstoneTest(
+  "maintained deliveryInvariantStoryCapstone executes all 22 beats in one exact Run"
+)
+const issue337CapstoneCleanupTest = issue337CapstoneTest(
+  "completes the uninterrupted seven-task run after reconciling A FullRerun predecessor cleanup"
+)
+const issue337CapstoneReplayTest = issue337CapstoneTest(
+  "replays the maintained capstone with the same exact chronology"
+)
 const ds17FinalityRestartTests = [
   capstoneTest("resumes exact DS-17 finality after TargetPromotionObservedSuccess durable checkpoint"),
   capstoneTest("resumes exact DS-17 finality after CompletionClaimReplaced durable checkpoint"),
@@ -152,6 +167,7 @@ const successorDeliveryRestartTest = orchestratorTest(
 )
 const issue268CassetteKeys = ["controlled:issue268Ds01ThroughDs13"] as const
 const issue268BeatIds = deliveryStoryBeatIds.slice(0, deliveryStoryBeatIds.indexOf("DS-13") + 1)
+const capstoneCassetteKey = "authored:deliveryInvariantStoryCapstone" as const
 
 const slice = (
   beatId: DeliveryStoryBeatId,
@@ -162,15 +178,10 @@ const slice = (
   coverage: { _tag: "DemonstratedByMaintainedSlice", acceptanceTests, cassetteKeys }
 })
 
-const missing = (beatId: DeliveryStoryBeatId, reason: string): DeliveryStoryBeatManifestEntry => ({
-  beatId,
-  coverage: { _tag: "NotImplemented", acceptanceTests: [], cassetteKeys: [], reason }
-})
-
 /**
  * Machine-readable coverage for the prose story. The long spine proves the
- * double-diamond graph/restart path; one maintained story proves one narrower beat;
- * unsupported combined behavior remains explicit instead of fabricated.
+ * ten-task graph/restart path; the maintained capstone proves the complete
+ * seven-task chronology while independent slices retain their own evidence.
  */
 export const deliveryStoryManifest = {
   cassetteKey: "authored:deliveryInvariantStory" as const,
@@ -178,40 +189,50 @@ export const deliveryStoryManifest = {
   sourceDocument: "docs/DELIVERY-STORY.md" as const,
   beats: [
     ...issue268BeatIds.map((beatId) =>
-      slice(beatId, issue268CassetteKeys, issue268CheckpointTable, issue268OccurrenceCassette)
+      slice(
+        beatId,
+        [...issue268CassetteKeys, capstoneCassetteKey],
+        issue268CheckpointTable,
+        issue268OccurrenceCassette,
+        issue337CapstoneExecutionTest
+      )
     ),
     slice(
       "DS-14",
-      ["authored:deliveryStoryDs14ThroughDs17", "authored:acceptedResultRestartsIntoIntegration"],
+      ["authored:deliveryStoryDs14ThroughDs17", "authored:acceptedResultRestartsIntoIntegration", capstoneCassetteKey],
       ds14ThroughDs17Test,
       ds14ThroughDs17ComposedRestartTest,
       ds14ThroughDs17PrefixHistoryTest,
-      scenarioTest("continues an accepted result after process death and crosses its integration cutoff once")
+      scenarioTest("continues an accepted result after process death and crosses its integration cutoff once"),
+      issue337CapstoneExecutionTest
     ),
     slice(
       "DS-15",
-      ["authored:deliveryStoryDs14ThroughDs17"],
+      ["authored:deliveryStoryDs14ThroughDs17", capstoneCassetteKey],
       ds14ThroughDs17Test,
       ds15NegativeTest,
       ds14ThroughDs17ComposedRestartTest,
-      ds14ThroughDs17PrefixHistoryTest
+      ds14ThroughDs17PrefixHistoryTest,
+      issue337CapstoneExecutionTest
     ),
     slice(
       "DS-16",
-      ["authored:deliveryStoryDs14ThroughDs17"],
+      ["authored:deliveryStoryDs14ThroughDs17", capstoneCassetteKey],
       ds14ThroughDs17Test,
       ds16NegativeTest,
       ds16AuthoredBoundaryNegativeTest,
       ds16StaleReadNegativeTest,
       ds14ThroughDs17ComposedRestartTest,
       ds14ThroughDs17PrefixHistoryTest,
-      promotionStaleRestartTest
+      promotionStaleRestartTest,
+      issue337CapstoneExecutionTest
     ),
     slice(
       "DS-17",
       [
         "authored:deliveryStoryDs14ThroughDs17",
         "authored:ambiguousCompletionResponse",
+        capstoneCassetteKey,
         "integration-finality:restartAfterPromotionResumesCompletionSettlementWithoutAnotherIntegrationAgent",
         "integration-finality:reconcilesALostCompletionClaimReplacementWithoutAllocatingAnotherClaim",
         "integration-finality:doesNotMutateAForeignClaimWhileSettlingAPromotedTask",
@@ -234,16 +255,24 @@ export const deliveryStoryManifest = {
       scenarioTest("does not mutate a foreign claim while settling a promoted task"),
       scenarioTest("deletes only the exact completion claim after focused task success"),
       scenarioTest("reconciles a lost completion-claim deletion without reopening success"),
-      scenarioTest("reconstructs and round-trips interrupted and settled completion-cleanup Run prefixes")
+      scenarioTest("reconstructs and round-trips interrupted and settled completion-cleanup Run prefixes"),
+      issue337CapstoneExecutionTest,
+      issue337CapstoneCleanupTest,
+      issue337CapstoneReplayTest
     ),
-    slice("DS-18", ["controlled:issue274LifecycleReopen"], {
-      declaration: "it.effect",
-      sourceFile: "packages/dalph/test/cassettes/issue-274-lifecycle-resume.test.ts",
-      name: "reopens C and resumes its original attempt only after accepted capacity three"
-    }),
+    slice(
+      "DS-18",
+      ["controlled:issue274LifecycleReopen", capstoneCassetteKey],
+      {
+        declaration: "it.effect",
+        sourceFile: "packages/dalph/test/cassettes/issue-274-lifecycle-resume.test.ts",
+        name: "reopens C and resumes its original attempt only after accepted capacity three"
+      },
+      issue337CapstoneExecutionTest
+    ),
     slice(
       "DS-19",
-      ["controlled:issue274LifecycleReopen", "controlled:issue274LostResumeResponse"],
+      ["controlled:issue274LifecycleReopen", "controlled:issue274LostResumeResponse", capstoneCassetteKey],
       {
         declaration: "it.effect",
         sourceFile: "packages/dalph/test/cassettes/issue-274-lifecycle-resume.test.ts",
@@ -253,20 +282,32 @@ export const deliveryStoryManifest = {
         declaration: "it.effect",
         sourceFile: "packages/dalph/test/cassettes/issue-274-lifecycle-resume.test.ts",
         name: "reconciles C's lost Resume response after restart without another Begin or Resume"
-      }
+      },
+      issue337CapstoneExecutionTest
     ),
-    slice("DS-20", ["controlled:issue275ActiveGraphRefresh"], {
-      declaration: "it.effect",
-      sourceFile: "packages/dalph/test/cassettes/issue-275-active-graph-refresh.test.ts",
-      name: "observes F and G without admitting either while B C and D retain every exact position"
-    }),
-    missing(
+    slice(
+      "DS-20",
+      ["controlled:issue275ActiveGraphRefresh", capstoneCassetteKey],
+      {
+        declaration: "it.effect",
+        sourceFile: "packages/dalph/test/cassettes/issue-275-active-graph-refresh.test.ts",
+        name: "observes F and G without admitting either while B C and D retain every exact position"
+      },
+      issue337CapstoneExecutionTest
+    ),
+    slice(
       "DS-21",
-      "Issue #276 proves position release and serialized integration order in an independent G5 fixture; #277 still owns ordinary finality and #279 owns uninterrupted composition."
+      [capstoneCassetteKey],
+      issue337CapstoneExecutionTest,
+      issue337CapstoneCleanupTest,
+      issue337CapstoneReplayTest
     ),
-    missing(
+    slice(
       "DS-22",
-      "The maintained staggered ten-task cassette finalizes all ten accepted results and terminates, but it is not the prose beat's seven-task G5 chronology for E, F, and G."
+      [capstoneCassetteKey],
+      issue337CapstoneExecutionTest,
+      issue337CapstoneCleanupTest,
+      issue337CapstoneReplayTest
     )
   ] satisfies ReadonlyArray<DeliveryStoryBeatManifestEntry>
 } as const

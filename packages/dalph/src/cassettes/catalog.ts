@@ -11,6 +11,7 @@ import {
 import { Option, Schema } from "effect"
 import { AuthoredScenarioCassette, type AuthoredScenarioCassette as ScenarioCassette } from "./authored.js"
 import { AuthoredCassetteStoryItem, type AuthoredOrchestrationEvidence } from "./authored-domain.js"
+import { deliveryStoryCapstoneAuthoredCassette } from "./delivery-story-capstone.js"
 
 const decodeStoryItem = Schema.decodeUnknownSync(AuthoredCassetteStoryItem)
 const terminalStoryItemOffset = -1
@@ -5426,6 +5427,7 @@ type MaintainedAuthoredCassetteName =
   | "deliveryFinalitySpine"
   | "deliveryStoryDs14ThroughDs17"
   | "deliveryInvariantStory"
+  | "deliveryInvariantStoryCapstone"
   | "productionShapedFiveTaskDiamond"
   | "dependentTasksCompleteInOneRun"
   | "incompatibleTargetRewriteSafelySuspends"
@@ -5495,6 +5497,7 @@ export const maintainedAuthoredCassetteCatalog: Readonly<Record<MaintainedAuthor
     deliveryFinalitySpine: deliveryFinalitySpineAuthoredCassette,
     deliveryStoryDs14ThroughDs17: deliveryStoryDs14ThroughDs17AuthoredCassette,
     deliveryInvariantStory: deliveryInvariantStoryAuthoredCassette,
+    deliveryInvariantStoryCapstone: deliveryStoryCapstoneAuthoredCassette,
     productionShapedFiveTaskDiamond: productionShapedFiveTaskDiamondAuthoredCassette,
     dependentTasksCompleteInOneRun: dependentTasksCompleteInOneRunAuthoredCassette,
     incompatibleTargetRewriteSafelySuspends: incompatibleTargetRewriteSafelySuspendsAuthoredCassette,

@@ -352,6 +352,10 @@ export interface StoryCursor {
   readonly consumeCapacityChange: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity.Type>
   >
+  readonly consumeSafeContinuationRevalidationPublication: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.CassetteAwaitsSafeContinuationRevalidationPublication.Type,
+    CursorFailure
+  >
   readonly consumeRunReactivationHints: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteOffersRunReactivationHints.Type>
   >
@@ -421,6 +425,18 @@ export interface StoryCursor {
   ) => Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.IntegratorGitObservationReturned.Type,
     CursorFailure | AuthoredIntegratorGitObservationFailure
+  >
+  readonly consumeIntegratorCandidateCleanupObservation: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.IntegratorCandidateCleanupObservationReturned.Type,
+    CursorFailure
+  >
+  readonly consumeIntegratorCandidateCleanupEvidenceRevision: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.IntegratorCandidateCleanupEvidenceRevisionReturned.Type,
+    CursorFailure
+  >
+  readonly consumeIntegratorCandidateCleanupRemoval: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.IntegratorCandidateCleanupRemovalReturned.Type,
+    CursorFailure
   >
   /** Consume the exact target-promotion CAS response for the Git request now in flight. */
   readonly consumeTargetPromotionCompareAndSet: (
@@ -1074,6 +1090,29 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const consumeDalphSelection = consume("DalphSelects").pipe(
     Effect.flatMap((item) =>
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.DalphSelects)(item).pipe(Effect.orDie)
+    )
+  )
+  const consumeIntegratorCandidateCleanupObservation = consume("IntegratorCandidateCleanupObservationReturned").pipe(
+    Effect.flatMap((item) =>
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.IntegratorCandidateCleanupObservationReturned)(
+        item
+      ).pipe(Effect.orDie)
+    )
+  )
+  const consumeIntegratorCandidateCleanupEvidenceRevision = consume(
+    "IntegratorCandidateCleanupEvidenceRevisionReturned"
+  ).pipe(
+    Effect.flatMap((item) =>
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.IntegratorCandidateCleanupEvidenceRevisionReturned)(
+        item
+      ).pipe(Effect.orDie)
+    )
+  )
+  const consumeIntegratorCandidateCleanupRemoval = consume("IntegratorCandidateCleanupRemovalReturned").pipe(
+    Effect.flatMap((item) =>
+      Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.IntegratorCandidateCleanupRemovalReturned)(item).pipe(
+        Effect.orDie
+      )
     )
   )
   const awaitOwnershipOrAdvance = Effect.fn("AuthoredCassette.awaitOwnershipOrAdvance")(function* (
@@ -2347,6 +2386,16 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeAttemptChoiceRace,
     consumeCapacityChange,
     consumeRunReactivationHints,
+    consumeSafeContinuationRevalidationPublication: consume(
+      "CassetteAwaitsSafeContinuationRevalidationPublication"
+    ).pipe(
+      Effect.flatMap(
+        Schema.decodeUnknownEffect(
+          AuthoredCassetteStoryItem.cases.CassetteAwaitsSafeContinuationRevalidationPublication
+        )
+      ),
+      Effect.orDie
+    ),
     consumeCurrentTrackerNotification,
     consumeControlDirection,
     consumeIntegrationQuarantineDirection,
@@ -2374,6 +2423,9 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeIntegratorRequest,
     consumeIntegratorResult,
     consumeIntegratorGitObservation,
+    consumeIntegratorCandidateCleanupObservation,
+    consumeIntegratorCandidateCleanupEvidenceRevision,
+    consumeIntegratorCandidateCleanupRemoval,
     consumeTargetPromotionCompareAndSet,
     consumeTargetPromotionGitRead,
     consumeRunCoordinator,
