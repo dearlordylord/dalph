@@ -76,7 +76,8 @@ import {
   cassetteSettledEvent,
   everyCassetteSettledEvent,
   mountCassetteLab,
-  singleCassetteSettledEvent
+  singleCassetteSettledEvent,
+  deliveryFrameEvent
 } from "./cassette-lab-browser.ts"
 import {
   browserDigest,
@@ -1498,7 +1499,9 @@ await scenario("shows production delivery frames before the authored cassette se
     workbench?.querySelectorAll(".delivery-timeline-controls option").length === 1,
     "The first live publication must create one frame before terminal settlement"
   )
+  const secondPublicationRendered = settled(deliveryFrameEvent)
   observer?.onObservationMoment?.(publicationMoments[1]!)
+  await secondPublicationRendered
   const status = workbench?.querySelector(".delivery-timeline-controls output")
   assert(status?.textContent?.startsWith("2 / 2") === true, "Follow live must advance to the newest running frame")
   const previous = workbench?.querySelector<HTMLButtonElement>("button[data-role='previous-frame']")
@@ -1506,7 +1509,9 @@ await scenario("shows production delivery frames before the authored cassette se
   const inspectedFrame = workbench?.querySelector("[data-role='delivery-frame']")
   const exactEvidence = inspectedFrame?.querySelector<HTMLDetailsElement>("details[data-role='all-task-facts']")
   exactEvidence?.setAttribute("open", "")
+  const thirdPublicationRendered = settled(deliveryFrameEvent)
   observer?.onObservationMoment?.(publicationMoments[2]!)
+  await thirdPublicationRendered
   assert(
     status?.textContent?.startsWith("1 / 3") === true,
     "A rewound playhead must not move when another production frame arrives"

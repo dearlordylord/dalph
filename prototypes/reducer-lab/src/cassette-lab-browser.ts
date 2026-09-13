@@ -257,7 +257,6 @@ const defectDetail = (error: unknown): string => error instanceof Error ? error.
 /** Mounts one shared maintainer workbench over the production-owned cassette catalogs. */
 export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   const { revision, root, rows, runCassette } = input
-  const coalesceLiveDeliveryRenders = typeof globalThis.requestAnimationFrame === "function"
   const reloadLab = input.reloadLab ?? (() => globalThis.location.reload())
   document.title = "Dalph reducer lab"
   const rowByKey = new Map(rows.map((row) => [row.catalogKey, row]))
@@ -602,8 +601,6 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
               liveMoments.push(moment)
               if (!hasRenderedLiveObservation) {
                 hasRenderedLiveObservation = true
-                renderLatestLiveObservation()
-              } else if (!coalesceLiveDeliveryRenders) {
                 renderLatestLiveObservation()
               } else {
                 liveDeliveryRenderTimer ??= setTimeout(renderLatestLiveObservation, liveDeliveryRenderIntervalMs)
