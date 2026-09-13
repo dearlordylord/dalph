@@ -175,8 +175,15 @@ the controlled GitHub fixture changes that issue's actual title/body to a
 sentinel-bearing `TaskWorkSpecification`. Its ordinary tracker read returns
 those changed facts; no projected status or public record is fabricated.
 The qualification callback rejects the original typed source before registering
-or publishing an unsafe CurrentStatus. The controller joins that original
-child and both readers, stops its transport, and performs exact cleanup once.
+or publishing an unsafe CurrentStatus. The ordinary task protocol can create
+its claim label before reading that specification; that successful creation
+adds an immutable original label receipt and does not revise the issue receipt.
+The test binds every such receipt to the actual creation boundary. The
+controller joins that original child and both readers and stops its transport.
+It then captures the complete creation inventory and performs exact cleanup
+once: it removes the proven unchanged label, retains the changed issue, and
+leaves local unfinished-Run resources retained. It must not omit the later label
+or assume rejection means no earlier authorized boundary was crossed.
 The fresh issue fingerprint differs from the original creation receipt, so
 cleanup retains the changed issue as `ChangedIdentity` rather than deleting it.
 The acceptance test requires no sentinel in accepted output, a static safe

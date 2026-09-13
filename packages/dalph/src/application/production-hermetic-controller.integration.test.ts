@@ -13,7 +13,8 @@ import {
   nodeGitCommandLayer,
   sqliteJournalStoreLayer
 } from "@dalph/orchestrator"
-import { Clock, Context, Effect, FileSystem, Layer, MutableList, Queue, Schema } from "effect"
+import { Clock, Context, Crypto, Effect, FileSystem, Layer, MutableList, Queue, Schema } from "effect"
+import { githubClaimLabelNameFor } from "../../../orchestrator/src/authorities/task-tracker/github/claim-mutation.js"
 import { expect } from "vitest"
 import { createHermeticFixture } from "../../test-support/production-hermetic-fixture.js"
 import {
@@ -49,7 +50,7 @@ const publishEvidence = Effect.fn("HermeticQualification.publishEvidence")(funct
   const child = children.at(-1)
   if (child === undefined) return yield* Effect.die("qualification requires its actual owned child")
   const artifact = QualificationArtifactLocator.make(
-    nodePath.join(nodePath.dirname(fixture.container), `${fixture.manifest.invocationId}.qualification.json`)
+    nodePath.join(nodePath.dirname(fixture.container), `${nodePath.basename(fixture.container)}.qualification.json`)
   )
   const fs = yield* FileSystem.FileSystem
   const git = yield* GitCommand
@@ -256,8 +257,29 @@ it.live(
         expect(yield* controller.activeRegistrationCount).toBe(0)
         const journal = yield* readJournal(fixture, child)
         expect(journal.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+        const created = yield* controller.providerCreationManifest
+        expect(created.invocationId).toBe(original.invocationId)
+        expect(created.repository).toStrictEqual(original.repository)
+        expect(created.resources.filter((resource) => resource._tag === "Issue")).toStrictEqual(original.resources)
+        const labels = created.resources.filter((resource) => resource._tag === "Label")
+        const claims = journal.flatMap(({ event }) => (event._tag === "TaskClaimAcquired" ? [event.claim] : []))
+        expect(labels).toHaveLength(1)
+        expect(claims).toHaveLength(1)
+        const label = labels[0]
+        const claim = claims[0]
+        if (label === undefined || claim === undefined)
+          return yield* Effect.die("qualification requires its successful original claim creation")
+        expect(label.nodeId).toBe(`hermetic-label:${claim.operationId}`)
+        expect(label.name).toBe(yield* githubClaimLabelNameFor(yield* Crypto.Crypto, claim.taskId))
+        expect(label.fingerprint).toBe(
+          createHash("sha256").update(["1", claim.operationId, claim.owner, claim.token].join("|")).digest("hex")
+        )
+        expect((yield* controller.finalTrackerFacts).claims).toStrictEqual(labels)
+        expect(
+          (yield* controller.providerSnapshot).operationCounts.find(({ tag }) => tag === "CreateClaimLabel")?.count
+        ).toBe(1)
         const githubCleanup = yield* cleanupDisposableGithubQualification(
-          original,
+          created,
           { invocationId: fixture.manifest.invocationId, repository: original.repository },
           controller.githubCleanupAdapter
         )
@@ -269,7 +291,10 @@ it.live(
         expect(retainedIssue[0]?.reason).toBe("ChangedIdentity")
         expect(githubCleanup.removed.some((resource) => resource._tag === "Issue")).toBe(false)
         expect((yield* controller.finalTrackerFacts).issuePresent).toBe(true)
-        expect(yield* controller.providerCreationManifest).toEqual(original)
+        expect(githubCleanup.removed).toStrictEqual(labels)
+        expect(githubCleanup.alreadyAbsent).toStrictEqual([])
+        expect(yield* controller.providerCreationManifest).toStrictEqual(created)
+        expect((yield* controller.finalTrackerFacts).claims).toStrictEqual([])
         const localCleanup = yield* disposeHermeticFixture(fixture, controller)
         expect(localCleanup).toEqual({
           _tag: "RetainedFixture",
@@ -282,6 +307,8 @@ it.live(
         const counts = (yield* controller.providerSnapshot).operationCounts
         expect(counts.find(({ tag }) => tag === "QualificationReadIssue")?.count).toBe(1)
         expect(counts.find(({ tag }) => tag === "QualificationDeleteIssue")).toBeUndefined()
+        expect(counts.find(({ tag }) => tag === "QualificationDeleteLabel")?.count).toBe(1)
+        expect(counts.find(({ tag }) => tag === "QualificationReadLabel")?.count).toBe(2)
         expect(counts.find(({ tag }) => tag === "CodexStartTurn")).toBeUndefined()
       })
     ).pipe(Effect.provide(fixtureLayer)),
