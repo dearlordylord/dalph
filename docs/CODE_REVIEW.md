@@ -75,6 +75,7 @@ no runtime behavior changes. Aggregate totals are not scenario evidence.
    changes, `check:all` establishes formal applicability before integration; a
    separate repeated exhaustive run is unnecessary. Use
    `pnpm check:quint --force` only for fresh reproduction or fresh timing.
-   Reuse never substitutes for model-adequacy review or required MBT. Failures
+   Reuse never substitutes for model-adequacy review. Automatic MBT is
+   temporarily excluded pending #363; `test:mbt` remains manual. Failures
    reopen affected work under step 4; green gates need no new broad review. See
    [development checks](DEVELOPMENT.md#commands).

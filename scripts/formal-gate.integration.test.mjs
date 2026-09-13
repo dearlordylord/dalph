@@ -625,7 +625,7 @@ test(
 // S4/S8/S12/S14: the real quality workflow acquires genuine controlled formal
 // receipts after preflight, always crosses that boundary on resume, and retains
 // mandatory verdict bytes independently of exact optional diagnostic logs.
-test("quality handoff retains formal evidence through MBT, warm execution and full-prefix resume", async () => {
+test("quality handoff retains formal evidence through application checks, warm execution and full-prefix resume", async () => {
   const f = fixture()
   try {
     f.put(
@@ -633,8 +633,8 @@ test("quality handoff retains formal evidence through MBT, warm execution and fu
       `
 import {appendFileSync,readFileSync,writeFileSync} from 'node:fs';import {join} from 'node:path';
 import {executeResumableQualityGate} from './gate-quality-run.mjs';import {runBoundedCommand} from './run-bounded-command.mjs';
-const sources=["require('fs').appendFileSync('.scratch/events','preflight\\\\n')","require('fs').appendFileSync('.scratch/events','mbt\\\\n');if(require('fs').existsSync('.scratch/mutate-formal'))require('fs').writeFileSync('formal-input','changed after formal')"];
-const manifest=sources.map((source,ordinal)=>({id:['preflight','mbt'][ordinal],name:['preflight','mbt'][ordinal],boundary:ordinal===0?'preflight':'qualification',args:[source],timeout:10000,artifactRoots:[],execution:{executable:process.execPath,args:['-e',source],cwd:process.cwd(),name:['preflight','mbt'][ordinal],timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
+const sources=["require('fs').appendFileSync('.scratch/events','preflight\\\\n')","require('fs').appendFileSync('.scratch/events','application-check\\\\n');if(require('fs').existsSync('.scratch/mutate-formal'))require('fs').writeFileSync('formal-input','changed after formal')"];
+const manifest=sources.map((source,ordinal)=>({id:['preflight','application-check'][ordinal],name:['preflight','application-check'][ordinal],boundary:ordinal===0?'preflight':'qualification',args:[source],timeout:10000,artifactRoots:[],execution:{executable:process.execPath,args:['-e',source],cwd:process.cwd(),name:['preflight','application-check'][ordinal],timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
 const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.base)},stageManifest:manifest,toolExecutables:[]};
 await executeResumableQualityGate({logicalInvocation,stageManifest:manifest,resumeRunId:process.argv[2]?.slice('--resume='.length),prepareFreshInputs:()=>{},
 startGuard:async({logicalInvocation})=>{const identity={version:2,observerVersion:1,inputDigest:'controlled-quality',sourceInputDigest:'controlled-source',logicalInvocation};return {identity,assertUnchanged:async()=>{},protectArtifacts:async()=>{},finish:async()=>({version:1,observerVersion:1,ready:true,drained:true,unchanged:true,inputDigest:identity.inputDigest,sourceInputDigest:identity.sourceInputDigest}),close:async()=>{}}},
@@ -655,12 +655,12 @@ runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.
     assert.equal(original.resume.formal.disposition, "executed")
     assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 105)
     assert.ok(f.events().indexOf("preflight") < f.events().indexOf("server-start"))
-    assert.ok(f.events().indexOf("server-stopped") < f.events().indexOf("mbt"))
+    assert.ok(f.events().indexOf("server-stopped") < f.events().indexOf("application-check"))
     f.put("unrelated-app", "ordinary application edit")
     const warm = await quality()
     assert.equal(warm.code, 0, warm.stderr)
     assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 105)
-    assert.equal(f.events().filter((event) => event === "mbt").length, 2)
+    assert.equal(f.events().filter((event) => event === "application-check").length, 2)
     const resumed = await quality(original.runId)
     assert.equal(resumed.code, 0, resumed.stderr)
     const all = qualityRecords()
@@ -672,14 +672,14 @@ runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.
     assert.equal(fullResume.resume.formal.disposition, "reused")
     assert.equal(fullResume.resume.formal.recordPath, original.resume.formal.recordPath)
     assert.equal(fullResume.resume.complete, true)
-    assert.equal(f.events().filter((event) => event === "mbt").length, 2)
+    assert.equal(f.events().filter((event) => event === "application-check").length, 2)
     const report = readRecord(f.saved().success.execution.reportPath)
     const optional = original.stages.find(
       (stage) => stage.obligationId === report.profileResult.commands[0].obligationId
     )
     rmSync(optional.logPath)
     assert.equal(readRunEvidence({ runDirectory: original.runDirectory, runId: original.runId }).resume.complete, true)
-    const mandatory = original.stages.find((stage) => stage.command.name === "mbt")
+    const mandatory = original.stages.find((stage) => stage.command.name === "application-check")
     const bytes = readFileSync(mandatory.logPath)
     rmSync(mandatory.logPath)
     assert.throws(
@@ -701,9 +701,9 @@ runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.
     assert.equal(invalidatedResume.code, 0, invalidatedResume.stderr)
     assert.equal(readRunEvidence({ runDirectory: original.runDirectory, runId: original.runId }).resume.complete, true)
     assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 210)
-    assert.equal(f.events().filter((event) => event === "mbt").length, 2)
+    assert.equal(f.events().filter((event) => event === "application-check").length, 2)
     // S12: a real failed checker child at the mandatory formal boundary
-    // rejects this handoff before any application MBT launch.
+    // rejects this handoff before any application check launch.
     const latest = f.saved()
     atomicRecord(latest.success.pointerPath, { ...latest.pointer, state: "started" })
     f.controls({ fail: true })
@@ -711,7 +711,7 @@ runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.
     assert.equal(failedFormal.code, 1)
     assert.match(failedFormal.stderr, /controlled checker failure/u)
     assert.ok(f.events().filter((event) => event.startsWith("checker ")).length > 210)
-    assert.equal(f.events().filter((event) => event === "mbt").length, 2)
+    assert.equal(f.events().filter((event) => event === "application-check").length, 2)
     f.controls({ fail: false })
     f.put(".scratch/mutate-formal", "trigger")
     const mutation = await quality()

@@ -252,3 +252,48 @@ successful F and R measurements, its benefit is not yet demonstrated. This
 requires revisiting qualification scope before release, rather than treating
 controlled tests as performance acceptance. This report-only update changes
 no Dalph runtime behavior or formal input.
+
+## Master update on 2026-09-13
+
+The maintainer requested pulling current master into this integration worktree.
+The fetched master is `9a76772a7bcf2548767968906cde7693aba6757a`, including
+`8fdcad06ca9c55eb3d3fcdd805579e3864d7bfb8` and its explicit temporary removal
+of automatic MBT pending [#363](https://github.com/dearlordylord/dalph/issues/363).
+The merge preserves that newer policy. The historical S4/S12 evidence above
+describes the former mandatory MBT stage; current handoff still requires its
+application stages, but does not launch MBT automatically. The controlled
+handoff test now names its independent application check accordingly, preserving
+formal-before-application ordering, failure propagation, original evidence,
+warm reuse, resume and late-mutation assertions. Routing and manifest tests
+assert that automatic MBT is absent while coverage remains required.
+
+Master also reduces repeated coverage replay/reconstruction and changes the
+production coverage floor to 95 percent. Its current quality allowance sum is
+30 minutes preflight plus 51 minutes qualification, down eight minutes because
+MBT is no longer automatic. With this branch's still-provisional 17-minute
+formal acquisition and 0.5-minute final validation allowances, the inventory
+is 98.5 minutes before existing setup/termination overhead. This is a policy
+inventory, not a new measured handoff duration.
+
+History inspection distinguishes MBT removal from formal-profile removal:
+master's hosted `formal-models` job still invokes `pnpm check:quint`, and its
+`check:ci` still includes `check:ci:formal`. The #363 commit explicitly retains
+that separate complete formal gate. Open
+[#344](https://github.com/dearlordylord/dalph/issues/344) tracks sampled-model
+reliability and complete-profile timing; it does not cancel formal verification.
+There is no change from the original baseline to this master in `specs/`,
+the checker timing policy, the lint runner or the capability-registration test.
+Thus the incoming changes may reduce application verification cost, but do
+not establish a repair for the failed fresh formal run or the two unresolved
+preflight timeouts. No real formal benchmark was launched for this merge.
+
+The merge changes formal inputs, so the earlier failed attempt remains
+historical evidence only. #362 still has no successful F/R qualification or
+complete final handoff; importing these changes is not release acceptance.
+
+Merge verification: 11 controlled Node routing tests passed; the three focused
+Vitest files for preflight, MBT source selection and CI contracts passed all
+11 tests. The controlled quality-handoff integration case passed in 26.18
+seconds, preserving the assertions described above. No real Quint model was
+executed by these checks. Changed-file formatting and whitespace checks passed,
+and the independent merge-resolution review found no remaining finding.

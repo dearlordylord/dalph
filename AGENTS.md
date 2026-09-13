@@ -69,7 +69,8 @@ questions. Reuse guidance already read unless it changed or scope changed.
   changes, `check:all` establishes formal applicability before integration; a
   separate repeated exhaustive run is unnecessary. Use
   `pnpm check:quint --force` only for fresh reproduction or fresh timing.
-  Reuse never substitutes for model-adequacy review or required MBT.
+  Reuse never substitutes for model-adequacy review. Automatic MBT is
+  temporarily excluded pending #363; `test:mbt` remains manual.
   Uncollected tests, undefined behavior, and unreachable actions can appear
   green; require a negative control.
 - `check:all`, `check:ci:quality`, `test:coverage`, `check:quint`, and standalone

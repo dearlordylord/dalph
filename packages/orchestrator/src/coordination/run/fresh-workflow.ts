@@ -14,6 +14,9 @@ import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task
 import { taskRevisionFor } from "../../authorities/task-tracker/graph.js"
 import {
   journalRecordByKey,
+  journalEvidenceBefore,
+  journalGraphObservationAt,
+  journalGraphSnapshotForObservation,
   journalRecordsForTask,
   journalRecordsOfKind,
   isJournalRecordEvidence,
@@ -24,7 +27,6 @@ import type { OperationId } from "../../workflow/identity.js"
 import { RunnableFrontierTransition, type RunnableFrontierTransition as Transition } from "../frontier/frontier.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { CurrentDeliveryFrame } from "./current-delivery-frame.js"
-import { reconstructedTaskGraphFromEvents } from "../reconstruction/graph-knowledge.js"
 import { FreshWorkflowStep, type FreshWorkflowStep as FreshWorkflowStepType } from "../delivery/fresh-workflow-step.js"
 import { recordedTaskAttemptPlans } from "../../workflow/protocols/task-attempt-planning/journal-evidence.js"
 import {
@@ -569,21 +571,23 @@ export const deriveFreshWorkflowDecisions = (
       ? undefined
       : journalRecordByKey(records, outcomeRecordKey(latestGlobalGraphOperation.operationId))?.position
   /* v8 ignore start -- Accepted global observations always retain an outcome position and reconstruct under validated history. */
-  const candidateGraph =
-    latestGlobalGraphOperation !== undefined
-      ? Option.getOrElse(
-          reconstructedTaskGraphFromEvents(
-            Array.from(journalRecordsOfKind(records, "TaskTrackerFactsObserved"))
-              .filter(
-                ({ position }) =>
-                  position <= (latestGlobalGraphObservationPosition ?? latestGlobalGraphRead?.position ?? 0)
-              )
-              .map(({ event }) => event),
-            latestGlobalGraphOperation.target
+  const candidateGraphObservation =
+    latestGlobalGraphOperation === undefined
+      ? undefined
+      : journalGraphObservationAt(
+          journalEvidenceBefore(
+            frame.workflowHistory.evidence,
+            (latestGlobalGraphObservationPosition ?? latestGlobalGraphRead?.position ?? 0) + 1
           ),
+          { target: latestGlobalGraphOperation.target }
+        )
+  const candidateGraph =
+    candidateGraphObservation === undefined
+      ? frame.currentGraph
+      : Option.getOrElse(
+          journalGraphSnapshotForObservation(frame.workflowHistory.evidence, candidateGraphObservation.position),
           () => frame.currentGraph
         )
-      : frame.currentGraph
   /* v8 ignore stop */
   const currentlyEligibleTaskIds = new Set(frame.currentGraph.eligibleTasks().map(({ id }) => id))
   const decisions = candidateGraph

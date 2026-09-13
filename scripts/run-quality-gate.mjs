@@ -62,7 +62,7 @@ const stageManifest = fullQualityGateManifest(qualityBaseSha, {
   worktree: context?.run.worktree ?? process.cwd()
 })
 const gates = stageManifest
-  .filter((stage) => stage.boundary === "qualification" && (resumable || stage.id !== "model-based-tests"))
+  .filter((stage) => stage.boundary === "qualification")
   .map((stage) =>
     stage.environmentPolicy === "coverage-base-warning" ? { ...stage, environment: testEnvironment } : stage
   )

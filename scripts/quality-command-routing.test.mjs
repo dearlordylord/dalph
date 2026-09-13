@@ -99,7 +99,8 @@ test("local handoff dispatch cannot be changed by CI or lifecycle metadata", () 
     assert.equal(calls.length, 1)
     assert.equal(calls[0].boundary, "local-handoff")
     assert.equal(calls[0].options.logicalInvocation.baseSha, base)
-    assert.ok(calls[0].options.stageManifest.some((stage) => stage.id === "model-based-tests"))
+    assert.ok(!calls[0].options.stageManifest.some((stage) => stage.id === "model-based-tests"))
+    assert.ok(calls[0].options.stageManifest.some((stage) => stage.id === "coverage"))
   }
 })
 

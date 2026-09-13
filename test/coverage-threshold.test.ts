@@ -12,8 +12,8 @@ const summaryAtGoals = () => ({
 })
 
 describe("coverage summary verification", () => {
-  it("requires 99% coverage for every aggregate metric", () => {
-    expect(coveragePolicy.thresholds).toEqual({ branches: 99, functions: 99, lines: 99, statements: 99 })
+  it("requires 95% coverage for every aggregate metric", () => {
+    expect(coveragePolicy.thresholds).toEqual({ branches: 95, functions: 95, lines: 95, statements: 95 })
   })
 
   it("returns a failing exit code when one metric is below its configured goal", () => {

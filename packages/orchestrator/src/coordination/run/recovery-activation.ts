@@ -1607,7 +1607,7 @@ export const deriveJournalResponsibilityFacts = (
       responsibility._tag === "TaskClaimReleaseResponsibility"
         ? responsibility.operation.release.claim
         : responsibility._tag === "TaskWorktreeResponsibility"
-          ? authorizedClaimForAttempt(records, responsibility.operation.plannedAttempt)?.claim
+          ? authorizedClaimForAttempt(source, responsibility.operation.plannedAttempt)?.claim
           : undefined
     const claimAuthority =
       responsibility._tag === "TaskClaimResponsibility"

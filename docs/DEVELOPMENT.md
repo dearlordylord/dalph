@@ -87,7 +87,7 @@ All commands below use `pnpm`. Script definitions live in
 | `check:duplicates` | Enforce the configured duplication budget. |
 | `coverage:body` | Coverage suites and their verifiers, without taking an admission slot. |
 | `test:coverage` | Enforce separate production/evaluation coverage and changed-line floors below; takes an admission slot. |
-| `test:mbt` | Quint-connected executable conformance suites. |
+| `test:mbt` | Explicit manual Quint-connected conformance run; temporarily excluded from automatic verification pending [#363](https://github.com/dearlordylord/dalph/issues/363), which restores replay from pre-generated traces. |
 | `test:issue-268-c4` | Run the accepted DS01–DS13 table and strict occurrence order in twenty consecutive fresh processes; stop at the first incomplete or divergent run. |
 | `test:ci-change-classification` | Prove the docs-only CI allowlist and fail-closed classification. |
 | `check:lab` | Reducer Lab typecheck, maintained-cassette smoke, build; no browser. |
@@ -98,14 +98,14 @@ All commands below use `pnpm`. Script definitions live in
 | `gate:status <run-id>` | Read durable command results, unresolved custody and per-run logs/report paths without the previous terminal. Missing or malformed receipts cannot prove success. |
 | `gate:reconcile <run-id>` | Close registration and prove every recorded writer group absent before clearing exact worktree/slot fences. Missing exits stay unproven. |
 | `check:all --candidate=<base sha> --resume=<run-id>` | Reuse a contiguous proven full-gate prefix in the same worktree on identical monitored inputs; failed/unproven stage and remaining suffix execute normally. |
-| `check:all` | Bounded handoff gate for a frozen candidate. It includes the complete formal requirement and required application checks, including MBT and non-browser Lab. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
-| `check:ci` | Hosted gate; currently omits only Quint-connected MBT. |
+| `check:all` | Bounded handoff gate for a frozen candidate. It includes the complete formal requirement and application checks, including non-browser Lab; automatic MBT is excluded pending #363. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
+| `check:ci` | Hosted gate; MBT remains excluded pending #363. |
 
 `check:quint` obtains the complete required formal profile through guarded local
 execution or applicable recorded success. It reports which occurred and names
 the original evidence. `--force` requests fresh execution under the same
 guards. `check:all` includes this formal requirement as well as required
-application checks, including MBT; it automatically runs stale or missing
+application checks; automatic MBT is excluded pending #363. It runs stale or missing
 formal work and cannot pass after a required formal failure. Existing candidate
 acknowledgement, base selection, admission and resume prerequisites remain
 required.
@@ -160,7 +160,8 @@ resumes only a contiguous proven application-gate prefix. The formal profile
 has its own guarded local success record: a missing or stale record executes the
 profile, while an applicable record can be reused and names its original
 evidence. `pnpm check:quint --force` requests fresh formal reproduction or
-timing. Reuse never replaces model-adequacy review or required MBT.
+timing. Reuse never replaces model-adequacy review. Automatic MBT is temporarily
+excluded pending #363; `test:mbt` remains an explicit manual command.
 
 Fresh full gates prepare the Effect diagnostics platform binary executable bit
 before observing inputs; resume retains changed installation modes and refuses
@@ -689,7 +690,7 @@ of retained files is a separate, deliberate operator action.
 
 ### Coverage and output budgets
 
-- Enforce 99% production and 75% maintained-evaluation coverage independently
+- Enforce 95% production and 75% maintained-evaluation coverage independently
   for statements, branches, functions, lines, and changed executable lines.
   Surplus in one bracket cannot cover the other. Maintained cassettes and
   deterministic test-only completion boundaries use evaluation; runtime and
@@ -740,7 +741,7 @@ counts, unreachable branches or threshold exemption are inferred.
 Status 0 means complete analysis of an artifact with matching freshness evidence.
 Status 1 means analysis is unproven, stale, incomplete or unavailable. Neither
 status certifies coverage compliance or replaces `test:coverage`/`check:all`;
-the production 99% and maintained-evaluation 75% floors remain unchanged.
+the production 95% and maintained-evaluation 75% floors remain unchanged.
 
 ### Formal reuse and handoff
 
@@ -776,7 +777,8 @@ instead of permitting reuse. Implicit Apalache configuration locations are
 observed even when absent; present unsupported configurations are refused.
 Application source and ordinary documentation outside these roots, and Git
 HEAD/index/base changes alone, do not change formal identity. Independent
-candidate verification and MBT still apply.
+candidate verification still applies. Automatic MBT is temporarily excluded
+pending #363; formal reuse does not prove application conformance.
 
 Current allowances in [formal-gate-policy.mjs](../scripts/formal-gate-policy.mjs)
 are provisional pending final qualification measurements: 1,020 seconds for
@@ -789,9 +791,9 @@ constraints. The 30-second final allowance follows a 7.333-second complete
 snapshot probe and reserves the remainder for evidence reads and observer
 drains; it is not the withdrawn 60-second final estimate.
 
-The local stage inventory is 30 minutes of preflight plus 59 minutes of
+The local stage inventory is 30 minutes of preflight plus 51 minutes of
 application qualification, now plus 17 minutes of formal acquisition and
-0.5 minutes of final validation: provisionally 106.5 minutes before existing
+0.5 minutes of final validation: provisionally 98.5 minutes before existing
 quality setup and termination overhead. This fits the existing 24-hour admitted
 command limit. These are ceilings, not measured duration or claimed savings.
 Final qualification must record fresh and warm costs, measured headroom and

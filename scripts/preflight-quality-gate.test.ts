@@ -26,6 +26,7 @@ const structuralCommands = [
 it(
   "reports multiple independent structural failures before any expensive qualification",
   async () => {
+    expect(structuralCommands).not.toContain("test:mbt")
     const { invocations, result } = await runQualityGateFixture({
       fixtureName: "preflight-failures",
       failureCommands: ["lint:code", "check:complexity", "check:artifacts"]

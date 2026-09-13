@@ -7,6 +7,7 @@ const exactSourceEntries = {
   "@dalph/orchestrator": fileURLToPath(new URL("../packages/orchestrator/src/index.ts", import.meta.url)),
   "@dalph/dalph": fileURLToPath(new URL("../packages/dalph/src/index.ts", import.meta.url))
 }
+const mbtTestPattern = "packages/**/*.mbt.test.ts"
 
 const requireCurrentSourceResolution = (resolve: ReturnType<typeof resolveVitestConfig>["resolve"]) => {
   expect(resolve?.alias).toEqual(exactSourceEntries)
@@ -26,6 +27,13 @@ it("keeps both inline MBT projects in the same current-source implementation as 
     expect(project.resolve).toBe(mbt.resolve)
     requireCurrentSourceResolution(project.resolve)
   }
+})
+
+it("excludes MBT files from ordinary and coverage selection while retaining explicit MBT mode", () => {
+  for (const mode of ["test", "coverage"]) {
+    expect(resolveVitestConfig(mode).test?.exclude).toContain(mbtTestPattern)
+  }
+  expect(resolveVitestConfig("mbt").test?.exclude).not.toContain(mbtTestPattern)
 })
 
 it.each([0, 1])("detects missing aliases in inline MBT project %i even when the root has aliases", (index) => {

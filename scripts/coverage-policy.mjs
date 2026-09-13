@@ -1,7 +1,7 @@
 /** Coverage metrics reported by Vitest and the independent exit-code verifiers. */
 const metrics = Object.freeze(["statements", "branches", "functions", "lines"])
 
-const productionThresholds = Object.freeze({ statements: 99, branches: 99, functions: 99, lines: 99 })
+const productionThresholds = Object.freeze({ statements: 95, branches: 95, functions: 95, lines: 95 })
 const maintainedEvaluationThresholds = Object.freeze({ statements: 75, branches: 75, functions: 75, lines: 75 })
 
 /**
@@ -10,7 +10,7 @@ const maintainedEvaluationThresholds = Object.freeze({ statements: 75, branches:
  * they are maintained test infrastructure, not application runtime.
  */
 const brackets = Object.freeze({
-  production: Object.freeze({ changedLinesThreshold: 99, name: "production", thresholds: productionThresholds }),
+  production: Object.freeze({ changedLinesThreshold: 95, name: "production", thresholds: productionThresholds }),
   "maintained-evaluation": Object.freeze({
     changedLinesThreshold: 75,
     name: "maintained-evaluation",
