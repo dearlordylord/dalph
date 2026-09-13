@@ -189,3 +189,66 @@ other active worktrees. This supports investigating the shared compatibility
 phase rather than attributing the failure to the formal module graph, but
 does not establish a root cause or waive final gates. No timeout was increased
 and no failed benchmark was repeated unchanged.
+
+## #362 fresh qualification failed; release remains unqualified
+
+On 2026-09-13 UTC, the maintainer's measurement driver ran
+`pnpm check:quint --force` at clean candidate
+`8dbd3e8c57d02cb8848da59667cd1184295eff27`. The admitted command started the
+owned server and complete planned profile. It exited 1 after 734.137706 seconds
+end to end because the unchanged 720-second execution deadline expired.
+Fifty-five checkers passed, the next verifier timed out, and the remaining
+49 commands did not start. This duration is a failed attempt, not a successful
+fresh F measurement. The driver stopped immediately: no warm R samples,
+median, maximum, savings ratio or qualified allowance can be reported.
+
+The run ID is `47bfe720-cfbe-41c9-a6fa-ec4a9c8ed8c0`. Its terminal evidence
+records unchanged source, closed registration and stopped custody. All 60
+registered obligations have terminal receipts proving process-group absence;
+the private server port was also absent. The attempt and latest pointer remain
+in `started` state, with no complete execution report or published success.
+The visible stack trace is the awaited failure propagated after cleanup, not
+evidence of an unhandled promise or leaked server.
+
+Read-only replay of baseline `990148ff20b0636f2428210973b5b80920e5a2df`
+with no-launch boundary stubs matched all 105 commands and 42 scheduling steps.
+Arguments differ only by the five approved seed additions. The 56 actual
+checker receipts match the planned arguments, and overlapping proof-family
+receipts confirm preserved concurrency. Rust backend selection, four-thread
+arguments and the two slow model sources are unchanged. No scheduling,
+backend or cleanup defect was established.
+
+The planned-attempt sampled check took 339.116 seconds and fresh-task admission
+sampling took 185.038 seconds. Their internal Rust evaluator timings total
+516.69 of those 524.154 seconds. Tool resolution took 0.146 seconds, observer
+setup 1.396 seconds and initial fingerprinting 4.304 seconds. These observations
+locate the dominant cost in evaluator work, but do not distinguish hardware
+performance from trace-cost effects of the newly required planned-attempt
+seed. There is no comparable full baseline measurement on this host.
+
+Scenario-to-evidence mapping for this attempt:
+
+| Concrete event | Evidence and acceptance status |
+| --- | --- |
+| Maintainer requests fresh verification; the full profile must finish before success is published. | 55 passed and one timed out; no complete report or success. Failure handling held, but fresh qualification failed. |
+| The execution deadline expires while a verifier and server are active. | All 60 terminal receipts prove stopped groups; server socket absent. No retry or success resurrection occurred. |
+| Maintainer measures ten ordinary reuses after a successful fresh result. | Not reached because the prerequisite failed; zero warm measurements. |
+| Maintainer requests final integrated handoff with independent application checks. | No final passing `pnpm check:all`; compatibility-lint and capability timeouts remain unresolved. |
+
+Raw local evidence is retained under
+`.scratch/formal-reuse-qualification/`: `frozen-candidate.json`, `fresh.log`,
+`measurement-progress.log`, `failed-fresh.json` and `measure.py`. Original
+receipts remain in the shared Git directory's `dalph-gates/runs/<run-id>`.
+The 1,001 failure-output lines are diagnostics; the successful-output budget
+cannot be qualified from a failed command.
+
+No failed benchmark was retried, deadline increased or profile narrowed.
+Launching the final handoff could request the same missing fresh verification,
+so it is not used as an indirect benchmark retry. #362 and integration remain
+incomplete pending a scoped resolution of the measured execution limitation
+and outstanding preflight failures. The new guarded-input, evidence, custody,
+server-patch and handoff machinery has substantial maintenance cost; without
+successful F and R measurements, its benefit is not yet demonstrated. This
+requires revisiting qualification scope before release, rather than treating
+controlled tests as performance acceptance. This report-only update changes
+no Dalph runtime behavior or formal input.
