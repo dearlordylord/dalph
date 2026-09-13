@@ -117,15 +117,16 @@ in this milestone.
 
 ## Readiness boundary
 
-Technical research should answer whether mechanisms exist and where they fail.
-It cannot choose a different user intent by renaming commands. The potentially
-remaining product question is whether a general “start work” action should
-explicitly resume a paused Run, or whether Pause is preserved until a separately
-named Unpause/Resume operation. The smallest recommendation is separate names that preserve Pause. Agents
-choose those operations under their existing user instructions; there is no
-per-command human approval or handback requirement. Any remaining product
-clarification concerns the design of a general action, not permission for each
-invocation.
+The user settled the remaining product clarification in
+[Q27](invoker-invokee-interview.md#q27--start-work-preserves-pause): a general
+“start work” request preserves Pause; only a separately named Resume/Unpause
+operation changes it. Agents choose those operations under their existing user
+instructions, without per-command human approval or handback.
+
+The research is ready to inform a subsequently requested specification and
+then tickets. The reproduced graph-finality gap and complete-command ownership
+requirement remain explicit technical inputs; accepting Q27 does not fix them
+or authorize implementation.
 
 No operator needs to reapprove settled root scope, Dalph choosing tasks,
 separate host startup, or client independence. Transport details and precise

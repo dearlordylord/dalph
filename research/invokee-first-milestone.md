@@ -29,8 +29,8 @@ observations; connecting a client creates no replacement Run history.
    capacity to two under Alice's instructions. Dalph chooses eligible work;
    the client does not choose an executor or individual task. Existing delivery
    protocols claim B, plan its exact attempt and Git resources, and start its
-   executor. The exact meaning of a work request when the Run is already
-   progressing, paused, or quiescent must be mapped to existing operations.
+   executor. A general start-work request preserves Pause; resuming requires explicit
+   Resume/Unpause (Q27). Hint submission still does not prove activation.
 4. The agent authors example-data task E and its blocker relationship to C
    through the tracker. It can ask Dalph to refresh the graph or refresh IDs
    [C, E]. That notification carries no authored dependency facts. Dalph reads
@@ -168,8 +168,8 @@ contract for every future adapter operation.
    existing production host. Keep its callback alive across client exits;
    retain exclusive coordinator ownership in that host.
 2. Map status/graph, work directions, capacity and refresh to shared application
-   operations with explicit results and redelivery behavior. Resolve the
-   wake-versus-Unpause distinction from accepted workflow intent before coding.
+   operations with explicit results and redelivery behavior. Preserve Q27:
+   start work keeps Pause intact; only explicit Resume/Unpause changes it.
 3. Turn the acceptance seams above into protocol scenarios and their concrete
    adapter tests. Targeted refresh must state how sufficient graph coverage is
    obtained, even if its implementation rereads the whole root graph.

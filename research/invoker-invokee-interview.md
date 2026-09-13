@@ -819,6 +819,18 @@ work within an already-running Dalph process.
   research track for externally launched workers and later core recursive
   planning. Do not reopen deferred mechanics as initial-milestone blockers.
 
+## Q27 — Start work preserves Pause
+
+After the research round, the user accepted the recommendation: a general
+“start work” request preserves an existing Pause. Resuming requires a separately
+named Resume/Unpause operation. An agent may invoke that operation under its
+existing user instructions; no per-command human approval or parent handback is
+required. Wake remains a hint, and explicit Unpause remains a durable direction
+with the retry limitations recorded in the research.
+
+This settles the remaining product clarification for the first milestone. It
+does not authorize specification generation, ticket creation or implementation.
+
 ## Records and provenance
 
 The eight research notes and their index additions were moved from

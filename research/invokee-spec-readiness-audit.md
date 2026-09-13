@@ -81,18 +81,15 @@ applicable interruption/retry cases, forbidden results linked to invariants,
 and scenario-to-test mappings. Research acceptance seams and successful
 throwaway probes do not fulfill that gate by themselves.
 
-## Operator input genuinely still needed
+## Operator clarification resolved
 
-One product distinction remains potentially consequential: if Alice's Run is
-paused, does her agent's “request work” explicitly mean Unpause, or should it
-leave Pause intact unless the agent invokes an explicit Unpause operation?
-Existing code distinguishes those actions, so the specification must not choose
-by conflation. The completed command recovery evidence now informs a small vocabulary of
-separately named wake and Unpause operations. Ask a design-time question only
-if a proposed general action still leaves the intended behavior ambiguous;
-agents do not need an online human to invoke an explicit operation under
-existing instructions.
+The user accepted [Q27](invoker-invokee-interview.md#q27--start-work-preserves-pause):
+“start work” preserves Pause, while explicit Resume/Unpause changes it. The
+caller/API therefore uses distinct operations. An agent may invoke them under
+existing instructions without an online human or parent handback.
 
+No first-milestone product clarification remains from this audit. The research
+can feed a later explicitly requested specification and ticket breakdown.
 The remaining transport, current-state projection and adapter lifetime choices
 are bounded design work, not automatically reasons to stop for permission.
 Capacity revision conflicts already have semantics. Q22 and Q26 need no new

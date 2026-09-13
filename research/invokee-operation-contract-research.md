@@ -5,6 +5,12 @@ Status: source-only research on 2026-09-13 at
 scenario/specification round. It does not select a frozen architecture, add a
 supported API, or change production behavior.
 
+The user subsequently accepted
+[Q27](invoker-invokee-interview.md#q27--start-work-preserves-pause): a general
+start-work request preserves Pause; explicit Resume/Unpause is required to change
+it. The separate-operation recommendation below is now accepted product intent;
+its candidate method/result schemas remain research inputs.
+
 ## Concrete operator events
 
 Alice attaches to one already-selected production Run. She needs to observe the
