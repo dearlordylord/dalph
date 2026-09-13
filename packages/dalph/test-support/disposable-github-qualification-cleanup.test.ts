@@ -57,7 +57,8 @@ const presentResource = (resource: DisposableGithubQualificationResource) =>
 const absentResource = DisposableGithubResourceObservation.cases.Absent.make({})
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 const expectReadonlyInspection = (manualCommand: string | undefined, nodeId: string) => {
-  if (manualCommand === undefined) throw new Error("expected a retained manual inspection command")
+  expect(manualCommand).toBeDefined()
+  expect(manualCommand).toBeTypeOf("string")
   expect(manualCommand).toContain("query($id: ID!) { node(id: $id) { id __typename } }")
   expect(manualCommand).toContain(`-f id=${shellQuote(nodeId)}`)
   expect(manualCommand).not.toContain("mutation")

@@ -11,6 +11,7 @@ import {
   FileSystem,
   Match,
   MutableList,
+  MutableHashMap,
   Option,
   Queue,
   Ref,
@@ -157,7 +158,7 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
   const childOutputs = new WeakMap<HermeticPublicChild, Effect.Success<ReturnType<typeof makeHermeticChildOutput>>>()
   const boundaries = yield* Queue.unbounded<BoundaryReached>()
   const boundaryLog = MutableList.make<BoundaryReached>()
-  const processOutcomes = new Map<HermeticPublicChild, HermeticProcessOutcome>()
+  const processOutcomes = MutableHashMap.empty<HermeticPublicChild, HermeticProcessOutcome>()
   const release = yield* Deferred.make<void>()
   const paused = yield* Ref.make(false)
   const observeBoundary = Effect.fn("HermeticController.observeBoundary")(function* (boundary: BoundaryReached) {
@@ -341,7 +342,7 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
     boundaryLog,
     processOutcomes: Effect.sync(() =>
       MutableList.toArray(children).flatMap((child) => {
-        const outcome = processOutcomes.get(child)
+        const outcome = Option.getOrUndefined(MutableHashMap.get(processOutcomes, child))
         return outcome === undefined ? [] : [outcome]
       })
     ),
@@ -381,7 +382,9 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
                 : Effect.succeed({ exit, outcome })
             })
           ),
-          ({ outcome }) => processOutcomes.set(child, outcome),
+          ({ outcome }) => {
+            MutableHashMap.set(processOutcomes, child, outcome)
+          },
           forgetRecordBindings(child)
         ).pipe(Effect.map(({ exit }) => exit))
       }),
@@ -389,7 +392,9 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
       settleHermeticChild(
         child,
         child.handle.exitCode,
-        (status) => processOutcomes.set(child, { _tag: "Exit", processId: child.handle.pid, status }),
+        (status) => {
+          MutableHashMap.set(processOutcomes, child, { _tag: "Exit", processId: child.handle.pid, status })
+        },
         forgetRecordBindings(child)
       )
   }

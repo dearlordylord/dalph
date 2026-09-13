@@ -381,9 +381,9 @@ export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")
       })
     ),
     finalTrackerFacts: Effect.gen(function* () {
-      const resources: Array<DisposableGithubQualificationResource> = []
+      const resources = MutableList.make<DisposableGithubQualificationResource>()
       for (const label of (yield* Ref.get(labels)).values())
-        resources.push({
+        MutableList.append(resources, {
           _tag: "Label",
           nodeId: label.id,
           name: label.name,
@@ -394,7 +394,7 @@ export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")
         issue: originalIssue,
         issuePresent: yield* Ref.get(issuePresent),
         taskLifecycle: yield* Ref.get(lifecycle),
-        claims: resources
+        claims: MutableList.toArray(resources)
       }
     }),
     snapshot: () =>

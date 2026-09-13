@@ -57,28 +57,34 @@ const validateRecoveredAction = Effect.fn("HermeticQualification.validateRecover
         plannedAttempt: yield* validatePlannedAttempt(action.plannedAttempt, context)
       }
     }
-    case "ReadTaskClaim": {
-      const operation = yield* Schema.decodeUnknownEffect(
-        NewClaimReadOperation,
-        strictSource
-      )(action.operation).pipe(Effect.mapError(sourceRejected))
-      if (
-        operation.taskId !== context.taskId ||
-        action.taskId !== context.taskId ||
-        !Schema.toEquivalence(TrackerTarget)(operation.target, context.configuration.target)
-      )
-        return yield* sourceRejected()
-      yield* Effect.forEach(operation.predecessorOperationIds, validateOperationId)
-      return {
-        _tag: action._tag,
-        operation,
-        taskId: context.taskId,
-        plannedAttempt:
-          action.plannedAttempt === null ? null : yield* validatePlannedAttempt(action.plannedAttempt, context)
-      }
-    }
+    case "ReadTaskClaim":
+      return yield* validateRecoveredTaskClaimRead(action, context)
     default:
       return yield* sourceRejected()
+  }
+})
+
+const validateRecoveredTaskClaimRead = Effect.fn("HermeticQualification.validateRecoveredTaskClaimRead")(function* (
+  action: Extract<RecoveredAction, { readonly _tag: "ReadTaskClaim" }>,
+  context: QualificationContext
+) {
+  const operation = yield* Schema.decodeUnknownEffect(
+    NewClaimReadOperation,
+    strictSource
+  )(action.operation).pipe(Effect.mapError(sourceRejected))
+  if (
+    operation.taskId !== context.taskId ||
+    action.taskId !== context.taskId ||
+    !Schema.toEquivalence(TrackerTarget)(operation.target, context.configuration.target)
+  )
+    return yield* sourceRejected()
+  yield* Effect.forEach(operation.predecessorOperationIds, validateOperationId)
+  return {
+    _tag: action._tag,
+    operation,
+    taskId: context.taskId,
+    plannedAttempt:
+      action.plannedAttempt === null ? null : yield* validatePlannedAttempt(action.plannedAttempt, context)
   }
 })
 

@@ -294,3 +294,15 @@ final source; missing facts remain a safe rejection, not a fabricated request.
 The built throttle test proves one request, safe bound Failure publication and
 recovery without a second close. Focused wrapper tests cover both callback and
 host-delivered failure paths and rejection when the original source is absent.
+
+The current-status checks may live in a qualification-only status-source helper;
+the source facade still alone constructs the validated record token. Recovered
+claim reads and focused specification/claim checks remain their existing typed
+boundaries. Splitting these functions changes no actor action, boundary call,
+workflow rule or accepted/rejected source. The original source vectors and six
+built chronologies must retain their exact results. Controller process/record
+registries and provider receipt accumulation are private scratch only; using
+Effect's explicit mutable collections must preserve original handle ownership,
+reader settlement, insertion order and receipt identity without persisting facts.
+Existing binding/provider tests and the six built cases cover those invariants;
+provenance tests keep the same formal and hosted timing budgets.

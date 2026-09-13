@@ -160,6 +160,16 @@ export interface SuppliedQualificationProfile {
 
 const supportedQualificationNode = (version: string) => /^24\.20\.\d+$/u.test(version)
 
+const profileTimingExceedsBudgets = (
+  formalBudgetSeconds: number,
+  formalSeconds: number,
+  profile: Pick<SuppliedQualificationProfile, "completeJobSeconds" | "setupInstallSeconds">
+) =>
+  formalBudgetSeconds !== formalGateLimitSeconds ||
+  formalSeconds > formalGateLimitSeconds ||
+  profile.completeJobSeconds < profile.setupInstallSeconds + formalSeconds ||
+  profile.completeJobSeconds > hostedJobLimitSeconds
+
 /** Existing inventory parser owns command order/counts; this seam additionally binds actual source/job/negative controls. */
 const validateProfile = Effect.fn("Qualification.validateProfile")(
   function* (sourceSha: GitCommitSha, profile: SuppliedQualificationProfile) {
@@ -191,12 +201,7 @@ const validateProfile = Effect.fn("Qualification.validateProfile")(
       negativeNames.some((name, index) => name !== profile.negativeControls[index])
     )
       return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
-    if (parsed.budgetSeconds !== formalGateLimitSeconds || parsed.formalSeconds > formalGateLimitSeconds)
-      return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
-    if (
-      profile.completeJobSeconds < profile.setupInstallSeconds + parsed.formalSeconds ||
-      profile.completeJobSeconds > hostedJobLimitSeconds
-    )
+    if (profileTimingExceedsBudgets(parsed.budgetSeconds, parsed.formalSeconds, profile))
       return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
     return yield* Schema.decodeUnknownEffect(FormalProfile)({
       sourceSha,

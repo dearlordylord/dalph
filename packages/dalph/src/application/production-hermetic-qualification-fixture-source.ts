@@ -69,7 +69,7 @@ export const validateGraph = Effect.fn("HermeticQualification.validateGraph")(fu
   if (original.revision !== trackerRevisionFor(tasks)) return yield* sourceRejected()
 })
 
-export const validateTrackerRevision = (revision: TrackerRevision, context: QualificationContext) =>
+const validateTrackerRevision = (revision: TrackerRevision, context: QualificationContext) =>
   ["Open", "CompletedSuccessfully"].some(
     (lifecycle) =>
       revision ===
@@ -151,33 +151,46 @@ const validateGraphOrFocusedTrackerFacts = Effect.fn("HermeticQualification.vali
       yield* Effect.forEach(facts.factFamilies, (family) => validateGraphFactFamily(family, context))
       return
     }
-    if (facts._tag === "FocusedTaskWorkSpecificationFacts") {
-      const specification = facts.factFamily
-      if (
-        specification.coverage.taskId !== context.taskId ||
-        specification.contentIdentity !== context.specification.fingerprint
-      )
-        return yield* sourceRejected()
-      yield* validateSpecification(
-        {
-          taskId: specification.taskId,
-          title: specification.title,
-          body: specification.body,
-          fingerprint: specification.fingerprint
-        },
-        context
-      )
-      return
-    }
-    if (facts._tag === "FocusedTaskClaimFacts") {
-      if (facts.coverage.taskId !== context.taskId) return yield* sourceRejected()
-      if (facts.observation._tag === "ActiveTaskClaim") yield* validateActiveClaim(facts.observation, context)
-      else if (facts.observation.taskId !== context.taskId) return yield* sourceRejected()
-      return
-    }
+    if (facts._tag === "FocusedTaskWorkSpecificationFacts")
+      return yield* validateFocusedSpecificationFacts(facts, context)
+    if (facts._tag === "FocusedTaskClaimFacts") return yield* validateFocusedClaimFacts(facts, context)
     return yield* sourceRejected()
   }
 )
+
+const validateFocusedSpecificationFacts = Effect.fn("HermeticQualification.validateFocusedSpecificationFacts")(
+  function* (
+    facts: Extract<TaskTrackerFactsObservation, { readonly _tag: "FocusedTaskWorkSpecificationFacts" }>,
+    context: QualificationContext
+  ) {
+    const specification = facts.factFamily
+    if (
+      specification.coverage.taskId !== context.taskId ||
+      specification.contentIdentity !== context.specification.fingerprint
+    )
+      return yield* sourceRejected()
+    yield* validateSpecification(
+      {
+        taskId: specification.taskId,
+        title: specification.title,
+        body: specification.body,
+        fingerprint: specification.fingerprint
+      },
+      context
+    )
+    return
+  }
+)
+
+const validateFocusedClaimFacts = Effect.fn("HermeticQualification.validateFocusedClaimFacts")(function* (
+  facts: Extract<TaskTrackerFactsObservation, { readonly _tag: "FocusedTaskClaimFacts" }>,
+  context: QualificationContext
+) {
+  if (facts.coverage.taskId !== context.taskId) return yield* sourceRejected()
+  if (facts.observation._tag === "ActiveTaskClaim") yield* validateActiveClaim(facts.observation, context)
+  else if (facts.observation.taskId !== context.taskId) return yield* sourceRejected()
+  return
+})
 
 type GraphFactFamily = Extract<
   TaskTrackerFactsObservation,

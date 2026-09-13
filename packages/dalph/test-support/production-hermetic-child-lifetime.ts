@@ -1,5 +1,5 @@
 import type { EvidenceDigest } from "@dalph/contracts"
-import { Cause, Deferred, Effect, Exit, Fiber, HashSet, Option, Ref, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, HashSet, MutableHashMap, Option, Ref, Schema } from "effect"
 import type * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner"
 import type { HermeticRegistrationScopeId } from "../src/application/production-hermetic-contract.js"
 import type { HermeticExpectedRecordRegistration } from "../src/application/production-hermetic-provider-bridge.js"
@@ -71,9 +71,12 @@ type HermeticSpawnWindow =
 
 /** Presentation-only bindings retain exact original handles; unknown requests and PID reuse create no binding. */
 export const makeHermeticRecordBindings = Effect.fn("HermeticController.makeRecordBindings")(function* () {
-  const owned = new Map<
+  const owned = MutableHashMap.empty<
     HermeticRegistrationScopeId,
-    { readonly handle: Pick<ChildProcessSpawner.ChildProcessHandle, "pid">; digests: HashSet.HashSet<EvidenceDigest> }
+    {
+      readonly handle: Pick<ChildProcessSpawner.ChildProcessHandle, "pid">
+      readonly digests: HashSet.HashSet<EvidenceDigest>
+    }
   >()
   const window = yield* Ref.make<HermeticSpawnWindow>({ _tag: "Idle" })
   const begin = Effect.fn("HermeticRecordBindings.begin")(function* (scope: HermeticRegistrationScopeId) {
@@ -99,7 +102,7 @@ export const makeHermeticRecordBindings = Effect.fn("HermeticController.makeReco
     const current = yield* Ref.get(window)
     if (current._tag !== "Spawning" || current.scope !== scope)
       return yield* new HermeticControllerFailure({ operation: "record.foreignScope" })
-    owned.set(scope, { handle, digests: HashSet.empty() })
+    MutableHashMap.set(owned, scope, { handle, digests: HashSet.empty() })
   })
   const register = Effect.fn("HermeticRecordBindings.register")(function* (
     scope: HermeticRegistrationScopeId,
@@ -107,16 +110,19 @@ export const makeHermeticRecordBindings = Effect.fn("HermeticController.makeReco
   ) {
     const current = yield* Ref.get(window)
     if (current._tag === "Spawning" && current.scope === scope) yield* Deferred.await(current.settled)
-    const original = owned.get(scope)
+    const original = Option.getOrUndefined(MutableHashMap.get(owned, scope))
     if (original === undefined || original.handle.pid !== registration.processId)
       return yield* new HermeticControllerFailure({ operation: "record.foreignChild" })
-    original.digests = HashSet.add(original.digests, registration.digest)
+    MutableHashMap.set(owned, scope, {
+      handle: original.handle,
+      digests: HashSet.add(original.digests, registration.digest)
+    })
   })
   const digestsFor = Effect.fn("HermeticRecordBindings.digestsFor")(function* (
     scope: HermeticRegistrationScopeId,
     handle: Pick<ChildProcessSpawner.ChildProcessHandle, "pid">
   ) {
-    const original = owned.get(scope)
+    const original = Option.getOrUndefined(MutableHashMap.get(owned, scope))
     if (original === undefined || original.handle !== handle)
       return yield* new HermeticControllerFailure({ operation: "record.foreignChild" })
     return original.digests
@@ -127,10 +133,11 @@ export const makeHermeticRecordBindings = Effect.fn("HermeticController.makeReco
     bind,
     register,
     digestsFor,
-    count: Effect.sync(() => owned.size),
+    count: Effect.sync(() => MutableHashMap.size(owned)),
     forget: (scope: HermeticRegistrationScopeId, handle: Pick<ChildProcessSpawner.ChildProcessHandle, "pid">) =>
       Effect.sync(() => {
-        if (owned.get(scope)?.handle === handle) owned.delete(scope)
+        if (Option.getOrUndefined(MutableHashMap.get(owned, scope))?.handle === handle)
+          MutableHashMap.remove(owned, scope)
       })
   }
 })
