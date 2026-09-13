@@ -263,92 +263,125 @@ type ProductionLiveQualificationEvidenceEncoded =
   | typeof PreCleanupProductionLiveQualificationEvidence.Encoded
   | typeof FinalProductionLiveQualificationEvidence.Encoded
 
+type LiveQualificationEvidenceInvariant = (evidence: ProductionLiveQualificationEvidence) => string | undefined
+
+const provenanceBindsOneSourceAndIndependentJobs: LiveQualificationEvidenceInvariant = (evidence) =>
+  evidence.hosted.sourceSha === evidence.build.sourceSha &&
+  evidence.formal.dedicated.sourceSha === evidence.build.sourceSha &&
+  evidence.formal.stressed.sourceSha === evidence.build.sourceSha &&
+  evidence.formal.dedicated.job.jobId !== evidence.formal.stressed.job.jobId
+    ? undefined
+    : "live qualification provenance must bind one source and two independent formal jobs"
+
+const finalityBelongsToDeliveredRun: LiveQualificationEvidenceInvariant = (evidence) =>
+  evidence.final.run.runId === evidence.delivery.runId
+    ? undefined
+    : "live qualification finality must belong to the delivered Run"
+
+const observationsHaveNondecreasingTimestamps: LiveQualificationEvidenceInvariant = (evidence) =>
+  evidence.startedAt <= evidence.endedAt ? undefined : "live qualification observations must end at or after they start"
+
+const compositionHasOneApplicationServerProcess: LiveQualificationEvidenceInvariant = (evidence) =>
+  evidence.composition.applicationServerProcessIdentities.length === 1
+    ? undefined
+    : "live qualification must observe exactly one Codex app-server process identity"
+
+const observedOperationTags = (evidence: ProductionLiveQualificationEvidence): ReadonlyArray<string> => [
+  ...evidence.journal.orderedEventTags.map((tag) => `JournalEvent.${tag}`),
+  ...evidence.publicRecords.values.map(({ _tag }) => `PublicRecord.${_tag}`),
+  ...evidence.orderedBoundaryTags.shippedGithub.map((tag) => `ShippedGithub.${tag}`),
+  ...evidence.orderedBoundaryTags.responses.map((tag) => `Responses.${tag}`),
+  ...evidence.orderedBoundaryTags.controllerFinal.map((tag) => `ControllerFinal.${tag}`),
+  ...evidence.orderedBoundaryTags.process.map((tag) => `Process.${tag}`)
+]
+
+const operationCountsMatchOrderedObservations: LiveQualificationEvidenceInvariant = (evidence) => {
+  const expectedCounts = observedOperationTags(evidence).reduce<Readonly<Record<string, number>>>(
+    (counts, tag) => ({ ...counts, [tag]: (counts[tag] ?? 0) + 1 }),
+    {}
+  )
+  const suppliedCounts = Object.fromEntries(evidence.operationCounts.map(({ count, tag }) => [tag, count]))
+  return Object.keys(suppliedCounts).length === Object.keys(expectedCounts).length &&
+    Object.entries(expectedCounts).every(([tag, count]) => suppliedCounts[tag] === count)
+    ? undefined
+    : "operation counts must exactly count every ordered journal, public, Responses, and final-controller observation"
+}
+
+const expectedGithubMutations = [
+  "CreateClaimLabel",
+  "CreateClaimLabel",
+  "CloseIssue",
+  "DeleteClaimLabel",
+  "DeleteClaimLabel"
+] as const
+
+const githubMutationsMatchAcceptedChronology: LiveQualificationEvidenceInvariant = (evidence) => {
+  const githubMutations = evidence.orderedBoundaryTags.shippedGithub.filter(
+    (tag) => tag === "CreateClaimLabel" || tag === "CloseIssue" || tag === "DeleteClaimLabel"
+  )
+  return !evidence.orderedBoundaryTags.shippedGithub.includes("Unrecognized") &&
+    JSON.stringify(githubMutations) === JSON.stringify(expectedGithubMutations)
+    ? undefined
+    : "live qualification must observe exactly the accepted claim, completion, and deletion mutations"
+}
+
+const claimRereadsAndFinalityReadAreOrdered: LiveQualificationEvidenceInvariant = (evidence) => {
+  const operations = evidence.orderedBoundaryTags.shippedGithub
+  const firstCreate = operations.indexOf("CreateClaimLabel")
+  const secondCreate = operations.indexOf("CreateClaimLabel", firstCreate + 1)
+  const close = operations.indexOf("CloseIssue")
+  const finalDelete = operations.lastIndexOf("DeleteClaimLabel")
+  const firstClaimReread = operations.indexOf("FindClaimLabel", firstCreate + 1)
+  const completionClaimReread = operations.indexOf("FindClaimLabel", secondCreate + 1)
+  const laterFinalityRead = operations.indexOf("ReadIssue", finalDelete + 1)
+  return firstCreate >= 0 &&
+    firstClaimReread > firstCreate &&
+    firstClaimReread < secondCreate &&
+    completionClaimReread > secondCreate &&
+    completionClaimReread < close &&
+    laterFinalityRead > finalDelete
+    ? undefined
+    : "live qualification must reread each claim and perform the later tracker finality read in order"
+}
+
+const cleanupMatchesExactFixture: LiveQualificationEvidenceInvariant = (evidence) => {
+  if (evidence.cleanup._tag === "Pending") return undefined
+  if (evidence.cleanup.github.removedIssueNodeId !== evidence.fixture.issueNodeId) {
+    return "live qualification cleanup must remove the exact fixture issue"
+  }
+  const expectedLabels = evidence.fixture.labelNodeIds.map(String)
+  const resolvedLabels = evidence.cleanup.github.resolvedLabels.map(({ nodeId }) => String(nodeId))
+  return uniqueBy(evidence.cleanup.github.resolvedLabels, ({ nodeId }) => String(nodeId)) &&
+    expectedLabels.length === resolvedLabels.length &&
+    expectedLabels.every((nodeId) => resolvedLabels.includes(nodeId))
+    ? undefined
+    : "live qualification cleanup must resolve every exact fixture label once"
+}
+
+const liveQualificationEvidenceInvariants = [
+  provenanceBindsOneSourceAndIndependentJobs,
+  finalityBelongsToDeliveredRun,
+  observationsHaveNondecreasingTimestamps,
+  compositionHasOneApplicationServerProcess,
+  operationCountsMatchOrderedObservations,
+  githubMutationsMatchAcceptedChronology,
+  claimRereadsAndFinalityReadAreOrdered,
+  cleanupMatchesExactFixture
+] as const
+
+const firstLiveQualificationEvidenceViolation: LiveQualificationEvidenceInvariant = (evidence) => {
+  for (const validate of liveQualificationEvidenceInvariants) {
+    const violation = validate(evidence)
+    if (violation !== undefined) return violation
+  }
+  return undefined
+}
+
 export const ProductionLiveQualificationEvidence: Schema.Codec<
   ProductionLiveQualificationEvidence,
   ProductionLiveQualificationEvidenceEncoded
 > = Schema.Union([PreCleanupProductionLiveQualificationEvidence, FinalProductionLiveQualificationEvidence]).check(
-  Schema.makeFilter((evidence) => {
-    if (
-      evidence.hosted.sourceSha !== evidence.build.sourceSha ||
-      evidence.formal.dedicated.sourceSha !== evidence.build.sourceSha ||
-      evidence.formal.stressed.sourceSha !== evidence.build.sourceSha ||
-      evidence.formal.dedicated.job.jobId === evidence.formal.stressed.job.jobId
-    ) {
-      return "live qualification provenance must bind one source and two independent formal jobs"
-    }
-    if (evidence.final.run.runId !== evidence.delivery.runId) {
-      return "live qualification finality must belong to the delivered Run"
-    }
-    if (evidence.startedAt > evidence.endedAt) {
-      return "live qualification observations must end at or after they start"
-    }
-    if (evidence.composition.applicationServerProcessIdentities.length !== 1) {
-      return "live qualification must observe exactly one Codex app-server process identity"
-    }
-    const observedTags = [
-      ...evidence.journal.orderedEventTags.map((tag) => `JournalEvent.${tag}`),
-      ...evidence.publicRecords.values.map(({ _tag }) => `PublicRecord.${_tag}`),
-      ...evidence.orderedBoundaryTags.shippedGithub.map((tag) => `ShippedGithub.${tag}`),
-      ...evidence.orderedBoundaryTags.responses.map((tag) => `Responses.${tag}`),
-      ...evidence.orderedBoundaryTags.controllerFinal.map((tag) => `ControllerFinal.${tag}`),
-      ...evidence.orderedBoundaryTags.process.map((tag) => `Process.${tag}`)
-    ]
-    const expectedCounts = observedTags.reduce<Readonly<Record<string, number>>>(
-      (counts, tag) => ({ ...counts, [tag]: (counts[tag] ?? 0) + 1 }),
-      {}
-    )
-    const suppliedCounts = Object.fromEntries(evidence.operationCounts.map(({ count, tag }) => [tag, count]))
-    if (
-      Object.keys(suppliedCounts).length !== Object.keys(expectedCounts).length ||
-      Object.entries(expectedCounts).some(([tag, count]) => suppliedCounts[tag] !== count)
-    ) {
-      return "operation counts must exactly count every ordered journal, public, Responses, and final-controller observation"
-    }
-    const githubMutations = evidence.orderedBoundaryTags.shippedGithub.filter(
-      (tag) => tag === "CreateClaimLabel" || tag === "CloseIssue" || tag === "DeleteClaimLabel"
-    )
-    const expectedGithubMutations = [
-      "CreateClaimLabel",
-      "CreateClaimLabel",
-      "CloseIssue",
-      "DeleteClaimLabel",
-      "DeleteClaimLabel"
-    ]
-    if (
-      evidence.orderedBoundaryTags.shippedGithub.includes("Unrecognized") ||
-      JSON.stringify(githubMutations) !== JSON.stringify(expectedGithubMutations)
-    ) {
-      return "live qualification must observe exactly the accepted claim, completion, and deletion mutations"
-    }
-    const firstCreate = evidence.orderedBoundaryTags.shippedGithub.indexOf("CreateClaimLabel")
-    const secondCreate = evidence.orderedBoundaryTags.shippedGithub.indexOf("CreateClaimLabel", firstCreate + 1)
-    const close = evidence.orderedBoundaryTags.shippedGithub.indexOf("CloseIssue")
-    const finalDelete = evidence.orderedBoundaryTags.shippedGithub.lastIndexOf("DeleteClaimLabel")
-    const firstClaimReread = evidence.orderedBoundaryTags.shippedGithub.indexOf("FindClaimLabel", firstCreate + 1)
-    const completionClaimReread = evidence.orderedBoundaryTags.shippedGithub.indexOf("FindClaimLabel", secondCreate + 1)
-    const laterFinalityRead = evidence.orderedBoundaryTags.shippedGithub.indexOf("ReadIssue", finalDelete + 1)
-    if (
-      firstCreate < 0 ||
-      firstClaimReread <= firstCreate ||
-      firstClaimReread >= secondCreate ||
-      completionClaimReread <= secondCreate ||
-      completionClaimReread >= close ||
-      laterFinalityRead <= finalDelete
-    ) {
-      return "live qualification must reread each claim and perform the later tracker finality read in order"
-    }
-    if (evidence.cleanup._tag === "Pending") return undefined
-    if (evidence.cleanup.github.removedIssueNodeId !== evidence.fixture.issueNodeId) {
-      return "live qualification cleanup must remove the exact fixture issue"
-    }
-    const expectedLabels = evidence.fixture.labelNodeIds.map(String)
-    const resolvedLabels = evidence.cleanup.github.resolvedLabels.map(({ nodeId }) => String(nodeId))
-    return uniqueBy(evidence.cleanup.github.resolvedLabels, ({ nodeId }) => String(nodeId)) &&
-      expectedLabels.length === resolvedLabels.length &&
-      expectedLabels.every((nodeId) => resolvedLabels.includes(nodeId))
-      ? undefined
-      : "live qualification cleanup must resolve every exact fixture label once"
-  })
+  Schema.makeFilter(firstLiveQualificationEvidenceViolation)
 )
 
 const qualificationFailurePhases = [

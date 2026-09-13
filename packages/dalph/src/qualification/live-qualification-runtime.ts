@@ -513,6 +513,84 @@ const readApplicationServerProcessIdentities = Effect.fn(
   )
 })
 
+const exactPlannedAttempt = (completion: ProductionLiveQualificationCompletion) => {
+  const record = exactOne(completion.facts.journal.filter(({ event }) => event._tag === "TaskAttemptPlanned"))
+  return record?.event._tag === "TaskAttemptPlanned" ? record.event.operation.plannedAttempt : undefined
+}
+
+const exactAcceptedResult = (completion: ProductionLiveQualificationCompletion) => {
+  const record = exactOne(
+    completion.facts.journal.filter(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" &&
+        event.report._tag === "ExecutorWorkTerminal" &&
+        event.report.result._tag === "Accepted"
+    )
+  )
+  return record?.event._tag === "PlannedAttemptExecutorWorkReported" &&
+    record.event.report._tag === "ExecutorWorkTerminal" &&
+    record.event.report.result._tag === "Accepted"
+    ? record.event.report.result.acceptedResult
+    : undefined
+}
+
+const exactPromotion = (completion: ProductionLiveQualificationCompletion) => {
+  const record = exactOne(completion.facts.journal.filter(({ event }) => event._tag === "TargetPromotionIntended"))
+  return record?.event._tag === "TargetPromotionIntended" ? record.event.correlation : undefined
+}
+
+const hasExactCompletedTermination = (completion: ProductionLiveQualificationCompletion) => {
+  const record = exactOne(completion.facts.journal.filter(({ event }) => event._tag === "WorkflowRunTerminated"))
+  return record?.event._tag === "WorkflowRunTerminated" && record.event.disposition === "Completed"
+}
+
+const exactCompletionFacts = (completion: ProductionLiveQualificationCompletion) => {
+  const planned = exactPlannedAttempt(completion)
+  const accepted = exactAcceptedResult(completion)
+  const promotion = exactPromotion(completion)
+  if (
+    planned === undefined ||
+    accepted === undefined ||
+    promotion === undefined ||
+    !hasExactCompletedTermination(completion)
+  )
+    return Option.none()
+  return Option.some({
+    planned,
+    accepted,
+    candidate: promotion.qualifiedCandidate,
+    promotionRequestId: promotion.requestId
+  })
+}
+
+const observeExactCompletedQualification = Effect.fn("ProductionLiveQualification.observeExactCompleted")(function* (
+  fixture: ProductionLiveLocalFixture,
+  forwarder: Effect.Success<ReturnType<typeof makeProductionLiveGithubForwarder>>,
+  completion: ProductionLiveQualificationCompletion
+) {
+  const facts = exactCompletionFacts(completion)
+  if (Option.isNone(facts)) return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
+  const applicationServerProcessIdentities = yield* readApplicationServerProcessIdentities(fixture).pipe(
+    Effect.mapError(() => qualificationFailed("EvidenceValidation"))
+  )
+  const githubFinal = Schema.decodeUnknownOption(CompletedLiveGithubObservation)(completion.facts.github)
+  if (
+    Option.isNone(githubFinal) ||
+    completion.facts.applicationServerCount !== 1 ||
+    applicationServerProcessIdentities.length !== 1
+  )
+    return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
+  const forwardObservation = yield* forwarder.observation
+  const evidence = deriveProductionLiveQualificationEvidenceObservations(
+    completion,
+    forwardObservation.orderedOperations,
+    githubFinal.value.responses
+  )
+  if (forwardObservation.createdLabels.length === 0 || Option.isNone(evidence))
+    return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
+  return { ...facts.value, applicationServerProcessIdentities, forwardObservation, evidence: evidence.value }
+})
+
 const publishCompletedQualification = Effect.fn("ProductionLiveQualification.publishCompleted")(function* (
   manifest: ProductionLiveQualificationManifest,
   fixture: ProductionLiveLocalFixture,
@@ -526,49 +604,8 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
     local?: Effect.Success<ReturnType<typeof cleanupProductionLiveFixture>>
   }
 ) {
-  const plannedRecords = completion.facts.journal.filter(({ event }) => event._tag === "TaskAttemptPlanned")
-  const acceptedRecords = completion.facts.journal.filter(
-    ({ event }) =>
-      event._tag === "PlannedAttemptExecutorWorkReported" &&
-      event.report._tag === "ExecutorWorkTerminal" &&
-      event.report.result._tag === "Accepted"
-  )
-  const promotionRecords = completion.facts.journal.filter(({ event }) => event._tag === "TargetPromotionIntended")
-  const terminationRecords = completion.facts.journal.filter(({ event }) => event._tag === "WorkflowRunTerminated")
-  const plannedRecord = exactOne(plannedRecords)
-  const acceptedRecord = exactOne(acceptedRecords)
-  const promotionRecord = exactOne(promotionRecords)
-  if (
-    plannedRecord?.event._tag !== "TaskAttemptPlanned" ||
-    acceptedRecord?.event._tag !== "PlannedAttemptExecutorWorkReported" ||
-    acceptedRecord.event.report._tag !== "ExecutorWorkTerminal" ||
-    acceptedRecord.event.report.result._tag !== "Accepted" ||
-    promotionRecord?.event._tag !== "TargetPromotionIntended" ||
-    terminationRecords.length !== 1 ||
-    terminationRecords[0]?.event._tag !== "WorkflowRunTerminated" ||
-    terminationRecords[0].event.disposition !== "Completed"
-  )
-    return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
-  const planned = plannedRecord.event.operation.plannedAttempt
-  const accepted = acceptedRecord.event.report.result.acceptedResult
-  const candidate = promotionRecord.event.correlation.qualifiedCandidate
-  const applicationServerProcessIdentities = yield* readApplicationServerProcessIdentities(fixture).pipe(
-    Effect.mapError(() => qualificationFailed("EvidenceValidation"))
-  )
-  const githubFinal = Schema.decodeUnknownOption(CompletedLiveGithubObservation)(completion.facts.github)
-  const responseCounts =
-    completion.facts.applicationServerCount === 1 && applicationServerProcessIdentities.length === 1
-  if (Option.isNone(githubFinal) || !responseCounts)
-    return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
-  const forwardObservation = yield* forwarder.observation
-  const observed = deriveProductionLiveQualificationEvidenceObservations(
-    completion,
-    forwardObservation.orderedOperations,
-    githubFinal.value.responses
-  )
-  if (forwardObservation.createdLabels.length === 0 || Option.isNone(observed))
-    return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
-  const labelResources = forwardObservation.createdLabels.map(({ fingerprint, name, nodeId }) =>
+  const observation = yield* observeExactCompletedQualification(fixture, forwarder, completion)
+  const labelResources = observation.forwardObservation.createdLabels.map(({ fingerprint, name, nodeId }) =>
     DisposableGithubQualificationResource.cases.Label.make({ nodeId, name, fingerprint })
   )
   const githubManifest = {
@@ -595,29 +632,36 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
       issueNodeId: githubFixture.issue.nodeId,
       labelNodeIds: labelResources.map(({ nodeId }) => nodeId)
     },
-    composition: { applicationServerProcessIdentities, taskWorktreeCount: 1, integrationTargetCount: 1 },
+    composition: {
+      applicationServerProcessIdentities: observation.applicationServerProcessIdentities,
+      taskWorktreeCount: 1,
+      integrationTargetCount: 1
+    },
     delivery: {
       runId: completion.runId,
-      taskId: planned.taskId,
-      attemptId: planned.attemptId,
-      baseCommit: planned.baseSha,
-      acceptedCommit: accepted.commit,
-      acceptedEvidence: accepted.evidenceManifest,
-      candidateCommit: candidate.candidateCommit,
-      candidateParents: candidate.directParents,
-      targetRef: candidate.run.session.integrationTarget.ref,
-      integration: { sessionId: candidate.run.session.sessionId, runOrdinal: candidate.run.ordinal },
-      promotionRequestId: promotionRecord.event.correlation.requestId,
+      taskId: observation.planned.taskId,
+      attemptId: observation.planned.attemptId,
+      baseCommit: observation.planned.baseSha,
+      acceptedCommit: observation.accepted.commit,
+      acceptedEvidence: observation.accepted.evidenceManifest,
+      candidateCommit: observation.candidate.candidateCommit,
+      candidateParents: observation.candidate.directParents,
+      targetRef: observation.candidate.run.session.integrationTarget.ref,
+      integration: {
+        sessionId: observation.candidate.run.session.sessionId,
+        runOrdinal: observation.candidate.run.ordinal
+      },
+      promotionRequestId: observation.promotionRequestId,
       initialTargetCommit: fixture.initialTargetCommit,
       finalTargetCommit: completion.facts.targetHead
     },
     journal: {
       positions: completion.facts.journal.map(({ position }) => position),
-      occurrences: observed.value.occurrences,
-      orderedEventTags: observed.value.journalEventTags
+      occurrences: observation.evidence.occurrences,
+      orderedEventTags: observation.evidence.journalEventTags
     },
-    orderedBoundaryTags: observed.value.orderedBoundaryTags,
-    operationCounts: observed.value.operationCounts,
+    orderedBoundaryTags: observation.evidence.orderedBoundaryTags,
+    operationCounts: observation.evidence.operationCounts,
     publicRecords: { values: completion.records, digest: publicDigest },
     final: {
       tracker: { lifecycle: "Completed", claims: [] },
@@ -631,44 +675,18 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
     manifest.artifact,
     evidenceBeforeCleanup
   )
-  const cleanupAdapter = yield* makeProductionLiveGithubCleanupAdapter(manifest.invocationId)
-  const githubCleanup = yield* cleanupProductionLiveGithubFixture(
+  const cleanup = yield* collectCompletedCleanupReceipt(
+    manifest,
+    fixture,
     githubManifest,
-    { invocationId: manifest.invocationId, repository: githubFixture.manifest.repository },
-    cleanupAdapter
+    labelResources,
+    observation.evidence.selectedRunsCompleted,
+    cleanupState
   )
-  // eslint-disable-next-line functional/immutable-data -- Retention reporting must retain the last observed partial cleanup receipt if a later boundary fails.
-  cleanupState.github = githubCleanup
-  const localCleanup = yield* cleanupProductionLiveFixture(fixture.localManifest, {
-    invocationId: manifest.invocationId,
-    ownedChildrenStopped: Effect.succeed(true),
-    selectedRunsCompleted: Effect.succeed(observed.value.selectedRunsCompleted)
-  })
-  // eslint-disable-next-line functional/immutable-data -- Retention reporting must retain the last observed partial cleanup receipt if evidence publication fails.
-  cleanupState.local = localCleanup
-  if (githubCleanup.retained.length > 0 || localCleanup._tag !== "Removed" || localCleanup.retained.length > 0)
-    return yield* Effect.fail(qualificationFailed("Cleanup"))
-  const removedIssue = githubCleanup.removed.find((resource) => resource._tag === "Issue")
-  if (removedIssue?._tag !== "Issue") return yield* Effect.fail(qualificationFailed("Cleanup"))
-  const resolvedLabels = labelResources.map(({ nodeId }) => ({
-    _tag: githubCleanup.removed.some((resource) => resource._tag === "Label" && resource.nodeId === nodeId)
-      ? ("Removed" as const)
-      : ("AlreadyAbsent" as const),
-    nodeId
-  }))
   return yield* publishProductionLiveQualificationEvidence(manifest.publicationContainer, manifest.artifact, {
     ...evidenceBeforeCleanup,
     artifactStage: "Final",
-    cleanup: {
-      _tag: "Completed",
-      github: { removedIssueNodeId: removedIssue.nodeId, resolvedLabels, retained: [] },
-      local: {
-        _tag: "RemovedFixture",
-        removedResourceCount: localCleanup.removed.length,
-        containerAbsent: true,
-        retained: []
-      }
-    }
+    cleanup
   })
 })
 
@@ -720,6 +738,121 @@ type GithubForwarder = Effect.Success<ReturnType<typeof makeProductionLiveGithub
 type GithubCleanup = Effect.Success<ReturnType<typeof cleanupProductionLiveGithubFixture>>
 type LocalCleanup = Effect.Success<ReturnType<typeof cleanupProductionLiveFixture>>
 
+const collectCompletedCleanupReceipt = Effect.fn("ProductionLiveQualification.collectCompletedCleanupReceipt")(
+  function* (
+    manifest: ProductionLiveQualificationManifest,
+    fixture: ProductionLiveLocalFixture,
+    githubManifest: GithubFixture["manifest"],
+    labelResources: ReadonlyArray<DisposableGithubQualificationResource & { readonly _tag: "Label" }>,
+    selectedRunsCompleted: boolean,
+    cleanupState: { github?: GithubCleanup; local?: LocalCleanup }
+  ) {
+    const cleanupAdapter = yield* makeProductionLiveGithubCleanupAdapter(manifest.invocationId)
+    const githubCleanup = yield* cleanupProductionLiveGithubFixture(
+      githubManifest,
+      { invocationId: manifest.invocationId, repository: githubManifest.repository },
+      cleanupAdapter
+    )
+    // eslint-disable-next-line functional/immutable-data -- Retention reporting must retain the last observed partial cleanup receipt if a later boundary fails.
+    cleanupState.github = githubCleanup
+    const localCleanup = yield* cleanupProductionLiveFixture(fixture.localManifest, {
+      invocationId: manifest.invocationId,
+      ownedChildrenStopped: Effect.succeed(true),
+      selectedRunsCompleted: Effect.succeed(selectedRunsCompleted)
+    })
+    // eslint-disable-next-line functional/immutable-data -- Retention reporting must retain the last observed partial cleanup receipt if evidence publication fails.
+    cleanupState.local = localCleanup
+    if (githubCleanup.retained.length > 0 || localCleanup._tag !== "Removed" || localCleanup.retained.length > 0)
+      return yield* Effect.fail(qualificationFailed("Cleanup"))
+    const removedIssue = githubCleanup.removed.find((resource) => resource._tag === "Issue")
+    if (removedIssue?._tag !== "Issue") return yield* Effect.fail(qualificationFailed("Cleanup"))
+    const resolvedLabels = labelResources.map(({ nodeId }) => ({
+      _tag: githubCleanup.removed.some((resource) => resource._tag === "Label" && resource.nodeId === nodeId)
+        ? ("Removed" as const)
+        : ("AlreadyAbsent" as const),
+      nodeId
+    }))
+    return {
+      _tag: "Completed" as const,
+      github: { removedIssueNodeId: removedIssue.nodeId, resolvedLabels, retained: [] },
+      local: {
+        _tag: "RemovedFixture" as const,
+        removedResourceCount: localCleanup.removed.length,
+        containerAbsent: true as const,
+        retained: []
+      }
+    }
+  }
+)
+
+const observeCreatedLabels = (forwarder: GithubForwarder | undefined) =>
+  forwarder === undefined
+    ? Effect.succeed([])
+    : forwarder.observation.pipe(Effect.map(({ createdLabels }) => createdLabels))
+
+const githubResourceDisposition = (cleanup: GithubCleanup | undefined, nodeId: string) => {
+  if (cleanup?.removed.some((resource) => resource.nodeId === nodeId)) return "Removed" as const
+  if (cleanup?.alreadyAbsent.some((resource) => resource.nodeId === nodeId)) return "AlreadyAbsent" as const
+  return "Retained" as const
+}
+
+const removedLocalContainerReport = (
+  cleanup: LocalCleanup | undefined,
+  fixture: ProductionLiveLocalFixture | undefined
+) => {
+  if (cleanup?._tag !== "Removed" || fixture === undefined) return []
+  const locator = fixture.localManifest.container.locator
+  return [{ locator, disposition: "Removed" as const, manualCommand: `stat -- '${locator.replaceAll("'", "'\\''")}'` }]
+}
+
+const removedLocalResourceReports = (
+  cleanup: LocalCleanup | undefined,
+  fixture: ProductionLiveLocalFixture | undefined
+) => {
+  if (fixture === undefined) return []
+  const removed = new Set(cleanup?.removed.map(({ locator }) => locator) ?? [])
+  return fixture.localManifest.resources
+    .filter(({ locator }) => removed.has(locator))
+    .map(({ locator }) => ({ locator, disposition: "Removed" as const, manualCommand: `stat -- '${locator}'` }))
+}
+
+const retainedLocalReports = (cleanup: LocalCleanup | undefined, fixture: ProductionLiveLocalFixture | undefined) => {
+  if (cleanup !== undefined)
+    return cleanup.retained.map(({ locator, manualCommand }) => ({
+      locator,
+      disposition: "Retained" as const,
+      manualCommand
+    }))
+  if (fixture === undefined) return []
+  const container = fixture.localManifest.container.locator
+  return [
+    {
+      locator: container,
+      disposition: "Retained" as const,
+      manualCommand: `find '${container.replaceAll("'", "'\\''")}' -mindepth 1 -maxdepth 1 -print`
+    },
+    ...fixture.localManifest.resources.map(({ locator }) => ({
+      locator,
+      disposition: "Retained" as const,
+      manualCommand: `stat -- '${locator.replaceAll("'", "'\\''")}'`
+    }))
+  ]
+}
+
+const localContainerFallbackReport = (
+  fixture: ProductionLiveLocalFixture | undefined,
+  container: ProductionLiveLocalContainer | undefined
+) => {
+  if (fixture !== undefined || container === undefined) return []
+  return [
+    {
+      locator: container,
+      disposition: "Retained" as const,
+      manualCommand: `find '${container.replaceAll("'", "'\\''")}' -mindepth 1 -maxdepth 1 -print`
+    }
+  ]
+}
+
 export const writeProductionLiveQualificationFailureRetentionReport = Effect.fn(
   "ProductionLiveQualification.writeRetentionReport"
 )(function* (
@@ -733,59 +866,12 @@ export const writeProductionLiveQualificationFailureRetentionReport = Effect.fn(
 ) {
   const fs = yield* FileSystem.FileSystem
   const githubCleanup = cleanupState.github
-  const observedLabels = forwarder === undefined ? [] : (yield* forwarder.observation).createdLabels
+  const observedLabels = yield* observeCreatedLabels(forwarder)
   const labelResources = observedLabels.map(({ fingerprint, name, nodeId }) =>
     DisposableGithubQualificationResource.cases.Label.make({ nodeId, name, fingerprint })
   )
   const githubResources = githubFixture === undefined ? [] : [...githubFixture.manifest.resources, ...labelResources]
   const localCleanup = cleanupState.local
-  const dispositionOf = (resource: (typeof githubResources)[number]) =>
-    githubCleanup?.removed.some(({ nodeId }) => nodeId === resource.nodeId)
-      ? ("Removed" as const)
-      : githubCleanup?.alreadyAbsent.some(({ nodeId }) => nodeId === resource.nodeId)
-        ? ("AlreadyAbsent" as const)
-        : ("Retained" as const)
-  const removedLocal = new Set(localCleanup?.removed.map(({ locator }) => locator) ?? [])
-  const removedLocalContainer =
-    localCleanup?._tag === "Removed" && localFixture !== undefined
-      ? [
-          {
-            locator: localFixture.localManifest.container.locator,
-            disposition: "Removed" as const,
-            manualCommand: `stat -- '${localFixture.localManifest.container.locator.replaceAll("'", "'\\''")}'`
-          }
-        ]
-      : []
-  const retainedLocal =
-    localCleanup?.retained.map(({ locator, manualCommand }) => ({
-      locator,
-      disposition: "Retained" as const,
-      manualCommand
-    })) ??
-    (localFixture === undefined
-      ? []
-      : [
-          {
-            locator: localFixture.localManifest.container.locator,
-            disposition: "Retained" as const,
-            manualCommand: `find '${localFixture.localManifest.container.locator.replaceAll("'", "'\\''")}' -mindepth 1 -maxdepth 1 -print`
-          },
-          ...localFixture.localManifest.resources.map(({ locator }) => ({
-            locator,
-            disposition: "Retained" as const,
-            manualCommand: `stat -- '${locator.replaceAll("'", "'\\''")}'`
-          }))
-        ])
-  const containerFallback =
-    localFixture === undefined && localContainer !== undefined
-      ? [
-          {
-            locator: localContainer,
-            disposition: "Retained" as const,
-            manualCommand: `find '${localContainer.replaceAll("'", "'\\''")}' -mindepth 1 -maxdepth 1 -print`
-          }
-        ]
-      : []
   const report = yield* Schema.decodeUnknownEffect(ProductionLiveQualificationRetentionReport, {
     onExcessProperty: "error",
     reportInput: false
@@ -797,17 +883,14 @@ export const writeProductionLiveQualificationFailureRetentionReport = Effect.fn(
     github: githubResources.map((resource) => ({
       _tag: resource._tag,
       nodeId: resource.nodeId,
-      disposition: dispositionOf(resource),
+      disposition: githubResourceDisposition(githubCleanup, resource.nodeId),
       manualCommand: githubReadCommand(resource.nodeId)
     })),
     local: [
-      ...removedLocalContainer,
-      ...(localFixture?.localManifest.resources
-        .filter(({ locator }) => removedLocal.has(locator))
-        .map(({ locator }) => ({ locator, disposition: "Removed" as const, manualCommand: `stat -- '${locator}'` })) ??
-        []),
-      ...retainedLocal,
-      ...containerFallback
+      ...removedLocalContainerReport(localCleanup, localFixture),
+      ...removedLocalResourceReports(localCleanup, localFixture),
+      ...retainedLocalReports(localCleanup, localFixture),
+      ...localContainerFallbackReport(localFixture, localContainer)
     ]
   })
   yield* fs.writeFileString(manifest.retentionReport, JSON.stringify(report))

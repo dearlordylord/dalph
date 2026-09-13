@@ -4,7 +4,7 @@ import nodePath from "node:path"
 import nodeProcess from "node:process"
 import type { GitCommitSha, RunId } from "@dalph/contracts"
 import type { GithubIssueTarget, JournalRecord } from "@dalph/orchestrator"
-import { Effect, Redacted, Schema, Stream, type Scope } from "effect"
+import { Effect, Redacted, Schema, Stream, type Result, type Scope } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import {
@@ -283,6 +283,16 @@ const hasExactCompletedDisposition = (records: ReadonlyArray<ProductionCliRecord
 const compositionIsExact = (facts: ProductionLiveQualificationFinalFacts) =>
   facts.applicationServerCount === 1 && facts.taskWorktreeCount === 1 && facts.integrationTargetCount === 1
 
+/** Accepts only the stopped zero-status child transcript for one selected completed Run. */
+const exactCompletedRun = (
+  process: Result.Result<number, ProductionLiveQualificationBoundaryFailure>,
+  records: ReadonlyArray<ProductionCliRecord>,
+  runId: RunId | undefined
+): RunId | undefined => {
+  if (process._tag === "Failure" || process.success !== 0 || runId === undefined) return undefined
+  return hasExactCompletedDisposition(records, runId) ? runId : undefined
+}
+
 /**
  * Runs one protected live journey. Every post-spawn failure is converted to a
  * safe stage and handed to retention exactly once; no branch can spawn again.
@@ -332,14 +342,9 @@ const runProductionLiveQualificationScoped = Effect.fn("ProductionLiveQualificat
   )
   if (output._tag === "Failure" || stderr._tag === "Failure") return yield* fail("ReadOutput")
   const records = output.success
-  runId = selectedRun(records)
-  if (
-    process._tag === "Failure" ||
-    process.success !== 0 ||
-    runId === undefined ||
-    !hasExactCompletedDisposition(records, runId)
-  )
-    return yield* fail("Process")
+  const completedRunId = exactCompletedRun(process, records, selectedRun(records))
+  if (completedRunId === undefined) return yield* fail("Process")
+  runId = completedRunId
   const finalInput = { processId, processStatus: 0 as const, records, runId }
   const gathered = yield* callbacks.gatherFinalFacts(finalInput).pipe(Effect.result)
   if (gathered._tag === "Failure") return yield* fail("GatherFinalFacts")

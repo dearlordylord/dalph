@@ -153,6 +153,10 @@ const decodeCleanup = <S extends Schema.Constraint>(schema: S, body: unknown) =>
     return yield* Schema.decodeUnknownEffect(schema)(body)
   }).pipe(Effect.mapError(cleanupFailure))
 
+type CleanupRepositoryIdentity = Parameters<DisposableGithubCleanupAdapter["readResource"]>[0]
+type CleanupIssue = Extract<DisposableGithubQualificationResource, { readonly _tag: "Issue" }>
+type CleanupLabel = Extract<DisposableGithubQualificationResource, { readonly _tag: "Label" }>
+
 /** Uses the production GitHub client for exact reads and one-attempt deletions; it never retries. */
 export const makeProductionLiveGithubCleanupAdapter = Effect.fn("ProductionLiveGithubFixture.makeCleanupAdapter")(
   function* (invocationId: LiveQualificationInvocationId) {
@@ -180,39 +184,45 @@ export const makeProductionLiveGithubCleanupAdapter = Effect.fn("ProductionLiveG
             repository: { ...repository, nodeId: response.data.repository.id }
           })
     })
-    const readResource: DisposableGithubCleanupAdapter["readResource"] = Effect.fn(
-      "ProductionLiveGithubFixture.readResource"
-    )(function* (repository, resource) {
-      if (resource._tag === "Issue") {
-        const resolved = yield* execute(
-          GithubGraphqlRequest.cases.ResolveIssue.make({
-            target: GithubIssueTarget.make({
-              owner: repository.owner,
-              repository: repository.name,
-              issueNumber: resource.number
-            })
-          }),
-          ResolveIssueResponse
-        )
-        const issue = resolved.data.repository?.issue
-        if (issue === null || issue === undefined) return DisposableGithubResourceObservation.cases.Absent.make({})
-        const response = yield* execute(
-          GithubGraphqlRequest.cases.ReadTaskWorkSpecification.make({ issueNodeId: issue.id }),
-          ReadIssueSpecificationResponse
-        )
-        const current = response.data.node
-        if (current === null) return DisposableGithubResourceObservation.cases.Absent.make({})
-        const fingerprint = yield* digestObserved(
-          JSON.stringify({ invocationId, specification: { title: current.title, body: current.body } })
-        )
-        return DisposableGithubResourceObservation.cases.Present.make({
-          resource: DisposableGithubQualificationResource.cases.Issue.make({
-            number: resource.number,
-            nodeId: current.id,
-            fingerprint
+    /** Reads the exact issue number, then verifies its current specification identity. */
+    const readIssue = Effect.fn("ProductionLiveGithubFixture.readIssue")(function* (
+      repository: CleanupRepositoryIdentity,
+      resource: CleanupIssue
+    ) {
+      const resolved = yield* execute(
+        GithubGraphqlRequest.cases.ResolveIssue.make({
+          target: GithubIssueTarget.make({
+            owner: repository.owner,
+            repository: repository.name,
+            issueNumber: resource.number
           })
+        }),
+        ResolveIssueResponse
+      )
+      const issue = resolved.data.repository?.issue
+      if (issue === null || issue === undefined) return DisposableGithubResourceObservation.cases.Absent.make({})
+      const response = yield* execute(
+        GithubGraphqlRequest.cases.ReadTaskWorkSpecification.make({ issueNodeId: issue.id }),
+        ReadIssueSpecificationResponse
+      )
+      const current = response.data.node
+      if (current === null) return DisposableGithubResourceObservation.cases.Absent.make({})
+      const fingerprint = yield* digestObserved(
+        JSON.stringify({ invocationId, specification: { title: current.title, body: current.body } })
+      )
+      return DisposableGithubResourceObservation.cases.Present.make({
+        resource: DisposableGithubQualificationResource.cases.Issue.make({
+          number: resource.number,
+          nodeId: current.id,
+          fingerprint
         })
-      }
+      })
+    })
+    /** Reads the exact repository label and verifies its current description identity. */
+    const readLabel = Effect.fn("ProductionLiveGithubFixture.readLabel")(function* (
+      repository: CleanupRepositoryIdentity,
+      resource: CleanupLabel
+    ) {
       const response = yield* execute(
         GithubGraphqlRequest.cases.FindClaimLabel.make({
           labelName: resource.name,
@@ -231,6 +241,11 @@ export const makeProductionLiveGithubCleanupAdapter = Effect.fn("ProductionLiveG
           fingerprint
         })
       })
+    })
+    const readResource: DisposableGithubCleanupAdapter["readResource"] = Effect.fn(
+      "ProductionLiveGithubFixture.readResource"
+    )(function* (repository, resource) {
+      return resource._tag === "Issue" ? yield* readIssue(repository, resource) : yield* readLabel(repository, resource)
     })
     const deleteResource: DisposableGithubCleanupAdapter["deleteResource"] = Effect.fn(
       "ProductionLiveGithubFixture.deleteResource"

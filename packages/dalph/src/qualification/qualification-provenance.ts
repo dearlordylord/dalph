@@ -261,45 +261,69 @@ const profileTimingExceedsBudgets = (
   profile.completeJobSeconds < profile.setupInstallSeconds + formalSeconds ||
   profile.completeJobSeconds >= hostedJobLimitSeconds
 
+const profileConditionMatchesKind = (
+  profileKind: "dedicated" | "stressed",
+  condition: typeof FormalProfileCondition.Type
+) => (profileKind === "dedicated" ? condition.kind === "dedicated-hosted-job" : condition.kind === "cpu-affinity")
+
+const profileMatchesExpectedIdentity = (
+  sourceSha: GitCommitSha,
+  profileKind: "dedicated" | "stressed",
+  profile: SuppliedQualificationProfile
+) =>
+  profile.profileKind === profileKind &&
+  profileConditionMatchesKind(profileKind, profile.condition) &&
+  profile.sourceSha === sourceSha &&
+  supportedQualificationNode(profile.nodeVersion)
+
+const profileCommandsHaveExpectedResults = (commands: ReadonlyArray<typeof ProfileCommand.Type>) =>
+  commands.every(({ name, result }) => result === (name.includes("temporal mutant") ? "exit:1" : "exit:0"))
+
+const parsedNegativeControlNames = (commands: ReadonlyArray<{ readonly name: string }>): ReadonlyArray<string> =>
+  commands
+    .filter(({ name }) => name.includes("negative mutation profile") || name.includes("temporal mutant"))
+    .map(({ name }) => name)
+
+const profileNegativeControlsMatch = (parsedNames: ReadonlyArray<string>, suppliedNames: ReadonlyArray<string>) =>
+  parsedNames.length === suppliedNames.length && parsedNames.every((name, index) => name === suppliedNames[index])
+
+const parseSuppliedQualificationProfile = (
+  scripts: QualificationScriptModules,
+  profile: SuppliedQualificationProfile
+) =>
+  Effect.try({
+    try: () =>
+      scripts.parseProfileLog({
+        id: String(profile.job.jobId),
+        node: profile.nodeVersion,
+        repeat: "1",
+        installSeconds: String(profile.setupInstallSeconds),
+        log: profile.log
+      }),
+    catch: () => new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
+  })
+
+const assertAcceptedQualificationGateCommands = (
+  scripts: QualificationScriptModules,
+  commands: ReadonlyArray<typeof ProfileCommand.Type>
+) =>
+  Effect.try({
+    try: () => scripts.assertAcceptedQuintGateCommands(commands),
+    catch: () => new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
+  })
+
 /** Existing inventory parser owns command order/counts; this seam additionally binds actual source/job/negative controls. */
 const validateProfile = Effect.fn("Qualification.validateProfile")(
   function* (sourceSha: GitCommitSha, profileKind: "dedicated" | "stressed", profile: SuppliedQualificationProfile) {
-    const conditionMatchesKind =
-      (profileKind === "dedicated" && profile.condition.kind === "dedicated-hosted-job") ||
-      (profileKind === "stressed" && profile.condition.kind === "cpu-affinity")
-    if (
-      profile.profileKind !== profileKind ||
-      !conditionMatchesKind ||
-      profile.sourceSha !== sourceSha ||
-      !supportedQualificationNode(profile.nodeVersion)
-    )
+    if (!profileMatchesExpectedIdentity(sourceSha, profileKind, profile))
       return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
     const scripts = yield* qualificationScriptModules()
-    const parsed = yield* Effect.try({
-      try: () =>
-        scripts.parseProfileLog({
-          id: String(profile.job.jobId),
-          node: profile.nodeVersion,
-          repeat: "1",
-          installSeconds: String(profile.setupInstallSeconds),
-          log: profile.log
-        }),
-      catch: () => new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
-    })
+    const parsed = yield* parseSuppliedQualificationProfile(scripts, profile)
     const commands = yield* Schema.decodeUnknownEffect(Schema.Array(ProfileCommand))(parsed.commands)
-    if (commands.some(({ name, result }) => result !== (name.includes("temporal mutant") ? "exit:1" : "exit:0")))
+    if (!profileCommandsHaveExpectedResults(commands))
       return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
-    yield* Effect.try({
-      try: () => scripts.assertAcceptedQuintGateCommands(commands),
-      catch: () => new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
-    })
-    const negativeNames = parsed.commands
-      .filter(({ name }) => name.includes("negative mutation profile") || name.includes("temporal mutant"))
-      .map(({ name }) => name)
-    if (
-      negativeNames.length !== profile.negativeControls.length ||
-      negativeNames.some((name, index) => name !== profile.negativeControls[index])
-    )
+    yield* assertAcceptedQualificationGateCommands(scripts, commands)
+    if (!profileNegativeControlsMatch(parsedNegativeControlNames(parsed.commands), profile.negativeControls))
       return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
     if (profile.formalSeconds !== parsed.formalSeconds)
       return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })

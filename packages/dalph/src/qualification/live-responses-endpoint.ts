@@ -131,6 +131,114 @@ const send = (response: ServerResponse, id: string, item: unknown) => {
   response.end()
 }
 
+interface ResponseTurn {
+  readonly prompt: { readonly kind: TurnKind; readonly text: string }
+  readonly worktree: ProductionLiveResponsesWorktreeLocator
+  readonly ordinal: number
+  readonly id: string
+}
+
+const requestFailure = () => new ProductionLiveResponsesEndpointFailure({ operation: "Request" })
+
+const decodeResponseTurn = Effect.fn("ProductionLiveResponsesEndpoint.decodeTurn")(function* (
+  input: unknown,
+  observations: Ref.Ref<ProductionLiveResponsesObservation>
+) {
+  const prompt = promptOf(input)
+  if (prompt === undefined) return yield* requestFailure()
+  const worktree = yield* Schema.decodeUnknownEffect(ProductionLiveResponsesWorktreeLocator)(
+    lineValue(prompt.text, prompt.kind === "Executor" ? "worktree" : "Candidate worktree")
+  ).pipe(Effect.mapError(requestFailure))
+  const ordinal = yield* Ref.modify(observations, (current) => {
+    const field = prompt.kind === "Executor" ? "executor" : "integrator"
+    const counts = { ...current.counts, [field]: current.counts[field] + 1, total: current.counts.total + 1 }
+    return [counts[field], { counts, orderedTags: [...current.orderedTags, `${prompt.kind}Request`] }] as const
+  })
+  return { prompt, worktree, ordinal, id: `${prompt.kind.toLowerCase()}-${ordinal}` } satisfies ResponseTurn
+})
+
+const respondToFirstTurn = Effect.fn("ProductionLiveResponsesEndpoint.respondToFirstTurn")(function* (
+  turn: ResponseTurn,
+  response: ServerResponse
+) {
+  if (turn.prompt.kind === "Executor") {
+    send(
+      response,
+      turn.id,
+      functionCall(
+        turn.id,
+        "printf '%s\\n' 'Dalph protected live qualification' > LIVE-QUALIFICATION.md && git add LIVE-QUALIFICATION.md && git commit -m 'dalph live qualification' >/dev/null",
+        turn.worktree
+      )
+    )
+    return
+  }
+  const commit = yield* Schema.decodeUnknownEffect(GitCommitSha)(lineValue(turn.prompt.text, "Accepted commit C")).pipe(
+    Effect.mapError(requestFailure)
+  )
+  send(
+    response,
+    turn.id,
+    functionCall(turn.id, `git merge --no-ff ${commit} -m 'dalph live integration' >/dev/null`, turn.worktree)
+  )
+})
+
+const respondToSecondTurn = Effect.fn("ProductionLiveResponsesEndpoint.respondToSecondTurn")(function* <E, R>(
+  turn: ResponseTurn,
+  response: ServerResponse,
+  observations: Ref.Ref<ProductionLiveResponsesObservation>,
+  readHead: (worktree: ProductionLiveResponsesWorktreeLocator) => Effect.Effect<string, E, R>
+) {
+  const head = yield* readHead(turn.worktree).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(GitCommitSha)),
+    Effect.mapError(() => new ProductionLiveResponsesEndpointFailure({ operation: "ReadHead" }))
+  )
+  const readHeadTag: ProductionLiveResponsesObservationTag =
+    turn.prompt.kind === "Executor" ? "ExecutorGitReadHead" : "IntegratorGitReadHead"
+  yield* Ref.update(observations, (current) => ({ ...current, orderedTags: [...current.orderedTags, readHeadTag] }))
+  if (turn.prompt.kind === "Integrator") {
+    send(
+      response,
+      turn.id,
+      assistantMessage(turn.id, JSON.stringify({ version: 1, outcome: "PreparedCandidate", candidate: head }))
+    )
+    return
+  }
+  const runId = lineValue(turn.prompt.text, "run_id")
+  const attemptId = lineValue(turn.prompt.text, "attempt_id")
+  if (runId === undefined || attemptId === undefined) return yield* requestFailure()
+  send(
+    response,
+    turn.id,
+    assistantMessage(turn.id, JSON.stringify({ commit: head, correlation: { runId, attemptId } }))
+  )
+})
+
+const respondToTurn = Effect.fn("ProductionLiveResponsesEndpoint.respondToTurn")(function* <E, R>(
+  turn: ResponseTurn,
+  response: ServerResponse,
+  observations: Ref.Ref<ProductionLiveResponsesObservation>,
+  readHead: (worktree: ProductionLiveResponsesWorktreeLocator) => Effect.Effect<string, E, R>
+) {
+  if (turn.ordinal === 1) return yield* respondToFirstTurn(turn, response)
+  if (turn.ordinal !== secondTurn) return yield* requestFailure()
+  return yield* respondToSecondTurn(turn, response, observations, readHead)
+})
+
+const handleResponsesRequest = Effect.fn("ProductionLiveResponsesEndpoint.handleRequest")(function* <E, R>(
+  request: IncomingMessage,
+  response: ServerResponse,
+  observations: Ref.Ref<ProductionLiveResponsesObservation>,
+  readHead: (worktree: ProductionLiveResponsesWorktreeLocator) => Effect.Effect<string, E, R>
+) {
+  if (request.method !== "POST" || request.url?.split("?", 1)[0] !== "/v1/responses") {
+    response.writeHead(notFoundStatus).end()
+    return
+  }
+  const turn = yield* readRequest(request).pipe(Effect.flatMap((input) => decodeResponseTurn(input, observations)))
+  yield* respondToTurn(turn, response, observations, readHead)
+})
+
 /**
  * Starts one Q-scoped Responses endpoint. It retains only safe ordered request
  * and Git-read tags plus their counts; prompts, tool output, provider response
@@ -150,72 +258,7 @@ export const makeProductionLiveResponsesEndpoint = Effect.fn("ProductionLiveResp
     request.socket.once("close", () => MutableHashSet.remove(sockets, request.socket))
     MutableHashSet.add(sockets, request.socket)
     void runPromise(
-      Effect.gen(function* () {
-        if (request.method !== "POST" || request.url?.split("?", 1)[0] !== "/v1/responses") {
-          response.writeHead(notFoundStatus).end()
-          return
-        }
-        const input = yield* readRequest(request)
-        const prompt = promptOf(input)
-        if (prompt === undefined) return yield* new ProductionLiveResponsesEndpointFailure({ operation: "Request" })
-        const worktree = yield* Schema.decodeUnknownEffect(ProductionLiveResponsesWorktreeLocator)(
-          lineValue(prompt.text, prompt.kind === "Executor" ? "worktree" : "Candidate worktree")
-        ).pipe(Effect.mapError(() => new ProductionLiveResponsesEndpointFailure({ operation: "Request" })))
-        const ordinal = yield* Ref.modify(observations, (current) => {
-          const field = prompt.kind === "Executor" ? "executor" : "integrator"
-          const counts = { ...current.counts, [field]: current.counts[field] + 1, total: current.counts.total + 1 }
-          return [counts[field], { counts, orderedTags: [...current.orderedTags, `${prompt.kind}Request`] }] as const
-        })
-        const id = `${prompt.kind.toLowerCase()}-${ordinal}`
-        if (ordinal === 1) {
-          if (prompt.kind === "Executor") {
-            send(
-              response,
-              id,
-              functionCall(
-                id,
-                "printf '%s\\n' 'Dalph protected live qualification' > LIVE-QUALIFICATION.md && git add LIVE-QUALIFICATION.md && git commit -m 'dalph live qualification' >/dev/null",
-                worktree
-              )
-            )
-            return
-          }
-          const accepted = lineValue(prompt.text, "Accepted commit C")
-          const commit = yield* Schema.decodeUnknownEffect(GitCommitSha)(accepted).pipe(
-            Effect.mapError(() => new ProductionLiveResponsesEndpointFailure({ operation: "Request" }))
-          )
-          send(
-            response,
-            id,
-            functionCall(id, `git merge --no-ff ${commit} -m 'dalph live integration' >/dev/null`, worktree)
-          )
-          return
-        }
-        if (ordinal !== secondTurn) return yield* new ProductionLiveResponsesEndpointFailure({ operation: "Request" })
-        const head = yield* readHead(worktree).pipe(
-          Effect.flatMap(Schema.decodeUnknownEffect(GitCommitSha)),
-          Effect.mapError(() => new ProductionLiveResponsesEndpointFailure({ operation: "ReadHead" }))
-        )
-        const readHeadTag: ProductionLiveResponsesObservationTag =
-          prompt.kind === "Executor" ? "ExecutorGitReadHead" : "IntegratorGitReadHead"
-        yield* Ref.update(observations, (current) => ({
-          ...current,
-          orderedTags: [...current.orderedTags, readHeadTag]
-        }))
-        if (prompt.kind === "Integrator") {
-          send(
-            response,
-            id,
-            assistantMessage(id, JSON.stringify({ version: 1, outcome: "PreparedCandidate", candidate: head }))
-          )
-          return
-        }
-        const runId = lineValue(prompt.text, "run_id")
-        const attemptId = lineValue(prompt.text, "attempt_id")
-        if (runId === undefined || attemptId === undefined)
-          return yield* new ProductionLiveResponsesEndpointFailure({ operation: "Request" })
-        send(response, id, assistantMessage(id, JSON.stringify({ commit: head, correlation: { runId, attemptId } })))
-      }).pipe(
+      handleResponsesRequest(request, response, observations, readHead).pipe(
         Effect.catch(() =>
           Effect.sync(() => {
             if (!response.headersSent) response.writeHead(internalErrorStatus)

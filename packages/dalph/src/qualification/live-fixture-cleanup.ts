@@ -1,7 +1,7 @@
 /* eslint-disable import/no-nodejs-modules -- Qualification cleanup validates exact local path relationships. */
 /* eslint-disable import-x/no-unused-modules -- Shipped qualification and external test-support consume these boundary contracts outside the production lint graph. */
 import nodePath from "node:path"
-import { Effect, FileSystem, HashSet, MutableList, Option, Schema } from "effect"
+import { Effect, FileSystem, HashSet, MutableList, Option, Schema, type Result } from "effect"
 import { LiveQualificationInvocationId } from "./live-qualification-evidence.js"
 
 const canonicalAbsoluteLocator = Schema.NonEmptyString.check(
@@ -179,137 +179,132 @@ const allLocators = (manifest: ProductionLiveLocalFixtureManifest, reason: Reten
   ...manifest.resources.map((resource) => retained(resource.locator, reason))
 ]
 
-/** Removes only recorded Q leaves, then only the proved-empty exact Q container, with absence rereads. */
-export const cleanupProductionLiveFixture = Effect.fn("ProductionLiveFixture.cleanup")(function* (
-  input: unknown,
+const retainAll = (
+  manifest: ProductionLiveLocalFixtureManifest,
+  reason: RetentionReason
+): ProductionLiveFixtureCleanup =>
+  ProductionLiveFixtureCleanup.cases.Retained.make({ removed: [], retained: allLocators(manifest, reason) })
+
+const retainOneAndBlockOthers = (
+  manifest: ProductionLiveLocalFixtureManifest,
+  locator: ProductionLiveLocalResourceLocator,
+  reason: RetentionReason
+): ProductionLiveFixtureCleanup =>
+  ProductionLiveFixtureCleanup.cases.Retained.make({
+    removed: [],
+    retained: [
+      retained(locator, reason),
+      ...allLocators(manifest, "BlockedByUnprovedResource").filter((candidate) => candidate.locator !== locator)
+    ]
+  })
+
+/** Checks the child and selected Run facts that must grant local cleanup authority. */
+const cleanupAuthorityFailure = Effect.fn("ProductionLiveFixture.checkCleanupAuthority")(function* (
+  manifest: ProductionLiveLocalFixtureManifest,
   controller: ProductionLiveCleanupController
 ) {
-  const manifest = yield* Schema.decodeUnknownEffect(ProductionLiveLocalFixtureManifest, {
-    onExcessProperty: "error",
-    reportInput: false
-  })(input).pipe(Effect.mapError(() => new ProductionLiveCleanupManifestFailure({ reason: "InvalidManifest" })))
-  if (controller.invocationId !== manifest.invocationId)
-    return ProductionLiveFixtureCleanup.cases.Retained.make({
-      removed: [],
-      retained: allLocators(manifest, "ForeignInvocation")
-    })
+  if (controller.invocationId !== manifest.invocationId) return retainAll(manifest, "ForeignInvocation")
   const stopped = yield* controller.ownedChildrenStopped.pipe(Effect.result)
-  if (stopped._tag === "Failure")
-    return ProductionLiveFixtureCleanup.cases.Retained.make({
-      removed: [],
-      retained: allLocators(manifest, "StatusUnreadable")
-    })
-  if (!stopped.success)
-    return ProductionLiveFixtureCleanup.cases.Retained.make({
-      removed: [],
-      retained: allLocators(manifest, "ChildrenRunning")
-    })
+  if (stopped._tag === "Failure") return retainAll(manifest, "StatusUnreadable")
+  if (!stopped.success) return retainAll(manifest, "ChildrenRunning")
   const completed = yield* controller.selectedRunsCompleted.pipe(Effect.result)
-  if (completed._tag === "Failure")
-    return ProductionLiveFixtureCleanup.cases.Retained.make({
-      removed: [],
-      retained: allLocators(manifest, "StatusUnreadable")
-    })
-  if (!completed.success)
-    return ProductionLiveFixtureCleanup.cases.Retained.make({
-      removed: [],
-      retained: allLocators(manifest, "UnfinishedRun")
-    })
+  if (completed._tag === "Failure") return retainAll(manifest, "StatusUnreadable")
+  if (!completed.success) return retainAll(manifest, "UnfinishedRun")
+  return undefined
+})
 
+/** Rejects a recorded leaf whose exact parent is not the recorded Q container. */
+const containmentFailure = (manifest: ProductionLiveLocalFixtureManifest): ProductionLiveFixtureCleanup | undefined => {
   const containerPath = nodePath.resolve(manifest.container.locator)
   const invalid = manifest.resources.find(
     (resource) => nodePath.dirname(nodePath.resolve(resource.locator)) !== containerPath
   )
-  if (invalid !== undefined)
-    return ProductionLiveFixtureCleanup.cases.Retained.make({
-      removed: [],
-      retained: [
-        retained(invalid.locator, "ChangedIdentity"),
-        ...allLocators(manifest, "BlockedByUnprovedResource").filter(({ locator }) => locator !== invalid.locator)
-      ]
-    })
+  return invalid === undefined ? undefined : retainOneAndBlockOthers(manifest, invalid.locator, "ChangedIdentity")
+}
 
+/** Checks the recorded container identity and refuses undeclared direct children. */
+const containerInspectionFailure = Effect.fn("ProductionLiveFixture.inspectContainer")(function* (
+  manifest: ProductionLiveLocalFixtureManifest
+) {
   const containerIdentity = yield* observeIdentity(manifest.container.locator)
-  if (containerIdentity._tag === "Failure")
-    return ProductionLiveFixtureCleanup.cases.Retained.make({
-      removed: [],
-      retained: allLocators(manifest, "Unreadable")
-    })
+  if (containerIdentity._tag === "Failure") return retainAll(manifest, "Unreadable")
   if (!sameIdentity(manifest.container.identity, containerIdentity.success))
-    return ProductionLiveFixtureCleanup.cases.Retained.make({
-      removed: [],
-      retained: allLocators(manifest, "ChangedIdentity")
-    })
+    return retainAll(manifest, "ChangedIdentity")
 
   const fs = yield* FileSystem.FileSystem
   const entries = yield* fs.readDirectory(manifest.container.locator).pipe(Effect.result)
-  if (entries._tag === "Failure")
-    return ProductionLiveFixtureCleanup.cases.Retained.make({
-      removed: [],
-      retained: allLocators(manifest, "Unreadable")
-    })
+  if (entries._tag === "Failure") return retainAll(manifest, "Unreadable")
   const declaredNames = new Set(manifest.resources.map((resource) => nodePath.basename(resource.locator)))
   const unexpected = entries.success.filter((entry) => !declaredNames.has(entry))
-  if (unexpected.length > 0)
-    return ProductionLiveFixtureCleanup.cases.Retained.make({
-      removed: [],
-      retained: [
-        ...unexpected.map((entry) =>
-          retained(
-            ProductionLiveLocalResourceLocator.make(nodePath.join(manifest.container.locator, entry)),
-            "UnexpectedContainerEntry"
-          )
-        ),
-        ...allLocators(manifest, "BlockedByUnprovedResource")
-      ]
-    })
+  if (unexpected.length === 0) return undefined
+  return ProductionLiveFixtureCleanup.cases.Retained.make({
+    removed: [],
+    retained: [
+      ...unexpected.map((entry) =>
+        retained(
+          ProductionLiveLocalResourceLocator.make(nodePath.join(manifest.container.locator, entry)),
+          "UnexpectedContainerEntry"
+        )
+      ),
+      ...allLocators(manifest, "BlockedByUnprovedResource")
+    ]
+  })
+})
 
+/** Checks every recorded leaf identity before any local deletion begins. */
+const resourceInspectionFailure = Effect.fn("ProductionLiveFixture.inspectResources")(function* (
+  manifest: ProductionLiveLocalFixtureManifest
+) {
   for (const receipt of manifest.resources) {
     const current = yield* observeIdentity(receipt.locator)
-    if (current._tag === "Failure")
-      return ProductionLiveFixtureCleanup.cases.Retained.make({
-        removed: [],
-        retained: [
-          retained(receipt.locator, "Unreadable"),
-          ...allLocators(manifest, "BlockedByUnprovedResource").filter(({ locator }) => locator !== receipt.locator)
-        ]
-      })
+    if (current._tag === "Failure") return retainOneAndBlockOthers(manifest, receipt.locator, "Unreadable")
     if (receipt._tag === "ExpectedAtomicReplacement" && current.success.kind !== "File")
-      return ProductionLiveFixtureCleanup.cases.Retained.make({
-        removed: [],
-        retained: [
-          retained(receipt.locator, "UnexpectedReplacementKind"),
-          ...allLocators(manifest, "BlockedByUnprovedResource").filter(({ locator }) => locator !== receipt.locator)
-        ]
-      })
+      return retainOneAndBlockOthers(manifest, receipt.locator, "UnexpectedReplacementKind")
     if (receipt._tag !== "ExpectedAtomicReplacement" && !sameIdentity(receipt.identity, current.success))
-      return ProductionLiveFixtureCleanup.cases.Retained.make({
-        removed: [],
-        retained: [
-          retained(receipt.locator, "ChangedIdentity"),
-          ...allLocators(manifest, "BlockedByUnprovedResource").filter(({ locator }) => locator !== receipt.locator)
-        ]
-      })
+      return retainOneAndBlockOthers(manifest, receipt.locator, "ChangedIdentity")
   }
+  return undefined
+})
+
+const deletionWasUnproved = (deletion: Result.Result<void, unknown>, absence: Result.Result<boolean, unknown>) =>
+  deletion._tag === "Failure" || absence._tag === "Failure" || absence.success
+
+/** Deletes each checked leaf once and rereads its exact locator for absence. */
+const removeRecordedResources = Effect.fn("ProductionLiveFixture.removeResources")(function* (
+  manifest: ProductionLiveLocalFixtureManifest
+) {
+  const fs = yield* FileSystem.FileSystem
   const removed = MutableList.make<ProductionLiveLocalResource>()
   for (const resource of manifest.resources) {
     const deletion = yield* fs.remove(resource.locator, { recursive: true }).pipe(Effect.result)
     const absence = yield* fs.exists(resource.locator).pipe(Effect.result)
-    if (deletion._tag === "Failure" || absence._tag === "Failure" || absence.success) {
+    if (deletionWasUnproved(deletion, absence)) {
       const removedValues = MutableList.toArray(removed)
       const remaining = manifest.resources.filter((candidate) => !removedValues.includes(candidate))
-      return ProductionLiveFixtureCleanup.cases.Retained.make({
-        removed: removedValues,
-        retained: [
-          retained(manifest.container.locator, "BlockedByUnprovedResource", true),
-          ...remaining.map((candidate) =>
-            retained(candidate.locator, candidate === resource ? "DeletionUnproved" : "BlockedByUnprovedResource")
-          )
-        ]
-      })
+      return {
+        removed,
+        failure: ProductionLiveFixtureCleanup.cases.Retained.make({
+          removed: removedValues,
+          retained: [
+            retained(manifest.container.locator, "BlockedByUnprovedResource", true),
+            ...remaining.map((candidate) =>
+              retained(candidate.locator, candidate === resource ? "DeletionUnproved" : "BlockedByUnprovedResource")
+            )
+          ]
+        })
+      }
     }
     MutableList.append(removed, resource)
   }
+  return { removed, failure: undefined }
+})
+
+/** Removes the exact container only after a fresh read proves it has no children. */
+const removeEmptyContainer = Effect.fn("ProductionLiveFixture.removeContainer")(function* (
+  manifest: ProductionLiveLocalFixtureManifest,
+  removed: MutableList.MutableList<ProductionLiveLocalResource>
+) {
+  const fs = yield* FileSystem.FileSystem
   const children = yield* fs.readDirectory(manifest.container.locator).pipe(Effect.result)
   if (children._tag === "Failure")
     return ProductionLiveFixtureCleanup.cases.Retained.make({
@@ -321,12 +316,34 @@ export const cleanupProductionLiveFixture = Effect.fn("ProductionLiveFixture.cle
       removed: MutableList.toArray(removed),
       retained: [retained(manifest.container.locator, "ContainerNonempty", true)]
     })
-  const containerDeletion = yield* fs.remove(manifest.container.locator, { recursive: true }).pipe(Effect.result)
-  const containerAbsence = yield* fs.exists(manifest.container.locator).pipe(Effect.result)
-  if (containerDeletion._tag === "Failure" || containerAbsence._tag === "Failure" || containerAbsence.success)
+  const deletion = yield* fs.remove(manifest.container.locator, { recursive: true }).pipe(Effect.result)
+  const absence = yield* fs.exists(manifest.container.locator).pipe(Effect.result)
+  if (deletionWasUnproved(deletion, absence))
     return ProductionLiveFixtureCleanup.cases.Retained.make({
       removed: MutableList.toArray(removed),
       retained: [retained(manifest.container.locator, "DeletionUnproved", true)]
     })
   return ProductionLiveFixtureCleanup.cases.Removed.make({ removed: MutableList.toArray(removed), retained: [] })
+})
+
+/** Removes only recorded Q leaves, then only the proved-empty exact Q container, with absence rereads. */
+export const cleanupProductionLiveFixture = Effect.fn("ProductionLiveFixture.cleanup")(function* (
+  input: unknown,
+  controller: ProductionLiveCleanupController
+) {
+  const manifest = yield* Schema.decodeUnknownEffect(ProductionLiveLocalFixtureManifest, {
+    onExcessProperty: "error",
+    reportInput: false
+  })(input).pipe(Effect.mapError(() => new ProductionLiveCleanupManifestFailure({ reason: "InvalidManifest" })))
+  const authorityFailure = yield* cleanupAuthorityFailure(manifest, controller)
+  if (authorityFailure !== undefined) return authorityFailure
+  const invalidContainment = containmentFailure(manifest)
+  if (invalidContainment !== undefined) return invalidContainment
+  const invalidContainer = yield* containerInspectionFailure(manifest)
+  if (invalidContainer !== undefined) return invalidContainer
+  const invalidResource = yield* resourceInspectionFailure(manifest)
+  if (invalidResource !== undefined) return invalidResource
+  const removal = yield* removeRecordedResources(manifest)
+  if (removal.failure !== undefined) return removal.failure
+  return yield* removeEmptyContainer(manifest, removal.removed)
 })
