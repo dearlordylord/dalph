@@ -83,12 +83,18 @@ if(mode==='output-route-old'&&!qualificationError)throw Error('old output route 
 if(mode!=='success'&&!mode.startsWith('output-route')&&!error)throw Error('failure fixture incorrectly qualified');
 `
   )
-  const environment = withoutInheritedCustody(process.env)
+  // Reproduce the enclosing quality gate even when this test runs standalone.
+  const environment = withoutInheritedCustody({
+    ...process.env,
+    DALPH_GATE_GIT_HISTORY: "candidate-ancestry",
+    DALPH_DPRINT_INCREMENTAL: "disabled"
+  })
   // This disposable repository owns its candidate base; an admitted parent
   // may name a commit that does not exist here.
   environment.DALPH_COVERAGE_BASE_SHA = git("rev-parse", "HEAD^")
-  // The parent's secret-scan history contract does not describe this fixture.
+  // Parent secret-scan and formatter contracts do not describe this fixture.
   delete environment.DALPH_GATE_GIT_HISTORY
+  delete environment.DALPH_DPRINT_INCREMENTAL
   delete environment.npm_execpath
   delete environment.DALPH_QUALIFICATION_ENV_CAPTURE
   delete environment.DALPH_RUN_REAL_CODEX_QUALIFICATION
