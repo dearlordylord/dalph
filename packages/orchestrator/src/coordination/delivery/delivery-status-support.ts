@@ -1,7 +1,7 @@
 import { plannedAttemptExecutorCorrelation, plannedAttemptExecutorCorrelationKey, type TaskId } from "@dalph/contracts"
 import { admittedProposalFor, type DeliveryRuntimeLiveOwnerSnapshot } from "./delivery-runtime-observation.js"
 import type { DeliveryActionProposal } from "./delivery-action-proposal.js"
-import { currentEvaluationPositionMatches } from "./delivery-status-proposal-compatibility.js"
+import { currentProposalPresentationMatches } from "./delivery-status-proposal-compatibility.js"
 import type {
   DeliveryRuntimeEvaluation,
   ExactWorkflowObligation,
@@ -191,7 +191,7 @@ const validateLiveOwnerAdmissionForStatus = (
   const current = currentProposals.find(({ id }) => id === proposalId)
   return current !== undefined &&
     !proposalEquals(owner.proposal, current) &&
-    !currentEvaluationPositionMatches(owner.proposal, current, evaluation)
+    !currentProposalPresentationMatches(owner.proposal, current, evaluation)
     ? liveOwnerConflict(subject, proposalId, "a live owner proposal differs from the current frontier proposal")
     : null
 }

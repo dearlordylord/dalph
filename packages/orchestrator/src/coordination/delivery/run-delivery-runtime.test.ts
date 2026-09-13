@@ -1,5 +1,7 @@
 import { it } from "@effect/vitest"
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
+import { makeAcceptedIntegrationHistory } from "../../../test/support/accepted-integration-history.js"
+import { makePromotedIntegrationHistory } from "../../../test/support/promoted-integration-history.js"
 import {
   AttemptId,
   GitCommitSha,
@@ -53,6 +55,7 @@ import {
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
+  makeCompletionTaskFactsObservationOperation,
   makeTrackerGraphObservationOperation,
   makeTargetLineageObservationOperation,
   makeTaskWorktreeObservationOperation,
@@ -81,7 +84,23 @@ import {
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import { taskClaimReacquisitionOperationId } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
-import { RunnableFrontierTransition } from "../frontier/frontier.js"
+import { deriveRunnableFrontier, RunnableFrontierTransition } from "../frontier/frontier.js"
+import { integrationFinalityTransitionsFor } from "../frontier/integration-finality-frontier.js"
+import { integratorCorrelationFor } from "../../workflow/protocols/integrator/session.js"
+import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
+import { TargetPromotionState } from "../../workflow/protocols/target-promotion/protocol.js"
+import { runCompletionClaimDeletionProtocol } from "../../workflow/protocols/integration-finality/protocol.js"
+import { runJournaledTaskClaimRelease } from "../../workflow/protocols/task-claim-release/journaled.js"
+import { runTaskClaimReleaseProtocol } from "../../workflow/protocols/task-claim-release/protocol.js"
+import {
+  CompletionClaimBoundary,
+  CompletionClaimMarkerAbsent,
+  CompletionTaskIntendedEvent,
+  CompletionTaskConfirmationReadOrdinal,
+  CompletionTaskRequestOrdinal,
+  CompletionTaskFocusedReadPurpose,
+  FocusedTaskCompletionFacts
+} from "../../workflow/protocols/integration-finality/events.js"
 import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
 import {
   acceptedWorkflowTransitionOperationId,
@@ -108,6 +127,7 @@ import { FreshWorkflowStep } from "./fresh-workflow-step.js"
 import { type FreshTaskCandidate, type FreshTaskCandidateFrontier } from "./fresh-task-candidate.js"
 import {
   currentSignalOf,
+  makeDeliveryReflection,
   currentSignalFromCurrentFirstStream,
   type DeliveryActionProposal,
   type DeliveryProposalFrontier,
@@ -148,13 +168,30 @@ import {
 import type { AcceptedPlannedAttemptExecutorResponsibility } from "../../workflow/protocols/planned-attempt-executor-work/responsibility.js"
 import type { DeliveryAdmissionReservation, DeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
-import { InRunJournal, type JournalRecord, JournalStorageUnavailable } from "../../workflow-journal/store.js"
+import {
+  InRunJournal,
+  type AppendableWorkflowJournalEvent,
+  type JournalRecord,
+  JournalStorageUnavailable
+} from "../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { deriveJournalResponsibilityFacts } from "../run/recovery-activation.js"
+import {
+  acceptedOperationIdsOf,
+  pendingReadOperationIdsOf,
+  journaledIntegrationEvidenceOf
+} from "./delivery-evidence.js"
+import {
+  boundedParallelTicketsOf,
+  frontierOf,
+  ticketDeliveriesOf,
+  deliverySettlementsOf
+} from "./ticket-delivery-projection.js"
 import { requiredPlannedAttemptPositionsOf } from "../run/required-planned-attempt-positions.js"
 import {
   makeFocusedTaskClaimFactsObserved,
+  makeFocusedTaskCompletionFactsObserved,
   makeCompleteTaskTrackerFactsObserved,
   makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
@@ -754,6 +791,342 @@ it.effect("publishes current-first exact live-owner observations until standalon
     })
   )
 )
+
+it.effect("keeps admitted outer cleanup while its actual nested release intent inserts reconciliation", () => {
+  const source = integrationFinalityFixture
+  const specification = makeTaskWorkSpecification({
+    body: "Hold exact nested release during completion cleanup.",
+    taskId: source.taskId,
+    title: "Live cleanup listing"
+  })
+  const accepted = makeAcceptedIntegrationHistory({
+    acceptedResult: source.qualifiedCandidate.run.session.acceptedResult,
+    activeClaim: source.activeClaim,
+    integrationTarget: source.integrationTarget,
+    plannedAttempt: { ...source.plannedAttempt, runId, taskRevision: specification.fingerprint },
+    taskSpecification: specification,
+    runId,
+    targetHeadSha: source.qualifiedCandidate.run.session.expectedTargetHead,
+    trackerTarget: target
+  })
+  const promoted = makePromotedIntegrationHistory({
+    candidateCommit: source.qualifiedCandidate.candidateCommit,
+    candidateText: source.qualifiedCandidate.candidateText,
+    originalClaim: accepted.activeClaim,
+    records: accepted.records,
+    session: integratorCorrelationFor(accepted)
+  })
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* Journal
+      const inRun = yield* InRunJournal
+      const acceptedJournal = yield* AcceptedJournalReader
+      const append = (event: AppendableWorkflowJournalEvent) =>
+        inRun.append(runId, describeJournalEvent(event).expectedKey, event)
+      const unusedAuthority = () => Effect.die("unrequested preparation boundary")
+      const claimReader = yield* WorkflowInterpreter.pipe(
+        Effect.provide(
+          journaledWorkflowInterpreterLayer(
+            runId,
+            Layer.succeed(
+              WorkflowInterpreter,
+              WorkflowInterpreter.of({
+                acquireTaskClaim: unusedAuthority,
+                readTrackerGraph: () => Effect.succeed(source.graphSnapshot),
+                readTargetLineage: unusedAuthority,
+                readTaskWorktree: unusedAuthority,
+                readTaskWorkSpecification: unusedAuthority,
+                reconcileTaskWorktree: unusedAuthority,
+                recordTaskAttemptPlan: unusedAuthority,
+                releaseTaskClaim: unusedAuthority,
+                readTaskClaim: () =>
+                  Effect.succeed({ _tag: "AuthoritativeTaskClaimObserved" as const, observation: accepted.activeClaim })
+              })
+            )
+          )
+        )
+      )
+      yield* claimReader.readTrackerGraph(
+        makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          OperationId.make("live-cleanup-current-graph-read"),
+          target
+        )
+      )
+      yield* claimReader.readTaskClaim(
+        makeTaskClaimObservationOperation(
+          OperationId.make("live-cleanup-original-claim-read"),
+          target,
+          accepted.plannedAttempt.taskId
+        )
+      )
+      yield* append(
+        CompletionTaskIntendedEvent.make({ request: promoted.completionRequest, version: workflowJournalEventVersion })
+      )
+      const operation = makeCompletionTaskFactsObservationOperation(
+        promoted.completionRequest,
+        target,
+        CompletionTaskFocusedReadPurpose.cases.Confirmation.make({
+          attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
+          confirmationOrdinal: CompletionTaskConfirmationReadOrdinal.make(1)
+        })
+      )
+      yield* append(taskTrackerReadIntent(operation))
+      const facts = FocusedTaskCompletionFacts.make({
+        currentClaim: promoted.claim,
+        lifecycle: "CompletedSuccessfully",
+        operationId: operation.operationId,
+        target,
+        targetMembership: "Member",
+        taskId: accepted.plannedAttempt.taskId,
+        taskRevision: accepted.plannedAttempt.taskRevision,
+        trackerRevision: source.trackerRevision,
+        unfinishedPrerequisiteTaskIds: []
+      })
+      yield* append(
+        taskTrackerFactsObservedEvent(operation.operationId, makeFocusedTaskCompletionFactsObserved(operation, facts))
+      )
+      const promotion = TargetPromotionState.cases.PromotionSucceeded.make({
+        basis: promoted.promotionSuccess.basis,
+        correlation: promoted.promotionCorrelation,
+        observation: promoted.promotionSuccess.observation
+      })
+      const runtimeFacts = {
+        activeClaimByAttemptId: new Map([[accepted.plannedAttempt.attemptId, accepted.activeClaim]]),
+        currentTrackerTaskIds: new Set([accepted.plannedAttempt.taskId]),
+        heldResponsibilities: [],
+        integrationFinalityConfigured: true,
+        completionTaskConfigured: true,
+        integrationTarget: Option.some(accepted.integrationTarget),
+        taskClaimAuthorityByAttemptId: new Map()
+      }
+      const derive = Effect.gen(function* () {
+        const state = yield* journal.state.get
+        const records = yield* inRun.read(runId)
+        const ordinary = deriveRunnableFrontier({
+          freshEligibleTasks: [],
+          responsibility: state.reconstructed.responsibility,
+          responsibilityFacts: deriveJournalResponsibilityFacts(state.reconstructed)
+        })
+        const outer = integrationFinalityTransitionsFor(
+          state.reconstructed.workflowHistory.evidence,
+          accepted.responsibility,
+          promotion,
+          runtimeFacts
+        )
+        const transitions = [...ordinary.transitions, ...outer]
+        const contributions = deliveryProposalsOf({
+          acceptedAt: state.position,
+          acceptedOperationIds: acceptedOperationIdsOf(records),
+          pendingReadOperationIds: pendingReadOperationIdsOf(records),
+          fresh: [],
+          integrationResponsibilities: [accepted.responsibility],
+          responsibilities: state.reconstructed.responsibility.entries,
+          runId,
+          transitions
+        })
+        return {
+          acceptedAt: state.position,
+          proposals: [...contributions.ticketDelivery, ...contributions.deliverySettlement],
+          transitions
+        }
+      })
+      const original = yield* derive
+      expect(original.transitions.map(({ _tag }) => _tag)).toEqual(["DeleteCompletedTaskCompletionClaim"])
+      const admitted = original.proposals[0]
+      if (admitted === undefined) return expect.fail("ordinary prefix must offer outer cleanup")
+      const base = yield* baseEvaluation
+      const graph = (yield* journal.state.get).graph
+      const evidence = journaledIntegrationEvidenceOf((yield* journal.state.get).reconstructed.workflowHistory.evidence)
+      const tickets = ticketDeliveriesOf(
+        boundedParallelTicketsOf(frontierOf({ exactEvidence: evidence, graph, policy })),
+        evidence
+      )
+      const settlements = deliverySettlementsOf(tickets)
+      const initial = {
+        ...withProposals(base, [admitted]),
+        acceptedAt: original.acceptedAt,
+        current: {
+          ...base.current,
+          trackerGraph: graph,
+          ticketDeliveries: tickets,
+          settlements,
+          reflection: makeDeliveryReflection(settlements)
+        }
+      }
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const integrationTargets = yield* makeIntegrationTargetResourceController()
+      const heldTarget = {
+        integrationTarget: accepted.integrationTarget,
+        plannedAttempt: accepted.plannedAttempt,
+        queuedAt: accepted.responsibility.queuedAt
+      }
+      yield* integrationTargets.acquire(heldTarget)
+      yield* integrationTargets.publishAcceptedOwnership(heldTarget)
+      const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
+      const reached = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const observed = yield* Deferred.make<DeliveryRuntimeObservationState>()
+      const failed = yield* Deferred.make<never, unknown>()
+      const releaseCalls = yield* Ref.make(0)
+      const activePresent = yield* Ref.make(true)
+      const markerPresent = yield* Ref.make(true)
+      const unused = () => Effect.die("unrequested completion boundary")
+      const tracker = CompletionClaimBoundary.of({
+        replaceTaskClaim: unused,
+        readTaskClaim: unused,
+        readCompletionClaimMarker: () =>
+          Ref.get(markerPresent).pipe(
+            Effect.map((present) =>
+              present ? promoted.claim : CompletionClaimMarkerAbsent.make({ taskId: accepted.plannedAttempt.taskId })
+            )
+          ),
+        readOriginalTaskClaim: () =>
+          Ref.get(activePresent).pipe(
+            Effect.map((present) =>
+              present ? accepted.activeClaim : UnclaimedTask.make({ taskId: accepted.plannedAttempt.taskId })
+            )
+          ),
+        deleteTaskClaim: () => Ref.set(markerPresent, false),
+        releaseOriginalTaskClaim: () =>
+          Effect.gen(function* () {
+            yield* Ref.update(releaseCalls, (count) => count + 1)
+            const current = yield* derive.pipe(Effect.orDie)
+            expect(current.transitions.map(({ _tag }) => _tag)).toEqual([
+              "ReconcileTaskClaimRelease",
+              "DeleteCompletedTaskCompletionClaim"
+            ])
+            yield* relation.publish({ ...withProposals(initial, current.proposals), acceptedAt: current.acceptedAt })
+            yield* Deferred.succeed(reached, undefined)
+            yield* Deferred.await(release)
+            yield* Ref.set(activePresent, false)
+          })
+      })
+      const observer = yield* capabilities.resources.runtimeObservation.changes.pipe(
+        Stream.runForEach((state) =>
+          state._tag === "Ready" &&
+          state.evaluation.acceptedAt !== original.acceptedAt &&
+          state.liveOwners.some(({ proposal }) => proposal.id === admitted.id)
+            ? Deferred.succeed(observed, state)
+            : Effect.void
+        ),
+        Effect.forkChild
+      )
+      const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
+        Effect.provide(identitySupportLayers),
+        Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({
+            execute: (action, lease) =>
+              Effect.gen(function* () {
+                if (
+                  action._tag === "AcceptedOperationAction" &&
+                  action.proposal.route.transition._tag === "ReconcileTaskClaimRelease"
+                ) {
+                  const operationId = action.proposal.route.transition.operationId
+                  const intent = (yield* inRun.read(runId)).find(
+                    ({ event }) =>
+                      event._tag === "TaskClaimReleaseIntended" && event.operation.release.operationId === operationId
+                  )
+                  if (intent?.event._tag !== "TaskClaimReleaseIntended")
+                    return yield* Effect.die("reconciliation requires exact accepted release intent")
+                  yield* runJournaledTaskClaimRelease(
+                    runId,
+                    intent.event.operation,
+                    runTaskClaimReleaseProtocol(
+                      {
+                        readTaskClaim: tracker.readOriginalTaskClaim,
+                        releaseTaskClaim: tracker.releaseOriginalTaskClaim
+                      },
+                      intent.event.operation.release
+                    ),
+                    { execution: interruptibleBoundaryOf(lease), onIntentRecorded: lease.recordIntent(operationId) }
+                  )
+                  const successor = yield* derive
+                  yield* relation.publish({
+                    ...withProposals(initial, successor.proposals),
+                    acceptedAt: successor.acceptedAt
+                  })
+                  return { _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult
+                }
+                if (
+                  action._tag !== "IdentityFreeAction" ||
+                  action.proposal.route._tag !== "IdentityFreeWorkflowRoute" ||
+                  action.proposal.route.transition._tag !== "DeleteCompletedTaskCompletionClaim"
+                )
+                  return yield* Effect.die("outer cleanup is the only admitted action")
+                const transition = action.proposal.route.transition
+                yield* runCompletionClaimDeletionProtocol(
+                  tracker,
+                  transition.request,
+                  transition.replacementOperationId,
+                  interruptibleBoundaryOf(lease)
+                )
+                const successor = yield* derive
+                yield* relation.publish({
+                  ...withProposals(initial, successor.proposals),
+                  acceptedAt: successor.acceptedAt
+                })
+                return { _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult
+              }).pipe(
+                Effect.provideService(AcceptedJournalReader, acceptedJournal),
+                Effect.provideService(InRunJournal, inRun),
+                Effect.tapCause((cause) => Deferred.failCause(failed, cause))
+              )
+          })
+        ),
+        Effect.forkChild
+      )
+      yield* Effect.raceFirst(
+        Deferred.await(reached),
+        Effect.raceFirst(
+          Deferred.await(failed),
+          Fiber.join(runtime).pipe(Effect.andThen(Effect.die("runtime ended before held release")))
+        )
+      )
+      const held = yield* Effect.race(
+        Deferred.await(observed),
+        Fiber.join(runtime).pipe(Effect.andThen(Effect.die("runtime ended before held cleanup publication")))
+      )
+      if (held._tag !== "Ready" || held.evaluation.proposedActions._tag !== "DeliveryProposalsAvailable")
+        return expect.fail("held cleanup must be Ready")
+      const owner = held.liveOwners.find(({ proposal }) => proposal.id === admitted.id)
+      const current = held.evaluation.proposedActions.proposals.find(({ id }) => id === admitted.id)
+      expect(owner?.proposal).toEqual(admitted)
+      expect(admitted.order).toMatchObject({
+        _tag: "IntegrationOrder",
+        frontierOrdinal: 0,
+        queuedAt: accepted.responsibility.queuedAt,
+        startedAt: accepted.responsibility.startedAt
+      })
+      expect(current).toEqual({ ...admitted, order: { ...admitted.order, frontierOrdinal: 1 } })
+      const intent = (yield* inRun.read(runId)).at(-1)
+      expect(intent).toMatchObject({
+        position: held.evaluation.acceptedAt,
+        event: {
+          _tag: "TaskClaimReleaseIntended",
+          operation: { authority: { _tag: "WorkflowClaimReleaseAuthority" }, release: { claim: accepted.activeClaim } }
+        }
+      })
+      expect(
+        validateLiveOwnersForStatus(DeliveryStatusSubject.cases.Run.make({ runId }), held.evaluation, held.liveOwners)
+      ).toBeNull()
+      const status = deliveryStatusOf(DeliveryStatusSubject.cases.Run.make({ runId }), held)
+      if (status instanceof DeliveryStatusProjectionConflict) return expect.fail(status.detail)
+      expect(status).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+      expect(yield* Ref.get(releaseCalls)).toBe(1)
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(runtime)
+      yield* Fiber.join(observer)
+      expect(yield* capabilities.resources.runtimeObservation.get).toMatchObject({
+        _tag: "Closed",
+        final: { liveOwners: [] }
+      })
+      expect(yield* Ref.get(releaseCalls)).toBe(1)
+    })
+  ).pipe(Effect.provide(liveJournalTestLayer({ runId, target, records: promoted.replacedRecords })))
+})
 
 it.effect("keeps the original graph-read owner while its acknowledged intent advances the current prefix", () =>
   Effect.scoped(

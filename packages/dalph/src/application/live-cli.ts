@@ -196,7 +196,7 @@ export const productionCliFromStdio = <EHost, RHost>(
   signals?: ApplicationExitSignalBoundary
 ) => Command.run(makeProductionCli(runProductionHost, signals), runConfiguration)
 
-const productionHostRunner =
+export const makeProductionCliHostRunner =
   <ECodex, EGithub, ETrace>(adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace>) =>
   (
     input: ProductionRepositoryHostConfiguration,
@@ -224,10 +224,10 @@ export const productionCliHostObservationOf = (
 })
 
 /** One shipped command composition; qualification supplies only the host's named boundary Layers. */
-export const makeProductionCliApplication = <ECodex = never, EGithub = never, ETrace = never>(
-  adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace> = {}
+export const makeProductionCliApplicationFromHost = <EHost, RHost>(
+  runProductionHost: ProductionCliHostRunner<EHost, RHost>
 ) =>
-  productionCliFromStdio(productionHostRunner(adapters)).pipe(
+  productionCliFromStdio(runProductionHost).pipe(
     Effect.provide(
       Layer.mergeAll(
         makeDryRunTrackerGraphReaderLayer(fixtureReaderFileLayer),
@@ -238,6 +238,11 @@ export const makeProductionCliApplication = <ECodex = never, EGithub = never, ET
       ).pipe(Layer.provideMerge(NodeServices.layer))
     )
   )
+
+/** Ordinary defaults and qualification share the same parser and application Layers. */
+export const makeProductionCliApplication = <ECodex = never, EGithub = never, ETrace = never>(
+  adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace> = {}
+) => makeProductionCliApplicationFromHost(makeProductionCliHostRunner(adapters))
 
 /** The shipped binary selects live defaults at every external boundary. */
 export const productionCliApplication = makeProductionCliApplication()

@@ -1074,6 +1074,72 @@ it("retains materialized operation identity through live and settled owner chron
   })
 })
 
+it("preserves admitted integration cleanup through current listing insertion and removal", () => {
+  const taskId = TaskId.make("listing-cleanup-task")
+  const admitted = {
+    ...trackerGraphReadProposalOf({
+      acceptedAt: JournalPosition.make(4),
+      purpose: "EstablishCurrentGraph",
+      runId,
+      target
+    }),
+    actionIdentity: { _tag: "FreshOperationIdRequired" as const, source: { _tag: "Allocate" as const } },
+    order: {
+      _tag: "IntegrationOrder" as const,
+      frontierOrdinal: DeliveryProposalOrdinal.make(0),
+      queuedAt: JournalPosition.make(21),
+      startedAt: JournalPosition.make(22),
+      taskId
+    }
+  }
+  const owner = ownerOf(admitted, false)
+  const project = (proposal: DeliveryActionProposal, liveOwners = [owner]) =>
+    deliveryStatusOf(
+      DeliveryStatusSubject.cases.Run.make({ runId }),
+      evaluationOf({ proposals: [proposal], liveOwners })
+    )
+  const current = { ...admitted, order: { ...admitted.order, frontierOrdinal: DeliveryProposalOrdinal.make(1) } }
+  const rebound = { ...admitted, id: DeliveryProposalId.make("rebound-cleanup") }
+  expect(project(current)).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  expect(project(admitted)).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  expect(project(admitted, [ownerOf(current, false)])).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  expect(owner.proposal).toEqual(admitted)
+  const changed: ReadonlyArray<DeliveryActionProposal> = [
+    { ...current, order: { ...current.order, queuedAt: JournalPosition.make(20) } },
+    { ...current, order: { ...current.order, startedAt: null } },
+    { ...current, order: { ...current.order, taskId: TaskId.make("different-cleanup-task") } },
+    {
+      ...current,
+      order: { ...current.order, _tag: "UnqueuedAcceptedResultOrder", terminalAt: JournalPosition.make(20) }
+    },
+    { ...current, waitsForLiveOperationId: OperationId.make("different-cleanup-wait") },
+    { ...current, owner: "DeliveryReflection" },
+    {
+      ...current,
+      admission: {
+        ...current.admission,
+        taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId }
+      }
+    },
+    { ...current, route: { ...current.route, target: FixtureTarget.make("changed-cleanup-payload") } },
+    {
+      ...current,
+      actionIdentity: {
+        _tag: "FreshOperationIdRequired",
+        source: { _tag: "Preserve", operationId: OperationId.make("changed-cleanup-action") }
+      }
+    }
+  ]
+  for (const proposal of changed) expect(project(proposal)).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  expect(project(current, [{ ...owner, proposal: current }])).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  expect(project(current, [{ ...owner, admissionAuthority: { ...owner.admissionAuthority } }])).toBeInstanceOf(
+    DeliveryStatusProjectionConflict
+  )
+  expect(project(current, [{ ...ownerOf(rebound, false), proposal: admitted }])).toBeInstanceOf(
+    DeliveryStatusProjectionConflict
+  )
+})
+
 it("keeps the exact admitted graph-read owner beside its coherent advanced current prefix", () => {
   const admitted = trackerGraphReadProposalOf({
     acceptedAt: JournalPosition.make(1),

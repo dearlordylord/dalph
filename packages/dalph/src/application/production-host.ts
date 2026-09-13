@@ -24,7 +24,9 @@ import {
   JournaledRunObservationSource,
   JournalStore,
   RunLifecycleJournal,
+  TargetPromotionGit,
   type TaskTrackerMutationThrottled,
+  type TargetPromotionGitRequest,
   TrackerGraphReader,
   TrackerMutation,
   WorkflowTrace,
@@ -33,6 +35,7 @@ import {
   journalStoreCapabilities,
   nodeEvidenceStoreLayer,
   nodeGitCommandLayer,
+  nodeGitTargetPromotionLayer,
   productionCoordinatorOwnershipLayer,
   sqliteJournalStoreLayer,
   taskClaimAcquisitionPlannerLayer,
@@ -60,6 +63,7 @@ import {
 import {
   productionRunReactivationLayer,
   productionWorkflowInterpreterLayer,
+  productionTargetGitCommands,
   type ProductionApplicationExitRequestObserver,
   type ProductionApplicationExitTraceObserver,
   type ProductionWorkflowCleanupObserver,
@@ -158,6 +162,8 @@ export interface ProductionRepositoryHostAdapters<ECodex = never, EGithub = neve
   readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
   /** Optional observation of each admitted activation finalization. */
   readonly onActivationFinalizationStart?: (kind: "Ordinary" | "ActiveWorkAuthorityRefresh") => Effect.Effect<void>
+  /** Qualification synchronization immediately before the real expected-head Git mutation. */
+  readonly targetPromotionCompareAndSetObserver?: (request: TargetPromotionGitRequest) => Effect.Effect<void>
   readonly codexAppServer?: (
     configuration: ProductionRepositoryHostConfiguration
   ) => Layer.Layer<CodexAppServer, ECodex, ApplicationExitShell>
@@ -396,6 +402,33 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           nodeGitCommandLayer.pipe(Layer.provide(NodeServices.layer)),
           adapters.boundaryObserver
         )
+        // IntegrationTarget names the configured repository; Git's --git-dir
+        // boundary needs its separately configured canonical common directory.
+        const promotionCommands = Layer.effect(
+          GitCommand,
+          Effect.map(GitCommand, (commands) =>
+            productionTargetGitCommands(
+              commands,
+              GitCommonDirectoryTarget.make(configuration.commonDirectory),
+              configuration.repository
+            )
+          )
+        ).pipe(Layer.provide(gitCommandLayer))
+        const realPromotion = nodeGitTargetPromotionLayer.pipe(Layer.provide(promotionCommands))
+        const observeCompareAndSet = adapters.targetPromotionCompareAndSetObserver
+        const promotionLayer =
+          observeCompareAndSet === undefined
+            ? realPromotion
+            : Layer.effect(
+                TargetPromotionGit,
+                Effect.map(TargetPromotionGit, (git) =>
+                  TargetPromotionGit.of({
+                    read: git.read,
+                    compareAndSet: (request) =>
+                      observeCompareAndSet(request).pipe(Effect.andThen(git.compareAndSet(request)))
+                  })
+                )
+              ).pipe(Layer.provide(realPromotion))
         const activityCensusLayer = nodeCodexOwnedActivityCensusLayer.pipe(Layer.provide(appLayer))
         const executorLayer = observedPlannedAttemptExecutorLayer(
           nodeCodexPlannedAttemptExecutorLayer.pipe(
@@ -430,6 +463,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           evidenceLayer,
           executorLayer,
           integratorLayer,
+          promotionLayer,
           adapters.workflowTrace?.() ?? defaultWorkflowTraceLayer
         )
         const services = yield* Layer.build(sharedServices)
@@ -441,6 +475,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const executor = Context.get(services, PlannedAttemptExecutor)
         const executorLifecycle = Context.get(services, PlannedAttemptExecutorLifecycleObservation)
         const integrator = Context.get(services, Integrator)
+        const targetPromotionGit = Context.get(services, TargetPromotionGit)
         const candidateAuthority = Context.get(services, IntegratorCandidateProviderAuthority)
         const trace = Context.get(services, WorkflowTrace)
         const journalLayer = Layer.merge(
@@ -467,6 +502,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
             coordinatorOwnership: ownership,
             integrationFinality: completionClaim,
             integrator,
+            targetPromotion: { git: targetPromotionGit },
             journalStoreLayer: journalLayer,
             applicationExit: { _tag: "SuppliedHostShell", shell: applicationExit },
             ...(workflowApplicationExitObserver === undefined

@@ -720,6 +720,15 @@ original ordering evidence and from the task, transition, ordinal and
 responsibility positions that identify and order its work.
 _Avoid_: Graph-read identity, replacement admission, current owner revision
 
+**Integration frontier listing position**:
+The current transition-list index represented by IntegrationOrder.frontierOrdinal.
+It is derived ordering metadata, not an integration responsibility identity or
+journal occurrence. Nested recovery work can move an unchanged admitted action
+within the current list. Its original position remains bound by the complete
+admission witness; task identity and integration queue/start positions remain
+distinct causal facts.
+_Avoid_: Responsibility ordinal, operation identity, replacement admission
+
 **Planned-attempt protocol guard**:
 The process-local exclusion held while Dalph either records an executor command
 intent or proves and records that the same exact Run and planned attempt may be
