@@ -114,3 +114,45 @@ declaration remains exactly 402 items (92,350 serialized bytes with the same
 declaration digest). Final whole-candidate qualification and integration remain
 pending. Coverage qualification remains with the user-authorized separate
 handoff and is not rerun here.
+
+## A bounded return keeps its exiting activation identity
+
+The maintainer replays the accepted ten-task cassette through the same
+process-owned Run owner. No person triggers these individual controlled steps.
+B/C recovery and A/B/C/D/E settlement already happened; F and X have their
+original attempts and current claims, and their executor sessions still owe
+terminal reports. The current activation has read its one post-quiescence
+complete graph. The controlled executor then publishes X's and F's exact
+Accepted reports, and Dalph reads F's and X's current claims. The journal keeps
+both accepted-result integration responsibilities unsettled.
+
+Dalph's current activation returns `RunMustRemainActive(UnsettledResponsibility)`.
+The cassette adapter queues that actual exit with its exiting activation
+ordinal and the captured facts that the graph publication names
+`PostQuiescenceReconfirmation` and the passive Accepted reports followed that
+paid graph. The owner may admit a trailing entry before the exit consumer
+runs; the consumer records the return with the exit's original ordinal. The
+next queued ordinary activation reads the current complete graph,
+check F/X claims again, read the later complete graph, and integrate F then X.
+The maintainer sees activation 7's return followed by activation 8's graph and
+claim calls. Removing the return declaration must fail at the next authored
+Dalph selection; the adapter must not silently discard an exit that precedes
+an owed boundary call or attribute it to the successor activation.
+
+Some owner exits happen while the cassette is waiting at an operator command,
+explicit hint, process death, or terminal assertion. An active-work refresh
+can also return after its graph read before a queued ordinary entry reads
+its own graph. Those seams may leave their finality reason unasserted. The
+post-quiescence case above is distinct: its captured passive Accepted reports
+follow the paid graph and still require a later activation graph, so the
+return before that owed graph remains mandatory.
+The controlled responses are definite; there is no added crash or provider
+retry, and this amendment changes cassette validation only, not the Dalph
+workflow or outside-system protocol.
+
+| Scenario outcome | Acceptance test |
+| --- | --- |
+| Paid graph, exact X/F acceptance and current claims precede activation 7's return; fresh activation 8 facts precede F/X finality | `double-diamond-activation-chronology.test.ts`: `returns after the paid G2 and settles F X and the complete double diamond after fresh activation facts` |
+| Missing return fails at its exact next owed graph selection | `double-diamond-activation-chronology.test.ts`: `rejects omission of the actual double-diamond activation return before its owed next graph` |
+| Unasserted idle exits and declared process loss remain valid owner seams | `authored-owner-lifetime.test.ts`: `consumes each idle-boundary process death once before installing the next owner` |
+| The uninterrupted capstone retains its actual owner chronology | `issue-337-capstone.execution.test.ts`: existing three public acceptance tests |

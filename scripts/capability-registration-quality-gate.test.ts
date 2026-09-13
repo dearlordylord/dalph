@@ -41,11 +41,11 @@ it("keeps the exact combined exclusions out of ordinary tests and in coverage", 
   const ordinary = resolveVitestConfig("test")
   const coverage = resolveVitestConfig("coverage")
 
-  expect(ordinary.test?.exclude).toEqual(["**/node_modules/**", "**/dist/**"])
+  expect(ordinary.test?.exclude).toEqual(["**/node_modules/**", "**/dist/**", "packages/**/*.mbt.test.ts"])
   expect(coverage.test?.exclude).toEqual([
     "**/node_modules/**",
     "**/dist/**",
-    "packages/**/!(run-activation|run-cancellation|task-fact-reconciliation).mbt.test.ts",
+    "packages/**/*.mbt.test.ts",
     "scripts/capability-registration.test.ts",
     "**/*.performance.test.ts",
     "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts"

@@ -86,7 +86,9 @@ describe("hosted formal-model contract", () => {
     expect(quintGate).toContain(
       'assertQuintHostedDeadlineContract(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"))'
     )
-    expect(quintGate).toContain("createQuintGateDeadline({ startedAt })")
+    expect(quintGate).toContain(
+      "createQuintGateDeadline({\n    startedAt,\n    allowanceMilliseconds: profile.policy.safetyTimeoutMilliseconds\n  })"
+    )
     expect(quintGate).toContain("const timeoutFor = (name) =>")
     expect(quintGate).toContain("remainingExecutionMilliseconds(name)")
     expect(quintGate).toContain("timeoutMilliseconds: timeoutFor(command.name)")
