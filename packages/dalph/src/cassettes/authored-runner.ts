@@ -1323,6 +1323,33 @@ const isAuthoredCoordinatorProcessDeath = (exit: Exit.Exit<unknown, unknown>): b
     (reason) => Cause.isDieReason(reason) && reason.defect instanceof AuthoredCoordinatorProcessDies
   )
 
+/** Activation exits must not hide an unrelated failure beside the authored death control. */
+const isOnlyAuthoredCoordinatorProcessDeath = (exit: Exit.Failure<unknown, unknown>): boolean =>
+  isAuthoredCoordinatorProcessDeath(exit) &&
+  exit.cause.reasons.every(
+    (reason) =>
+      Cause.isInterruptReason(reason) ||
+      (Cause.isDieReason(reason) && reason.defect instanceof AuthoredCoordinatorProcessDies)
+  )
+
+type AuthoredOwnerExitBoundary =
+  | { readonly _tag: "DeclaredProcessDeath"; readonly exit: Exit.Failure<unknown, unknown> }
+  | { readonly _tag: "ActivationExited"; readonly exit: Exit.Exit<CoordinatorFinalityDecision, unknown> }
+
+/** Untraced classification preserves the original failure Cause without adding helper metadata. */
+const classifyAuthoredOwnerBoundaryExit = Effect.fnUntraced(function* (boundary: AuthoredOwnerExitBoundary) {
+  if (boundary._tag === "DeclaredProcessDeath") {
+    if (isAuthoredCoordinatorProcessDeath(boundary.exit)) return "CoordinatorDied" as const
+    return yield* Effect.failCause(boundary.exit.cause)
+  }
+  const exit = boundary.exit
+  if (Exit.isFailure(exit)) {
+    if (isOnlyAuthoredCoordinatorProcessDeath(exit)) return "CoordinatorDied" as const
+    return yield* Effect.failCause(exit.cause)
+  }
+  return exit
+})
+
 /** Extracts a typed authored-correlation failure captured inside a journal append callback. */
 export const authoredInteractionMismatchFrom = (
   exit: Exit.Exit<unknown, unknown>
@@ -3119,22 +3146,8 @@ const runAuthoredScenarioCassetteWith = (request: {
               if (boundary._tag === "AssertionsReached") return "AssertionsReached" as const
               const interactionFailure = yield* Ref.get(authoredInteractionFailure)
               if (interactionFailure !== undefined) return yield* interactionFailure
-              if (boundary._tag === "DeclaredProcessDeath") {
-                if (isAuthoredCoordinatorProcessDeath(boundary.exit)) return "CoordinatorDied" as const
-                return yield* Effect.failCause(boundary.exit.cause)
-              }
-              const exit = boundary.exit
-              if (Exit.isFailure(exit)) {
-                const onlyAuthoredDeath =
-                  isAuthoredCoordinatorProcessDeath(exit) &&
-                  exit.cause.reasons.every(
-                    (reason) =>
-                      Cause.isInterruptReason(reason) ||
-                      (Cause.isDieReason(reason) && reason.defect instanceof AuthoredCoordinatorProcessDies)
-                  )
-                if (onlyAuthoredDeath) return "CoordinatorDied" as const
-                return yield* Effect.failCause(exit.cause)
-              }
+              const exit = yield* classifyAuthoredOwnerBoundaryExit(boundary)
+              if (exit === "CoordinatorDied") return exit
               if ((yield* cursor.currentStoryItem)?._tag === "CoordinatorActivationReturned") {
                 yield* settleCoordinatorActivationReturn(cursor, exit)
               }

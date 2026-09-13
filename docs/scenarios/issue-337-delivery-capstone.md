@@ -107,6 +107,10 @@ independently verified, not discarded for comparison.
 Five cheap owner-removal controls and three identity controls also pass. The
 development fast gate passes across 930 files with zero diagnostics. These are
 scoped receipts, not a claim that final whole-candidate qualification passed.
-Truthful catalog/manifest publication and final candidate qualification remain
-to be completed. Coverage qualification remains with the user-authorized
-separate handoff and is not rerun here.
+Truthful catalog/manifest publication is implemented, and all three
+delivery-story link tests pass. The complexity-only E/F/G profile refactor also
+passes the six focused owner/capstone tests without acceptance weakening; its
+declaration remains exactly 402 items (92,350 serialized bytes with the same
+declaration digest). Final whole-candidate qualification and integration remain
+pending. Coverage qualification remains with the user-authorized separate
+handoff and is not rerun here.

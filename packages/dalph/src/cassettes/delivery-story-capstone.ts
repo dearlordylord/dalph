@@ -48,6 +48,12 @@ const admissionReconciliationEnd = 7
 const integrationPreparationEnd = 4
 const integrationPromotionEnd = 6
 const integrationCompletionReplacementEnd = 8
+const finalTaskIds = ["E", "F", "G"] as const
+const finalTaskProfiles = {
+  E: { readsPredecessorCleanupRevision: false, positions: ePositions },
+  F: { readsPredecessorCleanupRevision: true, positions: fPositions },
+  G: { readsPredecessorCleanupRevision: true, positions: gPositions }
+} as const
 
 /** Alice's single five-to-seven task Run; all boundary results are interpreted by the ordinary authored runner. */
 export const deliveryStoryCapstoneAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
@@ -246,23 +252,26 @@ export const deliveryStoryCapstoneAuthoredCassette = Schema.decodeUnknownSync(Au
     ...integrate("D", candidateCommit("C"), candidateCommit("D"), dPositions).slice(
       integrationCompletionReplacementEnd
     ),
-    ...["E", "F", "G"].flatMap((taskId) => [
-      terminal(taskId),
-      select({ _tag: "ReadTaskClaim", taskId }),
-      { _tag: "TaskClaimCurrentReadReturned", taskId },
-      ...(taskId === "F" || taskId === "G" ? [predecessorCleanupRevision] : []),
-      ...readGraph(graphs.G5),
-      ...(taskId === "F" || taskId === "G"
-        ? [select({ _tag: "ReadTaskClaim", taskId }), { _tag: "TaskClaimCurrentReadReturned", taskId }]
-        : []),
-      ...(taskId === "F" || taskId === "G" ? readGraph(graphs.G5) : []),
-      ...integrate(
-        taskId,
-        candidateCommit(orderedNames[orderedNames.indexOf(taskId) - 1] ?? "A"),
-        candidateCommit(taskId),
-        taskId === "E" ? ePositions : taskId === "F" ? fPositions : gPositions
-      )
-    ]),
+    ...finalTaskIds.flatMap((taskId) => {
+      const { positions, readsPredecessorCleanupRevision } = finalTaskProfiles[taskId]
+      return [
+        terminal(taskId),
+        select({ _tag: "ReadTaskClaim", taskId }),
+        { _tag: "TaskClaimCurrentReadReturned", taskId },
+        ...(readsPredecessorCleanupRevision ? [predecessorCleanupRevision] : []),
+        ...readGraph(graphs.G5),
+        ...(readsPredecessorCleanupRevision
+          ? [select({ _tag: "ReadTaskClaim", taskId }), { _tag: "TaskClaimCurrentReadReturned", taskId }]
+          : []),
+        ...(readsPredecessorCleanupRevision ? readGraph(graphs.G5) : []),
+        ...integrate(
+          taskId,
+          candidateCommit(orderedNames[orderedNames.indexOf(taskId) - 1] ?? "A"),
+          candidateCommit(taskId),
+          positions
+        )
+      ]
+    }),
     predecessorCleanupRevision,
     ...readGraph(graphs.Gfinal),
     ...readGraph(graphs.Gfinal),
