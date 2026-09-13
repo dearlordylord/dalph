@@ -82,23 +82,26 @@ export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")
         ? [...values, { tag, count: ProviderCallCount.make(1) }]
         : values.map((value) => (value.tag === tag ? { tag, count: ProviderCallCount.make(value.count + 1) } : value))
     })
-  const requireRequestIdentity = Effect.fn("HermeticProvider.requireIdentity")(function* (
+  const repositoryLocatorMatches = (request: Extract<GithubGraphqlRequest, { readonly _tag: "ResolveRepository" }>) =>
+    request.owner === configuration.target.owner && request.repository === configuration.target.repository
+  const issueLocatorMatches = (request: Extract<GithubGraphqlRequest, { readonly _tag: "ResolveIssue" }>) =>
+    request.target.owner === configuration.target.owner &&
+    request.target.repository === configuration.target.repository &&
+    request.target.issueNumber === configuration.target.issueNumber
+  const requireNodeIdentity = Effect.fn("HermeticProvider.requireNodeIdentity")(function* (
     request: GithubGraphqlRequest
   ) {
     if ("issueNodeId" in request && request.issueNodeId !== issueId) return yield* badRequest("foreign issue node")
     if ("repositoryNodeId" in request && request.repositoryNodeId !== repositoryId)
       return yield* badRequest("foreign repository node")
-    if (
-      request._tag === "ResolveRepository" &&
-      (request.owner !== configuration.target.owner || request.repository !== configuration.target.repository)
-    )
+  })
+  const requireRequestIdentity = Effect.fn("HermeticProvider.requireIdentity")(function* (
+    request: GithubGraphqlRequest
+  ) {
+    yield* requireNodeIdentity(request)
+    if (request._tag === "ResolveRepository" && !repositoryLocatorMatches(request))
       return yield* badRequest("foreign repository locator")
-    if (
-      request._tag === "ResolveIssue" &&
-      (request.target.owner !== configuration.target.owner ||
-        request.target.repository !== configuration.target.repository ||
-        request.target.issueNumber !== configuration.target.issueNumber)
-    )
+    if (request._tag === "ResolveIssue" && !issueLocatorMatches(request))
       return yield* badRequest("foreign issue locator")
   })
   const github = Effect.fn("HermeticProvider.github")(function* (input: unknown) {
@@ -215,32 +218,35 @@ export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")
     if (thread === undefined) return yield* providerFailure("thread/read", "unknown controlled thread")
     return thread
   })
-  const produceResult = Effect.fn("HermeticProvider.produceResult")(function* (cwd: string, text: string) {
-    if (text.startsWith("You are the Dalph integration provider.\n")) {
-      if (
-        !cwd.startsWith(`${configuration.integratorCandidateWorktreeRoot}/`) ||
-        promptFact(text, "Candidate worktree") !== cwd
-      )
-        return yield* providerFailure("turn/start", "foreign candidate worktree")
-      const head = yield* Schema.decodeUnknownEffect(GitCommitSha)(promptFact(text, "Unchanged target head H"))
-      const accepted = yield* Schema.decodeUnknownEffect(GitCommitSha)(promptFact(text, "Accepted commit C"))
-      if ((yield* runGit(cwd, ["rev-parse", "HEAD"])) !== head)
-        return yield* providerFailure("turn/start", "candidate head differs from supplied H")
-      yield* runGit(cwd, [
-        "-c",
-        "user.name=Hermetic provider",
-        "-c",
-        "user.email=hermetic@example.invalid",
-        "merge",
-        "--no-ff",
-        "--no-edit",
-        accepted
-      ])
-      const candidate = yield* Schema.decodeUnknownEffect(GitCommitSha)(yield* runGit(cwd, ["rev-parse", "HEAD"]))
-      if ((yield* runGit(cwd, ["show", "-s", "--format=%P", candidate])) !== `${head} ${accepted}`)
-        return yield* providerFailure("turn/start", "candidate parents differ from H C")
-      return JSON.stringify({ version: 1, outcome: "PreparedCandidate", candidate })
-    }
+  const produceIntegrationResult = Effect.fn("HermeticProvider.produceIntegrationResult")(function* (
+    cwd: string,
+    text: string
+  ) {
+    if (
+      !cwd.startsWith(`${configuration.integratorCandidateWorktreeRoot}/`) ||
+      promptFact(text, "Candidate worktree") !== cwd
+    )
+      return yield* providerFailure("turn/start", "foreign candidate worktree")
+    const head = yield* Schema.decodeUnknownEffect(GitCommitSha)(promptFact(text, "Unchanged target head H"))
+    const accepted = yield* Schema.decodeUnknownEffect(GitCommitSha)(promptFact(text, "Accepted commit C"))
+    if ((yield* runGit(cwd, ["rev-parse", "HEAD"])) !== head)
+      return yield* providerFailure("turn/start", "candidate head differs from supplied H")
+    yield* runGit(cwd, [
+      "-c",
+      "user.name=Hermetic provider",
+      "-c",
+      "user.email=hermetic@example.invalid",
+      "merge",
+      "--no-ff",
+      "--no-edit",
+      accepted
+    ])
+    const candidate = yield* Schema.decodeUnknownEffect(GitCommitSha)(yield* runGit(cwd, ["rev-parse", "HEAD"]))
+    if ((yield* runGit(cwd, ["show", "-s", "--format=%P", candidate])) !== `${head} ${accepted}`)
+      return yield* providerFailure("turn/start", "candidate parents differ from H C")
+    return JSON.stringify({ version: 1, outcome: "PreparedCandidate", candidate })
+  })
+  const produceTaskResult = Effect.fn("HermeticProvider.produceTaskResult")(function* (cwd: string, text: string) {
     if (!cwd.startsWith(`${configuration.plannedAttemptWorktreeRoot}/`) || promptFact(text, "worktree") !== cwd)
       return yield* providerFailure("turn/start", "foreign task worktree")
     const correlation = yield* Schema.decodeUnknownEffect(PlannedAttemptExecutorCorrelation)({
@@ -263,6 +269,11 @@ export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")
     ])
     const commit = yield* Schema.decodeUnknownEffect(GitCommitSha)(yield* runGit(cwd, ["rev-parse", "HEAD"]))
     return JSON.stringify({ commit, correlation })
+  })
+  const produceResult = Effect.fn("HermeticProvider.produceResult")(function* (cwd: string, text: string) {
+    return yield* text.startsWith("You are the Dalph integration provider.\n")
+      ? produceIntegrationResult(cwd, text)
+      : produceTaskResult(cwd, text)
   })
   const codex: CodexAppServerService = {
     incarnation: CodexServerIncarnation.make("hermetic-provider-incarnation"),

@@ -27,7 +27,7 @@ import {
   type PlannedTaskAttemptPlanRequest,
   TaskWorkCapacity
 } from "@dalph/orchestrator"
-import { Effect, Layer, Ref, Schema, SchemaIssue } from "effect"
+import { Effect, Layer, MutableList, Ref, Schema, SchemaIssue } from "effect"
 import { IntegratorCandidateWorktreeRoot, IntegratorPrivateStoreLocator } from "./codex-integrator-private-store.js"
 import { ProductionRunReactivationInterval } from "./production.js"
 
@@ -221,15 +221,16 @@ export const deriveProductionPlannedAttemptLocations = (
   const resource = `run-${identitySegment(runId)}-task-${identitySegment(taskId)}-attempt-${String(ordinal)}`
   // Keep every tuple byte while bounding filesystem/ref components. The reserved
   // terminal cannot be a payload chunk or become another attempt's parent.
-  const components: Array<string> = []
+  const components = MutableList.make<string>()
   for (let offset = 0; offset < resource.length; offset += resourceChunkPayloadWidth) {
-    components.push(`part-${resource.slice(offset, offset + resourceChunkPayloadWidth)}`)
+    MutableList.append(components, `part-${resource.slice(offset, offset + resourceChunkPayloadWidth)}`)
   }
-  components.push("_leaf")
+  MutableList.append(components, "_leaf")
+  const componentArray = MutableList.toArray(components)
   return ProductionPlannedAttemptLocations.make({
     attemptId: AttemptId.make(`attempt:${resource}`),
-    branch: TaskBranchRef.make(`refs/heads/dalph/${components.join("/")}`),
-    worktree: WorktreeLocator.make(nodePath.join(root, ...components))
+    branch: TaskBranchRef.make(`refs/heads/dalph/${componentArray.join("/")}`),
+    worktree: WorktreeLocator.make(nodePath.join(root, ...componentArray))
   })
 }
 

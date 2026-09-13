@@ -187,12 +187,6 @@ const implementation = (
   source
 })
 
-const notApplicable = (reason: NotApplicableReason, detail: string): NotApplicableImplementation => ({
-  _tag: "NotApplicable",
-  detail,
-  reason
-})
-
 const contract = (id: string, executions: ReadonlyArray<ContractExecution>): ContractEvidence => ({ executions, id })
 
 const implementationBinding = (
@@ -553,7 +547,13 @@ const targetPromotionContract = contract("TargetPromotionGit", [
     },
     marker: "targetPromotionContract",
     role: "production",
-    source: "packages/orchestrator/test/contracts/target-promotion-contract.ts"
+    source: "packages/orchestrator/test/contracts/target-promotion-contract.ts",
+    implementation: implementationBinding(
+      "nodeGitTargetPromotionLayer",
+      "packages/orchestrator/src/authorities/git/target-promotion.ts",
+      "nodeGitTargetPromotionLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   }
 ])
 
@@ -923,9 +923,11 @@ export const capabilityRegistrationInventory = {
       ),
       contract: targetPromotionContract,
       family: "git-target-promotion",
-      production: notApplicable(
-        "application-supplied-boundary",
-        "production activation accepts TargetPromotionRuntimeInput from its host; the node adapter is qualification-tested but this repository does not assemble it in production"
+      production: implementation(
+        "nodeGitTargetPromotionLayer",
+        "packages/orchestrator/src/authorities/git/target-promotion.ts",
+        "nodeGitTargetPromotionLayer",
+        composed("packages/dalph/src/application/production-host.ts", "nodeGitTargetPromotionLayer")
       )
     },
     {
@@ -1282,6 +1284,11 @@ export const capabilityRegistrationInventory = {
       "nodeGitCommandLayer",
       "shared Git command dependency of registered Git boundaries",
       "packages/orchestrator/src/authorities/git/command.ts"
+    ),
+    support(
+      "productionWorkflowGitCommandLayer",
+      "ordinary target-locator translation and optional observation beneath registered Git boundaries",
+      "packages/dalph/src/application/production.ts"
     ),
     support(
       "sqliteJournalStoreLayer",

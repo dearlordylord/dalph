@@ -44,10 +44,9 @@ export const HermeticOwnershipMarker = Schema.NonEmptyString.check(
 export type HermeticOwnershipMarker = typeof HermeticOwnershipMarker.Type
 
 /** Locates the serialized Q manifest document, not an arbitrary fixture path. */
-export const HermeticManifestDocument = Schema.NonEmptyString.check(
-  canonicalAbsolutePath("hermetic manifest document")
-).pipe(Schema.brand("HermeticManifestDocument"))
-export type HermeticManifestDocument = typeof HermeticManifestDocument.Type
+const HermeticManifestDocument = Schema.NonEmptyString.check(canonicalAbsolutePath("hermetic manifest document")).pipe(
+  Schema.brand("HermeticManifestDocument")
+)
 
 /**
  * The non-secret manifest passed to the built qualification command. Source
@@ -144,18 +143,11 @@ const pathOverlaps = (left: string, right: string): boolean => {
 
 const overlap = (left: string, right: string): boolean => pathOverlaps(left, right) || pathOverlaps(right, left)
 
+const hasPairwisePathOverlap = (paths: ReadonlyArray<string>): boolean =>
+  paths.some((left, index) => paths.slice(index + 1).some((right) => overlap(left, right)))
+
 const hasManifestResourceOverlap = (manifest: HermeticFixtureManifest): boolean => {
   const worktreeRoots = [manifest.attemptWorktreeRoot, manifest.candidateRoot]
-  const firstWorktreeRoot = worktreeRoots[0]
-  const secondWorktreeRoot = worktreeRoots[1]
-  if (
-    firstWorktreeRoot !== undefined &&
-    secondWorktreeRoot !== undefined &&
-    overlap(firstWorktreeRoot, secondWorktreeRoot)
-  ) {
-    return true
-  }
-
   const statePaths = [
     manifest.repository,
     manifest.commonDirectory,
@@ -164,23 +156,43 @@ const hasManifestResourceOverlap = (manifest: HermeticFixtureManifest): boolean 
     manifest.codexStateDirectory,
     manifest.privateStore
   ]
-  if (worktreeRoots.some((worktree) => statePaths.some((state) => overlap(worktree, state)))) return true
-
   const privateStatePaths = [
     manifest.journalDatabase,
     manifest.evidenceRoot,
     manifest.codexStateDirectory,
     manifest.privateStore
   ]
-  for (let left = 0; left < privateStatePaths.length; left += 1) {
-    for (let right = left + 1; right < privateStatePaths.length; right += 1) {
-      const leftPath = privateStatePaths[left]
-      const rightPath = privateStatePaths[right]
-      if (leftPath !== undefined && rightPath !== undefined && overlap(leftPath, rightPath)) return true
-    }
-  }
-  return false
+  return (
+    hasPairwisePathOverlap(worktreeRoots) ||
+    worktreeRoots.some((worktree) => statePaths.some((state) => overlap(worktree, state))) ||
+    hasPairwisePathOverlap(privateStatePaths)
+  )
 }
+
+const hasConfiguredWorkflowResourceMismatch = (
+  manifest: HermeticFixtureManifest,
+  configuration: ProductionRepositoryHostConfiguration
+): boolean =>
+  configuration.journalDatabase !== manifest.journalDatabase ||
+  configuration.evidenceStoreRoot !== manifest.evidenceRoot ||
+  configuration.plannedAttemptWorktreeRoot !== manifest.attemptWorktreeRoot
+
+const hasConfiguredProviderResourceMismatch = (
+  manifest: HermeticFixtureManifest,
+  configuration: ProductionRepositoryHostConfiguration
+): boolean =>
+  configuration.codexStateDirectory !== manifest.codexStateDirectory ||
+  configuration.integratorCandidateWorktreeRoot !== manifest.candidateRoot ||
+  configuration.integratorPrivateStore !== manifest.privateStore
+
+const hasConfiguredFixtureMismatch = (
+  manifest: HermeticFixtureManifest,
+  configuration: ProductionRepositoryHostConfiguration
+): boolean =>
+  configuration.integrationRef !== manifest.integrationRef ||
+  configuration.plannedAttemptBaseSha !== manifest.baseSha ||
+  hasConfiguredWorkflowResourceMismatch(manifest, configuration) ||
+  hasConfiguredProviderResourceMismatch(manifest, configuration)
 
 const authorizationFailure = (
   reason: (typeof hermeticAuthorizationReasons)[number],
@@ -238,16 +250,7 @@ export const authorizeHermeticFixture = Effect.fn("HermeticFixture.authorize")(f
       "fresh configured common directory does not match the manifest"
     )
   }
-  if (
-    configuration.integrationRef !== manifest.integrationRef ||
-    configuration.plannedAttemptBaseSha !== manifest.baseSha ||
-    configuration.journalDatabase !== manifest.journalDatabase ||
-    configuration.evidenceStoreRoot !== manifest.evidenceRoot ||
-    configuration.plannedAttemptWorktreeRoot !== manifest.attemptWorktreeRoot ||
-    configuration.codexStateDirectory !== manifest.codexStateDirectory ||
-    configuration.integratorCandidateWorktreeRoot !== manifest.candidateRoot ||
-    configuration.integratorPrivateStore !== manifest.privateStore
-  ) {
+  if (hasConfiguredFixtureMismatch(manifest, configuration)) {
     return yield* authorizationFailure("ConfigurationMismatch", "fresh configuration does not match the manifest")
   }
   const fileSystem = yield* FileSystem.FileSystem
