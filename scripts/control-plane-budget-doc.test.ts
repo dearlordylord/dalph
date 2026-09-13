@@ -34,7 +34,7 @@ describe("control-plane budget documentation", () => {
     const scenarios = repositoryDocument("docs/scenarios/README.md")
 
     expect(architecture).toContain("architecture/control-plane-latency-and-responsiveness.md")
-    expect(scenarios).toContain("`issue-103-github-dry-run-cli.md` | 103")
-    expect(scenarios).toContain("`issue-104-control-plane-latency-and-responsiveness.md` | 104")
+    expect(scenarios).toContain("](issue-103-github-dry-run-cli.md)")
+    expect(scenarios).toContain("](issue-104-control-plane-latency-and-responsiveness.md)")
   })
 })
