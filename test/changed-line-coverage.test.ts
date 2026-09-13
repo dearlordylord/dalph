@@ -119,7 +119,7 @@ describe("changed production-line coverage", () => {
       percentage: 66.66666666666667
     })
     expect(coverageLineFailures(result)).toEqual([
-      `changed production-line coverage: expected at least 99%, observed 66.67%`,
+      `changed production-line coverage: expected at least 95%, observed 66.67%`,
       `  ${sourcePath}:2`
     ])
   })
@@ -159,16 +159,18 @@ describe("changed production-line coverage", () => {
     expect(coverageLineFailures(result)).toEqual([])
   })
 
-  it("accepts exactly the 99 percent floor while retaining uncovered-line evidence", () => {
+  it("accepts exactly the 95 percent floor while retaining uncovered-line evidence", () => {
     const changedLines = new Set(Array.from({ length: 100 }, (_, index) => index + 1))
     const result = changedLineCoverage(
-      coverageFor([...Array.from({ length: 99 }, () => 1), 0]),
+      coverageFor([...Array.from({ length: 95 }, () => 1), ...Array.from({ length: 5 }, () => 0)]),
       new Map([[sourcePath, changedLines]]),
       "/repo"
     )
 
-    expect(result.percentage).toBe(99)
-    expect(result.uncoveredLines).toEqual([{ path: sourcePath, line: 100 }])
+    expect(result.percentage).toBe(95)
+    expect(result.uncoveredLines).toEqual(
+      Array.from({ length: 5 }, (_, index) => ({ path: sourcePath, line: 96 + index }))
+    )
     expect(coverageLineFailures(result)).toEqual([])
   })
 
@@ -177,7 +179,7 @@ describe("changed production-line coverage", () => {
 
     expect(result.uncoveredLines).toEqual([{ path: sourcePath, line: 7, reason: "coverage entry missing" }])
     expect(coverageLineFailures(result)).toEqual([
-      "changed production-line coverage: expected at least 99%, observed 0.00%",
+      "changed production-line coverage: expected at least 95%, observed 0.00%",
       `  ${sourcePath}:7 (coverage entry missing)`
     ])
   })

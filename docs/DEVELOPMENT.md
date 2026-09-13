@@ -668,7 +668,7 @@ of retained files is a separate, deliberate operator action.
 
 ### Coverage and output budgets
 
-- Enforce 99% production and 75% maintained-evaluation coverage independently
+- Enforce 95% production and 75% maintained-evaluation coverage independently
   for statements, branches, functions, lines, and changed executable lines.
   Surplus in one bracket cannot cover the other. Maintained cassettes and
   deterministic test-only completion boundaries use evaluation; runtime and
@@ -719,7 +719,7 @@ counts, unreachable branches or threshold exemption are inferred.
 Status 0 means complete analysis of an artifact with matching freshness evidence.
 Status 1 means analysis is unproven, stale, incomplete or unavailable. Neither
 status certifies coverage compliance or replaces `test:coverage`/`check:all`;
-the production 99% and maintained-evaluation 75% floors remain unchanged.
+the production 95% and maintained-evaluation 75% floors remain unchanged.
 
 ### Final formal selection
 

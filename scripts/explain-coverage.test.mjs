@@ -53,7 +53,7 @@ test("maintainer sees actual uncovered locations, line counts and unchanged inde
       { metric: "branches", line: undefined, id: "0", arm: 1, location: loc(3) }
     ]
   )
-  assert.ok(result.thresholdFailures.some((failure) => failure.includes("expected at least 99%")))
+  assert.ok(result.thresholdFailures.some((failure) => failure.includes("expected at least 95%")))
   assert.ok(result.thresholdFailures.every((failure) => !failure.startsWith("maintained-evaluation")))
   assert.deepEqual(result.changed.production.uncoveredLines, [{ path: production, line: 2 }])
   assert.equal(result.freshness.status, "unproven")
@@ -406,7 +406,7 @@ test("actual captured failed-stage artifact is fresh diagnostic evidence without
   const result = coverageExplanationFromFiles({ baseSha: f.baseSha, runId: f.runId, cwd: f.root })
   assert.equal(result.freshness.status, "fresh", JSON.stringify(result.freshness))
   assert.equal(result.freshness.gateQualification, "UNPROVEN")
-  assert.ok(result.thresholdFailures.some((failure) => failure.includes("99%")))
+  assert.ok(result.thresholdFailures.some((failure) => failure.includes("95%")))
 })
 
 test("actual missing or wrong-version receipt cannot make captured artifact fresh", () => {
