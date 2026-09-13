@@ -6,6 +6,7 @@ import { sha256, sha384, sha512 } from "@noble/hashes/sha2.js"
 import {
   type AuthoredDeliveryFrame,
   type AuthoredObservationMoment,
+  type AuthoredObservationCapture,
   type AuthoredScenarioCassetteRun,
   runAuthoredScenarioCassette,
   useAuthoredScenarioCassette
@@ -58,10 +59,15 @@ type DispositionCleanupCassetteKey =
 type ProductionPreparedTrace = AuthoredScenarioCassetteRun["preparedTrace"]
 
 /** Keep raw evidence inspectable without embedding every repeated historical prefix. */
-const authoredExecutionEvidence = (run: AuthoredScenarioCassetteRun): unknown => ({
+const authoredExecutionEvidence = (run: AuthoredScenarioCassetteRun) => ({
   ...run,
   preparedTrace: { cursors: run.preparedTrace.cursors }
 })
+
+/** Exact retained raw source; the authored variant keeps its concrete fields typed rather than guessing from unknown protocol evidence. */
+export type CassetteRawEvidenceSource =
+  | { readonly _tag: "Authored"; readonly evidence: ReturnType<typeof authoredExecutionEvidence> }
+  | { readonly _tag: "Protocol"; readonly evidence: unknown }
 
 export type MaintainedCassetteKey =
   | AuthoredCassetteKey
@@ -127,12 +133,29 @@ const cassetteCategoryMetadata = {
 
 interface CassetteExecution {
   readonly activationOrdinals: ReadonlyArray<number>
+  readonly rawEvidenceSource: CassetteRawEvidenceSource
+  readonly observationCaptures: ReadonlyArray<AuthoredObservationCapture>
   readonly deliveryFrames: ReadonlyArray<AuthoredDeliveryFrame> | null
   readonly observationMoments: ReadonlyArray<AuthoredObservationMoment> | null
   readonly preparedTrace: ProductionPreparedTrace | null
   readonly evidence: unknown
   readonly journalRecords: ReadonlyArray<unknown>
   readonly runId: string | null
+}
+
+const authoredCassetteExecution = (run: AuthoredScenarioCassetteRun): CassetteExecution => {
+  const evidence = authoredExecutionEvidence(run)
+  return {
+    activationOrdinals: run.activationOrdinals,
+    observationCaptures: run.observationCaptures,
+    deliveryFrames: run.deliveryFrames,
+    observationMoments: run.observationMoments,
+    preparedTrace: run.preparedTrace,
+    evidence,
+    rawEvidenceSource: { _tag: "Authored", evidence },
+    journalRecords: run.records,
+    runId: run.runId
+  }
 }
 
 interface MaintainedCassetteDescriptor {
@@ -186,8 +209,11 @@ export type CassetteLabResult =
       readonly consumedItemCount: number
       readonly deliveryFrames: ReadonlyArray<AuthoredDeliveryFrame> | null
       readonly observationMoments: ReadonlyArray<AuthoredObservationMoment> | null
+      /** Complete original authored captures; direct protocol cassettes execute no authored observation capture. */
+      readonly observationCaptures: ReadonlyArray<AuthoredObservationCapture>
       readonly preparedTrace: ProductionPreparedTrace | null
       readonly executionEvidence: unknown
+      readonly rawEvidenceSource: CassetteRawEvidenceSource
       readonly journalRecordCount: number
       readonly journalRecords: ReadonlyArray<unknown>
       readonly runnerName: string
@@ -245,15 +271,7 @@ const authoredDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Object.
         onObservationMoment === undefined ? {} : { onObservationMoment }
       ).pipe(Effect.provide(cassetteRuntimeLayer))
     )
-    return Exit.map(exit, (run) => ({
-      activationOrdinals: run.activationOrdinals,
-      deliveryFrames: run.deliveryFrames,
-      observationMoments: run.observationMoments,
-      preparedTrace: run.preparedTrace,
-      evidence: authoredExecutionEvidence(run),
-      journalRecords: run.records,
-      runId: run.runId
-    }))
+    return Exit.map(exit, authoredCassetteExecution)
   },
   input: cassette,
   surface: {
@@ -287,10 +305,12 @@ const targetPromotionDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = 
     )
     return Exit.map(exit, (run) => ({
       activationOrdinals: [],
+      observationCaptures: [],
       deliveryFrames: null,
       observationMoments: null,
       preparedTrace: null,
       evidence: run,
+      rawEvidenceSource: { _tag: "Protocol", evidence: run },
       journalRecords: run.records,
       runId: null
     }))
@@ -316,10 +336,12 @@ const integrationFinalityDescriptors: ReadonlyArray<MaintainedCassetteDescriptor
     )
     return Exit.map(exit, (run) => ({
       activationOrdinals: [],
+      observationCaptures: [],
       deliveryFrames: null,
       observationMoments: null,
       preparedTrace: null,
       evidence: run,
+      rawEvidenceSource: { _tag: "Protocol", evidence: run },
       journalRecords: run.records,
       runId: null
     }))
@@ -343,10 +365,12 @@ const applicationExitDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = 
     )
     return Exit.map(exit, (run) => ({
       activationOrdinals: [],
+      observationCaptures: [],
       deliveryFrames: null,
       observationMoments: null,
       preparedTrace: null,
       evidence: run,
+      rawEvidenceSource: { _tag: "Protocol", evidence: run },
       journalRecords: [],
       runId: null
     }))
@@ -370,10 +394,12 @@ const codexExecutorDescriptors: ReadonlyArray<MaintainedCassetteDescriptor> = Ob
     )
     return Exit.map(exit, (run) => ({
       activationOrdinals: [],
+      observationCaptures: [],
       deliveryFrames: null,
       observationMoments: null,
       preparedTrace: null,
       evidence: run,
+      rawEvidenceSource: { _tag: "Protocol", evidence: run },
       journalRecords: [],
       runId: null
     }))
@@ -395,10 +421,12 @@ const dispositionCleanupDescriptors: ReadonlyArray<MaintainedCassetteDescriptor>
     const exit = await Effect.runPromiseExit(runDispositionCleanupCassette(cassette))
     return Exit.map(exit, (run) => ({
       activationOrdinals: [],
+      observationCaptures: [],
       deliveryFrames: null,
       observationMoments: null,
       preparedTrace: null,
       evidence: run,
+      rawEvidenceSource: { _tag: "Protocol", evidence: run },
       journalRecords: run.records,
       runId: run.records[0]?.runId ?? null
     }))
@@ -522,6 +550,7 @@ const completedResult = (
 ): CassetteLabResult => ({
   _tag: "Completed",
   activationOrdinals: execution.activationOrdinals,
+  observationCaptures: execution.observationCaptures,
   catalogKey: descriptor.catalogKey,
   category: descriptor.category,
     consumedItemCount: descriptor.story.length,
@@ -529,6 +558,7 @@ const completedResult = (
     observationMoments: execution.observationMoments,
     preparedTrace: execution.preparedTrace,
     executionEvidence: execution.evidence,
+    rawEvidenceSource: execution.rawEvidenceSource,
   journalRecordCount: execution.journalRecords.length,
   journalRecords: execution.journalRecords,
   runnerName: cassetteCategoryMetadata[descriptor.category].runnerName,
@@ -566,15 +596,7 @@ export const runAuthoredCassetteInput = async (
   const inputDescriptor = { ...descriptor, story: inputStory }
   return Exit.isFailure(exit)
     ? failedResult(inputDescriptor, exit.cause)
-    : completedResult(inputDescriptor, {
-        activationOrdinals: exit.value.activationOrdinals,
-        deliveryFrames: exit.value.deliveryFrames,
-        observationMoments: exit.value.observationMoments,
-        preparedTrace: exit.value.preparedTrace,
-        evidence: authoredExecutionEvidence(exit.value),
-        journalRecords: exit.value.records,
-        runId: exit.value.runId
-      })
+    : completedResult(inputDescriptor, authoredCassetteExecution(exit.value))
 }
 
 /** Runs all maintained catalogs independently; one failure never becomes a passing summary. */

@@ -7,6 +7,8 @@ import {
   type AuthoredObservationMoment
 } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 import "./trace-cursor-selection.test.ts"
+import "./cassette-raw-evidence.test.ts"
+import { cassetteRawEvidenceItems } from "./cassette-raw-evidence.ts"
 import "./trace-selected-history.test.ts"
 import "./delivery-playback.test.ts"
 import "./trace-history-navigation.test.ts"
@@ -884,6 +886,21 @@ await scenario("formats maintained cassette choices and summaries", () => {
       `${result.catalogKey} must render complete progress`
     )
     assert(resultEvidenceText(result).length > 2, `${result.catalogKey} must render execution evidence`)
+    if (result._tag === "Completed") {
+      const items = cassetteRawEvidenceItems(result)
+      for (const [collection, source] of [
+        ["JournalRecord", result.journalRecords],
+        ["ObservationCapture", result.observationCaptures],
+        ["ObservationMoment", result.observationMoments ?? []],
+        ["DeliveryFrame", result.deliveryFrames ?? []]
+      ] as const) {
+        const indexed = items.filter((item) => item.collection === collection)
+        assert(indexed.length === source.length, `${result.catalogKey} must index every ${collection}`)
+        for (const [index, value] of source.entries()) {
+          assert(indexed[index]?.index === index && indexed[index]?.value === value, "Raw indexes must preserve original artifact identity and order")
+        }
+      }
+    }
   }
   assert(everyResult.length === maintainedCassetteRows.length, "Run all must retain one result per catalog choice")
   assert(

@@ -53,7 +53,7 @@ export const restartPredecessorCleanupAfterRemoval = (history: ReadonlyArray<Jou
           Effect.gen(function* () {
             yield* Ref.update(calls, (values) => [
               ...values,
-              { tag: "Observe", locator: authorization.locator, sessionId: authorization.owner.sessionId }
+              { tag: "Observe", locator: authorization.locator, sessionId: authorization.owner.sessionId } as const
             ])
             return (yield* Ref.get(removed))
               ? IntegratorCandidateCleanupObservation.cases.Absent.make({
@@ -70,7 +70,7 @@ export const restartPredecessorCleanupAfterRemoval = (history: ReadonlyArray<Jou
         remove: (authorization) =>
           Ref.update(calls, (values) => [
             ...values,
-            { tag: "Remove", locator: authorization.locator, sessionId: authorization.owner.sessionId }
+            { tag: "Remove", locator: authorization.locator, sessionId: authorization.owner.sessionId } as const
           ]).pipe(
             Effect.andThen(Ref.set(removed, true)),
             Effect.andThen(Deferred.succeed(reached, undefined)),

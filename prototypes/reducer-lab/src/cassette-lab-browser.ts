@@ -20,6 +20,7 @@ import {
 } from "./cassette-lab-workbench.ts"
 import { PlaybackRunStarted } from "./delivery-playback.ts"
 import { continuationAuthorizationProjectionOf } from "./continuation-authorization-lab.ts"
+import { renderCassetteRawEvidence } from "./cassette-raw-evidence.ts"
 import type { AuthoredDeliveryFrame, AuthoredObservationMoment } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 
 export const singleCassetteSettledEvent = "dalph-cassette-lab:single-settled"
@@ -105,7 +106,10 @@ const renderJournalTable = (
       "summary",
       `Position ${row.position} · ${row.eventTag}${row.context.length > 0 ? ` · ${row.context}` : ""}`
     )
-    appendTextElement(raw, "pre", row.rawEvent)
+    const exact = appendTextElement(raw, "pre", "")
+    raw.addEventListener("toggle", () => {
+      exact.textContent = raw.open ? row.rawEvent() : ""
+    })
     rawCell.append(raw)
     tableRow.append(rawCell)
     body.append(tableRow)
@@ -129,6 +133,10 @@ const renderJournal = (parent: HTMLElement, result: CassetteLabResult): void => 
 }
 
 const renderRawEvidence = (parent: HTMLElement, result: CassetteLabResult): void => {
+  if (result._tag === "Completed") {
+    renderCassetteRawEvidence(parent, result)
+    return
+  }
   const details = document.createElement("details")
   details.dataset.role = result._tag === "Failed" ? "raw-diagnostic" : "raw-execution-result"
   appendTextElement(details, "summary", result._tag === "Failed" ? "Raw diagnostic" : "Raw execution result")

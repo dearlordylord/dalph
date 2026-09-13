@@ -26,7 +26,7 @@ export interface JournalEvidenceRow {
   readonly context: string
   readonly eventTag: string
   readonly position: string
-  readonly rawEvent: string
+  readonly rawEvent: () => string
   readonly runId: string
 }
 
@@ -69,7 +69,17 @@ export const cassetteStateStatusText = (state: CassetteState): string => {
 }
 
 export const resultEvidenceText = (result: CassetteLabResult): string =>
-  result._tag === "Failed" ? result.detail : JSON.stringify(result.executionEvidence, null, 2)
+  result._tag === "Failed" ? result.detail : JSON.stringify({
+    catalogKey: result.catalogKey,
+    runId: result.runId,
+    runnerName: result.runnerName,
+    consumedItemCount: result.consumedItemCount,
+    totalItemCount: result.totalItemCount,
+    journalRecordCount: result.journalRecords.length,
+    observationCaptureCount: result.observationCaptures.length,
+    observationMomentCount: result.observationMoments?.length ?? 0,
+    deliveryFrameCount: result.deliveryFrames?.length ?? 0
+  }, null, 2)
 
 const failureHeadline = (detail: string): string => {
   const lines = detail.split("\n").map((line) => line.trim()).filter((line) => line.length > 0)
@@ -284,7 +294,7 @@ export const journalEvidenceRows = (result: CassetteLabResult): ReadonlyArray<Jo
           context: journalContext(event),
           eventTag: typeof event?._tag === "string" ? event._tag : "UnknownEvent",
           position: valueText(envelope?.position ?? "unknown"),
-          rawEvent: JSON.stringify(envelope?.event, null, 2),
+          rawEvent: () => JSON.stringify(envelope?.event, null, 2),
           runId: valueText(envelope?.runId ?? "unknown")
         }
       })
