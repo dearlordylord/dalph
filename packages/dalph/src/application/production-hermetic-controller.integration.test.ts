@@ -681,16 +681,34 @@ it.live(
         ).toBe("CompletionThrottle")
         yield* controller.releaseBoundary()
         expect(yield* controller.awaitChild(first).pipe(Effect.timeout("20 seconds"))).toBe(1)
-        expect(MutableList.toArray(first.recordLog).find((record) => record._tag === "Failure")).toMatchObject({
-          code: "delivery.provider_throttled"
-        })
-        expect(
-          MutableList.toArray(first.recordLog).some((record) => record._tag === "ApplicationExitDisposition")
-        ).toBe(false)
-        expect(closeCount((yield* controller.providerSnapshot).operationCounts)).toBe(1)
+        const firstRecords = MutableList.toArray(first.recordLog)
+        const failure = firstRecords.find((record) => record._tag === "Failure")
+        if (failure?._tag !== "Failure") return yield* Effect.die("the throttled child must report its public failure")
+        expect(firstRecords.some((record) => record._tag === "RunDisposition")).toBe(false)
+        expect(firstRecords.some((record) => record._tag === "ApplicationExitDisposition")).toBe(false)
+        const afterThrottle = yield* controller.providerSnapshot
+        expect(closeCount(afterThrottle.operationCounts)).toBe(1)
+        expect(afterThrottle).toMatchObject({ activeClaimCount: 1, completionClaimCount: 1, taskLifecycle: "Open" })
+        const claimsAfterThrottle = yield* controller.finalTrackerFacts
+        const createdClaimIdentities = (yield* controller.providerCreationManifest).resources.filter(
+          (resource) => resource._tag === "Label"
+        )
+        expect(claimsAfterThrottle.claims).toEqual(createdClaimIdentities)
         const journal = yield* readJournal(fixture, first)
         expect(journal.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
-        expect(journal.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+        expect(
+          journal.some(({ event }) =>
+            [
+              "CompletionClaimDeletionIntended",
+              "CompletionClaimDeletionReadObserved",
+              "CompletionClaimDeletionAttemptIntended",
+              "TaskClaimReleased",
+              "CompletionClaimDeleted",
+              "IntegrationFinalitySettled",
+              "WorkflowRunTerminated"
+            ].includes(event._tag)
+          )
+        ).toBe(false)
         const last = journal.at(-1)
         if (last === undefined) return yield* Effect.die("the throttled Run must retain its journal prefix")
         const original = yield* selectedOf(first)
@@ -724,6 +742,8 @@ it.live(
           )
         ).toBe(true)
         expect(yield* second.handle.isRunning).toBe(true)
+        expect(yield* controller.finalTrackerFacts).toEqual(claimsAfterThrottle)
+        expect(closeCount((yield* controller.providerSnapshot).operationCounts)).toBe(1)
         yield* controller.terminateChild(second)
         expect(yield* controller.awaitChild(second).pipe(Effect.timeout("20 seconds"))).toBe(0)
         expect(
@@ -738,6 +758,7 @@ it.live(
         ])
         const recovered = yield* readJournal(fixture, second)
         const afterRecovery = yield* controller.providerSnapshot
+        expect(recovered.slice(0, journal.length)).toEqual(journal)
         const attempts = recovered.filter(({ event }) => event._tag === "CompletionTaskAttemptIntended")
         expect(closeCount(afterRecovery.operationCounts)).toBe(attempts.length)
         const newAttempts = attempts.filter(({ position }) => position > last.position)
@@ -750,6 +771,23 @@ it.live(
           lookup?.event._tag !== "CompletionTaskRequestLookupObserved"
         )
           return yield* Effect.die("missing original completion attempt or exact lookup observation")
+        expect(failure).toEqual({
+          _tag: "Failure",
+          code: "delivery.provider_throttled",
+          detail: "the task tracker throttled a production delivery mutation",
+          subject: {
+            _tag: "TaskTrackerMutation",
+            operation: "CompleteTask",
+            operationId: originalAttempt.event.request.operationId,
+            retry: null,
+            runId: original.runId
+          },
+          version: 1
+        })
+        const encodedFailure = encodeProductionCliRecord(failure)
+        expect(encodedFailure).not.toContain("Controlled completion throttle")
+        expect(encodedFailure).not.toContain("controlled-hermetic-github-token")
+        expect(encodedFailure).not.toContain("controlled-hermetic-codex-credential")
         expect(lookup.event.attemptOrdinal).toBe(originalAttempt.event.attemptOrdinal)
         expect(Schema.toEquivalence(CompletionTaskRequest)(lookup.event.request, originalAttempt.event.request)).toBe(
           true
@@ -775,20 +813,65 @@ it.live(
             event.operation._tag === "ReadCompletionTaskFacts"
         )
         if (lifecycleRead === undefined) return yield* Effect.die("missing recovery lifecycle read")
+        const lifecycleObservation = recovered.find(
+          ({ event, position }) =>
+            position > lifecycleRead.position &&
+            position < lookupIntent.position &&
+            event._tag === "TaskTrackerFactsObserved" &&
+            event.observation._tag === "FocusedTaskCompletionFacts"
+        )
+        if (
+          lifecycleObservation?.event._tag !== "TaskTrackerFactsObserved" ||
+          lifecycleObservation.event.observation._tag !== "FocusedTaskCompletionFacts"
+        )
+          return yield* Effect.die("missing recovery lifecycle and completion-claim observation")
+        expect(lifecycleObservation.event.observation.facts).toMatchObject({
+          currentClaim: { _tag: "CompletionTaskClaim" },
+          lifecycle: "Open"
+        })
+        expect(
+          Schema.toEquivalence(CompletionTaskRequest)(
+            lifecycleObservation.event.observation.request,
+            originalAttempt.event.request
+          )
+        ).toBe(true)
         expect(lifecycleRead.position).toBeLessThan(lookupIntent.position)
+        expect(lifecycleRead.position).toBeLessThan(lifecycleObservation.position)
+        expect(lifecycleObservation.position).toBeLessThan(lookupIntent.position)
         expect(lookupIntent.position).toBeGreaterThan(last.position)
         expect(lookup.position).toBeGreaterThan(lookupIntent.position)
         expect(recovered.filter(({ event }) => event._tag === "TaskClaimReleased")).toHaveLength(
           journal.filter(({ event }) => event._tag === "TaskClaimReleased").length
         )
+        expect(yield* controller.finalTrackerFacts).toEqual(claimsAfterThrottle)
         expect(afterRecovery.operationCounts.find(({ tag }) => tag === "CodexStartTurn")).toEqual(
           beforeRecovery.operationCounts.find(({ tag }) => tag === "CodexStartTurn")
         )
+        expect(afterRecovery.operationCounts.find(({ tag }) => tag === "DeleteClaimLabel")?.count ?? 0).toBe(0)
+        expect(afterRecovery.operationCounts.find(({ tag }) => tag === "QualificationDeleteLabel")?.count ?? 0).toBe(0)
         expect(recovered.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
         expect(recovered.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
         const disposal = yield* publishEvidence(fixture, controller, "CompletionThrottle", startedAt, [first, second])
         expect(disposal._tag).toBe("RetainedFixture")
         if (disposal._tag === "RetainedFixture") expect(disposal.cause._tag).toBe("UnfinishedRun")
+        const artifactText = yield* (yield* FileSystem.FileSystem).readFileString(
+          QualificationArtifactLocator.make(
+            nodePath.join(
+              nodePath.dirname(fixture.container),
+              `${nodePath.basename(fixture.container)}.qualification.json`
+            )
+          )
+        )
+        const artifact = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ProductionMvpQualificationEvidence), {
+          reportInput: false,
+          onExcessProperty: "error"
+        })(artifactText)
+        expect(closeCount(artifact.operationCounts)).toBe(1)
+        expect(artifact.runs).toEqual([{ _tag: "Unfinished", runId: original.runId }])
+        expect(artifact.finalTracker).toMatchObject({ lifecycle: "Open", claims: claimsAfterThrottle.claims })
+        expect(artifactText).not.toContain("Controlled completion throttle")
+        expect(artifactText).not.toContain("controlled-hermetic-github-token")
+        expect(artifactText).not.toContain("controlled-hermetic-codex-credential")
         expect(yield* controller.activeRequestCount).toBe(0)
       })
     ).pipe(Effect.provide(fixtureLayer)),
