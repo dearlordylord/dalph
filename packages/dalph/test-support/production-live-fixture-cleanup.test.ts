@@ -16,9 +16,11 @@ const makeFixture = Effect.fn("ProductionLiveCleanupTest.makeFixture")(function*
   const root = ProductionLiveLocalContainer.make(yield* fs.makeTempDirectory({ prefix: "dalph-live-cleanup-" }))
   const repository = `${root}/repository`
   const journal = `${root}/journal.sqlite`
+  const privateStore = `${root}/private.json`
   yield* fs.makeDirectory(repository)
   yield* fs.writeFileString(`${repository}/owned.txt`, "owned\n")
   yield* fs.writeFileString(journal, "journal\n")
+  yield* fs.writeFileString(privateStore, "[]\n")
   const resources = [
     ProductionLiveLocalResource.cases.Repository.make({
       locator: repository,
@@ -27,6 +29,10 @@ const makeFixture = Effect.fn("ProductionLiveCleanupTest.makeFixture")(function*
     ProductionLiveLocalResource.cases.JournalDatabase.make({
       locator: journal,
       identity: yield* captureProductionLiveLocalIdentity(journal)
+    }),
+    ProductionLiveLocalResource.cases.ExpectedAtomicReplacement.make({
+      locator: privateStore,
+      identity: yield* captureProductionLiveLocalIdentity(privateStore)
     })
   ]
   return ProductionLiveLocalFixtureManifest.make({
@@ -54,6 +60,67 @@ it.effect("Alice removes exact Q leaves, then the exact empty container, and rer
   ).pipe(Effect.provide(NodeServices.layer))
 )
 
+it.effect("Alice removes the exact regular private store after its expected atomic replacement", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const manifest = yield* makeFixture()
+      const privateStore = manifest.resources.find(({ _tag }) => _tag === "ExpectedAtomicReplacement")
+      if (privateStore === undefined) return yield* Effect.die("missing private-store fixture")
+      const replacement = `${privateStore.locator}.replacement`
+      yield* fs.writeFileString(replacement, "replacement bytes must remain private\n")
+      yield* fs.rename(replacement, privateStore.locator)
+      const result = yield* cleanupProductionLiveFixture(manifest, completedController(manifest.invocationId))
+      expect(result).toEqual({ _tag: "Removed", removed: manifest.resources, retained: [] })
+      expect(yield* fs.exists(manifest.container.locator)).toBe(false)
+    })
+  ).pipe(Effect.provide(NodeServices.layer))
+)
+
+for (const replacementKind of ["SymbolicLink", "Directory"] as const) {
+  it.effect(`Alice retains an expected atomic replacement that became a ${replacementKind}`, () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const manifest = yield* makeFixture()
+        const privateStore = manifest.resources.find(({ _tag }) => _tag === "ExpectedAtomicReplacement")
+        const repository = manifest.resources.find(({ _tag }) => _tag === "Repository")
+        if (privateStore === undefined) return yield* Effect.die("missing private-store fixture")
+        if (repository === undefined) return yield* Effect.die("missing repository fixture")
+        yield* fs.remove(privateStore.locator)
+        if (replacementKind === "Directory") yield* fs.makeDirectory(privateStore.locator)
+        else yield* fs.symlink(repository.locator, privateStore.locator)
+        const result = yield* cleanupProductionLiveFixture(manifest, completedController(manifest.invocationId))
+        expect(result._tag).toBe("Retained")
+        expect(result.removed).toEqual([])
+        expect(result.retained).toContainEqual(
+          expect.objectContaining({ locator: privateStore.locator, reason: "UnexpectedReplacementKind" })
+        )
+        expect(yield* fs.exists(repository.locator)).toBe(true)
+      })
+    ).pipe(Effect.provide(NodeServices.layer))
+  )
+}
+
+it.effect("Alice retains all resources when an unexpected private-store sibling remains", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const manifest = yield* makeFixture()
+      const privateStore = manifest.resources.find(({ _tag }) => _tag === "ExpectedAtomicReplacement")
+      if (privateStore === undefined) return yield* Effect.die("missing private-store fixture")
+      yield* fs.writeFileString(`${privateStore.locator}.next`, "unresolved atomic write\n")
+      const result = yield* cleanupProductionLiveFixture(manifest, completedController(manifest.invocationId))
+      expect(result._tag).toBe("Retained")
+      expect(result.removed).toEqual([])
+      expect(result.retained).toContainEqual(
+        expect.objectContaining({ locator: `${privateStore.locator}.next`, reason: "UnexpectedContainerEntry" })
+      )
+      for (const resource of manifest.resources) expect(yield* fs.exists(resource.locator)).toBe(true)
+    })
+  ).pipe(Effect.provide(NodeServices.layer))
+)
+
 it.effect("Alice retains the exact container when an unrecorded child makes it nonempty", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -62,13 +129,16 @@ it.effect("Alice retains the exact container when an unrecorded child makes it n
       yield* fs.writeFileString(`${manifest.container.locator}/foreign.txt`, "foreign\n")
       const result = yield* cleanupProductionLiveFixture(manifest, completedController(manifest.invocationId))
       expect(result._tag).toBe("Retained")
-      expect(result.removed).toEqual(manifest.resources)
-      expect(result.retained).toEqual([
-        expect.objectContaining({ locator: manifest.container.locator, reason: "ContainerNonempty" })
-      ])
-      expect(result.retained[0]?.manualCommand).toContain("-maxdepth 1")
-      expect(result.retained[0]?.manualCommand).not.toMatch(/\brm\b/u)
+      expect(result.removed).toEqual([])
+      expect(result.retained).toContainEqual(
+        expect.objectContaining({
+          locator: `${manifest.container.locator}/foreign.txt`,
+          reason: "UnexpectedContainerEntry"
+        })
+      )
+      expect(result.retained.every(({ manualCommand }) => !/\brm\b/u.test(manualCommand))).toBe(true)
       expect(yield* fs.readFileString(`${manifest.container.locator}/foreign.txt`)).toBe("foreign\n")
+      for (const resource of manifest.resources) expect(yield* fs.exists(resource.locator)).toBe(true)
     })
   ).pipe(Effect.provide(NodeServices.layer))
 )

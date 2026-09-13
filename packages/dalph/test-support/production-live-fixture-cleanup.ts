@@ -28,6 +28,11 @@ export const ProductionLiveLocalIdentity = Schema.Struct({
 export type ProductionLiveLocalIdentity = typeof ProductionLiveLocalIdentity.Type
 
 const localResourceFields = { locator: Schema.NonEmptyString, identity: ProductionLiveLocalIdentity }
+const OriginalRegularFileIdentity = ProductionLiveLocalIdentity.check(
+  Schema.makeFilter((identity) =>
+    identity.kind === "File" ? undefined : "original atomic-replacement resource was not a file"
+  )
+)
 
 /** Each variant names one exact Q leaf; no variant grants authority over a parent or matching prefix. */
 export const ProductionLiveLocalResource = Schema.TaggedUnion({
@@ -37,7 +42,8 @@ export const ProductionLiveLocalResource = Schema.TaggedUnion({
   AttemptWorktreeRoot: localResourceFields,
   CodexStateDirectory: localResourceFields,
   CandidateRoot: localResourceFields,
-  PrivateStore: localResourceFields,
+  /** The Integrator publishes this exact direct-child file by atomic rename, so its final inode is expected to differ. */
+  ExpectedAtomicReplacement: { locator: Schema.NonEmptyString, identity: OriginalRegularFileIdentity },
   ConfigurationDocument: localResourceFields,
   ManifestDocument: localResourceFields,
   OwnershipMarker: localResourceFields
@@ -51,6 +57,8 @@ const UniqueResources = Schema.Array(ProductionLiveLocalResource).check(
       if (HashSet.has(locators, resource.locator)) return "duplicate local resource locator"
       locators = HashSet.add(locators, resource.locator)
     }
+    if (resources.filter((resource) => resource._tag === "ExpectedAtomicReplacement").length !== 1)
+      return "manifest must contain exactly one expected atomic replacement"
     return undefined
   })
 )
@@ -78,6 +86,8 @@ const RetentionReason = Schema.Literals([
   "Unreadable",
   "DeletionUnproved",
   "ContainerNonempty",
+  "UnexpectedContainerEntry",
+  "UnexpectedReplacementKind",
   "BlockedByUnprovedResource"
 ])
 type RetentionReason = typeof RetentionReason.Type
@@ -186,31 +196,65 @@ export const cleanupProductionLiveFixture = Effect.fn("ProductionLiveFixture.cle
       ]
     })
 
-  const receipts = [
-    { locator: manifest.container.locator, identity: manifest.container.identity },
-    ...manifest.resources
-  ]
-  for (const receipt of receipts) {
+  const containerIdentity = yield* observeIdentity(manifest.container.locator)
+  if (containerIdentity._tag === "Failure")
+    return ProductionLiveFixtureCleanup.cases.Retained.make({
+      removed: [],
+      retained: allLocators(manifest, "Unreadable")
+    })
+  if (!sameIdentity(manifest.container.identity, containerIdentity.success))
+    return ProductionLiveFixtureCleanup.cases.Retained.make({
+      removed: [],
+      retained: allLocators(manifest, "ChangedIdentity")
+    })
+
+  const fs = yield* FileSystem.FileSystem
+  const entries = yield* fs.readDirectory(manifest.container.locator).pipe(Effect.result)
+  if (entries._tag === "Failure")
+    return ProductionLiveFixtureCleanup.cases.Retained.make({
+      removed: [],
+      retained: allLocators(manifest, "Unreadable")
+    })
+  const declaredNames = new Set(manifest.resources.map((resource) => nodePath.basename(resource.locator)))
+  const unexpected = entries.success.filter((entry) => !declaredNames.has(entry))
+  if (unexpected.length > 0)
+    return ProductionLiveFixtureCleanup.cases.Retained.make({
+      removed: [],
+      retained: [
+        ...unexpected.map((entry) =>
+          retained(nodePath.join(manifest.container.locator, entry), "UnexpectedContainerEntry")
+        ),
+        ...allLocators(manifest, "BlockedByUnprovedResource")
+      ]
+    })
+
+  for (const receipt of manifest.resources) {
     const current = yield* observeIdentity(receipt.locator)
     if (current._tag === "Failure")
       return ProductionLiveFixtureCleanup.cases.Retained.make({
         removed: [],
         retained: [
-          retained(receipt.locator, "Unreadable", receipt.locator === manifest.container.locator),
+          retained(receipt.locator, "Unreadable"),
           ...allLocators(manifest, "BlockedByUnprovedResource").filter(({ locator }) => locator !== receipt.locator)
         ]
       })
-    if (!sameIdentity(receipt.identity, current.success))
+    if (receipt._tag === "ExpectedAtomicReplacement" && current.success.kind !== "File")
       return ProductionLiveFixtureCleanup.cases.Retained.make({
         removed: [],
         retained: [
-          retained(receipt.locator, "ChangedIdentity", receipt.locator === manifest.container.locator),
+          retained(receipt.locator, "UnexpectedReplacementKind"),
+          ...allLocators(manifest, "BlockedByUnprovedResource").filter(({ locator }) => locator !== receipt.locator)
+        ]
+      })
+    if (receipt._tag !== "ExpectedAtomicReplacement" && !sameIdentity(receipt.identity, current.success))
+      return ProductionLiveFixtureCleanup.cases.Retained.make({
+        removed: [],
+        retained: [
+          retained(receipt.locator, "ChangedIdentity"),
           ...allLocators(manifest, "BlockedByUnprovedResource").filter(({ locator }) => locator !== receipt.locator)
         ]
       })
   }
-
-  const fs = yield* FileSystem.FileSystem
   const removed = MutableList.make<ProductionLiveLocalResource>()
   for (const resource of manifest.resources) {
     const deletion = yield* fs.remove(resource.locator, { recursive: true }).pipe(Effect.result)
