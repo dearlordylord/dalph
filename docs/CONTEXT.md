@@ -713,6 +713,13 @@ or integration-resource requirements. Constructing, comparing, or observing a
 proposal performs no action and acquires no process-local resource.
 _Avoid_: Workflow occurrence, admitted action, runtime ownership
 
+**Proposal evaluation position**:
+The accepted workflow-journal position at which a tracker graph or recovered
+workflow proposal was evaluated. It is distinct from the admitted owner's
+original ordering evidence and from the task, transition, ordinal and
+responsibility positions that identify and order its work.
+_Avoid_: Graph-read identity, replacement admission, current owner revision
+
 **Planned-attempt protocol guard**:
 The process-local exclusion held while Dalph either records an executor command
 intent or proves and records that the same exact Run and planned attempt may be

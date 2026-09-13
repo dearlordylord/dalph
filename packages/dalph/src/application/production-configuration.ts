@@ -209,6 +209,8 @@ const identitySegment = (value: string): string => {
   return `${encoded.length}-${encoded}`
 }
 
+const resourceChunkPayloadWidth = 128
+
 /** Pure codec; Base SHA is intentionally absent because the workflow protocol owns it. */
 export const deriveProductionPlannedAttemptLocations = (
   root: ProductionPlannedAttemptWorktreeRoot,
@@ -217,10 +219,17 @@ export const deriveProductionPlannedAttemptLocations = (
   ordinal: PlannedTaskAttemptOrdinal
 ): ProductionPlannedAttemptLocations => {
   const resource = `run-${identitySegment(runId)}-task-${identitySegment(taskId)}-attempt-${String(ordinal)}`
+  // Keep every tuple byte while bounding filesystem/ref components. The reserved
+  // terminal cannot be a payload chunk or become another attempt's parent.
+  const components: Array<string> = []
+  for (let offset = 0; offset < resource.length; offset += resourceChunkPayloadWidth) {
+    components.push(`part-${resource.slice(offset, offset + resourceChunkPayloadWidth)}`)
+  }
+  components.push("_leaf")
   return ProductionPlannedAttemptLocations.make({
     attemptId: AttemptId.make(`attempt:${resource}`),
-    branch: TaskBranchRef.make(`refs/heads/dalph/${resource}`),
-    worktree: WorktreeLocator.make(nodePath.join(root, resource))
+    branch: TaskBranchRef.make(`refs/heads/dalph/${components.join("/")}`),
+    worktree: WorktreeLocator.make(nodePath.join(root, ...components))
   })
 }
 

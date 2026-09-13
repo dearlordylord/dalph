@@ -1,6 +1,7 @@
 import { plannedAttemptExecutorCorrelation, plannedAttemptExecutorCorrelationKey, type TaskId } from "@dalph/contracts"
 import { admittedProposalFor, type DeliveryRuntimeLiveOwnerSnapshot } from "./delivery-runtime-observation.js"
 import type { DeliveryActionProposal } from "./delivery-action-proposal.js"
+import { currentEvaluationPositionMatches } from "./delivery-status-proposal-compatibility.js"
 import type {
   DeliveryRuntimeEvaluation,
   ExactWorkflowObligation,
@@ -175,6 +176,7 @@ const liveOwnerConflict = (
 const validateLiveOwnerAdmissionForStatus = (
   subject: DeliveryStatusSubject,
   currentProposals: ReadonlyArray<DeliveryActionProposal>,
+  evaluation: DeliveryRuntimeEvaluation,
   owner: DeliveryRuntimeLiveOwnerSnapshot
 ): DeliveryStatusProjectionConflict | null => {
   const proposalId = owner.proposal.id
@@ -187,7 +189,9 @@ const validateLiveOwnerAdmissionForStatus = (
     return liveOwnerConflict(subject, proposalId, detail)
   }
   const current = currentProposals.find(({ id }) => id === proposalId)
-  return current !== undefined && !proposalEquals(owner.proposal, current)
+  return current !== undefined &&
+    !proposalEquals(owner.proposal, current) &&
+    !currentEvaluationPositionMatches(owner.proposal, current, evaluation)
     ? liveOwnerConflict(subject, proposalId, "a live owner proposal differs from the current frontier proposal")
     : null
 }
@@ -217,7 +221,7 @@ export const validateLiveOwnersForStatus = (
     )
   }
   for (const owner of liveOwners) {
-    const conflict = validateLiveOwnerAdmissionForStatus(subject, proposals, owner)
+    const conflict = validateLiveOwnerAdmissionForStatus(subject, proposals, evaluation, owner)
     if (conflict !== null) return conflict
   }
   return null

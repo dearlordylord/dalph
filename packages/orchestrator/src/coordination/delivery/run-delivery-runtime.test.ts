@@ -33,7 +33,7 @@ import {
   makeFreshTaskCommitmentForTest
 } from "../../../test/support/fresh-task-admission.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
-import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
+import { InitialControlPolicy, initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { IntegratorBoundaryUnavailable } from "./integrator-boundary.js"
 import {
   deterministicOperationIdAllocatorLayer,
@@ -43,7 +43,11 @@ import {
 import { deterministicTaskClaimAcquisitionPlannerLayer } from "../../workflow/protocols/task-claim-acquisition/plan.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
-import { InterruptibleWorkflowBoundaryIntent } from "../../workflow/interpretation/interpreter.js"
+import { InterruptibleWorkflowBoundaryIntent, WorkflowInterpreter } from "../../workflow/interpretation/interpreter.js"
+import { journaledTrackerGraphRead } from "../../workflow/protocols/task-tracker-read/protocol.js"
+import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { Journal } from "./journal.js"
+import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
@@ -749,6 +753,307 @@ it.effect("publishes current-first exact live-owner observations until standalon
       expect(unrelatedIdentityDefect.detail).toBe("multiple live lifecycle snapshots claim one exact proposal")
     })
   )
+)
+
+it.effect("keeps the original graph-read owner while its acknowledged intent advances the current prefix", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const admitted = trackerGraphReadProposalOf({
+        acceptedAt: JournalPosition.make(1),
+        purpose: "EstablishCurrentGraph",
+        runId,
+        target
+      })
+      const initial = withProposals(yield* baseEvaluation, [admitted])
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const journal = yield* Journal
+      const inRun = yield* InRunJournal
+      const accepted = yield* AcceptedJournalReader
+      const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(
+        yield* makeIntegrationTargetResourceController()
+      )
+      const reached = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const advanced = yield* Deferred.make<DeliveryRuntimeObservationState>()
+      const calls = yield* Ref.make<ReadonlyArray<OperationId>>([])
+      const snapshot = projectTrackerSnapshot({ tasks: [], revision: "held-current-graph" })
+      if (snapshot._tag === "Invalid") return expect.fail("empty controlled graph must be valid")
+      const unused = () => Effect.die("unrequested workflow boundary")
+      const interpreter = WorkflowInterpreter.of({
+        acquireTaskClaim: unused,
+        readTaskClaim: unused,
+        readTargetLineage: unused,
+        readTaskWorktree: unused,
+        readTaskWorkSpecification: unused,
+        reconcileTaskWorktree: unused,
+        recordTaskAttemptPlan: unused,
+        releaseTaskClaim: unused,
+        readTrackerGraph: (operation) =>
+          Ref.update(calls, (values) => [...values, operation.operationId]).pipe(
+            Effect.andThen(Deferred.succeed(reached, undefined)),
+            Effect.andThen(Deferred.await(release)),
+            Effect.as(snapshot.snapshot)
+          )
+      })
+      const observer = yield* capabilities.resources.runtimeObservation.changes.pipe(
+        Stream.runForEach((state) =>
+          state._tag === "Ready" &&
+          state.evaluation.acceptedAt === JournalPosition.make(2) &&
+          state.liveOwners.length === 1
+            ? Deferred.succeed(advanced, state)
+            : Effect.void
+        ),
+        Effect.forkChild
+      )
+      const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
+        Effect.provide(identitySupportLayers),
+        Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({
+            execute: (action, lease) =>
+              Effect.gen(function* () {
+                if (action._tag !== "FreshOperationAction")
+                  return yield* Effect.die("graph read must materialize one operation")
+                const operation = makeTrackerGraphObservationOperation(
+                  { _tag: "WorkflowEstablishment" },
+                  action.operationId,
+                  target
+                )
+                yield* journaledTrackerGraphRead(
+                  runId,
+                  interpreter,
+                  inRun
+                )(
+                  operation,
+                  lease.recordIntent(action.operationId).pipe(
+                    Effect.andThen(
+                      Effect.gen(function* () {
+                        const acceptedAt = (yield* journal.state.get.pipe(Effect.orDie)).position
+                        expect(acceptedAt).toBe(JournalPosition.make(2))
+                        const current = trackerGraphReadProposalOf({
+                          acceptedAt,
+                          purpose: "EstablishCurrentGraph",
+                          runId,
+                          target
+                        })
+                        yield* relation.publish({ ...withProposals(initial, [current]), acceptedAt })
+                      })
+                    )
+                  )
+                ).pipe(Effect.provideService(AcceptedJournalReader, accepted))
+                yield* relation.publish({
+                  ...withProposals(initial, []),
+                  acceptedAt: (yield* journal.state.get).position
+                })
+                return { _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult
+              })
+          })
+        ),
+        Effect.forkChild
+      )
+      yield* Effect.race(
+        Deferred.await(reached),
+        Fiber.join(runtime).pipe(Effect.andThen(Effect.die("runtime ended before the held graph read")))
+      )
+      const held = yield* Effect.race(
+        Deferred.await(advanced),
+        Fiber.join(runtime).pipe(Effect.andThen(Effect.die("runtime ended before current-prefix publication")))
+      )
+      if (held._tag !== "Ready") return expect.fail("held owner must be ready")
+      expect(held.evaluation.acceptedAt).toBe(JournalPosition.make(2))
+      expect(held.liveOwners).toMatchObject([{ proposal: admitted, intent: "IntentRecorded" }])
+      expect(held.liveOwners[0]?.proposal.order).toEqual({
+        _tag: "TrackerGraphOrder",
+        acceptedAt: JournalPosition.make(1)
+      })
+      expect(yield* Ref.get(calls)).toEqual([
+        held.liveOwners[0]?._tag === "MaterializedDeliveryAction" ? held.liveOwners[0].operationId : undefined
+      ])
+      expect(deliveryStatusOf(DeliveryStatusSubject.cases.Run.make({ runId }), held)).toMatchObject({
+        _tag: "DeliveryStatusAvailable"
+      })
+      expect(
+        validateLiveOwnersForStatus(DeliveryStatusSubject.cases.Run.make({ runId }), held.evaluation, held.liveOwners)
+      ).toBeNull()
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(runtime)
+      yield* Fiber.join(observer)
+      const final = yield* capabilities.resources.runtimeObservation.get
+      expect(final).toMatchObject({ _tag: "Closed", final: { liveOwners: [] } })
+      expect(yield* Ref.get(calls)).toHaveLength(1)
+    })
+  ).pipe(
+    Effect.provide(
+      liveJournalTestLayer({
+        runId,
+        target,
+        records: [
+          makeWorkflowRunBeganRecord(
+            runId,
+            target,
+            InitialControlPolicy.make({ taskExecutionCapacity: policy.taskExecutionCapacity })
+          )
+        ]
+      })
+    )
+  )
+)
+
+it.effect(
+  "keeps the original recovered claim-read owner after its actual acknowledged intent advances evaluation",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const journal = yield* Journal
+        const inRun = yield* InRunJournal
+        const initialJournal = yield* journal.state.get
+        const originalPosition = initialJournal.position
+        const currentPosition = JournalPosition.make(originalPosition + 1)
+        const claimRecord = effectiveAdmissionHistory.records[2]
+        if (claimRecord?.event._tag !== "TaskClaimAcquired")
+          return expect.fail("real prefix must retain acquired claim")
+        const claim = claimRecord.event.claim
+        const claimRead = makeTaskClaimObservationOperation(
+          OperationId.make("held-recovered-claim-read"),
+          target,
+          claim.taskId
+        )
+        const derive = (acceptedAt: JournalPosition) => {
+          const proposal = deliveryProposalsOf({
+            acceptedAt,
+            acceptedOperationIds: HashSet.empty(),
+            fresh: [],
+            integrationResponsibilities: [],
+            responsibilities: [],
+            runId,
+            transitions: [
+              RunnableFrontierTransition.ObserveResponsibleTaskClaim({ operation: claimRead, taskId: claim.taskId })
+            ]
+          }).ticketDelivery[0]
+          if (proposal === undefined) return expect.fail("claim prefix must derive one recovered proposal")
+          return proposal
+        }
+        const admitted = derive(originalPosition)
+        const base = yield* baseEvaluation
+        const initial = {
+          ...withProposals(base, [admitted]),
+          acceptedAt: originalPosition,
+          current: { ...base.current, trackerGraph: initialJournal.graph }
+        }
+        const relation = yield* dynamicEvaluationSignal(initial)
+        const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(
+          yield* makeIntegrationTargetResourceController()
+        )
+        const reached = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const advanced = yield* Deferred.make<DeliveryRuntimeObservationState>()
+        const calls = yield* Ref.make<ReadonlyArray<OperationId>>([])
+        const unused = () => Effect.die("unrequested workflow boundary")
+        const outside = WorkflowInterpreter.of({
+          acquireTaskClaim: unused,
+          readTrackerGraph: unused,
+          readTargetLineage: unused,
+          readTaskWorktree: unused,
+          readTaskWorkSpecification: unused,
+          reconcileTaskWorktree: unused,
+          recordTaskAttemptPlan: unused,
+          releaseTaskClaim: unused,
+          readTaskClaim: (operation) =>
+            Ref.update(calls, (values) => [...values, operation.operationId]).pipe(
+              Effect.andThen(Deferred.succeed(reached, undefined)),
+              Effect.andThen(Deferred.await(release)),
+              Effect.as({ _tag: "AuthoritativeTaskClaimObserved" as const, observation: claim })
+            )
+        })
+        const interpreter = yield* WorkflowInterpreter.pipe(
+          Effect.provide(journaledWorkflowInterpreterLayer(runId, Layer.succeed(WorkflowInterpreter, outside)))
+        )
+        const observer = yield* capabilities.resources.runtimeObservation.changes.pipe(
+          Stream.runForEach((state) =>
+            state._tag === "Ready" && state.evaluation.acceptedAt === currentPosition && state.liveOwners.length === 1
+              ? Deferred.succeed(advanced, state)
+              : Effect.void
+          ),
+          Effect.forkChild
+        )
+        const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
+          Effect.provide(identitySupportLayers),
+          Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+          Effect.provideService(
+            DeliveryActionExecutor,
+            DeliveryActionExecutor.of({
+              execute: (action, lease) =>
+                Effect.gen(function* () {
+                  if (action._tag !== "FreshOperationAction")
+                    return yield* Effect.die("recovered claim read must materialize exact operation")
+                  const onIntent = lease.recordIntent(action.operationId).pipe(
+                    Effect.andThen(
+                      Effect.gen(function* () {
+                        const acceptedAt = (yield* journal.state.get.pipe(Effect.orDie)).position
+                        expect(acceptedAt).toBe(currentPosition)
+                        yield* relation.publish({ ...withProposals(initial, [derive(acceptedAt)]), acceptedAt })
+                      })
+                    )
+                  )
+                  yield* interpreter.readTaskClaim({ ...claimRead, operationId: action.operationId }, onIntent)
+                  yield* relation.publish({
+                    ...withProposals(initial, []),
+                    acceptedAt: (yield* journal.state.get).position
+                  })
+                  return { _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult
+                })
+            })
+          ),
+          Effect.forkChild
+        )
+        yield* Effect.race(
+          Deferred.await(reached),
+          Fiber.join(runtime).pipe(Effect.andThen(Effect.die("runtime ended before claim boundary")))
+        )
+        const held = yield* Deferred.await(advanced)
+        if (held._tag !== "Ready") return expect.fail("held claim owner must be ready")
+        const owner = held.liveOwners[0]
+        if (owner?._tag !== "MaterializedDeliveryAction")
+          return expect.fail("original claim operation must remain materialized")
+        expect(held.evaluation.acceptedAt).toBe(currentPosition)
+        expect(owner.proposal).toEqual(admitted)
+        expect(owner.proposal.order).toEqual({
+          _tag: "RecoveredWorkflowOrder",
+          acceptedAt: originalPosition,
+          frontierOrdinal: 0,
+          responsibilityBeganAt: null,
+          taskId: claim.taskId,
+          transition: "ObserveResponsibleTaskClaim"
+        })
+        expect(owner.intent).toBe("IntentRecorded")
+        expect(yield* Ref.get(calls)).toEqual([owner.operationId])
+        const intent = (yield* inRun.read(runId)).at(-1)
+        expect(intent).toMatchObject({
+          position: currentPosition,
+          event: {
+            _tag: "TaskTrackerReadIntentRecorded",
+            operation: { _tag: "ReadTaskClaim", operationId: owner.operationId, taskId: claim.taskId }
+          }
+        })
+        expect(
+          validateLiveOwnersForStatus(DeliveryStatusSubject.cases.Run.make({ runId }), held.evaluation, held.liveOwners)
+        ).toBeNull()
+        expect(deliveryStatusOf(DeliveryStatusSubject.cases.Run.make({ runId }), held)).toMatchObject({
+          _tag: "DeliveryStatusAvailable"
+        })
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(runtime)
+        yield* Fiber.join(observer)
+        expect(yield* capabilities.resources.runtimeObservation.get).toMatchObject({
+          _tag: "Closed",
+          final: { liveOwners: [] }
+        })
+        expect(yield* Ref.get(calls)).toHaveLength(1)
+      })
+    ).pipe(
+      Effect.provide(liveJournalTestLayer({ runId, target, records: effectiveAdmissionHistory.records.slice(0, 5) }))
+    )
 )
 
 it.effect("interrupts an admitted tracker owner under Exit and starts no successor action", () =>

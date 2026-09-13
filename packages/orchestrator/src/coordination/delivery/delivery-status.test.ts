@@ -1074,6 +1074,228 @@ it("retains materialized operation identity through live and settled owner chron
   })
 })
 
+it("keeps the exact admitted graph-read owner beside its coherent advanced current prefix", () => {
+  const admitted = trackerGraphReadProposalOf({
+    acceptedAt: JournalPosition.make(1),
+    purpose: "EstablishCurrentGraph",
+    runId,
+    target
+  })
+  const current = {
+    ...admitted,
+    actionIdentity: { _tag: "FreshOperationIdRequired" as const, source: { _tag: "Allocate" as const } },
+    order: { _tag: "TrackerGraphOrder" as const, acceptedAt: JournalPosition.make(2) }
+  }
+  const owner = ownerOf(admitted, false)
+  const observation = evaluationOf({ proposals: [current], liveOwners: [owner] })
+  if (observation._tag !== "Ready") return expect.fail("status fixture must be ready")
+  const coherent = { ...observation, evaluation: { ...observation.evaluation, acceptedAt: JournalPosition.make(2) } }
+  const subject = DeliveryStatusSubject.cases.Run.make({ runId })
+  expect(deliveryStatusOf(subject, coherent)).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  expect(owner.proposal).toEqual(admitted)
+  expect(owner.proposal.order).toEqual({ _tag: "TrackerGraphOrder", acceptedAt: JournalPosition.make(1) })
+
+  const initial = trackerGraphReadProposalOf({ acceptedAt: null, purpose: "EstablishCurrentGraph", runId, target })
+  expect(deliveryStatusOf(subject, { ...coherent, liveOwners: [ownerOf(initial, false)] })).toMatchObject({
+    _tag: "DeliveryStatusAvailable"
+  })
+})
+
+it("rejects graph-read order exceptions for altered proposals, witnesses, and incoherent prefixes", () => {
+  const admitted = trackerGraphReadProposalOf({
+    acceptedAt: JournalPosition.make(1),
+    purpose: "EstablishCurrentGraph",
+    runId,
+    target
+  })
+  const current = {
+    ...admitted,
+    actionIdentity: { _tag: "FreshOperationIdRequired" as const, source: { _tag: "Allocate" as const } },
+    order: { _tag: "TrackerGraphOrder" as const, acceptedAt: JournalPosition.make(2) }
+  }
+  const genuine = ownerOf(admitted, false)
+  const subject = DeliveryStatusSubject.cases.Run.make({ runId })
+  const project = (
+    proposal: DeliveryActionProposal,
+    owners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot> = [genuine],
+    acceptedAt: JournalPosition | null = JournalPosition.make(2)
+  ) => {
+    const observation = evaluationOf({ proposals: [proposal], liveOwners: owners })
+    if (observation._tag !== "Ready") return expect.fail("status fixture must be ready")
+    return deliveryStatusOf(subject, { ...observation, evaluation: { ...observation.evaluation, acceptedAt } })
+  }
+  const changed: ReadonlyArray<DeliveryActionProposal> = [
+    {
+      ...current,
+      actionIdentity: {
+        _tag: "FreshOperationIdRequired",
+        source: { _tag: "Preserve", operationId: OperationId.make("changed-graph-action") }
+      }
+    },
+    {
+      ...current,
+      admission: {
+        ...current.admission,
+        taskWorkPosition: {
+          _tag: "TaskWorkPositionRequired",
+          mode: "ReserveOrReuse",
+          taskId: TaskId.make("changed-task")
+        }
+      }
+    },
+    { ...current, owner: "TicketDelivery" },
+    {
+      ...current,
+      route: {
+        _tag: "FreshWorkflowRoute",
+        step: {
+          _tag: "ReadCurrentTaskGraph",
+          predecessorOperationId: OperationId.make("changed-route"),
+          task: {
+            id: TaskId.make("changed-task"),
+            lifecycle: TaskLifecycle.cases.Open.make({}),
+            parentTaskId: null,
+            prerequisiteIds: []
+          }
+        }
+      }
+    },
+    { ...current, route: { ...current.route, target: FixtureTarget.make("changed-target") } },
+    { ...current, waitsForLiveOperationId: OperationId.make("changed-wait") },
+    {
+      ...current,
+      order: {
+        _tag: "FreshWorkflowOrder",
+        frontierOrdinal: DeliveryProposalOrdinal.make(0),
+        step: "ReadCurrentTaskGraph",
+        taskId: TaskId.make("changed-task")
+      }
+    },
+    { ...current, order: { _tag: "TrackerGraphOrder", acceptedAt: null } },
+    { ...current, order: { _tag: "TrackerGraphOrder", acceptedAt: JournalPosition.make(3) } }
+  ]
+  for (const proposal of changed) expect(project(proposal)).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  expect(project(admitted, [ownerOf(current, false)], JournalPosition.make(1))).toBeInstanceOf(
+    DeliveryStatusProjectionConflict
+  )
+  expect(
+    project({ ...current, order: { _tag: "TrackerGraphOrder", acceptedAt: null } }, [genuine], null)
+  ).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  expect(project(current, [{ ...genuine, proposal: current }])).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  expect(project(current, [genuine, genuine])).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  expect(project(current, [{ ...genuine, admissionAuthority: { ...genuine.admissionAuthority } }])).toBeInstanceOf(
+    DeliveryStatusProjectionConflict
+  )
+  expect(
+    project(current, [
+      { ...ownerOf({ ...admitted, id: DeliveryProposalId.make("different-admission") }, false), proposal: admitted }
+    ])
+  ).toBeInstanceOf(DeliveryStatusProjectionConflict)
+})
+
+it("compares only the recovered evaluation position while preserving exact causal proposal evidence", () => {
+  const taskId = TaskId.make("recovered-prefix-task")
+  const derived = deliveryProposalsOf({
+    acceptedAt: JournalPosition.make(1),
+    acceptedOperationIds: HashSet.empty(),
+    fresh: [],
+    integrationResponsibilities: [],
+    responsibilities: [],
+    runId,
+    transitions: [
+      RunnableFrontierTransition.ObserveResponsibleTaskClaim({
+        operation: makeTaskClaimObservationOperation(OperationId.make("recovered-prefix-read"), target, taskId),
+        taskId
+      })
+    ]
+  }).ticketDelivery[0]
+  if (
+    derived === undefined ||
+    derived.order._tag !== "RecoveredWorkflowOrder" ||
+    derived.route._tag !== "RecoveredNewActionRoute" ||
+    derived.route.action._tag !== "ReadTaskClaim"
+  )
+    return expect.fail("must derive recovered responsible claim read")
+  const admitted = {
+    ...derived,
+    actionIdentity: { _tag: "FreshOperationIdRequired" as const, source: { _tag: "Allocate" as const } },
+    order: derived.order,
+    route: { _tag: "RecoveredNewActionRoute" as const, action: derived.route.action }
+  }
+  const current = { ...admitted, order: { ...admitted.order, acceptedAt: JournalPosition.make(2) } }
+  const genuine = ownerOf(admitted, false)
+  const subject = DeliveryStatusSubject.cases.Run.make({ runId })
+  const project = (
+    proposal: DeliveryActionProposal,
+    owners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot> = [genuine],
+    acceptedAt: JournalPosition | null = JournalPosition.make(2)
+  ) => {
+    const observation = evaluationOf({ proposals: [proposal], liveOwners: owners })
+    if (observation._tag !== "Ready") return expect.fail("status fixture must be ready")
+    return deliveryStatusOf(subject, { ...observation, evaluation: { ...observation.evaluation, acceptedAt } })
+  }
+  expect(project(current)).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  expect(genuine.proposal).toEqual(admitted)
+  const initial = { ...admitted, order: { ...admitted.order, acceptedAt: null } }
+  expect(project(current, [ownerOf(initial, false)])).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  const changed: ReadonlyArray<DeliveryActionProposal> = [
+    { ...current, order: { ...current.order, taskId: TaskId.make("other-recovered-task") } },
+    { ...current, order: { ...current.order, transition: "ObserveStoppedAttemptClaim" } },
+    { ...current, order: { ...current.order, frontierOrdinal: DeliveryProposalOrdinal.make(1) } },
+    { ...current, order: { ...current.order, responsibilityBeganAt: JournalPosition.make(1) } },
+    {
+      ...current,
+      actionIdentity: {
+        _tag: "FreshOperationIdRequired",
+        source: { _tag: "Preserve", operationId: OperationId.make("different-recovered-action") }
+      }
+    },
+    {
+      ...current,
+      admission: {
+        ...current.admission,
+        taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId }
+      }
+    },
+    {
+      ...current,
+      route: {
+        ...current.route,
+        action: {
+          ...current.route.action,
+          operation: { ...current.route.action.operation, target: FixtureTarget.make("different-recovered-target") }
+        }
+      }
+    },
+    {
+      ...current,
+      route: { ...current.route, action: { ...current.route.action, taskId: TaskId.make("different-read-payload") } }
+    },
+    { ...current, route: { _tag: "TrackerGraphReadRoute", purpose: "EstablishCurrentGraph", target } },
+    { ...current, waitsForLiveOperationId: OperationId.make("different-recovered-wait") },
+    { ...current, order: { _tag: "TrackerGraphOrder", acceptedAt: JournalPosition.make(2) } },
+    { ...current, order: { ...current.order, acceptedAt: JournalPosition.make(3) } }
+  ]
+  for (const proposal of changed) expect(project(proposal)).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  expect(project(admitted, [ownerOf(current, false)], JournalPosition.make(1))).toBeInstanceOf(
+    DeliveryStatusProjectionConflict
+  )
+  expect(project(initial, [genuine], null)).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  expect(project(current, [{ ...genuine, proposal: current }])).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  expect(project(current, [genuine, genuine])).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  expect(project(current, [{ ...genuine, admissionAuthority: { ...genuine.admissionAuthority } }])).toBeInstanceOf(
+    DeliveryStatusProjectionConflict
+  )
+  expect(
+    project(current, [
+      {
+        ...ownerOf({ ...admitted, id: DeliveryProposalId.make("other-recovered-admission") }, false),
+        proposal: admitted
+      }
+    ])
+  ).toBeInstanceOf(DeliveryStatusProjectionConflict)
+})
+
 it("fails closed for duplicate or mismatched live-owner snapshots", () => {
   const proposal = taskProposalOf("duplicate-owner-proposal", TaskId.make("A"))
   const genuine = ownerOf(proposal, false)
