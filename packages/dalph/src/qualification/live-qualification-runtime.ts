@@ -54,7 +54,8 @@ import {
   captureProductionLiveLocalIdentity,
   ProductionLiveLocalContainer,
   ProductionLiveLocalFixtureManifest,
-  ProductionLiveLocalResource
+  ProductionLiveLocalResource,
+  ProductionLiveLocalResourceLocator
 } from "./live-fixture-cleanup.js"
 import {
   makeProductionLiveQualificationNodeBoundary,
@@ -76,6 +77,21 @@ const expectedExecutorTurns = 2
 const expectedIntegratorTurns = 2
 const expectedTotalTurns = 4
 const missingChronologyIndex = -1
+
+const CompletedLiveGithubObservation = Schema.Struct({
+  lifecycle: Schema.Literal("CompletedSuccessfully"),
+  claim: Schema.Literal("Unclaimed"),
+  responses: Schema.Struct({
+    executor: Schema.Literal(expectedExecutorTurns),
+    integrator: Schema.Literal(expectedIntegratorTurns),
+    total: Schema.Literal(expectedTotalTurns)
+  })
+})
+
+class ProductionLiveGitObservationFailure extends Schema.TaggedError<ProductionLiveGitObservationFailure>()(
+  "ProductionLiveGitObservationFailure",
+  { operation: Schema.Literal("ReadHead") }
+) {}
 
 /** Locates the one operator-selected safe manifest file; it is not Q itself. */
 export const ProductionLiveQualificationManifestLocator = canonicalAbsolute("live qualification manifest").pipe(
@@ -133,7 +149,7 @@ export interface ProductionLiveLocalFixture {
   readonly configuration: ProductionRepositoryHostConfiguration
   readonly configurationPath: ProductionConfigurationLocator
   readonly initialTargetCommit: GitCommitSha
-  readonly applicationServerObservationPath: string
+  readonly applicationServerObservationPath: ProductionLiveLocalResourceLocator
   readonly localManifest: ProductionLiveLocalFixtureManifest
 }
 
@@ -198,7 +214,9 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
   const evidenceStoreRoot = at("evidence")
   const plannedAttemptWorktreeRoot = at("tasks")
   const codexStateDirectory = at("codex")
-  const codexAppServerObservationPath = nodePath.join(codexStateDirectory, "app-server-processes")
+  const codexAppServerObservationPath = ProductionLiveLocalResourceLocator.make(
+    nodePath.join(codexStateDirectory, "app-server-processes")
+  )
   const codexAppServerWrapper = nodePath.join(codexStateDirectory, "codex-app-server-observer")
   const integratorCandidateWorktreeRoot = at("candidates")
   const integratorPrivateStore = at("private.json")
@@ -409,17 +427,7 @@ export const deriveProductionLiveQualificationEvidenceObservations = (
     forwardedGithubRequestCount <= 0
   )
     return Option.none()
-  const final = Schema.decodeUnknownOption(
-    Schema.Struct({
-      lifecycle: Schema.Literal("CompletedSuccessfully"),
-      claim: Schema.Literal("Unclaimed"),
-      responses: Schema.Struct({
-        executor: Schema.Literal(expectedExecutorTurns),
-        integrator: Schema.Literal(expectedIntegratorTurns),
-        total: Schema.Literal(expectedTotalTurns)
-      })
-    })
-  )(completion.facts.github)
+  const final = Schema.decodeUnknownOption(CompletedLiveGithubObservation)(completion.facts.github)
   if (Option.isNone(final)) return Option.none()
   const gitObservationTags = new Set([
     "PlannedAttemptWorktreeObserved",
@@ -503,17 +511,7 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
   const applicationServerProcessIdentities = yield* readApplicationServerProcessIdentities(fixture).pipe(
     Effect.mapError(() => qualificationFailed("EvidenceValidation"))
   )
-  const githubFinal = Schema.decodeUnknownOption(
-    Schema.Struct({
-      lifecycle: Schema.Literal("CompletedSuccessfully"),
-      claim: Schema.Literal("Unclaimed"),
-      responses: Schema.Struct({
-        executor: Schema.Literal(expectedExecutorTurns),
-        integrator: Schema.Literal(expectedIntegratorTurns),
-        total: Schema.Literal(expectedTotalTurns)
-      })
-    })
-  )(completion.facts.github)
+  const githubFinal = Schema.decodeUnknownOption(CompletedLiveGithubObservation)(completion.facts.github)
   const responseCounts =
     completion.facts.applicationServerCount === 1 && applicationServerProcessIdentities.length === 1
   if (Option.isNone(githubFinal) || !responseCounts)
@@ -790,7 +788,9 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
         .runInWorktree(GitRepositoryLocator.make(worktree), ["rev-parse", "HEAD"])
         .pipe(
           Effect.flatMap((result) =>
-            result.exitCode === 0 ? Effect.succeed(result.stdout.trim()) : Effect.fail(undefined)
+            result.exitCode === 0
+              ? Effect.succeed(result.stdout.trim())
+              : Effect.fail(new ProductionLiveGitObservationFailure({ operation: "ReadHead" }))
           )
         )
     )

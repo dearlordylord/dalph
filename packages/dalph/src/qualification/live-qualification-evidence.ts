@@ -171,17 +171,10 @@ const SuccessfulCleanup = Schema.Struct({
   })
 })
 
-const QualificationArtifactStage = Schema.Literals(["PreCleanup", "Final"])
 const QualificationCleanup = Schema.TaggedUnion({ Pending: {}, Completed: SuccessfulCleanup.fields })
 
-/**
- * Safe success evidence for the single protected live journey. It deliberately
- * contains no worktree, candidate-resource, provider-private session/thread,
- * configuration, environment, provider-response, prompt, or private-store representation.
- */
-export const ProductionLiveQualificationEvidence = Schema.Struct({
+const productionLiveQualificationEvidenceFields = {
   schemaVersion: Schema.Literal(1),
-  artifactStage: QualificationArtifactStage,
   mode: Schema.Literal("Live"),
   invocationId: LiveQualificationInvocationId,
   build: QualificationBuild,
@@ -208,9 +201,38 @@ export const ProductionLiveQualificationEvidence = Schema.Struct({
     tracker: Schema.Struct({ lifecycle: Schema.Literal("Completed"), claims: Schema.Tuple([]) }),
     run: Schema.Struct({ runId: RunId, disposition: Schema.Literal("Completed") }),
     process: Schema.Struct({ status: Schema.Literal(0) })
-  }),
-  cleanup: QualificationCleanup
-}).check(
+  })
+}
+
+/**
+ * Safe success evidence for the single protected live journey. It deliberately
+ * contains no worktree, candidate-resource, provider-private session/thread,
+ * configuration, environment, provider-response, prompt, or private-store representation.
+ */
+const PreCleanupProductionLiveQualificationEvidence = Schema.Struct({
+  ...productionLiveQualificationEvidenceFields,
+  artifactStage: Schema.Literal("PreCleanup"),
+  cleanup: QualificationCleanup.cases.Pending
+})
+
+const FinalProductionLiveQualificationEvidence = Schema.Struct({
+  ...productionLiveQualificationEvidenceFields,
+  artifactStage: Schema.Literal("Final"),
+  cleanup: QualificationCleanup.cases.Completed
+})
+
+export type ProductionLiveQualificationEvidence =
+  | typeof PreCleanupProductionLiveQualificationEvidence.Type
+  | typeof FinalProductionLiveQualificationEvidence.Type
+
+type ProductionLiveQualificationEvidenceEncoded =
+  | typeof PreCleanupProductionLiveQualificationEvidence.Encoded
+  | typeof FinalProductionLiveQualificationEvidence.Encoded
+
+export const ProductionLiveQualificationEvidence: Schema.Codec<
+  ProductionLiveQualificationEvidence,
+  ProductionLiveQualificationEvidenceEncoded
+> = Schema.Union([PreCleanupProductionLiveQualificationEvidence, FinalProductionLiveQualificationEvidence]).check(
   Schema.makeFilter((evidence) => {
     if (
       evidence.hosted.sourceSha !== evidence.build.sourceSha ||
@@ -231,12 +253,6 @@ export const ProductionLiveQualificationEvidence = Schema.Struct({
     if (publicOutput?.count !== evidence.publicRecords.values.length || process?.count !== 1) {
       return "public-output and process counts must match the observed transcript and one child exit"
     }
-    if (
-      (evidence.artifactStage === "PreCleanup" && evidence.cleanup._tag !== "Pending") ||
-      (evidence.artifactStage === "Final" && evidence.cleanup._tag !== "Completed")
-    ) {
-      return "live qualification artifact stage must agree with observed cleanup"
-    }
     if (evidence.cleanup._tag === "Pending") return undefined
     if (evidence.cleanup.github.removedIssueNodeId !== evidence.fixture.issueNodeId) {
       return "live qualification cleanup must remove the exact fixture issue"
@@ -250,7 +266,6 @@ export const ProductionLiveQualificationEvidence = Schema.Struct({
       : "live qualification cleanup must resolve every exact fixture label once"
   })
 )
-export type ProductionLiveQualificationEvidence = typeof ProductionLiveQualificationEvidence.Type
 
 const qualificationFailurePhases = [
   "Setup",
@@ -265,6 +280,25 @@ const qualificationFailurePhases = [
 export const QualificationFailed = Schema.TaggedStruct("QualificationFailed", {
   phase: Schema.Literals(qualificationFailurePhases)
 })
+
+const writeValidatedProductionLiveQualificationEvidence = Effect.fn("LiveQualification.writeValidatedEvidence")(
+  function* (
+    expectedStage: ProductionLiveQualificationEvidence["artifactStage"],
+    container: QualificationPublicationContainer,
+    locator: QualificationArtifactLocator,
+    input: unknown
+  ) {
+    const evidence = yield* makeProductionLiveQualificationEvidence(input)
+    if (evidence.artifactStage !== expectedStage) return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
+    const encoded = yield* Schema.encodeUnknownEffect(ProductionLiveQualificationEvidence)(evidence).pipe(
+      Effect.mapError(() => qualificationFailed("EvidenceValidation"))
+    )
+    yield* writeQualificationArtifact(container, locator, JSON.stringify(encoded)).pipe(
+      Effect.mapError(() => qualificationFailed("Publication"))
+    )
+    return evidence
+  }
+)
 export type QualificationFailed = typeof QualificationFailed.Type
 
 export const qualificationFailed = (phase: QualificationFailed["phase"]): QualificationFailed =>
@@ -328,14 +362,7 @@ export const publishProductionLiveQualificationEvidence: (
   locator: QualificationArtifactLocator,
   input: unknown
 ) {
-  const evidence = yield* makeProductionLiveQualificationEvidence(input)
-  if (evidence.artifactStage !== "Final") return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
-  const encoded = yield* Schema.encodeUnknownEffect(ProductionLiveQualificationEvidence)(evidence).pipe(
-    Effect.mapError(() => qualificationFailed("EvidenceValidation"))
-  )
-  yield* writeQualificationArtifact(container, locator, JSON.stringify(encoded)).pipe(
-    Effect.mapError(() => qualificationFailed("Publication"))
-  )
+  const evidence = yield* writeValidatedProductionLiveQualificationEvidence("Final", container, locator, input)
   return { _tag: "Qualified" as const, evidence, artifact: locator }
 })
 
@@ -353,13 +380,6 @@ export const captureProductionLiveQualificationPreCleanupEvidence: (
   locator: QualificationArtifactLocator,
   input: unknown
 ) {
-  const evidence = yield* makeProductionLiveQualificationEvidence(input)
-  if (evidence.artifactStage !== "PreCleanup") return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
-  const encoded = yield* Schema.encodeUnknownEffect(ProductionLiveQualificationEvidence)(evidence).pipe(
-    Effect.mapError(() => qualificationFailed("EvidenceValidation"))
-  )
-  yield* writeQualificationArtifact(container, locator, JSON.stringify(encoded)).pipe(
-    Effect.mapError(() => qualificationFailed("Publication"))
-  )
+  const evidence = yield* writeValidatedProductionLiveQualificationEvidence("PreCleanup", container, locator, input)
   return { evidence, artifact: locator }
 })
