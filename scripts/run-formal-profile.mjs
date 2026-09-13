@@ -1,4 +1,5 @@
 import { readRecord, atomicRecord, inheritedCustody } from "./gate-custody-records.mjs"
+import { assertQuintEffectiveProfile } from "./quint-effective-profile.mjs"
 import { createQuintGateDeadline } from "./quint-gate-policy.mjs"
 import { runQuintEffectiveProfile } from "./check-quint-models.mjs"
 import { withOwnedQuintServer } from "./quint-owned-server.mjs"
@@ -16,7 +17,12 @@ if (
 ) {
   throw new Error("Formal execution request belongs to another admitted attempt")
 }
-const remainingExecutionMilliseconds = createQuintGateDeadline({ startedAt: performance.now() })
+// Validate the exact guarded-local policy before starting the owned server.
+assertQuintEffectiveProfile(request.profile, { purpose: "local-guarded" })
+const remainingExecutionMilliseconds = createQuintGateDeadline({
+  startedAt: performance.now(),
+  allowanceMilliseconds: request.profile.policy.safetyTimeoutMilliseconds
+})
 const report = await withOwnedQuintServer({
   javaExecutable: request.toolchain.javaExecutable,
   javaUserHome: request.toolchain.javaUserHome,
@@ -26,6 +32,7 @@ const report = await withOwnedQuintServer({
   remainingExecutionMilliseconds,
   runProfile: ({ environment, serverEndpoint, signal }) =>
     runQuintEffectiveProfile({
+      purpose: "local-guarded",
       profile: request.profile,
       environment,
       serverEndpoint,

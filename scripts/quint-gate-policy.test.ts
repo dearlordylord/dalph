@@ -5,7 +5,9 @@ import {
   assertQuintHostedDeadlineContract,
   createQuintGateDeadline,
   quintGateRegressionBudgetMilliseconds,
-  quintGateSafetyTimeoutMilliseconds
+  quintGateSafetyTimeoutMilliseconds,
+  quintLocalSafetyTimeoutMilliseconds,
+  quintLocalRegressionBudgetMilliseconds
 } from "./quint-gate-policy.mjs"
 import { createQuintGateTiming, runWithQuintGateTiming } from "./quint-gate-timing.mjs"
 // @ts-expect-error The production process runner is an executable JavaScript module.
@@ -95,4 +97,31 @@ describe("Quint hosted deadline", () => {
       expect(error).toMatchObject({ quintCommandResult: "timed-out" })
     }
   })
+})
+
+describe("guarded local Quint deadline", () => {
+  it("spends one 1800-second allowance across server readiness and every checker", () => {
+    let now = 100
+    const remaining = createQuintGateDeadline({
+      now: () => now,
+      allowanceMilliseconds: quintLocalSafetyTimeoutMilliseconds
+    })
+    expect(quintLocalRegressionBudgetMilliseconds).toBe(1_850_000)
+    expect(remaining("server readiness")).toBe(1_800_000)
+    now += 30_000
+    expect(remaining("first checker")).toBe(1_770_000)
+    now += 1_769_000
+    expect(remaining("last checker")).toBe(1_000)
+    now += 1_000
+    expect(() => remaining("not admitted")).toThrow("deadline before launch")
+    expect(quintGateSafetyTimeoutMilliseconds).toBe(720_000)
+    expect(quintGateRegressionBudgetMilliseconds).toBe(750_000)
+  })
+
+  it.each([0, -1, NaN, Infinity, 1_800_001, 3_600_000])(
+    "rejects an unsupported execution allowance %s",
+    (allowanceMilliseconds) => {
+      expect(() => createQuintGateDeadline({ allowanceMilliseconds })).toThrow("supported finite execution allowance")
+    }
+  )
 })

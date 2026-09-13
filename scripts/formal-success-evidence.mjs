@@ -161,7 +161,7 @@ export const validateFormalExecution = ({ attempt, execution }) => {
     profileResult?.entryPoint === attempt.identity.toolchain?.quintEntryPoint,
     "Formal installed checker changed"
   )
-  const profile = createQuintEffectiveProfile()
+  const profile = createQuintEffectiveProfile({ purpose: "local-guarded" })
   requireFact(
     same(profileResult?.profile, profile) && digest(JSON.stringify(profile)) === attempt.profileIdentity,
     "Obsolete or incomplete formal profile"

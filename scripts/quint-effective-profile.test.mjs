@@ -348,3 +348,54 @@ test("compact mode retains distinct failure diagnostics from every failed or can
   assert.equal(diagnostics.split("NEGATIVE_FAILURE_DIAGNOSTIC").length - 1, 1)
   assert.equal(diagnostics.split("SIBLING_CANCELLATION_DIAGNOSTIC").length - 1, 1)
 })
+
+test("guarded local execution preserves all hosted obligations and spends the shared local deadline", async () => {
+  const hosted = createQuintEffectiveProfile()
+  const profile = createQuintEffectiveProfile({ purpose: "local-guarded" })
+  assertQuintEffectiveProfile(profile, { purpose: "local-guarded" })
+  assert.deepEqual(profile.commands, hosted.commands)
+  assert.deepEqual(profile.steps, hosted.steps)
+  assert.deepEqual(profile.execution, hosted.execution)
+  assert.deepEqual(profile.policy, {
+    ...hosted.policy,
+    safetyTimeoutMilliseconds: 1800000,
+    regressionBudgetMilliseconds: 1850000
+  })
+  assert.notEqual(JSON.stringify(profile), JSON.stringify(hosted))
+  const launches = []
+  let remaining = 1700000
+  const report = await runQuintEffectiveProfile({
+    ...controls(profile, launches),
+    purpose: "local-guarded",
+    remainingExecutionMilliseconds: () => {
+      remaining -= 1000
+      return remaining
+    }
+  })
+  assert.equal(launches.length, 105)
+  assert.deepEqual(report.profile, profile)
+  assert.deepEqual(
+    launches.map(({ timeoutMilliseconds }) => timeoutMilliseconds),
+    Array.from({ length: 105 }, (_, position) => 1699000 - position * 1000)
+  )
+})
+
+test("hosted and guarded local execution reject each other's profile and arbitrary local policy before launch", async () => {
+  const hosted = createQuintEffectiveProfile()
+  const local = createQuintEffectiveProfile({ purpose: "local-guarded" })
+  const weakened = structuredClone(local)
+  weakened.policy.safetyTimeoutMilliseconds = 3600000
+  const omitted = structuredClone(local)
+  omitted.commands.pop()
+  for (const [purpose, profile] of [
+    ["hosted", local],
+    ["local-guarded", hosted],
+    ["local-guarded", weakened],
+    ["local-guarded", omitted]
+  ]) {
+    const launches = []
+    await assert.rejects(runQuintEffectiveProfile({ ...controls(profile, launches), purpose }), /Quint/)
+    assert.equal(launches.length, 0)
+  }
+  assert.throws(() => createQuintEffectiveProfile({ purpose: "arbitrary" }), /supported execution purpose/)
+})

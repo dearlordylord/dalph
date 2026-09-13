@@ -99,7 +99,7 @@ export const runFormalWorkflow = async ({ force = false, report = console.log, r
     timeoutMilliseconds: acquisitionDeadline("tool preparation", formalGatePolicy.preparationMilliseconds)
   })
   const toolResolutionMilliseconds = performance.now() - toolResolutionStartedAt
-  const profile = createQuintEffectiveProfile()
+  const profile = createQuintEffectiveProfile({ purpose: "local-guarded" })
   const guard = await startFormalInputGuard({
     worktree: location.worktree,
     effectiveEnvironment,

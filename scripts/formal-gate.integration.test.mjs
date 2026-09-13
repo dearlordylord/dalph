@@ -287,7 +287,7 @@ test(
       const original = f.saved()
       const report = readRecord(original.success.execution.reportPath)
       assert.equal(report.profileResult.commands.length, 105)
-      assert.deepEqual(report.profileResult.profile, createQuintEffectiveProfile())
+      assert.deepEqual(report.profileResult.profile, createQuintEffectiveProfile({ purpose: "local-guarded" }))
       const firstEvents = f.events()
       assert.equal(firstEvents.filter((event) => event.startsWith("checker ")).length, 105)
       assert.equal(firstEvents.filter((event) => event === "server-start").length, 1)

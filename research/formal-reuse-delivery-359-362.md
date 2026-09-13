@@ -297,3 +297,30 @@ Vitest files for preflight, MBT source selection and CI contracts passed all
 seconds, preserving the assertions described above. No real Quint model was
 executed by these checks. Changed-file formatting and whitespace checks passed,
 and the independent merge-resolution review found no remaining finding.
+
+## Authorized local deadline extension
+
+After the master/history review, the maintainer authorized continuing despite
+Quint problems, increasing a timeout when needed, and diagnosing/fixing any
+Quint problem that remains afterward. This explicitly revises the earlier
+local timeout constraint and removes the need to stop for another scope
+decision about a remaining Quint failure. It does not claim a failed run as
+success or waive complete verdict evidence.
+
+The [local qualification scenario](../docs/scenarios/formal-reuse-local-qualification-budget.md)
+records the concrete failed run, new bounds and scenario-to-test mapping.
+Guarded local execution now has 1,800 seconds, regression 1,850 seconds,
+helper envelope 1,857 seconds and outer acquisition 2,100 seconds. Input phase
+caps, final 30-second validation and 5+2-second cleanup remain unchanged.
+All 105 commands, sampled counts, steps, seeds and scheduling remain identical;
+the effective policy enters profile identity and is validated before the owned
+server starts. Hosted raw verification retains 720/750 seconds and its
+16-minute job. The updated local inventory is provisionally 116.5 minutes
+before existing overhead, within 24-hour custody.
+
+Focused verification passed 30 Node tests, 17 deadline tests and the actual
+controlled S1/S2 wrapper integration (13.29 seconds), including all 105 stopped
+checker receipts and zero warm launches. Typecheck, exact-file lint, formatting
+and whitespace checks pass. These prove the longer local policy is wired
+consistently while the hosted contract remains intact; new real measurements
+and final handoff still remain to be collected.

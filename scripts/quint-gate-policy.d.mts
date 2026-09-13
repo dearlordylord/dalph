@@ -1,4 +1,6 @@
 export declare const quintGateRegressionBudgetMilliseconds: number
+export declare const quintLocalSafetyTimeoutMilliseconds: number
+export declare const quintLocalRegressionBudgetMilliseconds: number
 export declare const quintHostedJobTimeoutMinutes: number
 export declare const quintHostedReserveMilliseconds: number
 export declare const quintGateTerminationGraceMilliseconds: number
@@ -8,4 +10,5 @@ export declare const assertQuintHostedDeadlineContract: (workflow: string) => vo
 export declare const createQuintGateDeadline: (options?: {
   readonly now?: () => number
   readonly startedAt?: number
+  readonly allowanceMilliseconds?: number
 }) => (name: string) => number

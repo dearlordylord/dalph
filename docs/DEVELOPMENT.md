@@ -781,19 +781,22 @@ candidate verification still applies. Automatic MBT is temporarily excluded
 pending #363; formal reuse does not prove application conformance.
 
 Current allowances in [formal-gate-policy.mjs](../scripts/formal-gate-policy.mjs)
-are provisional pending final qualification measurements: 1,020 seconds for
+are provisional pending final qualification measurements: 2,100 seconds for
 formal acquisition and 30 seconds for final handoff validation. Acquisition
 charges tool identification, observer setup, hashing, execution, evidence and
 qualification to one decreasing allowance; phase caps do not restart it. The
-existing 720-second checker execution budget, 750-second regression ceiling
-and 5-second termination plus 2-second absence proof remain separate inherited
-constraints. The 30-second final allowance follows a 7.333-second complete
+local execution allowance is 1,800 seconds with a 1,850-second regression
+ceiling, following the maintainer-authorized extension after the original
+720-second attempt timed out. Hosted execution and regression remain 720/750
+seconds. Both retain 5-second termination plus 2-second absence proof. See the
+[local qualification scenario](scenarios/formal-reuse-local-qualification-budget.md)
+for the observed cost and bounded allowance rationale. The 30-second final allowance follows a 7.333-second complete
 snapshot probe and reserves the remainder for evidence reads and observer
 drains; it is not the withdrawn 60-second final estimate.
 
 The local stage inventory is 30 minutes of preflight plus 51 minutes of
-application qualification, now plus 17 minutes of formal acquisition and
-0.5 minutes of final validation: provisionally 98.5 minutes before existing
+application qualification, now plus 35 minutes of formal acquisition and
+0.5 minutes of final validation: provisionally 116.5 minutes before existing
 quality setup and termination overhead. This fits the existing 24-hour admitted
 command limit. These are ceilings, not measured duration or claimed savings.
 Final qualification must record fresh and warm costs, measured headroom and

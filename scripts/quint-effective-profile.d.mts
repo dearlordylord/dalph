@@ -45,5 +45,8 @@ export interface QuintEffectiveProfile {
     readonly apalacheVersion: string
   }
 }
-export declare const createQuintEffectiveProfile: () => QuintEffectiveProfile
-export declare const assertQuintEffectiveProfile: (profile: QuintEffectiveProfile) => void
+export interface QuintEffectiveProfileOptions {
+  readonly purpose?: "hosted" | "local-guarded"
+}
+export declare const createQuintEffectiveProfile: (options?: QuintEffectiveProfileOptions) => QuintEffectiveProfile
+export declare const assertQuintEffectiveProfile: (profile: QuintEffectiveProfile, options?: QuintEffectiveProfileOptions) => void

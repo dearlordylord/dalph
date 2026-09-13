@@ -1,3 +1,4 @@
+import { formalGatePolicy } from "./formal-gate-policy.mjs"
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
@@ -123,4 +124,27 @@ test("external tool edit and revert during the final candidate drain rejects the
   } finally {
     await f.cleanup()
   }
+})
+
+test("local acquisition retains phase caps inside one finite extended execution allowance", () => {
+  assert.equal(formalGatePolicy.outerMilliseconds, 2100000)
+  assert.equal(formalGatePolicy.executionEnvelopeMilliseconds, 1857000)
+  assert.equal(formalGatePolicy.preparationMilliseconds, 60000)
+  assert.equal(formalGatePolicy.inputSetupMilliseconds, 60000)
+  assert.equal(formalGatePolicy.inputQualificationMilliseconds, 60000)
+  assert.equal(formalGatePolicy.finalValidationMilliseconds, 30000)
+  let now = 0
+  const remaining = createFormalControlDeadline({
+    allowanceMilliseconds: formalGatePolicy.outerMilliseconds,
+    now: () => now
+  })
+  assert.equal(remaining("preparation", formalGatePolicy.preparationMilliseconds), 60000)
+  now += 60000
+  assert.equal(remaining("input setup", formalGatePolicy.inputSetupMilliseconds), 60000)
+  now += 60000
+  assert.equal(Math.min(formalGatePolicy.executionEnvelopeMilliseconds, remaining("profile execution") - 7000), 1857000)
+  now += 1857000
+  assert.equal(remaining("execution qualification", formalGatePolicy.inputQualificationMilliseconds), 60000)
+  now = 2100000
+  assert.throws(() => remaining("publication"), /allowance exceeded/)
 })

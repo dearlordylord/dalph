@@ -22,6 +22,8 @@ import { quintCommandKindForArgs } from "./quint-gate-timing.mjs"
 import { quintWitnessesFromCommandArgs } from "./quint-witness-coverage.mjs"
 import {
   quintGateRegressionBudgetMilliseconds,
+  quintLocalSafetyTimeoutMilliseconds,
+  quintLocalRegressionBudgetMilliseconds,
   quintGateSafetyTimeoutMilliseconds,
   quintGateTerminationGraceMilliseconds,
   quintGateProcessGroupAbsenceTimeoutMilliseconds
@@ -36,7 +38,10 @@ const freezeTree = (value) => {
 }
 
 /** Materialize all effective CLI tokens and verdict obligations before launching anything. */
-export const createQuintEffectiveProfile = () => {
+export const createQuintEffectiveProfile = ({ purpose = "hosted" } = {}) => {
+  if (purpose !== "hosted" && purpose !== "local-guarded") {
+    throw new Error("Quint effective profile requires a supported execution purpose")
+  }
   const commands = []
   const steps = []
   const reserveCommand = (name, args, options = {}) => {
@@ -1112,8 +1117,10 @@ export const createQuintEffectiveProfile = () => {
       evaluatorProvenanceAfterPosition: 3
     },
     policy: {
-      regressionBudgetMilliseconds: quintGateRegressionBudgetMilliseconds,
-      safetyTimeoutMilliseconds: quintGateSafetyTimeoutMilliseconds,
+      regressionBudgetMilliseconds:
+        purpose === "local-guarded" ? quintLocalRegressionBudgetMilliseconds : quintGateRegressionBudgetMilliseconds,
+      safetyTimeoutMilliseconds:
+        purpose === "local-guarded" ? quintLocalSafetyTimeoutMilliseconds : quintGateSafetyTimeoutMilliseconds,
       terminationGraceMilliseconds: quintGateTerminationGraceMilliseconds,
       processGroupAbsenceTimeoutMilliseconds: quintGateProcessGroupAbsenceTimeoutMilliseconds,
       apalacheVersion
@@ -1122,9 +1129,9 @@ export const createQuintEffectiveProfile = () => {
 }
 
 /** Reject partial or substituted execution plans, independently of saved success evidence. */
-export const assertQuintEffectiveProfile = (profile) => {
+export const assertQuintEffectiveProfile = (profile, options = {}) => {
   assertQuintGateCommandContract({ manifest: profile.commands, executed: quintGateExpectedCommandCounts })
-  if (JSON.stringify(profile) !== JSON.stringify(createQuintEffectiveProfile())) {
+  if (JSON.stringify(profile) !== JSON.stringify(createQuintEffectiveProfile(options))) {
     throw new Error("Quint effective profile differs from the complete supported profile")
   }
 }

@@ -35,7 +35,7 @@ const fixture = () => {
   const runId = newIdentity()
   const runDirectory = join(location.custodyRoot, "runs", runId)
   Object.assign(location, { runDirectory, runId })
-  const profile = createQuintEffectiveProfile()
+  const profile = createQuintEffectiveProfile({ purpose: "local-guarded" })
   const profileIdentity = digest(JSON.stringify(profile))
   const identity = {
     version: 1,

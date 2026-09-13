@@ -82,7 +82,7 @@ export const seedQualityFormalBoundary = (worktree) => {
   }
   initializeRecord(join(runDirectory, "run.json"), run)
   initializeRecord(join(runDirectory, "identity.json"), { version: 1, inputDigest: "controlled-custody" })
-  const profile = createQuintEffectiveProfile()
+  const profile = createQuintEffectiveProfile({ purpose: "local-guarded" })
   const profileIdentity = digest(JSON.stringify(profile))
   const toolchain = {
     nodeExecutable: process.execPath,

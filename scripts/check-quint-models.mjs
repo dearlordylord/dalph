@@ -8,7 +8,6 @@ import {
   assertQuintHostedDeadlineContract,
   createQuintGateDeadline,
   quintGateProcessGroupAbsenceTimeoutMilliseconds,
-  quintGateRegressionBudgetMilliseconds,
   quintGateTerminationGraceMilliseconds
 } from "./quint-gate-policy.mjs"
 import { assertQuintGateCommandContract } from "./quint-gate-command-contract.mjs"
@@ -32,7 +31,8 @@ const quintEntryPoint = createRequire(import.meta.url).resolve("@informalsystems
  * Captured output is required verdict evidence, separate from optional log files.
  */
 export const runQuintEffectiveProfile = async ({
-  profile = createQuintEffectiveProfile(),
+  purpose = "hosted",
+  profile = createQuintEffectiveProfile({ purpose }),
   environment,
   serverEndpoint,
   evaluatorPath,
@@ -44,10 +44,10 @@ export const runQuintEffectiveProfile = async ({
   readProvenance = readQuintEvaluatorProvenance,
   assertArtifactPrepared = assertTlcArtifactPrepared
 } = {}) => {
-  assertQuintEffectiveProfile(profile)
+  assertQuintEffectiveProfile(profile, { purpose })
   // Execute a fresh frozen canonical copy, so caller mutation after validation
   // cannot change the admitted plan while a preceding command is awaited.
-  profile = createQuintEffectiveProfile()
+  profile = createQuintEffectiveProfile({ purpose })
   if (serverEndpoint !== undefined && environment === undefined) {
     throw new Error("An owned Quint endpoint requires an explicit sanitized environment")
   }
@@ -55,7 +55,10 @@ export const runQuintEffectiveProfile = async ({
     throw new Error("An owned Quint endpoint requires the identified prepared evaluator path")
   }
   const startedAt = performance.now()
-  const localDeadline = createQuintGateDeadline({ startedAt })
+  const localDeadline = createQuintGateDeadline({
+    startedAt,
+    allowanceMilliseconds: profile.policy.safetyTimeoutMilliseconds
+  })
   const timeoutFor = (name) => {
     const localRemaining = localDeadline(name)
     const sharedRemaining =
@@ -193,9 +196,9 @@ export const runQuintEffectiveProfile = async ({
     })
     const report = buildReport()
     write(
-      `\nComplete Quint model gate: ${(report.elapsedMilliseconds / 1000).toFixed(2)}s (budget ${quintGateRegressionBudgetMilliseconds / 1000}s)\n`
+      `\nComplete Quint model gate: ${(report.elapsedMilliseconds / 1000).toFixed(2)}s (budget ${profile.policy.regressionBudgetMilliseconds / 1000}s)\n`
     )
-    if (report.elapsedMilliseconds > quintGateRegressionBudgetMilliseconds) {
+    if (report.elapsedMilliseconds > profile.policy.regressionBudgetMilliseconds) {
       throw new Error("Quint models exceeded their regression budget")
     }
     return report
