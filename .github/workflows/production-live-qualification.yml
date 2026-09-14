@@ -157,7 +157,7 @@ jobs:
             condition,
             sourceSha: process.env.DALPH_CANDIDATE_SHA,
             reviewedBaseSha: process.env.DALPH_COVERAGE_BASE_SHA,
-            nodeVersion: process.version,
+            nodeVersion: process.versions.node,
             workflowName: process.env.GITHUB_WORKFLOW,
             runId: Number(process.env.GITHUB_RUN_ID),
             runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),

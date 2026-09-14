@@ -34,6 +34,8 @@ test("dispatch inputs and worker toolchain are exact and immutable", () => {
   assert.match(workflow, /actions\/checkout@v7[\s\S]*?ref: \$\{\{ inputs\.candidate_sha \}\}/u)
   assert.match(workflow, /pnpm\/action-setup@v6[\s\S]*?version: 10\.29\.3/u)
   assert.match(workflow, /actions\/setup-node@v7[\s\S]*?node-version: 24\.20\.0/u)
+  assert.match(workflow, /nodeVersion: process\.versions\.node/u)
+  assert.doesNotMatch(workflow, /nodeVersion: process\.version(?:\s|,)/u)
   assert.match(workflow, /pnpm install --frozen-lockfile/u)
   assert.match(workflow, /pnpm build/u)
   for (const field of [

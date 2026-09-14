@@ -523,6 +523,20 @@ test("rejects an absolute formal report path from uploaded provenance", async ()
   )
 })
 
+test("rejects the v-prefixed process.version metadata emitted by the failed hosted run", async () => {
+  const f = await fixture()
+  const environment = { ...environmentFor(f), GITHUB_TOKEN: "github-secret" }
+  const metadata = JSON.parse(await readFile(f.formal.dedicated[0].metadata, "utf8"))
+  await writeFile(f.formal.dedicated[0].metadata, `${JSON.stringify({ ...metadata, nodeVersion: "v24.20.0" })}\n`)
+  await assert.rejects(
+    resolveFormalQualificationJobs({
+      environment,
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ jobs: completedFormalJobs() }) })
+    }),
+    /dedicated shard 0 formal provenance Node version is unsupported/u
+  )
+})
+
 test("rejects mislabeled or non-constraining formal profile conditions", async () => {
   for (const mutate of [
     (metadata) => ({ ...metadata, profile: "dedicated" }),
