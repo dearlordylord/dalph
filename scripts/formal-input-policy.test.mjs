@@ -220,7 +220,11 @@ fi
   await changedLauncherEnvironment.close()
   writeFileSync(
     launcherPath(relocatedRoot),
-    launcher(relocatedRoot, "../../../../tool-package/bin/tool.js", "{checkout}/node_modules/tool-package"),
+    launcher(
+      relocatedRoot,
+      "../../../../tool-package/bin/tool.js",
+      "{checkout}/node_modules/.pnpm/tool-package/node_modules"
+    ),
     { mode: 0o755 }
   )
   const literalPlaceholder = await startFormalInputGuard({
