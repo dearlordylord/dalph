@@ -1,6 +1,16 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { chmodSync, statSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import {
+  chmodSync,
+  existsSync,
+  statSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawnSync } from "node:child_process"
@@ -226,6 +236,11 @@ const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,pro
 test("admitted check:all reports lint and complexity failures together before qualification", () => {
   const f = fixture()
   try {
+    const formalSentinel = join(f.root, ".scratch", "unexpected-formal-launch")
+    writeFileSync(
+      join(f.root, "scripts", "run-formal-workflow.mjs"),
+      `import {writeFileSync} from 'node:fs';export const runFormalWorkflow=async()=>{writeFileSync(${JSON.stringify(formalSentinel)},'launched');throw new Error('formal verification unexpectedly launched')}`
+    )
     const script = join(f.root, ".scratch", "collected-preflight.mjs")
     const sources = ["process.exit(23)", "process.exit(24)", "process.exitCode=99"]
     writeFileSync(
@@ -255,6 +270,10 @@ const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,pro
       evidence.stages.some((stage) => stage.command.name === "tests and coverage"),
       false
     )
+    assert.equal(existsSync(formalSentinel), false)
+    assert.equal(evidence.resume.formalProven, false)
+    assert.equal(evidence.resume.composite.formal, undefined)
+    assert.equal(evidence.resume.composite.formalOutputLineCount, 0)
     assert.equal(evidence.qualification, "UNPROVEN")
   } finally {
     f.cleanup()
