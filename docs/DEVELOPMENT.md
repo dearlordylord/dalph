@@ -836,7 +836,10 @@ boundary enforced by the formal policy. Equivalent governed inputs may reuse a
 complete success from another worktree of the same clone and host boot.
 Repository-local source and tool paths, checkout PATH entries, and a
 checkout-local pnpm launcher are compared by role plus checkout-relative
-location and content rather than raw worktree path. Absolute original
+location and content rather than raw worktree path. A recognized pnpm launcher
+retains a digest of its complete generated script with only checkout-local
+components of the generated `NODE_PATH` assignments represented symbolically;
+added commands or changed targets remain input changes. Absolute original
 worktree/run/report paths remain provenance and must still resolve through the
 same Git common directory; every original checker/server process group must be
 proven stopped. Unresolved custody, missing origin provenance, reconciliation

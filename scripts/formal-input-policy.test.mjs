@@ -200,6 +200,20 @@ fi
   cleanups.push(() => changedLauncher.close())
   assert.notEqual(changedLauncher.identity.applicabilityDigest, original.applicabilityDigest)
   await changedLauncher.close()
+  writeFileSync(
+    launcherPath(relocatedRoot),
+    launcher(relocatedRoot).replace("if [ -x", "export NODE_OPTIONS=--require=/tmp/hook.cjs\nif [ -x"),
+    { mode: 0o755 }
+  )
+  const changedLauncherEnvironment = await startFormalInputGuard({
+    worktree: relocatedRoot,
+    effectiveEnvironment: relocatedEnvironment,
+    profile: first.profile,
+    toolchain: relocatedToolchain
+  })
+  cleanups.push(() => changedLauncherEnvironment.close())
+  assert.notEqual(changedLauncherEnvironment.identity.applicabilityDigest, original.applicabilityDigest)
+  await changedLauncherEnvironment.close()
   writeFileSync(launcherPath(relocatedRoot), launcher(relocatedRoot), { mode: 0o755 })
 
   writeFileSync(join(relocatedRoot, "specs/model.qnt"), "module fixture { val changed = true }\n")

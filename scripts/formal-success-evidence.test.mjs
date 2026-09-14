@@ -251,6 +251,7 @@ test("reuses stopped evidence across same-custody worktrees and rejects unsafe o
     execFileSync("git", ["-C", f.location.worktree, "add", "tracked"])
     execFileSync("git", ["-C", f.location.worktree, "commit", "-qm", "fixture"])
     const sibling = `${f.location.worktree}-sibling`
+    const otherClone = `${f.location.worktree}-other-clone`
     try {
       execFileSync("git", ["-C", f.location.worktree, "worktree", "add", "-qb", "sibling", sibling])
       const location = repositoryLocation(sibling)
@@ -259,6 +260,38 @@ test("reuses stopped evidence across same-custody worktrees and rejects unsafe o
       assert.equal(reused.status, "hit", reused.reason)
       assert.equal(reused.evidencePath, attempt.recordPath)
       assert.equal(reused.success.worktree, f.location.worktree)
+
+      execFileSync("git", ["clone", "-q", f.location.worktree, otherClone])
+      const independentLocation = repositoryLocation(otherClone)
+      assert.throws(
+        () =>
+          readReferencedFormalSuccess({
+            recordPath: attempt.recordPath,
+            worktree: independentLocation.worktree,
+            identity: { ...identity, worktree: independentLocation.worktree },
+            profileIdentity: f.profileIdentity
+          }),
+        /Invalid referenced formal locator/u,
+        "another clone cannot consume this clone's custody record"
+      )
+
+      const success = JSON.parse(readFileSync(attempt.recordPath, "utf8"))
+      atomicRecord(attempt.recordPath, {
+        ...success,
+        host: { ...success.host, bootId: `${success.host.bootId}-different-boot` }
+      })
+      assert.equal(
+        readFormalSuccess({ location, identity, profileIdentity: f.profileIdentity }).status,
+        "miss",
+        "evidence from another host boot cannot be reused"
+      )
+      atomicRecord(attempt.recordPath, { ...success, worktree: `${success.worktree}-missing` })
+      assert.equal(
+        readFormalSuccess({ location, identity, profileIdentity: f.profileIdentity }).status,
+        "miss",
+        "evidence whose original worktree is no longer available cannot be reused"
+      )
+      atomicRecord(attempt.recordPath, success)
 
       const receiptPath = join(
         f.location.runDirectory,
@@ -278,6 +311,7 @@ test("reuses stopped evidence across same-custody worktrees and rejects unsafe o
       )
     } finally {
       rmSync(sibling, { recursive: true, force: true })
+      rmSync(otherClone, { recursive: true, force: true })
     }
   }))
 

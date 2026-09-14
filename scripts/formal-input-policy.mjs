@@ -159,9 +159,23 @@ const normalizedPnpmLauncher = (entry, worktree) => {
     targets[0] !== targets[1]
   )
     return entry
-  const semantic = { ...entry }
-  delete semantic.sha256
-  return { ...semantic, generatedLauncher: { runtime: "node", targetFromBinDirectory: targets[0] } }
+  let normalizedNodePathLines = 0
+  const semanticText = text.replace(/^(\s*export NODE_PATH=")([^"\n]*)(")$/gmu, (_, prefix, value, suffix) => {
+    normalizedNodePathLines++
+    const normalized = value
+      .split(delimiter)
+      .map((component) => {
+        if (component === "$NODE_PATH" || !isAbsolute(component)) return component
+        const absolute = resolve(component)
+        if (!below(absolute, worktree)) return component
+        const local = relative(worktree, absolute).split(sep).join("/")
+        return `{checkout}/${local}`
+      })
+      .join(delimiter)
+    return `${prefix}${normalized}${suffix}`
+  })
+  if (normalizedNodePathLines === 0 || semanticText.includes(worktree)) return entry
+  return { ...entry, sha256: digest(semanticText), generatedLauncher: { format: "pnpm-node-shell-v1" } }
 }
 
 const normalizedManifest = (entries, worktree, role) =>
