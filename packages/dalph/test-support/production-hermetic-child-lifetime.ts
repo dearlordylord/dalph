@@ -10,6 +10,68 @@ export class HermeticControllerFailure extends Schema.TaggedError<HermeticContro
   { operation: Schema.NonEmptyString }
 ) {}
 
+export const hermeticChildExitDiagnosticByteLimit = 4_096
+const maximumUtf8CodePointBytes = 4
+
+export const HermeticChildExitObservation = Schema.Union([
+  Schema.TaggedStruct("Exited", { exitCode: Schema.Int }),
+  Schema.TaggedStruct("ExitCodeUnavailable", {})
+])
+export type HermeticChildExitObservation = typeof HermeticChildExitObservation.Type
+
+/** Distinguishes an owned child exit from every controller setup, transport and binding failure. */
+export class HermeticChildExitedBeforeBoundary extends Schema.TaggedError<HermeticChildExitedBeforeBoundary>()(
+  "HermeticChildExitedBeforeBoundary",
+  {
+    operation: Schema.Literal("child.exitedBeforeBoundary"),
+    outcome: HermeticChildExitObservation,
+    stderr: Schema.String,
+    stderrTruncated: Schema.Boolean
+  }
+) {}
+
+const decodeHermeticStderr = (chunks: ReadonlyArray<Uint8Array>) => {
+  const decoder = new TextDecoder("utf-8", { ignoreBOM: true })
+  return chunks.map((chunk, index) => decoder.decode(chunk, { stream: index < chunks.length - 1 })).join("")
+}
+
+const redactExactValues = (text: string, sensitiveValues: ReadonlyArray<string>) =>
+  Array.from(new Set(sensitiveValues.filter((value) => value.length > 0)))
+    .sort((left, right) => right.length - left.length)
+    .reduce((redacted, value) => redacted.replaceAll(value, "[REDACTED]"), text)
+
+const boundUtf8 = (text: string) => {
+  const encoded = new TextEncoder().encode(text)
+  if (encoded.byteLength <= hermeticChildExitDiagnosticByteLimit) return { text, truncated: false }
+  const prefixes = Array.from({ length: maximumUtf8CodePointBytes }, (_, removed) => removed).flatMap((removed) => {
+    try {
+      return [
+        new TextDecoder("utf-8", { fatal: true }).decode(
+          encoded.slice(0, hermeticChildExitDiagnosticByteLimit - removed)
+        )
+      ]
+    } catch {
+      return []
+    }
+  })
+  return { text: prefixes[0] ?? "", truncated: true }
+}
+
+/** Makes an early child exit actionable without exposing controlled credentials or returning an unbounded diagnostic. */
+export const hermeticChildExitedBeforeBoundary = (
+  outcome: HermeticChildExitObservation,
+  stderrChunks: ReadonlyArray<Uint8Array>,
+  sensitiveValues: ReadonlyArray<string>
+) => {
+  const stderr = boundUtf8(redactExactValues(decodeHermeticStderr(stderrChunks), sensitiveValues))
+  return new HermeticChildExitedBeforeBoundary({
+    operation: "child.exitedBeforeBoundary",
+    outcome,
+    stderr: stderr.text,
+    stderrTruncated: stderr.truncated
+  })
+}
+
 /** Preserve the original exit receipt even when a public reader rejects a frame; retire its scope only after both readers settle. */
 export const settleHermeticChild = <A, E, R>(
   child: Pick<HermeticPublicChild, "stdout" | "stderr">,
