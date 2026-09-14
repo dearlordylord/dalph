@@ -10,7 +10,11 @@ import { startInputGuard } from "./gate-resume-inputs.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { repositoryLocation, withoutInheritedCustody } from "./gate-custody-records.mjs"
 import { readRunEvidence } from "./gate-run-evidence.mjs"
-import { copyQualityRuntimeFixture, seedQualityFormalBoundary } from "./formal-quality-test-fixture.mjs"
+import {
+  controlledFormalWorkflowSource,
+  copyQualityRuntimeFixture,
+  seedQualityFormalBoundary
+} from "./formal-quality-test-fixture.mjs"
 
 const pnpmEntryPoint = process.env.npm_execpath
 if (pnpmEntryPoint === undefined) throw new Error("Run pnpm workspace-state controls through pnpm")
@@ -149,12 +153,7 @@ test("actual admitted resume does not refresh altered pnpm workspace-state input
     copyQualityRuntimeFixture(f.root)
     writeFileSync(
       join(f.root, "scripts", "run-formal-workflow.mjs"),
-      `
-import {readFileSync} from 'node:fs';import {join} from 'node:path';import {readReferencedFormalSuccess} from './formal-success-evidence.mjs';
-export const runFormalWorkflow=async({report})=>{const evidencePath=readFileSync(join(process.cwd(),'.scratch','controlled-formal-path'),'utf8');
-const success=readReferencedFormalSuccess({recordPath:evidencePath,worktree:process.cwd()});report('Formal: controlled original evidence');
-return {status:'reused',success,evidencePath,finalizeApplicability:async()=>({success,evidencePath,observation:success.observation}),assertUnchanged:async()=>{},close:async()=>{}}};
-`
+      controlledFormalWorkflowSource("Formal: controlled original evidence")
     )
     git("add", ".")
     git("commit", "-qm", "base")
