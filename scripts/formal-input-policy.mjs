@@ -802,8 +802,8 @@ const localJavaScriptPath = async ({ dependencyKind, specifier }, importer, work
   throw new Error(`Missing repository formal source import: ${importer} -> ${specifier}`)
 }
 
-const discoverJavaScriptClosure = async (worktree, deadline) => {
-  const pending = formalJavaScriptEntries(worktree)
+const discoverJavaScriptClosure = async (worktree, deadline, entries = formalJavaScriptEntries(worktree)) => {
+  const pending = entries
   const visited = new Set()
   while (pending.length > 0) {
     deadline.assert()
@@ -828,6 +828,36 @@ const discoverFormalSources = async (profile, worktree, deadline) =>
       ...(await discoverQuintClosure(profile, worktree, deadline))
     ])
   ].sort((left, right) => left.localeCompare(right))
+
+/**
+ * Enumerate the repository files consumed from explicit JavaScript entries and
+ * the selected Quint roots. The hosted manifest generator and local input guard
+ * share this parser-backed closure; neither owns a second dependency list.
+ */
+export const discoverFormalSourcePaths = async ({
+  javascriptEntries,
+  profile,
+  timeoutMilliseconds = 60_000,
+  worktree
+}) => {
+  const deadline = phaseDeadline("source discovery", timeoutMilliseconds)
+  const root = await realpath(worktree)
+  if (!Array.isArray(javascriptEntries) || javascriptEntries.length === 0)
+    throw new Error("Formal source discovery requires JavaScript entries")
+  const entries = javascriptEntries.map((path) => {
+    if (typeof path !== "string" || path === "") throw new Error("Formal source entry must be a nonempty path")
+    const absolute = resolve(root, path)
+    if (!below(absolute, root)) throw new Error(`Formal source entry leaves the worktree: ${path}`)
+    return absolute
+  })
+  const sources = [
+    ...new Set([
+      ...(await discoverJavaScriptClosure(root, deadline, entries)),
+      ...(await discoverQuintClosure(profile, root, deadline))
+    ])
+  ].sort((left, right) => left.localeCompare(right))
+  return sources.map((path) => relative(root, path).split(sep).join("/"))
+}
 // Apalache's ConfigManager searches these paths even without caller configuration arguments.
 const apalacheConfigurationPaths = (worktree, javaUserHome) => {
   const paths = [join(javaUserHome, ".tlaplus", "apalache.cfg")]

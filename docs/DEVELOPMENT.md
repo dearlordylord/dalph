@@ -63,7 +63,10 @@ Accepted task requirements still apply. Handoffs name the affected scenarios,
 checks run or unrun, and why broader checks add no relevant coverage. Unused-code
 removal needs consumer evidence and affected type/build checks; changed behavior
 follows the runtime rule.
-Hosted CI keeps its existing classification and required jobs.
+Hosted CI keeps its documentation-only quality classification. Its separate
+formal classification compares the exact event base-to-head paths with the
+generated hosted-formal input projection. Unaffected changes retain the
+required formal check as a lightweight successful not-applicable result.
 
 When required, freeze the candidate and run
 `pnpm check:all --candidate=<base-sha>` with the existing exact-base,
@@ -132,8 +135,11 @@ All commands below use `pnpm`. Script definitions live in
 | `check:ci` | Hosted gate; MBT remains excluded pending #363. |
 
 Hosted CI keeps separate quality and formal entry points: hosted formal runs the
-complete profile fresh, while hosted quality retains its current Quint-connected
-MBT exclusion. A local success record is not hosted formal evidence.
+complete profile fresh when an input that can affect it changed, while hosted
+quality retains its current Quint-connected MBT exclusion. A local success
+record is not hosted formal evidence. If no hosted-formal input changed, neither
+shard starts; the required aggregate check reports the exact base, head, and
+classification evidence as not applicable.
 
 ### Heavy-gate admission
 
@@ -967,6 +973,18 @@ pinned Quint resolver. Unselected scripts, experimental models, documentation,
 raw package/lock/workspace/npm/patch metadata, and the hosted CI workflow do not
 change local formal identity merely because their bytes changed.
 
+Hosted admission has a different boundary because every shard starts from a
+fresh checkout and installation. The checked-in
+`scripts/hosted-formal-input-manifest.json` is generated from the same parsed
+JavaScript and selected-Quint closure, using the hosted shard, aggregate,
+admission, generator, and classifier entries. It also includes the workflow and
+the exact package, lock, workspace, npm, and selected Quint patch inputs that
+determine the hosted command and installed tools. The classifier reads the
+union of the exact base and head manifests so a removed input remains governed.
+Missing, malformed, or stale projection evidence fails closed to formal
+execution; `formal-input-policy.test.mjs` refuses a checked-in projection that
+does not exactly regenerate from the authoritative closure.
+
 The identity retains the consumed profile/toolchain projections and resolved
 Node, pnpm, Quint, parser, Rust evaluator, Apalache, Java, observer Python, and
 declared system library, locale, certificate, and runtime configuration roots.
@@ -1018,9 +1036,15 @@ graph and cycle check for the frozen candidate.
 Only exact diffs containing allowlisted documentation paths use the single
 Ubuntu docs gate: whitespace, classifier controls, changed-commit secrets.
 Everything else—including unreadable/empty diffs and manual/initial events—uses
-the comprehensive Node matrix. The allowlist and controls live in
+the comprehensive Node quality matrix. Independently, hosted formal shards run
+only when the exact base-to-head paths intersect the generated hosted-formal
+input projection. Unavailable base, head, diff, or projection evidence runs the
+shards; a proved unaffected change skips them while the required aggregate job
+reports a lightweight successful not-applicable result. The classifiers and
+controls live in
 [scripts/classify-docs-only-change.mjs](../scripts/classify-docs-only-change.mjs)
-and its test.
+and its test; the generated projection is checked by
+`formal-input-policy.test.mjs`.
 
 ## Changing the harness
 

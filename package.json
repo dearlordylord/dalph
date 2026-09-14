@@ -106,6 +106,7 @@
     "oxlint-tsgolint": "7.0.2001",
     "typescript": "5.9.3",
     "vitest": "4.1.10",
+    "yaml": "2.9.0",
     "zod": "4.1.12"
   }
 }
