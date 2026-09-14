@@ -65,11 +65,16 @@ import {
   ProductionLiveBuiltEntry,
   ProductionLiveCodexHome,
   runProductionLiveQualification,
-  type ProductionLiveQualificationCompletion
+  type ProductionLiveQualificationBoundary,
+  type ProductionLiveQualificationCallbacks,
+  type ProductionLiveQualificationCompletion,
+  type ProductionLiveQualificationInvocation,
+  type ProductionLiveQualificationResult
 } from "./live-qualification-controller.js"
 import { makeProductionLiveGithubForwarder, type ProductionLiveGithubOperationTag } from "./live-github-forwarder.js"
 import {
   makeProductionLiveResponsesEndpoint,
+  type ProductionLiveResponsesEndpointLocator,
   type ProductionLiveResponsesObservation,
   type ProductionLiveResponsesObservationTag
 } from "./live-responses-endpoint.js"
@@ -215,7 +220,7 @@ const codexAppServerObservationWrapper = (codexExecutable: string, observationPa
 export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualification.createLocalFixture")(function* (
   manifest: ProductionLiveQualificationManifest,
   targetInput: { readonly owner: string; readonly repository: string; readonly issueNumber: number },
-  responsesBaseUrl: string,
+  responsesBaseUrl: ProductionLiveResponsesEndpointLocator,
   githubGraphqlEndpoint: string,
   githubToken: Redacted.Redacted<string>,
   observeContainer: (container: ProductionLiveLocalContainer) => Effect.Effect<void> = () => Effect.void
@@ -733,6 +738,63 @@ const safeRecord = (secrets: ProductionLiveQualificationRedactionSecrets, record
     : Effect.void
 }
 
+type ProductionLiveControlledProviderInvocation = Omit<
+  ProductionLiveQualificationInvocation,
+  "controlledProviderCredential"
+>
+
+interface ProductionLiveControlledProviderCallbacks<EPublish, EGather, ERetain, RPublish, RGather, RRetain> {
+  readonly gatherFinalFacts: ProductionLiveQualificationCallbacks<
+    never,
+    EGather,
+    never,
+    never,
+    RGather
+  >["gatherFinalFacts"]
+  readonly publish: ProductionLiveQualificationCallbacks<EPublish, never, never, never, RPublish>["publish"]
+  readonly retainAfterFailure: ProductionLiveQualificationCallbacks<
+    never,
+    never,
+    never,
+    ERetain,
+    RRetain
+  >["retainAfterFailure"]
+}
+
+/**
+ * Generates the credential owned by one qualification invocation, supplies it
+ * to the one shipped child, and rejects any canonical record that exposes it.
+ */
+export const runProductionLiveQualificationWithControlledProvider = <
+  EPublish,
+  EGather,
+  ERetain,
+  RPublish,
+  RGather,
+  RRetain,
+  ECredential,
+  RCredential
+>(
+  invocation: ProductionLiveControlledProviderInvocation,
+  secrets: ProductionLiveQualificationSecrets,
+  boundary: ProductionLiveQualificationBoundary,
+  callbacks: ProductionLiveControlledProviderCallbacks<EPublish, EGather, ERetain, RPublish, RGather, RRetain>,
+  generateCredential: Effect.Effect<Redacted.Redacted<string>, ECredential, RCredential>
+): Effect.Effect<ProductionLiveQualificationResult, ECredential, RPublish | RGather | RRetain | RCredential> =>
+  Effect.gen(function* () {
+    const controlledProviderCredential = yield* generateCredential
+    return yield* runProductionLiveQualification<
+      EPublish,
+      EGather,
+      QualificationFailed,
+      ERetain,
+      RPublish | RGather | RRetain
+    >({ ...invocation, controlledProviderCredential }, boundary, {
+      ...callbacks,
+      validateRecord: (record) => safeRecord({ ...secrets, controlledProviderCredential }, record)
+    })
+  })
+
 const githubReadCommand = (nodeId: string) =>
   `gh api graphql -f query='query($id: ID!) { node(id: $id) { id __typename } }' -f id='${nodeId.replaceAll("'", "'\\''")}'`
 
@@ -949,8 +1011,6 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
   const crypto = yield* Crypto.Crypto
   const githubClient = yield* GithubGraphqlClient
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-  const controlledProviderCredential = yield* generateProductionLiveControlledProviderCredential()
-  const redactionSecrets = { ...secrets, controlledProviderCredential }
   const attempt = yield* Effect.gen(function* () {
     const createdGithubFixture = yield* createProductionLiveGithubFixture({
       invocationId: manifest.invocationId,
@@ -1006,18 +1066,17 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
       repository: manifest.repository.name,
       issueNumber: createdGithubFixture.issue.number
     })
-    const result = yield* runProductionLiveQualification(
+    const result = yield* runProductionLiveQualificationWithControlledProvider(
       {
         builtEntry: manifest.builtEntry,
         codexHome: fixture.codexHome,
         configuration: fixture.configurationPath,
         target,
-        githubToken: secrets.githubToken,
-        controlledProviderCredential
+        githubToken: secrets.githubToken
       },
+      secrets,
       makeProductionLiveQualificationNodeBoundary(spawner),
       {
-        validateRecord: (record) => safeRecord(redactionSecrets, record),
         gatherFinalFacts: ({ runId }) =>
           Effect.scoped(
             Effect.gen(function* () {
@@ -1085,7 +1144,8 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
             yield* Ref.set(qualified, outcome)
           }),
         retainAfterFailure: () => Effect.void
-      }
+      },
+      generateProductionLiveControlledProviderCredential()
     )
     if (result._tag === "Failed" && result.stage === "GatherFinalFacts")
       yield* Ref.set(qualified, qualificationFailed("EvidenceValidation"))

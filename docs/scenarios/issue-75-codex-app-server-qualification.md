@@ -55,9 +55,9 @@ fall back to OpenAI or to another provider.
 | Qualification outcome | Executable evidence |
 | --- | --- |
 | The protected workflow requires only the GitHub secret and contains no external provider secret. | `production live workflow exposes only the GitHub secret to the protected qualification` |
-| Each invocation generates a distinct throwaway credential, passes it only under the qualification-specific key, and keeps it out of serialized/logged output. | `production qualification controller generates and redacts one fresh controlled-provider credential per invocation` |
-| Controlled `codexHome` and Dalph-owned `codexExecutorPrivateStateDirectory` are distinct, and the isolated config names the qualification key. | `production live qualification fixture separates Codex home from executor private state` |
-| The loopback controlled provider remains local and does not call OpenAI. | `controlled qualification provider serves loopback responses without an OpenAI call` |
+| The production generator returns distinct random throwaway values, and the production composition invokes that generator once per invocation, supplies its exact value only as the qualification-specific child environment entry, and rejects the child record before publication when the record contains it. The safe failure result contains no value bytes. | `generates distinct random controlled-provider credentials without serializing their bytes`; `generates, supplies, and rejects one fresh controlled-provider credential per invocation` |
+| Controlled `codexHome` and Dalph-owned `codexExecutorPrivateStateDirectory` are distinct. The isolated config selects exactly one provider, names the qualification key, accepts only its loopback-branded endpoint, disables request/stream retries, and contains no OpenAI provider. | `production live qualification fixture separates Codex home from executor private state`; `rejects malformed worktree and Git head facts before returning an accepted response` |
+| The controlled endpoint accepts only `/v1/responses` on its bound loopback listener, invokes only the injected Git-head reader during its four expected requests, and retains only safe operation tags and counts. No external model-client boundary exists in this endpoint. | `controlled qualification provider serves loopback responses without an OpenAI call` |
 
 The qualification runner builds the checked-in Dalph host, verifies Codex
 `0.149.0`, and runs the same suite on Linux and macOS in

@@ -9,13 +9,13 @@ import {
   ProductionLiveResponsesWorktreeLocator
 } from "../src/qualification/live-responses-endpoint.js"
 
-const post = (endpoint: string, input: string) =>
+const post = (endpoint: string, input: string, path = "/responses") =>
   Effect.tryPromise(
     () =>
       new Promise<{ readonly status: number | undefined; readonly text: string }>((resolve, reject) => {
         const body = JSON.stringify({ input })
         const outgoing = request(
-          `${endpoint}/responses`,
+          `${endpoint}${path}`,
           {
             method: "POST",
             headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) }
@@ -34,12 +34,18 @@ const post = (endpoint: string, input: string) =>
       })
   )
 
-it("serves one controlled task turn and one controlled Integrator turn without retaining prompts", async () => {
+it("controlled qualification provider serves loopback responses without an OpenAI call", async () => {
   const head = "2222222222222222222222222222222222222222"
+  let readHeadCalls = 0
   const result = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const endpoint = yield* makeProductionLiveResponsesEndpoint(() => Effect.succeed(head))
+        const endpoint = yield* makeProductionLiveResponsesEndpoint(() =>
+          Effect.sync(() => {
+            readHeadCalls += 1
+            return head
+          })
+        )
         const taskPrompt = [
           "Dalph immutable attempt facts:",
           "run_id: run-q",
@@ -55,11 +61,13 @@ it("serves one controlled task turn and one controlled Integrator turn without r
         ].join("\n")
         const integrationCommand = yield* post(endpoint.baseUrl, integratorPrompt)
         const integrationResult = yield* post(endpoint.baseUrl, integratorPrompt)
+        const unsupportedProviderPath = yield* post(endpoint.baseUrl, taskPrompt, "/chat/completions")
         return {
           taskCommand,
           taskResult,
           integrationCommand,
           integrationResult,
+          unsupportedProviderPath,
           observation: yield* endpoint.observation
         }
       })
@@ -71,6 +79,7 @@ it("serves one controlled task turn and one controlled Integrator turn without r
   expect(result.taskResult.text).toContain("run-q")
   expect(result.integrationCommand.text).toContain("git merge --no-ff")
   expect(result.integrationResult.text).toContain(`\\"candidate\\":\\"${head}\\"`)
+  expect(result.unsupportedProviderPath.status).toBe(404)
   expect(result.observation).toEqual({
     counts: { executor: 2, integrator: 2, total: 4 },
     orderedTags: [
@@ -83,6 +92,7 @@ it("serves one controlled task turn and one controlled Integrator turn without r
     ]
   })
   expect(JSON.stringify(result.observation)).not.toContain("/tmp/q")
+  expect(readHeadCalls).toBe(2)
 })
 
 it("rejects malformed worktree and Git head facts before returning an accepted response", async () => {

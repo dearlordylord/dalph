@@ -2,7 +2,7 @@
 import nodeProcess from "node:process"
 import { GitCommitSha, RunId } from "@dalph/contracts"
 import { GithubIssueNumber, GithubIssueTarget, GithubRepositoryName, GithubRepositoryOwner } from "@dalph/orchestrator"
-import { Effect, MutableList, Redacted, Schema, Stream } from "effect"
+import { Effect, MutableList, Redacted, Ref, Schema, Stream } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   encodeProductionCliRecord,
@@ -19,6 +19,7 @@ import {
   type ProductionLiveQualificationBoundary,
   type ProductionLiveQualificationFinalFacts
 } from "../src/qualification/live-qualification-controller.js"
+import { runProductionLiveQualificationWithControlledProvider } from "../src/qualification/live-qualification-runtime.js"
 
 const builtEntry = ProductionLiveBuiltEntry.make("/workspace/dalph/packages/dalph/dist/bin/dalph.js")
 const configuration = ProductionConfigurationLocator.make("/tmp/dalph-live-q/production.json")
@@ -146,42 +147,66 @@ describe("#307 production live qualification controller", () => {
     }
   })
 
-  it("rejects unsafe canonical records without returning secret bytes and retains after one child", async () => {
-    const secret = "qualification-secret-sentinel"
-    let spawns = 0
-    const result = await Effect.runPromise(
-      runProductionLiveQualification(
-        invocation,
-        boundary(() => {
-          spawns += 1
-          return Effect.succeed({
-            pid: ProductionLiveQualificationProcessId.make(703),
-            stdout: Stream.make(
-              encoded(selected, {
-                _tag: "Failure",
-                code: "configuration.invalid",
-                detail: secret,
-                subject: "production configuration file",
-                version: 1
+  it("generates, supplies, and rejects one fresh controlled-provider credential per invocation", async () => {
+    const requests = MutableList.make<Parameters<ProductionLiveQualificationBoundary["spawn"]>[0]>()
+    const published = MutableList.make<unknown>()
+    const results = await Effect.runPromise(
+      Effect.gen(function* () {
+        const ordinal = yield* Ref.make(0)
+        const generateCredential = Ref.modify(ordinal, (current) => {
+          const next = current + 1
+          return [Redacted.make(`safe-controlled-provider-${next}`), next] as const
+        })
+        const run = () =>
+          runProductionLiveQualificationWithControlledProvider(
+            {
+              builtEntry: invocation.builtEntry,
+              codexHome: invocation.codexHome,
+              configuration: invocation.configuration,
+              target: invocation.target,
+              githubToken: invocation.githubToken
+            },
+            { githubToken: invocation.githubToken },
+            boundary((request) => {
+              MutableList.append(requests, request)
+              const credential = request.environment["DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL"] ?? "missing"
+              return Effect.succeed({
+                pid: ProductionLiveQualificationProcessId.make(703),
+                stdout: Stream.make(
+                  encoded(selected, {
+                    _tag: "Failure",
+                    code: "configuration.invalid",
+                    detail: credential,
+                    subject: "production configuration file",
+                    version: 1
+                  })
+                ),
+                stderr: Stream.empty,
+                exitCode: Effect.succeed(1)
               })
-            ),
-            stderr: Stream.empty,
-            exitCode: Effect.succeed(1)
-          })
-        }),
-        {
-          validateRecord: (record) =>
-            JSON.stringify(record).includes(secret) ? Effect.fail("unsafe public source") : Effect.void,
-          gatherFinalFacts: () => Effect.succeed(facts),
-          publish: () => Effect.void,
-          retainAfterFailure: () => Effect.void
-        }
-      )
+            }),
+            {
+              gatherFinalFacts: () => Effect.succeed(facts),
+              publish: (completion) => Effect.sync(() => MutableList.append(published, completion)),
+              retainAfterFailure: () => Effect.void
+            },
+            generateCredential
+          )
+        return [yield* run(), yield* run()] as const
+      })
     )
 
-    expect(result).toMatchObject({ _tag: "Failed", stage: "ReadOutput", spawnCount: 1 })
-    expect(JSON.stringify(result)).not.toContain(secret)
-    expect(spawns).toBe(1)
+    const captured = MutableList.toArray(requests)
+    const credentials = captured.map(({ environment }) => environment["DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL"])
+    expect(results).toEqual([
+      { _tag: "Failed", stage: "ReadOutput", processId: 703, spawnCount: 1 },
+      { _tag: "Failed", stage: "ReadOutput", processId: 703, spawnCount: 1 }
+    ])
+    expect(credentials).toEqual(["safe-controlled-provider-1", "safe-controlled-provider-2"])
+    expect(captured.every(({ environment }) => Object.keys(environment).length === 4)).toBe(true)
+    expect(captured.every(({ environment }) => environment["CODEX_HOME"] === invocation.codexHome)).toBe(true)
+    expect(MutableList.toArray(published)).toHaveLength(0)
+    expect(JSON.stringify(results)).not.toContain("safe-controlled-provider")
   })
 
   it("fails closed unless observations prove one app server one task worktree and one integration target", async () => {

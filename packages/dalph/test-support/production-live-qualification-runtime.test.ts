@@ -11,6 +11,7 @@ import {
   productionLiveQualificationOperationCounts,
   writeProductionLiveQualificationFailureRetentionReport
 } from "../src/qualification/live-qualification-runtime.js"
+import { ProductionLiveResponsesEndpointLocator } from "../src/qualification/live-responses-endpoint.js"
 
 const layer = nodeGitCommandLayer.pipe(Layer.provideMerge(NodeServices.layer), Layer.merge(NodeCrypto.layer))
 const formalPositions = (shard: number) =>
@@ -116,7 +117,7 @@ const input = {
 }
 
 describe("#307 production live qualification runtime", () => {
-  it("production qualification controller generates and redacts one fresh controlled-provider credential per invocation", async () => {
+  it("generates distinct random controlled-provider credentials without serializing their bytes", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const first = yield* generateProductionLiveControlledProviderCredential()
@@ -217,7 +218,7 @@ describe("#307 production live qualification runtime", () => {
         const fixture = yield* createProductionLiveLocalFixture(
           yield* decodeProductionLiveQualificationManifest(input),
           { owner: "dalph-live", repository: "qualification", issueNumber: 307 },
-          "http://127.0.0.1:4307/v1",
+          ProductionLiveResponsesEndpointLocator.make("http://127.0.0.1:4307/v1"),
           "http://127.0.0.1:4308/graphql",
           Redacted.make("github-secret")
         )
@@ -228,6 +229,11 @@ describe("#307 production live qualification runtime", () => {
         const config = yield* fs.readFileString(`${fixture.codexHome}/config.toml`)
         expect(config).toContain('base_url = "http://127.0.0.1:4307/v1"')
         expect(config).toContain('env_key = "DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL"')
+        expect(config.match(/^\[model_providers\./gmu)).toHaveLength(1)
+        expect(config).toContain('model_provider = "dalph-live-qualification"')
+        expect(config).toContain("request_max_retries = 0")
+        expect(config).toContain("stream_max_retries = 0")
+        expect(config.toLowerCase()).not.toContain("openai")
         expect(config).not.toContain("DALPH_CODEX_PROVIDER_CREDENTIAL")
         expect(fixture.configuration.codexExecutable).not.toBe(input.codexExecutable)
         expect(yield* fs.readFileString(fixture.configuration.codexExecutable)).toContain(
@@ -250,7 +256,7 @@ describe("#307 production live qualification runtime", () => {
         const failed = yield* createProductionLiveLocalFixture(
           manifest,
           { owner: "dalph-live", repository: "qualification", issueNumber: 307 },
-          "http://127.0.0.1:4307/v1",
+          ProductionLiveResponsesEndpointLocator.make("http://127.0.0.1:4307/v1"),
           "not-an-http-endpoint",
           Redacted.make("github-secret"),
           (container) =>
@@ -283,7 +289,7 @@ describe("#307 production live qualification runtime", () => {
           const fixture = yield* createProductionLiveLocalFixture(
             manifest,
             { owner: "dalph-live", repository: "qualification", issueNumber: 307 },
-            "http://127.0.0.1:4307/v1",
+            ProductionLiveResponsesEndpointLocator.make("http://127.0.0.1:4307/v1"),
             "http://127.0.0.1:4308/graphql",
             Redacted.make("github-secret")
           )
