@@ -420,6 +420,38 @@ it.effect("maps invalid production input to a stable redacted configuration code
   })
 )
 
+it.effect("rejects removed Codex provider and state fields before production host acquisition", () =>
+  Effect.gen(function* () {
+    const cases = [
+      ["codexProvider", "controlled-provider"],
+      ["codexProviderCredential", "non-secret-sentinel"],
+      ["codexStateDirectory", "/tmp/obsolete-codex-state"]
+    ] as const
+
+    for (const [field, value] of cases) {
+      const document = JSON.stringify({ ...validProductionDocument, [field]: value })
+      const failure = yield* loadProductionConfiguration(configurationLocator, target, () =>
+        Effect.succeed(document)
+      ).pipe(
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ GITHUB_TOKEN: "github-sentinel" }))),
+        Effect.flip
+      )
+      expect(failure).toBeInstanceOf(ProductionCliConfigurationError)
+      expect(failure.code).toBe("configuration.invalid")
+
+      const hostAcquisitions = yield* Ref.make(0)
+      const application = runProductionCli(() => Ref.update(hostAcquisitions, (count) => count + 1))
+      yield* application(["run", "github:octo/dalph#42", "--production", "--config", "/tmp/production.json"]).pipe(
+        Effect.provide(liveCliLayer(yield* Ref.make([]), yield* Ref.make([]), document)),
+        Effect.provide(NodeServices.layer),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ GITHUB_TOKEN: "github-sentinel" }))),
+        Effect.flip
+      )
+      expect(yield* Ref.get(hostAcquisitions), field).toBe(0)
+    }
+  })
+)
+
 it.effect("redacts every configuration read document and required GitHub credential failure", () =>
   Effect.gen(function* () {
     const cases = [

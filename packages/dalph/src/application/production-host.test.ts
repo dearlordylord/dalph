@@ -123,6 +123,37 @@ const validRawConfiguration = () => ({
   githubToken: "github-secret"
 })
 
+const ProductionCodexLaunchCapture = Schema.Struct({ arguments: Schema.Array(Schema.String), codexHome: Schema.String })
+
+const fakeProductionCodex = String.raw`#!/usr/bin/env node
+const fs = require("node:fs")
+fs.writeFileSync(
+  process.argv[1] + ".capture.json",
+  JSON.stringify({ arguments: process.argv.slice(2), codexHome: process.env.CODEX_HOME })
+)
+let buffer = ""
+const write = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n")
+process.stdin.setEncoding("utf8")
+process.stdin.on("data", (chunk) => {
+  buffer += chunk
+  while (buffer.includes("\n")) {
+    const index = buffer.indexOf("\n")
+    const line = buffer.slice(0, index)
+    buffer = buffer.slice(index + 1)
+    if (line.trim().length === 0) continue
+    const message = JSON.parse(line)
+    if (message.method === "initialize") {
+      write(message.id, {
+        userAgent: "fixture-codex/production-host",
+        codexHome: process.env.CODEX_HOME,
+        platformFamily: "unix",
+        platformOs: "linux"
+      })
+    }
+  }
+})
+`
+
 const makeTemporaryProductionInput = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -171,6 +202,76 @@ it("ordinary Exit shells cannot inhabit the production-host shell boundary", () 
   expectTypeOf<ApplicationExitShell["Service"]>().not.toMatchTypeOf<ProductionHostApplicationExitShellService>()
   expectTypeOf<SuppliedHostShell>().toEqualTypeOf<ProductionHostApplicationExitShellService>()
 })
+
+it.effect("production host composition keeps ambient Codex home separate from executor private state", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-codex-auth-" })
+      const repository = path.join(root, "repository.git")
+      const evidence = path.join(root, "evidence")
+      const ambientCodexHome = path.join(root, "ambient-codex-home")
+      const executorPrivateState = path.join(root, "executor-private-state")
+      const executable = path.join(root, "fixture-codex")
+      const capture = `${executable}.capture.json`
+      for (const directory of [repository, evidence, ambientCodexHome, executorPrivateState]) {
+        yield* fileSystem.makeDirectory(directory, { recursive: true })
+      }
+      yield* fileSystem.chmod(executorPrivateState, 0o700)
+      yield* fileSystem.writeFileString(executable, fakeProductionCodex)
+      yield* fileSystem.chmod(executable, 0o755)
+
+      const providerStarted = yield* Deferred.make<void>()
+      const githubClient = GithubGraphqlClient.of({
+        execute: () => Deferred.succeed(providerStarted, undefined).pipe(Effect.andThen(Effect.never))
+      })
+      const input = {
+        ...validRawConfiguration(),
+        repository,
+        commonDirectory: repository,
+        journalDatabase: path.join(root, "journal.sqlite"),
+        evidenceStoreRoot: evidence,
+        plannedAttemptWorktreeRoot: path.join(root, "planned-attempts"),
+        codexExecutorPrivateStateDirectory: executorPrivateState,
+        integratorCandidateWorktreeRoot: path.join(root, "integrator-candidates"),
+        integratorPrivateStore: path.join(root, "integrator-private.json"),
+        codexExecutable: executable
+      }
+      const previousCodexHome = nodeProcess.env.CODEX_HOME
+
+      yield* Effect.acquireUseRelease(
+        Effect.sync(() => {
+          nodeProcess.env.CODEX_HOME = ambientCodexHome
+        }),
+        () =>
+          withProductionRepositoryHost(
+            input,
+            productionRepositoryHostGraph({ githubClient: () => Layer.succeed(GithubGraphqlClient, githubClient) }),
+            () =>
+              Effect.gen(function* () {
+                yield* Deferred.await(providerStarted)
+                const captured = yield* Schema.decodeUnknownEffect(ProductionCodexLaunchCapture)(
+                  JSON.parse(yield* fileSystem.readFileString(capture))
+                )
+                expect(captured.arguments).toEqual(["app-server"])
+                expect(captured.codexHome).toBe(ambientCodexHome)
+                expect(captured.codexHome).not.toBe(executorPrivateState)
+                expect(yield* fileSystem.readDirectory(ambientCodexHome)).toEqual([])
+                const privateEntries = yield* fileSystem.readDirectory(executorPrivateState)
+                expect(privateEntries).toContain("executor-private-state.json")
+                expect(privateEntries.every((entry) => entry.startsWith("executor-private-state.json"))).toBe(true)
+              })
+          ),
+        () =>
+          Effect.sync(() => {
+            if (previousCodexHome === undefined) delete nodeProcess.env.CODEX_HOME
+            else nodeProcess.env.CODEX_HOME = previousCodexHome
+          })
+      )
+    }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
+  )
+)
 
 /**
  * Scenario mapping: a supervisor requests Exit from a host constructed without

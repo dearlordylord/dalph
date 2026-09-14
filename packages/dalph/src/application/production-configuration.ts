@@ -178,9 +178,10 @@ const safeConfigurationError = (failure: { readonly issue: SchemaIssue.Issue }) 
 /** Decodes the complete raw host value before any caller can construct live Layers. */
 export const decodeProductionRepositoryHostConfiguration = Effect.fn("ProductionRepositoryHostConfiguration.decode")(
   function* (input: unknown) {
-    return yield* Schema.decodeUnknownEffect(ProductionRepositoryHostConfiguration)(input, { reportInput: false }).pipe(
-      Effect.mapError(safeConfigurationError)
-    )
+    return yield* Schema.decodeUnknownEffect(ProductionRepositoryHostConfiguration)(input, {
+      onExcessProperty: "error",
+      reportInput: false
+    }).pipe(Effect.mapError(safeConfigurationError))
   }
 )
 

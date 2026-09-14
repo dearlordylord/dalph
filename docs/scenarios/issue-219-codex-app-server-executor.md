@@ -1,7 +1,7 @@
 # First concrete executor: persistent Codex app-server threads
 
-Status: accepted planning decision for issue 219. Runtime behavior remains
-unimplemented until the focused tickets named below close.
+Status: accepted operational contract for issue 219. The runtime implementation
+and focused production coverage described below are present.
 
 ## Selected implementation
 
@@ -36,7 +36,10 @@ starts the shipped production command.
 
 1. The production command reads `GITHUB_TOKEN` and decodes the non-secret host
    configuration. It does not require or read an OpenAI API key or a
-   Dalph-specific Codex provider credential.
+   Dalph-specific Codex provider credential. A document that still names the
+   removed `codexProvider`, `codexProviderCredential`, or `codexStateDirectory`
+   field fails with `configuration.invalid` before the production host acquires
+   any resource.
 2. The production host opens Dalph's configured executor-private directory for
    its association and ownership records. It does not use that directory as
    `CODEX_HOME`.
@@ -72,8 +75,10 @@ subscription use into API-key billing, or persist authentication material.
 ### Acceptance-test mapping
 
 - `production configuration accepts ambient Codex CLI authentication without a provider credential`
+- `rejects removed Codex provider and state fields before production host acquisition`
 - `production starts codex app-server without provider credential or CODEX_HOME overrides`
 - `production keeps Codex CLI state separate from Dalph executor private state`
+- `production host composition keeps ambient Codex home separate from executor private state`
 - `production help names only the GitHub credential required by the ordinary path`
 
 The following implementation-private names make the chronology precise:
