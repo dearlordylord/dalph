@@ -753,7 +753,7 @@ type ProductionLiveControlledProviderInvocation = Omit<
 >
 
 interface ProductionLiveControlledProviderCallbacks<EPublish, EGather, ERetain, RPublish, RGather, RRetain> {
-  readonly observeProgress?: (
+  readonly observeProgress: (
     progress: ProductionLiveQualificationProgress
   ) => Effect.Effect<void, never, RPublish | RGather | RRetain>
   readonly gatherFinalFacts: ProductionLiveQualificationCallbacks<
@@ -840,6 +840,12 @@ export const ProductionLiveQualificationRetentionReport = Schema.Struct({
     })
   )
 })
+
+/** The hosted collector uses this same strict boundary before reading checkpoint locators or progress. */
+export const decodeProductionLiveQualificationRetentionReport = Schema.decodeUnknownEffect(
+  ProductionLiveQualificationRetentionReport,
+  { onExcessProperty: "error", reportInput: false }
+)
 
 type GithubFixture = Effect.Success<ReturnType<typeof createProductionLiveGithubFixture>>
 type GithubForwarder = Effect.Success<ReturnType<typeof makeProductionLiveGithubForwarder>>
@@ -982,18 +988,30 @@ export const replaceProductionLiveQualificationRetentionReportAtomically = Effec
   }).pipe(Effect.ensuring(fs.remove(replacement, { force: true }).pipe(Effect.ignore)))
 })
 
+/** Exact fixture receipts and completed observations used to replace one retention checkpoint. */
+interface ProductionLiveQualificationRetentionInput {
+  readonly manifest: ProductionLiveQualificationManifest
+  readonly phase: QualificationFailed["phase"]
+  readonly githubFixture: GithubFixture | undefined
+  readonly forwarder: GithubForwarder | undefined
+  readonly localFixture: ProductionLiveLocalFixture | undefined
+  readonly localContainer: ProductionLiveLocalContainer | undefined
+  readonly cleanupState: { github?: GithubCleanup; local?: LocalCleanup }
+  readonly progress?: ReadonlyArray<ProductionLiveQualificationProgress>
+}
+
 export const writeProductionLiveQualificationFailureRetentionReport = Effect.fn(
   "ProductionLiveQualification.writeRetentionReport"
-)(function* (
-  manifest: ProductionLiveQualificationManifest,
-  phase: QualificationFailed["phase"],
-  githubFixture: GithubFixture | undefined,
-  forwarder: GithubForwarder | undefined,
-  localFixture: ProductionLiveLocalFixture | undefined,
-  localContainer: ProductionLiveLocalContainer | undefined,
-  cleanupState: { github?: GithubCleanup; local?: LocalCleanup },
-  progress?: ReadonlyArray<ProductionLiveQualificationProgress>
-) {
+)(function* ({
+  cleanupState,
+  forwarder,
+  githubFixture,
+  localContainer,
+  localFixture,
+  manifest,
+  phase,
+  progress
+}: ProductionLiveQualificationRetentionInput) {
   const githubCleanup = cleanupState.github
   const observedLabels = yield* observeCreatedLabels(forwarder)
   const labelResources = observedLabels.map(({ fingerprint, name, nodeId }) =>
@@ -1001,10 +1019,7 @@ export const writeProductionLiveQualificationFailureRetentionReport = Effect.fn(
   )
   const githubResources = githubFixture === undefined ? [] : [...githubFixture.manifest.resources, ...labelResources]
   const localCleanup = cleanupState.local
-  const report = yield* Schema.decodeUnknownEffect(ProductionLiveQualificationRetentionReport, {
-    onExcessProperty: "error",
-    reportInput: false
-  })({
+  const report = yield* decodeProductionLiveQualificationRetentionReport({
     schemaVersion: 1,
     invocationId: manifest.invocationId,
     outcome: "NotQualified",
@@ -1048,20 +1063,24 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const progress = yield* Ref.make<ReadonlyArray<ProductionLiveQualificationProgress>>([])
   const progressWrites = yield* Semaphore.make(1)
+  const writeCheckpoint = (phase: QualificationFailed["phase"]) =>
+    Effect.gen(function* () {
+      yield* writeProductionLiveQualificationFailureRetentionReport({
+        manifest,
+        phase,
+        githubFixture,
+        forwarder,
+        localFixture: local,
+        localContainer,
+        cleanupState,
+        progress: yield* Ref.get(progress)
+      })
+    })
   const observeProgress = (observation: ProductionLiveQualificationProgress) =>
     progressWrites.withPermit(
       Effect.gen(function* () {
         yield* Ref.update(progress, (current) => [...current, observation])
-        yield* writeProductionLiveQualificationFailureRetentionReport(
-          manifest,
-          "Execution",
-          githubFixture,
-          forwarder,
-          local,
-          localContainer,
-          cleanupState,
-          yield* Ref.get(progress)
-        )
+        yield* writeCheckpoint("Execution")
       }).pipe(Effect.ignore)
     )
   const attempt = yield* Effect.gen(function* () {
@@ -1074,15 +1093,7 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
     // Persist Q's first exact remote locator before any later setup or child
     // boundary can remain unresolved. The hosted runner uploads this checkpoint
     // even when its outer deadline terminates the controller process.
-    yield* writeProductionLiveQualificationFailureRetentionReport(
-      manifest,
-      "Setup",
-      githubFixture,
-      undefined,
-      undefined,
-      undefined,
-      cleanupState
-    )
+    yield* writeCheckpoint("Setup")
     const runningForwarder = yield* makeProductionLiveGithubForwarder(defaultGithubGraphqlEndpoint)
     forwarder = runningForwarder
     const responses = yield* makeProductionLiveResponsesEndpoint((worktree) =>
@@ -1115,15 +1126,7 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
     // Replace the setup checkpoint with the complete recoverable fixture before
     // the shipped child starts. This is evidence of retained resources, not
     // authority to delete them or to retry the live journey.
-    yield* writeProductionLiveQualificationFailureRetentionReport(
-      manifest,
-      "Execution",
-      githubFixture,
-      forwarder,
-      fixture,
-      localContainer,
-      cleanupState
-    )
+    yield* writeCheckpoint("Execution")
     const build = yield* measureQualificationBuild(manifest.sourceRepository, manifest.sourceBaseSha, {
       builtEntry: manifest.builtEntry,
       lockfile: manifest.lockfile,
@@ -1233,16 +1236,7 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
   if (attempt._tag === "Success" && attempt.success._tag === "Qualified") {
     const removedCheckpoint = yield* fs.remove(manifest.retentionReport).pipe(Effect.result)
     if (removedCheckpoint._tag === "Success") return attempt.success
-    yield* writeProductionLiveQualificationFailureRetentionReport(
-      manifest,
-      "Publication",
-      githubFixture,
-      forwarder,
-      local,
-      localContainer,
-      cleanupState,
-      yield* Ref.get(progress)
-    ).pipe(
+    yield* writeCheckpoint("Publication").pipe(
       Effect.provideService(GithubGraphqlClient, githubClient),
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Crypto.Crypto, crypto)
@@ -1253,16 +1247,7 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
     attempt._tag === "Success" && attempt.success._tag === "QualificationFailed"
       ? attempt.success
       : qualificationFailed("Setup")
-  yield* writeProductionLiveQualificationFailureRetentionReport(
-    manifest,
-    failure.phase,
-    githubFixture,
-    forwarder,
-    local,
-    localContainer,
-    cleanupState,
-    yield* Ref.get(progress)
-  ).pipe(
+  yield* writeCheckpoint(failure.phase).pipe(
     Effect.provideService(GithubGraphqlClient, githubClient),
     Effect.provideService(FileSystem.FileSystem, fs),
     Effect.provideService(Crypto.Crypto, crypto)

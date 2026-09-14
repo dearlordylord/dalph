@@ -6,20 +6,24 @@ import nodeProcess from "node:process"
 import * as nodeTimers from "node:timers"
 import { Effect, Exit, FileSystem, Layer, Redacted } from "effect"
 import { NodeCrypto, NodeServices } from "@effect/platform-node"
-import { nodeGitCommandLayer } from "@dalph/orchestrator"
+import { GitCommand, GithubGraphqlClient, nodeGitCommandLayer } from "@dalph/orchestrator"
+import { GitRepositoryLocator } from "@dalph/contracts"
 import { describe, expect, it } from "vitest"
 import { launchExecutableMatches } from "../src/application/codex-app-server.js"
 import {
   createProductionLiveLocalFixture,
   decodeProductionLiveQualificationManifest,
+  decodeProductionLiveQualificationRetentionReport,
   generateProductionLiveControlledProviderCredential,
   productionLiveQualificationBoundaryObservations,
   productionLiveQualificationChronologyIsExact,
   productionLiveQualificationOperationCounts,
   replaceProductionLiveQualificationRetentionReportAtomically,
+  runProductionLiveQualificationRuntime,
   writeProductionLiveQualificationFailureRetentionReport
 } from "../src/qualification/live-qualification-runtime.js"
 import { ProductionLiveResponsesEndpointLocator } from "../src/qualification/live-responses-endpoint.js"
+import { githubGraphqlTestClient } from "../../orchestrator/src/authorities/task-tracker/github/graphql-client.test-fixture.js"
 
 const layer = nodeGitCommandLayer.pipe(Layer.provideMerge(NodeServices.layer), Layer.merge(NodeCrypto.layer))
 const processBoundMilliseconds = 5_000
@@ -152,6 +156,86 @@ const input = {
 }
 
 describe("#307 production live qualification runtime", () => {
+  it("runtime retains build measurement and child progress through its real checkpoint writer", async () => {
+    const client = githubGraphqlTestClient((request) =>
+      Effect.succeed({
+        body:
+          request._tag === "ResolveRepository"
+            ? { data: { repository: { id: "repository-node" } } }
+            : {
+                data: {
+                  createIssue: {
+                    clientMutationId: input.createIssueOperationId,
+                    issue: { id: "issue-node", number: 307, state: "OPEN", stateReason: null }
+                  }
+                }
+              }
+      })
+    )
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const git = yield* GitCommand
+          const directory = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-live-runtime-progress-" })
+          const sourceRepository = GitRepositoryLocator.make(`${directory}/source`)
+          const bin = `${sourceRepository}/packages/dalph/dist/bin`
+          yield* fs.makeDirectory(bin, { recursive: true })
+          // This controlled child owns only stdout and an unsuccessful exit; it cannot contact providers.
+          yield* fs.writeFileString(
+            `${bin}/dalph.js`,
+            'process.stdout.write(JSON.stringify({_tag:"RunSelected",runId:"run-progress",selection:"Allocated",version:1})+"\\n");process.exitCode=1;\n'
+          )
+          yield* fs.writeFileString(`${sourceRepository}/pnpm-lock.yaml`, "controlled lockfile\n")
+          for (const args of [
+            ["init", "--initial-branch=master"],
+            ["config", "user.name", "Qualification Test"],
+            ["config", "user.email", "qualification@example.invalid"],
+            ["add", "."],
+            ["commit", "-m", "fixture"]
+          ])
+            expect((yield* git.runInWorktree(sourceRepository, args)).exitCode).toBe(0)
+          const manifest = yield* decodeProductionLiveQualificationManifest({
+            ...input,
+            sourceRepository,
+            builtEntry: `${bin}/dalph.js`,
+            lockfile: `${sourceRepository}/pnpm-lock.yaml`,
+            publicationContainer: directory,
+            artifact: `${directory}/qualification.json`,
+            retentionReport: `${directory}/retained-locators.json`
+          })
+          const result = yield* runProductionLiveQualificationRuntime(manifest, {
+            githubToken: Redacted.make("github-secret")
+          })
+          expect(result).toMatchObject({ _tag: "QualificationFailed", phase: "Execution" })
+          const source = yield* fs.readFileString(manifest.retentionReport)
+          const report = yield* decodeProductionLiveQualificationRetentionReport(JSON.parse(source))
+          expect(report.progress?.map(({ _tag }) => _tag)).toEqual(
+            expect.arrayContaining([
+              "BuildMeasured",
+              "ChildSpawned",
+              "FirstCanonicalRecord",
+              "RunSelected",
+              "StdoutCompleted",
+              "StderrCompleted",
+              "ProcessCompleted"
+            ])
+          )
+          expect(report.progress).toHaveLength(7)
+          expect(report.progress?.[0]).toEqual({ _tag: "BuildMeasured" })
+          expect(report.progress?.[1]).toMatchObject({ _tag: "ChildSpawned" })
+          expect(report.progress).toContainEqual({ _tag: "RunSelected", runId: "run-progress" })
+          expect(report.progress).toContainEqual({ _tag: "ProcessCompleted", exitCode: 1 })
+          expect(source).not.toContain("github-secret")
+          expect(yield* fs.exists(manifest.artifact)).toBe(false)
+          const fixtureContainer = report.local[0]?.locator
+          expect(fixtureContainer).toMatch(/^\/tmp\/dalph-live-live-q-307-/u)
+          if (fixtureContainer !== undefined) yield* fs.remove(fixtureContainer, { recursive: true })
+        })
+      ).pipe(Effect.provide(layer), Effect.provideService(GithubGraphqlClient, client))
+    )
+  })
+
   it("generates distinct random controlled-provider credentials without serializing their bytes", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -424,10 +508,10 @@ describe("#307 production live qualification runtime", () => {
             artifact: `${output}/evidence.json`,
             retentionReport: `${publicationContainer}/retained-locators.json`
           })
-          yield* writeProductionLiveQualificationFailureRetentionReport(
+          yield* writeProductionLiveQualificationFailureRetentionReport({
             manifest,
-            "Setup",
-            {
+            phase: "Setup",
+            githubFixture: {
               manifest: {
                 resources: [
                   {
@@ -441,11 +525,11 @@ describe("#307 production live qualification runtime", () => {
                 ]
               }
             } as never,
-            undefined,
-            undefined,
-            undefined,
-            {}
-          )
+            forwarder: undefined,
+            localFixture: undefined,
+            localContainer: undefined,
+            cleanupState: {}
+          })
           const report = JSON.parse(yield* fs.readFileString(manifest.retentionReport)) as {
             readonly phase: string
             readonly github: ReadonlyArray<{
@@ -492,16 +576,16 @@ describe("#307 production live qualification runtime", () => {
             "http://127.0.0.1:4308/graphql",
             Redacted.make("github-secret")
           )
-          yield* writeProductionLiveQualificationFailureRetentionReport(
+          yield* writeProductionLiveQualificationFailureRetentionReport({
             manifest,
-            "Execution",
-            undefined,
-            undefined,
-            fixture,
-            undefined,
-            {},
-            [{ _tag: "BuildMeasured" }]
-          )
+            phase: "Execution",
+            githubFixture: undefined,
+            forwarder: undefined,
+            localFixture: fixture,
+            localContainer: undefined,
+            cleanupState: {},
+            progress: [{ _tag: "BuildMeasured" }]
+          })
           const report = JSON.parse(yield* fs.readFileString(manifest.retentionReport)) as {
             readonly local: ReadonlyArray<{ readonly locator: string; readonly disposition: string }>
             readonly progress: ReadonlyArray<{ readonly _tag: string }>

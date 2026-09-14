@@ -138,6 +138,7 @@ describe("#307 production live qualification controller", () => {
         }),
         {
           validateRecord: () => Effect.void,
+          observeProgress: () => Effect.void,
           gatherFinalFacts: () => Effect.succeed(facts),
           publish: (input) => Effect.sync(() => MutableList.append(published, input)),
           retainAfterFailure: () => Effect.void
@@ -186,6 +187,7 @@ describe("#307 production live qualification controller", () => {
           }),
           {
             validateRecord: () => Effect.void,
+            observeProgress: () => Effect.void,
             gatherFinalFacts: () =>
               failedStage === "GatherFinalFacts" ? Effect.fail("unreadable final authority") : Effect.succeed(facts),
             publish: () => (failedStage === "Publish" ? Effect.fail("artifact unavailable") : Effect.void),
@@ -242,6 +244,7 @@ describe("#307 production live qualification controller", () => {
               })
             }),
             {
+              observeProgress: () => Effect.void,
               gatherFinalFacts: () => Effect.succeed(facts),
               publish: (completion) => Effect.sync(() => MutableList.append(published, completion)),
               retainAfterFailure: () => Effect.void
@@ -282,6 +285,7 @@ describe("#307 production live qualification controller", () => {
           }),
           {
             validateRecord: () => Effect.void,
+            observeProgress: () => Effect.void,
             gatherFinalFacts: () => Effect.succeed({ ...facts, [field]: 2 }),
             publish: () => Effect.void,
             retainAfterFailure: () => Effect.void
@@ -311,6 +315,7 @@ describe("#307 production live qualification controller", () => {
         ),
         {
           validateRecord: () => Effect.void,
+          observeProgress: () => Effect.void,
           gatherFinalFacts: () => Effect.succeed(facts),
           publish: () => Effect.void,
           retainAfterFailure: () => Effect.void

@@ -159,7 +159,7 @@ export interface ProductionLiveQualificationCallbacks<
   R = never
 > {
   /** Safe observations only; the callback cannot receive child output or credentials. */
-  readonly observeProgress?: (progress: ProductionLiveQualificationProgress) => Effect.Effect<void, never, R>
+  readonly observeProgress: (progress: ProductionLiveQualificationProgress) => Effect.Effect<void, never, R>
   /** Rejects unsafe source atoms before the record enters the accepted transcript. */
   readonly validateRecord: (record: ProductionCliRecord) => Effect.Effect<void, EValidate, R>
   readonly gatherFinalFacts: (
@@ -363,7 +363,7 @@ const runProductionLiveQualificationScoped = Effect.fn("ProductionLiveQualificat
   if (spawned._tag === "Failure") return yield* fail("Spawn")
   const child = spawned.success
   processId = child.pid
-  const observe = callbacks.observeProgress ?? (() => Effect.void)
+  const observe = callbacks.observeProgress
   yield* observe({ _tag: "ChildSpawned", processId })
   let firstRecord = true
   let firstSelection = true
