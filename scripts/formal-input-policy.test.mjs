@@ -126,6 +126,19 @@ test("retains formal reuse across unrelated edits without binding HEAD index or 
 
 test("builds one applicability identity for equivalent inputs and checkout tools in relocated worktrees", async () => {
   const first = fixture()
+  const launcherPath = (worktree) =>
+    join(worktree, "node_modules", ".pnpm", "fixture@1.0.0", "node_modules", "fixture", "node_modules", ".bin", "tool")
+  const launcher = (worktree, target = "../../../../tool-package/bin/tool.js") => `#!/bin/sh
+basedir=$(dirname "$(echo "$0" | sed -e 's,\\\\,/,g')")
+export NODE_PATH="${worktree}/node_modules/.pnpm/tool-package/node_modules"
+if [ -x "$basedir/node" ]; then
+  exec "$basedir/node"  "$basedir/${target}" "$@"
+else
+  exec node  "$basedir/${target}" "$@"
+fi
+`
+  mkdirSync(dirname(launcherPath(first.root)), { recursive: true })
+  writeFileSync(launcherPath(first.root), launcher(first.root), { mode: 0o755 })
   const configurationPaths = (worktree) => {
     const paths = [join(first.toolchain.javaUserHome, ".tlaplus", "apalache.cfg")]
     let directory = worktree
@@ -137,18 +150,31 @@ test("builds one applicability identity for equivalent inputs and checkout tools
   }
   const originalConfigurations = configurationPaths(first.root)
   first.toolchain.roots.push(...originalConfigurations)
+  first.toolchain.roots.push(join(first.root, "node_modules"))
   first.toolchain.allowedRoots.push(...originalConfigurations)
+  first.toolchain.allowedRoots.push(join(first.root, "node_modules"))
+  first.toolchain.requiredRoots.push(join(first.root, "node_modules"))
   first.toolchain.configPaths = originalConfigurations
   first.environment.PATH = `${join(first.root, "node_modules", ".bin")}:${first.environment.PATH}`
   first.environment.npm_execpath = join(first.root, "node_modules", ".bin", "pnpm")
   const original = await first.identity()
   const relocatedRoot = join(first.outer, "deeper", "relocated")
   cpSync(first.root, relocatedRoot, { recursive: true })
+  writeFileSync(launcherPath(relocatedRoot), launcher(relocatedRoot), { mode: 0o755 })
   const replaceRoot = (value) => JSON.parse(JSON.stringify(value).replaceAll(first.root, relocatedRoot))
   const relocatedToolchain = replaceRoot(first.toolchain)
   const relocatedConfigurations = configurationPaths(relocatedRoot)
-  relocatedToolchain.roots = [join(relocatedRoot, "tools"), ...relocatedConfigurations]
-  relocatedToolchain.allowedRoots = [join(relocatedRoot, "tools"), ...relocatedConfigurations]
+  relocatedToolchain.roots = [
+    join(relocatedRoot, "tools"),
+    join(relocatedRoot, "node_modules"),
+    ...relocatedConfigurations
+  ]
+  relocatedToolchain.allowedRoots = [
+    join(relocatedRoot, "tools"),
+    join(relocatedRoot, "node_modules"),
+    ...relocatedConfigurations
+  ]
+  relocatedToolchain.requiredRoots = [join(relocatedRoot, "tools"), join(relocatedRoot, "node_modules")]
   relocatedToolchain.configPaths = relocatedConfigurations
   const relocatedEnvironment = replaceRoot(first.environment)
   const relocated = await startFormalInputGuard({
@@ -163,6 +189,18 @@ test("builds one applicability identity for equivalent inputs and checkout tools
   assert.equal(relocated.identity.applicabilityDigest, original.applicabilityDigest)
   assert.deepEqual(relocated.identity.applicability, original.applicability)
   assert.equal(JSON.stringify(original.applicability).includes(".apalache.cfg"), false)
+
+  writeFileSync(launcherPath(relocatedRoot), launcher(relocatedRoot, "../../../../other/bin/tool.js"), { mode: 0o755 })
+  const changedLauncher = await startFormalInputGuard({
+    worktree: relocatedRoot,
+    effectiveEnvironment: relocatedEnvironment,
+    profile: first.profile,
+    toolchain: relocatedToolchain
+  })
+  cleanups.push(() => changedLauncher.close())
+  assert.notEqual(changedLauncher.identity.applicabilityDigest, original.applicabilityDigest)
+  await changedLauncher.close()
+  writeFileSync(launcherPath(relocatedRoot), launcher(relocatedRoot), { mode: 0o755 })
 
   writeFileSync(join(relocatedRoot, "specs/model.qnt"), "module fixture { val changed = true }\n")
   const changed = await startFormalInputGuard({

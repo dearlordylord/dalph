@@ -144,14 +144,37 @@ const normalizedToolchain = (toolchain, worktree, configPaths) => {
   }
 }
 
+const normalizedPnpmLauncher = (entry, worktree) => {
+  const pnpmStore = join(worktree, "node_modules", ".pnpm")
+  if (entry.type !== "file" || dirname(entry.path).split(sep).at(-1) !== ".bin" || !below(entry.path, pnpmStore))
+    return entry
+  const text = readFileSync(entry.path, "utf8")
+  const targets = [...text.matchAll(/^\s*exec (?:"\$basedir\/node"|node)\s+"\$basedir\/([^"\n]+)"\s+"\$@"\s*$/gmu)].map(
+    (match) => match[1]
+  )
+  if (
+    !text.startsWith("#!/bin/sh\n") ||
+    !text.includes('basedir=$(dirname "$(echo "$0"') ||
+    targets.length !== 2 ||
+    targets[0] !== targets[1]
+  )
+    return entry
+  const semantic = { ...entry }
+  delete semantic.sha256
+  return { ...semantic, generatedLauncher: { runtime: "node", targetFromBinDirectory: targets[0] } }
+}
+
 const normalizedManifest = (entries, worktree, role) =>
   entries
-    .map(({ path, resolved, target, ...entry }) => ({
-      location: pathIdentity(path, worktree, role),
-      ...entry,
-      ...(resolved === undefined ? {} : { resolved: pathIdentity(resolved, worktree, role) }),
-      ...(target === undefined ? {} : { target: isAbsolute(target) ? pathIdentity(target, worktree, role) : target })
-    }))
+    .map((candidate) => {
+      const { path, resolved, target, ...entry } = normalizedPnpmLauncher(candidate, worktree)
+      return {
+        location: pathIdentity(path, worktree, role),
+        ...entry,
+        ...(resolved === undefined ? {} : { resolved: pathIdentity(resolved, worktree, role) }),
+        ...(target === undefined ? {} : { target: isAbsolute(target) ? pathIdentity(target, worktree, role) : target })
+      }
+    })
     .sort((left, right) => JSON.stringify(left.location).localeCompare(JSON.stringify(right.location)))
 
 const normalizedToolManifest = (entries, worktree, configPaths) => {
