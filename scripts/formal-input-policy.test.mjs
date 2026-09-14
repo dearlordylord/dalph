@@ -16,11 +16,14 @@ import { createRequire } from "node:module"
 import { afterEach, test } from "node:test"
 import {
   createFormalEnvironment,
+  discoverFormalSourcePaths,
   formalInputPolicyVersion,
   quintImportSources,
   resolveFormalExecutable,
   startFormalInputGuard
 } from "./formal-input-policy.mjs"
+import { expectedHostedFormalInputManifestText } from "./generate-hosted-formal-input-manifest.mjs"
+import { hostedFormalInputManifestPath } from "./hosted-formal-input-manifest.mjs"
 import { localHostIdentity } from "./gate-custody-records.mjs"
 import { startInputObserver } from "./gate-input-observer.mjs"
 const cleanups = []
@@ -105,6 +108,25 @@ test("formal executable lookup continues from a missing PATH entry to the later 
     resolveFormalExecutable("absent-tool", { PATH: missing }, root),
     (error) => error.code === "ENOENT" && error.cause?.code === "ENOENT"
   )
+})
+
+test("checked-in hosted formal inputs exactly match the authoritative JavaScript and Quint closure", async () => {
+  assert.equal(
+    readFileSync(hostedFormalInputManifestPath, "utf8"),
+    await expectedHostedFormalInputManifestText(process.cwd())
+  )
+})
+
+test("explicit source discovery uses the same parser-backed model and helper closure", async () => {
+  const f = fixture()
+  writeFileSync(join(f.root, "scripts/hosted-entry.mjs"), 'import "./hosted-helper.mjs"\n')
+  writeFileSync(join(f.root, "scripts/hosted-helper.mjs"), "export const hosted = true\n")
+  const paths = await discoverFormalSourcePaths({
+    javascriptEntries: ["scripts/hosted-entry.mjs"],
+    profile: f.profile,
+    worktree: f.root
+  })
+  assert.deepEqual(paths, ["scripts/hosted-entry.mjs", "scripts/hosted-helper.mjs", "specs/model.qnt"])
 })
 
 test("retains formal reuse across unrelated edits without binding HEAD index or base", async () => {

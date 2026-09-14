@@ -71,8 +71,15 @@ describe("hosted formal-model contract", () => {
     expect(packageJson.engines.node).toBe("^24.20.0")
 
     const jobs = parseWorkflowJobs(ciWorkflow)
+    const changePlanJob = jobs.get("change-plan")?.join("\n")
+    expect(changePlanJob).toBeDefined()
+    expect(changePlanJob).toContain("\n      head-sha: ${{ steps.change.outputs.head-sha }}")
+    expect(changePlanJob).toContain("\n      formal-required: ${{ steps.change.outputs.formal-required }}")
+    expect(changePlanJob).toContain("\n      formal-classification: ${{ steps.change.outputs.formal-classification }}")
     const formalJob = jobs.get("formal-models")?.join("\n")
     expect(formalJob).toBeDefined()
+    expect(formalJob).toContain("\n    if: needs.change-plan.outputs.formal-required == 'true'")
+    expect(formalJob).not.toContain("docs-only")
     expect(formalJob).toContain("\n    runs-on: ubuntu-24.04-arm")
     expect(formalJob).toContain("\n    timeout-minutes: 16")
     expect(formalJob).toMatch(/\n\s+node-version: \$\{\{ matrix\.node-version \}\}/)
@@ -94,8 +101,20 @@ describe("hosted formal-model contract", () => {
     const aggregateJob = jobs.get("formal-model-aggregate")?.join("\n")
     expect(aggregateJob).toBeDefined()
     expect(aggregateJob).toContain("\n    needs: [change-plan, formal-models]")
+    expect(aggregateJob).toContain("\n    if: always()")
+    expect(aggregateJob).not.toContain("needs.change-plan.result == 'success'")
+    const supportedVersions = packageJson.engines.node.split(" || ").map((range) => range.slice(1))
     expect(aggregateJob).toContain(
-      "\n    if: always() && needs.change-plan.result == 'success' && needs.change-plan.outputs.docs-only != 'true'"
+      `node-version: \${{ fromJSON(needs.change-plan.outputs.versions || '${JSON.stringify(supportedVersions)}') }}`
+    )
+    expect(aggregateJob).toContain("DALPH_FORMAL_BASE_SHA: ${{ needs.change-plan.outputs.base-sha }}")
+    expect(aggregateJob).toContain("DALPH_FORMAL_HEAD_SHA: ${{ needs.change-plan.outputs.head-sha }}")
+    expect(aggregateJob).toContain(
+      "DALPH_FORMAL_CLASSIFICATION: ${{ needs.change-plan.outputs.formal-classification }}"
+    )
+    expect(aggregateJob).toMatch(/- name: Checkout\n\s+if: needs\.change-plan\.outputs\.formal-required == 'true'/u)
+    expect(aggregateJob).toMatch(
+      /- name: Set up Node\.js\n\s+if: needs\.change-plan\.outputs\.formal-required == 'true'/u
     )
     expect(aggregateJob).toContain("\n        uses: actions/download-artifact@v4")
     expect(aggregateJob).toContain("\n          path: formal-shard-reports")
@@ -103,6 +122,17 @@ describe("hosted formal-model contract", () => {
     expect(aggregateJob).toContain(
       "node scripts/aggregate-hosted-formal-shards.mjs formal-shard-reports/shard-0.json formal-shard-reports/shard-1.json"
     )
+    expect(aggregateJob).toMatch(
+      /- name: Report formal model gate not applicable\n\s+if: needs\.change-plan\.outputs\.formal-required == 'false'/u
+    )
+    expect(aggregateJob).toContain("Formal model gate not applicable.")
+    expect(aggregateJob).toContain("printf 'Base SHA: %s\\n' \"$DALPH_FORMAL_BASE_SHA\"")
+    expect(aggregateJob).toContain("printf 'Head SHA: %s\\n' \"$DALPH_FORMAL_HEAD_SHA\"")
+    expect(aggregateJob).toContain("printf 'Classification: %s\\n' \"$DALPH_FORMAL_CLASSIFICATION\"")
+    expect(aggregateJob).toMatch(
+      /- name: Refuse missing formal classification\n\s+if: needs\.change-plan\.outputs\.formal-required != 'true' && needs\.change-plan\.outputs\.formal-required != 'false'/u
+    )
+    expect(aggregateJob).not.toContain("pnpm install")
     expect(jobs.get("quality")?.join("\n")).toContain("\n    runs-on: ubuntu-latest")
     expect(jobs.get("quality")?.join("\n")).not.toContain("pnpm check:quint")
     expect(formalGate).toContain("Use the admitted pnpm check:quint entry point")

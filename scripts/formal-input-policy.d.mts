@@ -53,6 +53,12 @@ export declare const resolveFormalExecutable: (
   worktree: string
 ) => Promise<string>
 export declare const createFormalEnvironment: (callerEnvironment?: NodeJS.ProcessEnv) => Record<string, string>
+export declare const discoverFormalSourcePaths: (options: {
+  readonly javascriptEntries: ReadonlyArray<string>
+  readonly profile: unknown
+  readonly timeoutMilliseconds?: number
+  readonly worktree: string
+}) => Promise<ReadonlyArray<string>>
 export declare const resolveFormalToolchain: (options: {
   readonly worktree: string
   readonly effectiveEnvironment: NodeJS.ProcessEnv

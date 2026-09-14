@@ -2,7 +2,10 @@ import { execFileSync } from "node:child_process"
 import { appendFileSync } from "node:fs"
 import { pathToFileURL } from "node:url"
 
+import { hostedFormalInputManifestPath, parseHostedFormalInputManifest } from "./hosted-formal-input-manifest.mjs"
+
 const allZeroSha = /^0+$/u
+const commitSha = /^[0-9a-f]{40}$/u
 
 /** Paths that cannot change Dalph runtime, repository tooling, or executable evaluation. */
 export const isDocsOnlyPath = (path) =>
@@ -32,20 +35,89 @@ export const changedPathsBetween = (baseSha, headSha, cwd = process.cwd()) => {
     .filter((path) => path !== "")
 }
 
+const manifestAtCommit = (sha, cwd) =>
+  parseHostedFormalInputManifest(
+    execFileSync("git", ["show", `${sha}:${hostedFormalInputManifestPath}`], { cwd, encoding: "utf8" })
+  )
+
+/** A deletion remains governed by taking the union of the exact base and head projections. */
+export const hostedFormalInputPathsBetween = (baseSha, headSha, cwd = process.cwd()) => [
+  ...new Set([...manifestAtCommit(baseSha, cwd).paths, ...manifestAtCommit(headSha, cwd).paths])
+]
+
+export const classifyFormalChangedPaths = (changedPaths, formalInputPaths) => {
+  if (!Array.isArray(changedPaths) || changedPaths.length === 0)
+    throw new Error("The exact base-to-head path set is empty")
+  if (
+    changedPaths.some(
+      (path) =>
+        typeof path !== "string" ||
+        path === "" ||
+        path.startsWith("/") ||
+        path.includes("\\") ||
+        path.split("/").some((part) => part === "" || part === "." || part === "..")
+    )
+  )
+    throw new Error("The exact base-to-head path set contains a non-canonical repository path")
+  if (!Array.isArray(formalInputPaths) || formalInputPaths.length === 0)
+    throw new Error("The hosted formal input projection is unavailable")
+  const governed = new Set(formalInputPaths)
+  return changedPaths.filter((path) => governed.has(path)).sort((left, right) => left.localeCompare(right))
+}
+
+const unavailablePlan = ({ baseSha = "", headSha = "", reason }) => ({
+  baseSha,
+  headSha,
+  docsOnly: false,
+  formalRequired: true,
+  formalClassification: {
+    version: 1,
+    status: "unavailable",
+    baseSha,
+    headSha,
+    changedPaths: [],
+    affectedPaths: [],
+    reason
+  }
+})
+
 export const planCiChange = (
   { eventName, headSha, pullRequestBaseSha = "", pushBeforeSha = "" },
   listChangedPaths = changedPathsBetween,
+  listFormalInputPaths = hostedFormalInputPathsBetween,
   reportFailure = () => undefined
 ) => {
+  const unavailable = (input) => {
+    reportFailure(input.reason)
+    return unavailablePlan(input)
+  }
   const baseSha = resolveComparisonBase({ eventName, pullRequestBaseSha, pushBeforeSha })
-  if (baseSha === undefined || headSha === "") return { baseSha: "", docsOnly: false }
+  if (baseSha === undefined)
+    return unavailable({ headSha, reason: "The event has no supported nonzero comparison base" })
+  if (!commitSha.test(baseSha) || !commitSha.test(headSha) || allZeroSha.test(headSha))
+    return unavailable({ baseSha, headSha, reason: "The event base or head is not an exact commit SHA" })
 
   try {
-    return { baseSha, docsOnly: classifyChangedPaths(listChangedPaths(baseSha, headSha)) }
+    const changedPaths = listChangedPaths(baseSha, headSha)
+    const affectedPaths = classifyFormalChangedPaths(changedPaths, listFormalInputPaths(baseSha, headSha))
+    const formalRequired = affectedPaths.length > 0
+    return {
+      baseSha,
+      headSha,
+      docsOnly: classifyChangedPaths(changedPaths),
+      formalRequired,
+      formalClassification: {
+        version: 1,
+        status: formalRequired ? "affected" : "unaffected",
+        baseSha,
+        headSha,
+        changedPaths,
+        affectedPaths
+      }
+    }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
-    reportFailure(detail)
-    return { baseSha, docsOnly: false }
+    return unavailable({ baseSha, headSha, reason: detail })
   }
 }
 
@@ -60,9 +132,17 @@ if (invokedDirectly) {
       pushBeforeSha: process.env.DALPH_CI_PUSH_BEFORE_SHA ?? ""
     },
     changedPathsBetween,
+    hostedFormalInputPathsBetween,
     (detail) => process.stderr.write(`Unable to classify the CI change; selecting the comprehensive gate: ${detail}\n`)
   )
-  const output = `base-sha=${plan.baseSha}\ndocs-only=${String(plan.docsOnly)}\n`
+  const output = [
+    `base-sha=${plan.baseSha}`,
+    `head-sha=${plan.headSha}`,
+    `docs-only=${String(plan.docsOnly)}`,
+    `formal-required=${String(plan.formalRequired)}`,
+    `formal-classification=${JSON.stringify(plan.formalClassification)}`,
+    ""
+  ].join("\n")
   if (process.env.GITHUB_OUTPUT === undefined) process.stdout.write(output)
   else appendFileSync(process.env.GITHUB_OUTPUT, output, "utf8")
 }
