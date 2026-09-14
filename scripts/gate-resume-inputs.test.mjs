@@ -242,14 +242,19 @@ runpy.run_path(sys.argv[1], run_name="__main__")
   }
 })
 
-test("a relevant config edit restored before validation remains rejected as multiple generations", async () => {
+test("a relevant config edit restored before validation remains rejected", async () => {
   const f = fixture()
   const originalFileMode = f.git("config", "--local", "--get", "core.filemode")
   const guard = await f.guard()
   try {
     f.git("config", "core.filemode", originalFileMode === "true" ? "false" : "true")
     f.git("config", "core.filemode", originalFileMode)
-    await assert.rejects(guard.assertUnchanged(), /multiple replaceable input generations/u)
+    // Linux may report IN_MOVE_SELF before the parent-directory replacement
+    // proves the next pathname generation is watched. Both outcomes fail closed.
+    await assert.rejects(
+      guard.assertUnchanged(),
+      /(?:multiple replaceable input generations|replaceable input watch was not re-established mask=0x800)/u
+    )
   } finally {
     await guard.close()
   }

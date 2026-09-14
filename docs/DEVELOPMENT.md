@@ -239,7 +239,7 @@ provider boundary, journal fact, retry, or cleanup behavior.
 | A repository-wide setting in the subsection-less `[branch]` section changes; the observer refuses both the next stage and final qualification | `scripts/gate-resume-inputs.test.mjs`: `a subsection-less branch setting remains repository-wide candidate configuration` |
 | A repository-wide Git setting changes after an unrelated replacement; the re-armed observer refuses both the next stage and final qualification | `scripts/gate-resume-inputs.test.mjs`: `a candidate-relevant config replacement fails after an unrelated replacement re-arms the watch` |
 | The parent-directory replacement event arrives in one observer drain and the obsolete file-watch removal arrives in the next; the observer watches the new generation immediately and treats only the later old-generation removal as obsolete | `scripts/gate-resume-inputs.test.mjs`: `split parent replacement and obsolete file removal events re-arm before the later removal` |
-| A relevant Git setting changes and is restored through two config generations before validation | `scripts/gate-resume-inputs.test.mjs`: `a relevant config edit restored before validation remains rejected as multiple generations` |
+| A relevant Git setting changes and is restored through two config generations before validation | `scripts/gate-resume-inputs.test.mjs`: `a relevant config edit restored before validation remains rejected` |
 
 Reuse requires identical HEAD, conflict-free semantic index, working/untracked
 bytes and modes, ignored configuration, actual installed dependency and resolved
