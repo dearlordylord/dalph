@@ -2,7 +2,7 @@
 import nodeProcess from "node:process"
 import { GitCommitSha, RunId } from "@dalph/contracts"
 import { GithubIssueNumber, GithubIssueTarget, GithubRepositoryName, GithubRepositoryOwner } from "@dalph/orchestrator"
-import { Effect, MutableList, Redacted, Ref, Schema, Stream } from "effect"
+import { Deferred, Effect, Fiber, MutableList, Redacted, Ref, Schema, Stream } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   encodeProductionCliRecord,
@@ -65,6 +65,62 @@ const boundary = (spawn: ProductionLiveQualificationBoundary["spawn"]): Producti
 })
 
 describe("#307 production live qualification controller", () => {
+  it("records child and canonical-output progress before EOF and exit independently while output remains open", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const finishOutput = yield* Deferred.make<void>()
+          const processExit = yield* Deferred.make<number>()
+          const selectedObserved = yield* Deferred.make<void>()
+          const exitObserved = yield* Deferred.make<void>()
+          const observations = MutableList.make<unknown>()
+          const runner = yield* runProductionLiveQualification(
+            invocation,
+            boundary(() =>
+              Effect.succeed({
+                pid: ProductionLiveQualificationProcessId.make(703),
+                // Split a canonical frame across chunks; its complete LF must arrive before observation.
+                stdout: Stream.fromIterable([encoded(selected).slice(0, 7), encoded(selected).slice(7)]).pipe(
+                  Stream.concat(Stream.fromEffect(Deferred.await(finishOutput).pipe(Effect.as(encoded(disposition)))))
+                ),
+                stderr: Stream.fromEffect(Deferred.await(finishOutput).pipe(Effect.as(new Uint8Array()))),
+                exitCode: Deferred.await(processExit)
+              })
+            ),
+            {
+              validateRecord: () => Effect.void,
+              observeProgress: (progress) =>
+                Effect.gen(function* () {
+                  MutableList.append(observations, progress)
+                  if (progress._tag === "RunSelected") yield* Deferred.succeed(selectedObserved, undefined)
+                  if (progress._tag === "ProcessCompleted") yield* Deferred.succeed(exitObserved, undefined)
+                }),
+              gatherFinalFacts: () => Effect.succeed(facts),
+              publish: () => Effect.void,
+              retainAfterFailure: () => Effect.void
+            }
+          ).pipe(Effect.forkScoped)
+          yield* Deferred.await(selectedObserved)
+          expect(MutableList.toArray(observations)).toEqual([
+            { _tag: "ChildSpawned", processId: 703 },
+            { _tag: "FirstCanonicalRecord" },
+            { _tag: "RunSelected", runId: selected.runId }
+          ])
+          yield* Deferred.succeed(processExit, 0)
+          yield* Deferred.await(exitObserved)
+          expect(MutableList.toArray(observations)).toHaveLength(4)
+          expect(MutableList.toArray(observations)[3]).toEqual({ _tag: "ProcessCompleted", exitCode: 0 })
+          yield* Deferred.succeed(finishOutput, undefined)
+          expect((yield* Fiber.join(runner))._tag).toBe("Completed")
+          expect(MutableList.toArray(observations).slice(4)).toEqual(
+            expect.arrayContaining([{ _tag: "StdoutCompleted" }, { _tag: "StderrCompleted" }])
+          )
+          expect(MutableList.toArray(observations)).toHaveLength(6)
+        })
+      )
+    )
+  })
+
   it("starts the shipped production command once with the exact public argument vector", async () => {
     const requests = MutableList.make<Parameters<ProductionLiveQualificationBoundary["spawn"]>[0]>()
     const published = MutableList.make<unknown>()
@@ -267,10 +323,11 @@ describe("#307 production live qualification controller", () => {
 
   it("maps typed child observation failures to their exact safe stages", async () => {
     for (const expected of [
-      { operation: "ReadStdout" as const, stage: "ReadOutput" as const },
-      { operation: "ReadStderr" as const, stage: "ReadOutput" as const },
-      { operation: "WaitForExit" as const, stage: "Process" as const }
+      { operation: "ReadStdout" as const, stage: "ReadOutput" as const, progress: "StdoutFailed" },
+      { operation: "ReadStderr" as const, stage: "ReadOutput" as const, progress: "StderrFailed" },
+      { operation: "WaitForExit" as const, stage: "Process" as const, progress: "ProcessFailed" }
     ]) {
+      const progress = MutableList.make<unknown>()
       const failure = new ProductionLiveQualificationBoundaryFailure({
         operation: expected.operation,
         reason: "Unavailable"
@@ -292,6 +349,7 @@ describe("#307 production live qualification controller", () => {
           ),
           {
             validateRecord: () => Effect.void,
+            observeProgress: (observation) => Effect.sync(() => MutableList.append(progress, observation)),
             gatherFinalFacts: () => Effect.succeed(facts),
             publish: () => Effect.void,
             retainAfterFailure: (observation) =>
@@ -303,6 +361,7 @@ describe("#307 production live qualification controller", () => {
       )
 
       expect(result).toMatchObject({ _tag: "Failed", stage: expected.stage, processId: 705, spawnCount: 1 })
+      expect(MutableList.toArray(progress)).toContainEqual({ _tag: expected.progress })
       if (expected.operation === "WaitForExit") {
         expect(result).toMatchObject({ runId: "run-live-q" })
         expect(retainedRunId).toBe("run-live-q")

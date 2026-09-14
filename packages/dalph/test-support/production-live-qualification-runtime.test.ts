@@ -471,7 +471,7 @@ describe("#307 production live qualification runtime", () => {
     )
   })
 
-  it("an unfinished recoverable Run retains every exact local locator for manual cleanup", async () => {
+  it("atomically retains safe progress with cleanup locators for an unfinished recoverable Run", async () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -499,11 +499,15 @@ describe("#307 production live qualification runtime", () => {
             undefined,
             fixture,
             undefined,
-            {}
+            {},
+            [{ _tag: "BuildMeasured" }]
           )
           const report = JSON.parse(yield* fs.readFileString(manifest.retentionReport)) as {
             readonly local: ReadonlyArray<{ readonly locator: string; readonly disposition: string }>
+            readonly progress: ReadonlyArray<{ readonly _tag: string }>
           }
+          expect(report.progress).toEqual([{ _tag: "BuildMeasured" }])
+          expect(JSON.stringify(report)).not.toContain("github-secret")
           expect(report.local).toHaveLength(fixture.localManifest.resources.length + 1)
           expect(report.local.every(({ disposition }) => disposition === "Retained")).toBe(true)
           expect(report.local.map(({ locator }) => locator)).toContain(fixture.localManifest.container.locator)

@@ -19,7 +19,7 @@ import {
   sqliteJournalStoreLayer
 } from "@dalph/orchestrator"
 import { NodeCrypto } from "@effect/platform-node"
-import { Context, Crypto, DateTime, Effect, FileSystem, Layer, Option, Redacted, Ref, Schema } from "effect"
+import { Context, Crypto, DateTime, Effect, FileSystem, Layer, Option, Redacted, Ref, Schema, Semaphore } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { ProductionConfigurationLocator } from "../application/production-cli.js"
 import {
@@ -65,6 +65,7 @@ import {
   makeProductionLiveQualificationNodeBoundary,
   ProductionLiveBuiltEntry,
   ProductionLiveCodexHome,
+  ProductionLiveQualificationProgress,
   runProductionLiveQualification,
   type ProductionLiveQualificationBoundary,
   type ProductionLiveQualificationCallbacks,
@@ -752,6 +753,9 @@ type ProductionLiveControlledProviderInvocation = Omit<
 >
 
 interface ProductionLiveControlledProviderCallbacks<EPublish, EGather, ERetain, RPublish, RGather, RRetain> {
+  readonly observeProgress?: (
+    progress: ProductionLiveQualificationProgress
+  ) => Effect.Effect<void, never, RPublish | RGather | RRetain>
   readonly gatherFinalFacts: ProductionLiveQualificationCallbacks<
     never,
     EGather,
@@ -811,6 +815,7 @@ export const ProductionLiveQualificationRetentionReport = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   invocationId: LiveQualificationInvocationId,
   outcome: Schema.Literal("NotQualified"),
+  progress: Schema.optionalKey(Schema.Array(ProductionLiveQualificationProgress)),
   phase: Schema.Literals([
     "Setup",
     "Execution",
@@ -986,7 +991,8 @@ export const writeProductionLiveQualificationFailureRetentionReport = Effect.fn(
   forwarder: GithubForwarder | undefined,
   localFixture: ProductionLiveLocalFixture | undefined,
   localContainer: ProductionLiveLocalContainer | undefined,
-  cleanupState: { github?: GithubCleanup; local?: LocalCleanup }
+  cleanupState: { github?: GithubCleanup; local?: LocalCleanup },
+  progress?: ReadonlyArray<ProductionLiveQualificationProgress>
 ) {
   const githubCleanup = cleanupState.github
   const observedLabels = yield* observeCreatedLabels(forwarder)
@@ -1002,6 +1008,7 @@ export const writeProductionLiveQualificationFailureRetentionReport = Effect.fn(
     schemaVersion: 1,
     invocationId: manifest.invocationId,
     outcome: "NotQualified",
+    ...(progress === undefined ? {} : { progress }),
     phase,
     github: githubResources.map((resource) => ({
       _tag: resource._tag,
@@ -1039,6 +1046,24 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
   const crypto = yield* Crypto.Crypto
   const githubClient = yield* GithubGraphqlClient
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const progress = yield* Ref.make<ReadonlyArray<ProductionLiveQualificationProgress>>([])
+  const progressWrites = yield* Semaphore.make(1)
+  const observeProgress = (observation: ProductionLiveQualificationProgress) =>
+    progressWrites.withPermit(
+      Effect.gen(function* () {
+        yield* Ref.update(progress, (current) => [...current, observation])
+        yield* writeProductionLiveQualificationFailureRetentionReport(
+          manifest,
+          "Execution",
+          githubFixture,
+          forwarder,
+          local,
+          localContainer,
+          cleanupState,
+          yield* Ref.get(progress)
+        )
+      }).pipe(Effect.ignore)
+    )
   const attempt = yield* Effect.gen(function* () {
     const createdGithubFixture = yield* createProductionLiveGithubFixture({
       invocationId: manifest.invocationId,
@@ -1104,6 +1129,7 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
       lockfile: manifest.lockfile,
       configuration: fixture.configurationPath
     }).pipe(Effect.mapError(() => qualificationFailed("Setup")))
+    yield* observeProgress({ _tag: "BuildMeasured" })
     const qualified = yield* Ref.make<ProductionLiveQualificationOutcome>(qualificationFailed("Execution"))
     const githubAuthorities = yield* Layer.build(
       githubDeliveryAuthorityLayer.pipe(
@@ -1129,6 +1155,7 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
       secrets,
       makeProductionLiveQualificationNodeBoundary(spawner),
       {
+        observeProgress,
         gatherFinalFacts: ({ runId }) =>
           Effect.scoped(
             Effect.gen(function* () {
@@ -1213,7 +1240,8 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
       forwarder,
       local,
       localContainer,
-      cleanupState
+      cleanupState,
+      yield* Ref.get(progress)
     ).pipe(
       Effect.provideService(GithubGraphqlClient, githubClient),
       Effect.provideService(FileSystem.FileSystem, fs),
@@ -1232,7 +1260,8 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
     forwarder,
     local,
     localContainer,
-    cleanupState
+    cleanupState,
+    yield* Ref.get(progress)
   ).pipe(
     Effect.provideService(GithubGraphqlClient, githubClient),
     Effect.provideService(FileSystem.FileSystem, fs),

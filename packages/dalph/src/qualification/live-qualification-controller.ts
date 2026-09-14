@@ -2,9 +2,9 @@
 /* eslint-disable import-x/no-unused-modules -- Shipped qualification and external test-support consume these boundary contracts outside the production lint graph. */
 import nodePath from "node:path"
 import nodeProcess from "node:process"
-import type { GitCommitSha, RunId } from "@dalph/contracts"
+import { type GitCommitSha, RunId } from "@dalph/contracts"
 import type { GithubIssueTarget, JournalRecord } from "@dalph/orchestrator"
-import { Effect, Redacted, Schema, Stream, type Result, type Scope } from "effect"
+import { Effect, MutableList, Redacted, Schema, Stream, type Result, type Scope } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import type { ChildProcessSpawner } from "effect/unstable/process"
 import {
@@ -45,6 +45,21 @@ export const ProductionLiveQualificationProcessId = Schema.Int.check(
   Schema.makeFilter((value) => (value > 0 ? undefined : "process identity must be positive"))
 ).pipe(Schema.brand("ProductionLiveQualificationProcessId"))
 export type ProductionLiveQualificationProcessId = typeof ProductionLiveQualificationProcessId.Type
+
+/** Completed local observation boundaries; these never certify workflow success or authorize cleanup. */
+export const ProductionLiveQualificationProgress = Schema.TaggedUnion({
+  BuildMeasured: {},
+  ChildSpawned: { processId: ProductionLiveQualificationProcessId },
+  FirstCanonicalRecord: {},
+  RunSelected: { runId: RunId },
+  StdoutCompleted: {},
+  StdoutFailed: {},
+  StderrCompleted: {},
+  StderrFailed: {},
+  ProcessCompleted: { exitCode: Schema.Int },
+  ProcessFailed: {}
+})
+export type ProductionLiveQualificationProgress = typeof ProductionLiveQualificationProgress.Type
 
 const qualificationBoundaryOperations = ["Spawn", "ReadStdout", "ReadStderr", "WaitForExit"] as const
 
@@ -143,6 +158,8 @@ export interface ProductionLiveQualificationCallbacks<
   ERetain = never,
   R = never
 > {
+  /** Safe observations only; the callback cannot receive child output or credentials. */
+  readonly observeProgress?: (progress: ProductionLiveQualificationProgress) => Effect.Effect<void, never, R>
   /** Rejects unsafe source atoms before the record enters the accepted transcript. */
   readonly validateRecord: (record: ProductionCliRecord) => Effect.Effect<void, EValidate, R>
   readonly gatherFinalFacts: (
@@ -248,27 +265,39 @@ const decodeFrame = <EValidate, R>(
 /** Accepts only complete canonical LF frames and never returns rejected source bytes. */
 const readCanonicalRecords = Effect.fn("ProductionLiveQualification.readCanonicalRecords")(function* <EValidate, R>(
   stdout: Stream.Stream<Uint8Array, ProductionLiveQualificationBoundaryFailure>,
-  validate: (record: ProductionCliRecord) => Effect.Effect<void, EValidate, R>
+  validate: (record: ProductionCliRecord) => Effect.Effect<void, EValidate, R>,
+  observe: (record: ProductionCliRecord) => Effect.Effect<void, never, R>
 ) {
-  const chunks = yield* stdout.pipe(Stream.runCollect)
-  const size = chunks.reduce((total, chunk) => total + chunk.length, 0)
-  const joined = new Uint8Array(size)
-  let offset = 0
-  for (const chunk of chunks) {
-    joined.set(chunk, offset)
-    offset += chunk.length
-  }
-  const source = yield* Effect.try({
-    try: () => new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(joined),
-    catch: () => new ProductionLiveQualificationRecordFailure({ reason: "InvalidUtf8" })
-  })
-  if (!source.endsWith("\n"))
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
+  const records = MutableList.make<ProductionCliRecord>()
+  const missingDelimiter = -1
+  let pending = ""
+  const decode = (bytes?: Uint8Array) =>
+    Effect.try({
+      try: () => decoder.decode(bytes, { stream: bytes !== undefined }),
+      catch: () => new ProductionLiveQualificationRecordFailure({ reason: "InvalidUtf8" })
+    })
+  yield* stdout.pipe(
+    Stream.runForEach((bytes) =>
+      Effect.gen(function* () {
+        pending += yield* decode(bytes)
+        let delimiter = pending.indexOf("\n")
+        while (delimiter !== missingDelimiter) {
+          const frame = pending.slice(0, delimiter)
+          pending = pending.slice(delimiter + 1)
+          if (frame.length === 0) return yield* new ProductionLiveQualificationRecordFailure({ reason: "EmptyFrame" })
+          const record = yield* decodeFrame(frame, validate)
+          yield* observe(record)
+          MutableList.append(records, record)
+          delimiter = pending.indexOf("\n")
+        }
+      })
+    )
+  )
+  pending += yield* decode()
+  if (pending.length > 0 || records.length === 0)
     return yield* new ProductionLiveQualificationRecordFailure({ reason: "MissingFinalDelimiter" })
-  const finalDelimiterWidth = 1
-  const frames = source.slice(0, -finalDelimiterWidth).split("\n")
-  if (frames.some((frame) => frame.length === 0))
-    return yield* new ProductionLiveQualificationRecordFailure({ reason: "EmptyFrame" })
-  return yield* Effect.forEach(frames, (frame) => decodeFrame(frame, validate))
+  return MutableList.toArray(records)
 })
 
 const selectedRun = (records: ReadonlyArray<ProductionCliRecord>): RunId | undefined => {
@@ -334,11 +363,42 @@ const runProductionLiveQualificationScoped = Effect.fn("ProductionLiveQualificat
   if (spawned._tag === "Failure") return yield* fail("Spawn")
   const child = spawned.success
   processId = child.pid
+  const observe = callbacks.observeProgress ?? (() => Effect.void)
+  yield* observe({ _tag: "ChildSpawned", processId })
+  let firstRecord = true
+  let firstSelection = true
+  const observeRecord = (record: ProductionCliRecord) =>
+    Effect.gen(function* () {
+      if (firstRecord) {
+        firstRecord = false
+        yield* observe({ _tag: "FirstCanonicalRecord" })
+      }
+      if (firstSelection && record._tag === "RunSelected") {
+        firstSelection = false
+        yield* observe({ _tag: "RunSelected", runId: record.runId })
+      }
+    })
   const [output, stderr, process] = yield* Effect.all(
     [
-      readCanonicalRecords(child.stdout, callbacks.validateRecord).pipe(Effect.result),
-      child.stderr.pipe(Stream.runDrain, Effect.result),
-      child.exitCode.pipe(Effect.result)
+      readCanonicalRecords(child.stdout, callbacks.validateRecord, observeRecord).pipe(
+        Effect.result,
+        Effect.tap((result) => observe({ _tag: result._tag === "Success" ? "StdoutCompleted" : "StdoutFailed" }))
+      ),
+      child.stderr.pipe(
+        Stream.runDrain,
+        Effect.result,
+        Effect.tap((result) => observe({ _tag: result._tag === "Success" ? "StderrCompleted" : "StderrFailed" }))
+      ),
+      child.exitCode.pipe(
+        Effect.result,
+        Effect.tap((result) =>
+          observe(
+            result._tag === "Success"
+              ? { _tag: "ProcessCompleted", exitCode: result.success }
+              : { _tag: "ProcessFailed" }
+          )
+        )
+      )
     ] as const,
     { concurrency: "unbounded" }
   )
