@@ -196,6 +196,8 @@ type Harness = {
   readonly turnCwds: Array<string>
   readonly turnTexts: Array<string>
   readonly resumeCwds: Array<string>
+  readonly threadReads: () => number
+  readonly closeCount: () => number
   readonly interruptCount: () => number
   readonly threadStarts: () => number
   readonly attemptReadCount: () => number
@@ -245,7 +247,6 @@ const makeHarness = (
   options: {
     readonly loseFirstTurnResponse?: boolean
     readonly loseTurnResponseAt?: number
-    readonly resumeUnavailableAfterLostTurn?: boolean
     readonly missingEmptyThread?: boolean
     readonly freshThreadIds?: boolean
     readonly failAssociatedWriteOnce?: boolean
@@ -298,6 +299,8 @@ const makeHarness = (
   let readOverride: CodexAttemptRecord | undefined
   let threadStartCount = 0
   let attemptReadCount = 0
+  let threadReadCount = 0
+  let appCloseCount = 0
   let resumeUnavailable = false
   let resumeFailure: CodexAppServerFailure | undefined
   let readFailure = false
@@ -347,7 +350,10 @@ const makeHarness = (
         }
         return currentThread
       }),
-    readThread: () => Effect.succeed(currentThread),
+    readThread: () => {
+      threadReadCount += 1
+      return Effect.succeed(currentThread)
+    },
     resumeThread: (threadIdValue, cwd) => {
       resumeCwds.push(cwd)
       if (resumeFailure !== undefined) return Effect.fail(resumeFailure)
@@ -414,7 +420,6 @@ const makeHarness = (
           !firstTurnResponseLost
         ) {
           firstTurnResponseLost = true
-          if (options.resumeUnavailableAfterLostTurn === true) resumeUnavailable = true
           currentThread = { ...currentThread, status: options.loseResponseThreadStatus ?? "active" }
           return yield* Effect.fail(unavailable("turn/start"))
         }
@@ -462,7 +467,9 @@ const makeHarness = (
         terminalActivity = false
         return backgroundTerminationFailure ? false : wasActive
       }),
-    close: Effect.void
+    close: Effect.sync(() => {
+      appCloseCount += 1
+    })
   }
 
   const store: CodexAttemptStoreService = {
@@ -554,6 +561,8 @@ const makeHarness = (
     turnCwds,
     turnTexts,
     resumeCwds,
+    threadReads: () => threadReadCount,
+    closeCount: () => appCloseCount,
     interruptCount: () => interruptCount,
     threadStarts: () => threadStartCount,
     attemptReadCount: () => attemptReadCount,
@@ -1788,13 +1797,17 @@ it.effect("reconciles a lost Begin terminal after restart before exposing it pas
   )
 })
 
-it.effect("retains the original turn-start failure when recovery cannot resume the thread", () => {
-  const harness = makeHarness({ loseFirstTurnResponse: true, resumeUnavailableAfterLostTurn: true })
+it.effect("retains the turn intent and closes once when the exact-thread read lacks its token", () => {
+  const harness = makeHarness({ loseFirstTurnResponse: true, omitOwnedTurnToken: true })
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
     const result = yield* executor.begin(request, { _tag: "InitialDelivery" }).pipe(Effect.exit)
     expect(result._tag).toBe("Failure")
     expect(harness.turnCount()).toBe(1)
+    expect(harness.threadReads()).toBe(1)
+    expect(harness.resumeCwds).toHaveLength(0)
+    expect(harness.closeCount()).toBe(1)
+    expect(harness.currentRecord()?._tag).toBe("TurnIntentRecorded")
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
@@ -1819,6 +1832,8 @@ it.effect("reconciles a lost turn response without sending a second turn", () =>
     const running = yield* executor.begin(request, { _tag: "InitialDelivery" })
     expect(running._tag).toBe("ExecutorWorkExecuting")
     expect(harness.turnCount()).toBe(1)
+    expect(harness.threadReads()).toBe(1)
+    expect(harness.resumeCwds).toHaveLength(0)
 
     harness.complete(finalResponse(head))
     const accepted = yield* observeExactReport(executor)

@@ -260,10 +260,24 @@ const CodexAppServerFailureKind = Schema.Literals([
 ])
 type CodexAppServerFailureKind = typeof CodexAppServerFailureKind.Type
 
+const JsonRpcRequestId = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))
+const JsonRpcMessageCount = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+
+/** Sanitized transport facts captured without retaining request or response payloads. */
+const CodexAppServerRpcSnapshot = Schema.Struct({
+  requestId: JsonRpcRequestId,
+  method: Schema.NonEmptyString,
+  sentCount: JsonRpcMessageCount,
+  responseCount: JsonRpcMessageCount,
+  pendingCount: JsonRpcMessageCount
+})
+type CodexAppServerRpcSnapshot = typeof CodexAppServerRpcSnapshot.Type
+
 export class CodexAppServerFailure extends Schema.TaggedError<CodexAppServerFailure>()("CodexAppServerFailure", {
   detail: Schema.String,
   kind: CodexAppServerFailureKind,
-  operation: CodexAppServerOperation
+  operation: CodexAppServerOperation,
+  rpcSnapshot: Schema.optionalKey(CodexAppServerRpcSnapshot)
 }) {}
 
 /** Captures a native process-signal failure before the app-server adapter classifies it. */
@@ -441,8 +455,15 @@ export const controlledCodexOwnedActivityCensusLayer = (
 const operationFailure = (
   operation: CodexAppServerOperation,
   kind: CodexAppServerFailureKind,
-  detail: unknown
-): CodexAppServerFailure => new CodexAppServerFailure({ operation, kind, detail: String(detail) })
+  detail: unknown,
+  rpcSnapshot?: CodexAppServerRpcSnapshot
+): CodexAppServerFailure =>
+  new CodexAppServerFailure({
+    operation,
+    kind,
+    detail: String(detail),
+    ...(rpcSnapshot === undefined ? {} : { rpcSnapshot })
+  })
 
 const initializeOwnershipFailure = (error: unknown): CodexAppServerFailure =>
   operationFailure("initialize", "Ownership", error)
@@ -1609,6 +1630,12 @@ interface JsonRpcClient {
     method: string,
     params?: unknown
   ) => Effect.Effect<unknown, CodexAppServerFailure, never>
+  readonly requestBounded: (
+    operation: "initialize" | "thread/start" | "thread/read" | "turn/start",
+    method: string,
+    params?: unknown
+  ) => Effect.Effect<unknown, CodexAppServerFailure, never>
+  readonly installDeadlineClose: (close: Effect.Effect<void, CodexAppServerFailure>) => Effect.Effect<void, never>
   readonly notify: (method: string, params?: unknown) => Effect.Effect<void, CodexAppServerFailure, never>
   readonly close: Effect.Effect<void, CodexAppServerFailure, never>
 }
@@ -1619,6 +1646,7 @@ type PendingJsonRpcRequest = {
 }
 
 const jsonRpcInvalidRequestCode = -32600
+const jsonRpcResponseDeadline = Duration.seconds(60) // eslint-disable-line no-magic-numbers -- accepted Codex RPC acknowledgement bound
 
 const jsonRpcResponseFailure = (operation: CodexAppServerOperation, error: unknown): CodexAppServerFailure => {
   const detail = JSON.stringify(error)
@@ -1642,6 +1670,9 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   const writes = yield* Semaphore.make(1)
   const closed = yield* Ref.make(false)
   const pending = yield* Ref.make<ReadonlyMap<number, PendingJsonRpcRequest>>(new Map())
+  const deadlineClose = yield* Deferred.make<Effect.Effect<void, CodexAppServerFailure>>()
+  const sentCount = yield* Ref.make(0)
+  const responseCount = yield* Ref.make(0)
   // Provider notifications are wake hints only; one pending wake is enough
   // because every consumer rereads the provider-owned state.
   const turnCompletedHints = yield* PubSub.sliding<void>(1)
@@ -1685,12 +1716,16 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
           if (typeof id !== "number") {
             return failPending(operationFailure("initialize", "Protocol", "JSON-RPC response id is invalid"))
           }
-          const result = Ref.modify(pending, (current) => {
-            const request = current.get(id)
-            if (request === undefined) return [Option.none<PendingJsonRpcRequest>(), current] as const
-            const next = new Map([...current].filter(([key]) => key !== id))
-            return [Option.some(request), next] as const
-          })
+          const result = Ref.updateAndGet(responseCount, (current) => current + 1).pipe(
+            Effect.andThen(
+              Ref.modify(pending, (current) => {
+                const request = current.get(id)
+                if (request === undefined) return [Option.none<PendingJsonRpcRequest>(), current] as const
+                const next = new Map([...current].filter(([key]) => key !== id))
+                return [Option.some(request), next] as const
+              })
+            )
+          )
           return result.pipe(
             Effect.flatMap((maybeDeferred) => {
               if (Option.isNone(maybeDeferred)) return Effect.void
@@ -1737,37 +1772,70 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
     /* v8 ignore next -- @preserve The sole initialized notification always supplies its initialization parameters. */
     yield* write({ jsonrpc: "2.0", method, ...(params === undefined ? {} : { params }) })
   })
-  const request: JsonRpcClient["request"] = Effect.fn("CodexAppServer.request")(function* (
+  const performRequest = Effect.fn("CodexAppServer.performRequest")(function* (
     operation: CodexAppServerOperation,
     method: string,
-    params?: unknown
+    params: unknown,
+    bounded: boolean
   ) {
     const isClosed = yield* Ref.get(closed)
     if (isClosed) return yield* Effect.fail(operationFailure(operation, "Unavailable", "app-server is closed"))
     const id = yield* Ref.modify(nextId, (current) => [current, current + 1] as const)
     const deferred = yield* Deferred.make<unknown, CodexAppServerFailure>()
+    const removePending = Ref.update(pending, (current) => {
+      return new Map([...current].filter(([key]) => key !== id))
+    })
     yield* Ref.update(pending, (current) => new Map([...current, [id, { deferred, operation }] as const]))
-    /* v8 ignore next -- @preserve Every Codex request method in this adapter supplies its protocol parameter object. */
-    yield* write({ jsonrpc: "2.0", id, method, ...(params === undefined ? {} : { params }) }).pipe(
-      Effect.catch((error) =>
-        Ref.update(pending, (current) => {
-          return new Map([...current].filter(([key]) => key !== id))
-        }).pipe(
-          Effect.andThen(
-            error instanceof CodexAppServerFailure
-              ? Effect.fail(error)
-              : Effect.fail(operationFailure(operation, "Unavailable", error))
-          )
-        )
-      )
-    )
-    return yield* Deferred.await(deferred).pipe(
+    const pendingResponse = write({ jsonrpc: "2.0", id, method, ...(params === undefined ? {} : { params }) }).pipe(
+      Effect.tap(() => Ref.update(sentCount, (current) => current + 1)),
+      Effect.andThen(Deferred.await(deferred)),
       Effect.mapError((error) =>
         /* v8 ignore next -- @preserve Pending request failures originate in the shared reader and therefore carry initialize until remapped here. */
         error.operation === "initialize" ? operationFailure(operation, error.kind, error.detail) : error
       )
     )
+    const response = bounded
+      ? pendingResponse.pipe(
+          Effect.timeoutOrElse({
+            duration: jsonRpcResponseDeadline,
+            orElse: () =>
+              Effect.gen(function* () {
+                yield* removePending
+                const snapshot: CodexAppServerRpcSnapshot = {
+                  requestId: id,
+                  method,
+                  sentCount: yield* Ref.get(sentCount),
+                  responseCount: yield* Ref.get(responseCount),
+                  pendingCount: (yield* Ref.get(pending)).size
+                }
+                const failure = operationFailure(
+                  operation,
+                  "Unavailable",
+                  `JSON-RPC response deadline exceeded (requestId=${snapshot.requestId}, method=${snapshot.method}, sentCount=${snapshot.sentCount}, responseCount=${snapshot.responseCount}, pendingCount=${snapshot.pendingCount})`,
+                  snapshot
+                )
+                if (operation !== "turn/start") {
+                  const close = yield* Deferred.await(deadlineClose)
+                  yield* close
+                }
+                return yield* failure
+              })
+          })
+        )
+      : pendingResponse
+    return yield* response.pipe(
+      Effect.ensuring(removePending),
+      Effect.catch((error) =>
+        error instanceof CodexAppServerFailure
+          ? Effect.fail(error)
+          : Effect.fail(operationFailure(operation, "Unavailable", error))
+      )
+    )
   })
+  const request: JsonRpcClient["request"] = (operation, method, params) =>
+    performRequest(operation, method, params, false)
+  const requestBounded: JsonRpcClient["requestBounded"] = (operation, method, params) =>
+    performRequest(operation, method, params, true)
   const close = Effect.gen(function* () {
     const shouldClose = yield* Ref.modify(closed, (current) => [!current, true] as const)
     /* v8 ignore next -- @preserve The outer scoped close latch invokes the private RPC close exactly once. */
@@ -1786,6 +1854,8 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
       )
     ),
     request,
+    requestBounded,
+    installDeadlineClose: (deadline) => Deferred.succeed(deadlineClose, deadline).pipe(Effect.asVoid),
     notify,
     close
   } satisfies JsonRpcClient
@@ -1868,7 +1938,8 @@ const unavailableAppServer = (failure: CodexAppServerFailure): CodexAppServerSer
         // request that merely happens to observe the unavailable service.
         operation: failure.operation === "initialize" ? "initialize" : operation,
         kind: failure.kind,
-        detail: failure.detail
+        detail: failure.detail,
+        ...(failure.rpcSnapshot === undefined ? {} : { rpcSnapshot: failure.rpcSnapshot })
       })
     )
   return {
@@ -2800,12 +2871,13 @@ export const codexAppServerLayer = (
         .releaseServerLease(leaseOwner)
         .pipe(Effect.mapError((error) => operationFailure("close", "Ownership", error.detail)))
       const close = yield* Effect.cached(closeHandle.pipe(Effect.andThen(rpc.close), Effect.andThen(releaseLease)))
+      yield* rpc.installDeadlineClose(close)
       // The application shell owns the only graceful Exit close. The scope
       // finalizer is a process-death fallback and cannot synthesize executor
       // safety or terminal evidence.
       yield* Effect.addFinalizer(() => close.pipe(Effect.orDie))
       if (Option.isSome(applicationExit)) yield* registerApplicationServerDrain(applicationExit.value, close)
-      const initializeResponse = yield* rpc.request("initialize", "initialize", {
+      const initializeResponse = yield* rpc.requestBounded("initialize", "initialize", {
         clientInfo: { name: selected.clientName, version: selected.clientVersion },
         capabilities: { experimentalApi: true }
       })
@@ -2817,7 +2889,7 @@ export const codexAppServerLayer = (
         ownedThreadToken?: CodexThreadOwnershipToken
       ) {
         const response = responseObject(
-          yield* rpc.request("thread/start", "thread/start", {
+          yield* rpc.requestBounded("thread/start", "thread/start", {
             cwd,
             ephemeral: false,
             ...(ownedThreadToken === undefined ? {} : { metadata: { dalphOwnedThreadToken: ownedThreadToken } })
@@ -2853,7 +2925,7 @@ export const codexAppServerLayer = (
       })
       const readThread = Effect.fn("CodexAppServer.readThread")(function* (threadId: CodexThreadId) {
         const response = responseObject(
-          yield* rpc.request("thread/read", "thread/read", { threadId, includeTurns: true }),
+          yield* rpc.requestBounded("thread/read", "thread/read", { threadId, includeTurns: true }),
           "thread/read"
         )
         if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
@@ -2874,7 +2946,7 @@ export const codexAppServerLayer = (
         ownedTurnToken?: CodexOwnedTurnToken
       ) {
         const response = responseObject(
-          yield* rpc.request("turn/start", "turn/start", {
+          yield* rpc.requestBounded("turn/start", "turn/start", {
             threadId,
             cwd,
             input: [

@@ -1,7 +1,9 @@
 /* eslint-disable import/no-nodejs-modules -- this test launches only local protocol fixtures. */
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
+import type { PlatformError } from "effect"
 import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Stream } from "effect"
+import { TestClock } from "effect/testing"
 import { expect, expectTypeOf } from "vitest"
 import {
   CodexAppServer,
@@ -25,6 +27,7 @@ const path = require("node:path")
 let buffer = ""
 let requestNumber = 0
 let threadReadNumber = 0
+let lostTurnToken
 const mode = path.basename(process.argv[1])
 const validThread = {
   id: "protocol-thread",
@@ -43,6 +46,15 @@ const validTurn = {
 const write = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n")
 const writeError = (id) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: "fixture failure" } }) + "\n")
 const responseFor = (method, params = {}) => {
+  if (mode === "turn-start-unanswered-then-read" && method === "thread/read") {
+    return {
+      thread: {
+        ...validThread,
+        status: "active",
+        turns: [{ ...validTurn, status: "inProgress", ownedTurnToken: lostTurnToken }]
+      }
+    }
+  }
   if (mode === "non-openai-provider-credential" && method === "initialize") {
     const argumentsAreExact = process.argv.slice(2).join("\n") === "app-server"
     return process.env.DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL === "fixture-provider-key" && argumentsAreExact
@@ -386,6 +398,19 @@ const onMessage = (message) => {
   if (message.method === "initialized") return
   requestNumber += 1
   if (message.method === "thread/read") threadReadNumber += 1
+  if (
+    (mode === "initialize-unanswered" && message.method === "initialize") ||
+    (mode === "thread-start-unanswered" && message.method === "thread/start")
+  ) {
+    fs.writeFileSync(process.argv[1] + ".received", message.method)
+    return
+  }
+  if (mode === "turn-start-unanswered-then-read" && message.method === "turn/start") {
+    const text = message.params?.input?.[0]?.text ?? ""
+    lostTurnToken = /<!-- dalph-owned-turn-token:v1:([^ ]+) -->/.exec(text)?.[1]
+    fs.writeFileSync(process.argv[1] + ".received", message.method)
+    return
+  }
   if (mode === "stderr-noise" && requestNumber === 1) process.stderr.write("diagnostic-only\n")
   if (mode === "blank-line" && requestNumber === 1) process.stdout.write("\n")
   if (mode === "non-number-response-id" && requestNumber === 1) {
@@ -444,7 +469,30 @@ process.stdin.on("data", (chunk) => {
     if (line.trim() !== "") onMessage(JSON.parse(line))
   }
 })
+process.on("SIGTERM", () => {
+  fs.appendFileSync(process.argv[1] + ".closed", "closed\n")
+  process.exit(0)
+})
 `
+
+const fixtureFilePollAttemptLimit = 1_000 // eslint-disable-line no-magic-numbers -- deterministic fixture setup bound
+
+const awaitFile = (
+  fileSystem: FileSystem.FileSystem,
+  file: string,
+  remaining: number = fixtureFilePollAttemptLimit
+): Effect.Effect<void, PlatformError.PlatformError> =>
+  Effect.suspend(() =>
+    remaining <= 0
+      ? Effect.die(`fixture did not create ${file} within ${fixtureFilePollAttemptLimit} observations`)
+      : fileSystem
+          .exists(file)
+          .pipe(
+            Effect.flatMap((exists) =>
+              exists ? Effect.void : Effect.yieldNow.pipe(Effect.andThen(awaitFile(fileSystem, file, remaining - 1)))
+            )
+          )
+  )
 
 const expectAppFailure = (exit: Exit.Exit<unknown, unknown>, operation: string): void => {
   expect(Exit.isFailure(exit)).toBe(true)
@@ -478,6 +526,37 @@ const withFixture = <A>(
         const app = yield* CodexAppServer
         return yield* action(app, root).pipe(Effect.ensuring(app.close.pipe(Effect.orDie)))
       }).pipe(Effect.provide(layer), Effect.provide(NodeServices.layer))
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+
+const unansweredFixture = (
+  mode: "initialize-unanswered" | "thread-start-unanswered",
+  action: (app: CodexAppServerService) => Effect.Effect<unknown, CodexAppServerFailure>
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: `dalph-protocol-${mode}-` })
+      const executable = path.join(root, mode)
+      yield* fileSystem.writeFileString(executable, protocolFixture)
+      yield* fileSystem.chmod(executable, 0o755)
+      const layer = codexAppServerNodeLayer(
+        { executable, environment: { DALPH_SECRET_SENTINEL: "credential-must-not-escape" } },
+        isolatedCodexProcessNativeService
+      ).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
+      const result = yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        return yield* Effect.exit(action(app))
+      }).pipe(Effect.provide(layer), Effect.provide(NodeServices.layer), Effect.forkChild)
+
+      yield* awaitFile(fileSystem, `${executable}.received`)
+      yield* TestClock.adjust("59 seconds")
+      expect(result.pollUnsafe()).toBeUndefined()
+      yield* TestClock.adjust("1 second")
+      const exit = yield* Fiber.join(result)
+      expect(yield* fileSystem.readFileString(`${executable}.closed`)).toBe("closed\n")
+      return exit
     }).pipe(Effect.provide(NodeServices.layer))
   )
 
@@ -917,6 +996,84 @@ it.effect("classifies transport protocol errors without fabricating a thread", (
           expectAppFailure(result, operation)
         })
       )
+  )
+)
+
+it.effect("bounds an unanswered initialize request and closes its exact owned child once", () =>
+  Effect.gen(function* () {
+    const exit = yield* unansweredFixture("initialize-unanswered", (app) => app.startThread("/fixture/worktree"))
+    expectAppFailure(exit, "initialize")
+    if (Exit.isFailure(exit)) {
+      const failure = Cause.findErrorOption(exit.cause)
+      if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+        expect(failure.value).toMatchObject({
+          kind: "Unavailable",
+          rpcSnapshot: { requestId: 1, method: "initialize", sentCount: 1, responseCount: 0, pendingCount: 0 }
+        })
+        expect(JSON.stringify(failure.value)).not.toMatch(/credential-must-not-escape|DALPH_SECRET_SENTINEL/)
+      }
+    }
+  })
+)
+
+it.effect("bounds an unanswered thread start without fabricating a task turn and closes once", () =>
+  Effect.gen(function* () {
+    const exit = yield* unansweredFixture("thread-start-unanswered", (app) =>
+      app.startThread("/fixture/prompt-and-secret-must-not-escape")
+    )
+    expectAppFailure(exit, "thread/start")
+    if (Exit.isFailure(exit)) {
+      const failure = Cause.findErrorOption(exit.cause)
+      if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+        expect(failure.value).toMatchObject({
+          kind: "Unavailable",
+          rpcSnapshot: { requestId: 2, method: "thread/start", sentCount: 2, responseCount: 1, pendingCount: 0 }
+        })
+        expect(JSON.stringify(failure.value)).not.toMatch(
+          /credential-must-not-escape|DALPH_SECRET_SENTINEL|prompt-and-secret-must-not-escape/
+        )
+      }
+    }
+  })
+)
+
+it.effect("bounds an unanswered turn start and permits one bounded exact-thread read", () =>
+  withFixture("turn-start-unanswered-then-read", (app, root) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const thread = yield* app.startThread("/fixture/worktree")
+      const token = CodexOwnedTurnToken.make("lost-turn-token")
+      const waiting = yield* app
+        .startTurn(thread.id, "/fixture/worktree", "prompt-must-not-escape", token)
+        .pipe(Effect.exit, Effect.forkChild)
+      const executable = path.join(root, "turn-start-unanswered-then-read")
+      yield* awaitFile(fileSystem, `${executable}.received`)
+      yield* TestClock.adjust("59 seconds")
+      expect(waiting.pollUnsafe()).toBeUndefined()
+      yield* TestClock.adjust("1 second")
+      const exit = yield* Fiber.join(waiting)
+      expectAppFailure(exit, "turn/start")
+      if (Exit.isFailure(exit)) {
+        const failure = Cause.findErrorOption(exit.cause)
+        if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+          expect(failure.value.rpcSnapshot).toEqual({
+            requestId: 3,
+            method: "turn/start",
+            sentCount: 3,
+            responseCount: 2,
+            pendingCount: 0
+          })
+          expect(JSON.stringify(failure.value)).not.toContain("prompt-must-not-escape")
+        }
+      }
+      expect(yield* fileSystem.exists(`${executable}.closed`)).toBe(false)
+      const reconciled = yield* app.readThread(thread.id)
+      expect(reconciled.turns).toHaveLength(1)
+      expect(reconciled.turns[0]?.ownedTurnToken).toBe(token)
+      yield* app.close
+      expect(yield* fileSystem.readFileString(`${executable}.closed`)).toBe("closed\n")
+    })
   )
 )
 

@@ -989,6 +989,21 @@ const makeCodexPlannedAttemptExecutorContext = (
       return ownedTurn
     })
 
+    const readAfterTurnBoundary = Effect.fn("CodexPlannedAttemptExecutor.readAfterTurnBoundary")(function* (
+      attempt: CodexAttemptContext,
+      correlation: PlannedAttemptExecutorCorrelation,
+      record: CodexIntentRecord
+    ) {
+      const thread = yield* app.readThread(record.threadId)
+      yield* enforceThreadIdentity(attempt, correlation, record.threadId, thread)
+      const ownedTurn = yield* reconcileOwnedTurn(thread, record)
+      if (ownedTurn._tag === "Terminal") return ownedTurn
+      if (thread.status === "notLoaded" || thread.status === "systemError") {
+        return yield* Effect.fail(new CodexThreadMismatch({}))
+      }
+      return ownedTurn
+    })
+
     const observeOwnedActivity = Effect.fn("CodexPlannedAttemptExecutor.observeOwnedActivity")(function* (
       thread: CodexThreadSnapshot
     ) {
@@ -1284,7 +1299,10 @@ const makeCodexPlannedAttemptExecutorContext = (
       correlation: PlannedAttemptExecutorCorrelation,
       record: CodexIntentRecord
     ) {
-      const reconciliation = yield* reconcile(attempt, correlation, record)
+      // turn/start may have crossed the provider boundary before its response
+      // was lost. Read the exact thread without issuing another state-changing
+      // request; the app-server transport applies its own finite RPC bound.
+      const reconciliation = yield* readAfterTurnBoundary(attempt, correlation, record)
       if (reconciliation._tag === "Running") {
         const turn = yield* requiredReconciliationTurn(reconciliation)
         const observed = observedRecordFor(
@@ -1332,7 +1350,7 @@ const makeCodexPlannedAttemptExecutorContext = (
           Effect.catch((error) =>
             reconcileAfterTurnBoundary(attempt, correlation, intent).pipe(
               Effect.map((report): StartedTurnResult => ({ _tag: "Report", report })),
-              Effect.catch(() => Effect.fail(error))
+              Effect.catch(() => app.close.pipe(Effect.andThen(Effect.fail(error))))
             )
           )
         )

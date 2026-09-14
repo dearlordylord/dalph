@@ -120,6 +120,7 @@ Git history.
 - [Qualify real Git lineage, candidate shape, and ref mutation](issue-73-qualify-real-git-lineage-candidate-ref.md)
 - [Qualify real Git worktree ownership and preservation](issue-74-qualify-real-worktree-lease.md)
 - [Qualify the Codex app-server executor on real hosts](issue-75-codex-app-server-qualification.md)
+- [Bound a Codex RPC wait without deciding the task outcome](issue-376-bounded-codex-rpc.md)
 - [Qualify production cleanup adapters](issue-77-production-cleanup-qualification.md)
 - [Capability registration gate](issue-79-capability-registration.md)
 
