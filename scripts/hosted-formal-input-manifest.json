@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "1bd7a9afd0e092919ddcd3f86f1c976d7ed4200ede57347f1bedc8f510c70051",
+  "digest": "5a7e35f6dfd83cb26ef2da19de0a257896fd7162a786fcd7fd11170017dbbc7b",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -59,7 +59,6 @@
     "packages/orchestrator/src/authorities/task-tracker/github/read-boundary.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/read-limits.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/read-primitives.ts",
-    "packages/orchestrator/src/authorities/task-tracker/github/request-circuit.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/target.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/task-identity.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/task-lifecycle.ts",
@@ -70,6 +69,7 @@
     "packages/orchestrator/src/authorities/task-tracker/target.ts",
     "packages/orchestrator/src/authorities/task-tracker/task.ts",
     "packages/orchestrator/src/control/policy.ts",
+    "packages/orchestrator/src/control/request-circuit.ts",
     "packages/orchestrator/src/control/task-work-capacity.ts",
     "packages/orchestrator/src/coordination/activation/selected-transition.ts",
     "packages/orchestrator/src/coordination/admission/capacity.ts",
