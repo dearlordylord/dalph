@@ -19,8 +19,8 @@ export interface RequestCircuitOptions<Operation, Failure> {
 
 /** One process-local request admission circuit owned by an external driver. */
 export interface RequestCircuit<Operation, Failure> {
-  /** Reserves one request or fails without contacting the outside system. */
-  readonly reserve: (operation: Operation) => Effect.Effect<void, Failure>
+  /** Admits one request before running it, preserving the transport's typed failures. */
+  readonly run: <A, E, R>(operation: Operation, request: Effect.Effect<A, E, R>) => Effect.Effect<A, E | Failure, R>
 }
 
 interface RequestCircuitState {
@@ -40,25 +40,24 @@ export const makeRequestCircuit = Effect.fn("RequestCircuit.make")(function* <Op
   options: RequestCircuitOptions<Operation, Failure>
 ): Effect.fn.Return<RequestCircuit<Operation, Failure>> {
   const state = yield* Ref.make<RequestCircuitState>({ openUntil: undefined, requests: [] })
-  const reserve = Effect.fn("RequestCircuit.reserve")(function* (operation: Operation) {
+  const admit = Effect.fn("RequestCircuit.admit")(function* (operation: Operation) {
     const now = yield* Clock.monotonicTimeNanos
     const admitted = yield* Ref.modify(state, (current): readonly [boolean, RequestCircuitState] => {
+      const recent = current.requests.filter((startedAt) => now - startedAt < options.policy.windowNanos)
       if (current.openUntil !== undefined && now < current.openUntil) {
-        const recent = current.requests.filter((startedAt) => now - startedAt < options.policy.windowNanos)
         return [false, { ...current, requests: recent }]
       }
       // A full cooldown is a deliberate fresh admission window. Retaining the
       // old burst would reopen the circuit immediately after it closes.
-      const recent =
-        current.openUntil === undefined
-          ? current.requests.filter((startedAt) => now - startedAt < options.policy.windowNanos)
-          : []
-      if (recent.length >= options.policy.maxRequests) {
+      const available = current.openUntil === undefined ? recent : []
+      if (available.length >= options.policy.maxRequests) {
         return [false, { openUntil: now + options.policy.cooldownNanos, requests: recent }]
       }
-      return [true, { openUntil: undefined, requests: [...recent, now] }]
+      return [true, { openUntil: undefined, requests: [...available, now] }]
     })
     if (!admitted) return yield* Effect.fail(options.onOpen(operation))
   })
-  return { reserve }
+  const run = <A, E, R>(operation: Operation, request: Effect.Effect<A, E, R>) =>
+    admit(operation).pipe(Effect.andThen(request))
+  return { run }
 })

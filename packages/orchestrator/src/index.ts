@@ -234,7 +234,14 @@ export {
 export {
   GithubGraphqlClient,
   GithubGraphqlEndpointLocator,
+  type GithubGraphqlExecution,
+  type GithubGraphqlMutationExecution,
+  type GithubGraphqlMutationRequest,
+  GithubGraphqlReadThrottled,
+  type GithubGraphqlReadExecution,
+  type GithubGraphqlReadRequest,
   GithubGraphqlRequest,
+  GithubGraphqlRequestError,
   GithubIssueNodeId,
   GithubLabelName,
   GithubLabelNodeId,
@@ -242,6 +249,7 @@ export {
   defaultGithubGraphqlEndpoint,
   githubGraphqlClientLayer
 } from "./authorities/task-tracker/github/graphql-client.js"
+export { GithubGraphqlThrottled } from "./authorities/task-tracker/github/graphql-throttling.js"
 export {
   githubTrackerGraphReaderLayer,
   githubTrackerGraphReaderNodeLayer

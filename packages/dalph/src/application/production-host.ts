@@ -2,7 +2,14 @@
 import { NodeCrypto, NodeHttpClient, NodeServices } from "@effect/platform-node"
 import { IntegrationTarget, PlannedAttemptExecutor, PlannedAttemptExecutorLifecycleObservation } from "@dalph/contracts"
 import {
-  type GithubGraphqlClient,
+  GithubGraphqlClient,
+  type GithubGraphqlExecution,
+  GithubGraphqlRequestError,
+  type GithubGraphqlMutationExecution,
+  type GithubGraphqlMutationRequest,
+  type GithubGraphqlReadExecution,
+  type GithubGraphqlReadRequest,
+  type GithubGraphqlRequest,
   type RunReactivationOwner,
   type ApplicationExitRequestBoundaryService,
   type ProductionHostApplicationExitShellService,
@@ -33,6 +40,7 @@ import {
   githubDeliveryAuthorityLayer,
   githubGraphqlClientLayer,
   journalStoreCapabilities,
+  makeRequestCircuit,
   nodeEvidenceStoreLayer,
   nodeGitCommandLayer,
   nodeGitTargetPromotionLayer,
@@ -44,13 +52,18 @@ import {
   TraceReader,
   TraceReaderLayer,
   type TraceReaderService,
+  type RequestCircuitPolicy,
   asApplicationExitShellService,
   makeProductionHostApplicationExitShell,
   selectProductionRun
 } from "@dalph/orchestrator"
 import { Context, Deferred, Effect, Layer, type Scope } from "effect"
-import type { CodexAppServer } from "./codex-app-server.js"
-import { codexAppServerNodeLayer, codexOwnedActivityCensusLayer } from "./codex-app-server.js"
+import {
+  CodexAppServer,
+  CodexAppServerFailure,
+  codexAppServerNodeLayer,
+  codexOwnedActivityCensusLayer
+} from "./codex-app-server.js"
 import { nodeCodexAttemptStoreLayer } from "./codex-attempt-store.js"
 import { nodeCodexProcessNativeService, type CodexProcessNativeService } from "./codex-process-native.js"
 import { nodeCodexPlannedAttemptExecutorLayer } from "./codex-planned-attempt-executor.js"
@@ -182,6 +195,101 @@ const defaultGithubClientLayer = (configuration: ProductionRepositoryHostConfigu
   githubGraphqlClientLayer({ token: configuration.githubToken, endpoint: configuration.githubGraphqlEndpoint }).pipe(
     Layer.provide(NodeHttpClient.layerUndici)
   )
+
+const githubRequestCircuitPolicy: RequestCircuitPolicy = {
+  cooldownNanos: 30n * 1_000_000_000n,
+  maxRequests: 120,
+  windowNanos: 60n * 1_000_000_000n
+}
+
+const githubRequestCircuitOpenDetail =
+  "GitHub request circuit is open after 120 requests in 60 seconds; retrying is locally deferred for 30 seconds"
+
+type CodexAppServerRequestOperation =
+  | "thread/start"
+  | "thread/list"
+  | "thread/read"
+  | "thread/resume"
+  | "turn/start"
+  | "turn/interrupt"
+  | "thread/backgroundTerminals/list"
+  | "thread/backgroundTerminals/terminate"
+
+const codexRequestCircuitPolicy: RequestCircuitPolicy = {
+  cooldownNanos: 30n * 1_000_000_000n,
+  maxRequests: 240,
+  windowNanos: 60n * 1_000_000_000n
+}
+
+const codexRequestCircuitOpenDetail =
+  "Codex app-server request circuit is open after 240 requests in 60 seconds; retrying is locally deferred for 30 seconds"
+
+/**
+ * Decorates the one production GitHub client after its transport is selected.
+ * The client owns request/error typing; the host owns admission policy and
+ * creates one circuit state for this provider instance.
+ */
+export const guardedGithubClientLayer = <E, R>(
+  layer: Layer.Layer<GithubGraphqlClient, E, R>
+): Layer.Layer<GithubGraphqlClient, E, R> =>
+  Layer.effect(
+    GithubGraphqlClient,
+    Effect.gen(function* () {
+      const client = yield* GithubGraphqlClient
+      const requestCircuit = yield* makeRequestCircuit({
+        onOpen: (operation: GithubGraphqlRequest["_tag"]) =>
+          new GithubGraphqlRequestError({ detail: githubRequestCircuitOpenDetail, kind: "CircuitOpen", operation }),
+        policy: githubRequestCircuitPolicy
+      })
+      function execute(request: GithubGraphqlReadRequest): GithubGraphqlReadExecution
+      function execute(request: GithubGraphqlMutationRequest): GithubGraphqlMutationExecution
+      function execute(request: GithubGraphqlRequest): GithubGraphqlExecution
+      function execute(request: GithubGraphqlRequest) {
+        return requestCircuit.run(request._tag, client.execute(request))
+      }
+      return GithubGraphqlClient.of({ execute })
+    })
+  ).pipe(Layer.provide(layer))
+
+/**
+ * Decorates the exposed Codex app-server boundary after its process/session
+ * transport is selected. Cleanup stays outside admission so scope finalizers
+ * can always close the owned process.
+ */
+const guardedCodexAppServerLayer = <E, R>(
+  layer: Layer.Layer<CodexAppServer, E, R>
+): Layer.Layer<CodexAppServer, E, R> =>
+  Layer.effect(
+    CodexAppServer,
+    Effect.gen(function* () {
+      const appServer = yield* CodexAppServer
+      const requestCircuit = yield* makeRequestCircuit({
+        onOpen: (operation: CodexAppServerRequestOperation) =>
+          new CodexAppServerFailure({ detail: codexRequestCircuitOpenDetail, kind: "CircuitOpen", operation }),
+        policy: codexRequestCircuitPolicy
+      })
+      const listThreads = appServer.listThreads
+      return CodexAppServer.of({
+        ...appServer,
+        startThread: (cwd, ownedThreadToken) =>
+          requestCircuit.run("thread/start", appServer.startThread(cwd, ownedThreadToken)),
+        ...(listThreads === undefined ? {} : { listThreads: () => requestCircuit.run("thread/list", listThreads()) }),
+        readThread: (threadId) => requestCircuit.run("thread/read", appServer.readThread(threadId)),
+        resumeThread: (threadId, cwd) => requestCircuit.run("thread/resume", appServer.resumeThread(threadId, cwd)),
+        startTurn: (threadId, cwd, text, ownedTurnToken) =>
+          requestCircuit.run("turn/start", appServer.startTurn(threadId, cwd, text, ownedTurnToken)),
+        interruptTurn: (threadId, turnId) =>
+          requestCircuit.run("turn/interrupt", appServer.interruptTurn(threadId, turnId)),
+        listBackgroundTerminals: (threadId) =>
+          requestCircuit.run("thread/backgroundTerminals/list", appServer.listBackgroundTerminals(threadId)),
+        terminateBackgroundTerminal: (threadId, processId) =>
+          requestCircuit.run(
+            "thread/backgroundTerminals/terminate",
+            appServer.terminateBackgroundTerminal(threadId, processId)
+          )
+      })
+    })
+  ).pipe(Layer.provide(layer))
 
 const defaultCodexAppServerLayer = (
   configuration: ProductionRepositoryHostConfiguration,
@@ -377,7 +485,9 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const lifecycle = yield* RunLifecycleJournal
         const workflowApplicationExitObserver = adapters.workflowApplicationExitObserver
         /* v8 ignore start -- @preserve Hermetic host tests replace the live GitHub boundary; this assignment retains the production-only provider default. */
-        const githubClientLayer = adapters.githubClient?.(configuration) ?? defaultGithubClientLayer(configuration)
+        const githubClientLayer = guardedGithubClientLayer(
+          adapters.githubClient?.(configuration) ?? defaultGithubClientLayer(configuration)
+        )
         /* v8 ignore stop */
         const githubAuthorityLayer = observedLayerBuild(
           githubDeliveryAuthorityLayer.pipe(Layer.provide(githubClientLayer), Layer.provide(NodeCrypto.layer)),
@@ -401,12 +511,13 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           adapters.codexAppServer?.(configuration) ??
           defaultCodexAppServerLayer(configuration, attemptStoreLayer, codexProcessNative)
         /* v8 ignore stop */
-        const appLayer: Layer.Layer<
+        const appLayerWithoutCircuit: Layer.Layer<
           CodexAppServer,
           ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>
         > = appLayerWithoutApplicationExit.pipe(
           Layer.provide(Layer.succeed(ApplicationExitShell, asApplicationExitShellService(applicationExit)))
         )
+        const appLayer = guardedCodexAppServerLayer(appLayerWithoutCircuit)
         const gitCommandLayer = observedGitCommandLayer(
           nodeGitCommandLayer.pipe(Layer.provide(NodeServices.layer)),
           adapters.boundaryObserver

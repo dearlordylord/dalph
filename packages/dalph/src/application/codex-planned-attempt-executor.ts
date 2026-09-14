@@ -1810,7 +1810,7 @@ const makeCodexPlannedAttemptExecutorContext = (
     ): PlannedAttemptExecutorProjectionType => {
       if (error instanceof ForeignAttemptRecord) return foreign(correlation, error.observed)
       if (error instanceof CodexAppServerFailure) {
-        if (error.kind === "Unavailable") return unavailable(correlation)
+        if (error.kind === "Unavailable" || error.kind === "CircuitOpen") return unavailable(correlation)
         if (error.kind === "CorrelationContradiction" && error.operation === "initialize") {
           return initializationContradiction(correlation, error.detail)
         }

@@ -5,16 +5,16 @@ import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest"
 import { GithubIssueTarget, GithubRepositoryName, GithubRepositoryOwner } from "./target.js"
 import { OperationId } from "../../../workflow/identity.js"
 import { GithubGraphqlReadOperation, type GithubGraphqlReadThrottled } from "./graphql-read-throttle.js"
-import { type GithubGraphqlOperation, type GithubGraphqlThrottled } from "./graphql-throttling.js"
+import { type GithubGraphqlThrottled } from "./graphql-throttling.js"
 import {
   decodeGithubGraphqlMutationResponse,
   decodeGithubGraphqlReadResponse,
   GithubGraphqlRequestError,
   type GithubGraphqlResponse
 } from "./graphql-response.js"
-import { makeRequestCircuit, type RequestCircuitPolicy } from "../../../control/request-circuit.js"
 
 export { GithubGraphqlThrottled } from "./graphql-throttling.js"
+export { GithubGraphqlReadThrottled } from "./graphql-read-throttle.js"
 export { GithubGraphqlRequestError, GithubGraphqlResponse } from "./graphql-response.js"
 
 /** Identifies one GitHub issue node at the provider boundary, not a tracker-neutral task. */
@@ -68,23 +68,26 @@ export const GithubGraphqlRequest = Schema.TaggedUnion({
 })
 export type GithubGraphqlRequest = typeof GithubGraphqlRequest.Type
 
-type GithubGraphqlReadRequest = Extract<GithubGraphqlRequest, { readonly _tag: GithubGraphqlReadOperation }>
-type GithubGraphqlMutationRequest = Exclude<GithubGraphqlRequest, GithubGraphqlReadRequest>
+export type GithubGraphqlReadRequest = Extract<GithubGraphqlRequest, { readonly _tag: GithubGraphqlReadOperation }>
+export type GithubGraphqlMutationRequest = Exclude<GithubGraphqlRequest, GithubGraphqlReadRequest>
+export type GithubGraphqlReadExecution = Effect.Effect<
+  GithubGraphqlResponse,
+  GithubGraphqlRequestError | GithubGraphqlReadThrottled
+>
+export type GithubGraphqlMutationExecution = Effect.Effect<
+  GithubGraphqlResponse,
+  GithubGraphqlRequestError | GithubGraphqlThrottled
+>
+export type GithubGraphqlExecution = Effect.Effect<
+  GithubGraphqlResponse,
+  GithubGraphqlRequestError | GithubGraphqlReadThrottled | GithubGraphqlThrottled
+>
 
 interface GithubGraphqlClientService {
   readonly execute: {
-    (
-      request: GithubGraphqlReadRequest
-    ): Effect.Effect<GithubGraphqlResponse, GithubGraphqlRequestError | GithubGraphqlReadThrottled>
-    (
-      request: GithubGraphqlMutationRequest
-    ): Effect.Effect<GithubGraphqlResponse, GithubGraphqlRequestError | GithubGraphqlThrottled>
-    (
-      request: GithubGraphqlRequest
-    ): Effect.Effect<
-      GithubGraphqlResponse,
-      GithubGraphqlRequestError | GithubGraphqlReadThrottled | GithubGraphqlThrottled
-    >
+    (request: GithubGraphqlReadRequest): GithubGraphqlReadExecution
+    (request: GithubGraphqlMutationRequest): GithubGraphqlMutationExecution
+    (request: GithubGraphqlRequest): GithubGraphqlExecution
   }
 }
 
@@ -115,13 +118,6 @@ export type GithubGraphqlEndpointLocator = typeof GithubGraphqlEndpointLocator.T
 export const defaultGithubGraphqlEndpoint = GithubGraphqlEndpointLocator.make("https://api.github.com/graphql")
 const githubUserAgent = "dalph-orchestrator"
 const connectionPageSize = 100
-const githubRequestCircuitPolicy: RequestCircuitPolicy = {
-  cooldownNanos: 30n * 1_000_000_000n,
-  maxRequests: 120,
-  windowNanos: 60n * 1_000_000_000n
-}
-const githubRequestCircuitOpenDetail =
-  "GitHub request circuit is open after 120 requests in 60 seconds; retrying is locally deferred for 30 seconds"
 // Stable identity format guidance:
 // https://docs.github.com/en/graphql/guides/migrating-graphql-global-node-ids
 const nextGlobalIdHeaderValue = "1"
@@ -377,13 +373,7 @@ const makeClient = Effect.fn("GithubGraphqlClient.make")(function* (
   endpoint: GithubGraphqlEndpointLocator
 ) {
   const httpClient = yield* HttpClient.HttpClient
-  const requestCircuit = yield* makeRequestCircuit({
-    onOpen: (operation: GithubGraphqlOperation) =>
-      new GithubGraphqlRequestError({ detail: githubRequestCircuitOpenDetail, kind: "CircuitOpen", operation }),
-    policy: githubRequestCircuitPolicy
-  })
   const executeHttp = Effect.fn("GithubGraphqlClient.executeHttp")(function* (request: GithubGraphqlRequest) {
-    yield* requestCircuit.reserve(request._tag)
     const httpRequest = HttpClientRequest.post(endpoint).pipe(
       HttpClientRequest.acceptJson,
       HttpClientRequest.bearerToken(token),

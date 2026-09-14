@@ -252,6 +252,7 @@ type CodexAppServerOperation = typeof CodexAppServerOperation.Type
 
 const CodexAppServerFailureKind = Schema.Literals([
   "Unavailable",
+  "CircuitOpen",
   "NotFound",
   "Protocol",
   "Ownership",
