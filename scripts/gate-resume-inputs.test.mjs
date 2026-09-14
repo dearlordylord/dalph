@@ -155,6 +155,18 @@ test("the exact current branch section remains candidate-relevant configuration"
   }
 })
 
+test("a subsection-less branch setting remains repository-wide candidate configuration", async () => {
+  const f = fixture()
+  const guard = await f.guard()
+  try {
+    f.git("config", "branch.sort", "-committerdate")
+    await assert.rejects(guard.assertUnchanged(), /Candidate-relevant Git configuration changed/u)
+    await assert.rejects(guard.finish(), /Candidate-relevant Git configuration changed/u)
+  } finally {
+    await guard.close()
+  }
+})
+
 test("a candidate-relevant config replacement fails after an unrelated replacement re-arms the watch", async () => {
   const f = fixture()
   const guard = await f.guard()

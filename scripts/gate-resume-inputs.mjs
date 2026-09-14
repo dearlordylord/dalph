@@ -178,7 +178,11 @@ const candidateGitConfiguration = (worktree, environment) => {
     })
     .filter(([key]) => {
       const parts = gitConfigurationKeyParts(key)
-      return parts.section !== "branch" || (currentBranch !== undefined && parts.subsection === currentBranch)
+      return (
+        parts.section !== "branch" ||
+        parts.subsection === undefined ||
+        (currentBranch !== undefined && parts.subsection === currentBranch)
+      )
     })
   return JSON.stringify({ currentBranch, entries })
 }
