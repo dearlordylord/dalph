@@ -24,31 +24,158 @@ const hostedBootstrapInputs = Object.freeze([
   hostedFormalInputManifestPath
 ])
 
+const workflowJobSection = (workflow, name) => {
+  const lines = workflow.split("\n")
+  const start = lines.findIndex((line) => line === `  ${name}:`)
+  if (start < 0) throw new Error(`Hosted formal manifest cannot identify workflow job ${name}`)
+  const end = lines.findIndex((line, index) => index > start && /^  [A-Za-z0-9_-]+:$/u.test(line))
+  return lines.slice(start + 1, end < 0 ? undefined : end)
+}
+
+const yamlScalar = (source) => {
+  if ((source.startsWith('"') && source.endsWith('"')) || (source.startsWith("'") && source.endsWith("'")))
+    return source.slice(1, -1)
+  return source
+}
+
+const supportedEnvironmentByJob = Object.freeze({
+  "formal-models": Object.freeze({
+    DALPH_FORMAL_COMMIT_SHA: "${{ github.sha }}",
+    DALPH_FORMAL_NODE_VERSION: "${{ matrix.node-version }}",
+    NODE_OPTIONS: "--max-old-space-size=8192"
+  }),
+  "formal-model-aggregate": Object.freeze({
+    DALPH_FORMAL_COMMIT_SHA: "${{ github.sha }}",
+    DALPH_FORMAL_NODE_VERSION: "${{ matrix.node-version }}",
+    DALPH_FORMAL_BASE_SHA: "${{ needs.change-plan.outputs.base-sha }}",
+    DALPH_FORMAL_HEAD_SHA: "${{ needs.change-plan.outputs.head-sha }}",
+    DALPH_FORMAL_CLASSIFICATION: "${{ needs.change-plan.outputs.formal-classification }}"
+  })
+})
+
+const validateFormalJobEnvironment = (lines, job) => {
+  const found = {}
+  for (let index = 0; index < lines.length; index++) {
+    const block = /^(\s*)env:\s*$/u.exec(lines[index])
+    if (block === null) continue
+    const indentation = block[1].length
+    while (index + 1 < lines.length) {
+      const next = lines[index + 1]
+      if (next.trim() === "") {
+        index++
+        continue
+      }
+      const leading = /^\s*/u.exec(next)[0].length
+      if (leading <= indentation) break
+      index++
+      const entry = new RegExp(`^ {${indentation + 2}}([A-Z][A-Z0-9_]*):\\s*(.+?)\\s*$`, "u").exec(next)
+      if (entry === null || Object.hasOwn(found, entry[1]))
+        throw new Error(`Hosted formal manifest does not support environment syntax in ${job}`)
+      found[entry[1]] = yamlScalar(entry[2])
+    }
+  }
+  if (JSON.stringify(found) !== JSON.stringify(supportedEnvironmentByJob[job]))
+    throw new Error(`Hosted formal manifest requires the exact supported environment in ${job}`)
+}
+
+const formalWorkflowCommands = (workflow) => {
+  const commands = []
+  for (const job of ["formal-models", "formal-model-aggregate"]) {
+    const lines = workflowJobSection(workflow, job)
+    validateFormalJobEnvironment(lines, job)
+    for (let index = 0; index < lines.length; index++) {
+      if (/^\s+(?:shell|working-directory):/u.test(lines[index]))
+        throw new Error(`Hosted formal manifest does not support a custom shell or working directory in ${job}`)
+      const uses = /^        uses:\s*(.+?)\s*$/u.exec(lines[index])
+      if (uses !== null) {
+        const action = yamlScalar(uses[1])
+        if (action.startsWith("./"))
+          throw new Error(`Hosted formal manifest does not support a repository-local action in ${job}`)
+        if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+$/u.test(action) && !action.startsWith("docker://"))
+          throw new Error(`Hosted formal manifest does not support workflow action syntax in ${job}: ${action}`)
+      }
+      const run = /^        run:\s*(.*?)\s*$/u.exec(lines[index])
+      if (run === null) continue
+      if (run[1] === ">") throw new Error(`Hosted formal manifest does not support a folded run command in ${job}`)
+      if (run[1] !== "|") {
+        commands.push(yamlScalar(run[1]))
+        continue
+      }
+      while (index + 1 < lines.length && (lines[index + 1].trim() === "" || /^ {10,}/u.test(lines[index + 1]))) {
+        index++
+        if (lines[index].trim() !== "") commands.push(lines[index].trim())
+      }
+    }
+  }
+  return commands
+}
+
+const nodeEntry = (command) => {
+  if (/[;&|`<>]|\$\(/u.test(command))
+    throw new Error(`Hosted formal manifest does not support shell control syntax: ${command}`)
+  const match = /^node ([A-Za-z0-9._/-]+\.(?:c?js|mjs|ts))(.*)$/u.exec(command)
+  if (match === null || match[1].startsWith("/") || match[1].split("/").includes(".."))
+    throw new Error(`Hosted formal manifest does not support workflow command: ${command}`)
+  if (match[2] !== "" && !/^(?: formal-shard-reports\/[A-Za-z0-9._-]+\.json)+$/u.test(match[2]))
+    throw new Error(`Hosted formal manifest does not support repository command arguments: ${command}`)
+  return match[1].replace(/^\.\//u, "")
+}
+
+const rootLifecycleEntries = (packageJson) => {
+  for (const name of ["preinstall", "install", "postinstall", "prepare"]) {
+    const script = packageJson.scripts?.[name]
+    if (script === undefined) continue
+    if (name === "prepare" && script === "husky && effect-tsgo patch --typescript-package @typescript/native") continue
+    throw new Error(`Hosted formal package lifecycle ${name} has an unsupported command shape`)
+  }
+  return []
+}
+
+const inertFormalCommands = new Set([
+  "printf 'Formal model gate not applicable.\\n'",
+  `printf 'Base SHA: %s\\n' "$DALPH_FORMAL_BASE_SHA"`,
+  `printf 'Head SHA: %s\\n' "$DALPH_FORMAL_HEAD_SHA"`,
+  `printf 'Classification: %s\\n' "$DALPH_FORMAL_CLASSIFICATION"`,
+  "printf 'Formal model classification is missing; refusing a successful required check.\\n' >&2",
+  "exit 1"
+])
+const shardWorkflowCommand =
+  'pnpm check:ci:formal:shard --shard "${{ matrix.shard }}" --report "formal-shard-reports/shard-${{ matrix.shard }}.json"'
+const shardPackageCommand = "node scripts/with-gate-slot.mjs -- node scripts/run-hosted-formal-shard.mjs"
+
+export const hostedWorkflowCommandEntries = ({ packageJson, workflow }) => {
+  const entries = []
+  for (const command of formalWorkflowCommands(workflow)) {
+    if (command === "pnpm install --frozen-lockfile") {
+      entries.push(...rootLifecycleEntries(packageJson))
+      continue
+    }
+    if (inertFormalCommands.has(command)) continue
+    if (command === shardWorkflowCommand) {
+      const script = packageJson.scripts?.["check:ci:formal:shard"]
+      if (script !== shardPackageCommand)
+        throw new Error("Hosted formal package shard script has an unsupported command shape")
+      entries.push(...shardPackageCommand.split(" -- ").map(nodeEntry))
+      continue
+    }
+    entries.push(nodeEntry(command))
+  }
+  if (entries.length === 0) throw new Error("Hosted formal workflow selects no repository command entries")
+  return [...new Set(entries)]
+}
+
 const hostedCommandEntries = async (worktree, packageJson) => {
-  const shardCommand = packageJson.scripts?.["check:ci:formal:shard"]
-  const shard =
-    typeof shardCommand === "string"
-      ? /^node (scripts\/[A-Za-z0-9._/-]+\.mjs) -- node (scripts\/[A-Za-z0-9._/-]+\.mjs)$/u.exec(shardCommand)
-      : null
-  if (shard === null) throw new Error("Hosted formal manifest cannot identify the package shard command entries")
-
   const workflow = await readFile(join(worktree, ".github/workflows/ci.yml"), "utf8")
-  if (/^\s+uses:\s+\.\//mu.test(workflow))
-    throw new Error("Hosted formal manifest does not support an undiscovered repository-local workflow action")
-  const aggregateEntries = [
-    ...workflow.matchAll(/^\s+run: node (scripts\/[A-Za-z0-9._/-]+\.mjs) formal-shard-reports\//gmu)
-  ].map((match) => match[1])
-  if (aggregateEntries.length !== 1 || !workflow.includes("run: pnpm check:ci:formal:shard --shard"))
-    throw new Error("Hosted formal manifest cannot identify the workflow shard and aggregate commands")
-
-  const withGateEntry = shard[1]
+  const workflowEntries = hostedWorkflowCommandEntries({ packageJson, workflow })
+  const withGateEntry = workflowEntries.find((entry) => posix.basename(entry) === "with-gate-slot.mjs")
+  if (withGateEntry === undefined) throw new Error("Hosted formal workflow does not use the admitted gate entry")
   const withGateSource = await readFile(join(worktree, withGateEntry), "utf8")
   const admittedEntries = [
     ...withGateSource.matchAll(/new URL\("(\.\/[A-Za-z0-9._/-]+\.mjs)", import\.meta\.url\)/gmu)
   ].map((match) => posix.join(posix.dirname(withGateEntry), match[1]))
   if (admittedEntries.length !== 1)
     throw new Error("Hosted formal manifest cannot identify the admitted gate command entry")
-  return [...hostedPolicyEntries, shard[1], shard[2], ...admittedEntries, ...aggregateEntries]
+  return [...hostedPolicyEntries, ...workflowEntries, ...admittedEntries]
 }
 
 export const deriveHostedFormalInputManifest = async (worktree = repositoryRoot) => {

@@ -22,7 +22,10 @@ import {
   resolveFormalExecutable,
   startFormalInputGuard
 } from "./formal-input-policy.mjs"
-import { expectedHostedFormalInputManifestText } from "./generate-hosted-formal-input-manifest.mjs"
+import {
+  expectedHostedFormalInputManifestText,
+  hostedWorkflowCommandEntries
+} from "./generate-hosted-formal-input-manifest.mjs"
 import { hostedFormalInputManifestPath } from "./hosted-formal-input-manifest.mjs"
 import { localHostIdentity } from "./gate-custody-records.mjs"
 import { startInputObserver } from "./gate-input-observer.mjs"
@@ -114,6 +117,115 @@ test("checked-in hosted formal inputs exactly match the authoritative JavaScript
   assert.equal(
     readFileSync(hostedFormalInputManifestPath, "utf8"),
     await expectedHostedFormalInputManifestText(process.cwd())
+  )
+})
+
+test("hosted command discovery includes new Node entries and rejects unsupported formal job inputs", () => {
+  const packageJson = JSON.parse(readFileSync("package.json", "utf8"))
+  const workflow = readFileSync(".github/workflows/ci.yml", "utf8")
+  const withFormalStep = workflow.replace(
+    "      - name: Run formal model shard\n",
+    "      - name: Prepare hosted formal input\n        run: node scripts/prepare-hosted-formal.mjs\n\n      - name: Run formal model shard\n"
+  )
+  assert.equal(
+    hostedWorkflowCommandEntries({ packageJson, workflow: withFormalStep }).includes(
+      "scripts/prepare-hosted-formal.mjs"
+    ),
+    true
+  )
+  const withShellStep = workflow.replace(
+    "      - name: Run formal model shard\n",
+    "      - name: Prepare hosted formal input\n        run: bash scripts/prepare-hosted-formal.sh\n\n      - name: Run formal model shard\n"
+  )
+  assert.throws(
+    () => hostedWorkflowCommandEntries({ packageJson, workflow: withShellStep }),
+    /does not support workflow command/u
+  )
+  for (const command of [
+    "node scripts/first-formal.mjs && node scripts/second-formal.mjs",
+    "node scripts/first-formal.mjs; node scripts/second-formal.mjs",
+    "node scripts/first-formal.mjs | node scripts/second-formal.mjs",
+    "node scripts/first-formal.mjs $(node scripts/second-formal.mjs)",
+    "node scripts/first-formal.mjs > formal-output.txt",
+    "node scripts/first-formal.mjs node scripts/second-formal.mjs"
+  ]) {
+    const unsupported = workflow.replace(
+      "      - name: Run formal model shard\n",
+      `      - name: Prepare hosted formal inputs\n        run: ${command}\n\n      - name: Run formal model shard\n`
+    )
+    assert.throws(() => hostedWorkflowCommandEntries({ packageJson, workflow: unsupported }), /does not support/u)
+  }
+  const withChainedInstall = workflow.replaceAll(
+    "        run: pnpm install --frozen-lockfile\n",
+    "        run: pnpm install --frozen-lockfile && node scripts/post-install-formal.mjs\n"
+  )
+  assert.throws(
+    () => hostedWorkflowCommandEntries({ packageJson, workflow: withChainedInstall }),
+    /does not support shell control syntax/u
+  )
+  const withShardConfig = workflow.replace(
+    '        run: pnpm check:ci:formal:shard --shard "${{ matrix.shard }}" --report "formal-shard-reports/shard-${{ matrix.shard }}.json"\n',
+    "        run: pnpm check:ci:formal:shard --config config/hosted-formal.json\n"
+  )
+  assert.throws(
+    () => hostedWorkflowCommandEntries({ packageJson, workflow: withShardConfig }),
+    /does not support workflow command/u
+  )
+  assert.throws(() =>
+    hostedWorkflowCommandEntries({
+      packageJson: {
+        ...packageJson,
+        scripts: { ...packageJson.scripts, prepare: "husky && node scripts/prepare-formal.mjs" }
+      },
+      workflow
+    })
+  )
+  assert.throws(() =>
+    hostedWorkflowCommandEntries({
+      packageJson: {
+        ...packageJson,
+        scripts: { ...packageJson.scripts, prepare: "husky && tsx config/prepare-hosted-formal.ts" }
+      },
+      workflow
+    })
+  )
+  assert.throws(() =>
+    hostedWorkflowCommandEntries({
+      packageJson: { ...packageJson, scripts: { ...packageJson.scripts, prepare: "node scripts/prepare-formal.mjs" } },
+      workflow
+    })
+  )
+  const withLocalAction = workflow.replace(
+    "      - name: Run formal model shard\n",
+    "      - name: Prepare hosted formal input\n        uses: './.github/actions/prepare-formal'\n\n      - name: Run formal model shard\n"
+  )
+  assert.throws(
+    () => hostedWorkflowCommandEntries({ packageJson, workflow: withLocalAction }),
+    /does not support a repository-local action/u
+  )
+  const withFileLoadingEnvironment = workflow.replaceAll(
+    "      NODE_OPTIONS: --max-old-space-size=8192\n",
+    "      NODE_OPTIONS: --require ./scripts/formal-hook.cjs\n"
+  )
+  assert.throws(
+    () => hostedWorkflowCommandEntries({ packageJson, workflow: withFileLoadingEnvironment }),
+    /requires the exact supported environment/u
+  )
+  const withCustomShell = workflow.replace(
+    "      - name: Run formal model shard\n",
+    "      - name: Run formal model shard\n        shell: node scripts/formal-shell.mjs {0}\n"
+  )
+  assert.throws(
+    () => hostedWorkflowCommandEntries({ packageJson, workflow: withCustomShell }),
+    /does not support a custom shell/u
+  )
+  const withUnrelatedLocalAction = workflow.replace(
+    "      - name: Install gitleaks\n",
+    "      - name: Prepare documentation\n        uses: './.github/actions/prepare-docs'\n\n      - name: Install gitleaks\n"
+  )
+  assert.deepEqual(
+    hostedWorkflowCommandEntries({ packageJson, workflow: withUnrelatedLocalAction }),
+    hostedWorkflowCommandEntries({ packageJson, workflow })
   )
 })
 
