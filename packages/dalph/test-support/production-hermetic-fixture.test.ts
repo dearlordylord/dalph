@@ -57,7 +57,7 @@ it.effect("a failed creation retains original observed identities and its exact 
       makeTempDirectory: (options) =>
         Ref.update(allocations, (count) => count + 1).pipe(Effect.andThen(fs.makeTempDirectory(options))),
       makeDirectory: (path, options) =>
-        path.endsWith("/codex")
+        path.endsWith("/codex-executor-private")
           ? Ref.update(failedCreations, (count) => count + 1).pipe(
               Effect.andThen(
                 Effect.fail(
@@ -88,7 +88,9 @@ it.effect("a failed creation retains original observed identities and its exact 
       "EvidenceRoot",
       "AttemptWorktreeRoot"
     ])
-    expect(failure.unresolved).toEqual([{ locator: `${failure.container}/codex`, operation: "createResource" }])
+    expect(failure.unresolved).toEqual([
+      { locator: `${failure.container}/codex-executor-private`, operation: "createResource" }
+    ])
     expect(failure.attempted.at(-1)).toEqual(failure.unresolved[0])
     expect(yield* Ref.get(allocations)).toBe(1)
     expect(yield* Ref.get(failedCreations)).toBe(1)
@@ -111,7 +113,7 @@ it.effect("an unavailable built entry retains the actual partial fixture and rep
       "CommonDirectory",
       "EvidenceRoot",
       "AttemptWorktreeRoot",
-      "CodexStateDirectory",
+      "CodexExecutorPrivateStateDirectory",
       "CandidateRoot",
       "JournalDatabase",
       "PrivateStore"
