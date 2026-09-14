@@ -242,6 +242,76 @@ runpy.run_path(sys.argv[1], run_name="__main__")
   }
 })
 
+test("split config inode events wait for replacement evidence until validation", () => {
+  const f = fixture()
+  const script = fileURLToPath(new URL("./gate-input-observer.py", import.meta.url))
+  // Execute the actual event processor with deterministic read boundaries.
+  // Real kernel delivery order cannot reliably force EAGAIN between these events.
+  execFileSync(
+    "python3",
+    [
+      "-c",
+      String.raw`
+import contextlib, io, os, struct, sys
+source = open(sys.argv[1], encoding="utf-8").read()
+scope = {}
+exec(source.split("\ntry:\n    config =", 1)[0], scope)
+config = sys.argv[2]
+scope["roots"] = [config]
+scope["protected"] = [config]
+scope["replaceable"] = {config}
+scope["watch"](os.path.dirname(config))
+scope["watch"](config)
+old_wd = scope["active_replaceable_watches"][config]
+parent_wd = next(wd for wd, paths in scope["watches"].items() if os.path.dirname(config) in paths)
+replacement = config + ".lock"
+with open(replacement, "w", encoding="utf-8") as target:
+    target.write("[core]\nfilemode = true\n")
+os.replace(replacement, config)
+def event(wd, mask, name=b""):
+    return struct.pack("iIII", wd, mask, 0, len(name)) + name
+queued = []
+def read_batch(fd, size):
+    if queued:
+        return queued.pop(0)
+    raise BlockingIOError()
+real_read = os.read
+os.read = read_batch
+output = io.StringIO()
+try:
+    with contextlib.redirect_stdout(output):
+        # IN_MOVE_SELF (0x800), as reported by the hosted overlay, arrives
+        # before the parent event. A background drain is not a barrier.
+        queued.append(event(old_wd, 0x800))
+        scope["drain"]()
+        assert output.getvalue() == "", output.getvalue()
+        # If no replacement evidence arrives by validation, still fail closed.
+        scope["drain"](validate=True)
+        assert "watch was not re-established" in output.getvalue()
+        output.seek(0)
+        output.truncate()
+        queued.append(event(parent_wd, 0x80, b"config\0"))
+        scope["drain"](validate=True)
+        assert output.getvalue() == "", output.getvalue()
+        assert scope["active_replaceable_watches"][config] != old_wd
+        queued.append(event(old_wd, 0x400) + event(old_wd, 0x8000))
+        scope["drain"](validate=True)
+        assert output.getvalue() == "", output.getvalue()
+        # Subsequent changes to the replacement inode remain observable.
+        queued.append(event(scope["active_replaceable_watches"][config], 0x2))
+        scope["drain"](validate=True)
+        assert '"kind": "dirty"' in output.getvalue(), output.getvalue()
+finally:
+    os.read = real_read
+    os.close(scope["fd"])
+`,
+      script,
+      join(f.root, ".git", "config")
+    ],
+    { encoding: "utf8" }
+  )
+})
+
 test("a relevant config edit restored before validation remains rejected", async () => {
   const f = fixture()
   const originalFileMode = f.git("config", "--local", "--get", "core.filemode")

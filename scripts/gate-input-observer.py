@@ -29,6 +29,7 @@ replacement_counts = {}
 active_replaceable_watches = {}
 obsolete_replaceable_watches = {}
 awaiting_parent_replacements = {}
+unresolved_replaceable_events = {}
 paused = False
 
 
@@ -149,18 +150,20 @@ def walk(path):
         raise OSError("unsupported input " + path)
 
 
-def drain():
+def drain(validate=False):
     dirty_path = None
     dirty_mask = None
     dirty_name = None
-    unresolved_replaceable_events = {}
-    rearmed_paths = set()
     while True:
         try:
             data = os.read(fd, 1024 * 1024)
         except BlockingIOError:
-            for path, mask in unresolved_replaceable_events.items():
-                if path not in rearmed_paths:
+            # EAGAIN ends one available batch, not necessarily the kernel's
+            # replacement notification sequence. Retain pending inode events
+            # across background drains; only a validation barrier requires
+            # replacement evidence to have arrived and its watch to be live.
+            if validate:
+                for path, mask in unresolved_replaceable_events.items():
                     send("error", reason="replaceable input watch was not re-established mask=" + hex(mask),
                          path=path[:1024])
             if dirty_path is not None:
@@ -196,7 +199,7 @@ def drain():
                         watched_paths.discard(path)
                         active_replaceable_watches.pop(path)
                         if install_replaceable_generation(path):
-                            rearmed_paths.add(path)
+                            unresolved_replaceable_events.pop(path, None)
                             awaiting_parent_replacements[path] = awaiting_parent_replacements.get(path, 0) + 1
                         continue
                     send("error", reason="unexpected watch removal or unmount mask=" + hex(mask), path=path[:1024])
@@ -216,7 +219,7 @@ def drain():
                                 else:
                                     awaiting_parent_replacements[path] = awaiting - 1
                             elif install_replaceable_generation(path):
-                                rearmed_paths.add(path)
+                                unresolved_replaceable_events.pop(path, None)
                             continue
                         unresolved_replaceable_events[path] = unresolved_replaceable_events.get(path, 0) | mask
                         continue
@@ -238,7 +241,7 @@ try:
     for root in list(roots):
         watch_ancestors(root)
         walk(root)
-    drain()
+    drain(validate=True)
     send("ready", version=1)
     while True:
         readable, _, _ = select.select([sys.stdin] + ([] if paused else [fd]), [], [])
@@ -255,7 +258,7 @@ try:
             if command == "pause":
                 paused = True
             elif command == "drain":
-                drain()
+                drain(validate=True)
                 replacement_counts.clear()
             elif command == "protect":
                 added = [os.path.abspath(path) for path in request["roots"]]
@@ -265,7 +268,7 @@ try:
                     visited.discard(path)
                     watch_ancestors(path)
                     walk(path)
-                drain()
+                drain(validate=True)
             else:
                 raise OSError("unsupported observer command")
             send("ack", requestId=request["requestId"])
