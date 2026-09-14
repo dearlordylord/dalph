@@ -43,11 +43,11 @@ uploaded result.
    after its UTF-8, framing, decoding, and canonical validation succeed. It
    records `FirstCanonicalRecord`; the diagnostic contains the marker, not the
    record bytes or stdout text.
-4. When the canonical output contains exactly one `RunSelected`, the
-   controller records that one safe Run identity as `RunSelected`. No child
-   existence, arbitrary output bytes, or first-record marker can stand in for
-   this observation. Zero or multiple selections leave the selection
-   incomplete and the qualification cannot claim one Run.
+4. When the canonical output first contains a `RunSelected`, the controller
+   records that first safe Run identity as `RunSelected`. This prefix
+   observation does not prove uniqueness; final transcript validation still
+   rejects zero or multiple selections. No child existence, arbitrary output
+   bytes, or first-record marker can stand in for this observation.
 5. Three observations run concurrently. The process boundary records
    `ProcessCompleted` with its bounded exit result, or `ProcessFailed`, when
    the child exit is observed. The stdout reader independently records
@@ -62,9 +62,9 @@ same-directory replacement and then atomically renames it over the prior
 checkpoint. The snapshot retains the existing exact GitHub/local cleanup
 locators and the ordered safe progress markers. Alice can therefore tell
 whether build measurement completed, the one child spawned, the first
-canonical record arrived, exactly one Run was selected, and each of process,
-stdout, and stderr completed. An unobserved boundary remains unobserved; it
-is never silently presented as success.
+canonical record arrived, the first `RunSelected` occurrence arrived, and
+each of process, stdout, and stderr completed. An unobserved boundary remains
+unobserved; it is never silently presented as success.
 
 ### Runner loss, crash, and retry
 
@@ -105,7 +105,5 @@ progress, or create a second child.
 
 | Scenario outcome | Acceptance test |
 | --- | --- |
-| Alice sees child spawn and first canonical-output progress before either output stream reaches EOF; the process identity is the only child identity published. | `records child and canonical-output progress before EOF` |
-| Process exit is recorded independently while output remains open; later stdout/stderr completion or failure is recorded without inferring qualification success. | `records exit independently while output remains open` |
-| Every replacement is a complete redacted checkpoint, an interrupted replacement retains the prior complete progress, and existing cleanup locators remain available without private payloads or a second child. | `atomically retains safe progress with cleanup locators` |
-
+| Alice sees child spawn and first canonical-output progress before either output stream reaches EOF; process exit remains independently observable while output is open, and the process identity is the only child identity published. | `records child and canonical-output progress before EOF and exit independently while output remains open` |
+| Every replacement is a complete redacted checkpoint, an interrupted replacement retains the prior complete progress, and existing cleanup locators remain available without private payloads or a second child. | `atomically retains safe progress with cleanup locators for an unfinished recoverable Run` |
