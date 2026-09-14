@@ -191,7 +191,7 @@ const validateLiveOwnerAdmissionForStatus = (
   const current = currentProposals.find(({ id }) => id === proposalId)
   return current !== undefined &&
     !proposalEquals(owner.proposal, current) &&
-    !currentProposalPresentationMatches(owner.proposal, current, evaluation)
+    !currentProposalPresentationMatches(owner, current, evaluation)
     ? liveOwnerConflict(subject, proposalId, "a live owner proposal differs from the current frontier proposal")
     : null
 }

@@ -67,6 +67,16 @@ coverage does not depend on winning a wall-clock race. The built happy-path,
 close-response-loss, promotion-CAS and HTTP429 cases retain their existing
 Run, Git, tracker, process and cleanup assertions.
 
+After the child's read intent is acknowledged, the ordinary status projector
+compares the pending read's preserved operation ID with the original live
+owner's exact materialized ID, as specified in
+[the acknowledged-read owner scenario](issue-300-current-status-admission-witness.md#alice-sees-the-original-read-owner-after-its-allocated-intent-becomes-pending).
+The qualification callback still rejects a true projection conflict; it does
+not turn errors into status records. `registers the original pending read
+status only for its acknowledged materialized owner identity` passes the
+same pending-read proposal fields through this callback and rejects a foreign
+UUID before registration.
+
 | Continuation source outcome | Acceptance test |
 | --- | --- |
 | Original graph, specification and worktree reads remain publishable; foreign identities, nested private fields and route substitutions are rejected before registration. | `validates continuation read sources before registering status and rejects substituted source atoms` |

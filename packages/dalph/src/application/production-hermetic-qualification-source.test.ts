@@ -1309,6 +1309,68 @@ describe("qualification original source boundary", () => {
     expect(JSON.stringify(rejected)).not.toContain("DeliveryStatusProjectionConflict")
   })
 
+  it("registers the original pending read status only for its acknowledged materialized owner identity", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const allocatedId = OperationId.make("01990a72-38c0-7000-8000-000000000021")
+    const route = routeFixtures(context).routes.find(
+      (candidate) => candidate._tag === "RecoveredNewActionRoute" && candidate.action._tag === "ReadTrackerGraph"
+    )
+    if (route?._tag !== "RecoveredNewActionRoute") return expect.fail("fixture must contain the graph read route")
+    const admitted = {
+      ...proposalForRoute(route, context),
+      route,
+      actionIdentity: { _tag: "FreshOperationIdRequired" as const, source: { _tag: "Allocate" as const } },
+      order: {
+        _tag: "RecoveredWorkflowOrder" as const,
+        acceptedAt: JournalPosition.make(4),
+        frontierOrdinal: DeliveryProposalOrdinal.make(0),
+        responsibilityBeganAt: null,
+        taskId: context.taskId,
+        transition: "ObservePlannedAttemptContinuationGraph" as const
+      }
+    }
+    const current = {
+      ...admitted,
+      actionIdentity: {
+        _tag: "FreshOperationIdRequired" as const,
+        source: { _tag: "Preserve" as const, operationId: allocatedId }
+      },
+      order: { ...admitted.order, acceptedAt: JournalPosition.make(5) }
+    }
+    const owner = ticketOwnerSnapshotForTest(admitted, {
+      _tag: "MaterializedDeliveryAction",
+      intent: "IntentRecorded",
+      operationId: allocatedId
+    })
+    const ready = readyFor(context, [current])
+    if (ready._tag !== "Ready") return expect.fail("source fixture must be ready")
+    expect(
+      await Effect.runPromise(
+        validateHermeticQualificationStatus(manifest, configuration, { ...ready, liveOwners: [owner] }, runId)
+      )
+    ).toHaveProperty("registration")
+    const foreign = {
+      ...current,
+      actionIdentity: {
+        _tag: "FreshOperationIdRequired" as const,
+        source: { _tag: "Preserve" as const, operationId: OperationId.make("01990a72-38c0-7000-8000-000000000022") }
+      }
+    }
+    const foreignReady = readyFor(context, [foreign])
+    if (foreignReady._tag !== "Ready") return expect.fail("foreign source fixture must be ready")
+    const rejected = await Effect.runPromise(
+      validateHermeticQualificationStatus(
+        manifest,
+        configuration,
+        { ...foreignReady, liveOwners: [owner] },
+        runId
+      ).pipe(Effect.flip)
+    )
+    expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
+    expect(rejected).not.toHaveProperty("registration")
+  })
+
   it("checks all six measured route families and twenty-eight direct roots without accepting added opaque source fields", async () => {
     const { configuration, manifest, runId } = await Effect.runPromise(fixture)
     const originalContext = await Effect.runPromise(contextFor(manifest, configuration, runId))

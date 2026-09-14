@@ -214,6 +214,51 @@ refinement reconstructs no old owner and authorizes no retry.
   projection conflict. The remaining #339 and downstream qualification
   scenarios and blocking edges are unchanged.
 
+## Alice sees the original read owner after its allocated intent becomes pending
+
+This refines the owner/current comparison below for a graph, specification,
+claim, worktree or target-lineage read. It preserves the original admission
+witness and the full source comparison; it changes no workflow operation,
+outside request, journal fact, retry or process-observation rule.
+
+Alice watches Run R while Dalph retains one planned attempt and its existing
+claim. The current tracker and Git facts require one read. Dalph admits proposal
+P with permission to allocate an operation identity, materializes UUID U, and
+acknowledges the exact read intent in SQLite. The original request is still
+waiting on GitHub or Git. A current-status publication now derives P again from
+that pending intent, with the same route and proposal identity but a requirement
+to preserve U. No new request has been admitted or sent.
+
+Status first verifies P's original opaque admission witness. Only an actual
+materialized owner whose intent is recorded can explain this change from
+allocation to preservation, and only when the pending proposal names that
+owner's exact U. The existing coherent forward-prefix comparison still applies;
+every route, payload, predecessor, admission requirement and semantic ordering
+field remains exact. Status retains the original owner and shows Alice its
+ongoing read. After its request finishes, ordinary publication removes it. A
+settled materialized owner may remain visible until that publication catches
+up, with the same exact checks.
+
+Status must reject a foreign operation ID, an unmaterialized owner, an
+unacknowledged intent, changed semantic fields, or a forged/duplicate witness.
+It must not rewrite an owner, issue another request, or accept a projection
+error as an ordinary status. A process crash destroys the live owner and
+witness; the existing journal reconciliation rules own restart and retry.
+
+### Scenario-to-test mapping
+
+- Production proposal derivation before and after the exact read intent,
+  paired with production admission/materialization/intent recording →
+  `keeps the exact materialized read owner when its acknowledged intent requires preserving its allocated identity`.
+- Foreign UUID, unmaterialized/unacknowledged owner and changed source fields →
+  the same regression's negative controls and the existing recovered-prefix,
+  duplicate-owner and admission-witness rejection tests.
+- Qualification still rejects actual projector conflicts →
+  `maps a canonical projector conflict to safe typed source rejection without a publication token`.
+- The six built hermetic controller cases retain their existing Run, Git,
+  tracker, process and cleanup outcomes; the qualification validator accepts
+  only the ordinary status produced after the exact-owner comparison succeeds.
+
 ## Alice sees the original claim-read owner after its intent advances history
 
 This accepted #339 refinement extends the preceding graph-read rule only to

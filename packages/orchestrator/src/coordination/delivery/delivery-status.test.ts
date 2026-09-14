@@ -47,6 +47,9 @@ import {
   makeTargetLineageObservationOperation,
   makeTaskClaimReleaseOperation,
   makeTaskClaimObservationOperation,
+  makeTrackerGraphObservationOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeObservationOperation,
   TaskClaimReleaseAuthority,
   WorkflowOperation
 } from "../../workflow/registry/operation.js"
@@ -1360,6 +1363,149 @@ it("compares only the recovered evaluation position while preserving exact causa
       }
     ])
   ).toBeInstanceOf(DeliveryStatusProjectionConflict)
+})
+
+it("keeps the exact materialized read owner when its acknowledged intent requires preserving its allocated identity", () => {
+  const taskId = TaskId.make("pending-read-task")
+  const plannedAttempt = { ...integrationFinalityFixture.plannedAttempt, runId, taskId }
+  const planId = OperationId.make("01990a72-38c0-7000-8000-000000000020")
+  const allocatedId = OperationId.make("01990a72-38c0-7000-8000-000000000021")
+  const provisionalId = OperationId.make(`continuation:${plannedAttempt.attemptId}:after:4:read`)
+  const transitions = (operationId: OperationId): ReadonlyArray<RunnableFrontierTransition> => [
+    RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+      plannedAttempt,
+      operation: makeTrackerGraphObservationOperation(
+        { _tag: "ExecutingWorkAuthorityCheck" },
+        operationId,
+        target,
+        [planId],
+        [taskId]
+      )
+    }),
+    RunnableFrontierTransition.ObservePlannedAttemptContinuationSpecification({
+      plannedAttempt,
+      operation: makeTaskWorkSpecificationObservationOperation(operationId, target, taskId, [planId])
+    }),
+    RunnableFrontierTransition.ObservePlannedAttemptContinuationClaim({
+      plannedAttempt,
+      operation: makeTaskClaimObservationOperation(operationId, target, taskId, [planId])
+    }),
+    RunnableFrontierTransition.ObservePlannedAttemptContinuationWorktree({
+      plannedAttempt,
+      operation: makeTaskWorktreeObservationOperation({
+        operationId,
+        plannedAttempt,
+        predecessorOperationIds: [planId]
+      })
+    }),
+    RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+      plannedAttempt,
+      operationIdentity: "Allocate",
+      operation: makeTargetLineageObservationOperation({
+        operationId,
+        plannedAttempt,
+        integrationTarget: integrationFinalityFixture.integrationTarget,
+        predecessorOperationIds: [planId]
+      })
+    })
+  ]
+  const proposals = (operationId: OperationId, pending: boolean) =>
+    transitions(operationId).map((transition) => {
+      const result = deliveryProposalsOf({
+        acceptedAt: JournalPosition.make(pending ? 5 : 4),
+        acceptedOperationIds: pending ? HashSet.make(operationId) : HashSet.empty(),
+        pendingReadOperationIds: pending ? HashSet.make(operationId) : HashSet.empty(),
+        fresh: [],
+        runId,
+        transitions: [transition]
+      })
+      expect(result.issues).toEqual([])
+      const proposal = result.ticketDelivery[0]
+      if (proposal === undefined) return expect.fail("continuation read must produce one proposal")
+      if (
+        proposal.route._tag !== "RecoveredNewActionRoute" ||
+        proposal.actionIdentity._tag !== "FreshOperationIdRequired"
+      )
+        return expect.fail("continuation read must use its recovered route and fresh identity requirement")
+      return { ...proposal, route: proposal.route, actionIdentity: proposal.actionIdentity }
+    })
+  const admitted = proposals(provisionalId, false)
+  const pending = proposals(allocatedId, true)
+  for (const [index, original] of admitted.entries()) {
+    const current = pending[index]
+    if (current === undefined) return expect.fail("pending read must preserve its proposal")
+    expect(current.id).toBe(original.id)
+    expect(original.actionIdentity).toEqual({ _tag: "FreshOperationIdRequired", source: { _tag: "Allocate" } })
+    expect(current.actionIdentity).toEqual({
+      _tag: "FreshOperationIdRequired",
+      source: { _tag: "Preserve", operationId: allocatedId }
+    })
+    const owner = ticketOwnerSnapshotForTest(original, {
+      _tag: "MaterializedDeliveryAction",
+      intent: "IntentRecorded",
+      operationId: allocatedId
+    })
+    const project = (
+      owners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>,
+      proposal: DeliveryActionProposal = current
+    ) =>
+      deliveryStatusOf(
+        DeliveryStatusSubject.cases.Run.make({ runId }),
+        evaluationOf({ proposals: [proposal], liveOwners: owners })
+      )
+    expect(project([owner])).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+    expect(
+      project([
+        ticketOwnerSnapshotForTest(original, {
+          _tag: "SettledMaterializedDeliveryAction",
+          intent: "IntentRecorded",
+          operationId: allocatedId
+        })
+      ])
+    ).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+    const foreignId = OperationId.make("01990a72-38c0-7000-8000-000000000022")
+    const invalidOwners = [
+      ticketOwnerSnapshotForTest(original),
+      ticketOwnerSnapshotForTest(original, {
+        _tag: "MaterializedDeliveryAction",
+        intent: "IntentNotRecorded",
+        operationId: allocatedId
+      }),
+      ticketOwnerSnapshotForTest(original, {
+        _tag: "MaterializedDeliveryAction",
+        intent: "IntentRecorded",
+        operationId: foreignId
+      }),
+      { ...owner, admissionAuthority: { ...owner.admissionAuthority } }
+    ]
+    for (const invalid of invalidOwners) expect(project([invalid])).toBeInstanceOf(DeliveryStatusProjectionConflict)
+    expect(project([owner, owner])).toBeInstanceOf(DeliveryStatusProjectionConflict)
+    expect(
+      project([owner], {
+        ...current,
+        actionIdentity: { _tag: "FreshOperationIdRequired", source: { _tag: "Preserve", operationId: foreignId } }
+      })
+    ).toBeInstanceOf(DeliveryStatusProjectionConflict)
+    const privateCurrent = { ...current, privateSource: "private-source-sentinel" }
+    expect(project([owner], privateCurrent)).toBeInstanceOf(DeliveryStatusProjectionConflict)
+    const privateIdentity = {
+      ...current,
+      actionIdentity: { ...current.actionIdentity, privateSource: "private-source-sentinel" }
+    }
+    expect(project([owner], privateIdentity)).toBeInstanceOf(DeliveryStatusProjectionConflict)
+    const privateSource = {
+      ...current,
+      actionIdentity: {
+        _tag: "FreshOperationIdRequired" as const,
+        source: { _tag: "Preserve" as const, operationId: allocatedId, privateSource: "private-source-sentinel" }
+      }
+    }
+    expect(project([owner], privateSource)).toBeInstanceOf(DeliveryStatusProjectionConflict)
+    expect(project([owner], { ...current, waitsForLiveOperationId: foreignId })).toBeInstanceOf(
+      DeliveryStatusProjectionConflict
+    )
+    expect(owner.proposal).toEqual(original)
+  }
 })
 
 it("fails closed for duplicate or mismatched live-owner snapshots", () => {
