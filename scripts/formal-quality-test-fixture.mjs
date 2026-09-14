@@ -65,6 +65,17 @@ const initializeRecord = (path, record) => {
   writeFileSync(path, `${JSON.stringify(record)}\n`, { mode: 0o600 })
 }
 
+/** One controlled workflow module shape for quality/resume integration fixtures. */
+export const controlledFormalWorkflowSource = (message) => `
+import {readFileSync} from 'node:fs';import {join} from 'node:path';
+import {readReferencedFormalSuccess} from './formal-success-evidence.mjs';
+export const runFormalWorkflow=async({report})=>{
+ const evidencePath=readFileSync(join(process.cwd(),'.scratch','controlled-formal-path'),'utf8');
+ const success=readReferencedFormalSuccess({recordPath:evidencePath,worktree:process.cwd()});
+ report(${JSON.stringify(message)});
+ return {status:'reused',success,evidencePath,finalizeApplicability:async()=>({success,evidencePath,identity:success.identity,observation:success.observation}),assertUnchanged:async()=>{},close:async()=>{}}
+}`
+
 export const seedQualityFormalBoundary = (worktree) => {
   const location = repositoryLocation(worktree)
   const runId = newIdentity()
