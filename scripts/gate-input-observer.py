@@ -24,6 +24,8 @@ visited = set()
 roots = []
 excluded = []
 protected = []
+replaceable = set()
+replacement_counts = {}
 paused = False
 
 
@@ -122,10 +124,17 @@ def drain():
     dirty_path = None
     dirty_mask = None
     dirty_name = None
+    replacement_masks = {}
     while True:
         try:
             data = os.read(fd, 1024 * 1024)
         except BlockingIOError:
+            for path, mask in replacement_masks.items():
+                if mask & IGNORED and mask & (0x80 | 0x100) and os.path.isfile(path):
+                    watch(path)
+                else:
+                    send("error", reason="replaceable input watch was not re-established mask=" + hex(mask),
+                         path=path[:1024])
             if dirty_path is not None:
                 send("dirty", reason="input filesystem event mask=" + hex(dirty_mask) + " name=" + repr(dirty_name), path=dirty_path[:512])
             return
@@ -143,14 +152,31 @@ def drain():
             offset += length
             if mask & OVERFLOW:
                 send("error", reason="IN_Q_OVERFLOW: input observation lost events")
-            elif mask & (IGNORED | 0x2000):
+            elif mask & 0x2000:
                 send("error", reason="unexpected watch removal or unmount mask=" + hex(mask),
                      path=", ".join(sorted(watches.get(wd, {"<unknown watch>"})))[:1024])
+            elif mask & IGNORED:
+                paths = watches.pop(wd, {"<unknown watch>"})
+                if paths != {"<unknown watch>"} and all(path in replaceable for path in paths):
+                    for path in paths:
+                        watched_paths.discard(path)
+                        replacement_masks[path] = replacement_masks.get(path, 0) | mask
+                else:
+                    send("error", reason="unexpected watch removal or unmount mask=" + hex(mask),
+                         path=", ".join(sorted(paths))[:1024])
             elif wd not in watches:
                 raise OSError("unknown inotify watch")
             else:
                 for base in watches[wd]:
                     path = os.path.join(base, name) if name else base
+                    if path in replaceable and not mask & (0x2 | 0x8):
+                        replacement_masks[path] = replacement_masks.get(path, 0) | mask
+                        if name and mask & (0x80 | 0x100):
+                            replacement_counts[path] = replacement_counts.get(path, 0) + 1
+                            if replacement_counts[path] > 1:
+                                send("error", reason="multiple replaceable input generations occurred before validation",
+                                     path=path[:1024])
+                        continue
                     if invalidates(path, mask):
                         dirty_path = path
                         dirty_mask = mask
@@ -163,6 +189,9 @@ try:
     roots = list(dict.fromkeys([os.path.abspath(path) for path in config["roots"]] + [os.path.realpath(path) for path in config["roots"]]))
     excluded = [os.path.abspath(path) for path in config["excludedRoots"]]
     protected = [os.path.abspath(path) for path in config.get("protectedRoots", [])]
+    replaceable = set(os.path.abspath(path) for path in config.get("replaceableRoots", []))
+    if not replaceable.issubset(set(protected)):
+        raise OSError("replaceable inputs must also be protected inputs")
     for root in list(roots):
         watch_ancestors(root)
         walk(root)
@@ -184,6 +213,7 @@ try:
                 paused = True
             elif command == "drain":
                 drain()
+                replacement_counts.clear()
             elif command == "protect":
                 added = [os.path.abspath(path) for path in request["roots"]]
                 protected.extend(added)
