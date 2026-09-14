@@ -17,8 +17,10 @@ import {
 } from "@dalph/contracts"
 import {
   ClaimOwner,
+  defaultGithubGraphqlEndpoint,
   EvidenceStoreLocator,
   GitCommonDirectoryLocator,
+  GithubGraphqlEndpointLocator,
   GithubIssueTarget,
   JournalDatabaseLocator,
   PlannedTaskAttemptOrdinal,
@@ -130,6 +132,9 @@ const hostPathRelationships = Schema.makeFilter<HostPathFacts>(hostPathRelations
  */
 export const ProductionRepositoryHostConfiguration = Schema.Struct({
   target: GithubIssueTarget,
+  githubGraphqlEndpoint: GithubGraphqlEndpointLocator.pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(defaultGithubGraphqlEndpoint))
+  ),
   repository: CanonicalRepositoryLocator,
   commonDirectory: CanonicalCommonDirectoryLocator,
   integrationRef: IntegrationTargetRef,

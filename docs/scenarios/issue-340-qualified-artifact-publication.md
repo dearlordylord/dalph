@@ -115,13 +115,31 @@ as when application Exit leaves an unfinished recoverable Run.
    hosted and dedicated/stressed profile provenance as not applicable when none
    was supplied; it cannot claim live qualification or fabricated hosted jobs.
    Any supplied hosted or profile evidence must bind to this same qualification
-   source SHA and the supported Node 24.20 line. Applicable #153 evidence retains
-   dedicated/stressed job identities, negative-control provenance, the current
-   ordered 105-command inventory and 15/46/23/21 phase counts, measured
-   setup/install margin within the unchanged 16-minute hosted limit, and later
-   accepted additions. Historical Node 22 or older Node 24 data is comparison
-   evidence only. Existing inventory/profile parsers are reused; they do not
-   themselves prove source-SHA or hosted-job identity.
+   source SHA, protected workflow run attempt, and supported Node 24.20 line.
+   The protected workflow starts four distinct physical jobs: dedicated shard
+   zero and shard one on `ubuntu-24.04-arm`, then stressed shard zero and shard
+   one on `ubuntu-latest`. Each stressed job proves that the host exposes more
+   than two CPUs and that `taskset` reduces the formal command to exactly two.
+   Each job enters the existing hosted shard runner and uploads its own actual
+   shard report; no controller combines log text into a fictitious job.
+
+   The qualification job downloads the exact shard set `{0, 1}` for each
+   profile. It resolves four distinct successful Actions job IDs from the same
+   workflow run and attempt, binds each report to its source/profile/condition/
+   shard/job identity, and passes both pairs through the existing hosted shard
+   aggregator. That aggregator must reconstruct positions 0 through 104 once,
+   with their exact command tokens, declared verdicts, observed exit results,
+   custody IDs, and negative-control obligations. Missing, duplicate, mixed, or
+   malformed shard or job evidence stops qualification before the live child.
+
+   For each profile, formal duration is the greater of its two shard execution
+   durations. Complete-profile duration is the interval from the earlier shard
+   start to the later shard completion, never the sum of parallel work. The
+   evidence also retains each shard's setup/install, execution, complete-job,
+   start, completion, and remaining 16-minute job margin. Applicable #153
+   evidence retains the current ordered 105-command inventory and 15/46/23/21
+   phase counts plus later accepted additions. Historical Node 22 or older Node
+   24 data is comparison evidence only.
 4. Before cleanup, the controller reads final controlled GitHub lifecycle and
    exact claim facts and the real Git target head. The evidence records what
    those authorities actually report, not success inferred from an earlier
@@ -257,7 +275,7 @@ teardown, and `ChangedIdentity` retention after one exact cleanup pass.
 | Scenario | Minimum module/caller and acceptance proof |
 | --- | --- |
 | 1: exact safe artifact | `production-mvp-qualification-evidence.ts` and adjacent tests decode actual built-controller output; prove complete applicable identities, source SHA distinct from fixture H, exact digests, unchanged safe payload, canonical transcript digest, and artifact outside Q. Existing controller built-child tests consume the same helper. |
-| 1: provenance | Evidence tests prove honest local N/A, supplied same-SHA hosted/profile binding, supported Node 24.20, current independent inventory and negative controls, and setup/install margin; reject stale/substituted evidence without fabricating missing data. |
+| 1: provenance | Evidence tests prove honest local N/A and supplied same-SHA protected workflow/run-attempt binding. Workflow and runner tests prove dedicated ARM shards 0/1, stressed host>2/taskset=2 shards 0/1, and four physical artifact producers. Resolution tests prove four distinct successful Actions job IDs, truthful per-shard timing, max-shard formal duration, and earliest-start/latest-completion profile duration. Existing hosted aggregation plus qualification tests prove positions 0–104, exact tokens/verdicts/results/custody/negative controls, and reject every missing/duplicate/mixed shard, job, profile, condition, source, run-attempt, or unsupported Node substitution before live launch. |
 | 2: prepublication rejection | Evidence tests and the existing controller caller seed sentinel/private values in free failure text and unknown fields; prove rejection before record/evidence/user-output publication, safe failure reporting, unchanged child/Run truth, and no rerun. |
 | 2: original canonical bytes | Framing component tests reject blank, whitespace-altered, and reordered complete frames before publication; preserve the original canonical payload and existing real-Node SIGKILL tail controls. Transcript digest tests bind the accepted original LF bytes, not a normalized substitute. |
 | 2: opaque source and record binding | Qualification host/current-source tests seed a sentinel in a source atom and inside an opaque identity; reject before expected-record registration or public presentation. Parent tests reject an otherwise canonical counterfeit record without the exact safe-source record binding. All four built-controller chronologies retain live RunSelected and original P1/P2 synchronization. |

@@ -47,6 +47,7 @@ describe("production repository host configuration", () => {
     expect(decoded.target.issueNumber).toBe(292)
     expect(decoded.taskWorkCapacity).toBe(2)
     expect(decoded.integrationRef).toBe("refs/heads/master")
+    expect(decoded.githubGraphqlEndpoint).toBe("https://api.github.com/graphql")
     expect(Redacted.value(decoded.githubToken)).toBe(credentialNeedle)
     expect(Redacted.value(decoded.codexProviderCredential)).toBe(`${credentialNeedle}-codex`)
     expect(JSON.stringify(decoded.githubToken)).toBe('"<redacted:GitHubToken>"')
@@ -67,6 +68,7 @@ describe("production repository host configuration", () => {
     ["non-positive interval", { activationInterval: "0 seconds" }],
     ["edge-whitespace executable", { codexExecutable: " /usr/local/bin/codex" }],
     ["unsafe provider identifier", { codexProvider: 'openai" --dangerous' }],
+    ["non-HTTP GitHub endpoint", { githubGraphqlEndpoint: "file:///tmp/github" }],
     ["overlapping worktree roots", { integratorCandidateWorktreeRoot: "/srv/dalph/planned-attempts/integrator" }],
     ["worktree and state overlap", { codexStateDirectory: "/srv/dalph/planned-attempts/state" }],
     ["private state overlap", { integratorPrivateStore: "/var/lib/dalph/evidence/integrator.json" }]
@@ -86,6 +88,16 @@ describe("production repository host configuration", () => {
     expect(String(result)).not.toContain(credentialNeedle)
     expect(JSON.stringify(result)).not.toContain(credentialNeedle)
     expect(JSON.stringify(result)).not.toContain("/usr/local/bin/codex")
+  })
+
+  it("accepts one explicit canonical qualification forwarding endpoint", async () => {
+    const decoded = await Effect.runPromise(
+      decodeProductionRepositoryHostConfiguration({
+        ...validRawConfiguration(),
+        githubGraphqlEndpoint: "http://127.0.0.1:4307/graphql"
+      })
+    )
+    expect(decoded.githubGraphqlEndpoint).toBe("http://127.0.0.1:4307/graphql")
   })
 
   it("rejects filesystem-root and trailing-separator parent overlaps before any live-boundary continuation", async () => {

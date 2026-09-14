@@ -20,7 +20,7 @@ import {
   type DisposableGithubCleanupAdapter,
   type DisposableGithubQualificationManifest,
   type DisposableGithubQualificationResource
-} from "./disposable-github-qualification-cleanup.js"
+} from "../src/qualification/disposable-github-qualification-cleanup.js"
 import { makeHermeticProviderFingerprint } from "./production-hermetic-provider-fingerprint.js"
 import { makeHermeticProviderResult, providerFailure } from "./production-hermetic-provider-result.js"
 import type { ProductionRepositoryHostConfiguration } from "../src/application/production-configuration.js"

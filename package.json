@@ -43,6 +43,7 @@
     "check:quint": "node scripts/with-gate-slot.mjs -- node scripts/run-formal-gate.mjs",
     "check:secrets": "gitleaks git --redact --no-banner",
     "qualify:codex": "node scripts/qualify-codex-app-server.mjs",
+    "qualify:production-live": "node scripts/run-production-live-qualification.mjs",
     "test:codex-integrator-qualification": "pnpm --filter @dalph/dalph... build && DALPH_RUN_REAL_CODEX_QUALIFICATION=1 vitest run packages/dalph/src/application/codex-integrator-real-qualification.test.ts --pool=forks",
     "test": "vitest run",
     "coverage:explain": "node scripts/explain-coverage.mjs",

@@ -1,0 +1,284 @@
+name: Production live qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact 40-character candidate commit SHA to qualify
+        required: true
+        type: string
+      reviewed_base_sha:
+        description: Exact 40-character reviewed Base SHA for this candidate
+        required: true
+        type: string
+      repository:
+        description: Disposable GitHub repository in owner/repository form
+        required: true
+        type: string
+
+# Checkout needs read-only source access; the configured disposable-repository
+# token is separately scoped to issue and label mutation in the named repo.
+permissions:
+  contents: read
+  actions: read
+
+# Every live mutation shares one lane, regardless of dispatch ref or candidate.
+concurrency:
+  group: production-live-qualification
+  cancel-in-progress: false
+
+jobs:
+  formal:
+    name: ${{ matrix.label }} shard ${{ matrix.shard }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 16
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: dedicated
+            label: Dedicated formal evidence
+            runner: ubuntu-24.04-arm
+            shard: 0
+          - profile: dedicated
+            label: Dedicated formal evidence
+            runner: ubuntu-24.04-arm
+            shard: 1
+          - profile: stressed
+            label: Stressed formal evidence
+            runner: ubuntu-latest
+            shard: 0
+          - profile: stressed
+            label: Stressed formal evidence
+            runner: ubuntu-latest
+            shard: 1
+    env:
+      DALPH_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      DALPH_COVERAGE_BASE_SHA: ${{ inputs.reviewed_base_sha }}
+      DALPH_FORMAL_COMMIT_SHA: ${{ inputs.candidate_sha }}
+      DALPH_FORMAL_NODE_VERSION: 24.20.0
+      DALPH_FORMAL_PROFILE_KIND: ${{ matrix.profile }}
+      DALPH_FORMAL_RUNNER_LABEL: ${{ matrix.runner }}
+      DALPH_FORMAL_SHARD: ${{ matrix.shard }}
+      DALPH_FORMAL_STRESS_CPU_LIST: 0-1
+      NODE_OPTIONS: --max-old-space-size=8192
+    steps:
+      - name: Start formal shard timing
+        run: |
+          evidence_dir="$RUNNER_TEMP/dalph-live-formal/$DALPH_FORMAL_PROFILE_KIND/shard-$DALPH_FORMAL_SHARD"
+          echo "DALPH_FORMAL_EVIDENCE_DIR=$evidence_dir" >> "$GITHUB_ENV"
+          mkdir -p "$evidence_dir"
+          date +%s%3N > "$evidence_dir/started-ms"
+
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify candidate and reviewed Base
+        run: |
+          [[ "$DALPH_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$DALPH_COVERAGE_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$DALPH_CANDIDATE_SHA"
+          git cat-file -e "$DALPH_COVERAGE_BASE_SHA^{commit}"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+          version: 10.29.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          cache: pnpm
+          node-version: 24.20.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Record setup timing
+        run: date +%s%3N > "$DALPH_FORMAL_EVIDENCE_DIR/install-complete-ms"
+
+      - name: Run dedicated formal shard
+        if: matrix.profile == 'dedicated'
+        run: |
+          effective_parallelism=$(node -p 'require("node:os").availableParallelism()')
+          test "$effective_parallelism" -gt 0
+          echo "DALPH_FORMAL_EFFECTIVE_PARALLELISM=$effective_parallelism" >> "$GITHUB_ENV"
+          pnpm check:ci:formal:shard --shard "$DALPH_FORMAL_SHARD" --report "$DALPH_FORMAL_EVIDENCE_DIR/report.json"
+
+      - name: Run stressed formal shard
+        if: matrix.profile == 'stressed'
+        run: |
+          host_parallelism=$(node -p 'require("node:os").availableParallelism()')
+          effective_parallelism=$(taskset --cpu-list "$DALPH_FORMAL_STRESS_CPU_LIST" node -p 'require("node:os").availableParallelism()')
+          test "$host_parallelism" -gt 2
+          test "$effective_parallelism" -eq 2
+          echo "DALPH_FORMAL_HOST_PARALLELISM=$host_parallelism" >> "$GITHUB_ENV"
+          echo "DALPH_FORMAL_EFFECTIVE_PARALLELISM=$effective_parallelism" >> "$GITHUB_ENV"
+          taskset --cpu-list "$DALPH_FORMAL_STRESS_CPU_LIST" pnpm check:ci:formal:shard --shard "$DALPH_FORMAL_SHARD" --report "$DALPH_FORMAL_EVIDENCE_DIR/report.json"
+
+      - name: Record formal shard provenance
+        env:
+          DALPH_FORMAL_METADATA: ${{ runner.temp }}/dalph-live-formal/${{ matrix.profile }}/shard-${{ matrix.shard }}/provenance.json
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto"
+          import { readFileSync, writeFileSync } from "node:fs"
+          const timing = (name) => Number(readFileSync(`${process.env.DALPH_FORMAL_EVIDENCE_DIR}/${name}`, "utf8"))
+          const started = timing("started-ms")
+          const installed = timing("install-complete-ms")
+          const setupInstallSeconds = (installed - started) / 1000
+          const reportSource = readFileSync(`${process.env.DALPH_FORMAL_EVIDENCE_DIR}/report.json`, "utf8")
+          const report = JSON.parse(reportSource)
+          if (![started, installed, report.report?.elapsedMilliseconds].every(Number.isFinite) || setupInstallSeconds < 0) {
+            throw new Error("formal shard timing markers are invalid")
+          }
+          const profile = process.env.DALPH_FORMAL_PROFILE_KIND
+          const condition = profile === "dedicated"
+            ? {
+                kind: "dedicated-hosted-job",
+                runnerLabel: process.env.DALPH_FORMAL_RUNNER_LABEL,
+                effectiveParallelism: Number(process.env.DALPH_FORMAL_EFFECTIVE_PARALLELISM)
+              }
+            : {
+                kind: "cpu-affinity",
+                runnerLabel: process.env.DALPH_FORMAL_RUNNER_LABEL,
+                cpuList: process.env.DALPH_FORMAL_STRESS_CPU_LIST,
+                hostParallelism: Number(process.env.DALPH_FORMAL_HOST_PARALLELISM),
+                effectiveParallelism: Number(process.env.DALPH_FORMAL_EFFECTIVE_PARALLELISM)
+              }
+          const fields = {
+            profile,
+            shard: Number(process.env.DALPH_FORMAL_SHARD),
+            condition,
+            sourceSha: process.env.DALPH_CANDIDATE_SHA,
+            reviewedBaseSha: process.env.DALPH_COVERAGE_BASE_SHA,
+            nodeVersion: process.version,
+            workflowName: process.env.GITHUB_WORKFLOW,
+            runId: Number(process.env.GITHUB_RUN_ID),
+            runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+            jobName: process.env.GITHUB_JOB,
+            report: "report.json",
+            reportDigest: createHash("sha256").update(reportSource).digest("hex"),
+            setupInstallSeconds,
+            formalSeconds: report.report.elapsedMilliseconds / 1000
+          }
+          writeFileSync(process.env.DALPH_FORMAL_METADATA, `${JSON.stringify(fields, null, 2)}\n`, { mode: 0o600 })
+          NODE
+
+      - name: Upload formal shard evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-live-formal-${{ matrix.profile }}-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/dalph-live-formal
+          if-no-files-found: error
+          retention-days: 30
+
+  qualify:
+    name: One protected live qualification
+    needs: [formal]
+    if: needs.formal.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production-live-qualification
+    env:
+      DALPH_RUN_PRODUCTION_LIVE_QUALIFICATION: "1"
+      DALPH_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      DALPH_COVERAGE_BASE_SHA: ${{ inputs.reviewed_base_sha }}
+      DALPH_LIVE_QUALIFICATION_SOURCE_SHA: ${{ inputs.candidate_sha }}
+      DALPH_LIVE_QUALIFICATION_SOURCE_REPOSITORY: ${{ github.workspace }}
+      DALPH_LIVE_QUALIFICATION_SOURCE_BASE_SHA: ${{ inputs.reviewed_base_sha }}
+      DALPH_LIVE_QUALIFICATION_BUILT_ENTRY: ${{ github.workspace }}/packages/dalph/dist/bin/production-live-qualification.js
+      DALPH_LIVE_QUALIFICATION_SHIPPED_ENTRY: ${{ github.workspace }}/packages/dalph/dist/bin/dalph.js
+      DALPH_LIVE_QUALIFICATION_LOCKFILE: ${{ github.workspace }}/pnpm-lock.yaml
+      DALPH_LIVE_QUALIFICATION_CODEX_EXECUTABLE: ${{ github.workspace }}/node_modules/.bin/codex
+      DALPH_LIVE_QUALIFICATION_WORKFLOW: ${{ github.workflow }}
+      DALPH_LIVE_QUALIFICATION_RUN_ID: ${{ github.run_id }}
+      DALPH_LIVE_QUALIFICATION_JOB_ID: ${{ github.job }}
+      DALPH_LIVE_QUALIFICATION_REPOSITORY: ${{ inputs.repository }}
+      DALPH_LIVE_QUALIFICATION_PROTECTED_ENVIRONMENT: production-live-qualification
+      DALPH_SOURCE: ${{ github.workspace }}
+      GIT_OPTIONAL_LOCKS: "0"
+      NODE_OPTIONS: --max-old-space-size=8192
+    steps:
+      - name: Prepare live qualification paths
+        run: |
+          {
+            echo "DALPH_LIVE_QUALIFICATION_PUBLICATION_CONTAINER=$RUNNER_TEMP/dalph-live-publication"
+            echo "DALPH_LIVE_QUALIFICATION_MANIFEST=$RUNNER_TEMP/dalph-live-qualification/manifest.json"
+            echo "DALPH_LIVE_QUALIFICATION_ARTIFACT=$RUNNER_TEMP/dalph-live-qualification/qualification.json"
+            echo "DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS=$RUNNER_TEMP/dalph-live-publication/retained-locators.json"
+            echo "DALPH_LIVE_QUALIFICATION_FORMAL_ROOT=$RUNNER_TEMP/dalph-live-formal"
+          } >> "$GITHUB_ENV"
+
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify candidate and reviewed Base
+        run: |
+          [[ "$DALPH_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$DALPH_COVERAGE_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$DALPH_CANDIDATE_SHA"
+          git cat-file -e "$DALPH_COVERAGE_BASE_SHA^{commit}"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+          version: 10.29.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          cache: pnpm
+          node-version: 24.20.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shipped controller
+        run: pnpm build
+
+      - name: Download all four formal shard reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: production-live-formal-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/dalph-live-formal
+          merge-multiple: true
+
+      - name: Prepare redacted output locations
+        run: |
+          mkdir -p "$RUNNER_TEMP/dalph-live-qualification"
+          mkdir -p "$RUNNER_TEMP/dalph-live-publication"
+
+      - name: Resolve current formal job provenance
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/run-production-live-qualification.mjs --resolve-formal-jobs
+
+      # The protected environment secrets enter only this one controller command.
+      - name: Run one protected live qualification
+        env:
+          DALPH_LIVE_GITHUB_TOKEN: ${{ secrets.DALPH_LIVE_GITHUB_TOKEN }}
+          DALPH_CODEX_PROVIDER_CREDENTIAL: ${{ secrets.DALPH_LIVE_CODEX_PROVIDER_CREDENTIAL }}
+        run: pnpm qualify:production-live
+
+      - name: Upload redacted qualification outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-live-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/dalph-live-qualification/qualification.json
+            ${{ runner.temp }}/dalph-live-publication/retained-locators.json
+          if-no-files-found: warn
+          retention-days: 30
