@@ -63,9 +63,7 @@ const fixtureProcessIds = (processes: ReadonlyArray<LinuxProcessStat>, rootPid: 
     if (parent === undefined || parent.parentPid === 0) return false
     return reachesRoot(parent.parentPid, new Set([...seen, pid]))
   }
-  return new Set(
-    processes.flatMap((process) => (reachesRoot(process.pid, new Set()) ? [process.pid] : []))
-  )
+  return new Set(processes.flatMap((process) => (reachesRoot(process.pid, new Set()) ? [process.pid] : [])))
 }
 
 /**
