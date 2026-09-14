@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { execFile as nodeExecFile, spawn } from "node:child_process"
 import { access, chmod, constants, lstat, mkdir, readFile, writeFile } from "node:fs/promises"
 import nodePath from "node:path"
@@ -207,12 +207,18 @@ const readFormalShardMetadata = async ({ environment, kind, metadataPath, report
     throw new Error(`${kind} shard ${shard} formal report name is incorrect`)
   }
   await requireReadableFile(reportPath, `${kind} shard ${shard} formal report`)
+  const reportSource = await readFile(reportPath, "utf8")
+  const reportDigest = createHash("sha256").update(reportSource).digest("hex")
+  if (metadata.reportDigest !== reportDigest) {
+    throw new Error(`${kind} shard ${shard} formal report digest does not match its job provenance`)
+  }
   return {
     condition,
     formalSeconds: nonnegativeSeconds(metadata.formalSeconds, `${kind} shard ${shard} formal duration`),
     nodeVersion: metadata.nodeVersion,
     profile: kind,
     reportPath,
+    reportDigest,
     reviewedBaseSha: metadata.reviewedBaseSha,
     runAttempt,
     runId,
@@ -321,11 +327,15 @@ const enrichFormalMetadata = async ({ environment, job, kind, metadataPath, repo
     profile: profile.profile,
     protectedEnvironment: productionLiveQualificationEnvironment,
     report: "report.json",
+    reportDigest: profile.reportDigest,
+    reviewedBaseSha: profile.reviewedBaseSha,
+    runId: profile.runId,
     runAttempt: profile.runAttempt,
     shard,
     sourceSha: profile.sourceSha,
     startedAt: job.startedAt,
     setupInstallSeconds: profile.setupInstallSeconds,
+    jobName: "formal",
     workflowName: profile.workflowName
   }
   const serialized = `${JSON.stringify(enriched, null, 2)}\n`
@@ -574,6 +584,7 @@ export const createProductionLiveQualificationManifest = ({ environment, formal,
         Number(positiveIntegerInput(environment, "DALPH_LIVE_QUALIFICATION_RUN_ID")),
         "DALPH_LIVE_QUALIFICATION_RUN_ID"
       ),
+      runAttempt: githubRunIdentity(environment).runAttempt,
       job: valueOf(environment, "DALPH_LIVE_QUALIFICATION_JOB_ID"),
       protectedEnvironment: valueOf(environment, "DALPH_LIVE_QUALIFICATION_PROTECTED_ENVIRONMENT")
     },

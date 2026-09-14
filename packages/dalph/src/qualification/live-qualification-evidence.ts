@@ -27,7 +27,12 @@ import {
   type QualificationPublicationContainer,
   writeQualificationArtifact
 } from "./qualification-artifact.js"
-import { QualificationBuild, RequiredQualificationFormalProvenance } from "./qualification-provenance.js"
+import {
+  QualificationBuild,
+  QualificationFormalRunAttempt,
+  QualificationFormalRunId,
+  RequiredQualificationFormalProvenance
+} from "./qualification-provenance.js"
 
 const requiredFormalShardJobCount = 4
 
@@ -44,7 +49,8 @@ export type LiveQualificationObservedTimestamp = typeof LiveQualificationObserve
 /** Identifies the protected GitHub Actions workflow that admitted the live provider mutations. */
 export const GithubActionsWorkflowName = Schema.NonEmptyString.pipe(Schema.brand("GithubActionsWorkflowName"))
 /** Identifies one GitHub Actions workflow run, independently of its job. */
-export const GithubActionsRunId = Schema.Int.check(Schema.isGreaterThan(0)).pipe(Schema.brand("GithubActionsRunId"))
+export const GithubActionsRunId = QualificationFormalRunId
+export const GithubActionsRunAttempt = QualificationFormalRunAttempt
 /** Identifies the exact job within the admitted workflow run. */
 export const GithubActionsJobId = Schema.NonEmptyString.pipe(Schema.brand("GithubActionsJobId"))
 /** Identifies the protected environment that released credentials to the live job. */
@@ -54,6 +60,7 @@ const GithubActionsHostedProvenance = Schema.Struct({
   sourceSha: GitCommitSha,
   workflow: GithubActionsWorkflowName,
   runId: GithubActionsRunId,
+  runAttempt: GithubActionsRunAttempt,
   job: GithubActionsJobId,
   protectedEnvironment: GithubProtectedEnvironmentName
 })
@@ -271,6 +278,10 @@ const provenanceBindsOneSourceAndIndependentJobs: LiveQualificationEvidenceInvar
   evidence.hosted.sourceSha === evidence.build.sourceSha &&
   evidence.formal.dedicated.sourceSha === evidence.build.sourceSha &&
   evidence.formal.stressed.sourceSha === evidence.build.sourceSha &&
+  evidence.formal.dedicated.runId === evidence.hosted.runId &&
+  evidence.formal.stressed.runId === evidence.hosted.runId &&
+  evidence.formal.dedicated.runAttempt === evidence.hosted.runAttempt &&
+  evidence.formal.stressed.runAttempt === evidence.hosted.runAttempt &&
   new Set(
     [evidence.formal.dedicated, evidence.formal.stressed].flatMap(({ shards }) => shards.map(({ job }) => job.jobId))
   ).size === requiredFormalShardJobCount
@@ -482,6 +493,10 @@ const provenanceMatches = (input: unknown): boolean => {
     hosted.sourceSha === build.sourceSha &&
     formal.dedicated.sourceSha === build.sourceSha &&
     formal.stressed.sourceSha === build.sourceSha &&
+    formal.dedicated.runId === hosted.runId &&
+    formal.stressed.runId === hosted.runId &&
+    formal.dedicated.runAttempt === hosted.runAttempt &&
+    formal.stressed.runAttempt === hosted.runAttempt &&
     new Set([formal.dedicated, formal.stressed].flatMap(({ shards }) => shards.map(({ job }) => job.jobId))).size ===
       requiredFormalShardJobCount
   )

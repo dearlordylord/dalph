@@ -12,6 +12,79 @@ import {
 } from "../src/qualification/live-qualification-runtime.js"
 
 const layer = nodeGitCommandLayer.pipe(Layer.provideMerge(NodeServices.layer), Layer.merge(NodeCrypto.layer))
+const formalPositions = (shard: number) =>
+  Array.from({ length: 105 }, (_value, position) => position).filter((position) =>
+    shard === 0
+      ? position <= 36 ||
+        (position >= 42 && position <= 46) ||
+        (position >= 60 && position <= 64) ||
+        (position >= 86 && position <= 90) ||
+        position >= 100
+      : (position >= 37 && position <= 41) ||
+        (position >= 47 && position <= 59) ||
+        (position >= 65 && position <= 85) ||
+        (position >= 91 && position <= 99)
+  )
+const formalCommands = (offset: number) =>
+  Array.from({ length: 105 }, (_value, position) => ({
+    position,
+    kind: "test",
+    name: `formal command ${position}`,
+    args: ["test", `formal-${position}.qnt`],
+    verdict: {
+      acceptedExitCodes: [0],
+      witnesses: [],
+      temporal: null,
+      collectedReplacementTest: false,
+      artifactPreparedAfter: false
+    },
+    result: "exit:0",
+    obligationId: `00000000-0000-4000-8000-${String(offset * 1_000 + position + 1).padStart(12, "0")}`,
+    durationMilliseconds: 1
+  }))
+const formalProfile = (profileKind: "dedicated" | "stressed", jobId: number) => ({
+  profileKind,
+  sourceSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  nodeVersion: "24.20.0",
+  runId: 307,
+  runAttempt: 1,
+  profileDigest: "9".repeat(64),
+  formalSeconds: 1,
+  completeProfileSeconds: 2,
+  shards: [0, 1].map((shard) => ({
+    shard,
+    condition:
+      profileKind === "dedicated"
+        ? { kind: "dedicated-hosted-job", runnerLabel: "ubuntu-24.04-arm", effectiveParallelism: 4 }
+        : {
+            kind: "cpu-affinity",
+            runnerLabel: "ubuntu-latest",
+            cpuList: "0-1",
+            hostParallelism: 4,
+            effectiveParallelism: 2
+          },
+    job: {
+      workflow: "Production live qualification",
+      runId: 307,
+      runAttempt: 1,
+      jobId: jobId + shard,
+      name: `${profileKind === "dedicated" ? "Dedicated" : "Stressed"} formal evidence shard ${shard}`
+    },
+    reportDigest: String(jobId + shard)
+      .slice(-1)
+      .repeat(64),
+    positions: formalPositions(shard),
+    setupInstallSeconds: 1,
+    formalSeconds: 1,
+    completeJobSeconds: 2,
+    remainingHostedSeconds: 958,
+    hostedLimitSeconds: 960,
+    startedAt: "2026-09-13T12:00:00.000Z",
+    completedAt: "2026-09-13T12:00:02.000Z"
+  })),
+  commands: formalCommands(jobId),
+  negativeControls: ["negative"]
+})
 
 const input = {
   schemaVersion: 1,
@@ -30,47 +103,14 @@ const input = {
     sourceSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     workflow: "Candidate qualification",
     runId: 307,
+    runAttempt: 1,
     job: "live-qualification",
     protectedEnvironment: "live-qualification"
   },
   formal: {
     _tag: "DedicatedAndStressed",
-    dedicated: {
-      profileKind: "dedicated",
-      condition: { kind: "dedicated-hosted-job", runnerLabel: "ubuntu-24.04-arm", effectiveParallelism: 4 },
-      sourceSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      nodeVersion: "24.20.0",
-      job: { workflow: "Production live qualification", runId: 1, jobId: 1 },
-      logDigest: "0".repeat(64),
-      setupInstallSeconds: 1,
-      formalSeconds: 1,
-      completeJobSeconds: 2,
-      remainingHostedSeconds: 958,
-      hostedLimitSeconds: 960,
-      commands: [],
-      negativeControls: ["negative"]
-    },
-    stressed: {
-      profileKind: "stressed",
-      condition: {
-        kind: "cpu-affinity",
-        runnerLabel: "ubuntu-latest",
-        cpuList: "0-1",
-        hostParallelism: 4,
-        effectiveParallelism: 2
-      },
-      sourceSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      nodeVersion: "24.20.0",
-      job: { workflow: "Production live qualification", runId: 1, jobId: 2 },
-      logDigest: "1".repeat(64),
-      setupInstallSeconds: 1,
-      formalSeconds: 1,
-      completeJobSeconds: 2,
-      remainingHostedSeconds: 958,
-      hostedLimitSeconds: 960,
-      commands: [],
-      negativeControls: ["negative"]
-    }
+    dedicated: formalProfile("dedicated", 312),
+    stressed: formalProfile("stressed", 314)
   }
 }
 

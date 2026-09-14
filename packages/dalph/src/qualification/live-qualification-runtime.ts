@@ -34,6 +34,7 @@ import { measureQualificationBuild, RequiredQualificationFormalProvenance } from
 import {
   GithubActionsJobId,
   GithubActionsRunId,
+  GithubActionsRunAttempt,
   GithubActionsWorkflowName,
   GithubProtectedEnvironmentName,
   LiveCodexAppServerProcessIdentity,
@@ -138,6 +139,7 @@ export const ProductionLiveQualificationManifest = Schema.Struct({
     sourceSha: GitCommitSha,
     workflow: GithubActionsWorkflowName,
     runId: GithubActionsRunId,
+    runAttempt: GithubActionsRunAttempt,
     job: GithubActionsJobId,
     protectedEnvironment: GithubProtectedEnvironmentName
   }),

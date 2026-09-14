@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -32,7 +33,8 @@ const fixture = async () => {
       const report = join(directory, "report.json")
       const metadata = join(directory, "provenance.json")
       await mkdir(directory, { recursive: true })
-      await writeFile(report, `${JSON.stringify({ version: 1, report: { elapsedMilliseconds: 108000 } })}\n`)
+      const reportSource = `${JSON.stringify({ version: 1, profile: name, shard, report: { elapsedMilliseconds: 108000 } })}\n`
+      await writeFile(report, reportSource)
       await writeFile(
         metadata,
         `${JSON.stringify({
@@ -56,6 +58,7 @@ const fixture = async () => {
           runAttempt: 1,
           jobName: "formal",
           report: "report.json",
+          reportDigest: createHash("sha256").update(reportSource).digest("hex"),
           setupInstallSeconds: 12,
           formalSeconds: 108
         })}\n`
@@ -80,22 +83,23 @@ const fixture = async () => {
   return { codexExecutable, lockfile, root, formal, output }
 }
 
-const formalCommands = Array.from({ length: 105 }, (_value, position) => ({
-  position,
-  kind: "test",
-  name: `formal command ${position}`,
-  args: ["test", `specs/formal-${position}.qnt`],
-  verdict: {
-    acceptedExitCodes: [0],
-    witnesses: [],
-    temporal: null,
-    collectedReplacementTest: false,
-    artifactPreparedAfter: false
-  },
-  result: "exit:0",
-  obligationId: `00000000-0000-4000-8000-${String(position + 1).padStart(12, "0")}`,
-  durationMilliseconds: 1
-}))
+const formalCommands = (custodyOffset) =>
+  Array.from({ length: 105 }, (_value, position) => ({
+    position,
+    kind: "test",
+    name: `formal command ${position}`,
+    args: ["test", `specs/formal-${position}.qnt`],
+    verdict: {
+      acceptedExitCodes: [0],
+      witnesses: [],
+      temporal: null,
+      collectedReplacementTest: false,
+      artifactPreparedAfter: false
+    },
+    result: "exit:0",
+    obligationId: `00000000-0000-4000-8000-${String(custodyOffset * 1_000 + position + 1).padStart(12, "0")}`,
+    durationMilliseconds: 1
+  }))
 const formalProfileForManifest = (profileKind, jobStart) => ({
   profileKind,
   sourceSha: candidateSha,
@@ -104,7 +108,7 @@ const formalProfileForManifest = (profileKind, jobStart) => ({
   runAttempt: 1,
   profileDigest: "9".repeat(64),
   formalSeconds: 105,
-  completeProfileSeconds: 121,
+  completeProfileSeconds: 120,
   shards: [0, 1].map((shard) => ({
     shard,
     condition:
@@ -127,7 +131,18 @@ const formalProfileForManifest = (profileKind, jobStart) => ({
     reportDigest: String(jobStart + shard)
       .slice(-1)
       .repeat(64),
-    positions: [shard],
+    positions: Array.from({ length: 105 }, (_value, position) => position).filter((position) =>
+      shard === 0
+        ? position <= 36 ||
+          (position >= 42 && position <= 46) ||
+          (position >= 60 && position <= 64) ||
+          (position >= 86 && position <= 90) ||
+          position >= 100
+        : (position >= 37 && position <= 41) ||
+          (position >= 47 && position <= 59) ||
+          (position >= 65 && position <= 85) ||
+          (position >= 91 && position <= 99)
+    ),
     setupInstallSeconds: 12,
     formalSeconds: 105 - shard,
     completeJobSeconds: 120,
@@ -136,7 +151,7 @@ const formalProfileForManifest = (profileKind, jobStart) => ({
     startedAt: "2026-09-13T12:00:00.000Z",
     completedAt: "2026-09-13T12:02:00.000Z"
   })),
-  commands: formalCommands,
+  commands: formalCommands(jobStart),
   negativeControls: ["formal negative control"]
 })
 const formalForManifest = Object.freeze({
@@ -420,9 +435,13 @@ test("resolves four unique numeric shard job IDs and retains truthful per-shard 
       assert.equal(typeof metadata.job.jobId, "number")
       assert.equal(metadata.job.workflow, "Production live qualification")
       assert.equal(metadata.job.runAttempt, 1)
+      assert.equal(metadata.jobName, "formal")
+      assert.equal(metadata.reviewedBaseSha, reviewedBaseSha)
+      assert.equal(metadata.runId, 701)
       assert.equal(metadata.setupInstallSeconds, 12)
       assert.equal(metadata.completeJobSeconds, 120)
       assert.equal(metadata.report, "report.json")
+      assert.match(metadata.reportDigest, /^[0-9a-f]{64}$/u)
       assert.equal(metadata.profile, name)
       assert.equal(metadata.shard, shard)
       assert.equal(metadata.condition.kind, name === "dedicated" ? "dedicated-hosted-job" : "cpu-affinity")
@@ -436,6 +455,10 @@ test("resolves four unique numeric shard job IDs and retains truthful per-shard 
       assert.equal(JSON.stringify(metadata).includes(f.root), false)
     }
   }
+  await resolveFormalQualificationJobs({
+    environment,
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => apiPayload })
+  })
 })
 
 test("fails closed for duplicate or nonnumeric formal Actions job identities", async () => {
@@ -453,6 +476,22 @@ test("fails closed for duplicate or nonnumeric formal Actions job identities", a
       })
     )
   }
+})
+
+test("fails closed when a formal report is moved between physical profile artifacts", async () => {
+  const f = await fixture()
+  const environment = { ...environmentFor(f), GITHUB_TOKEN: "github-secret" }
+  const dedicated = await readFile(f.formal.dedicated[0].report, "utf8")
+  const stressed = await readFile(f.formal.stressed[0].report, "utf8")
+  await writeFile(f.formal.dedicated[0].report, stressed)
+  await writeFile(f.formal.stressed[0].report, dedicated)
+  await assert.rejects(
+    resolveFormalQualificationJobs({
+      environment,
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ jobs: completedFormalJobs() }) })
+    }),
+    /report digest/u
+  )
 })
 
 test("rejects an Actions-reported formal job duration at the 16-minute cutoff", async () => {

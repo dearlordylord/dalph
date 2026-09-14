@@ -126,12 +126,14 @@ jobs:
           DALPH_FORMAL_METADATA: ${{ runner.temp }}/dalph-live-formal/${{ matrix.profile }}/shard-${{ matrix.shard }}/provenance.json
         run: |
           node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto"
           import { readFileSync, writeFileSync } from "node:fs"
           const timing = (name) => Number(readFileSync(`${process.env.DALPH_FORMAL_EVIDENCE_DIR}/${name}`, "utf8"))
           const started = timing("started-ms")
           const installed = timing("install-complete-ms")
           const setupInstallSeconds = (installed - started) / 1000
-          const report = JSON.parse(readFileSync(`${process.env.DALPH_FORMAL_EVIDENCE_DIR}/report.json`, "utf8"))
+          const reportSource = readFileSync(`${process.env.DALPH_FORMAL_EVIDENCE_DIR}/report.json`, "utf8")
+          const report = JSON.parse(reportSource)
           if (![started, installed, report.report?.elapsedMilliseconds].every(Number.isFinite) || setupInstallSeconds < 0) {
             throw new Error("formal shard timing markers are invalid")
           }
@@ -161,6 +163,7 @@ jobs:
             runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
             jobName: process.env.GITHUB_JOB,
             report: "report.json",
+            reportDigest: createHash("sha256").update(reportSource).digest("hex"),
             setupInstallSeconds,
             formalSeconds: report.report.elapsedMilliseconds / 1000
           }

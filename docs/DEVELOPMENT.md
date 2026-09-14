@@ -392,14 +392,15 @@ secrets are mapped only into the single live-command step:
 repository) and `DALPH_LIVE_CODEX_PROVIDER_CREDENTIAL`. Ordinary CI never
 invokes this command.
 
-Two preceding jobs capture dedicated and stressed formal evidence independently
-with `pnpm check:ci:formal`; their logs and provenance files are downloaded by
-the approved job. Each formal job records its setup/install duration and derives
-its ordered negative-control names from the validated log. Its uploaded provenance
-names only the relative `formal.log`, never the worker's absolute log or home path.
+Four preceding matrix jobs capture shards 0 and 1 for both the dedicated ARM
+profile and the two-CPU stressed profile with `pnpm check:ci:formal:shard`.
+Their reports and provenance files are downloaded by the approved job. Each
+formal job records its setup/install duration and binds the SHA-256 digest of
+its relative `report.json` to its profile, shard, and measured execution
+condition; it never publishes the worker's absolute report or home path.
 Before the live command, the approved job uses the current repository's
 automatic Actions token (`GITHUB_TOKEN`, with only `actions: read`) to resolve
-exactly one successful numeric Actions job ID for each formal job in this run
+exactly one successful numeric Actions job ID for each of the four formal jobs in this run
 attempt. It derives each complete-job duration from that successful Actions
 job's `started_at` and `completed_at`; unlike a timestamp written by the formal
 job itself, this interval covers provenance generation and the final formal
@@ -426,10 +427,7 @@ DALPH_LIVE_QUALIFICATION_JOB_ID
 DALPH_LIVE_QUALIFICATION_MANIFEST
 DALPH_LIVE_QUALIFICATION_ARTIFACT
 DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS (under DALPH_LIVE_QUALIFICATION_PUBLICATION_CONTAINER)
-DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED
-DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED
-DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED_METADATA
-DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED_METADATA
+DALPH_LIVE_QUALIFICATION_FORMAL_ROOT
 ```
 
 The root command is:
@@ -442,7 +440,7 @@ Before that one launch, the wrapper creates the absolute manifest file with a
 fresh invocation and issue-operation identity, the exact candidate/Base and
 hosted provenance, the shipped `packages/dalph/dist/bin/dalph.js` entry, the
 lockfile/Codex locators, the outside-Q artifact and retained-report locators,
-and the two formal profiles processed by the built provenance validator. The
+and the two exact two-shard formal profiles processed by the built provenance validator. The
 controller locator (`packages/dalph/dist/bin/production-live-qualification.js`)
 is intentionally separate from the shipped Dalph entry. The retained report is
 under the pre-created publication container and remains distinct from the

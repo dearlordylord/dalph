@@ -231,19 +231,19 @@ const capturedOutput = (command: ReturnType<typeof createQuintEffectiveProfile>[
   return `${lines.join("\n")}\n`
 }
 
-const shardReports = () => {
+const shardReports = (custodyOffset: number) => {
   const effective = createQuintEffectiveProfile()
   const binding = { runId: "1", runAttempt: "1", commitSha: sourceSha, nodeVersion: "24.20.0" }
   return assertCompleteQuintHostedPartition(effective).map((shard) => {
     const commands = shard.positions.map((position) => {
       const command = effective.commands[position]
-      if (command === undefined) throw new Error(`missing formal command ${position}`)
+      if (command === undefined) return expect.fail(`missing formal command ${position}`)
       return {
         position,
         name: command.name,
         kind: command.kind,
         executable: "/opt/node/bin/node",
-        obligationId: `00000000-0000-4000-8000-${String(position + 1).padStart(12, "0")}`,
+        obligationId: `00000000-0000-4000-8000-${String(custodyOffset * 1_000 + position + 1).padStart(12, "0")}`,
         args: command.args,
         exitCode: command.verdict.acceptedExitCodes[0],
         output: capturedOutput(command),
@@ -301,7 +301,7 @@ const profile = (profileKind: "dedicated" | "stressed", jobId: number): Supplied
   nodeVersion: "24.20.0",
   runId: 1,
   runAttempt: 1,
-  shards: shardReports().map((report, shard) => ({
+  shards: shardReports(jobId).map((report, shard) => ({
     shard,
     condition:
       profileKind === "dedicated"

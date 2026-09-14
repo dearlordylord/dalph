@@ -2,8 +2,10 @@ import { EvidenceDigest, GitCommitSha } from "@dalph/contracts"
 import { Schema } from "effect"
 
 const hostedJobLimitSeconds = 960
+const formalGateLimitSeconds = 750
 const stressedFormalParallelism = 2
 const formalCommandCount = 105
+const millisecondsPerSecond = 1_000
 
 export const QualificationFormalJobId = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
   Schema.brand("QualificationFormalJobId")
@@ -63,13 +65,13 @@ export const CompleteProfileCommands = Schema.Array(ProfileCommand).check(
   )
 )
 /** One ARM formal-only shard job establishes half of the dedicated reference profile. */
-export const DedicatedFormalCondition = Schema.Struct({
+const DedicatedFormalCondition = Schema.Struct({
   kind: Schema.Literal("dedicated-hosted-job"),
   runnerLabel: Schema.Literal("ubuntu-24.04-arm"),
   effectiveParallelism: Schema.Int.check(Schema.isGreaterThan(0))
 })
 /** One measured two-CPU affinity shard below its host capacity establishes stressed evidence. */
-export const StressedFormalCondition = Schema.Struct({
+const StressedFormalCondition = Schema.Struct({
   kind: Schema.Literal("cpu-affinity"),
   runnerLabel: Schema.Literal("ubuntu-latest"),
   cpuList: Schema.Literal("0-1"),
@@ -103,14 +105,66 @@ const FormalProfileFields = {
   commands: CompleteProfileCommands,
   negativeControls: Schema.NonEmptyArray(Schema.NonEmptyString)
 }
+type ProfileKind = "dedicated" | "stressed"
+
+const profileEvidenceIsExact = (profile: {
+  readonly profileKind: ProfileKind
+  readonly runId: number
+  readonly runAttempt: number
+  readonly formalSeconds: number
+  readonly completeProfileSeconds: number
+  readonly shards: ReadonlyArray<typeof FormalShardEvidence.Type>
+  readonly commands: ReadonlyArray<typeof ProfileCommand.Type>
+}) => {
+  const expectedNamePrefix = profile.profileKind === "dedicated" ? "Dedicated" : "Stressed"
+  const expectedCondition = profile.profileKind === "dedicated" ? "dedicated-hosted-job" : "cpu-affinity"
+  const positions = profile.shards.flatMap(({ positions: shardPositions }) => shardPositions).toSorted((a, b) => a - b)
+  const commandPositions = profile.commands.map(({ position }) => position)
+  const started = profile.shards.map(({ startedAt }) => Date.parse(startedAt))
+  const completed = profile.shards.map(({ completedAt }) => Date.parse(completedAt))
+  const shardEvidenceIsExact = profile.shards.every((shard, index) => {
+    const startedAt = Date.parse(shard.startedAt)
+    const completedAt = Date.parse(shard.completedAt)
+    const completeJobSeconds = (completedAt - startedAt) / millisecondsPerSecond
+    return (
+      shard.shard === index &&
+      shard.condition.kind === expectedCondition &&
+      shard.job.runId === profile.runId &&
+      shard.job.runAttempt === profile.runAttempt &&
+      shard.job.name === `${expectedNamePrefix} formal evidence shard ${String(index)}` &&
+      Number.isFinite(startedAt) &&
+      Number.isFinite(completedAt) &&
+      completedAt >= startedAt &&
+      shard.completeJobSeconds === completeJobSeconds &&
+      shard.completeJobSeconds >= shard.setupInstallSeconds + shard.formalSeconds &&
+      shard.completeJobSeconds < hostedJobLimitSeconds &&
+      shard.formalSeconds <= formalGateLimitSeconds &&
+      shard.remainingHostedSeconds === hostedJobLimitSeconds - shard.completeJobSeconds
+    )
+  })
+  return (
+    shardEvidenceIsExact &&
+    positions.length === commandPositions.length &&
+    positions.every((position, index) => position === commandPositions[index]) &&
+    new Set(profile.commands.map(({ obligationId }) => obligationId)).size === profile.commands.length &&
+    new Set(profile.shards.map(({ reportDigest }) => reportDigest)).size === profile.shards.length &&
+    profile.formalSeconds === Math.max(...profile.shards.map(({ formalSeconds }) => formalSeconds)) &&
+    profile.completeProfileSeconds === (Math.max(...completed) - Math.min(...started)) / millisecondsPerSecond
+  )
+}
+
+const exactProfileFilter = Schema.makeFilter((profile: Parameters<typeof profileEvidenceIsExact>[0]) =>
+  profileEvidenceIsExact(profile) ? undefined : "qualification formal profile evidence is not internally exact"
+)
+
 const DedicatedQualificationFormalProfile = Schema.Struct({
   profileKind: Schema.Literal("dedicated"),
   ...FormalProfileFields
-})
+}).check(exactProfileFilter)
 const StressedQualificationFormalProfile = Schema.Struct({
   profileKind: Schema.Literal("stressed"),
   ...FormalProfileFields
-})
+}).check(exactProfileFilter)
 export const QualificationFormalProfile = Schema.Union([
   DedicatedQualificationFormalProfile,
   StressedQualificationFormalProfile
@@ -120,5 +174,34 @@ export const QualificationFormalProvenance = Schema.TaggedUnion({
   DedicatedAndStressed: { dedicated: DedicatedQualificationFormalProfile, stressed: StressedQualificationFormalProfile }
 })
 export type QualificationFormalProvenance = typeof QualificationFormalProvenance.Type
-export const RequiredQualificationFormalProvenance = QualificationFormalProvenance.cases.DedicatedAndStressed
+const commandIdentity = (profile: typeof QualificationFormalProfile.Type) =>
+  profile.commands.map(({ args, kind, name, position, result, verdict }) => ({
+    args,
+    kind,
+    name,
+    position,
+    result,
+    verdict
+  }))
+
+export const RequiredQualificationFormalProvenance = QualificationFormalProvenance.cases.DedicatedAndStressed.check(
+  Schema.makeFilter(({ dedicated, stressed }) => {
+    const profiles = [dedicated, stressed]
+    const jobs = profiles.flatMap(({ shards }) => shards.map(({ job }) => job.jobId))
+    const reports = profiles.flatMap(({ shards }) => shards.map(({ reportDigest }) => reportDigest))
+    const obligations = profiles.flatMap(({ commands }) => commands.map(({ obligationId }) => obligationId))
+    return dedicated.sourceSha === stressed.sourceSha &&
+      dedicated.nodeVersion === stressed.nodeVersion &&
+      dedicated.runId === stressed.runId &&
+      dedicated.runAttempt === stressed.runAttempt &&
+      dedicated.profileDigest === stressed.profileDigest &&
+      new Set(jobs).size === jobs.length &&
+      new Set(reports).size === reports.length &&
+      new Set(obligations).size === obligations.length &&
+      JSON.stringify(commandIdentity(dedicated)) === JSON.stringify(commandIdentity(stressed)) &&
+      JSON.stringify(dedicated.negativeControls) === JSON.stringify(stressed.negativeControls)
+      ? undefined
+      : "dedicated and stressed formal profiles must describe one exact independent run attempt"
+  })
+)
 export type RequiredQualificationFormalProvenance = typeof RequiredQualificationFormalProvenance.Type

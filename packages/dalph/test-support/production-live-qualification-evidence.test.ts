@@ -47,22 +47,23 @@ const applicationServerIdentity = CodexProcessIdentity.make("linux:307:pid:730")
 const startedAt = "2026-09-13T14:00:00.000Z"
 const endedAt = "2026-09-13T14:05:00.000Z"
 
-const formalCommands = Array.from({ length: 105 }, (_value, position) => ({
-  position,
-  kind: "test" as const,
-  name: `formal command ${position}`,
-  args: ["test", `specs/formal-${position}.qnt`] as const,
-  verdict: {
-    acceptedExitCodes: [0] as const,
-    witnesses: [],
-    temporal: null,
-    collectedReplacementTest: false,
-    artifactPreparedAfter: false
-  },
-  result: "exit:0" as const,
-  obligationId: `00000000-0000-4000-8000-${String(position + 1).padStart(12, "0")}`,
-  durationMilliseconds: 1
-}))
+const formalCommands = (custodyOffset: number) =>
+  Array.from({ length: 105 }, (_value, position) => ({
+    position,
+    kind: "test" as const,
+    name: `formal command ${position}`,
+    args: ["test", `specs/formal-${position}.qnt`] as const,
+    verdict: {
+      acceptedExitCodes: [0] as const,
+      witnesses: [],
+      temporal: null,
+      collectedReplacementTest: false,
+      artifactPreparedAfter: false
+    },
+    result: "exit:0" as const,
+    obligationId: `00000000-0000-4000-8000-${String(custodyOffset * 1_000 + position + 1).padStart(12, "0")}`,
+    durationMilliseconds: 1
+  }))
 const formalProfileFields = (profileKind: "dedicated" | "stressed", jobId: number) => ({
   sourceSha,
   nodeVersion: "24.20.0",
@@ -70,7 +71,7 @@ const formalProfileFields = (profileKind: "dedicated" | "stressed", jobId: numbe
   runAttempt: 1,
   profileDigest: digest("9"),
   formalSeconds: 105,
-  completeProfileSeconds: 116,
+  completeProfileSeconds: 115,
   shards: [0, 1].map((shard) => ({
     shard,
     condition:
@@ -91,7 +92,18 @@ const formalProfileFields = (profileKind: "dedicated" | "stressed", jobId: numbe
       name: `${profileKind === "dedicated" ? "Dedicated" : "Stressed"} formal evidence shard ${shard}`
     },
     reportDigest: digest(String((jobId + shard) % 10)),
-    positions: [shard],
+    positions: Array.from({ length: 105 }, (_value, position) => position).filter((position) =>
+      shard === 0
+        ? position <= 36 ||
+          (position >= 42 && position <= 46) ||
+          (position >= 60 && position <= 64) ||
+          (position >= 86 && position <= 90) ||
+          position >= 100
+        : (position >= 37 && position <= 41) ||
+          (position >= 47 && position <= 59) ||
+          (position >= 65 && position <= 85) ||
+          (position >= 91 && position <= 99)
+    ),
     setupInstallSeconds: 10,
     formalSeconds: 105 - shard,
     completeJobSeconds: 115,
@@ -100,7 +112,7 @@ const formalProfileFields = (profileKind: "dedicated" | "stressed", jobId: numbe
     startedAt: "2026-09-13T12:00:00.000Z",
     completedAt: "2026-09-13T12:01:55.000Z"
   })),
-  commands: formalCommands,
+  commands: formalCommands(jobId),
   negativeControls: ["collected temporal mutant"] as const
 })
 const dedicatedFormalProfile = (jobId: number) => ({
@@ -140,6 +152,7 @@ const validInput = Effect.fn("LiveEvidenceTest.validInput")(function* () {
       sourceSha,
       workflow: "Production live qualification",
       runId: 71,
+      runAttempt: 1,
       job: "qualify",
       protectedEnvironment: "production-live-qualification"
     },
@@ -333,16 +346,19 @@ it.effect("Alice receives only same-source protected hosted and required dedicat
     const input = yield* validInput()
     for (const changed of [
       { ...input, hosted: { ...input.hosted, sourceSha: sha("9") } },
+      { ...input, hosted: { ...input.hosted, runAttempt: 2 } },
       {
         ...input,
-        formal: QualificationFormalProvenance.cases.DedicatedAndStressed.make({
+        formal: {
+          _tag: "DedicatedAndStressed" as const,
           dedicated: { ...input.formal.dedicated, sourceSha: sha("9") },
           stressed: input.formal.stressed
-        })
+        }
       },
       {
         ...input,
-        formal: QualificationFormalProvenance.cases.DedicatedAndStressed.make({
+        formal: {
+          _tag: "DedicatedAndStressed" as const,
           dedicated: input.formal.dedicated,
           stressed: {
             ...input.formal.stressed,
@@ -351,7 +367,18 @@ it.effect("Alice receives only same-source protected hosted and required dedicat
               input.formal.stressed.shards[1]
             ]
           }
-        })
+        }
+      },
+      { ...input, formal: { ...input.formal, dedicated: { ...input.formal.dedicated, completeProfileSeconds: 116 } } },
+      {
+        ...input,
+        formal: {
+          ...input.formal,
+          stressed: {
+            ...input.formal.stressed,
+            shards: [{ ...input.formal.stressed.shards[0], positions: [0] }, input.formal.stressed.shards[1]]
+          }
+        }
       }
     ]) {
       expect(yield* makeProductionLiveQualificationEvidence(changed).pipe(Effect.flip)).toEqual(
