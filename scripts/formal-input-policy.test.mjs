@@ -217,7 +217,7 @@ test("hosted command discovery includes new Node entries and rejects unsupported
   )
   assert.throws(
     () => hostedWorkflowCommandEntries({ packageJson, workflow: withCustomShell }),
-    /does not support a custom shell/u
+    /does not support step/u
   )
   const withWorkflowEnvironment = workflow.replace(
     "jobs:\n",
@@ -225,7 +225,7 @@ test("hosted command discovery includes new Node entries and rejects unsupported
   )
   assert.throws(
     () => hostedWorkflowCommandEntries({ packageJson, workflow: withWorkflowEnvironment }),
-    /does not support workflow-level environment/u
+    /does not support workflow-level/u
   )
   const withWorkflowRunDefaults = workflow.replace(
     "jobs:\n",
@@ -233,7 +233,7 @@ test("hosted command discovery includes new Node entries and rejects unsupported
   )
   assert.throws(
     () => hostedWorkflowCommandEntries({ packageJson, workflow: withWorkflowRunDefaults }),
-    /does not support workflow-level environment/u
+    /does not support workflow-level/u
   )
   const withWorkflowWorkingDirectory = workflow.replace(
     "jobs:\n",
@@ -241,8 +241,83 @@ test("hosted command discovery includes new Node entries and rejects unsupported
   )
   assert.throws(
     () => hostedWorkflowCommandEntries({ packageJson, workflow: withWorkflowWorkingDirectory }),
-    /does not support workflow-level environment/u
+    /does not support workflow-level/u
   )
+  for (const replacement of [
+    '"env":\n  NODE_OPTIONS: --require ./scripts/formal-hook.cjs\n\njobs:\n',
+    "defaults :\n  run:\n    shell: node scripts/formal-shell.mjs {0}\n\njobs:\n"
+  ]) {
+    const withEquivalentWorkflowKey = workflow.replace("jobs:\n", replacement)
+    assert.throws(
+      () => hostedWorkflowCommandEntries({ packageJson, workflow: withEquivalentWorkflowKey }),
+      /does not support workflow-level/u
+    )
+  }
+  for (const key of ['"env"', '"defaults"', '"shell"', '"working-directory"']) {
+    const withEquivalentFormalKey = workflow.replace(
+      "      - name: Run formal model shard\n",
+      `      - name: Prepare hosted formal input\n        ${key}: node scripts/formal-hook.mjs\n\n      - name: Run formal model shard\n`
+    )
+    assert.throws(
+      () => hostedWorkflowCommandEntries({ packageJson, workflow: withEquivalentFormalKey }),
+      /does not support step/u
+    )
+  }
+  const withQuotedRunKey = workflow.replace(
+    "      - name: Run formal model shard\n",
+    '      - name: Prepare hosted formal input\n        "run": node scripts/formal-hook.mjs\n\n      - name: Run formal model shard\n'
+  )
+  assert.equal(
+    hostedWorkflowCommandEntries({ packageJson, workflow: withQuotedRunKey }).includes("scripts/formal-hook.mjs"),
+    true
+  )
+  const withQuotedUsesKey = workflow.replace(
+    "      - name: Run formal model shard\n",
+    '      - name: Prepare hosted formal input\n        "uses": "./.github/actions/formal-hook"\n\n      - name: Run formal model shard\n'
+  )
+  assert.throws(
+    () => hostedWorkflowCommandEntries({ packageJson, workflow: withQuotedUsesKey }),
+    /does not support a repository-local action/u
+  )
+  const withSpacedFormalKey = workflow.replace(
+    "      - name: Run formal model shard\n",
+    "      - name: Prepare hosted formal input\n        shell : node scripts/formal-shell.mjs {0}\n\n      - name: Run formal model shard\n"
+  )
+  assert.throws(
+    () => hostedWorkflowCommandEntries({ packageJson, workflow: withSpacedFormalKey }),
+    /does not support step/u
+  )
+  const withActionRepositoryPath = workflow.replaceAll(
+    "          fetch-depth: 0\n",
+    "          fetch-depth: 0\n          path: scripts/formal-checkout\n"
+  )
+  assert.throws(
+    () => hostedWorkflowCommandEntries({ packageJson, workflow: withActionRepositoryPath }),
+    /does not support workflow action inputs/u
+  )
+  const withStepHash = workflow.replaceAll(
+    "      - name: Checkout\n        uses: actions/checkout@v7\n",
+    "      - name: Checkout\n        if: ${{ hashFiles('scripts/formal-hook.mjs') != '' }}\n        uses: actions/checkout@v7\n"
+  )
+  assert.throws(() => hostedWorkflowCommandEntries({ packageJson, workflow: withStepHash }), /does not support step/u)
+  const withJobHash = workflow.replace(
+    "    if: needs.change-plan.outputs.formal-required == 'true'\n",
+    "    if: ${{ hashFiles('scripts/formal-hook.mjs') != '' }}\n"
+  )
+  assert.throws(
+    () => hostedWorkflowCommandEntries({ packageJson, workflow: withJobHash }),
+    /requires the exact supported job condition/u
+  )
+  for (const field of ["container: node:24", "services: {}", "defaults: {}"]) {
+    const withUnsupportedJobField = workflow.replace(
+      "    runs-on: ubuntu-24.04-arm\n",
+      `    runs-on: ubuntu-24.04-arm\n    ${field}\n`
+    )
+    assert.throws(
+      () => hostedWorkflowCommandEntries({ packageJson, workflow: withUnsupportedJobField }),
+      /cannot identify workflow job/u
+    )
+  }
   const withUnrelatedLocalAction = workflow.replace(
     "      - name: Install gitleaks\n",
     "      - name: Prepare documentation\n        uses: './.github/actions/prepare-docs'\n\n      - name: Install gitleaks\n"

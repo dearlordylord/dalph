@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises"
 import { dirname, join, posix } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { parse as parseYaml } from "yaml"
 
 import { discoverFormalSourcePaths } from "./formal-input-policy.mjs"
 import {
@@ -24,20 +25,6 @@ const hostedBootstrapInputs = Object.freeze([
   hostedFormalInputManifestPath
 ])
 
-const workflowJobSection = (workflow, name) => {
-  const lines = workflow.split("\n")
-  const start = lines.findIndex((line) => line === `  ${name}:`)
-  if (start < 0) throw new Error(`Hosted formal manifest cannot identify workflow job ${name}`)
-  const end = lines.findIndex((line, index) => index > start && /^  [A-Za-z0-9_-]+:$/u.test(line))
-  return lines.slice(start + 1, end < 0 ? undefined : end)
-}
-
-const yamlScalar = (source) => {
-  if ((source.startsWith('"') && source.endsWith('"')) || (source.startsWith("'") && source.endsWith("'")))
-    return source.slice(1, -1)
-  return source
-}
-
 const supportedEnvironmentByJob = Object.freeze({
   "formal-models": Object.freeze({
     DALPH_FORMAL_COMMIT_SHA: "${{ github.sha }}",
@@ -53,60 +40,105 @@ const supportedEnvironmentByJob = Object.freeze({
   })
 })
 
-const validateFormalJobEnvironment = (lines, job) => {
-  const found = {}
-  for (let index = 0; index < lines.length; index++) {
-    const block = /^(\s*)env:\s*$/u.exec(lines[index])
-    if (block === null) continue
-    const indentation = block[1].length
-    while (index + 1 < lines.length) {
-      const next = lines[index + 1]
-      if (next.trim() === "") {
-        index++
-        continue
-      }
-      const leading = /^\s*/u.exec(next)[0].length
-      if (leading <= indentation) break
-      index++
-      const entry = new RegExp(`^ {${indentation + 2}}([A-Z][A-Z0-9_]*):\\s*(.+?)\\s*$`, "u").exec(next)
-      if (entry === null || Object.hasOwn(found, entry[1]))
-        throw new Error(`Hosted formal manifest does not support environment syntax in ${job}`)
-      found[entry[1]] = yamlScalar(entry[2])
+const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
+
+const hasExactKeys = (value, keys) =>
+  isRecord(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+
+const isExactFlatRecord = (value, expected) =>
+  hasExactKeys(value, Object.keys(expected)) &&
+  Object.entries(expected).every(([key, expectedValue]) => Object.is(value[key], expectedValue))
+
+const supportedActionInputs = Object.freeze({
+  "actions/checkout@v7": Object.freeze([{ "fetch-depth": 0 }]),
+  "pnpm/action-setup@v6": Object.freeze([{ run_install: false, version: "10.29.3" }]),
+  "actions/setup-node@v7": Object.freeze([
+    { cache: "pnpm", "node-version": "${{ matrix.node-version }}" },
+    { "node-version": "${{ matrix.node-version }}" }
+  ]),
+  "actions/upload-artifact@v4": Object.freeze([
+    {
+      name: "formal-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.node-version }}-${{ matrix.shard }}",
+      path: "formal-shard-reports/shard-${{ matrix.shard }}.json",
+      "if-no-files-found": "error",
+      "retention-days": 1
     }
-  }
-  if (JSON.stringify(found) !== JSON.stringify(supportedEnvironmentByJob[job]))
+  ]),
+  "actions/download-artifact@v4": Object.freeze([
+    {
+      pattern: "formal-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.node-version }}-*",
+      path: "formal-shard-reports",
+      "merge-multiple": true
+    }
+  ])
+})
+
+const supportedJobConditions = Object.freeze({
+  "formal-models": "needs.change-plan.outputs.formal-required == 'true'",
+  "formal-model-aggregate": "always()"
+})
+const supportedAggregateStepConditions = new Set([
+  "needs.change-plan.outputs.formal-required == 'true'",
+  "needs.change-plan.outputs.formal-required == 'false'",
+  "needs.change-plan.outputs.formal-required != 'true' && needs.change-plan.outputs.formal-required != 'false'"
+])
+
+const validateFormalJobEnvironment = (environment, job) => {
+  if (!isRecord(environment) || JSON.stringify(environment) !== JSON.stringify(supportedEnvironmentByJob[job]))
     throw new Error(`Hosted formal manifest requires the exact supported environment in ${job}`)
 }
 
 const formalWorkflowCommands = (workflow) => {
-  if (/^(?:env|defaults):(?:\s|$)/mu.test(workflow))
-    throw new Error("Hosted formal manifest does not support workflow-level environment or run defaults")
+  const parsed = parseYaml(workflow)
+  if (!isRecord(parsed) || !isRecord(parsed.jobs))
+    throw new Error("Hosted formal manifest cannot identify workflow jobs")
+  for (const key of ["env", "defaults", "shell", "working-directory"])
+    if (Object.hasOwn(parsed, key)) throw new Error(`Hosted formal manifest does not support workflow-level ${key}`)
   const commands = []
   for (const job of ["formal-models", "formal-model-aggregate"]) {
-    const lines = workflowJobSection(workflow, job)
-    validateFormalJobEnvironment(lines, job)
-    for (let index = 0; index < lines.length; index++) {
-      if (/^\s+(?:shell|working-directory):/u.test(lines[index]))
-        throw new Error(`Hosted formal manifest does not support a custom shell or working directory in ${job}`)
-      const uses = /^        uses:\s*(.+?)\s*$/u.exec(lines[index])
-      if (uses !== null) {
-        const action = yamlScalar(uses[1])
-        if (action.startsWith("./"))
-          throw new Error(`Hosted formal manifest does not support a repository-local action in ${job}`)
-        if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+$/u.test(action) && !action.startsWith("docker://"))
-          throw new Error(`Hosted formal manifest does not support workflow action syntax in ${job}: ${action}`)
+    const definition = parsed.jobs[job]
+    const jobKeys = ["name", "needs", "if", "runs-on", "timeout-minutes", "env", "strategy", "steps"]
+    if (!hasExactKeys(definition, jobKeys) || !Array.isArray(definition.steps))
+      throw new Error(`Hosted formal manifest cannot identify workflow job ${job}`)
+    if (definition.if !== supportedJobConditions[job])
+      throw new Error(`Hosted formal manifest requires the exact supported job condition in ${job}`)
+    validateFormalJobEnvironment(definition.env, job)
+    for (const step of definition.steps) {
+      if (!isRecord(step)) throw new Error(`Hosted formal manifest does not support step syntax in ${job}`)
+      const hasAction = Object.hasOwn(step, "uses")
+      const hasCommand = Object.hasOwn(step, "run")
+      if (hasAction && typeof step.uses === "string" && step.uses.startsWith("./"))
+        throw new Error(`Hosted formal manifest does not support a repository-local action in ${job}`)
+      const expectedStepKeys = hasAction
+        ? job === "formal-models"
+          ? ["name", "uses", "with"]
+          : ["name", "if", "uses", "with"]
+        : job === "formal-models"
+          ? ["name", "run"]
+          : ["name", "if", "run"]
+      if (hasAction === hasCommand || !hasExactKeys(step, expectedStepKeys))
+        throw new Error(`Hosted formal manifest does not support step syntax in ${job}`)
+      const condition = step.if
+      if (
+        (job === "formal-models" && condition !== undefined) ||
+        (job === "formal-model-aggregate" && !supportedAggregateStepConditions.has(condition))
+      )
+        throw new Error(`Hosted formal manifest does not support step condition in ${job}`)
+      if (hasAction) {
+        const action = step.uses
+        if (typeof action !== "string")
+          throw new Error(`Hosted formal manifest does not support workflow action syntax in ${job}`)
+        const supportedInputs = supportedActionInputs[action]
+        if (
+          supportedInputs === undefined ||
+          !supportedInputs.some((expected) => isExactFlatRecord(step.with, expected))
+        )
+          throw new Error(`Hosted formal manifest does not support workflow action inputs in ${job}: ${action}`)
       }
-      const run = /^        run:\s*(.*?)\s*$/u.exec(lines[index])
-      if (run === null) continue
-      if (run[1] === ">") throw new Error(`Hosted formal manifest does not support a folded run command in ${job}`)
-      if (run[1] !== "|") {
-        commands.push(yamlScalar(run[1]))
-        continue
-      }
-      while (index + 1 < lines.length && (lines[index + 1].trim() === "" || /^ {10,}/u.test(lines[index + 1]))) {
-        index++
-        if (lines[index].trim() !== "") commands.push(lines[index].trim())
-      }
+      if (!hasCommand) continue
+      if (typeof step.run !== "string")
+        throw new Error(`Hosted formal manifest does not support workflow run syntax in ${job}`)
+      commands.push(...step.run.split("\n").filter((command) => command !== ""))
     }
   }
   return commands
