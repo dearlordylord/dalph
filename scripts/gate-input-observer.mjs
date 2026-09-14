@@ -13,7 +13,8 @@ export const startInputObserver = async ({
   replaceableRoots = [],
   roots,
   signal,
-  timeoutMilliseconds = 30_000
+  timeoutMilliseconds = 30_000,
+  transientCoordinationRoots = []
 }) => {
   if (!Number.isSafeInteger(timeoutMilliseconds) || timeoutMilliseconds <= 0)
     throw new Error("Input observer requires a finite positive response timeout")
@@ -128,7 +129,9 @@ export const startInputObserver = async ({
   }
   signal?.addEventListener("abort", abort, { once: true })
   if (signal?.aborted) abort()
-  child.stdin.write(`${JSON.stringify({ roots, excludedRoots, protectedRoots, replaceableRoots })}\n`)
+  child.stdin.write(
+    `${JSON.stringify({ roots, excludedRoots, protectedRoots, replaceableRoots, transientCoordinationRoots })}\n`
+  )
   const setupTimer = setTimeout(() => fail("Input observer readiness timeout"), timeoutMilliseconds)
   try {
     await ready

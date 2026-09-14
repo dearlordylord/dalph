@@ -386,6 +386,7 @@ export const startInputGuard = async ({
     excludedRoots: layout.sourceExclusions,
     protectedRoots: layout.gitInputs,
     replaceableRoots: [layout.commonConfig],
+    transientCoordinationRoots: layout.gitInputs.filter((path) => path.endsWith(".lock")),
     pythonExecutable: layout.python
   })
   let identity

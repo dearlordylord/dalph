@@ -25,6 +25,7 @@ roots = []
 excluded = []
 protected = []
 replaceable = set()
+transient_coordination = set()
 replacement_counts = {}
 active_replaceable_watches = {}
 obsolete_replaceable_watches = {}
@@ -70,7 +71,12 @@ def invalidates(path, mask):
     # and replacement events still invalidate, and the final snapshot catches
     # a lasting ancestor change that alters the resolved input identity.
     metadata_only = mask & ~ISDIR == ATTRIB
-    return relevant(path) and not (metadata_only and only_strict_ancestor(path))
+    # Exact coordination files may appear and disappear while another process
+    # coordinates Git access. Their persistent identity is still part of the
+    # caller's final snapshot, and a rename into the real authority is reported
+    # against that destination rather than suppressed here.
+    return (path not in transient_coordination and relevant(path)
+            and not (metadata_only and only_strict_ancestor(path)))
 
 
 def watch(path):
@@ -251,8 +257,12 @@ try:
     excluded = [os.path.abspath(path) for path in config["excludedRoots"]]
     protected = [os.path.abspath(path) for path in config.get("protectedRoots", [])]
     replaceable = set(os.path.abspath(path) for path in config.get("replaceableRoots", []))
+    transient_coordination = set(
+        os.path.abspath(path) for path in config.get("transientCoordinationRoots", []))
     if not replaceable.issubset(set(protected)):
         raise OSError("replaceable inputs must also be protected inputs")
+    if not transient_coordination.issubset(set(protected)):
+        raise OSError("transient coordination inputs must also be protected inputs")
     for root in list(roots):
         watch_ancestors(root)
         walk(root)

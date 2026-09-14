@@ -989,7 +989,7 @@ test("bound candidate history allows real unrelated loose branch and lock writes
   }
 })
 
-for (const authority of ["selected ref", "index", "selected ref lock", "index lock", "HEAD"]) {
+for (const authority of ["selected ref", "index", "HEAD"]) {
   test(`bound candidate history refuses transient ${authority} writes`, async () => {
     const f = candidateGitFixture()
     const reference = f.git("symbolic-ref", "HEAD")
@@ -1016,6 +1016,54 @@ for (const authority of ["selected ref", "index", "selected ref lock", "index lo
     }
   })
 }
+
+for (const authority of ["selected ref lock", "index lock"]) {
+  test(`bound candidate history allows transient ${authority} coordination`, async () => {
+    const f = candidateGitFixture()
+    const reference = f.git("symbolic-ref", "HEAD")
+    const path = join(f.root, ".git", authority === "selected ref lock" ? `${reference}.lock` : "index.lock")
+    const guard = await f.guard()
+    try {
+      writeFileSync(path, "transient")
+      rmSync(path)
+      await guard.assertUnchanged()
+      assert.equal((await guard.finish()).inputDigest, guard.identity.inputDigest)
+    } finally {
+      await guard.close()
+    }
+  })
+}
+
+test("a transient index lock cannot hide a real candidate index mutation", async () => {
+  const f = candidateGitFixture()
+  const index = join(f.root, ".git", "index")
+  const original = readFileSync(index)
+  const lock = join(f.root, ".git", "index.lock")
+  const guard = await f.guard()
+  try {
+    writeFileSync(index, "transient")
+    writeFileSync(index, original)
+    writeFileSync(lock, "coordination")
+    rmSync(lock)
+    await assert.rejects(guard.assertUnchanged(), /input filesystem event/u)
+  } finally {
+    await guard.close()
+  }
+})
+
+test("a persistent index lock fails the final authoritative snapshot", async () => {
+  const f = candidateGitFixture()
+  const lock = join(f.root, ".git", "index.lock")
+  const guard = await f.guard()
+  try {
+    writeFileSync(lock, "abandoned")
+    await guard.assertUnchanged()
+    await assert.rejects(guard.finish(), /Complete resume inputs changed/u)
+  } finally {
+    rmSync(lock, { force: true })
+    await guard.close()
+  }
+})
 
 test("bound candidate history observes intermediate symbolic HEAD chain", async () => {
   const f = candidateGitFixture()
