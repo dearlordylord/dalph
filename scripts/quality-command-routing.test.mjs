@@ -31,6 +31,7 @@ const dispatch = ({
   argvZeroTool,
   environment = {},
   failLocal = false,
+  pinJavaHome = false,
   throughWrapper = false
 }) => {
   const root = mkdtempSync(join(tmpdir(), "dalph-quality-routing-"))
@@ -103,13 +104,25 @@ const dispatch = ({
       clean.PATH = `${shim}:/usr/local/bin:/usr/bin:/bin`
       if (argvZeroTool === false) clean.DALPH_TEST_CAPTURE_IDENTITY = "1"
     }
+    if (pinJavaHome) {
+      const javaHome = join(root, "java-home")
+      const javaExecutable = join(javaHome, "bin", "java")
+      mkdirSync(join(javaHome, "bin"), { recursive: true })
+      writeFileSync(javaExecutable, "#!/bin/sh\nexit 0\n")
+      chmodSync(javaExecutable, 0o755)
+      clean.JAVA_HOME = javaHome
+    }
     const qualityCommand = [process.execPath, join(root, "run-quality-gate.mjs"), ...args]
     const invocation = throughWrapper
       ? [fileURLToPath(new URL("with-gate-slot.mjs", import.meta.url)), "--", ...qualityCommand]
       : qualityCommand.slice(1)
+    const childEnvironment = { ...clean, npm_execpath: pnpmEntryPoint, ...environment }
+    // The Java-shim rejection scenario must exercise PATH-selected Java even
+    // on hosted runners that provide an ambient JAVA_HOME.
+    if (argvZeroTool === "java" && !pinJavaHome) delete childEnvironment.JAVA_HOME
     const result = spawnSync(process.execPath, invocation, {
       cwd: throughWrapper ? root : repository,
-      env: { ...clean, npm_execpath: pnpmEntryPoint, ...environment },
+      env: childEnvironment,
       encoding: "utf8",
       timeout: 30000
     })
@@ -144,6 +157,25 @@ test("full quality entry refuses a shim-supplied nested Java before any child bo
   assert.equal(result.status, 1)
   assert.match(result.stderr, /declared tool resolution changes: java/u)
   assert.deepEqual(calls, [])
+})
+
+/**
+ * Scenario mapping for the admission PATH fixture:
+ * - PATH-selected Java plus a Codex shim refuses before any child boundary;
+ * - JAVA_HOME-pinned Java ignores an unrelated PATH shim and admits normally.
+ * These are test-only environment controls; Dalph's production tool inventory
+ * and Java launch behavior remain unchanged.
+ */
+test("full quality entry accepts an unrelated PATH Java shim when JAVA_HOME pins Java", () => {
+  const { calls, result } = dispatch({
+    arguments: ["--local-handoff", `--candidate=${base}`],
+    argvZeroTool: "java",
+    pinJavaHome: true
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].effectivePath.includes("/.codex/tmp/arg0/"), false)
+  assert.equal(calls[0].childPath, calls[0].effectivePath)
 })
 
 test("quality admission wrapper stabilizes PATH before its custody child", () => {
