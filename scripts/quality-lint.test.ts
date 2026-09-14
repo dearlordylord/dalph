@@ -160,6 +160,18 @@ const copyFixture = (fixtureDirectory: string, fixtureName: string) =>
 const relativeToFixture = (fixtureDirectory: string, path: string) =>
   relative(fixtureDirectory, path).split("\\").join("/")
 
+const initializeFixtureRepository = (fixture: LintFixture) =>
+  Effect.gen(function* () {
+    const invoke = (arguments_: ReadonlyArray<string>, name: string) =>
+      run({ arguments_, executable: "git", fixture, name, timeoutMilliseconds: 10_000 })
+    yield* invoke(["init", "--quiet"], "Initialize lint fixture repository")
+    yield* invoke(["add", "."], "Stage lint fixture baseline")
+    yield* invoke(
+      ["-c", "user.name=Dalph Test", "-c", "user.email=dalph@example.invalid", "commit", "--quiet", "-m", "baseline"],
+      "Commit lint fixture baseline"
+    )
+  })
+
 describe.sequential("quality lint integration", () => {
   it.effect("preserves the raw signal failure and fixture until exact process-group absence is proved", () =>
     Effect.gen(function* () {
@@ -245,6 +257,58 @@ describe.sequential("quality lint integration", () => {
           expect(result.exitCode).not.toBe(0)
           expect(result.output).toContain("no-debugger")
           expect(result.outputLineCount).toBeLessThan(30)
+        })
+      ),
+    30_000
+  )
+
+  it.effect(
+    "changed lint checks one changed compatibility file without linting an unrelated file",
+    () =>
+      withFixtures((fixture) =>
+        Effect.gen(function* () {
+          const changedFile = yield* copyFixture(fixture.directory, "functional")
+          const unrelatedFile = join(fixture.directory, "packages", "dalph", "src", "unrelated.ts")
+          yield* Effect.tryPromise(async () => {
+            await writeFile(unrelatedFile, await readFile(changedFile, "utf8"))
+          })
+          yield* initializeFixtureRepository(fixture)
+          yield* Effect.tryPromise(async () =>
+            writeFile(changedFile, `${await readFile(changedFile, "utf8")}\n// changed\n`)
+          )
+          const result = yield* run({
+            arguments_: [qualityLintRunner, "--changed"],
+            environment: { ...process.env, DALPH_DIAGNOSTICS_BASE: "HEAD" },
+            fixture,
+            executable: process.execPath,
+            name: "Changed compatibility lint integration subprocess",
+            timeoutMilliseconds: 20_000
+          })
+          expect(result.exitCode).toBe(1)
+          expect(result.output).toContain(changedFile)
+          expect(result.output).not.toContain(unrelatedFile)
+          expect(result.output).toContain("functional/immutable-data")
+        })
+      ),
+    30_000
+  )
+
+  it.effect(
+    "changed lint is a no-op when the changed selection is empty",
+    () =>
+      withFixtures((fixture) =>
+        Effect.gen(function* () {
+          yield* copyFixture(fixture.directory, "functional")
+          yield* initializeFixtureRepository(fixture)
+          const result = yield* run({
+            arguments_: [qualityLintRunner, "--changed"],
+            environment: { ...process.env, DALPH_DIAGNOSTICS_BASE: "HEAD" },
+            fixture,
+            executable: process.execPath,
+            name: "Empty changed compatibility lint integration subprocess",
+            timeoutMilliseconds: 20_000
+          })
+          expect(result).toEqual({ exitCode: 0, output: "", outputLineCount: 0 })
         })
       ),
     30_000
@@ -349,7 +413,7 @@ describe("compatibility lint policy", () => {
     expect(compatibilityFiles).toEqual(["packages/dalph/src/index.ts", "packages/dalph/src/run.ts"])
   })
 
-  it("skips the compatibility pass for a scoped run", () => {
+  it("skips the compatibility pass for an explicit or staged scoped run", () => {
     const { compatibilityFiles, selectedCompatibilityFiles } = selectCompatibilityFiles({
       allFiles,
       scoped: true,
@@ -358,6 +422,30 @@ describe("compatibility lint policy", () => {
 
     expect(compatibilityFiles).toEqual([])
     expect(selectedCompatibilityFiles).toEqual(["packages/dalph/src/run.ts"])
+  })
+
+  it("runs compatibility rules only over changed compatible files", () => {
+    const { compatibilityFiles, selectedCompatibilityFiles } = selectCompatibilityFiles({
+      allFiles,
+      changed: true,
+      scoped: true,
+      selectedFiles: ["packages/dalph/src/run.ts"]
+    })
+
+    expect(compatibilityFiles).toEqual(["packages/dalph/src/run.ts"])
+    expect(selectedCompatibilityFiles).toEqual(["packages/dalph/src/run.ts"])
+  })
+
+  it("does not start compatibility lint for an empty changed selection", () => {
+    const { compatibilityFiles, selectedCompatibilityFiles } = selectCompatibilityFiles({
+      allFiles,
+      changed: true,
+      scoped: true,
+      selectedFiles: []
+    })
+
+    expect(compatibilityFiles).toEqual([])
+    expect(selectedCompatibilityFiles).toEqual([])
   })
 
   it("runs the compatibility pass for a scoped run that asks for it", () => {

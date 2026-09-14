@@ -53,6 +53,7 @@ if (nativeFiles.length > 0) {
 
 const { compatibilityFiles } = selectCompatibilityFiles({
   allFiles,
+  changed: changedOnly,
   compatibility,
   scoped: staged || changedOnly || explicitFiles.length > 0,
   selectedFiles,

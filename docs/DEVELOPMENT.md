@@ -112,7 +112,7 @@ All commands below use `pnpm`. Script definitions live in
 | `typecheck:effect` | Dedicated strict Effect pass over the whole project; errors and warnings fail, JSON output. |
 | `typecheck:effect:changed` | Effect pass over files changed against `origin/master`; falls back to the project pass above twelve changed files. |
 | `lint:code` | Type-aware Oxlint, compatibility ESLint, dprint; warnings fail. File-scoped runs check the compatibility graph only with `--compatibility`. |
-| `lint:changed` | Oxlint and dprint over files changed against `origin/master`; the compatibility pass belongs to repository runs. |
+| `lint:changed` | Oxlint, compatibility ESLint, and dprint over files changed against `origin/master`; compatibility ESLint receives only the changed TypeScript files. |
 | `check:preflight --candidate=<base sha>` | Pre-freeze structural census: report all independent typecheck, Effect, lint/format, cycle, complexity, duplication, CI classifier, secrets and artifact failures. Runs no coverage, catalog, Lab or MBT suites. |
 | `check:fast` | Development-loop tier: `typecheck`, `lint:changed`, `typecheck:effect:changed`. |
 | `check:circular` | Reject runtime dependency cycles. |
@@ -123,6 +123,7 @@ All commands below use `pnpm`. Script definitions live in
 | `test:mbt` | Explicit manual Quint-connected conformance run; temporarily excluded from automatic verification pending [#363](https://github.com/dearlordylord/dalph/issues/363), which restores replay from pre-generated traces. |
 | `test:issue-268-c4` | Run the accepted DS01–DS13 table and strict occurrence order in twenty consecutive fresh processes; stop at the first incomplete or divergent run. |
 | `test:ci-change-classification` | Prove the docs-only CI allowlist and fail-closed classification. |
+
 | `check:lab` | Reducer Lab typecheck, maintained-cassette smoke, build; no browser. |
 | `check:lab:browser` | Host an ephemeral Lab, run Chromium against every maintained cassette, stop the host. |
 | `qualify:codex` | Opt-in real app-server contract; prerequisites below. |
@@ -133,6 +134,11 @@ All commands below use `pnpm`. Script definitions live in
 | `check:all --candidate=<base sha> --resume=<run-id>` | Reuse a contiguous proven full-gate prefix in the same worktree on identical monitored inputs; failed/unproven stage and remaining suffix execute normally. |
 | `check:all` | Complete qualification when required by [choosing checks](#choosing-checks), for a frozen candidate. It reports all ordinary preflight failures together, then starts no formal or application qualification when any preflight check failed. An interruption, unproven surviving process, or runner defect stops the census immediately. The command includes the complete formal requirement and application checks, including non-browser Lab; automatic MBT is excluded pending #363. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
 | `check:ci` | Hosted gate; MBT remains excluded pending #363. |
+
+When a developer changes a TypeScript file, `check:fast` passes that changed
+file—and no unrelated source file—to compatibility ESLint, so rules such as
+`functional/immutable-data` fail during the edit loop. When the changed set has
+no compatible TypeScript file, the compatibility process is not started.
 
 Hosted CI keeps separate quality and formal entry points: hosted formal runs the
 complete profile fresh when an input that can affect it changed, while hosted
