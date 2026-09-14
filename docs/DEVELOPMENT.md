@@ -289,8 +289,14 @@ change that alters resolved identity.
 
 Guarded full-gate children use `GIT_OPTIONAL_LOCKS=0`, so read-only status checks
 leave index stat-cache metadata untouched. Required Git writes still acquire
-their locks, and actual index changes invalidate the observer. External Git
-observation during a run must use the same optional-lock setting.
+their locks, and actual index changes invalidate the observer. Only explicitly
+constructed internal Git lock paths—the selected ref `.lock` and `index.lock`—
+may be treated as transient coordination when their create/remove pair is
+observed. A real same-batch index/ref event remains dirty even when a lock is
+created and removed; a persistent internal lock fails the final authoritative
+snapshot. User-configured authority files named `*.lock` remain observed, so
+editing and restoring one rejects reuse. External Git observation during a run
+must use the same optional-lock setting.
 
 Creating an unrelated linked worktree can atomically replace the shared Git
 config while adding only that other branch's settings. The input observer
@@ -321,6 +327,10 @@ provider boundary, journal fact, retry, or cleanup behavior.
 | A repository-wide Git setting changes after an unrelated replacement; the re-armed observer refuses both the next stage and final qualification | `scripts/gate-resume-inputs.test.mjs`: `a candidate-relevant config replacement fails after an unrelated replacement re-arms the watch` |
 | The parent-directory replacement event arrives in one observer drain and the obsolete file-watch removal arrives in the next; the observer watches the new generation immediately and treats only the later old-generation removal as obsolete | `scripts/gate-resume-inputs.test.mjs`: `split parent replacement and obsolete file removal events re-arm before the later removal` |
 | A relevant Git setting changes and is restored through two config generations before validation | `scripts/gate-resume-inputs.test.mjs`: `a relevant config edit restored before validation remains rejected` |
+| Git creates and removes a transient coordination lock for the selected ref or index without changing the authority bytes | `scripts/gate-resume-inputs.test.mjs`: `bound candidate history allows transient selected ref lock coordination`; `bound candidate history allows transient index lock coordination` |
+| A real selected-ref or index mutation remains dirty, including an index mutation followed by a transient index lock | `scripts/gate-resume-inputs.test.mjs`: `bound candidate history refuses transient selected ref writes`; `bound candidate history refuses transient index writes`; `a transient index lock cannot hide a real candidate index mutation` |
+| An internally constructed index lock persists through the final authoritative snapshot | `scripts/gate-resume-inputs.test.mjs`: `a persistent index lock fails the final authoritative snapshot` |
+| A user-configured external authority file named `*.lock` is edited and restored | `scripts/gate-resume-inputs.test.mjs`: `candidate history observes external excludes ending in .lock edit and restore` |
 
 Reuse requires identical HEAD, conflict-free semantic index, working/untracked
 bytes and modes, ignored configuration, actual installed dependency and resolved

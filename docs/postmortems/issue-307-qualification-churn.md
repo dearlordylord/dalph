@@ -40,7 +40,7 @@ The following evidence is independently inspectable:
 | A later protected run passed its exact-candidate CI preflight and all four formal shards before entering the live step. | [Run 34849184077](https://github.com/dearlordylord/dalph/actions/runs/34849184077) started its live step at 13:37:57 UTC, created disposable issue 8 at 13:37:59, made no label, comment, or state changes, and was cancelled at 13:56:06 UTC after approximately 18 minutes. Artifact `10350839168` contained only `retained-locators.json` with `NotQualified/Execution`; no `qualification.json` was present. The exact issue node was reread and deleted, and the disposable repository was empty. This proves fixture creation and cleanup, not the stalled live boundary or qualification success. |
 | The wrapper-identity diagnosis was separated from the live-stall claim. | The process-identity mismatch is a proven wrapper defect. It remains unproven as the root cause of the protected stall because no retained checkpoint ties that defect to the stalled run; it must not be reported as that run's causal diagnosis. |
 | New progress checkpoints and redacted diagnostics are prevention/evidence improvements. | After fixture creation, the accepted checkpoint records build measurement, the safe shipped-child process identity, the first canonical record, the first `RunSelected` occurrence, and independent process/stdout/stderr outcomes. Each complete update atomically replaces the prior checkpoint, and runner loss retains the last complete checkpoint. The diagnostic adds no raw stdout/stderr, prompt, secret, or private path beyond existing cleanup locators. The associated domain/spec, architecture/connascence, and code-review passes reported zero findings; those review results are evidence improvements, not proof of a successful protected run. |
-| The final candidate gate was false-invalidated during a read-only review. | A transient worktree `index.lock` was observed during the read-only review and caused a false invalidation. A fundamental observer fix is underway; this remains unresolved and must not be called repaired or treated as candidate evidence. |
+| The final candidate gate was false-invalidated during a read-only review, and the observer behavior is now scoped. | Only explicitly constructed internal Git lock paths tolerate transient coordination events: the selected-ref `.lock` and `index.lock` create/remove pairs. Real same-batch index/ref events remain dirty; a persistent internal lock fails the final authoritative snapshot; user-configured authority files named `*.lock` remain observed and an edit followed by restore is rejected. Commits `22b8b30dc` and `a1679c762` resolve the false invalidation without broadening the exemption. This is tooling-only and changes no Dalph runtime behavior. |
 
 ## What went wrong
 
@@ -171,6 +171,7 @@ repairs. This document records their evidence and the operating controls; it
 does not claim a new successful protected live artifact. The earlier inspected
 protected run above entered the live step and was cancelled at its job bound;
 the later exact-candidate run 34849184077 also has no qualification artifact.
-The candidate-gate observer's transient `index.lock` false invalidation remains
-unresolved while its fundamental fix is underway. Final #307/#261/#253 closure
-must link the later successful artifact if and when it exists.
+The candidate-gate observer's transient `index.lock` false invalidation is
+resolved by the scoped lock behavior recorded above; the live-stall boundary
+itself remains separately unproven. Final #307/#261/#253 closure must link the
+later successful artifact if and when it exists.
