@@ -34,6 +34,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { Context, Effect, Fiber, FileSystem, Layer, Path, Queue, Ref, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import { ProductionCliRecord, type ProductionCliRecord as ProductionCliRecordType } from "./production-cli.js"
+import { DalphRuntimeDiagnostic } from "./runtime-diagnostic.js"
 
 type CurrentStatusRecord = Extract<ProductionCliRecordType, { readonly _tag: "CurrentStatus" }>
 type ClosedStatus = Extract<CurrentStatusRecord["status"], { readonly _tag: "DeliveryStatusClosed" }>
@@ -108,6 +109,7 @@ const CleanupGitObservation = Schema.TaggedStruct("CleanupGitObservationStarted"
 })
 
 interface PublicProcess {
+  readonly diagnostics: Ref.Ref<ReadonlyArray<DalphRuntimeDiagnostic>>
   readonly events: Queue.Queue<FixtureEvent>
   readonly handle: ChildProcessSpawner.ChildProcessHandle
   readonly eventLog: Ref.Ref<ReadonlyArray<FixtureEvent>>
@@ -116,6 +118,15 @@ interface PublicProcess {
   readonly stderrFiber: Fiber.Fiber<void, unknown>
   readonly stdoutFiber: Fiber.Fiber<void, unknown>
 }
+
+class PublicQualificationChildExited extends Schema.TaggedError<PublicQualificationChildExited>()(
+  "PublicQualificationChildExited",
+  {
+    diagnostics: Schema.Array(DalphRuntimeDiagnostic),
+    exitCode: Schema.Int,
+    operation: Schema.Literal("qualification.childExit")
+  }
+) {}
 
 const takeMatching = <A>(queue: Queue.Queue<A>, predicate: (value: A) => boolean): Effect.Effect<A> =>
   Effect.gen(function* () {
@@ -160,6 +171,7 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
   const events = yield* Queue.unbounded<FixtureEvent>()
   const recordLog = yield* Ref.make<ReadonlyArray<ProductionCliRecordType>>([])
   const eventLog = yield* Ref.make<ReadonlyArray<FixtureEvent>>([])
+  const diagnostics = yield* Ref.make<ReadonlyArray<DalphRuntimeDiagnostic>>([])
   const stdoutFiber = yield* handle.stdout.pipe(
     Stream.decodeText(),
     Stream.splitLines,
@@ -179,17 +191,23 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
   const stderrFiber = yield* handle.stderr.pipe(
     Stream.decodeText(),
     Stream.splitLines,
-    Stream.filter((line) => line.startsWith(fixturePrefix)),
-    Stream.map((line) => line.slice(fixturePrefix.length)),
-    Stream.mapEffect((line) => Schema.decodeUnknownEffect(Schema.fromJsonString(FixtureEvent))(line)),
-    Stream.runForEach((event) =>
-      Effect.all([Queue.offer(events, event), Ref.update(eventLog, (current) => [...current, event])], {
-        discard: true
-      })
+    Stream.filter((line) => line.length > 0),
+    Stream.runForEach((line) =>
+      line.startsWith(fixturePrefix)
+        ? Schema.decodeUnknownEffect(Schema.fromJsonString(FixtureEvent))(line.slice(fixturePrefix.length)).pipe(
+            Effect.flatMap((event) =>
+              Effect.all([Queue.offer(events, event), Ref.update(eventLog, (current) => [...current, event])], {
+                discard: true
+              })
+            )
+          )
+        : Schema.decodeUnknownEffect(Schema.fromJsonString(DalphRuntimeDiagnostic))(line).pipe(
+            Effect.flatMap((diagnostic) => Ref.update(diagnostics, (current) => [...current, diagnostic]))
+          )
     ),
     Effect.forkScoped
   )
-  return { eventLog, events, handle, recordLog, records, stderrFiber, stdoutFiber } satisfies PublicProcess
+  return { diagnostics, eventLog, events, handle, recordLog, records, stderrFiber, stdoutFiber } satisfies PublicProcess
 })
 
 const stopAbruptly = (process: PublicProcess) =>
@@ -204,6 +222,12 @@ const awaitGraceful = (process: PublicProcess) =>
   Effect.gen(function* () {
     const exitCode = yield* process.handle.exitCode
     yield* Effect.all([Fiber.join(process.stdoutFiber), Fiber.join(process.stderrFiber)])
+    if (exitCode !== 0)
+      return yield* new PublicQualificationChildExited({
+        diagnostics: yield* Ref.get(process.diagnostics),
+        exitCode,
+        operation: "qualification.childExit"
+      })
     return exitCode
   })
 

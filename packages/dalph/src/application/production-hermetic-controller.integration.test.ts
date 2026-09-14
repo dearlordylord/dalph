@@ -255,8 +255,20 @@ it.live(
           expect(earlyExit).toMatchObject({
             operation: "child.exitedBeforeBoundary",
             outcome: { _tag: "Exited", exitCode: 1 },
-            stderr: "Dalph failed because of an unexpected runtime defect.\n",
             stderrTruncated: false
+          })
+          expect(JSON.parse(earlyExit.stderr)).toMatchObject({
+            _tag: "DalphRuntimeDiagnostic",
+            boundary: "NodeMainExit",
+            reasons: [
+              {
+                _tag: "Defect",
+                error: {
+                  errorTag: "HermeticQualificationSourceRejected",
+                  safeMessage: "HermeticQualificationSourceRejected failed"
+                }
+              }
+            ]
           })
           expect(new TextEncoder().encode(earlyExit.stderr).byteLength).toBeLessThanOrEqual(4_096)
           expect(earlyExit.stderr).not.toContain("controlled-hermetic-github-token")
@@ -270,7 +282,10 @@ it.live(
         const stderr = MutableList.toArray(child.stderrLog)
           .map((bytes) => new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes))
           .join("")
-        expect(stderr === "Dalph failed because of an unexpected runtime defect.\n").toBe(true)
+        expect(JSON.parse(stderr)).toMatchObject({
+          _tag: "DalphRuntimeDiagnostic",
+          reasons: [{ _tag: "Defect", error: { errorTag: "HermeticQualificationSourceRejected" } }]
+        })
         yield* controller.stopTransport
         expect(yield* controller.ownedChildrenStopped).toBe(true)
         expect(yield* controller.activeRequestCount).toBe(0)
