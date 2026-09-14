@@ -79,6 +79,8 @@ const validateFormalJobEnvironment = (lines, job) => {
 }
 
 const formalWorkflowCommands = (workflow) => {
+  if (/^(?:env|defaults):(?:\s|$)/mu.test(workflow))
+    throw new Error("Hosted formal manifest does not support workflow-level environment or run defaults")
   const commands = []
   for (const job of ["formal-models", "formal-model-aggregate"]) {
     const lines = workflowJobSection(workflow, job)

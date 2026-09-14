@@ -219,6 +219,30 @@ test("hosted command discovery includes new Node entries and rejects unsupported
     () => hostedWorkflowCommandEntries({ packageJson, workflow: withCustomShell }),
     /does not support a custom shell/u
   )
+  const withWorkflowEnvironment = workflow.replace(
+    "jobs:\n",
+    "env:\n  NODE_OPTIONS: --require ./scripts/formal-hook.cjs\n\njobs:\n"
+  )
+  assert.throws(
+    () => hostedWorkflowCommandEntries({ packageJson, workflow: withWorkflowEnvironment }),
+    /does not support workflow-level environment/u
+  )
+  const withWorkflowRunDefaults = workflow.replace(
+    "jobs:\n",
+    "defaults:\n  run:\n    shell: node scripts/formal-shell.mjs {0}\n\njobs:\n"
+  )
+  assert.throws(
+    () => hostedWorkflowCommandEntries({ packageJson, workflow: withWorkflowRunDefaults }),
+    /does not support workflow-level environment/u
+  )
+  const withWorkflowWorkingDirectory = workflow.replace(
+    "jobs:\n",
+    "defaults:\n  run:\n    working-directory: scripts\n\njobs:\n"
+  )
+  assert.throws(
+    () => hostedWorkflowCommandEntries({ packageJson, workflow: withWorkflowWorkingDirectory }),
+    /does not support workflow-level environment/u
+  )
   const withUnrelatedLocalAction = workflow.replace(
     "      - name: Install gitleaks\n",
     "      - name: Prepare documentation\n        uses: './.github/actions/prepare-docs'\n\n      - name: Install gitleaks\n"
