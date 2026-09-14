@@ -135,10 +135,17 @@ All commands below use `pnpm`. Script definitions live in
 | `check:all` | Complete qualification when required by [choosing checks](#choosing-checks), for a frozen candidate. It reports all ordinary preflight failures together, then starts no formal or application qualification when any preflight check failed. An interruption, unproven surviving process, or runner defect stops the census immediately. The command includes the complete formal requirement and application checks, including non-browser Lab; automatic MBT is excluded pending #363. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
 | `check:ci` | Hosted gate; MBT remains excluded pending #363. |
 
-When a developer changes a TypeScript file, `check:fast` passes that changed
-file—and no unrelated source file—to compatibility ESLint, so rules such as
-`functional/immutable-data` fail during the edit loop. When the changed set has
-no compatible TypeScript file, the compatibility process is not started.
+When a developer changes a TypeScript or TSX file, `check:fast` passes only the
+changed TypeScript/TSX files—and no unrelated source file—to compatibility
+ESLint, so rules such as `functional/immutable-data` fail during the edit loop.
+This is an accepted trade-off: hosted and frozen-candidate verification run
+whole-project compatibility ESLint, so a whole-program or graph-only
+compatibility finding can surface at candidate qualification rather than during
+the edit loop. This scope applies to compatibility ESLint only;
+`typecheck:effect:changed` remains a separate Effect diagnostic and retains its
+documented fallback to the whole-project pass when more than twelve files
+change. When the changed set has no compatible TypeScript/TSX file, the
+compatibility process is not started.
 
 Hosted CI keeps separate quality and formal entry points: hosted formal runs the
 complete profile fresh when an input that can affect it changed, while hosted
