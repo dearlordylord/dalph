@@ -221,11 +221,13 @@ observation during a run must use the same optional-lock setting.
 
 Creating an unrelated linked worktree can atomically replace the shared Git
 config while adding only that other branch's settings. The input observer
-re-establishes its exact config-file watch and compares the effective local
-configuration for the candidate worktree; foreign `branch.*` sections do not
-invalidate qualification, while a candidate-branch or repository-wide setting
-change does. More than one config generation before a comparison fails closed,
-so a relevant edit followed by restoration cannot pass as one benign rewrite.
+installs a watch on the replacement as soon as the parent-directory replacement
+event and the new file establish that generation. A later removal event for the
+obsolete inode retires only that old generation. The guard compares the effective
+local configuration for the candidate worktree; foreign `branch.*` sections do
+not invalidate qualification, while a candidate-branch or repository-wide
+setting change does. More than one config generation before a comparison fails
+closed, so a relevant edit followed by restoration cannot pass as one benign rewrite.
 This is qualification-tool behavior only and changes no Dalph runtime command,
 provider boundary, journal fact, retry, or cleanup behavior.
 
@@ -236,7 +238,8 @@ provider boundary, journal fact, retry, or cleanup behavior.
 | The exact current branch's Git configuration changes; the observer refuses the candidate even though similarly prefixed foreign branch sections are ignored | `scripts/gate-resume-inputs.test.mjs`: `the exact current branch section remains candidate-relevant configuration` |
 | A repository-wide setting in the subsection-less `[branch]` section changes; the observer refuses both the next stage and final qualification | `scripts/gate-resume-inputs.test.mjs`: `a subsection-less branch setting remains repository-wide candidate configuration` |
 | A repository-wide Git setting changes after an unrelated replacement; the re-armed observer refuses both the next stage and final qualification | `scripts/gate-resume-inputs.test.mjs`: `a candidate-relevant config replacement fails after an unrelated replacement re-arms the watch` |
-| A relevant Git setting changes and is restored before validation | `scripts/gate-resume-inputs.test.mjs`: `candidate history observes configuration retargeting of external ignores` |
+| The parent-directory replacement event arrives in one observer drain and the obsolete file-watch removal arrives in the next; the observer watches the new generation immediately and treats only the later old-generation removal as obsolete | `scripts/gate-resume-inputs.test.mjs`: `split parent replacement and obsolete file removal events re-arm before the later removal` |
+| A relevant Git setting changes and is restored through two config generations before validation | `scripts/gate-resume-inputs.test.mjs`: `a relevant config edit restored before validation remains rejected as multiple generations` |
 
 Reuse requires identical HEAD, conflict-free semantic index, working/untracked
 bytes and modes, ignored configuration, actual installed dependency and resolved
