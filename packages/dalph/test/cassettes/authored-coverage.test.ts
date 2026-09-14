@@ -88,6 +88,82 @@ const completionRequest = Schema.decodeUnknownSync(CompletionTaskRequest)({
   taskRevision: "coverage-revision"
 })
 
+/**
+ * Each maintained key below is one authored chronology and one acceptance
+ * outcome. The generated test names are the scenario-to-test mapping; keeping
+ * the chronologies separate gives each one the existing coverage timeout.
+ * This test-harness shape does not change Dalph runtime behavior.
+ */
+const authoredCandidateAndPromotionNames = [
+  "changedAttemptContinues",
+  "changedAttemptRestartsCleanly",
+  "changedAttemptRestartAfterSupersessionCrash",
+  "changedAttemptStopsAndReleases",
+  "changedAttemptStopsWithAbsentClaim",
+  "changedAttemptStopsWithForeignClaim",
+  "changedAttemptChoiceRace",
+  "changedAttemptReacquisitionForeignConflict",
+  "taskPauseExecutorAndPromotionBoundaries",
+  "taskPauseFinishesHeldIntegration",
+  "runPauseSafelySuspends",
+  "runPauseObservationDisconnects",
+  "runUnpauseAfterSafeSuspension",
+  "runUnpauseDuringSuspensionRestarts",
+  "taskUnpauseAfterSafeSuspension",
+  "taskUnpauseDuringSuspensionRestarts",
+  "targetPromotionAmbiguityExhaustion",
+  "targetPromotionStaleBeforeCompareAndSet",
+  "targetPromotionLostResponseDiscoversCurrentCandidate"
+] as const
+
+type AuthoredCandidateAndPromotionName = (typeof authoredCandidateAndPromotionNames)[number]
+
+const assertAuthoredCandidateAndPromotionOutcome = (name: AuthoredCandidateAndPromotionName) =>
+  Effect.gen(function* () {
+    const exit = yield* Effect.exit(
+      runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog[name]).pipe(Effect.provide(NodeCrypto.layer))
+    )
+    expect(Exit.isSuccess(exit), Cause.pretty(Exit.isFailure(exit) ? exit.cause : Cause.empty)).toBe(true)
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.records.length).toBeGreaterThan(0)
+      expect(exit.value.cassette.story.at(-1)?._tag).toBe("ExpectedBehavior")
+      if (name.startsWith("changedAttemptStops")) {
+        const beginning = exit.value.records.find(({ event }) => event._tag === "WorkflowRunBegan")
+        if (beginning?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("missing cassette beginning")
+        const finality = completedRunFinalityFixture({
+          runId: beginning.runId,
+          target: beginning.event.target
+        }).evidence
+        const unsettledResponsibilityIssue = "termination requires every journal responsibility to be settled"
+        for (const [index, record] of exit.value.records.entries()) {
+          if (
+            ![
+              "AttemptImplementationAbandoned",
+              "StoppedAttemptClaimNoReleaseObserved",
+              "TaskClaimReleaseIntended",
+              "TaskClaimReleased"
+            ].includes(record.event._tag)
+          )
+            continue
+          for (const prefixLength of [index, index + 1]) {
+            if (prefixLength > 0) {
+              const issues = terminationPreconditionIssues(
+                exit.value.records.slice(0, prefixLength),
+                beginning.runId,
+                finality
+              )
+              const settlementCompleted =
+                prefixLength === index + 1 &&
+                ["StoppedAttemptClaimNoReleaseObserved", "TaskClaimReleased"].includes(record.event._tag)
+              if (settlementCompleted) expect(issues).toEqual([])
+              else expect(issues).toContain(unsettledResponsibilityIssue)
+            }
+          }
+        }
+      }
+    }
+  })
+
 it.effect("uses default authored tracker hooks and exposes every completion lookup outcome", () =>
   Effect.gen(function* () {
     const tracker = yield* TrackerMutation.pipe(Effect.provide(controlledTrackerMutationLayerFrom([])))
@@ -119,78 +195,13 @@ it.effect("uses default authored tracker hooks and exposes every completion look
   })
 )
 
-it.effect(
-  "runs the authored candidate and promotion outcomes through their production adapters",
-  () =>
-    Effect.gen(function* () {
-      const names = [
-        "changedAttemptContinues",
-        "changedAttemptRestartsCleanly",
-        "changedAttemptRestartAfterSupersessionCrash",
-        "changedAttemptStopsAndReleases",
-        "changedAttemptStopsWithAbsentClaim",
-        "changedAttemptStopsWithForeignClaim",
-        "changedAttemptChoiceRace",
-        "changedAttemptReacquisitionForeignConflict",
-        "taskPauseExecutorAndPromotionBoundaries",
-        "taskPauseFinishesHeldIntegration",
-        "runPauseSafelySuspends",
-        "runPauseObservationDisconnects",
-        "runUnpauseAfterSafeSuspension",
-        "runUnpauseDuringSuspensionRestarts",
-        "taskUnpauseAfterSafeSuspension",
-        "taskUnpauseDuringSuspensionRestarts",
-        "targetPromotionAmbiguityExhaustion",
-        "targetPromotionStaleBeforeCompareAndSet",
-        "targetPromotionLostResponseDiscoversCurrentCandidate"
-      ] as const
-      for (const name of names) {
-        const exit = yield* Effect.exit(
-          runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog[name]).pipe(Effect.provide(NodeCrypto.layer))
-        )
-        expect(Exit.isSuccess(exit), Cause.pretty(Exit.isFailure(exit) ? exit.cause : Cause.empty)).toBe(true)
-        if (Exit.isSuccess(exit)) {
-          expect(exit.value.records.length).toBeGreaterThan(0)
-          expect(exit.value.cassette.story.at(-1)?._tag).toBe("ExpectedBehavior")
-          if (name.startsWith("changedAttemptStops")) {
-            const beginning = exit.value.records.find(({ event }) => event._tag === "WorkflowRunBegan")
-            if (beginning?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("missing cassette beginning")
-            const finality = completedRunFinalityFixture({
-              runId: beginning.runId,
-              target: beginning.event.target
-            }).evidence
-            const unsettledResponsibilityIssue = "termination requires every journal responsibility to be settled"
-            for (const [index, record] of exit.value.records.entries()) {
-              if (
-                ![
-                  "AttemptImplementationAbandoned",
-                  "StoppedAttemptClaimNoReleaseObserved",
-                  "TaskClaimReleaseIntended",
-                  "TaskClaimReleased"
-                ].includes(record.event._tag)
-              )
-                continue
-              for (const prefixLength of [index, index + 1]) {
-                if (prefixLength > 0) {
-                  const issues = terminationPreconditionIssues(
-                    exit.value.records.slice(0, prefixLength),
-                    beginning.runId,
-                    finality
-                  )
-                  const settlementCompleted =
-                    prefixLength === index + 1 &&
-                    ["StoppedAttemptClaimNoReleaseObserved", "TaskClaimReleased"].includes(record.event._tag)
-                  if (settlementCompleted) expect(issues).toEqual([])
-                  else expect(issues).toContain(unsettledResponsibilityIssue)
-                }
-              }
-            }
-          }
-        }
-      }
-    }),
-  30_000
-)
+for (const name of authoredCandidateAndPromotionNames) {
+  it.effect(
+    `runs the authored ${name} candidate and promotion outcomes through their production adapters`,
+    () => assertAuthoredCandidateAndPromotionOutcome(name),
+    30_000
+  )
+}
 
 it.effect("covers authored cursor terminal and cleanup outcomes", () =>
   Effect.gen(function* () {
