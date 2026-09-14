@@ -14,6 +14,11 @@ type ContinuationRead = Extract<
   { readonly _tag: "ReadTrackerGraph" | "ReadTaskWorkSpecification" | "ReadTaskWorktree" }
 >
 
+export const isContinuationRead = (action: RecoveredAction): action is ContinuationRead =>
+  action._tag === "ReadTrackerGraph" ||
+  action._tag === "ReadTaskWorkSpecification" ||
+  action._tag === "ReadTaskWorktree"
+
 const { operationId: _graphOperationId, ...graphFields } = WorkflowOperation.cases.ReadTrackerGraph.fields
 const { operationId: _specificationOperationId, ...specificationFields } =
   WorkflowOperation.cases.ReadTaskWorkSpecification.fields
@@ -23,6 +28,32 @@ const NewContinuationRead = Schema.Union([
   Schema.Struct(specificationFields),
   Schema.Struct(worktreeFields)
 ])
+
+const validateContinuationGraph = Effect.fn("HermeticQualification.validateContinuationGraph")(function* (
+  operation: Extract<typeof NewContinuationRead.Type, { readonly _tag: "ReadTrackerGraph" }>,
+  context: QualificationContext
+) {
+  if (
+    !Schema.toEquivalence(TrackerTarget)(operation.target, context.configuration.target) ||
+    operation.readShape.explicitlyCoveredTaskIds.length !== 1 ||
+    operation.readShape.explicitlyCoveredTaskIds[0] !== context.taskId ||
+    (operation.cause._tag !== "ExecutingWorkAuthorityCheck" && operation.cause._tag !== "AttemptContinuation")
+  )
+    return yield* sourceRejected()
+})
+
+const validateContinuationSpecification = Effect.fn("HermeticQualification.validateContinuationSpecification")(
+  function* (
+    operation: Extract<typeof NewContinuationRead.Type, { readonly _tag: "ReadTaskWorkSpecification" }>,
+    context: QualificationContext
+  ) {
+    if (
+      operation.taskId !== context.taskId ||
+      !Schema.toEquivalence(TrackerTarget)(operation.target, context.configuration.target)
+    )
+      return yield* sourceRejected()
+  }
+)
 
 /** Ordinary reactivation can reread the same executing attempt before its terminal report arrives. */
 export const validateContinuationRead = Effect.fn("HermeticQualification.validateContinuationRead")(function* (
@@ -38,20 +69,10 @@ export const validateContinuationRead = Effect.fn("HermeticQualification.validat
   yield* Effect.forEach(operation.predecessorOperationIds, validateOperationId)
   switch (operation._tag) {
     case "ReadTrackerGraph":
-      if (
-        !Schema.toEquivalence(TrackerTarget)(operation.target, context.configuration.target) ||
-        operation.readShape.explicitlyCoveredTaskIds.length !== 1 ||
-        operation.readShape.explicitlyCoveredTaskIds[0] !== context.taskId ||
-        (operation.cause._tag !== "ExecutingWorkAuthorityCheck" && operation.cause._tag !== "AttemptContinuation")
-      )
-        return yield* sourceRejected()
+      yield* validateContinuationGraph(operation, context)
       return { _tag: operation._tag, operation, plannedAttempt }
     case "ReadTaskWorkSpecification":
-      if (
-        operation.taskId !== context.taskId ||
-        !Schema.toEquivalence(TrackerTarget)(operation.target, context.configuration.target)
-      )
-        return yield* sourceRejected()
+      yield* validateContinuationSpecification(operation, context)
       return { _tag: operation._tag, operation, plannedAttempt }
     case "ReadTaskWorktree":
       yield* validatePlannedAttempt(operation.plannedAttempt, context)
