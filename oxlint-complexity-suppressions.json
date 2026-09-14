@@ -4,6 +4,12 @@
       "count": 1
     }
   },
+  "packages/dalph/src/application/runtime-diagnostic.ts": {
+    "complexity": {
+      "count": 3,
+      "justification": "sourceTag and sourceOperation keep their ordered fallback precedence, while projectError keeps source decoding, redaction, recursive cause traversal, cycle/depth limits, and omission evidence in one process-boundary projection. Splitting those branches would separate facts required to produce one bounded diagnostic result rather than remove an independent decision."
+    }
+  },
   "packages/dalph/src/cassettes/disposition-cleanup-cassette.ts": {
     "complexity": {
       "count": 6
