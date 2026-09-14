@@ -200,20 +200,26 @@ jobs:
         node-version: ${{ fromJSON(needs.change-plan.outputs.versions || '["24.20.0"]') }}
 
     steps:
+      - name: Refuse failed change plan
+        if: needs.change-plan.result != 'success'
+        run: |
+          printf 'Formal model change plan did not succeed; refusing a successful required check.\n' >&2
+          exit 1
+
       - name: Checkout
-        if: needs.change-plan.outputs.formal-required == 'true'
+        if: needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'true'
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
-        if: needs.change-plan.outputs.formal-required == 'true'
+        if: needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
 
       - name: Download formal model shard evidence
-        if: needs.change-plan.outputs.formal-required == 'true'
+        if: needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'true'
         uses: actions/download-artifact@v4
         with:
           pattern: formal-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.node-version }}-*
@@ -221,11 +227,11 @@ jobs:
           merge-multiple: true
 
       - name: Validate complete formal model evidence
-        if: needs.change-plan.outputs.formal-required == 'true'
+        if: needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'true'
         run: node scripts/aggregate-hosted-formal-shards.mjs formal-shard-reports/shard-0.json formal-shard-reports/shard-1.json
 
       - name: Report formal model gate not applicable
-        if: needs.change-plan.outputs.formal-required == 'false'
+        if: needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'false'
         run: |
           printf 'Formal model gate not applicable.\n'
           printf 'Base SHA: %s\n' "$DALPH_FORMAL_BASE_SHA"
@@ -233,7 +239,7 @@ jobs:
           printf 'Classification: %s\n' "$DALPH_FORMAL_CLASSIFICATION"
 
       - name: Refuse missing formal classification
-        if: needs.change-plan.outputs.formal-required != 'true' && needs.change-plan.outputs.formal-required != 'false'
+        if: needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required != 'true' && needs.change-plan.outputs.formal-required != 'false'
         run: |
           printf 'Formal model classification is missing; refusing a successful required check.\n' >&2
           exit 1

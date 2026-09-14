@@ -114,6 +114,15 @@ test("formal executable lookup continues from a missing PATH entry to the later 
 })
 
 test("checked-in hosted formal inputs exactly match the authoritative JavaScript and Quint closure", async () => {
+  const manifest = JSON.parse(readFileSync(hostedFormalInputManifestPath, "utf8"))
+  for (const path of [
+    "package.json",
+    "packages/contracts/package.json",
+    "packages/dalph/package.json",
+    "packages/orchestrator/package.json",
+    "prototypes/reducer-lab/package.json"
+  ])
+    assert.equal(manifest.paths.includes(path), true, path)
   assert.equal(
     readFileSync(hostedFormalInputManifestPath, "utf8"),
     await expectedHostedFormalInputManifestText(process.cwd())
@@ -194,6 +203,21 @@ test("hosted command discovery includes new Node entries and rejects unsupported
       packageJson: { ...packageJson, scripts: { ...packageJson.scripts, prepare: "node scripts/prepare-formal.mjs" } },
       workflow
     })
+  )
+  assert.throws(
+    () =>
+      hostedWorkflowCommandEntries({
+        packageJson,
+        workspacePackages: [
+          {
+            path: "packages/dalph/package.json",
+            packageJson: { scripts: { postinstall: "node scripts/mutate-formal-runtime.mjs" } },
+            isRoot: false
+          }
+        ],
+        workflow
+      }),
+    /lifecycle postinstall in packages\/dalph\/package\.json has an unsupported command shape/u
   )
   const withLocalAction = workflow.replace(
     "      - name: Run formal model shard\n",
@@ -309,8 +333,8 @@ test("hosted command discovery includes new Node entries and rejects unsupported
     /requires the exact supported job condition/u
   )
   const withSwappedValidationCondition = workflow.replace(
-    "      - name: Validate complete formal model evidence\n        if: needs.change-plan.outputs.formal-required == 'true'\n",
-    "      - name: Validate complete formal model evidence\n        if: needs.change-plan.outputs.formal-required == 'false'\n"
+    "      - name: Validate complete formal model evidence\n        if: needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'true'\n",
+    "      - name: Validate complete formal model evidence\n        if: needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'false'\n"
   )
   assert.throws(
     () => hostedWorkflowCommandEntries({ packageJson, workflow: withSwappedValidationCondition }),

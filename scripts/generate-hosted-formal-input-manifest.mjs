@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises"
+import { readdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, join, posix } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { parse as parseYaml } from "yaml"
@@ -78,13 +78,17 @@ const supportedJobConditions = Object.freeze({
   "formal-model-aggregate": "always()"
 })
 const supportedAggregateStepConditions = Object.freeze({
-  Checkout: "needs.change-plan.outputs.formal-required == 'true'",
-  "Set up Node.js": "needs.change-plan.outputs.formal-required == 'true'",
-  "Download formal model shard evidence": "needs.change-plan.outputs.formal-required == 'true'",
-  "Validate complete formal model evidence": "needs.change-plan.outputs.formal-required == 'true'",
-  "Report formal model gate not applicable": "needs.change-plan.outputs.formal-required == 'false'",
+  "Refuse failed change plan": "needs.change-plan.result != 'success'",
+  Checkout: "needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'true'",
+  "Set up Node.js": "needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'true'",
+  "Download formal model shard evidence":
+    "needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'true'",
+  "Validate complete formal model evidence":
+    "needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'true'",
+  "Report formal model gate not applicable":
+    "needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required == 'false'",
   "Refuse missing formal classification":
-    "needs.change-plan.outputs.formal-required != 'true' && needs.change-plan.outputs.formal-required != 'false'"
+    "needs.change-plan.result == 'success' && needs.change-plan.outputs.formal-required != 'true' && needs.change-plan.outputs.formal-required != 'false'"
 })
 
 const validateFormalJobEnvironment = (environment, job) => {
@@ -161,17 +165,69 @@ const nodeEntry = (command) => {
   return match[1].replace(/^\.\//u, "")
 }
 
-const rootLifecycleEntries = (packageJson) => {
+const lifecycleEntries = (packageJson, manifestPath, isRoot) => {
   for (const name of ["preinstall", "install", "postinstall", "prepare"]) {
     const script = packageJson.scripts?.[name]
     if (script === undefined) continue
-    if (name === "prepare" && script === "husky && effect-tsgo patch --typescript-package @typescript/native") continue
-    throw new Error(`Hosted formal package lifecycle ${name} has an unsupported command shape`)
+    if (isRoot && name === "prepare" && script === "husky && effect-tsgo patch --typescript-package @typescript/native")
+      continue
+    throw new Error(`Hosted formal package lifecycle ${name} in ${manifestPath} has an unsupported command shape`)
   }
   return []
 }
 
+const isWorkspaceDirectory = (path) =>
+  typeof path === "string" &&
+  path !== "" &&
+  !path.startsWith("/") &&
+  !path.includes("\\") &&
+  !path.split("/").some((part) => part === "" || part === "." || part === "..")
+
+const readPackageManifest = async (worktree, path, isRoot = false) => {
+  let packageJson
+  try {
+    packageJson = JSON.parse(await readFile(join(worktree, path), "utf8"))
+  } catch (error) {
+    throw new Error(`Hosted formal manifest cannot read workspace package manifest ${path}`, { cause: error })
+  }
+  if (!isRecord(packageJson))
+    throw new Error(`Hosted formal workspace package manifest ${path} must contain a JSON object`)
+  lifecycleEntries(packageJson, path, isRoot)
+  return Object.freeze({ path, packageJson, isRoot })
+}
+
+const workspacePackageManifests = async (worktree) => {
+  const workspacePath = join(worktree, "pnpm-workspace.yaml")
+  const workspace = parseYaml(await readFile(workspacePath, "utf8"))
+  if (!isRecord(workspace) || !Array.isArray(workspace.packages) || workspace.packages.length === 0)
+    throw new Error("Hosted formal manifest requires an explicit pnpm workspace package declaration")
+  const manifestPaths = []
+  for (const pattern of workspace.packages) {
+    if (pattern === ".") {
+      manifestPaths.push("package.json")
+      continue
+    }
+    if (typeof pattern !== "string")
+      throw new Error("Hosted formal manifest does not support non-string pnpm workspace package patterns")
+    if (pattern.endsWith("/*") && isWorkspaceDirectory(pattern.slice(0, -2))) {
+      const parent = pattern.slice(0, -2)
+      const children = await readdir(join(worktree, parent), { withFileTypes: true })
+      for (const child of children) {
+        if (child.isDirectory() || child.isSymbolicLink())
+          manifestPaths.push(posix.join(parent, child.name, "package.json"))
+      }
+      continue
+    }
+    if (!isWorkspaceDirectory(pattern) || pattern.includes("*"))
+      throw new Error(`Hosted formal manifest does not support pnpm workspace package pattern: ${pattern}`)
+    manifestPaths.push(posix.join(pattern, "package.json"))
+  }
+  const uniquePaths = [...new Set(manifestPaths)].sort((left, right) => left.localeCompare(right))
+  return Promise.all(uniquePaths.map((path) => readPackageManifest(worktree, path, path === "package.json")))
+}
+
 const inertFormalCommands = new Set([
+  "printf 'Formal model change plan did not succeed; refusing a successful required check.\\n' >&2",
   "printf 'Formal model gate not applicable.\\n'",
   `printf 'Base SHA: %s\\n' "$DALPH_FORMAL_BASE_SHA"`,
   `printf 'Head SHA: %s\\n' "$DALPH_FORMAL_HEAD_SHA"`,
@@ -183,11 +239,13 @@ const shardWorkflowCommand =
   'pnpm check:ci:formal:shard --shard "${{ matrix.shard }}" --report "formal-shard-reports/shard-${{ matrix.shard }}.json"'
 const shardPackageCommand = "node scripts/with-gate-slot.mjs -- node scripts/run-hosted-formal-shard.mjs"
 
-export const hostedWorkflowCommandEntries = ({ packageJson, workflow }) => {
+export const hostedWorkflowCommandEntries = ({ packageJson, workflow, workspacePackages = [] }) => {
   const entries = []
   for (const command of formalWorkflowCommands(workflow)) {
     if (command === "pnpm install --frozen-lockfile") {
-      entries.push(...rootLifecycleEntries(packageJson))
+      entries.push(...lifecycleEntries(packageJson, "package.json", true))
+      for (const workspacePackage of workspacePackages)
+        entries.push(...lifecycleEntries(workspacePackage.packageJson, workspacePackage.path, workspacePackage.isRoot))
       continue
     }
     if (inertFormalCommands.has(command)) continue
@@ -204,9 +262,9 @@ export const hostedWorkflowCommandEntries = ({ packageJson, workflow }) => {
   return [...new Set(entries)]
 }
 
-const hostedCommandEntries = async (worktree, packageJson) => {
+const hostedCommandEntries = async (worktree, packageJson, workspacePackages) => {
   const workflow = await readFile(join(worktree, ".github/workflows/ci.yml"), "utf8")
-  const workflowEntries = hostedWorkflowCommandEntries({ packageJson, workflow })
+  const workflowEntries = hostedWorkflowCommandEntries({ packageJson, workflow, workspacePackages })
   const withGateEntry = workflowEntries.find((entry) => posix.basename(entry) === "with-gate-slot.mjs")
   if (withGateEntry === undefined) throw new Error("Hosted formal workflow does not use the admitted gate entry")
   const withGateSource = await readFile(join(worktree, withGateEntry), "utf8")
@@ -219,18 +277,26 @@ const hostedCommandEntries = async (worktree, packageJson) => {
 }
 
 export const deriveHostedFormalInputManifest = async (worktree = repositoryRoot) => {
-  const packageJson = JSON.parse(await readFile(join(worktree, "package.json"), "utf8"))
+  const workspacePackages = await workspacePackageManifests(worktree)
+  const packageJson = workspacePackages.find(({ isRoot }) => isRoot)?.packageJson
+  if (packageJson === undefined)
+    throw new Error("Hosted formal manifest requires the root package in the pnpm workspace")
   const quintPatches = Object.entries(packageJson.pnpm?.patchedDependencies ?? {})
     .filter(([name]) => name.startsWith("@informalsystems/quint@"))
     .map(([, path]) => path)
   if (quintPatches.length !== 1 || quintPatches.some((path) => typeof path !== "string"))
     throw new Error("Hosted formal manifest requires one selected Quint patch input")
   const discovered = await discoverFormalSourcePaths({
-    javascriptEntries: await hostedCommandEntries(worktree, packageJson),
+    javascriptEntries: await hostedCommandEntries(worktree, packageJson, workspacePackages),
     profile: createQuintEffectiveProfile({ purpose: "hosted" }),
     worktree
   })
-  return createHostedFormalInputManifest([...hostedBootstrapInputs, ...quintPatches, ...discovered])
+  return createHostedFormalInputManifest([
+    ...hostedBootstrapInputs,
+    ...workspacePackages.map(({ path }) => path),
+    ...quintPatches,
+    ...discovered
+  ])
 }
 
 export const expectedHostedFormalInputManifestText = async (worktree = repositoryRoot) =>

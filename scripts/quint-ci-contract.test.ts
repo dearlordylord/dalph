@@ -102,7 +102,9 @@ describe("hosted formal-model contract", () => {
     expect(aggregateJob).toBeDefined()
     expect(aggregateJob).toContain("\n    needs: [change-plan, formal-models]")
     expect(aggregateJob).toContain("\n    if: always()")
-    expect(aggregateJob).not.toContain("needs.change-plan.result == 'success'")
+    expect(aggregateJob).toMatch(
+      /- name: Refuse failed change plan\n\s+if: needs\.change-plan\.result != 'success'\n\s+run: \|\n\s+printf 'Formal model change plan did not succeed; refusing a successful required check\.\\n' >&2\n\s+exit 1/u
+    )
     const supportedVersions = packageJson.engines.node.split(" || ").map((range) => range.slice(1))
     expect(aggregateJob).toContain(
       `node-version: \${{ fromJSON(needs.change-plan.outputs.versions || '${JSON.stringify(supportedVersions)}') }}`
@@ -112,27 +114,29 @@ describe("hosted formal-model contract", () => {
     expect(aggregateJob).toContain(
       "DALPH_FORMAL_CLASSIFICATION: ${{ needs.change-plan.outputs.formal-classification }}"
     )
-    expect(aggregateJob).toMatch(/- name: Checkout\n\s+if: needs\.change-plan\.outputs\.formal-required == 'true'/u)
     expect(aggregateJob).toMatch(
-      /- name: Set up Node\.js\n\s+if: needs\.change-plan\.outputs\.formal-required == 'true'/u
+      /- name: Checkout\n\s+if: needs\.change-plan\.result == 'success' && needs\.change-plan\.outputs\.formal-required == 'true'/u
     )
     expect(aggregateJob).toMatch(
-      /- name: Download formal model shard evidence\n\s+if: needs\.change-plan\.outputs\.formal-required == 'true'\n\s+uses: actions\/download-artifact@v4/u
+      /- name: Set up Node\.js\n\s+if: needs\.change-plan\.result == 'success' && needs\.change-plan\.outputs\.formal-required == 'true'/u
+    )
+    expect(aggregateJob).toMatch(
+      /- name: Download formal model shard evidence\n\s+if: needs\.change-plan\.result == 'success' && needs\.change-plan\.outputs\.formal-required == 'true'\n\s+uses: actions\/download-artifact@v4/u
     )
     expect(aggregateJob).toContain("\n          path: formal-shard-reports")
     expect(aggregateJob).not.toContain(".formal-shard-reports")
     expect(aggregateJob).toMatch(
-      /- name: Validate complete formal model evidence\n\s+if: needs\.change-plan\.outputs\.formal-required == 'true'\n\s+run: node scripts\/aggregate-hosted-formal-shards\.mjs formal-shard-reports\/shard-0\.json formal-shard-reports\/shard-1\.json/u
+      /- name: Validate complete formal model evidence\n\s+if: needs\.change-plan\.result == 'success' && needs\.change-plan\.outputs\.formal-required == 'true'\n\s+run: node scripts\/aggregate-hosted-formal-shards\.mjs formal-shard-reports\/shard-0\.json formal-shard-reports\/shard-1\.json/u
     )
     expect(aggregateJob).toMatch(
-      /- name: Report formal model gate not applicable\n\s+if: needs\.change-plan\.outputs\.formal-required == 'false'/u
+      /- name: Report formal model gate not applicable\n\s+if: needs\.change-plan\.result == 'success' && needs\.change-plan\.outputs\.formal-required == 'false'/u
     )
     expect(aggregateJob).toContain("Formal model gate not applicable.")
     expect(aggregateJob).toContain("printf 'Base SHA: %s\\n' \"$DALPH_FORMAL_BASE_SHA\"")
     expect(aggregateJob).toContain("printf 'Head SHA: %s\\n' \"$DALPH_FORMAL_HEAD_SHA\"")
     expect(aggregateJob).toContain("printf 'Classification: %s\\n' \"$DALPH_FORMAL_CLASSIFICATION\"")
     expect(aggregateJob).toMatch(
-      /- name: Refuse missing formal classification\n\s+if: needs\.change-plan\.outputs\.formal-required != 'true' && needs\.change-plan\.outputs\.formal-required != 'false'/u
+      /- name: Refuse missing formal classification\n\s+if: needs\.change-plan\.result == 'success' && needs\.change-plan\.outputs\.formal-required != 'true' && needs\.change-plan\.outputs\.formal-required != 'false'/u
     )
     expect(aggregateJob).not.toContain("pnpm install")
     expect(jobs.get("quality")?.join("\n")).toContain("\n    runs-on: ubuntu-latest")
