@@ -37,13 +37,14 @@ jobs:
       DALPH_COVERAGE_BASE_SHA: ${{ inputs.reviewed_base_sha }}
       DALPH_FORMAL_PROFILE_KIND: dedicated
       DALPH_FORMAL_RUNNER_LABEL: ubuntu-24.04-arm
-      DALPH_FORMAL_EVIDENCE_DIR: ${{ runner.temp }}/dalph-live-formal/dedicated
       NODE_OPTIONS: --max-old-space-size=8192
     steps:
       - name: Start formal timing
         run: |
-          mkdir -p "$DALPH_FORMAL_EVIDENCE_DIR"
-          date +%s%3N > "$DALPH_FORMAL_EVIDENCE_DIR/started-ms"
+          evidence_dir="$RUNNER_TEMP/dalph-live-formal/dedicated"
+          echo "DALPH_FORMAL_EVIDENCE_DIR=$evidence_dir" >> "$GITHUB_ENV"
+          mkdir -p "$evidence_dir"
+          date +%s%3N > "$evidence_dir/started-ms"
 
       - name: Checkout exact candidate
         uses: actions/checkout@v7
@@ -152,13 +153,14 @@ jobs:
       DALPH_FORMAL_PROFILE_KIND: stressed
       DALPH_FORMAL_RUNNER_LABEL: ubuntu-latest
       DALPH_FORMAL_STRESS_CPU_LIST: 0-1
-      DALPH_FORMAL_EVIDENCE_DIR: ${{ runner.temp }}/dalph-live-formal/stressed
       NODE_OPTIONS: --max-old-space-size=8192
     steps:
       - name: Start formal timing
         run: |
-          mkdir -p "$DALPH_FORMAL_EVIDENCE_DIR"
-          date +%s%3N > "$DALPH_FORMAL_EVIDENCE_DIR/started-ms"
+          evidence_dir="$RUNNER_TEMP/dalph-live-formal/stressed"
+          echo "DALPH_FORMAL_EVIDENCE_DIR=$evidence_dir" >> "$GITHUB_ENV"
+          mkdir -p "$evidence_dir"
+          date +%s%3N > "$evidence_dir/started-ms"
 
       - name: Checkout exact candidate
         uses: actions/checkout@v7
@@ -281,23 +283,28 @@ jobs:
       DALPH_LIVE_QUALIFICATION_SHIPPED_ENTRY: ${{ github.workspace }}/packages/dalph/dist/bin/dalph.js
       DALPH_LIVE_QUALIFICATION_LOCKFILE: ${{ github.workspace }}/pnpm-lock.yaml
       DALPH_LIVE_QUALIFICATION_CODEX_EXECUTABLE: ${{ github.workspace }}/node_modules/.bin/codex
-      DALPH_LIVE_QUALIFICATION_PUBLICATION_CONTAINER: ${{ runner.temp }}/dalph-live-publication
       DALPH_LIVE_QUALIFICATION_WORKFLOW: ${{ github.workflow }}
       DALPH_LIVE_QUALIFICATION_RUN_ID: ${{ github.run_id }}
       DALPH_LIVE_QUALIFICATION_JOB_ID: ${{ github.job }}
       DALPH_LIVE_QUALIFICATION_REPOSITORY: ${{ inputs.repository }}
       DALPH_LIVE_QUALIFICATION_PROTECTED_ENVIRONMENT: production-live-qualification
-      DALPH_LIVE_QUALIFICATION_MANIFEST: ${{ runner.temp }}/dalph-live-qualification/manifest.json
-      DALPH_LIVE_QUALIFICATION_ARTIFACT: ${{ runner.temp }}/dalph-live-qualification/qualification.json
-      DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS: ${{ runner.temp }}/dalph-live-publication/retained-locators.json
-      DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED: ${{ runner.temp }}/dalph-live-formal/dedicated/formal.log
-      DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED: ${{ runner.temp }}/dalph-live-formal/stressed/formal.log
-      DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED_METADATA: ${{ runner.temp }}/dalph-live-formal/dedicated/provenance.json
-      DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED_METADATA: ${{ runner.temp }}/dalph-live-formal/stressed/provenance.json
       DALPH_SOURCE: ${{ github.workspace }}
       GIT_OPTIONAL_LOCKS: "0"
       NODE_OPTIONS: --max-old-space-size=8192
     steps:
+      - name: Prepare live qualification paths
+        run: |
+          {
+            echo "DALPH_LIVE_QUALIFICATION_PUBLICATION_CONTAINER=$RUNNER_TEMP/dalph-live-publication"
+            echo "DALPH_LIVE_QUALIFICATION_MANIFEST=$RUNNER_TEMP/dalph-live-qualification/manifest.json"
+            echo "DALPH_LIVE_QUALIFICATION_ARTIFACT=$RUNNER_TEMP/dalph-live-qualification/qualification.json"
+            echo "DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS=$RUNNER_TEMP/dalph-live-publication/retained-locators.json"
+            echo "DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED=$RUNNER_TEMP/dalph-live-formal/dedicated/formal.log"
+            echo "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED=$RUNNER_TEMP/dalph-live-formal/stressed/formal.log"
+            echo "DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED_METADATA=$RUNNER_TEMP/dalph-live-formal/dedicated/provenance.json"
+            echo "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED_METADATA=$RUNNER_TEMP/dalph-live-formal/stressed/provenance.json"
+          } >> "$GITHUB_ENV"
+
       - name: Checkout exact candidate
         uses: actions/checkout@v7
         with:

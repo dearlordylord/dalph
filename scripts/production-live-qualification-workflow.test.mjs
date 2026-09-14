@@ -17,6 +17,8 @@ const dedicatedFormalJob = workflow.slice(
 )
 const stressedFormalJob = workflow.slice(workflow.indexOf("  formal-stressed:\n"), workflow.indexOf("  qualify:\n"))
 
+const jobEnvironment = (job) => job.slice(job.indexOf("    env:\n"), job.indexOf("    steps:\n"))
+
 test("production live qualification is a protected manually dispatched workflow", () => {
   assert.match(workflow, /^name: Production live qualification$/mu)
   assert.match(workflow, /^  workflow_dispatch:$/mu)
@@ -55,6 +57,32 @@ test("dispatch inputs and worker toolchain are exact and immutable", () => {
   }
 })
 
+test("job environments do not read runner context before GitHub assigns a runner", () => {
+  const qualifyJob = workflow.slice(workflow.indexOf("  qualify:\n"))
+  const qualificationPaths = qualifyJob.slice(
+    qualifyJob.indexOf("      - name: Prepare live qualification paths\n"),
+    qualifyJob.indexOf("      - name: Checkout exact candidate\n")
+  )
+  for (const job of [dedicatedFormalJob, stressedFormalJob, qualifyJob]) {
+    assert.doesNotMatch(jobEnvironment(job), /\$\{\{\s*runner\./u)
+  }
+  assert.equal((workflow.match(/evidence_dir="\$RUNNER_TEMP\/dalph-live-formal\//gu) ?? []).length, 2)
+  assert.equal((workflow.match(/DALPH_FORMAL_EVIDENCE_DIR=\$evidence_dir/gu) ?? []).length, 2)
+  for (const assignment of [
+    "DALPH_LIVE_QUALIFICATION_PUBLICATION_CONTAINER=$RUNNER_TEMP/dalph-live-publication",
+    "DALPH_LIVE_QUALIFICATION_MANIFEST=$RUNNER_TEMP/dalph-live-qualification/manifest.json",
+    "DALPH_LIVE_QUALIFICATION_ARTIFACT=$RUNNER_TEMP/dalph-live-qualification/qualification.json",
+    "DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS=$RUNNER_TEMP/dalph-live-publication/retained-locators.json",
+    "DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED=$RUNNER_TEMP/dalph-live-formal/dedicated/formal.log",
+    "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED=$RUNNER_TEMP/dalph-live-formal/stressed/formal.log",
+    "DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED_METADATA=$RUNNER_TEMP/dalph-live-formal/dedicated/provenance.json",
+    "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED_METADATA=$RUNNER_TEMP/dalph-live-formal/stressed/provenance.json"
+  ]) {
+    assert.ok(qualificationPaths.includes(assignment), `missing qualification path assignment: ${assignment}`)
+  }
+  assert.match(qualificationPaths, /\}\s*>> "\$GITHUB_ENV"/u)
+})
+
 test("formal evidence is captured in dedicated and stressed jobs before one live job", () => {
   assert.match(workflow, /^  formal-dedicated:$/mu)
   assert.match(workflow, /^  formal-stressed:$/mu)
@@ -78,7 +106,7 @@ test("formal evidence is captured in dedicated and stressed jobs before one live
   assert.match(workflow, /Resolve current formal job provenance[\s\S]*?--resolve-formal-jobs/u)
   assert.match(
     workflow,
-    /DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS:\s*\$\{\{ runner\.temp \}\}\/dalph-live-publication\/retained-locators\.json/u
+    /DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS=\$RUNNER_TEMP\/dalph-live-publication\/retained-locators\.json/u
   )
   assert.match(workflow, /mkdir -p "\$RUNNER_TEMP\/dalph-live-publication"/u)
   assert.match(workflow, /qualify:production-live/u)
