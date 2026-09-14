@@ -9,6 +9,7 @@ import { afterEach, test } from "node:test"
 import {
   productionLiveQualificationBin,
   productionLiveQualificationShippedBin,
+  requireSuccessfulCandidateCi,
   resolveFormalQualificationJobs,
   runProductionLiveQualification
 } from "./run-production-live-qualification.mjs"
@@ -77,9 +78,12 @@ const fixture = async () => {
   await mkdir(output.publication, { recursive: true })
   const lockfile = join(root, "pnpm-lock.yaml")
   const codexExecutable = join(root, "node_modules", ".bin", "codex")
+  const codexEntry = join(root, "node_modules", "@openai", "codex", "bin", "codex.js")
   await writeFile(lockfile, "lockfileVersion: 9\n")
   await mkdir(join(root, "node_modules", ".bin"), { recursive: true })
+  await mkdir(join(root, "node_modules", "@openai", "codex", "bin"), { recursive: true })
   await writeFile(codexExecutable, "#!/usr/bin/env node\n")
+  await writeFile(codexEntry, "#!/usr/bin/env node\n")
   return { codexExecutable, lockfile, root, formal, output }
 }
 
@@ -223,6 +227,54 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { force: true, recursive: true })
 })
 
+test("blocks formal qualification unless exact candidate CI is completed and successful", async () => {
+  const environment = {
+    DALPH_CANDIDATE_SHA: candidateSha,
+    GITHUB_REPOSITORY: "dearlordylord/dalph",
+    GITHUB_TOKEN: "actions-read-token"
+  }
+  for (const workflowRun of [
+    { name: "CI", head_sha: candidateSha, status: "completed", conclusion: "failure" },
+    { name: "CI", head_sha: candidateSha, status: "in_progress", conclusion: null },
+    { name: "CI", head_sha: candidateSha, status: "completed", conclusion: "cancelled" },
+    { name: "CI", head_sha: reviewedBaseSha, status: "completed", conclusion: "success" },
+    { name: "Production live qualification", head_sha: candidateSha, status: "completed", conclusion: "success" }
+  ]) {
+    await assert.rejects(
+      requireSuccessfulCandidateCi({
+        environment,
+        fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ workflow_runs: [workflowRun] }) })
+      }),
+      /exact candidate requires a completed successful CI workflow/u
+    )
+  }
+})
+
+test("permits formal qualification after exact candidate CI completed successfully", async () => {
+  const requests = []
+  const result = await requireSuccessfulCandidateCi({
+    environment: {
+      DALPH_CANDIDATE_SHA: candidateSha,
+      GITHUB_REPOSITORY: "dearlordylord/dalph",
+      GITHUB_TOKEN: "actions-read-token"
+    },
+    fetchImpl: async (url, options) => {
+      requests.push({ url: url.href, options })
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          workflow_runs: [{ name: "CI", head_sha: candidateSha, status: "completed", conclusion: "success" }]
+        })
+      }
+    }
+  })
+  assert.deepEqual(result, { headSha: candidateSha, workflow: "CI" })
+  assert.equal(requests.length, 1)
+  assert.match(requests[0].url, /\/actions\/runs\?head_sha=0123456789abcdef0123456789abcdef01234567&per_page=100$/u)
+  assert.equal(requests[0].options.headers.Authorization, "Bearer actions-read-token")
+})
+
 test("rejects missing live opt-in before observing or launching anything", async () => {
   const f = await fixture()
   let observed = 0
@@ -260,6 +312,24 @@ test("rejects a candidate HEAD mismatch before the live child launch", async () 
       }
     }),
     /candidate HEAD does not match the exact requested candidate SHA/u
+  )
+  assert.equal(launched, 0)
+})
+
+test("rejects a missing derived Codex entry before the live child launch", async () => {
+  const f = await fixture()
+  await rm(join(f.root, "node_modules", "@openai", "codex", "bin", "codex.js"))
+  let launched = 0
+  await assert.rejects(
+    runProductionLiveQualification({
+      repositoryRoot: f.root,
+      environment: environmentFor(f),
+      readCandidateSha: async () => candidateSha,
+      runCommand: async () => {
+        launched++
+      }
+    }),
+    /locked Codex JavaScript entry is not a readable file/u
   )
   assert.equal(launched, 0)
 })

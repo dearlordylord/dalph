@@ -2,6 +2,7 @@ import { Effect, FileSystem, Layer, Redacted } from "effect"
 import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import { nodeGitCommandLayer } from "@dalph/orchestrator"
 import { describe, expect, it } from "vitest"
+import { launchExecutableMatches } from "../src/application/codex-app-server.js"
 import {
   createProductionLiveLocalFixture,
   decodeProductionLiveQualificationManifest,
@@ -236,10 +237,26 @@ describe("#307 production live qualification runtime", () => {
         expect(config.toLowerCase()).not.toContain("openai")
         expect(config).not.toContain("DALPH_CODEX_PROVIDER_CREDENTIAL")
         expect(fixture.configuration.codexExecutable).not.toBe(input.codexExecutable)
-        expect(yield* fs.readFileString(fixture.configuration.codexExecutable)).toContain(
-          `exec '${input.codexExecutable}' "$@"`
-        )
-        expect(yield* fs.readFileString(fixture.configuration.codexExecutable)).toContain('test "${1-}" = "app-server"')
+        const wrapper = yield* fs.readFileString(fixture.configuration.codexExecutable)
+        expect(wrapper).toContain("#!/usr/bin/env bash")
+        expect(wrapper).toContain('exec -a "$0"')
+        expect(wrapper).toContain("/@openai/codex/bin/codex.js'")
+        expect(wrapper).toContain("test -r '/usr/local/@openai/codex/bin/codex.js'")
+        expect(wrapper).toContain('test "${1-}" = "app-server"')
+        expect(
+          launchExecutableMatches(fixture.configuration.codexExecutable, [
+            fixture.configuration.codexExecutable,
+            "/workspace/dalph/node_modules/@openai/codex/bin/codex.js",
+            "app-server"
+          ])
+        ).toBe(true)
+        expect(
+          launchExecutableMatches(fixture.configuration.codexExecutable, [
+            "node",
+            "/workspace/dalph/node_modules/@openai/codex/bin/codex.js",
+            "app-server"
+          ])
+        ).toBe(false)
         expect(yield* fs.readFileString(fixture.applicationServerObservationPath)).toBe("")
         const document = yield* fs.readFileString(fixture.configurationPath)
         expect(document).not.toContain("github-secret")
@@ -269,6 +286,67 @@ describe("#307 production live qualification runtime", () => {
         if (observedContainer !== undefined)
           yield* (yield* FileSystem.FileSystem).remove(observedContainer, { recursive: true })
       }).pipe(Effect.provide(layer))
+    )
+  })
+
+  it("persists the exact remote fixture before local setup or the shipped child can stall", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const output = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-live-remote-checkpoint-" })
+          const publicationContainer = `${output}/Q`
+          yield* fs.makeDirectory(publicationContainer)
+          const manifest = yield* decodeProductionLiveQualificationManifest({
+            ...input,
+            publicationContainer,
+            artifact: `${output}/evidence.json`,
+            retentionReport: `${publicationContainer}/retained-locators.json`
+          })
+          yield* writeProductionLiveQualificationFailureRetentionReport(
+            manifest,
+            "Setup",
+            {
+              manifest: {
+                resources: [
+                  {
+                    _tag: "Issue",
+                    nodeId: "issue-node-307",
+                    number: 307,
+                    title: "live-q-307: one disposable Dalph qualification task",
+                    body: "live-q-307: create LIVE-QUALIFICATION.md with one sentence and commit the change.",
+                    fingerprint: "a".repeat(64)
+                  }
+                ]
+              }
+            } as never,
+            undefined,
+            undefined,
+            undefined,
+            {}
+          )
+          const report = JSON.parse(yield* fs.readFileString(manifest.retentionReport)) as {
+            readonly phase: string
+            readonly github: ReadonlyArray<{
+              readonly nodeId: string
+              readonly disposition: string
+              readonly manualCommand: string
+            }>
+            readonly local: ReadonlyArray<unknown>
+          }
+          expect(report.phase).toBe("Setup")
+          expect(report.github).toEqual([
+            {
+              _tag: "Issue",
+              nodeId: "issue-node-307",
+              disposition: "Retained",
+              manualCommand:
+                "gh api graphql -f query='query($id: ID!) { node(id: $id) { id __typename } }' -f id='issue-node-307'"
+            }
+          ])
+          expect(report.local).toEqual([])
+        })
+      ).pipe(Effect.provide(layer))
     )
   })
 

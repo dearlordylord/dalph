@@ -78,7 +78,11 @@ test("job environments do not read runner context before GitHub assigns a runner
 })
 
 test("four physical shard jobs capture dedicated and stressed evidence before one live job", () => {
+  const preflightJob = workflow.slice(workflow.indexOf("  preflight:\n"), workflow.indexOf("  formal:\n"))
+  assert.match(preflightJob, /Require successful CI for exact candidate/u)
+  assert.match(preflightJob, /--require-successful-ci/u)
   assert.match(workflow, /^  formal:$/mu)
+  assert.match(formalJob, /needs:\s*\[preflight\]/u)
   assert.match(formalJob, /name: \$\{\{ matrix\.label \}\} shard \$\{\{ matrix\.shard \}\}/u)
   assert.equal((formalJob.match(/profile: dedicated/gu) ?? []).length, 2)
   assert.equal((formalJob.match(/profile: stressed/gu) ?? []).length, 2)

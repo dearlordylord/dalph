@@ -461,8 +461,12 @@ only for one accepted candidate and one dedicated disposable repository. The
 dispatch supplies `candidate_sha`, `reviewed_base_sha`, and `repository`; the
 first two values must each be exactly 40 lowercase hexadecimal characters.
 The workflow checks out that candidate, verifies the reviewed Base exists,
-installs with pnpm 10.29.3 on Node 24.20.0, and runs `pnpm build` before any
-controlled-provider credential is generated.
+and first asks GitHub Actions whether the exact candidate already has one
+completed successful workflow named `CI`. A failed, running, cancelled,
+wrong-SHA, or differently named workflow stops the dispatch before any formal
+worker or protected-environment approval starts. It does not poll. After that
+preflight succeeds, the workflow installs with pnpm 10.29.3 on Node 24.20.0
+and runs `pnpm build` before any controlled-provider credential is generated.
 
 The workflow has one constant concurrency group,
 `production-live-qualification`, with `cancel-in-progress: false`, regardless
@@ -472,7 +476,7 @@ secret, `DALPH_LIVE_GITHUB_TOKEN`, is mapped only into the single live-command
 step and is scoped to issue and label mutation in the configured repository.
 Ordinary CI never invokes this command.
 
-Four preceding matrix jobs capture shards 0 and 1 for both the dedicated ARM
+Four matrix jobs after that preflight capture shards 0 and 1 for both the dedicated ARM
 profile and the two-CPU stressed profile with `pnpm check:ci:formal:shard`.
 Their reports and provenance files are downloaded by the approved job. Each
 formal job records its setup/install duration and binds the SHA-256 digest of
@@ -533,11 +537,24 @@ the formal evidence files, and the built entry
 controller once with one absolute `--manifest` locator. The controller owns
 fixture creation, the one shipped production Run, build/hash/provenance
 evidence, exact cleanup, and the redacted artifact; this wrapper has no retry
-or resume path. The controller generates a fresh random throwaway credential
+or resume path. As soon as Q's GitHub issue exists, the controller writes its
+exact redacted remote locator to `retained-locators.json`; after local setup it
+replaces that checkpoint with the complete remote/local retained
+set before starting the shipped child. Outer cancellation can therefore upload
+the last completed disposition checkpoint even when the controller never
+returns. A successful final publication removes the stale checkpoint. The
+controller generates a fresh random throwaway credential
 for the loopback Responses provider per invocation, binds it only to the
 isolated `CODEX_HOME` config under
 `DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL`, and passes that value only to the
-controlled shipped child. A failed or ambiguous provider boundary therefore leaves the
+controlled shipped child. Its Bash observation wrapper starts the locked Codex
+JavaScript entry with the wrapper locator retained as `argv[0]`; the ownership
+census can therefore still identify and signal the exact detached app-server
+after pnpm's ordinary shim would have replaced that identity with `node`. The
+outer validator requires that derived locked JavaScript entry to be a readable
+nonempty file before it launches the controller, and the generated wrapper
+rereads it immediately before `exec`.
+A failed or ambiguous provider boundary therefore leaves the
 Run and exact retained locators for manual inspection rather than launching a
 second command.
 
@@ -559,11 +576,13 @@ The focused contract mapping is:
 
 | Scenario | Acceptance test |
 | --- | --- |
+| Alice dispatches a candidate whose exact `CI` workflow is failed, running, cancelled, absent, or successful only for another SHA; the preflight fails before formal work or environment approval. An exact completed successful `CI` permits the formal dependency. | `scripts/run-production-live-qualification.test.mjs`: `blocks formal qualification unless exact candidate CI is completed and successful`, `permits formal qualification after exact candidate CI completed successfully`; `scripts/production-live-qualification-workflow.test.mjs`: dependency-order assertions in the four-shard case |
 | Alice's approved workflow is manually dispatched with exact candidate/Base inputs, one serialized lane, Node 24.20.0, build, and dedicated/stressed evidence; each shard records Node's unprefixed runtime version while the resolver rejects the `v24.20.0` spelling that caused run 34837785947 to fail; GitHub's successful whole-job timestamps prove each job finishes below its 16-minute cutoff after its final upload | `scripts/production-live-qualification-workflow.test.mjs` exact worker toolchain case; `scripts/run-production-live-qualification.test.mjs` v-prefixed hosted-metadata negative control, successful timestamp derivation, and 16-minute rejection cases |
 | The command rejects missing opt-in, malformed inputs, or a changed candidate before any provider child starts | `scripts/run-production-live-qualification.test.mjs` validation cases |
 | The built controller receives one manifest locator and secrets only through one child launch | `scripts/run-production-live-qualification.test.mjs` exact launch case |
 | Uploaded formal provenance and live failure evidence disclose no private absolute worker/controller locator | `scripts/run-production-live-qualification.test.mjs` absolute formal-log rejection case; `scripts/production-live-qualification-workflow.test.mjs` manifest/pre-cleanup exclusion case |
 | A child/provider failure is reported without a retry and without secret bytes in the wrapper error | `scripts/run-production-live-qualification.test.mjs` single-launch failure case and workflow artifact `if: always()` contract |
+| The disposable issue exists but later local setup or the shipped command never returns; the always-upload step receives Q's latest exact retained-resource checkpoint rather than no artifact. | `packages/dalph/test-support/production-live-qualification-runtime.test.ts`: `persists the exact remote fixture before local setup or the shipped child can stall`, `an unfinished recoverable Run retains every exact local locator for manual cleanup` |
 
 ### Disposable production repository walkthrough
 

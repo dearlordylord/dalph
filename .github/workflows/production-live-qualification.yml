@@ -28,8 +28,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  preflight:
+    name: Require successful CI for exact candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      DALPH_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+
+      - name: Require successful CI for exact candidate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/run-production-live-qualification.mjs --require-successful-ci
+
   formal:
     name: ${{ matrix.label }} shard ${{ matrix.shard }}
+    needs: [preflight]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 16
     strategy:

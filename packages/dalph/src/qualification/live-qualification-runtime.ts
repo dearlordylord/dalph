@@ -1,6 +1,7 @@
 /* eslint-disable import/no-nodejs-modules, max-lines -- The protected runner owns the complete Q lifecycle. */
 /* eslint-disable import-x/no-unused-modules -- Shipped qualification and external test-support consume these boundary contracts outside the production lint graph. */
 import nodePath from "node:path"
+import nodeProcess from "node:process"
 import { GitCommitSha, GitRepositoryLocator } from "@dalph/contracts"
 import {
   GitCommand,
@@ -204,15 +205,20 @@ const codexConfiguration = (baseUrl: string, container: string) =>
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 
-const codexAppServerObservationWrapper = (codexExecutable: string, observationPath: string) =>
+const codexAppServerObservationWrapper = (codexEntry: string, nodeExecutable: string, observationPath: string) =>
   [
-    "#!/bin/sh",
+    "#!/usr/bin/env bash",
     "set -eu",
     'test "${1-}" = "app-server"',
+    `test -r ${shellQuote(codexEntry)}`,
     "test -r /proc/self/stat",
     "start_identity=$(awk '{ print $22 }' /proc/$$/stat)",
     `printf 'linux:%s:pid:%s\\n' "$start_identity" "$$" >> ${shellQuote(observationPath)}`,
-    `exec ${shellQuote(codexExecutable)} "$@"`,
+    // pnpm's .bin shim replaces argv[0] with `node .../codex.js`, which makes
+    // the process cease matching this exact owned wrapper before cleanup can
+    // signal it. Launch the same locked Codex entry explicitly while retaining
+    // the wrapper locator as argv[0].
+    `exec -a "$0" ${shellQuote(nodeExecutable)} ${shellQuote(codexEntry)} "$@"`,
     ""
   ].join("\n")
 
@@ -242,6 +248,7 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
     nodePath.join(codexExecutorPrivateStateDirectory, "app-server-processes")
   )
   const codexAppServerWrapper = nodePath.join(codexExecutorPrivateStateDirectory, "codex-app-server-observer")
+  const codexEntry = nodePath.resolve(nodePath.dirname(manifest.codexExecutable), "../@openai/codex/bin/codex.js")
   const integratorCandidateWorktreeRoot = at("candidates")
   const integratorPrivateStore = at("private.json")
   const configurationPath = ProductionConfigurationLocator.make(at("production.json"))
@@ -280,7 +287,7 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
   yield* fs.writeFileString(codexAppServerObservationPath, "")
   yield* fs.writeFileString(
     codexAppServerWrapper,
-    codexAppServerObservationWrapper(manifest.codexExecutable, codexAppServerObservationPath)
+    codexAppServerObservationWrapper(codexEntry, nodeProcess.execPath, codexAppServerObservationPath)
   )
   yield* fs.chmod(codexAppServerWrapper, privateDirectoryMode)
   yield* fs.writeFileString(journalDatabase, "")
@@ -1018,6 +1025,18 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
       createIssueOperationId: manifest.createIssueOperationId
     })
     githubFixture = createdGithubFixture
+    // Persist Q's first exact remote locator before any later setup or child
+    // boundary can remain unresolved. The hosted runner uploads this checkpoint
+    // even when its outer deadline terminates the controller process.
+    yield* writeProductionLiveQualificationFailureRetentionReport(
+      manifest,
+      "Setup",
+      githubFixture,
+      undefined,
+      undefined,
+      undefined,
+      cleanupState
+    )
     const runningForwarder = yield* makeProductionLiveGithubForwarder(defaultGithubGraphqlEndpoint)
     forwarder = runningForwarder
     const responses = yield* makeProductionLiveResponsesEndpoint((worktree) =>
@@ -1047,6 +1066,18 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
         })
     )
     const fixture = local
+    // Replace the setup checkpoint with the complete recoverable fixture before
+    // the shipped child starts. This is evidence of retained resources, not
+    // authority to delete them or to retry the live journey.
+    yield* writeProductionLiveQualificationFailureRetentionReport(
+      manifest,
+      "Execution",
+      githubFixture,
+      forwarder,
+      fixture,
+      localContainer,
+      cleanupState
+    )
     const build = yield* measureQualificationBuild(manifest.sourceRepository, manifest.sourceBaseSha, {
       builtEntry: manifest.builtEntry,
       lockfile: manifest.lockfile,
@@ -1151,7 +1182,24 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
       yield* Ref.set(qualified, qualificationFailed("EvidenceValidation"))
     return yield* Ref.get(qualified)
   }).pipe(Effect.result)
-  if (attempt._tag === "Success" && attempt.success._tag === "Qualified") return attempt.success
+  if (attempt._tag === "Success" && attempt.success._tag === "Qualified") {
+    const removedCheckpoint = yield* fs.remove(manifest.retentionReport).pipe(Effect.result)
+    if (removedCheckpoint._tag === "Success") return attempt.success
+    yield* writeProductionLiveQualificationFailureRetentionReport(
+      manifest,
+      "Publication",
+      githubFixture,
+      forwarder,
+      local,
+      localContainer,
+      cleanupState
+    ).pipe(
+      Effect.provideService(GithubGraphqlClient, githubClient),
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provideService(Crypto.Crypto, crypto)
+    )
+    return qualificationFailed("Publication")
+  }
   const failure =
     attempt._tag === "Success" && attempt.success._tag === "QualificationFailed"
       ? attempt.success

@@ -152,6 +152,60 @@ const githubRunInputs = (environment) => ({
   token: valueOf(environment, "GITHUB_TOKEN")
 })
 
+/** Require already-completed hosted CI for this exact candidate before any formal worker starts. */
+export const requireSuccessfulCandidateCi = async ({
+  environment = nodeProcess.env,
+  fetchImpl = globalThis.fetch
+} = {}) => {
+  if (typeof fetchImpl !== "function") throw new Error("GitHub Actions CI lookup requires fetch")
+  const headSha = exactShaInput(environment, "DALPH_CANDIDATE_SHA")
+  const sourceRepository = valueOf(environment, "GITHUB_REPOSITORY")
+  if (!repository.test(sourceRepository)) throw new Error("GitHub workflow repository identity is invalid")
+  const token = valueOf(environment, "GITHUB_TOKEN")
+  const apiBase = new URL(environment.GITHUB_API_URL ?? "https://api.github.com")
+  if (apiBase.protocol !== "https:") throw new Error("GitHub API URL must use HTTPS")
+  const endpoint = new URL(
+    `repos/${sourceRepository}/actions/runs`,
+    apiBase.href.endsWith("/") ? apiBase : `${apiBase.href}/`
+  )
+  endpoint.searchParams.set("head_sha", headSha)
+  endpoint.searchParams.set("per_page", "100")
+  let response
+  try {
+    response = await fetchImpl(endpoint, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "dalph-production-live-qualification"
+      }
+    })
+  } catch (error) {
+    throw new Error("GitHub Actions CI lookup failed", { cause: error })
+  }
+  if (!response.ok) throw new Error(`GitHub Actions CI lookup failed with status ${response.status}`)
+  let payload
+  try {
+    payload = await response.json()
+  } catch (error) {
+    throw new Error("GitHub Actions CI lookup returned invalid JSON", { cause: error })
+  }
+  if (payload === null || typeof payload !== "object" || !Array.isArray(payload.workflow_runs)) {
+    throw new Error("GitHub Actions CI lookup returned an invalid workflow-run list")
+  }
+  const accepted = payload.workflow_runs.some(
+    (run) =>
+      run !== null &&
+      typeof run === "object" &&
+      run.name === "CI" &&
+      run.head_sha === headSha &&
+      run.status === "completed" &&
+      run.conclusion === "success"
+  )
+  if (!accepted) throw new Error("exact candidate requires a completed successful CI workflow")
+  return { headSha, workflow: "CI" }
+}
+
 const formalShardPaths = (root, kind, shard) => ({
   reportPath: nodePath.join(root, kind, `shard-${shard}`, "report.json"),
   metadataPath: nodePath.join(root, kind, `shard-${shard}`, "provenance.json")
@@ -512,6 +566,7 @@ export const validateProductionLiveQualificationEnvironment = async (environment
   const shippedEntry = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_SHIPPED_ENTRY")
   const lockfile = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_LOCKFILE")
   const codexExecutable = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_CODEX_EXECUTABLE")
+  const codexEntry = nodePath.resolve(nodePath.dirname(codexExecutable), "../@openai/codex/bin/codex.js")
   const publicationContainer = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_PUBLICATION_CONTAINER")
   if (builtEntry !== nodePath.resolve(sourceRepository, productionLiveQualificationBin)) {
     throw new Error("qualification built entry must be the explicit production-live controller path")
@@ -524,6 +579,7 @@ export const validateProductionLiveQualificationEnvironment = async (environment
   }
   await requireReadableFile(builtEntry, "built production-live qualification controller")
   await requireReadableFile(shippedEntry, "built shipped Dalph entry")
+  await requireReadableFile(codexEntry, "locked Codex JavaScript entry")
   for (const kind of ["dedicated", "stressed"]) {
     for (const shard of [0, 1]) {
       const paths = formalShardPaths(formalRoot, kind, shard)
@@ -685,6 +741,10 @@ export const runProductionLiveQualification = async ({
 }
 
 const main = async () => {
+  if (nodeProcess.argv.includes("--require-successful-ci")) {
+    await requireSuccessfulCandidateCi()
+    return
+  }
   if (nodeProcess.argv.includes("--resolve-formal-jobs")) {
     await resolveFormalQualificationJobs()
     return
