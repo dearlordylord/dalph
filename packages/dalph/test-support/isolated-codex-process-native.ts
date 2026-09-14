@@ -56,19 +56,15 @@ const readFixtureProcess = async (
 
 const fixtureProcessIds = (processes: ReadonlyArray<LinuxProcessStat>, rootPid: number): ReadonlySet<number> => {
   const byPid = new Map(processes.map((process) => [process.pid, process]))
+  const reachesRoot = (pid: number, seen: ReadonlySet<number>): boolean => {
+    if (seen.has(pid)) return false
+    if (pid === rootPid) return true
+    const parent = byPid.get(pid)
+    if (parent === undefined || parent.parentPid === 0) return false
+    return reachesRoot(parent.parentPid, new Set([...seen, pid]))
+  }
   return new Set(
-    processes.flatMap((process) => {
-      let pid = process.pid
-      const seen = new Set<number>()
-      while (!seen.has(pid)) {
-        if (pid === rootPid) return [process.pid]
-        seen.add(pid)
-        const parent = byPid.get(pid)
-        if (parent === undefined || parent.parentPid === 0) return []
-        pid = parent.parentPid
-      }
-      return []
-    })
+    processes.flatMap((process) => (reachesRoot(process.pid, new Set()) ? [process.pid] : []))
   )
 }
 
