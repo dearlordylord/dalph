@@ -7,6 +7,7 @@ import { afterEach, test } from "node:test"
 
 import {
   changedPathsBetween,
+  classifyFormalChangeBetween,
   classifyFormalChangedPaths,
   classifyChangedPaths,
   hostedFormalInputPathsBetween,
@@ -96,6 +97,33 @@ test("fails closed when Git cannot enumerate the exact change", () => {
   assert.deepEqual(failures, ["unreadable comparison"])
 })
 
+test("one exact classifier accepts an unchanged candidate and rejects unavailable identities", () => {
+  assert.deepEqual(
+    classifyFormalChangeBetween({
+      baseSha,
+      headSha,
+      listChangedPaths: () => [],
+      listFormalInputPaths: () => ["specs/selected.qnt"]
+    }),
+    { version: 1, status: "unaffected", baseSha, headSha, changedPaths: [], affectedPaths: [] }
+  )
+  assert.throws(
+    () => classifyFormalChangeBetween({ baseSha: "HEAD^", headSha, listChangedPaths: () => [] }),
+    /exact nonzero commit SHAs/u
+  )
+  assert.throws(
+    () =>
+      classifyFormalChangeBetween({
+        baseSha,
+        headSha,
+        listChangedPaths: () => [],
+        listFormalInputPaths: () => ["specs/selected.qnt"],
+        requireChangedPaths: true
+      }),
+    /path set is empty/u
+  )
+})
+
 test("fails closed for missing identities, unsupported events, empty diffs, and unavailable projections", () => {
   const paths = () => ["packages/dalph/src/index.ts"]
   const formal = () => ["specs/selected.qnt"]
@@ -150,7 +178,8 @@ test("requires formal verification for model, helper, command, workflow, and too
     "scripts/generate-hosted-formal-input-manifest.mjs",
     "scripts/hosted-formal-input-manifest.json",
     "scripts/hosted-formal-input-manifest.mjs",
-    "scripts/classify-docs-only-change.mjs"
+    "scripts/classify-docs-only-change.mjs",
+    "packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts"
   ])
     assert.deepEqual(classifyFormalChangedPaths([path], manifest.paths), [path], path)
 

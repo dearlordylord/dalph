@@ -29,6 +29,7 @@ const dispatch = ({
   admitted = true,
   arguments: args,
   argvZeroTool,
+  classificationFailure = false,
   environment = {},
   failLocal = false,
   pinJavaHome = false,
@@ -59,6 +60,12 @@ const dispatch = ({
       "stabilize-verification-path.mjs"
     ])
       copyFileSync(new URL(file, import.meta.url), join(root, file))
+    writeFileSync(
+      join(root, "classify-docs-only-change.mjs"),
+      classificationFailure
+        ? "export const classifyFormalChangeBetween=()=>{throw new Error('controlled unavailable projection')}"
+        : "export const classifyFormalChangeBetween=({baseSha,headSha})=>({version:1,status:'affected',baseSha,headSha,changedPaths:['controlled-formal-input'],affectedPaths:['controlled-formal-input']})"
+    )
     writeFileSync(
       join(root, "gate-quality-run.mjs"),
       `${append}import {execFileSync} from 'node:child_process';export const executeResumableQualityGate=async options=>{let identity={environmentPath:process.env.PATH};let environment=process.env;let guard;if(process.env.DALPH_TEST_CAPTURE_IDENTITY==='1'){environment={...process.env,GIT_OPTIONAL_LOCKS:'0'};delete environment.DALPH_GATE_GIT_HISTORY;const {startInputGuard}=await import(${JSON.stringify(new URL("gate-resume-inputs.mjs", import.meta.url).href)});guard=await startInputGuard({worktree:${JSON.stringify(identityWorktree)},logicalInvocation:{mode:'controlled check:all identity',baseSha:options.logicalInvocation.baseSha,dprintIncremental:'disabled',toolExecutables:[]},effectiveEnvironment:environment,generatedOutputRoots:[]});identity=guard.identity;}try{const childPath=execFileSync(process.execPath,['-e','process.stdout.write(process.env.PATH)'],{env:environment,encoding:'utf8'});record({boundary:'local-handoff',options,effectivePath:environment.PATH,childPath,identity});${failLocal ? "throw Error('controlled required formal verification failed');" : "return {successfulOutputLines:0};"}}finally{if(guard){await guard.finish();await guard.close();}}};`
@@ -261,6 +268,16 @@ test("required local formal failure propagates through the actual quality comman
   assert.match(result.stderr, /required formal verification failed/u)
   assert.equal(calls.length, 1)
   assert.equal(calls[0].boundary, "local-handoff")
+})
+
+test("unavailable local formal classification fails before the resumable quality boundary", () => {
+  const { calls, result } = dispatch({
+    arguments: ["--local-handoff", `--candidate=${base}`],
+    classificationFailure: true
+  })
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /Unable to classify local formal relevance: controlled unavailable projection/u)
+  assert.deepEqual(calls, [])
 })
 
 test("hosted quality dispatch excludes local formal integration and MBT regardless lifecycle", () => {

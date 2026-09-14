@@ -107,7 +107,7 @@ const runs = (root) => {
     )
     .map((runId) => readRunEvidence({ runId, runDirectory: join(location.custodyRoot, "runs", runId) }))
 }
-test("admitted late failure resumes proven stages once and copies reused whole-coverage bytes with provenance", () => {
+test("an unaffected candidate resumes proven stages with not-applicable formal evidence and no formal workflow", () => {
   const f = fixture()
   let completed = false
   try {
@@ -127,11 +127,14 @@ const sources=${JSON.stringify(stageSources)};
 const executableSources=sources.map(source=>"import {createRequire} from 'node:module';const require=createRequire(import.meta.url);"+source);
 const manifest=sources.map((source,ordinal)=>({execution:{executable:process.execPath,args:['--input-type=module','-e',executableSources[ordinal]],cwd:process.cwd(),name:'fixture '+ordinal,timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000},id:['build','negative','coverage','late'][ordinal],name:'fixture '+ordinal,boundary:'qualification',args:[source],timeout:10000,artifactRoots:ordinal===0?['dist']:ordinal===2?['@coverage']:[]}));
 const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};
+logicalInvocation.formalClassification={version:1,status:'unaffected',baseSha:logicalInvocation.baseSha,headSha:undefined,changedPaths:['application-only-input'],affectedPaths:[]};
 await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,resumeRunId:process.argv[2]?.slice('--resume='.length),runStage:async stage=>{
 return runBoundedCommand({executable:process.execPath,args:['--input-type=module','-e',"import {createRequire} from 'node:module';const require=createRequire(import.meta.url);"+stage.args[0]],name:stage.name,timeoutMilliseconds:10000})}});`
     )
     const failed = launch(f.root, script)
     assert.equal(failed.status, 1, failed.stderr)
+    assert.match(failed.stderr, /Formal: not applicable; zero checkers or servers started/u)
+    assert.doesNotMatch(failed.stderr, /controlled boundary reuses/u)
     const prior = runs(f.root)[0]
     assert.equal(prior.custody, "stopped")
     assert.equal(prior.resume.stages[0].outcome, "passed", JSON.stringify(prior.stages))
@@ -140,6 +143,9 @@ return runBoundedCommand({executable:process.execPath,args:['--input-type=module
     assert.equal(resumed.status, 0, resumed.stderr)
     const evidence = runs(f.root).find((run) => run.runId !== prior.runId)
     assert.equal(evidence.qualification, "passed")
+    assert.equal(evidence.resume.formal.disposition, "not-applicable")
+    assert.equal(evidence.resume.formalProven, true)
+    assert.doesNotMatch(resumed.stderr, /controlled boundary reuses/u)
     assert.deepEqual(readFileSync(counter, "utf8").trim().split("\n"), [
       "build",
       "negative",
@@ -154,6 +160,7 @@ return runBoundedCommand({executable:process.execPath,args:['--input-type=module
     const fresh = launch(f.root, script)
     assert.equal(fresh.status, 0, fresh.stderr)
     const freshEvidence = runs(f.root).find((run) => run.runId !== prior.runId && run.runId !== evidence.runId)
+    assert.equal(freshEvidence.resume.formal.disposition, "not-applicable")
     assert.deepEqual(
       freshEvidence.resume.stages.map((stage) => stage.outcome),
       evidence.resume.stages.map((stage) => stage.outcome)
@@ -214,7 +221,7 @@ test("admitted census failure reruns later successful checks instead of treating
       script,
       `import {executeResumableQualityGate} from ${JSON.stringify(new URL(`file://${join(f.root, "scripts", "gate-quality-run.mjs")}`).href)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
 const sources=${JSON.stringify(sources)};const manifest=sources.map((source,ordinal)=>({id:['first','later','suffix'][ordinal],name:'census '+ordinal,boundary:ordinal<2?'preflight':'qualification',args:[source],timeout:10000,artifactRoots:[],execution:{executable:process.execPath,args:['-e',source],cwd:process.cwd(),name:'census '+ordinal,timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
-const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,resumeRunId:process.argv[2]?.slice('--resume='.length),runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`
+const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};logicalInvocation.formalClassification={version:1,status:'affected',baseSha:logicalInvocation.baseSha,headSha:undefined,changedPaths:['controlled-formal-input'],affectedPaths:['controlled-formal-input']};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,resumeRunId:process.argv[2]?.slice('--resume='.length),runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`
     )
     const failed = launch(f.root, script)
     assert.equal(failed.status, 1, failed.stderr)
@@ -243,7 +250,7 @@ test("admitted check:all reports lint and complexity failures together before qu
       script,
       `import {executeResumableQualityGate} from ${JSON.stringify(new URL(`file://${join(f.root, "scripts", "gate-quality-run.mjs")}`).href)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
 const sources=${JSON.stringify(sources)};const manifest=sources.map((source,ordinal)=>({id:['format-lint','complexity','coverage'][ordinal],name:['format and lint','cyclomatic complexity','tests and coverage'][ordinal],boundary:ordinal<2?'preflight':'qualification',args:[ordinal===0?'lint:code':ordinal===1?'check:complexity':'test:coverage'],timeout:10000,artifactRoots:[],execution:{executable:process.execPath,args:['-e',source],cwd:process.cwd(),name:['format and lint','cyclomatic complexity','tests and coverage'][ordinal],timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
-const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',sources[manifest.indexOf(stage)]],name:stage.name,timeoutMilliseconds:10000})});`
+const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};logicalInvocation.formalClassification={version:1,status:'affected',baseSha:logicalInvocation.baseSha,headSha:undefined,changedPaths:['controlled-formal-input'],affectedPaths:['controlled-formal-input']};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',sources[manifest.indexOf(stage)]],name:stage.name,timeoutMilliseconds:10000})});`
     )
     const failed = launch(f.root, script)
     assert.equal(failed.status, 1, failed.stderr)
@@ -289,7 +296,7 @@ test("resumed suffix consumes the original successful output budget", () => {
       script,
       `import {executeResumableQualityGate} from ${JSON.stringify(new URL(`file://${join(f.root, "scripts", "gate-quality-run.mjs")}`).href)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
 const sources=${JSON.stringify(sources)};const manifest=sources.map((source,ordinal)=>({id:['prefix','suffix'][ordinal],name:'budget '+ordinal,boundary:'qualification',args:[source],timeout:10000,artifactRoots:[],execution:{executable:process.execPath,args:['-e',source],cwd:process.cwd(),name:'budget '+ordinal,timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
-const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,resumeRunId:process.argv[2]?.slice('--resume='.length),runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`
+const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};logicalInvocation.formalClassification={version:1,status:'affected',baseSha:logicalInvocation.baseSha,headSha:undefined,changedPaths:['controlled-formal-input'],affectedPaths:['controlled-formal-input']};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,resumeRunId:process.argv[2]?.slice('--resume='.length),runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`
     )
     assert.equal(launch(f.root, script).status, 1)
     const prior = runs(f.root)[0]
@@ -319,7 +326,7 @@ test("a real edit-and-restore during a designated stage forbids later launches a
       script,
       `import {executeResumableQualityGate} from ${JSON.stringify(new URL(`file://${join(f.root, "scripts", "gate-quality-run.mjs")}`).href)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
 const sources=${JSON.stringify(sources)};const manifest=sources.map((source,ordinal)=>({id:['mutation','next'][ordinal],name:'mutation '+ordinal,boundary:'qualification',args:[source],timeout:10000,artifactRoots:[],execution:{executable:process.execPath,args:['-e',source],cwd:process.cwd(),name:'mutation '+ordinal,timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
-const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`
+const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};logicalInvocation.formalClassification={version:1,status:'affected',baseSha:logicalInvocation.baseSha,headSha:undefined,changedPaths:['controlled-formal-input'],affectedPaths:['controlled-formal-input']};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`
     )
     const result = launch(f.root, script)
     assert.equal(result.status, 1)
@@ -347,7 +354,7 @@ test("an enclosing negative test proves later cleanup while preserving the child
       script,
       `import {executeResumableQualityGate} from ${JSON.stringify(new URL(`file://${join(f.root, "scripts", "gate-quality-run.mjs")}`).href)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
 const sources=${JSON.stringify([negative, late])};const manifest=sources.map((source,ordinal)=>({id:['negative-cleanup','late'][ordinal],name:'cleanup '+ordinal,boundary:'qualification',args:[source],timeout:10000,artifactRoots:[],execution:{executable:process.execPath,args:['--input-type=module','-e',source],cwd:process.cwd(),name:'cleanup '+ordinal,timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
-const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,resumeRunId:process.argv[2]?.slice('--resume='.length),runStage:stage=>runBoundedCommand({executable:process.execPath,args:['--input-type=module','-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`
+const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};logicalInvocation.formalClassification={version:1,status:'affected',baseSha:logicalInvocation.baseSha,headSha:undefined,changedPaths:['controlled-formal-input'],affectedPaths:['controlled-formal-input']};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,resumeRunId:process.argv[2]?.slice('--resume='.length),runStage:stage=>runBoundedCommand({executable:process.execPath,args:['--input-type=module','-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`
     )
     const failed = launch(f.root, script, undefined, true)
     assert.equal(failed.status, 1, failed.stderr)
@@ -383,7 +390,7 @@ test("a fresh build protects its produced artifacts against consumer edit-and-re
       script,
       `import {executeResumableQualityGate} from ${JSON.stringify(new URL(`file://${join(f.root, "scripts", "gate-quality-run.mjs")}`).href)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
 const sources=${JSON.stringify(sources)};const manifest=sources.map((source,ordinal)=>({id:['build','consumer','next'][ordinal],name:'artifact '+ordinal,boundary:'qualification',args:[source],timeout:10000,artifactRoots:ordinal===0?['dist']:[],execution:{executable:process.execPath,args:['-e',source],cwd:process.cwd(),name:'artifact '+ordinal,timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
-const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`
+const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};logicalInvocation.formalClassification={version:1,status:'affected',baseSha:logicalInvocation.baseSha,headSha:undefined,changedPaths:['controlled-formal-input'],affectedPaths:['controlled-formal-input']};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`
     )
     const result = launch(f.root, script)
     assert.equal(result.status, 1)
@@ -416,7 +423,7 @@ test("fresh platform setup precedes observation, ready diagnostics do not mutate
       `import {executeResumableQualityGate} from ${JSON.stringify(new URL(`file://${join(f.root, "scripts", "gate-quality-run.mjs")}`).href)};import {ensureEffectTsgoPlatformBinaryExecutable} from ${JSON.stringify(helper)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
 const sources=${JSON.stringify([source, late])};
 const manifest=sources.map((source,ordinal)=>({id:'stage-'+ordinal,name:'stage '+ordinal,boundary:'qualification',args:[source],timeout:10000,artifactRoots:[],execution:{executable:process.execPath,args:['--input-type=module','-e',source],cwd:process.cwd(),name:'stage '+ordinal,timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
-await executeResumableQualityGate({logicalInvocation:{mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]},stageManifest:manifest,resumeRunId:process.argv[2]?.slice('--resume='.length),prepareFreshInputs:()=>ensureEffectTsgoPlatformBinaryExecutable({platform:'linux',resolvePackageJson:()=>${JSON.stringify(packageJson)}}),runStage:stage=>runBoundedCommand({executable:process.execPath,args:['--input-type=module','-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`
+const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};logicalInvocation.formalClassification={version:1,status:'affected',baseSha:logicalInvocation.baseSha,headSha:undefined,changedPaths:['controlled-formal-input'],affectedPaths:['controlled-formal-input']};await executeResumableQualityGate({logicalInvocation,stageManifest:manifest,resumeRunId:process.argv[2]?.slice('--resume='.length),prepareFreshInputs:()=>ensureEffectTsgoPlatformBinaryExecutable({platform:'linux',resolvePackageJson:()=>${JSON.stringify(packageJson)}}),runStage:stage=>runBoundedCommand({executable:process.execPath,args:['--input-type=module','-e',stage.args[0]],name:stage.name,timeoutMilliseconds:10000})});`
     )
     const fresh = launch(f.root, script)
     assert.equal(fresh.status, 1, fresh.stderr)

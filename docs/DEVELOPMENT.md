@@ -77,9 +77,13 @@ required formal check as a lightweight successful not-applicable result.
 
 When required, freeze the candidate and run
 `pnpm check:all --candidate=<base-sha>` with the existing exact-base,
-acknowledgement, admission, and resume rules. Never skip stages inside a full run
-or claim incomplete evidence as qualification. It obtains complete formal
-verification through fresh execution or guarded reuse; a separate repeated
+acknowledgement, admission, and resume rules. Never manually skip stages or
+claim incomplete evidence as qualification. The local runner compares that Base
+with the exact candidate HEAD using the checked-in formal-input projection. An
+affected candidate obtains complete formal verification through fresh execution
+or guarded reuse; an unaffected candidate records an explicit not-applicable
+disposition and starts zero Quint checkers or servers. Missing or ambiguous Git
+or projection evidence fails before qualification. A separate repeated
 `check:quint` is unnecessary. Use focused model/adapter checks during development;
 reserve `pnpm check:quint --force` for fresh reproduction or timing.
 
@@ -139,7 +143,7 @@ All commands below use `pnpm`. Script definitions live in
 | `gate:status <run-id>` | Read durable command results, unresolved custody and per-run logs/report paths without the previous terminal. Missing or malformed receipts cannot prove success. |
 | `gate:reconcile <run-id>` | Close registration and prove every recorded writer group absent before clearing exact worktree/slot fences. Missing exits stay unproven. |
 | `check:all --candidate=<base sha> --resume=<run-id>` | Reuse a contiguous proven full-gate prefix in the same worktree on identical monitored inputs; failed/unproven stage and remaining suffix execute normally. |
-| `check:all` | Complete qualification when required by [choosing checks](#choosing-checks), for a frozen candidate. It reports all ordinary preflight failures together, then starts no formal or application qualification when any preflight check failed. An interruption, unproven surviving process, or runner defect stops the census immediately. The command includes the complete formal requirement and application checks, including non-browser Lab; automatic MBT is excluded pending #363. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
+| `check:all` | Complete qualification when required by [choosing checks](#choosing-checks), for a frozen candidate. It reports all ordinary preflight failures together, then starts no formal or application qualification when any preflight check failed. An interruption, unproven surviving process, or runner defect stops the census immediately. The command classifies formal relevance against the declared candidate Base, runs or reuses the complete formal workflow once when affected, records not applicable without formal processes when unaffected, and runs application checks including non-browser Lab; automatic MBT is excluded pending #363. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
 | `check:ci` | Hosted gate; MBT remains excluded pending #363. |
 
 When a developer changes a TypeScript or TSX file, `check:fast` passes only the
@@ -248,10 +252,12 @@ test later stops the group, a separate exact group-absence record can prove stop
 custody without rewriting that child result. Missing terminal receipts remain
 `UNPROVEN`; successful earlier stages are not a
 final green gate. `check:all --candidate=<base sha> --resume=<run-id>` still
-resumes only a contiguous proven application-gate prefix. The formal profile
-has its own guarded local success record: a missing or stale record executes the
-profile, while an applicable record can be reused and names its original
-evidence. `pnpm check:quint --force` requests fresh formal reproduction or
+resumes only a contiguous proven application-gate prefix. It recomputes formal
+relevance for the same exact Base and candidate HEAD. An affected candidate's
+formal profile has its own guarded local success record: a missing or stale
+record executes the profile, while an applicable record can be reused and names
+its original evidence. An unaffected candidate records not applicable without
+reading that record or starting a checker/server. `pnpm check:quint --force` requests fresh formal reproduction or
 timing. Reuse never replaces model-adequacy review. Automatic MBT is temporarily
 excluded pending #363; `test:mbt` remains an explicit manual command.
 
@@ -393,10 +399,11 @@ production artifacts before source checks so a fresh checkout does not lint
 unresolved distributable declarations. Artifact validation stops at failed
 prerequisites rather than interpreting absent build output. Preflight control
 tests cover this ordering; it changes no Dalph runtime behavior. `check:all` runs
-the same census once. After successful preflight it executes or reuses the
-complete formal profile before expensive qualification, keeps the external-tool
-observation through the final application stage, and performs final no-checker
-applicability validation before handoff success. It starts application
+the same census once. After successful preflight, an affected candidate executes
+or reuses the complete formal profile before expensive qualification, keeps the
+external-tool observation through the final application stage, and performs
+final no-checker applicability validation before handoff success. An unaffected
+candidate records its exact classification and starts no formal process. It starts application
 qualification only when its prerequisites pass.
 Standalone preflight is evidence for repairs before freezing; the final full
 gate repeats the census on its frozen candidate. Use `check:fast` during edits.

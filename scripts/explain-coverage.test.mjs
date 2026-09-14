@@ -520,6 +520,7 @@ const resumedCoverageFixture = () => {
 const sources=${JSON.stringify([coverageSource, lateSource])};
 const manifest=sources.map((source,ordinal)=>({id:['coverage','late'][ordinal],name:'fixture '+ordinal,boundary:'qualification',args:[source],timeout:10000,artifactRoots:ordinal===0?['@coverage']:[],execution:{executable:process.execPath,args:['--input-type=module','-e',source],cwd:process.cwd(),name:'fixture '+ordinal,timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
 const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.baseSha)},stageManifest:manifest,toolExecutables:[]};
+logicalInvocation.formalClassification={version:1,status:'affected',baseSha:logicalInvocation.baseSha,headSha:undefined,changedPaths:['controlled-formal-input'],affectedPaths:['controlled-formal-input']};
 await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,resumeRunId:process.argv[2]?.slice('--resume='.length),runStage:stage=>runBoundedCommand(stage.execution)});`
   )
   const wrapper = fileURLToPath(new URL("./with-gate-slot.mjs", import.meta.url))

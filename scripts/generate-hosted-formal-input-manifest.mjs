@@ -24,6 +24,10 @@ const hostedBootstrapInputs = Object.freeze([
   "pnpm-workspace.yaml",
   hostedFormalInputManifestPath
 ])
+const executableConformanceAdapters = async (worktree) =>
+  (await readdir(join(worktree, "packages/dalph/test/conformance"), { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".mbt.test.ts"))
+    .map((entry) => posix.join("packages/dalph/test/conformance", entry.name))
 
 const supportedEnvironmentByJob = Object.freeze({
   "formal-models": Object.freeze({
@@ -293,6 +297,7 @@ export const deriveHostedFormalInputManifest = async (worktree = repositoryRoot)
   })
   return createHostedFormalInputManifest([
     ...hostedBootstrapInputs,
+    ...(await executableConformanceAdapters(worktree)),
     ...workspacePackages.map(({ path }) => path),
     ...quintPatches,
     ...discovered

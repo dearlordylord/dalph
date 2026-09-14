@@ -93,7 +93,9 @@ the workflow journal.
   selected-Quint closure used by the formal gate, plus the exact workflow,
   root and every declared workspace package manifest, lock, workspace, npm,
   and selected patch inputs that determine the hosted installation and
-  command. The workspace manifests are derived from `pnpm-workspace.yaml`, and
+  command. The projection also names every executable model-conformance adapter,
+  so an adapter edit remains formal-relevant even while automatic MBT is
+  temporarily excluded. The workspace manifests are derived from `pnpm-workspace.yaml`, and
   unsupported install lifecycle commands in any of them fail projection
   generation closed. The projection, its generator, and the
   classifier that imports it are themselves governed inputs. A new formal

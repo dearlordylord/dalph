@@ -50,6 +50,32 @@ export const preparePnpmWorkspaceState = ({ environment = process.env, pnpmEntry
     timeoutMilliseconds: 60_000
   })
 
+export const validateFormalClassification = (classification, logicalInvocation) => {
+  const headSha = logicalInvocation.gitHistory?.headSha
+  if (
+    classification === null ||
+    typeof classification !== "object" ||
+    classification.version !== 1 ||
+    !["affected", "unaffected"].includes(classification.status) ||
+    classification.baseSha !== logicalInvocation.baseSha ||
+    (headSha !== undefined && classification.headSha !== headSha) ||
+    !Array.isArray(classification.changedPaths) ||
+    !Array.isArray(classification.affectedPaths) ||
+    (classification.status === "affected") !== classification.affectedPaths.length > 0
+  )
+    throw new Error("Local formal relevance classification is unavailable or inconsistent")
+  return classification
+}
+
+/** Select the complete formal workflow or an explicit no-process disposition. */
+export const obtainCandidateFormalEvidence = async ({ classification, report, runWorkflow = runFormalWorkflow }) => {
+  if (classification.status === "affected") return { retained: await runWorkflow({ retainGuard: true, report }) }
+  report(
+    `Formal: not applicable; zero checkers or servers started. Base: ${classification.baseSha}; head: ${classification.headSha}; affected paths: none.`
+  )
+  return { disposition: { version: 1, disposition: "not-applicable", classification } }
+}
+
 /** Execute designated stages; skipped commands retain original provenance rather than fresh receipts. */
 export const executeResumableQualityGate = async ({
   logicalInvocation,
@@ -64,6 +90,7 @@ export const executeResumableQualityGate = async ({
   const context = inheritedCustody()
   if (context === undefined) throw new Error("Resumable quality stages require admitted gate custody")
   const { run, runDirectory } = context
+  const formalClassification = validateFormalClassification(logicalInvocation.formalClassification, logicalInvocation)
   logicalInvocation = { ...logicalInvocation, dprintIncremental: "disabled" }
   process.env.DALPH_DPRINT_INCREMENTAL = "disabled"
   // Read-only Git observations must not refresh the watched index; required Git locks remain enabled.
@@ -247,22 +274,26 @@ export const executeResumableQualityGate = async ({
         report
       })
       if (!preflight.succeeded) throw new Error("Preflight failed; qualification stages did not start")
+      const reportFormal = (text) => {
+        const lines = String(text).split(/\r\n|\r|\n/u).length
+        formalOutputLineCount += lines
+        successfulOutputLines = addSuccessfulOutputLines({
+          currentOutputLines: successfulOutputLines,
+          maximumOutputLines: successfulOutputLineLimit,
+          stageName: "formal verification",
+          stageOutputLines: lines
+        })
+        report(text)
+      }
       // Formal work is outside the credited stage prefix: even an entirely
       // resumed application gate obtains current applicability after preflight.
-      retainedFormal = await runFormalWorkflow({
-        retainGuard: true,
-        report: (text) => {
-          const lines = String(text).split(/\r\n|\r|\n/u).length
-          formalOutputLineCount += lines
-          successfulOutputLines = addSuccessfulOutputLines({
-            currentOutputLines: successfulOutputLines,
-            maximumOutputLines: successfulOutputLineLimit,
-            stageName: "formal verification",
-            stageOutputLines: lines
-          })
-          report(text)
-        }
+      const selectedFormal = await obtainCandidateFormalEvidence({
+        classification: formalClassification,
+        report: reportFormal
       })
+      retainedFormal = selectedFormal.retained
+      if (selectedFormal.disposition !== undefined)
+        formal = { ...selectedFormal.disposition, outputLineCount: formalOutputLineCount }
       for (const stage of suffix.filter((stage) => stage.boundary === "qualification")) await executeStage(stage)
     } catch (error) {
       failure = error
@@ -277,6 +308,7 @@ export const executeResumableQualityGate = async ({
       formal = {
         version: 1,
         disposition: retainedFormal.status,
+        classification: formalClassification,
         recordPath: finalized.evidencePath,
         attemptId: finalized.success.attemptId,
         runId: finalized.success.runId,

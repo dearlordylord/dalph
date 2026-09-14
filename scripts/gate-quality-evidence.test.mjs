@@ -20,6 +20,14 @@ const fixture = () => {
   const logicalInvocation = {
     mode: "check:all",
     baseSha: "base",
+    formalClassification: {
+      version: 1,
+      status: "affected",
+      baseSha: "base",
+      headSha: "head",
+      changedPaths: ["specs/model.qnt"],
+      affectedPaths: ["specs/model.qnt"]
+    },
     commandArguments: ["node", "quality"],
     stageManifest: [stage]
   }
@@ -70,6 +78,7 @@ const fixture = () => {
   const formal = {
     version: 1,
     disposition: "reused",
+    classification: logicalInvocation.formalClassification,
     recordPath: "controlled-formal-reference",
     attemptId: formalSuccess.attemptId,
     runId: formalSuccess.runId,
@@ -126,6 +135,53 @@ test("complete negative-test stage evidence qualifies without replacing its genu
   const f = fixture()
   try {
     assert.equal(readQualityEvidence(f).complete, true)
+  } finally {
+    f.cleanup()
+  }
+})
+test("not-applicable formal evidence completes the composite only for the exact unaffected classification", () => {
+  const f = fixture()
+  try {
+    const classification = {
+      version: 1,
+      status: "unaffected",
+      baseSha: "base",
+      headSha: "head",
+      changedPaths: ["packages/dalph/src/index.ts"],
+      affectedPaths: []
+    }
+    f.composite.logicalInvocation.formalClassification = classification
+    f.composite.formal = { version: 1, disposition: "not-applicable", classification, outputLineCount: 0 }
+    const contract = {
+      ...f.composite,
+      manifest: f.composite.manifest,
+      maximumSuccessfulOutputLines: 550,
+      identityReceiptDigest: digest(
+        JSON.stringify({
+          version: 2,
+          observerVersion: 1,
+          inputDigest: "strong-input",
+          sourceInputDigest: "source",
+          logicalInvocation: f.composite.logicalInvocation
+        })
+      )
+    }
+    atomicRecord(join(f.runDirectory, "resume-contract.json"), contract)
+    atomicRecord(join(f.runDirectory, "resume-inputs.json"), {
+      version: 1,
+      identity: {
+        version: 2,
+        observerVersion: 1,
+        inputDigest: "strong-input",
+        sourceInputDigest: "source",
+        logicalInvocation: f.composite.logicalInvocation
+      }
+    })
+    atomicRecord(join(f.runDirectory, "composite.json"), f.composite)
+    assert.equal(readQualityEvidence(f).complete, true)
+    f.composite.formal.classification = { ...classification, status: "affected" }
+    atomicRecord(join(f.runDirectory, "composite.json"), f.composite)
+    assert.throws(() => readQualityEvidence(f), /formal disposition accounting/u)
   } finally {
     f.cleanup()
   }

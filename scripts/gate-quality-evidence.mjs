@@ -185,30 +185,45 @@ export const readQualityEvidence = ({
   if (formal !== undefined) {
     if (
       formal.version !== 1 ||
-      !["executed", "reused"].includes(formal.disposition) ||
+      !["executed", "reused", "not-applicable"].includes(formal.disposition) ||
+      !same(formal.classification, contract.logicalInvocation.formalClassification) ||
       formal.outputLineCount !== formalOutputLineCount
     )
-      throw new Error("Invalid composite formal execution accounting")
-    const original = readFormalSuccess({
-      recordPath: formal.recordPath,
-      worktree: run.worktree,
-      identity: formal.identity,
-      profileIdentity: formal.profileIdentity
-    })
-    const observation = formal.observation
-    if (
-      original.attemptId !== formal.attemptId ||
-      original.runId !== formal.runId ||
-      original.profileIdentity !== formal.profileIdentity ||
-      observation?.version !== formalEvidenceContract.inputPolicyVersion ||
-      observation.observerVersion !== formalEvidenceContract.observerVersion ||
-      observation.ready !== true ||
-      observation.drained !== true ||
-      observation.unchanged !== true ||
-      observation.inputDigest !== formal.identity.inputDigest
-    )
-      throw new Error("Invalid final formal applicability evidence")
-    formalProven = true
+      throw new Error("Invalid composite formal disposition accounting")
+    if (formal.disposition === "not-applicable") {
+      if (
+        formal.classification?.status !== "unaffected" ||
+        formal.classification.affectedPaths.length !== 0 ||
+        ["recordPath", "attemptId", "runId", "identity", "profileIdentity", "observation"].some((key) =>
+          Object.hasOwn(formal, key)
+        )
+      )
+        throw new Error("Invalid not-applicable formal evidence")
+      formalProven = true
+    } else {
+      if (formal.classification?.status !== "affected")
+        throw new Error("Formal execution requires an affected classification")
+      const original = readFormalSuccess({
+        recordPath: formal.recordPath,
+        worktree: run.worktree,
+        identity: formal.identity,
+        profileIdentity: formal.profileIdentity
+      })
+      const observation = formal.observation
+      if (
+        original.attemptId !== formal.attemptId ||
+        original.runId !== formal.runId ||
+        original.profileIdentity !== formal.profileIdentity ||
+        observation?.version !== formalEvidenceContract.inputPolicyVersion ||
+        observation.observerVersion !== formalEvidenceContract.observerVersion ||
+        observation.ready !== true ||
+        observation.drained !== true ||
+        observation.unchanged !== true ||
+        observation.inputDigest !== formal.identity.inputDigest
+      )
+        throw new Error("Invalid final formal applicability evidence")
+      formalProven = true
+    }
   }
   if (composite !== undefined && composite.successfulOutputLines !== outputLines)
     throw new Error("Composite output accounting does not match stage evidence")

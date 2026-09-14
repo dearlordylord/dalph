@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process"
+import { classifyFormalChangeBetween } from "./classify-docs-only-change.mjs"
 import { executeResumableQualityGate } from "./gate-quality-run.mjs"
 import { inheritedCustody } from "./gate-custody-records.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
@@ -58,11 +59,28 @@ const testEnvironment = qualityGateTestEnvironment(qualityBaseSha)
 const context = inheritedCustody()
 const resumable = purpose === "local-handoff"
 if (resumable && context === undefined) throw new Error("Use the admitted pnpm check:all entry point")
-const candidateHistory = resumable && process.env.CI === undefined
+const candidateHistory = resumable
 const candidateHeadSha = candidateHistory
-  ? execFileSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], { encoding: "utf8" }).trim()
+  ? execFileSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], {
+      cwd: context.run.worktree,
+      encoding: "utf8",
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }
+    }).trim()
   : undefined
 if (candidateHistory) process.env.DALPH_GATE_GIT_HISTORY = "candidate-ancestry"
+let formalClassification
+if (resumable) {
+  try {
+    formalClassification = classifyFormalChangeBetween({
+      baseSha: qualityBaseSha,
+      headSha: candidateHeadSha,
+      cwd: context.run.worktree
+    })
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new Error(`Unable to classify local formal relevance: ${detail}`, { cause: error })
+  }
+}
 const stageManifest = fullQualityGateManifest(qualityBaseSha, {
   nodeExecutable: process.execPath,
   pnpmEntryPoint,
@@ -81,6 +99,7 @@ if (resumable) {
       ? {}
       : { gitHistory: { mode: "candidate-ancestry", headSha: candidateHeadSha } }),
     baseSha: qualityBaseSha,
+    formalClassification,
     commandArguments: context.run.commandArguments
       .filter((argument) => !argument.startsWith("--resume="))
       .map((argument) => (argument.startsWith("--candidate=") ? `--candidate=${qualityBaseSha}` : argument)),

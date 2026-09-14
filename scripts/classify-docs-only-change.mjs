@@ -27,7 +27,7 @@ export const changedPathsBetween = (baseSha, headSha, cwd = process.cwd()) => {
   const output = execFileSync(
     "git",
     ["diff", "--name-only", "--no-renames", "-z", "--diff-filter=ACDMRTUXB", baseSha, headSha, "--"],
-    { cwd }
+    { cwd, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } }
   )
   return output
     .toString("utf8")
@@ -37,7 +37,11 @@ export const changedPathsBetween = (baseSha, headSha, cwd = process.cwd()) => {
 
 const manifestAtCommit = (sha, cwd) =>
   parseHostedFormalInputManifest(
-    execFileSync("git", ["show", `${sha}:${hostedFormalInputManifestPath}`], { cwd, encoding: "utf8" })
+    execFileSync("git", ["show", `${sha}:${hostedFormalInputManifestPath}`], {
+      cwd,
+      encoding: "utf8",
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }
+    })
   )
 
 /** A deletion remains governed by taking the union of the exact base and head projections. */
@@ -63,6 +67,34 @@ export const classifyFormalChangedPaths = (changedPaths, formalInputPaths) => {
     throw new Error("The hosted formal input projection is unavailable")
   const governed = new Set(formalInputPaths)
   return changedPaths.filter((path) => governed.has(path)).sort((left, right) => left.localeCompare(right))
+}
+
+/** Compare one exact candidate range with the checked-in formal-input projection.
+ * Callers choose whether an empty range is a valid unchanged candidate or an
+ * unavailable hosted event; every other identity, Git, and projection failure
+ * is reported by throwing. */
+export const classifyFormalChangeBetween = ({
+  baseSha,
+  cwd = process.cwd(),
+  headSha,
+  listChangedPaths = changedPathsBetween,
+  listFormalInputPaths = hostedFormalInputPathsBetween,
+  requireChangedPaths = false
+}) => {
+  if (!commitSha.test(baseSha) || !commitSha.test(headSha) || allZeroSha.test(baseSha) || allZeroSha.test(headSha))
+    throw new Error("The formal comparison base and head must be exact nonzero commit SHAs")
+  const changedPaths = listChangedPaths(baseSha, headSha, cwd)
+  if (requireChangedPaths && changedPaths.length === 0) throw new Error("The exact base-to-head path set is empty")
+  const formalInputPaths = listFormalInputPaths(baseSha, headSha, cwd)
+  const affectedPaths = changedPaths.length === 0 ? [] : classifyFormalChangedPaths(changedPaths, formalInputPaths)
+  return Object.freeze({
+    version: 1,
+    status: affectedPaths.length > 0 ? "affected" : "unaffected",
+    baseSha,
+    headSha,
+    changedPaths: Object.freeze(changedPaths),
+    affectedPaths: Object.freeze(affectedPaths)
+  })
 }
 
 const unavailablePlan = ({ baseSha = "", headSha = "", reason }) => ({
@@ -98,22 +130,20 @@ export const planCiChange = (
     return unavailable({ baseSha, headSha, reason: "The event base or head is not an exact commit SHA" })
 
   try {
-    const changedPaths = listChangedPaths(baseSha, headSha)
-    const affectedPaths = classifyFormalChangedPaths(changedPaths, listFormalInputPaths(baseSha, headSha))
-    const formalRequired = affectedPaths.length > 0
+    const formalClassification = classifyFormalChangeBetween({
+      baseSha,
+      headSha,
+      listChangedPaths,
+      listFormalInputPaths,
+      requireChangedPaths: true
+    })
+    const formalRequired = formalClassification.status === "affected"
     return {
       baseSha,
       headSha,
-      docsOnly: classifyChangedPaths(changedPaths),
+      docsOnly: classifyChangedPaths(formalClassification.changedPaths),
       formalRequired,
-      formalClassification: {
-        version: 1,
-        status: formalRequired ? "affected" : "unaffected",
-        baseSha,
-        headSha,
-        changedPaths,
-        affectedPaths
-      }
+      formalClassification
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
