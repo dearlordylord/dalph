@@ -32,14 +32,6 @@ const secretEnvironmentNames = new Set([
   "DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL"
 ])
 const secretEnvironmentPattern = /(TOKEN|SECRET|CREDENTIAL|PASSWORD|PRIVATE_KEY)/iu
-const qualificationFailurePhases = new Set([
-  "Setup",
-  "Execution",
-  "EvidenceValidation",
-  "ProvenanceValidation",
-  "Cleanup",
-  "Publication"
-])
 
 const requiredEnvironmentNames = [
   productionLiveQualificationOptIn,
@@ -147,28 +139,40 @@ const readJsonObject = async (path, name) => {
   return value
 }
 
-const validRetentionCheckpoint = (value) =>
-  value.schemaVersion === 1 &&
-  value.outcome === "NotQualified" &&
-  qualificationFailurePhases.has(value.phase) &&
-  Array.isArray(value.github) &&
-  value.github.every(
-    (resource) =>
-      resource !== null &&
-      typeof resource === "object" &&
-      (resource._tag === "Issue" || resource._tag === "Label") &&
-      ["Removed", "AlreadyAbsent", "Retained"].includes(resource.disposition)
-  ) &&
-  Array.isArray(value.local) &&
-  value.local.every(
-    (resource) =>
-      resource !== null &&
-      typeof resource === "object" &&
-      typeof resource.locator === "string" &&
-      nodePath.isAbsolute(resource.locator) &&
-      nodePath.normalize(resource.locator) === resource.locator &&
-      ["Removed", "Retained"].includes(resource.disposition)
+const decodeRetentionCheckpoint = async (sourceRepository, value) => {
+  const runtime = await import(
+    pathToFileURL(
+      nodePath.join(sourceRepository, "packages/dalph/dist/src/qualification/live-qualification-runtime.js")
+    ).href
   )
+  const { Effect } = await import("effect")
+  if (typeof runtime.decodeProductionLiveQualificationRetentionReport !== "function") {
+    throw new Error("built live qualification runtime is missing its retention-report decoder")
+  }
+  return Effect.runPromise(runtime.decodeProductionLiveQualificationRetentionReport(value))
+}
+
+const publicJournalEventKindDecoder = async () => {
+  const [{ WorkflowJournalEvent }, { Schema }] = await Promise.all([import("@dalph/orchestrator"), import("effect")])
+  const eventKinds = []
+  const collectEventKinds = (ast) => {
+    if (ast._tag === "Union") {
+      for (const member of ast.types) collectEventKinds(member)
+      return
+    }
+    if (ast._tag !== "Objects") throw new Error("workflow journal event vocabulary is not a tagged union")
+    const tag = ast.propertySignatures.find(({ name }) => name === "_tag")?.type
+    if (tag?._tag !== "Literal" || typeof tag.literal !== "string") {
+      throw new Error("workflow journal event vocabulary has a non-literal tag")
+    }
+    eventKinds.push(tag.literal)
+  }
+  collectEventKinds(WorkflowJournalEvent.ast)
+  if (eventKinds.length === 0 || new Set(eventKinds).size !== eventKinds.length) {
+    throw new Error("workflow journal event vocabulary is empty or ambiguous")
+  }
+  return Schema.decodeUnknownSync(Schema.Literals(eventKinds))
+}
 
 const dispositionCounts = (resources) =>
   Object.fromEntries(
@@ -183,18 +187,16 @@ const observeJournalKinds = async (journalPath) => {
   if (journalPath === undefined) return unavailableObservation("CheckpointIncomplete")
   let database
   try {
-    const { DatabaseSync } = await import("node:sqlite")
+    const [{ DatabaseSync }, decodeEventKind] = await Promise.all([
+      import("node:sqlite"),
+      publicJournalEventKindDecoder()
+    ])
     database = new DatabaseSync(journalPath, { readOnly: true })
     const readPartition = (table) =>
       database
         .prepare(`SELECT event_kind FROM ${table} ORDER BY run_id, position`)
         .all()
-        .map(({ event_kind: eventKind }) => {
-          if (typeof eventKind !== "string" || !/^[A-Za-z][A-Za-z0-9]*$/u.test(eventKind)) {
-            throw new Error("journal event kind is not safe to publish")
-          }
-          return eventKind
-        })
+        .map(({ event_kind: eventKind }) => decodeEventKind(eventKind))
     const hot = readPartition("journal_records")
     const cold = readPartition("journal_records_cold")
     if (hot.length + cold.length > 1_000) return unavailableObservation("UnexpectedRecordCount")
@@ -228,15 +230,19 @@ const observeApplicationServerStarts = async (privateStateDirectory) => {
  */
 export const captureProductionLiveQualificationDiagnostics = async ({ environment = nodeProcess.env } = {}) => {
   const publicationContainer = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_PUBLICATION_CONTAINER")
+  const sourceRepository = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_SOURCE_REPOSITORY")
   const retentionReport = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS")
   const qualificationArtifact = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_ARTIFACT")
   const diagnostics = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_DIAGNOSTICS")
   if (
+    sourceRepository !== nodePath.resolve(nodeProcess.cwd()) ||
     nodePath.dirname(diagnostics) !== publicationContainer ||
     diagnostics === retentionReport ||
     diagnostics === qualificationArtifact
   ) {
-    throw new Error("qualification diagnostics must be distinct and under the publication container")
+    throw new Error(
+      "qualification diagnostics require the command repository and a distinct output under the publication container"
+    )
   }
   const hosted = {
     sourceSha: exactShaInput(environment, "DALPH_CANDIDATE_SHA"),
@@ -258,7 +264,7 @@ export const captureProductionLiveQualificationDiagnostics = async ({ environmen
   if (checkpointSource !== undefined) {
     checkpointRead = "Unreadable"
     try {
-      checkpoint = JSON.parse(checkpointSource)
+      checkpoint = await decodeRetentionCheckpoint(sourceRepository, JSON.parse(checkpointSource))
     } catch {
       checkpoint = undefined
     }
@@ -272,7 +278,7 @@ export const captureProductionLiveQualificationDiagnostics = async ({ environmen
     }
   }
   let report
-  if (checkpoint === undefined || !validRetentionCheckpoint(checkpoint)) {
+  if (checkpoint === undefined) {
     report = {
       schemaVersion: 1,
       outcome: "NotQualified",

@@ -210,6 +210,9 @@ const environmentFor = (f, overrides = {}) => ({
   ...overrides
 })
 
+const diagnosticsEnvironmentFor = (f) =>
+  environmentFor(f, { DALPH_LIVE_QUALIFICATION_SOURCE_REPOSITORY: process.cwd() })
+
 const completedFormalJob = (id, name, completeJobSeconds = 120) => ({
   id,
   name,
@@ -463,7 +466,7 @@ test("hosted cancellation diagnostics retain progress without locators, payloads
   `)
   database
     .prepare("INSERT INTO journal_records VALUES (?, ?, ?, ?)")
-    .run("private-run-id", 1, "WorkflowRunStarted", '{"prompt":"private user prompt","token":"github-secret"}')
+    .run("private-run-id", 1, "WorkflowRunBegan", '{"prompt":"private user prompt","token":"github-secret"}')
   database
     .prepare("INSERT INTO journal_records VALUES (?, ?, ?, ?)")
     .run("private-run-id", 2, "TaskAttemptPlanned", '{"worktree":"/private/attempt"}')
@@ -476,7 +479,7 @@ test("hosted cancellation diagnostics retain progress without locators, payloads
       invocationId: "live-q-private",
       outcome: "NotQualified",
       phase: "Execution",
-      progress: { _tag: "PrivateFutureField", prompt: "private user prompt" },
+      progress: [{ _tag: "BuildMeasured" }],
       github: [{ _tag: "Issue", nodeId: "private-node-id", disposition: "Retained", manualCommand: "private" }],
       local: [
         { locator: container, disposition: "Retained", manualCommand: "private" },
@@ -486,10 +489,10 @@ test("hosted cancellation diagnostics retain progress without locators, payloads
     })
   )
 
-  const result = await captureProductionLiveQualificationDiagnostics({ environment: environmentFor(f) })
+  const result = await captureProductionLiveQualificationDiagnostics({ environment: diagnosticsEnvironmentFor(f) })
   assert.deepEqual(result.journal, {
     _tag: "Observed",
-    hotEventKinds: ["WorkflowRunStarted", "TaskAttemptPlanned"],
+    hotEventKinds: ["WorkflowRunBegan", "TaskAttemptPlanned"],
     coldEventKinds: []
   })
   assert.deepEqual(result.applicationServerStarts, { _tag: "Observed", count: 2 })
@@ -516,9 +519,54 @@ test("hosted cancellation diagnostics retain progress without locators, payloads
   }
 })
 
+test("hosted diagnostics reject an alphanumeric event kind outside the public Journal vocabulary", async () => {
+  const f = await fixture()
+  const container = join(f.root, "dalph-live-fixture")
+  const journal = join(container, "journal.sqlite")
+  await mkdir(container, { recursive: true })
+  const database = new DatabaseSync(journal)
+  database.exec(`
+    CREATE TABLE journal_records (
+      run_id TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      event_kind TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE journal_records_cold (
+      run_id TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      event_kind TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    ) STRICT;
+  `)
+  database
+    .prepare("INSERT INTO journal_records VALUES (?, ?, ?, ?)")
+    .run("private-run-id", 1, "PrivateProviderResponse", "{}")
+  database.close()
+  await writeFile(
+    f.output.retained,
+    JSON.stringify({
+      schemaVersion: 1,
+      invocationId: "live-q-private",
+      outcome: "NotQualified",
+      progress: [{ _tag: "BuildMeasured" }],
+      phase: "Execution",
+      github: [],
+      local: [
+        { locator: container, disposition: "Retained", manualCommand: "private" },
+        { locator: journal, disposition: "Retained", manualCommand: "private" }
+      ]
+    })
+  )
+
+  const result = await captureProductionLiveQualificationDiagnostics({ environment: diagnosticsEnvironmentFor(f) })
+  assert.deepEqual(result.journal, { _tag: "Unavailable", reason: "Unreadable" })
+  assert.equal((await readFile(f.output.diagnostics, "utf8")).includes("PrivateProviderResponse"), false)
+})
+
 test("hosted diagnostics distinguish a missing checkpoint and do not misreport successful qualification", async () => {
   const f = await fixture()
-  const environment = environmentFor(f)
+  const environment = diagnosticsEnvironmentFor(f)
   const missing = await captureProductionLiveQualificationDiagnostics({ environment })
   assert.deepEqual(missing.checkpoint, { _tag: "Unavailable", reason: "Absent" })
   assert.deepEqual(missing.journal, { _tag: "Unavailable", reason: "CheckpointUnavailable" })
@@ -527,6 +575,23 @@ test("hosted diagnostics distinguish a missing checkpoint and do not misreport s
   await writeFile(f.output.retained, "not JSON")
   const unreadable = await captureProductionLiveQualificationDiagnostics({ environment })
   assert.deepEqual(unreadable.checkpoint, { _tag: "Unavailable", reason: "Unreadable" })
+
+  for (const invalidCheckpoint of [
+    { schemaVersion: 1, outcome: "NotQualified", phase: "Execution", github: [], local: [] },
+    {
+      schemaVersion: 1,
+      invocationId: "live-q-private",
+      outcome: "NotQualified",
+      progress: [{ _tag: "PrivateProviderResponse" }],
+      phase: "Execution",
+      github: [],
+      local: []
+    }
+  ]) {
+    await writeFile(f.output.retained, JSON.stringify(invalidCheckpoint))
+    const invalid = await captureProductionLiveQualificationDiagnostics({ environment })
+    assert.deepEqual(invalid.checkpoint, { _tag: "Unavailable", reason: "Unreadable" })
+  }
 
   await rm(f.output.retained)
   await rm(f.output.diagnostics)
