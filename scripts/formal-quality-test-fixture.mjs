@@ -94,12 +94,22 @@ export const seedQualityFormalBoundary = (worktree) => {
     apalacheJar: "controlled-jar"
   }
   const identity = {
-    version: 1,
+    version: formalEvidenceContract.inputPolicyVersion,
     worktree,
     toolchain,
     profileDigest: profileIdentity,
-    inputDigest: digest("controlled-formal")
+    inputDigest: digest("controlled-formal"),
+    applicability: {
+      version: formalEvidenceContract.inputPolicyVersion,
+      observerVersion: formalEvidenceContract.observerVersion,
+      sourceManifest: [],
+      toolManifest: [],
+      environmentDigests: {},
+      toolchain: { versions: { fixture: "1" } },
+      profile
+    }
   }
+  identity.applicabilityDigest = digest(JSON.stringify(identity.applicability))
   const ids = []
   const add = (parentId, command, outcome, exitCode, output = "") => {
     const obligationId = newIdentity()

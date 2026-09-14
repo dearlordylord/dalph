@@ -4,7 +4,7 @@ import { access, lstat, readFile, readdir, realpath } from "node:fs/promises"
 import { accessSync, constants, lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "node:fs"
 import { createRequire } from "node:module"
 import { arch, platform } from "node:os"
-import { delimiter, dirname, extname, isAbsolute, join, resolve, sep } from "node:path"
+import { delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { performance } from "node:perf_hooks"
 import { fileURLToPath } from "node:url"
 import { parse } from "acorn"
@@ -102,6 +102,133 @@ const environmentIdentity = (environment) =>
       key,
       environment[key] === undefined ? { present: false } : { present: true, digest: digest(environment[key]) }
     ])
+  )
+
+const pathIdentity = (path, worktree, role) => {
+  const absolute = resolve(path)
+  return below(absolute, worktree)
+    ? { role, relativePath: relative(worktree, absolute).split(sep).join("/") || "." }
+    : { role: "host", absolutePath: absolute }
+}
+
+const normalizeAbsoluteStrings = (value, worktree, role) => {
+  if (typeof value === "string") return isAbsolute(value) ? pathIdentity(value, worktree, role) : value
+  if (Array.isArray(value)) return value.map((item) => normalizeAbsoluteStrings(item, worktree, role))
+  if (value === null || typeof value !== "object") return value
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, normalizeAbsoluteStrings(item, worktree, role)])
+  )
+}
+
+const normalizedToolchain = (toolchain, worktree, configPaths) => {
+  const configurations = new Set(configPaths.map((path) => resolve(path)))
+  const semanticToolchain = { ...toolchain }
+  delete semanticToolchain.configPaths
+  for (const key of ["roots", "allowedRoots", "requiredRoots"])
+    if (Array.isArray(semanticToolchain[key]))
+      semanticToolchain[key] = semanticToolchain[key].filter((path) => !configurations.has(resolve(path)))
+  const normalized = normalizeAbsoluteStrings(semanticToolchain, worktree, "checkout-tool")
+  const result = { ...normalized, apalacheConfiguration: { state: "absent" } }
+  if (!Array.isArray(toolchain.javaArguments)) return result
+  return {
+    ...result,
+    javaArguments: toolchain.javaArguments.map((argument) => {
+      const prefix = "-Duser.home="
+      if (!argument.startsWith(prefix) || !isAbsolute(argument.slice(prefix.length))) return argument
+      return {
+        role: "java-system-property",
+        name: "user.home",
+        value: pathIdentity(argument.slice(prefix.length), worktree, "checkout-tool")
+      }
+    })
+  }
+}
+
+const normalizedPnpmLauncher = (entry, worktree) => {
+  const pnpmStore = join(worktree, "node_modules", ".pnpm")
+  if (entry.type !== "file" || dirname(entry.path).split(sep).at(-1) !== ".bin" || !below(entry.path, pnpmStore))
+    return entry
+  const text = readFileSync(entry.path, "utf8")
+  const targets = [...text.matchAll(/^\s*exec (?:"\$basedir\/node"|node)\s+"\$basedir\/([^"\n]+)"\s+"\$@"\s*$/gmu)].map(
+    (match) => match[1]
+  )
+  if (
+    !text.startsWith("#!/bin/sh\n") ||
+    !text.includes('basedir=$(dirname "$(echo "$0"') ||
+    targets.length !== 2 ||
+    targets[0] !== targets[1]
+  )
+    return entry
+  const semanticParts = []
+  let cursor = 0
+  for (const match of text.matchAll(/^(\s*export NODE_PATH=")([^"\n]*)(")$/gmu)) {
+    semanticParts.push({ role: "literal-script", text: text.slice(cursor, match.index) })
+    semanticParts.push({
+      role: "generated-node-path",
+      prefix: match[1],
+      components: match[2].split(delimiter).map((component) => {
+        if (component === "$NODE_PATH") return { role: "inherited-node-path" }
+        if (!isAbsolute(component)) return { role: "literal-node-path", value: component }
+        const absolute = resolve(component)
+        return below(absolute, worktree)
+          ? { role: "checkout-node-path", relativePath: relative(worktree, absolute).split(sep).join("/") || "." }
+          : { role: "literal-node-path", value: component }
+      }),
+      suffix: match[3]
+    })
+    cursor = match.index + match[0].length
+  }
+  semanticParts.push({ role: "literal-script", text: text.slice(cursor) })
+  if (semanticParts.length === 1 || JSON.stringify(semanticParts).includes(worktree)) return entry
+  return {
+    ...entry,
+    sha256: digest(JSON.stringify(semanticParts)),
+    generatedLauncher: { format: "pnpm-node-shell-v1" }
+  }
+}
+
+const normalizedManifest = (entries, worktree, role) =>
+  entries
+    .map((candidate) => {
+      const { path, resolved, target, ...entry } = normalizedPnpmLauncher(candidate, worktree)
+      return {
+        location: pathIdentity(path, worktree, role),
+        ...entry,
+        ...(resolved === undefined ? {} : { resolved: pathIdentity(resolved, worktree, role) }),
+        ...(target === undefined ? {} : { target: isAbsolute(target) ? pathIdentity(target, worktree, role) : target })
+      }
+    })
+    .sort((left, right) => JSON.stringify(left.location).localeCompare(JSON.stringify(right.location)))
+
+const normalizedToolManifest = (entries, worktree, configPaths) => {
+  const configurations = new Set(configPaths.map((path) => resolve(path)))
+  for (const path of configurations) {
+    const entry = entries.find((candidate) => candidate.path === path)
+    if (entry?.type !== "absent") throw new Error("Formal applicability requires proven absent Apalache configuration")
+  }
+  return [
+    ...normalizedManifest(
+      entries.filter((entry) => !configurations.has(entry.path)),
+      worktree,
+      "formal-tool"
+    ),
+    { location: { role: "apalache-configuration" }, type: "absent" }
+  ]
+}
+
+const environmentApplicability = (environment, worktree) =>
+  Object.fromEntries(
+    retainedEnvironmentKeys.map((key) => {
+      const value = environment[key]
+      if (value === undefined) return [key, { present: false }]
+      const semantic =
+        key === "PATH"
+          ? value.split(delimiter).map((entry) => pathIdentity(resolve(worktree, entry), worktree, "checkout-path"))
+          : ["HOME", "QUINT_HOME", "JAVA_HOME", "TMPDIR", "TMP", "TEMP", "npm_execpath"].includes(key)
+            ? pathIdentity(resolve(worktree, value), worktree, "checkout-environment")
+            : value
+      return [key, { present: true, digest: digest(JSON.stringify(semantic)) }]
+    })
   )
 const requiredFile = async (path, executable = false) => {
   try {
@@ -826,6 +953,15 @@ export const startFormalInputGuard = async ({
       toolchain.requiredRoots,
       phase
     )
+    const applicability = {
+      version: formalInputPolicyVersion,
+      observerVersion: formalEvidenceContract.observerVersion,
+      sourceManifest: normalizedManifest(sourceManifest, root, "repository-source"),
+      toolManifest: normalizedToolManifest(toolManifest, root, configPaths),
+      environmentDigests: environmentApplicability(environment, root),
+      toolchain: normalizedToolchain(toolchain, root, configPaths),
+      profile: normalizeAbsoluteStrings(profile, root, "repository-profile-input")
+    }
     const result = {
       version: formalInputPolicyVersion,
       observerVersion: formalEvidenceContract.observerVersion,
@@ -839,7 +975,9 @@ export const startFormalInputGuard = async ({
       toolManifest,
       environmentDigests: JSON.parse(originalEnvironment),
       toolchain,
-      profile
+      profile,
+      applicability,
+      applicabilityDigest: digest(JSON.stringify(applicability))
     }
     return { ...result, inputDigest: digest(JSON.stringify(result)) }
   }

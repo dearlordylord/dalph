@@ -37,9 +37,10 @@ const inputAdapter = `
 import {readFileSync,appendFileSync} from 'node:fs'
 import {join} from 'node:path'
 import {digest} from './gate-custody-records.mjs'
+import {formalEvidenceContract} from './formal-evidence-contract.mjs'
 const event=(root,value)=>appendFileSync(join(root,'.scratch','events'),value+'\\n')
 export const createFormalEnvironment=(environment)=>({...environment})
-export const formalInputPolicyVersion=3
+export const formalInputPolicyVersion=formalEvidenceContract.inputPolicyVersion
 export const resolveFormalToolchain=async({worktree})=>{
  event(worktree,'prepare');return {nodeExecutable:process.execPath,quintEntryPoint:join(worktree,'node_modules','@informalsystems','quint','dist','src','cli.js'),javaExecutable:join(worktree,'fake-java.cjs'),javaUserHome:worktree,javaArguments:['-Duser.home='+worktree],
  apalacheJar:join(worktree,'.quint','apalache-dist-0.56.1','apalache','lib','apalache.jar'),
@@ -49,11 +50,14 @@ export const startFormalInputGuard=async({worktree,profile,toolchain})=>{
  event(worktree,'guard-start')
  const bytes=readFileSync(join(worktree,'formal-input'))
  const profileDigest=digest(JSON.stringify(profile))
- const identity={version:3,worktree,profileDigest,toolchain,inputDigest:digest(Buffer.concat([bytes,Buffer.from(profileDigest)]))}
+ const applicability={version:formalEvidenceContract.inputPolicyVersion,observerVersion:formalEvidenceContract.observerVersion,
+  formalInputDigest:digest(bytes),profile,toolSemantics:{node:process.version,quint:'0.32.0',apalache:'0.56.1',fixture:'1'}}
+ const identity={version:formalEvidenceContract.inputPolicyVersion,worktree,profileDigest,toolchain,applicability,
+  applicabilityDigest:digest(JSON.stringify(applicability)),inputDigest:digest(Buffer.concat([Buffer.from(worktree),bytes,Buffer.from(profileDigest)]))}
  return {identity,assertUnchanged:async()=>{},finish:async()=>{
  event(worktree,'guard-finish')
  if(!bytes.equals(readFileSync(join(worktree,'formal-input'))))throw Error('fixture input changed')
- return {version:3,observerVersion:1,ready:true,drained:true,unchanged:true,inputDigest:identity.inputDigest}
+ return {version:formalEvidenceContract.inputPolicyVersion,observerVersion:formalEvidenceContract.observerVersion,ready:true,drained:true,unchanged:true,inputDigest:identity.inputDigest}
  },close:async()=>event(worktree,'guard-close')}
 }
 `
@@ -631,7 +635,7 @@ test(
 )
 
 test(
-  "different worktrees obey clone capacity and execute separate complete profiles without sharing success or servers",
+  "an equivalent worktree reuses stopped evidence while changed formal input launches its own complete profile",
   { timeout: 120000 },
   async () => {
     const f = fixture()
@@ -665,8 +669,14 @@ test(
       const [firstResult, secondResult] = await Promise.all([first.completion, second.completion])
       assert.equal(firstResult.code, 0, firstResult.stderr)
       assert.equal(secondResult.code, 0, secondResult.stderr)
-      assert.match(secondResult.stdout, /running complete profile/)
+      assert.match(secondResult.stdout, /reusing complete success; zero checkers or servers started/)
       assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 105)
+      assert.equal(linked.events().filter((event) => event.startsWith("checker ")).length, 0)
+      assert.equal(linked.events().filter((event) => event === "server-start").length, 0)
+      writeFileSync(join(linkedRoot, "formal-input"), "changed governed formal fixture")
+      const changedResult = await launch(linked, { slots: 1 }).completion
+      assert.equal(changedResult.code, 0, changedResult.stderr)
+      assert.match(changedResult.stdout, /running complete profile/)
       assert.equal(linked.events().filter((event) => event.startsWith("checker ")).length, 105)
       assert.equal(linked.events().filter((event) => event === "server-start").length, 1)
       const pointers = readdirSync(join(f.location.custodyRoot, "formal")).map((file) =>

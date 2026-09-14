@@ -829,10 +829,21 @@ after the external tool observation reaches the end of the application stage,
 so a final input change fails the handoff. A final check failure does not
 silently start a second formal profile.
 
-Local reuse requires supported cooperative Linux, exact worktree admission and
-custody, prepared coherent pnpm/Quint/Apalache/Java roots, and the conservative
-environment and input boundary enforced by the formal policy. Unresolved
-custody, reconciliation or observer evidence fails closed. The local boundary
+Local reuse requires supported cooperative Linux, exact current-worktree
+admission, shared Git-repository custody, prepared coherent
+pnpm/Quint/Apalache/Java roots, and the conservative environment and input
+boundary enforced by the formal policy. Equivalent governed inputs may reuse a
+complete success from another worktree of the same clone and host boot.
+Repository-local source and tool paths, checkout PATH entries, and a
+checkout-local pnpm launcher are compared by role plus checkout-relative
+location and content rather than raw worktree path. A recognized pnpm launcher
+retains a digest of its complete generated script with only checkout-local
+components of the generated `NODE_PATH` assignments represented symbolically;
+added commands or changed targets remain input changes. Absolute original
+worktree/run/report paths remain provenance and must still resolve through the
+same Git common directory; every original checker/server process group must be
+proven stopped. Unresolved custody, missing origin provenance, reconciliation
+or observer evidence fails closed. The local boundary
 does not coordinate arbitrary external processes, other clones, distributed
 filesystems, non-Linux hosts, or tool roots outside the identified installation.
 
