@@ -14,6 +14,7 @@ import {
   MutableHashMap,
   Option,
   Queue,
+  Redacted,
   Ref,
   Schema,
   Stream
@@ -36,6 +37,7 @@ import { authorizeHermeticControllerFixture } from "./production-hermetic-fixtur
 import { makeHermeticProviderState } from "./production-hermetic-provider-state.js"
 import {
   HermeticControllerFailure,
+  hermeticChildExitedBeforeBoundary,
   type HermeticProcessOutcome,
   killedProcessOutcome,
   makeHermeticRecordBindings,
@@ -329,10 +331,18 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
         if (boundary._tag === tag) return boundary
       }
     })
-    const exited = Effect.exit(child.handle.exitCode).pipe(
-      Effect.andThen(Effect.all([Fiber.join(child.stdout), Fiber.join(child.stderr)])),
-      Effect.andThen(new HermeticControllerFailure({ operation: "child.exitedBeforeBoundary" }))
-    )
+    const exited = Effect.gen(function* () {
+      const exit = yield* Effect.exit(child.handle.exitCode)
+      yield* Effect.all([Fiber.join(child.stdout), Fiber.join(child.stderr)])
+      return yield* hermeticChildExitedBeforeBoundary(
+        exit._tag === "Success" ? { _tag: "Exited", exitCode: exit.value } : { _tag: "ExitCodeUnavailable" },
+        MutableList.toArray(child.stderrLog),
+        [
+          Redacted.value(fixture.configuration.githubToken),
+          Redacted.value(fixture.configuration.codexProviderCredential)
+        ]
+      )
+    })
     return yield* Effect.raceFirst(observedBoundary, exited)
   })
   const forgetRecordBindings = (child: HermeticPublicChild) =>

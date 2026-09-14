@@ -7,7 +7,12 @@ import { Deferred, Effect, Fiber, HashSet, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { expect } from "vitest"
 import { HermeticRegistrationScopeId } from "../src/application/production-hermetic-contract.js"
-import { makeHermeticRecordBindings, settleHermeticChild } from "./production-hermetic-child-lifetime.js"
+import {
+  hermeticChildExitDiagnosticByteLimit,
+  hermeticChildExitedBeforeBoundary,
+  makeHermeticRecordBindings,
+  settleHermeticChild
+} from "./production-hermetic-child-lifetime.js"
 import { makeHermeticChildOutput, HermeticChildOutputCanonicalFailure } from "./production-hermetic-child-output.js"
 
 const firstScope = HermeticRegistrationScopeId.make("original-spawn-S1")
@@ -15,6 +20,43 @@ const secondScope = HermeticRegistrationScopeId.make("original-spawn-S2")
 const unknownScope = HermeticRegistrationScopeId.make("unknown-spawn")
 const digest = EvidenceDigest.make("a".repeat(64))
 const pid = ChildProcessSpawner.ProcessId(123)
+
+it("reports an early child exit with exact status and bounded stderr without controlled credentials", () => {
+  const githubCredential = "github-sensitive-value"
+  const codexCredential = "codex-sensitive-value"
+  const sharedCredentialPrefix = "github-sensitive"
+  const failure = hermeticChildExitedBeforeBoundary(
+    { _tag: "Exited", exitCode: 17 },
+    [
+      new TextEncoder().encode(`before ${githubCredential.slice(0, 7)}`),
+      new TextEncoder().encode(`${githubCredential.slice(7)} ${codexCredential} ${"long diagnostic ".repeat(400)}`)
+    ],
+    [sharedCredentialPrefix, githubCredential, codexCredential]
+  )
+  expect(failure).toMatchObject({
+    _tag: "HermeticChildExitedBeforeBoundary",
+    operation: "child.exitedBeforeBoundary",
+    outcome: { _tag: "Exited", exitCode: 17 },
+    stderrTruncated: true
+  })
+  expect(failure.stderr).toContain("before [REDACTED] [REDACTED]")
+  expect(failure.stderr).not.toContain(githubCredential)
+  expect(failure.stderr).not.toContain(codexCredential)
+  expect(failure.stderr).not.toContain(sharedCredentialPrefix)
+  expect(new TextEncoder().encode(failure.stderr).byteLength).toBeLessThanOrEqual(hermeticChildExitDiagnosticByteLimit)
+
+  const multibyteBoundary = hermeticChildExitedBeforeBoundary(
+    { _tag: "ExitCodeUnavailable" },
+    [new TextEncoder().encode(`${"a".repeat(4_095)}€x`)],
+    []
+  )
+  expect(multibyteBoundary).toMatchObject({ outcome: { _tag: "ExitCodeUnavailable" }, stderrTruncated: true })
+  expect(multibyteBoundary.stderr).toBe("a".repeat(4_095))
+  expect(multibyteBoundary.stderr).not.toContain("�")
+  expect(new TextEncoder().encode(multibyteBoundary.stderr).byteLength).toBeLessThanOrEqual(
+    hermeticChildExitDiagnosticByteLimit
+  )
+})
 
 it.live("retains an observed real exit and its scope until both readers settle despite a rejected complete frame", () =>
   Effect.scoped(
