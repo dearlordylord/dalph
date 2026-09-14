@@ -63,15 +63,15 @@ const RuntimeDiagnosticText = Schema.NonEmptyString.check(
   )
 )
 
-export const RuntimeDiagnosticFrame = Schema.Struct({
+const RuntimeDiagnosticFrame = Schema.Struct({
   column: RuntimeDiagnosticColumnPosition,
   function: RuntimeDiagnosticText,
   line: RuntimeDiagnosticLinePosition,
   module: RuntimeDiagnosticText
 })
-export type RuntimeDiagnosticFrame = typeof RuntimeDiagnosticFrame.Type
+type RuntimeDiagnosticFrame = typeof RuntimeDiagnosticFrame.Type
 
-export interface RuntimeDiagnosticError {
+interface RuntimeDiagnosticError {
   readonly category?: string
   readonly causes?: readonly [RuntimeDiagnosticError, ...Array<RuntimeDiagnosticError>]
   readonly code?: string
@@ -82,7 +82,7 @@ export interface RuntimeDiagnosticError {
   readonly syscall?: string
 }
 
-export const RuntimeDiagnosticError: Schema.Codec<RuntimeDiagnosticError, unknown> = Schema.Struct({
+const RuntimeDiagnosticError: Schema.Codec<RuntimeDiagnosticError, unknown> = Schema.Struct({
   category: Schema.optionalKey(RuntimeDiagnosticText),
   causes: Schema.optionalKey(
     Schema.NonEmptyArray(
@@ -99,12 +99,12 @@ export const RuntimeDiagnosticError: Schema.Codec<RuntimeDiagnosticError, unknow
   syscall: Schema.optionalKey(RuntimeDiagnosticText)
 })
 
-export const RuntimeDiagnosticReason = Schema.TaggedUnion({
+const RuntimeDiagnosticReason = Schema.TaggedUnion({
   Defect: { error: RuntimeDiagnosticError },
   Failure: { error: RuntimeDiagnosticError },
   Interruption: { error: RuntimeDiagnosticError }
 })
-export type RuntimeDiagnosticReason = typeof RuntimeDiagnosticReason.Type
+type RuntimeDiagnosticReason = typeof RuntimeDiagnosticReason.Type
 
 /** A process-boundary observation of a terminal Cause; it is diagnostic evidence, never workflow authority. */
 export const DalphRuntimeDiagnostic = Schema.TaggedStruct("DalphRuntimeDiagnostic", {
