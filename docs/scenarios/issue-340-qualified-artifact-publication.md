@@ -49,6 +49,29 @@ as when application Exit leaves an unfinished recoverable Run.
 
 ### Ordered boundaries and visible result
 
+While Alice's controlled child retains one executing attempt, the ordinary
+reactivation timer can fire before the executor publishes its terminal result.
+The journal already holds the exact plan and executor responsibility; GitHub's
+controlled task remains open with the same specification and claim, and Git
+still owns the exact planned worktree and Base. Dalph may then propose reading
+the tracker graph, task specification, claim, worktree and target lineage again.
+These are ordinary continuation observations even without a process crash.
+The qualification callback must validate each original proposed read against
+the fixture before registering the current-status record. A slower host must
+not turn a valid read into `HermeticQualificationSourceRejected`, and neither
+an unrelated task/target/plan nor an added private field may receive a token.
+No new mutation, retry or crash protocol is introduced: any crash retains the
+ordinary read intent and restart follows its existing authority-read rules.
+Deterministic source tests present each original read proposal directly, so
+coverage does not depend on winning a wall-clock race. The built happy-path,
+close-response-loss, promotion-CAS and HTTP429 cases retain their existing
+Run, Git, tracker, process and cleanup assertions.
+
+| Continuation source outcome | Acceptance test |
+| --- | --- |
+| Original graph, specification and worktree reads remain publishable; foreign identities, nested private fields and route substitutions are rejected before registration. | `validates continuation read sources before registering status and rejects substituted source atoms` |
+| Every previously measured route retains strict source validation. | `checks all six measured route families and twenty-eight direct roots without accepting added opaque source fields` |
+
 1. The controller captures child stdout internally. The qualification seam
    validates each canonical version-one NDJSON record before adding it to
    controller records or publishing it as evidence or user-visible stdout.

@@ -31,6 +31,7 @@ import {
   validateDeletionRequest
 } from "./production-hermetic-qualification-fixture-source.js"
 import { validateFreshStep } from "./production-hermetic-qualification-fresh-source.js"
+import { validateContinuationRead } from "./production-hermetic-qualification-continuation-source.js"
 
 type RecoveredAction = Extract<DeliveryActionProposal["route"], { readonly _tag: "RecoveredNewActionRoute" }>["action"]
 const { operationId: _targetLineageOperationId, ...newLineageFields } = WorkflowOperation.cases.ReadTargetLineage.fields
@@ -41,8 +42,11 @@ const validateRecoveredAction = Effect.fn("HermeticQualification.validateRecover
   action: RecoveredAction,
   context: QualificationContext
 ) {
-  if (action._tag !== "ReadTargetLineage" && action._tag !== "ReadTaskClaim") return yield* sourceRejected()
   switch (action._tag) {
+    case "ReadTrackerGraph":
+    case "ReadTaskWorkSpecification":
+    case "ReadTaskWorktree":
+      return yield* validateContinuationRead(action, context)
     case "ReadTargetLineage": {
       const operation = yield* Schema.decodeUnknownEffect(
         NewLineageOperation,
@@ -59,6 +63,10 @@ const validateRecoveredAction = Effect.fn("HermeticQualification.validateRecover
     }
     case "ReadTaskClaim":
       return yield* validateRecoveredTaskClaimRead(action, context)
+    case "ReleaseCancelledAttemptClaim":
+    case "ReleaseExternallyCompletedTaskClaim":
+    case "ReleaseStoppedAttemptClaim":
+    case "TaskClaimReacquisition":
     default:
       return yield* sourceRejected()
   }

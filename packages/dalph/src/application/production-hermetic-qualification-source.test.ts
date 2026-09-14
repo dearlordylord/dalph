@@ -81,6 +81,7 @@ import {
   TrackerGraphState,
   TrackerSnapshot,
   TrackerTask,
+  TrackerTarget,
   trackerGraphReadProposalOf,
   trackerRevisionFor,
   githubFocusedCompletionRevisionFor,
@@ -422,6 +423,41 @@ const routeFixtures = (
         plannedAttempt,
         specification: context.specification,
         acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(6) }
+      }
+    },
+    {
+      _tag: "RecoveredNewActionRoute",
+      action: {
+        _tag: "ReadTrackerGraph",
+        plannedAttempt,
+        operation: {
+          _tag: "ReadTrackerGraph",
+          cause: { _tag: "ExecutingWorkAuthorityCheck" },
+          predecessorOperationIds: [operationId],
+          readShape: { _tag: "CompleteTargetClosure", explicitlyCoveredTaskIds: [context.taskId] },
+          target: context.configuration.target
+        }
+      }
+    },
+    {
+      _tag: "RecoveredNewActionRoute",
+      action: {
+        _tag: "ReadTaskWorkSpecification",
+        plannedAttempt,
+        operation: {
+          _tag: "ReadTaskWorkSpecification",
+          predecessorOperationIds: [operationId],
+          taskId: context.taskId,
+          target: context.configuration.target
+        }
+      }
+    },
+    {
+      _tag: "RecoveredNewActionRoute",
+      action: {
+        _tag: "ReadTaskWorktree",
+        plannedAttempt,
+        operation: { _tag: "ReadTaskWorktree", predecessorOperationIds: [operationId], plannedAttempt }
       }
     },
     {
@@ -1273,11 +1309,11 @@ describe("qualification original source boundary", () => {
     expect(JSON.stringify(rejected)).not.toContain("DeliveryStatusProjectionConflict")
   })
 
-  it("checks all six measured route families and twenty-five direct roots without accepting added opaque source fields", async () => {
+  it("checks all six measured route families and twenty-eight direct roots without accepting added opaque source fields", async () => {
     const { configuration, manifest, runId } = await Effect.runPromise(fixture)
     const originalContext = await Effect.runPromise(contextFor(manifest, configuration, runId))
     const { context, routes } = routeFixtures(originalContext)
-    expect(routes).toHaveLength(25)
+    expect(routes).toHaveLength(28)
     expect(new Set(routes.map((route) => route._tag)).size).toBe(6)
     for (const route of routes) {
       const proposal = proposalForRoute(route, context)
@@ -1288,6 +1324,117 @@ describe("qualification original source boundary", () => {
       )
       expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
       expect(JSON.stringify(rejected)).not.toContain("private-thread-sentinel")
+    }
+  })
+
+  it("validates continuation read sources before registering status and rejects substituted source atoms", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const originalContext = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const { context, routes } = routeFixtures(originalContext)
+    const validate = (route: DeliveryActionProposal["route"]) =>
+      validateHermeticQualificationStatus(
+        manifest,
+        configuration,
+        readyFor(context, [proposalForRoute(route, context)]),
+        runId
+      )
+    const reject = async (route: DeliveryActionProposal["route"]) => {
+      const rejected = await Effect.runPromise(validate(route).pipe(Effect.flip))
+      expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
+      expect(rejected).not.toHaveProperty("registration")
+      expect(JSON.stringify(rejected)).not.toContain("private-source-sentinel")
+    }
+    const withPrivateSource = <A>(source: A) => ({ ...source, privateSource: "private-source-sentinel" })
+    const foreignTarget = await Effect.runPromise(
+      Schema.decodeUnknownEffect(TrackerTarget)({
+        _tag: "GithubIssue",
+        owner: "foreign",
+        repository: "controlled",
+        issueNumber: 1
+      })
+    )
+    for (const route of routes) {
+      if (route._tag !== "RecoveredNewActionRoute") continue
+      const action = route.action
+      if (
+        action._tag !== "ReadTrackerGraph" &&
+        action._tag !== "ReadTaskWorkSpecification" &&
+        action._tag !== "ReadTaskWorktree"
+      )
+        continue
+      expect(await Effect.runPromise(validate(route))).toHaveProperty("registration")
+      await reject({ ...route, action: withPrivateSource(action) })
+      await reject({
+        ...route,
+        action: { ...action, plannedAttempt: { ...action.plannedAttempt, baseSha: GitCommitSha.make("f".repeat(40)) } }
+      })
+      // Keep each tagged operation paired with its original action while changing its source atoms.
+      switch (action._tag) {
+        case "ReadTrackerGraph":
+          await reject({ ...route, action: { ...action, operation: { ...action.operation, target: foreignTarget } } })
+          await reject({
+            ...route,
+            action: {
+              ...action,
+              operation: { ...action.operation, predecessorOperationIds: [OperationId.make("private-source-sentinel")] }
+            }
+          })
+          await reject({
+            ...route,
+            action: {
+              ...action,
+              operation: {
+                ...action.operation,
+                readShape: { ...action.operation.readShape, explicitlyCoveredTaskIds: [] }
+              }
+            }
+          })
+          await reject({
+            ...route,
+            action: {
+              ...action,
+              operation: {
+                ...action.operation,
+                readShape: { ...action.operation.readShape, explicitlyCoveredTaskIds: [TaskId.make("foreign")] }
+              }
+            }
+          })
+          await reject({
+            ...route,
+            action: { ...action, operation: { ...action.operation, cause: { _tag: "WorkflowEstablishment" } } }
+          })
+          await reject({ ...route, action: { ...action, operation: withPrivateSource(action.operation) } })
+          expect(
+            await Effect.runPromise(
+              validate({
+                ...route,
+                action: { ...action, operation: { ...action.operation, cause: { _tag: "AttemptContinuation" } } }
+              })
+            )
+          ).toHaveProperty("registration")
+          break
+        case "ReadTaskWorkSpecification":
+          await reject({ ...route, action: { ...action, operation: { ...action.operation, target: foreignTarget } } })
+          await reject({
+            ...route,
+            action: { ...action, operation: { ...action.operation, taskId: TaskId.make("foreign") } }
+          })
+          await reject({ ...route, action: { ...action, operation: withPrivateSource(action.operation) } })
+          break
+        case "ReadTaskWorktree":
+          await reject({
+            ...route,
+            action: {
+              ...action,
+              operation: {
+                ...action.operation,
+                plannedAttempt: { ...action.plannedAttempt, baseSha: GitCommitSha.make("f".repeat(40)) }
+              }
+            }
+          })
+          await reject({ ...route, action: { ...action, operation: withPrivateSource(action.operation) } })
+          break
+      }
     }
   })
 
