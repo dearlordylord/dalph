@@ -628,7 +628,7 @@ type LinuxProcessStatObservation =
 const isNonnegativeInteger = (value: number): boolean => Number.isSafeInteger(value) && value >= 0
 const isNonempty = (value: string | undefined): value is string => value !== undefined && value.length > 0
 
-const parseLinuxProcessStat = (pid: number, text: string): LinuxProcessStat | undefined => {
+export const parseLinuxProcessStat = (pid: number, text: string): LinuxProcessStat | undefined => {
   const commandEnd = text.lastIndexOf(")")
   if (commandEnd < 0) return undefined
   const fields = text
@@ -2976,17 +2976,23 @@ export const makeNodeCodexProcessOwnershipService = (
   return service
 }
 
-/** Convenience composition for the attempt-owned activity census. */
-export const nodeCodexOwnedActivityCensusLayer: Layer.Layer<CodexOwnedActivityCensus, never, CodexAppServer> =
+/** Composes the attempt-owned activity census with one explicit host process view. */
+export const codexOwnedActivityCensusLayer = (
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
+): Layer.Layer<CodexOwnedActivityCensus, never, CodexAppServer> =>
   Layer.effect(
     CodexOwnedActivityCensus,
     /* v8 ignore next -- @preserve Production composition is exercised by the separate built-host qualification runner. */
     Effect.map(CodexAppServer, (app) =>
       // The app-server incarnation is available to the planned-attempt scope,
       // while the default Integrator-session scope remains exact-thread-only.
-      makeNodeCodexOwnedActivityCensusService(nodeCodexProcessNativeService, app.serverPid, app.incarnation)
+      makeNodeCodexOwnedActivityCensusService(native, app.serverPid, app.incarnation)
     )
   )
+
+/** Convenience composition for the production Node process view. */
+export const nodeCodexOwnedActivityCensusLayer: Layer.Layer<CodexOwnedActivityCensus, never, CodexAppServer> =
+  codexOwnedActivityCensusLayer()
 
 /** Convenience composition for the real app-server layer's process gate. */
 export const codexAppServerNodeLayer = (

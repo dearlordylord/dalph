@@ -50,8 +50,9 @@ import {
 } from "@dalph/orchestrator"
 import { Context, Deferred, Effect, Layer, type Scope } from "effect"
 import type { CodexAppServer } from "./codex-app-server.js"
-import { codexAppServerNodeLayer, nodeCodexOwnedActivityCensusLayer } from "./codex-app-server.js"
+import { codexAppServerNodeLayer, codexOwnedActivityCensusLayer } from "./codex-app-server.js"
 import { nodeCodexAttemptStoreLayer } from "./codex-attempt-store.js"
+import { nodeCodexProcessNativeService, type CodexProcessNativeService } from "./codex-process-native.js"
 import { nodeCodexPlannedAttemptExecutorLayer } from "./codex-planned-attempt-executor.js"
 import { nodeCodexIntegratorLayer } from "./codex-integrator.js"
 import { CodexIntegratorConfiguration } from "./codex-integrator-private-store.js"
@@ -164,6 +165,8 @@ export interface ProductionRepositoryHostAdapters<ECodex = never, EGithub = neve
   readonly onActivationFinalizationStart?: (kind: "Ordinary" | "ActiveWorkAuthorityRefresh") => Effect.Effect<void>
   /** Qualification synchronization immediately before the real expected-head Git mutation. */
   readonly targetPromotionCompareAndSetObserver?: (request: TargetPromotionGitRequest) => Effect.Effect<void>
+  /** Qualification-only process view shared by app-server ownership and attempt activity observations. */
+  readonly codexProcessNative?: CodexProcessNativeService
   readonly codexAppServer?: (
     configuration: ProductionRepositoryHostConfiguration
   ) => Layer.Layer<CodexAppServer, ECodex, ApplicationExitShell>
@@ -182,13 +185,17 @@ const defaultGithubClientLayer = (configuration: ProductionRepositoryHostConfigu
 
 const defaultCodexAppServerLayer = (
   configuration: ProductionRepositoryHostConfiguration,
-  attemptStore: ReturnType<typeof nodeCodexAttemptStoreLayer>
+  attemptStore: ReturnType<typeof nodeCodexAttemptStoreLayer>,
+  native: CodexProcessNativeService = nodeCodexProcessNativeService
 ) => {
-  return codexAppServerNodeLayer({
-    executable: configuration.codexExecutable,
-    clientName: configuration.codexClientName,
-    clientVersion: configuration.codexClientVersion
-  }).pipe(Layer.provide(attemptStore), Layer.provide(NodeServices.layer))
+  return codexAppServerNodeLayer(
+    {
+      executable: configuration.codexExecutable,
+      clientName: configuration.codexClientName,
+      clientVersion: configuration.codexClientVersion
+    },
+    native
+  ).pipe(Layer.provide(attemptStore), Layer.provide(NodeServices.layer))
 }
 
 const observedLayerBuild = <A, E, R>(
@@ -384,12 +391,15 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const attemptStoreLayer = nodeCodexAttemptStoreLayer({
           stateDirectory: configuration.codexExecutorPrivateStateDirectory
         }).pipe(Layer.provide(NodeServices.layer))
+        const codexProcessNative = adapters.codexProcessNative ?? nodeCodexProcessNativeService
         /* v8 ignore start -- @preserve Hermetic host tests replace the process boundary; this assignment retains the production Codex app-server default. */
         const appLayerWithoutApplicationExit: Layer.Layer<
           CodexAppServer,
           ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>,
           ApplicationExitShell
-        > = adapters.codexAppServer?.(configuration) ?? defaultCodexAppServerLayer(configuration, attemptStoreLayer)
+        > =
+          adapters.codexAppServer?.(configuration) ??
+          defaultCodexAppServerLayer(configuration, attemptStoreLayer, codexProcessNative)
         /* v8 ignore stop */
         const appLayer: Layer.Layer<
           CodexAppServer,
@@ -428,7 +438,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
                   })
                 )
               ).pipe(Layer.provide(realPromotion))
-        const activityCensusLayer = nodeCodexOwnedActivityCensusLayer.pipe(Layer.provide(appLayer))
+        const activityCensusLayer = codexOwnedActivityCensusLayer(codexProcessNative).pipe(Layer.provide(appLayer))
         const executorLayer = observedPlannedAttemptExecutorLayer(
           nodeCodexPlannedAttemptExecutorLayer.pipe(
             Layer.provide(appLayer),

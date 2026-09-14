@@ -400,9 +400,14 @@ export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")
     snapshot: () =>
       Effect.gen(function* () {
         const retained = [...(yield* Ref.get(labels)).values()]
+        const retainedThreads = [...(yield* Ref.get(threads)).values()]
         return {
           taskLifecycle: yield* Ref.get(lifecycle),
           activeClaimCount: retained.filter((label) => label.name.startsWith("dalph-claim-")).length,
+          activeTurnCount: retainedThreads
+            .flatMap((thread) => thread.turns)
+            .filter((turn) => turn.status !== "completed").length,
+          backgroundTerminalCount: 0,
           completionClaimCount: retained.filter((label) => label.name.startsWith("dalph-completion-")).length,
           operationCounts: yield* Ref.get(counts)
         }

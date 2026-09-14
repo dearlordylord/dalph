@@ -311,7 +311,8 @@ it.effect("the shipped binary and recovery qualification select the same CLI and
     expect(composition).toContain("productionCliApplication = makeProductionCliApplication()")
     expect(composition).toContain("withDecodedProductionRepositoryHost(input, productionRepositoryHostGraph(adapters)")
     expect(qualification).toContain('import { makeProductionCliApplication } from "../src/application/live-cli.js"')
-    expect(qualification).toContain("makeProductionCliApplication({ githubClient: () => publicRecoveryGithubLayer })")
+    expect(qualification).toContain("codexProcessNative: isolatedCodexProcessNativeService")
+    expect(qualification).toContain("githubClient: () => publicRecoveryGithubLayer")
   }).pipe(Effect.provide(NodeServices.layer))
 )
 

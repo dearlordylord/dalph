@@ -87,6 +87,7 @@ import type { ProductionRepositoryHostConfiguration } from "./production-configu
 import { ProductionRepositoryHostConfigurationError } from "./production-configuration.js"
 import { CodexAppServer } from "./codex-app-server.js"
 import { CodexServerIncarnation } from "./codex-attempt-store.js"
+import { isolatedCodexProcessNativeService } from "../../test-support/isolated-codex-process-native.js"
 import { completedRunFinalityFixture } from "../../../orchestrator/test/run-finality.js"
 import { GithubGraphqlThrottled } from "../../../orchestrator/src/authorities/task-tracker/github/graphql-client.js"
 import { GithubGraphqlRequestError } from "../../../orchestrator/src/authorities/task-tracker/github/graphql-response.js"
@@ -247,7 +248,10 @@ it.effect("production host composition keeps ambient Codex home separate from ex
         () =>
           withProductionRepositoryHost(
             input,
-            productionRepositoryHostGraph({ githubClient: () => Layer.succeed(GithubGraphqlClient, githubClient) }),
+            productionRepositoryHostGraph({
+              codexProcessNative: isolatedCodexProcessNativeService,
+              githubClient: () => Layer.succeed(GithubGraphqlClient, githubClient)
+            }),
             () =>
               Effect.gen(function* () {
                 yield* Deferred.await(providerStarted)

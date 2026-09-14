@@ -605,7 +605,9 @@ it.live(
         if (boundary._tag !== "CompletionResponse") return yield* Effect.die("wrong concrete completion cut")
         const before = yield* controller.providerSnapshot
         expect(yield* controller.activeRequestCount).toBeGreaterThan(0)
-        expect(before.taskLifecycle).toBe("Completed")
+        // This #307 death point follows completed in-process task activity;
+        // real app-server/post-turn death is qualified separately by #75.
+        expect(before).toMatchObject({ activeTurnCount: 0, backgroundTerminalCount: 0, taskLifecycle: "Completed" })
         expect(closeCount(before.operationCounts)).toBe(1)
         const original = yield* selectedOf(first)
         yield* controller.killChild(first)

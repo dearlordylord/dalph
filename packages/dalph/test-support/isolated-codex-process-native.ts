@@ -1,4 +1,9 @@
 import {
+  linuxProcessEffectiveUid,
+  type LinuxProcessStat,
+  parseLinuxProcessStat
+} from "../src/application/codex-app-server.js"
+import {
   nodeCodexProcessNativeService,
   type CodexProcessNativeService
 } from "../src/application/codex-process-native.js"
@@ -6,29 +11,72 @@ import {
 const processErrorCode = (error: unknown): string =>
   typeof error === "object" && error !== null && "code" in error ? String(error.code) : ""
 
-export const processEntryReadIsUnavailable = (error: unknown): boolean => {
+export const processEntryReadProvesAbsence = (error: unknown): boolean => {
   const code = processErrorCode(error)
-  return code === "EACCES" || code === "ENOENT" || code === "ESRCH"
+  return code === "ENOENT" || code === "ESRCH"
 }
 
-const processEntryIsReadable = async (entry: string, native: CodexProcessNativeService): Promise<boolean> => {
-  if (!/^[0-9]+$/.test(entry)) return true
+const processBelongsToForeignUser = async (pid: number, native: CodexProcessNativeService): Promise<boolean> => {
   try {
-    await native.readFile(`/proc/${entry}/environ`)
-    return true
+    const [candidateStatus, ownerStatus] = await Promise.all([
+      native.readFile(`/proc/${pid}/status`),
+      native.readFile(`/proc/${native.pid}/status`)
+    ])
+    const candidateUid = linuxProcessEffectiveUid(candidateStatus)
+    const ownerUid = linuxProcessEffectiveUid(ownerStatus)
+    return candidateUid !== undefined && ownerUid !== undefined && candidateUid !== ownerUid
+  } catch {
+    return false
+  }
+}
+
+const processEntryMayBeExcluded = async (
+  pid: number,
+  error: unknown,
+  native: CodexProcessNativeService
+): Promise<boolean> =>
+  processEntryReadProvesAbsence(error) ||
+  (processErrorCode(error) === "EACCES" && (await processBelongsToForeignUser(pid, native)))
+
+const readFixtureProcess = async (
+  entry: string,
+  native: CodexProcessNativeService
+): Promise<LinuxProcessStat | undefined> => {
+  if (!/^[0-9]+$/.test(entry)) return undefined
+  const pid = Number(entry)
+  try {
+    const stat = parseLinuxProcessStat(pid, await native.readFile(`/proc/${entry}/stat`))
+    if (stat === undefined) return Promise.reject(new Error(`process ${pid} identity is malformed`))
+    return stat
   } catch (error) {
-    // A process can disappear after `/proc` enumeration but before this
-    // readability probe. ESRCH is a proven absence at this exact PID; it is
-    // not an unreadable/live/changed process and must not abort the census.
-    if (processEntryReadIsUnavailable(error)) return false
+    if (processEntryReadProvesAbsence(error)) return undefined
     return Promise.reject(error)
   }
 }
 
+const fixtureProcessIds = (processes: ReadonlyArray<LinuxProcessStat>, rootPid: number): ReadonlySet<number> => {
+  const byPid = new Map(processes.map((process) => [process.pid, process]))
+  return new Set(
+    processes.flatMap((process) => {
+      let pid = process.pid
+      const seen = new Set<number>()
+      while (!seen.has(pid)) {
+        if (pid === rootPid) return [process.pid]
+        seen.add(pid)
+        const parent = byPid.get(pid)
+        if (parent === undefined || parent.parentPid === 0) return []
+        pid = parent.parentPid
+      }
+      return []
+    })
+  )
+}
+
 /**
- * Real Node process operations with the same per-account readable process view
- * used by the supported-host qualification fixture. Protocol tests do not own
- * unrelated runner processes and therefore must not census them.
+ * Real Node process operations restricted to this qualification child and its
+ * descendants. The hermetic provider is in-process and creates no app-server
+ * or task processes, so sibling runner processes are outside its test scope.
+ * Real app-server restart ownership is qualified separately.
  */
 export const makeIsolatedCodexProcessNativeService = (
   native: CodexProcessNativeService
@@ -38,13 +86,11 @@ export const makeIsolatedCodexProcessNativeService = (
     try {
       return await native.readFile(filename)
     } catch (error) {
-      // The runner can make an unrelated entry unreadable after enumeration.
-      // Keep this fixture's readable directory view consistent at the later
-      // token read; production retains its stricter ownership observations.
+      const processMatch = /^\/proc\/(\d+)\/environ$/.exec(filename)
       if (
         native.platform === "linux" &&
-        /^\/proc\/\d+\/environ$/.test(filename) &&
-        processEntryReadIsUnavailable(error)
+        processMatch !== null &&
+        (await processEntryMayBeExcluded(Number(processMatch[1]), error, native))
       ) {
         return Promise.reject(
           Object.assign(new Error(`entry unavailable in fixture process view: ${filename}`), { code: "ENOENT" })
@@ -56,8 +102,11 @@ export const makeIsolatedCodexProcessNativeService = (
   readdir: async (directory) => {
     const entries = await native.readdir(directory)
     if (native.platform !== "linux" || directory !== "/proc") return entries
-    const readable = await Promise.all(entries.map((entry) => processEntryIsReadable(entry, native)))
-    return entries.filter((_, index) => readable[index] === true)
+    const processes = (await Promise.all(entries.map((entry) => readFixtureProcess(entry, native)))).filter(
+      (process): process is LinuxProcessStat => process !== undefined
+    )
+    const included = fixtureProcessIds(processes, native.pid)
+    return entries.filter((entry) => !/^[0-9]+$/.test(entry) || included.has(Number(entry)))
   }
 })
 

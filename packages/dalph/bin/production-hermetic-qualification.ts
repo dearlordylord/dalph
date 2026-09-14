@@ -25,9 +25,11 @@ import {
   hermeticPromotionCompareAndSetObserver,
   registerHermeticExpectedRecord
 } from "../src/application/production-hermetic-provider-bridge.js"
+import { isolatedCodexProcessNativeService } from "../test-support/isolated-codex-process-native.js"
 
 // The ordinary public parser, host, protocols, storage and encoder remain intact.
-// Only controlled outer provider Layers and a real-CAS observation tap are installed.
+// Controlled provider Layers, the fixture-owned process view, and a real-CAS
+// observation tap are installed only for this qualification.
 const application = Effect.gen(function* () {
   const manifest = yield* Config.schema(
     Schema.fromJsonString(HermeticFixtureManifest),
@@ -40,6 +42,7 @@ const application = Effect.gen(function* () {
     endpoint,
     scope,
     makeProductionCliHostRunner({
+      codexProcessNative: isolatedCodexProcessNativeService,
       githubClient: (configuration) => hermeticGithubClientLayer(endpoint, configuration),
       codexAppServer: () =>
         hermeticCodexAppServerLayer(endpoint, CodexServerIncarnation.make("hermetic-provider-incarnation")),
