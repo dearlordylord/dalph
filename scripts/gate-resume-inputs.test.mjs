@@ -117,6 +117,144 @@ test("effective environment remains behavioral input and per-run transport does 
   }
 })
 
+test("an unrelated branch section can be added while the candidate config watch remains live", async () => {
+  const f = fixture()
+  const guard = await f.guard()
+  try {
+    f.git("config", "branch.unrelated-worktree.remote", "origin")
+    await guard.assertUnchanged()
+    assert.equal((await guard.finish()).inputDigest, guard.identity.inputDigest)
+  } finally {
+    await guard.close()
+  }
+})
+
+test("a branch whose name extends the current branch remains unrelated configuration", async () => {
+  const f = fixture()
+  assert.equal(f.git("branch", "--show-current"), "master")
+  const guard = await f.guard()
+  try {
+    f.git("config", "branch.master.backup.remote", "origin")
+    await guard.assertUnchanged()
+    assert.equal((await guard.finish()).inputDigest, guard.identity.inputDigest)
+  } finally {
+    await guard.close()
+  }
+})
+
+test("the exact current branch section remains candidate-relevant configuration", async () => {
+  const f = fixture()
+  assert.equal(f.git("branch", "--show-current"), "master")
+  const guard = await f.guard()
+  try {
+    f.git("config", "branch.master.remote", "origin")
+    await assert.rejects(guard.assertUnchanged(), /Candidate-relevant Git configuration changed/u)
+    await assert.rejects(guard.finish(), /Candidate-relevant Git configuration changed/u)
+  } finally {
+    await guard.close()
+  }
+})
+
+test("a subsection-less branch setting remains repository-wide candidate configuration", async () => {
+  const f = fixture()
+  const guard = await f.guard()
+  try {
+    f.git("config", "branch.sort", "-committerdate")
+    await assert.rejects(guard.assertUnchanged(), /Candidate-relevant Git configuration changed/u)
+    await assert.rejects(guard.finish(), /Candidate-relevant Git configuration changed/u)
+  } finally {
+    await guard.close()
+  }
+})
+
+test("a candidate-relevant config replacement fails after an unrelated replacement re-arms the watch", async () => {
+  const f = fixture()
+  const guard = await f.guard()
+  try {
+    f.git("config", "branch.unrelated-worktree.remote", "origin")
+    await guard.assertUnchanged()
+    f.git("config", "core.filemode", "false")
+    await assert.rejects(guard.assertUnchanged(), /Candidate-relevant Git configuration changed/u)
+    await assert.rejects(guard.finish(), /Candidate-relevant Git configuration changed/u)
+  } finally {
+    await guard.close()
+  }
+})
+
+test("split parent replacement and obsolete file removal events re-arm before the later removal", async () => {
+  const f = fixture()
+  const config = join(f.root, ".git", "config")
+  const splitMarker = join(f.outer, "split-observer-events")
+  const splitReplacementEvents = String.raw`
+import os, runpy, struct, sys
+split_marker = ${JSON.stringify(splitMarker)}
+real_read = os.read
+held = []
+block_once = False
+split_once = False
+def split_read(fd, size):
+    global block_once, split_once
+    if block_once:
+        block_once = False
+        raise BlockingIOError()
+    if held:
+        block_once = True
+        return held.pop(0)
+    data = real_read(fd, size)
+    if split_once:
+        return data
+    records = []
+    offset = 0
+    while offset < len(data):
+        _, mask, _, length = struct.unpack_from("iIII", data, offset)
+        end = offset + 16 + length
+        records.append((mask, data[offset:end]))
+        offset = end
+    ordinary = [record for mask, record in records if not mask & 0x8000]
+    ignored = [record for mask, record in records if mask & 0x8000]
+    if ordinary and ignored and any(mask & 0x80 for mask, _ in records):
+        split_once = True
+        with open(split_marker, "w", encoding="utf-8") as marker:
+            marker.write("split")
+        held.append(b"".join(ignored))
+        block_once = True
+        return b"".join(ordinary)
+    return data
+os.read = split_read
+runpy.run_path(sys.argv[1], run_name="__main__")
+`
+  const observer = await startInputObserver({
+    roots: [config],
+    protectedRoots: [config],
+    replaceableRoots: [config],
+    pythonArguments: ["-c", splitReplacementEvents]
+  })
+  try {
+    const replacement = join(f.root, ".git", "config.lock")
+    writeFileSync(replacement, readFileSync(config))
+    renameSync(replacement, config)
+    await observer.assertUnchanged()
+    assert.equal(readFileSync(splitMarker, "utf8"), "split")
+    writeFileSync(config, `${readFileSync(config, "utf8")}# relevant edit\n`)
+    await assert.rejects(observer.assertUnchanged(), /input filesystem event/u)
+  } finally {
+    await observer.close()
+  }
+})
+
+test("a relevant config edit restored before validation remains rejected as multiple generations", async () => {
+  const f = fixture()
+  const originalFileMode = f.git("config", "--local", "--get", "core.filemode")
+  const guard = await f.guard()
+  try {
+    f.git("config", "core.filemode", originalFileMode === "true" ? "false" : "true")
+    f.git("config", "core.filemode", originalFileMode)
+    await assert.rejects(guard.assertUnchanged(), /multiple replaceable input generations/u)
+  } finally {
+    await guard.close()
+  }
+})
+
 test("resolved external workspace target and symlink replacement are observed", async () => {
   const f = fixture()
   const external = join(f.outer, "external")

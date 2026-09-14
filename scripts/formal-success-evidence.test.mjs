@@ -46,9 +46,20 @@ const fixture = () => {
   Object.assign(location, { runDirectory, runId })
   const profile = createQuintEffectiveProfile({ purpose: "local-guarded" })
   const profileIdentity = digest(JSON.stringify(profile))
+  const applicability = {
+    version: formalEvidenceContract.inputPolicyVersion,
+    observerVersion: formalEvidenceContract.observerVersion,
+    sourceManifest: [{ location: { role: "repository-source", relativePath: "specs/model.qnt" } }],
+    toolManifest: [],
+    environmentDigests: {},
+    toolchain: { versions: { fixture: "1" } },
+    profile
+  }
   const identity = {
     version: formalEvidenceContract.inputPolicyVersion,
     worktree: root,
+    applicability,
+    applicabilityDigest: digest(JSON.stringify(applicability)),
     inputDigest: digest("formal inputs"),
     profileDigest: profileIdentity,
     toolchain: {
@@ -230,6 +241,80 @@ test("records complete formal success only after obligations and terminal eviden
     assert.equal(result.evidencePath, attempt.recordPath)
   }))
 
+test("reuses stopped evidence across same-custody worktrees and rejects unsafe original custody", () =>
+  withFixture((f) => {
+    const attempt = beginFormalAttempt(f.options)
+    publishFormalSuccess({ attempt, execution: f.execution, observation: f.observation })
+    execFileSync("git", ["-C", f.location.worktree, "config", "user.email", "formal-fixture@example.invalid"])
+    execFileSync("git", ["-C", f.location.worktree, "config", "user.name", "Formal Fixture"])
+    writeFileSync(join(f.location.worktree, "tracked"), "same repository\n")
+    execFileSync("git", ["-C", f.location.worktree, "add", "tracked"])
+    execFileSync("git", ["-C", f.location.worktree, "commit", "-qm", "fixture"])
+    const sibling = `${f.location.worktree}-sibling`
+    const otherClone = `${f.location.worktree}-other-clone`
+    try {
+      execFileSync("git", ["-C", f.location.worktree, "worktree", "add", "-qb", "sibling", sibling])
+      const location = repositoryLocation(sibling)
+      const identity = { ...f.identity, worktree: location.worktree, inputDigest: digest("relocated exact inputs") }
+      const reused = readFormalSuccess({ location, identity, profileIdentity: f.profileIdentity })
+      assert.equal(reused.status, "hit", reused.reason)
+      assert.equal(reused.evidencePath, attempt.recordPath)
+      assert.equal(reused.success.worktree, f.location.worktree)
+
+      execFileSync("git", ["clone", "-q", f.location.worktree, otherClone])
+      const independentLocation = repositoryLocation(otherClone)
+      assert.throws(
+        () =>
+          readReferencedFormalSuccess({
+            recordPath: attempt.recordPath,
+            worktree: independentLocation.worktree,
+            identity: { ...identity, worktree: independentLocation.worktree },
+            profileIdentity: f.profileIdentity
+          }),
+        /Invalid referenced formal locator/u,
+        "another clone cannot consume this clone's custody record"
+      )
+
+      const success = JSON.parse(readFileSync(attempt.recordPath, "utf8"))
+      atomicRecord(attempt.recordPath, {
+        ...success,
+        host: { ...success.host, bootId: `${success.host.bootId}-different-boot` }
+      })
+      assert.equal(
+        readFormalSuccess({ location, identity, profileIdentity: f.profileIdentity }).status,
+        "miss",
+        "evidence from another host boot cannot be reused"
+      )
+      atomicRecord(attempt.recordPath, { ...success, worktree: `${success.worktree}-missing` })
+      assert.equal(
+        readFormalSuccess({ location, identity, profileIdentity: f.profileIdentity }).status,
+        "miss",
+        "evidence whose original worktree is no longer available cannot be reused"
+      )
+      atomicRecord(attempt.recordPath, success)
+
+      const receiptPath = join(
+        f.location.runDirectory,
+        "receipts",
+        `${f.report.profileResult.commands[0].obligationId}.json`
+      )
+      const receipt = JSON.parse(readFileSync(receiptPath, "utf8"))
+      atomicRecord(receiptPath, { ...receipt, groupAbsent: false })
+      assert.equal(readFormalSuccess({ location, identity, profileIdentity: f.profileIdentity }).status, "miss")
+      atomicRecord(receiptPath, receipt)
+
+      const applicability = { ...identity.applicability, profile: { changed: true } }
+      const changed = { ...identity, applicability, applicabilityDigest: digest(JSON.stringify(applicability)) }
+      assert.equal(
+        readFormalSuccess({ location, identity: changed, profileIdentity: f.profileIdentity }).status,
+        "miss"
+      )
+    } finally {
+      rmSync(sibling, { recursive: true, force: true })
+      rmSync(otherClone, { recursive: true, force: true })
+    }
+  }))
+
 test("failed force prevents fallback to older success", () =>
   withFixture((f) => {
     publishFormalSuccess({ attempt: beginFormalAttempt(f.options), execution: f.execution, observation: f.observation })
@@ -269,8 +354,17 @@ test("reruns when required evidence is malformed truncated old-policy or mismatc
       assert.equal(readFormalSuccess(f.options).status, "miss")
     }
     writeFileSync(attempt.pointerPath, original)
+    const applicability = { ...f.identity.applicability, sourceManifest: [{ changed: true }] }
     assert.equal(
-      readFormalSuccess({ ...f.options, identity: { ...f.identity, inputDigest: digest("changed") } }).status,
+      readFormalSuccess({
+        ...f.options,
+        identity: {
+          ...f.identity,
+          inputDigest: digest("changed"),
+          applicability,
+          applicabilityDigest: digest(JSON.stringify(applicability))
+        }
+      }).status,
       "miss"
     )
   }))

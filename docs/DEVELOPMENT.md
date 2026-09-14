@@ -128,7 +128,7 @@ All commands below use `pnpm`. Script definitions live in
 | `gate:status <run-id>` | Read durable command results, unresolved custody and per-run logs/report paths without the previous terminal. Missing or malformed receipts cannot prove success. |
 | `gate:reconcile <run-id>` | Close registration and prove every recorded writer group absent before clearing exact worktree/slot fences. Missing exits stay unproven. |
 | `check:all --candidate=<base sha> --resume=<run-id>` | Reuse a contiguous proven full-gate prefix in the same worktree on identical monitored inputs; failed/unproven stage and remaining suffix execute normally. |
-| `check:all` | Complete qualification when required by [choosing checks](#choosing-checks), for a frozen candidate. It includes the complete formal requirement and application checks, including non-browser Lab; automatic MBT is excluded pending #363. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
+| `check:all` | Complete qualification when required by [choosing checks](#choosing-checks), for a frozen candidate. It reports all ordinary preflight failures together, then starts no formal or application qualification when any preflight check failed. An interruption, unproven surviving process, or runner defect stops the census immediately. The command includes the complete formal requirement and application checks, including non-browser Lab; automatic MBT is excluded pending #363. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
 | `check:ci` | Hosted gate; MBT remains excluded pending #363. |
 
 Hosted CI keeps separate quality and formal entry points: hosted formal runs the
@@ -218,6 +218,28 @@ Guarded full-gate children use `GIT_OPTIONAL_LOCKS=0`, so read-only status check
 leave index stat-cache metadata untouched. Required Git writes still acquire
 their locks, and actual index changes invalidate the observer. External Git
 observation during a run must use the same optional-lock setting.
+
+Creating an unrelated linked worktree can atomically replace the shared Git
+config while adding only that other branch's settings. The input observer
+installs a watch on the replacement as soon as the parent-directory replacement
+event and the new file establish that generation. A later removal event for the
+obsolete inode retires only that old generation. The guard compares the effective
+local configuration for the candidate worktree; foreign `branch.*` sections do
+not invalidate qualification, while a candidate-branch or repository-wide
+setting change does. More than one config generation before a comparison fails
+closed, so a relevant edit followed by restoration cannot pass as one benign rewrite.
+This is qualification-tool behavior only and changes no Dalph runtime command,
+provider boundary, journal fact, retry, or cleanup behavior.
+
+| Qualification scenario | Acceptance test |
+| --- | --- |
+| Another maintainer adds an unrelated branch section while the candidate input observer is live; the observer re-arms the atomically replaced config and retains the same candidate input identity | `scripts/gate-resume-inputs.test.mjs`: `an unrelated branch section can be added while the candidate config watch remains live` |
+| Another maintainer adds branch metadata whose branch name merely extends the candidate's branch name; exact Git section/subsection parsing keeps it unrelated | `scripts/gate-resume-inputs.test.mjs`: `a branch whose name extends the current branch remains unrelated configuration` |
+| The exact current branch's Git configuration changes; the observer refuses the candidate even though similarly prefixed foreign branch sections are ignored | `scripts/gate-resume-inputs.test.mjs`: `the exact current branch section remains candidate-relevant configuration` |
+| A repository-wide setting in the subsection-less `[branch]` section changes; the observer refuses both the next stage and final qualification | `scripts/gate-resume-inputs.test.mjs`: `a subsection-less branch setting remains repository-wide candidate configuration` |
+| A repository-wide Git setting changes after an unrelated replacement; the re-armed observer refuses both the next stage and final qualification | `scripts/gate-resume-inputs.test.mjs`: `a candidate-relevant config replacement fails after an unrelated replacement re-arms the watch` |
+| The parent-directory replacement event arrives in one observer drain and the obsolete file-watch removal arrives in the next; the observer watches the new generation immediately and treats only the later old-generation removal as obsolete | `scripts/gate-resume-inputs.test.mjs`: `split parent replacement and obsolete file removal events re-arm before the later removal` |
+| A relevant Git setting changes and is restored through two config generations before validation | `scripts/gate-resume-inputs.test.mjs`: `a relevant config edit restored before validation remains rejected as multiple generations` |
 
 Reuse requires identical HEAD, conflict-free semantic index, working/untracked
 bytes and modes, ignored configuration, actual installed dependency and resolved
@@ -917,10 +939,21 @@ after the external tool observation reaches the end of the application stage,
 so a final input change fails the handoff. A final check failure does not
 silently start a second formal profile.
 
-Local reuse requires supported cooperative Linux, exact worktree admission and
-custody, prepared coherent pnpm/Quint/Apalache/Java roots, and the conservative
-environment and input boundary enforced by the formal policy. Unresolved
-custody, reconciliation or observer evidence fails closed. The local boundary
+Local reuse requires supported cooperative Linux, exact current-worktree
+admission, shared Git-repository custody, prepared coherent
+pnpm/Quint/Apalache/Java roots, and the conservative environment and input
+boundary enforced by the formal policy. Equivalent governed inputs may reuse a
+complete success from another worktree of the same clone and host boot.
+Repository-local source and tool paths, checkout PATH entries, and a
+checkout-local pnpm launcher are compared by role plus checkout-relative
+location and content rather than raw worktree path. A recognized pnpm launcher
+retains a digest of its complete generated script with only checkout-local
+components of the generated `NODE_PATH` assignments represented symbolically;
+added commands or changed targets remain input changes. Absolute original
+worktree/run/report paths remain provenance and must still resolve through the
+same Git common directory; every original checker/server process group must be
+proven stopped. Unresolved custody, missing origin provenance, reconciliation
+or observer evidence fails closed. The local boundary
 does not coordinate arbitrary external processes, other clones, distributed
 filesystems, non-Linux hosts, or tool roots outside the identified installation.
 

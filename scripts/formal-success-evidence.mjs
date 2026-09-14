@@ -22,21 +22,25 @@ const requireFact = (fact, message) => {
 }
 export const formalSuccessPolicyVersion = formalEvidenceContract.successPolicyVersion
 const policyVersion = formalSuccessPolicyVersion
+const validateApplicabilityIdentity = (identity) => {
+  requireFact(
+    identity?.version === formalEvidenceContract.inputPolicyVersion &&
+      identity.applicability?.version === formalEvidenceContract.inputPolicyVersion &&
+      identity.applicability.observerVersion === formalEvidenceContract.observerVersion &&
+      typeof identity.applicabilityDigest === "string" &&
+      identity.applicabilityDigest === digest(JSON.stringify(identity.applicability)),
+    "Invalid formal applicability identity"
+  )
+  return identity.applicabilityDigest
+}
 const scope = ({ identity, location, profileIdentity }) => {
   requireFact(
     typeof identity?.inputDigest === "string" && identity.worktree === location.worktree,
     "Invalid current formal identity"
   )
+  const applicabilityDigest = validateApplicabilityIdentity(identity)
   const host = localHostIdentity()
-  const key = digest(
-    JSON.stringify({
-      host,
-      worktree: location.worktree,
-      identity: identity.inputDigest,
-      profileIdentity,
-      policyVersion
-    })
-  )
+  const key = digest(JSON.stringify({ host, applicabilityDigest, profileIdentity, policyVersion }))
   return { host, key, pointerPath: join(location.custodyRoot, "formal", `${key}.json`) }
 }
 
@@ -318,7 +322,12 @@ export const invalidateFormalAttempt = ({ attempt, reason }) => {
 }
 
 export const readFormalSuccess = ({ identity, location, profileIdentity }) => {
-  const selected = scope({ identity, location, profileIdentity })
+  let selected
+  try {
+    selected = scope({ identity, location, profileIdentity })
+  } catch (error) {
+    return { status: "miss", reason: error.message }
+  }
   if (!existsSync(selected.pointerPath)) return { status: "miss", reason: "no reusable success" }
   try {
     const pointer = readRecord(selected.pointerPath)
@@ -348,23 +357,27 @@ export const readFormalSuccess = ({ identity, location, profileIdentity }) => {
 
 /** Historical handoff evidence identifies its original success, independent of later attempts. */
 export const readReferencedFormalSuccess = ({ identity, profileIdentity, recordPath, worktree }) => {
-  const location = repositoryLocation(worktree)
+  const currentLocation = repositoryLocation(worktree)
   requireFact(
-    typeof recordPath === "string" && resolve(recordPath).startsWith(`${location.custodyRoot}/runs/`),
+    typeof recordPath === "string" && resolve(recordPath).startsWith(`${currentLocation.custodyRoot}/runs/`),
     "Invalid referenced formal locator"
   )
   const success = readRecord(recordPath)
   const expectedIdentity = identity ?? success.identity
   const expectedProfile = profileIdentity ?? success.profileIdentity
-  const selected = scope({ identity: expectedIdentity, location, profileIdentity: expectedProfile })
+  const selected = scope({ identity: expectedIdentity, location: currentLocation, profileIdentity: expectedProfile })
+  const originLocation = repositoryLocation(success.worktree)
   requireFact(
-    success.policyVersion === policyVersion &&
+    originLocation.commonDirectory === currentLocation.commonDirectory &&
+      originLocation.custodyRoot === currentLocation.custodyRoot &&
+      success.policyVersion === policyVersion &&
       success.state === "passed" &&
       success.recordPath === recordPath &&
       success.pointerPath === selected.pointerPath &&
-      success.worktree === location.worktree &&
+      success.worktree === originLocation.worktree &&
       same(success.host, selected.host) &&
-      same(success.identity, expectedIdentity) &&
+      success.identity.worktree === originLocation.worktree &&
+      validateApplicabilityIdentity(success.identity) === validateApplicabilityIdentity(expectedIdentity) &&
       success.profileIdentity === expectedProfile,
     "Referenced formal success identity changed"
   )
@@ -381,7 +394,7 @@ export const readReferencedFormalSuccess = ({ identity, profileIdentity, recordP
       success.observation.unchanged === true &&
       success.observation.ready === true &&
       success.observation.drained === true &&
-      success.observation.inputDigest === expectedIdentity.inputDigest,
+      success.observation.inputDigest === success.identity.inputDigest,
     "Referenced formal observation is incomplete"
   )
   validateFormalExecution({ attempt: success, execution: success.execution })

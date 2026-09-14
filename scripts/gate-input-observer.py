@@ -24,6 +24,11 @@ visited = set()
 roots = []
 excluded = []
 protected = []
+replaceable = set()
+replacement_counts = {}
+active_replaceable_watches = {}
+obsolete_replaceable_watches = {}
+awaiting_parent_replacements = {}
 paused = False
 
 
@@ -74,6 +79,32 @@ def watch(path):
         raise OSError(ctypes.get_errno(), "cannot watch " + path)
     watches.setdefault(wd, set()).add(path)
     watched_paths.add(path)
+    if path in replaceable:
+        active_replaceable_watches[path] = wd
+
+
+def install_replaceable_generation(path):
+    if not os.path.isfile(path):
+        send("error", reason="replaceable input watch was not re-established because the file is absent",
+             path=path[:1024])
+        return False
+    previous_wd = active_replaceable_watches.get(path)
+    wd = libc.inotify_add_watch(fd, os.fsencode(path), MASK)
+    if wd < 0:
+        send("error", reason="replaceable input watch could not be re-established errno=" + str(ctypes.get_errno()),
+             path=path[:1024])
+        return False
+    if previous_wd != wd:
+        if previous_wd is not None:
+            obsolete_replaceable_watches.setdefault(previous_wd, set()).add(path)
+        watches.setdefault(wd, set()).add(path)
+        watched_paths.add(path)
+        active_replaceable_watches[path] = wd
+    replacement_counts[path] = replacement_counts.get(path, 0) + 1
+    if replacement_counts[path] > 1:
+        send("error", reason="multiple replaceable input generations occurred before validation",
+             path=path[:1024])
+    return True
 
 
 def watch_ancestors(path):
@@ -122,10 +153,16 @@ def drain():
     dirty_path = None
     dirty_mask = None
     dirty_name = None
+    unresolved_replaceable_events = {}
+    rearmed_paths = set()
     while True:
         try:
             data = os.read(fd, 1024 * 1024)
         except BlockingIOError:
+            for path, mask in unresolved_replaceable_events.items():
+                if path not in rearmed_paths:
+                    send("error", reason="replaceable input watch was not re-established mask=" + hex(mask),
+                         path=path[:1024])
             if dirty_path is not None:
                 send("dirty", reason="input filesystem event mask=" + hex(dirty_mask) + " name=" + repr(dirty_name), path=dirty_path[:512])
             return
@@ -143,14 +180,46 @@ def drain():
             offset += length
             if mask & OVERFLOW:
                 send("error", reason="IN_Q_OVERFLOW: input observation lost events")
-            elif mask & (IGNORED | 0x2000):
+            elif mask & 0x2000:
                 send("error", reason="unexpected watch removal or unmount mask=" + hex(mask),
                      path=", ".join(sorted(watches.get(wd, {"<unknown watch>"})))[:1024])
+            elif mask & IGNORED:
+                paths = watches.pop(wd, {"<unknown watch>"})
+                for path in paths:
+                    obsolete = path in obsolete_replaceable_watches.get(wd, set())
+                    if obsolete:
+                        obsolete_replaceable_watches[wd].discard(path)
+                        if not obsolete_replaceable_watches[wd]:
+                            obsolete_replaceable_watches.pop(wd)
+                        continue
+                    if path in replaceable and active_replaceable_watches.get(path) == wd:
+                        watched_paths.discard(path)
+                        active_replaceable_watches.pop(path)
+                        if install_replaceable_generation(path):
+                            rearmed_paths.add(path)
+                            awaiting_parent_replacements[path] = awaiting_parent_replacements.get(path, 0) + 1
+                        continue
+                    send("error", reason="unexpected watch removal or unmount mask=" + hex(mask), path=path[:1024])
             elif wd not in watches:
                 raise OSError("unknown inotify watch")
             else:
                 for base in watches[wd]:
                     path = os.path.join(base, name) if name else base
+                    if path in obsolete_replaceable_watches.get(wd, set()):
+                        continue
+                    if path in replaceable and not mask & (0x2 | 0x8):
+                        if name and mask & (0x80 | 0x100):
+                            awaiting = awaiting_parent_replacements.get(path, 0)
+                            if awaiting > 0:
+                                if awaiting == 1:
+                                    awaiting_parent_replacements.pop(path)
+                                else:
+                                    awaiting_parent_replacements[path] = awaiting - 1
+                            elif install_replaceable_generation(path):
+                                rearmed_paths.add(path)
+                            continue
+                        unresolved_replaceable_events[path] = unresolved_replaceable_events.get(path, 0) | mask
+                        continue
                     if invalidates(path, mask):
                         dirty_path = path
                         dirty_mask = mask
@@ -163,6 +232,9 @@ try:
     roots = list(dict.fromkeys([os.path.abspath(path) for path in config["roots"]] + [os.path.realpath(path) for path in config["roots"]]))
     excluded = [os.path.abspath(path) for path in config["excludedRoots"]]
     protected = [os.path.abspath(path) for path in config.get("protectedRoots", [])]
+    replaceable = set(os.path.abspath(path) for path in config.get("replaceableRoots", []))
+    if not replaceable.issubset(set(protected)):
+        raise OSError("replaceable inputs must also be protected inputs")
     for root in list(roots):
         watch_ancestors(root)
         walk(root)
@@ -184,6 +256,7 @@ try:
                 paused = True
             elif command == "drain":
                 drain()
+                replacement_counts.clear()
             elif command == "protect":
                 added = [os.path.abspath(path) for path in request["roots"]]
                 protected.extend(added)

@@ -199,14 +199,13 @@ export const readQualityEvidence = ({
     if (
       original.attemptId !== formal.attemptId ||
       original.runId !== formal.runId ||
-      !same(original.identity, formal.identity) ||
       original.profileIdentity !== formal.profileIdentity ||
       observation?.version !== formalEvidenceContract.inputPolicyVersion ||
       observation.observerVersion !== formalEvidenceContract.observerVersion ||
       observation.ready !== true ||
       observation.drained !== true ||
       observation.unchanged !== true ||
-      observation.inputDigest !== original.identity.inputDigest
+      observation.inputDigest !== formal.identity.inputDigest
     )
       throw new Error("Invalid final formal applicability evidence")
     formalProven = true
