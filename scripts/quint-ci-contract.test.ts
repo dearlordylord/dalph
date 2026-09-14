@@ -116,11 +116,13 @@ describe("hosted formal-model contract", () => {
     expect(aggregateJob).toMatch(
       /- name: Set up Node\.js\n\s+if: needs\.change-plan\.outputs\.formal-required == 'true'/u
     )
-    expect(aggregateJob).toContain("\n        uses: actions/download-artifact@v4")
+    expect(aggregateJob).toMatch(
+      /- name: Download formal model shard evidence\n\s+if: needs\.change-plan\.outputs\.formal-required == 'true'\n\s+uses: actions\/download-artifact@v4/u
+    )
     expect(aggregateJob).toContain("\n          path: formal-shard-reports")
     expect(aggregateJob).not.toContain(".formal-shard-reports")
-    expect(aggregateJob).toContain(
-      "node scripts/aggregate-hosted-formal-shards.mjs formal-shard-reports/shard-0.json formal-shard-reports/shard-1.json"
+    expect(aggregateJob).toMatch(
+      /- name: Validate complete formal model evidence\n\s+if: needs\.change-plan\.outputs\.formal-required == 'true'\n\s+run: node scripts\/aggregate-hosted-formal-shards\.mjs formal-shard-reports\/shard-0\.json formal-shard-reports\/shard-1\.json/u
     )
     expect(aggregateJob).toMatch(
       /- name: Report formal model gate not applicable\n\s+if: needs\.change-plan\.outputs\.formal-required == 'false'/u

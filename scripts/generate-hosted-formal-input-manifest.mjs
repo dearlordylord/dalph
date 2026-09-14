@@ -77,11 +77,15 @@ const supportedJobConditions = Object.freeze({
   "formal-models": "needs.change-plan.outputs.formal-required == 'true'",
   "formal-model-aggregate": "always()"
 })
-const supportedAggregateStepConditions = new Set([
-  "needs.change-plan.outputs.formal-required == 'true'",
-  "needs.change-plan.outputs.formal-required == 'false'",
-  "needs.change-plan.outputs.formal-required != 'true' && needs.change-plan.outputs.formal-required != 'false'"
-])
+const supportedAggregateStepConditions = Object.freeze({
+  Checkout: "needs.change-plan.outputs.formal-required == 'true'",
+  "Set up Node.js": "needs.change-plan.outputs.formal-required == 'true'",
+  "Download formal model shard evidence": "needs.change-plan.outputs.formal-required == 'true'",
+  "Validate complete formal model evidence": "needs.change-plan.outputs.formal-required == 'true'",
+  "Report formal model gate not applicable": "needs.change-plan.outputs.formal-required == 'false'",
+  "Refuse missing formal classification":
+    "needs.change-plan.outputs.formal-required != 'true' && needs.change-plan.outputs.formal-required != 'false'"
+})
 
 const validateFormalJobEnvironment = (environment, job) => {
   if (!isRecord(environment) || JSON.stringify(environment) !== JSON.stringify(supportedEnvironmentByJob[job]))
@@ -121,7 +125,9 @@ const formalWorkflowCommands = (workflow) => {
       const condition = step.if
       if (
         (job === "formal-models" && condition !== undefined) ||
-        (job === "formal-model-aggregate" && !supportedAggregateStepConditions.has(condition))
+        (job === "formal-model-aggregate" &&
+          (!Object.hasOwn(supportedAggregateStepConditions, step.name) ||
+            supportedAggregateStepConditions[step.name] !== condition))
       )
         throw new Error(`Hosted formal manifest does not support step condition in ${job}`)
       if (hasAction) {

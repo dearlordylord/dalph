@@ -308,6 +308,14 @@ test("hosted command discovery includes new Node entries and rejects unsupported
     () => hostedWorkflowCommandEntries({ packageJson, workflow: withJobHash }),
     /requires the exact supported job condition/u
   )
+  const withSwappedValidationCondition = workflow.replace(
+    "      - name: Validate complete formal model evidence\n        if: needs.change-plan.outputs.formal-required == 'true'\n",
+    "      - name: Validate complete formal model evidence\n        if: needs.change-plan.outputs.formal-required == 'false'\n"
+  )
+  assert.throws(
+    () => hostedWorkflowCommandEntries({ packageJson, workflow: withSwappedValidationCondition }),
+    /does not support step condition/u
+  )
   for (const field of ["container: node:24", "services: {}", "defaults: {}"]) {
     const withUnsupportedJobField = workflow.replace(
       "    runs-on: ubuntu-24.04-arm\n",
