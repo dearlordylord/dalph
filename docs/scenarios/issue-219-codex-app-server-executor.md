@@ -17,6 +17,65 @@ Codex thread ids, turn ids,
 JSON-RPC request ids, processes, terminal sessions, tools, and rollout files
 remain private to this implementation.
 
+## Alice starts production with her existing Codex CLI login
+
+### Starting situation and trigger
+
+Alice has installed the Codex CLI and has already completed its ordinary
+`codex login` flow. Codex owns that login, its configuration, instructions,
+skills, MCP servers, and conversation history under the `CODEX_HOME` selected
+by Alice's process environment, or under Codex's own default home when she did
+not set one. Dalph has a separate configured private directory for its exact
+attempt-thread associations and app-server ownership records. The production
+configuration names no model provider and contains no Codex credential.
+
+Alice exports the GitHub credential needed for the selected task tracker and
+starts the shipped production command.
+
+### Ordered boundaries, failure, and retry
+
+1. The production command reads `GITHUB_TOKEN` and decodes the non-secret host
+   configuration. It does not require or read an OpenAI API key or a
+   Dalph-specific Codex provider credential.
+2. The production host opens Dalph's configured executor-private directory for
+   its association and ownership records. It does not use that directory as
+   `CODEX_HOME`.
+3. The host starts the installed executable as exactly `codex app-server`,
+   without a model-provider override, provider credential environment mapping,
+   `OPENAI_API_KEY`, or `CODEX_HOME` addition. The child process inherits the
+   invoking environment, so Codex performs its own normal authentication and
+   configuration selection.
+4. The executor and Integrator share that one application-scoped app server as
+   in the existing chronologies below.
+
+If Codex cannot use its selected login or configuration, the app-server
+boundary returns its existing typed unavailable or operation failure. Dalph
+does not replace that result with a request for an API key, silently choose a
+provider, or retry a model request. Alice may repair the Codex login using the
+Codex CLI and invoke Dalph again; ordinary Journal and executor reconciliation
+decide whether the same Run and attempt resume.
+
+A crash before the app server starts leaves no Codex process to reconcile. A
+crash after launch follows the existing exact app-server ownership and attempt
+recovery chronology. Authentication data remains Codex-owned and never enters
+the Dalph Journal, evidence store, private executor state, diagnostics, or
+public output.
+
+### Visible and forbidden result
+
+Alice can run production using her existing Codex CLI login and sees the
+ordinary production progress or a redacted typed Codex failure. Dalph must not
+require an OpenAI API key for this path, hide Alice's Codex home behind its
+private executor-state directory, select a model provider, convert ChatGPT
+subscription use into API-key billing, or persist authentication material.
+
+### Acceptance-test mapping
+
+- `production configuration accepts ambient Codex CLI authentication without a provider credential`
+- `production starts codex app-server without provider credential or CODEX_HOME overrides`
+- `production keeps Codex CLI state separate from Dalph executor private state`
+- `production help names only the GitHub credential required by the ordinary path`
+
 The following implementation-private names make the chronology precise:
 
 - **Codex application server** — the scoped child process through which the

@@ -28,7 +28,7 @@ const validRawConfiguration = () => ({
   journalDatabase: "/var/lib/dalph/journal.sqlite",
   evidenceStoreRoot: "/var/lib/dalph/evidence",
   plannedAttemptWorktreeRoot: "/srv/dalph/planned-attempts",
-  codexStateDirectory: "/var/lib/dalph/codex",
+  codexExecutorPrivateStateDirectory: "/var/lib/dalph/executor-private",
   integratorCandidateWorktreeRoot: "/srv/dalph/integrator-candidates",
   integratorPrivateStore: "/var/lib/dalph/integrator-private.json",
   activationInterval: "1 minute",
@@ -36,25 +36,31 @@ const validRawConfiguration = () => ({
   codexExecutable: "/usr/local/bin/codex",
   codexClientName: "dalph",
   codexClientVersion: "0.0.0",
-  codexProvider: "openai",
-  githubToken: credentialNeedle,
-  codexProviderCredential: `${credentialNeedle}-codex`
+  githubToken: credentialNeedle
 })
 
 describe("production repository host configuration", () => {
-  it("decodes one complete value with branded locations and redacted credentials", async () => {
+  it("production configuration accepts ambient Codex CLI authentication without a provider credential", async () => {
     const decoded = await Effect.runPromise(decodeProductionRepositoryHostConfiguration(validRawConfiguration()))
     expect(decoded.target.issueNumber).toBe(292)
     expect(decoded.taskWorkCapacity).toBe(2)
     expect(decoded.integrationRef).toBe("refs/heads/master")
     expect(decoded.githubGraphqlEndpoint).toBe("https://api.github.com/graphql")
     expect(Redacted.value(decoded.githubToken)).toBe(credentialNeedle)
-    expect(Redacted.value(decoded.codexProviderCredential)).toBe(`${credentialNeedle}-codex`)
     expect(JSON.stringify(decoded.githubToken)).toBe('"<redacted:GitHubToken>"')
-    expect(JSON.stringify(decoded.codexProviderCredential)).toBe('"<redacted:CodexProviderCredential>"')
+    expect(decoded.codexExecutorPrivateStateDirectory).toBe("/var/lib/dalph/executor-private")
+    expect("codexProvider" in decoded).toBe(false)
+    expect("codexProviderCredential" in decoded).toBe(false)
     expect("mode" in decoded).toBe(false)
     expect("recovered" in decoded).toBe(false)
     expect("applicationExitDrain" in decoded).toBe(false)
+  })
+
+  it("production keeps Codex CLI state separate from Dalph executor private state", async () => {
+    const decoded = await Effect.runPromise(decodeProductionRepositoryHostConfiguration(validRawConfiguration()))
+    expect(decoded.codexExecutorPrivateStateDirectory).toBe("/var/lib/dalph/executor-private")
+    expect("codexStateDirectory" in decoded).toBe(false)
+    expect("codexHome" in decoded).toBe(false)
   })
 
   it.each([
@@ -67,10 +73,9 @@ describe("production repository host configuration", () => {
     ["non-canonical candidate root", { integratorCandidateWorktreeRoot: "/srv/dalph/../candidates" }],
     ["non-positive interval", { activationInterval: "0 seconds" }],
     ["edge-whitespace executable", { codexExecutable: " /usr/local/bin/codex" }],
-    ["unsafe provider identifier", { codexProvider: 'openai" --dangerous' }],
     ["non-HTTP GitHub endpoint", { githubGraphqlEndpoint: "file:///tmp/github" }],
     ["overlapping worktree roots", { integratorCandidateWorktreeRoot: "/srv/dalph/planned-attempts/integrator" }],
-    ["worktree and state overlap", { codexStateDirectory: "/srv/dalph/planned-attempts/state" }],
+    ["worktree and state overlap", { codexExecutorPrivateStateDirectory: "/srv/dalph/planned-attempts/state" }],
     ["private state overlap", { integratorPrivateStore: "/var/lib/dalph/evidence/integrator.json" }]
   ])("rejects %s before any live-boundary continuation", async (name, override) => {
     const opened = await Effect.runPromise(Ref.make(0))

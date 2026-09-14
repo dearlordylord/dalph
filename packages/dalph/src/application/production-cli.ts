@@ -222,8 +222,9 @@ const configurationFailure = (subject: string, detail: string) =>
   new ProductionCliConfigurationError({ code: "configuration.invalid", detail, subject })
 
 /**
- * Reads one non-secret JSON document and combines only the two documented
- * credential environment values. Failures never retain rejected bytes.
+ * Reads one non-secret JSON document and combines only the task tracker's
+ * documented credential environment value. Codex owns its ambient CLI
+ * authentication. Failures never retain rejected bytes.
  */
 export const loadProductionConfiguration = <ERead>(
   locator: ProductionConfigurationLocator,
@@ -247,14 +248,8 @@ export const loadProductionConfiguration = <ERead>(
     const githubToken = yield* Config.redacted("GITHUB_TOKEN").pipe(
       Effect.mapError(() => configurationFailure("GITHUB_TOKEN", "required credential is unavailable"))
     )
-    const codexProviderCredential = yield* Config.redacted("DALPH_CODEX_PROVIDER_CREDENTIAL").pipe(
-      Effect.mapError(() =>
-        configurationFailure("DALPH_CODEX_PROVIDER_CREDENTIAL", "required credential is unavailable")
-      )
-    )
     return yield* decodeProductionRepositoryHostConfiguration({
       ...document,
-      codexProviderCredential: Redacted.value(codexProviderCredential),
       githubToken: Redacted.value(githubToken),
       target
     }).pipe(

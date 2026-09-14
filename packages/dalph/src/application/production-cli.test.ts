@@ -222,8 +222,7 @@ const validProductionDocument = {
   codexClientName: "dalph",
   codexClientVersion: "0.0.0",
   codexExecutable: "/usr/local/bin/codex",
-  codexProvider: "openai",
-  codexStateDirectory: "/var/lib/dalph/codex",
+  codexExecutorPrivateStateDirectory: "/var/lib/dalph/executor-private",
   commonDirectory: "/srv/dalph/repository.git",
   evidenceStoreRoot: "/var/lib/dalph/evidence",
   failureCooldown: "5 seconds",
@@ -421,7 +420,7 @@ it.effect("maps invalid production input to a stable redacted configuration code
   })
 )
 
-it.effect("redacts every configuration read, document, and credential failure", () =>
+it.effect("redacts every configuration read document and required GitHub credential failure", () =>
   Effect.gen(function* () {
     const cases = [
       {
@@ -443,11 +442,6 @@ it.effect("redacts every configuration read, document, and credential failure", 
       {
         expectedSubject: "GITHUB_TOKEN",
         provider: ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret" }),
-        readFile: () => Effect.succeed(JSON.stringify(validProductionDocument))
-      },
-      {
-        expectedSubject: "DALPH_CODEX_PROVIDER_CREDENTIAL",
-        provider: ConfigProvider.fromUnknown({ GITHUB_TOKEN: "github-secret" }),
         readFile: () => Effect.succeed(JSON.stringify(validProductionDocument))
       }
     ] as const
@@ -1416,21 +1410,16 @@ it.effect(
     })
 )
 
-it.effect("combines only documented credential inputs with the non-secret production document", () =>
+it.effect("loads ambient Codex CLI production configuration with only the GitHub credential", () =>
   Effect.gen(function* () {
     const loaded = yield* loadProductionConfiguration(configurationLocator, target, () =>
       Effect.succeed(JSON.stringify(validProductionDocument))
-    ).pipe(
-      Effect.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
-        )
-      )
-    )
+    ).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ GITHUB_TOKEN: "github-secret" }))))
 
     expect(loaded).toMatchObject({ repository: "/srv/dalph/repository.git", target: { _tag: "GithubIssue" } })
     expect(Redacted.value(loaded.githubToken)).toBe("github-secret")
-    expect(Redacted.value(loaded.codexProviderCredential)).toBe("codex-secret")
+    expect(loaded.codexExecutorPrivateStateDirectory).toBe("/var/lib/dalph/executor-private")
+    expect("codexProviderCredential" in loaded).toBe(false)
   })
 )
 
@@ -3244,7 +3233,7 @@ it.effect("invokes one production host only after configuration and reports its 
   })
 )
 
-it.effect("production help names required configuration credentials recovery and live consequences", () =>
+it.effect("production help names only the GitHub credential required by the ordinary path", () =>
   Effect.gen(function* () {
     const output: Array<string> = []
     const testConsole: Console.Console = Object.assign(Object.create(console), {
@@ -3265,7 +3254,8 @@ it.effect("production help names required configuration credentials recovery and
 
     const help = output.join("\n")
     expect(help).toContain("GITHUB_TOKEN")
-    expect(help).toContain("DALPH_CODEX_PROVIDER_CREDENTIAL")
+    expect(help).not.toContain("DALPH_CODEX_PROVIDER_CREDENTIAL")
+    expect(help).not.toContain("OPENAI_API_KEY")
     expect(help).toContain("recover one unfinished Run")
     expect(help).toContain("state-changing")
     expect(help).not.toContain("codex-secret")

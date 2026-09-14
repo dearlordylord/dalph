@@ -187,10 +187,7 @@ const defaultCodexAppServerLayer = (
   return codexAppServerNodeLayer({
     executable: configuration.codexExecutable,
     clientName: configuration.codexClientName,
-    clientVersion: configuration.codexClientVersion,
-    modelProvider: configuration.codexProvider,
-    providerCredential: configuration.codexProviderCredential,
-    environment: { CODEX_HOME: configuration.codexStateDirectory }
+    clientVersion: configuration.codexClientVersion
   }).pipe(Layer.provide(attemptStore), Layer.provide(NodeServices.layer))
 }
 
@@ -385,7 +382,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           adapters.boundaryObserver
         )
         const attemptStoreLayer = nodeCodexAttemptStoreLayer({
-          stateDirectory: configuration.codexStateDirectory
+          stateDirectory: configuration.codexExecutorPrivateStateDirectory
         }).pipe(Layer.provide(NodeServices.layer))
         /* v8 ignore start -- @preserve Hermetic host tests replace the process boundary; this assignment retains the production Codex app-server default. */
         const appLayerWithoutApplicationExit: Layer.Layer<

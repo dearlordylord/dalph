@@ -2,8 +2,8 @@
 import nodeProcess from "node:process"
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Redacted, Schema } from "effect"
-import { expect } from "vitest"
+import { Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Schema } from "effect"
+import { expect, expectTypeOf } from "vitest"
 import {
   ApplicationExitDiagnostic,
   ApplicationExitDrainFailure,
@@ -14,6 +14,7 @@ import {
 import {
   CodexAppServer,
   CodexAppServerFailure,
+  type CodexAppServerLayerConfig,
   CodexProcessStartIdentity,
   codexAppServerLayer as rawCodexAppServerLayer,
   codexAppServerNodeLayer,
@@ -41,8 +42,9 @@ const codexAppServerLayer = (config?: Parameters<typeof rawCodexAppServerLayer>[
 const QualificationEnvironmentCapture = Schema.Struct({
   arguments: Schema.optionalKey(Schema.Array(Schema.String)),
   codexHome: Schema.optionalKey(Schema.String),
-  openAiApiKey: Schema.optionalKey(Schema.String),
-  providerCredential: Schema.optionalKey(Schema.String),
+  hasOpenAiApiKey: Schema.Boolean,
+  hasProviderCredential: Schema.Boolean,
+  path: Schema.optionalKey(Schema.String),
   providerKey: Schema.optionalKey(Schema.String)
 })
 
@@ -57,8 +59,9 @@ if (process.env.DALPH_QUALIFICATION_ENV_CAPTURE !== undefined) {
     JSON.stringify({
       arguments: process.argv.slice(2),
       codexHome: process.env.CODEX_HOME,
-      openAiApiKey: process.env.OPENAI_API_KEY,
-      providerCredential: process.env.DALPH_CODEX_PROVIDER_CREDENTIAL,
+      hasOpenAiApiKey: process.env.OPENAI_API_KEY !== undefined,
+      hasProviderCredential: process.env.DALPH_CODEX_PROVIDER_CREDENTIAL !== undefined,
+      path: process.env.PATH,
       providerKey: process.env.DALPH_QUALIFICATION_PROVIDER_KEY
     })
   )
@@ -344,6 +347,9 @@ it.effect("forwards isolated qualification environment only at the child launch 
         expect(captured).toEqual({
           arguments: ["app-server"],
           codexHome: "/isolated/qualification-codex-home",
+          hasOpenAiApiKey: nodeProcess.env.OPENAI_API_KEY !== undefined,
+          hasProviderCredential: nodeProcess.env.DALPH_CODEX_PROVIDER_CREDENTIAL !== undefined,
+          path: nodeProcess.env.PATH,
           providerKey: "fixture-only-provider-key"
         })
         const missing = yield* app
@@ -357,7 +363,12 @@ it.effect("forwards isolated qualification environment only at the child launch 
   )
 )
 
-it.effect("selects the configured provider while keeping its credential outside the durable launch command", () =>
+it("does not expose a provider or credential override on the app-server launch boundary", () => {
+  type ProviderOverrideKey = Extract<keyof CodexAppServerLayerConfig, "modelProvider" | "providerCredential">
+  expectTypeOf<ProviderOverrideKey>().toEqualTypeOf<never>()
+})
+
+it.effect("starts codex app-server without provider credential or CODEX_HOME overrides", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
@@ -365,18 +376,12 @@ it.effect("selects the configured provider while keeping its credential outside 
       const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-293-provider-boundary-" })
       const executable = path.join(root, "fixture-codex")
       const capture = path.join(root, "provider-environment.json")
-      const credential = "provider-credential-that-must-not-enter-the-command"
       yield* fileSystem.writeFileString(executable, fakeServer)
       yield* fileSystem.chmod(executable, 0o755)
 
       const storeLayer = memoryCodexAttemptStoreLayer()
       const appLayer = codexAppServerNodeLayer(
-        {
-          executable,
-          environment: { DALPH_QUALIFICATION_ENV_CAPTURE: capture },
-          modelProvider: "openai",
-          providerCredential: Redacted.make(credential)
-        },
+        { executable, environment: { DALPH_QUALIFICATION_ENV_CAPTURE: capture } },
         isolatedCodexProcessNativeService
       ).pipe(Layer.provide(storeLayer))
       yield* Effect.gen(function* () {
@@ -385,30 +390,16 @@ it.effect("selects the configured provider while keeping its credential outside 
         const launch = yield* store.readServerLaunch()
         expect(Option.isSome(launch)).toBe(true)
         if (Option.isNone(launch)) return
-        expect(launch.value.command).toEqual([
-          executable,
-          "app-server",
-          "-c",
-          'model_provider="openai"',
-          "-c",
-          'model_providers.openai.env_key="DALPH_CODEX_PROVIDER_CREDENTIAL"'
-        ])
-        expect(JSON.stringify(launch.value)).not.toContain(credential)
+        expect(launch.value.command).toEqual([executable, "app-server"])
 
         const captured = yield* Schema.decodeUnknownEffect(QualificationEnvironmentCapture)(
           JSON.parse(yield* fileSystem.readFileString(capture))
         )
-        expect(captured).toEqual({
-          arguments: [
-            "app-server",
-            "-c",
-            'model_provider="openai"',
-            "-c",
-            'model_providers.openai.env_key="DALPH_CODEX_PROVIDER_CREDENTIAL"'
-          ],
-          openAiApiKey: credential,
-          providerCredential: credential
-        })
+        expect(captured.arguments).toEqual(["app-server"])
+        expect(captured.codexHome).toBe(nodeProcess.env.CODEX_HOME)
+        expect(captured.hasOpenAiApiKey).toBe(nodeProcess.env.OPENAI_API_KEY !== undefined)
+        expect(captured.hasProviderCredential).toBe(nodeProcess.env.DALPH_CODEX_PROVIDER_CREDENTIAL !== undefined)
+        expect(captured.path).toBe(nodeProcess.env.PATH)
         yield* app.close
       }).pipe(Effect.provide(Layer.merge(storeLayer, appLayer)))
     }).pipe(Effect.provide(NodeServices.layer))

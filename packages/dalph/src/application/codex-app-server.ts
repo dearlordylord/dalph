@@ -15,7 +15,6 @@ import {
   Layer,
   Option,
   PubSub,
-  Redacted,
   Ref,
   Result,
   Schema,
@@ -1838,42 +1837,26 @@ export const normalizeInitializeResponse = (
   }
 }
 
-/** Default app-server executable and ambient-only protocol options. */
+/** Default app-server executable and ambient Codex CLI protocol options. */
 export interface CodexAppServerLayerConfig {
   readonly executable?: string
   readonly clientName?: string
   readonly clientVersion?: string
-  /** Decoded model-provider table selected for this isolated app-server process. */
-  readonly modelProvider?: string
-  /** Credential exposed only through the selected provider's process environment key. */
-  readonly providerCredential?: Redacted.Redacted<string>
   /**
    * Process-local environment additions for an explicitly isolated host.
-   * Production keeps the ambient environment; qualification fixtures use this
-   * field to bind one Codex home and deterministic provider credential.
+   * Production supplies none; qualification fixtures use this field to bind
+   * one isolated Codex home and controlled provider environment.
    */
   readonly environment?: Readonly<Record<string, string>>
 }
 
 const defaultConfig: Required<Pick<CodexAppServerLayerConfig, "clientName" | "clientVersion" | "executable">> &
-  Pick<CodexAppServerLayerConfig, "environment" | "modelProvider" | "providerCredential"> = {
+  Pick<CodexAppServerLayerConfig, "environment"> = {
   executable: "codex",
   clientName: "dalph",
   clientVersion: "0.0.0",
   environment: {}
 }
-
-const codexProviderCredentialEnvironment = "DALPH_CODEX_PROVIDER_CREDENTIAL"
-
-const providerArguments = (modelProvider: string | undefined): ReadonlyArray<string> =>
-  modelProvider === undefined
-    ? []
-    : [
-        "-c",
-        `model_provider=${JSON.stringify(modelProvider)}`,
-        "-c",
-        `model_providers.${modelProvider}.env_key=${JSON.stringify(codexProviderCredentialEnvironment)}`
-      ]
 
 const newIncarnation = (): CodexServerIncarnation => CodexServerIncarnation.make(randomUUID())
 
@@ -2717,11 +2700,10 @@ export const closeHandleFailure = (error: unknown): CodexAppServerFailure =>
       : operationFailure("close", "Unavailable", error)
 
 /**
- * Real application-scoped app-server layer. When the host selects a provider,
- * the layer passes only its configuration identity on the command line and
- * exposes its redacted credential at the child-process environment boundary.
- * It sends no model, sandbox, approval, instruction, skill, or MCP options.
- * The exact worktree is supplied per thread and turn.
+ * Real application-scoped app-server layer. It delegates authentication,
+ * provider, model, sandbox, approval, instruction, skill, and MCP selection to
+ * the installed Codex CLI's inherited environment and configuration. The
+ * exact worktree is supplied per thread and turn.
  */
 export const codexAppServerLayer = (
   config: CodexAppServerLayerConfig = {}
@@ -2740,31 +2722,17 @@ export const codexAppServerLayer = (
       const applicationExit = yield* Effect.serviceOption(ApplicationExitShell)
       const processGroupCensus = yield* Effect.serviceOption(CodexProcessGroupCensus)
       const selected = { ...defaultConfig, ...config }
-      const appServerArguments = providerArguments(selected.modelProvider)
-      const command = [selected.executable, "app-server", ...appServerArguments] as const
-      const providerEnvironment =
-        selected.providerCredential === undefined
-          ? {}
-          : {
-              [codexProviderCredentialEnvironment]: Redacted.value(selected.providerCredential),
-              ...(selected.modelProvider === "openai"
-                ? { OPENAI_API_KEY: Redacted.value(selected.providerCredential) }
-                : {})
-            }
+      const command = [selected.executable, "app-server"] as const
       const incarnation = newIncarnation()
       const leaseOwner = yield* ownershipGate(store, ownership, incarnation, command, native)
       const handle = yield* spawner
         .spawn(
-          ChildProcess.make(selected.executable, ["app-server", ...appServerArguments], {
+          ChildProcess.make(selected.executable, ["app-server"], {
             stdin: { stream: "pipe", endOnDone: false },
             stdout: "pipe",
             stderr: "pipe",
             detached: true,
-            env: {
-              ...selected.environment,
-              ...providerEnvironment,
-              [codexServerIncarnationEnvironment]: durableIncarnationToken(incarnation)
-            },
+            env: { ...selected.environment, [codexServerIncarnationEnvironment]: durableIncarnationToken(incarnation) },
             extendEnv: true
           })
         )

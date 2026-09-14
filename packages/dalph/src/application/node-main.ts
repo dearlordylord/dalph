@@ -5,7 +5,7 @@ import { encodeRuntimeDiagnostic, projectRuntimeCause } from "./runtime-diagnost
 
 const configuredSensitiveValues = () => [
   nodeProcess.env["GITHUB_TOKEN"] ?? "",
-  nodeProcess.env["DALPH_CODEX_PROVIDER_CREDENTIAL"] ?? "",
+  nodeProcess.env["DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL"] ?? "",
   nodeProcess.env["OPENAI_API_KEY"] ?? ""
 ]
 

@@ -112,7 +112,7 @@ const validRawConfiguration = () => ({
   journalDatabase: "/var/lib/dalph/journal.sqlite",
   evidenceStoreRoot: "/var/lib/dalph/evidence",
   plannedAttemptWorktreeRoot: "/srv/dalph/planned-attempts",
-  codexStateDirectory: "/var/lib/dalph/codex",
+  codexExecutorPrivateStateDirectory: "/var/lib/dalph/executor-private",
   integratorCandidateWorktreeRoot: "/srv/dalph/integrator-candidates",
   integratorPrivateStore: "/var/lib/dalph/integrator-private.json",
   activationInterval: "1 minute",
@@ -120,9 +120,7 @@ const validRawConfiguration = () => ({
   codexExecutable: "/usr/local/bin/codex",
   codexClientName: "dalph",
   codexClientVersion: "0.0.0",
-  codexProvider: "openai",
-  githubToken: "github-secret",
-  codexProviderCredential: "codex-secret"
+  githubToken: "github-secret"
 })
 
 const makeTemporaryProductionInput = Effect.gen(function* () {
@@ -143,7 +141,7 @@ const makeTemporaryProductionInput = Effect.gen(function* () {
     journalDatabase: path.join(root, "journal.sqlite"),
     evidenceStoreRoot: evidence,
     plannedAttemptWorktreeRoot: path.join(root, "planned-attempts"),
-    codexStateDirectory: codexState,
+    codexExecutorPrivateStateDirectory: codexState,
     integratorCandidateWorktreeRoot: path.join(root, "integrator-candidates"),
     integratorPrivateStore: path.join(root, "integrator-private.json")
   }
@@ -760,7 +758,7 @@ it.effect("cold production host records one beginning before the first GitHub de
         journalDatabase: path.join(root, "journal.sqlite"),
         evidenceStoreRoot: evidence,
         plannedAttemptWorktreeRoot: path.join(root, "planned-attempts"),
-        codexStateDirectory: codexState,
+        codexExecutorPrivateStateDirectory: codexState,
         integratorCandidateWorktreeRoot: path.join(root, "integrator-candidates"),
         integratorPrivateStore: path.join(root, "integrator-private.json")
       }
@@ -851,7 +849,7 @@ it.effect("production host connects supplied Exit request and trace observers", 
         journalDatabase: path.join(root, "journal.sqlite"),
         evidenceStoreRoot: evidence,
         plannedAttemptWorktreeRoot: path.join(root, "planned-attempts"),
-        codexStateDirectory: codexState,
+        codexExecutorPrivateStateDirectory: codexState,
         integratorCandidateWorktreeRoot: path.join(root, "integrator-candidates"),
         integratorPrivateStore: path.join(root, "integrator-private.json")
       }
@@ -1603,7 +1601,7 @@ it.effect(
           journalDatabase: path.join(root, "journal.sqlite"),
           evidenceStoreRoot: path.join(root, "evidence"),
           plannedAttemptWorktreeRoot: path.join(root, "planned-attempts"),
-          codexStateDirectory: path.join(root, "codex-state"),
+          codexExecutorPrivateStateDirectory: path.join(root, "executor-private-state"),
           integratorCandidateWorktreeRoot: path.join(root, "integrator-candidates"),
           integratorPrivateStore: path.join(root, "integrator-private.json")
         }

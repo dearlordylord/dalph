@@ -45,11 +45,11 @@ export const ProductionPlannedAttemptWorktreeRoot = Schema.NonEmptyString.check(
 ).pipe(Schema.brand("ProductionPlannedAttemptWorktreeRoot"))
 export type ProductionPlannedAttemptWorktreeRoot = typeof ProductionPlannedAttemptWorktreeRoot.Type
 
-/** Canonical private directory for executor and application-scoped Codex state. */
-export const ProductionCodexStateDirectory = Schema.NonEmptyString.check(
-  canonicalAbsolutePath("Codex state directory")
-).pipe(Schema.brand("ProductionCodexStateDirectory"))
-export type ProductionCodexStateDirectory = typeof ProductionCodexStateDirectory.Type
+/** Canonical private directory for Dalph's executor associations and app-server ownership records. */
+export const ProductionCodexExecutorPrivateStateDirectory = Schema.NonEmptyString.check(
+  canonicalAbsolutePath("Codex executor private-state directory")
+).pipe(Schema.brand("ProductionCodexExecutorPrivateStateDirectory"))
+export type ProductionCodexExecutorPrivateStateDirectory = typeof ProductionCodexExecutorPrivateStateDirectory.Type
 
 const CanonicalRepositoryLocator = GitRepositoryLocator.check(canonicalAbsolutePath("Git repository locator"))
 const CanonicalCommonDirectoryLocator = GitCommonDirectoryLocator.check(
@@ -62,12 +62,6 @@ const NonEmptyExecutable = Schema.NonEmptyString.check(
     value.trim() === value ? undefined : "Codex executable must not contain edge whitespace"
   )
 )
-const CodexProviderName = Schema.NonEmptyString.check(
-  Schema.makeFilter((value) =>
-    /^[A-Za-z0-9_-]+$/.test(value) ? undefined : "Codex provider must be a safe configuration identifier"
-  )
-)
-
 const pathContains = (parent: string, child: string): boolean => {
   const relative = nodePath.relative(parent, child)
   return (
@@ -84,7 +78,7 @@ type HostPathFacts = {
   readonly journalDatabase: string
   readonly evidenceStoreRoot: string
   readonly plannedAttemptWorktreeRoot: string
-  readonly codexStateDirectory: string
+  readonly codexExecutorPrivateStateDirectory: string
   readonly integratorCandidateWorktreeRoot: string
   readonly integratorPrivateStore: string
 }
@@ -99,7 +93,7 @@ const hostPathRelationshipError = (value: HostPathFacts): string | undefined => 
     value.commonDirectory,
     value.journalDatabase,
     value.evidenceStoreRoot,
-    value.codexStateDirectory,
+    value.codexExecutorPrivateStateDirectory,
     value.integratorPrivateStore
   ] as const
   if (worktreeRoots.some((worktree) => statePaths.some((state) => pathsOverlap(worktree, state)))) {
@@ -108,7 +102,7 @@ const hostPathRelationshipError = (value: HostPathFacts): string | undefined => 
   const privateStatePaths = [
     value.journalDatabase,
     value.evidenceStoreRoot,
-    value.codexStateDirectory,
+    value.codexExecutorPrivateStateDirectory,
     value.integratorPrivateStore
   ] as const
   for (let left = 0; left < privateStatePaths.length; left += 1) {
@@ -145,7 +139,7 @@ export const ProductionRepositoryHostConfiguration = Schema.Struct({
   journalDatabase: CanonicalJournalDatabaseLocator,
   evidenceStoreRoot: CanonicalEvidenceStoreLocator,
   plannedAttemptWorktreeRoot: ProductionPlannedAttemptWorktreeRoot,
-  codexStateDirectory: ProductionCodexStateDirectory,
+  codexExecutorPrivateStateDirectory: ProductionCodexExecutorPrivateStateDirectory,
   integratorCandidateWorktreeRoot: IntegratorCandidateWorktreeRoot,
   integratorPrivateStore: IntegratorPrivateStoreLocator,
   activationInterval: ProductionRunReactivationInterval,
@@ -153,12 +147,7 @@ export const ProductionRepositoryHostConfiguration = Schema.Struct({
   codexExecutable: NonEmptyExecutable,
   codexClientName: Schema.NonEmptyString,
   codexClientVersion: Schema.NonEmptyString,
-  codexProvider: CodexProviderName,
-  githubToken: Schema.RedactedFromValue(Schema.NonEmptyString, { label: "GitHubToken", disallowEncode: true }),
-  codexProviderCredential: Schema.RedactedFromValue(Schema.NonEmptyString, {
-    label: "CodexProviderCredential",
-    disallowEncode: true
-  })
+  githubToken: Schema.RedactedFromValue(Schema.NonEmptyString, { label: "GitHubToken", disallowEncode: true })
 }).check(hostPathRelationships)
 export type ProductionRepositoryHostConfiguration = typeof ProductionRepositoryHostConfiguration.Type
 

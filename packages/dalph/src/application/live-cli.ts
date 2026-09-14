@@ -180,7 +180,7 @@ export const makeProductionCli = <EHost, RHost>(
       })
   ).pipe(
     Command.withDescription(
-      "Run Dalph explicitly in dry or production mode. Production requires GITHUB_TOKEN and DALPH_CODEX_PROVIDER_CREDENTIAL; it may change GitHub, Git, executor, and Journal state."
+      "Run Dalph explicitly in dry or production mode. Production requires GITHUB_TOKEN and uses the installed Codex CLI's existing authentication and configuration; it may change GitHub, Git, executor, and Journal state."
     )
   )
   return Command.make("dalph").pipe(Command.withSubcommands([run]))
