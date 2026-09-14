@@ -62,7 +62,7 @@ its redacted stable lifecycle code.
 
 ## Acceptance-test mapping
 
-- `records the executor operation and failure detail while retaining the generic durable unreadable observation`
+- `logs the concrete executor boundary when projection becomes unreadable`
   proves the process log contains the typed failure boundary and the journal
   still contains the fail-closed observation.
 - `opens the GitHub request circuit after the bounded window and closes it after cooldown`
@@ -71,7 +71,7 @@ its redacted stable lifecycle code.
   `admits a request after cooldown and starts a fresh window` exercise the
   reusable boundary, while `production GitHub wrapper rejects before its
   transport after the bounded window` exercises composition-root wiring.
-- `maps a circuit-open GitHub read to a typed tracker adapter reason without an HTTP call`
+- `preserves a locally opened provider circuit as a distinct read failure`
   proves the tracker authority sees the breaker rather than a fabricated graph.
 - `rejects initialize before the app-server transport runs when composition admission is open`
   proves the host-supplied request boundary rejects initialization before the
