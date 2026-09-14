@@ -64,6 +64,9 @@ describe("hosted formal-model contract", () => {
     expect(packageJson.scripts["check:ci:formal"]).toBe(
       "node scripts/with-gate-slot.mjs -- node scripts/check-quint-models.mjs"
     )
+    expect(packageJson.scripts["check:ci:formal:shard"]).toBe(
+      "node scripts/with-gate-slot.mjs -- node scripts/run-hosted-formal-shard.mjs"
+    )
     expect(packageJson.scripts["test:mbt"]).toBe("vitest run --mode mbt")
     expect(packageJson.engines.node).toBe("^24.20.0")
 
@@ -73,9 +76,32 @@ describe("hosted formal-model contract", () => {
     expect(formalJob).toContain("\n    runs-on: ubuntu-24.04-arm")
     expect(formalJob).toContain("\n    timeout-minutes: 16")
     expect(formalJob).toMatch(/\n\s+node-version: \$\{\{ matrix\.node-version \}\}/)
-    expect(formalJob).toContain("\n        run: pnpm check:ci:formal")
+    expect(formalJob).toContain("\n        shard: [0, 1]")
+    expect(formalJob).toContain('pnpm check:ci:formal:shard -- --shard "${{ matrix.shard }}"')
+    expect(formalJob).not.toContain("run: node scripts/run-hosted-formal-shard.mjs")
+    expect(formalJob).toContain("\n        uses: actions/upload-artifact@v4")
+    expect(formalJob).toContain("path: formal-shard-reports/shard-${{ matrix.shard }}.json")
+    expect(formalJob).not.toContain(".formal-shard-reports")
+    expect(
+      execFileSync("git", ["check-ignore", "formal-shard-reports/shard-0.json"], {
+        cwd: repositoryRoot,
+        encoding: "utf8"
+      }).trim()
+    ).toBe("formal-shard-reports/shard-0.json")
     expect(formalJob).toContain(
-      "\n      matrix:\n        node-version: ${{ fromJSON(needs.change-plan.outputs.versions) }}"
+      "\n      matrix:\n        node-version: ${{ fromJSON(needs.change-plan.outputs.versions) }}\n        shard: [0, 1]"
+    )
+    const aggregateJob = jobs.get("formal-model-aggregate")?.join("\n")
+    expect(aggregateJob).toBeDefined()
+    expect(aggregateJob).toContain("\n    needs: [change-plan, formal-models]")
+    expect(aggregateJob).toContain(
+      "\n    if: always() && needs.change-plan.result == 'success' && needs.change-plan.outputs.docs-only != 'true'"
+    )
+    expect(aggregateJob).toContain("\n        uses: actions/download-artifact@v4")
+    expect(aggregateJob).toContain("\n          path: formal-shard-reports")
+    expect(aggregateJob).not.toContain(".formal-shard-reports")
+    expect(aggregateJob).toContain(
+      "node scripts/aggregate-hosted-formal-shards.mjs formal-shard-reports/shard-0.json formal-shard-reports/shard-1.json"
     )
     expect(jobs.get("quality")?.join("\n")).toContain("\n    runs-on: ubuntu-latest")
     expect(jobs.get("quality")?.join("\n")).not.toContain("pnpm check:quint")

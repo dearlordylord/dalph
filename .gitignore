@@ -15,6 +15,7 @@ coverage/
 *.db-wal
 .references/
 _apalache-out/
+/formal-shard-reports/
 
 # Scratchpad for local tooling runs, not part of the repository.
 .scratch/
