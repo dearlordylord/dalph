@@ -1112,7 +1112,7 @@ for (const mismatch of ["missing environment", "missing contract", "wrong HEAD",
 }
 
 for (const authority of [
-  "external excludes",
+  "external excludes ending in .lock",
   "info/exclude",
   "info/attributes",
   "info/grafts",
@@ -1122,8 +1122,9 @@ for (const authority of [
 ]) {
   test(`candidate history observes ${authority} edit and restore`, async () => {
     const f = candidateGitFixture()
-    const path = authority === "external excludes" ? join(f.outer, "ignored") : join(f.root, ".git", authority)
-    if (authority === "external excludes") f.git("config", "core.excludesfile", path)
+    const externalExcludes = authority === "external excludes ending in .lock"
+    const path = externalExcludes ? join(f.outer, "ignored.lock") : join(f.root, ".git", authority)
+    if (externalExcludes) f.git("config", "core.excludesfile", path)
     mkdirSync(join(path, ".."), { recursive: true })
     writeFileSync(path, "")
     const guard = await f.guard()

@@ -230,15 +230,19 @@ const gitAuthorityInputs = (root, logicalInvocation, environment, gitDirectory, 
   // Git path-format canonicalization erases authored symlink locators. Resolve
   // plain --git-path output against this worktree while retaining those links.
   const path = (name) => resolve(root, git(root, ["rev-parse", "--git-path", name], environment).trim())
+  const headLock = join(gitDirectory, "HEAD.lock")
+  const indexLock = join(gitDirectory, "index.lock")
+  const packedRefsLock = path("packed-refs.lock")
+  const transientCoordinationRoots = [headLock, indexLock, packedRefsLock]
   const paths = [
     join(gitDirectory, "HEAD"),
-    join(gitDirectory, "HEAD.lock"),
+    headLock,
     join(gitDirectory, "index"),
-    join(gitDirectory, "index.lock"),
+    indexLock,
     join(commonDirectory, "config"),
     path("config.worktree"),
     path("packed-refs"),
-    path("packed-refs.lock"),
+    packedRefsLock,
     path("info/exclude"),
     path("info/attributes"),
     path("info/grafts"),
@@ -281,11 +285,13 @@ const gitAuthorityInputs = (root, logicalInvocation, environment, gitDirectory, 
           throw new Error(`Unsupported selected Git ref ancestor link: ${ancestor}`)
         ancestor = dirname(ancestor)
       }
-      paths.push(locator, `${locator}.lock`)
+      const lock = `${locator}.lock`
+      paths.push(locator, lock)
+      transientCoordinationRoots.push(lock)
       target = optionalGit(root, ["symbolic-ref", "--quiet", "--no-recurse", target], environment)
     }
   }
-  return [...new Set(paths)]
+  return { inputs: [...new Set(paths)], transientCoordinationRoots: [...new Set(transientCoordinationRoots)] }
 }
 
 const inputLayout = ({ effectiveEnvironment, generatedOutputRoots, logicalInvocation, worktree }) => {
@@ -306,7 +312,13 @@ const inputLayout = ({ effectiveEnvironment, generatedOutputRoots, logicalInvoca
     ["rev-parse", "--path-format=absolute", "--git-common-dir"],
     effectiveEnvironment
   ).trim()
-  const gitInputs = gitAuthorityInputs(root, logicalInvocation, effectiveEnvironment, gitDirectory, commonDirectory)
+  const { inputs: gitInputs, transientCoordinationRoots } = gitAuthorityInputs(
+    root,
+    logicalInvocation,
+    effectiveEnvironment,
+    gitDirectory,
+    commonDirectory
+  )
   if (lstatSync(join(root, ".git")).isFile()) gitInputs.push(join(root, ".git"))
   const configurations = configurationRoots(root, effectiveEnvironment)
   const exclusions = generatedOutputRoots.map((path) => resolve(root, path))
@@ -335,7 +347,8 @@ const inputLayout = ({ effectiveEnvironment, generatedOutputRoots, logicalInvoca
     configurations,
     exclusions,
     sourceExclusions: [...exclusions, join(root, ".git")],
-    python: executable("python3", effectiveEnvironment)
+    python: executable("python3", effectiveEnvironment),
+    transientCoordinationRoots
   }
 }
 
@@ -386,7 +399,7 @@ export const startInputGuard = async ({
     excludedRoots: layout.sourceExclusions,
     protectedRoots: layout.gitInputs,
     replaceableRoots: [layout.commonConfig],
-    transientCoordinationRoots: layout.gitInputs.filter((path) => path.endsWith(".lock")),
+    transientCoordinationRoots: layout.transientCoordinationRoots,
     pythonExecutable: layout.python
   })
   let identity
