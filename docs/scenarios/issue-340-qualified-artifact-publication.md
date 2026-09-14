@@ -63,9 +63,10 @@ an unrelated task/target/plan nor an added private field may receive a token.
 No new mutation, retry or crash protocol is introduced: any crash retains the
 ordinary read intent and restart follows its existing authority-read rules.
 Deterministic source tests present each original read proposal directly, so
-coverage does not depend on winning a wall-clock race. The built happy-path,
-close-response-loss, promotion-CAS and HTTP429 cases retain their existing
-Run, Git, tracker, process and cleanup assertions.
+coverage does not depend on winning a wall-clock race. Focused protocol tests
+retain the close-response-loss, promotion-CAS, and HTTP429 failure-mode
+assertions. The protected #307 run alone owns final composition across the
+shipped entry, Run, Git, tracker, process, cleanup, and artifact boundaries.
 
 After the child's read intent is acknowledged, the ordinary status projector
 compares the pending read's preserved operation ID with the original live
@@ -363,18 +364,20 @@ qualification wrapper must validate and acknowledge the mapped literal failure
 before the ordinary CLI writes it, whichever host branch delivers the error.
 It uses the original selected observation and its original current or closed
 final source; missing facts remain a safe rejection, not a fabricated request.
-The built throttle test proves one request, safe bound Failure publication and
-recovery without a second close. Focused wrapper tests cover both callback and
-host-delivered failure paths and rejection when the original source is absent.
+Focused completion protocol and adapter tests prove one request, safe bound
+Failure publication, and recovery without a second close. Focused wrapper tests
+cover both callback and host-delivered failure paths and rejection when the
+original source is absent.
 
 The current-status checks may live in a qualification-only status-source helper;
 the source facade still alone constructs the validated record token. Recovered
 claim reads and focused specification/claim checks remain their existing typed
 boundaries. Splitting these functions changes no actor action, boundary call,
-workflow rule or accepted/rejected source. The original source vectors and six
-built chronologies must retain their exact results. Controller process/record
-registries and provider receipt accumulation are private scratch only; using
-Effect's explicit mutable collections must preserve original handle ownership,
-reader settlement, insertion order and receipt identity without persisting facts.
-Existing binding/provider tests and the six built cases cover those invariants;
-provenance tests keep the same formal and hosted timing budgets.
+workflow rule or accepted/rejected source. The original focused source vectors
+must retain their exact results. Controller process/record registries and
+provider receipt accumulation are private scratch only; using Effect's explicit
+mutable collections must preserve original handle ownership, reader settlement,
+insertion order and receipt identity without persisting facts. Existing focused
+binding/provider tests cover those invariants; provenance tests keep the same
+formal and hosted timing budgets. The protected #307 run supplies the final
+composed production evidence.

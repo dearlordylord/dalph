@@ -85,7 +85,9 @@ and common-directory facts are explicit composition inputs, not new authority.
 - Unreadable target during autonomous refresh → `production-reactivation.test.ts`'s
   unreadable-boundary test retains acknowledged target-read intent without a
   fabricated target observation or new executor.
-- Complete ordinary built command → existing #339 controller proves actual
-  ready worktree, Accepted C and real CAS with exact M parents H,C.
-- Foreign target move → existing stale-CAS chronology proves F remains current,
-  the same unfinished Run is recovered and graceful Exit is not Run completion.
+- Complete ordinary built command → the protected #307 qualification proves
+  the shipped entry uses an actual ready worktree, Accepted C, and real CAS with
+  exact M parents H,C.
+- Foreign target move → focused target-promotion protocol and cassette tests
+  prove F remains current and preserve the unfinished Run authority; the
+  protected #307 qualification owns final shipped-entry composition.
