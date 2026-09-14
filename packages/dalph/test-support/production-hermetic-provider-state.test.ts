@@ -46,7 +46,7 @@ const setup = Effect.gen(function* () {
     journalDatabase: `${root}/journal.sqlite`,
     evidenceStoreRoot: `${root}/evidence`,
     plannedAttemptWorktreeRoot: `${root}/tasks`,
-    codexStateDirectory: `${root}/codex`,
+    codexExecutorPrivateStateDirectory: `${root}/codex-executor-private`,
     integratorCandidateWorktreeRoot: `${root}/candidates`,
     integratorPrivateStore: `${root}/private`,
     activationInterval: "1 second",
@@ -54,9 +54,7 @@ const setup = Effect.gen(function* () {
     codexExecutable: "controlled-codex",
     codexClientName: "hermetic",
     codexClientVersion: "1",
-    codexProvider: "hermetic",
     githubToken: "sentinel-secret",
-    codexProviderCredential: "sentinel-private"
   })
   return { root, repository, head, configuration, runGit }
 })

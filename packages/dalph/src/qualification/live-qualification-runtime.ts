@@ -63,6 +63,7 @@ import {
 import {
   makeProductionLiveQualificationNodeBoundary,
   ProductionLiveBuiltEntry,
+  ProductionLiveCodexHome,
   runProductionLiveQualification,
   type ProductionLiveQualificationCompletion
 } from "./live-qualification-controller.js"
@@ -165,6 +166,7 @@ export const decodeProductionLiveQualificationManifest = (input: unknown) =>
 export interface ProductionLiveLocalFixture {
   readonly configuration: ProductionRepositoryHostConfiguration
   readonly configurationPath: ProductionConfigurationLocator
+  readonly codexHome: ProductionLiveCodexHome
   readonly initialTargetCommit: GitCommitSha
   readonly applicationServerObservationPath: ProductionLiveLocalResourceLocator
   readonly localManifest: ProductionLiveLocalFixtureManifest
@@ -185,7 +187,7 @@ const codexConfiguration = (baseUrl: string, container: string) =>
     "[model_providers.dalph-live-qualification]",
     'name = "Dalph protected live qualification"',
     `base_url = ${JSON.stringify(baseUrl)}`,
-    'env_key = "DALPH_CODEX_PROVIDER_CREDENTIAL"',
+    'env_key = "DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL"',
     'wire_api = "responses"',
     "request_max_retries = 0",
     "stream_max_retries = 0",
@@ -216,7 +218,6 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
   responsesBaseUrl: string,
   githubGraphqlEndpoint: string,
   githubToken: Redacted.Redacted<string>,
-  codexProviderCredential: Redacted.Redacted<string>,
   observeContainer: (container: ProductionLiveLocalContainer) => Effect.Effect<void> = () => Effect.void
 ) {
   const fs = yield* FileSystem.FileSystem
@@ -230,11 +231,12 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
   const journalDatabase = at("journal.sqlite")
   const evidenceStoreRoot = at("evidence")
   const plannedAttemptWorktreeRoot = at("tasks")
-  const codexStateDirectory = at("codex")
+  const codexHome = ProductionLiveCodexHome.make(at("codex-home"))
+  const codexExecutorPrivateStateDirectory = at("codex-executor-private")
   const codexAppServerObservationPath = ProductionLiveLocalResourceLocator.make(
-    nodePath.join(codexStateDirectory, "app-server-processes")
+    nodePath.join(codexExecutorPrivateStateDirectory, "app-server-processes")
   )
-  const codexAppServerWrapper = nodePath.join(codexStateDirectory, "codex-app-server-observer")
+  const codexAppServerWrapper = nodePath.join(codexExecutorPrivateStateDirectory, "codex-app-server-observer")
   const integratorCandidateWorktreeRoot = at("candidates")
   const integratorPrivateStore = at("private.json")
   const configurationPath = ProductionConfigurationLocator.make(at("production.json"))
@@ -259,10 +261,17 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
   yield* runGit(["commit", "-m", "qualification base H"])
   const initialTargetCommit = yield* Schema.decodeUnknownEffect(GitCommitSha)(yield* runGit(["rev-parse", "HEAD"]))
   yield* Effect.forEach(
-    [evidenceStoreRoot, plannedAttemptWorktreeRoot, codexStateDirectory, integratorCandidateWorktreeRoot],
+    [
+      evidenceStoreRoot,
+      plannedAttemptWorktreeRoot,
+      codexHome,
+      codexExecutorPrivateStateDirectory,
+      integratorCandidateWorktreeRoot
+    ],
     (locator) => fs.makeDirectory(locator)
   )
-  yield* fs.chmod(codexStateDirectory, privateDirectoryMode)
+  yield* fs.chmod(codexHome, privateDirectoryMode)
+  yield* fs.chmod(codexExecutorPrivateStateDirectory, privateDirectoryMode)
   yield* fs.writeFileString(codexAppServerObservationPath, "")
   yield* fs.writeFileString(
     codexAppServerWrapper,
@@ -272,7 +281,7 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
   yield* fs.writeFileString(journalDatabase, "")
   yield* fs.writeFileString(integratorPrivateStore, "[]\n")
   yield* fs.writeFileString(
-    nodePath.join(codexStateDirectory, "config.toml"),
+    nodePath.join(codexHome, "config.toml"),
     codexConfiguration(responsesBaseUrl, container)
   )
   const target = yield* Schema.decodeUnknownEffect(GithubIssueTarget)({
@@ -293,21 +302,19 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
     journalDatabase,
     evidenceStoreRoot,
     plannedAttemptWorktreeRoot,
-    codexStateDirectory,
+    codexExecutorPrivateStateDirectory,
     integratorCandidateWorktreeRoot,
     integratorPrivateStore,
     activationInterval: "1 second",
     failureCooldown: "1 second",
     codexExecutable: codexAppServerWrapper,
     codexClientName: "dalph-live-qualification",
-    codexClientVersion: "1",
-    codexProvider: "dalph-live-qualification"
+    codexClientVersion: "1"
   }
   const configuration = yield* decodeProductionRepositoryHostConfiguration({
     ...safeDocument,
     target,
-    githubToken: Redacted.value(githubToken),
-    codexProviderCredential: Redacted.value(codexProviderCredential)
+    githubToken: Redacted.value(githubToken)
   })
   yield* fs.writeFileString(configurationPath, JSON.stringify(safeDocument))
   yield* fs.writeFileString(
@@ -320,7 +327,8 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
     ["JournalDatabase", journalDatabase],
     ["EvidenceRoot", evidenceStoreRoot],
     ["AttemptWorktreeRoot", plannedAttemptWorktreeRoot],
-    ["CodexStateDirectory", codexStateDirectory],
+    ["CodexHome", codexHome],
+    ["CodexExecutorPrivateStateDirectory", codexExecutorPrivateStateDirectory],
     ["CandidateRoot", integratorCandidateWorktreeRoot],
     ["ExpectedAtomicReplacement", integratorPrivateStore],
     ["ConfigurationDocument", configurationPath],
@@ -344,6 +352,7 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
   return {
     configuration,
     configurationPath,
+    codexHome,
     initialTargetCommit,
     applicationServerObservationPath: codexAppServerObservationPath,
     localManifest
@@ -352,8 +361,21 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
 
 export interface ProductionLiveQualificationSecrets {
   readonly githubToken: Redacted.Redacted<string>
-  readonly codexProviderCredential: Redacted.Redacted<string>
 }
+
+interface ProductionLiveQualificationRedactionSecrets extends ProductionLiveQualificationSecrets {
+  readonly controlledProviderCredential: Redacted.Redacted<string>
+}
+
+/** Generates one invocation-local credential for the loopback provider; it is never persisted or logged. */
+export const generateProductionLiveControlledProviderCredential = Effect.fn(
+  "ProductionLiveQualification.generateControlledProviderCredential"
+)(function* () {
+  const crypto = yield* Crypto.Crypto
+  return yield* crypto.randomBytes(32).pipe(
+    Effect.map((bytes) => Redacted.make(Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")))
+  )
+})
 
 const liveOccurrenceTags = [
   "RunSelected",
@@ -694,10 +716,10 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
 
 const exactOne = <A>(values: ReadonlyArray<A>): A | undefined => (values.length === 1 ? values[0] : undefined)
 
-const safeRecord = (secrets: ProductionLiveQualificationSecrets, record: unknown) => {
+const safeRecord = (secrets: ProductionLiveQualificationRedactionSecrets, record: unknown) => {
   const encoded = JSON.stringify(record)
   return encoded.includes(Redacted.value(secrets.githubToken)) ||
-    encoded.includes(Redacted.value(secrets.codexProviderCredential))
+    encoded.includes(Redacted.value(secrets.controlledProviderCredential))
     ? Effect.fail(qualificationFailed("EvidenceValidation"))
     : Effect.void
 }
@@ -918,6 +940,8 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
   const crypto = yield* Crypto.Crypto
   const githubClient = yield* GithubGraphqlClient
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const controlledProviderCredential = yield* generateProductionLiveControlledProviderCredential
+  const redactionSecrets = { ...secrets, controlledProviderCredential }
   const attempt = yield* Effect.gen(function* () {
     const createdGithubFixture = yield* createProductionLiveGithubFixture({
       invocationId: manifest.invocationId,
@@ -948,7 +972,6 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
       responses.baseUrl,
       runningForwarder.endpoint,
       secrets.githubToken,
-      secrets.codexProviderCredential,
       (container) =>
         Effect.sync(() => {
           localContainer = container
@@ -977,15 +1000,15 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
     const result = yield* runProductionLiveQualification(
       {
         builtEntry: manifest.builtEntry,
-        codexHome: fixture.configuration.codexStateDirectory,
+        codexHome: fixture.codexHome,
         configuration: fixture.configurationPath,
         target,
         githubToken: secrets.githubToken,
-        codexProviderCredential: secrets.codexProviderCredential
+        controlledProviderCredential
       },
       makeProductionLiveQualificationNodeBoundary(spawner),
       {
-        validateRecord: (record) => safeRecord(secrets, record),
+        validateRecord: (record) => safeRecord(redactionSecrets, record),
         gatherFinalFacts: ({ runId }) =>
           Effect.scoped(
             Effect.gen(function* () {

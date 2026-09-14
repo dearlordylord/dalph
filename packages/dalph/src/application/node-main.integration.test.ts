@@ -30,7 +30,7 @@ const observeFailureChannels = (application: string, unavailable = false) =>
           cwd: dalphPackageDirectory,
           env: {
             ...nodeProcess.env,
-            DALPH_CODEX_PROVIDER_CREDENTIAL: "controlled-codex-credential",
+            DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL: "controlled-codex-credential",
             GITHUB_TOKEN: "controlled-github-token"
           }
         })

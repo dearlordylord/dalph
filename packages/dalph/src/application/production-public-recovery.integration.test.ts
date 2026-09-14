@@ -154,7 +154,7 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
       cwd: dalphPackageDirectory,
       env: {
         ...nodeProcess.env,
-        DALPH_CODEX_PROVIDER_CREDENTIAL: "controlled-codex-credential",
+        DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL: "controlled-codex-credential",
         DALPH_QUALIFICATION_CLAIM_STATE: claimState,
         DALPH_QUALIFICATION_CLEANUP_OBSERVATION: cleanupObservation,
         DALPH_QUALIFICATION_CLEANUP_RELEASE: cleanupRelease,
@@ -270,8 +270,7 @@ const publicFixture = Effect.gen(function* () {
       codexClientName: "dalph",
       codexClientVersion: "0.0.0",
       codexExecutable,
-      codexProvider: "openai",
-      codexStateDirectory: path.join(root, "codex"),
+      codexExecutorPrivateStateDirectory: path.join(root, "codex-executor-private"),
       commonDirectory,
       evidenceStoreRoot: path.join(root, "evidence"),
       failureCooldown: "5 seconds",

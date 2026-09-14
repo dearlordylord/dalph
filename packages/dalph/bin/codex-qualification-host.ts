@@ -66,7 +66,7 @@ const QualificationConfiguration = Schema.Struct({
   holdAfterAction: Schema.Boolean,
   waitForOwnedChild: Schema.Boolean,
   waitForTerminalProjection: Schema.Boolean,
-  openAiApiKey: Schema.optionalKey(Schema.String)
+  controlledProviderCredential: Schema.optionalKey(Schema.String)
 })
 type QualificationConfiguration = typeof QualificationConfiguration.Type
 
@@ -95,7 +95,9 @@ const rawConfiguration = {
   holdAfterAction: envValue("DALPH_CODEX_QUALIFICATION_HOLD") === "1",
   waitForOwnedChild: envValue("DALPH_CODEX_QUALIFICATION_WAIT_FOR_OWNED_CHILD") === "1",
   waitForTerminalProjection: envValue("DALPH_CODEX_QUALIFICATION_WAIT_FOR_TERMINAL_PROJECTION") === "1",
-  ...(envValue("OPENAI_API_KEY") === undefined ? {} : { openAiApiKey: envValue("OPENAI_API_KEY") })
+  ...(envValue("DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL") === undefined
+    ? {}
+    : { controlledProviderCredential: envValue("DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL") })
 }
 
 const decodeConfiguration = (): Effect.Effect<QualificationConfiguration, QualificationConfigurationFailure> =>
@@ -187,9 +189,12 @@ const attemptFor = (configuration: QualificationConfiguration): PlannedTaskAttem
 }
 
 const environmentFor = (configuration: QualificationConfiguration): Readonly<Record<string, string>> =>
-  configuration.openAiApiKey === undefined
+  configuration.controlledProviderCredential === undefined
     ? { CODEX_HOME: configuration.codexHome }
-    : { CODEX_HOME: configuration.codexHome, OPENAI_API_KEY: configuration.openAiApiKey }
+    : {
+        CODEX_HOME: configuration.codexHome,
+        DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL: configuration.controlledProviderCredential
+      }
 
 const exitDrainFailure = (detail: string) =>
   new ApplicationExitDrainFailure({ diagnostics: [ApplicationExitDiagnostic.make(detail)] })

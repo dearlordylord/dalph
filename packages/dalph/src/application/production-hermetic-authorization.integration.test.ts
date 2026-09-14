@@ -75,7 +75,7 @@ it.live(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
         const fixture = yield* createHermeticFixture(builtEntry, sourceBaseSha)
-        const beforeCodex = yield* fs.readDirectory(fixture.manifest.codexStateDirectory)
+        const beforeCodex = yield* fs.readDirectory(fixture.manifest.codexExecutorPrivateStateDirectory)
         const document = yield* fs
           .readFileString(fixture.configurationPath)
           .pipe(
@@ -97,7 +97,7 @@ it.live(
             {
               env: {
                 GITHUB_TOKEN: "controlled-hermetic-github-token",
-                DALPH_CODEX_PROVIDER_CREDENTIAL: "controlled-hermetic-codex-credential",
+                DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL: "controlled-hermetic-codex-credential",
                 DALPH_HERMETIC_CONTROLLER: "http://127.0.0.1:9",
                 DALPH_HERMETIC_REGISTRATION_SCOPE: HermeticRegistrationScopeId.make("original-authorization-spawn"),
                 DALPH_HERMETIC_EXPECTED_MANIFEST: yield* Schema.encodeEffect(
@@ -117,7 +117,7 @@ it.live(
         expect(yield* fs.readFileString(foreignJournal)).toBe("foreign journal sentinel\n")
         expect(yield* fs.readFileString(fixture.manifest.journalDatabase)).toBe("")
         expect(yield* fs.readFileString(fixture.manifest.privateStore)).toBe("[]\n")
-        expect(yield* fs.readDirectory(fixture.manifest.codexStateDirectory)).toEqual(beforeCodex)
+        expect(yield* fs.readDirectory(fixture.manifest.codexExecutorPrivateStateDirectory)).toEqual(beforeCodex)
       })
     ).pipe(Effect.provide(fixtureLayer)),
   30_000

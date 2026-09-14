@@ -60,8 +60,10 @@ fixture is available at
 Production changes live state. Use only a dedicated disposable GitHub
 repository with one unblocked issue for a first run. Give `GITHUB_TOKEN` access
 only to that repository (metadata read, issues read/write, and contents
-read for the local clone), keep both credentials in the environment,
-and never put either value in the JSON file. The complete, copyable
+read for the local clone), keep that credential in the environment, and never
+put it in the JSON file. Codex uses the invoking user's ordinary CLI login and
+ambient `CODEX_HOME`; Dalph does not require or select an API/provider
+credential. The complete, copyable
 [disposable production walkthrough](docs/DEVELOPMENT.md#disposable-production-repository-walkthrough)
 creates disjoint local state and worktree paths, lists every non-secret
 configuration field, explains the state-changing consequences, shows the
@@ -79,9 +81,8 @@ node packages/dalph/dist/bin/dalph.js \
 
 The non-secret JSON document contains the repository/ref, exact Base SHA,
 capacity/cadence, Journal/evidence, disjoint worktree/private-state, and Codex
-settings accepted by the production-host schema. Credential values come only
-from `GITHUB_TOKEN` and `DALPH_CODEX_PROVIDER_CREDENTIAL`; public validation
-records and help never print them.
+settings accepted by the production-host schema. The GitHub credential comes
+only from `GITHUB_TOKEN`; public validation records and help never print it.
 
 While the production command is attached, Ctrl-C (`SIGINT`) and supervisor
 `SIGTERM` deliveries enter the same host-owned graceful application Exit. A

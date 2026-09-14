@@ -199,7 +199,6 @@ const environmentFor = (f, overrides = {}) => ({
   GITHUB_SHA: candidateSha,
   PATH: process.env.PATH,
   DALPH_LIVE_GITHUB_TOKEN: "github-secret",
-  DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret",
   ...overrides
 })
 
@@ -265,14 +264,15 @@ test("rejects a candidate HEAD mismatch before the live child launch", async () 
   assert.equal(launched, 0)
 })
 
-test("launches the built controller exactly once with one manifest locator and both secrets", async () => {
+test("launches the built controller exactly once with one manifest locator and only the GitHub secret", async () => {
   const f = await fixture()
   const requests = []
   const result = await runProductionLiveQualification({
     repositoryRoot: f.root,
     environment: environmentFor(f, {
       UNRELATED_SECRET: "secret-not-for-child",
-      UNRELATED_TOKEN: "token-not-for-child"
+      UNRELATED_TOKEN: "token-not-for-child",
+      DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL: "must-be-generated-by-controller"
     }),
     readCandidateSha: async () => candidateSha,
     buildFormal: async () => formalForManifest,
@@ -287,11 +287,11 @@ test("launches the built controller exactly once with one manifest locator and b
   assert.deepEqual(requests[0].args, [join(f.root, productionLiveQualificationBin), "--manifest", f.output.manifest])
   assert.equal(requests[0].environment.DALPH_LIVE_GITHUB_TOKEN, "github-secret")
   assert.equal(requests[0].environment.GITHUB_TOKEN, undefined)
-  assert.equal(requests[0].environment.DALPH_CODEX_PROVIDER_CREDENTIAL, "codex-secret")
+  assert.equal(requests[0].environment.DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL, undefined)
   assert.equal(requests[0].environment.UNRELATED_SECRET, undefined)
   assert.equal(requests[0].environment.UNRELATED_TOKEN, undefined)
   assert.equal(requests[0].args.includes("github-secret"), false)
-  assert.equal(requests[0].args.includes("codex-secret"), false)
+  assert.equal(requests[0].args.includes("must-be-generated-by-controller"), false)
   const manifest = JSON.parse(await readFile(f.output.manifest, "utf8"))
   assert.equal(manifest.builtEntry, join(f.root, productionLiveQualificationShippedBin))
   assert.equal(manifest.retentionReport, f.output.retained)
@@ -300,7 +300,7 @@ test("launches the built controller exactly once with one manifest locator and b
   assert.equal(manifest.hosted.sourceSha, candidateSha)
   assert.equal(manifest.formal._tag, "DedicatedAndStressed")
   assert.equal(JSON.stringify(manifest).includes("github-secret"), false)
-  assert.equal(JSON.stringify(manifest).includes("codex-secret"), false)
+  assert.equal(JSON.stringify(manifest).includes("must-be-generated-by-controller"), false)
 })
 
 test("the exact written manifest decodes with the built runtime schema without secrets", async (t) => {
@@ -315,7 +315,7 @@ test("the exact written manifest decodes with the built runtime schema without s
   })
   const manifest = JSON.parse(await readFile(f.output.manifest, "utf8"))
   assert.equal(JSON.stringify(manifest).includes("github-secret"), false)
-  assert.equal(JSON.stringify(manifest).includes("codex-secret"), false)
+  assert.equal(JSON.stringify(manifest).includes("must-be-generated-by-controller"), false)
   try {
     assert.deepEqual(await decodeWithBuiltRuntimeSchema(manifest), manifest)
   } catch (error) {
@@ -344,7 +344,7 @@ test("does not retry after a live child failure and does not expose secret bytes
     (error) => {
       assert.match(error.message, /exited with status 17/u)
       assert.equal(error.message.includes("github-secret"), false)
-      assert.equal(error.message.includes("codex-secret"), false)
+      assert.equal(error.message.includes("must-be-generated-by-controller"), false)
       return true
     }
   )

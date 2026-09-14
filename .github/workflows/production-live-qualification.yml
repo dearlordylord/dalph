@@ -265,11 +265,11 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/run-production-live-qualification.mjs --resolve-formal-jobs
 
-      # The protected environment secrets enter only this one controller command.
+      # Only the disposable-repository GitHub token enters this controller command.
+      # The controller creates the loopback provider credential per invocation.
       - name: Run one protected live qualification
         env:
           DALPH_LIVE_GITHUB_TOKEN: ${{ secrets.DALPH_LIVE_GITHUB_TOKEN }}
-          DALPH_CODEX_PROVIDER_CREDENTIAL: ${{ secrets.DALPH_LIVE_CODEX_PROVIDER_CREDENTIAL }}
         run: pnpm qualify:production-live
 
       - name: Upload redacted qualification outputs

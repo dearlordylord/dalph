@@ -19,7 +19,10 @@ import {
 } from "@dalph/orchestrator"
 import { Effect, FileSystem, Schema } from "effect"
 import { IntegratorCandidateWorktreeRoot, IntegratorPrivateStoreLocator } from "./codex-integrator-private-store.js"
-import { ProductionCodexStateDirectory, ProductionPlannedAttemptWorktreeRoot } from "./production-configuration.js"
+import {
+  ProductionCodexExecutorPrivateStateDirectory,
+  ProductionPlannedAttemptWorktreeRoot
+} from "./production-configuration.js"
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 import { ProductionConfigurationLocator } from "./production-cli.js"
 
@@ -82,7 +85,7 @@ export const HermeticFixtureManifest = Schema.Struct({
   journalDatabase: JournalDatabaseLocator,
   evidenceRoot: EvidenceStoreLocator,
   attemptWorktreeRoot: ProductionPlannedAttemptWorktreeRoot,
-  codexStateDirectory: ProductionCodexStateDirectory,
+  codexExecutorPrivateStateDirectory: ProductionCodexExecutorPrivateStateDirectory,
   candidateRoot: IntegratorCandidateWorktreeRoot,
   privateStore: IntegratorPrivateStoreLocator,
   ownershipMarker: HermeticOwnershipMarker
@@ -110,7 +113,7 @@ export const HermeticFixtureResource = Schema.TaggedUnion({
   JournalDatabase: { locator: JournalDatabaseLocator },
   EvidenceRoot: { locator: EvidenceStoreLocator },
   AttemptWorktreeRoot: { locator: ProductionPlannedAttemptWorktreeRoot },
-  CodexStateDirectory: { locator: ProductionCodexStateDirectory },
+  CodexExecutorPrivateStateDirectory: { locator: ProductionCodexExecutorPrivateStateDirectory },
   CandidateRoot: { locator: IntegratorCandidateWorktreeRoot },
   PrivateStore: { locator: IntegratorPrivateStoreLocator },
   OwnershipMarker: { locator: HermeticOwnershipMarker }
@@ -171,13 +174,13 @@ const hasManifestResourceOverlap = (manifest: HermeticFixtureManifest): boolean 
     manifest.commonDirectory,
     manifest.journalDatabase,
     manifest.evidenceRoot,
-    manifest.codexStateDirectory,
+    manifest.codexExecutorPrivateStateDirectory,
     manifest.privateStore
   ]
   const privateStatePaths = [
     manifest.journalDatabase,
     manifest.evidenceRoot,
-    manifest.codexStateDirectory,
+    manifest.codexExecutorPrivateStateDirectory,
     manifest.privateStore
   ]
   return (
@@ -195,11 +198,11 @@ const hasConfiguredWorkflowResourceMismatch = (
   configuration.evidenceStoreRoot !== manifest.evidenceRoot ||
   configuration.plannedAttemptWorktreeRoot !== manifest.attemptWorktreeRoot
 
-const hasConfiguredProviderResourceMismatch = (
+const hasConfiguredExecutorResourceMismatch = (
   manifest: HermeticFixtureManifest,
   configuration: ProductionRepositoryHostConfiguration
 ): boolean =>
-  configuration.codexStateDirectory !== manifest.codexStateDirectory ||
+  configuration.codexExecutorPrivateStateDirectory !== manifest.codexExecutorPrivateStateDirectory ||
   configuration.integratorCandidateWorktreeRoot !== manifest.candidateRoot ||
   configuration.integratorPrivateStore !== manifest.privateStore
 
@@ -210,7 +213,7 @@ const hasConfiguredFixtureMismatch = (
   configuration.integrationRef !== manifest.integrationRef ||
   configuration.plannedAttemptBaseSha !== manifest.baseSha ||
   hasConfiguredWorkflowResourceMismatch(manifest, configuration) ||
-  hasConfiguredProviderResourceMismatch(manifest, configuration)
+  hasConfiguredExecutorResourceMismatch(manifest, configuration)
 
 const authorizationFailure = (
   reason: (typeof hermeticAuthorizationReasons)[number],

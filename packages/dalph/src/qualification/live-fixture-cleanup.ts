@@ -57,7 +57,8 @@ export const ProductionLiveLocalResource = Schema.TaggedUnion({
   JournalDatabase: localResourceFields,
   EvidenceRoot: localResourceFields,
   AttemptWorktreeRoot: localResourceFields,
-  CodexStateDirectory: localResourceFields,
+  CodexHome: localResourceFields,
+  CodexExecutorPrivateStateDirectory: localResourceFields,
   CandidateRoot: localResourceFields,
   /** The Integrator publishes this exact direct-child file by atomic rename, so its final inode is expected to differ. */
   ExpectedAtomicReplacement: { locator: ProductionLiveLocalResourceLocator, identity: OriginalRegularFileIdentity },

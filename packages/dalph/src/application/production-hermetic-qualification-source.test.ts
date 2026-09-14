@@ -149,7 +149,7 @@ const fixture = Effect.gen(function* () {
     journalDatabase: "/fixture/journal.sqlite",
     evidenceStoreRoot: "/fixture/evidence",
     plannedAttemptWorktreeRoot: "/fixture/attempts",
-    codexStateDirectory: "/fixture/codex",
+    codexExecutorPrivateStateDirectory: "/fixture/codex-executor-private",
     integratorCandidateWorktreeRoot: "/fixture/candidates",
     integratorPrivateStore: "/fixture/private.json",
     activationInterval: "1 minute",
@@ -157,9 +157,7 @@ const fixture = Effect.gen(function* () {
     codexExecutable: "/bin/codex",
     codexClientName: "dalph",
     codexClientVersion: "0.0.0",
-    codexProvider: "openai",
-    githubToken: "private-credential",
-    codexProviderCredential: "private-provider-credential"
+    githubToken: "private-credential"
   })
   const manifest = yield* Schema.decodeUnknownEffect(HermeticFixtureManifest)({
     invocationId: "qualification",
@@ -173,7 +171,7 @@ const fixture = Effect.gen(function* () {
     journalDatabase: configuration.journalDatabase,
     evidenceRoot: configuration.evidenceStoreRoot,
     attemptWorktreeRoot: configuration.plannedAttemptWorktreeRoot,
-    codexStateDirectory: configuration.codexStateDirectory,
+    codexExecutorPrivateStateDirectory: configuration.codexExecutorPrivateStateDirectory,
     candidateRoot: configuration.integratorCandidateWorktreeRoot,
     privateStore: configuration.integratorPrivateStore,
     ownershipMarker: "/fixture/marker"

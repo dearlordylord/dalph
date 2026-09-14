@@ -65,7 +65,7 @@ const schemaEvidence = (container: string, transcriptDigest: string) => {
       journalDatabase: `${container}/journal.sqlite`,
       evidenceRoot: `${container}/evidence`,
       attemptWorktreeRoot: `${container}/worktrees`,
-      codexStateDirectory: `${container}/codex`,
+      codexExecutorPrivateStateDirectory: `${container}/codex-executor-private`,
       candidateRoot: `${container}/candidates`,
       privateStore: `${container}/private.json`,
       ownershipMarker: `${container}/Q.marker`

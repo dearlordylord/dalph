@@ -32,7 +32,7 @@ import {
 import { IntegratorCandidateWorktreeRoot, IntegratorPrivateStoreLocator } from "./codex-integrator-private-store.js"
 import {
   decodeProductionRepositoryHostConfiguration,
-  ProductionCodexStateDirectory,
+  ProductionCodexExecutorPrivateStateDirectory,
   ProductionPlannedAttemptWorktreeRoot
 } from "./production-configuration.js"
 
@@ -53,7 +53,9 @@ const makeManifest = (root: string): HermeticFixtureManifestType => {
     journalDatabase: JournalDatabaseLocator.make(nodePath.join(root, "journal.sqlite")),
     evidenceRoot: EvidenceStoreLocator.make(nodePath.join(root, "evidence")),
     attemptWorktreeRoot: ProductionPlannedAttemptWorktreeRoot.make(nodePath.join(root, "attempts")),
-    codexStateDirectory: ProductionCodexStateDirectory.make(nodePath.join(root, "codex")),
+    codexExecutorPrivateStateDirectory: ProductionCodexExecutorPrivateStateDirectory.make(
+      nodePath.join(root, "codex-executor-private")
+    ),
     candidateRoot: IntegratorCandidateWorktreeRoot.make(nodePath.join(root, "candidates")),
     privateStore: IntegratorPrivateStoreLocator.make(nodePath.join(root, "private.json")),
     ownershipMarker: HermeticOwnershipMarker.make(nodePath.join(root, "ownership.json"))
@@ -75,7 +77,7 @@ const rawConfiguration = (
   journalDatabase: manifest.journalDatabase,
   evidenceStoreRoot: manifest.evidenceRoot,
   plannedAttemptWorktreeRoot: manifest.attemptWorktreeRoot,
-  codexStateDirectory: manifest.codexStateDirectory,
+  codexExecutorPrivateStateDirectory: manifest.codexExecutorPrivateStateDirectory,
   integratorCandidateWorktreeRoot: manifest.candidateRoot,
   integratorPrivateStore: manifest.privateStore,
   activationInterval: "1 second",
@@ -83,9 +85,7 @@ const rawConfiguration = (
   codexExecutable: "controlled-codex",
   codexClientName: "hermetic",
   codexClientVersion: "1",
-  codexProvider: "hermetic",
   githubToken: "controlled-github-token",
-  codexProviderCredential: "controlled-codex-credential",
   ...overrides
 })
 

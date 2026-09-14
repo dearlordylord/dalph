@@ -115,6 +115,7 @@ export type HermeticControllerPause =
   | { readonly _tag: "PauseAt"; readonly boundary: BoundaryReached["_tag"] }
 
 const providerFailureHttpStatus = 500
+const hermeticControlledProviderCredential = "controlled-hermetic-codex-credential"
 
 const readBody = Effect.fn("HermeticController.readBody")(function* (request: IncomingMessage) {
   const text = yield* Effect.tryPromise({
@@ -276,7 +277,7 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
         {
           env: {
             GITHUB_TOKEN: "controlled-hermetic-github-token",
-            DALPH_CODEX_PROVIDER_CREDENTIAL: "controlled-hermetic-codex-credential",
+            DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL: hermeticControlledProviderCredential,
             DALPH_HERMETIC_EXPECTED_MANIFEST: yield* Schema.encodeEffect(
               Schema.fromJsonString(HermeticFixtureManifest)
             )(fixture.manifest),
@@ -339,7 +340,7 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
         MutableList.toArray(child.stderrLog),
         [
           Redacted.value(fixture.configuration.githubToken),
-          Redacted.value(fixture.configuration.codexProviderCredential)
+          hermeticControlledProviderCredential
         ]
       )
     })

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest"
 import {
   createProductionLiveLocalFixture,
   decodeProductionLiveQualificationManifest,
+  generateProductionLiveControlledProviderCredential,
   productionLiveQualificationBoundaryObservations,
   productionLiveQualificationChronologyIsExact,
   productionLiveQualificationOperationCounts,
@@ -115,6 +116,22 @@ const input = {
 }
 
 describe("#307 production live qualification runtime", () => {
+  it("production qualification controller generates and redacts one fresh controlled-provider credential per invocation", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const first = yield* generateProductionLiveControlledProviderCredential
+        const second = yield* generateProductionLiveControlledProviderCredential
+        const firstValue = Redacted.value(first)
+        const secondValue = Redacted.value(second)
+        expect(firstValue).toMatch(/^[0-9a-f]{64}$/u)
+        expect(secondValue).toMatch(/^[0-9a-f]{64}$/u)
+        expect(secondValue).not.toBe(firstValue)
+        expect(JSON.stringify({ first, second })).not.toContain(firstValue)
+        expect(JSON.stringify({ first, second })).not.toContain(secondValue)
+      }).pipe(Effect.provide(layer))
+    )
+  })
+
   it("strictly decodes the one safe manifest and rejects extra keys", async () => {
     expect(await Effect.runPromise(decodeProductionLiveQualificationManifest(input))).toMatchObject(input)
     await expect(
@@ -194,7 +211,7 @@ describe("#307 production live qualification runtime", () => {
     )
   })
 
-  it("creates one local repository H, one configuration, and one isolated Codex home", async () => {
+  it("production live qualification fixture separates Codex home from executor private state", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         const fixture = yield* createProductionLiveLocalFixture(
@@ -202,15 +219,16 @@ describe("#307 production live qualification runtime", () => {
           { owner: "dalph-live", repository: "qualification", issueNumber: 307 },
           "http://127.0.0.1:4307/v1",
           "http://127.0.0.1:4308/graphql",
-          Redacted.make("github-secret"),
-          Redacted.make("provider-secret")
+          Redacted.make("github-secret")
         )
         const fs = yield* FileSystem.FileSystem
         expect(fixture.configuration.plannedAttemptBaseSha).toBe(fixture.initialTargetCommit)
-        expect(fixture.localManifest.resources).toHaveLength(10)
-        expect(yield* fs.readFileString(`${fixture.configuration.codexStateDirectory}/config.toml`)).toContain(
-          'base_url = "http://127.0.0.1:4307/v1"'
-        )
+        expect(fixture.localManifest.resources).toHaveLength(11)
+        expect(fixture.codexHome).not.toBe(fixture.configuration.codexExecutorPrivateStateDirectory)
+        const config = yield* fs.readFileString(`${fixture.codexHome}/config.toml`)
+        expect(config).toContain('base_url = "http://127.0.0.1:4307/v1"')
+        expect(config).toContain('env_key = "DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL"')
+        expect(config).not.toContain("DALPH_CODEX_PROVIDER_CREDENTIAL")
         expect(fixture.configuration.codexExecutable).not.toBe(input.codexExecutable)
         expect(yield* fs.readFileString(fixture.configuration.codexExecutable)).toContain(
           `exec '${input.codexExecutable}' "$@"`
@@ -219,7 +237,6 @@ describe("#307 production live qualification runtime", () => {
         expect(yield* fs.readFileString(fixture.applicationServerObservationPath)).toBe("")
         const document = yield* fs.readFileString(fixture.configurationPath)
         expect(document).not.toContain("github-secret")
-        expect(document).not.toContain("provider-secret")
         yield* fs.remove(fixture.localManifest.container.locator, { recursive: true })
       }).pipe(Effect.provide(layer))
     )
@@ -236,7 +253,6 @@ describe("#307 production live qualification runtime", () => {
           "http://127.0.0.1:4307/v1",
           "not-an-http-endpoint",
           Redacted.make("github-secret"),
-          Redacted.make("provider-secret"),
           (container) =>
             Effect.sync(() => {
               observedContainer = container
@@ -269,8 +285,7 @@ describe("#307 production live qualification runtime", () => {
             { owner: "dalph-live", repository: "qualification", issueNumber: 307 },
             "http://127.0.0.1:4307/v1",
             "http://127.0.0.1:4308/graphql",
-            Redacted.make("github-secret"),
-            Redacted.make("provider-secret")
+            Redacted.make("github-secret")
           )
           yield* writeProductionLiveQualificationFailureRetentionReport(
             manifest,

@@ -112,33 +112,31 @@ export const createHermeticFixture = Effect.fn("HermeticFixture.create")(functio
       journalDatabase: `${root}/journal.sqlite`,
       evidenceStoreRoot: `${root}/evidence`,
       plannedAttemptWorktreeRoot: `${root}/tasks`,
-      codexStateDirectory: `${root}/codex`,
+      codexExecutorPrivateStateDirectory: `${root}/codex-executor-private`,
       integratorCandidateWorktreeRoot: `${root}/candidates`,
       integratorPrivateStore: `${root}/private.json`,
       activationInterval: "1 second",
       failureCooldown: "1 second",
       codexExecutable: "controlled-codex",
       codexClientName: "hermetic",
-      codexClientVersion: "1",
-      codexProvider: "hermetic"
+      codexClientVersion: "1"
     }
     const configuration = yield* decodeProductionRepositoryHostConfiguration({
       ...document,
       target: { _tag: "GithubIssue", owner: "hermetic", repository: "fixture", issueNumber: 1 },
-      githubToken: "controlled-hermetic-github-token",
-      codexProviderCredential: "controlled-hermetic-codex-credential"
+      githubToken: "controlled-hermetic-github-token"
     })
     const directories = [
       yield* resourceAt("EvidenceRoot", configuration.evidenceStoreRoot),
       yield* resourceAt("AttemptWorktreeRoot", configuration.plannedAttemptWorktreeRoot),
-      yield* resourceAt("CodexStateDirectory", configuration.codexStateDirectory),
+      yield* resourceAt("CodexExecutorPrivateStateDirectory", configuration.codexExecutorPrivateStateDirectory),
       yield* resourceAt("CandidateRoot", configuration.integratorCandidateWorktreeRoot)
     ]
     yield* Effect.forEach(directories, (resource) => createResource(resource, fs.makeDirectory(resource.locator)))
     yield* cross(
-      configuration.codexStateDirectory,
+      configuration.codexExecutorPrivateStateDirectory,
       "chmodPrivateDirectory",
-      fs.chmod(configuration.codexStateDirectory, privateDirectoryMode)
+      fs.chmod(configuration.codexExecutorPrivateStateDirectory, privateDirectoryMode)
     )
     yield* createResource(
       yield* resourceAt("JournalDatabase", configuration.journalDatabase),
@@ -167,7 +165,7 @@ export const createHermeticFixture = Effect.fn("HermeticFixture.create")(functio
       journalDatabase: configuration.journalDatabase,
       evidenceRoot: configuration.evidenceStoreRoot,
       attemptWorktreeRoot: configuration.plannedAttemptWorktreeRoot,
-      codexStateDirectory: configuration.codexStateDirectory,
+      codexExecutorPrivateStateDirectory: configuration.codexExecutorPrivateStateDirectory,
       candidateRoot: configuration.integratorCandidateWorktreeRoot,
       privateStore: configuration.integratorPrivateStore,
       ownershipMarker: `${root}/ownership.json`

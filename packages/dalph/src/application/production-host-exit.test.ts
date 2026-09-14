@@ -42,7 +42,7 @@ const validRawConfiguration = () => ({
   journalDatabase: "/var/lib/dalph/journal.sqlite",
   evidenceStoreRoot: "/var/lib/dalph/evidence",
   plannedAttemptWorktreeRoot: "/srv/dalph/planned-attempts",
-  codexStateDirectory: "/var/lib/dalph/codex",
+  codexExecutorPrivateStateDirectory: "/var/lib/dalph/codex-executor-private",
   integratorCandidateWorktreeRoot: "/srv/dalph/integrator-candidates",
   integratorPrivateStore: "/var/lib/dalph/integrator-private.json",
   activationInterval: "1 minute",
@@ -50,9 +50,7 @@ const validRawConfiguration = () => ({
   codexExecutable: "/usr/local/bin/codex",
   codexClientName: "dalph",
   codexClientVersion: "0.0.0",
-  codexProvider: "openai",
-  githubToken: "github-secret",
-  codexProviderCredential: "codex-secret"
+  githubToken: "github-secret"
 })
 
 const scopedCoordinatorOwnershipLayer = (ownership: CoordinatorOwnership["Service"]) =>

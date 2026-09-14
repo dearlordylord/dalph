@@ -1,7 +1,7 @@
 /* eslint-disable import/no-nodejs-modules -- this test launches only local protocol fixtures. */
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Redacted, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Stream } from "effect"
 import { expect, expectTypeOf } from "vitest"
 import {
   CodexAppServer,
@@ -44,16 +44,8 @@ const write = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.
 const writeError = (id) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: "fixture failure" } }) + "\n")
 const responseFor = (method, params = {}) => {
   if (mode === "non-openai-provider-credential" && method === "initialize") {
-    const argumentsAreExact = process.argv.slice(2).join("\n") === [
-      "app-server",
-      "-c",
-      'model_provider="fixture-provider"',
-      "-c",
-      'model_providers.fixture-provider.env_key="DALPH_CODEX_PROVIDER_CREDENTIAL"'
-    ].join("\n")
-    return process.env.DALPH_CODEX_PROVIDER_CREDENTIAL === "fixture-provider-key" &&
-      process.env.OPENAI_API_KEY === "ambient-openai-key" &&
-      argumentsAreExact
+    const argumentsAreExact = process.argv.slice(2).join("\n") === "app-server"
+    return process.env.DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL === "fixture-provider-key" && argumentsAreExact
       ? { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "unix", platformOs: "linux" }
       : { userAgent: "", codexHome: "", platformFamily: "unix", platformOs: "linux" }
   }
@@ -471,8 +463,6 @@ const withFixture = <A>(
   action: (app: CodexAppServerService, root: string) => Effect.Effect<A, unknown, FileSystem.FileSystem | Path.Path>,
   config: {
     readonly environment?: Readonly<Record<string, string>>
-    readonly modelProvider?: string
-    readonly providerCredential?: Redacted.Redacted<string>
   } = {}
 ) =>
   Effect.scoped(
@@ -653,14 +643,12 @@ it.effect("accepts ownership markers only from schema-decoded user-authored inpu
   })
 )
 
-it.effect("keeps a non-OpenAI provider credential scoped to its selected environment key", () =>
+it.effect("controlled qualification provider serves loopback responses without an OpenAI call", () =>
   withFixture(
     "non-openai-provider-credential",
     (app) => Effect.map(app.startThread("/fixture/worktree"), (thread) => expect(thread.id).toBe("protocol-thread")),
     {
-      environment: { OPENAI_API_KEY: "ambient-openai-key" },
-      modelProvider: "fixture-provider",
-      providerCredential: Redacted.make("fixture-provider-key")
+      environment: { DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL: "fixture-provider-key" }
     }
   )
 )

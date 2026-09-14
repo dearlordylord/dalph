@@ -117,11 +117,11 @@ test("successful shard jobs supply complete timestamps after their final uploads
   assert.match(qualificationResolver, /completeJobSeconds: \(completed - started\) \/ 1000/u)
 })
 
-test("provider credentials occur only on the one live command and artifacts upload on failure", () => {
+test("production live workflow exposes only the GitHub secret to the protected qualification", () => {
   assert.equal((workflow.match(/secrets\.DALPH_LIVE_GITHUB_TOKEN/gu) ?? []).length, 1)
-  assert.equal((workflow.match(/secrets\.DALPH_LIVE_CODEX_PROVIDER_CREDENTIAL/gu) ?? []).length, 1)
+  assert.equal((workflow.match(/secrets\.DALPH_LIVE_CODEX_PROVIDER_CREDENTIAL/gu) ?? []).length, 0)
   assert.match(workflow, /Run one protected live qualification[\s\S]*?DALPH_LIVE_GITHUB_TOKEN/u)
-  assert.match(workflow, /Run one protected live qualification[\s\S]*?DALPH_LIVE_CODEX_PROVIDER_CREDENTIAL/u)
+  assert.doesNotMatch(workflow, /Run one protected live qualification[\s\S]*?DALPH_LIVE_CODEX_PROVIDER_CREDENTIAL/u)
   assert.doesNotMatch(workflow, /Run one protected live qualification[\s\S]*?^\s+GITHUB_TOKEN:/mu)
   assert.match(workflow, /Upload redacted qualification outputs[\s\S]*?if: always\(\)/u)
   const uploadedOutputs = workflow.slice(workflow.indexOf("      - name: Upload redacted qualification outputs\n"))

@@ -368,7 +368,7 @@ const createGitFixture = async (mode: QualificationMode): Promise<GitFixture> =>
     "[model_providers.fixture]",
     'name = "Dalph deterministic qualification fixture"',
     `base_url = "${endpoint}"`,
-    'env_key = "OPENAI_API_KEY"',
+    'env_key = "DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL"',
     'wire_api = "responses"',
     "request_max_retries = 0",
     "stream_max_retries = 0",
@@ -400,7 +400,11 @@ const launchCodexProcess = async (
   const child = spawn(codexExecutable, ["app-server", "--stdio"], {
     cwd: fixture.worktree,
     detached: true,
-    env: { ...nodeProcess.env, CODEX_HOME: fixture.codexHome, OPENAI_API_KEY: "dalph-deterministic-fixture" },
+    env: {
+      ...nodeProcess.env,
+      CODEX_HOME: fixture.codexHome,
+      DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL: "dalph-deterministic-fixture"
+    },
     stdio: ["pipe", "pipe", "pipe"]
   })
   const rpc = new JsonRpcFixtureClient(child)

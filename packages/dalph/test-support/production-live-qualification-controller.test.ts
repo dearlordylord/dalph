@@ -32,7 +32,7 @@ const invocation = {
     issueNumber: GithubIssueNumber.make(41)
   }),
   githubToken: Redacted.make("github-secret"),
-  codexProviderCredential: Redacted.make("codex-secret")
+  controlledProviderCredential: Redacted.make("controlled-provider-secret")
 }
 
 const selected: ProductionCliRecord = {
@@ -103,7 +103,7 @@ describe("#307 production live qualification controller", () => {
         environment: {
           CODEX_HOME: "/tmp/dalph-live-q/codex",
           GITHUB_TOKEN: "github-secret",
-          DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret",
+          DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL: "controlled-provider-secret",
           GIT_OPTIONAL_LOCKS: "0"
         }
       }

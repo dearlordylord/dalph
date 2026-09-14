@@ -17,7 +17,8 @@ const resourceBelongsToFixture = (fixture: HermeticControllerFixture, resource: 
     JournalDatabase: ({ locator }) => locator === fixture.manifest.journalDatabase,
     EvidenceRoot: ({ locator }) => locator === fixture.manifest.evidenceRoot,
     AttemptWorktreeRoot: ({ locator }) => locator === fixture.manifest.attemptWorktreeRoot,
-    CodexStateDirectory: ({ locator }) => locator === fixture.manifest.codexStateDirectory,
+    CodexExecutorPrivateStateDirectory: ({ locator }) =>
+      locator === fixture.manifest.codexExecutorPrivateStateDirectory,
     CandidateRoot: ({ locator }) => locator === fixture.manifest.candidateRoot,
     PrivateStore: ({ locator }) => locator === fixture.manifest.privateStore,
     OwnershipMarker: ({ locator }) => locator === fixture.manifest.ownershipMarker
@@ -72,8 +73,7 @@ export const authorizeHermeticControllerFixture = Effect.fn("HermeticController.
   const c = yield* decodeProductionRepositoryHostConfiguration({
     ...document,
     target: fixture.configuration.target,
-    githubToken: Redacted.value(fixture.configuration.githubToken),
-    codexProviderCredential: Redacted.value(fixture.configuration.codexProviderCredential)
+    githubToken: Redacted.value(fixture.configuration.githubToken)
   })
   return yield* authorizeHermeticFixture(fixture.manifest, c)
 })

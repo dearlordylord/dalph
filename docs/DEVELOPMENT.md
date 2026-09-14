@@ -387,16 +387,15 @@ dispatch supplies `candidate_sha`, `reviewed_base_sha`, and `repository`; the
 first two values must each be exactly 40 lowercase hexadecimal characters.
 The workflow checks out that candidate, verifies the reviewed Base exists,
 installs with pnpm 10.29.3 on Node 24.20.0, and runs `pnpm build` before any
-provider credential is made available.
+controlled-provider credential is generated.
 
 The workflow has one constant concurrency group,
 `production-live-qualification`, with `cancel-in-progress: false`, regardless
 of dispatch ref or SHA. The `qualify` job requires approval from the protected
-GitHub environment named `production-live-qualification`. Its two protected
-secrets are mapped only into the single live-command step:
-`DALPH_LIVE_GITHUB_TOKEN` (scoped to issue and label mutation in the configured
-repository) and `DALPH_LIVE_CODEX_PROVIDER_CREDENTIAL`. Ordinary CI never
-invokes this command.
+GitHub environment named `production-live-qualification`. Its one protected
+secret, `DALPH_LIVE_GITHUB_TOKEN`, is mapped only into the single live-command
+step and is scoped to issue and label mutation in the configured repository.
+Ordinary CI never invokes this command.
 
 Four preceding matrix jobs capture shards 0 and 1 for both the dedicated ARM
 profile and the two-CPU stressed profile with `pnpm check:ci:formal:shard`.
@@ -459,7 +458,11 @@ the formal evidence files, and the built entry
 controller once with one absolute `--manifest` locator. The controller owns
 fixture creation, the one shipped production Run, build/hash/provenance
 evidence, exact cleanup, and the redacted artifact; this wrapper has no retry
-or resume path. A failed or ambiguous provider boundary therefore leaves the
+or resume path. The controller generates a fresh random throwaway credential
+for the loopback Responses provider per invocation, binds it only to the
+isolated `CODEX_HOME` config under
+`DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL`, and passes that value only to the
+controlled shipped child. A failed or ambiguous provider boundary therefore leaves the
 Run and exact retained locators for manual inspection rather than launching a
 second command.
 
@@ -472,7 +475,10 @@ The uploaded artifact must contain no credential, raw environment,
 provider-private session, prompt, response, raw Actions API payload, or private
 absolute workspace/home locator. The disposable-repository secret remains named
 `DALPH_LIVE_GITHUB_TOKEN` until the runtime maps it to the shipped child’s
-`GITHUB_TOKEN` boundary.
+`GITHUB_TOKEN` boundary. `CODEX_HOME` contains the controlled fixture config;
+`codexExecutorPrivateStateDirectory` contains only Dalph-owned attempt and
+app-server ownership state. The generated provider value is never serialized or
+logged.
 
 The focused contract mapping is:
 
@@ -514,22 +520,19 @@ fine-grained personal access token restricted to that repository with:
 
 The token does not need Actions, Administration, Pull requests, or organization
 permissions. Use a separately authorized browser session if you later delete
-the repository. The Codex credential below is an OpenAI API project key allowed
-to run the installed Codex CLI. Read both values without echoing them and keep
-them in environment variables only:
+the repository. Complete the ordinary Codex CLI login separately; Dalph uses
+that ambient Codex authentication and does not request an OpenAI API key. Read
+the GitHub token without echoing it and keep it in the environment only:
 
 ```bash
 read -r -s -p "Disposable-repository GitHub token: " GITHUB_TOKEN
 printf '\n'
 export GITHUB_TOKEN
-read -r -s -p "Disposable Codex provider credential: " DALPH_CODEX_PROVIDER_CREDENTIAL
-printf '\n'
-export DALPH_CODEX_PROVIDER_CREDENTIAL
 ```
 
-Do not put either value in shell history, a Git remote URL, the JSON document,
-the repository, SQLite, or an evidence directory. Dalph reads exactly
-`GITHUB_TOKEN` and `DALPH_CODEX_PROVIDER_CREDENTIAL` and redacts known
+Do not put the token in shell history, a Git remote URL, the JSON document, the
+repository, SQLite, or an evidence directory. Dalph reads exactly
+`GITHUB_TOKEN` and redacts it from known
 configuration failures.
 
 Set the repository identity, create an exact disposable local root, clone the
@@ -604,27 +607,27 @@ repository.
 
 Create disjoint sibling locations under the disposable root. The two worktree
 roots must not contain each other or the repository/private state. The Journal
-database, evidence root, Codex state directory, and Integrator private-store
+database, evidence root, Codex executor-private state directory, and Integrator private-store
 file must also be pairwise disjoint. Every path below is normalized and
 absolute because it is derived from the absolute `mktemp` root.
 
 ```bash
 export DALPH_DEMO_JOURNAL="${DALPH_DEMO_ROOT}/journal.sqlite"
 export DALPH_DEMO_EVIDENCE="${DALPH_DEMO_ROOT}/evidence"
-export DALPH_DEMO_CODEX_STATE="${DALPH_DEMO_ROOT}/codex-state"
+export DALPH_DEMO_CODEX_EXECUTOR_PRIVATE_STATE="${DALPH_DEMO_ROOT}/codex-executor-private"
 export DALPH_DEMO_INTEGRATOR_STORE="${DALPH_DEMO_ROOT}/integrator-private.json"
 export DALPH_DEMO_TASK_WORKTREES="${DALPH_DEMO_ROOT}/task-worktrees"
 export DALPH_DEMO_INTEGRATOR_WORKTREES="${DALPH_DEMO_ROOT}/integrator-worktrees"
 export DALPH_DEMO_CONFIG="${DALPH_DEMO_ROOT}/production.json"
 mkdir -p \
   "${DALPH_DEMO_EVIDENCE}" \
-  "${DALPH_DEMO_CODEX_STATE}" \
+  "${DALPH_DEMO_CODEX_EXECUTOR_PRIVATE_STATE}" \
   "${DALPH_DEMO_TASK_WORKTREES}" \
   "${DALPH_DEMO_INTEGRATOR_WORKTREES}"
 chmod 700 \
   "${DALPH_DEMO_ROOT}" \
   "${DALPH_DEMO_EVIDENCE}" \
-  "${DALPH_DEMO_CODEX_STATE}" \
+  "${DALPH_DEMO_CODEX_EXECUTOR_PRIVATE_STATE}" \
   "${DALPH_DEMO_TASK_WORKTREES}" \
   "${DALPH_DEMO_INTEGRATOR_WORKTREES}"
 
@@ -634,7 +637,7 @@ import { writeFileSync } from "node:fs"
 const requiredEnvironment = [
   "DALPH_CODEX_EXECUTABLE",
   "DALPH_DEMO_BASE_SHA",
-  "DALPH_DEMO_CODEX_STATE",
+  "DALPH_DEMO_CODEX_EXECUTOR_PRIVATE_STATE",
   "DALPH_DEMO_COMMON_DIRECTORY",
   "DALPH_DEMO_CONFIG",
   "DALPH_DEMO_EVIDENCE",
@@ -661,15 +664,14 @@ const configuration = {
   journalDatabase: process.env.DALPH_DEMO_JOURNAL,
   evidenceStoreRoot: process.env.DALPH_DEMO_EVIDENCE,
   plannedAttemptWorktreeRoot: process.env.DALPH_DEMO_TASK_WORKTREES,
-  codexStateDirectory: process.env.DALPH_DEMO_CODEX_STATE,
+  codexExecutorPrivateStateDirectory: process.env.DALPH_DEMO_CODEX_EXECUTOR_PRIVATE_STATE,
   integratorCandidateWorktreeRoot: process.env.DALPH_DEMO_INTEGRATOR_WORKTREES,
   integratorPrivateStore: process.env.DALPH_DEMO_INTEGRATOR_STORE,
   activationInterval: "1 minute",
   failureCooldown: "5 seconds",
   codexExecutable: process.env.DALPH_CODEX_EXECUTABLE,
   codexClientName: "dalph-production-walkthrough",
-  codexClientVersion: "1.0.0",
-  codexProvider: "openai"
+  codexClientVersion: "1.0.0"
 }
 
 writeFileSync(process.env.DALPH_DEMO_CONFIG, `${JSON.stringify(configuration, null, 2)}\n`, {
@@ -678,11 +680,11 @@ writeFileSync(process.env.DALPH_DEMO_CONFIG, `${JSON.stringify(configuration, nu
 NODE
 ```
 
-Those are all 19 non-secret
-`ProductionRepositoryHostConfiguration` document fields. The CLI injects the
-GitHub target parsed from the command and the two redacted credentials parsed
-from the environment; adding `target`, `githubToken`, or
-`codexProviderCredential` to the JSON is rejected as an excess property.
+The JSON contains only non-secret `ProductionRepositoryHostConfiguration` fields.
+The CLI injects the GitHub target parsed from the command and the redacted
+`GITHUB_TOKEN` credential; adding `target` or `githubToken` to the JSON is
+rejected as an excess property. Codex authentication remains in the invoking
+CLI environment and is not copied into this document.
 
 #### 4. Run and read the public output
 
@@ -746,7 +748,8 @@ The run can change each owning system:
   exact resources whose disposition is proven; unreadable, foreign, or
   ambiguous resources are preserved and block unsafe successor work.
 - The Codex executable starts app-server processes and provider threads using
-  the environment credential. Executor state stays under `codexStateDirectory`;
+  the ambient Codex CLI authentication. Executor state stays under
+  `codexExecutorPrivateStateDirectory`;
   Integrator thread/candidate facts stay in `integratorPrivateStore` and the
   candidate-worktree root. Public output omits provider-private transcripts and
   session data.
@@ -836,7 +839,7 @@ the local root with this guarded command. It moves the complete root into a
 fresh sibling retention directory, so the local files remain recoverable:
 
 ```bash
-unset GITHUB_TOKEN DALPH_CODEX_PROVIDER_CREDENTIAL
+unset GITHUB_TOKEN
 (
 case "${DALPH_DEMO_ROOT##*/}" in
   dalph-production-walkthrough.?*) ;;

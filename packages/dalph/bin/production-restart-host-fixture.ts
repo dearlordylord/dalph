@@ -48,7 +48,7 @@ const validRawConfiguration = (input: RestartFixtureInput) => {
     journalDatabase: input.journalDatabase,
     evidenceStoreRoot: join(input.root, "evidence"),
     plannedAttemptWorktreeRoot: join(input.root, "planned-attempts"),
-    codexStateDirectory: join(input.root, "codex-state"),
+    codexExecutorPrivateStateDirectory: join(input.root, "codex-executor-private"),
     integratorCandidateWorktreeRoot: join(input.root, "integrator-candidates"),
     integratorPrivateStore: join(input.root, "integrator-private.json"),
     activationInterval: "1 minute",
@@ -56,9 +56,7 @@ const validRawConfiguration = (input: RestartFixtureInput) => {
     codexExecutable: "/usr/local/bin/codex",
     codexClientName: "dalph",
     codexClientVersion: "0.0.0",
-    codexProvider: "openai",
-    githubToken: "github-secret",
-    codexProviderCredential: "codex-secret"
+    githubToken: "github-secret"
   }
 }
 

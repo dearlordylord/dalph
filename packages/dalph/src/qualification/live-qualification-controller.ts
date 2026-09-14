@@ -12,7 +12,6 @@ import {
   ProductionCliRecord,
   type ProductionConfigurationLocator
 } from "../application/production-cli.js"
-import { ProductionCodexStateDirectory } from "../application/production-configuration.js"
 
 const canonicalAbsoluteLocator = (subject: string) =>
   Schema.NonEmptyString.check(
@@ -30,8 +29,10 @@ export const ProductionLiveBuiltEntry = canonicalAbsoluteLocator("live qualifica
 export type ProductionLiveBuiltEntry = typeof ProductionLiveBuiltEntry.Type
 
 /** Locates the exact private Codex home made for this qualification invocation. */
-export const ProductionLiveCodexHome = ProductionCodexStateDirectory
-export type ProductionLiveCodexHome = ProductionCodexStateDirectory
+export const ProductionLiveCodexHome = canonicalAbsoluteLocator("live qualification Codex home").pipe(
+  Schema.brand("ProductionLiveCodexHome")
+)
+export type ProductionLiveCodexHome = typeof ProductionLiveCodexHome.Type
 
 /** Locates the exact Node executable used to start the shipped Dalph entry. */
 export const ProductionLiveChildExecutable = canonicalAbsoluteLocator("live qualification child executable").pipe(
@@ -77,7 +78,8 @@ export interface ProductionLiveQualificationInvocation {
   readonly configuration: ProductionConfigurationLocator
   readonly target: GithubIssueTarget
   readonly githubToken: Redacted.Redacted<string>
-  readonly codexProviderCredential: Redacted.Redacted<string>
+  /** Generated per qualification invocation for the isolated loopback provider only. */
+  readonly controlledProviderCredential: Redacted.Redacted<string>
 }
 
 /** Exact process request for the one public production command. */
@@ -172,7 +174,7 @@ export const productionLiveQualificationChildRequest = (
   environment: {
     CODEX_HOME: invocation.codexHome,
     GITHUB_TOKEN: Redacted.value(invocation.githubToken),
-    DALPH_CODEX_PROVIDER_CREDENTIAL: Redacted.value(invocation.codexProviderCredential),
+    DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL: Redacted.value(invocation.controlledProviderCredential),
     GIT_OPTIONAL_LOCKS: "0"
   }
 })

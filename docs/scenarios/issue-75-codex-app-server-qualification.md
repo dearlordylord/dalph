@@ -22,6 +22,43 @@ fabricate terminal success or safe suspension. Retries reuse a proven exact
 thread or replace only a conclusively empty pre-turn allocation; they never
 send a second task turn after an ambiguity-crossing turn request.
 
+## Issue #307 qualification starts one isolated controlled-provider child
+
+The protected qualification job is the affected operator boundary. Before the
+job starts, GitHub has supplied only its repository token through the protected
+`DALPH_LIVE_GITHUB_TOKEN` secret; no OpenAI, API, or Codex-provider secret is
+configured. The controller has one disposable checkout and an empty temporary
+fixture root. The controlled loopback Responses endpoint is the provider used
+by this qualification only; it never calls OpenAI.
+
+When the job invokes the shipped qualification command, the outer controller
+creates a fresh random throwaway credential for that invocation. It passes the
+credential only to the controlled child under
+`DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL`, and passes that child an isolated
+`CODEX_HOME` whose `config.toml` names the same qualification-specific env key.
+The child receives the ordinary GitHub token separately. Dalph's
+`codexExecutorPrivateStateDirectory` is a different path containing only
+attempt/app-server ownership state; `codexHome` contains only controlled Codex
+configuration. The controller does not serialize, log, publish, or return the
+throwaway value, and its redaction checks reject output that would expose it.
+
+If setup or the child exits before qualification completes, the controller
+retains the existing exact cleanup disposition and never retries by reusing the
+credential. A retry starts a new invocation with a distinct generated value.
+The workflow refuses to start without `DALPH_LIVE_GITHUB_TOKEN`; it does not
+look for or require an external provider credential. A failure from the
+loopback endpoint is a controlled qualification failure, not permission to
+fall back to OpenAI or to another provider.
+
+### Acceptance-test mapping
+
+| Qualification outcome | Executable evidence |
+| --- | --- |
+| The protected workflow requires only the GitHub secret and contains no external provider secret. | `production live workflow exposes only the GitHub secret to the protected qualification` |
+| Each invocation generates a distinct throwaway credential, passes it only under the qualification-specific key, and keeps it out of serialized/logged output. | `production qualification controller generates and redacts one fresh controlled-provider credential per invocation` |
+| Controlled `codexHome` and Dalph-owned `codexExecutorPrivateStateDirectory` are distinct, and the isolated config names the qualification key. | `production live qualification fixture separates Codex home from executor private state` |
+| The loopback controlled provider remains local and does not call OpenAI. | `controlled qualification provider serves loopback responses without an OpenAI call` |
+
 The qualification runner builds the checked-in Dalph host, verifies Codex
 `0.149.0`, and runs the same suite on Linux and macOS in
 `.github/workflows/codex-app-server-qualification.yml`. The raw-protocol tests

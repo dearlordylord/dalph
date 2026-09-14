@@ -18,16 +18,12 @@ const application = Effect.scoped(
       "DALPH_LIVE_QUALIFICATION_MANIFEST"
     )
     const githubToken = yield* Config.redacted("DALPH_LIVE_GITHUB_TOKEN")
-    const codexProviderCredential = yield* Config.redacted("DALPH_CODEX_PROVIDER_CREDENTIAL")
     const fs = yield* FileSystem.FileSystem
     const input = yield* fs
       .readFileString(locator)
       .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))))
     const manifest = yield* decodeProductionLiveQualificationManifest(input)
-    const outcome = yield* runProductionLiveQualificationRuntime(manifest, {
-      githubToken,
-      codexProviderCredential
-    }).pipe(
+    const outcome = yield* runProductionLiveQualificationRuntime(manifest, { githubToken }).pipe(
       Effect.provide(githubGraphqlClientLayer({ token: githubToken }).pipe(Layer.provide(NodeHttpClient.layerUndici)))
     )
     return outcome._tag === "Qualified" ? outcome : yield* Effect.fail(outcome)

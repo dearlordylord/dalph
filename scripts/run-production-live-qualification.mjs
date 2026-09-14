@@ -26,7 +26,11 @@ const exactSha = /^[0-9a-f]{40}$/u
 const repository = /^[^\s/]+\/[^\s/]+$/u
 const positiveInteger = /^[1-9][0-9]*$/u
 const hostedFormalJobLimitSeconds = 16 * 60
-const secretEnvironmentNames = new Set(["GITHUB_TOKEN", "DALPH_LIVE_GITHUB_TOKEN", "DALPH_CODEX_PROVIDER_CREDENTIAL"])
+const secretEnvironmentNames = new Set([
+  "GITHUB_TOKEN",
+  "DALPH_LIVE_GITHUB_TOKEN",
+  "DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL"
+])
 const secretEnvironmentPattern = /(TOKEN|SECRET|CREDENTIAL|PASSWORD|PRIVATE_KEY)/iu
 
 const requiredEnvironmentNames = [
@@ -58,8 +62,7 @@ const requiredEnvironmentNames = [
   "GITHUB_REPOSITORY",
   "GITHUB_SERVER_URL",
   "GITHUB_SHA",
-  "DALPH_LIVE_GITHUB_TOKEN",
-  "DALPH_CODEX_PROVIDER_CREDENTIAL"
+  "DALPH_LIVE_GITHUB_TOKEN"
 ]
 
 const valueOf = (environment, name) => {
@@ -609,11 +612,10 @@ const environmentWithoutSecrets = (environment) =>
     )
   )
 
-/** Keep the current repository's Actions token out of the controller and target child. */
+/** Keep the current repository's Actions token and ambient secrets out of the controller and target child. */
 const environmentForLiveChild = (environment) => ({
   ...environmentWithoutSecrets(environment),
-  DALPH_LIVE_GITHUB_TOKEN: valueOf(environment, "DALPH_LIVE_GITHUB_TOKEN"),
-  DALPH_CODEX_PROVIDER_CREDENTIAL: valueOf(environment, "DALPH_CODEX_PROVIDER_CREDENTIAL")
+  DALPH_LIVE_GITHUB_TOKEN: valueOf(environment, "DALPH_LIVE_GITHUB_TOKEN")
 })
 
 const readGitCandidateSha = async ({ environment, repositoryRoot }) => {
@@ -641,7 +643,7 @@ const invocationFor = ({ builtEntry, environment, manifest, repositoryRoot }) =>
 
 /**
  * Validate one protected invocation, observe the checked-out candidate, and
- * launch the shipped controller exactly once. A provider or child failure is
+ * launch the shipped controller exactly once. A controlled-provider or child failure is
  * returned to the caller; this wrapper has no retry or resume path.
  */
 export const runProductionLiveQualification = async ({
