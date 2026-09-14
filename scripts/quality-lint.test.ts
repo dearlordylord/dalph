@@ -170,7 +170,12 @@ const initializeFixtureRepository = (fixture: LintFixture) =>
       ["-c", "user.name=Dalph Test", "-c", "user.email=dalph@example.invalid", "commit", "--quiet", "-m", "baseline"],
       "Commit lint fixture baseline"
     )
+    const head = yield* invoke(["rev-parse", "HEAD"], "Read lint fixture baseline")
+    return head.output.trim()
   })
+
+const runFixtureGit = (fixture: LintFixture, arguments_: ReadonlyArray<string>, name: string) =>
+  run({ arguments_, executable: "git", fixture, name, timeoutMilliseconds: 10_000 })
 
 describe.sequential("quality lint integration", () => {
   it.effect("preserves the raw signal failure and fixture until exact process-group absence is proved", () =>
@@ -263,6 +268,87 @@ describe.sequential("quality lint integration", () => {
   )
 
   it.effect(
+    "a planned attempt checks prerequisite changes from its pinned base after origin/master advances",
+    () =>
+      withFixtures((fixture) =>
+        Effect.gen(function* () {
+          const prerequisiteFile = yield* copyFixture(fixture.directory, "functional")
+          const plannedBaseSha = yield* initializeFixtureRepository(fixture)
+          yield* Effect.tryPromise(async () =>
+            writeFile(prerequisiteFile, `${await readFile(prerequisiteFile, "utf8")}\n// prerequisite change\n`)
+          )
+          yield* runFixtureGit(fixture, ["add", "."], "Stage prerequisite lint change")
+          yield* runFixtureGit(
+            fixture,
+            [
+              "-c",
+              "user.name=Dalph Test",
+              "-c",
+              "user.email=dalph@example.invalid",
+              "commit",
+              "--quiet",
+              "-m",
+              "prerequisite"
+            ],
+            "Commit prerequisite lint change"
+          )
+          const prerequisiteHead = (yield* runFixtureGit(
+            fixture,
+            ["rev-parse", "HEAD"],
+            "Read prerequisite lint head"
+          )).output.trim()
+          yield* runFixtureGit(
+            fixture,
+            ["update-ref", "refs/remotes/origin/master", prerequisiteHead],
+            "Advance moving lint base"
+          )
+          yield* Effect.tryPromise(async () =>
+            writeFile(
+              join(fixture.directory, "scripts", "fixture.ts"),
+              `${await readFile(join(fixture.directory, "scripts", "fixture.ts"), "utf8")}\n// dependent change\n`
+            )
+          )
+
+          const pinned = yield* run({
+            arguments_: [qualityLintRunner, "--changed"],
+            environment: { ...process.env, DALPH_DIAGNOSTICS_BASE: plannedBaseSha },
+            fixture,
+            executable: process.execPath,
+            name: "Pinned-base changed lint integration subprocess",
+            timeoutMilliseconds: 20_000
+          })
+          expect(pinned.exitCode).toBe(1)
+          expect(pinned.output).toContain(`"reference":"${plannedBaseSha}"`)
+          expect(pinned.output).toContain(`"resolvedSha":"${plannedBaseSha}"`)
+          expect(pinned.output).toContain(`"comparisonSha":"${plannedBaseSha}"`)
+          expect(pinned.output).toContain('"source":"explicit"')
+          expect(pinned.output).toContain('"changedPaths":["packages/dalph/src/functional.ts","scripts/fixture.ts"]')
+          expect(pinned.output).toContain('"selectedPaths":["packages/dalph/src/functional.ts","scripts/fixture.ts"]')
+          expect(pinned.output).toContain("functional/immutable-data")
+
+          const { DALPH_DIAGNOSTICS_BASE: _inheritedBase, ...movingEnvironment } = process.env
+          const moving = yield* run({
+            arguments_: [qualityLintRunner, "--changed"],
+            environment: movingEnvironment,
+            fixture,
+            executable: process.execPath,
+            name: "Moving-base changed lint integration subprocess",
+            timeoutMilliseconds: 20_000
+          })
+          expect(moving.exitCode).toBe(0)
+          expect(moving.output).toContain('"reference":"origin/master"')
+          expect(moving.output).toContain(`"resolvedSha":"${prerequisiteHead}"`)
+          expect(moving.output).toContain(`"comparisonSha":"${prerequisiteHead}"`)
+          expect(moving.output).toContain('"source":"moving-default"')
+          expect(moving.output).toContain('"changedPaths":["scripts/fixture.ts"]')
+          expect(moving.output).toContain('"selectedPaths":["scripts/fixture.ts"]')
+          expect(moving.output).not.toContain("functional/immutable-data")
+        })
+      ),
+    30_000
+  )
+
+  it.effect(
     "changed lint checks one changed compatibility file without linting an unrelated file",
     () =>
       withFixtures((fixture) =>
@@ -299,7 +385,7 @@ describe.sequential("quality lint integration", () => {
       withFixtures((fixture) =>
         Effect.gen(function* () {
           yield* copyFixture(fixture.directory, "functional")
-          yield* initializeFixtureRepository(fixture)
+          const head = yield* initializeFixtureRepository(fixture)
           const result = yield* run({
             arguments_: [qualityLintRunner, "--changed"],
             environment: { ...process.env, DALPH_DIAGNOSTICS_BASE: "HEAD" },
@@ -308,7 +394,15 @@ describe.sequential("quality lint integration", () => {
             name: "Empty changed compatibility lint integration subprocess",
             timeoutMilliseconds: 20_000
           })
-          expect(result).toEqual({ exitCode: 0, output: "", outputLineCount: 0 })
+          expect(result.exitCode).toBe(0)
+          expect(result.outputLineCount).toBe(1)
+          expect(result.output).toContain('"command":"lint:changed"')
+          expect(result.output).toContain('"reference":"HEAD"')
+          expect(result.output).toContain(`"resolvedSha":"${head}"`)
+          expect(result.output).toContain(`"comparisonSha":"${head}"`)
+          expect(result.output).toContain('"source":"explicit"')
+          expect(result.output).toContain('"changedPaths":[]')
+          expect(result.output).toContain('"selectedPaths":[]')
         })
       ),
     30_000

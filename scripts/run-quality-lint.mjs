@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process"
 import { extname, join } from "node:path"
-import { changedRepositoryFiles } from "./changed-files.mjs"
+import { changedRepositoryFileSelection } from "./changed-files.mjs"
+import { diagnosticBaseInput, reportDiagnosticSelection } from "./diagnostic-selection-evidence.mjs"
 import { discoverQualityFiles } from "./quality-file-discovery.mjs"
 import { selectCompatibilityFiles } from "./quality-lint-policy.mjs"
 
@@ -11,14 +12,24 @@ const fix = options.has("--fix")
 const census = options.has("--census")
 let failedChecks = 0
 const changedOnly = options.has("--changed")
-const baseReference = process.env["DALPH_DIAGNOSTICS_BASE"] ?? "origin/master"
+const diagnosticBase = diagnosticBaseInput()
 const compatibility = options.has("--compatibility")
 const withoutCompatibility = options.has("--without-compatibility")
 const allFiles = await discoverQualityFiles()
-const requestedFiles =
-  changedOnly && explicitFiles.length === 0 ? changedRepositoryFiles({ baseReference }) : explicitFiles
+const changedSelection =
+  changedOnly && explicitFiles.length === 0
+    ? changedRepositoryFileSelection({ baseReference: diagnosticBase.baseReference })
+    : undefined
+const requestedFiles = changedSelection?.files ?? explicitFiles
 const selectedFiles =
   requestedFiles.length === 0 && !changedOnly ? allFiles : await discoverQualityFiles({ explicitFiles: requestedFiles })
+if (changedSelection !== undefined)
+  reportDiagnosticSelection({
+    command: "lint:changed",
+    selection: changedSelection,
+    selectedPaths: selectedFiles,
+    source: diagnosticBase.source
+  })
 const lintableExtensions = new Set([".js", ".mjs", ".ts", ".tsx"])
 // Compatibility lint loads the complete TypeScript import graph even when a
 // single explicit file is selected. Give that child process enough heap for

@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { test } from "node:test"
-import { completeFormalChangedPaths } from "./changed-files.mjs"
+import { changedRepositoryFileSelection, completeFormalChangedPaths } from "./changed-files.mjs"
 
 const git = (root, ...arguments_) => execFileSync("git", arguments_, { cwd: root, encoding: "utf8" }).trim()
 
@@ -64,6 +64,38 @@ test("completeFormalChangedPaths retains deletion and both sides of a rename", (
       "packages/dalph/src/runtime.ts",
       "specs/model.qnt"
     ])
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test("changedRepositoryFileSelection keeps an older pinned base after the moving reference advances", () => {
+  const fixture = createFixture()
+  try {
+    fixture.write("packages/dalph/src/prerequisite.ts", "prerequisite\n")
+    git(fixture.root, "add", ".")
+    git(fixture.root, "commit", "-qm", "prerequisite")
+    const prerequisiteHead = git(fixture.root, "rev-parse", "HEAD")
+    git(fixture.root, "update-ref", "refs/remotes/origin/master", prerequisiteHead)
+    fixture.write("packages/dalph/src/dependent.ts", "dependent\n")
+
+    const pinned = changedRepositoryFileSelection({ baseReference: fixture.baseSha, cwd: fixture.root })
+    const moving = changedRepositoryFileSelection({ baseReference: "origin/master", cwd: fixture.root })
+
+    assert.deepEqual(pinned, {
+      baseReference: fixture.baseSha,
+      resolvedBaseSha: fixture.baseSha,
+      comparisonBaseSha: fixture.baseSha,
+      headSha: prerequisiteHead,
+      files: ["packages/dalph/src/dependent.ts", "packages/dalph/src/prerequisite.ts"]
+    })
+    assert.deepEqual(moving, {
+      baseReference: "origin/master",
+      resolvedBaseSha: prerequisiteHead,
+      comparisonBaseSha: prerequisiteHead,
+      headSha: prerequisiteHead,
+      files: ["packages/dalph/src/dependent.ts"]
+    })
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
   }

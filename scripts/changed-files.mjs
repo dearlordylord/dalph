@@ -1,10 +1,44 @@
 import { execFileSync, spawnSync } from "node:child_process"
 import { existsSync } from "node:fs"
+import { join } from "node:path"
 
-const gitLines = (gitArguments) => {
-  const result = spawnSync("git", gitArguments, { encoding: "utf8" })
+const gitPaths = (gitArguments, cwd) => {
+  const result = spawnSync("git", gitArguments, { cwd, encoding: "utf8" })
   if (result.status !== 0) return []
-  return result.stdout.split("\n").filter((line) => line.length > 0)
+  return result.stdout.split("\0").filter((path) => path.length > 0)
+}
+
+const gitCommit = (reference, cwd) => {
+  const result = spawnSync("git", ["rev-parse", "--verify", "--end-of-options", `${reference}^{commit}`], {
+    cwd,
+    encoding: "utf8"
+  })
+  return result.status === 0 ? result.stdout.trim() : undefined
+}
+
+/** Select the development-loop comparison base and every extant changed path, with reproducible Git evidence. */
+export const changedRepositoryFileSelection = ({ baseReference, cwd = process.cwd() }) => {
+  const headSha = gitCommit("HEAD", cwd)
+  const resolvedBaseSha = gitCommit(baseReference, cwd)
+  const mergeBase =
+    resolvedBaseSha === undefined
+      ? undefined
+      : spawnSync("git", ["merge-base", "HEAD", resolvedBaseSha], { cwd, encoding: "utf8" })
+  const comparisonBaseSha = mergeBase?.status === 0 ? mergeBase.stdout.trim() : undefined
+  const committed =
+    comparisonBaseSha === undefined
+      ? []
+      : gitPaths(
+          ["diff", "--name-only", "--no-renames", "-z", "--diff-filter=ACMR", `${comparisonBaseSha}...HEAD`],
+          cwd
+        )
+  const working = gitPaths(["diff", "--name-only", "--no-renames", "-z", "--diff-filter=ACMR", "HEAD"], cwd)
+  const untracked = gitPaths(["ls-files", "--others", "--exclude-standard", "-z"], cwd)
+  const files = [...new Set([...committed, ...working, ...untracked])]
+    .filter((file) => existsSync(join(cwd, file)))
+    .toSorted((left, right) => left.localeCompare(right))
+
+  return { baseReference, resolvedBaseSha, comparisonBaseSha, headSha, files }
 }
 
 /**
@@ -12,16 +46,8 @@ const gitLines = (gitArguments) => {
  * reference, plus the working tree. A missing base reference yields the working tree alone rather than the whole
  * repository, so an unfetched worktree checks less instead of checking everything.
  */
-export const changedRepositoryFiles = ({ baseReference }) => {
-  const mergeBase = spawnSync("git", ["merge-base", "HEAD", baseReference], { encoding: "utf8" })
-  const committed =
-    mergeBase.status === 0
-      ? gitLines(["diff", "--name-only", "--diff-filter=ACMR", `${mergeBase.stdout.trim()}...HEAD`])
-      : []
-  const working = gitLines(["diff", "--name-only", "--diff-filter=ACMR", "HEAD"])
-  const untracked = gitLines(["ls-files", "--others", "--exclude-standard"])
-  return [...new Set([...committed, ...working, ...untracked])].filter((file) => existsSync(file))
-}
+export const changedRepositoryFiles = ({ baseReference, cwd = process.cwd() }) =>
+  changedRepositoryFileSelection({ baseReference, cwd }).files
 
 const git = (arguments_, cwd) =>
   execFileSync("git", arguments_, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })

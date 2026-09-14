@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process"
 import { join } from "node:path"
-import { changedRepositoryFiles } from "./changed-files.mjs"
+import { changedRepositoryFileSelection } from "./changed-files.mjs"
+import { diagnosticBaseInput, reportDiagnosticSelection } from "./diagnostic-selection-evidence.mjs"
 import { ensureEffectTsgoPlatformBinaryExecutable } from "./effect-tsgo-platform-binary.mjs"
 import { selectDiagnosticTargets } from "./effect-diagnostics-scope.mjs"
 
@@ -8,7 +9,7 @@ const requestedArguments = process.argv.slice(2)
 const changedOnly = requestedArguments.includes("--changed")
 const passedArguments = requestedArguments.filter((argument) => argument !== "--changed")
 const hasTarget = passedArguments.some((argument) => argument === "--file" || argument === "--project")
-const baseReference = process.env["DALPH_DIAGNOSTICS_BASE"] ?? "origin/master"
+const diagnosticBase = diagnosticBaseInput()
 const maximumChangedFiles = Number(process.env["DALPH_DIAGNOSTICS_MAXIMUM_FILES"] ?? "12")
 
 const diagnosticsExecutable = join(
@@ -37,19 +38,28 @@ if (!changedOnly || hasTarget) {
   process.exit(settle(runDiagnostics(targetArguments)))
 }
 
+const changedSelection = changedRepositoryFileSelection({ baseReference: diagnosticBase.baseReference })
 const { files, scope } = selectDiagnosticTargets({
-  changedFiles: changedRepositoryFiles({ baseReference }),
+  changedFiles: changedSelection.files,
   maximumFiles: maximumChangedFiles
+})
+reportDiagnosticSelection({
+  command: `typecheck:effect:changed:${scope}`,
+  selection: changedSelection,
+  selectedPaths: scope === "files" ? files : scope === "project" ? ["tsconfig.json"] : [],
+  source: diagnosticBase.source
 })
 
 if (scope === "none") {
-  console.log(`No changed TypeScript files against ${baseReference}; Effect diagnostics have nothing to check.`)
+  console.log(
+    `No changed TypeScript files against ${diagnosticBase.baseReference}; Effect diagnostics have nothing to check.`
+  )
   process.exit(0)
 }
 
 if (scope === "project") {
   console.log(
-    `More than ${maximumChangedFiles} changed TypeScript files against ${baseReference}; checking the whole project.`
+    `More than ${maximumChangedFiles} changed TypeScript files against ${diagnosticBase.baseReference}; checking the whole project.`
   )
   process.exit(settle(runDiagnostics(["--project", "tsconfig.json", ...passedArguments])))
 }

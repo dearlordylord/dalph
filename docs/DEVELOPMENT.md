@@ -110,11 +110,11 @@ All commands below use `pnpm`. Script definitions live in
 | `vitest run <test-file>` | Focused development check; `test` runs deterministic Vitest. |
 | `typecheck` | Strict TypeScript-Go with Effect errors; suggestions remain nonfatal. |
 | `typecheck:effect` | Dedicated strict Effect pass over the whole project; errors and warnings fail, JSON output. |
-| `typecheck:effect:changed` | Effect pass over files changed against `origin/master`; falls back to the project pass above twelve changed files. |
+| `typecheck:effect:changed` | Effect pass over files changed against `DALPH_DIAGNOSTICS_BASE`, or the explicitly reported moving `origin/master` fallback; falls back to the project pass above twelve changed files. |
 | `lint:code` | Type-aware Oxlint, compatibility ESLint, dprint; warnings fail. File-scoped runs check the compatibility graph only with `--compatibility`. |
-| `lint:changed` | Oxlint, compatibility ESLint, and dprint over files changed against `origin/master`; compatibility ESLint receives only the changed TypeScript files. |
+| `lint:changed` | Oxlint, compatibility ESLint, and dprint over files changed against `DALPH_DIAGNOSTICS_BASE`, or the explicitly reported moving `origin/master` fallback; compatibility ESLint receives only the changed TypeScript files. |
 | `check:preflight --candidate=<base sha>` | Pre-freeze structural census: report all independent typecheck, Effect, lint/format, cycle, complexity, duplication, CI classifier, secrets and artifact failures. Runs no coverage, catalog, Lab or MBT suites. |
-| `check:fast` | Development-loop tier: `typecheck`, `lint:changed`, `typecheck:effect:changed`. |
+| `check:fast` | Development-loop tier: `typecheck`, `lint:changed`, `typecheck:effect:changed`. A planned task attempt sets `DALPH_DIAGNOSTICS_BASE` to its exact Base SHA. |
 | `check:circular` | Reject runtime dependency cycles. |
 | `check:complexity` | Reject increased per-file counts of production functions above complexity eight. |
 | `check:duplicates` | Enforce the configured duplication budget. |
@@ -146,6 +146,31 @@ the edit loop. This scope applies to compatibility ESLint only;
 documented fallback to the whole-project pass when more than twelve files
 change. When the changed set has no compatible TypeScript/TSX file, the
 compatibility process is not started.
+
+For a planned task attempt, pin the immutable Base SHA already supplied by the
+attempt context:
+
+```sh
+DALPH_DIAGNOSTICS_BASE="<planned Base SHA>" pnpm check:fast
+```
+
+`lint:changed` and `typecheck:effect:changed` each print one JSON selection line
+containing the input reference, its resolved commit, the actual merge base,
+HEAD, the sorted changed paths, and the sorted paths selected for that command.
+Without `DALPH_DIAGNOSTICS_BASE`, they keep the convenient `origin/master`
+development fallback and label it
+`moving-default`; that output must not be reported as evidence for an immutable
+planned-attempt base. An empty path list remains a successful no-op.
+
+This is repository-tooling behavior only. It does not change a Dalph command,
+workflow decision, provider boundary, journal fact, retry, cleanup action, or
+runtime-visible result, so no Dalph runtime operational scenario applies.
+
+| Changed-file tooling scenario | Acceptance test |
+| --- | --- |
+| A planned attempt starts from Base commit B. A prerequisite commit P lands and `origin/master` advances to P before the dependent edit. The maintainer runs changed lint with `DALPH_DIAGNOSTICS_BASE=B`; the selection names B and includes both the prerequisite file and dependent file. | `scripts/quality-lint.test.ts`: `a planned attempt checks prerequisite changes from its pinned base after origin/master advances`; `scripts/changed-files.test.mjs`: `changedRepositoryFileSelection keeps an older pinned base after the moving reference advances` |
+| A developer runs changed lint without a planned Base. The tool labels `origin/master` as the moving default, resolves P, and selects only paths changed after P. | `scripts/quality-lint.test.ts`: `a planned attempt checks prerequisite changes from its pinned base after origin/master advances` |
+| A maintainer runs changed lint from an unchanged worktree with an explicit Base equal to HEAD. The tool names the resolved Base and reports empty changed and selected path lists without starting a linter. | `scripts/quality-lint.test.ts`: `changed lint is a no-op when the changed selection is empty` |
 
 Hosted CI keeps separate quality and formal entry points: hosted formal runs the
 complete profile fresh when an input that can affect it changed, while hosted
