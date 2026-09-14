@@ -30,6 +30,7 @@ active_replaceable_watches = {}
 obsolete_replaceable_watches = {}
 awaiting_parent_replacements = {}
 unresolved_replaceable_events = {}
+expected_arrival_moves = {}
 paused = False
 
 
@@ -189,6 +190,8 @@ def drain(validate=False):
             elif mask & IGNORED:
                 paths = watches.pop(wd, {"<unknown watch>"})
                 for path in paths:
+                    if expected_arrival_moves.get(path) == wd:
+                        expected_arrival_moves.pop(path)
                     obsolete = path in obsolete_replaceable_watches.get(wd, set())
                     if obsolete:
                         obsolete_replaceable_watches[wd].discard(path)
@@ -211,6 +214,13 @@ def drain(validate=False):
                     if path in obsolete_replaceable_watches.get(wd, set()):
                         continue
                     if path in replaceable and not mask & (0x2 | 0x8):
+                        # fsnotify may report MOVED_TO to the parent before
+                        # MOVE_SELF to the arriving inode. If we installed its
+                        # watch between those calls, this one self-move belongs
+                        # to the already observed arrival, not a lost watch.
+                        if not name and mask == 0x800 and expected_arrival_moves.get(path) == wd:
+                            expected_arrival_moves.pop(path)
+                            continue
                         if name and mask & (0x80 | 0x100):
                             awaiting = awaiting_parent_replacements.get(path, 0)
                             if awaiting > 0:
@@ -220,6 +230,8 @@ def drain(validate=False):
                                     awaiting_parent_replacements[path] = awaiting - 1
                             elif install_replaceable_generation(path):
                                 unresolved_replaceable_events.pop(path, None)
+                            if mask & 0x80 and path in active_replaceable_watches:
+                                expected_arrival_moves[path] = active_replaceable_watches[path]
                             continue
                         unresolved_replaceable_events[path] = unresolved_replaceable_events.get(path, 0) | mask
                         continue

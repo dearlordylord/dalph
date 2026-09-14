@@ -294,6 +294,12 @@ try:
         scope["drain"](validate=True)
         assert output.getvalue() == "", output.getvalue()
         assert scope["active_replaceable_watches"][config] != old_wd
+        # fsnotify reports parent MOVED_TO before move-self on the source
+        # inode. A watch installed between those notifications sees MOVE_SELF
+        # on the NEW descriptor, even though that inode is already at config.
+        queued.append(event(scope["active_replaceable_watches"][config], 0x800))
+        scope["drain"](validate=True)
+        assert output.getvalue() == "", output.getvalue()
         queued.append(event(old_wd, 0x400) + event(old_wd, 0x8000))
         scope["drain"](validate=True)
         assert output.getvalue() == "", output.getvalue()
@@ -301,6 +307,13 @@ try:
         queued.append(event(scope["active_replaceable_watches"][config], 0x2))
         scope["drain"](validate=True)
         assert '"kind": "dirty"' in output.getvalue(), output.getvalue()
+        output.seek(0)
+        output.truncate()
+        # The observed arrival explains only one self-move, not arbitrary
+        # later moves of that inode with no corresponding parent evidence.
+        queued.append(event(scope["active_replaceable_watches"][config], 0x800))
+        scope["drain"](validate=True)
+        assert "watch was not re-established" in output.getvalue(), output.getvalue()
 finally:
     os.read = real_read
     os.close(scope["fd"])

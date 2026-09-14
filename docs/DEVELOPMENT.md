@@ -229,7 +229,12 @@ Creating an unrelated linked worktree can atomically replace the shared Git
 config while adding only that other branch's settings. The input observer
 installs a watch on the replacement as soon as the parent-directory replacement
 event and the new file establish that generation. A later removal event for the
-obsolete inode retires only that old generation. The guard compares the effective
+obsolete inode retires only that old generation.
+Linux can also deliver the replacement inode's own move notification after the
+parent notification caused its watch to be installed. The observer recognizes
+one such notification for that exact watched generation; further self-moves,
+watch removal, and writes still require replacement evidence or invalidate.
+The guard compares the effective
 local configuration for the candidate worktree; foreign `branch.*` sections do
 not invalidate qualification, while a candidate-branch or repository-wide
 setting change does. More than one config generation before a comparison fails
