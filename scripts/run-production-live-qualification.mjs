@@ -18,8 +18,8 @@ export const productionLiveQualificationFormalValidatorBin =
 export const productionLiveQualificationEnvironment = "production-live-qualification"
 export const productionLiveQualificationOptIn = "DALPH_RUN_PRODUCTION_LIVE_QUALIFICATION"
 export const formalQualificationJobNames = Object.freeze({
-  dedicated: "Dedicated formal evidence",
-  stressed: "Stressed formal evidence"
+  dedicated: Object.freeze(["Dedicated formal evidence shard 0", "Dedicated formal evidence shard 1"]),
+  stressed: Object.freeze(["Stressed formal evidence shard 0", "Stressed formal evidence shard 1"])
 })
 
 const exactSha = /^[0-9a-f]{40}$/u
@@ -48,10 +48,7 @@ const requiredEnvironmentNames = [
   "DALPH_LIVE_QUALIFICATION_MANIFEST",
   "DALPH_LIVE_QUALIFICATION_ARTIFACT",
   "DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS",
-  "DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED",
-  "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED",
-  "DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED_METADATA",
-  "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED_METADATA",
+  "DALPH_LIVE_QUALIFICATION_FORMAL_ROOT",
   "DALPH_LIVE_QUALIFICATION_PROTECTED_ENVIRONMENT",
   "GITHUB_ACTIONS",
   "GITHUB_WORKFLOW",
@@ -139,20 +136,30 @@ const readJsonObject = async (path, name) => {
   return value
 }
 
-const githubRunInputs = (environment) => ({
+const githubRunIdentity = (environment) => ({
   repository: valueOf(environment, "GITHUB_REPOSITORY"),
   runAttempt: positiveSafeInteger(
     Number(positiveIntegerInput(environment, "GITHUB_RUN_ATTEMPT")),
     "GITHUB_RUN_ATTEMPT"
   ),
-  runId: positiveSafeInteger(Number(positiveIntegerInput(environment, "GITHUB_RUN_ID")), "GITHUB_RUN_ID"),
+  runId: positiveSafeInteger(Number(positiveIntegerInput(environment, "GITHUB_RUN_ID")), "GITHUB_RUN_ID")
+})
+const githubRunInputs = (environment) => ({
+  ...githubRunIdentity(environment),
   token: valueOf(environment, "GITHUB_TOKEN")
 })
 
-const readFormalProfileMetadata = async ({ environment, kind, logPath, metadataPath }) => {
-  const metadata = await readJsonObject(metadataPath, `${kind} formal provenance`)
-  const { runAttempt, runId } = githubRunInputs(environment)
-  if (metadata.profile !== kind) throw new Error(`${kind} formal provenance profile is incorrect`)
+const formalShardPaths = (root, kind, shard) => ({
+  reportPath: nodePath.join(root, kind, `shard-${shard}`, "report.json"),
+  metadataPath: nodePath.join(root, kind, `shard-${shard}`, "provenance.json")
+})
+
+const readFormalShardMetadata = async ({ environment, kind, metadataPath, reportPath, shard }) => {
+  const metadata = await readJsonObject(metadataPath, `${kind} shard ${shard} formal provenance`)
+  const { runAttempt, runId } = githubRunIdentity(environment)
+  if (metadata.profile !== kind || metadata.shard !== shard) {
+    throw new Error(`${kind} shard ${shard} formal provenance identity is incorrect`)
+  }
   const expectedCondition =
     kind === "dedicated"
       ? { kind: "dedicated-hosted-job", runnerLabel: "ubuntu-24.04-arm" }
@@ -162,65 +169,58 @@ const readFormalProfileMetadata = async ({ environment, kind, logPath, metadataP
     typeof metadata.condition !== "object" ||
     Array.isArray(metadata.condition) ||
     Object.entries(expectedCondition).some(([name, value]) => metadata.condition[name] !== value)
-  ) {
-    throw new Error(`${kind} formal provenance execution condition is incorrect`)
-  }
+  )
+    throw new Error(`${kind} shard ${shard} formal provenance execution condition is incorrect`)
   const effectiveParallelism = positiveSafeInteger(
     metadata.condition.effectiveParallelism,
-    `${kind} formal effective parallelism`
+    `${kind} shard ${shard} formal effective parallelism`
   )
   let condition
   if (kind === "dedicated") {
     condition = { ...expectedCondition, effectiveParallelism }
   } else {
-    const hostParallelism = positiveSafeInteger(metadata.condition.hostParallelism, `${kind} formal host parallelism`)
-    if (effectiveParallelism !== 2 || hostParallelism <= effectiveParallelism) {
-      throw new Error(`${kind} formal provenance does not prove the declared CPU-affinity stress`)
+    const hostParallelism = positiveSafeInteger(
+      metadata.condition.hostParallelism,
+      `${kind} shard ${shard} formal host parallelism`
+    )
+    if (effectiveParallelism !== 2 || hostParallelism <= 2) {
+      throw new Error(`${kind} shard ${shard} formal provenance does not prove CPU-affinity stress`)
     }
     condition = { ...expectedCondition, hostParallelism, effectiveParallelism }
   }
   if (metadata.sourceSha !== valueOf(environment, "DALPH_LIVE_QUALIFICATION_SOURCE_SHA")) {
-    throw new Error(`${kind} formal provenance source SHA does not match the candidate`)
+    throw new Error(`${kind} shard ${shard} formal provenance source SHA does not match the candidate`)
   }
   if (metadata.reviewedBaseSha !== valueOf(environment, "DALPH_LIVE_QUALIFICATION_SOURCE_BASE_SHA")) {
-    throw new Error(`${kind} formal provenance Base SHA does not match the reviewed Base`)
+    throw new Error(`${kind} shard ${shard} formal provenance Base SHA does not match the reviewed Base`)
   }
   if (metadata.workflowName !== "Production live qualification") {
-    throw new Error(`${kind} formal provenance workflow is not the protected workflow`)
+    throw new Error(`${kind} shard ${shard} formal provenance workflow is not protected`)
   }
-  if (metadata.runId !== runId || metadata.runAttempt !== runAttempt) {
-    throw new Error(`${kind} formal provenance run does not match the current workflow attempt`)
-  }
-  if (metadata.jobName !== `formal-${kind}`) {
-    throw new Error(`${kind} formal provenance job does not match its formal worker`)
+  if (metadata.runId !== runId || metadata.runAttempt !== runAttempt || metadata.jobName !== "formal") {
+    throw new Error(`${kind} shard ${shard} formal provenance run attempt or worker is incorrect`)
   }
   if (typeof metadata.nodeVersion !== "string" || !/^24\.20\.\d+$/u.test(metadata.nodeVersion)) {
-    throw new Error(`${kind} formal provenance Node version is unsupported`)
+    throw new Error(`${kind} shard ${shard} formal provenance Node version is unsupported`)
   }
-  if (metadata.log !== "formal.log" || nodePath.basename(logPath) !== metadata.log) {
-    throw new Error(`${kind} formal provenance log name is not the downloaded formal log`)
+  if (metadata.report !== "report.json" || nodePath.basename(reportPath) !== metadata.report) {
+    throw new Error(`${kind} shard ${shard} formal report name is incorrect`)
   }
-  const setupInstallSeconds = nonnegativeSeconds(metadata.setupInstallSeconds, `${kind} setup/install duration`)
-  const formalSeconds = nonnegativeSeconds(metadata.formalSeconds, `${kind} formal duration`)
-  if (
-    !Array.isArray(metadata.negativeControls) ||
-    metadata.negativeControls.length === 0 ||
-    metadata.negativeControls.some((value) => typeof value !== "string" || value.length === 0)
-  ) {
-    throw new Error(`${kind} formal provenance negative controls are invalid`)
-  }
-  await requireReadableFile(logPath, `${kind} formal evidence`)
+  await requireReadableFile(reportPath, `${kind} shard ${shard} formal report`)
   return {
     condition,
-    formalSeconds,
-    log: logPath,
-    negativeControls: metadata.negativeControls,
+    formalSeconds: nonnegativeSeconds(metadata.formalSeconds, `${kind} shard ${shard} formal duration`),
     nodeVersion: metadata.nodeVersion,
     profile: kind,
+    reportPath,
     reviewedBaseSha: metadata.reviewedBaseSha,
     runAttempt,
     runId,
-    setupInstallSeconds,
+    setupInstallSeconds: nonnegativeSeconds(
+      metadata.setupInstallSeconds,
+      `${kind} shard ${shard} setup/install duration`
+    ),
+    shard,
     sourceSha: metadata.sourceSha,
     workflowName: metadata.workflowName
   }
@@ -263,8 +263,8 @@ const currentRunAttemptJobs = async ({ environment, fetchImpl = globalThis.fetch
   return payload.jobs
 }
 
-const resolveFormalJob = (jobs, kind, runId, runAttempt) => {
-  const name = formalQualificationJobNames[kind]
+const resolveFormalJob = (jobs, kind, shard, runId, runAttempt) => {
+  const name = formalQualificationJobNames[kind][shard]
   const matches = jobs.filter(
     (job) =>
       job !== null &&
@@ -274,47 +274,57 @@ const resolveFormalJob = (jobs, kind, runId, runAttempt) => {
       job.run_attempt === runAttempt
   )
   if (matches.length !== 1) {
-    throw new Error(`${kind} formal Actions job must resolve uniquely for the current run attempt`)
+    throw new Error(`${kind} shard ${shard} formal Actions job must resolve uniquely for the current run attempt`)
   }
   const job = matches[0]
   if (job.status !== "completed" || job.conclusion !== "success") {
-    throw new Error(`${kind} formal Actions job did not complete successfully`)
+    throw new Error(`${kind} shard ${shard} formal Actions job did not complete successfully`)
   }
   if (typeof job.started_at !== "string" || typeof job.completed_at !== "string") {
-    throw new Error(`${kind} formal Actions job timestamps are invalid`)
+    throw new Error(`${kind} shard ${shard} formal Actions job timestamps are invalid`)
   }
   const started = Date.parse(job.started_at)
   const completed = Date.parse(job.completed_at)
   if (!Number.isFinite(started) || !Number.isFinite(completed) || completed < started) {
-    throw new Error(`${kind} formal Actions job timestamps are invalid`)
+    throw new Error(`${kind} shard ${shard} formal Actions job timestamps are invalid`)
   }
   return {
     completeJobSeconds: (completed - started) / 1000,
-    id: positiveSafeInteger(job.id, `${kind} formal Actions job ID`),
-    name
+    completedAt: job.completed_at,
+    id: positiveSafeInteger(job.id, `${kind} shard ${shard} formal Actions job ID`),
+    name,
+    startedAt: job.started_at
   }
 }
 
-const enrichFormalMetadata = async ({ environment, job, kind, logPath, metadataPath }) => {
-  const profile = await readFormalProfileMetadata({ environment, kind, logPath, metadataPath })
+const enrichFormalMetadata = async ({ environment, job, kind, metadataPath, reportPath, shard }) => {
+  const profile = await readFormalShardMetadata({ environment, kind, shard, reportPath, metadataPath })
   if (
     job.completeJobSeconds < profile.setupInstallSeconds + profile.formalSeconds ||
     job.completeJobSeconds >= hostedFormalJobLimitSeconds
   ) {
-    throw new Error(`${kind} formal Actions job duration does not satisfy the hosted timing contract`)
+    throw new Error(`${kind} shard ${shard} Actions job duration does not satisfy the hosted timing contract`)
   }
   const enriched = {
     condition: profile.condition,
     completeJobSeconds: job.completeJobSeconds,
     formalSeconds: profile.formalSeconds,
-    job: { jobId: job.id, runId: profile.runId, workflow: "Production live qualification" },
-    log: "formal.log",
-    negativeControls: profile.negativeControls,
+    job: {
+      jobId: job.id,
+      name: job.name,
+      runAttempt: profile.runAttempt,
+      runId: profile.runId,
+      workflow: "Production live qualification"
+    },
+    completedAt: job.completedAt,
     nodeVersion: profile.nodeVersion,
     profile: profile.profile,
     protectedEnvironment: productionLiveQualificationEnvironment,
+    report: "report.json",
     runAttempt: profile.runAttempt,
+    shard,
     sourceSha: profile.sourceSha,
+    startedAt: job.startedAt,
     setupInstallSeconds: profile.setupInstallSeconds,
     workflowName: profile.workflowName
   }
@@ -326,39 +336,54 @@ const enrichFormalMetadata = async ({ environment, job, kind, logPath, metadataP
   return enriched
 }
 
-const suppliedFormalProfile = async ({ environment, kind, logPath, metadataPath }) => {
-  const profile = await readFormalProfileMetadata({ environment, kind, logPath, metadataPath })
-  const metadata = await readJsonObject(metadataPath, `${kind} formal provenance`)
-  const job = metadata.job
-  if (job === null || typeof job !== "object" || Array.isArray(job)) {
-    throw new Error(`${kind} formal provenance is missing the resolved Actions job`)
-  }
-  if (job.workflow !== "Production live qualification") {
-    throw new Error(`${kind} formal provenance job workflow is invalid`)
-  }
-  const jobId = positiveSafeInteger(job.jobId, `${kind} formal Actions job ID`)
-  const jobRunId = positiveSafeInteger(job.runId, `${kind} formal Actions run ID`)
-  const completeJobSeconds = nonnegativeSeconds(metadata.completeJobSeconds, `${kind} complete-job duration`)
-  if (jobRunId !== profile.runId) {
-    throw new Error(`${kind} formal provenance Actions run does not match the current attempt`)
-  }
-  let log
-  try {
-    log = await readFile(profile.log, "utf8")
-  } catch (error) {
-    throw new Error(`${kind} formal evidence log is not readable`, { cause: error })
-  }
+const suppliedFormalProfile = async ({ environment, formalRoot, kind }) => {
+  const shards = await Promise.all(
+    [0, 1].map(async (shard) => {
+      const paths = formalShardPaths(formalRoot, kind, shard)
+      const profile = await readFormalShardMetadata({ environment, kind, shard, ...paths })
+      const metadata = await readJsonObject(paths.metadataPath, `${kind} shard ${shard} formal provenance`)
+      const job = metadata.job
+      if (job === null || typeof job !== "object" || Array.isArray(job)) {
+        throw new Error(`${kind} shard ${shard} formal provenance is missing its Actions job`)
+      }
+      const completeJobSeconds = nonnegativeSeconds(
+        metadata.completeJobSeconds,
+        `${kind} shard ${shard} complete-job duration`
+      )
+      let reportSource
+      try {
+        reportSource = await readFile(profile.reportPath, "utf8")
+      } catch (error) {
+        throw new Error(`${kind} shard ${shard} formal report is not readable`, { cause: error })
+      }
+      return {
+        condition: profile.condition,
+        completeJobSeconds,
+        completedAt: metadata.completedAt,
+        formalSeconds: profile.formalSeconds,
+        job: {
+          jobId: positiveSafeInteger(job.jobId, `${kind} shard ${shard} Actions job ID`),
+          name: job.name,
+          runAttempt: positiveSafeInteger(job.runAttempt, `${kind} shard ${shard} Actions run attempt`),
+          runId: positiveSafeInteger(job.runId, `${kind} shard ${shard} Actions run ID`),
+          workflow: job.workflow
+        },
+        reportSource,
+        setupInstallSeconds: profile.setupInstallSeconds,
+        shard,
+        sourceSha: profile.sourceSha,
+        nodeVersion: profile.nodeVersion,
+        startedAt: metadata.startedAt
+      }
+    })
+  )
   return {
-    condition: profile.condition,
-    completeJobSeconds,
-    formalSeconds: profile.formalSeconds,
-    job: { jobId, runId: jobRunId, workflow: job.workflow },
-    log,
-    negativeControls: profile.negativeControls,
-    nodeVersion: profile.nodeVersion,
-    profileKind: profile.profile,
-    setupInstallSeconds: profile.setupInstallSeconds,
-    sourceSha: profile.sourceSha
+    nodeVersion: shards[0].nodeVersion,
+    profileKind: kind,
+    runAttempt: shards[0].job.runAttempt,
+    runId: shards[0].job.runId,
+    shards,
+    sourceSha: shards[0].sourceSha
   }
 }
 
@@ -372,18 +397,8 @@ export const buildFormalQualificationProvenance = async ({ environment, inputs }
     }
     const { Effect } = await import("effect")
     const effect = validator.requiredQualificationFormalProvenance(inputs.candidateSha, {
-      dedicated: await suppliedFormalProfile({
-        environment,
-        kind: "dedicated",
-        logPath: inputs.dedicatedFormal,
-        metadataPath: inputs.dedicatedFormalMetadata
-      }),
-      stressed: await suppliedFormalProfile({
-        environment,
-        kind: "stressed",
-        logPath: inputs.stressedFormal,
-        metadataPath: inputs.stressedFormalMetadata
-      })
+      dedicated: await suppliedFormalProfile({ environment, kind: "dedicated", formalRoot: inputs.formalRoot }),
+      stressed: await suppliedFormalProfile({ environment, kind: "stressed", formalRoot: inputs.formalRoot })
     })
     return await Effect.runPromise(effect)
   } catch (error) {
@@ -404,24 +419,25 @@ export const resolveFormalQualificationJobs = async ({
   }
   const { runAttempt, runId } = githubRunInputs(environment)
   const jobs = await currentRunAttemptJobs({ environment, fetchImpl })
-  const dedicated = resolveFormalJob(jobs, "dedicated", runId, runAttempt)
-  const stressed = resolveFormalJob(jobs, "stressed", runId, runAttempt)
-  if (dedicated.id === stressed.id) throw new Error("formal Actions job IDs must be distinct")
-  await enrichFormalMetadata({
-    environment,
-    kind: "dedicated",
-    job: dedicated,
-    logPath: exactLocator(environment, "DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED"),
-    metadataPath: exactLocator(environment, "DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED_METADATA")
-  })
-  await enrichFormalMetadata({
-    environment,
-    kind: "stressed",
-    job: stressed,
-    logPath: exactLocator(environment, "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED"),
-    metadataPath: exactLocator(environment, "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED_METADATA")
-  })
-  return { dedicated, stressed }
+  const formalRoot = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_FORMAL_ROOT")
+  const resolved = Object.fromEntries(
+    ["dedicated", "stressed"].map((kind) => [
+      kind,
+      [0, 1].map((shard) => resolveFormalJob(jobs, kind, shard, runId, runAttempt))
+    ])
+  )
+  const jobIds = Object.values(resolved)
+    .flat()
+    .map(({ id }) => id)
+  if (new Set(jobIds).size !== 4) throw new Error("all four formal Actions job IDs must be distinct")
+  await Promise.all(
+    Object.entries(resolved).flatMap(([kind, profileJobs]) =>
+      profileJobs.map((job, shard) =>
+        enrichFormalMetadata({ environment, job, kind, shard, ...formalShardPaths(formalRoot, kind, shard) })
+      )
+    )
+  )
+  return resolved
 }
 
 /** Validate the protected workflow's non-secret shape before any provider child starts. */
@@ -477,10 +493,7 @@ export const validateProductionLiveQualificationEnvironment = async (environment
   const manifest = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_MANIFEST")
   const artifact = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_ARTIFACT")
   const retainedLocators = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS")
-  const dedicatedFormal = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED")
-  const stressedFormal = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED")
-  const dedicatedFormalMetadata = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED_METADATA")
-  const stressedFormalMetadata = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED_METADATA")
+  const formalRoot = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_FORMAL_ROOT")
   const sourceRepository = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_SOURCE_REPOSITORY")
   const builtEntry = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_BUILT_ENTRY")
   const shippedEntry = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_SHIPPED_ENTRY")
@@ -498,10 +511,13 @@ export const validateProductionLiveQualificationEnvironment = async (environment
   }
   await requireReadableFile(builtEntry, "built production-live qualification controller")
   await requireReadableFile(shippedEntry, "built shipped Dalph entry")
-  await requireReadableFile(dedicatedFormal, "dedicated formal evidence")
-  await requireReadableFile(stressedFormal, "stressed formal evidence")
-  await requireReadableFile(dedicatedFormalMetadata, "dedicated formal provenance")
-  await requireReadableFile(stressedFormalMetadata, "stressed formal provenance")
+  for (const kind of ["dedicated", "stressed"]) {
+    for (const shard of [0, 1]) {
+      const paths = formalShardPaths(formalRoot, kind, shard)
+      await requireReadableFile(paths.reportPath, `${kind} shard ${shard} formal report`)
+      await requireReadableFile(paths.metadataPath, `${kind} shard ${shard} formal provenance`)
+    }
+  }
 
   return {
     candidateSha,
@@ -510,10 +526,7 @@ export const validateProductionLiveQualificationEnvironment = async (environment
     manifest,
     artifact,
     retainedLocators,
-    dedicatedFormal,
-    dedicatedFormalMetadata,
-    stressedFormal,
-    stressedFormalMetadata,
+    formalRoot,
     builtEntry,
     shippedEntry,
     codexExecutable,

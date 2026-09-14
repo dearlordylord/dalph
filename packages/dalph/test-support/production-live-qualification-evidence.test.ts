@@ -47,38 +47,69 @@ const applicationServerIdentity = CodexProcessIdentity.make("linux:307:pid:730")
 const startedAt = "2026-09-13T14:00:00.000Z"
 const endedAt = "2026-09-13T14:05:00.000Z"
 
-const formalProfileFields = (jobId: number) => ({
+const formalCommands = Array.from({ length: 105 }, (_value, position) => ({
+  position,
+  kind: "test" as const,
+  name: `formal command ${position}`,
+  args: ["test", `specs/formal-${position}.qnt`] as const,
+  verdict: {
+    acceptedExitCodes: [0] as const,
+    witnesses: [],
+    temporal: null,
+    collectedReplacementTest: false,
+    artifactPreparedAfter: false
+  },
+  result: "exit:0" as const,
+  obligationId: `00000000-0000-4000-8000-${String(position + 1).padStart(12, "0")}`,
+  durationMilliseconds: 1
+}))
+const formalProfileFields = (profileKind: "dedicated" | "stressed", jobId: number) => ({
   sourceSha,
   nodeVersion: "24.20.0",
-  job: { workflow: "Production live qualification" as const, runId: 71, jobId },
-  logDigest: digest(String(jobId % 10)),
-  setupInstallSeconds: 10,
+  runId: 71,
+  runAttempt: 1,
+  profileDigest: digest("9"),
   formalSeconds: 105,
-  completeJobSeconds: 115,
-  remainingHostedSeconds: 845,
-  hostedLimitSeconds: 960 as const,
-  commands: [],
+  completeProfileSeconds: 116,
+  shards: [0, 1].map((shard) => ({
+    shard,
+    condition:
+      profileKind === "dedicated"
+        ? { kind: "dedicated-hosted-job" as const, runnerLabel: "ubuntu-24.04-arm" as const, effectiveParallelism: 4 }
+        : {
+            kind: "cpu-affinity" as const,
+            runnerLabel: "ubuntu-latest" as const,
+            cpuList: "0-1" as const,
+            hostParallelism: 4,
+            effectiveParallelism: 2 as const
+          },
+    job: {
+      workflow: "Production live qualification" as const,
+      runId: 71,
+      runAttempt: 1,
+      jobId: jobId + shard,
+      name: `${profileKind === "dedicated" ? "Dedicated" : "Stressed"} formal evidence shard ${shard}`
+    },
+    reportDigest: digest(String((jobId + shard) % 10)),
+    positions: [shard],
+    setupInstallSeconds: 10,
+    formalSeconds: 105 - shard,
+    completeJobSeconds: 115,
+    remainingHostedSeconds: 845,
+    hostedLimitSeconds: 960 as const,
+    startedAt: "2026-09-13T12:00:00.000Z",
+    completedAt: "2026-09-13T12:01:55.000Z"
+  })),
+  commands: formalCommands,
   negativeControls: ["collected temporal mutant"] as const
 })
 const dedicatedFormalProfile = (jobId: number) => ({
   profileKind: "dedicated" as const,
-  condition: {
-    kind: "dedicated-hosted-job" as const,
-    runnerLabel: "ubuntu-24.04-arm" as const,
-    effectiveParallelism: 4
-  },
-  ...formalProfileFields(jobId)
+  ...formalProfileFields("dedicated", jobId)
 })
 const stressedFormalProfile = (jobId: number) => ({
   profileKind: "stressed" as const,
-  condition: {
-    kind: "cpu-affinity" as const,
-    runnerLabel: "ubuntu-latest" as const,
-    cpuList: "0-1" as const,
-    hostParallelism: 4,
-    effectiveParallelism: 2 as const
-  },
-  ...formalProfileFields(jobId)
+  ...formalProfileFields("stressed", jobId)
 })
 
 const validInput = Effect.fn("LiveEvidenceTest.validInput")(function* () {
@@ -112,9 +143,10 @@ const validInput = Effect.fn("LiveEvidenceTest.validInput")(function* () {
       job: "qualify",
       protectedEnvironment: "production-live-qualification"
     },
-    formal: QualificationFormalProvenance.cases.DedicatedAndStressed.make({
+    formal: yield* Schema.decodeUnknownEffect(QualificationFormalProvenance.cases.DedicatedAndStressed)({
+      _tag: "DedicatedAndStressed",
       dedicated: dedicatedFormalProfile(72),
-      stressed: stressedFormalProfile(73)
+      stressed: stressedFormalProfile(74)
     }),
     fixture: { repositoryNodeId, issueNodeId, labelNodeIds: [labelNodeId] },
     composition: {
@@ -312,7 +344,13 @@ it.effect("Alice receives only same-source protected hosted and required dedicat
         ...input,
         formal: QualificationFormalProvenance.cases.DedicatedAndStressed.make({
           dedicated: input.formal.dedicated,
-          stressed: { ...input.formal.stressed, job: input.formal.dedicated.job }
+          stressed: {
+            ...input.formal.stressed,
+            shards: [
+              { ...input.formal.stressed.shards[0], job: input.formal.dedicated.shards[0].job },
+              input.formal.stressed.shards[1]
+            ]
+          }
         })
       }
     ]) {

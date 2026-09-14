@@ -5,6 +5,8 @@ import { GitCommand, nodeGitCommandLayer } from "@dalph/orchestrator"
 import { Effect, FileSystem, Layer, Schema } from "effect"
 import { expect } from "vitest"
 import { quintGateCommandManifest } from "../../../scripts/quint-gate-command-manifest.mjs"
+import { createQuintEffectiveProfile } from "../../../scripts/quint-effective-profile.mjs"
+import { assertCompleteQuintHostedPartition, quintHostedProfileDigest } from "../../../scripts/quint-hosted-shards.mjs"
 import { HermeticFixtureContainer } from "./production-hermetic-controller.js"
 import { HermeticFixtureResource } from "../src/application/production-hermetic-contract.js"
 import {
@@ -217,41 +219,114 @@ it.effect("complete artifact schema rejects original unknown fields and free fai
   ).pipe(Effect.provide(NodeServices.layer), Effect.provide(NodeCrypto.layer))
 )
 
-const formalLog = () =>
-  [
-    ...quintGateCommandManifest.map(
-      ({ kind, name }) =>
-        `Quint command timing: ${kind} ${name} 1.00s result=${name.includes("temporal mutant") ? "exit:1" : "exit:0"}`
-    ),
-    "Quint phase timing: typecheck 15 command(s), 15.00s",
-    "Quint phase timing: test 46 command(s), 46.00s",
-    "Quint phase timing: sampled-run 23 command(s), 23.00s",
-    "Quint phase timing: verify 21 command(s), 21.00s",
-    "Complete Quint model gate: 105.00s (budget 750s)"
-  ].join("\n")
+const capturedOutput = (command: ReturnType<typeof createQuintEffectiveProfile>["commands"][number]) => {
+  const lines = command.verdict.witnesses.map(
+    (witness) => `${witness} was witnessed in 1 trace(s) out of 1 explored (100.00%)`
+  )
+  if (command.verdict.collectedReplacementTest) {
+    lines.push("ok safeSuspensionAndExactFreshFactsAtomicallyRecordCleanP2Test passed 1 test(s)")
+  }
+  if (command.verdict.temporal === "clean") lines.push("[ok] No violation found")
+  if (command.verdict.temporal === "violation") lines.push("[violation] Found an issue")
+  return `${lines.join("\n")}\n`
+}
+
+const shardReports = () => {
+  const effective = createQuintEffectiveProfile()
+  const binding = { runId: "1", runAttempt: "1", commitSha: sourceSha, nodeVersion: "24.20.0" }
+  return assertCompleteQuintHostedPartition(effective).map((shard) => {
+    const commands = shard.positions.map((position) => {
+      const command = effective.commands[position]
+      if (command === undefined) throw new Error(`missing formal command ${position}`)
+      return {
+        position,
+        name: command.name,
+        kind: command.kind,
+        executable: "/opt/node/bin/node",
+        obligationId: `00000000-0000-4000-8000-${String(position + 1).padStart(12, "0")}`,
+        args: command.args,
+        exitCode: command.verdict.acceptedExitCodes[0],
+        output: capturedOutput(command),
+        verdict: command.verdict
+      }
+    })
+    return {
+      version: 1,
+      binding,
+      profileDigest: quintHostedProfileDigest(effective),
+      shard: shard.shard,
+      shardCount: shard.shardCount,
+      report: {
+        version: 1,
+        entryPoint: "/workspace/node_modules/@informalsystems/quint/dist/src/cli.js",
+        profile: effective,
+        shard,
+        serverEndpoint: null,
+        commands,
+        timing: {
+          records: commands.map(({ exitCode, kind, name }) => ({
+            kind,
+            name,
+            durationMilliseconds: 1000,
+            result: `exit:${exitCode}`
+          })),
+          aggregates: Object.fromEntries(
+            ["typecheck", "test", "sampled-run", "verify"].map((kind) => [
+              kind,
+              {
+                count: commands.filter((command) => command.kind === kind).length,
+                durationMilliseconds: commands.filter((command) => command.kind === kind).length * 1000
+              }
+            ])
+          )
+        },
+        provenance: {
+          architecture: "arm64",
+          bytes: 1,
+          evaluatorPath: "/home/runner/evaluator",
+          evaluatorVersion: "v0.6.0",
+          platform: "linux",
+          quintPackageVersion: "0.32.0",
+          sha256: "a".repeat(64)
+        },
+        elapsedMilliseconds: shard.shard === 0 ? 105_000 : 104_000
+      }
+    }
+  })
+}
 
 const profile = (profileKind: "dedicated" | "stressed", jobId: number): SuppliedQualificationProfile => ({
   profileKind,
-  condition:
-    profileKind === "dedicated"
-      ? { kind: "dedicated-hosted-job", runnerLabel: "ubuntu-24.04-arm", effectiveParallelism: 4 }
-      : {
-          kind: "cpu-affinity",
-          runnerLabel: "ubuntu-latest",
-          cpuList: "0-1",
-          hostParallelism: 4,
-          effectiveParallelism: 2
-        },
   sourceSha,
   nodeVersion: "24.20.0",
-  job: { workflow: "Production live qualification", runId: 1, jobId },
-  log: formalLog(),
-  setupInstallSeconds: 10,
-  formalSeconds: 105,
-  completeJobSeconds: 115,
-  negativeControls: quintGateCommandManifest
-    .filter(({ name }) => name.includes("negative mutation profile") || name.includes("temporal mutant"))
-    .map(({ name }) => name)
+  runId: 1,
+  runAttempt: 1,
+  shards: shardReports().map((report, shard) => ({
+    shard,
+    condition:
+      profileKind === "dedicated"
+        ? { kind: "dedicated-hosted-job", runnerLabel: "ubuntu-24.04-arm", effectiveParallelism: 4 }
+        : {
+            kind: "cpu-affinity",
+            runnerLabel: "ubuntu-latest",
+            cpuList: "0-1",
+            hostParallelism: 4,
+            effectiveParallelism: 2
+          },
+    job: {
+      workflow: "Production live qualification",
+      runId: 1,
+      runAttempt: 1,
+      jobId: jobId + shard,
+      name: `${profileKind === "dedicated" ? "Dedicated" : "Stressed"} formal evidence shard ${shard}`
+    },
+    reportSource: `${JSON.stringify(report)}\n`,
+    setupInstallSeconds: 10,
+    formalSeconds: shard === 0 ? 105 : 104,
+    completeJobSeconds: 115,
+    startedAt: shard === 0 ? "2026-09-13T12:00:00.000Z" : "2026-09-13T12:00:01.000Z",
+    completedAt: shard === 0 ? "2026-09-13T12:01:55.000Z" : "2026-09-13T12:01:56.000Z"
+  }))
 })
 
 it.effect("Alice's byte digest matches the independent SHA256 known answer", () =>
@@ -274,7 +349,7 @@ it.effect("same-source supported dedicated and stressed evidence retains every o
     const result = yield* qualificationFormalProvenance(sourceSha, {
       _tag: "SuppliedProfiles",
       dedicated: profile("dedicated", 2),
-      stressed: profile("stressed", 3)
+      stressed: profile("stressed", 4)
     })
     expect(result._tag).toBe("DedicatedAndStressed")
     if (result._tag !== "DedicatedAndStressed") return yield* Effect.die("supplied profiles must be present")
@@ -289,15 +364,19 @@ it.effect("same-source supported dedicated and stressed evidence retains every o
       expect(value.negativeControls).toContain(
         "planned-attempt executor temporal mutant releasableEvidenceNeverReleasesPosition (TLC)"
       )
-      expect(value.completeJobSeconds).toBe(115)
-      expect(value.hostedLimitSeconds).toBe(960)
-      expect(value.setupInstallSeconds).toBe(10)
+      expect(value.formalSeconds).toBe(105)
+      expect(value.completeProfileSeconds).toBe(116)
+      expect(value.shards.map(({ shard }) => shard)).toEqual([0, 1])
+      expect(value.shards.map(({ hostedLimitSeconds }) => hostedLimitSeconds)).toEqual([960, 960])
+      expect(value.shards.every(({ setupInstallSeconds }) => setupInstallSeconds === 10)).toBe(true)
     }
-    expect(result.dedicated.job.jobId).not.toBe(result.stressed.job.jobId)
+    expect(
+      new Set([result.dedicated, result.stressed].flatMap(({ shards }) => shards.map(({ job }) => job.jobId))).size
+    ).toBe(4)
     expect(result.dedicated.profileKind).toBe("dedicated")
-    expect(result.dedicated.condition.kind).toBe("dedicated-hosted-job")
+    expect(result.dedicated.shards.every(({ condition }) => condition.kind === "dedicated-hosted-job")).toBe(true)
     expect(result.stressed.profileKind).toBe("stressed")
-    expect(result.stressed.condition).toEqual({
+    expect(result.stressed.shards[0].condition).toEqual({
       kind: "cpu-affinity",
       runnerLabel: "ubuntu-latest",
       cpuList: "0-1",
@@ -307,26 +386,28 @@ it.effect("same-source supported dedicated and stressed evidence retains every o
   })
 )
 
-it.effect("live qualification provenance requires two independent same-source formal jobs", () =>
+it.effect("live qualification provenance requires four independent same-source formal shard jobs", () =>
   Effect.gen(function* () {
     const result = yield* requiredQualificationFormalProvenance(sourceSha, {
       dedicated: profile("dedicated", 2),
-      stressed: profile("stressed", 3)
+      stressed: profile("stressed", 4)
     })
     expect(result._tag).toBe("DedicatedAndStressed")
     expect(result.dedicated.sourceSha).toBe(sourceSha)
     expect(result.stressed.sourceSha).toBe(sourceSha)
-    expect(result.dedicated.job.jobId).not.toBe(result.stressed.job.jobId)
+    expect(
+      new Set([result.dedicated, result.stressed].flatMap(({ shards }) => shards.map(({ job }) => job.jobId))).size
+    ).toBe(4)
     expect(
       (yield* requiredQualificationFormalProvenance(sourceSha, {
         dedicated: profile("dedicated", 2),
-        stressed: profile("stressed", 2)
+        stressed: profile("stressed", 3)
       }).pipe(Effect.flip)).operation
     ).toBe("ValidateProvenance")
     expect(
       (yield* requiredQualificationFormalProvenance(sourceSha, {
         dedicated: profile("dedicated", 2),
-        stressed: { ...profile("stressed", 3), job: { ...profile("stressed", 3).job, runId: 2 } }
+        stressed: { ...profile("stressed", 4), runId: 2 }
       }).pipe(Effect.flip)).operation
     ).toBe("ValidateProvenance")
   })
@@ -338,24 +419,23 @@ it.effect("stale substituted unsupported incomplete or over-budget provenance gr
       { ...profile("dedicated", 2), sourceSha: otherSha },
       { ...profile("dedicated", 2), nodeVersion: "22.22.2" },
       { ...profile("dedicated", 2), nodeVersion: "24.15.0" },
-      { ...profile("dedicated", 2), completeJobSeconds: 104 },
-      { ...profile("dedicated", 2), completeJobSeconds: 960 },
-      { ...profile("dedicated", 2), formalSeconds: 104 },
-      { ...profile("dedicated", 2), negativeControls: [] },
-      { ...profile("dedicated", 2), profileKind: "stressed" as const },
-      { ...profile("dedicated", 2), condition: profile("stressed", 2).condition },
+      { ...profile("dedicated", 2), shards: profile("dedicated", 2).shards.slice(0, 1) },
       {
         ...profile("dedicated", 2),
-        log: formalLog().replace(
-          "Quint command timing: typecheck planned-attempt executor model typecheck 1.00s result=exit:0\n",
-          ""
+        shards: profile("dedicated", 2).shards.map((shard) => ({ ...shard, completeJobSeconds: 960 }))
+      },
+      { ...profile("dedicated", 2), profileKind: "stressed" as const },
+      {
+        ...profile("dedicated", 2),
+        shards: profile("dedicated", 2).shards.map((shard, index) =>
+          index === 0 ? { ...shard, reportSource: "{}" } : shard
         )
       }
     ]) {
       const failure = yield* qualificationFormalProvenance(sourceSha, {
         _tag: "SuppliedProfiles",
         dedicated: changed,
-        stressed: profile("stressed", 3)
+        stressed: profile("stressed", 4)
       }).pipe(Effect.flip)
       expect(failure.operation).toBe("ValidateProvenance")
     }
@@ -363,14 +443,20 @@ it.effect("stale substituted unsupported incomplete or over-budget provenance gr
       (yield* qualificationFormalProvenance(sourceSha, {
         _tag: "SuppliedProfiles",
         dedicated: profile("dedicated", 2),
-        stressed: profile("stressed", 2)
+        stressed: profile("stressed", 3)
       }).pipe(Effect.flip)).operation
     ).toBe("ValidateProvenance")
     expect(
       (yield* qualificationFormalProvenance(sourceSha, {
         _tag: "SuppliedProfiles",
         dedicated: profile("dedicated", 2),
-        stressed: { ...profile("stressed", 3), condition: profile("dedicated", 2).condition }
+        stressed: {
+          ...profile("stressed", 4),
+          shards: profile("stressed", 4).shards.map((shard) => ({
+            ...shard,
+            condition: profile("dedicated", 2).shards[0]?.condition ?? shard.condition
+          }))
+        }
       }).pipe(Effect.flip)).operation
     ).toBe("ValidateProvenance")
   })

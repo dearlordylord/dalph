@@ -11,11 +11,7 @@ const qualificationResolver = await readFile(
   new URL("./run-production-live-qualification.mjs", import.meta.url),
   "utf8"
 )
-const dedicatedFormalJob = workflow.slice(
-  workflow.indexOf("  formal-dedicated:\n"),
-  workflow.indexOf("  formal-stressed:\n")
-)
-const stressedFormalJob = workflow.slice(workflow.indexOf("  formal-stressed:\n"), workflow.indexOf("  qualify:\n"))
+const formalJob = workflow.slice(workflow.indexOf("  formal:\n"), workflow.indexOf("  qualify:\n"))
 
 const jobEnvironment = (job) => job.slice(job.indexOf("    env:\n"), job.indexOf("    steps:\n"))
 
@@ -47,10 +43,9 @@ test("dispatch inputs and worker toolchain are exact and immutable", () => {
     "DALPH_LIVE_QUALIFICATION_JOB_ID",
     "DALPH_LIVE_QUALIFICATION_SHIPPED_ENTRY",
     "DALPH_LIVE_QUALIFICATION_PROTECTED_ENVIRONMENT",
-    "DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED_METADATA",
-    "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED_METADATA",
+    "DALPH_LIVE_QUALIFICATION_FORMAL_ROOT",
     "setupInstallSeconds",
-    "negativeControls",
+    "formalSeconds",
     "condition"
   ]) {
     assert.match(workflow, new RegExp(field, "u"))
@@ -63,45 +58,46 @@ test("job environments do not read runner context before GitHub assigns a runner
     qualifyJob.indexOf("      - name: Prepare live qualification paths\n"),
     qualifyJob.indexOf("      - name: Checkout exact candidate\n")
   )
-  for (const job of [dedicatedFormalJob, stressedFormalJob, qualifyJob]) {
+  for (const job of [formalJob, qualifyJob]) {
     assert.doesNotMatch(jobEnvironment(job), /\$\{\{\s*runner\./u)
   }
-  assert.equal((workflow.match(/evidence_dir="\$RUNNER_TEMP\/dalph-live-formal\//gu) ?? []).length, 2)
-  assert.equal((workflow.match(/DALPH_FORMAL_EVIDENCE_DIR=\$evidence_dir/gu) ?? []).length, 2)
+  assert.equal((workflow.match(/evidence_dir="\$RUNNER_TEMP\/dalph-live-formal\//gu) ?? []).length, 1)
+  assert.equal((workflow.match(/DALPH_FORMAL_EVIDENCE_DIR=\$evidence_dir/gu) ?? []).length, 1)
   for (const assignment of [
     "DALPH_LIVE_QUALIFICATION_PUBLICATION_CONTAINER=$RUNNER_TEMP/dalph-live-publication",
     "DALPH_LIVE_QUALIFICATION_MANIFEST=$RUNNER_TEMP/dalph-live-qualification/manifest.json",
     "DALPH_LIVE_QUALIFICATION_ARTIFACT=$RUNNER_TEMP/dalph-live-qualification/qualification.json",
     "DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS=$RUNNER_TEMP/dalph-live-publication/retained-locators.json",
-    "DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED=$RUNNER_TEMP/dalph-live-formal/dedicated/formal.log",
-    "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED=$RUNNER_TEMP/dalph-live-formal/stressed/formal.log",
-    "DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED_METADATA=$RUNNER_TEMP/dalph-live-formal/dedicated/provenance.json",
-    "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED_METADATA=$RUNNER_TEMP/dalph-live-formal/stressed/provenance.json"
+    "DALPH_LIVE_QUALIFICATION_FORMAL_ROOT=$RUNNER_TEMP/dalph-live-formal"
   ]) {
     assert.ok(qualificationPaths.includes(assignment), `missing qualification path assignment: ${assignment}`)
   }
   assert.match(qualificationPaths, /\}\s*>> "\$GITHUB_ENV"/u)
 })
 
-test("formal evidence is captured in dedicated and stressed jobs before one live job", () => {
-  assert.match(workflow, /^  formal-dedicated:$/mu)
-  assert.match(workflow, /^  formal-stressed:$/mu)
-  assert.match(dedicatedFormalJob, /pnpm check:ci:formal/u)
-  assert.match(stressedFormalJob, /pnpm check:ci:formal/u)
+test("four physical shard jobs capture dedicated and stressed evidence before one live job", () => {
+  assert.match(workflow, /^  formal:$/mu)
+  assert.match(formalJob, /name: \$\{\{ matrix\.label \}\} shard \$\{\{ matrix\.shard \}\}/u)
+  assert.equal((formalJob.match(/profile: dedicated/gu) ?? []).length, 2)
+  assert.equal((formalJob.match(/profile: stressed/gu) ?? []).length, 2)
+  assert.equal((formalJob.match(/runner: ubuntu-24\.04-arm/gu) ?? []).length, 2)
+  assert.equal((formalJob.match(/shard: 0/gu) ?? []).length, 2)
+  assert.equal((formalJob.match(/shard: 1/gu) ?? []).length, 2)
+  assert.match(formalJob, /pnpm check:ci:formal:shard --shard/u)
   assert.equal((workflow.match(/pnpm check:ci:formal/gu) ?? []).length, 2)
-  assert.match(dedicatedFormalJob, /DALPH_FORMAL_PROFILE_KIND: dedicated/u)
-  assert.match(dedicatedFormalJob, /DALPH_FORMAL_RUNNER_LABEL: ubuntu-24\.04-arm/u)
-  assert.doesNotMatch(dedicatedFormalJob, /taskset/u)
-  assert.match(stressedFormalJob, /DALPH_FORMAL_PROFILE_KIND: stressed/u)
-  assert.match(stressedFormalJob, /DALPH_FORMAL_STRESS_CPU_LIST: 0-1/u)
-  assert.match(
-    stressedFormalJob,
-    /taskset --cpu-list "\$DALPH_FORMAL_STRESS_CPU_LIST" pnpm check:ci:formal 2>&1 \| tee/u
-  )
-  assert.match(stressedFormalJob, /test "\$host_parallelism" -gt "\$effective_parallelism"/u)
-  assert.match(stressedFormalJob, /test "\$effective_parallelism" -eq 2/u)
+  assert.match(formalJob, /DALPH_FORMAL_PROFILE_KIND: \$\{\{ matrix\.profile \}\}/u)
+  assert.match(formalJob, /DALPH_FORMAL_RUNNER_LABEL: \$\{\{ matrix\.runner \}\}/u)
+  assert.match(formalJob, /DALPH_FORMAL_STRESS_CPU_LIST: 0-1/u)
+  assert.match(formalJob, /taskset --cpu-list "\$DALPH_FORMAL_STRESS_CPU_LIST" pnpm check:ci:formal:shard --shard/u)
+  assert.match(formalJob, /test "\$host_parallelism" -gt 2/u)
+  assert.match(formalJob, /test "\$effective_parallelism" -eq 2/u)
   assert.match(workflow, /upload-artifact@v4/u)
-  assert.match(workflow, /needs:\s*\[formal-dedicated, formal-stressed\]/u)
+  assert.match(workflow, /needs:\s*\[formal\]/u)
+  assert.match(
+    workflow,
+    /pattern: production-live-formal-\*-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/u
+  )
+  assert.match(workflow, /merge-multiple: true/u)
   assert.match(workflow, /Resolve current formal job provenance[\s\S]*?GITHUB_TOKEN: \$\{\{ github\.token \}\}/u)
   assert.match(workflow, /Resolve current formal job provenance[\s\S]*?--resolve-formal-jobs/u)
   assert.match(
@@ -112,11 +108,10 @@ test("formal evidence is captured in dedicated and stressed jobs before one live
   assert.match(workflow, /qualify:production-live/u)
 })
 
-test("successful Actions jobs supply the complete duration after their final uploads", () => {
-  assert.equal((workflow.match(/timeout-minutes: 16/gu) ?? []).length, 2)
-  assert.doesNotMatch(dedicatedFormalJob, /completeJobSeconds|completed-ms/u)
-  assert.doesNotMatch(stressedFormalJob, /completeJobSeconds|completed-ms/u)
-  assert.equal((workflow.match(/const log = "formal\.log"/gu) ?? []).length, 2)
+test("successful shard jobs supply complete timestamps after their final uploads", () => {
+  assert.equal((workflow.match(/timeout-minutes: 16/gu) ?? []).length, 1)
+  assert.doesNotMatch(formalJob, /completeJobSeconds|completed-ms/u)
+  assert.equal((workflow.match(/report: "report\.json"/gu) ?? []).length, 1)
   assert.match(qualificationResolver, /Date\.parse\(job\.started_at\)/u)
   assert.match(qualificationResolver, /Date\.parse\(job\.completed_at\)/u)
   assert.match(qualificationResolver, /completeJobSeconds: \(completed - started\) \/ 1000/u)

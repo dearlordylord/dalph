@@ -26,38 +26,44 @@ const fixture = async () => {
   await writeFile(shippedEntry, "#!/usr/bin/env node\n")
   const formal = {}
   for (const name of ["dedicated", "stressed"]) {
-    formal[name] = join(root, "formal", name, "formal.log")
-    formal[`${name}Metadata`] = join(root, "formal", name, "provenance.json")
-    await mkdir(join(root, "formal", name), { recursive: true })
-    await writeFile(formal[name], `${name} formal evidence\n`)
-    await writeFile(
-      formal[`${name}Metadata`],
-      `${JSON.stringify({
-        profile: name,
-        condition:
-          name === "dedicated"
-            ? { kind: "dedicated-hosted-job", runnerLabel: "ubuntu-24.04-arm", effectiveParallelism: 4 }
-            : {
-                kind: "cpu-affinity",
-                runnerLabel: "ubuntu-latest",
-                cpuList: "0-1",
-                hostParallelism: 4,
-                effectiveParallelism: 2
-              },
-        sourceSha: candidateSha,
-        reviewedBaseSha,
-        nodeVersion: "24.20.0",
-        workflowName: "Production live qualification",
-        runId: 701,
-        runAttempt: 1,
-        jobName: `formal-${name}`,
-        log: "formal.log",
-        setupInstallSeconds: 12,
-        formalSeconds: 108,
-        negativeControls: ["formal negative control"]
-      })}\n`
-    )
+    formal[name] = []
+    for (const shard of [0, 1]) {
+      const directory = join(root, "formal", name, `shard-${shard}`)
+      const report = join(directory, "report.json")
+      const metadata = join(directory, "provenance.json")
+      await mkdir(directory, { recursive: true })
+      await writeFile(report, `${JSON.stringify({ version: 1, report: { elapsedMilliseconds: 108000 } })}\n`)
+      await writeFile(
+        metadata,
+        `${JSON.stringify({
+          profile: name,
+          shard,
+          condition:
+            name === "dedicated"
+              ? { kind: "dedicated-hosted-job", runnerLabel: "ubuntu-24.04-arm", effectiveParallelism: 4 }
+              : {
+                  kind: "cpu-affinity",
+                  runnerLabel: "ubuntu-latest",
+                  cpuList: "0-1",
+                  hostParallelism: 4,
+                  effectiveParallelism: 2
+                },
+          sourceSha: candidateSha,
+          reviewedBaseSha,
+          nodeVersion: "24.20.0",
+          workflowName: "Production live qualification",
+          runId: 701,
+          runAttempt: 1,
+          jobName: "formal",
+          report: "report.json",
+          setupInstallSeconds: 12,
+          formalSeconds: 108
+        })}\n`
+      )
+      formal[name].push({ metadata, report })
+    }
   }
+  formal.root = join(root, "formal")
   const output = {
     manifest: join(root, "output", "manifest.json"),
     artifact: join(root, "output", "qualification.json"),
@@ -74,44 +80,69 @@ const fixture = async () => {
   return { codexExecutable, lockfile, root, formal, output }
 }
 
+const formalCommands = Array.from({ length: 105 }, (_value, position) => ({
+  position,
+  kind: "test",
+  name: `formal command ${position}`,
+  args: ["test", `specs/formal-${position}.qnt`],
+  verdict: {
+    acceptedExitCodes: [0],
+    witnesses: [],
+    temporal: null,
+    collectedReplacementTest: false,
+    artifactPreparedAfter: false
+  },
+  result: "exit:0",
+  obligationId: `00000000-0000-4000-8000-${String(position + 1).padStart(12, "0")}`,
+  durationMilliseconds: 1
+}))
+const formalProfileForManifest = (profileKind, jobStart) => ({
+  profileKind,
+  sourceSha: candidateSha,
+  nodeVersion: "24.20.0",
+  runId: 701,
+  runAttempt: 1,
+  profileDigest: "9".repeat(64),
+  formalSeconds: 105,
+  completeProfileSeconds: 121,
+  shards: [0, 1].map((shard) => ({
+    shard,
+    condition:
+      profileKind === "dedicated"
+        ? { kind: "dedicated-hosted-job", runnerLabel: "ubuntu-24.04-arm", effectiveParallelism: 4 }
+        : {
+            kind: "cpu-affinity",
+            runnerLabel: "ubuntu-latest",
+            cpuList: "0-1",
+            hostParallelism: 4,
+            effectiveParallelism: 2
+          },
+    job: {
+      workflow: "Production live qualification",
+      runId: 701,
+      runAttempt: 1,
+      jobId: jobStart + shard,
+      name: `${profileKind === "dedicated" ? "Dedicated" : "Stressed"} formal evidence shard ${shard}`
+    },
+    reportDigest: String(jobStart + shard)
+      .slice(-1)
+      .repeat(64),
+    positions: [shard],
+    setupInstallSeconds: 12,
+    formalSeconds: 105 - shard,
+    completeJobSeconds: 120,
+    remainingHostedSeconds: 840,
+    hostedLimitSeconds: 960,
+    startedAt: "2026-09-13T12:00:00.000Z",
+    completedAt: "2026-09-13T12:02:00.000Z"
+  })),
+  commands: formalCommands,
+  negativeControls: ["formal negative control"]
+})
 const formalForManifest = Object.freeze({
   _tag: "DedicatedAndStressed",
-  dedicated: {
-    profileKind: "dedicated",
-    condition: { kind: "dedicated-hosted-job", runnerLabel: "ubuntu-24.04-arm", effectiveParallelism: 4 },
-    sourceSha: candidateSha,
-    nodeVersion: "24.20.0",
-    job: { workflow: "Production live qualification", runId: 701, jobId: 812 },
-    logDigest: "0".repeat(64),
-    setupInstallSeconds: 12,
-    formalSeconds: 105,
-    completeJobSeconds: 120,
-    remainingHostedSeconds: 840,
-    hostedLimitSeconds: 960,
-    commands: [],
-    negativeControls: ["formal negative control"]
-  },
-  stressed: {
-    profileKind: "stressed",
-    condition: {
-      kind: "cpu-affinity",
-      runnerLabel: "ubuntu-latest",
-      cpuList: "0-1",
-      hostParallelism: 4,
-      effectiveParallelism: 2
-    },
-    sourceSha: candidateSha,
-    nodeVersion: "24.20.0",
-    job: { workflow: "Production live qualification", runId: 701, jobId: 813 },
-    logDigest: "1".repeat(64),
-    setupInstallSeconds: 12,
-    formalSeconds: 105,
-    completeJobSeconds: 120,
-    remainingHostedSeconds: 840,
-    hostedLimitSeconds: 960,
-    commands: [],
-    negativeControls: ["formal negative control"]
-  }
+  dedicated: formalProfileForManifest("dedicated", 812),
+  stressed: formalProfileForManifest("stressed", 814)
 })
 
 const decodeWithBuiltRuntimeSchema = async (manifest) => {
@@ -141,10 +172,7 @@ const environmentFor = (f, overrides = {}) => ({
   DALPH_LIVE_QUALIFICATION_MANIFEST: f.output.manifest,
   DALPH_LIVE_QUALIFICATION_ARTIFACT: f.output.artifact,
   DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS: f.output.retained,
-  DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED: f.formal.dedicated,
-  DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED: f.formal.stressed,
-  DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED_METADATA: f.formal.dedicatedMetadata,
-  DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED_METADATA: f.formal.stressedMetadata,
+  DALPH_LIVE_QUALIFICATION_FORMAL_ROOT: f.formal.root,
   DALPH_LIVE_QUALIFICATION_PROTECTED_ENVIRONMENT: "production-live-qualification",
   GITHUB_ACTIONS: "true",
   GITHUB_WORKFLOW: "Production live qualification",
@@ -170,6 +198,12 @@ const completedFormalJob = (id, name, completeJobSeconds = 120) => ({
   started_at: "2026-09-13T12:00:00Z",
   completed_at: new Date(Date.parse("2026-09-13T12:00:00Z") + completeJobSeconds * 1000).toISOString()
 })
+const completedFormalJobs = (duration = 120) => [
+  completedFormalJob(812, "Dedicated formal evidence shard 0", duration),
+  completedFormalJob(813, "Dedicated formal evidence shard 1", duration),
+  completedFormalJob(814, "Stressed formal evidence shard 0", duration),
+  completedFormalJob(815, "Stressed formal evidence shard 1", duration)
+]
 
 afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { force: true, recursive: true })
@@ -327,14 +361,11 @@ test("fails closed for a malformed reviewed base or non-absolute manifest locato
   }
 })
 
-test("resolves unique numeric formal job IDs and enriches only safe profile fields", async () => {
+test("resolves four unique numeric shard job IDs and retains truthful per-shard timing", async () => {
   const f = await fixture()
   const environment = { ...environmentFor(f), GITHUB_TOKEN: "github-secret" }
   const apiPayload = {
-    jobs: [
-      { ...completedFormalJob(812, "Dedicated formal evidence"), rawPayloadSecret: "must-not-be-written" },
-      completedFormalJob(813, "Stressed formal evidence")
-    ]
+    jobs: [{ ...completedFormalJobs()[0], rawPayloadSecret: "must-not-be-written" }, ...completedFormalJobs().slice(1)]
   }
   let request
   const result = await resolveFormalQualificationJobs({
@@ -347,29 +378,63 @@ test("resolves unique numeric formal job IDs and enriches only safe profile fiel
   })
 
   assert.deepEqual(result, {
-    dedicated: { completeJobSeconds: 120, id: 812, name: "Dedicated formal evidence" },
-    stressed: { completeJobSeconds: 120, id: 813, name: "Stressed formal evidence" }
+    dedicated: [
+      {
+        completeJobSeconds: 120,
+        completedAt: "2026-09-13T12:02:00.000Z",
+        id: 812,
+        name: "Dedicated formal evidence shard 0",
+        startedAt: "2026-09-13T12:00:00Z"
+      },
+      {
+        completeJobSeconds: 120,
+        completedAt: "2026-09-13T12:02:00.000Z",
+        id: 813,
+        name: "Dedicated formal evidence shard 1",
+        startedAt: "2026-09-13T12:00:00Z"
+      }
+    ],
+    stressed: [
+      {
+        completeJobSeconds: 120,
+        completedAt: "2026-09-13T12:02:00.000Z",
+        id: 814,
+        name: "Stressed formal evidence shard 0",
+        startedAt: "2026-09-13T12:00:00Z"
+      },
+      {
+        completeJobSeconds: 120,
+        completedAt: "2026-09-13T12:02:00.000Z",
+        id: 815,
+        name: "Stressed formal evidence shard 1",
+        startedAt: "2026-09-13T12:00:00Z"
+      }
+    ]
   })
   assert.match(request.url, /\/actions\/runs\/701\/attempts\/1\/jobs\?per_page=100$/u)
   assert.equal(request.options.headers.Authorization, "Bearer github-secret")
-  for (const name of ["dedicated", "stressed"]) {
-    const metadata = JSON.parse(await readFile(f.formal[`${name}Metadata`], "utf8"))
-    assert.equal(metadata.job.jobId, name === "dedicated" ? 812 : 813)
-    assert.equal(typeof metadata.job.jobId, "number")
-    assert.equal(metadata.job.workflow, "Production live qualification")
-    assert.equal(metadata.setupInstallSeconds, 12)
-    assert.equal(metadata.completeJobSeconds, 120)
-    assert.equal(metadata.log, "formal.log")
-    assert.equal(metadata.profile, name)
-    assert.equal(metadata.condition.kind, name === "dedicated" ? "dedicated-hosted-job" : "cpu-affinity")
-    if (name === "stressed") {
-      assert.equal(metadata.condition.cpuList, "0-1")
-      assert.equal(metadata.condition.hostParallelism, 4)
-      assert.equal(metadata.condition.effectiveParallelism, 2)
+  for (const [profileIndex, name] of ["dedicated", "stressed"].entries()) {
+    for (const shard of [0, 1]) {
+      const metadata = JSON.parse(await readFile(f.formal[name][shard].metadata, "utf8"))
+      assert.equal(metadata.job.jobId, 812 + profileIndex * 2 + shard)
+      assert.equal(typeof metadata.job.jobId, "number")
+      assert.equal(metadata.job.workflow, "Production live qualification")
+      assert.equal(metadata.job.runAttempt, 1)
+      assert.equal(metadata.setupInstallSeconds, 12)
+      assert.equal(metadata.completeJobSeconds, 120)
+      assert.equal(metadata.report, "report.json")
+      assert.equal(metadata.profile, name)
+      assert.equal(metadata.shard, shard)
+      assert.equal(metadata.condition.kind, name === "dedicated" ? "dedicated-hosted-job" : "cpu-affinity")
+      if (name === "stressed") {
+        assert.equal(metadata.condition.cpuList, "0-1")
+        assert.equal(metadata.condition.hostParallelism, 4)
+        assert.equal(metadata.condition.effectiveParallelism, 2)
+      }
+      assert.equal(metadata.rawPayloadSecret, undefined)
+      assert.equal(JSON.stringify(metadata).includes("must-not-be-written"), false)
+      assert.equal(JSON.stringify(metadata).includes(f.root), false)
     }
-    assert.equal(metadata.rawPayloadSecret, undefined)
-    assert.equal(JSON.stringify(metadata).includes("must-not-be-written"), false)
-    assert.equal(JSON.stringify(metadata).includes(f.root), false)
   }
 })
 
@@ -377,50 +442,9 @@ test("fails closed for duplicate or nonnumeric formal Actions job identities", a
   const f = await fixture()
   const environment = { ...environmentFor(f), GITHUB_TOKEN: "github-secret" }
   for (const jobs of [
-    [
-      {
-        id: 812,
-        name: "Dedicated formal evidence",
-        run_id: 701,
-        run_attempt: 1,
-        status: "completed",
-        conclusion: "success"
-      },
-      {
-        id: 813,
-        name: "Dedicated formal evidence",
-        run_id: 701,
-        run_attempt: 1,
-        status: "completed",
-        conclusion: "success"
-      },
-      {
-        id: 814,
-        name: "Stressed formal evidence",
-        run_id: 701,
-        run_attempt: 1,
-        status: "completed",
-        conclusion: "success"
-      }
-    ],
-    [
-      {
-        id: "812",
-        name: "Dedicated formal evidence",
-        run_id: 701,
-        run_attempt: 1,
-        status: "completed",
-        conclusion: "success"
-      },
-      {
-        id: 814,
-        name: "Stressed formal evidence",
-        run_id: 701,
-        run_attempt: 1,
-        status: "completed",
-        conclusion: "success"
-      }
-    ]
+    [...completedFormalJobs(), completedFormalJob(816, "Dedicated formal evidence shard 0")],
+    completedFormalJobs().map((job, index) => (index === 0 ? { ...job, id: "812" } : job)),
+    completedFormalJobs().map((job, index) => (index === 1 ? { ...job, id: 812 } : job))
   ]) {
     await assert.rejects(
       resolveFormalQualificationJobs({
@@ -437,41 +461,26 @@ test("rejects an Actions-reported formal job duration at the 16-minute cutoff", 
   await assert.rejects(
     resolveFormalQualificationJobs({
       environment,
-      fetchImpl: async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          jobs: [
-            completedFormalJob(812, "Dedicated formal evidence", 960),
-            completedFormalJob(813, "Stressed formal evidence")
-          ]
-        })
-      })
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ jobs: [...completedFormalJobs(960)] }) })
     }),
     /Actions job duration does not satisfy the hosted timing contract/u
   )
 })
 
-test("rejects an absolute formal log path from uploaded provenance", async () => {
+test("rejects an absolute formal report path from uploaded provenance", async () => {
   const f = await fixture()
   const environment = { ...environmentFor(f), GITHUB_TOKEN: "github-secret" }
-  const metadata = JSON.parse(await readFile(f.formal.dedicatedMetadata, "utf8"))
-  await writeFile(f.formal.dedicatedMetadata, `${JSON.stringify({ ...metadata, log: f.formal.dedicated })}\n`)
+  const metadata = JSON.parse(await readFile(f.formal.dedicated[0].metadata, "utf8"))
+  await writeFile(
+    f.formal.dedicated[0].metadata,
+    `${JSON.stringify({ ...metadata, report: f.formal.dedicated[0].report })}\n`
+  )
   await assert.rejects(
     resolveFormalQualificationJobs({
       environment,
-      fetchImpl: async () => ({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          jobs: [
-            completedFormalJob(812, "Dedicated formal evidence"),
-            completedFormalJob(813, "Stressed formal evidence")
-          ]
-        })
-      })
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ jobs: completedFormalJobs() }) })
     }),
-    /formal provenance log name is not the downloaded formal log/u
+    /formal report name is incorrect/u
   )
 })
 
@@ -487,23 +496,14 @@ test("rejects mislabeled or non-constraining formal profile conditions", async (
   ]) {
     const f = await fixture()
     const environment = { ...environmentFor(f), GITHUB_TOKEN: "github-secret" }
-    const metadata = JSON.parse(await readFile(f.formal.stressedMetadata, "utf8"))
-    await writeFile(f.formal.stressedMetadata, `${JSON.stringify(mutate(metadata))}\n`)
+    const metadata = JSON.parse(await readFile(f.formal.stressed[0].metadata, "utf8"))
+    await writeFile(f.formal.stressed[0].metadata, `${JSON.stringify(mutate(metadata))}\n`)
     await assert.rejects(
       resolveFormalQualificationJobs({
         environment,
-        fetchImpl: async () => ({
-          ok: true,
-          status: 200,
-          json: async () => ({
-            jobs: [
-              completedFormalJob(812, "Dedicated formal evidence"),
-              completedFormalJob(813, "Stressed formal evidence")
-            ]
-          })
-        })
+        fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ jobs: completedFormalJobs() }) })
       }),
-      /stressed formal provenance/u
+      /stressed shard 0 formal provenance/u
     )
   }
 })

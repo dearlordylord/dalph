@@ -28,136 +28,44 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  formal-dedicated:
-    name: Dedicated formal evidence
-    runs-on: ubuntu-24.04-arm
+  formal:
+    name: ${{ matrix.label }} shard ${{ matrix.shard }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 16
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: dedicated
+            label: Dedicated formal evidence
+            runner: ubuntu-24.04-arm
+            shard: 0
+          - profile: dedicated
+            label: Dedicated formal evidence
+            runner: ubuntu-24.04-arm
+            shard: 1
+          - profile: stressed
+            label: Stressed formal evidence
+            runner: ubuntu-latest
+            shard: 0
+          - profile: stressed
+            label: Stressed formal evidence
+            runner: ubuntu-latest
+            shard: 1
     env:
       DALPH_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
       DALPH_COVERAGE_BASE_SHA: ${{ inputs.reviewed_base_sha }}
-      DALPH_FORMAL_PROFILE_KIND: dedicated
-      DALPH_FORMAL_RUNNER_LABEL: ubuntu-24.04-arm
-      NODE_OPTIONS: --max-old-space-size=8192
-    steps:
-      - name: Start formal timing
-        run: |
-          evidence_dir="$RUNNER_TEMP/dalph-live-formal/dedicated"
-          echo "DALPH_FORMAL_EVIDENCE_DIR=$evidence_dir" >> "$GITHUB_ENV"
-          mkdir -p "$evidence_dir"
-          date +%s%3N > "$evidence_dir/started-ms"
-
-      - name: Checkout exact candidate
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.candidate_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Verify candidate and reviewed Base
-        run: |
-          [[ "$DALPH_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$DALPH_COVERAGE_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$DALPH_CANDIDATE_SHA"
-          git cat-file -e "$DALPH_COVERAGE_BASE_SHA^{commit}"
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          run_install: false
-          version: 10.29.3
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          cache: pnpm
-          node-version: 24.20.0
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Record setup timing
-        run: date +%s%3N > "$DALPH_FORMAL_EVIDENCE_DIR/install-complete-ms"
-
-      - name: Run dedicated formal evidence
-        run: |
-          set -o pipefail
-          effective_parallelism=$(node -p 'require("node:os").availableParallelism()')
-          test "$effective_parallelism" -gt 0
-          echo "DALPH_FORMAL_EFFECTIVE_PARALLELISM=$effective_parallelism" >> "$GITHUB_ENV"
-          pnpm check:ci:formal 2>&1 | tee "$DALPH_FORMAL_EVIDENCE_DIR/formal.log"
-
-      - name: Record dedicated formal provenance
-        if: always()
-        env:
-          DALPH_FORMAL_METADATA: ${{ runner.temp }}/dalph-live-formal/dedicated/provenance.json
-        run: |
-          node --input-type=module <<'NODE'
-          import { readFileSync, writeFileSync } from "node:fs"
-          import { parseProfileLog } from "./scripts/generate-quint-profile-evidence.mjs"
-          const timing = (name) => Number(readFileSync(`${process.env.DALPH_FORMAL_EVIDENCE_DIR}/${name}`, "utf8"))
-          const started = timing("started-ms")
-          const installed = timing("install-complete-ms")
-          const setupInstallSeconds = (installed - started) / 1000
-          if (![started, installed].every(Number.isFinite) || setupInstallSeconds < 0) {
-            throw new Error("formal timing markers are not monotonic")
-          }
-          const log = "formal.log"
-          const parsed = parseProfileLog({
-            id: process.env.GITHUB_JOB,
-            node: process.version,
-            repeat: "1",
-            installSeconds: String(setupInstallSeconds),
-            log: readFileSync(`${process.env.DALPH_FORMAL_EVIDENCE_DIR}/${log}`, "utf8"),
-            sourcePath: log
-          })
-          const fields = {
-            profile: process.env.DALPH_FORMAL_PROFILE_KIND,
-            condition: {
-              kind: "dedicated-hosted-job",
-              runnerLabel: process.env.DALPH_FORMAL_RUNNER_LABEL,
-              effectiveParallelism: Number(process.env.DALPH_FORMAL_EFFECTIVE_PARALLELISM)
-            },
-            sourceSha: process.env.DALPH_CANDIDATE_SHA,
-            reviewedBaseSha: process.env.DALPH_COVERAGE_BASE_SHA,
-            nodeVersion: process.version,
-            workflowName: process.env.GITHUB_WORKFLOW,
-            runId: Number(process.env.GITHUB_RUN_ID),
-            runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
-            jobName: process.env.GITHUB_JOB,
-            log,
-            setupInstallSeconds,
-            formalSeconds: parsed.formalSeconds,
-            negativeControls: parsed.commands
-              .filter(({ name }) => name.includes("negative mutation profile") || name.includes("temporal mutant"))
-              .map(({ name }) => name)
-          }
-          writeFileSync(process.env.DALPH_FORMAL_METADATA, `${JSON.stringify(fields, null, 2)}\n`, { mode: 0o600 })
-          NODE
-
-      - name: Upload dedicated formal evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: production-live-formal-dedicated-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/dalph-live-formal/dedicated
-          if-no-files-found: error
-          retention-days: 30
-
-  formal-stressed:
-    name: Stressed formal evidence
-    runs-on: ubuntu-latest
-    timeout-minutes: 16
-    env:
-      DALPH_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
-      DALPH_COVERAGE_BASE_SHA: ${{ inputs.reviewed_base_sha }}
-      DALPH_FORMAL_PROFILE_KIND: stressed
-      DALPH_FORMAL_RUNNER_LABEL: ubuntu-latest
+      DALPH_FORMAL_COMMIT_SHA: ${{ inputs.candidate_sha }}
+      DALPH_FORMAL_NODE_VERSION: 24.20.0
+      DALPH_FORMAL_PROFILE_KIND: ${{ matrix.profile }}
+      DALPH_FORMAL_RUNNER_LABEL: ${{ matrix.runner }}
+      DALPH_FORMAL_SHARD: ${{ matrix.shard }}
       DALPH_FORMAL_STRESS_CPU_LIST: 0-1
       NODE_OPTIONS: --max-old-space-size=8192
     steps:
-      - name: Start formal timing
+      - name: Start formal shard timing
         run: |
-          evidence_dir="$RUNNER_TEMP/dalph-live-formal/stressed"
+          evidence_dir="$RUNNER_TEMP/dalph-live-formal/$DALPH_FORMAL_PROFILE_KIND/shard-$DALPH_FORMAL_SHARD"
           echo "DALPH_FORMAL_EVIDENCE_DIR=$evidence_dir" >> "$GITHUB_ENV"
           mkdir -p "$evidence_dir"
           date +%s%3N > "$evidence_dir/started-ms"
@@ -194,50 +102,57 @@ jobs:
       - name: Record setup timing
         run: date +%s%3N > "$DALPH_FORMAL_EVIDENCE_DIR/install-complete-ms"
 
-      - name: Run stressed formal evidence
+      - name: Run dedicated formal shard
+        if: matrix.profile == 'dedicated'
         run: |
-          set -o pipefail
+          effective_parallelism=$(node -p 'require("node:os").availableParallelism()')
+          test "$effective_parallelism" -gt 0
+          echo "DALPH_FORMAL_EFFECTIVE_PARALLELISM=$effective_parallelism" >> "$GITHUB_ENV"
+          pnpm check:ci:formal:shard --shard "$DALPH_FORMAL_SHARD" --report "$DALPH_FORMAL_EVIDENCE_DIR/report.json"
+
+      - name: Run stressed formal shard
+        if: matrix.profile == 'stressed'
+        run: |
           host_parallelism=$(node -p 'require("node:os").availableParallelism()')
           effective_parallelism=$(taskset --cpu-list "$DALPH_FORMAL_STRESS_CPU_LIST" node -p 'require("node:os").availableParallelism()')
-          test "$host_parallelism" -gt "$effective_parallelism"
+          test "$host_parallelism" -gt 2
           test "$effective_parallelism" -eq 2
           echo "DALPH_FORMAL_HOST_PARALLELISM=$host_parallelism" >> "$GITHUB_ENV"
           echo "DALPH_FORMAL_EFFECTIVE_PARALLELISM=$effective_parallelism" >> "$GITHUB_ENV"
-          taskset --cpu-list "$DALPH_FORMAL_STRESS_CPU_LIST" pnpm check:ci:formal 2>&1 | tee "$DALPH_FORMAL_EVIDENCE_DIR/formal.log"
+          taskset --cpu-list "$DALPH_FORMAL_STRESS_CPU_LIST" pnpm check:ci:formal:shard --shard "$DALPH_FORMAL_SHARD" --report "$DALPH_FORMAL_EVIDENCE_DIR/report.json"
 
-      - name: Record stressed formal provenance
-        if: always()
+      - name: Record formal shard provenance
         env:
-          DALPH_FORMAL_METADATA: ${{ runner.temp }}/dalph-live-formal/stressed/provenance.json
+          DALPH_FORMAL_METADATA: ${{ runner.temp }}/dalph-live-formal/${{ matrix.profile }}/shard-${{ matrix.shard }}/provenance.json
         run: |
           node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from "node:fs"
-          import { parseProfileLog } from "./scripts/generate-quint-profile-evidence.mjs"
           const timing = (name) => Number(readFileSync(`${process.env.DALPH_FORMAL_EVIDENCE_DIR}/${name}`, "utf8"))
           const started = timing("started-ms")
           const installed = timing("install-complete-ms")
           const setupInstallSeconds = (installed - started) / 1000
-          if (![started, installed].every(Number.isFinite) || setupInstallSeconds < 0) {
-            throw new Error("formal timing markers are not monotonic")
+          const report = JSON.parse(readFileSync(`${process.env.DALPH_FORMAL_EVIDENCE_DIR}/report.json`, "utf8"))
+          if (![started, installed, report.report?.elapsedMilliseconds].every(Number.isFinite) || setupInstallSeconds < 0) {
+            throw new Error("formal shard timing markers are invalid")
           }
-          const log = "formal.log"
-          const parsed = parseProfileLog({
-            id: process.env.GITHUB_JOB,
-            node: process.version,
-            repeat: "1",
-            installSeconds: String(setupInstallSeconds),
-            log: readFileSync(`${process.env.DALPH_FORMAL_EVIDENCE_DIR}/${log}`, "utf8"),
-            sourcePath: log
-          })
+          const profile = process.env.DALPH_FORMAL_PROFILE_KIND
+          const condition = profile === "dedicated"
+            ? {
+                kind: "dedicated-hosted-job",
+                runnerLabel: process.env.DALPH_FORMAL_RUNNER_LABEL,
+                effectiveParallelism: Number(process.env.DALPH_FORMAL_EFFECTIVE_PARALLELISM)
+              }
+            : {
+                kind: "cpu-affinity",
+                runnerLabel: process.env.DALPH_FORMAL_RUNNER_LABEL,
+                cpuList: process.env.DALPH_FORMAL_STRESS_CPU_LIST,
+                hostParallelism: Number(process.env.DALPH_FORMAL_HOST_PARALLELISM),
+                effectiveParallelism: Number(process.env.DALPH_FORMAL_EFFECTIVE_PARALLELISM)
+              }
           const fields = {
-            profile: process.env.DALPH_FORMAL_PROFILE_KIND,
-            condition: {
-              kind: "cpu-affinity",
-              runnerLabel: process.env.DALPH_FORMAL_RUNNER_LABEL,
-              cpuList: process.env.DALPH_FORMAL_STRESS_CPU_LIST,
-              hostParallelism: Number(process.env.DALPH_FORMAL_HOST_PARALLELISM),
-              effectiveParallelism: Number(process.env.DALPH_FORMAL_EFFECTIVE_PARALLELISM)
-            },
+            profile,
+            shard: Number(process.env.DALPH_FORMAL_SHARD),
+            condition,
             sourceSha: process.env.DALPH_CANDIDATE_SHA,
             reviewedBaseSha: process.env.DALPH_COVERAGE_BASE_SHA,
             nodeVersion: process.version,
@@ -245,29 +160,25 @@ jobs:
             runId: Number(process.env.GITHUB_RUN_ID),
             runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
             jobName: process.env.GITHUB_JOB,
-            log,
+            report: "report.json",
             setupInstallSeconds,
-            formalSeconds: parsed.formalSeconds,
-            negativeControls: parsed.commands
-              .filter(({ name }) => name.includes("negative mutation profile") || name.includes("temporal mutant"))
-              .map(({ name }) => name)
+            formalSeconds: report.report.elapsedMilliseconds / 1000
           }
           writeFileSync(process.env.DALPH_FORMAL_METADATA, `${JSON.stringify(fields, null, 2)}\n`, { mode: 0o600 })
           NODE
 
-      - name: Upload stressed formal evidence
-        if: always()
+      - name: Upload formal shard evidence
         uses: actions/upload-artifact@v4
         with:
-          name: production-live-formal-stressed-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/dalph-live-formal/stressed
+          name: production-live-formal-${{ matrix.profile }}-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/dalph-live-formal
           if-no-files-found: error
           retention-days: 30
 
   qualify:
     name: One protected live qualification
-    needs: [formal-dedicated, formal-stressed]
-    if: needs.formal-dedicated.result == 'success' && needs.formal-stressed.result == 'success'
+    needs: [formal]
+    if: needs.formal.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment:
@@ -299,10 +210,7 @@ jobs:
             echo "DALPH_LIVE_QUALIFICATION_MANIFEST=$RUNNER_TEMP/dalph-live-qualification/manifest.json"
             echo "DALPH_LIVE_QUALIFICATION_ARTIFACT=$RUNNER_TEMP/dalph-live-qualification/qualification.json"
             echo "DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS=$RUNNER_TEMP/dalph-live-publication/retained-locators.json"
-            echo "DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED=$RUNNER_TEMP/dalph-live-formal/dedicated/formal.log"
-            echo "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED=$RUNNER_TEMP/dalph-live-formal/stressed/formal.log"
-            echo "DALPH_LIVE_QUALIFICATION_FORMAL_DEDICATED_METADATA=$RUNNER_TEMP/dalph-live-formal/dedicated/provenance.json"
-            echo "DALPH_LIVE_QUALIFICATION_FORMAL_STRESSED_METADATA=$RUNNER_TEMP/dalph-live-formal/stressed/provenance.json"
+            echo "DALPH_LIVE_QUALIFICATION_FORMAL_ROOT=$RUNNER_TEMP/dalph-live-formal"
           } >> "$GITHUB_ENV"
 
       - name: Checkout exact candidate
@@ -337,17 +245,12 @@ jobs:
       - name: Build shipped controller
         run: pnpm build
 
-      - name: Download dedicated formal evidence
+      - name: Download all four formal shard reports
         uses: actions/download-artifact@v4
         with:
-          name: production-live-formal-dedicated-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/dalph-live-formal/dedicated
-
-      - name: Download stressed formal evidence
-        uses: actions/download-artifact@v4
-        with:
-          name: production-live-formal-stressed-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/dalph-live-formal/stressed
+          pattern: production-live-formal-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/dalph-live-formal
+          merge-multiple: true
 
       - name: Prepare redacted output locations
         run: |

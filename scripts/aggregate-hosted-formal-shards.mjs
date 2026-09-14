@@ -16,6 +16,24 @@ import { validateQuintCommandOutput } from "./quint-witness-coverage.mjs"
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right)
 const commandKinds = ["typecheck", "test", "sampled-run", "verify"]
 
+const publicCommandEvidence = (command, timing) =>
+  Object.freeze({
+    position: command.position,
+    name: command.name,
+    kind: command.kind,
+    args: Object.freeze([...command.args]),
+    verdict: Object.freeze(structuredClone(command.verdict)),
+    result: `exit:${command.exitCode}`,
+    obligationId: command.obligationId,
+    durationMilliseconds: timing.durationMilliseconds
+  })
+
+const shardForCommandPosition = (shards, position) => {
+  const shard = shards.find(({ positions }) => positions.includes(position))?.shard
+  if (shard === undefined) throw new Error(`Hosted Quint aggregate has no shard for command ${position}`)
+  return shard
+}
+
 const provenanceIdentity = (provenance) => {
   const identity = {
     architecture: provenance?.architecture,
@@ -162,11 +180,22 @@ export const aggregateHostedFormalShards = ({ binding, envelopes }) => {
       verify: commands.filter(({ kind }) => kind === "verify").length
     }
   })
+  const commandEvidence = commands.map((command) => {
+    const envelope = byShard.get(shardForCommandPosition(shards, command.position))
+    const index = envelope.report.commands.findIndex(({ position }) => position === command.position)
+    return publicCommandEvidence(command, envelope.report.timing.records[index])
+  })
   return Object.freeze({
     version: 1,
     binding,
     profileDigest: quintHostedProfileDigest(profile),
-    commands: commands.length
+    commands: commands.length,
+    commandEvidence: Object.freeze(commandEvidence),
+    negativeControls: Object.freeze(
+      commandEvidence
+        .filter(({ name }) => name.includes("negative mutation profile") || name.includes("temporal mutant"))
+        .map(({ name }) => name)
+    )
   })
 }
 

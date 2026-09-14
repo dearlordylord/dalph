@@ -1,6 +1,7 @@
 /* eslint-disable import/no-nodejs-modules -- Qualification measures original build and process provenance. */
 /* eslint-disable import-x/no-unused-modules -- Qualification schemas are consumed by external test-support outside the production lint graph. */
 import nodeProcess from "node:process"
+import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { arch, platform } from "node:os"
 import nodePath from "node:path"
@@ -9,32 +10,43 @@ import { EvidenceDigest, GitCommitSha, type GitRepositoryLocator } from "@dalph/
 import { GitCommand } from "@dalph/orchestrator"
 import { Crypto, Effect, FileSystem, Schema } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import type { parseProfileLog as parseQualificationProfileLog } from "../../../../scripts/generate-quint-profile-evidence.mjs"
-import type { assertAcceptedQuintGateCommands as assertQualificationGateCommands } from "../../../../scripts/quint-gate-command-contract.mjs"
+import type { aggregateHostedFormalShards as aggregateQualificationShards } from "../../../../scripts/aggregate-hosted-formal-shards.mjs"
+import {
+  CompleteProfileCommands,
+  type FormalProfileCondition,
+  FormalShardEvidence,
+  QualificationFormalProfile,
+  QualificationFormalProvenance,
+  RequiredQualificationFormalProvenance
+} from "./qualification-formal-provenance.js"
 
-type QualificationProfileParser = typeof parseQualificationProfileLog
-type QualificationCommandValidator = typeof assertQualificationGateCommands
+export {
+  QualificationFormalJobId,
+  QualificationFormalProfile,
+  QualificationFormalProvenance,
+  QualificationFormalRunAttempt,
+  QualificationFormalRunId,
+  QualificationFormalShard,
+  QualificationHostedJob,
+  RequiredQualificationFormalProvenance
+} from "./qualification-formal-provenance.js"
+type QualificationShardAggregator = typeof aggregateQualificationShards
 
 const hexadecimalRadix = 16
 const hexadecimalByteWidth = 2
 const hostedJobLimitSeconds = 960
 const formalGateLimitSeconds = 750
-const stressedFormalParallelism = 2
+const millisecondsPerSecond = 1_000
+const qualificationFormalShardCount = 2
+const qualificationFormalJobCount = 4
 
-type QualificationScriptModules = {
-  readonly parseProfileLog: QualificationProfileParser
-  readonly assertAcceptedQuintGateCommands: QualificationCommandValidator
-}
+type QualificationScriptModules = { readonly aggregateHostedFormalShards: QualificationShardAggregator }
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null
-const QualificationProfileModule = Schema.declare<Pick<QualificationScriptModules, "parseProfileLog">>(
-  (value): value is Pick<QualificationScriptModules, "parseProfileLog"> =>
-    isRecord(value) && typeof value["parseProfileLog"] === "function"
-)
-const QualificationCommandModule = Schema.declare<Pick<QualificationScriptModules, "assertAcceptedQuintGateCommands">>(
-  (value): value is Pick<QualificationScriptModules, "assertAcceptedQuintGateCommands"> =>
-    isRecord(value) && typeof value["assertAcceptedQuintGateCommands"] === "function"
+const QualificationAggregateModule = Schema.declare<QualificationScriptModules>(
+  (value): value is QualificationScriptModules =>
+    isRecord(value) && typeof value["aggregateHostedFormalShards"] === "function"
 )
 
 /** Loads the workspace-owned formal evidence parsers from either source or emitted package layout. */
@@ -46,28 +58,15 @@ const qualificationScriptModules = Effect.fn("Qualification.loadScriptModules")(
     nodePath.resolve(moduleDirectory, "../../../../scripts"),
     nodePath.resolve(moduleDirectory, "../../../../../scripts")
   ]
-  const root = candidates.find((candidate) => existsSync(`${candidate}/generate-quint-profile-evidence.mjs`))
+  const root = candidates.find((candidate) => existsSync(`${candidate}/aggregate-hosted-formal-shards.mjs`))
   if (root === undefined) return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
-  const [profile, contract] = yield* Effect.all([
-    Effect.tryPromise({
-      try: () => import(pathToFileURL(`${root}/generate-quint-profile-evidence.mjs`).href),
-      catch: () => new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
-    }).pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(QualificationProfileModule)),
-      Effect.mapError(() => new QualificationEvidenceFailure({ operation: "ValidateProvenance" }))
-    ),
-    Effect.tryPromise({
-      try: () => import(pathToFileURL(`${root}/quint-gate-command-contract.mjs`).href),
-      catch: () => new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
-    }).pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(QualificationCommandModule)),
-      Effect.mapError(() => new QualificationEvidenceFailure({ operation: "ValidateProvenance" }))
-    )
-  ])
-  return {
-    parseProfileLog: profile.parseProfileLog,
-    assertAcceptedQuintGateCommands: contract.assertAcceptedQuintGateCommands
-  } satisfies QualificationScriptModules
+  return yield* Effect.tryPromise({
+    try: () => import(pathToFileURL(`${root}/aggregate-hosted-formal-shards.mjs`).href),
+    catch: () => new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
+  }).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(QualificationAggregateModule)),
+    Effect.mapError(() => new QualificationEvidenceFailure({ operation: "ValidateProvenance" }))
+  )
 })
 
 /** A qualification failure carries no rejected transcript, configuration, provider data or filesystem diagnostic. */
@@ -175,91 +174,32 @@ export const measureQualificationBuild = Effect.fn("Qualification.measureBuild")
   Effect.mapError(() => new QualificationEvidenceFailure({ operation: "MeasureBuild" }))
 )
 
-export const QualificationHostedJob = Schema.Struct({
-  workflow: Schema.Literal("Production live qualification"),
-  runId: Schema.Int.check(Schema.isGreaterThan(0)),
-  jobId: Schema.Int.check(Schema.isGreaterThan(0))
-})
-const ProfileCommand = Schema.Struct({
-  kind: Schema.Literals(["typecheck", "test", "sampled-run", "verify"]),
-  name: Schema.NonEmptyString,
-  durationSeconds: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
-  result: Schema.Literals(["exit:0", "exit:1"])
-})
-/** An otherwise unconstrained, formal-only hosted job establishes the dedicated reference profile. */
-const DedicatedFormalCondition = Schema.Struct({
-  kind: Schema.Literal("dedicated-hosted-job"),
-  runnerLabel: Schema.Literal("ubuntu-24.04-arm"),
-  effectiveParallelism: Schema.Int.check(Schema.isGreaterThan(0))
-})
-/** A measured two-CPU affinity below the host's available CPUs establishes the stressed profile. */
-const StressedFormalCondition = Schema.Struct({
-  kind: Schema.Literal("cpu-affinity"),
-  runnerLabel: Schema.Literal("ubuntu-latest"),
-  cpuList: Schema.Literal("0-1"),
-  hostParallelism: Schema.Int.check(Schema.isGreaterThan(stressedFormalParallelism)),
-  effectiveParallelism: Schema.Literal(stressedFormalParallelism)
-})
-const FormalProfileCondition = Schema.Union([DedicatedFormalCondition, StressedFormalCondition])
-const FormalProfileFields = {
-  sourceSha: GitCommitSha,
-  nodeVersion: Schema.NonEmptyString,
-  job: QualificationHostedJob,
-  logDigest: EvidenceDigest,
-  setupInstallSeconds: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
-  formalSeconds: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
-  completeJobSeconds: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
-  remainingHostedSeconds: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
-  hostedLimitSeconds: Schema.Literal(hostedJobLimitSeconds),
-  commands: Schema.Array(ProfileCommand),
-  negativeControls: Schema.NonEmptyArray(Schema.NonEmptyString)
-}
-const DedicatedQualificationFormalProfile = Schema.Struct({
-  profileKind: Schema.Literal("dedicated"),
-  condition: DedicatedFormalCondition,
-  ...FormalProfileFields
-})
-const StressedQualificationFormalProfile = Schema.Struct({
-  profileKind: Schema.Literal("stressed"),
-  condition: StressedFormalCondition,
-  ...FormalProfileFields
-})
-export const QualificationFormalProfile = Schema.Union([
-  DedicatedQualificationFormalProfile,
-  StressedQualificationFormalProfile
-])
-export const QualificationFormalProvenance = Schema.TaggedUnion({
-  NotSupplied: { reason: Schema.Literal("LocalHermeticInvocation") },
-  DedicatedAndStressed: { dedicated: DedicatedQualificationFormalProfile, stressed: StressedQualificationFormalProfile }
-})
-export type QualificationFormalProvenance = typeof QualificationFormalProvenance.Type
-export const RequiredQualificationFormalProvenance = QualificationFormalProvenance.cases.DedicatedAndStressed
-export type RequiredQualificationFormalProvenance = typeof RequiredQualificationFormalProvenance.Type
-
 export interface SuppliedQualificationProfile {
   readonly profileKind: "dedicated" | "stressed"
-  readonly condition: typeof FormalProfileCondition.Type
   readonly sourceSha: GitCommitSha
   readonly nodeVersion: string
-  readonly job: typeof QualificationHostedJob.Type
-  readonly log: string
-  readonly setupInstallSeconds: number
-  readonly formalSeconds: number
-  readonly completeJobSeconds: number
-  readonly negativeControls: ReadonlyArray<string>
+  readonly runId: number
+  readonly runAttempt: number
+  readonly shards: ReadonlyArray<{
+    readonly shard: number
+    readonly condition: typeof FormalProfileCondition.Type
+    readonly job: {
+      readonly workflow: "Production live qualification"
+      readonly runId: number
+      readonly runAttempt: number
+      readonly jobId: number
+      readonly name: string
+    }
+    readonly reportSource: string
+    readonly setupInstallSeconds: number
+    readonly formalSeconds: number
+    readonly completeJobSeconds: number
+    readonly startedAt: string
+    readonly completedAt: string
+  }>
 }
 
 const supportedQualificationNode = (version: string) => /^24\.20\.\d+$/u.test(version)
-
-const profileTimingExceedsBudgets = (
-  formalBudgetSeconds: number,
-  formalSeconds: number,
-  profile: Pick<SuppliedQualificationProfile, "completeJobSeconds" | "setupInstallSeconds">
-) =>
-  formalBudgetSeconds !== formalGateLimitSeconds ||
-  formalSeconds > formalGateLimitSeconds ||
-  profile.completeJobSeconds < profile.setupInstallSeconds + formalSeconds ||
-  profile.completeJobSeconds >= hostedJobLimitSeconds
 
 const profileConditionMatchesKind = (
   profileKind: "dedicated" | "stressed",
@@ -272,43 +212,34 @@ const profileMatchesExpectedIdentity = (
   profile: SuppliedQualificationProfile
 ) =>
   profile.profileKind === profileKind &&
-  profileConditionMatchesKind(profileKind, profile.condition) &&
   profile.sourceSha === sourceSha &&
   supportedQualificationNode(profile.nodeVersion)
 
-const profileCommandsHaveExpectedResults = (commands: ReadonlyArray<typeof ProfileCommand.Type>) =>
-  commands.every(({ name, result }) => result === (name.includes("temporal mutant") ? "exit:1" : "exit:0"))
-
-const parsedNegativeControlNames = (commands: ReadonlyArray<{ readonly name: string }>): ReadonlyArray<string> =>
-  commands
-    .filter(({ name }) => name.includes("negative mutation profile") || name.includes("temporal mutant"))
-    .map(({ name }) => name)
-
-const profileNegativeControlsMatch = (parsedNames: ReadonlyArray<string>, suppliedNames: ReadonlyArray<string>) =>
-  parsedNames.length === suppliedNames.length && parsedNames.every((name, index) => name === suppliedNames[index])
-
-const parseSuppliedQualificationProfile = (
-  scripts: QualificationScriptModules,
-  profile: SuppliedQualificationProfile
-) =>
+const parsedShardReport = (source: string) =>
   Effect.try({
-    try: () =>
-      scripts.parseProfileLog({
-        id: String(profile.job.jobId),
-        node: profile.nodeVersion,
-        repeat: "1",
-        installSeconds: String(profile.setupInstallSeconds),
-        log: profile.log
-      }),
+    try: () => JSON.parse(source),
     catch: () => new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
   })
 
-const assertAcceptedQualificationGateCommands = (
+const shardReportDigest = (source: string) =>
+  Schema.decodeUnknownEffect(EvidenceDigest)(createHash("sha256").update(source).digest("hex"))
+
+const aggregateProfile = (
   scripts: QualificationScriptModules,
-  commands: ReadonlyArray<typeof ProfileCommand.Type>
+  profile: SuppliedQualificationProfile,
+  envelopes: Array<unknown>
 ) =>
   Effect.try({
-    try: () => scripts.assertAcceptedQuintGateCommands(commands),
+    try: () =>
+      scripts.aggregateHostedFormalShards({
+        binding: {
+          runId: String(profile.runId),
+          runAttempt: String(profile.runAttempt),
+          commitSha: profile.sourceSha,
+          nodeVersion: profile.nodeVersion
+        },
+        envelopes
+      }),
     catch: () => new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
   })
 
@@ -317,32 +248,81 @@ const validateProfile = Effect.fn("Qualification.validateProfile")(
   function* (sourceSha: GitCommitSha, profileKind: "dedicated" | "stressed", profile: SuppliedQualificationProfile) {
     if (!profileMatchesExpectedIdentity(sourceSha, profileKind, profile))
       return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
+    if (profile.shards.length !== qualificationFormalShardCount)
+      return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
     const scripts = yield* qualificationScriptModules()
-    const parsed = yield* parseSuppliedQualificationProfile(scripts, profile)
-    const commands = yield* Schema.decodeUnknownEffect(Schema.Array(ProfileCommand))(parsed.commands)
-    if (!profileCommandsHaveExpectedResults(commands))
+    const envelopes = yield* Effect.all(profile.shards.map(({ reportSource }) => parsedShardReport(reportSource)))
+    const aggregate = yield* aggregateProfile(scripts, profile, envelopes)
+    const commands = yield* Schema.decodeUnknownEffect(CompleteProfileCommands)(aggregate.commandEvidence)
+    const negativeControls = yield* Schema.decodeUnknownEffect(Schema.NonEmptyArray(Schema.NonEmptyString))(
+      aggregate.negativeControls
+    )
+    const shards = yield* Effect.all(
+      profile.shards.map((shard) =>
+        Effect.gen(function* () {
+          const envelope = envelopes.find((value) => isRecord(value) && value["shard"] === shard.shard)
+          if (!isRecord(envelope) || !isRecord(envelope["report"]))
+            return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
+          const report = envelope["report"]
+          const positions = isRecord(report["shard"]) ? report["shard"]["positions"] : undefined
+          const elapsedMilliseconds = report["elapsedMilliseconds"]
+          const started = Date.parse(shard.startedAt)
+          const completed = Date.parse(shard.completedAt)
+          if (
+            ![0, 1].includes(shard.shard) ||
+            !profileConditionMatchesKind(profileKind, shard.condition) ||
+            shard.job.runId !== profile.runId ||
+            shard.job.runAttempt !== profile.runAttempt ||
+            shard.job.name !==
+              `${profileKind === "dedicated" ? "Dedicated" : "Stressed"} formal evidence shard ${shard.shard}` ||
+            !Array.isArray(positions) ||
+            !Number.isFinite(elapsedMilliseconds) ||
+            shard.formalSeconds !== Number(elapsedMilliseconds) / millisecondsPerSecond ||
+            !Number.isFinite(started) ||
+            !Number.isFinite(completed) ||
+            completed < started ||
+            shard.completeJobSeconds !== (completed - started) / millisecondsPerSecond ||
+            shard.completeJobSeconds < shard.setupInstallSeconds + shard.formalSeconds ||
+            shard.completeJobSeconds >= hostedJobLimitSeconds ||
+            shard.formalSeconds > formalGateLimitSeconds
+          )
+            return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
+          return yield* Schema.decodeUnknownEffect(FormalShardEvidence)({
+            shard: shard.shard,
+            condition: shard.condition,
+            job: shard.job,
+            reportDigest: yield* shardReportDigest(shard.reportSource),
+            positions,
+            setupInstallSeconds: shard.setupInstallSeconds,
+            formalSeconds: shard.formalSeconds,
+            completeJobSeconds: shard.completeJobSeconds,
+            remainingHostedSeconds: hostedJobLimitSeconds - shard.completeJobSeconds,
+            hostedLimitSeconds: hostedJobLimitSeconds,
+            startedAt: shard.startedAt,
+            completedAt: shard.completedAt
+          })
+        })
+      )
+    )
+    if (shards[0]?.shard !== 0 || shards[1]?.shard !== 1 || shards[0].job.jobId === shards[1].job.jobId)
       return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
-    yield* assertAcceptedQualificationGateCommands(scripts, commands)
-    if (!profileNegativeControlsMatch(parsedNegativeControlNames(parsed.commands), profile.negativeControls))
-      return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
-    if (profile.formalSeconds !== parsed.formalSeconds)
-      return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
-    if (profileTimingExceedsBudgets(parsed.budgetSeconds, parsed.formalSeconds, profile))
-      return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
+    const formalSeconds = Math.max(...shards.map((shard) => shard.formalSeconds))
+    const completeProfileSeconds =
+      (Math.max(...shards.map((shard) => Date.parse(shard.completedAt))) -
+        Math.min(...shards.map((shard) => Date.parse(shard.startedAt)))) /
+      millisecondsPerSecond
     return yield* Schema.decodeUnknownEffect(QualificationFormalProfile)({
       profileKind,
-      condition: profile.condition,
       sourceSha,
       nodeVersion: profile.nodeVersion,
-      job: profile.job,
-      logDigest: parsed.source.sha256,
-      setupInstallSeconds: profile.setupInstallSeconds,
-      formalSeconds: parsed.formalSeconds,
-      completeJobSeconds: profile.completeJobSeconds,
-      remainingHostedSeconds: hostedJobLimitSeconds - profile.completeJobSeconds,
-      hostedLimitSeconds: hostedJobLimitSeconds,
+      runId: profile.runId,
+      runAttempt: profile.runAttempt,
+      profileDigest: aggregate.profileDigest,
+      formalSeconds,
+      completeProfileSeconds,
+      shards,
       commands,
-      negativeControls: profile.negativeControls
+      negativeControls
     })
   },
   Effect.mapError(() => new QualificationEvidenceFailure({ operation: "ValidateProvenance" }))
@@ -353,8 +333,8 @@ export const requiredQualificationFormalProvenance = Effect.fn("Qualification.re
   supplied: { readonly dedicated: SuppliedQualificationProfile; readonly stressed: SuppliedQualificationProfile }
 ) {
   if (
-    supplied.dedicated.job.jobId === supplied.stressed.job.jobId ||
-    supplied.dedicated.job.runId !== supplied.stressed.job.runId
+    supplied.dedicated.runId !== supplied.stressed.runId ||
+    supplied.dedicated.runAttempt !== supplied.stressed.runAttempt
   )
     return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
   const dedicated = yield* validateProfile(sourceSha, "dedicated", supplied.dedicated)
@@ -363,8 +343,17 @@ export const requiredQualificationFormalProvenance = Effect.fn("Qualification.re
     return yield* new QualificationEvidenceFailure({ operation: "ValidateProvenance" })
   }
   const commandIdentity = (profile: typeof QualificationFormalProfile.Type) =>
-    profile.commands.map(({ kind, name, result }) => ({ kind, name, result }))
+    profile.commands.map(({ args, kind, name, position, result, verdict }) => ({
+      args,
+      kind,
+      name,
+      position,
+      result,
+      verdict
+    }))
+  const jobIds = [dedicated, stressed].flatMap(({ shards }) => shards.map(({ job }) => job.jobId))
   if (
+    new Set(jobIds).size !== qualificationFormalJobCount ||
     JSON.stringify(commandIdentity(dedicated)) !== JSON.stringify(commandIdentity(stressed)) ||
     JSON.stringify(dedicated.negativeControls) !== JSON.stringify(stressed.negativeControls)
   )

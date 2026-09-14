@@ -83,12 +83,24 @@ const fixture = () => {
 
 test("accepts two out-of-order reports only as one exact 105-command profile", () => {
   const envelopes = fixture().reverse()
-  assert.deepEqual(aggregateHostedFormalShards({ binding, envelopes }), {
-    version: 1,
-    binding,
-    profileDigest: envelopes[0].profileDigest,
-    commands: 105
-  })
+  const aggregate = aggregateHostedFormalShards({ binding, envelopes })
+  assert.equal(aggregate.version, 1)
+  assert.deepEqual(aggregate.binding, binding)
+  assert.equal(aggregate.profileDigest, envelopes[0].profileDigest)
+  assert.equal(aggregate.commands, 105)
+  assert.deepEqual(
+    aggregate.commandEvidence.map(({ position }) => position),
+    Array.from({ length: 105 }, (_value, position) => position)
+  )
+  const first = aggregate.commandEvidence[0]
+  assert.deepEqual(first.args, envelopes[1].report.commands[0].args)
+  assert.deepEqual(first.verdict, envelopes[1].report.commands[0].verdict)
+  assert.equal(first.result, "exit:0")
+  assert.equal(first.obligationId, envelopes[1].report.commands[0].obligationId)
+  assert.equal(first.durationMilliseconds, 1)
+  assert.ok(aggregate.negativeControls.some((name) => name.includes("temporal mutant")))
+  assert.equal(JSON.stringify(aggregate).includes("/opt/bin/node"), false)
+  assert.equal(JSON.stringify(aggregate).includes("witnessed in"), false)
 })
 
 test("fails closed on missing duplicate mixed and altered shard evidence", () => {
