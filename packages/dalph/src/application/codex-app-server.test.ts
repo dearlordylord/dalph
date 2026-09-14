@@ -2,7 +2,7 @@
 import nodeProcess from "node:process"
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Ref, Schema } from "effect"
 import { expect, expectTypeOf } from "vitest"
 import {
   ApplicationExitDiagnostic,
@@ -15,6 +15,7 @@ import {
   CodexAppServer,
   CodexAppServerFailure,
   type CodexAppServerLayerConfig,
+  type CodexAppServerRequestBoundary,
   CodexProcessStartIdentity,
   codexAppServerLayer as rawCodexAppServerLayer,
   codexAppServerNodeLayer,
@@ -311,6 +312,50 @@ it.effect("speaks the normalized app-server protocol with exact per-call cwd", (
         yield* app.close
       }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer))
       expect(result).toBeUndefined()
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("rejects initialize before the app-server transport runs when composition admission is open", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-378-initialize-admission-" })
+      const executable = path.join(root, "fixture-codex")
+      yield* fileSystem.writeFileString(executable, fakeServer)
+      yield* fileSystem.chmod(executable, 0o755)
+
+      const transportCalls = yield* Ref.make(0)
+      const requestBoundary: CodexAppServerRequestBoundary = {
+        run: (operation, request) =>
+          operation === "initialize"
+            ? Effect.fail(
+                new CodexAppServerFailure({
+                  detail: "executor request circuit is open",
+                  kind: "CircuitOpen",
+                  operation
+                })
+              )
+            : Ref.update(transportCalls, (current) => current + 1).pipe(Effect.andThen(request))
+      }
+      const appLayer = codexAppServerNodeLayer({ executable }, isolatedCodexProcessNativeService, requestBoundary).pipe(
+        Layer.provide(memoryCodexAttemptStoreLayer())
+      )
+      const result = yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        yield* app.startThread("/never-started")
+      }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer), Effect.exit)
+
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result)) {
+        const failure = Cause.findErrorOption(result.cause)
+        expect(Option.isSome(failure)).toBe(true)
+        if (Option.isSome(failure)) {
+          expect(failure.value).toMatchObject({ kind: "CircuitOpen", operation: "initialize" })
+        }
+      }
+      expect(yield* Ref.get(transportCalls)).toBe(0)
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )

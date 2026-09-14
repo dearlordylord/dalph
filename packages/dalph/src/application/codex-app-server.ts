@@ -281,6 +281,24 @@ export class CodexAppServerFailure extends Schema.TaggedError<CodexAppServerFail
   rpcSnapshot: Schema.optionalKey(CodexAppServerRpcSnapshot)
 }) {}
 
+/** Operations that cross the app-server request transport; lifecycle close stays outside admission. */
+export type CodexAppServerRequestOperation = Exclude<CodexAppServerOperation, "close">
+
+/**
+ * Composition-supplied admission around one app-server request effect. The
+ * process driver knows only this capability, not the provider circuit policy.
+ */
+export interface CodexAppServerRequestBoundary {
+  readonly run: <A, E, R>(
+    operation: CodexAppServerRequestOperation,
+    request: Effect.Effect<A, E, R>
+  ) => Effect.Effect<A, E | CodexAppServerFailure, R>
+}
+
+const unrestrictedCodexAppServerRequestBoundary: CodexAppServerRequestBoundary = {
+  run: (_operation, request) => request
+}
+
 /** Captures a native process-signal failure before the app-server adapter classifies it. */
 class CodexProcessSignalFailure extends Schema.TaggedError<CodexProcessSignalFailure>()("CodexProcessSignalFailure", {
   cause: Schema.Defect()
@@ -1627,7 +1645,7 @@ interface JsonRpcClient {
   readonly attachTurnCompletedHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
   readonly attachOwnedActivityHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
   readonly request: (
-    operation: CodexAppServerOperation,
+    operation: CodexAppServerRequestOperation,
     method: string,
     params?: unknown
   ) => Effect.Effect<unknown, CodexAppServerFailure, never>
@@ -1643,7 +1661,7 @@ interface JsonRpcClient {
 
 type PendingJsonRpcRequest = {
   readonly deferred: Deferred.Deferred<unknown, CodexAppServerFailure>
-  readonly operation: CodexAppServerOperation
+  readonly operation: CodexAppServerRequestOperation
 }
 
 const jsonRpcInvalidRequestCode = -32600
@@ -1665,7 +1683,8 @@ const jsonRpcResponseFailure = (operation: CodexAppServerOperation, error: unkno
 
 const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function* (
   handle: ChildProcessHandle,
-  incarnation: CodexServerIncarnation
+  incarnation: CodexServerIncarnation,
+  requestBoundary: CodexAppServerRequestBoundary = unrestrictedCodexAppServerRequestBoundary
 ) {
   const nextId = yield* Ref.make(1)
   const writes = yield* Semaphore.make(1)
@@ -1774,7 +1793,7 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
     yield* write({ jsonrpc: "2.0", method, ...(params === undefined ? {} : { params }) })
   })
   const performRequest = Effect.fn("CodexAppServer.performRequest")(function* (
-    operation: CodexAppServerOperation,
+    operation: CodexAppServerRequestOperation,
     method: string,
     params: unknown,
     bounded: boolean
@@ -1786,13 +1805,16 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
     const removePending = Ref.update(pending, (current) => {
       return new Map([...current].filter(([key]) => key !== id))
     })
-    yield* Ref.update(pending, (current) => new Map([...current, [id, { deferred, operation }] as const]))
-    const pendingResponse = write({ jsonrpc: "2.0", id, method, ...(params === undefined ? {} : { params }) }).pipe(
-      Effect.tap(() => Ref.update(sentCount, (current) => current + 1)),
-      Effect.andThen(Deferred.await(deferred)),
-      Effect.mapError((error) =>
-        /* v8 ignore next -- @preserve Pending request failures originate in the shared reader and therefore carry initialize until remapped here. */
-        error.operation === "initialize" ? operationFailure(operation, error.kind, error.detail) : error
+    const pendingResponse = requestBoundary.run(
+      operation,
+      Ref.update(pending, (current) => new Map([...current, [id, { deferred, operation }] as const])).pipe(
+        Effect.andThen(write({ jsonrpc: "2.0", id, method, ...(params === undefined ? {} : { params }) })),
+        Effect.tap(() => Ref.update(sentCount, (current) => current + 1)),
+        Effect.andThen(Deferred.await(deferred)),
+        Effect.mapError((error) =>
+          /* v8 ignore next -- @preserve Pending request failures originate in the shared reader and therefore carry initialize until remapped here. */
+          error.operation === "initialize" ? operationFailure(operation, error.kind, error.detail) : error
+        )
       )
     )
     const response = bounded
@@ -2778,7 +2800,8 @@ export const closeHandleFailure = (error: unknown): CodexAppServerFailure =>
  * exact worktree is supplied per thread and turn.
  */
 export const codexAppServerLayer = (
-  config: CodexAppServerLayerConfig = {}
+  config: CodexAppServerLayerConfig = {},
+  requestBoundary: CodexAppServerRequestBoundary = unrestrictedCodexAppServerRequestBoundary
 ): Layer.Layer<
   CodexAppServer,
   CodexAppServerFailure | CodexAttemptStoreFailure,
@@ -2867,7 +2890,7 @@ export const codexAppServerLayer = (
         yield* store.clearServerLaunch(liveIncarnation)
       }).pipe(Effect.mapError(closeHandleFailure))
       yield* store.writeServerLaunch(liveLaunch).pipe(Effect.catch(failAfterClose.bind(undefined, closeHandle)))
-      const rpc = yield* makeJsonRpcClient(handle, liveIncarnation)
+      const rpc = yield* makeJsonRpcClient(handle, liveIncarnation, requestBoundary)
       const releaseLease = store
         .releaseServerLease(leaseOwner)
         .pipe(Effect.mapError((error) => operationFailure("close", "Ownership", error.detail)))
@@ -3070,13 +3093,14 @@ export const nodeCodexOwnedActivityCensusLayer: Layer.Layer<CodexOwnedActivityCe
 /** Convenience composition for the real app-server layer's process gate. */
 export const codexAppServerNodeLayer = (
   config: CodexAppServerLayerConfig = {},
-  native: CodexProcessNativeService = nodeCodexProcessNativeService
+  native: CodexProcessNativeService = nodeCodexProcessNativeService,
+  requestBoundary: CodexAppServerRequestBoundary = unrestrictedCodexAppServerRequestBoundary
 ): Layer.Layer<
   CodexAppServer,
   CodexAppServerFailure | CodexAttemptStoreFailure,
   CodexAttemptStore | ChildProcessSpawner.ChildProcessSpawner
 > =>
-  codexAppServerLayer(config).pipe(
+  codexAppServerLayer(config, requestBoundary).pipe(
     Layer.provide(
       native === nodeCodexProcessNativeService ? nodeCodexProcessNativeLayer : Layer.succeed(CodexProcessNative, native)
     ),

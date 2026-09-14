@@ -62,7 +62,9 @@ import {
   CodexAppServer,
   CodexAppServerFailure,
   codexAppServerNodeLayer,
-  codexOwnedActivityCensusLayer
+  codexOwnedActivityCensusLayer,
+  type CodexAppServerRequestBoundary,
+  type CodexAppServerRequestOperation
 } from "./codex-app-server.js"
 import { nodeCodexAttemptStoreLayer } from "./codex-attempt-store.js"
 import { nodeCodexProcessNativeService, type CodexProcessNativeService } from "./codex-process-native.js"
@@ -180,8 +182,14 @@ export interface ProductionRepositoryHostAdapters<ECodex = never, EGithub = neve
   readonly targetPromotionCompareAndSetObserver?: (request: TargetPromotionGitRequest) => Effect.Effect<void>
   /** Qualification-only process view shared by app-server ownership and attempt activity observations. */
   readonly codexProcessNative?: CodexProcessNativeService
+  /**
+   * Optional app-server layer factory. The request boundary is supplied when
+   * the factory is called so construction-time initialization can opt into
+   * the same admission state as the production default layer.
+   */
   readonly codexAppServer?: (
-    configuration: ProductionRepositoryHostConfiguration
+    configuration: ProductionRepositoryHostConfiguration,
+    requestBoundary?: CodexAppServerRequestBoundary
   ) => Layer.Layer<CodexAppServer, ECodex, ApplicationExitShell>
   readonly githubClient?: (
     configuration: ProductionRepositoryHostConfiguration
@@ -204,16 +212,6 @@ const githubRequestCircuitPolicy: RequestCircuitPolicy = {
 
 const githubRequestCircuitOpenDetail =
   "GitHub request circuit is open after 120 requests in 60 seconds; retrying is locally deferred for 30 seconds"
-
-type CodexAppServerRequestOperation =
-  | "thread/start"
-  | "thread/list"
-  | "thread/read"
-  | "thread/resume"
-  | "turn/start"
-  | "turn/interrupt"
-  | "thread/backgroundTerminals/list"
-  | "thread/backgroundTerminals/terminate"
 
 const codexRequestCircuitPolicy: RequestCircuitPolicy = {
   cooldownNanos: 30n * 1_000_000_000n,
@@ -257,33 +255,29 @@ export const guardedGithubClientLayer = <E, R>(
  * can always close the owned process.
  */
 const guardedCodexAppServerLayer = <E, R>(
-  layer: Layer.Layer<CodexAppServer, E, R>
+  layer: Layer.Layer<CodexAppServer, E, R>,
+  requestBoundary: CodexAppServerRequestBoundary
 ): Layer.Layer<CodexAppServer, E, R> =>
   Layer.effect(
     CodexAppServer,
     Effect.gen(function* () {
       const appServer = yield* CodexAppServer
-      const requestCircuit = yield* makeRequestCircuit({
-        onOpen: (operation: CodexAppServerRequestOperation) =>
-          new CodexAppServerFailure({ detail: codexRequestCircuitOpenDetail, kind: "CircuitOpen", operation }),
-        policy: codexRequestCircuitPolicy
-      })
       const listThreads = appServer.listThreads
       return CodexAppServer.of({
         ...appServer,
         startThread: (cwd, ownedThreadToken) =>
-          requestCircuit.run("thread/start", appServer.startThread(cwd, ownedThreadToken)),
-        ...(listThreads === undefined ? {} : { listThreads: () => requestCircuit.run("thread/list", listThreads()) }),
-        readThread: (threadId) => requestCircuit.run("thread/read", appServer.readThread(threadId)),
-        resumeThread: (threadId, cwd) => requestCircuit.run("thread/resume", appServer.resumeThread(threadId, cwd)),
+          requestBoundary.run("thread/start", appServer.startThread(cwd, ownedThreadToken)),
+        ...(listThreads === undefined ? {} : { listThreads: () => requestBoundary.run("thread/list", listThreads()) }),
+        readThread: (threadId) => requestBoundary.run("thread/read", appServer.readThread(threadId)),
+        resumeThread: (threadId, cwd) => requestBoundary.run("thread/resume", appServer.resumeThread(threadId, cwd)),
         startTurn: (threadId, cwd, text, ownedTurnToken) =>
-          requestCircuit.run("turn/start", appServer.startTurn(threadId, cwd, text, ownedTurnToken)),
+          requestBoundary.run("turn/start", appServer.startTurn(threadId, cwd, text, ownedTurnToken)),
         interruptTurn: (threadId, turnId) =>
-          requestCircuit.run("turn/interrupt", appServer.interruptTurn(threadId, turnId)),
+          requestBoundary.run("turn/interrupt", appServer.interruptTurn(threadId, turnId)),
         listBackgroundTerminals: (threadId) =>
-          requestCircuit.run("thread/backgroundTerminals/list", appServer.listBackgroundTerminals(threadId)),
+          requestBoundary.run("thread/backgroundTerminals/list", appServer.listBackgroundTerminals(threadId)),
         terminateBackgroundTerminal: (threadId, processId) =>
-          requestCircuit.run(
+          requestBoundary.run(
             "thread/backgroundTerminals/terminate",
             appServer.terminateBackgroundTerminal(threadId, processId)
           )
@@ -294,7 +288,8 @@ const guardedCodexAppServerLayer = <E, R>(
 const defaultCodexAppServerLayer = (
   configuration: ProductionRepositoryHostConfiguration,
   attemptStore: ReturnType<typeof nodeCodexAttemptStoreLayer>,
-  native: CodexProcessNativeService = nodeCodexProcessNativeService
+  native: CodexProcessNativeService = nodeCodexProcessNativeService,
+  requestBoundary: CodexAppServerRequestBoundary
 ) => {
   return codexAppServerNodeLayer(
     {
@@ -302,7 +297,8 @@ const defaultCodexAppServerLayer = (
       clientName: configuration.codexClientName,
       clientVersion: configuration.codexClientVersion
     },
-    native
+    native,
+    requestBoundary
   ).pipe(Layer.provide(attemptStore), Layer.provide(NodeServices.layer))
 }
 
@@ -502,14 +498,20 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           stateDirectory: configuration.codexExecutorPrivateStateDirectory
         }).pipe(Layer.provide(NodeServices.layer))
         const codexProcessNative = adapters.codexProcessNative ?? nodeCodexProcessNativeService
+        const codexRequestBoundary = yield* makeRequestCircuit<CodexAppServerRequestOperation, CodexAppServerFailure>({
+          onOpen: (operation) =>
+            new CodexAppServerFailure({ detail: codexRequestCircuitOpenDetail, kind: "CircuitOpen", operation }),
+          policy: codexRequestCircuitPolicy
+        })
+        const suppliedCodexAppServerLayer = adapters.codexAppServer?.(configuration, codexRequestBoundary)
         /* v8 ignore start -- @preserve Hermetic host tests replace the process boundary; this assignment retains the production Codex app-server default. */
         const appLayerWithoutApplicationExit: Layer.Layer<
           CodexAppServer,
           ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>,
           ApplicationExitShell
         > =
-          adapters.codexAppServer?.(configuration) ??
-          defaultCodexAppServerLayer(configuration, attemptStoreLayer, codexProcessNative)
+          suppliedCodexAppServerLayer ??
+          defaultCodexAppServerLayer(configuration, attemptStoreLayer, codexProcessNative, codexRequestBoundary)
         /* v8 ignore stop */
         const appLayerWithoutCircuit: Layer.Layer<
           CodexAppServer,
@@ -517,7 +519,10 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         > = appLayerWithoutApplicationExit.pipe(
           Layer.provide(Layer.succeed(ApplicationExitShell, asApplicationExitShellService(applicationExit)))
         )
-        const appLayer = guardedCodexAppServerLayer(appLayerWithoutCircuit)
+        const appLayer =
+          suppliedCodexAppServerLayer === undefined
+            ? appLayerWithoutCircuit
+            : guardedCodexAppServerLayer(appLayerWithoutCircuit, codexRequestBoundary)
         const gitCommandLayer = observedGitCommandLayer(
           nodeGitCommandLayer.pipe(Layer.provide(NodeServices.layer)),
           adapters.boundaryObserver
