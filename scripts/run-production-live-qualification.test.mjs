@@ -3,12 +3,14 @@ import { createHash } from "node:crypto"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
 import { pathToFileURL } from "node:url"
 import { afterEach, test } from "node:test"
 
 import {
   productionLiveQualificationBin,
   productionLiveQualificationShippedBin,
+  captureProductionLiveQualificationDiagnostics,
   requireSuccessfulCandidateCi,
   resolveFormalQualificationJobs,
   runProductionLiveQualification
@@ -74,6 +76,7 @@ const fixture = async () => {
     publication: join(root, "output", "publication")
   }
   output.retained = join(output.publication, "retained-locators.json")
+  output.diagnostics = join(output.publication, "diagnostics.json")
   await mkdir(join(root, "output"), { recursive: true })
   await mkdir(output.publication, { recursive: true })
   const lockfile = join(root, "pnpm-lock.yaml")
@@ -191,6 +194,7 @@ const environmentFor = (f, overrides = {}) => ({
   DALPH_LIVE_QUALIFICATION_MANIFEST: f.output.manifest,
   DALPH_LIVE_QUALIFICATION_ARTIFACT: f.output.artifact,
   DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS: f.output.retained,
+  DALPH_LIVE_QUALIFICATION_DIAGNOSTICS: f.output.diagnostics,
   DALPH_LIVE_QUALIFICATION_FORMAL_ROOT: f.formal.root,
   DALPH_LIVE_QUALIFICATION_PROTECTED_ENVIRONMENT: "production-live-qualification",
   GITHUB_ACTIONS: "true",
@@ -434,6 +438,101 @@ test("does not retry after a live child failure and does not expose secret bytes
     }
   )
   assert.equal(requests.length, 1)
+})
+
+test("hosted cancellation diagnostics retain progress without locators, payloads, prompts, or credentials", async () => {
+  const f = await fixture()
+  const container = join(f.root, "dalph-live-fixture")
+  const journal = join(container, "journal.sqlite")
+  const privateState = join(container, "codex-executor-private")
+  await mkdir(privateState, { recursive: true })
+  const database = new DatabaseSync(journal)
+  database.exec(`
+    CREATE TABLE journal_records (
+      run_id TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      event_kind TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE journal_records_cold (
+      run_id TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      event_kind TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    ) STRICT;
+  `)
+  database
+    .prepare("INSERT INTO journal_records VALUES (?, ?, ?, ?)")
+    .run("private-run-id", 1, "WorkflowRunStarted", '{"prompt":"private user prompt","token":"github-secret"}')
+  database
+    .prepare("INSERT INTO journal_records VALUES (?, ?, ?, ?)")
+    .run("private-run-id", 2, "TaskAttemptPlanned", '{"worktree":"/private/attempt"}')
+  database.close()
+  await writeFile(join(privateState, "app-server-processes"), "linux:12345:pid:123\nlinux:23456:pid:456\n")
+  await writeFile(
+    f.output.retained,
+    JSON.stringify({
+      schemaVersion: 1,
+      invocationId: "live-q-private",
+      outcome: "NotQualified",
+      phase: "Execution",
+      progress: { _tag: "PrivateFutureField", prompt: "private user prompt" },
+      github: [{ _tag: "Issue", nodeId: "private-node-id", disposition: "Retained", manualCommand: "private" }],
+      local: [
+        { locator: container, disposition: "Retained", manualCommand: "private" },
+        { locator: journal, disposition: "Retained", manualCommand: "private" },
+        { locator: privateState, disposition: "Retained", manualCommand: "private" }
+      ]
+    })
+  )
+
+  const result = await captureProductionLiveQualificationDiagnostics({ environment: environmentFor(f) })
+  assert.deepEqual(result.journal, {
+    _tag: "Observed",
+    hotEventKinds: ["WorkflowRunStarted", "TaskAttemptPlanned"],
+    coldEventKinds: []
+  })
+  assert.deepEqual(result.applicationServerStarts, { _tag: "Observed", count: 2 })
+  assert.deepEqual(result.checkpoint, {
+    _tag: "Observed",
+    phase: "Execution",
+    githubResourceCount: 1,
+    githubDispositions: { Retained: 1 },
+    localResourceCount: 3,
+    localDispositions: { Retained: 3 }
+  })
+  const serialized = await readFile(f.output.diagnostics, "utf8")
+  for (const privateValue of [
+    f.root,
+    container,
+    journal,
+    privateState,
+    "private-run-id",
+    "private-node-id",
+    "private user prompt",
+    "github-secret"
+  ]) {
+    assert.equal(serialized.includes(privateValue), false, `published private value: ${privateValue}`)
+  }
+})
+
+test("hosted diagnostics distinguish a missing checkpoint and do not misreport successful qualification", async () => {
+  const f = await fixture()
+  const environment = environmentFor(f)
+  const missing = await captureProductionLiveQualificationDiagnostics({ environment })
+  assert.deepEqual(missing.checkpoint, { _tag: "Unavailable", reason: "Absent" })
+  assert.deepEqual(missing.journal, { _tag: "Unavailable", reason: "CheckpointUnavailable" })
+
+  await rm(f.output.diagnostics)
+  await writeFile(f.output.retained, "not JSON")
+  const unreadable = await captureProductionLiveQualificationDiagnostics({ environment })
+  assert.deepEqual(unreadable.checkpoint, { _tag: "Unavailable", reason: "Unreadable" })
+
+  await rm(f.output.retained)
+  await rm(f.output.diagnostics)
+  await writeFile(f.output.artifact, JSON.stringify({ schemaVersion: 1, artifactStage: "Final" }))
+  assert.equal(await captureProductionLiveQualificationDiagnostics({ environment }), undefined)
+  await assert.rejects(readFile(f.output.diagnostics), /ENOENT/u)
 })
 
 test("fails closed for a malformed reviewed base or non-absolute manifest locator", async () => {

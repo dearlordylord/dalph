@@ -70,6 +70,7 @@ test("job environments do not read runner context before GitHub assigns a runner
     "DALPH_LIVE_QUALIFICATION_MANIFEST=$RUNNER_TEMP/dalph-live-qualification/manifest.json",
     "DALPH_LIVE_QUALIFICATION_ARTIFACT=$RUNNER_TEMP/dalph-live-qualification/qualification.json",
     "DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS=$RUNNER_TEMP/dalph-live-publication/retained-locators.json",
+    "DALPH_LIVE_QUALIFICATION_DIAGNOSTICS=$RUNNER_TEMP/dalph-live-publication/diagnostics.json",
     "DALPH_LIVE_QUALIFICATION_FORMAL_ROOT=$RUNNER_TEMP/dalph-live-formal"
   ]) {
     assert.ok(qualificationPaths.includes(assignment), `missing qualification path assignment: ${assignment}`)
@@ -112,6 +113,10 @@ test("four physical shard jobs capture dedicated and stressed evidence before on
   )
   assert.match(workflow, /mkdir -p "\$RUNNER_TEMP\/dalph-live-publication"/u)
   assert.match(workflow, /qualify:production-live/u)
+  assert.match(
+    workflow,
+    /Capture redacted hosted diagnostics[\s\S]*?if: always\(\)[\s\S]*?--capture-hosted-diagnostics/u
+  )
 })
 
 test("successful shard jobs supply complete timestamps after their final uploads", () => {
@@ -133,6 +138,7 @@ test("production live workflow exposes only the GitHub secret to the protected q
   const uploadedOutputs = workflow.slice(workflow.indexOf("      - name: Upload redacted qualification outputs\n"))
   assert.match(uploadedOutputs, /dalph-live-qualification\/qualification\.json/u)
   assert.match(uploadedOutputs, /dalph-live-publication\/retained-locators\.json/u)
+  assert.match(uploadedOutputs, /dalph-live-publication\/diagnostics\.json/u)
   assert.doesNotMatch(uploadedOutputs, /qualification\.json\.pre-cleanup/u)
   assert.doesNotMatch(uploadedOutputs, /manifest\.json/u)
   assert.doesNotMatch(workflow, /retry:/u)

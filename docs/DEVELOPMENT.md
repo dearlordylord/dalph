@@ -559,9 +559,16 @@ A failed or ambiguous provider boundary therefore leaves the
 Run and exact retained locators for manual inspection rather than launching a
 second command.
 
-The final step uploads only `qualification.json` and `retained-locators.json`
-with `if: always()`, so a successful result and a failed live attempt use the
-same explicit redacted artifact boundary. It does not upload the controller
+After the live command settles or the hosted job cancels it, an `if: always()`
+step reads the latest retention checkpoint. It writes `diagnostics.json` with
+only the checkpoint phase and disposition counts, durable journal event-kind
+chronology, app-server start count, and hosted run identity. It never copies
+journal payloads, GitHub node IDs, prompts, responses, credentials, private
+Codex state, or runner-local locators. The final step uploads
+`qualification.json`, `retained-locators.json`, and `diagnostics.json` with
+`if: always()`, so a successful result and a failed live attempt use the same
+explicit redacted artifact boundary. A successful final qualification omits
+the not-qualified diagnostics file. It does not upload the controller
 manifest or a pre-cleanup snapshot: those contain private absolute workspace or
 temporary locators and are local controller inputs, not publication artifacts.
 The uploaded artifact must contain no credential, raw environment,
@@ -584,6 +591,7 @@ The focused contract mapping is:
 | Uploaded formal provenance and live failure evidence disclose no private absolute worker/controller locator | `scripts/run-production-live-qualification.test.mjs` absolute formal-log rejection case; `scripts/production-live-qualification-workflow.test.mjs` manifest/pre-cleanup exclusion case |
 | A child/provider failure is reported without a retry and without secret bytes in the wrapper error | `scripts/run-production-live-qualification.test.mjs` single-launch failure case and workflow artifact `if: always()` contract |
 | The disposable issue exists but later local setup or the shipped command never returns; the always-upload step receives Q's latest exact retained-resource checkpoint rather than no artifact. An interruption during checkpoint replacement leaves the prior complete checkpoint intact. | `packages/dalph/test-support/production-live-qualification-runtime.test.ts`: `persists the exact remote fixture before local setup or the shipped child can stall`, `an unfinished recoverable Run retains every exact local locator for manual cleanup`, `preserves the prior valid checkpoint if replacement is interrupted` |
+| The hosted job cancels the live command after its Execution checkpoint. Before the runner disappears, the always-run diagnostic step reads that checkpoint and the retained SQLite/app-server observation files. The uploaded diagnostic identifies the checkpoint phase, ordered journal event kinds, and number of app-server starts without copying runner paths, journal payloads, prompts, responses, resource IDs, or credentials. If no checkpoint exists, it reports that fact; after a final qualified artifact, it publishes no contradictory not-qualified diagnostic. | `scripts/run-production-live-qualification.test.mjs`: `hosted cancellation diagnostics retain progress without locators, payloads, prompts, or credentials`, `hosted diagnostics distinguish a missing checkpoint and do not misreport successful qualification`; `scripts/production-live-qualification-workflow.test.mjs`: always-run capture and uploaded diagnostics assertions |
 | The generated Codex wrapper starts the exact locked JavaScript entry and remains signalable as the recorded wrapper process; a missing entry fails before any process observation. | `packages/dalph/test-support/production-live-qualification-runtime.test.ts`: `production live qualification fixture separates Codex home from executor private state`, `the generated wrapper fails before process observation when its locked entry is missing` |
 
 ### Disposable production repository walkthrough

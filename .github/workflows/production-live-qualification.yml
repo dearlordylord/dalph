@@ -232,6 +232,7 @@ jobs:
             echo "DALPH_LIVE_QUALIFICATION_MANIFEST=$RUNNER_TEMP/dalph-live-qualification/manifest.json"
             echo "DALPH_LIVE_QUALIFICATION_ARTIFACT=$RUNNER_TEMP/dalph-live-qualification/qualification.json"
             echo "DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS=$RUNNER_TEMP/dalph-live-publication/retained-locators.json"
+            echo "DALPH_LIVE_QUALIFICATION_DIAGNOSTICS=$RUNNER_TEMP/dalph-live-publication/diagnostics.json"
             echo "DALPH_LIVE_QUALIFICATION_FORMAL_ROOT=$RUNNER_TEMP/dalph-live-formal"
           } >> "$GITHUB_ENV"
 
@@ -291,6 +292,10 @@ jobs:
           DALPH_LIVE_GITHUB_TOKEN: ${{ secrets.DALPH_LIVE_GITHUB_TOKEN }}
         run: pnpm qualify:production-live
 
+      - name: Capture redacted hosted diagnostics
+        if: always()
+        run: node scripts/run-production-live-qualification.mjs --capture-hosted-diagnostics
+
       - name: Upload redacted qualification outputs
         if: always()
         uses: actions/upload-artifact@v4
@@ -299,5 +304,6 @@ jobs:
           path: |
             ${{ runner.temp }}/dalph-live-qualification/qualification.json
             ${{ runner.temp }}/dalph-live-publication/retained-locators.json
+            ${{ runner.temp }}/dalph-live-publication/diagnostics.json
           if-no-files-found: warn
           retention-days: 30

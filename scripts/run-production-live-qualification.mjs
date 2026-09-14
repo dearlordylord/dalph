@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto"
 import { execFile as nodeExecFile, spawn } from "node:child_process"
-import { access, chmod, constants, lstat, mkdir, readFile, writeFile } from "node:fs/promises"
+import { access, chmod, constants, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import nodePath from "node:path"
 import nodeProcess from "node:process"
 import { promisify } from "node:util"
@@ -32,6 +32,14 @@ const secretEnvironmentNames = new Set([
   "DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL"
 ])
 const secretEnvironmentPattern = /(TOKEN|SECRET|CREDENTIAL|PASSWORD|PRIVATE_KEY)/iu
+const qualificationFailurePhases = new Set([
+  "Setup",
+  "Execution",
+  "EvidenceValidation",
+  "ProvenanceValidation",
+  "Cleanup",
+  "Publication"
+])
 
 const requiredEnvironmentNames = [
   productionLiveQualificationOptIn,
@@ -137,6 +145,188 @@ const readJsonObject = async (path, name) => {
     throw new Error(`qualification input ${name} must be a JSON object`)
   }
   return value
+}
+
+const validRetentionCheckpoint = (value) =>
+  value.schemaVersion === 1 &&
+  value.outcome === "NotQualified" &&
+  qualificationFailurePhases.has(value.phase) &&
+  Array.isArray(value.github) &&
+  value.github.every(
+    (resource) =>
+      resource !== null &&
+      typeof resource === "object" &&
+      (resource._tag === "Issue" || resource._tag === "Label") &&
+      ["Removed", "AlreadyAbsent", "Retained"].includes(resource.disposition)
+  ) &&
+  Array.isArray(value.local) &&
+  value.local.every(
+    (resource) =>
+      resource !== null &&
+      typeof resource === "object" &&
+      typeof resource.locator === "string" &&
+      nodePath.isAbsolute(resource.locator) &&
+      nodePath.normalize(resource.locator) === resource.locator &&
+      ["Removed", "Retained"].includes(resource.disposition)
+  )
+
+const dispositionCounts = (resources) =>
+  Object.fromEntries(
+    [...new Set(resources.map(({ disposition }) => disposition))]
+      .sort((left, right) => left.localeCompare(right))
+      .map((disposition) => [disposition, resources.filter((resource) => resource.disposition === disposition).length])
+  )
+
+const unavailableObservation = (reason) => ({ _tag: "Unavailable", reason })
+
+const observeJournalKinds = async (journalPath) => {
+  if (journalPath === undefined) return unavailableObservation("CheckpointIncomplete")
+  let database
+  try {
+    const { DatabaseSync } = await import("node:sqlite")
+    database = new DatabaseSync(journalPath, { readOnly: true })
+    const readPartition = (table) =>
+      database
+        .prepare(`SELECT event_kind FROM ${table} ORDER BY run_id, position`)
+        .all()
+        .map(({ event_kind: eventKind }) => {
+          if (typeof eventKind !== "string" || !/^[A-Za-z][A-Za-z0-9]*$/u.test(eventKind)) {
+            throw new Error("journal event kind is not safe to publish")
+          }
+          return eventKind
+        })
+    const hot = readPartition("journal_records")
+    const cold = readPartition("journal_records_cold")
+    if (hot.length + cold.length > 1_000) return unavailableObservation("UnexpectedRecordCount")
+    return { _tag: "Observed", hotEventKinds: hot, coldEventKinds: cold }
+  } catch {
+    return unavailableObservation("Unreadable")
+  } finally {
+    database?.close()
+  }
+}
+
+const observeApplicationServerStarts = async (privateStateDirectory) => {
+  if (privateStateDirectory === undefined) return unavailableObservation("CheckpointIncomplete")
+  try {
+    const source = await readFile(nodePath.join(privateStateDirectory, "app-server-processes"), "utf8")
+    const observations = source.split("\n").filter((line) => line.length > 0)
+    if (observations.some((line) => !/^linux:[1-9][0-9]*:pid:[1-9][0-9]*$/u.test(line))) {
+      return unavailableObservation("Unreadable")
+    }
+    const count = observations.length
+    return count <= 16 ? { _tag: "Observed", count } : unavailableObservation("UnexpectedRecordCount")
+  } catch {
+    return unavailableObservation("Unreadable")
+  }
+}
+
+/**
+ * After a hosted cancellation, publish only fixed journal event kinds and an
+ * app-server start count. Journal payloads, private Codex state, prompts,
+ * credentials, and runner-local locators never cross this boundary.
+ */
+export const captureProductionLiveQualificationDiagnostics = async ({ environment = nodeProcess.env } = {}) => {
+  const publicationContainer = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_PUBLICATION_CONTAINER")
+  const retentionReport = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_RETAINED_LOCATORS")
+  const qualificationArtifact = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_ARTIFACT")
+  const diagnostics = exactLocator(environment, "DALPH_LIVE_QUALIFICATION_DIAGNOSTICS")
+  if (
+    nodePath.dirname(diagnostics) !== publicationContainer ||
+    diagnostics === retentionReport ||
+    diagnostics === qualificationArtifact
+  ) {
+    throw new Error("qualification diagnostics must be distinct and under the publication container")
+  }
+  const hosted = {
+    sourceSha: exactShaInput(environment, "DALPH_CANDIDATE_SHA"),
+    runId: positiveSafeInteger(Number(positiveIntegerInput(environment, "GITHUB_RUN_ID")), "GITHUB_RUN_ID"),
+    runAttempt: positiveSafeInteger(
+      Number(positiveIntegerInput(environment, "GITHUB_RUN_ATTEMPT")),
+      "GITHUB_RUN_ATTEMPT"
+    ),
+    job: valueOf(environment, "GITHUB_JOB")
+  }
+  let checkpoint
+  let checkpointRead = "Absent"
+  let checkpointSource
+  try {
+    checkpointSource = await readFile(retentionReport, "utf8")
+  } catch (error) {
+    checkpointRead = error?.code === "ENOENT" ? "Absent" : "Unreadable"
+  }
+  if (checkpointSource !== undefined) {
+    checkpointRead = "Unreadable"
+    try {
+      checkpoint = JSON.parse(checkpointSource)
+    } catch {
+      checkpoint = undefined
+    }
+  }
+  if (checkpoint === undefined && checkpointRead === "Absent") {
+    try {
+      const qualified = JSON.parse(await readFile(qualificationArtifact, "utf8"))
+      if (qualified?.schemaVersion === 1 && qualified?.artifactStage === "Final") return undefined
+    } catch {
+      // A missing or malformed final artifact does not erase the hosted failure diagnostic.
+    }
+  }
+  let report
+  if (checkpoint === undefined || !validRetentionCheckpoint(checkpoint)) {
+    report = {
+      schemaVersion: 1,
+      outcome: "NotQualified",
+      hosted,
+      checkpoint: unavailableObservation(checkpoint === undefined ? checkpointRead : "Unreadable"),
+      journal: unavailableObservation("CheckpointUnavailable"),
+      applicationServerStarts: unavailableObservation("CheckpointUnavailable")
+    }
+  } else {
+    const retainedLocalLocators = checkpoint.local
+      .filter(({ disposition }) => disposition === "Retained")
+      .map(({ locator }) => locator)
+    const journalPaths = retainedLocalLocators.filter((locator) => nodePath.basename(locator) === "journal.sqlite")
+    const privateStateDirectories = retainedLocalLocators.filter(
+      (locator) => nodePath.basename(locator) === "codex-executor-private"
+    )
+    report = {
+      schemaVersion: 1,
+      outcome: "NotQualified",
+      hosted,
+      checkpoint: {
+        _tag: "Observed",
+        phase: checkpoint.phase,
+        githubResourceCount: checkpoint.github.length,
+        githubDispositions: dispositionCounts(checkpoint.github),
+        localResourceCount: checkpoint.local.length,
+        localDispositions: dispositionCounts(checkpoint.local)
+      },
+      journal: await observeJournalKinds(journalPaths.length === 1 ? journalPaths[0] : undefined),
+      applicationServerStarts: await observeApplicationServerStarts(
+        privateStateDirectories.length === 1 ? privateStateDirectories[0] : undefined
+      )
+    }
+  }
+  const serialized = `${JSON.stringify(report, null, 2)}\n`
+  for (const [name, value] of Object.entries(environment)) {
+    if (
+      (secretEnvironmentNames.has(name) || secretEnvironmentPattern.test(name)) &&
+      typeof value === "string" &&
+      value !== "" &&
+      serialized.includes(value)
+    ) {
+      throw new Error("qualification diagnostics contain a protected credential")
+    }
+  }
+  await mkdir(publicationContainer, { recursive: true, mode: 0o700 })
+  const replacement = `${diagnostics}.replacement`
+  try {
+    await writeFile(replacement, serialized, { mode: 0o600 })
+    await rename(replacement, diagnostics)
+  } finally {
+    await rm(replacement, { force: true })
+  }
+  return report
 }
 
 const githubRunIdentity = (environment) => ({
@@ -743,6 +933,10 @@ export const runProductionLiveQualification = async ({
 }
 
 const main = async () => {
+  if (nodeProcess.argv.includes("--capture-hosted-diagnostics")) {
+    await captureProductionLiveQualificationDiagnostics()
+    return
+  }
   if (nodeProcess.argv.includes("--require-successful-ci")) {
     await requireSuccessfulCandidateCi()
     return
