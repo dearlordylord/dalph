@@ -127,6 +127,20 @@ test("checked-in hosted formal inputs exactly match the authoritative JavaScript
     readFileSync(hostedFormalInputManifestPath, "utf8"),
     await expectedHostedFormalInputManifestText(process.cwd())
   )
+  assert.equal(
+    manifest.paths.includes("packages/dalph/test/conformance/planned-attempt-executor-resume-fixture.ts"),
+    true
+  )
+  assert.equal(
+    manifest.paths.includes(
+      "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/resume-redelivery.ts"
+    ),
+    true
+  )
+  assert.equal(
+    manifest.paths.includes("packages/dalph/test/conformance/workspace-source-resolution.mbt.test.ts"),
+    false
+  )
 })
 
 test("hosted command discovery includes new Node entries and rejects unsupported formal job inputs", () => {

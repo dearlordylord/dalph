@@ -1,6 +1,7 @@
 import { readdir, readFile, writeFile } from "node:fs/promises"
-import { dirname, join, posix } from "node:path"
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import ts from "typescript"
 import { parse as parseYaml } from "yaml"
 
 import { discoverFormalSourcePaths } from "./formal-input-policy.mjs"
@@ -22,12 +23,99 @@ const hostedBootstrapInputs = Object.freeze([
   "package.json",
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
+  "tsconfig.base.json",
+  "tsconfig.json",
   hostedFormalInputManifestPath
 ])
 const executableConformanceAdapters = async (worktree) =>
   (await readdir(join(worktree, "packages/dalph/test/conformance"), { withFileTypes: true }))
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".mbt.test.ts"))
+    .filter(
+      (entry) =>
+        entry.isFile() &&
+        entry.name.endsWith(".mbt.test.ts") &&
+        // This infrastructure control proves Vitest resolves source rather than
+        // dist output; it does not execute a Quint model or govern runtime behavior.
+        entry.name !== "workspace-source-resolution.mbt.test.ts"
+    )
     .map((entry) => posix.join("packages/dalph/test/conformance", entry.name))
+
+const repositoryPath = (worktree, path) => {
+  const value = relative(worktree, path)
+  if (value === "" || value === ".." || value.startsWith(`..${sep}`) || isAbsolute(value)) return undefined
+  const normalized = value.split(sep).join(posix.sep)
+  return normalized === "node_modules" || normalized.startsWith("node_modules/") ? undefined : normalized
+}
+
+const typescriptModuleSpecifiers = (source, sourcePath) => {
+  const syntax = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true)
+  const specifiers = new Set()
+  const add = (node, syntaxKind) => {
+    if (!ts.isStringLiteralLike(node))
+      throw new Error(`Hosted formal manifest does not support non-literal ${syntaxKind} in ${sourcePath}`)
+    specifiers.add(node.text)
+  }
+  const visit = (node) => {
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier !== undefined)
+      add(node.moduleSpecifier, "module source")
+    else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference))
+      add(node.moduleReference.expression, "import assignment")
+    else if (ts.isCallExpression(node)) {
+      if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        if (node.arguments.length !== 1) throw new Error(`Unsupported dynamic import in ${sourcePath}`)
+        add(node.arguments[0], "dynamic import")
+      } else if (
+        (ts.isIdentifier(node.expression) && node.expression.text === "require") ||
+        (ts.isPropertyAccessExpression(node.expression) &&
+          ts.isIdentifier(node.expression.expression) &&
+          node.expression.expression.text === "require" &&
+          node.expression.name.text === "resolve")
+      ) {
+        if (node.arguments.length !== 1) throw new Error(`Unsupported require call in ${sourcePath}`)
+        add(node.arguments[0], "require source")
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(syntax)
+  return [...specifiers]
+}
+
+/** TypeScript resolves the executable adapter graph, including its workspace
+ * aliases and `.js` source specifiers, without broadening it to unrelated
+ * production files. */
+const discoverExecutableConformancePaths = async (worktree) => {
+  const configPath = join(worktree, "tsconfig.json")
+  const loaded = ts.readConfigFile(configPath, (path) => ts.sys.readFile(path))
+  if (loaded.error !== undefined)
+    throw new Error(
+      `Hosted formal manifest cannot read TypeScript configuration: ${ts.flattenDiagnosticMessageText(loaded.error.messageText, "\n")}`
+    )
+  const config = ts.parseJsonConfigFileContent(loaded.config, ts.sys, worktree, undefined, configPath)
+  if (config.errors.length > 0)
+    throw new Error(
+      `Hosted formal manifest cannot parse TypeScript configuration: ${ts.flattenDiagnosticMessageText(config.errors[0].messageText, "\n")}`
+    )
+  const pending = (await executableConformanceAdapters(worktree)).map((path) => join(worktree, path))
+  const visited = new Set()
+  while (pending.length > 0) {
+    const path = resolve(pending.pop())
+    const selected = repositoryPath(worktree, path)
+    if (selected === undefined || visited.has(selected)) continue
+    visited.add(selected)
+    const source = await readFile(path, "utf8")
+    const imports = typescriptModuleSpecifiers(source, selected)
+    for (const specifier of imports) {
+      const resolved = ts.resolveModuleName(specifier, path, config.options, ts.sys).resolvedModule?.resolvedFileName
+      if (resolved === undefined) {
+        if (specifier.startsWith(".") || specifier.startsWith("/") || specifier.startsWith("@dalph/"))
+          throw new Error(`Hosted formal manifest cannot resolve adapter import ${selected} -> ${specifier}`)
+        continue
+      }
+      if (repositoryPath(worktree, resolved) !== undefined) pending.push(resolved)
+    }
+  }
+  return [...visited].sort((left, right) => left.localeCompare(right))
+}
 
 const supportedEnvironmentByJob = Object.freeze({
   "formal-models": Object.freeze({
@@ -297,9 +385,9 @@ export const deriveHostedFormalInputManifest = async (worktree = repositoryRoot)
   })
   return createHostedFormalInputManifest([
     ...hostedBootstrapInputs,
-    ...(await executableConformanceAdapters(worktree)),
     ...workspacePackages.map(({ path }) => path),
     ...quintPatches,
+    ...(await discoverExecutableConformancePaths(worktree)),
     ...discovered
   ])
 }

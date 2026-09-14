@@ -196,6 +196,22 @@ test("requires formal verification for model, helper, command, workflow, and too
     assert.deepEqual(classifyFormalChangedPaths([path], manifest.paths), [], path)
 })
 
+test("marks an adapter helper and governed source affected while leaving the non-model resolution control unaffected", () => {
+  const manifest = parseHostedFormalInputManifest(readFileSync(hostedFormalInputManifestPath, "utf8"))
+  for (const path of [
+    "packages/dalph/test/conformance/planned-attempt-executor-resume-fixture.ts",
+    "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/resume-redelivery.ts"
+  ])
+    assert.deepEqual(classifyFormalChangedPaths([path], manifest.paths), [path], path)
+  assert.deepEqual(
+    classifyFormalChangedPaths(
+      ["packages/dalph/test/conformance/workspace-source-resolution.mbt.test.ts"],
+      manifest.paths
+    ),
+    []
+  )
+})
+
 test("classifies exact affected and unaffected plans with visible path evidence", () => {
   const affected = planCiChange(
     { eventName: "pull_request", headSha, pullRequestBaseSha: baseSha },

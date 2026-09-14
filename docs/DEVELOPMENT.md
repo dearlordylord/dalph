@@ -72,7 +72,9 @@ removal needs consumer evidence and affected type/build checks; changed behavior
 follows the runtime rule.
 Hosted CI keeps its documentation-only quality classification. Its separate
 formal classification compares the exact event base-to-head paths with the
-generated hosted-formal input projection. Unaffected changes retain the
+generated hosted-formal input projection. That projection follows executable
+model-conformance adapters through their TypeScript-resolved repository import
+closure; the non-model workspace source-resolution control remains outside it. Unaffected changes retain the
 required formal check as a lightweight successful not-applicable result.
 
 When required, freeze the candidate and run

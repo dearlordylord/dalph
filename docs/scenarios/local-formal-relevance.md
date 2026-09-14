@@ -34,8 +34,9 @@ branch, or let an unavailable path/projection read count as unaffected.
 
 The starting facts and trigger are the same, except at least one changed path is
 a selected `.qnt` model, a formal command/helper/toolchain input, or an
-executable model-conformance adapter named by the checked-in projection. The
-classification records that affected path. After preflight succeeds, the local
+executable model-conformance adapter or one of its TypeScript-resolved helper,
+type, or governed implementation dependencies named by the checked-in
+projection. The classification records that affected path. After preflight succeeds, the local
 runner enters the existing complete formal workflow exactly once. That workflow
 either executes the complete profile or reuses one independently applicable
 complete success, retains its observer through application qualification, and
@@ -66,6 +67,6 @@ local qualification harness.
 | Scenario outcome | Acceptance test |
 | --- | --- |
 | An unchanged or nonformal B-to-H path set records `not-applicable` and starts zero formal workflows/checkers/servers | `scripts/local-formal-relevance.test.mjs`: `an unaffected candidate records formal not applicable and starts no formal workflow` |
-| A selected `.qnt` model or executable conformance adapter enters one complete formal workflow | `scripts/local-formal-relevance.test.mjs`: `a model or executable conformance adapter requires exactly one formal workflow` |
+| A selected `.qnt` model, executable conformance adapter, adapter helper, or governed implementation source enters one complete formal workflow | `scripts/local-formal-relevance.test.mjs`: `a model or executable conformance adapter requires exactly one formal workflow`; `scripts/classify-docs-only-change.test.mjs`: `marks an adapter helper and governed source affected while leaving the non-model resolution control unaffected` |
 | Missing or malformed Git/projection evidence fails before any preflight, formal, or application child | `scripts/quality-command-routing.test.mjs`: `unavailable local formal classification fails before the resumable quality boundary`; `scripts/local-formal-relevance.test.mjs`: `unavailable formal classification fails closed before qualification children` |
 | A fully reused application prefix retains exact classification and a validated not-applicable composite without formal execution receipts | `scripts/gate-resume-integration.test.mjs`: `an unaffected candidate resumes proven stages with not-applicable formal evidence and no formal workflow`; `scripts/gate-quality-evidence.test.mjs`: `not-applicable formal evidence completes the composite only for the exact unaffected classification` |
