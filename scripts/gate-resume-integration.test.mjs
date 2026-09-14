@@ -17,7 +17,11 @@ import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { withoutInheritedCustody, repositoryLocation } from "./gate-custody-records.mjs"
 import { readRunEvidence } from "./gate-run-evidence.mjs"
-import { copyQualityRuntimeFixture, seedQualityFormalBoundary } from "./formal-quality-test-fixture.mjs"
+import {
+  controlledFormalWorkflowSource,
+  copyQualityRuntimeFixture,
+  seedQualityFormalBoundary
+} from "./formal-quality-test-fixture.mjs"
 
 const wrapper = fileURLToPath(new URL("./with-gate-slot.mjs", import.meta.url))
 const bounded = new URL("./run-bounded-command.mjs", import.meta.url).href
@@ -37,15 +41,7 @@ const fixture = () => {
   )
   writeFileSync(
     join(root, "scripts", "run-formal-workflow.mjs"),
-    `
-import {readFileSync} from 'node:fs';import {join} from 'node:path';
-import {readReferencedFormalSuccess} from './formal-success-evidence.mjs';
-export const runFormalWorkflow=async({report})=>{
- const evidencePath=readFileSync(join(process.cwd(),'.scratch','controlled-formal-path'),'utf8');
- const success=readReferencedFormalSuccess({recordPath:evidencePath,worktree:process.cwd()});
- report('Formal: controlled boundary reuses independently validated synthetic records');
- return {status:'reused',success,evidencePath,finalizeApplicability:async()=>({success,evidencePath,observation:success.observation}),assertUnchanged:async()=>{},close:async()=>{}}
-}`
+    controlledFormalWorkflowSource("Formal: controlled boundary reuses independently validated synthetic records")
   )
 
   writeFileSync(join(root, ".gitignore"), ".scratch/\ndist/\n")
