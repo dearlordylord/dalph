@@ -54,6 +54,7 @@
     "test:watch": "vitest",
     "check:ci:quality": "node scripts/with-gate-slot.mjs -- node scripts/run-quality-gate.mjs --hosted-quality",
     "check:ci:formal": "node scripts/with-gate-slot.mjs -- node scripts/check-quint-models.mjs",
+    "check:ci:formal:shard": "node scripts/with-gate-slot.mjs -- node scripts/run-hosted-formal-shard.mjs",
     "check:ci": "pnpm check:ci:quality && pnpm check:ci:formal",
     "check:all": "node scripts/with-gate-slot.mjs -- node scripts/run-quality-gate.mjs --local-handoff",
     "test:formal:controls": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/formal-input-policy.test.mjs scripts/formal-success-evidence.test.mjs scripts/quint-effective-profile.test.mjs scripts/quint-owned-server.test.mjs scripts/quint-owned-client-patch.test.mjs scripts/quality-command-routing.test.mjs scripts/run-formal-workflow.test.mjs",

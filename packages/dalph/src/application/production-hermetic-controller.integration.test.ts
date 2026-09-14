@@ -24,7 +24,10 @@ import {
   type HermeticPublicChild
 } from "../../test-support/production-hermetic-controller.js"
 import { disposeHermeticFixture } from "../../test-support/production-hermetic-fixture-cleanup.js"
-import { HermeticControllerFailure } from "../../test-support/production-hermetic-child-lifetime.js"
+import {
+  HermeticChildExitedBeforeBoundary,
+  HermeticControllerFailure
+} from "../../test-support/production-hermetic-child-lifetime.js"
 import { cleanupDisposableGithubQualification } from "../qualification/disposable-github-qualification-cleanup.js"
 import {
   hermeticQualificationPublicTaskSpecification,
@@ -244,6 +247,21 @@ it.live(
         })
         yield* controller.setPublicTaskSpecification(specification)
         const child = yield* controller.startChild()
+        const earlyExit = yield* controller
+          .awaitBoundary("PromotionCompareAndSet", child)
+          .pipe(Effect.flip, Effect.timeout("20 seconds"))
+        expect(earlyExit).toBeInstanceOf(HermeticChildExitedBeforeBoundary)
+        if (earlyExit instanceof HermeticChildExitedBeforeBoundary) {
+          expect(earlyExit).toMatchObject({
+            operation: "child.exitedBeforeBoundary",
+            outcome: { _tag: "Exited", exitCode: 1 },
+            stderr: "Dalph failed because of an unexpected runtime defect.\n",
+            stderrTruncated: false
+          })
+          expect(new TextEncoder().encode(earlyExit.stderr).byteLength).toBeLessThanOrEqual(4_096)
+          expect(earlyExit.stderr).not.toContain("controlled-hermetic-github-token")
+          expect(earlyExit.stderr).not.toContain("controlled-hermetic-codex-credential")
+        }
         expect(yield* controller.awaitChild(child).pipe(Effect.timeout("20 seconds"))).toBe(1)
         const records = MutableList.toArray(child.recordLog)
         expect(JSON.stringify(records).includes(specification.body)).toBe(false)

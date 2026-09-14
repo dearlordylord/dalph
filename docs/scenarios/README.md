@@ -127,6 +127,7 @@ Git history.
 
 - [Local formal qualification after the execution timeout](formal-reuse-local-qualification-budget.md)
 - [Fresh formal verification keeps generated server output outside candidate inputs](formal-reuse-owned-server-output.md)
+- [Hosted formal verification finishes without changing its evidence](formal-hosted-throughput.md)
 
 ## Retained contracts with corrected integration premises
 

@@ -191,6 +191,16 @@ failure, the actual child result, and truthful removed/retained receipts. The
 fixture setter changes no production provider interpretation or workflow rule;
 it does not grant a replacement child, mutation retry, or cleanup permission.
 
+When that owned child exits before the controller observes the requested
+promotion boundary, the controller first joins both output readers. It reports
+the exact numeric status when the process supplied one, or a distinct
+`ExitCodeUnavailable` result when the process boundary supplied no status. Its
+diagnostic contains at most 4,096 UTF-8 bytes on a complete code-point boundary,
+states whether it was truncated, and replaces the two controlled provider
+credentials before exposing stderr. This diagnostic is controller test-harness
+output only: it changes no production CLI record, workflow decision, provider
+call, journal fact, retry, cleanup action, or user-visible Dalph result.
+
 ## Scenario 3 — exact cleanup succeeds or preserves an unproved resource
 
 After the scenario's final tracker/Git reads, the controller has original local
@@ -252,6 +262,7 @@ teardown, and `ChangedIdentity` retention after one exact cleanup pass.
 | 2: original canonical bytes | Framing component tests reject blank, whitespace-altered, and reordered complete frames before publication; preserve the original canonical payload and existing real-Node SIGKILL tail controls. Transcript digest tests bind the accepted original LF bytes, not a normalized substitute. |
 | 2: opaque source and record binding | Qualification host/current-source tests seed a sentinel in a source atom and inside an opaque identity; reject before expected-record registration or public presentation. Parent tests reject an otherwise canonical counterfeit record without the exact safe-source record binding. All four built-controller chronologies retain live RunSelected and original P1/P2 synchronization. |
 | 2: original spawn registration | Controller component tests use distinct original spawn handles with the same numeric PID and a delayed S1 request during the S2 spawn gate. Prove zero stale/unknown-scope digest adoption or cache, and one owned S2/PID ACK before record publication. Actual built-child tests preserve startup synchronization without a provider retry. |
+| 2: child exits before requested boundary | The built-controller source-change chronology drives the real `awaitBoundary` race through an owned status-one child, joins its readers, and proves the distinct early-exit result carries status one, the complete safe static stderr, no controlled credential, and no truncation. The adjacent component negative test proves credential redaction across chunks and overlapping values, a valid UTF-8 prefix no larger than 4,096 bytes, the truncation flag, and distinct unavailable-exit-code state. |
 | 2: actual completion throttle | The built throttle chronology uses the production HTTP429 classification and the original current/final runtime request to bind the deterministic CompleteTask operation before safe-token registration and literal Failure publication; absent or mismatched request source is rejected without a UUID substitute. |
 | 2: callback and outer host failures | `production-hermetic-qualification-source.test.ts` drives the actual-used qualification host wrapper through callback and host-delivered errors using its original source fixtures; proves original-observation/current-or-closed-final validation and registration acknowledgement before error propagation, and safe rejection when the original source is absent. |
 | 3: exact GitHub cleanup | `disposable-github-qualification-cleanup.ts` and adjacent controlled tests prove fresh exact repository/issue/label ownership, one exact deletion, and absence reread; foreign, changed, unreadable, and throttled cases prove preservation and exact retained commands. No live provider is called. |

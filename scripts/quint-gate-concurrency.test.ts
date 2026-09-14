@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest"
 
-import { quintGateBatchResults, quintGateFamilyConcurrency, runQuintGateFamily } from "./quint-gate-concurrency.mjs"
+import {
+  quintGateBatchResults,
+  quintGateCommandAdmissionPriority,
+  quintGateFamilyConcurrency,
+  runQuintGateFamily
+} from "./quint-gate-concurrency.mjs"
 
 const controlledCompletion = () => {
   let resolve!: () => void
@@ -20,6 +25,44 @@ const controlledCommand = (values: ReturnType<typeof controlledCommands>, comman
 }
 
 describe("Quint gate family scheduler", () => {
+  it("starts expensive independent checks first and retains canonical result order", async () => {
+    const started: Array<string> = []
+    const releases = controlledCommands(["test", "sampled", "verify", "negative"])
+    const admissions = controlledCommands(["test", "sampled", "verify", "negative"])
+    const commands = [
+      { kind: "test", name: "test" },
+      { kind: "sampled-run", name: "sampled" },
+      { kind: "verify", name: "verify" },
+      { kind: "test", name: "negative" }
+    ]
+    const execution = runQuintGateFamily({
+      commands,
+      priority: quintGateCommandAdmissionPriority,
+      run: async (command) => {
+        started.push(command.name)
+        controlledCommand(admissions, command.name).resolve()
+        await controlledCommand(releases, command.name).promise
+        return `${command.name} result`
+      }
+    })
+
+    await Promise.all([
+      controlledCommand(admissions, "sampled").promise,
+      controlledCommand(admissions, "verify").promise
+    ])
+    expect(started).toEqual(["sampled", "verify"])
+    controlledCommand(releases, "verify").resolve()
+    await controlledCommand(admissions, "test").promise
+    expect(started).toEqual(["sampled", "verify", "test"])
+    controlledCommand(releases, "test").resolve()
+    await controlledCommand(admissions, "negative").promise
+    expect(started).toEqual(["sampled", "verify", "test", "negative"])
+    controlledCommand(releases, "negative").resolve()
+    controlledCommand(releases, "sampled").resolve()
+
+    await expect(execution).resolves.toEqual(["test result", "sampled result", "verify result", "negative result"])
+  })
+
   it("keeps a fixed family bound and restores input order after out-of-order completion", async () => {
     let active = 0
     let peak = 0
