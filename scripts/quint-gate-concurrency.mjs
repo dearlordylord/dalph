@@ -5,6 +5,15 @@
  */
 export const quintGateFamilyConcurrency = 2
 
+const commandAdmissionPriorities = Object.freeze({ "sampled-run": 0, verify: 1, test: 2, typecheck: 3 })
+
+/**
+ * Start the expensive independent checks first so both bounded workers reach
+ * the long tail without waiting behind two short checks. Result identity and
+ * reporting remain in canonical command order.
+ */
+export const quintGateCommandAdmissionPriority = (command) => commandAdmissionPriorities[command.kind] ?? 4
+
 const batchResults = Symbol("quintGateBatchResults")
 
 const asError = (failure) => (failure instanceof Error ? failure : new Error(String(failure)))
@@ -33,6 +42,7 @@ export const quintGateBatchResults = (failure) => (failure instanceof Error ? fa
 export const runQuintGateFamily = async ({
   commands,
   concurrency = quintGateFamilyConcurrency,
+  priority = () => 0,
   run,
   serializedPrefix = 0
 }) => {
@@ -49,7 +59,11 @@ export const runQuintGateFamily = async ({
   const effectiveConcurrency = Math.min(concurrency, quintGateFamilyConcurrency)
   const controller = new AbortController()
   const outcomes = new Array(commands.length)
-  let nextIndex = serializedPrefix
+  const admissionOrder = commands
+    .map((_command, index) => index)
+    .slice(serializedPrefix)
+    .sort((left, right) => priority(commands[left]) - priority(commands[right]) || left - right)
+  let nextAdmission = 0
   const failureState = { error: undefined, occurred: false }
 
   const recordFailure = (error) => {
@@ -77,9 +91,9 @@ export const runQuintGateFamily = async ({
 
   const worker = async () => {
     while (!failureState.occurred) {
-      const index = nextIndex
-      nextIndex += 1
-      if (index >= commands.length) return
+      const index = admissionOrder[nextAdmission]
+      nextAdmission += 1
+      if (index === undefined) return
       if (!(await executeAt(index))) return
     }
   }

@@ -1,11 +1,13 @@
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
+import { createHash } from "node:crypto"
 import { promisify } from "node:util"
 import { test } from "node:test"
 
 import { createQuintEffectiveProfile, assertQuintEffectiveProfile } from "./quint-effective-profile.mjs"
 import { runQuintEffectiveProfile } from "./check-quint-models.mjs"
 import { quintGateExpectedCommandCounts } from "./quint-gate-command-contract.mjs"
+import { createQuintHostedShard } from "./quint-hosted-shards.mjs"
 
 const capturedOutput = (command) => {
   const lines = command.verdict.witnesses.map(
@@ -58,6 +60,17 @@ test("hosted and local imports launch no checker", async () => {
 test("materializes the independent complete 105 obligations before any launch", () => {
   const profile = createQuintEffectiveProfile()
   assertQuintEffectiveProfile(profile)
+  const commandContract = profile.commands.map(({ args, kind, name, position, verdict }) => ({
+    position,
+    name,
+    kind,
+    args,
+    verdict
+  }))
+  assert.equal(
+    createHash("sha256").update(JSON.stringify(commandContract)).digest("hex"),
+    "3eb9085f1b7b4b5bf9930600064408e0dca8bb7474da83a0517ece19d97aa804"
+  )
   const counts = Object.fromEntries(
     ["typecheck", "test", "sampled-run", "verify"].map((kind) => [
       kind,
@@ -172,6 +185,7 @@ test("records every actual command custody ID and required verdict output with o
   })
   assert.equal(launches.length, 105)
   assert.equal(report.commands.length, 105)
+  assert.equal(Object.hasOwn(report, "shard"), false)
   assert.deepEqual(
     report.commands.map(({ obligationId }) => obligationId),
     Array.from({ length: 105 }, (_, p) => `custody-${p}`)
@@ -192,6 +206,43 @@ test("records every actual command custody ID and required verdict output with o
     assert.equal(launch.relayParentSignals, true)
     assert.equal(launch.captureOutput, true)
     assert.equal(launch.forwardOutput, false)
+  }
+})
+
+test("cost-priority admission changes hosted order without changing guarded-local order", async () => {
+  const hostedProfile = createQuintEffectiveProfile()
+  const hostedLaunches = []
+  await runQuintEffectiveProfile(controls(hostedProfile, hostedLaunches))
+  assert.deepEqual(
+    hostedLaunches.slice(0, 4).map(({ position }) => position),
+    [0, 1, 3, 2]
+  )
+
+  const localProfile = createQuintEffectiveProfile({ purpose: "local-guarded" })
+  const localLaunches = []
+  await runQuintEffectiveProfile({ ...controls(localProfile, localLaunches), purpose: "local-guarded" })
+  assert.deepEqual(
+    localLaunches.slice(0, 4).map(({ position }) => position),
+    [0, 1, 2, 3]
+  )
+})
+
+test("a hosted shard executes only its whole-family canonical positions", async () => {
+  for (const hostedShard of [0, 1]) {
+    const profile = createQuintEffectiveProfile()
+    const expected = createQuintHostedShard(profile, hostedShard)
+    const launches = []
+    const report = await runQuintEffectiveProfile({ ...controls(profile, launches), hostedShard })
+    assert.equal(Object.hasOwn(report, "shard"), true)
+    assert.deepEqual(report.shard, expected)
+    assert.deepEqual(
+      report.commands.map(({ position }) => position),
+      expected.positions
+    )
+    assert.deepEqual(
+      launches.map(({ position }) => position).sort((left, right) => left - right),
+      expected.positions
+    )
   }
 })
 

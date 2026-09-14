@@ -17,7 +17,12 @@ import {
   assertTlcArtifactPrepared,
   assertViolatedTemporalVerdict
 } from "./quint-temporal-gate.mjs"
-import { quintGateBatchResults, runQuintGateFamily } from "./quint-gate-concurrency.mjs"
+import {
+  quintGateBatchResults,
+  quintGateCommandAdmissionPriority,
+  runQuintGateFamily
+} from "./quint-gate-concurrency.mjs"
+import { assertCompleteQuintHostedPartition, createQuintHostedShard } from "./quint-hosted-shards.mjs"
 import { createQuintGateTiming, runWithQuintGateTiming } from "./quint-gate-timing.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { validateQuintCommandOutput } from "./quint-witness-coverage.mjs"
@@ -42,12 +47,21 @@ export const runQuintEffectiveProfile = async ({
   compact = false,
   runCommand = runBoundedCommand,
   readProvenance = readQuintEvaluatorProvenance,
-  assertArtifactPrepared = assertTlcArtifactPrepared
+  assertArtifactPrepared = assertTlcArtifactPrepared,
+  hostedShard
 } = {}) => {
   assertQuintEffectiveProfile(profile, { purpose })
   // Execute a fresh frozen canonical copy, so caller mutation after validation
   // cannot change the admitted plan while a preceding command is awaited.
   profile = createQuintEffectiveProfile({ purpose })
+  if (hostedShard !== undefined && purpose !== "hosted") {
+    throw new Error("Hosted Quint shards cannot select the guarded local profile")
+  }
+  const shard =
+    hostedShard === undefined
+      ? undefined
+      : (assertCompleteQuintHostedPartition(profile), createQuintHostedShard(profile, hostedShard))
+  const executionSteps = shard?.steps ?? profile.steps
   if (serverEndpoint !== undefined && environment === undefined) {
     throw new Error("An owned Quint endpoint requires an explicit sanitized environment")
   }
@@ -77,6 +91,7 @@ export const runQuintEffectiveProfile = async ({
     version: 1,
     entryPoint: quintEntryPoint,
     profile,
+    ...(shard === undefined ? {} : { shard }),
     serverEndpoint: serverEndpoint ?? null,
     commands: commands.filter((command) => command !== undefined),
     timing: { records: timing.records(), aggregates: timing.aggregates() },
@@ -155,7 +170,7 @@ export const runQuintEffectiveProfile = async ({
     await runWithQuintGateTiming({
       timing,
       run: async () => {
-        for (const step of profile.steps) {
+        for (const step of executionSteps) {
           if (step.kind === "evaluator-provenance") {
             // Local preparation/identification happens before observation; supplying
             // the identified path avoids the binary manager's cold-download branch.
@@ -168,6 +183,7 @@ export const runQuintEffectiveProfile = async ({
             const values = await runQuintGateFamily({
               commands: reserved,
               concurrency: step.concurrency,
+              priority: purpose === "hosted" ? quintGateCommandAdmissionPriority : undefined,
               serializedPrefix: step.serializedPrefix,
               run: executeCommand
             })
@@ -184,19 +200,34 @@ export const runQuintEffectiveProfile = async ({
       write: compact ? () => {} : write
     })
     const phases = timing.aggregates()
-    assertQuintGateCommandContract({
-      manifest: profile.commands,
-      executed: {
-        total: commands.filter((command) => command !== undefined).length,
-        typecheck: phases.typecheck.count,
-        test: phases.test.count,
-        "sampled-run": phases["sampled-run"].count,
-        verify: phases.verify.count
+    const executed = {
+      total: commands.filter((command) => command !== undefined).length,
+      typecheck: phases.typecheck.count,
+      test: phases.test.count,
+      "sampled-run": phases["sampled-run"].count,
+      verify: phases.verify.count
+    }
+    if (shard === undefined) {
+      assertQuintGateCommandContract({ manifest: profile.commands, executed })
+    } else {
+      const selectedCommands = shard.positions.map((position) => profile.commands[position])
+      const expected = Object.fromEntries(
+        ["typecheck", "test", "sampled-run", "verify"].map((kind) => [
+          kind,
+          selectedCommands.filter((command) => command.kind === kind).length
+        ])
+      )
+      if (
+        executed.total !== selectedCommands.length ||
+        Object.entries(expected).some(([kind, count]) => executed[kind] !== count)
+      ) {
+        throw new Error(`Hosted Quint shard ${shard.shard} command contract mismatch`)
       }
-    })
+    }
     const report = buildReport()
+    const resultName = shard === undefined ? "Complete Quint model gate" : `Hosted Quint shard ${shard.shard} evidence`
     write(
-      `\nComplete Quint model gate: ${(report.elapsedMilliseconds / 1000).toFixed(2)}s (budget ${profile.policy.regressionBudgetMilliseconds / 1000}s)\n`
+      `\n${resultName}: ${(report.elapsedMilliseconds / 1000).toFixed(2)}s (budget ${profile.policy.regressionBudgetMilliseconds / 1000}s)\n`
     )
     if (report.elapsedMilliseconds > profile.policy.regressionBudgetMilliseconds) {
       throw new Error("Quint models exceeded their regression budget")
