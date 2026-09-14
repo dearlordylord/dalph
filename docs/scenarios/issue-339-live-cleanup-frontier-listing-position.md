@@ -12,7 +12,7 @@ acknowledges `TaskClaimReleaseIntended` at position 47 for
 `CompletionOriginalClaimRelease`, using the exact claim acquired at 7 and the
 acquisition/completion predecessors. Its result is not yet acknowledged.
 
-The actual controller diagnostic proves that the next frontier contains
+The accepted failure diagnosis established that the next frontier contains
 `ReconcileTaskClaimRelease` at listing position 0, followed by the still-needed
 outer `DeleteCompletedTaskCompletionClaim` at 1. The same-ID owner/current
 proposal pair has equal route, action identity, payload, wait, admission and all
@@ -71,5 +71,7 @@ no permission to repeat a mutation, adopt a resource or infer completion.
   payload/wait/admission → focused negative tests still report conflict.
 - Different order tags, malformed/duplicate proposal records and changed
   RecoveredWorkflowOrder responsibility ordinal → existing negative cases remain.
-- Complete ordinary command → #339's real SQLite/Git controller reaches actual
-  CAS, M parents H,C and protocol-proven terminal output without projection failure.
+- Complete ordinary command → #307's protected live qualification is the final
+  composed proof that the shipped CLI reaches actual CAS, M parents H,C and
+  protocol-proven terminal output without projection failure. Focused tests own
+  the listing-position rule, not an equivalent composition.

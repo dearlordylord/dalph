@@ -52,9 +52,10 @@ defect, not permission to shorten the task identity or raise a timeout.
    ownership and foreign-resource checks remain; matching an encoded path alone is
    never permission to adopt, overwrite or delete an existing resource.
 4. Git reports the actual ready worktree; SQLite acknowledges that observation
-   before the executor starts. The built controller can then reach its real
-   promotion boundary. The test does not shorten RunId, fake Git, pre-create
-   the expected worktree or increase its deadline to manufacture progress.
+   before the executor starts. #307's protected live qualification can then
+   reach the shipped command's real promotion boundary. Focused tests do not
+   shorten RunId, fake Git, pre-create the expected worktree or increase a
+   deadline to manufacture progress.
 
 ## Crash, retry and forbidden results
 
@@ -84,6 +85,7 @@ actual Run/GitHub task inputs and generated properties use well-formed Unicode.
 - Actual local filesystem/Git → focused integration creates the derived
   long-identity worktree using real Git and asserts its branch, H and exact
   path; no live provider calls or timeout widening.
-- Ordinary complete command → #339's built SQLite/Git controller asserts
-  real ready-worktree evidence before executor progress and reaches real CAS.
-  The other three controller cuts and downstream #304–#306 blockers remain.
+- Ordinary complete command → #307's protected live qualification owns the
+  final composed proof of real ready-worktree evidence before executor progress
+  and real CAS. Focused tests retain the component rules but are not an
+  equivalent composition. Downstream blocking edges remain.

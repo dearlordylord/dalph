@@ -209,10 +209,12 @@ refinement reconstructs no old owner and authorizes no retry.
   owner-order tampering against its witness, current payload/admission/target/
   wait changes, changed order tag, regression, duplicates, and forged/rebound
   witnesses.
-- Same real trigger through built production entry → #339's real SQLite/Git
-  controller test proceeds beyond the first graph read without the false
-  projection conflict. The remaining #339 and downstream qualification
-  scenarios and blocking edges are unchanged.
+- Same real trigger through the shipped production entry → #307's protected
+  live qualification is the sole final composition proof that real SQLite,
+  Git, tracker, process and cleanup boundaries proceed without the false
+  projection conflict. Focused runtime/status tests own the failure mode; they
+  are not an equivalent composed proof. The remaining #339 and downstream
+  qualification scenarios and blocking edges are unchanged.
 
 ## Alice sees the original read owner after its allocated intent becomes pending
 
@@ -255,9 +257,11 @@ witness; the existing journal reconciliation rules own restart and retry.
   duplicate-owner and admission-witness rejection tests.
 - Qualification still rejects actual projector conflicts →
   `maps a canonical projector conflict to safe typed source rejection without a publication token`.
-- The six built hermetic controller cases retain their existing Run, Git,
-  tracker, process and cleanup outcomes; the qualification validator accepts
-  only the ordinary status produced after the exact-owner comparison succeeds.
+- Focused qualification-validator tests reject the actual projector conflict
+  and accept only the ordinary status produced after the exact-owner comparison
+  succeeds. #307's protected live run owns the final shipped-entry composition;
+  the retired resource-sensitive built-child simulations provide no separate
+  acceptance claim.
 
 ## Alice sees the original claim-read owner after its intent advances history
 
@@ -333,6 +337,8 @@ adds no recovery request or automatic qualification rerun.
   reject witness/order tampering, duplicate/forged/copied/rebound witnesses,
   changed route/payload/admission/identity/wait, order tag, regression and
   mixed-time position. Other order variants remain strict.
-- Actual built chronology → #339's real SQLite/Git controller proceeds past
-  the responsible-task claim read with no extra provider operation. Remaining
-  #339 acceptance scenarios and native blocking edges are unchanged.
+- Actual shipped chronology → #307's protected live qualification proceeds past
+  the responsible-task claim read with no extra provider operation. The focused
+  tests own the comparison rule but do not substitute for that final
+  composition. Remaining #339 acceptance scenarios and native blocking edges
+  are unchanged.

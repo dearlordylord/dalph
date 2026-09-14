@@ -31,8 +31,8 @@ controlled adapter, not credentials or a live disposable repository.
 
 ### Starting facts and trigger
 
-Alice invokes the existing built hermetic controller for one named scenario Q.
-The controller creates its exact local fixture and runs the built public CLI
+Alice invokes the protected live qualification controller for one named
+scenario Q. The controller creates its exact disposable fixture and runs the built public CLI
 with real Git and SQLite and controlled outer GitHub and Codex providers. The
 fixture manifest and creation receipts name the actual resources created by Q.
 No evidence document authorizes a workflow action or fixture deletion.
@@ -316,9 +316,12 @@ These are focused acceptance seams plus the one protected live qualification.
 | 4: publication failure | `production-mvp-qualification-evidence.test.ts` proves an unwritable or already-written artifact never claims or repeats publication; focused cleanup tests preserve the exact retained disposition. |
 
 The removed `production-hermetic-controller.integration.test.ts` duplicated six
-resource-sensitive built-child simulations. Their acceptance ownership remains:
+resource-sensitive built-child simulations. The focused tests below own only
+their named failure modes; they are not equivalent composed proof. #307's one
+actual protected live run owns the final shipped-CLI composition across SQLite,
+Git, tracker, process, cleanup and artifact boundaries.
 
-| Removed simulation | Retained acceptance owner |
+| Removed simulation | Retained focused failure-mode owner or final composition owner |
 | --- | --- |
 | changed original tracker source | `production-hermetic-qualification-source.test.ts` source-atom/private-specification rejection tests plus `production-hermetic-fixture-cleanup.test.ts` changed-identity retention |
 | artifact write failure after cleanup | `production-mvp-qualification-evidence.test.ts`: `artifact writing stays outside Q and failure never claims or repeats publication`, plus the focused cleanup tests |
@@ -328,7 +331,7 @@ resource-sensitive built-child simulations. Their acceptance ownership remains:
 | HTTP429 completion throttle | `production-hermetic-qualification-source.test.ts`: `acknowledges an outer host throttle using the original Ready or closed final source before propagation`, plus `production-cli.test.ts` throttle/unfinished-Run tests |
 
 The implementation is qualification-only source/evidence helpers and their
-focused tests plus narrow existing-controller wiring. This is not a new
+focused tests plus narrow protected-controller wiring. This is not a new
 controller, generic package API, artifact framework, legacy migration, or MBT lane.
 The qualification source validator reuses the existing canonical
 `trackerRevisionFor`, `deliveryProposalIdOf`,

@@ -953,7 +953,9 @@ action, or runtime-visible result. Resource-sensitive simulations that spawn a
 built CLI do not belong in automatic V8 coverage: the child process is not
 attributed to the parent report. When focused boundary tests plus the actual
 protected qualification already own their acceptance facts, remove a redundant
-built-child simulation instead of moving it into another automatic lane.
+built-child simulation instead of moving it into another automatic lane. The
+focused tests remain boundary evidence, not a substitute for composed runtime
+proof; the actual protected #307 run owns the final shipped-entry composition.
 
 Before submitting another hosted candidate after a failure, reproduce the
 failure with the smallest named check that owns that boundary. Run cheap
