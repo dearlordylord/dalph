@@ -105,5 +105,6 @@ progress, or create a second child.
 
 | Scenario outcome | Acceptance test |
 | --- | --- |
+| Build measurement and all safe child/output observations flow through the real runtime into its atomic retained report without publishing an artifact or secret. | `runtime retains build measurement and child progress through its real checkpoint writer` |
 | Alice sees child spawn and first canonical-output progress before either output stream reaches EOF; process exit remains independently observable while output is open, and the process identity is the only child identity published. | `records child and canonical-output progress before EOF and exit independently while output remains open` |
-| Every replacement is a complete redacted checkpoint, an interrupted replacement retains the prior complete progress, and existing cleanup locators remain available without private payloads or a second child. | `atomically retains safe progress with cleanup locators for an unfinished recoverable Run` |
+| Every replacement is a complete redacted checkpoint, an interrupted replacement retains the prior complete progress, and existing cleanup locators remain available without private payloads or a second child. | `atomically retains safe progress with cleanup locators for an unfinished recoverable Run`; `preserves the prior valid checkpoint if replacement is interrupted` |
