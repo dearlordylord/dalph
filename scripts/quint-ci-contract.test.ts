@@ -77,7 +77,7 @@ describe("hosted formal-model contract", () => {
     expect(formalJob).toContain("\n    timeout-minutes: 16")
     expect(formalJob).toMatch(/\n\s+node-version: \$\{\{ matrix\.node-version \}\}/)
     expect(formalJob).toContain("\n        shard: [0, 1]")
-    expect(formalJob).toContain('pnpm check:ci:formal:shard -- --shard "${{ matrix.shard }}"')
+    expect(formalJob).toContain('pnpm check:ci:formal:shard --shard "${{ matrix.shard }}"')
     expect(formalJob).not.toContain("run: node scripts/run-hosted-formal-shard.mjs")
     expect(formalJob).toContain("\n        uses: actions/upload-artifact@v4")
     expect(formalJob).toContain("path: formal-shard-reports/shard-${{ matrix.shard }}.json")
@@ -141,6 +141,49 @@ describe("hosted formal-model contract", () => {
     expect(quintGateRegressionBudgetMilliseconds).toBe(750_000)
     expect(quintGateSafetyTimeoutMilliseconds).toBe(720_000)
     expect(() => assertQuintHostedDeadlineContract(ciWorkflow)).not.toThrow()
+  })
+
+  it("forwards shard flags without a separator through pnpm's script shorthand", async () => {
+    await mkdir(join(repositoryRoot, ".scratch"), { recursive: true })
+    const directory = await mkdtemp(join(repositoryRoot, ".scratch", "dalph-pnpm-shard-"))
+    const capturedArgumentsPath = join(directory, "captured-arguments.json")
+    try {
+      await writeFile(
+        join(directory, "package.json"),
+        JSON.stringify({ private: true, scripts: { "check:ci:formal:shard": "node capture-arguments.mjs" } })
+      )
+      await writeFile(
+        join(directory, "capture-arguments.mjs"),
+        [
+          'import { writeFile } from "node:fs/promises"',
+          "const destination = process.env.DALPH_TEST_ARGUMENT_CAPTURE",
+          'if (destination === undefined) throw new Error("argument capture path is missing")',
+          "await writeFile(destination, JSON.stringify(process.argv.slice(2)))",
+          ""
+        ].join("\n")
+      )
+
+      const pnpmEntryPoint = process.env["npm_execpath"] ?? "pnpm"
+      const pnpmArguments = ["check:ci:formal:shard", "--shard", "1", "--report", "formal-shard-reports/shard-1.json"]
+      execFileSync(
+        process.env["npm_execpath"] === undefined ? pnpmEntryPoint : process.execPath,
+        process.env["npm_execpath"] === undefined ? pnpmArguments : [pnpmEntryPoint, ...pnpmArguments],
+        {
+          cwd: directory,
+          encoding: "utf8",
+          env: { ...process.env, DALPH_TEST_ARGUMENT_CAPTURE: capturedArgumentsPath }
+        }
+      )
+
+      expect(JSON.parse(await readFile(capturedArgumentsPath, "utf8"))).toEqual([
+        "--shard",
+        "1",
+        "--report",
+        "formal-shard-reports/shard-1.json"
+      ])
+    } finally {
+      await rm(directory, { force: true, recursive: true })
+    }
   })
 
   it(
