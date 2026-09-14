@@ -440,9 +440,11 @@ it.effect("rejects removed Codex provider and state fields before production hos
       expect(failure.code).toBe("configuration.invalid")
 
       const hostAcquisitions = yield* Ref.make(0)
+      const lines = yield* Ref.make<ReadonlyArray<string>>([])
+      const chronology = yield* Ref.make<ReadonlyArray<string>>([])
       const application = runProductionCli(() => Ref.update(hostAcquisitions, (count) => count + 1))
       yield* application(["run", "github:octo/dalph#42", "--production", "--config", "/tmp/production.json"]).pipe(
-        Effect.provide(liveCliLayer(yield* Ref.make([]), yield* Ref.make([]), document)),
+        Effect.provide(liveCliLayer(lines, chronology, document)),
         Effect.provide(NodeServices.layer),
         Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ GITHUB_TOKEN: "github-sentinel" }))),
         Effect.flip

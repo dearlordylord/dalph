@@ -238,11 +238,11 @@ it.effect("production host composition keeps ambient Codex home separate from ex
         integratorPrivateStore: path.join(root, "integrator-private.json"),
         codexExecutable: executable
       }
-      const previousCodexHome = nodeProcess.env.CODEX_HOME
+      const previousCodexHome = nodeProcess.env["CODEX_HOME"]
 
       yield* Effect.acquireUseRelease(
         Effect.sync(() => {
-          nodeProcess.env.CODEX_HOME = ambientCodexHome
+          nodeProcess.env["CODEX_HOME"] = ambientCodexHome
         }),
         () =>
           withProductionRepositoryHost(
@@ -265,8 +265,8 @@ it.effect("production host composition keeps ambient Codex home separate from ex
           ),
         () =>
           Effect.sync(() => {
-            if (previousCodexHome === undefined) delete nodeProcess.env.CODEX_HOME
-            else nodeProcess.env.CODEX_HOME = previousCodexHome
+            if (previousCodexHome === undefined) delete nodeProcess.env["CODEX_HOME"]
+            else nodeProcess.env["CODEX_HOME"] = previousCodexHome
           })
       )
     }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
