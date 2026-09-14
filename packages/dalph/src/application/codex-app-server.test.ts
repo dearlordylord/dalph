@@ -59,9 +59,9 @@ if (process.env.DALPH_QUALIFICATION_ENV_CAPTURE !== undefined) {
     JSON.stringify({
       arguments: process.argv.slice(2),
       codexHome: process.env.CODEX_HOME,
-      hasOpenAiApiKey: process.env.OPENAI_API_KEY !== undefined,
-      hasProviderCredential: process.env.DALPH_CODEX_PROVIDER_CREDENTIAL !== undefined,
-      path: process.env.PATH,
+      hasOpenAiApiKey: process.env["OPENAI_API_KEY"] !== undefined,
+      hasProviderCredential: process.env["DALPH_CODEX_PROVIDER_CREDENTIAL"] !== undefined,
+      path: process.env["PATH"],
       providerKey: process.env.DALPH_QUALIFICATION_PROVIDER_KEY
     })
   )
@@ -347,9 +347,9 @@ it.effect("forwards isolated qualification environment only at the child launch 
         expect(captured).toEqual({
           arguments: ["app-server"],
           codexHome: "/isolated/qualification-codex-home",
-          hasOpenAiApiKey: nodeProcess.env.OPENAI_API_KEY !== undefined,
-          hasProviderCredential: nodeProcess.env.DALPH_CODEX_PROVIDER_CREDENTIAL !== undefined,
-          path: nodeProcess.env.PATH,
+          hasOpenAiApiKey: nodeProcess.env["OPENAI_API_KEY"] !== undefined,
+          hasProviderCredential: nodeProcess.env["DALPH_CODEX_PROVIDER_CREDENTIAL"] !== undefined,
+          path: nodeProcess.env["PATH"],
           providerKey: "fixture-only-provider-key"
         })
         const missing = yield* app
@@ -396,10 +396,10 @@ it.effect("starts codex app-server without provider credential or CODEX_HOME ove
           JSON.parse(yield* fileSystem.readFileString(capture))
         )
         expect(captured.arguments).toEqual(["app-server"])
-        expect(captured.codexHome).toBe(nodeProcess.env.CODEX_HOME)
-        expect(captured.hasOpenAiApiKey).toBe(nodeProcess.env.OPENAI_API_KEY !== undefined)
-        expect(captured.hasProviderCredential).toBe(nodeProcess.env.DALPH_CODEX_PROVIDER_CREDENTIAL !== undefined)
-        expect(captured.path).toBe(nodeProcess.env.PATH)
+        expect(captured.codexHome).toBe(nodeProcess.env["CODEX_HOME"])
+        expect(captured.hasOpenAiApiKey).toBe(nodeProcess.env["OPENAI_API_KEY"] !== undefined)
+        expect(captured.hasProviderCredential).toBe(nodeProcess.env["DALPH_CODEX_PROVIDER_CREDENTIAL"] !== undefined)
+        expect(captured.path).toBe(nodeProcess.env["PATH"])
         yield* app.close
       }).pipe(Effect.provide(Layer.merge(storeLayer, appLayer)))
     }).pipe(Effect.provide(NodeServices.layer))
