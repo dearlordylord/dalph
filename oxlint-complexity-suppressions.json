@@ -15,6 +15,24 @@
       "count": 6
     }
   },
+  "packages/dalph/src/qualification/live-qualification-evidence.ts": {
+    "complexity": {
+      "count": 2,
+      "justification": "The live qualification provenance predicates bind one source, workflow run and attempt, and four distinct formal jobs before accepting evidence; their remaining comparisons form one fail-closed cross-artifact identity proof, and splitting them would obscure that exact relation."
+    }
+  },
+  "packages/dalph/src/qualification/qualification-formal-provenance.ts": {
+    "complexity": {
+      "count": 3,
+      "justification": "The formal qualification profile predicates retain one exact shard and profile identity across shard names, run identity, timings, positions, unique reports and obligations, and dedicated/stressed equivalence; those clauses form one fail-closed provenance proof whose separation would make the evidence contract harder to audit."
+    }
+  },
+  "packages/dalph/src/qualification/qualification-provenance.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "validateProfile validates one supplied formal profile from source and run identity through both shard reports, timings, positions, and canonical schema construction before returning it; its branches are the fail-closed clauses of that one boundary, and splitting them would separate the reports from the evidence they prove."
+    }
+  },
   "packages/dalph/test-support/issue-268-controlled-characterization.ts": {
     "complexity": {
       "count": 7,
