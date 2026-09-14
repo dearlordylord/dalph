@@ -244,9 +244,9 @@ const publicFixture = Effect.gen(function* () {
   yield* git.runInWorktree(repository, ["commit", "--allow-empty", "-m", "initial"])
   yield* git.runInWorktree(repository, ["branch", "-M", "master"])
   const baseSha = GitCommitSha.make((yield* git.runInWorktree(repository, ["rev-parse", "HEAD"])).stdout.trim())
-  const directories = ["codex", "evidence", "planned-attempts", "integrator-candidates"]
+  const directories = ["codex-executor-private", "evidence", "planned-attempts", "integrator-candidates"]
   yield* Effect.forEach(directories, (directory) => fileSystem.makeDirectory(path.join(root, directory)))
-  yield* fileSystem.chmod(path.join(root, "codex"), 0o700)
+  yield* fileSystem.chmod(path.join(root, "codex-executor-private"), 0o700)
   const journalDatabase = path.join(root, "journal.sqlite")
   const config = path.join(root, "production.json")
   const claimState = path.join(root, "claim.json")

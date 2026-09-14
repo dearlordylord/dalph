@@ -48,7 +48,7 @@ const validRawConfiguration = (input: RestartFixtureInput) => {
     journalDatabase: input.journalDatabase,
     evidenceStoreRoot: join(input.root, "evidence"),
     plannedAttemptWorktreeRoot: join(input.root, "planned-attempts"),
-    codexExecutorPrivateStateDirectory: join(input.root, "codex-executor-private"),
+    codexExecutorPrivateStateDirectory: join(input.root, "codex-state"),
     integratorCandidateWorktreeRoot: join(input.root, "integrator-candidates"),
     integratorPrivateStore: join(input.root, "integrator-private.json"),
     activationInterval: "1 minute",
