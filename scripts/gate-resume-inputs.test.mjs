@@ -247,11 +247,12 @@ test("split config inode events wait for replacement evidence until validation",
   const script = fileURLToPath(new URL("./gate-input-observer.py", import.meta.url))
   // Execute the actual event processor with deterministic read boundaries.
   // Real kernel delivery order cannot reliably force EAGAIN between these events.
-  execFileSync(
-    "python3",
-    [
-      "-c",
-      String.raw`
+  for (const expireArrival of [false, true])
+    execFileSync(
+      "python3",
+      [
+        "-c",
+        String.raw`
 import contextlib, io, os, struct, sys
 source = open(sys.argv[1], encoding="utf-8").read()
 scope = {}
@@ -291,7 +292,7 @@ try:
         output.seek(0)
         output.truncate()
         queued.append(event(parent_wd, 0x80, b"config\0"))
-        scope["drain"](validate=True)
+        scope["drain"](validate=sys.argv[3] == "true")
         assert output.getvalue() == "", output.getvalue()
         assert scope["active_replaceable_watches"][config] != old_wd
         # fsnotify reports parent MOVED_TO before move-self on the source
@@ -299,6 +300,10 @@ try:
         # on the NEW descriptor, even though that inode is already at config.
         queued.append(event(scope["active_replaceable_watches"][config], 0x800))
         scope["drain"](validate=True)
+        if sys.argv[3] == "true":
+            # A previous successful validation cannot explain a later move.
+            assert "watch was not re-established" in output.getvalue(), output.getvalue()
+            sys.exit(0)
         assert output.getvalue() == "", output.getvalue()
         queued.append(event(old_wd, 0x400) + event(old_wd, 0x8000))
         scope["drain"](validate=True)
@@ -318,11 +323,12 @@ finally:
     os.read = real_read
     os.close(scope["fd"])
 `,
-      script,
-      join(f.root, ".git", "config")
-    ],
-    { encoding: "utf8" }
-  )
+        script,
+        join(f.root, ".git", "config"),
+        String(expireArrival)
+      ],
+      { encoding: "utf8" }
+    )
 })
 
 test("a relevant config edit restored before validation remains rejected", async () => {

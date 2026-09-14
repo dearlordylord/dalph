@@ -164,6 +164,9 @@ def drain(validate=False):
             # across background drains; only a validation barrier requires
             # replacement evidence to have arrived and its watch to be live.
             if validate:
+                # An arrival can explain a self-move only within this
+                # validation interval, never a later independent operation.
+                expected_arrival_moves.clear()
                 for path, mask in unresolved_replaceable_events.items():
                     send("error", reason="replaceable input watch was not re-established mask=" + hex(mask),
                          path=path[:1024])

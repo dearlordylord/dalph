@@ -232,7 +232,8 @@ event and the new file establish that generation. A later removal event for the
 obsolete inode retires only that old generation.
 Linux can also deliver the replacement inode's own move notification after the
 parent notification caused its watch to be installed. The observer recognizes
-one such notification for that exact watched generation; further self-moves,
+one such notification for that exact watched generation before the next explicit
+validation; an unused arrival expectation expires at that boundary. Further self-moves,
 watch removal, and writes still require replacement evidence or invalidate.
 The guard compares the effective
 local configuration for the candidate worktree; foreign `branch.*` sections do
@@ -246,6 +247,7 @@ provider boundary, journal fact, retry, or cleanup behavior.
 | --- | --- |
 | Another maintainer adds an unrelated branch section while the candidate input observer is live; the observer re-arms the atomically replaced config and retains the same candidate input identity | `scripts/gate-resume-inputs.test.mjs`: `an unrelated branch section can be added while the candidate config watch remains live` |
 | Linux delivers the old config inode's removal before the parent replacement event in separate observer reads; the observer retains the pending event until validation, re-arms the replacement, and still refuses a missing replacement or a later edit | `scripts/gate-resume-inputs.test.mjs`: `split config inode events wait for replacement evidence until validation` |
+| Linux reports the parent replacement before the newly watched inode's arrival self-move; that arrival is accepted only before the next explicit validation, and a later unexplained self-move is rejected | `scripts/gate-resume-inputs.test.mjs`: `split config inode events wait for replacement evidence until validation` |
 | Another maintainer adds branch metadata whose branch name merely extends the candidate's branch name; exact Git section/subsection parsing keeps it unrelated | `scripts/gate-resume-inputs.test.mjs`: `a branch whose name extends the current branch remains unrelated configuration` |
 | The exact current branch's Git configuration changes; the observer refuses the candidate even though similarly prefixed foreign branch sections are ignored | `scripts/gate-resume-inputs.test.mjs`: `the exact current branch section remains candidate-relevant configuration` |
 | A repository-wide setting in the subsection-less `[branch]` section changes; the observer refuses both the next stage and final qualification | `scripts/gate-resume-inputs.test.mjs`: `a subsection-less branch setting remains repository-wide candidate configuration` |
