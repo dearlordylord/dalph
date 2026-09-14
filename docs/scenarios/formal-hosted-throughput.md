@@ -91,8 +91,11 @@ the workflow journal.
   compares those paths with one checked-in hosted-formal input projection. That
   projection is generated from the same recursively discovered JavaScript and
   selected-Quint closure used by the formal gate, plus the exact workflow,
-  package, lock, workspace, npm, and selected patch inputs that determine the
-  hosted installation and command. The projection, its generator, and the
+  root and every declared workspace package manifest, lock, workspace, npm,
+  and selected patch inputs that determine the hosted installation and
+  command. The workspace manifests are derived from `pnpm-workspace.yaml`, and
+  unsupported install lifecycle commands in any of them fail projection
+  generation closed. The projection, its generator, and the
   classifier that imports it are themselves governed inputs. A new formal
   dependency therefore first changes an already-governed importer or selected
   root, and the quality test refuses a stale projection before that dependency
@@ -129,7 +132,11 @@ the workflow journal.
   documentation classification, and generated-manifest positive and negative
   controls. `formal-input-policy.test.mjs` proves the checked-in projection is
   exactly regenerated from the authoritative closure and changes for a selected
-  model, imported helper, hosted command, workflow, toolchain, or package input.
+  model, imported helper, hosted command, workflow, toolchain, or workspace
+  package input, including rejection of an unsupported workspace lifecycle.
   `quint-ci-contract.test.ts` proves affected changes retain two shards and
   unchanged aggregation, while unaffected changes skip both shards and keep the
-  successful lightweight required check with exact classification evidence.
+  successful lightweight required check with exact classification evidence. It
+  also proves that a failed change plan fails the always-running aggregate and
+  that not-applicable success requires a successful plan with the exact
+  `false` classification.
