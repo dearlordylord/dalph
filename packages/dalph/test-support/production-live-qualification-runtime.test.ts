@@ -119,8 +119,8 @@ describe("#307 production live qualification runtime", () => {
   it("production qualification controller generates and redacts one fresh controlled-provider credential per invocation", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        const first = yield* generateProductionLiveControlledProviderCredential
-        const second = yield* generateProductionLiveControlledProviderCredential
+        const first = yield* generateProductionLiveControlledProviderCredential()
+        const second = yield* generateProductionLiveControlledProviderCredential()
         const firstValue = Redacted.value(first)
         const secondValue = Redacted.value(second)
         expect(firstValue).toMatch(/^[0-9a-f]{64}$/u)

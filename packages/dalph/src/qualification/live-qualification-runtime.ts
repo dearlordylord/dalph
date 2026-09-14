@@ -280,10 +280,7 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
   yield* fs.chmod(codexAppServerWrapper, privateDirectoryMode)
   yield* fs.writeFileString(journalDatabase, "")
   yield* fs.writeFileString(integratorPrivateStore, "[]\n")
-  yield* fs.writeFileString(
-    nodePath.join(codexHome, "config.toml"),
-    codexConfiguration(responsesBaseUrl, container)
-  )
+  yield* fs.writeFileString(nodePath.join(codexHome, "config.toml"), codexConfiguration(responsesBaseUrl, container))
   const target = yield* Schema.decodeUnknownEffect(GithubIssueTarget)({
     _tag: "GithubIssue",
     owner: targetInput.owner,
@@ -367,14 +364,26 @@ interface ProductionLiveQualificationRedactionSecrets extends ProductionLiveQual
   readonly controlledProviderCredential: Redacted.Redacted<string>
 }
 
+const controlledProviderCredentialByteLength = 32
+const controlledProviderCredentialHexRadix = 16
+const controlledProviderCredentialHexWidth = 2
+
 /** Generates one invocation-local credential for the loopback provider; it is never persisted or logged. */
 export const generateProductionLiveControlledProviderCredential = Effect.fn(
   "ProductionLiveQualification.generateControlledProviderCredential"
 )(function* () {
   const crypto = yield* Crypto.Crypto
-  return yield* crypto.randomBytes(32).pipe(
-    Effect.map((bytes) => Redacted.make(Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")))
-  )
+  return yield* crypto
+    .randomBytes(controlledProviderCredentialByteLength)
+    .pipe(
+      Effect.map((bytes) =>
+        Redacted.make(
+          Array.from(bytes, (byte) =>
+            byte.toString(controlledProviderCredentialHexRadix).padStart(controlledProviderCredentialHexWidth, "0")
+          ).join("")
+        )
+      )
+    )
 })
 
 const liveOccurrenceTags = [
@@ -940,7 +949,7 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
   const crypto = yield* Crypto.Crypto
   const githubClient = yield* GithubGraphqlClient
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-  const controlledProviderCredential = yield* generateProductionLiveControlledProviderCredential
+  const controlledProviderCredential = yield* generateProductionLiveControlledProviderCredential()
   const redactionSecrets = { ...secrets, controlledProviderCredential }
   const attempt = yield* Effect.gen(function* () {
     const createdGithubFixture = yield* createProductionLiveGithubFixture({
