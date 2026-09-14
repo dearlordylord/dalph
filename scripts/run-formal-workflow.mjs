@@ -66,7 +66,12 @@ export const createRetainedFormalLifecycle = ({
         guard: guard.timings
       })
       finalDeadline("final qualification")
-      return { success: applicable.success, evidencePath: applicable.evidencePath, observation }
+      return {
+        success: applicable.success,
+        evidencePath: applicable.evidencePath,
+        identity: lookup.identity,
+        observation
+      }
     },
     assertUnchanged: async () => {
       if (closed) throw new Error("Formal observation is closed")

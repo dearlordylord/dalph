@@ -1,9 +1,10 @@
 # Formal success follows the inputs the formal command actually consumes
 
 After a maintainer has completed the local formal profile, they may repair an
-unrelated test under `scripts/`, add or remove an experimental Quint model, or
-edit documentation before the next local handoff. The formal success record,
-its stopped checker/server custody evidence, the installed toolchain, and the
+unrelated test under `scripts/`, add or remove an experimental Quint model,
+edit documentation, or qualify an equivalent candidate in another Git
+worktree of the same clone. The formal success record, its stopped
+checker/server custody evidence, the installed tool semantics, and the
 effective profile are unchanged. GitHub, Dalph executors, and the workflow
 journal do not participate because this is repository verification tooling,
 not Dalph runtime behavior.
@@ -14,8 +15,12 @@ repository-local imports. It reads model paths
 from the effective Quint command arguments and follows the pinned Quint
 resolver recursively. It compares those files, resolved installed tools,
 environment, profile, absent Apalache configuration, and custody evidence with
-the completed record. The unrelated repair remains outside that closure, so
-the gate reports reuse and starts zero checkers and zero servers. Raw package,
+the completed record. Repository inputs are compared by their role, relative
+path, mode, link semantics, and content. Checkout-local tool and PATH entries
+are compared by their semantic checkout-relative locations and content rather
+than by the worktree directory name. The unrelated repair or checkout
+relocation therefore leaves applicability unchanged, so the gate reports reuse
+and starts zero checkers and zero servers. Raw package,
 lock, workspace, npm, patch, and hosted-CI files are not local formal inputs;
 the resolved toolchain and effective profile already retain the portions the
 local command consumes.
@@ -26,6 +31,16 @@ the selected model imports, the input identity changes and the complete profile
 runs. A newly added repository-local import enters the closure automatically.
 Non-literal dynamic repository imports are refused because their affected input
 cannot be established without executing source discovery.
+
+The original absolute worktree, run directory, report, receipt, and server
+output paths remain provenance. Before reuse, the reader resolves both
+worktrees to the same Git common directory and custody root, rereads the
+original record there, and proves every original checker and server process
+group stopped. A removed origin worktree, another clone, missing or malformed
+record, unsafe process custody, different host boot, changed model, changed
+adapter, changed tool bytes, changed configuration, changed environment
+semantics, or changed profile refuses reuse. Removing a worktree path from a
+key without these provenance checks is not sufficient evidence.
 
 A short observer watches repository source and the already-resolved tool/configuration
 roots before dependency discovery; Git state, generated run/output trees, and
@@ -60,3 +75,5 @@ state.
 | Read success evidence written under the old policy | `formal-success-evidence.test.mjs`: `reruns when required evidence is malformed truncated old-policy or mismatched; distinguishes optional logs` |
 | Validate input/observer/success generations at publication and handoff | `formal-success-evidence.test.mjs`: `shared formal evidence contract owns input observation and success generations`; `gate-quality-evidence.test.mjs` composite cases |
 | Retry after an unrelated test-only repair | `formal-gate.integration.test.mjs`: complete-success/reuse scenario asserts the reuse message and zero checker/server launches |
+| Qualify the same governed inputs and checkout-tool semantics in a sibling Git worktree | `formal-input-policy.test.mjs`: `builds one applicability identity for equivalent inputs and checkout tools in relocated worktrees`; `formal-success-evidence.test.mjs`: `reuses stopped evidence across same-custody worktrees and rejects unsafe original custody`; `formal-gate.integration.test.mjs`: `an equivalent worktree reuses stopped evidence while changed formal input launches its own complete profile` |
+| Change a selected model/input after relocation | The same input-policy and integration tests assert a different applicability digest and a fresh complete checker/server profile |

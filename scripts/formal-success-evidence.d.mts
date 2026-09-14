@@ -9,6 +9,8 @@ export interface FormalEvidenceIdentity {
   readonly version: number
   readonly worktree: string
   readonly inputDigest: string
+  readonly applicability: Record<string, unknown>
+  readonly applicabilityDigest: string
   readonly [key: string]: unknown
 }
 export interface FormalAttempt {

@@ -280,7 +280,7 @@ export const executeResumableQualityGate = async ({
         recordPath: finalized.evidencePath,
         attemptId: finalized.success.attemptId,
         runId: finalized.success.runId,
-        identity: finalized.success.identity,
+        identity: finalized.identity,
         profileIdentity: finalized.success.profileIdentity,
         observation: finalized.observation,
         outputLineCount: formalOutputLineCount

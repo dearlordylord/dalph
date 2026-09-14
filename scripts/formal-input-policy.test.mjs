@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import {
   chmodSync,
+  cpSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -10,7 +11,7 @@ import {
   writeFileSync
 } from "node:fs"
 import { arch, platform, tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { createRequire } from "node:module"
 import { afterEach, test } from "node:test"
 import {
@@ -121,6 +122,57 @@ test("retains formal reuse across unrelated edits without binding HEAD index or 
   assert.equal((await f.identity()).inputDigest, original.inputDigest)
   assert.equal("head" in original, false)
   assert.equal("index" in original, false)
+})
+
+test("builds one applicability identity for equivalent inputs and checkout tools in relocated worktrees", async () => {
+  const first = fixture()
+  const configurationPaths = (worktree) => {
+    const paths = [join(first.toolchain.javaUserHome, ".tlaplus", "apalache.cfg")]
+    let directory = worktree
+    for (;;) {
+      paths.push(join(directory, ".apalache.cfg"))
+      if (directory === dirname(directory)) return paths
+      directory = dirname(directory)
+    }
+  }
+  const originalConfigurations = configurationPaths(first.root)
+  first.toolchain.roots.push(...originalConfigurations)
+  first.toolchain.allowedRoots.push(...originalConfigurations)
+  first.toolchain.configPaths = originalConfigurations
+  first.environment.PATH = `${join(first.root, "node_modules", ".bin")}:${first.environment.PATH}`
+  first.environment.npm_execpath = join(first.root, "node_modules", ".bin", "pnpm")
+  const original = await first.identity()
+  const relocatedRoot = join(first.outer, "deeper", "relocated")
+  cpSync(first.root, relocatedRoot, { recursive: true })
+  const replaceRoot = (value) => JSON.parse(JSON.stringify(value).replaceAll(first.root, relocatedRoot))
+  const relocatedToolchain = replaceRoot(first.toolchain)
+  const relocatedConfigurations = configurationPaths(relocatedRoot)
+  relocatedToolchain.roots = [join(relocatedRoot, "tools"), ...relocatedConfigurations]
+  relocatedToolchain.allowedRoots = [join(relocatedRoot, "tools"), ...relocatedConfigurations]
+  relocatedToolchain.configPaths = relocatedConfigurations
+  const relocatedEnvironment = replaceRoot(first.environment)
+  const relocated = await startFormalInputGuard({
+    worktree: relocatedRoot,
+    effectiveEnvironment: relocatedEnvironment,
+    profile: first.profile,
+    toolchain: relocatedToolchain
+  })
+  cleanups.push(() => relocated.close())
+  await relocated.finish()
+  assert.notEqual(relocated.identity.inputDigest, original.inputDigest)
+  assert.equal(relocated.identity.applicabilityDigest, original.applicabilityDigest)
+  assert.deepEqual(relocated.identity.applicability, original.applicability)
+  assert.equal(JSON.stringify(original.applicability).includes(".apalache.cfg"), false)
+
+  writeFileSync(join(relocatedRoot, "specs/model.qnt"), "module fixture { val changed = true }\n")
+  const changed = await startFormalInputGuard({
+    worktree: relocatedRoot,
+    effectiveEnvironment: relocatedEnvironment,
+    profile: first.profile,
+    toolchain: relocatedToolchain
+  })
+  cleanups.push(() => changed.close())
+  assert.notEqual(changed.identity.applicabilityDigest, original.applicabilityDigest)
 })
 
 test("discovers direct and transitive JavaScript helpers without including their siblings", async () => {
