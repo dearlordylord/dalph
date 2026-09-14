@@ -128,9 +128,13 @@ test("builds one applicability identity for equivalent inputs and checkout tools
   const first = fixture()
   const launcherPath = (worktree) =>
     join(worktree, "node_modules", ".pnpm", "fixture@1.0.0", "node_modules", "fixture", "node_modules", ".bin", "tool")
-  const launcher = (worktree, target = "../../../../tool-package/bin/tool.js") => `#!/bin/sh
+  const launcher = (
+    worktree,
+    target = "../../../../tool-package/bin/tool.js",
+    nodePath = `${worktree}/node_modules/.pnpm/tool-package/node_modules`
+  ) => `#!/bin/sh
 basedir=$(dirname "$(echo "$0" | sed -e 's,\\\\,/,g')")
-export NODE_PATH="${worktree}/node_modules/.pnpm/tool-package/node_modules"
+export NODE_PATH="${nodePath}"
 if [ -x "$basedir/node" ]; then
   exec "$basedir/node"  "$basedir/${target}" "$@"
 else
@@ -214,6 +218,20 @@ fi
   cleanups.push(() => changedLauncherEnvironment.close())
   assert.notEqual(changedLauncherEnvironment.identity.applicabilityDigest, original.applicabilityDigest)
   await changedLauncherEnvironment.close()
+  writeFileSync(
+    launcherPath(relocatedRoot),
+    launcher(relocatedRoot, "../../../../tool-package/bin/tool.js", "{checkout}/node_modules/tool-package"),
+    { mode: 0o755 }
+  )
+  const literalPlaceholder = await startFormalInputGuard({
+    worktree: relocatedRoot,
+    effectiveEnvironment: relocatedEnvironment,
+    profile: first.profile,
+    toolchain: relocatedToolchain
+  })
+  cleanups.push(() => literalPlaceholder.close())
+  assert.notEqual(literalPlaceholder.identity.applicabilityDigest, original.applicabilityDigest)
+  await literalPlaceholder.close()
   writeFileSync(launcherPath(relocatedRoot), launcher(relocatedRoot), { mode: 0o755 })
 
   writeFileSync(join(relocatedRoot, "specs/model.qnt"), "module fixture { val changed = true }\n")

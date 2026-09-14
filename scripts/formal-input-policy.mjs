@@ -159,23 +159,32 @@ const normalizedPnpmLauncher = (entry, worktree) => {
     targets[0] !== targets[1]
   )
     return entry
-  let normalizedNodePathLines = 0
-  const semanticText = text.replace(/^(\s*export NODE_PATH=")([^"\n]*)(")$/gmu, (_, prefix, value, suffix) => {
-    normalizedNodePathLines++
-    const normalized = value
-      .split(delimiter)
-      .map((component) => {
-        if (component === "$NODE_PATH" || !isAbsolute(component)) return component
+  const semanticParts = []
+  let cursor = 0
+  for (const match of text.matchAll(/^(\s*export NODE_PATH=")([^"\n]*)(")$/gmu)) {
+    semanticParts.push({ role: "literal-script", text: text.slice(cursor, match.index) })
+    semanticParts.push({
+      role: "generated-node-path",
+      prefix: match[1],
+      components: match[2].split(delimiter).map((component) => {
+        if (component === "$NODE_PATH") return { role: "inherited-node-path" }
+        if (!isAbsolute(component)) return { role: "literal-node-path", value: component }
         const absolute = resolve(component)
-        if (!below(absolute, worktree)) return component
-        const local = relative(worktree, absolute).split(sep).join("/")
-        return `{checkout}/${local}`
-      })
-      .join(delimiter)
-    return `${prefix}${normalized}${suffix}`
-  })
-  if (normalizedNodePathLines === 0 || semanticText.includes(worktree)) return entry
-  return { ...entry, sha256: digest(semanticText), generatedLauncher: { format: "pnpm-node-shell-v1" } }
+        return below(absolute, worktree)
+          ? { role: "checkout-node-path", relativePath: relative(worktree, absolute).split(sep).join("/") || "." }
+          : { role: "literal-node-path", value: component }
+      }),
+      suffix: match[3]
+    })
+    cursor = match.index + match[0].length
+  }
+  semanticParts.push({ role: "literal-script", text: text.slice(cursor) })
+  if (semanticParts.length === 1 || JSON.stringify(semanticParts).includes(worktree)) return entry
+  return {
+    ...entry,
+    sha256: digest(JSON.stringify(semanticParts)),
+    generatedLauncher: { format: "pnpm-node-shell-v1" }
+  }
 }
 
 const normalizedManifest = (entries, worktree, role) =>
