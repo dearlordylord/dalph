@@ -120,6 +120,12 @@ export {
   TaskWorkCapacityControl,
   TaskWorkCapacityPolicyRevisionConflict
 } from "./control/task-work-capacity.js"
+export {
+  makeRequestCircuit,
+  type RequestCircuit,
+  type RequestCircuitOptions,
+  type RequestCircuitPolicy
+} from "./control/request-circuit.js"
 export { workflowJournalEventVersion } from "./workflow/kernel/event.js"
 export { ClaimOwner, ClaimToken } from "./authorities/task-tracker/claim.js"
 export {
