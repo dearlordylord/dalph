@@ -230,19 +230,17 @@ const gitAuthorityInputs = (root, logicalInvocation, environment, gitDirectory, 
   // Git path-format canonicalization erases authored symlink locators. Resolve
   // plain --git-path output against this worktree while retaining those links.
   const path = (name) => resolve(root, git(root, ["rev-parse", "--git-path", name], environment).trim())
-  const headLock = join(gitDirectory, "HEAD.lock")
   const indexLock = join(gitDirectory, "index.lock")
-  const packedRefsLock = path("packed-refs.lock")
-  const transientCoordinationRoots = [headLock, indexLock, packedRefsLock]
+  const transientCoordinationRoots = [indexLock]
   const paths = [
     join(gitDirectory, "HEAD"),
-    headLock,
+    join(gitDirectory, "HEAD.lock"),
     join(gitDirectory, "index"),
     indexLock,
     join(commonDirectory, "config"),
     path("config.worktree"),
     path("packed-refs"),
-    packedRefsLock,
+    path("packed-refs.lock"),
     path("info/exclude"),
     path("info/attributes"),
     path("info/grafts"),

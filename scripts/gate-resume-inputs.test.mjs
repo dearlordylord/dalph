@@ -1034,6 +1034,21 @@ for (const authority of ["selected ref lock", "index lock"]) {
   })
 }
 
+for (const authority of ["HEAD lock", "packed-refs lock"]) {
+  test(`bound candidate history refuses transient ${authority} writes`, async () => {
+    const f = candidateGitFixture()
+    const path = join(f.root, ".git", authority === "HEAD lock" ? "HEAD.lock" : "packed-refs.lock")
+    const guard = await f.guard()
+    try {
+      writeFileSync(path, "transient")
+      rmSync(path)
+      await assert.rejects(guard.assertUnchanged(), /input filesystem event/u)
+    } finally {
+      await guard.close()
+    }
+  })
+}
+
 test("a transient index lock cannot hide a real candidate index mutation", async () => {
   const f = candidateGitFixture()
   const index = join(f.root, ".git", "index")
