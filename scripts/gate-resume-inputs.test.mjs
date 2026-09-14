@@ -117,6 +117,32 @@ test("effective environment remains behavioral input and per-run transport does 
   }
 })
 
+test("an unrelated branch section can be added while the candidate config watch remains live", async () => {
+  const f = fixture()
+  const guard = await f.guard()
+  try {
+    f.git("config", "branch.unrelated-worktree.remote", "origin")
+    await guard.assertUnchanged()
+    assert.equal((await guard.finish()).inputDigest, guard.identity.inputDigest)
+  } finally {
+    await guard.close()
+  }
+})
+
+test("a candidate-relevant config replacement fails after an unrelated replacement re-arms the watch", async () => {
+  const f = fixture()
+  const guard = await f.guard()
+  try {
+    f.git("config", "branch.unrelated-worktree.remote", "origin")
+    await guard.assertUnchanged()
+    f.git("config", "core.filemode", "false")
+    await assert.rejects(guard.assertUnchanged(), /Candidate-relevant Git configuration changed/u)
+    await assert.rejects(guard.finish(), /Candidate-relevant Git configuration changed/u)
+  } finally {
+    await guard.close()
+  }
+})
+
 test("resolved external workspace target and symlink replacement are observed", async () => {
   const f = fixture()
   const external = join(f.outer, "external")

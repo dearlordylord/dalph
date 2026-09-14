@@ -219,6 +219,22 @@ leave index stat-cache metadata untouched. Required Git writes still acquire
 their locks, and actual index changes invalidate the observer. External Git
 observation during a run must use the same optional-lock setting.
 
+Creating an unrelated linked worktree can atomically replace the shared Git
+config while adding only that other branch's settings. The input observer
+re-establishes its exact config-file watch and compares the effective local
+configuration for the candidate worktree; foreign `branch.*` sections do not
+invalidate qualification, while a candidate-branch or repository-wide setting
+change does. More than one config generation before a comparison fails closed,
+so a relevant edit followed by restoration cannot pass as one benign rewrite.
+This is qualification-tool behavior only and changes no Dalph runtime command,
+provider boundary, journal fact, retry, or cleanup behavior.
+
+| Qualification scenario | Acceptance test |
+| --- | --- |
+| Another maintainer adds an unrelated branch section while the candidate input observer is live; the observer re-arms the atomically replaced config and retains the same candidate input identity | `scripts/gate-resume-inputs.test.mjs`: `an unrelated branch section can be added while the candidate config watch remains live` |
+| A repository-wide Git setting changes after an unrelated replacement; the re-armed observer refuses both the next stage and final qualification | `scripts/gate-resume-inputs.test.mjs`: `a candidate-relevant config replacement fails after an unrelated replacement re-arms the watch` |
+| A relevant Git setting changes and is restored before validation | `scripts/gate-resume-inputs.test.mjs`: `candidate history observes configuration retargeting of external ignores` |
+
 Reuse requires identical HEAD, conflict-free semantic index, working/untracked
 bytes and modes, ignored configuration, actual installed dependency and resolved
 tool bytes/link targets, effective environment and normalized logical invocation.
