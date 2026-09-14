@@ -113,7 +113,7 @@ describe("capability registration gate", () => {
     }
   )
 
-  it("registers the real tracker, Integrator, and Git target-promotion authorities", () => {
+  it("registers the real tracker, Codex activity census, Integrator, and Git target-promotion authorities", () => {
     const graph = capabilityRegistrationInventory.capabilities.find(
       ({ family }) => family === "task-tracker-graph-read"
     )
@@ -127,6 +127,9 @@ describe("capability registration gate", () => {
     const integrator = capabilityRegistrationInventory.capabilities.find(({ family }) => family === "outer-integrator")
     const promotion = capabilityRegistrationInventory.capabilities.find(
       ({ family }) => family === "git-target-promotion"
+    )
+    const activityCensus = capabilityRegistrationInventory.capabilities.find(
+      ({ family }) => family === "codex-owned-activity-census"
     )
 
     expect([
@@ -145,6 +148,26 @@ describe("capability registration gate", () => {
     ])
     expect(integrator?.production).toEqual(
       expect.objectContaining({ _tag: "Implementation", identity: "nodeCodexIntegratorLayer" })
+    )
+    expect(activityCensus).toEqual(
+      expect.objectContaining({
+        controlled: expect.objectContaining({
+          _tag: "Implementation",
+          identity: "controlledCodexOwnedActivityCensusLayer"
+        }),
+        production: {
+          _tag: "Implementation",
+          identity: "codexOwnedActivityCensusLayer",
+          source: "packages/dalph/src/application/codex-app-server.ts",
+          marker: "codexOwnedActivityCensusLayer",
+          composition: {
+            _tag: "Assembled",
+            identity: "codexOwnedActivityCensusLayer",
+            source: "packages/dalph/src/application/production-host.ts",
+            marker: "codexOwnedActivityCensusLayer"
+          }
+        }
+      })
     )
     expect(promotion?.production).toEqual({
       _tag: "Implementation",
@@ -179,6 +202,20 @@ describe("capability registration gate", () => {
     }
 
     expect(issuesFor(missingFamily)).toContain("missing capability family outer-integrator")
+  })
+
+  it("keeps the Codex-owned activity census in the fixed family denominator", () => {
+    const missingFamily = {
+      ...capabilityRegistrationInventory,
+      requiredFamilies: capabilityRegistrationInventory.requiredFamilies.filter(
+        (family) => family !== "codex-owned-activity-census"
+      ),
+      capabilities: capabilityRegistrationInventory.capabilities.filter(
+        ({ family }) => family !== "codex-owned-activity-census"
+      )
+    }
+
+    expect(issuesFor(missingFamily)).toContain("missing capability family codex-owned-activity-census")
   })
 
   it("rejects duplicate family and implementation registrations", () => {
@@ -330,6 +367,42 @@ describe("capability registration gate", () => {
 
     expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, replacedProductionHost)).toContain(
       "immutable-evidence production composition marker is stale: nodeEvidenceStoreLayer"
+    )
+  })
+
+  it("rejects replacement of the registered Codex-owned activity census in the production host", () => {
+    const replacedProductionHost = sourceFiles.map((file) =>
+      file.path === "packages/dalph/src/application/production-host.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              "codexOwnedActivityCensusLayer(codexProcessNative).pipe(Layer.provide(appLayer))",
+              "Layer.empty"
+            )
+          }
+        : file
+    )
+
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, replacedProductionHost)).toContain(
+      "codex-owned-activity-census production composition marker is stale: codexOwnedActivityCensusLayer"
+    )
+  })
+
+  it("rejects a controlled substitute for the production Codex-owned activity census contract", () => {
+    const substitutedContract = sourceFiles.map((file) =>
+      file.path === "packages/dalph/test/contracts/codex-owned-activity-census.contract.test.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              "layer: codexOwnedActivityCensusLayer(emptyLinuxProcessView).pipe(",
+              "layer: absentCensusLayer.pipe("
+            )
+          }
+        : file
+    )
+
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, substitutedContract)).toContain(
+      "codex-owned-activity-census production contract implementation binding is stale: codexOwnedActivityCensusLayer"
     )
   })
 

@@ -14,6 +14,7 @@ type CapabilityFamily =
   | "git-lineage"
   | "git-integrator-candidate"
   | "git-target-promotion"
+  | "codex-owned-activity-census"
   | "planned-attempt-executor"
   | "outer-integrator"
   | "immutable-evidence"
@@ -136,6 +137,7 @@ const implementationCompositionEvidenceSources = [
     source: "packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts"
   },
   { role: "controlled", source: "packages/dalph/src/application/composition.ts" },
+  { role: "controlled", source: "packages/dalph/test/contracts/codex-owned-activity-census.contract.test.ts" },
   { role: "production", source: "packages/dalph/src/application/codex-planned-attempt-executor.ts" },
   { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts" },
   { role: "production", source: "packages/dalph/src/application/production-host.ts" },
@@ -230,6 +232,7 @@ const requiredCapabilityFamilies = [
   "git-lineage",
   "git-integrator-candidate",
   "git-target-promotion",
+  "codex-owned-activity-census",
   "planned-attempt-executor",
   "outer-integrator",
   "immutable-evidence",
@@ -552,6 +555,41 @@ const targetPromotionContract = contract("TargetPromotionGit", [
       "nodeGitTargetPromotionLayer",
       "packages/orchestrator/src/authorities/git/target-promotion.ts",
       "nodeGitTargetPromotionLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
+  }
+])
+
+const codexOwnedActivityCensusContract = contract("CodexOwnedActivityCensus", [
+  {
+    invocation: {
+      marker: "codexOwnedActivityCensusContract(",
+      selector: { _tag: "ObjectProperty", property: "name", value: "controlled" },
+      source: "packages/dalph/test/contracts/codex-owned-activity-census.contract.test.ts"
+    },
+    marker: "codexOwnedActivityCensusContract",
+    role: "controlled",
+    source: "packages/dalph/test/contracts/codex-owned-activity-census-contract.ts",
+    implementation: implementationBinding(
+      "controlledCodexOwnedActivityCensusLayer",
+      "packages/dalph/src/application/codex-app-server.ts",
+      "controlledCodexOwnedActivityCensusLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
+  },
+  {
+    invocation: {
+      marker: "codexOwnedActivityCensusContract(",
+      selector: { _tag: "ObjectProperty", property: "name", value: "node" },
+      source: "packages/dalph/test/contracts/codex-owned-activity-census.contract.test.ts"
+    },
+    marker: "codexOwnedActivityCensusContract",
+    role: "production",
+    source: "packages/dalph/test/contracts/codex-owned-activity-census-contract.ts",
+    implementation: implementationBinding(
+      "codexOwnedActivityCensusLayer",
+      "packages/dalph/src/application/codex-app-server.ts",
+      "codexOwnedActivityCensusLayer",
       { _tag: "ObjectProperty", property: "layer" }
     )
   }
@@ -931,6 +969,26 @@ export const capabilityRegistrationInventory = {
       )
     },
     {
+      boundary: "Codex-owned turn, terminal, and execution-substrate activity observation",
+      controlled: implementation(
+        "controlledCodexOwnedActivityCensusLayer",
+        "packages/dalph/src/application/codex-app-server.ts",
+        "controlledCodexOwnedActivityCensusLayer",
+        controlledComposition(
+          "packages/dalph/test/contracts/codex-owned-activity-census.contract.test.ts",
+          "controlledCodexOwnedActivityCensusLayer"
+        )
+      ),
+      contract: codexOwnedActivityCensusContract,
+      family: "codex-owned-activity-census",
+      production: implementation(
+        "codexOwnedActivityCensusLayer",
+        "packages/dalph/src/application/codex-app-server.ts",
+        "codexOwnedActivityCensusLayer",
+        composed("packages/dalph/src/application/production-host.ts", "codexOwnedActivityCensusLayer")
+      )
+    },
+    {
       boundary: "planned-attempt executor",
       controlled: implementation(
         "dryRunPlannedAttemptExecutorLayer",
@@ -1110,6 +1168,8 @@ export const capabilityRegistrationInventory = {
     { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts" },
     { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/evidence-store.test.ts" },
     { role: "production", source: "packages/orchestrator/src/workflow/protocols/evidence-store.test.ts" },
+    { role: "controlled", source: "packages/dalph/test/contracts/codex-owned-activity-census.contract.test.ts" },
+    { role: "production", source: "packages/dalph/test/contracts/codex-owned-activity-census.contract.test.ts" },
     { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/worktree.test.ts" },
     { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/branch.test.ts" },
     {

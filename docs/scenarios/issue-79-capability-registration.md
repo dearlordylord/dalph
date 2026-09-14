@@ -62,6 +62,10 @@ planned branches, and quarantined Integrator predecessor candidates. The
 controlled, production, and qualification implementations that exist in this repository are
 named by source identity. The GitHub tracker composition registers graph read,
 active claim, completion claim, and task completion as four exact families.
+The Codex-owned activity census is a separate execution-substrate capability:
+its controlled implementation and the explicit-process-view production
+implementation run the same shared contract, and the production host must
+consume that exact production Layer.
 The outer Integrator has controlled evidence plus a repository-owned Node
 implementation assembled by the production host. The three cleanup families
 share the production cleanup boundary implementation while remaining separate
@@ -115,7 +119,10 @@ qualification composition evidence substituted for a production implementation`,
 `rejects an unclassified test consumer substituted for real production consumption`,
 `rejects a classified contract consumer substituted for real production composition evidence`,
 `cannot reclassify the production host to hide a qualification-only Layer`,
-`rejects replacement of the registered evidence Layer in the production host`, `keeps the
+`rejects replacement of the registered evidence Layer in the production host`,
+`rejects replacement of the registered Codex-owned activity census in the production host`,
+`rejects a controlled substitute for the production Codex-owned activity census contract`,
+`keeps the Codex-owned activity census in the fixed family denominator`, `keeps the
 required family denominator outside a mutated inventory`. `check:all` runs
 these source-audit assertions once through the focused
 `test:capability-registration` command under a 60-second process deadline. The
@@ -132,6 +139,7 @@ coverage stage excludes that suite and every test named with the
 | Production adapter added without controlled evidence | Source auditing remains read-only and dependency-neutral. | `audits source text without loading or invoking a live provider` |
 | Existing registration changed | Every current controlled, production, and qualification implementation has a contract execution and current source/composition evidence. | `runs every registered controlled, production, and qualification implementation through its named contract family` |
 | Existing registration changed | The real production host consumes its registered production implementations; qualification evidence, qualification-only Layers, and unclassified test consumers cannot stand in for that edge. | `rejects qualification composition evidence substituted for a production implementation`; `rejects a qualification-only capability Layer assembled by a production composition`; `rejects an unclassified test consumer substituted for real production consumption`; `rejects replacement of the registered evidence Layer in the production host` |
+| Existing registration changed | The process census remains its own capability family: its controlled and production Layers execute one contract, and the production host consumes the explicit-process-view implementation rather than a controlled or qualification substitute. | `registers the real tracker, Codex activity census, Integrator, and Git target-promotion authorities`; `rejects replacement of the registered Codex-owned activity census in the production host`; `rejects a controlled substitute for the production Codex-owned activity census contract`; `keeps the Codex-owned activity census in the fixed family denominator` |
 | Existing registration changed | Every declared composition source receives the exported-Layer audit, so an authored flag cannot reclassify the production host out of the denominator. | `cannot reclassify the production host to hide a qualification-only Layer` |
 | Existing registration changed | A source's audited consumption roles do not make it eligible to prove runtime assembly. | `rejects a classified contract consumer substituted for real production composition evidence` |
 | Existing registration changed | Missing, duplicate, stale, one-sided, fixed-denominator, and no-current-consumer mutations fail closed. | `rejects a missing family even when the inventory is otherwise unchanged`; `keeps the required family denominator outside a mutated inventory`; `rejects duplicate family and implementation registrations`; `rejects stale implementation and composition evidence`; `rejects one-sided contract evidence` |
