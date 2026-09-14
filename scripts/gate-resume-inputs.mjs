@@ -153,10 +153,21 @@ const optionalGit = (worktree, args, environment) => {
   }
 }
 
+const gitConfigurationKeyParts = (key) => {
+  const sectionSeparator = key.indexOf(".")
+  const nameSeparator = key.lastIndexOf(".")
+  if (sectionSeparator < 1 || nameSeparator === key.length - 1)
+    throw new Error("Git local configuration emitted an invalid key")
+  return {
+    section: key.slice(0, sectionSeparator).toLowerCase(),
+    subsection: sectionSeparator === nameSeparator ? undefined : key.slice(sectionSeparator + 1, nameSeparator),
+    name: key.slice(nameSeparator + 1).toLowerCase()
+  }
+}
+
 /** Foreign branch tracking metadata cannot affect Git commands in this exact worktree. */
 const candidateGitConfiguration = (worktree, environment) => {
   const currentBranch = optionalGit(worktree, ["symbolic-ref", "--quiet", "--short", "HEAD"], environment)
-  const currentPrefix = currentBranch === undefined ? undefined : `branch.${currentBranch}.`
   const entries = git(worktree, ["config", "--local", "--null", "--list"], environment)
     .split("\0")
     .filter(Boolean)
@@ -165,7 +176,10 @@ const candidateGitConfiguration = (worktree, environment) => {
       if (separator < 1) throw new Error("Git local configuration emitted an invalid entry")
       return [entry.slice(0, separator), entry.slice(separator + 1)]
     })
-    .filter(([key]) => !key.startsWith("branch.") || (currentPrefix !== undefined && key.startsWith(currentPrefix)))
+    .filter(([key]) => {
+      const parts = gitConfigurationKeyParts(key)
+      return parts.section !== "branch" || (currentBranch !== undefined && parts.subsection === currentBranch)
+    })
   return JSON.stringify({ currentBranch, entries })
 }
 

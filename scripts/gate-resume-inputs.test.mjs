@@ -129,6 +129,32 @@ test("an unrelated branch section can be added while the candidate config watch 
   }
 })
 
+test("a branch whose name extends the current branch remains unrelated configuration", async () => {
+  const f = fixture()
+  assert.equal(f.git("branch", "--show-current"), "master")
+  const guard = await f.guard()
+  try {
+    f.git("config", "branch.master.backup.remote", "origin")
+    await guard.assertUnchanged()
+    assert.equal((await guard.finish()).inputDigest, guard.identity.inputDigest)
+  } finally {
+    await guard.close()
+  }
+})
+
+test("the exact current branch section remains candidate-relevant configuration", async () => {
+  const f = fixture()
+  assert.equal(f.git("branch", "--show-current"), "master")
+  const guard = await f.guard()
+  try {
+    f.git("config", "branch.master.remote", "origin")
+    await assert.rejects(guard.assertUnchanged(), /Candidate-relevant Git configuration changed/u)
+    await assert.rejects(guard.finish(), /Candidate-relevant Git configuration changed/u)
+  } finally {
+    await guard.close()
+  }
+})
+
 test("a candidate-relevant config replacement fails after an unrelated replacement re-arms the watch", async () => {
   const f = fixture()
   const guard = await f.guard()
