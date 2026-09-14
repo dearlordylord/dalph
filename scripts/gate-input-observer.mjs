@@ -10,6 +10,7 @@ export const startInputObserver = async ({
   protectedRoots = [],
   pythonArguments = [],
   pythonExecutable = "python3",
+  replaceableRoots = [],
   roots,
   signal,
   timeoutMilliseconds = 30_000
@@ -127,7 +128,7 @@ export const startInputObserver = async ({
   }
   signal?.addEventListener("abort", abort, { once: true })
   if (signal?.aborted) abort()
-  child.stdin.write(`${JSON.stringify({ roots, excludedRoots, protectedRoots })}\n`)
+  child.stdin.write(`${JSON.stringify({ roots, excludedRoots, protectedRoots, replaceableRoots })}\n`)
   const setupTimer = setTimeout(() => fail("Input observer readiness timeout"), timeoutMilliseconds)
   try {
     await ready

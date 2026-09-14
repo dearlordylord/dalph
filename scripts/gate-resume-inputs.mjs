@@ -153,6 +153,40 @@ const optionalGit = (worktree, args, environment) => {
   }
 }
 
+const gitConfigurationKeyParts = (key) => {
+  const sectionSeparator = key.indexOf(".")
+  const nameSeparator = key.lastIndexOf(".")
+  if (sectionSeparator < 1 || nameSeparator === key.length - 1)
+    throw new Error("Git local configuration emitted an invalid key")
+  return {
+    section: key.slice(0, sectionSeparator).toLowerCase(),
+    subsection: sectionSeparator === nameSeparator ? undefined : key.slice(sectionSeparator + 1, nameSeparator),
+    name: key.slice(nameSeparator + 1).toLowerCase()
+  }
+}
+
+/** Foreign branch tracking metadata cannot affect Git commands in this exact worktree. */
+const candidateGitConfiguration = (worktree, environment) => {
+  const currentBranch = optionalGit(worktree, ["symbolic-ref", "--quiet", "--short", "HEAD"], environment)
+  const entries = git(worktree, ["config", "--local", "--null", "--list"], environment)
+    .split("\0")
+    .filter(Boolean)
+    .map((entry) => {
+      const separator = entry.indexOf("\n")
+      if (separator < 1) throw new Error("Git local configuration emitted an invalid entry")
+      return [entry.slice(0, separator), entry.slice(separator + 1)]
+    })
+    .filter(([key]) => {
+      const parts = gitConfigurationKeyParts(key)
+      return (
+        parts.section !== "branch" ||
+        parts.subsection === undefined ||
+        (currentBranch !== undefined && parts.subsection === currentBranch)
+      )
+    })
+  return JSON.stringify({ currentBranch, entries })
+}
+
 const candidateHistory = (worktree, logicalInvocation, environment) => {
   const history = logicalInvocation.gitHistory
   const marker = environment.DALPH_GATE_GIT_HISTORY
@@ -294,6 +328,7 @@ const inputLayout = ({ effectiveEnvironment, generatedOutputRoots, logicalInvoca
   if (exclusions.some((path) => below(root, path)))
     throw new Error("Generated output exclusions cannot erase the worktree")
   return {
+    commonConfig: join(commonDirectory, "config"),
     root,
     tools,
     gitInputs,
@@ -310,13 +345,20 @@ const snapshot = ({ effectiveEnvironment, layout, logicalInvocation }) => {
     throw new Error("Unresolved Git index conflicts forbid resume")
   const head = git(layout.root, ["rev-parse", "HEAD"], effectiveEnvironment).trim()
   const source = manifest([layout.root], layout.sourceExclusions)
+  const gitConfiguration = candidateGitConfiguration(layout.root, effectiveEnvironment)
+  const projectGitConfiguration = (entries) =>
+    entries.map((entry) =>
+      entry.path === layout.commonConfig
+        ? { path: entry.path, type: "candidate-git-configuration", mode: entry.mode, sha256: hash(gitConfiguration) }
+        : entry
+    )
   const manifests = {
     source,
     index,
     head,
-    git: manifest(layout.gitInputs, []),
+    git: projectGitConfiguration(manifest(layout.gitInputs, [])),
     tools: manifest(layout.tools, layout.exclusions),
-    configuration: manifest(layout.configurations, layout.exclusions)
+    configuration: projectGitConfiguration(manifest(layout.configurations, layout.exclusions))
   }
   const sourceInputDigest = hash(JSON.stringify({ head, index, source }))
   const inputs = {
@@ -343,6 +385,7 @@ export const startInputGuard = async ({
     roots: [layout.root, ...layout.gitInputs, ...layout.tools, ...layout.configurations],
     excludedRoots: layout.sourceExclusions,
     protectedRoots: layout.gitInputs,
+    replaceableRoots: [layout.commonConfig],
     pythonExecutable: layout.python
   })
   let identity
@@ -358,6 +401,7 @@ export const startInputGuard = async ({
   }
   const originalEnvironment = JSON.stringify(identity.environmentDigests)
   const originalInvocation = JSON.stringify(logicalInvocation)
+  const originalGitConfiguration = candidateGitConfiguration(layout.root, effectiveEnvironment)
   let invalidation
   const assertUnchanged = async () => {
     await observer.assertUnchanged()
@@ -367,6 +411,8 @@ export const startInputGuard = async ({
     ) {
       invalidation ??= "Effective environment or logical invocation changed"
     }
+    if (candidateGitConfiguration(layout.root, effectiveEnvironment) !== originalGitConfiguration)
+      invalidation ??= "Candidate-relevant Git configuration changed"
     if (invalidation !== undefined) throw new Error(invalidation)
   }
   return {
