@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest"
+// @ts-expect-error The canonical path order is shared with executable JavaScript runners.
+import { canonicalPaths } from "./canonical-path-order.mjs"
 // @ts-expect-error The diagnostics scope policy is shared with the executable JavaScript runner.
 import { selectDiagnosticTargets } from "./effect-diagnostics-scope.mjs"
 
 describe("effect diagnostics scope", () => {
+  it("orders path evidence by stable code units rather than the host locale", () => {
+    expect(canonicalPaths(["z.ts", "ä.ts", "A.ts", "z.ts", "Z.ts"])).toEqual(["A.ts", "Z.ts", "z.ts", "ä.ts"])
+  })
   it("checks nothing when no diagnosable file changed", () => {
     expect(
       selectDiagnosticTargets({ changedFiles: ["docs/DEVELOPMENT.md", "scripts/run.mjs"], maximumFiles: 12 })

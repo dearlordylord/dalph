@@ -154,13 +154,16 @@ attempt context:
 DALPH_DIAGNOSTICS_BASE="<planned Base SHA>" pnpm check:fast
 ```
 
-`lint:changed` and `typecheck:effect:changed` each print one JSON selection line
+`lint:changed` and `typecheck:effect:changed` each print one JSON selection line to stderr
 containing the input reference, its resolved commit, the actual merge base,
 HEAD, the sorted changed paths, and the sorted paths selected for that command.
 Without `DALPH_DIAGNOSTICS_BASE`, they keep the convenient `origin/master`
 development fallback and label it
 `moving-default`; that output must not be reported as evidence for an immutable
-planned-attempt base. An empty path list remains a successful no-op.
+planned-attempt base. An unresolved base or a base from unrelated history exits
+nonzero before a lint or diagnostic child starts. Selection and routing messages
+stay on stderr so Effect diagnostic JSON on stdout remains machine-readable. An
+empty path list remains a successful no-op.
 
 This is repository-tooling behavior only. It does not change a Dalph command,
 workflow decision, provider boundary, journal fact, retry, cleanup action, or
@@ -171,6 +174,10 @@ runtime-visible result, so no Dalph runtime operational scenario applies.
 | A planned attempt starts from Base commit B. A prerequisite commit P lands and `origin/master` advances to P before the dependent edit. The maintainer runs changed lint with `DALPH_DIAGNOSTICS_BASE=B`; the selection names B and includes both the prerequisite file and dependent file. | `scripts/quality-lint.test.ts`: `a planned attempt checks prerequisite changes from its pinned base after origin/master advances`; `scripts/changed-files.test.mjs`: `changedRepositoryFileSelection keeps an older pinned base after the moving reference advances` |
 | A developer runs changed lint without a planned Base. The tool labels `origin/master` as the moving default, resolves P, and selects only paths changed after P. | `scripts/quality-lint.test.ts`: `a planned attempt checks prerequisite changes from its pinned base after origin/master advances` |
 | A maintainer runs changed lint from an unchanged worktree with an explicit Base equal to HEAD. The tool names the resolved Base and reports empty changed and selected path lists without starting a linter. | `scripts/quality-lint.test.ts`: `changed lint is a no-op when the changed selection is empty` |
+| A task attempt supplies a reference that cannot resolve to a commit, or a commit from unrelated history. Changed lint and Effect diagnostics exit nonzero with the exact failed boundary and do not start their child tools; an unavailable moving fallback fails the same way. | `scripts/quality-lint.test.ts`: `changed lint fails before lint execution when its explicit base cannot resolve`; `scripts/effect-diagnostics.test.ts`: `changed Effect diagnostics fail before execution when the explicit base cannot resolve`, `changed Effect diagnostics fail before execution when the explicit base has unrelated history`, and `changed Effect diagnostics fail visibly when the moving origin/master fallback cannot resolve` |
+| Effect changed diagnostics use a pinned Base and select one changed TypeScript path while leaving stdout as diagnostic JSON. | `scripts/effect-diagnostics.test.ts`: `changed Effect diagnostics use the pinned base and keep selection evidence off stdout` |
+| Effect changed diagnostics find no TypeScript path, emit empty selection evidence to stderr, and do not start the diagnostic executable. | `scripts/effect-diagnostics.test.ts`: `changed Effect diagnostics report an empty pinned selection without starting diagnostics` |
+| More than twelve changed TypeScript files select one project diagnostic invocation without running thirteen file diagnostics. | `scripts/effect-diagnostics.test.ts`: `more than twelve changed TypeScript files route Effect diagnostics to one project check` |
 
 Hosted CI keeps separate quality and formal entry points: hosted formal runs the
 complete profile fresh when an input that can affect it changed, while hosted

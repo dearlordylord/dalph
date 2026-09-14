@@ -6,7 +6,7 @@ export const diagnosticBaseInput = (environment = process.env) =>
 
 /** Emit one machine-readable line so a diagnostic report cannot obscure its comparison base or selected paths. */
 export const reportDiagnosticSelection = ({ command, selectedPaths, selection, source }) => {
-  console.log(
+  console.error(
     `Dalph changed-file selection: ${JSON.stringify({
       command,
       base: {
@@ -16,8 +16,8 @@ export const reportDiagnosticSelection = ({ command, selectedPaths, selection, s
         source
       },
       headSha: selection.headSha ?? null,
-      changedPaths: [...selection.files].toSorted((left, right) => left.localeCompare(right)),
-      selectedPaths: [...selectedPaths].toSorted((left, right) => left.localeCompare(right))
+      changedPaths: selection.files,
+      selectedPaths
     })}`
   )
 }

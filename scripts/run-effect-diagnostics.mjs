@@ -51,14 +51,14 @@ reportDiagnosticSelection({
 })
 
 if (scope === "none") {
-  console.log(
+  console.error(
     `No changed TypeScript files against ${diagnosticBase.baseReference}; Effect diagnostics have nothing to check.`
   )
   process.exit(0)
 }
 
 if (scope === "project") {
-  console.log(
+  console.error(
     `More than ${maximumChangedFiles} changed TypeScript files against ${diagnosticBase.baseReference}; checking the whole project.`
   )
   process.exit(settle(runDiagnostics(["--project", "tsconfig.json", ...passedArguments])))

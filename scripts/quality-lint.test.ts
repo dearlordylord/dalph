@@ -408,6 +408,32 @@ describe.sequential("quality lint integration", () => {
     30_000
   )
 
+  it.effect("changed lint fails before lint execution when its explicit base cannot resolve", () =>
+    withFixtures((fixture) =>
+      Effect.gen(function* () {
+        const changedFile = yield* copyFixture(fixture.directory, "functional")
+        yield* initializeFixtureRepository(fixture)
+        yield* Effect.tryPromise(async () =>
+          writeFile(changedFile, `${await readFile(changedFile, "utf8")}\n// changed but must not be linted\n`)
+        )
+        const result = yield* run({
+          arguments_: [qualityLintRunner, "--changed"],
+          environment: { ...process.env, DALPH_DIAGNOSTICS_BASE: "refs/heads/missing-planned-base" },
+          fixture,
+          executable: process.execPath,
+          name: "Unresolved-base changed lint integration subprocess",
+          timeoutMilliseconds: 20_000
+        })
+        expect(result.exitCode).toBe(1)
+        expect(result.output).toContain(
+          'Changed-file diagnostics cannot resolve comparison base "refs/heads/missing-planned-base"'
+        )
+        expect(result.output).not.toContain("Dalph changed-file selection")
+        expect(result.output).not.toContain("functional/immutable-data")
+      })
+    )
+  )
+
   it.effect(
     "compatibility lint restores immutable-data and whole-project unused-export checks",
     () =>

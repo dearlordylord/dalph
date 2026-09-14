@@ -1,4 +1,5 @@
 import { extname } from "node:path"
+import { canonicalPaths } from "./canonical-path-order.mjs"
 
 const diagnosableExtensions = new Set([".ts", ".tsx"])
 
@@ -10,9 +11,7 @@ export const isDiagnosableFile = (file) => diagnosableExtensions.has(extname(fil
  * is both faster and stronger, so it is selected instead.
  */
 export const selectDiagnosticTargets = ({ changedFiles, maximumFiles }) => {
-  const files = [...new Set(changedFiles.filter(isDiagnosableFile))].toSorted((left, right) =>
-    left.localeCompare(right)
-  )
+  const files = canonicalPaths(changedFiles.filter(isDiagnosableFile))
   if (files.length === 0) return { files: [], scope: "none" }
   if (files.length > maximumFiles) return { files: [], scope: "project" }
   return { files, scope: "files" }

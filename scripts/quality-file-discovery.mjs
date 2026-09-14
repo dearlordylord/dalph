@@ -1,5 +1,6 @@
 import { readdir } from "node:fs/promises"
 import { extname, join, relative, resolve, sep } from "node:path"
+import { compareCanonicalPaths } from "./canonical-path-order.mjs"
 
 const authoredRoots = ["src", "packages", "scripts", "test"]
 const authoredExtensions = new Set([".js", ".mjs", ".ts", ".tsx"])
@@ -39,7 +40,7 @@ const explicitQualityFiles = ({ explicitFiles, rootDirectory }) =>
     .map((file) => normalizedRelativePath(relative(rootDirectory, resolve(rootDirectory, file))))
     .filter((file) => file !== ".." && !file.startsWith("../"))
     .filter(isAuthoredQualityFile)
-    .toSorted()
+    .toSorted(compareCanonicalPaths)
 
 export const discoverQualityFiles = async ({ explicitFiles, rootDirectory = process.cwd() } = {}) => {
   if (explicitFiles !== undefined) return [...new Set(explicitQualityFiles({ explicitFiles, rootDirectory }))]
