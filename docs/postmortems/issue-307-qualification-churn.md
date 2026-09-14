@@ -133,6 +133,24 @@ the specific ineffective control and changing it before the next repeated
 attempt. Lower gate duration alone is insufficient if required behavior lost
 its proof. No new dashboard, scheduler, or always-running monitor is introduced.
 
+## Architecture question retained after the incident
+
+The generated Bash wrapper is justified today only at the real operating-system
+boundary: Effect fake process services prove application decisions, but they
+cannot prove which PID, start identity, or command line Linux exposes after a
+package-manager shim executes Node. That distinction is why the focused real
+wrapper test found a defect that a hand-authored fake identity did not.
+
+The follow-up architecture question is whether the production process service
+can expose a stable owned-child identity directly, leaving Effect fakes to the
+ordinary application tests and one small Linux contract test to verify the real
+boundary, instead of generating a qualification-specific executable wrapper.
+This incident does not answer that question and does not authorize a redesign.
+Revisit it only when a proposed API removes the wrapper while preserving the
+existing hard-bounded test of PID, start identity, command line, signal, and
+clean exit. The measurable success condition is less qualification-only process
+machinery with no weaker ownership or cleanup evidence.
+
 The four concrete Node test commands above were executed during this report's
 review: census 2/2 (1.58 seconds), formal projection 2/2 (0.43 seconds), input
 observation 4/4 (1.31 seconds), metadata 2/2 (0.07 seconds). These are focused
@@ -147,5 +165,6 @@ Suite deletion, acceptance-map correction, preflight collection, formal input
 projection, PATH stabilization, and canonical Node metadata have committed
 repairs. This document records their evidence and the operating controls; it
 does not claim a new successful protected live artifact. The latest inspected
-protected run above failed before the live step. Final #307/#261/#253 closure
-must link the later successful artifact if and when it exists.
+protected run above entered the live step and was cancelled at its job bound.
+Final #307/#261/#253 closure must link the later successful artifact if and when
+it exists.
