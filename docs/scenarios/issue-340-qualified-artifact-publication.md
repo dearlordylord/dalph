@@ -220,7 +220,7 @@ Alice sees a safe qualification failure and truthful retained resources, not
 the sentinel or private identity. A valid record's original safe payload is
 preserved rather than silently rewritten.
 
-The built-controller negative control starts with Q's original fixed public
+The protected qualification starts with Q's original fixed public
 GitHub issue and immutable creation receipt. Before the child reads the task,
 the controlled GitHub fixture changes that issue's actual title/body to a
 sentinel-bearing `TaskWorkSpecification`. Its ordinary tracker read returns
@@ -298,27 +298,34 @@ evidence of success; publication is best-effort, not workflow authority.
 
 ## Required scenario-to-test mapping
 
-These are planned focused acceptance seams, not passing-test receipts.
-
-The Scenario 2 built-controller source-change test uses the existing provider
-fixture's typed specification setter and original creation receipts. It maps
-the original tracker read to source rejection before publication, joined-child
-teardown, and `ChangedIdentity` retention after one exact cleanup pass.
+These are focused acceptance seams plus the one protected live qualification.
 
 | Scenario | Minimum module/caller and acceptance proof |
 | --- | --- |
-| 1: exact safe artifact | `production-mvp-qualification-evidence.ts` and adjacent tests decode actual built-controller output; prove complete applicable identities, source SHA distinct from fixture H, exact digests, unchanged safe payload, canonical transcript digest, and artifact outside Q. Existing controller built-child tests consume the same helper. |
+| 1: exact safe artifact | `production-mvp-qualification-evidence.ts` and adjacent tests prove complete applicable identities, source SHA distinct from fixture H, exact digests, unchanged safe payload, canonical transcript digest, and artifact outside Q. The protected live qualification consumes the same helper around the shipped CLI. |
 | 1: provenance | Evidence tests prove honest local N/A and supplied same-SHA protected workflow/run-attempt binding. Workflow and runner tests prove dedicated ARM shards 0/1, stressed host>2/taskset=2 shards 0/1, and four physical artifact producers. Resolution tests prove four distinct successful Actions job IDs, truthful per-shard timing, max-shard formal duration, and earliest-start/latest-completion profile duration. Existing hosted aggregation plus qualification tests prove positions 0–104, exact tokens/verdicts/results/custody/negative controls, and reject every missing/duplicate/mixed shard, job, profile, condition, source, run-attempt, or unsupported Node substitution before live launch. |
-| 2: prepublication rejection | Evidence tests and the existing controller caller seed sentinel/private values in free failure text and unknown fields; prove rejection before record/evidence/user-output publication, safe failure reporting, unchanged child/Run truth, and no rerun. |
+| 2: prepublication rejection | Evidence and qualification-source tests seed sentinel/private values in free failure text, unknown fields, source atoms and opaque identities; prove rejection before record/evidence/user-output publication and safe failure reporting. |
 | 2: original canonical bytes | Framing component tests reject blank, whitespace-altered, and reordered complete frames before publication; preserve the original canonical payload and existing real-Node SIGKILL tail controls. Transcript digest tests bind the accepted original LF bytes, not a normalized substitute. |
-| 2: opaque source and record binding | Qualification host/current-source tests seed a sentinel in a source atom and inside an opaque identity; reject before expected-record registration or public presentation. Parent tests reject an otherwise canonical counterfeit record without the exact safe-source record binding. All four built-controller chronologies retain live RunSelected and original P1/P2 synchronization. |
-| 2: original spawn registration | Controller component tests use distinct original spawn handles with the same numeric PID and a delayed S1 request during the S2 spawn gate. Prove zero stale/unknown-scope digest adoption or cache, and one owned S2/PID ACK before record publication. Actual built-child tests preserve startup synchronization without a provider retry. |
-| 2: child exits before requested boundary | The built-controller source-change chronology drives the real `awaitBoundary` race through an owned status-one child, joins its readers, and proves the distinct early-exit result carries status one and the complete bounded structured `HermeticQualificationSourceRejected` Cause diagnostic without either controlled credential. The adjacent component negative test proves credential redaction across chunks and overlapping values, a valid UTF-8 prefix no larger than 4,096 bytes, the truncation flag, and distinct unavailable-exit-code state. |
-| 2: actual completion throttle | The built throttle chronology uses the production HTTP429 classification and the original current/final runtime request to bind the deterministic CompleteTask operation before safe-token registration and literal Failure publication; absent or mismatched request source is rejected without a UUID substitute. |
+| 2: opaque source and record binding | Qualification host/current-source tests seed a sentinel in a source atom and inside an opaque identity; reject before expected-record registration or public presentation. Parent tests reject an otherwise canonical counterfeit record without the exact safe-source record binding. |
+| 2: original spawn registration | Controller component tests use distinct original spawn handles with the same numeric PID and a delayed S1 request during the S2 spawn gate. They prove zero stale/unknown-scope digest adoption or cache, and one owned S2/PID ACK before record publication. |
+| 2: child exits before requested boundary | Controller component tests prove credential redaction across chunks and overlapping values, a valid UTF-8 prefix no larger than 4,096 bytes, the truncation flag, and distinct unavailable-exit-code state. The protected live qualification owns the actual shipped-child lifecycle. |
+| 2: actual completion throttle | `production-hermetic-qualification-source.test.ts` binds the production throttle classification to the original current/final completion source before acknowledgement; `production-cli.test.ts` proves the visible redacted throttle and unfinished-Run result. |
 | 2: callback and outer host failures | `production-hermetic-qualification-source.test.ts` drives the actual-used qualification host wrapper through callback and host-delivered errors using its original source fixtures; proves original-observation/current-or-closed-final validation and registration acknowledgement before error propagation, and safe rejection when the original source is absent. |
 | 3: exact GitHub cleanup | `disposable-github-qualification-cleanup.ts` and adjacent controlled tests prove fresh exact repository/issue/label ownership, one exact deletion, and absence reread; foreign, changed, unreadable, and throttled cases prove preservation and exact retained commands. No live provider is called. |
-| 3: local cleanup | Reuse existing `disposeHermeticFixture` tests and its controller caller; prove changed same-locator identity retained, partial removal truthful, and `RemovedResources` still reports the retained container. |
-| 4: publication failure | Evidence/controller writer-failure tests preserve independent Run/process dispositions and actual cleanup results, claim no artifact success, and prove no automatic child/provider/cleanup rerun. |
+| 3: local cleanup | `production-hermetic-fixture-cleanup.test.ts` proves changed same-locator identity retained, partial removal truthful, and `RemovedResources` still reports the retained container. |
+| 4: publication failure | `production-mvp-qualification-evidence.test.ts` proves an unwritable or already-written artifact never claims or repeats publication; focused cleanup tests preserve the exact retained disposition. |
+
+The removed `production-hermetic-controller.integration.test.ts` duplicated six
+resource-sensitive built-child simulations. Their acceptance ownership remains:
+
+| Removed simulation | Retained acceptance owner |
+| --- | --- |
+| changed original tracker source | `production-hermetic-qualification-source.test.ts` source-atom/private-specification rejection tests plus `production-hermetic-fixture-cleanup.test.ts` changed-identity retention |
+| artifact write failure after cleanup | `production-mvp-qualification-evidence.test.ts`: `artifact writing stays outside Q and failure never claims or repeats publication`, plus the focused cleanup tests |
+| happy built CLI with SQLite and Git | the one protected production live qualification, which launches the shipped CLI and records the actual artifact |
+| completed close response loss | `packages/orchestrator/src/authorities/task-tracker/github/completion-task.test.ts`: `observes GitHub success after a lost close response without another close` |
+| foreign-head promotion and graceful Exit | `target-promotion/outer-protocol.test.ts` stale/ambiguous compare-and-set tests plus `production-host-exit.test.ts`: `graceful host Exit reports the lifecycle result, then releases the coordinator lock` |
+| HTTP429 completion throttle | `production-hermetic-qualification-source.test.ts`: `acknowledges an outer host throttle using the original Ready or closed final source before propagation`, plus `production-cli.test.ts` throttle/unfinished-Run tests |
 
 The implementation is qualification-only source/evidence helpers and their
 focused tests plus narrow existing-controller wiring. This is not a new

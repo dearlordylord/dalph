@@ -947,6 +947,21 @@ of retained files is a separate, deliberate operator action.
 
 ### Coverage and output budgets
 
+Coverage scheduling is repository tooling only: it does not change a Dalph
+command, workflow decision, provider boundary, journal fact, retry, cleanup
+action, or runtime-visible result. Resource-sensitive simulations that spawn a
+built CLI do not belong in automatic V8 coverage: the child process is not
+attributed to the parent report. When focused boundary tests plus the actual
+protected qualification already own their acceptance facts, remove a redundant
+built-child simulation instead of moving it into another automatic lane.
+
+Before submitting another hosted candidate after a failure, reproduce the
+failure with the smallest named check that owns that boundary. Run cheap
+structural diagnostics before resource-sensitive acceptance checks; the gate
+manifest enforces its complete preflight prefix before qualification and
+coverage. `scripts/recorded-catalog-gate.test.ts` proves that ordering and the
+unchanged four-worker V8 policy.
+
 - Enforce 95% production and 75% maintained-evaluation coverage independently
   for statements, branches, functions, lines, and changed executable lines.
   Surplus in one bracket cannot cover the other. Maintained cassettes and

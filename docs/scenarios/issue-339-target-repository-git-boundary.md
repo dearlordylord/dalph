@@ -17,8 +17,8 @@ acknowledged the exact task plan and real ready worktree, then the executor's
 Accepted commit C and integration responsibility. The next admitted boundary
 reads the current head and ancestry of the configured target.
 
-The retained built-controller diagnostic proves those facts through journal
-position 22. ReadTargetLineage intents follow without an observation. The real
+The accepted failure diagnostic recorded those facts through journal position
+22. ReadTargetLineage intents followed without an observation. The real
 Node command interprets `GitCommand.run`'s locator as `--git-dir`, but the nested
 production lineage Layer passes the ordinary repository worktree. The exact
 read exits 128, "not a git repository". A promotion-only host translation cannot
