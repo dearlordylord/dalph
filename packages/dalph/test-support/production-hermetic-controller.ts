@@ -338,10 +338,7 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
       return yield* hermeticChildExitedBeforeBoundary(
         exit._tag === "Success" ? { _tag: "Exited", exitCode: exit.value } : { _tag: "ExitCodeUnavailable" },
         MutableList.toArray(child.stderrLog),
-        [
-          Redacted.value(fixture.configuration.githubToken),
-          hermeticControlledProviderCredential
-        ]
+        [Redacted.value(fixture.configuration.githubToken), hermeticControlledProviderCredential]
       )
     })
     return yield* Effect.raceFirst(observedBoundary, exited)

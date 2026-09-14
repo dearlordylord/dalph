@@ -461,9 +461,7 @@ const expectAppFailure = (exit: Exit.Exit<unknown, unknown>, operation: string):
 const withFixture = <A>(
   mode: string,
   action: (app: CodexAppServerService, root: string) => Effect.Effect<A, unknown, FileSystem.FileSystem | Path.Path>,
-  config: {
-    readonly environment?: Readonly<Record<string, string>>
-  } = {}
+  config: { readonly environment?: Readonly<Record<string, string>> } = {}
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -647,9 +645,7 @@ it.effect("controlled qualification provider serves loopback responses without a
   withFixture(
     "non-openai-provider-credential",
     (app) => Effect.map(app.startThread("/fixture/worktree"), (thread) => expect(thread.id).toBe("protocol-thread")),
-    {
-      environment: { DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL: "fixture-provider-key" }
-    }
+    { environment: { DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL: "fixture-provider-key" } }
   )
 )
 

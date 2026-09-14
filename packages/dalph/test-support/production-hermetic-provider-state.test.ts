@@ -54,7 +54,7 @@ const setup = Effect.gen(function* () {
     codexExecutable: "controlled-codex",
     codexClientName: "hermetic",
     codexClientVersion: "1",
-    githubToken: "sentinel-secret",
+    githubToken: "sentinel-secret"
   })
   return { root, repository, head, configuration, runGit }
 })
