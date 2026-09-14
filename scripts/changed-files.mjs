@@ -42,14 +42,6 @@ export const changedRepositoryFileSelection = ({ baseReference, cwd = process.cw
   return { baseReference, resolvedBaseSha, comparisonBaseSha, headSha, files }
 }
 
-/**
- * Development-loop gates check what this attempt changed: everything since the merge base with the integration
- * reference, plus the working tree. An unresolved reference or unrelated history fails closed rather than reporting
- * an incomplete changed-file selection.
- */
-export const changedRepositoryFiles = ({ baseReference, cwd = process.cwd() }) =>
-  changedRepositoryFileSelection({ baseReference, cwd }).files
-
 const git = (arguments_, cwd) =>
   execFileSync("git", arguments_, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
 
