@@ -75,3 +75,61 @@ the workflow journal.
   IDs; the CI contract test proves two shards, report upload/download, the
   pnpm/custody runner path, the aggregate dependency, and the literal
   720-second and 16-minute bounds.
+
+## GitHub avoids formal execution when the exact change cannot affect it
+
+- **Affected person and starting facts:** a maintainer opens or updates a pull
+  request, or pushes a commit to `master`, and waits for the required
+  `Formal model gate (Node 24.20.0)` check. GitHub has checked out the exact
+  event head with complete Git history. The event supplies either the pull
+  request base commit or the push's previous commit. Dalph has not started a
+  formal checker. GitHub, Git, the execution substrate, and the workflow
+  journal are not called as Dalph runtime boundaries because this is repository
+  qualification tooling only.
+- **Trigger and boundary calls:** the change-plan job resolves the event's exact
+  base and head commits, asks Git for every path changed from base to head, and
+  compares those paths with one checked-in hosted-formal input projection. That
+  projection is generated from the same recursively discovered JavaScript and
+  selected-Quint closure used by the formal gate, plus the exact workflow,
+  package, lock, workspace, npm, and selected patch inputs that determine the
+  hosted installation and command. The projection, its generator, and the
+  classifier that imports it are themselves governed inputs. A new formal
+  dependency therefore first changes an already-governed importer or selected
+  root, and the quality test refuses a stale projection before that dependency
+  can merge.
+- **Affected result:** if any changed path is in the projection, both existing
+  shard jobs run and the aggregate job validates their evidence exactly as in
+  the preceding scenario. The classification does not change the shard count,
+  commands, custody evidence, deadlines, or aggregation contract.
+- **Not-applicable result:** if the exact nonempty path set contains no governed
+  input, GitHub starts neither expensive shard. It still starts one lightweight
+  aggregate job for every supported Node version under the unchanged required
+  check name. That job reports success as not applicable and prints the exact
+  base commit, head commit, classification, and changed-path evidence. Runtime
+  source, runtime tests, formal-tool tests outside the discovered closure, and
+  documentation alone do not require fresh hosted formal execution.
+- **Fail-closed result:** a missing or all-zero event base, an empty or
+  unsupported head, an unsupported event, an unreadable Git diff, or a missing,
+  malformed, or internally inconsistent projection selects formal execution.
+  The change plan reports the concrete classification failure; it does not
+  present an unknown change as not applicable. If the change plan itself fails,
+  the required aggregate check fails instead of reporting success.
+- **Crash and retry:** GitHub may stop between classification, either shard, and
+  aggregation. A workflow retry recomputes the exact base-to-head paths and
+  classification. It does not reuse a partial shard or an earlier
+  not-applicable result.
+- **Forbidden result:** GitHub must not skip a shard because the change looks
+  like ordinary runtime or test work when a governed formal input also changed;
+  hide a base, diff, or projection error behind a successful not-applicable
+  result; omit the required formal check; maintain a second broad path allowlist
+  that can drift from the formal closure; or run either expensive shard for a
+  proven unaffected change.
+- **Acceptance tests:** `classify-docs-only-change.test.mjs` proves exact
+  base-to-head path enumeration, all fail-closed inputs, unchanged runtime/test/
+  documentation classification, and generated-manifest positive and negative
+  controls. `formal-input-policy.test.mjs` proves the checked-in projection is
+  exactly regenerated from the authoritative closure and changes for a selected
+  model, imported helper, hosted command, workflow, toolchain, or package input.
+  `quint-ci-contract.test.ts` proves affected changes retain two shards and
+  unchanged aggregation, while unaffected changes skip both shards and keep the
+  successful lightweight required check with exact classification evidence.
