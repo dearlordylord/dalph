@@ -112,7 +112,8 @@ const PlannedAttemptExecutorProjectionShape = Schema.TaggedUnion({
   BeginNotCrossed: { correlation: PlannedAttemptExecutorCorrelation, proofId: PlannedAttemptExecutorBeginProofId },
   NoReport: { correlation: PlannedAttemptExecutorCorrelation },
   TemporarilyUnavailable: { correlation: PlannedAttemptExecutorCorrelation },
-  Unreadable: { correlation: PlannedAttemptExecutorCorrelation },
+  /** The executor could not prove a current state; detail is process-local diagnostic context. */
+  Unreadable: { correlation: PlannedAttemptExecutorCorrelation, detail: Schema.optionalKey(Schema.String) },
   /** The pre-attempt app initialization response contradicted the requested host/protocol identity. */
   InitializationCorrelationContradiction: { correlation: PlannedAttemptExecutorCorrelation, detail: Schema.String },
   CorrelationContradiction: { expected: PlannedAttemptExecutorCorrelation, observed: PlannedAttemptExecutorReport }

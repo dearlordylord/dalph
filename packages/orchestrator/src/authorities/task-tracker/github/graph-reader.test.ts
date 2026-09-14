@@ -281,6 +281,30 @@ it.effect("rejects GraphQL errors and malformed provider payloads as distinct fa
   })
 )
 
+it.effect("preserves a locally opened provider circuit as a distinct read failure", () =>
+  Effect.gen(function* () {
+    const failure = yield* failedRead(
+      Layer.succeed(
+        GithubGraphqlClient,
+        GithubGraphqlClient.of({
+          execute: (request) =>
+            Effect.fail(
+              new GithubGraphqlRequestError({
+                detail: "request budget is open",
+                kind: "CircuitOpen",
+                operation: request._tag
+              })
+            )
+        })
+      )
+    )
+    expect(failure._tag).toBe("TrackerGraphReader.AdapterReadError")
+    if (failure._tag === "TrackerGraphReader.AdapterReadError") {
+      expect(failure.reason._tag).toBe("CircuitOpen")
+    }
+  })
+)
+
 it.effect("fails closed for inaccessible, contradictory, and unsupported GitHub observations", () =>
   Effect.gen(function* () {
     const override = (replacement: (request: GithubGraphqlRequest) => ReturnType<typeof page> | undefined) =>

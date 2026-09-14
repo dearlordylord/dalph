@@ -1,6 +1,7 @@
 // @effect-diagnostics multipleEffectProvide:off
 import { expect, it } from "@effect/vitest"
 import { ConfigProvider, Effect, Layer, Option, Redacted, Ref, Schema } from "effect"
+import { TestClock } from "effect/testing"
 import * as Headers from "effect/unstable/http/Headers"
 import * as HttpClient from "effect/unstable/http/HttpClient"
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse"
@@ -271,6 +272,41 @@ it.effect("classifies HTTP and JSON failures", () =>
       expect(failure._tag).toBe("GithubGraphqlClient.RequestError")
       expect(failure.operation).toBe("ResolveIssue")
     }
+  })
+)
+
+it.effect("opens a local circuit before a request loop can exhaust the provider quota", () =>
+  Effect.gen(function* () {
+    const observed = yield* Ref.make(0)
+    const httpClient = HttpClient.make((request) =>
+      Effect.gen(function* () {
+        yield* Ref.update(observed, (count) => count + 1)
+        return HttpClientResponse.fromWeb(
+          request,
+          new Response(JSON.stringify({ data: { repository: { id: "repo", issue: { id: "issue" } } } }), {
+            status: 200
+          })
+        )
+      })
+    )
+    const request = GithubGraphqlRequest.cases.ResolveIssue.make({ target })
+    const layer = githubGraphqlClientLayer({ token: Redacted.make("token") }).pipe(
+      Layer.provide(Layer.succeed(HttpClient.HttpClient, httpClient))
+    )
+    yield* Effect.gen(function* () {
+      const client = yield* GithubGraphqlClient
+      yield* Effect.forEach(Array.from({ length: 120 }), () => client.execute(request))
+      const failure = yield* client.execute(request).pipe(Effect.flip)
+      expect(failure).toMatchObject({
+        _tag: "GithubGraphqlClient.RequestError",
+        kind: "CircuitOpen",
+        operation: "ResolveIssue"
+      })
+      expect(yield* Ref.get(observed)).toBe(120)
+      yield* TestClock.adjust("30 seconds")
+      yield* client.execute(request)
+      expect(yield* Ref.get(observed)).toBe(121)
+    }).pipe(Effect.provide(layer))
   })
 )
 

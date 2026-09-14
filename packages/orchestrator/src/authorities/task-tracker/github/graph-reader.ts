@@ -180,7 +180,9 @@ export const githubTrackerGraphReaderLayer: Layer.Layer<TrackerGraphReader, neve
               operation,
               error._tag === "GithubGraphqlClient.ReadThrottled"
                 ? TrackerAdapterReadFailureReason.cases.Throttled.make({})
-                : TrackerAdapterReadFailureReason.cases.Transport.make({}),
+                : String(error.kind) === "CircuitOpen"
+                  ? TrackerAdapterReadFailureReason.cases.CircuitOpen.make({})
+                  : TrackerAdapterReadFailureReason.cases.Transport.make({}),
               error.detail
             )
           )

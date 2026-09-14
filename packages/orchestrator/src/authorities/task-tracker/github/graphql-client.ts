@@ -1,17 +1,18 @@
 import { NodeHttpClient } from "@effect/platform-node"
-import { Config, Context, Effect, Layer, Match, Option, type Redacted, Schema } from "effect"
+import { Config, Context, Effect, Layer, Match, Option, Ref, type Redacted, Schema } from "effect"
 import * as HttpClient from "effect/unstable/http/HttpClient"
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest"
 import { GithubIssueTarget, GithubRepositoryName, GithubRepositoryOwner } from "./target.js"
 import { OperationId } from "../../../workflow/identity.js"
 import { GithubGraphqlReadOperation, type GithubGraphqlReadThrottled } from "./graphql-read-throttle.js"
-import type { GithubGraphqlThrottled } from "./graphql-throttling.js"
+import { type GithubGraphqlThrottled } from "./graphql-throttling.js"
 import {
   decodeGithubGraphqlMutationResponse,
   decodeGithubGraphqlReadResponse,
   GithubGraphqlRequestError,
   type GithubGraphqlResponse
 } from "./graphql-response.js"
+import { reserveGithubRequest, type GithubRequestRateState } from "./request-circuit.js"
 
 export { GithubGraphqlThrottled } from "./graphql-throttling.js"
 export { GithubGraphqlRequestError, GithubGraphqlResponse } from "./graphql-response.js"
@@ -369,7 +370,9 @@ const makeClient = Effect.fn("GithubGraphqlClient.make")(function* (
   endpoint: GithubGraphqlEndpointLocator
 ) {
   const httpClient = yield* HttpClient.HttpClient
+  const requestRateState = yield* Ref.make<GithubRequestRateState>({ openUntil: undefined, requests: [] })
   const executeHttp = Effect.fn("GithubGraphqlClient.executeHttp")(function* (request: GithubGraphqlRequest) {
+    yield* reserveGithubRequest(requestRateState, request._tag)
     const httpRequest = HttpClientRequest.post(endpoint).pipe(
       HttpClientRequest.acceptJson,
       HttpClientRequest.bearerToken(token),

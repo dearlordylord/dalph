@@ -48,6 +48,7 @@ import {
   Fiber,
   FileSystem,
   Layer,
+  Logger,
   Option,
   PlatformError,
   PubSub,
@@ -3292,7 +3293,11 @@ it.effect("normalizes stored failures, foreign records, and unusable app-server 
         protocolHarness.setResumeFailure(
           new CodexAppServerFailure({ detail: "protocol response", kind: "Protocol", operation: "thread/resume" })
         )
-        expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
+        const unreadable = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+        expect(unreadable).toMatchObject({
+          _tag: "Unreadable",
+          detail: "CodexAppServerFailure thread/resume/Protocol: protocol response"
+        })
         protocolHarness.setResumeFailure(
           new CodexAppServerFailure({
             detail: "initialization identity conflict",
@@ -3306,6 +3311,36 @@ it.effect("normalizes stored failures, foreign records, and unusable app-server 
       }).pipe(Effect.provide(layerFor(protocolHarness)))
     )
   )
+})
+
+it.effect("logs the concrete executor boundary when projection becomes unreadable", () => {
+  const harness = makeHarness()
+  const messages: Array<string> = []
+  const collector = Logger.make(({ message }) => {
+    messages.push(String(message))
+  })
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request, { _tag: "InitialDelivery" })
+    harness.setResumeFailure(
+      new CodexAppServerFailure({ detail: "protocol response", kind: "Protocol", operation: "thread/resume" })
+    )
+    const projection = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+    expect(projection).toMatchObject({
+      _tag: "Unreadable",
+      detail: "CodexAppServerFailure thread/resume/Protocol: protocol response"
+    })
+    expect(messages.map((message) => JSON.parse(message))).toContainEqual(
+      expect.objectContaining({
+        _tag: "CodexExecutorProjectionFailure",
+        attemptId: correlation.attemptId,
+        detail: "protocol response",
+        kind: "Protocol",
+        operation: "thread/resume",
+        runId: correlation.runId
+      })
+    )
+  }).pipe(Effect.provide(layerFor(harness)), Effect.provide(Logger.layer([collector])))
 })
 
 it.effect("reconstructs a persisted failed terminal without sending another task turn", () => {

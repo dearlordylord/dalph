@@ -25,6 +25,8 @@ export const TrackerAdapterReadFailureReason = Schema.TaggedUnion({
   ResourceLimitExceeded: {},
   /** The provider proved a request limit, so Dalph must not infer missing tracker facts. */
   Throttled: {},
+  /** Dalph locally stopped a request storm before crossing the provider boundary. */
+  CircuitOpen: {},
   Transport: {},
   UnsupportedTarget: {}
 })

@@ -144,8 +144,13 @@ const exact = (report: PlannedAttemptExecutorReportType): PlannedAttemptExecutor
 const unavailable = (correlation: PlannedAttemptExecutorCorrelation): PlannedAttemptExecutorProjectionType =>
   PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({ correlation })
 
-const unreadable = (correlation: PlannedAttemptExecutorCorrelation): PlannedAttemptExecutorProjectionType =>
-  PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation })
+const unreadable = (
+  correlation: PlannedAttemptExecutorCorrelation,
+  detail?: string
+): PlannedAttemptExecutorProjectionType =>
+  PlannedAttemptExecutorProjection.cases.Unreadable.make(
+    detail === undefined ? { correlation } : { correlation, detail }
+  )
 
 const initializationContradiction = (
   correlation: PlannedAttemptExecutorCorrelation,
@@ -1809,11 +1814,37 @@ const makeCodexPlannedAttemptExecutorContext = (
         if (error.kind === "CorrelationContradiction" && error.operation === "initialize") {
           return initializationContradiction(correlation, error.detail)
         }
-        return unreadable(correlation)
+        return unreadable(correlation, `${error._tag} ${error.operation}/${error.kind}: ${error.detail}`)
       }
-      if (storeFailure(error)) return unreadable(correlation)
-      return unreadable(correlation)
+      if (storeFailure(error)) return unreadable(correlation, `${error._tag}: ${String(error)}`)
+      return unreadable(correlation, String(error))
     }
+
+    const logProjectionFailure = (
+      correlation: PlannedAttemptExecutorCorrelation,
+      purpose: PlannedAttemptExecutorObservationPurpose,
+      error: unknown
+    ): Effect.Effect<void> =>
+      Effect.logError(
+        JSON.stringify({
+          _tag: "CodexExecutorProjectionFailure",
+          attemptId: correlation.attemptId,
+          detail:
+            error instanceof CodexAppServerFailure
+              ? error.detail
+              : error instanceof Error
+                ? error.message
+                : String(error),
+          kind:
+            error instanceof CodexAppServerFailure
+              ? error.kind
+              : typeof error === "object" && error !== null && "_tag" in error
+                ? String(error._tag)
+                : undefined,
+          operation: error instanceof CodexAppServerFailure ? error.operation : purpose._tag,
+          runId: correlation.runId
+        })
+      )
 
     const project = Effect.fn("CodexPlannedAttemptExecutor.project")(function* (
       correlation: PlannedAttemptExecutorCorrelation,
@@ -1822,7 +1853,9 @@ const makeCodexPlannedAttemptExecutorContext = (
       try {
         return (yield* projectStoredRecord(correlation, purpose)).projection
       } catch (error) {
-        return projectFailure(correlation, error)
+        const projection = projectFailure(correlation, error)
+        yield* logProjectionFailure(correlation, purpose, error)
+        return projection
       }
     })
 
@@ -1830,7 +1863,11 @@ const makeCodexPlannedAttemptExecutorContext = (
       correlation: PlannedAttemptExecutorCorrelation
     ) {
       return yield* projectStoredRecord(correlation, { _tag: "PassiveLifecycleObservation" }).pipe(
-        Effect.catch((error: unknown) => Effect.succeed(projectionOutcome(projectFailure(correlation, error))))
+        Effect.catch((error: unknown) =>
+          logProjectionFailure(correlation, { _tag: "PassiveLifecycleObservation" }, error).pipe(
+            Effect.andThen(Effect.succeed(projectionOutcome(projectFailure(correlation, error))))
+          )
+        )
       )
     })
 
@@ -2556,7 +2593,13 @@ const makeCodexPlannedAttemptExecutorContext = (
         (isBeginReconciliation(purpose)
           ? gateFor(correlation).pipe(Effect.flatMap((gate) => gate.withPermit(project(correlation, purpose))))
           : project(correlation, purpose)
-        ).pipe(Effect.catch((error: unknown) => Effect.succeed(projectFailure(correlation, error)))),
+        ).pipe(
+          Effect.catch((error: unknown) =>
+            logProjectionFailure(correlation, purpose, error).pipe(
+              Effect.andThen(Effect.succeed(projectFailure(correlation, error)))
+            )
+          )
+        ),
       begin: (request, delivery) => {
         const correlation = plannedAttemptExecutorCorrelation(request.plannedAttempt)
         return gateFor(correlation).pipe(

@@ -19,11 +19,15 @@ export type GithubGraphqlResponse = typeof GithubGraphqlResponse.Type
 
 export class GithubGraphqlRequestError extends Schema.TaggedError<GithubGraphqlRequestError>()(
   "GithubGraphqlClient.RequestError",
-  { detail: Schema.String, operation: GithubGraphqlOperation }
+  {
+    detail: Schema.String,
+    kind: Schema.optionalKey(Schema.Literals(["Transport", "CircuitOpen"])),
+    operation: GithubGraphqlOperation
+  }
 ) {}
 
 const requestError = (operation: GithubGraphqlOperation, cause: unknown) =>
-  new GithubGraphqlRequestError({ detail: String(cause), operation })
+  new GithubGraphqlRequestError({ detail: String(cause), kind: "Transport", operation })
 
 const ensureResponseCanHaveGraphqlBody = Effect.fn("GithubGraphqlClient.ensureResponseCanHaveGraphqlBody")(function* (
   operation: GithubGraphqlOperation,
