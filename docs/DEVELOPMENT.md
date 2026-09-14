@@ -248,6 +248,21 @@ evidence. `pnpm check:quint --force` requests fresh formal reproduction or
 timing. Reuse never replaces model-adequacy review. Automatic MBT is temporarily
 excluded pending #363; `test:mbt` remains an explicit manual command.
 
+A synthetic detached writer can create its fixture readiness file after launch
+while its parent is still publishing the post-spawn process-group observation.
+The custody test therefore waits, for at most its existing ten-second fixture
+deadline, until the writer's exact obligation is `observed` before corrupting
+that variant. If the observer dies, the still-live writer keeps both fences; an
+`observed` record rewritten as `no-child` while retaining its process group must
+be rejected, and reconciliation must not clear either fence. No retry applies:
+the fixture releases the original writer and reconciles that run. This is
+qualification-tool behavior only; it changes no Dalph runtime command, provider
+boundary, journal fact, retry, or cleanup behavior.
+
+| Qualification scenario | Acceptance test |
+| --- | --- |
+| A detached writer reports fixture readiness before its parent can publish the post-spawn observation; the test waits for the exact observed variant, kills the enclosing observer, and proves corrupting that variant cannot clear either fence | `scripts/gate-custody.test.mjs`: `formal-copy observer death preserves registered detached writer custody before any next launch` |
+
 Fresh full gates prepare the Effect diagnostics platform binary executable bit
 before observing inputs; resume retains changed installation modes and refuses
 reuse. Already prepared diagnostics binaries are left untouched. Fresh full gates also

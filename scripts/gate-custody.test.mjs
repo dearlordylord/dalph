@@ -895,9 +895,18 @@ for (const mode of ["census", "formal-copy"]) {
         throw error
       })
       const entry = runs(f.root)[0]
-      const records = readRecord(join(entry.runDirectory, "registration.json")).obligations.map((id) =>
-        readRecord(join(entry.runDirectory, "obligations", `${id}.json`))
+      const readObligations = () =>
+        readRecord(join(entry.runDirectory, "registration.json")).obligations.map((id) =>
+          readRecord(join(entry.runDirectory, "obligations", `${id}.json`))
+        )
+      // Child-visible readiness can precede the parent's post-spawn observation record.
+      // The custody mutation below is meaningful only after that exact variant is durable.
+      await until(() =>
+        readObligations().some(
+          (record) => record.command.name === "formal fixture detached writer" && record.state === "observed"
+        )
       )
+      const records = readObligations()
       const killed = records.find((record) =>
         mode === "census" ? record.command.name === "fixture stage observer" : record.parentId === "root"
       )
@@ -909,6 +918,7 @@ for (const mode of ["census", "formal-copy"]) {
       assert.throws(() => reconcileGateRun(entry), /not proven absent/u)
       if (mode === "formal-copy") {
         const live = records.find((record) => record.command.name === "formal fixture detached writer")
+        assert.equal(live.state, "observed", "negative control requires the observed writer variant")
         const path = join(entry.runDirectory, "obligations", `${live.obligationId}.json`)
         atomicRecord(path, { ...live, state: "no-child" })
         assert.throws(() => readRunEvidence(entry), /Invalid custody obligation variant/u)
