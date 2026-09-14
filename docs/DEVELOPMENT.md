@@ -24,6 +24,13 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
   and run a distinguishing experiment. More reviewers, time, or gate reruns alone
   are not new evidence. Continue independent authorized work; ask only about
   unresolved choices that materially change accepted outcomes.
+- Apply the [#307 churn controls](postmortems/issue-307-qualification-churn.md#prevention-plan-and-validation)
+  after two non-advancing attempts or 30 minutes of active repair without a new
+  distinguishing result. Within the next 10 minutes of active work, record the
+  changed experiment and a costly test's unique acceptance value in the existing
+  task. Before another broad/hosted submission, record the focused reproduction
+  and passing repair, or the concrete reason it cannot run locally. Subtasks do
+  not reset the parent outcome's budget.
 - Keep outcomes, test mappings, revision, obstruction, and next experiment in
   the existing issue/specification/scenario. Link it from parent issues. Record
   deadlines with units and timezone; dependencies, reviews, and renamed
