@@ -539,7 +539,7 @@ fixture creation, the one shipped production Run, build/hash/provenance
 evidence, exact cleanup, and the redacted artifact; this wrapper has no retry
 or resume path. As soon as Q's GitHub issue exists, the controller writes its
 exact redacted remote locator to `retained-locators.json`; after local setup it
-replaces that checkpoint with the complete remote/local retained
+atomically replaces that checkpoint with the complete remote/local retained
 set before starting the shipped child. Outer cancellation can therefore upload
 the last completed disposition checkpoint even when the controller never
 returns. A successful final publication removes the stale checkpoint. The
@@ -547,7 +547,8 @@ controller generates a fresh random throwaway credential
 for the loopback Responses provider per invocation, binds it only to the
 isolated `CODEX_HOME` config under
 `DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL`, and passes that value only to the
-controlled shipped child. Its Bash observation wrapper starts the locked Codex
+controlled shipped child. The outer runner resolves the locked Codex JavaScript
+entry once and carries that exact locator in the safe manifest. Its Bash observation wrapper starts the locked Codex
 JavaScript entry with the wrapper locator retained as `argv[0]`; the ownership
 census can therefore still identify and signal the exact detached app-server
 after pnpm's ordinary shim would have replaced that identity with `node`. The
@@ -582,7 +583,8 @@ The focused contract mapping is:
 | The built controller receives one manifest locator and secrets only through one child launch | `scripts/run-production-live-qualification.test.mjs` exact launch case |
 | Uploaded formal provenance and live failure evidence disclose no private absolute worker/controller locator | `scripts/run-production-live-qualification.test.mjs` absolute formal-log rejection case; `scripts/production-live-qualification-workflow.test.mjs` manifest/pre-cleanup exclusion case |
 | A child/provider failure is reported without a retry and without secret bytes in the wrapper error | `scripts/run-production-live-qualification.test.mjs` single-launch failure case and workflow artifact `if: always()` contract |
-| The disposable issue exists but later local setup or the shipped command never returns; the always-upload step receives Q's latest exact retained-resource checkpoint rather than no artifact. | `packages/dalph/test-support/production-live-qualification-runtime.test.ts`: `persists the exact remote fixture before local setup or the shipped child can stall`, `an unfinished recoverable Run retains every exact local locator for manual cleanup` |
+| The disposable issue exists but later local setup or the shipped command never returns; the always-upload step receives Q's latest exact retained-resource checkpoint rather than no artifact. An interruption during checkpoint replacement leaves the prior complete checkpoint intact. | `packages/dalph/test-support/production-live-qualification-runtime.test.ts`: `persists the exact remote fixture before local setup or the shipped child can stall`, `an unfinished recoverable Run retains every exact local locator for manual cleanup`, `preserves the prior valid checkpoint if replacement is interrupted` |
+| The generated Codex wrapper starts the exact locked JavaScript entry and remains signalable as the recorded wrapper process; a missing entry fails before any process observation. | `packages/dalph/test-support/production-live-qualification-runtime.test.ts`: `production live qualification fixture separates Codex home from executor private state`, `the generated wrapper fails before process observation when its locked entry is missing` |
 
 ### Disposable production repository walkthrough
 

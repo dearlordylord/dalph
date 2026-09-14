@@ -1,4 +1,10 @@
-import { Effect, FileSystem, Layer, Redacted } from "effect"
+/* eslint-disable import/no-nodejs-modules -- This qualification test executes and observes the real Node process boundary. */
+import { spawn } from "node:child_process"
+import { readFile } from "node:fs/promises"
+import nodePath from "node:path"
+import nodeProcess from "node:process"
+import * as nodeTimers from "node:timers"
+import { Effect, Exit, FileSystem, Layer, Redacted } from "effect"
 import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import { nodeGitCommandLayer } from "@dalph/orchestrator"
 import { describe, expect, it } from "vitest"
@@ -10,11 +16,38 @@ import {
   productionLiveQualificationBoundaryObservations,
   productionLiveQualificationChronologyIsExact,
   productionLiveQualificationOperationCounts,
+  replaceProductionLiveQualificationRetentionReportAtomically,
   writeProductionLiveQualificationFailureRetentionReport
 } from "../src/qualification/live-qualification-runtime.js"
 import { ProductionLiveResponsesEndpointLocator } from "../src/qualification/live-responses-endpoint.js"
 
 const layer = nodeGitCommandLayer.pipe(Layer.provideMerge(NodeServices.layer), Layer.merge(NodeCrypto.layer))
+const processBoundMilliseconds = 5_000
+
+const waitFor = async <A>(observe: () => Promise<A | undefined>): Promise<A> => {
+  const attempts = processBoundMilliseconds / 20
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const observed = await observe()
+    if (observed !== undefined) return observed
+    await new Promise((resolve) => nodeTimers.setTimeout(resolve, 20))
+  }
+  throw new Error("bounded process observation timed out")
+}
+
+const stopChild = async (child: ReturnType<typeof spawn>): Promise<void> => {
+  if (child.exitCode !== null || child.signalCode !== null) return
+  const exited = new Promise<void>((resolve, reject) => {
+    child.once("exit", () => resolve())
+    child.once("error", reject)
+  })
+  child.kill("SIGTERM")
+  const timer = nodeTimers.setTimeout(() => child.kill("SIGKILL"), processBoundMilliseconds)
+  try {
+    await exited
+  } finally {
+    clearTimeout(timer)
+  }
+}
 const formalPositions = (shard: number) =>
   Array.from({ length: 105 }, (_value, position) => position).filter((position) =>
     shard === 0
@@ -97,6 +130,7 @@ const input = {
   builtEntry: "/workspace/dalph/packages/dalph/dist/bin/dalph.js",
   lockfile: "/workspace/dalph/pnpm-lock.yaml",
   codexExecutable: "/usr/local/bin/codex",
+  codexJavaScriptEntry: "/usr/local/@openai/codex/bin/codex.js",
   publicationContainer: "/tmp/dalph-live-publication",
   artifact: "/tmp/dalph-live-publication/evidence.json",
   retentionReport: "/tmp/dalph-live-publication/retained-locators.json",
@@ -216,8 +250,10 @@ describe("#307 production live qualification runtime", () => {
   it("production live qualification fixture separates Codex home from executor private state", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
+        const codexExecutable = nodePath.join(nodeProcess.cwd(), "node_modules/.bin/codex")
+        const codexJavaScriptEntry = nodePath.join(nodeProcess.cwd(), "node_modules/@openai/codex/bin/codex.js")
         const fixture = yield* createProductionLiveLocalFixture(
-          yield* decodeProductionLiveQualificationManifest(input),
+          yield* decodeProductionLiveQualificationManifest({ ...input, codexExecutable, codexJavaScriptEntry }),
           { owner: "dalph-live", repository: "qualification", issueNumber: 307 },
           ProductionLiveResponsesEndpointLocator.make("http://127.0.0.1:4307/v1"),
           "http://127.0.0.1:4308/graphql",
@@ -240,13 +276,13 @@ describe("#307 production live qualification runtime", () => {
         const wrapper = yield* fs.readFileString(fixture.configuration.codexExecutable)
         expect(wrapper).toContain("#!/usr/bin/env bash")
         expect(wrapper).toContain('exec -a "$0"')
-        expect(wrapper).toContain("/@openai/codex/bin/codex.js'")
-        expect(wrapper).toContain("test -r '/usr/local/@openai/codex/bin/codex.js'")
+        expect(wrapper).toContain(codexJavaScriptEntry)
+        expect(wrapper).toContain(`test -r '${codexJavaScriptEntry}'`)
         expect(wrapper).toContain('test "${1-}" = "app-server"')
         expect(
           launchExecutableMatches(fixture.configuration.codexExecutable, [
             fixture.configuration.codexExecutable,
-            "/workspace/dalph/node_modules/@openai/codex/bin/codex.js",
+            codexJavaScriptEntry,
             "app-server"
           ])
         ).toBe(true)
@@ -257,11 +293,96 @@ describe("#307 production live qualification runtime", () => {
             "app-server"
           ])
         ).toBe(false)
-        expect(yield* fs.readFileString(fixture.applicationServerObservationPath)).toBe("")
+        const child = spawn(fixture.configuration.codexExecutable, ["app-server"], {
+          env: { ...nodeProcess.env, CODEX_HOME: fixture.codexHome },
+          stdio: "ignore"
+        })
+        try {
+          const observed = yield* Effect.promise(() =>
+            waitFor(async () => {
+              const source = await readFile(fixture.applicationServerObservationPath, "utf8")
+              const match = /^linux:([^:]+):pid:(\d+)$/u.exec(source.trim())
+              return match === null ? undefined : { startIdentity: match[1], pid: Number(match[2]) }
+            })
+          )
+          expect(observed.pid).toBe(child.pid)
+          const commandLine = yield* Effect.promise(() =>
+            waitFor(async () => {
+              const values = (await readFile(`/proc/${observed.pid}/cmdline`, "utf8")).split("\0").filter(Boolean)
+              return values[0] === fixture.configuration.codexExecutable && values.includes("app-server")
+                ? values
+                : undefined
+            })
+          )
+          const stat = (yield* Effect.promise(() => readFile(`/proc/${observed.pid}/stat`, "utf8"))).split(" ")
+          expect(stat[21]).toBe(observed.startIdentity)
+          expect(commandLine).toContain(codexJavaScriptEntry)
+          expect(launchExecutableMatches(fixture.configuration.codexExecutable, commandLine)).toBe(true)
+        } finally {
+          yield* Effect.promise(() => stopChild(child))
+        }
         const document = yield* fs.readFileString(fixture.configurationPath)
         expect(document).not.toContain("github-secret")
         yield* fs.remove(fixture.localManifest.container.locator, { recursive: true })
       }).pipe(Effect.provide(layer))
+    )
+  })
+
+  it("the generated wrapper fails before process observation when its locked entry is missing", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fixture = yield* createProductionLiveLocalFixture(
+          yield* decodeProductionLiveQualificationManifest({
+            ...input,
+            codexJavaScriptEntry: "/missing/@openai/codex/bin/codex.js"
+          }),
+          { owner: "dalph-live", repository: "qualification", issueNumber: 307 },
+          ProductionLiveResponsesEndpointLocator.make("http://127.0.0.1:4307/v1"),
+          "http://127.0.0.1:4308/graphql",
+          Redacted.make("github-secret")
+        )
+        const child = spawn(fixture.configuration.codexExecutable, ["app-server"], { stdio: "ignore" })
+        const exitCode = yield* Effect.promise(
+          () =>
+            new Promise<number | null>((resolve, reject) => {
+              const timer = nodeTimers.setTimeout(() => {
+                child.kill("SIGKILL")
+                reject(new Error("missing-entry wrapper did not exit within its hard bound"))
+              }, processBoundMilliseconds)
+              child.once("error", reject)
+              child.once("exit", (code) => {
+                clearTimeout(timer)
+                resolve(code)
+              })
+            })
+        )
+        expect(exitCode).not.toBe(0)
+        expect(yield* (yield* FileSystem.FileSystem).readFileString(fixture.applicationServerObservationPath)).toBe("")
+        yield* (yield* FileSystem.FileSystem).remove(fixture.localManifest.container.locator, { recursive: true })
+      }).pipe(Effect.provide(layer))
+    )
+  })
+
+  it("preserves the prior valid checkpoint if replacement is interrupted", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem
+          const directory = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-live-atomic-checkpoint-" })
+          const locator = nodePath.join(directory, "retained-locators.json")
+          yield* fs.writeFileString(locator, '{"checkpoint":"prior"}')
+          const interrupted = yield* replaceProductionLiveQualificationRetentionReportAtomically(
+            locator,
+            '{"checkpoint":"replacement"}',
+            Effect.interrupt
+          ).pipe(Effect.exit)
+          expect(Exit.isFailure(interrupted)).toBe(true)
+          expect(yield* fs.readFileString(locator)).toBe('{"checkpoint":"prior"}')
+          expect(yield* fs.exists(`${locator}.replacement`)).toBe(false)
+          yield* replaceProductionLiveQualificationRetentionReportAtomically(locator, '{"checkpoint":"replacement"}')
+          expect(yield* fs.readFileString(locator)).toBe('{"checkpoint":"replacement"}')
+        })
+      ).pipe(Effect.provide(layer))
     )
   })
 

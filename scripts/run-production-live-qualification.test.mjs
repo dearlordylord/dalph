@@ -84,7 +84,7 @@ const fixture = async () => {
   await mkdir(join(root, "node_modules", "@openai", "codex", "bin"), { recursive: true })
   await writeFile(codexExecutable, "#!/usr/bin/env node\n")
   await writeFile(codexEntry, "#!/usr/bin/env node\n")
-  return { codexExecutable, lockfile, root, formal, output }
+  return { codexEntry, codexExecutable, lockfile, root, formal, output }
 }
 
 const formalCommands = (custodyOffset) =>
@@ -250,6 +250,20 @@ test("blocks formal qualification unless exact candidate CI is completed and suc
   }
 })
 
+test("blocks formal qualification when the exact candidate has no CI workflow run", async () => {
+  await assert.rejects(
+    requireSuccessfulCandidateCi({
+      environment: {
+        DALPH_CANDIDATE_SHA: candidateSha,
+        GITHUB_REPOSITORY: "dearlordylord/dalph",
+        GITHUB_TOKEN: "actions-read-token"
+      },
+      fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ workflow_runs: [] }) })
+    }),
+    /exact candidate requires a completed successful CI workflow/u
+  )
+})
+
 test("permits formal qualification after exact candidate CI completed successfully", async () => {
   const requests = []
   const result = await requireSuccessfulCandidateCi({
@@ -364,6 +378,7 @@ test("launches the built controller exactly once with one manifest locator and o
   assert.equal(requests[0].args.includes("must-be-generated-by-controller"), false)
   const manifest = JSON.parse(await readFile(f.output.manifest, "utf8"))
   assert.equal(manifest.builtEntry, join(f.root, productionLiveQualificationShippedBin))
+  assert.equal(manifest.codexJavaScriptEntry, f.codexEntry)
   assert.equal(manifest.retentionReport, f.output.retained)
   assert.equal(manifest.publicationContainer, f.output.publication)
   assert.notEqual(manifest.artifact, manifest.retentionReport)

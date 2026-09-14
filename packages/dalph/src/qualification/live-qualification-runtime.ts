@@ -136,6 +136,8 @@ export const ProductionLiveQualificationManifest = Schema.Struct({
   builtEntry: ProductionLiveBuiltEntry,
   lockfile: canonicalAbsolute("lockfile"),
   codexExecutable: canonicalAbsolute("Codex executable"),
+  /** Exact locked JavaScript entry resolved by the outer qualification runner. */
+  codexJavaScriptEntry: canonicalAbsolute("Codex JavaScript entry"),
   publicationContainer: QualificationPublicationContainer,
   artifact: QualificationArtifactLocator,
   /** Outside-Q destination for an exact, secret-free cleanup or retention report. */
@@ -248,7 +250,6 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
     nodePath.join(codexExecutorPrivateStateDirectory, "app-server-processes")
   )
   const codexAppServerWrapper = nodePath.join(codexExecutorPrivateStateDirectory, "codex-app-server-observer")
-  const codexEntry = nodePath.resolve(nodePath.dirname(manifest.codexExecutable), "../@openai/codex/bin/codex.js")
   const integratorCandidateWorktreeRoot = at("candidates")
   const integratorPrivateStore = at("private.json")
   const configurationPath = ProductionConfigurationLocator.make(at("production.json"))
@@ -287,7 +288,7 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
   yield* fs.writeFileString(codexAppServerObservationPath, "")
   yield* fs.writeFileString(
     codexAppServerWrapper,
-    codexAppServerObservationWrapper(codexEntry, nodeProcess.execPath, codexAppServerObservationPath)
+    codexAppServerObservationWrapper(manifest.codexJavaScriptEntry, nodeProcess.execPath, codexAppServerObservationPath)
   )
   yield* fs.chmod(codexAppServerWrapper, privateDirectoryMode)
   yield* fs.writeFileString(journalDatabase, "")
@@ -955,6 +956,27 @@ const localContainerFallbackReport = (
   ]
 }
 
+/** Replaces a checkpoint only after its complete replacement is durable. */
+export const replaceProductionLiveQualificationRetentionReportAtomically = Effect.fn(
+  "ProductionLiveQualification.replaceRetentionReportAtomically"
+)(function* (locator: string, content: string, beforeRename: Effect.Effect<void> = Effect.void) {
+  const fs = yield* FileSystem.FileSystem
+  const replacement = `${locator}.replacement`
+  yield* Effect.gen(function* () {
+    // Closing the scoped handle before rename makes the synced replacement a
+    // complete candidate; interruption can only expose it or the prior file.
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const file = yield* fs.open(replacement, { flag: "w", mode: 0o600 })
+        yield* file.writeAll(new TextEncoder().encode(content))
+        yield* file.sync
+      })
+    )
+    yield* beforeRename
+    yield* fs.rename(replacement, locator)
+  }).pipe(Effect.ensuring(fs.remove(replacement, { force: true }).pipe(Effect.ignore)))
+})
+
 export const writeProductionLiveQualificationFailureRetentionReport = Effect.fn(
   "ProductionLiveQualification.writeRetentionReport"
 )(function* (
@@ -966,7 +988,6 @@ export const writeProductionLiveQualificationFailureRetentionReport = Effect.fn(
   localContainer: ProductionLiveLocalContainer | undefined,
   cleanupState: { github?: GithubCleanup; local?: LocalCleanup }
 ) {
-  const fs = yield* FileSystem.FileSystem
   const githubCleanup = cleanupState.github
   const observedLabels = yield* observeCreatedLabels(forwarder)
   const labelResources = observedLabels.map(({ fingerprint, name, nodeId }) =>
@@ -995,7 +1016,7 @@ export const writeProductionLiveQualificationFailureRetentionReport = Effect.fn(
       ...localContainerFallbackReport(localFixture, localContainer)
     ]
   })
-  yield* fs.writeFileString(manifest.retentionReport, JSON.stringify(report))
+  yield* replaceProductionLiveQualificationRetentionReportAtomically(manifest.retentionReport, JSON.stringify(report))
 })
 
 /**
