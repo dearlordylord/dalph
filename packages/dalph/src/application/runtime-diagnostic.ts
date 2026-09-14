@@ -223,6 +223,84 @@ const sourceSafeMessage = (
   return `${operation ?? tag} failed`
 }
 
+interface ProjectedErrorFields {
+  readonly category: Projection<string> | undefined
+  readonly code: Projection<string> | undefined
+  readonly frames: Projection<ReadonlyArray<RuntimeDiagnosticFrame>>
+  readonly message: Projection<string>
+  readonly operation: Projection<string> | undefined
+  readonly syscall: Projection<string> | undefined
+  readonly tag: Projection<string>
+}
+
+interface ProjectedCauseTraversal {
+  readonly atDepthLimit: boolean
+  readonly children: ReadonlyArray<Projection<RuntimeDiagnosticError>>
+  readonly nested: ReadonlyArray<unknown>
+  readonly repeated: boolean
+}
+
+const projectOptionalDiagnosticText = (
+  value: string | number | undefined,
+  sensitiveValues: ReadonlyArray<string>
+): Projection<string> | undefined => (value === undefined ? undefined : diagnosticText(String(value), sensitiveValues))
+
+const projectErrorFields = (
+  value: unknown,
+  source: typeof RuntimeDiagnosticSource.Type | undefined,
+  sensitiveValues: ReadonlyArray<string>
+): ProjectedErrorFields => {
+  const tag = diagnosticText(sourceTag(value, source), sensitiveValues)
+  const operation = projectOptionalDiagnosticText(sourceOperation(source), sensitiveValues)
+  const category = projectOptionalDiagnosticText(source?.kind, sensitiveValues)
+  const code = projectOptionalDiagnosticText(source?.code, sensitiveValues)
+  const syscall = projectOptionalDiagnosticText(source?.syscall, sensitiveValues)
+  const message = diagnosticText(sourceSafeMessage(tag.value, operation?.value, source), sensitiveValues)
+  const frames = projectFrames(value instanceof Error ? value.stack : source?.stack, sensitiveValues)
+  return { category, code, frames, message, operation, syscall, tag }
+}
+
+const errorCause = (value: unknown): unknown => (value instanceof Error ? value.cause : undefined)
+
+const oneCause = (cause: unknown): ReadonlyArray<unknown> => (cause === undefined ? [] : [cause])
+
+const nestedCauseValues = (
+  value: unknown,
+  source: typeof RuntimeDiagnosticSource.Type | undefined
+): ReadonlyArray<unknown> => {
+  const fallbackCause = errorCause(value)
+  if (source === undefined) return oneCause(fallbackCause)
+  return [source.reason, source.cause ?? fallbackCause].filter((item) => item !== undefined)
+}
+
+const isRepeatedCause = (value: unknown, ancestors: ReadonlyArray<unknown>) =>
+  typeof value === "object" && value !== null && ancestors.includes(value)
+
+const hasOmittedErrorField = (fields: ProjectedErrorFields): boolean =>
+  [fields.tag, fields.category, fields.code, fields.operation, fields.syscall, fields.message, fields.frames].some(
+    (projection) => projection?.omitted === true
+  )
+
+const hasOmittedCauseTraversal = (traversal: ProjectedCauseTraversal): boolean =>
+  traversal.repeated ||
+  (traversal.atDepthLimit && traversal.nested.length > 0) ||
+  traversal.children.some(({ omitted }) => omitted)
+
+const buildProjectedError = (
+  fields: ProjectedErrorFields,
+  causes: readonly [RuntimeDiagnosticError, ...Array<RuntimeDiagnosticError>] | undefined,
+  frames: readonly [RuntimeDiagnosticFrame, ...Array<RuntimeDiagnosticFrame>] | undefined
+): RuntimeDiagnosticError => ({
+  ...(fields.category === undefined ? {} : { category: fields.category.value }),
+  ...(causes === undefined ? {} : { causes }),
+  ...(fields.code === undefined ? {} : { code: fields.code.value }),
+  errorTag: fields.tag.value,
+  ...(frames === undefined ? {} : { frames }),
+  ...(fields.operation === undefined ? {} : { operation: fields.operation.value }),
+  safeMessage: fields.message.value,
+  ...(fields.syscall === undefined ? {} : { syscall: fields.syscall.value })
+})
+
 const projectError = (
   value: unknown,
   sensitiveValues: ReadonlyArray<string>,
@@ -230,53 +308,31 @@ const projectError = (
   ancestors: ReadonlyArray<unknown>
 ): Projection<RuntimeDiagnosticError> => {
   const source = diagnosticSource(value)
-  const tag = diagnosticText(sourceTag(value, source), sensitiveValues)
-  const rawOperation = sourceOperation(source)
-  const operation = rawOperation === undefined ? undefined : diagnosticText(rawOperation, sensitiveValues)
-  const category = source?.kind === undefined ? undefined : diagnosticText(source.kind, sensitiveValues)
-  const code = source?.code === undefined ? undefined : diagnosticText(String(source.code), sensitiveValues)
-  const syscall = source?.syscall === undefined ? undefined : diagnosticText(source.syscall, sensitiveValues)
-  const message = diagnosticText(sourceSafeMessage(tag.value, operation?.value, source), sensitiveValues)
-  const frames = projectFrames(value instanceof Error ? value.stack : source?.stack, sensitiveValues)
-  const nested =
-    source === undefined
-      ? value instanceof Error && value.cause !== undefined
-        ? [value.cause]
-        : []
-      : [source.reason, source.cause ?? (value instanceof Error ? value.cause : undefined)].filter(
-          (item) => item !== undefined
-        )
-  const repeated = typeof value === "object" && value !== null && ancestors.includes(value)
+  const fields = projectErrorFields(value, source, sensitiveValues)
+  const traversal = projectErrorCauses(value, source, sensitiveValues, depth, ancestors)
+  const projectedChildren = nonEmpty(traversal.children.map(({ value: child }) => child))
+  const projectedFrames = nonEmpty(fields.frames.value)
+  return {
+    omitted: hasOmittedErrorField(fields) || hasOmittedCauseTraversal(traversal),
+    value: buildProjectedError(fields, projectedChildren, projectedFrames)
+  }
+}
+
+const projectErrorCauses = (
+  value: unknown,
+  source: typeof RuntimeDiagnosticSource.Type | undefined,
+  sensitiveValues: ReadonlyArray<string>,
+  depth: number,
+  ancestors: ReadonlyArray<unknown>
+): ProjectedCauseTraversal => {
+  const nested = nestedCauseValues(value, source)
+  const repeated = isRepeatedCause(value, ancestors)
   const atDepthLimit = depth >= runtimeDiagnosticCauseDepthLimit
   const children =
     repeated || atDepthLimit
       ? []
       : nested.map((item) => projectError(item, sensitiveValues, depth + 1, [...ancestors, value]))
-  const projectedChildren = nonEmpty(children.map(({ value: child }) => child))
-  const projectedFrames = nonEmpty(frames.value)
-  return {
-    omitted:
-      tag.omitted ||
-      (category?.omitted ?? false) ||
-      (code?.omitted ?? false) ||
-      (operation?.omitted ?? false) ||
-      (syscall?.omitted ?? false) ||
-      message.omitted ||
-      frames.omitted ||
-      repeated ||
-      (atDepthLimit && nested.length > 0) ||
-      children.some(({ omitted }) => omitted),
-    value: {
-      ...(category === undefined ? {} : { category: category.value }),
-      ...(projectedChildren === undefined ? {} : { causes: projectedChildren }),
-      ...(code === undefined ? {} : { code: code.value }),
-      errorTag: tag.value,
-      ...(projectedFrames === undefined ? {} : { frames: projectedFrames }),
-      ...(operation === undefined ? {} : { operation: operation.value }),
-      safeMessage: message.value,
-      ...(syscall === undefined ? {} : { syscall: syscall.value })
-    }
-  }
+  return { atDepthLimit, children, nested, repeated }
 }
 
 /** Projects only named diagnostic fields; arbitrary messages, details, stacks and provider payloads are never copied. */
