@@ -38,6 +38,8 @@ The following evidence is independently inspectable:
 | The next protected run consumed formal capacity before confirming ordinary CI, then timed out without a disposition artifact. | [Run 34840177594](https://github.com/dearlordylord/dalph/actions/runs/34840177594), 11:49:44–12:31:38 UTC, ran all four formal jobs successfully. Its protected live command ran from 12:02:15 until the 30-minute job limit cancelled it at 12:31:34. Q created disposable issue 7 at 12:02:18, but GitHub recorded no label, comment, close, or reopen event; direct read-only graph parsing of that exact issue later completed locally in 2.3 seconds. No qualification or retention artifact existed. This localizes the unresolved wait before the first tracker mutation but does not prove which eager startup sub-boundary stalled. The exact fingerprinted issue was deleted and its node became unreadable afterward. |
 | The controlled Codex observation wrapper lost its declared process identity. | A focused probe using the exact generated `CODEX_HOME` initialized Codex 0.149.0 in 0.17–1.85 seconds, excluding a generally slow initialize handshake. The generated wrapper named itself as the expected executable, but pnpm's shell shim replaced the observed command with `node …/codex.js app-server`; `launchExecutableMatches(wrapperPath, observedCommand)` returned false and close failed with the ownership diagnostic `process identity changed before signal`. An equivalent Bash wrapper using `exec -a wrapperPath node …/codex.js app-server` initialized and closed in 2.6 seconds. This reproduced ownership defect is consistent with the protected stall; because the cancelled run retained no internal checkpoint, the report does not claim it as uniquely proven historical causation. |
 | A later protected run passed its exact-candidate CI preflight and all four formal shards before entering the live step. | [Run 34849184077](https://github.com/dearlordylord/dalph/actions/runs/34849184077) started its live step at 13:37:57 UTC, created disposable issue 8 at 13:37:59, made no label, comment, or state changes, and was cancelled at 13:56:06 UTC after approximately 18 minutes. Artifact `10350839168` contained only `retained-locators.json` with `NotQualified/Execution`; no `qualification.json` was present. The exact issue node was reread and deleted, and the disposable repository was empty. This proves fixture creation and cleanup, not the stalled live boundary or qualification success. |
+| Formal relevance and adapter projection were completed. | Commits `78c315133` and `61c2527a7` complete the local formal-relevance and formal-adapter projection repairs. They are tooling/docs changes, not proof of protected live qualification, and are not pending work. |
+| The protected candidate reached selection but did not complete its deterministic fixture. | [Run 34866580369](https://github.com/dearlordylord/dalph/actions/runs/34866580369) used exact candidate `61c2527a7`; exact CI [run 34864004597](https://github.com/dearlordylord/dalph/actions/runs/34864004597) was green, and all four protected formal shards were green. The live controller was manually stopped after 13m38s because the deterministic fixture exceeded its expected duration. Artifact `10357774516` recorded `BuildMeasured`, `ChildSpawned`, `FirstCanonicalRecord`, and `RunSelected`, with one app-server start but no process/stdout/stderr completion. The journal was unreadable; issue #9 was deleted and the disposable repository was empty. This proves progress through selection and cleanup, not successful completion or end-to-end qualification. |
 | The wrapper-identity diagnosis was separated from the live-stall claim. | The process-identity mismatch is a proven wrapper defect. It remains unproven as the root cause of the protected stall because no retained checkpoint ties that defect to the stalled run; it must not be reported as that run's causal diagnosis. |
 | New progress checkpoints and redacted diagnostics are prevention/evidence improvements. | After fixture creation, the accepted checkpoint records build measurement, the safe shipped-child process identity, the first canonical record, the first `RunSelected` occurrence, and independent process/stdout/stderr outcomes. Each complete update atomically replaces the prior checkpoint, and runner loss retains the last complete checkpoint. The diagnostic adds no raw stdout/stderr, prompt, secret, or private path beyond existing cleanup locators. The associated domain/spec, architecture/connascence, and code-review passes reported zero findings; those review results are evidence improvements, not proof of a successful protected run. |
 | The final candidate gate was false-invalidated during a read-only review, and the observer behavior is now scoped. | Only explicitly constructed internal Git coordination lock paths tolerate transient events: the candidate's `index.lock` and the lock paths for its exact symbolic selected-ref chain. No `HEAD.lock`, `packed-refs.lock`, or arbitrary `*.lock` path is exempt. Real same-batch index/ref events remain dirty; a persistent internal lock fails the final authoritative snapshot; user-configured authority files named `*.lock` remain observed and an edit followed by restore is rejected. Commits `22b8b30dc`, `a1679c762`, and `1b20f232` resolve the false invalidation without broadening the exemption. The negative controls `bound candidate history refuses transient HEAD lock writes` and `bound candidate history refuses transient packed-refs lock writes` in `scripts/gate-resume-inputs.test.mjs` prove those locks remain dirty. This is tooling-only and changes no Dalph runtime behavior. |
@@ -98,6 +100,14 @@ The following evidence is independently inspectable:
    shim changed `argv[0]` underneath the ownership census. Tests did not connect
    the generated wrapper to the existing exact executable matcher or prove that
    the started process remained signalable during close.
+10. **The live controller still had an unbounded post-selection completion wait.**
+    The final protected run reached `RunSelected` but stopped after 13m38s
+    without process, stdout, or stderr completion. The working diagnosis is an
+    unbounded parent-completion join after selection, possibly involving an
+    unanswered JSON-RPC request. Whether any RPC was pending, and which one,
+    remain unproven because the journal was unreadable and the retained artifact
+    contained no completion outcome. The safe fix is deferred to #376 while
+    turn/start ambiguity reconciliation is resolved.
 
 ## Prevention plan and validation
 
@@ -166,12 +176,17 @@ unexecuted command in a document is not evidence of an executable control.
 ## State at publication
 
 Suite deletion, acceptance-map correction, preflight collection, formal input
-projection, PATH stabilization, and canonical Node metadata have committed
-repairs. This document records their evidence and the operating controls; it
-does not claim a new successful protected live artifact. The earlier inspected
-protected run above entered the live step and was cancelled at its job bound;
-the later exact-candidate run 34849184077 also has no qualification artifact.
-The candidate-gate observer's transient `index.lock` false invalidation is
-resolved by the scoped lock behavior recorded above; the live-stall boundary
-itself remains separately unproven. Final #307/#261/#253 closure must link the
-later successful artifact if and when it exists.
+projection, PATH stabilization, canonical Node metadata, and the formal
+relevance repairs in `78c315133` and `61c2527a7` have committed repairs. This
+document records their evidence and the operating controls; it does not claim a
+successful protected live qualification result. The latest exact-candidate run
+34866580369 passed exact CI and all four formal shards, then was manually stopped
+after 13m38s with an artifact that reached `RunSelected` but lacked process,
+stdout, and stderr completion; its journal was unreadable. The working
+post-selection parent-join diagnosis remains bounded by that evidence; an
+unanswered JSON-RPC request is possible but unproven. The safe fix is deferred
+to #376 pending turn/start ambiguity reconciliation. The candidate-gate
+observer's transient `index.lock` false
+invalidation is resolved by the scoped lock behavior recorded above; the
+live-stall boundary and exact RPC remain separately unproven. #307, #261, and
+#253 remain open and unproven.

@@ -46,6 +46,12 @@ questions. Reuse guidance already read unless it changed or scope changed.
 
 ## Verification and closure
 
+- Before starting or waiting on an operation expected to exceed one minute,
+  record its expected duration and wall-clock stop time. At that time, stop
+  safely, preserve evidence, and name the next discriminating action before a
+  rerun; a live handle is not progress. Time-box fixture repair separately;
+  then open a scoped follow-up, or report blocked if it is the only proof of
+  current acceptance behavior.
 - Use minimal live-provider fixtures, controlled tests for bulk behavior, and
   never retry throttled mutations.
 - Select checks using [choosing checks](docs/DEVELOPMENT.md#choosing-checks);
