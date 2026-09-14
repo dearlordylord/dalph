@@ -3,6 +3,9 @@
 This worktree carries the research notes created in the invoker/invokee
 conversation. Research is evidence, not accepted runtime behavior.
 
+- [First invoker/invokee milestone specification](../docs/scenarios/invoker-invokee-first-milestone.md)
+- [Published tickets and reviewed implementation handoff](FRESH-SESSION-HANDOFF.md#current-state--2026-09-13)
+- [Independent ticket reviews and accepted corrections](invokee-ticket-review-disposition.md)
 - [Fresh-session handoff and to-spec prompt](./FRESH-SESSION-HANDOFF.md)
 - [Research conclusion and specification inputs](./invokee-research-conclusion.md)
 - [Scope and specification-readiness audit](./invokee-spec-readiness-audit.md)

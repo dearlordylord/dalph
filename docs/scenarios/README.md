@@ -105,6 +105,8 @@ Git history.
 
 ## Production boundaries and qualification
 
+- [Inspect and direct one running Dalph through MCP or CLI](invoker-invokee-first-milestone.md) — first-milestone specification; acceptance tests and validation gaps are explicit.
+
 - [Expose GitHub tracker targets through the dry-run CLI](issue-103-github-dry-run-cli.md)
 - [Reject unsafe production-host path relationships](issue-292-production-host-configuration.md)
 - [Alice's ordinary task gets a filesystem-sized worktree component](issue-339-bounded-attempt-resource-components.md)

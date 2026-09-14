@@ -1,9 +1,82 @@
-# Fresh-session handoff: invoker/invokee specification
+# Fresh-session handoff: invoker/invokee implementation tickets
 
-This file is the entry point for continuing without the original conversation.
-Material decisions, evidence, limitations and runnable probes are committed in
-this research worktree. A specification and implementation tickets have not
-been created. The user will request those steps explicitly.
+## Current state — 2026-09-13
+
+The [first-milestone specification](../docs/scenarios/invoker-invokee-first-milestone.md)
+is published as [#365](https://github.com/dearlordylord/dalph/issues/365).
+Ten reviewed tickets are published with `ready-for-agent`, chronological
+acceptance criteria, scenario-to-test mappings and verified native blocking
+links. The parent issue was not modified. No runtime implementation or master
+integration was performed in this conversation.
+
+| Ticket | Blocked by |
+| --- | --- |
+| [#366 — Concrete MCP/CLI contracts](https://github.com/dearlordylord/dalph/issues/366) | None |
+| [#367 — Changing-graph finality correction](https://github.com/dearlordylord/dalph/issues/367) | None; corrected chronology required before runtime edits |
+| [#368 — Host attachment and passive reads](https://github.com/dearlordylord/dalph/issues/368) | #366 |
+| [#369 — Wake/Unpause and complete command lifetime](https://github.com/dearlordylord/dalph/issues/369) | #368 |
+| [#370 — Revisioned capacity](https://github.com/dearlordylord/dalph/issues/370) | #369 |
+| [#371 — Advisory refresh](https://github.com/dearlordylord/dalph/issues/371) | #369 |
+| [#372 — Watches and truthful closure](https://github.com/dearlordylord/dalph/issues/372) | #369 |
+| [#373 — Intermediate edits versus incomplete evidence](https://github.com/dearlordylord/dalph/issues/373) | #368 |
+| [#374 — Actual host death and reconstruction](https://github.com/dearlordylord/dalph/issues/374) | #369 |
+| [#375 — Complete public-client qualification](https://github.com/dearlordylord/dalph/issues/375) | #367, #370, #371, #372, #373, #374 |
+
+This is the publication-time graph, not a replacement for tracker authority.
+Read current issue bodies, comments, status and blocking links before acting.
+#366 and #367 were the two unblocked starting tickets at publication.
+
+## Review corrections to preserve
+
+The user requested independent evaluation by Kimi CLI (`kimi-code/k3-256k`)
+and an Astra subagent. Their records and adjudicated corrections are saved:
+
+- [Original ten-ticket draft](invokee-ticket-breakdown-draft.md)
+- [Kimi review](invokee-ticket-review-kimi.md)
+- [Astra review](invokee-ticket-review-astra.md)
+- [Review disposition and revised dependencies](invokee-ticket-review-disposition.md)
+
+The published ticket bodies incorporate the corrections. In particular:
+
+- #366 defines how a client obtains accepted Run disposition and exact journal
+  position separately from coherent snapshots, and the typed finality-failure
+  path; #368 implements those public results.
+- #367 must establish a concrete corrected causal chronology before coding,
+  preserve the unchanged validator and incomparable-history negative control,
+  and declare the correction's Quint implications. Core finality evidence
+  belongs there; #375 owns public-client composition of the outcomes.
+- #369 qualifies command admission versus Exit immediately; #372 qualifies
+  actual host shutdown and Closed delivery. #374 is only abrupt host death
+  and reconstruction, with no dependency on watches.
+- Every operation owns explicit MCP/CLI parity and its input/failure tests.
+  Split scenarios name each assertion's owner. Each workflow slice owns its
+  maintained cassette and relevant process/transport tests.
+- #368 remains the largest sizing risk. #366 must bound its design or propose
+  an explicit adapter split before implementation; do not silently expand it.
+
+The local specification remains the published parent text; these refinements
+are carried by the child tickets and this review record. Accepted product
+decisions need no new interview. Research probes are not maintained acceptance.
+
+## Resume without the conversation
+
+Read this handoff, #365, the review disposition, then the current #366 or #367
+issue and its actual blockers. Choose one ticket explicitly before starting
+implementation and follow its operational-scenario gate. Use the research
+reading order below for evidence. Do not regenerate the specification or
+duplicate the ten published tickets.
+
+The research branch `research/invoker-invokee-interview` is pushed to origin.
+This archival update preserves the previously uncommitted specification and
+the review records; no temporary review file is needed to resume. It changes
+documentation only, so runtime and model gates are not rerun. Verification is
+documentation consistency, local links, whitespace and normal commit hooks.
+
+## Original research handoff
+
+The remaining sections retain the research context and historical suggested
+specification prompt. Current publication and next steps above supersede their
+old task status; the original experimental limitations still apply.
 
 ## Open the correct workspace
 
@@ -112,7 +185,7 @@ instructions. Four new tracks were independently checked: recovery 2/2,
 MCP-host 1/1, slow-watch 2/2, changing-graph 1/1 (negative reproduction).
 Earlier results and their limitations remain linked from the research index.
 
-## Suggested prompt for a new session
+## Historical specification prompt — already completed
 
 ```text
 $to-spec
@@ -149,7 +222,5 @@ Not archival guarantees: ignored `.scratch` logs, temporary databases/worktrees,
 or locally installed dependencies. Disposable runtime resources were cleaned
 up; raw diagnostic logs are supplementary, not the sole record of findings.
 Some probes use a built Dalph fixture binary and the sibling installed MCP SDK;
-their READMEs record those prerequisites. These commits are local to this
-workspace; no remote backup or push is claimed. Closing the chat does not
-remove the committed files, but loss of the workspace would require a separate
-repository backup.
+their READMEs record those prerequisites. The research branch and this archival
+handoff are pushed to origin; the temporary resources themselves are not.
