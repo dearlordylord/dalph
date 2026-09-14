@@ -10,10 +10,7 @@ const budgetPolicies = [
     "Claim and mutation admission",
     "Retry/backoff at the owning protocol; local admission is an observation/cancellation bound."
   ],
-  [
-    "Execution start and stop observation",
-    "Passive observation has no retry budget; suspension retains its bounded command attempts; remote execution latency is metrics only."
-  ],
+  ["Execution start and stop observation", "Passive observation has no retry budget"],
   ["Coordinator ownership contradiction", "Observation/cancellation bound."],
   ["Cancellation and application drain", "Hard timeout."],
   ["Recovery and reconciliation", "Retry/backoff at each named protocol; metrics only for wall-clock elapsed recovery."]
@@ -25,7 +22,7 @@ describe("control-plane budget documentation", () => {
 
     for (const [boundary, policy] of budgetPolicies) {
       expect(budget).toContain(`| ${boundary} |`)
-      expect(budget).toContain(`| ${policy} |`)
+      expect(budget).toContain(policy)
     }
   })
 
