@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "78cecda32a9804f82fb79983c258500a13f1ad3b4ff4a63f2227ceb53d075a77",
+  "digest": "1bd7a9afd0e092919ddcd3f86f1c976d7ed4200ede57347f1bedc8f510c70051",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -59,6 +59,7 @@
     "packages/orchestrator/src/authorities/task-tracker/github/read-boundary.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/read-limits.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/read-primitives.ts",
+    "packages/orchestrator/src/authorities/task-tracker/github/request-circuit.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/target.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/task-identity.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/task-lifecycle.ts",
