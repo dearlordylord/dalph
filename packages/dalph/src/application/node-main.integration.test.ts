@@ -5,12 +5,13 @@ import { it } from "@effect/vitest"
 import { Deferred, Effect, Fiber, Ref, Schema, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { expect } from "vitest"
+import { runtimeDiagnosticByteLimit } from "./runtime-diagnostic.js"
 
 const fixture = new URL("../../dist/bin/node-main-signal-fixture.js", import.meta.url).pathname
 const dalphPackageDirectory = new URL("../../", import.meta.url).pathname
 const FixtureEvent = Schema.Struct({ event: Schema.String })
 
-const assertFailureChannels = (application: string, expectedStderr: string, unavailable = false) =>
+const observeFailureChannels = (application: string, unavailable = false) =>
   Effect.scoped(
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
@@ -26,7 +27,12 @@ const assertFailureChannels = (application: string, expectedStderr: string, unav
       `
       const handle = yield* spawner.spawn(
         ChildProcess.make(nodeProcess.execPath, ["--input-type=module", "--eval", script], {
-          cwd: dalphPackageDirectory
+          cwd: dalphPackageDirectory,
+          env: {
+            ...nodeProcess.env,
+            DALPH_CODEX_PROVIDER_CREDENTIAL: "controlled-codex-credential",
+            GITHUB_TOKEN: "controlled-github-token"
+          }
         })
       )
       const [stdout, stderr, exitCode] = yield* Effect.all(
@@ -37,13 +43,20 @@ const assertFailureChannels = (application: string, expectedStderr: string, unav
         ],
         { concurrency: "unbounded" }
       )
-      expect(stdout).toBe("")
-      expect(stderr).toBe(expectedStderr)
-      expect(exitCode).toBe(1)
+      return { exitCode, stderr, stdout }
     })
   ).pipe(Effect.provide(NodeServices.layer))
 
-const safeDiagnostic = "Dalph failed because of an unexpected runtime defect.\n"
+const assertFailureChannels = (application: string, expectedStderr: string, unavailable = false) =>
+  observeFailureChannels(application, unavailable).pipe(
+    Effect.tap(({ exitCode, stderr, stdout }) =>
+      Effect.sync(() => {
+        expect(stdout).toBe("")
+        expect(stderr).toBe(expectedStderr)
+        expect(exitCode).toBe(1)
+      })
+    )
+  )
 
 it.live(
   "a known typed command failure adds no terminal cause dump or private payload",
@@ -56,17 +69,74 @@ it.live(
 )
 
 it.live(
-  "an unexpected defect writes only a static stderr diagnostic and fails the process",
-  () => assertFailureChannels("Effect.die(new Error(privateSentinel))", safeDiagnostic),
+  "an unexpected defect retains useful structured cause facts without credentials or provider-private payload",
+  () =>
+    Effect.gen(function* () {
+      const observed = yield* observeFailureChannels(`Effect.die({
+        _tag: "QualificationTransportDefect",
+        kind: "Unavailable",
+        operation: "QualificationTransport.connect",
+        safeMessage: "provider-private safe-message claim controlled-github-token",
+        detail: privateSentinel,
+        body: privateSentinel,
+        cause: {
+          _tag: "SystemError",
+          code: "EAGAIN",
+          syscall: "spawn",
+          message: privateSentinel
+        }
+      })`)
+      expect(observed.stdout).toBe("")
+      expect(observed.exitCode).toBe(1)
+      expect(new TextEncoder().encode(observed.stderr).byteLength).toBeLessThanOrEqual(runtimeDiagnosticByteLimit)
+      expect(JSON.parse(observed.stderr)).toMatchObject({
+        _tag: "DalphRuntimeDiagnostic",
+        boundary: "NodeMainExit",
+        omitted: false,
+        reasons: [
+          {
+            _tag: "Defect",
+            error: {
+              category: "Unavailable",
+              errorTag: "QualificationTransportDefect",
+              operation: "QualificationTransport.connect",
+              safeMessage: "QualificationTransport.connect failed",
+              causes: [
+                {
+                  code: "EAGAIN",
+                  errorTag: "SystemError",
+                  operation: "spawn",
+                  safeMessage: "spawn failed with EAGAIN",
+                  syscall: "spawn"
+                }
+              ]
+            }
+          }
+        ],
+        version: 1
+      })
+      expect(observed.stderr).not.toContain("controlled-github-token")
+      expect(observed.stderr).not.toContain("private-provider-payload-must-not-be-printed")
+    }),
   30_000
 )
 
 it.live(
-  "a failing scoped finalizer writes only a static stderr diagnostic and fails the process",
+  "a failing scoped finalizer writes a structured stderr diagnostic and fails the process",
   () =>
-    assertFailureChannels(
-      "Effect.scoped(Effect.addFinalizer(() => Effect.die(new Error(privateSentinel))))",
-      safeDiagnostic
+    observeFailureChannels("Effect.scoped(Effect.addFinalizer(() => Effect.die(new Error(privateSentinel))))").pipe(
+      Effect.tap(({ exitCode, stderr, stdout }) =>
+        Effect.sync(() => {
+          expect(stdout).toBe("")
+          expect(exitCode).toBe(1)
+          expect(JSON.parse(stderr)).toMatchObject({
+            _tag: "DalphRuntimeDiagnostic",
+            boundary: "NodeMainExit",
+            reasons: [{ _tag: "Defect", error: { errorTag: "Error", safeMessage: "Error failed" } }]
+          })
+          expect(stderr).not.toContain("private-provider-payload-must-not-be-printed")
+        })
+      )
     ),
   30_000
 )

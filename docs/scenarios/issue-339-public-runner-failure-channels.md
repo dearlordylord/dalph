@@ -2,11 +2,12 @@
 
 ## Governing behavior
 
-This #339 repair preserves #260's accepted public wire and unexpected-defect
-contract. Known typed failures retain their existing redacted structured
-records. Unexpected defects use stderr and a nonzero process result, not a
-fabricated public failure variant. It changes no workflow decision, provider
-request, retry, Journal occurrence, signal ownership or Quint transition.
+This #339 repair preserves #260's accepted public wire while correcting its
+unexpected-defect contract. Known typed failures retain their existing
+redacted structured records. Unexpected defects use a structured stderr
+diagnostic and a nonzero process result, not a fabricated public failure
+variant. It changes no workflow decision, provider request, retry, Journal
+occurrence, signal ownership or Quint transition.
 
 ## Starting facts and trigger
 
@@ -28,14 +29,28 @@ proven; this repair must not suppress that failure or claim those cases passed.
 2. The shared Node runner disables Effect's additional terminal cause dump.
    It does not weaken the public decoder or alter the application effect.
 3. If the terminal cause contains an unexpected defect, including a failed
-   finalizer, the runner best-effort writes one static safe diagnostic to stderr.
-   It does not serialize the cause, private payloads or provider transcripts.
-4. Existing teardown still selects the process result from the original exit.
+   finalizer, the runner projects the Cause before teardown into one bounded
+   structured diagnostic. The projection keeps the Node-main boundary, reason
+   kind, exact error tag/name, operation and safe message assembled from
+   nonsecret structured fields, plus the same facts for a bounded nested cause
+   chain. A bounded call-site projection retains function, repository-relative
+   or module identity, line and column while removing absolute/private path
+   prefixes and the stack's free-text message line. It never copies arbitrary
+   detail, request, response, body or provider transcript fields. Exact
+   configured credentials are replaced even when they occur inside an
+   otherwise safe field.
+4. The runner best-effort writes that diagnostic as one JSON line on stderr.
+   The diagnostic states whether reason, cause-chain or text limits omitted
+   information. Service-manager logs, hosted logs and the controlled hermetic
+   reader can therefore retain the same actionable report. Dalph's workflow
+   Journal does not acquire runtime-diagnostic authority.
+5. Existing teardown still selects the process result from the original exit.
    Failure remains nonzero even when diagnostic output is unavailable. A normal
    success remains zero. Signal ownership stays exclusively in the application.
 
 Alice receives only existing public JSON records on stdout. An unexpected
-defect has a safe stderr diagnostic and a nonzero result. Scope disposal is not
+defect has a safe structured stderr diagnostic and a nonzero result. Scope
+disposal is not
 graceful application Exit, Run termination, proof of provider failure or retry
 permission. No crash/restart algorithm changes: the next invocation reads the
 same owning authorities through ordinary recovery. No live provider call is
@@ -45,12 +60,20 @@ needed for the controlled runner tests.
 
 - Known typed failure with a private sentinel → actual built Node runner test proves
   status one and no additional terminal cause dump or private payload.
-- Unexpected defect with a private sentinel → actual built Node runner test proves a
-  static stderr diagnostic, no extra stdout/private payload and status one.
-- Successful application followed by failing scoped finalizer → built runner test
-  proves the same stderr-only defect result and nonzero status.
+- Unexpected defect with a useful nonsecret tag, operation, safe message,
+  nested cause and credential/provider-private sentinels → actual built Node
+  runner test decodes the diagnostic, proves the useful cause chain survives,
+  proves the sentinels and arbitrary private fields do not, and observes status
+  one with no extra stdout.
+- Hostile oversized fields and cause chains → cause-projection component test
+  proves one valid JSON line inside the exact UTF-8 byte cap, explicit
+  truncation, and no secret value.
+- Successful application followed by failing scoped finalizer → built runner
+  test proves the finalizer's structured stderr-only defect result and nonzero
+  status.
 - Existing success and signal ownership → retain shared runner and public
   signal tests; no new process signal handler or Exit request is introduced.
-- Actual public recovery and #339 throttle → retain strict built-process
-  decoding and the original acceptance assertions. Any underlying Codex
-  disposal failure remains separate work until its specific cause is proven.
+- Actual public recovery and hermetic qualification → their owned stderr
+  readers retain and decode the same bounded diagnostic when a child exits one;
+  focused interference tests use its boundary and cause facts to identify the
+  shared failure without changing public stdout or authorizing a retry.
