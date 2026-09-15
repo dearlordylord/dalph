@@ -306,7 +306,30 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
               state === undefined
                 ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
                 : PlannedAttemptExecutorProjection.cases.Exact.make({ report: executing(correlation) })
-            return { current, changes: Stream.empty, close: Effect.void }
+            const changes =
+              state === undefined
+                ? Stream.empty
+                : Stream.fromEffect(
+                    projection(correlation, state).pipe(
+                      Effect.catch(() =>
+                        Effect.succeed(
+                          PlannedAttemptExecutorProjection.cases.Unreadable.make({
+                            correlation,
+                            detail: "Kimi lifecycle observation failed"
+                          })
+                        )
+                      )
+                    )
+                  )
+            return {
+              current,
+              // Lifecycle attachment performs one immediate passive read so a
+              // terminal/unavailable provider state is not hidden behind an
+              // empty stream. The generic observer still filters unchanged
+              // projections below.
+              changes,
+              close: Effect.void
+            }
           }),
           Effect.map((attachment) => ({
             ...attachment,
