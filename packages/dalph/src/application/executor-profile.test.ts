@@ -1,4 +1,5 @@
 import { it } from "@effect/vitest"
+import { TaskExecutorLocator } from "@dalph/contracts"
 import { Cause, Effect, Exit, Option } from "effect"
 import { expect } from "vitest"
 import {
@@ -81,6 +82,21 @@ it.effect("rejects duplicate configured profiles before locator resolution", () 
     if (Exit.isFailure(result)) {
       const error = Cause.findErrorOption(result.cause)
       expect(Option.isSome(error) && error.value).toMatchObject({ kind: "DuplicateProfile" })
+    }
+  })
+)
+
+it.effect("rejects malformed locator ids without constructing an invalid brand", () =>
+  Effect.gen(function* () {
+    const result = yield* resolveExecutorProfileLocator(
+      [codex],
+      TaskExecutorLocator.make("executor:Codex Profile")
+    ).pipe(Effect.exit)
+    expect(Exit.isFailure(result)).toBe(true)
+    if (Exit.isFailure(result)) {
+      const error = Cause.findErrorOption(result.cause)
+      expect(Option.isSome(error) && error.value).toMatchObject({ kind: "UnknownProfile" })
+      if (Option.isSome(error)) expect(error.value.profileId).toBeUndefined()
     }
   })
 )
