@@ -2333,7 +2333,7 @@ it.effect("rate-limits a rapid passive status source before it reaches stdout", 
     const rapidStatusCount = 10
     const current = currentSignalFromCurrentFirstStream(
       Stream.concat(
-        Stream.make({ _tag: "NotReady" as const }),
+        Stream.make(observationState),
         Stream.fromIterable(Array.from({ length: rapidStatusCount }, () => observationState))
       )
     )
@@ -2352,8 +2352,8 @@ it.effect("rate-limits a rapid passive status source before it reaches stdout", 
     const statuses = (yield* Ref.get(lines))
       .map((line) => JSON.parse(line))
       .filter(({ _tag }) => _tag === "CurrentStatus")
-    expect(statuses.length).toBeGreaterThanOrEqual(2)
-    expect(statuses.length).toBeLessThanOrEqual(3)
+    expect(statuses.length).toBeGreaterThanOrEqual(1)
+    expect(statuses.length).toBeLessThanOrEqual(2)
     expect(statuses.at(-1)?.status._tag).toBe("DeliveryStatusAvailable")
   })
 )

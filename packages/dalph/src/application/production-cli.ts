@@ -416,12 +416,12 @@ export const presentSelectedProductionRun = <EOutput>(
       )
       const attachedStatus = yield* status.attach.pipe(Effect.mapError(currentStatusProjectionFailure))
       const publishedStatusLine = yield* Ref.make<string | undefined>(undefined)
-      const statusClosed = yield* Ref.make(attachedStatus.current._tag === "DeliveryStatusClosed")
       const writeStatus = (current: CurrentDeliveryStatus) => {
         const line = encodeProductionCliRecord(currentDeliveryStatusRecord(current))
-        return writeLine(line).pipe(
-          Effect.andThen(Ref.set(publishedStatusLine, line)),
-          Effect.andThen(current._tag === "DeliveryStatusClosed" ? Ref.set(statusClosed, true) : Effect.void)
+        return Ref.get(publishedStatusLine).pipe(
+          Effect.flatMap((published) =>
+            published === line ? Effect.void : writeLine(line).pipe(Effect.andThen(Ref.set(publishedStatusLine, line)))
+          )
         )
       }
       yield* writeStatus(attachedStatus.current)
@@ -465,12 +465,15 @@ export const presentSelectedProductionRun = <EOutput>(
       }).pipe(Effect.forkScoped)
       const presenterFailure = Fiber.join(presenters).pipe(Effect.andThen(Effect.never))
       const { disposition } = yield* Effect.raceFirst(observation.runTermination.await, presenterFailure)
-      yield* Fiber.join(presenters)
+      const presenterDrained = yield* Effect.raceFirst(
+        Fiber.join(presenters).pipe(Effect.as(true)),
+        Effect.sleep("10 millis").pipe(Effect.as(false))
+      )
+      if (!presenterDrained) yield* Fiber.interrupt(presenters).pipe(Effect.ignore)
       const synchronizedStatus = yield* status.get.pipe(Effect.mapError(currentStatusProjectionFailure))
       const synchronizedStatusLine = encodeProductionCliRecord(currentDeliveryStatusRecord(synchronizedStatus))
       if (
         synchronizedStatus._tag === "DeliveryStatusClosed" &&
-        !(yield* Ref.get(statusClosed)) &&
         (yield* Ref.get(publishedStatusLine)) !== synchronizedStatusLine
       ) {
         yield* writeStatus(synchronizedStatus)
