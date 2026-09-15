@@ -374,6 +374,27 @@ test("bounds a hung persistent warm iteration by its total timeout", async () =>
   expect(closeCalls).toBe(1)
 })
 
+test("closes a Vitest instance that resolves after warm creation timeout", async () => {
+  const closeCalls: Array<string> = []
+  const lateVitest = {
+    close: async () => {
+      closeCalls.push("close")
+    }
+  }
+  await expect(
+    runWarmedDeliveryTarget({
+      createVitest: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30))
+        return lateVitest
+      },
+      iterations: 1,
+      totalTimeoutMilliseconds: 5
+    })
+  ).rejects.toThrow(/total timeout.*creating Vitest/u)
+  await new Promise((resolve) => setTimeout(resolve, 40))
+  expect(closeCalls).toEqual(["close"])
+})
+
 test("bounds a hung persistent warm close by its total timeout", async () => {
   const specification = { moduleId: deliveryRepeatabilityTargetTestPath }
   await expect(

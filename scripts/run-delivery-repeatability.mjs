@@ -519,15 +519,28 @@ export const runWarmedDeliveryTarget = async (options = {}) => {
     }
     return remainingMilliseconds
   }
-  const awaitLifecycle = async (phase, operation) => {
+  const awaitLifecycle = async (phase, operation, onLateResolution) => {
     const remainingMilliseconds = lifecycleRemaining(phase)
     let timeout
+    let timedOut = false
     const operationPromise = Promise.resolve().then(operation)
+    void operationPromise.then(
+      (value) => {
+        if (!timedOut || typeof onLateResolution !== "function") return
+        try {
+          const cleanup = onLateResolution(value)
+          if (cleanup !== undefined && typeof cleanup.then === "function") void cleanup.catch(() => undefined)
+        } catch {
+          // Late cleanup is best effort; the original timeout remains authoritative.
+        }
+      },
+      () => undefined
+    )
     const timeoutPromise = new Promise((_, reject) => {
-      timeout = setTimeout(
-        () => reject(new Error(`delivery repeatability warm total timeout exceeded during ${phase}`)),
-        remainingMilliseconds
-      )
+      timeout = setTimeout(() => {
+        timedOut = true
+        reject(new Error(`delivery repeatability warm total timeout exceeded during ${phase}`))
+      }, remainingMilliseconds)
     })
     try {
       const result = await Promise.race([operationPromise, timeoutPromise])
@@ -545,21 +558,27 @@ export const runWarmedDeliveryTarget = async (options = {}) => {
   let lifecycleFailure
   try {
     const createTimeoutMilliseconds = Math.min(childTimeoutMilliseconds, lifecycleRemaining("creating Vitest"))
-    vitest = await awaitLifecycle("creating Vitest", () =>
-      createVitest("test", {
-        fileParallelism: false,
-        isolate: false,
-        maxWorkers: 1,
-        minWorkers: 1,
-        pool: "forks",
-        reporters: [],
-        root: process.cwd(),
-        run: true,
-        silent: true,
-        testNamePattern: deliveryRepeatabilityTargetTestNamePattern,
-        testTimeout: createTimeoutMilliseconds,
-        watch: false
-      })
+    vitest = await awaitLifecycle(
+      "creating Vitest",
+      () =>
+        createVitest("test", {
+          fileParallelism: false,
+          isolate: false,
+          maxWorkers: 1,
+          minWorkers: 1,
+          pool: "forks",
+          reporters: [],
+          root: process.cwd(),
+          run: true,
+          silent: true,
+          testNamePattern: deliveryRepeatabilityTargetTestNamePattern,
+          testTimeout: createTimeoutMilliseconds,
+          watch: false
+        }),
+      (lateVitest) => {
+        if (isRecord(lateVitest) && typeof lateVitest.close === "function") return lateVitest.close()
+        return undefined
+      }
     )
     if (!isRecord(vitest)) throw new Error("delivery repeatability Vitest factory returned an invalid instance")
     if (
