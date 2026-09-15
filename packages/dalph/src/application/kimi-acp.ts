@@ -642,7 +642,7 @@ export const nodeKimiAcpClientLayer = (
       const probe = Context.get(probeContext, KimiAcpClient)
       yield* Effect.gen(function* () {
         yield* probe.newSession(preflightCwd)
-      }).pipe(Effect.ensuring(probe.close().pipe(Effect.ignore)))
+      }).pipe(Effect.ensuring(probe.close().pipe(Effect.orDie)))
       const activeContext = yield* Layer.build(baseNodeKimiAcpClientLayer(profile, probeConfig)).pipe(
         Effect.provideService(Scope.Scope, scope)
       )
