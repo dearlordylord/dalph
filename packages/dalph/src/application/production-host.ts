@@ -57,7 +57,7 @@ import {
   makeProductionHostApplicationExitShell,
   selectProductionRun
 } from "@dalph/orchestrator"
-import { Context, Deferred, Effect, Layer, type Scope } from "effect"
+import { Context, Deferred, Effect, Layer, Option, Schema, type Scope } from "effect"
 import {
   CodexAppServer,
   CodexAppServerFailure,
@@ -511,9 +511,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const isKnownKimiLocator = executorLocator === kimiLocator
         if (!isKnownCodexLocator && !isKnownKimiLocator) {
           const rawProfileId = executorLocator.replace(/^executor:/u, "unknown/")
-          const profileId = /^[a-z0-9][a-z0-9._/-]*$/u.test(rawProfileId)
-            ? ExecutorProfileId.make(rawProfileId)
-            : undefined
+          const profileId = Option.getOrUndefined(Schema.decodeUnknownOption(ExecutorProfileId)(rawProfileId))
           return yield* Effect.fail(
             new ExecutorProfileResolutionFailure({
               detail: `executor locator ${executorLocator} is not configured`,

@@ -186,7 +186,8 @@ const makeRpc = Effect.fn("KimiAcp.makeRpc")(function* (
   handle: ChildProcessHandle,
   permissionPolicy: ExecutorPermissionPolicy,
   updateState: (params: unknown) => Effect.Effect<void>,
-  onPermissionDenied: () => Effect.Effect<void>
+  onPermissionDenied: (sessionId: string | undefined) => Effect.Effect<void>,
+  onProcessUnavailable: () => Effect.Effect<void>
 ): Effect.fn.Return<KimiAcpRpc, KimiAcpFailure> {
   const nextId = yield* Ref.make(1)
   const pending = yield* Ref.make<ReadonlyMap<number, Pending>>(new Map())
@@ -219,8 +220,11 @@ const makeRpc = Effect.fn("KimiAcp.makeRpc")(function* (
       permissionPolicy === "unattended" && optionId !== undefined
         ? { outcome: { outcome: "selected", optionId } }
         : { outcome: { outcome: "cancelled" } }
+    const sessionId = asNonEmptyString(params["sessionId"] ?? params["session_id"])
     return send({ jsonrpc: "2.0", id, result: selected }).pipe(
-      Effect.andThen(permissionPolicy === "unattended" && optionId !== undefined ? Effect.void : onPermissionDenied())
+      Effect.andThen(
+        permissionPolicy === "unattended" && optionId !== undefined ? Effect.void : onPermissionDenied(sessionId)
+      )
     )
   }
 
@@ -274,7 +278,9 @@ const makeRpc = Effect.fn("KimiAcp.makeRpc")(function* (
         )
       )
     }),
-    Effect.ensuring(failPending(failure("close", "Unavailable", "Kimi ACP stdout closed")))
+    Effect.ensuring(
+      Effect.all([failPending(failure("close", "Unavailable", "Kimi ACP stdout closed")), onProcessUnavailable()])
+    )
   )
   yield* reader.pipe(Effect.forkDetach)
   // Drain stderr independently. It is intentionally never exposed through the ACP message parser.
@@ -369,7 +375,6 @@ export const nodeKimiAcpClientLayer = (
       const rpc = yield* Ref.make<Option.Option<KimiAcpRpc>>(Option.none())
       const sessions = yield* Ref.make<ReadonlyMap<KimiAcpSessionId, SessionState>>(new Map())
       const initialized = yield* Ref.make<Option.Option<KimiAcpCapabilities>>(Option.none())
-      const permissionDenied = yield* Ref.make(false)
       const states = (params: unknown) => {
         if (!isJsonRecord(params)) return Effect.void
         const id = params["sessionId"] ?? params["session_id"]
@@ -407,7 +412,26 @@ export const nodeKimiAcpClientLayer = (
           )
           .pipe(Effect.provideService(Scope.Scope, layerScope))
           .pipe(Effect.mapError((error) => failure("initialize", "Unavailable", safeDetail(error))))
-        const client = yield* makeRpc(handle, profile.permissionPolicy, states, () => Ref.set(permissionDenied, true))
+        const client = yield* makeRpc(
+          handle,
+          profile.permissionPolicy,
+          states,
+          (sessionId) =>
+            Ref.update(sessions, (current) => {
+              if (sessionId === undefined) return current
+              const parsed = KimiAcpSessionId.make(sessionId)
+              const state = current.get(parsed)
+              return state === undefined
+                ? current
+                : new Map([...current, [parsed, { ...state, permissionDenied: true }] as const])
+            }),
+          () =>
+            Ref.update(
+              sessions,
+              (current) =>
+                new Map([...current].map(([id, state]) => [id, { ...state, status: "unavailable" as const }] as const))
+            )
+        )
         yield* Ref.set(rpc, Option.some(client))
         return client
       })
@@ -499,7 +523,6 @@ export const nodeKimiAcpClientLayer = (
         }
       })
       const observe = Effect.fn("KimiAcp.observe")(function* (sessionId: KimiAcpSessionId) {
-        const denied = yield* Ref.get(permissionDenied)
         const state = (yield* Ref.get(sessions)).get(sessionId)
         if (state === undefined)
           return yield* Effect.fail(failure("session/resume", "Unavailable", "Kimi session is unknown"))
@@ -510,7 +533,7 @@ export const nodeKimiAcpClientLayer = (
           updateCount: state.updateCount,
           ...(state.lastMessage === undefined ? {} : { lastMessage: state.lastMessage }),
           ...(state.stopReason === undefined ? {} : { stopReason: state.stopReason }),
-          permissionDenied: denied || state.permissionDenied
+          permissionDenied: state.permissionDenied
         })
       })
       const cancel = Effect.fn("KimiAcp.cancel")(function* (sessionId: KimiAcpSessionId) {

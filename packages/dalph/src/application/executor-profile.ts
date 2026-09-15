@@ -1,5 +1,5 @@
 import { TaskExecutorLocator } from "@dalph/contracts"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 
 /** Stable operator-facing name for one executor configuration. */
 export const ExecutorProfileId = Schema.NonEmptyString.check(
@@ -132,7 +132,7 @@ export const executorProfileRegistryLayer = (
         const profile = profiles.find((candidate) => executorLocatorForProfile(candidate) === locator)
         if (profile !== undefined) return Effect.succeed(profile)
         const rawId = locator.replace(/^executor:/u, "")
-        const profileId = /^[a-z0-9][a-z0-9._/-]*$/u.test(rawId) ? ExecutorProfileId.make(rawId) : undefined
+        const profileId = Option.getOrUndefined(Schema.decodeUnknownOption(ExecutorProfileId)(rawId))
         return Effect.fail(
           new ExecutorProfileResolutionFailure({
             detail: `executor locator ${locator} has no configured profile`,
