@@ -542,9 +542,20 @@ export const runWarmedDeliveryTarget = async (options = {}) => {
         reject(new Error(`delivery repeatability warm total timeout exceeded during ${phase}`))
       }, remainingMilliseconds)
     })
+    const cleanupLateResolution = (value) => {
+      if (typeof onLateResolution !== "function") return
+      try {
+        const cleanup = onLateResolution(value)
+        if (cleanup !== undefined && typeof cleanup.then === "function") void cleanup.catch(() => undefined)
+      } catch {
+        // Late cleanup is best effort; the original timeout remains authoritative.
+      }
+    }
     try {
       const result = await Promise.race([operationPromise, timeoutPromise])
       if (now() > deadline) {
+        timedOut = true
+        cleanupLateResolution(result)
         throw new Error(`delivery repeatability warm total timeout exceeded during ${phase}`)
       }
       return result

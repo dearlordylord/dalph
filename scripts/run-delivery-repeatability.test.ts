@@ -395,6 +395,25 @@ test("closes a Vitest instance that resolves after warm creation timeout", async
   expect(closeCalls).toEqual(["close"])
 })
 
+test("closes a Vitest instance when creation resolves after the deadline check", async () => {
+  const closeCalls: Array<string> = []
+  const lateVitest = {
+    close: async () => {
+      closeCalls.push("close")
+    }
+  }
+  const clock = [0, 0, 0, 6]
+  await expect(
+    runWarmedDeliveryTarget({
+      createVitest: async () => lateVitest,
+      iterations: 1,
+      now: () => clock.shift() ?? 6,
+      totalTimeoutMilliseconds: 5
+    })
+  ).rejects.toThrow(/total timeout.*creating Vitest/u)
+  expect(closeCalls).toEqual(["close"])
+})
+
 test("bounds a hung persistent warm close by its total timeout", async () => {
   const specification = { moduleId: deliveryRepeatabilityTargetTestPath }
   await expect(
