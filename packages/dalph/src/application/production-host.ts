@@ -222,6 +222,14 @@ const codexRequestCircuitPolicy: RequestCircuitPolicy = {
 const codexRequestCircuitOpenDetail =
   "Codex app-server request circuit is open after 240 requests in 60 seconds; retrying is locally deferred for 30 seconds"
 
+type GuardedGithubClientService = {
+  readonly execute: {
+    (request: GithubGraphqlReadRequest): GithubGraphqlReadExecution
+    (request: GithubGraphqlMutationRequest): GithubGraphqlMutationExecution
+    (request: GithubGraphqlRequest): GithubGraphqlExecution
+  }
+}
+
 /**
  * Builds the host-owned GitHub client decorator. The Layer remains private to
  * production composition; this service seam keeps its focused boundary test
@@ -230,8 +238,8 @@ const codexRequestCircuitOpenDetail =
  * this provider instance.
  */
 export const makeGuardedGithubClient = Effect.fn("ProductionHost.makeGuardedGithubClient")(function* (
-  client: GithubGraphqlClient["Service"]
-) {
+  client: GuardedGithubClientService
+): Effect.fn.Return<GuardedGithubClientService> {
   const requestCircuit = yield* makeRequestCircuit({
     onOpen: (operation: GithubGraphqlRequest["_tag"]) =>
       new GithubGraphqlRequestError({ detail: githubRequestCircuitOpenDetail, kind: "CircuitOpen", operation }),
