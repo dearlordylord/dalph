@@ -506,15 +506,15 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const journal = yield* JournalStore
         const lifecycle = yield* RunLifecycleJournal
         const kimiLocator = "executor:kimi/for-coding"
-        if (
-          configuration.plannedAttemptExecutor.startsWith("executor:kimi/") &&
-          configuration.plannedAttemptExecutor !== kimiLocator
-        ) {
+        const executorLocator = configuration.plannedAttemptExecutor
+        const isKnownCodexLocator = executorLocator.startsWith("codex:")
+        const isKnownKimiLocator = executorLocator === kimiLocator
+        if (!isKnownCodexLocator && !isKnownKimiLocator) {
           return yield* Effect.fail(
             new ExecutorProfileResolutionFailure({
-              detail: `executor locator ${configuration.plannedAttemptExecutor} is not configured`,
+              detail: `executor locator ${executorLocator} is not configured`,
               kind: "UnknownProfile",
-              profileId: ExecutorProfileId.make(configuration.plannedAttemptExecutor.slice("executor:".length))
+              profileId: ExecutorProfileId.make(executorLocator.replace(/^executor:/u, "unknown/"))
             })
           )
         }
