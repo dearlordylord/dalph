@@ -99,54 +99,70 @@ it.effect("performs the ACP authentication and model-selection handshake in orde
     Effect.gen(function* () {
       const commands: Array<ChildProcess.Command> = []
       const requests: Array<string> = []
-      const output = yield* Queue.unbounded<Uint8Array>()
       const encoder = new TextEncoder()
       const decoder = new TextDecoder()
-      const interactiveHandle = ChildProcessSpawner.makeHandle({
-        pid: ChildProcessSpawner.ProcessId(2),
-        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
-        isRunning: Effect.succeed(true),
-        kill: () => Effect.void,
-        stdin: Sink.forEach((chunk: Uint8Array) =>
-          Effect.gen(function* () {
-            const message = JSON.parse(decoder.decode(chunk)) as { id?: number; method?: string }
-            if (message.method !== undefined) requests.push(message.method)
-            if (message.id === undefined) return
-            const result =
-              message.method === "initialize"
-                ? { agentCapabilities: { sessionCapabilities: { loadSession: true, resume: true, close: true } } }
-                : message.method === "session/new"
-                  ? { sessionId: "kimi-session" }
-                  : {}
-            yield* Queue.offer(
-              output,
-              encoder.encode(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result })}\n`)
-            )
-          })
-        ),
-        stdout: Stream.fromQueue(output),
-        stderr: Stream.empty,
-        all: Stream.empty,
-        getInputFd: () => Sink.drain,
-        getOutputFd: () => Stream.empty,
-        unref: Effect.succeed(Effect.void)
-      })
-      const spawner = ChildProcessSpawner.make((command) =>
-        Effect.sync(() => {
-          commands.push(command)
-          const isPreflight = ChildProcess.isStandardCommand(command) && command.options.stdin === "ignore"
-          return isPreflight ? fakeHandle(0) : interactiveHandle
+      let nextPid = 2
+      const makeInteractiveHandle = Effect.fn("test.makeInteractiveHandle")(function* () {
+        const output = yield* Queue.unbounded<Uint8Array>()
+        const handle = ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(nextPid++),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+          isRunning: Effect.succeed(true),
+          kill: () => Effect.void,
+          stdin: Sink.forEach((chunk: Uint8Array) =>
+            Effect.gen(function* () {
+              const message = JSON.parse(decoder.decode(chunk)) as { id?: number; method?: string }
+              if (message.method !== undefined) requests.push(message.method)
+              if (message.id === undefined) return
+              const result =
+                message.method === "initialize"
+                  ? { agentCapabilities: { sessionCapabilities: { loadSession: true, resume: true, close: true } } }
+                  : message.method === "session/new"
+                    ? { sessionId: "kimi-session" }
+                    : {}
+              yield* Queue.offer(
+                output,
+                encoder.encode(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result })}\n`)
+              )
+            })
+          ),
+          stdout: Stream.fromQueue(output),
+          stderr: Stream.empty,
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+          unref: Effect.succeed(Effect.void)
         })
-      )
+        return handle
+      })
+      const spawner = ChildProcessSpawner.make((command) => {
+        commands.push(command)
+        const isPreflight = ChildProcess.isStandardCommand(command) && command.options.stdin === "ignore"
+        return isPreflight ? Effect.succeed(fakeHandle(0)) : makeInteractiveHandle()
+      })
       const services = yield* Effect.provide(
-        Layer.build(nodeKimiAcpClientLayer(profile, { preflightCwd: "/srv/dalph/repository" })),
+        Layer.build(
+          nodeKimiAcpClientLayer(profile, { preflightCwd: "/srv/dalph/repository", preflightProtocol: true })
+        ),
         Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)
       )
       const client = Context.get(services, KimiAcpClient)
       const sessionId = yield* client.newSession("/srv/dalph/repository")
       expect(sessionId).toBe("kimi-session")
-      expect(requests).toEqual(["initialize", "initialized", "authenticate", "session/new", "session/set_model"])
-      expect(commands).toHaveLength(2)
+      expect(requests).toEqual([
+        "initialize",
+        "initialized",
+        "authenticate",
+        "session/new",
+        "session/set_model",
+        "session/close",
+        "initialize",
+        "initialized",
+        "authenticate",
+        "session/new",
+        "session/set_model"
+      ])
+      expect(commands).toHaveLength(3)
     })
   )
 )

@@ -365,6 +365,7 @@ type KimiAcpNodeConfiguration = Partial<typeof nodeConfig> & {
   readonly preflightCwd?: string
   /** Run a disposable ACP initialize/auth/session probe before activation. */
   readonly preflightProtocol?: boolean
+  readonly skipExecutablePreflight?: boolean
 }
 
 /**
@@ -401,7 +402,7 @@ const baseNodeKimiAcpClientLayer = (
     KimiAcpClient,
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-      yield* preflightKimiExecutable(profile, config.preflightCwd)
+      if (config.skipExecutablePreflight !== true) yield* preflightKimiExecutable(profile, config.preflightCwd)
       const layerScope = yield* Scope.Scope
       const rpc = yield* Ref.make<Option.Option<KimiAcpRpc>>(Option.none())
       const sessions = yield* Ref.make<ReadonlyMap<KimiAcpSessionId, SessionState>>(new Map())
@@ -633,14 +634,16 @@ export const nodeKimiAcpClientLayer = (
     KimiAcpClient,
     Effect.gen(function* () {
       const scope = yield* Scope.Scope
-      const probeContext = yield* Layer.build(baseNodeKimiAcpClientLayer(profile, config)).pipe(
+      yield* preflightKimiExecutable(profile, preflightCwd)
+      const probeConfig: KimiAcpNodeConfiguration = { ...config, skipExecutablePreflight: true }
+      const probeContext = yield* Layer.build(baseNodeKimiAcpClientLayer(profile, probeConfig)).pipe(
         Effect.provideService(Scope.Scope, scope)
       )
       const probe = Context.get(probeContext, KimiAcpClient)
       yield* Effect.gen(function* () {
         yield* probe.newSession(preflightCwd)
       }).pipe(Effect.ensuring(probe.close().pipe(Effect.ignore)))
-      const activeContext = yield* Layer.build(baseNodeKimiAcpClientLayer(profile, config)).pipe(
+      const activeContext = yield* Layer.build(baseNodeKimiAcpClientLayer(profile, probeConfig)).pipe(
         Effect.provideService(Scope.Scope, scope)
       )
       return Context.get(activeContext, KimiAcpClient)
