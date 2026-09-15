@@ -2506,7 +2506,11 @@ export const validateLaunchedProcessObservation = async (
   if (!launchExecutableMatches(facts.expectedExecutable, commandLine)) {
     return { _tag: "Contradictory", detail: `pid ${pid} is not the recorded Codex executable` }
   }
-  if (!commandLine.includes(facts.expectedMode)) {
+  const expectedArguments = launch.command.slice(1)
+  const argumentsMatch = commandLine.some((_, candidateIndex) =>
+    expectedArguments.every((argument, argumentIndex) => commandLine[candidateIndex + argumentIndex] === argument)
+  )
+  if (!argumentsMatch || !commandLine.includes(facts.expectedMode)) {
     return { _tag: "Contradictory", detail: `pid ${pid} is not an app-server command` }
   }
   const expectedProcessIdentity = processIdentityFromIncarnation(launch.incarnation)
