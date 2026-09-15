@@ -331,19 +331,15 @@ finally:
     )
 })
 
-test("a relevant config edit restored before validation remains rejected", async () => {
+test("a shared config edit restored before validation is ignored", async () => {
   const f = fixture()
   const originalFileMode = f.git("config", "--local", "--get", "core.filemode")
   const guard = await f.guard()
   try {
     f.git("config", "core.filemode", originalFileMode === "true" ? "false" : "true")
     f.git("config", "core.filemode", originalFileMode)
-    // Linux may report IN_MOVE_SELF before the parent-directory replacement
-    // proves the next pathname generation is watched. Both outcomes fail closed.
-    await assert.rejects(
-      guard.assertUnchanged(),
-      /(?:multiple replaceable input generations|replaceable input watch was not re-established mask=0x800)/u
-    )
+    await guard.assertUnchanged()
+    assert.equal((await guard.finish()).inputDigest, guard.identity.inputDigest)
   } finally {
     await guard.close()
   }
@@ -1193,12 +1189,11 @@ test("candidate history refuses external object alternates", async () => {
   await assert.rejects(f.guard(), /Unsupported Git object indirection/u)
 })
 
-test("candidate history observes configuration retargeting of external ignores", async () => {
+test("candidate history rejects a persistent configuration retargeting of external ignores", async () => {
   const f = candidateGitFixture()
   const guard = await f.guard()
   try {
     f.git("config", "core.excludesfile", join(f.outer, "new-ignore"))
-    f.git("config", "--unset", "core.excludesfile")
     await assert.rejects(guard.assertUnchanged())
   } finally {
     await guard.close()

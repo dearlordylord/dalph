@@ -237,7 +237,6 @@ const gitAuthorityInputs = (root, logicalInvocation, environment, gitDirectory, 
     join(gitDirectory, "HEAD.lock"),
     join(gitDirectory, "index"),
     indexLock,
-    join(commonDirectory, "config"),
     path("config.worktree"),
     path("packed-refs"),
     path("packed-refs.lock"),
@@ -318,7 +317,13 @@ const inputLayout = ({ effectiveEnvironment, generatedOutputRoots, logicalInvoca
     commonDirectory
   )
   if (lstatSync(join(root, ".git")).isFile()) gitInputs.push(join(root, ".git"))
-  const configurations = configurationRoots(root, effectiveEnvironment)
+  const commonConfig = join(commonDirectory, "config")
+  // The shared common config is mutable coordination state when multiple
+  // worktrees are active. Candidate-relevant settings are still compared by
+  // candidateGitConfiguration at each validation boundary; the inode itself
+  // is deliberately outside the live filesystem observer so an unrelated
+  // worktree replacement cannot invalidate this candidate's gate.
+  const configurations = configurationRoots(root, effectiveEnvironment).filter((path) => resolve(path) !== commonConfig)
   const exclusions = generatedOutputRoots.map((path) => resolve(root, path))
   const environmentDisablesIncremental = effectiveEnvironment.DALPH_DPRINT_INCREMENTAL === "disabled"
   const contractDisablesIncremental = logicalInvocation.dprintIncremental === "disabled"
@@ -338,7 +343,7 @@ const inputLayout = ({ effectiveEnvironment, generatedOutputRoots, logicalInvoca
   if (exclusions.some((path) => below(root, path)))
     throw new Error("Generated output exclusions cannot erase the worktree")
   return {
-    commonConfig: join(commonDirectory, "config"),
+    commonConfig,
     root,
     tools,
     gitInputs,
@@ -396,7 +401,7 @@ export const startInputGuard = async ({
     roots: [layout.root, ...layout.gitInputs, ...layout.tools, ...layout.configurations],
     excludedRoots: layout.sourceExclusions,
     protectedRoots: layout.gitInputs,
-    replaceableRoots: [layout.commonConfig],
+    replaceableRoots: [],
     transientCoordinationRoots: layout.transientCoordinationRoots,
     pythonExecutable: layout.python
   })

@@ -308,35 +308,27 @@ User-configured authority files named `*.lock` remain observed, so editing and
 restoring one rejects reuse. External Git observation during a run must use the
 same optional-lock setting.
 
-Creating an unrelated linked worktree can atomically replace the shared Git
-config while adding only that other branch's settings. The input observer
-installs a watch on the replacement as soon as the parent-directory replacement
-event and the new file establish that generation. A later removal event for the
-obsolete inode retires only that old generation.
-Linux can also deliver the replacement inode's own move notification after the
-parent notification caused its watch to be installed. The observer recognizes
-one such notification for that exact watched generation before the next explicit
-validation; an unused arrival expectation expires at that boundary. Further self-moves,
-watch removal, and writes still require replacement evidence or invalidate.
-The guard compares the effective
-local configuration for the candidate worktree; foreign `branch.*` sections do
-not invalidate qualification, while a candidate-branch or repository-wide
-setting change does. More than one config generation before a comparison fails
-closed, so a relevant edit followed by restoration cannot pass as one benign rewrite.
+The shared common Git config is not part of the live filesystem observer: linked
+worktrees can replace that file while adding only another branch's settings.
+The guard instead compares the effective local configuration at each validation
+boundary; foreign `branch.*` sections do not invalidate qualification, while a
+candidate-branch or repository-wide setting change does. A setting changed and
+restored before a boundary is intentionally ignored because the candidate's
+effective Git authority is unchanged. Worktree-local `config.worktree`, refs,
+the index, and other Git authority files remain observed.
 This is qualification-tool behavior only and changes no Dalph runtime command,
 provider boundary, journal fact, retry, or cleanup behavior.
 
 | Qualification scenario | Acceptance test |
 | --- | --- |
-| Another maintainer adds an unrelated branch section while the candidate input observer is live; the observer re-arms the atomically replaced config and retains the same candidate input identity | `scripts/gate-resume-inputs.test.mjs`: `an unrelated branch section can be added while the candidate config watch remains live` |
-| Linux delivers the old config inode's removal before the parent replacement event in separate observer reads; the observer retains the pending event until validation, re-arms the replacement, and still refuses a missing replacement or a later edit | `scripts/gate-resume-inputs.test.mjs`: `split config inode events wait for replacement evidence until validation` |
-| Linux reports the parent replacement before the newly watched inode's arrival self-move; that arrival is accepted only before the next explicit validation, and a later unexplained self-move is rejected | `scripts/gate-resume-inputs.test.mjs`: `split config inode events wait for replacement evidence until validation` |
+| Another maintainer adds an unrelated branch section while the shared common config is replaced; boundary comparison retains the candidate identity | `scripts/gate-resume-inputs.test.mjs`: `an unrelated branch section can be added while the candidate config watch remains live` |
 | Another maintainer adds branch metadata whose branch name merely extends the candidate's branch name; exact Git section/subsection parsing keeps it unrelated | `scripts/gate-resume-inputs.test.mjs`: `a branch whose name extends the current branch remains unrelated configuration` |
 | The exact current branch's Git configuration changes; the observer refuses the candidate even though similarly prefixed foreign branch sections are ignored | `scripts/gate-resume-inputs.test.mjs`: `the exact current branch section remains candidate-relevant configuration` |
 | A repository-wide setting in the subsection-less `[branch]` section changes; the observer refuses both the next stage and final qualification | `scripts/gate-resume-inputs.test.mjs`: `a subsection-less branch setting remains repository-wide candidate configuration` |
+| A persistent repository setting retargets an external ignore file | `scripts/gate-resume-inputs.test.mjs`: `candidate history rejects a persistent configuration retargeting of external ignores` |
 | A repository-wide Git setting changes after an unrelated replacement; the re-armed observer refuses both the next stage and final qualification | `scripts/gate-resume-inputs.test.mjs`: `a candidate-relevant config replacement fails after an unrelated replacement re-arms the watch` |
 | The parent-directory replacement event arrives in one observer drain and the obsolete file-watch removal arrives in the next; the observer watches the new generation immediately and treats only the later old-generation removal as obsolete | `scripts/gate-resume-inputs.test.mjs`: `split parent replacement and obsolete file removal events re-arm before the later removal` |
-| A relevant Git setting changes and is restored through two config generations before validation | `scripts/gate-resume-inputs.test.mjs`: `a relevant config edit restored before validation remains rejected` |
+| A shared Git setting changes and is restored before validation | `scripts/gate-resume-inputs.test.mjs`: `a shared config edit restored before validation is ignored` |
 | Git creates and removes one explicitly constructed coordination lock (`index.lock` or a lock for the exact symbolic selected-ref chain) without changing the authority bytes; the selected-ref/index controls prove the scoped allowance | `scripts/gate-resume-inputs.test.mjs`: `bound candidate history allows transient selected ref lock coordination`; `bound candidate history allows transient index lock coordination` |
 | A real selected-ref or index mutation remains dirty, including an index mutation followed by a transient index lock | `scripts/gate-resume-inputs.test.mjs`: `bound candidate history refuses transient selected ref writes`; `bound candidate history refuses transient index writes`; `a transient index lock cannot hide a real candidate index mutation` |
 | An internally constructed `index.lock` persists through the final authoritative snapshot | `scripts/gate-resume-inputs.test.mjs`: `a persistent index lock fails the final authoritative snapshot` |
