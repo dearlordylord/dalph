@@ -10,6 +10,7 @@ import {
   ProductionPlannedAttemptWorktreeRoot,
   decodeProductionRepositoryHostConfiguration,
   deriveProductionPlannedAttemptLocations,
+  productionKimiExecutorPrivateStateDirectory,
   productionPlannedTaskAttemptLayer,
   withProductionRepositoryHostConfiguration
 } from "./production-configuration.js"
@@ -85,6 +86,21 @@ describe("production repository host configuration", () => {
     expect(decoded.codexExecutorPrivateStateDirectory).toBe("/var/lib/dalph/executor-private")
     expect("codexStateDirectory" in decoded).toBe(false)
     expect("codexHome" in decoded).toBe(false)
+  })
+
+  it("derives a disjoint Kimi executor state directory when none is configured", async () => {
+    const decoded = await Effect.runPromise(decodeProductionRepositoryHostConfiguration(validRawConfiguration()))
+    expect(productionKimiExecutorPrivateStateDirectory(decoded)).toBe("/var/lib/dalph/executor-private-kimi")
+  })
+
+  it("preserves an explicit Kimi executor state directory", async () => {
+    const decoded = await Effect.runPromise(
+      decodeProductionRepositoryHostConfiguration({
+        ...validRawConfiguration(),
+        kimiExecutorPrivateStateDirectory: "/var/lib/dalph/kimi-private"
+      })
+    )
+    expect(productionKimiExecutorPrivateStateDirectory(decoded)).toBe("/var/lib/dalph/kimi-private")
   })
 
   it.each([

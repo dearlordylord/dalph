@@ -85,6 +85,7 @@ import {
   type ProductionRepositoryHostConfiguration,
   decodeProductionRepositoryHostConfiguration,
   productionExecutorLocator,
+  productionKimiExecutorPrivateStateDirectory,
   productionPlannedTaskAttemptLayer
 } from "./production-configuration.js"
 import {
@@ -533,6 +534,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           selectedProfile.adapter === "codex-app-server"
             ? { ...configuration, codexExecutable: selectedProfile.executable }
             : configuration
+        const kimiPrivateStateDirectory = productionKimiExecutorPrivateStateDirectory(configuration)
         const workflowApplicationExitObserver = adapters.workflowApplicationExitObserver
         /* v8 ignore start -- @preserve Hermetic host tests replace the live GitHub boundary; this assignment retains the production-only provider default. */
         const githubClientLayer = guardedGithubClientLayer(
@@ -620,9 +622,9 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
                     }).pipe(Layer.provide(NodeServices.layer))
                   ),
                   Layer.provide(
-                    nodeKimiAttemptPrivateStoreLayer({
-                      stateDirectory: configuration.codexExecutorPrivateStateDirectory
-                    }).pipe(Layer.provide(NodeServices.layer))
+                    nodeKimiAttemptPrivateStoreLayer({ stateDirectory: kimiPrivateStateDirectory }).pipe(
+                      Layer.provide(NodeServices.layer)
+                    )
                   ),
                   Layer.provide(evidenceLayer),
                   Layer.provide(gitCommandLayer),

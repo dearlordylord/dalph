@@ -52,6 +52,14 @@ export const ProductionCodexExecutorPrivateStateDirectory = Schema.NonEmptyStrin
 ).pipe(Schema.brand("ProductionCodexExecutorPrivateStateDirectory"))
 export type ProductionCodexExecutorPrivateStateDirectory = typeof ProductionCodexExecutorPrivateStateDirectory.Type
 
+/** Canonical private directory for Kimi's provider-session associations. */
+export const ProductionKimiExecutorPrivateStateDirectory = Schema.NonEmptyString.check(
+  canonicalAbsolutePath("Kimi executor private-state directory")
+).pipe(Schema.brand("ProductionKimiExecutorPrivateStateDirectory"))
+export type ProductionKimiExecutorPrivateStateDirectory = typeof ProductionKimiExecutorPrivateStateDirectory.Type
+
+const defaultKimiExecutorPrivateStateDirectory = (codexDirectory: string): string => `${codexDirectory}-kimi`
+
 const CanonicalRepositoryLocator = GitRepositoryLocator.check(canonicalAbsolutePath("Git repository locator"))
 const CanonicalCommonDirectoryLocator = GitCommonDirectoryLocator.check(
   canonicalAbsolutePath("Git common-directory locator")
@@ -80,6 +88,7 @@ type HostPathFacts = {
   readonly evidenceStoreRoot: string
   readonly plannedAttemptWorktreeRoot: string
   readonly codexExecutorPrivateStateDirectory: string
+  readonly kimiExecutorPrivateStateDirectory?: string
   readonly integratorCandidateWorktreeRoot: string
   readonly integratorPrivateStore: string
 }
@@ -95,6 +104,8 @@ const hostPathRelationshipError = (value: HostPathFacts): string | undefined => 
     value.journalDatabase,
     value.evidenceStoreRoot,
     value.codexExecutorPrivateStateDirectory,
+    value.kimiExecutorPrivateStateDirectory ??
+      defaultKimiExecutorPrivateStateDirectory(value.codexExecutorPrivateStateDirectory),
     value.integratorPrivateStore
   ] as const
   if (worktreeRoots.some((worktree) => statePaths.some((state) => pathsOverlap(worktree, state)))) {
@@ -112,7 +123,7 @@ const hostPathRelationshipError = (value: HostPathFacts): string | undefined => 
       const rightPath = privateStatePaths[right]
       /* v8 ignore next -- @preserve Both loop indexes are bounded by the tuple length before access. */
       if (leftPath !== undefined && rightPath !== undefined && pathsOverlap(leftPath, rightPath)) {
-        return "Journal, evidence, Codex, and Integrator private state locators must be disjoint"
+        return "Journal, evidence, Codex, Kimi, and Integrator private state locators must be disjoint"
       }
     }
   }
@@ -143,6 +154,7 @@ export const ProductionRepositoryHostConfiguration = Schema.Struct({
   evidenceStoreRoot: CanonicalEvidenceStoreLocator,
   plannedAttemptWorktreeRoot: ProductionPlannedAttemptWorktreeRoot,
   codexExecutorPrivateStateDirectory: ProductionCodexExecutorPrivateStateDirectory,
+  kimiExecutorPrivateStateDirectory: Schema.optionalKey(ProductionKimiExecutorPrivateStateDirectory),
   integratorCandidateWorktreeRoot: IntegratorCandidateWorktreeRoot,
   integratorPrivateStore: IntegratorPrivateStoreLocator,
   activationInterval: ProductionRunReactivationInterval,
@@ -161,6 +173,16 @@ export const productionExecutorLocator = (
   configuration.plannedAttemptExecutor === "executor:default" && configuration.executorProfileDefault !== undefined
     ? TaskExecutorLocator.make(`executor:${configuration.executorProfileDefault}`)
     : configuration.plannedAttemptExecutor
+
+/** Selects Kimi's disjoint private state path without changing existing configs. */
+export const productionKimiExecutorPrivateStateDirectory = (
+  configuration: Pick<
+    ProductionRepositoryHostConfiguration,
+    "codexExecutorPrivateStateDirectory" | "kimiExecutorPrivateStateDirectory"
+  >
+): string =>
+  configuration.kimiExecutorPrivateStateDirectory ??
+  defaultKimiExecutorPrivateStateDirectory(configuration.codexExecutorPrivateStateDirectory)
 
 /** Safe startup failure: field and subject are retained, rejected bytes are not. */
 export class ProductionRepositoryHostConfigurationError extends Schema.TaggedError<ProductionRepositoryHostConfigurationError>()(
