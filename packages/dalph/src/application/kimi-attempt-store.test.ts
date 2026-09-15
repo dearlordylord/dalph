@@ -70,3 +70,16 @@ it.effect("fails closed when Kimi private state is malformed", () =>
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )
+
+it.effect("fails closed when another process owns the Kimi private-store lease", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-kimi-private-store-lease-" })
+      yield* Layer.build(layerAt(root))
+      const result = yield* Layer.build(layerAt(root)).pipe(Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result)) expect(result.cause).toBeDefined()
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)

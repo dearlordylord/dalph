@@ -3,6 +3,13 @@
 import nodePath from "node:path"
 import { AttemptId, RunId, TaskExecutorLocator, WorktreeLocator } from "@dalph/contracts"
 import { Context, Effect, FileSystem, Layer, Option, Path, Ref, Schema, Semaphore } from "effect"
+import { CodexAttemptStoreNative, nodeCodexAttemptStoreNativeLayer } from "./codex-attempt-store-native.js"
+import {
+  ensurePrivateDirectory,
+  nativeErrorCode,
+  openPrivateLeaseDescriptor,
+  validatePrivateDescriptor
+} from "./codex-attempt-store.js"
 import { KimiAcpSessionId } from "./kimi-acp.js"
 
 /** The provider-private phase retained for one Kimi session association. */
@@ -126,6 +133,7 @@ export interface KimiAttemptPrivateStoreConfig {
 }
 
 const privateStateFilename = "kimi-executor-private-state.json"
+const privateLeaseFilename = `${privateStateFilename}.lease`
 const privateFileMode = 0o600
 const privateDirectoryMode = 0o700
 
@@ -172,9 +180,51 @@ export const nodeKimiAttemptPrivateStoreLayer = (
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
       const path = yield* Path.Path
+      const native = yield* CodexAttemptStoreNative
       const stateDirectory = yield* decodeStateDirectory(config.stateDirectory, path)
       const filename = nodePath.join(stateDirectory, privateStateFilename)
       const temporary = `${filename}.next`
+      const leaseFilename = nodePath.join(stateDirectory, privateLeaseFilename)
+      const directory = yield* Effect.tryPromise({
+        try: () => ensurePrivateDirectory(stateDirectory, native),
+        catch: (error) => new KimiAttemptStoreFailure({ detail: String(error), operation: "configure" })
+      })
+      if (directory._tag === "Failure") {
+        return yield* Effect.fail(new KimiAttemptStoreFailure({ detail: directory.detail, operation: "configure" }))
+      }
+      const lease = yield* Effect.acquireRelease(
+        Effect.tryPromise({
+          try: () => openPrivateLeaseDescriptor(leaseFilename, native),
+          catch: (error) => new KimiAttemptStoreFailure({ detail: String(error), operation: "configure" })
+        }),
+        (file) =>
+          Effect.tryPromise({
+            try: async () => {
+              // The shared Codex native adapter exposes the same descriptor
+              // lock boundary; release before closing to make the lease
+              // disposition explicit on every platform it supports.
+              await native.lock(file, "un")
+              await file.close()
+            },
+            catch: (error) => new KimiAttemptStoreFailure({ detail: String(error), operation: "configure" })
+          }).pipe(Effect.orDie)
+      )
+      yield* validatePrivateDescriptor(lease, leaseFilename, native).pipe(
+        Effect.mapError((error) => new KimiAttemptStoreFailure({ detail: error.detail, operation: "configure" }))
+      )
+      yield* Effect.tryPromise({
+        try: () => native.lock(lease, "exnb"),
+        catch: (error) =>
+          new KimiAttemptStoreFailure({
+            detail:
+              nativeErrorCode(error) === "EACCES" ||
+              nativeErrorCode(error) === "EAGAIN" ||
+              nativeErrorCode(error) === "EWOULDBLOCK"
+                ? "Kimi private store is already owned by another process"
+                : String(error),
+            operation: "configure"
+          })
+      })
       const readAll = Effect.fn("KimiAttemptPrivateStore.Node.readAll")(function* () {
         const exists = yield* fileSystem
           .exists(filename)
@@ -229,4 +279,4 @@ export const nodeKimiAttemptPrivateStoreLayer = (
           )
       })
     })
-  )
+  ).pipe(Layer.provide(nodeCodexAttemptStoreNativeLayer))
