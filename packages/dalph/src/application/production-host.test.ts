@@ -85,7 +85,7 @@ import {
 } from "./production.js"
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 import { ProductionRepositoryHostConfigurationError } from "./production-configuration.js"
-import { CodexAppServer } from "./codex-app-server.js"
+import { CodexAppServer, codexAppServerLaunchArguments } from "./codex-app-server.js"
 import { CodexServerIncarnation } from "./codex-attempt-store.js"
 import { isolatedCodexProcessNativeService } from "../../test-support/isolated-codex-process-native.js"
 import { completedRunFinalityFixture } from "../../../orchestrator/test/run-finality.js"
@@ -258,7 +258,7 @@ it.effect("production host composition keeps ambient Codex home separate from ex
                 const captured = yield* Schema.decodeUnknownEffect(ProductionCodexLaunchCapture)(
                   JSON.parse(yield* fileSystem.readFileString(capture))
                 )
-                expect(captured.arguments).toEqual(["app-server"])
+                expect(captured.arguments).toEqual([...codexAppServerLaunchArguments])
                 expect(captured.codexHome).toBe(ambientCodexHome)
                 expect(captured.codexHome).not.toBe(executorPrivateState)
                 expect(yield* fileSystem.readDirectory(ambientCodexHome)).toEqual([])

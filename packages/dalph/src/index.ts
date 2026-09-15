@@ -33,6 +33,37 @@ export {
 } from "./application/codex-integrator-private-store.js"
 export { codexIntegratorLayer, nodeCodexIntegratorLayer } from "./application/codex-integrator.js"
 export {
+  ExecutorAdapterKind,
+  ExecutorModelAlias,
+  ExecutorPermissionPolicy,
+  ExecutorProfile,
+  ExecutorProfileId,
+  ExecutorProfileRegistry,
+  ExecutorProfileResolutionFailure,
+  ExecutorProfileSelection,
+  ExecutorProviderConfigReference,
+  decodeExecutorProfiles,
+  executorLocatorForProfile,
+  executorProfileRegistryLayer,
+  type ExecutorProfileRegistryService
+} from "./application/executor-profile.js"
+export {
+  KimiAcpCapabilities,
+  KimiAcpClient,
+  KimiAcpFailure,
+  KimiAcpFailureKind,
+  KimiAcpOperation,
+  KimiAcpSessionId,
+  KimiAcpSessionObservation,
+  controlledKimiAcpClientLayer,
+  kimiAcpProfileArguments,
+  nodeKimiAcpClientLayer
+} from "./application/kimi-acp.js"
+export {
+  kimiPlannedAttemptExecutorLayer,
+  nodeKimiPlannedAttemptExecutorLayer
+} from "./application/kimi-planned-attempt-executor.js"
+export {
   CodexReplacementAuthority,
   CodexReplacementAuthorityFailure,
   CodexReplacementAuthorityProof,
