@@ -1,5 +1,39 @@
 # Issue 378: preserve executor diagnostics and stop tracker request storms
 
+## Full dogfood delivery gate
+
+Alice runs the shipped production CLI against one fresh issue in the dedicated
+disposable dogfood repository. Before the command starts, the issue is open and
+eligible, the repository is at the declared Base SHA, no claim label or task
+worktree exists, and no executor session or Run record exists for this task.
+
+The command uses either the configured `executor:kimi/for-coding` profile or
+`codex:production`; the selected provider is part of the acceptance evidence.
+Dalph reads the issue, records the Run, creates the exact task worktree from
+Base, claims the issue, starts that provider in the worktree, and sends the
+authored one-sentence task. After the provider returns, Dalph checks the exact
+worktree commit and accepted-result evidence, creates and validates the
+Integrator candidate, updates the local integration ref, removes only proven
+temporary resources, and closes the GitHub issue. The visible result is one
+completed Run, one task commit integrated on the local ref, and a closed task.
+
+This gate is a real end-to-end dogfood observation, not a controlled fixture or
+ACP smoke probe. A provider/session handshake without a task claim, worktree
+commit, integration, and task closure does not satisfy it. No crash or retry is
+part of the successful gate; if one occurs, the run is retained for the
+existing reconciliation protocol and the gate remains unproven.
+
+### Acceptance-test mapping
+
+- `dearlordylord/dalph-dogfood-2026-09#<fresh issue>` records the exact open
+  starting issue and task text.
+- The captured production NDJSON and SQLite/GitHub/Git evidence must show, in
+  order: `RunSelected`, claim, task worktree, selected executor, accepted task
+  commit, Integrator candidate/integration, cleanup, and issue closure.
+- The same gate accepts either Kimi or Codex, but the selected executor and
+  model/profile must be named in the evidence; a smoke prompt alone is not
+  acceptance.
+
 ## Starting situation
 
 Alice runs the production command against a GitHub issue. Dalph has allocated
