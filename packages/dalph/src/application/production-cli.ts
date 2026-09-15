@@ -51,7 +51,7 @@ import {
   TaskTrackerThrottleTimingEvidence,
   type TrackerTarget
 } from "@dalph/orchestrator"
-import { Config, Effect, Fiber, Option, Redacted, Ref, Schema, Stream } from "effect"
+import { Config, Duration, Effect, Fiber, Option, Redacted, Ref, Schema, Sink, Stream } from "effect"
 import { decodeCliTarget } from "./cli.js"
 import {
   decodeProductionRepositoryHostConfiguration,
@@ -364,6 +364,37 @@ export const currentDeliveryStatusRecord = (status: CurrentDeliveryStatus): Prod
   version: productionCliWireVersion
 })
 
+/** Passive output is rate-limited independently from workflow and authority calls. */
+const productionCliPublicationWindow = Duration.seconds(1)
+const productionCliPublicationRate = {
+  cost: () => 1,
+  units: 1,
+  duration: productionCliPublicationWindow,
+  strategy: "enforce"
+} as const
+
+const sameTraceCursor = (left: TraceCursor, right: TraceCursor): boolean =>
+  left.runId === right.runId && left.position === right.position
+
+const rateLimitedAfterFirst = <A, E, R>(changes: Stream.Stream<A, E, R>): Stream.Stream<A, E, R> =>
+  Stream.scoped(
+    Stream.unwrap(
+      changes.pipe(
+        Stream.peel(Sink.head<A>()),
+        Effect.map(([first, rest]) =>
+          Option.match(first, {
+            onNone: () => Stream.empty,
+            onSome: (initial) =>
+              Stream.concat(
+                Stream.make(initial),
+                rest.pipe(Stream.rechunk(1), Stream.throttle(productionCliPublicationRate))
+              )
+          })
+        )
+      )
+    )
+  )
+
 /**
  * Writes the already-established Run first, attaches the passive status source
  * current-first, and keeps later status, history, and disposition facts distinct.
@@ -384,33 +415,50 @@ export const presentSelectedProductionRun = <EOutput>(
         Effect.mapError(() => historicalProjectionFailure(observation.selection.runId))
       )
       const attachedStatus = yield* status.attach.pipe(Effect.mapError(currentStatusProjectionFailure))
+      const publishedStatusLine = yield* Ref.make<string | undefined>(undefined)
       const statusClosed = yield* Ref.make(attachedStatus.current._tag === "DeliveryStatusClosed")
-      yield* writeLine(encodeProductionCliRecord(currentDeliveryStatusRecord(attachedStatus.current)))
+      const writeStatus = (current: CurrentDeliveryStatus) => {
+        const line = encodeProductionCliRecord(currentDeliveryStatusRecord(current))
+        return writeLine(line).pipe(
+          Effect.andThen(Ref.set(publishedStatusLine, line)),
+          Effect.andThen(current._tag === "DeliveryStatusClosed" ? Ref.set(statusClosed, true) : Effect.void)
+        )
+      }
+      yield* writeStatus(attachedStatus.current)
 
-      const presentStatusChanges = attachedStatus.changes.pipe(
-        Stream.mapError(currentStatusProjectionFailure),
-        Stream.runForEach((current) =>
-          writeLine(encodeProductionCliRecord(currentDeliveryStatusRecord(current))).pipe(
-            Effect.andThen(current._tag === "DeliveryStatusClosed" ? Ref.set(statusClosed, true) : Effect.void)
+      const presentStatusChanges = rateLimitedAfterFirst(
+        attachedStatus.changes.pipe(Stream.mapError(currentStatusProjectionFailure))
+      ).pipe(Stream.runForEach(writeStatus))
+      const publishedHistoryCursor = yield* Ref.make<TraceCursor | undefined>(undefined)
+      const writeHistory = (cursor: TraceCursor) =>
+        Ref.get(publishedHistoryCursor).pipe(
+          Effect.flatMap((published) =>
+            published !== undefined && sameTraceCursor(published, cursor)
+              ? Effect.void
+              : observation.traceReader
+                  .readAt(cursor)
+                  .pipe(
+                    Effect.flatMap((snapshot) =>
+                      writeLine(encodeProductionCliRecord(historicalRecord(snapshot))).pipe(
+                        Effect.tap(() => Ref.set(publishedHistoryCursor, cursor))
+                      )
+                    )
+                  )
           )
         )
-      )
-      const presentHistory = observation.acceptedHistory.changes.pipe(
-        Stream.takeUntilEffect((cursor) =>
-          observation.runTermination.poll.pipe(
-            Effect.map(
-              Option.exists(
-                ({ terminatedAt }) => terminatedAt.runId === cursor.runId && terminatedAt.position <= cursor.position
+      const presentHistory = rateLimitedAfterFirst(
+        observation.acceptedHistory.changes.pipe(
+          Stream.takeUntilEffect((cursor) =>
+            observation.runTermination.poll.pipe(
+              Effect.map(
+                Option.exists(
+                  ({ terminatedAt }) => terminatedAt.runId === cursor.runId && terminatedAt.position <= cursor.position
+                )
               )
             )
           )
-        ),
-        Stream.runForEach((cursor) =>
-          observation.traceReader
-            .readAt(cursor)
-            .pipe(Effect.flatMap((snapshot) => writeLine(encodeProductionCliRecord(historicalRecord(snapshot)))))
         )
-      )
+      ).pipe(Stream.runForEach(writeHistory))
       const presenters = yield* Effect.all([presentStatusChanges, presentHistory], {
         concurrency: "unbounded",
         discard: true
@@ -419,9 +467,15 @@ export const presentSelectedProductionRun = <EOutput>(
       const { disposition } = yield* Effect.raceFirst(observation.runTermination.await, presenterFailure)
       yield* Fiber.join(presenters)
       const synchronizedStatus = yield* status.get.pipe(Effect.mapError(currentStatusProjectionFailure))
-      if (synchronizedStatus._tag === "DeliveryStatusClosed" && !(yield* Ref.get(statusClosed))) {
-        yield* writeLine(encodeProductionCliRecord(currentDeliveryStatusRecord(synchronizedStatus)))
+      const synchronizedStatusLine = encodeProductionCliRecord(currentDeliveryStatusRecord(synchronizedStatus))
+      if (
+        synchronizedStatus._tag === "DeliveryStatusClosed" &&
+        !(yield* Ref.get(statusClosed)) &&
+        (yield* Ref.get(publishedStatusLine)) !== synchronizedStatusLine
+      ) {
+        yield* writeStatus(synchronizedStatus)
       }
+      yield* writeHistory(yield* observation.acceptedHistory.get)
       yield* writeLine(encodeProductionCliRecord(runDispositionRecord(observation.selection.runId, disposition)))
     })
   )

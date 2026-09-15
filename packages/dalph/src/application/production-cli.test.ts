@@ -2326,6 +2326,38 @@ it.effect("presents Alice's nonterminal status change before the accepted Run te
   })
 )
 
+it.effect("rate-limits a rapid passive status source before it reaches stdout", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const observationState = projectedStatusFixture()
+    const rapidStatusCount = 10
+    const current = currentSignalFromCurrentFirstStream(
+      Stream.concat(
+        Stream.make({ _tag: "NotReady" as const }),
+        Stream.fromIterable(Array.from({ length: rapidStatusCount }, () => observationState))
+      )
+    )
+
+    yield* presentSelectedProductionRun(
+      {
+        acceptedHistory: currentSignalOf(cursor),
+        current,
+        runTermination: completedRunTermination(),
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        traceReader: { readAt: () => Effect.succeed(snapshot) }
+      },
+      (line) => Ref.update(lines, (current) => [...current, line])
+    )
+
+    const statuses = (yield* Ref.get(lines))
+      .map((line) => JSON.parse(line))
+      .filter(({ _tag }) => _tag === "CurrentStatus")
+    expect(statuses.length).toBeGreaterThanOrEqual(2)
+    expect(statuses.length).toBeLessThanOrEqual(3)
+    expect(statuses.at(-1)?.status._tag).toBe("DeliveryStatusAvailable")
+  })
+)
+
 it("round-trips the ordered identity evidence of every canonical current-status entry", () => {
   const taskId = TaskId.make("identity-fixture-task")
   const subject = { _tag: "Task" as const, runId, taskId }

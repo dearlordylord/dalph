@@ -76,5 +76,10 @@ its redacted stable lifecycle code.
 - `rejects initialize before the app-server transport runs when composition admission is open`
   proves the host-supplied request boundary rejects initialization before the
   JSON-RPC transport effect runs and retains the typed `initialize` operation.
+- `rate-limits a rapid passive status source before it reaches stdout` proves
+  that a hot current-status source cannot emit every intermediate value to the
+  production CLI; the first value remains immediate, later values are limited
+  to a one-second publication window, and the terminal synchronized status
+  remains visible.
 - Existing production CLI and application Exit tests continue to prove public
   redaction and exact lifecycle dispositions.
