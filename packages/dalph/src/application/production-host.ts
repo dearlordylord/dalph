@@ -66,9 +66,18 @@ import {
   type CodexAppServerRequestBoundary,
   type CodexAppServerRequestOperation
 } from "./codex-app-server.js"
+import {
+  ExecutorModelAlias,
+  ExecutorProfile,
+  ExecutorProfileId,
+  ExecutorProviderConfigReference,
+  executorLocatorForProfile
+} from "./executor-profile.js"
 import { nodeCodexAttemptStoreLayer } from "./codex-attempt-store.js"
 import { nodeCodexProcessNativeService, type CodexProcessNativeService } from "./codex-process-native.js"
 import { nodeCodexPlannedAttemptExecutorLayer } from "./codex-planned-attempt-executor.js"
+import { nodeKimiAcpClientLayer } from "./kimi-acp.js"
+import { kimiPlannedAttemptExecutorLayer } from "./kimi-planned-attempt-executor.js"
 import { nodeCodexIntegratorLayer } from "./codex-integrator.js"
 import { CodexIntegratorConfiguration } from "./codex-integrator-private-store.js"
 import {
@@ -571,18 +580,39 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
                 )
               ).pipe(Layer.provide(realPromotion))
         const activityCensusLayer = codexOwnedActivityCensusLayer(codexProcessNative).pipe(Layer.provide(appLayer))
-        const executorLayer = observedPlannedAttemptExecutorLayer(
-          nodeCodexPlannedAttemptExecutorLayer.pipe(
-            Layer.provide(appLayer),
-            Layer.provide(activityCensusLayer),
-            Layer.provide(attemptStoreLayer),
-            Layer.provide(evidenceLayer),
-            Layer.provide(gitCommandLayer),
-            Layer.provide(NodeCrypto.layer),
-            Layer.provide(NodeServices.layer)
-          ),
-          adapters.boundaryObserver
-        )
+        const kimiProfile = ExecutorProfile.make({
+          adapter: "kimi-acp",
+          executable: "kimi",
+          id: ExecutorProfileId.make("kimi/for-coding"),
+          model: ExecutorModelAlias.make("kimi-for-coding"),
+          permissionPolicy: "deny",
+          provider: "kimi",
+          providerConfigRef: ExecutorProviderConfigReference.make("kimi-for-coding")
+        })
+        const executorLayer =
+          configuration.plannedAttemptExecutor === executorLocatorForProfile(kimiProfile)
+            ? observedPlannedAttemptExecutorLayer(
+                kimiPlannedAttemptExecutorLayer.pipe(
+                  Layer.provide(nodeKimiAcpClientLayer(kimiProfile).pipe(Layer.provide(NodeServices.layer))),
+                  Layer.provide(evidenceLayer),
+                  Layer.provide(gitCommandLayer),
+                  Layer.provide(NodeCrypto.layer),
+                  Layer.provide(NodeServices.layer)
+                ),
+                adapters.boundaryObserver
+              )
+            : observedPlannedAttemptExecutorLayer(
+                nodeCodexPlannedAttemptExecutorLayer.pipe(
+                  Layer.provide(appLayer),
+                  Layer.provide(activityCensusLayer),
+                  Layer.provide(attemptStoreLayer),
+                  Layer.provide(evidenceLayer),
+                  Layer.provide(gitCommandLayer),
+                  Layer.provide(NodeCrypto.layer),
+                  Layer.provide(NodeServices.layer)
+                ),
+                adapters.boundaryObserver
+              )
         const integratorConfiguration = CodexIntegratorConfiguration.make({
           candidateWorktreeRoot: configuration.integratorCandidateWorktreeRoot,
           commonDirectory: configuration.commonDirectory,
