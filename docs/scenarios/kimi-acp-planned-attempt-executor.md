@@ -100,7 +100,7 @@ without accepted evidence.
 | A suspension cancels and a resume reuses the same ACP session and body. | `kimi-planned-attempt-executor.test.ts`: `cancels and resumes the same ACP session through the generic command boundary` |
 | Dalph restarts while Kimi is executing and observes the same session without a new prompt. | `kimi-planned-attempt-executor.test.ts`: `reconnects a persisted executing session after restart without sending another prompt`; `kimi-attempt-store.test.ts`: persistence and malformed-state tests |
 | An unavailable Kimi executable is rejected before executor activation. | `kimi-acp.test.ts`: `fails Kimi layer construction when the configured executable exits unsuccessfully` |
-| ACP wire ordering, stderr isolation, permission policy, and malformed/provider failures are exercised without a live Kimi account. | `kimi-acp.test.ts`: `performs the ACP authentication and model-selection handshake in order`; the broader recorded progress/permission fixture remains follow-up work. |
+| ACP wire ordering, stderr isolation, progress updates, permission policy, and malformed/provider failures are exercised without a live Kimi account. | `kimi-acp.test.ts`: `performs the ACP authentication and model-selection handshake in order`; `records ACP progress and rejects a permission request under the deny policy` |
 
 The controlled tests are the maintained catalog entry for this boundary; they
 do not claim that a live Kimi account or model is available in CI.
