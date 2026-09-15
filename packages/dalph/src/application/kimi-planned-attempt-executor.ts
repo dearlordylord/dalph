@@ -340,8 +340,7 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
         worktree: attempt.worktree
       }
       const existingInMemory = yield* stateFor(correlation)
-      const recovered = yield* recoverForAttempt(context)
-      const existing = existingInMemory ?? Option.getOrUndefined(recovered)
+      const existing = existingInMemory ?? Option.getOrUndefined(yield* recoverForAttempt(context))
       if (existing !== undefined) {
         if (existing.phase === "SessionCreated") {
           const intent = { ...existing, phase: "PromptIntentRecorded" as const, status: "executing" as const }
@@ -381,13 +380,16 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
     const suspend = Effect.fn("KimiPlannedAttemptExecutor.suspend")(function* (attempt: PlannedTaskAttempt) {
       const correlation = correlationOf(attempt)
       const existingInMemory = yield* stateFor(correlation)
-      const recovered = yield* recoverForAttempt({
-        attemptId: attempt.attemptId,
-        executor: attempt.executor,
-        runId: attempt.runId,
-        worktree: attempt.worktree
-      })
-      const existing = existingInMemory ?? Option.getOrUndefined(recovered)
+      const existing =
+        existingInMemory ??
+        Option.getOrUndefined(
+          yield* recoverForAttempt({
+            attemptId: attempt.attemptId,
+            executor: attempt.executor,
+            runId: attempt.runId,
+            worktree: attempt.worktree
+          })
+        )
       if (existing === undefined)
         return yield* Effect.fail(commandFailure("Suspend", correlation, "Kimi session is unknown"))
       yield* client
@@ -417,13 +419,16 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
       const attempt = request.plannedAttempt
       const correlation = correlationOf(attempt)
       const existingInMemory = yield* stateFor(correlation)
-      const recovered = yield* recoverForAttempt({
-        attemptId: attempt.attemptId,
-        executor: attempt.executor,
-        runId: attempt.runId,
-        worktree: attempt.worktree
-      })
-      const existing = existingInMemory ?? Option.getOrUndefined(recovered)
+      const existing =
+        existingInMemory ??
+        Option.getOrUndefined(
+          yield* recoverForAttempt({
+            attemptId: attempt.attemptId,
+            executor: attempt.executor,
+            runId: attempt.runId,
+            worktree: attempt.worktree
+          })
+        )
       if (existing === undefined)
         return yield* Effect.fail(commandFailure("Resume", correlation, "Kimi session is unknown"))
       if (existing.phase === "PromptIntentRecorded") {
