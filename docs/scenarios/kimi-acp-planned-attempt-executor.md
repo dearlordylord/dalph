@@ -98,4 +98,3 @@ without accepted evidence.
 
 The controlled tests are the maintained catalog entry for this boundary; they
 do not claim that a live Kimi account or model is available in CI.
-
