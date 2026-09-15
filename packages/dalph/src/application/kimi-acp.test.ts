@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import { Effect, Layer, Sink, Stream } from "effect"
+import { Context, Effect, Layer, Queue, Sink, Stream } from "effect"
 import { expect } from "vitest"
 import {
   ExecutorModelAlias,
@@ -8,7 +8,7 @@ import {
   ExecutorProfileId,
   ExecutorProviderConfigReference
 } from "./executor-profile.js"
-import { KimiAcpFailure, nodeKimiAcpClientLayer, preflightKimiExecutable } from "./kimi-acp.js"
+import { KimiAcpClient, KimiAcpFailure, nodeKimiAcpClientLayer, preflightKimiExecutable } from "./kimi-acp.js"
 
 const profile = ExecutorProfile.make({
   adapter: "kimi-acp",
@@ -87,3 +87,59 @@ it.effect("fails Kimi layer construction when the configured executable exits un
     )
   )
 })
+
+it.effect("performs the ACP authentication and model-selection handshake in order", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const commands: Array<ChildProcess.Command> = []
+      const requests: Array<string> = []
+      const output = yield* Queue.unbounded<Uint8Array>()
+      const encoder = new TextEncoder()
+      const decoder = new TextDecoder()
+      const interactiveHandle = ChildProcessSpawner.makeHandle({
+        pid: ChildProcessSpawner.ProcessId(2),
+        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+        isRunning: Effect.succeed(true),
+        kill: () => Effect.void,
+        stdin: Sink.forEach((chunk: Uint8Array) =>
+          Effect.gen(function* () {
+            const message = JSON.parse(decoder.decode(chunk)) as { id?: number; method?: string }
+            if (message.method !== undefined) requests.push(message.method)
+            if (message.id === undefined) return
+            const result =
+              message.method === "initialize"
+                ? { agentCapabilities: { sessionCapabilities: { loadSession: true, resume: true, close: true } } }
+                : message.method === "session/new"
+                  ? { sessionId: "kimi-session" }
+                  : {}
+            yield* Queue.offer(
+              output,
+              encoder.encode(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result })}\n`)
+            )
+          })
+        ),
+        stdout: Stream.fromQueue(output),
+        stderr: Stream.empty,
+        all: Stream.empty,
+        getInputFd: () => Sink.drain,
+        getOutputFd: () => Stream.empty,
+        unref: Effect.succeed(Effect.void)
+      })
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.sync(() => {
+          commands.push(command)
+          return command.options.stdin === "ignore" ? fakeHandle(0) : interactiveHandle
+        })
+      )
+      const services = yield* Effect.provide(
+        Layer.build(nodeKimiAcpClientLayer(profile, { preflightCwd: "/srv/dalph/repository" })),
+        Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)
+      )
+      const client = Context.get(services, KimiAcpClient)
+      const sessionId = yield* client.newSession("/srv/dalph/repository")
+      expect(sessionId).toBe("kimi-session")
+      expect(requests).toEqual(["initialize", "initialized", "authenticate", "session/new", "session/set_model"])
+      expect(commands).toHaveLength(2)
+    })
+  )
+)
