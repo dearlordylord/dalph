@@ -31,6 +31,8 @@ type AttemptState = {
 type JsonRecord = Record<string, unknown>
 const hexRadix = 16
 const hexByteWidth = 2
+const maximumSuspensionObservations = 4
+const suspensionObservationInterval = "100 millis"
 
 const isJsonRecord = (value: unknown): value is JsonRecord => typeof value === "object" && value !== null
 
@@ -166,6 +168,16 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
           new Map([...current, [plannedAttemptExecutorCorrelationKey(correlationOf(state.attempt)), state] as const])
       )
     const observeClient = (state: AttemptState) => client.observe(state.sessionId)
+    const confirmIdleAfterCancel = Effect.fn("KimiPlannedAttemptExecutor.confirmIdleAfterCancel")(function* (
+      sessionId: KimiAcpSessionId
+    ) {
+      let observed = yield* client.observe(sessionId)
+      for (let attempt = 0; attempt < maximumSuspensionObservations && observed.status !== "idle"; attempt += 1) {
+        yield* Effect.sleep(suspensionObservationInterval)
+        observed = yield* client.observe(sessionId)
+      }
+      return observed
+    })
     const projection = Effect.fn("KimiPlannedAttemptExecutor.project")(function* (
       correlation: PlannedAttemptExecutorCorrelation,
       state: AttemptState
@@ -219,9 +231,9 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
       yield* client
         .cancel(existing.sessionId)
         .pipe(Effect.mapError((error) => commandFailure("Suspend", correlation, error)))
-      const afterCancel = yield* client
-        .observe(existing.sessionId)
-        .pipe(Effect.mapError((error) => commandFailure("Suspend", correlation, error)))
+      const afterCancel = yield* confirmIdleAfterCancel(existing.sessionId).pipe(
+        Effect.mapError((error) => commandFailure("Suspend", correlation, error))
+      )
       if (afterCancel.status !== "idle")
         return yield* Effect.fail(
           commandFailure(
