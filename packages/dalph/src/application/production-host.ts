@@ -70,6 +70,7 @@ import {
   ExecutorModelAlias,
   ExecutorProfile,
   ExecutorProfileId,
+  ExecutorProfileResolutionFailure,
   ExecutorProviderConfigReference,
   executorLocatorForProfile
 } from "./executor-profile.js"
@@ -504,6 +505,19 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const ownership = yield* CoordinatorOwnership
         const journal = yield* JournalStore
         const lifecycle = yield* RunLifecycleJournal
+        const kimiLocator = "executor:kimi/for-coding"
+        if (
+          configuration.plannedAttemptExecutor.startsWith("executor:kimi/") &&
+          configuration.plannedAttemptExecutor !== kimiLocator
+        ) {
+          return yield* Effect.fail(
+            new ExecutorProfileResolutionFailure({
+              detail: `executor locator ${configuration.plannedAttemptExecutor} is not configured`,
+              kind: "UnknownProfile",
+              profileId: ExecutorProfileId.make(configuration.plannedAttemptExecutor.slice("executor:".length))
+            })
+          )
+        }
         const workflowApplicationExitObserver = adapters.workflowApplicationExitObserver
         /* v8 ignore start -- @preserve Hermetic host tests replace the live GitHub boundary; this assignment retains the production-only provider default. */
         const githubClientLayer = guardedGithubClientLayer(

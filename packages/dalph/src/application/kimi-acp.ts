@@ -434,6 +434,7 @@ export const nodeKimiAcpClientLayer = (
           .pipe(Effect.catch((error) => Effect.fail(error)))
         const capabilities = initializeCapabilities(response)
         if (capabilities instanceof KimiAcpFailure) return yield* Effect.fail(capabilities)
+        yield* client.notify("initialize", "initialized", {})
         yield* Ref.set(initialized, Option.some(capabilities))
         return capabilities
       })
@@ -524,7 +525,18 @@ export const nodeKimiAcpClientLayer = (
       })
       const close = Effect.gen(function* () {
         const current = yield* Ref.get(rpc)
-        if (Option.isSome(current)) yield* current.value.close
+        if (Option.isSome(current)) {
+          const knownSessions = yield* Ref.get(sessions)
+          yield* Effect.forEach(
+            knownSessions.values(),
+            (state) =>
+              current.value
+                .notify("session/close", "session/close", { sessionId: state.sessionId })
+                .pipe(Effect.ignore),
+            { discard: true }
+          )
+          yield* current.value.close
+        }
       })
       yield* Effect.addFinalizer(() =>
         Ref.get(rpc).pipe(
