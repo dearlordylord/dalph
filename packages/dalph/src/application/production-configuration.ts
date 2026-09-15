@@ -31,6 +31,7 @@ import {
 } from "@dalph/orchestrator"
 import { Effect, Layer, MutableList, Ref, Schema, SchemaIssue } from "effect"
 import { IntegratorCandidateWorktreeRoot, IntegratorPrivateStoreLocator } from "./codex-integrator-private-store.js"
+import { ExecutorProfile, ExecutorProfileId } from "./executor-profile.js"
 import { ProductionRunReactivationInterval } from "./production.js"
 
 const canonicalAbsolutePath = (subject: string) =>
@@ -134,6 +135,8 @@ export const ProductionRepositoryHostConfiguration = Schema.Struct({
   integrationRef: IntegrationTargetRef,
   plannedAttemptBaseSha: GitCommitSha,
   plannedAttemptExecutor: TaskExecutorLocator,
+  executorProfiles: Schema.optionalKey(Schema.Array(ExecutorProfile)),
+  executorProfileDefault: Schema.optionalKey(ExecutorProfileId),
   claimOwner: ClaimOwner,
   taskWorkCapacity: TaskWorkCapacity,
   journalDatabase: CanonicalJournalDatabaseLocator,

@@ -1,6 +1,11 @@
 /* eslint-disable max-lines -- Production host composition keeps one scoped lifecycle and its qualification seams auditable. */
 import { NodeCrypto, NodeHttpClient, NodeServices } from "@effect/platform-node"
-import { IntegrationTarget, PlannedAttemptExecutor, PlannedAttemptExecutorLifecycleObservation } from "@dalph/contracts"
+import {
+  IntegrationTarget,
+  PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
+  TaskExecutorLocator
+} from "@dalph/contracts"
 import {
   GithubGraphqlClient,
   type GithubGraphqlExecution,
@@ -57,7 +62,7 @@ import {
   makeProductionHostApplicationExitShell,
   selectProductionRun
 } from "@dalph/orchestrator"
-import { Context, Deferred, Effect, Layer, Option, Schema, type Scope } from "effect"
+import { Context, Deferred, Effect, Layer, type Scope } from "effect"
 import {
   CodexAppServer,
   CodexAppServerFailure,
@@ -70,9 +75,8 @@ import {
   ExecutorModelAlias,
   ExecutorProfile,
   ExecutorProfileId,
-  ExecutorProfileResolutionFailure,
   ExecutorProviderConfigReference,
-  executorLocatorForProfile
+  resolveExecutorProfileLocator
 } from "./executor-profile.js"
 import { nodeCodexAttemptStoreLayer } from "./codex-attempt-store.js"
 import { nodeCodexProcessNativeService, type CodexProcessNativeService } from "./codex-process-native.js"
@@ -505,21 +509,32 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const ownership = yield* CoordinatorOwnership
         const journal = yield* JournalStore
         const lifecycle = yield* RunLifecycleJournal
-        const kimiLocator = "executor:kimi/for-coding"
-        const executorLocator = configuration.plannedAttemptExecutor
-        const isKnownCodexLocator = executorLocator.startsWith("codex:")
-        const isKnownKimiLocator = executorLocator === kimiLocator
-        if (!isKnownCodexLocator && !isKnownKimiLocator) {
-          const rawProfileId = executorLocator.replace(/^executor:/u, "unknown/")
-          const profileId = Option.getOrUndefined(Schema.decodeUnknownOption(ExecutorProfileId)(rawProfileId))
-          return yield* Effect.fail(
-            new ExecutorProfileResolutionFailure({
-              detail: `executor locator ${executorLocator} is not configured`,
-              kind: "UnknownProfile",
-              ...(profileId === undefined ? {} : { profileId })
-            })
-          )
-        }
+        const requestedExecutorLocator = configuration.plannedAttemptExecutor
+        const kimiProfile = ExecutorProfile.make({
+          adapter: "kimi-acp",
+          executable: "kimi",
+          id: ExecutorProfileId.make("kimi/for-coding"),
+          model: ExecutorModelAlias.make("kimi-for-coding"),
+          permissionPolicy: "deny",
+          provider: "kimi",
+          providerConfigRef: ExecutorProviderConfigReference.make("kimi-for-coding")
+        })
+        const codexProfile = ExecutorProfile.make({
+          adapter: "codex-app-server",
+          executable: configuration.codexExecutable,
+          id: ExecutorProfileId.make("codex/production"),
+          model: ExecutorModelAlias.make("default"),
+          permissionPolicy: "unattended",
+          provider: "codex"
+        })
+        const configuredProfiles = configuration.executorProfiles ?? [codexProfile, kimiProfile]
+        const executorLocator =
+          requestedExecutorLocator === "executor:default" && configuration.executorProfileDefault !== undefined
+            ? TaskExecutorLocator.make(`executor:${configuration.executorProfileDefault}`)
+            : requestedExecutorLocator
+        const selectedProfile = executorLocator.startsWith("codex:")
+          ? codexProfile
+          : yield* resolveExecutorProfileLocator(configuredProfiles, executorLocator)
         const workflowApplicationExitObserver = adapters.workflowApplicationExitObserver
         /* v8 ignore start -- @preserve Hermetic host tests replace the live GitHub boundary; this assignment retains the production-only provider default. */
         const githubClientLayer = guardedGithubClientLayer(
@@ -596,20 +611,11 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
                 )
               ).pipe(Layer.provide(realPromotion))
         const activityCensusLayer = codexOwnedActivityCensusLayer(codexProcessNative).pipe(Layer.provide(appLayer))
-        const kimiProfile = ExecutorProfile.make({
-          adapter: "kimi-acp",
-          executable: "kimi",
-          id: ExecutorProfileId.make("kimi/for-coding"),
-          model: ExecutorModelAlias.make("kimi-for-coding"),
-          permissionPolicy: "deny",
-          provider: "kimi",
-          providerConfigRef: ExecutorProviderConfigReference.make("kimi-for-coding")
-        })
         const executorLayer =
-          configuration.plannedAttemptExecutor === executorLocatorForProfile(kimiProfile)
+          selectedProfile.adapter === "kimi-acp"
             ? observedPlannedAttemptExecutorLayer(
                 kimiPlannedAttemptExecutorLayer.pipe(
-                  Layer.provide(nodeKimiAcpClientLayer(kimiProfile).pipe(Layer.provide(NodeServices.layer))),
+                  Layer.provide(nodeKimiAcpClientLayer(selectedProfile).pipe(Layer.provide(NodeServices.layer))),
                   Layer.provide(evidenceLayer),
                   Layer.provide(gitCommandLayer),
                   Layer.provide(NodeCrypto.layer),
@@ -670,7 +676,10 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           Layer.succeed(RunLifecycleJournal, lifecycle)
         )
         const planningLayer = Layer.merge(
-          productionPlannedTaskAttemptLayer(configuration, selection.runId),
+          productionPlannedTaskAttemptLayer(
+            { ...configuration, plannedAttemptExecutor: executorLocator },
+            selection.runId
+          ),
           taskClaimAcquisitionPlannerLayer(configuration.claimOwner).pipe(Layer.provide(NodeCrypto.layer))
         )
         const workflowLayer = productionWorkflowInterpreterLayer(

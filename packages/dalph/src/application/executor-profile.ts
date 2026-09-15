@@ -69,6 +69,24 @@ export class ExecutorProfileResolutionFailure extends Schema.TaggedError<Executo
 export const executorLocatorForProfile = (profile: ExecutorProfile): TaskExecutorLocator =>
   TaskExecutorLocator.make(`executor:${profile.id}`)
 
+/** Resolves one persisted locator without constructing a branded id from unchecked bytes. */
+export const resolveExecutorProfileLocator = (
+  profiles: ReadonlyArray<ExecutorProfile>,
+  locator: TaskExecutorLocator
+): Effect.Effect<ExecutorProfile, ExecutorProfileResolutionFailure> => {
+  const profile = profiles.find((candidate) => executorLocatorForProfile(candidate) === locator)
+  if (profile !== undefined) return Effect.succeed(profile)
+  const rawId = locator.replace(/^executor:/u, "")
+  const profileId = Option.getOrUndefined(Schema.decodeUnknownOption(ExecutorProfileId)(rawId))
+  return Effect.fail(
+    new ExecutorProfileResolutionFailure({
+      detail: `executor locator ${locator} has no configured profile`,
+      kind: "UnknownProfile",
+      ...(profileId === undefined ? {} : { profileId })
+    })
+  )
+}
+
 /** Application-level registry used by production and controlled compositions. */
 export interface ExecutorProfileRegistryService {
   readonly resolve: (
@@ -125,17 +143,7 @@ export const executorProfileRegistryLayer = (
           : Effect.succeed(profile)
       }
       const profileForLocator = (locator: TaskExecutorLocator) => {
-        const profile = profiles.find((candidate) => executorLocatorForProfile(candidate) === locator)
-        if (profile !== undefined) return Effect.succeed(profile)
-        const rawId = locator.replace(/^executor:/u, "")
-        const profileId = Option.getOrUndefined(Schema.decodeUnknownOption(ExecutorProfileId)(rawId))
-        return Effect.fail(
-          new ExecutorProfileResolutionFailure({
-            detail: `executor locator ${locator} has no configured profile`,
-            kind: "UnknownProfile",
-            ...(profileId === undefined ? {} : { profileId })
-          })
-        )
+        return resolveExecutorProfileLocator(profiles, locator)
       }
       return ExecutorProfileRegistry.of({ resolve, profileForLocator })
     })

@@ -56,6 +56,30 @@ describe("production repository host configuration", () => {
     expect("applicationExitDrain" in decoded).toBe(false)
   })
 
+  it("decodes configured executor profiles and a host default", async () => {
+    const decoded = await Effect.runPromise(
+      decodeProductionRepositoryHostConfiguration({
+        ...validRawConfiguration(),
+        plannedAttemptExecutor: "executor:default",
+        executorProfileDefault: "kimi/for-coding",
+        executorProfiles: [
+          {
+            adapter: "kimi-acp",
+            executable: "kimi",
+            id: "kimi/for-coding",
+            model: "kimi-for-coding",
+            permissionPolicy: "deny",
+            provider: "kimi",
+            providerConfigRef: "kimi-for-coding"
+          }
+        ]
+      })
+    )
+    expect(decoded.plannedAttemptExecutor).toBe("executor:default")
+    expect(decoded.executorProfileDefault).toBe("kimi/for-coding")
+    expect(decoded.executorProfiles?.[0]?.adapter).toBe("kimi-acp")
+  })
+
   it("production keeps Codex CLI state separate from Dalph executor private state", async () => {
     const decoded = await Effect.runPromise(decodeProductionRepositoryHostConfiguration(validRawConfiguration()))
     expect(decoded.codexExecutorPrivateStateDirectory).toBe("/var/lib/dalph/executor-private")
