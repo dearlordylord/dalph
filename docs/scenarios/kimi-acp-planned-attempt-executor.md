@@ -1,6 +1,6 @@
 # Select Kimi ACP for one planned attempt
 
-Status: implemented bounded slice for issue [#379](https://github.com/dearlordylord/dalph/issues/379). The profile registry, production profile resolution, executable and disposable protocol/credential preflight, provider-private session recovery, and controlled Kimi adapter cover the deterministic selection and lifecycle seam; live-wire qualification remains follow-up acceptance work.
+Status: implemented bounded slice for issue [#379](https://github.com/dearlordylord/dalph/issues/379). The profile registry, production profile resolution, executable and disposable protocol/credential preflight, provider-private session recovery, and controlled Kimi adapter cover the deterministic selection and lifecycle seam; cross-process private-store lease/custody hardening and live-wire qualification remain follow-up acceptance work.
 
 ## Alice selects a Kimi profile before work begins
 
