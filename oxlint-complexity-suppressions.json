@@ -1,4 +1,16 @@
 {
+  "packages/dalph/src/application/kimi-acp.ts": {
+    "complexity": {
+      "count": 3,
+      "justification": "The ACP transport retains one fail-closed protocol boundary across framed parsing, request correlation, and session cleanup; these branches are the protocol state transitions rather than independent policy decisions."
+    }
+  },
+  "packages/dalph/src/application/kimi-planned-attempt-executor.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "The planned-attempt adapter preserves one provider-neutral report transition while mapping ACP outcomes and evidence; the branch is the single accepted-versus-terminal boundary."
+    }
+  },
   "packages/dalph/src/application/production-cli.ts": {
     "complexity": {
       "count": 1

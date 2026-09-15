@@ -1223,6 +1223,16 @@ export const capabilityRegistrationInventory = {
       "packages/dalph/src/application/codex-planned-attempt-executor.ts"
     ),
     support(
+      "nodeKimiAcpClientLayer",
+      "ACP process transport support beneath the selectable Kimi planned-attempt executor",
+      "packages/dalph/src/application/kimi-acp.ts"
+    ),
+    support(
+      "kimiPlannedAttemptExecutorLayer",
+      "selectable Kimi planned-attempt executor support behind the provider-neutral executor boundary",
+      "packages/dalph/src/application/kimi-planned-attempt-executor.ts"
+    ),
+    support(
       "attemptChoiceControlLayer",
       "operator-control protocol support",
       "packages/orchestrator/src/workflow/protocols/attempt-choice/control.ts"
