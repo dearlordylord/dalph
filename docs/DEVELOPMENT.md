@@ -43,7 +43,7 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
   descendants. A timeout settles only after the direct child closes and the
   Unix process group is absent, or after a bounded explicit failure to prove
   absence. A nested detached command must opt into parent-signal relay; the
-  issue-268 C4 runner does so for every child and Git lookup. Do not add an
+  delivery repeatability runner does so for every child and Git lookup. Do not add an
   outer GNU `timeout` around `check:all`.
 - For the workflow pilot, use the next existing milestone to record broad review rounds, reopened findings
   with new evidence, full-gate restarts, and closure time. Verify that required
@@ -120,7 +120,7 @@ All commands below use `pnpm`. Script definitions live in
 | --- | --- |
 | `bootstrap:worktree` | Initialize repository submodules, install the frozen dependency graph, clean-build and validate production artifacts, then relink and verify generated workspace bins. |
 | `check:artifacts` | Clean-build production packages in dependency order, then validate normal exports, declarations, bins, package boundaries, and packed contents. |
-| `vitest run <test-file>` | Focused development check; `test` runs deterministic Vitest. |
+| `vitest run <test-file>` | Focused development check. `test` runs the covered core suite. |
 | `typecheck` | Strict TypeScript-Go with Effect errors; suggestions remain nonfatal. |
 | `typecheck:effect` | Dedicated strict Effect pass over the whole project; errors and warnings fail, JSON output. |
 | `typecheck:effect:changed` | Effect pass over files changed against `DALPH_DIAGNOSTICS_BASE`, or the explicitly reported moving `origin/master` fallback; falls back to the project pass above twelve changed files. |
@@ -132,9 +132,9 @@ All commands below use `pnpm`. Script definitions live in
 | `check:complexity` | Reject increased per-file counts of production functions above complexity eight. |
 | `check:duplicates` | Enforce the configured duplication budget. |
 | `coverage:body` | Coverage suites and their verifiers, without taking an admission slot. |
-| `test:coverage` | Enforce separate production/evaluation coverage and changed-line floors below; takes an admission slot. |
+| `test` | Enforce separate production/evaluation coverage and changed-line floors below; takes an admission slot. |
 | `test:mbt` | Explicit manual Quint-connected conformance run; temporarily excluded from automatic verification pending [#363](https://github.com/dearlordylord/dalph/issues/363), which restores replay from pre-generated traces. |
-| `test:issue-268-c4` | Run the accepted DS01–DS13 table and strict occurrence order in twenty consecutive fresh processes; stop at the first incomplete or divergent run. |
+| `test:delivery-repeatability` | Run the accepted DS01–DS13 delivery checkpoint table and strict occurrence order in twenty consecutive fresh processes; stop at the first incomplete or divergent run. This is the dedicated delivery-repeatability qualification command. |
 | `test:ci-change-classification` | Prove the docs-only CI allowlist and fail-closed classification. |
 
 | `check:lab` | Reducer Lab typecheck, maintained-cassette smoke, build; no browser. |
@@ -201,7 +201,7 @@ classification evidence as not applicable.
 
 ### Heavy-gate admission
 
-`check:all`, `check:ci:quality`, `test:coverage`, `check:quint`, and standalone
+`check:all`, `check:ci:quality`, `test`, `check:quint`, and standalone
 `check:preflight` take the exact worktree lock before one of two clone-wide slots.
 A second writer in that worktree waits without consuming a spare slot; another
 worktree can use it. Nested admitted commands validate the active run and register
@@ -1042,7 +1042,7 @@ unchanged four-worker V8 policy.
 For a branch review, set the coverage base explicitly:
 
 ```sh
-DALPH_COVERAGE_BASE_SHA="$(git merge-base origin/master HEAD)" pnpm test:coverage
+DALPH_COVERAGE_BASE_SHA="$(git merge-base origin/master HEAD)" pnpm test
 ```
 
 ### Coverage explanation
@@ -1070,7 +1070,7 @@ counts, unreachable branches or threshold exemption are inferred.
 
 Status 0 means complete analysis of an artifact with matching freshness evidence.
 Status 1 means analysis is unproven, stale, incomplete or unavailable. Neither
-status certifies coverage compliance or replaces `test:coverage`/`check:all`;
+status certifies coverage compliance or replaces `test`/`check:all`;
 the production 95% and maintained-evaluation 75% floors remain unchanged.
 
 ### Formal reuse and handoff

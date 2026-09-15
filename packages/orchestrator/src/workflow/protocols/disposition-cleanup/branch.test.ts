@@ -56,13 +56,13 @@ const branchAuthorization = BranchCleanupAuthorization.make({
   locator: attempt.branch,
   observationAt: authorization.observationAt,
   observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
-  operationId: OperationId.make("issue-69-branch-cleanup"),
+  operationId: OperationId.make("cleanup-branch-cleanup"),
   owner: BranchCleanupOwner.make({ attemptId: attempt.attemptId }),
-  worktreeCleanupOperationId: OperationId.make("issue-69-worktree-cleanup"),
+  worktreeCleanupOperationId: OperationId.make("cleanup-worktree-cleanup"),
   writerQuiescent: true
 })
 
-const begin = Effect.fn("Issue69BranchTest.begin")(function* () {
+const begin = Effect.fn("CleanupCassetteBranchTest.begin")(function* () {
   const journal = yield* InRunJournal
   yield* appendReplacementProvenance(attempt, successor, "StartupValid")
   yield* journal.append(
@@ -233,8 +233,8 @@ it.effect("does not let a self-consistent forged branch authorization suppress c
     yield* begin()
     const forged = BranchCleanupAuthorization.make({
       ...branchAuthorization,
-      causalPredecessors: [OperationId.make("issue-69-foreign-branch-causal")],
-      operationId: OperationId.make("issue-69-forged-branch-authorization")
+      causalPredecessors: [OperationId.make("cleanup-foreign-branch-causal")],
+      operationId: OperationId.make("cleanup-forged-branch-authorization")
     })
     yield* journal.append(
       runId,
@@ -247,7 +247,7 @@ it.effect("does not let a self-consistent forged branch authorization suppress c
       })
     )
     const activation = yield* activateDispositionCleanup(runId)
-    expect(activation.branch.map(({ operationId }) => operationId)).toEqual(["disposition-cleanup:branch:issue-69-p1"])
+    expect(activation.branch.map(({ operationId }) => operationId)).toEqual(["disposition-cleanup:branch:cleanup-p1"])
     expect((yield* journal.read(runId)).filter(({ event }) => event._tag === "BranchCleanupAuthorized")).toHaveLength(2)
   }).pipe(
     Effect.provide(branchCleanupTestLayer({ observations: [] })),

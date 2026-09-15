@@ -302,7 +302,7 @@ module integrationFinalityTest {
           and state.promoted.completionOutcome == Applied
           and state.promoted.completionNotAppliedReads == 1
           and completionRetryRequiresExactRequestLookup
-          and completionRequestsAreBoundedForIssue61
+          and completionRequestsAreBounded
           and completionRequestUsesExactPremises
       )
   }
@@ -513,7 +513,7 @@ module integrationFinalityTest {
           and settledTaskRequiresExactCleanup
           and subjectSettlementIsLocal
           and dependantReleaseBoundaryRemainsExternal
-          and runTerminationRemainsOwnedByIssue102
+          and runTerminationRequiresWholeRunSettlement
       )
   }
 
@@ -609,7 +609,7 @@ module integrationFinalityTest {
         emptyFrontierReached
           and state.unrelated.responsibilityHeld
           and emptyFrontierDoesNotSettleRetainedResponsibility
-          and runTerminationRemainsOwnedByIssue102
+          and runTerminationRequiresWholeRunSettlement
       )
   }
 }

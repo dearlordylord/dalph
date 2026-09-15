@@ -54,17 +54,17 @@ const candidateAcceptedResult = AcceptedResult.make({
   evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("a".repeat(64)) })
 })
 const candidateTarget = IntegrationTarget.make({
-  repository: GitRepositoryLocator.make("repo:issue-69-provenance-negative"),
+  repository: GitRepositoryLocator.make("repo:cleanup-provenance-negative"),
   ref: IntegrationTargetRef.make("refs/heads/main")
 })
 const candidatePredecessor = IntegratorSessionCorrelation.make({
   acceptedResult: candidateAcceptedResult,
-  candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-provenance-negative-p1"),
+  candidateResource: IntegratorCandidateResourceLocator.make("candidate:cleanup-provenance-negative-p1"),
   expectedTargetHead: baseSha,
   integrationTarget: candidateTarget,
   plannedAttempt: attempt,
   queuedAt: JournalPosition.make(17),
-  sessionId: IntegratorSessionId.make("session:issue-69-provenance-negative-p1"),
+  sessionId: IntegratorSessionId.make("session:cleanup-provenance-negative-p1"),
   startedAt: JournalPosition.make(18),
   targetLineageObservedAt: JournalPosition.make(20)
 })

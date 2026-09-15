@@ -19,56 +19,54 @@ import {
 } from "@dalph/orchestrator"
 import { Cause, Effect, Exit, Schema } from "effect"
 import { expect } from "vitest"
-// @ts-expect-error The C4 subprocess runner is an executable JavaScript test-support module.
-import { runIssue268C4 } from "../../../../scripts/run-issue-268-c4.mjs"
 import {
-  runIssue268Ds01Characterization,
-  runIssue268Ds02Characterization,
-  runIssue268Ds03Characterization,
-  runIssue268Ds04Characterization,
-  runIssue268Ds05Characterization,
-  runIssue268Ds06Characterization,
-  runIssue268Ds07Characterization,
-  runIssue268Ds08Characterization,
-  runIssue268Ds09Characterization,
-  runIssue268Ds10Characterization,
-  runIssue268Ds11Characterization,
-  runIssue268Ds12Characterization,
-  runIssue268Ds13Characterization
-} from "../../test-support/issue-268-controlled-characterization.js"
-import { issue268ControlledDeliveryCharacterization as controlledScenario } from "../../test-support/issue-268-controlled-characterization-catalog.js"
+  runControlledDs01Characterization,
+  runControlledDs02Characterization,
+  runControlledDs03Characterization,
+  runControlledDs04Characterization,
+  runControlledDs05Characterization,
+  runControlledDs06Characterization,
+  runControlledDs07Characterization,
+  runControlledDs08Characterization,
+  runControlledDs09Characterization,
+  runControlledDs10Characterization,
+  runControlledDs11Characterization,
+  runControlledDs12Characterization,
+  runControlledDs13Characterization
+} from "../../test-support/controlled-characterization.js"
+import { controlledDeliveryCharacterization as controlledScenario } from "../../test-support/controlled-characterization-catalog.js"
 import {
-  consumeIssue268AcceptedOccurrenceOrder,
-  issue268ControlledDeliveryCassetteCatalog,
-  runIssue268ControlledDeliveryCassette
-} from "../../test-support/issue-268-controlled-occurrence-cassette.js"
-import { isIssue268Ds04CompleteCheckpoint } from "../../test-support/issue-268-controlled-ds04.js"
+  consumeControlledAcceptedOccurrenceOrder,
+  controlledDeliveryCassetteCatalog,
+  runControlledDeliveryCassette
+} from "../../test-support/controlled-occurrence-cassette.js"
+import { isControlledDs04CompleteCheckpoint } from "../../test-support/controlled-ds04.js"
 import {
-  isIssue268Ds02ActionInventory,
-  isIssue268Ds02PassiveAction,
-  isIssue268Ds02PassiveRead,
-  isIssue268Ds02StageSequence
-} from "../../test-support/issue-268-controlled-ds02.js"
-import { isIssue268Ds05CompleteCheckpoint } from "../../test-support/issue-268-controlled-ds05.js"
+  isControlledDs02ActionInventory,
+  isControlledDs02PassiveAction,
+  isControlledDs02PassiveRead,
+  isControlledDs02StageSequence
+} from "../../test-support/controlled-ds02.js"
+import { isControlledDs05CompleteCheckpoint } from "../../test-support/controlled-ds05.js"
 import {
-  isIssue268Ds06CompleteCheckpoint,
-  isIssue268RetainedBResponsibility
-} from "../../test-support/issue-268-controlled-ds06.js"
-import { isIssue268Ds07CompleteCheckpoint } from "../../test-support/issue-268-controlled-ds07.js"
-import { isIssue268Ds10CompleteCheckpoint } from "../../test-support/issue-268-controlled-ds10.js"
-import { isIssue268Ds11CompleteCheckpoint } from "../../test-support/issue-268-controlled-ds11.js"
-import { isIssue268Ds12CompleteCheckpoint } from "../../test-support/issue-268-controlled-ds12.js"
-import { isIssue268Ds13CompleteCheckpoint } from "../../test-support/issue-268-controlled-ds13.js"
+  isControlledDs06CompleteCheckpoint,
+  isControlledRetainedBResponsibility
+} from "../../test-support/controlled-ds06.js"
+import { isControlledDs07CompleteCheckpoint } from "../../test-support/controlled-ds07.js"
+import { isControlledDs10CompleteCheckpoint } from "../../test-support/controlled-ds10.js"
+import { isControlledDs11CompleteCheckpoint } from "../../test-support/controlled-ds11.js"
+import { isControlledDs12CompleteCheckpoint } from "../../test-support/controlled-ds12.js"
+import { isControlledDs13CompleteCheckpoint } from "../../test-support/controlled-ds13.js"
 import {
-  issue268OccurrenceEvidenceIsComplete,
-  issue268RequiredClaimCoverageIsComplete,
-  reverseIssue268RequiredEdge,
-  validateIssue268RequiredEdges,
-  type Issue268CausalLandmark,
-  type Issue268ObservedOccurrence,
-  type Issue268OccurrenceSource,
-  type Issue268RequiredEdge
-} from "../../test-support/issue-268-controlled-occurrences.js"
+  controlledOccurrenceEvidenceIsComplete,
+  controlledRequiredClaimCoverageIsComplete,
+  reverseControlledRequiredEdge,
+  validateControlledRequiredEdges,
+  type ControlledCausalLandmark,
+  type ControlledObservedOccurrence,
+  type ControlledOccurrenceSource,
+  type ControlledRequiredEdge
+} from "../../test-support/controlled-occurrences.js"
 import {
   AuthoredScenarioCassette,
   maintainedAuthoredCassetteCatalog,
@@ -80,12 +78,6 @@ import {
 const lastItemIndex = -1
 const capstoneTimeout = 600_000
 const boundedContinuationTimeout = 120_000
-const c4RepeatabilityTimeout = 18 * 60_000
-const vitestEnvironment = Reflect.get(import.meta, "env")
-const c4AlreadyRunsOutsideCoverage =
-  typeof vitestEnvironment === "object" &&
-  vitestEnvironment !== null &&
-  Reflect.get(vitestEnvironment, "MODE") === "coverage"
 const cachedRun = Effect.runSync(
   Effect.cached(
     runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStory).pipe(
@@ -193,7 +185,7 @@ const recordIssueUnless = (issues: Array<string>, condition: boolean, issue: str
   if (!condition) issues.push(issue)
 }
 
-const issue272AdmissionAndSessionIssues = (run: AuthoredScenarioCassetteRun): ReadonlyArray<string> => {
+const capstoneAdmissionAndSessionIssues = (run: AuthoredScenarioCassetteRun): ReadonlyArray<string> => {
   const issues: Array<string> = []
   const accepted = one(
     eventRecords(run, "PlannedAttemptExecutorWorkReported").filter(
@@ -261,7 +253,7 @@ const issue272AdmissionAndSessionIssues = (run: AuthoredScenarioCassetteRun): Re
   return issues
 }
 
-const issue272PromotionIssues = (
+const capstonePromotionIssues = (
   run: AuthoredScenarioCassetteRun,
   expectedRejectedAttemptOrdinal: 1 | 2 = 1,
   expectedFreshLineagePairCount: 1 | 2 = 1
@@ -409,7 +401,7 @@ const issue272PromotionIssues = (
   return issues
 }
 
-const issue272FinalityIssues = (run: AuthoredScenarioCassetteRun): ReadonlyArray<string> => {
+const capstoneFinalityIssues = (run: AuthoredScenarioCassetteRun): ReadonlyArray<string> => {
   const issues: Array<string> = []
   const promotion = one(eventRecords(run, "TargetPromotionObservedSuccess"), "successor promotion", issues)
   const replacement = one(eventRecords(run, "CompletionClaimReplaced"), "completion-claim replacement", issues)
@@ -559,14 +551,14 @@ const issue272FinalityIssues = (run: AuthoredScenarioCassetteRun): ReadonlyArray
   return issues
 }
 
-const issue272AcceptanceIssues = (
+const capstoneAcceptanceIssues = (
   run: AuthoredScenarioCassetteRun,
   expectedRejectedAttemptOrdinal: 1 | 2 = 1,
   expectedFreshLineagePairCount: 1 | 2 = 1
 ): ReadonlyArray<string> => [
-  ...issue272AdmissionAndSessionIssues(run),
-  ...issue272PromotionIssues(run, expectedRejectedAttemptOrdinal, expectedFreshLineagePairCount),
-  ...issue272FinalityIssues(run)
+  ...capstoneAdmissionAndSessionIssues(run),
+  ...capstonePromotionIssues(run, expectedRejectedAttemptOrdinal, expectedFreshLineagePairCount),
+  ...capstoneFinalityIssues(run)
 ]
 
 const deliveryStoryIntegrationRestartCheckpoints = [
@@ -1036,7 +1028,7 @@ it.effect(
           expect(compareAndSetAt).toBeGreaterThan(gitReconciliationAt)
         }
         expect(
-          issue272AcceptanceIssues(
+          capstoneAcceptanceIssues(
             run,
             checkpoint === "TargetPromotionAttemptIntended" ? 2 : 1,
             checkpoint === "TargetLineageObserved" ? 2 : 1
@@ -1094,7 +1086,7 @@ const verifyDeliveryStoryFinalityRestart = (checkpoint: (typeof deliveryStoryFin
             ? { _tag: "CompletionTaskFocusedReadReturned", lifecycle: "CompletedSuccessfully", taskId: "A" }
             : { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } }
     expect(resumedOccurrences[2]).toMatchObject(expectedContinuation)
-    expect(issue272AcceptanceIssues(run)).toEqual([])
+    expect(capstoneAcceptanceIssues(run)).toEqual([])
     expect(storyOccurrences(run, "CompletionClaimReplacementApplied")).toHaveLength(1)
     expect(storyOccurrences(run, "CompletionTaskRequestReturned")).toHaveLength(1)
     expect(storyOccurrences(run, "CompletionClaimDeletionApplied")).toHaveLength(1)
@@ -1140,7 +1132,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const run = yield* cachedDs14ThroughDs17Run
-      expect(issue272AcceptanceIssues(run)).toEqual([])
+      expect(capstoneAcceptanceIssues(run)).toEqual([])
       expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
     }),
   capstoneTimeout
@@ -1292,7 +1284,7 @@ it.effect(
           ({ result }) => result._tag === "RejectedExpectedHead"
         )
       ).toHaveLength(0)
-      expect(issue272AcceptanceIssues(responseLostRun)).toContain(
+      expect(capstoneAcceptanceIssues(responseLostRun)).toContain(
         "promotion must use one rejected exact-head CAS followed by one applied successor CAS, never force-update"
       )
     }),
@@ -1348,7 +1340,7 @@ it.effect(
 
 it.effect("DS-01 derives A, B, and C inside capacity while D and E stay outside", () =>
   Effect.gen(function* () {
-    const run = yield* runIssue268Ds01Characterization
+    const run = yield* runControlledDs01Characterization
     const establishedBundle = run.publications.find(({ publication }) => publication.graph._tag === "GraphEstablished")
     if (establishedBundle === undefined) return expect.fail("DS-01 must publish the established G0 graph")
     const established = yield* evaluateDeliveryRuntimeInputBundle(establishedBundle)
@@ -1406,24 +1398,24 @@ it("DS-02 startup inventory rejects duplicate Begin, reordered startup, and outs
     "BeginPlannedAttemptExecutorWork"
   ]
   const valid = ["A", "B", "C"].flatMap((taskId) => stages.map((stage) => ({ stage, taskId })))
-  expect(isIssue268Ds02ActionInventory(valid)).toBe(true)
-  expect(isIssue268Ds02ActionInventory([...valid, { stage: "BeginPlannedAttemptExecutorWork", taskId: "A" }])).toBe(
+  expect(isControlledDs02ActionInventory(valid)).toBe(true)
+  expect(isControlledDs02ActionInventory([...valid, { stage: "BeginPlannedAttemptExecutorWork", taskId: "A" }])).toBe(
     false
   )
   expect(
-    isIssue268Ds02ActionInventory(
+    isControlledDs02ActionInventory(
       valid.map((action, index) => (index === 0 ? { ...action, stage: "AcquireTaskClaim" } : action))
     )
   ).toBe(false)
   for (const taskId of ["D", "E"])
-    expect(isIssue268Ds02ActionInventory([...valid, { stage: "ObservePlannedAttemptExecutorWork", taskId }])).toBe(
+    expect(isControlledDs02ActionInventory([...valid, { stage: "ObservePlannedAttemptExecutorWork", taskId }])).toBe(
       false
     )
 })
 
 it.effect("DS-02 starts only A, B, and C through the production workflow algebra", () =>
   Effect.gen(function* () {
-    const run = yield* runIssue268Ds02Characterization
+    const run = yield* runControlledDs02Characterization
     const begun = run.records.flatMap(({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
         ? [`${event.plannedAttempt.taskId}:${event.plannedAttempt.attemptId}`]
@@ -1495,11 +1487,11 @@ it.effect("DS-02 starts only A, B, and C through the production workflow algebra
     expect(claimed).toHaveLength(3)
     expect(new Set(claimed)).toEqual(new Set(["A", "B", "C"]))
     expect(planned).toEqual(["A", "B", "C"])
-    expect(isIssue268Ds02ActionInventory(run.executedActions)).toBe(true)
+    expect(isControlledDs02ActionInventory(run.executedActions)).toBe(true)
     for (const taskId of ["A", "B", "C"]) {
       const stages = stagesByTask[taskId] ?? []
       expect(stages.slice(0, expectedStages.length)).toEqual(expectedStages)
-      expect(isIssue268Ds02StageSequence(stages)).toBe(true)
+      expect(isControlledDs02StageSequence(stages)).toBe(true)
       const passiveActions = run.ds02PassiveActions.filter(
         ({ action }) => deliveryProposalOrderTaskId(action.proposal.order) === taskId
       )
@@ -1507,10 +1499,10 @@ it.effect("DS-02 starts only A, B, and C through the production workflow algebra
       const plan = run.plans.find((candidate) => candidate.taskId === taskId)
       if (plan === undefined) return expect.fail(`DS-02 lacks its exact ${taskId} plan`)
       for (const capture of passiveActions) {
-        expect(isIssue268Ds02PassiveAction(capture, plan)).toBe(true)
-        expect(isIssue268Ds02PassiveAction({ ...capture, records: [] }, plan)).toBe(false)
+        expect(isControlledDs02PassiveAction(capture, plan)).toBe(true)
+        expect(isControlledDs02PassiveAction({ ...capture, records: [] }, plan)).toBe(false)
         expect(
-          isIssue268Ds02PassiveAction(capture, { ...plan, attemptId: AttemptId.make("foreign-ds02-attempt") })
+          isControlledDs02PassiveAction(capture, { ...plan, attemptId: AttemptId.make("foreign-ds02-attempt") })
         ).toBe(false)
         const action = capture.action
         if (
@@ -1521,7 +1513,7 @@ it.effect("DS-02 starts only A, B, and C through the production workflow algebra
           const route = action.proposal.route
           const step = action.proposal.route.step
           expect(
-            isIssue268Ds02PassiveAction(
+            isControlledDs02PassiveAction(
               {
                 ...capture,
                 action: {
@@ -1549,10 +1541,10 @@ it.effect("DS-02 starts only A, B, and C through the production workflow algebra
     }
     expect(stagesByTask["D"]).toEqual([])
     expect(stagesByTask["E"]).toEqual([])
-    expect(run.ds02PassiveReads.every((capture) => isIssue268Ds02PassiveRead(capture, run.plans))).toBe(true)
+    expect(run.ds02PassiveReads.every((capture) => isControlledDs02PassiveRead(capture, run.plans))).toBe(true)
     for (const capture of run.ds02PassiveReads)
       expect(
-        isIssue268Ds02PassiveRead(
+        isControlledDs02PassiveRead(
           { ...capture, correlation: { ...capture.correlation, attemptId: AttemptId.make("foreign-ds02-read") } },
           run.plans
         )
@@ -1668,7 +1660,7 @@ it.effect("DS-02 starts only A, B, and C through the production workflow algebra
 
 it.effect("DS-03 accepts Alice's B/F2 and G1 tracker edit without triggering Dalph work", () =>
   Effect.gen(function* () {
-    const run = yield* runIssue268Ds03Characterization
+    const run = yield* runControlledDs03Characterization
     const ds03 = run.ds03
     const executingAttempts = ds03.before.records.flatMap(({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkExecuting"
@@ -1711,7 +1703,7 @@ it.effect(
   "refreshes B from the bounded timer when its notification is lost",
   () =>
     Effect.gen(function* () {
-      const run = yield* runIssue268Ds04Characterization
+      const run = yield* runControlledDs04Characterization
       const ds04 = run.ds04
       const newRecords = ds04.after.records.slice(ds04.beforeTimer.records.length)
       const authorityGraphReads = newRecords.filter(
@@ -1852,7 +1844,7 @@ it.effect(
   "DS-05 accepts exact B1 Safe and releases only B1's position",
   () =>
     Effect.gen(function* () {
-      const run = yield* runIssue268Ds05Characterization
+      const run = yield* runControlledDs05Characterization
       const ds05 = run.ds05
       const newRecords = ds05.after.records.slice(ds05.beforeSafe.records.length)
       const safeObservations = newRecords.filter(
@@ -2017,7 +2009,7 @@ it.effect(
   "DS-06 admits D only after B1 releases and keeps E outside every boundary",
   () =>
     Effect.gen(function* () {
-      const run = yield* runIssue268Ds06Characterization
+      const run = yield* runControlledDs06Characterization
       const ds06 = run.ds06
       const newRecords = ds06.after.records.slice(ds06.beforeD.records.length)
       const newActions = ds06.after.executedActions.slice(ds06.beforeD.executedActions.length)
@@ -2268,7 +2260,7 @@ it.effect(
   "DS-07 applies P2 without evicting the three already-held attempts",
   () =>
     Effect.gen(function* () {
-      const run = yield* runIssue268Ds07Characterization
+      const run = yield* runControlledDs07Characterization
       const ds07 = run.ds07
 
       const newRecords = ds07.after.records.slice(ds07.beforeCapacity.records.length)
@@ -2422,7 +2414,7 @@ it.effect(
   "DS-08 interrupts the first coordinator after published P2 while the external executor state survives",
   () =>
     Effect.gen(function* () {
-      const run = yield* runIssue268Ds08Characterization
+      const run = yield* runControlledDs08Characterization
       const ds08 = run.ds08
       const before = ds08.beforeLoss.snapshot
       const after = ds08.afterLoss
@@ -2509,7 +2501,7 @@ it.effect(
   "reattaches three exact attempts after restart without Begin or Resume",
   () =>
     Effect.gen(function* () {
-      const run = yield* runIssue268Ds09Characterization
+      const run = yield* runControlledDs09Characterization
       const ds09 = run.ds09
       const expectedHeld = [
         controlledScenario.attempts.A1,
@@ -2582,7 +2574,7 @@ it.effect(
       for (const publication of secondPublications) {
         expect(publication.publication.policy).toEqual(ds09.beforeLoss.ds07.returned)
         expect(held(publication)).toEqual(expectedHeld)
-        expect(publication.publication.exactEvidence.some(isIssue268RetainedBResponsibility)).toBe(true)
+        expect(publication.publication.exactEvidence.some(isControlledRetainedBResponsibility)).toBe(true)
       }
     }),
   capstoneTimeout
@@ -2592,7 +2584,7 @@ it.effect(
   "returns RunnableTransition after strict restart projections before the later refresh",
   () =>
     Effect.gen(function* () {
-      const run = yield* runIssue268Ds09Characterization
+      const run = yield* runControlledDs09Characterization
       const ds09 = run.ds09
       expect(ds09.decision).toEqual({ _tag: "RunMustRemainActive", reason: "RunnableTransition" })
       expect(ds09.applicationBuildCount).toBe(2)
@@ -2658,7 +2650,7 @@ it.effect(
   "refreshes closed C through the same owner and keeps its position",
   () =>
     Effect.gen(function* () {
-      const run = yield* runIssue268Ds10Characterization
+      const run = yield* runControlledDs10Characterization
       const { ds09, ds10 } = run
       const recordSuffix = ds10.after.records.slice(ds09.after.records.length)
       const requestSuffix = ds10.after.requestedTargets.slice(ds09.after.requestedTargets.length)
@@ -2802,7 +2794,7 @@ it.effect(
             evidence.facts.disposition._tag === "PlannedAttemptExecutorSuspensionRequested"
         )
       ).toBe(true)
-      expect(ds10.checkpointPublication.publication.exactEvidence.some(isIssue268RetainedBResponsibility)).toBe(true)
+      expect(ds10.checkpointPublication.publication.exactEvidence.some(isControlledRetainedBResponsibility)).toBe(true)
       const runtime = yield* evaluateDeliveryRuntimeInputBundle(ds10.checkpointPublication)
       expect(
         runtime.current.ticketDeliveries.source.placements.find(({ taskId }) => taskId === controlledScenario.taskIds.E)
@@ -2824,7 +2816,7 @@ it.effect(
   "accepts exact C1 Safe and releases only C1's position",
   () =>
     Effect.gen(function* () {
-      const { ds10, ds11 } = yield* runIssue268Ds11Characterization
+      const { ds10, ds11 } = yield* runControlledDs11Characterization
       const recordSuffix = ds11.after.records.slice(ds10.after.records.length)
       const safeObservations = recordSuffix.filter(
         ({ event }) =>
@@ -2944,7 +2936,7 @@ it.effect(
               : undefined
         }
       })
-      expect(ds11.checkpointPublication.publication.exactEvidence.some(isIssue268RetainedBResponsibility)).toBe(true)
+      expect(ds11.checkpointPublication.publication.exactEvidence.some(isControlledRetainedBResponsibility)).toBe(true)
       expect(cResponsibilityAfter).toBeDefined()
       expect(ds11.after.requestedTargets.slice(ds10.after.requestedTargets.length)).toEqual([controlledScenario.target])
       expect(ds11.after.claimRequests).toEqual(ds10.after.claimRequests)
@@ -2959,7 +2951,7 @@ it.effect(
   "keeps active-work refresh before quiescence and stabilization after it",
   () =>
     Effect.gen(function* () {
-      const { ds09, ds10, ds11 } = yield* runIssue268Ds11Characterization
+      const { ds09, ds10, ds11 } = yield* runControlledDs11Characterization
       const activeRefreshRecords = ds10.after.records.slice(ds09.after.records.length)
       const afterSafeRecords = ds11.after.records.slice(ds10.after.records.length)
       const g2Results = activeRefreshRecords.filter(
@@ -3101,7 +3093,7 @@ it.effect(
   "accepts exact B1 Continue but defers Resume while A1 and D1 fill capacity",
   () =>
     Effect.gen(function* () {
-      const { ds11, ds12 } = yield* runIssue268Ds12Characterization
+      const { ds11, ds12 } = yield* runControlledDs12Characterization
       const recordSuffix = ds12.after.records.slice(ds11.after.records.length)
       const choiceRecords = recordSuffix.filter(
         ({ event }) => event._tag === "AttemptChoiceApplied" && event.choice === "ContinueExistingAttempt"
@@ -3352,7 +3344,7 @@ it.effect(
   "resumes retained B1 after A1 accepts and does not create B2",
   () =>
     Effect.gen(function* () {
-      const { ds12, ds13 } = yield* runIssue268Ds13Characterization
+      const { ds12, ds13 } = yield* runControlledDs13Characterization
       const recordSuffix = ds13.after.records.slice(ds12.after.records.length)
       const aStateObservations = recordSuffix.filter(
         ({ event }) =>
@@ -3558,7 +3550,7 @@ it.effect(
   "retains exact Run attempt claim and resource identities across DS01 through DS13",
   () =>
     Effect.gen(function* () {
-      const { ds09, ds13 } = yield* runIssue268Ds13Characterization
+      const { ds09, ds13 } = yield* runControlledDs13Characterization
       const boundaryCapture = ds09.beforeLoss.snapshot
       const finalRecords = ds13.afterProcessStop.records
       const expectedPlans = [
@@ -3755,9 +3747,7 @@ it.effect(
   "emits the exact DS01 through DS13 delivery checkpoint table",
   () =>
     Effect.gen(function* () {
-      const run = yield* runIssue268ControlledDeliveryCassette(
-        issue268ControlledDeliveryCassetteCatalog.issue268Ds01ThroughDs13
-      )
+      const run = yield* runControlledDeliveryCassette(controlledDeliveryCassetteCatalog.controlledDs01ThroughDs13)
       expect(run.cassette).toMatchObject({
         acceptedOrderDigest: "6df6b575b41d4ea07d3ac083725cd54b0ddf29fb925936dfd7f1c85a5d90b5c8",
         acceptedSourceSha: "1e6b3f44bacc3cae6945823abc3d3f92e2a7a48d",
@@ -3851,7 +3841,7 @@ it.effect(
           beat: "DS04",
           assert: () =>
             expect(
-              isIssue268Ds04CompleteCheckpoint(
+              isControlledDs04CompleteCheckpoint(
                 ds04Publication,
                 ds04.after.records.slice(ds04.beforeTimer.records.length),
                 controlledScenario.attempts.B1
@@ -3861,16 +3851,16 @@ it.effect(
         {
           beat: "DS05",
           assert: () =>
-            expect(isIssue268Ds05CompleteCheckpoint(ds05.checkpointPublication, ds05.after.records)).toBe(true)
+            expect(isControlledDs05CompleteCheckpoint(ds05.checkpointPublication, ds05.after.records)).toBe(true)
         },
         {
           beat: "DS06",
           assert: () =>
-            expect(isIssue268Ds06CompleteCheckpoint(ds06.checkpointPublication, ds06.after.records)).toBe(true)
+            expect(isControlledDs06CompleteCheckpoint(ds06.checkpointPublication, ds06.after.records)).toBe(true)
         },
         {
           beat: "DS07",
-          assert: () => expect(isIssue268Ds07CompleteCheckpoint(ds07.p2Publication, ds07.after.records)).toBe(true)
+          assert: () => expect(isControlledDs07CompleteCheckpoint(ds07.p2Publication, ds07.after.records)).toBe(true)
         },
         {
           beat: "DS08",
@@ -3893,22 +3883,22 @@ it.effect(
         {
           beat: "DS10",
           assert: () =>
-            expect(isIssue268Ds10CompleteCheckpoint(ds10.checkpointPublication, ds10.after.records)).toBe(true)
+            expect(isControlledDs10CompleteCheckpoint(ds10.checkpointPublication, ds10.after.records)).toBe(true)
         },
         {
           beat: "DS11",
           assert: () =>
-            expect(isIssue268Ds11CompleteCheckpoint(ds11.checkpointPublication, ds11.after.records)).toBe(true)
+            expect(isControlledDs11CompleteCheckpoint(ds11.checkpointPublication, ds11.after.records)).toBe(true)
         },
         {
           beat: "DS12",
           assert: () =>
-            expect(isIssue268Ds12CompleteCheckpoint(ds12.checkpointPublication, ds12.after.records)).toBe(true)
+            expect(isControlledDs12CompleteCheckpoint(ds12.checkpointPublication, ds12.after.records)).toBe(true)
         },
         {
           beat: "DS13",
           assert: () =>
-            expect(isIssue268Ds13CompleteCheckpoint(ds13.checkpointPublication, ds13.after.records)).toBe(true)
+            expect(isControlledDs13CompleteCheckpoint(ds13.checkpointPublication, ds13.after.records)).toBe(true)
         }
       ] as const
 
@@ -3933,25 +3923,25 @@ it.effect(
 )
 
 it.effect(
-  "records the complete cassette-free controlled issue 268 occurrence order",
+  "records the complete cassette-free controlled occurrence order",
   () =>
     Effect.gen(function* () {
-      const { ds09, ds13, occurrenceEvidence } = yield* runIssue268Ds13Characterization
+      const { ds09, ds13, occurrenceEvidence } = yield* runControlledDs13Characterization
       const occurrencesOf = (source: (typeof occurrenceEvidence.observedOccurrences)[number]["source"]) =>
         occurrenceEvidence.observedOccurrences.filter((occurrence) => occurrence.source === source)
       const occurrencesWithKind = (kind: string) =>
         occurrenceEvidence.observedOccurrences.filter((occurrence) => occurrence.kind === kind)
-      expect(issue268OccurrenceEvidenceIsComplete(occurrenceEvidence)).toBe(true)
+      expect(controlledOccurrenceEvidenceIsComplete(occurrenceEvidence)).toBe(true)
       expect(
-        issue268OccurrenceEvidenceIsComplete({
+        controlledOccurrenceEvidenceIsComplete({
           ...occurrenceEvidence,
           observedOccurrences: occurrenceEvidence.observedOccurrences.slice(0, lastItemIndex)
         })
       ).toBe(false)
       const firstOccurrence = occurrenceEvidence.observedOccurrences[0]
-      if (firstOccurrence === undefined) return expect.fail("issue 268 occurrence evidence is empty")
+      if (firstOccurrence === undefined) return expect.fail("controlled occurrence evidence is empty")
       expect(
-        issue268OccurrenceEvidenceIsComplete({
+        controlledOccurrenceEvidenceIsComplete({
           observedOccurrences: [
             { ...firstOccurrence, sourceSequence: firstOccurrence.sourceSequence + 1 },
             ...occurrenceEvidence.observedOccurrences.slice(1)
@@ -3959,9 +3949,9 @@ it.effect(
         })
       ).toBe(false)
       const lastOccurrence = occurrenceEvidence.observedOccurrences.at(lastItemIndex)
-      if (lastOccurrence === undefined) return expect.fail("issue 268 occurrence evidence has no last item")
+      if (lastOccurrence === undefined) return expect.fail("controlled occurrence evidence has no last item")
       expect(
-        issue268OccurrenceEvidenceIsComplete({
+        controlledOccurrenceEvidenceIsComplete({
           observedOccurrences: [
             ...occurrenceEvidence.observedOccurrences,
             {
@@ -3974,9 +3964,9 @@ it.effect(
       ).toBe(false)
       const actionOccurrences = occurrencesOf("Action")
       const lastAction = actionOccurrences.at(lastItemIndex)
-      if (lastAction === undefined) return expect.fail("issue 268 occurrence evidence has no action")
+      if (lastAction === undefined) return expect.fail("controlled occurrence evidence has no action")
       expect(
-        issue268OccurrenceEvidenceIsComplete({
+        controlledOccurrenceEvidenceIsComplete({
           observedOccurrences: [
             ...occurrenceEvidence.observedOccurrences,
             {
@@ -4032,12 +4022,10 @@ it.effect(
 )
 
 it.effect(
-  "consumes exactly the accepted issue 268 occurrence inventory",
+  "consumes exactly the accepted controlled occurrence inventory",
   () =>
     Effect.gen(function* () {
-      const run = yield* runIssue268ControlledDeliveryCassette(
-        issue268ControlledDeliveryCassetteCatalog.issue268Ds01ThroughDs13
-      )
+      const run = yield* runControlledDeliveryCassette(controlledDeliveryCassetteCatalog.controlledDs01ThroughDs13)
       const actual = run.characterization.occurrenceEvidence.observedOccurrences
       expect(run.cassette).toMatchObject({
         acceptedOrderDigest: "6df6b575b41d4ea07d3ac083725cd54b0ddf29fb925936dfd7f1c85a5d90b5c8",
@@ -4049,15 +4037,15 @@ it.effect(
       })
       expect(run.consumption).toEqual({ _tag: "AcceptedOccurrenceOrderConsumed", occurrenceCount: 1_010 })
 
-      const missing = consumeIssue268AcceptedOccurrenceOrder(run.cassette.occurrences, actual.slice(0, -1))
+      const missing = consumeControlledAcceptedOccurrenceOrder(run.cassette.occurrences, actual.slice(0, -1))
       expect(missing._tag).toBe("OccurrenceOrderMismatch")
       if (missing._tag === "OccurrenceOrderMismatch") {
         expect(missing.mismatch).toMatchObject({ _tag: "UnconsumedExpectedOccurrence", position: 1_010 })
       }
 
       const finalOccurrence = actual.at(-1)
-      if (finalOccurrence === undefined) return expect.fail("accepted issue 268 occurrence inventory is empty")
-      const unexpected = consumeIssue268AcceptedOccurrenceOrder(run.cassette.occurrences, [
+      if (finalOccurrence === undefined) return expect.fail("accepted controlled occurrence inventory is empty")
+      const unexpected = consumeControlledAcceptedOccurrenceOrder(run.cassette.occurrences, [
         ...actual,
         { ...finalOccurrence, ordinal: finalOccurrence.ordinal + 1, sourceSequence: finalOccurrence.sourceSequence + 1 }
       ])
@@ -4069,7 +4057,7 @@ it.effect(
       const substituted = actual.map((occurrence, index) =>
         index === 0 ? { ...occurrence, detail: `${occurrence.detail}:substituted` } : occurrence
       )
-      const identityMismatch = consumeIssue268AcceptedOccurrenceOrder(run.cassette.occurrences, substituted)
+      const identityMismatch = consumeControlledAcceptedOccurrenceOrder(run.cassette.occurrences, substituted)
       expect(identityMismatch._tag).toBe("OccurrenceOrderMismatch")
       if (identityMismatch._tag === "OccurrenceOrderMismatch") {
         expect(identityMismatch.mismatch).toMatchObject({ _tag: "DifferentOccurrence", position: 1 })
@@ -4077,7 +4065,7 @@ it.effect(
       const combined = substituted.map((occurrence, index) =>
         index === substituted.length - 1 ? { ...occurrence, ordinal: occurrence.ordinal + 1 } : occurrence
       )
-      const firstCombinedMismatch = consumeIssue268AcceptedOccurrenceOrder(run.cassette.occurrences, combined)
+      const firstCombinedMismatch = consumeControlledAcceptedOccurrenceOrder(run.cassette.occurrences, combined)
       expect(firstCombinedMismatch._tag).toBe("OccurrenceOrderMismatch")
       if (firstCombinedMismatch._tag === "OccurrenceOrderMismatch") {
         expect(firstCombinedMismatch.mismatch).toMatchObject({ _tag: "DifferentOccurrence", position: 1 })
@@ -4086,13 +4074,13 @@ it.effect(
       const swapped = [actual[1], actual[0], ...actual.slice(2)].flatMap((occurrence) =>
         occurrence === undefined ? [] : [occurrence]
       )
-      const sourceSequences = new Map<Issue268OccurrenceSource, number>()
+      const sourceSequences = new Map<ControlledOccurrenceSource, number>()
       const restamped = swapped.map((occurrence, index) => {
         const sourceSequence = (sourceSequences.get(occurrence.source) ?? 0) + 1
         sourceSequences.set(occurrence.source, sourceSequence)
         return { ...occurrence, ordinal: index + 1, sourceSequence }
       })
-      const orderMismatch = consumeIssue268AcceptedOccurrenceOrder(run.cassette.occurrences, restamped)
+      const orderMismatch = consumeControlledAcceptedOccurrenceOrder(run.cassette.occurrences, restamped)
       expect(orderMismatch._tag).toBe("OccurrenceOrderMismatch")
       if (orderMismatch._tag === "OccurrenceOrderMismatch") {
         expect(orderMismatch.mismatch).toMatchObject({ _tag: "DifferentOccurrence", position: 1 })
@@ -4101,36 +4089,18 @@ it.effect(
   boundedContinuationTimeout
 )
 
-it.skipIf(c4AlreadyRunsOutsideCoverage)(
-  "repeats the complete issue 268 cassette twenty times with one identical order",
-  async () => {
-    const result = await runIssue268C4()
-    expect(result).toMatchObject({
-      acceptedOrderDigest: "6df6b575b41d4ea07d3ac083725cd54b0ddf29fb925936dfd7f1c85a5d90b5c8",
-      iterations: Array.from({ length: 20 }, (_, index) => ({
-        acceptedOrderDigest: "6df6b575b41d4ea07d3ac083725cd54b0ddf29fb925936dfd7f1c85a5d90b5c8",
-        iteration: index + 1,
-        occurrenceCount: 1_010,
-        status: "PASS"
-      })),
-      occurrenceCount: 1_010
-    })
-  },
-  c4RepeatabilityTimeout
-)
-
 it.effect(
-  "rejects each required issue 268 edge reversal",
+  "rejects each required controlled edge reversal",
   () =>
     Effect.gen(function* () {
-      const { occurrenceEvidence } = yield* runIssue268Ds13Characterization
+      const { occurrenceEvidence } = yield* runControlledDs13Characterization
       const observed = occurrenceEvidence.observedOccurrences
       const required = (
-        source: Issue268OccurrenceSource,
+        source: ControlledOccurrenceSource,
         kind: string,
         fragments: ReadonlyArray<string> = [],
         after = 0
-      ): Issue268ObservedOccurrence => {
+      ): ControlledObservedOccurrence => {
         const found = observed.find(
           (occurrence) =>
             occurrence.ordinal > after &&
@@ -4139,23 +4109,23 @@ it.effect(
             fragments.every((fragment) => occurrence.detail.includes(fragment))
         )
         if (found === undefined)
-          return expect.fail(`missing issue 268 occurrence ${source}:${kind} ${fragments.join(" ")}`)
+          return expect.fail(`missing controlled occurrence ${source}:${kind} ${fragments.join(" ")}`)
         return found
       }
-      let edges: ReadonlyArray<Issue268RequiredEdge> = []
-      let landmarks: ReadonlyArray<Issue268CausalLandmark> = []
+      let edges: ReadonlyArray<ControlledRequiredEdge> = []
+      let landmarks: ReadonlyArray<ControlledCausalLandmark> = []
       const addEdge = (
         claim: number,
         id: string,
-        before: Issue268ObservedOccurrence,
-        after: Issue268ObservedOccurrence
+        before: ControlledObservedOccurrence,
+        after: ControlledObservedOccurrence
       ) => {
         const beforeKey = `${id}:before`
         const afterKey = `${id}:after`
         edges = [...edges, { after: afterKey, before: beforeKey, claim, id }]
         landmarks = [...landmarks, { ...before, key: beforeKey }, { ...after, key: afterKey }]
       }
-      const addChain = (claim: number, id: string, chain: ReadonlyArray<Issue268ObservedOccurrence>) => {
+      const addChain = (claim: number, id: string, chain: ReadonlyArray<ControlledObservedOccurrence>) => {
         for (let index = 0; index < chain.length - 1; index++) {
           const before = chain[index]
           const after = chain[index + 1]
@@ -4168,12 +4138,12 @@ it.effect(
       const journalAttempt = (kind: string, attemptId: string, after = 0, extra: ReadonlyArray<string> = []) =>
         required("Journal", kind, [`attemptId=${attemptId}`, ...extra], after)
       const occurrenceAfter = (
-        source: Issue268OccurrenceSource,
+        source: ControlledOccurrenceSource,
         kind: string,
-        after: Issue268ObservedOccurrence,
+        after: ControlledObservedOccurrence,
         fragments: ReadonlyArray<string> = []
       ) => required(source, kind, fragments, after.ordinal)
-      const identityValue = (occurrence: Issue268ObservedOccurrence, key: string) => {
+      const identityValue = (occurrence: ControlledObservedOccurrence, key: string) => {
         const value = occurrence.detail
           .split("|")
           .find((part) => part.startsWith(`${key}=`))
@@ -4195,7 +4165,7 @@ it.effect(
         addChain(2, `${taskId}-claim`, [intent, call, returned, observation])
       }
 
-      const readyByTask = new Map<string, Issue268ObservedOccurrence>()
+      const readyByTask = new Map<string, ControlledObservedOccurrence>()
       for (const [taskId, attemptId] of [
         ["A", "attempt:A:1"],
         ["B", "attempt:B:1"],
@@ -4339,11 +4309,11 @@ it.effect(
           (expected, index) => edges.filter(({ claim }) => claim === index + 1).length === expected
         )
       ).toBe(true)
-      expect(issue268RequiredClaimCoverageIsComplete(edges)).toBe(true)
-      expect(validateIssue268RequiredEdges(orderedLandmarks, edges)).toEqual([])
+      expect(controlledRequiredClaimCoverageIsComplete(edges)).toBe(true)
+      expect(validateControlledRequiredEdges(orderedLandmarks, edges)).toEqual([])
       for (const edge of edges) {
-        const reversed = reverseIssue268RequiredEdge(orderedLandmarks, edge)
-        expect(validateIssue268RequiredEdges(reversed, [edge])).toEqual([{ edge, reason: "AfterNotAfterBefore" }])
+        const reversed = reverseControlledRequiredEdge(orderedLandmarks, edge)
+        expect(validateControlledRequiredEdges(reversed, [edge])).toEqual([{ edge, reason: "AfterNotAfterBefore" }])
       }
     }),
   boundedContinuationTimeout

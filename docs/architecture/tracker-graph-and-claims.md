@@ -144,4 +144,4 @@ task and required graph facts before planning work; the claim itself does not
 prove that the task remains open, selected, or free of unfinished
 prerequisites.
 
-See [issue-137-reconcile-task-claims.md](../scenarios/issue-137-reconcile-task-claims.md).
+See [reconcile-task-claims.md](../scenarios/reconcile-task-claims.md).

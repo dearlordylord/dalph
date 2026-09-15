@@ -52,7 +52,7 @@ it(
     expect(full.invocations.slice(0, structuralCommands.length)).toEqual(structuralCommands)
     for (const command of structuralCommands)
       expect(full.invocations.filter((invocation) => invocation === command)).toHaveLength(1)
-    expect(full.invocations).toContain("test:coverage")
+    expect(full.invocations).toContain("test")
     expect(preflight.invocationArguments).toContainEqual(["lint:code", "--census"])
   },
   qualityGateFixturePairTestTimeoutMilliseconds
@@ -68,7 +68,7 @@ it(
     expect(invocations).toEqual(structuralCommands)
     expect(result.exitCode).toBe(1)
     expect(result.output).toContain("Preflight failed: pnpm test:formal:controls")
-    expect(invocations).not.toContain("test:coverage")
+    expect(invocations).not.toContain("test")
     expect(invocations).not.toContain("check:quint")
   },
   qualityGateFixtureTestTimeoutMilliseconds

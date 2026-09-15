@@ -67,4 +67,4 @@ tracker/Git reads, one authorization, no death record, and rejection of
 missing, stale, later, and wrong-attempt witnesses.
 
 The accepted chronology is
-[`issue-165-domain-readable-cassettes.md`](../scenarios/issue-165-domain-readable-cassettes.md).
+[`domain-readable-cassettes.md`](../scenarios/domain-readable-cassettes.md).

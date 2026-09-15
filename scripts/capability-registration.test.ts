@@ -26,12 +26,12 @@ const issuesFor = (inventory: CapabilityRegistrationInventory): ReadonlyArray<st
 describe("capability registration gate", () => {
   it("indexes unchanged syntax once while resolving replacement exports in each current program", () => {
     const provider = {
-      path: "scripts/fixtures/issue-343-provider.ts",
+      path: "scripts/fixtures/registration-fixture-provider.ts",
       source: "declare const Layer: { succeed: (value: unknown) => unknown }; export const value = Layer.succeed({})"
     }
     const consumer = {
-      path: "scripts/fixtures/issue-343-consumer.ts",
-      source: 'import { value } from "./issue-343-provider.js"; export const assembly = value'
+      path: "scripts/fixtures/registration-fixture-consumer.ts",
+      source: 'import { value } from "./registration-fixture-provider.js"; export const assembly = value'
     }
     const sources = [provider, consumer]
     const inventory = {
@@ -68,7 +68,7 @@ describe("capability registration gate", () => {
   })
 
   it("fails closed for a first-audit virtual source under a repository source root", () => {
-    const path = "packages/contracts/src/issue-262-invalid-added-root.ts"
+    const path = "packages/contracts/src/registration-fixture-invalid-added-root.ts"
     const issues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [
       { path, source: "export {}\nexport const = 1" }
     ])
@@ -82,8 +82,8 @@ describe("capability registration gate", () => {
     () => {
       inspectCapabilitySourceProgram([
         {
-          path: "scripts/fixtures/issue-262-unrelated-global.ts",
-          source: "declare const issue262UnrelatedGlobal: string"
+          path: "scripts/fixtures/registration-fixture-unrelated-global.ts",
+          source: "declare const registrationFixtureUnrelatedGlobal: string"
         }
       ])
       const issues = issuesFor(capabilityRegistrationInventory)
@@ -278,7 +278,7 @@ describe("capability registration gate", () => {
 
   it("rejects an unclassified test consumer substituted for real production consumption", () => {
     const unclassifiedConsumer: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-79-unclassified-evidence-consumer.test.ts",
+      path: "scripts/fixtures/registration-fixture-unclassified-evidence-consumer.test.ts",
       source:
         'import { nodeEvidenceStoreLayer } from "../../packages/orchestrator/src/workflow/protocols/evidence-store.js"\nexport const testEvidenceLayer = nodeEvidenceStoreLayer'
     }
@@ -904,13 +904,13 @@ describe("capability registration gate", () => {
 
   it("rejects an assembled production layer that is absent from the registry", () => {
     const unknownLayer: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-79-unknown-layer.ts",
+      path: "scripts/fixtures/registration-fixture-unknown-layer.ts",
       source: "export const unknownProductionCapabilityLayer = Layer.succeed(UnknownService, {})"
     }
     const unknownComposition: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-79-unknown-composition.ts",
+      path: "scripts/fixtures/registration-fixture-unknown-composition.ts",
       source:
-        'import { unknownProductionCapabilityLayer } from "./issue-79-unknown-layer.js"\nexport const assembled = unknownProductionCapabilityLayer'
+        'import { unknownProductionCapabilityLayer } from "./registration-fixture-unknown-layer.js"\nexport const assembled = unknownProductionCapabilityLayer'
     }
     const inventory = {
       ...capabilityRegistrationInventory,
@@ -927,7 +927,7 @@ describe("capability registration gate", () => {
 
   it("rejects a qualification-only capability Layer assembled by a production composition", () => {
     const productionComposition: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-79-cross-role-composition.ts",
+      path: "scripts/fixtures/registration-fixture-cross-role-composition.ts",
       source:
         'import { sqliteJournalTestLayer } from "../../packages/orchestrator/src/workflow-journal/adapters/sqlite-store.js"\nexport const assembled = sqliteJournalTestLayer'
     }
@@ -969,16 +969,16 @@ describe("capability registration gate", () => {
 
   it("audits exported Layer values without a Layer suffix and through re-exports", () => {
     const layerSource: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-79-layer-source.ts",
+      path: "scripts/fixtures/registration-fixture-layer-source.ts",
       source: "export const hiddenProvider =\n  Layer.succeed(UnknownService, {})"
     }
     const reexportSource: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-79-layer-reexport.ts",
-      source: 'export {\n  hiddenProvider as provider\n} from "./issue-79-layer-source.js"'
+      path: "scripts/fixtures/registration-fixture-layer-reexport.ts",
+      source: 'export {\n  hiddenProvider as provider\n} from "./registration-fixture-layer-source.js"'
     }
     const composition: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-79-layer-composition.ts",
-      source: 'import { provider } from "./issue-79-layer-reexport.js"\nexport const assembled = provider'
+      path: "scripts/fixtures/registration-fixture-layer-composition.ts",
+      source: 'import { provider } from "./registration-fixture-layer-reexport.js"\nexport const assembled = provider'
     }
     const inventory = {
       ...capabilityRegistrationInventory,
@@ -995,24 +995,24 @@ describe("capability registration gate", () => {
 
   it("audits local aliases, default exports, and namespace/default re-exports", () => {
     const layerSource: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-79-layer-export-forms.ts",
+      path: "scripts/fixtures/registration-fixture-layer-export-forms.ts",
       source: ["const hidden = Layer.succeed(UnknownService, {})", "export { hidden }", "export default hidden"].join(
         "\n"
       )
     }
     const reexportSource: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-79-layer-export-forms-reexport.ts",
+      path: "scripts/fixtures/registration-fixture-layer-export-forms-reexport.ts",
       source: [
-        'export { hidden } from "./issue-79-layer-export-forms.js"',
-        'export { default } from "./issue-79-layer-export-forms.js"',
-        'export * as namespace from "./issue-79-layer-export-forms.js"'
+        'export { hidden } from "./registration-fixture-layer-export-forms.js"',
+        'export { default } from "./registration-fixture-layer-export-forms.js"',
+        'export * as namespace from "./registration-fixture-layer-export-forms.js"'
       ].join("\n")
     }
     const composition: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-79-layer-export-forms-composition.ts",
+      path: "scripts/fixtures/registration-fixture-layer-export-forms-composition.ts",
       source: [
-        'import defaultProvider, { hidden } from "./issue-79-layer-export-forms-reexport.js"',
-        'import { namespace } from "./issue-79-layer-export-forms-reexport.js"',
+        'import defaultProvider, { hidden } from "./registration-fixture-layer-export-forms-reexport.js"',
+        'import { namespace } from "./registration-fixture-layer-export-forms-reexport.js"',
         "const localProvider = Layer.succeed(UnknownService, {})",
         "export const assembledLocal = hidden",
         "export const assembledDefault = defaultProvider",
@@ -1041,13 +1041,13 @@ describe("capability registration gate", () => {
 
   it("runtime value consumption excludes type-only references", () => {
     const layerSource: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-79-type-only-layer.ts",
+      path: "scripts/fixtures/registration-fixture-type-only-layer.ts",
       source: "export const typeOnlyProvider = Layer.succeed(UnknownService, {})"
     }
     const composition: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-79-type-only-composition.ts",
+      path: "scripts/fixtures/registration-fixture-type-only-composition.ts",
       source: [
-        'import { typeOnlyProvider } from "./issue-79-type-only-layer.js"',
+        'import { typeOnlyProvider } from "./registration-fixture-type-only-layer.js"',
         "type ProviderShape = typeof typeOnlyProvider",
         "export const assembled = undefined as unknown"
       ].join("\n")
@@ -1066,8 +1066,8 @@ describe("capability registration gate", () => {
   })
 
   it("reuses unchanged source trees when a later audit adds a virtual root", () => {
-    const basePath = "scripts/fixtures/issue-262-cache-base.ts"
-    const addedPath = "scripts/fixtures/issue-262-cache-added.ts"
+    const basePath = "scripts/fixtures/registration-fixture-cache-base.ts"
+    const addedPath = "scripts/fixtures/registration-fixture-cache-added.ts"
     const base = [{ path: basePath, source: "export const cacheBase = 1" }]
 
     inspectCapabilitySourceProgram(base)
@@ -1082,7 +1082,7 @@ describe("capability registration gate", () => {
   })
 
   it("rebuilds a source whose complete text changes instead of reusing its old tree", () => {
-    const path = "scripts/fixtures/issue-262-cache-changed.ts"
+    const path = "scripts/fixtures/registration-fixture-cache-changed.ts"
     const original = [{ path, source: "export const cacheValue = 1" }]
 
     inspectCapabilitySourceProgram(original)
@@ -1093,9 +1093,9 @@ describe("capability registration gate", () => {
   })
 
   it("fails closed on syntax diagnostics from an added virtual source without exposing repository diagnostics", () => {
-    const path = "scripts/fixtures/issue-262-invalid-syntax.ts"
+    const path = "scripts/fixtures/registration-fixture-invalid-syntax.ts"
     const validSource: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-262-invalid-syntax-base.ts",
+      path: "scripts/fixtures/registration-fixture-invalid-syntax-base.ts",
       source: "export const valid = 1"
     }
     const invalidSource: CapabilitySourceFile = { path, source: "export const = 1" }
@@ -1109,7 +1109,7 @@ describe("capability registration gate", () => {
   })
 
   it("fails closed on semantic diagnostics from a changed virtual source", () => {
-    const path = "scripts/fixtures/issue-262-invalid-semantic.ts"
+    const path = "scripts/fixtures/registration-fixture-invalid-semantic.ts"
     const validSource: CapabilitySourceFile = { path, source: 'export const semanticValue: string = "valid"' }
     const invalidSource: CapabilitySourceFile = { path, source: "export const semanticValue: string = 1" }
 
@@ -1125,14 +1125,14 @@ describe("capability registration gate", () => {
   })
 
   it("preserves or recomputes diagnostics across unrelated and ambient source changes", () => {
-    const path = "scripts/fixtures/issue-262-equivalent-invalid.ts"
+    const path = "scripts/fixtures/registration-fixture-equivalent-invalid.ts"
     const invalidSource = { path, source: "export const value: string = 1" }
     const validSource = {
-      path: "scripts/fixtures/issue-262-equivalent-valid.ts",
+      path: "scripts/fixtures/registration-fixture-equivalent-valid.ts",
       source: "export const validValue = 1"
     }
     const unrelatedSource = {
-      path: "scripts/fixtures/issue-262-equivalent-unrelated.ts",
+      path: "scripts/fixtures/registration-fixture-equivalent-unrelated.ts",
       source: "export const unrelatedValue = 2"
     }
 
@@ -1162,14 +1162,14 @@ describe("capability registration gate", () => {
     expect(hasExpectedDiagnostic(expandedIssues)).toBe(true)
     expect(hasExpectedDiagnostic(changedUnrelatedIssues)).toBe(true)
 
-    const conflictPath = "scripts/fixtures/issue-262-global-conflict.ts"
+    const conflictPath = "scripts/fixtures/registration-fixture-global-conflict.ts"
     const retainedGlobal: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-262-global-retained.ts",
-      source: "export {}; declare global { const issue262Conflict: string }"
+      path: "scripts/fixtures/registration-fixture-global-retained.ts",
+      source: "export {}; declare global { const registrationFixtureConflict: string }"
     }
     const conflictingGlobal: CapabilitySourceFile = {
       path: conflictPath,
-      source: "export {}; declare global { const issue262Conflict: number }"
+      source: "export {}; declare global { const registrationFixtureConflict: number }"
     }
     const conflictingIssues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [
       retainedGlobal,
@@ -1180,25 +1180,25 @@ describe("capability registration gate", () => {
     expect(conflictingIssues.some((issue) => issue.includes("TS2451"))).toBe(true)
     expect(afterRemovalIssues.some((issue) => issue.includes("TS2451"))).toBe(false)
 
-    const ambientPath = "scripts/fixtures/issue-262-ambient-value.ts"
-    const consumerPath = "scripts/fixtures/issue-262-ambient-consumer.ts"
+    const ambientPath = "scripts/fixtures/registration-fixture-ambient-value.ts"
+    const consumerPath = "scripts/fixtures/registration-fixture-ambient-consumer.ts"
     const ambientNumber: CapabilitySourceFile = {
       path: ambientPath,
-      source: "export {}; declare global { const issue262AmbientValue: number }"
+      source: "export {}; declare global { const registrationFixtureAmbientValue: number }"
     }
     const ambientString: CapabilitySourceFile = {
       path: ambientPath,
-      source: "export {}; declare global { const issue262AmbientValue: string }"
+      source: "export {}; declare global { const registrationFixtureAmbientValue: string }"
     }
     const ambientConsumer: CapabilitySourceFile = {
       path: consumerPath,
-      source: "export const issue262ConsumerValue: number = issue262AmbientValue"
+      source: "export const registrationFixtureConsumerValue: number = registrationFixtureAmbientValue"
     }
     const freshAmbientIssues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [
-      { ...ambientString, path: "scripts/fixtures/issue-262-fresh-ambient-value.ts" },
+      { ...ambientString, path: "scripts/fixtures/registration-fixture-fresh-ambient-value.ts" },
       {
-        path: "scripts/fixtures/issue-262-fresh-ambient-consumer.ts",
-        source: "export const issue262FreshConsumerValue: number = issue262AmbientValue"
+        path: "scripts/fixtures/registration-fixture-fresh-ambient-consumer.ts",
+        source: "export const registrationFixtureFreshConsumerValue: number = registrationFixtureAmbientValue"
       }
     ])
 
@@ -1219,43 +1219,44 @@ describe("capability registration gate", () => {
     ).toBe(true)
     expect(diagnosticCodes(changedAmbientIssues)).toEqual(diagnosticCodes(freshAmbientIssues))
 
-    const indirectRoot = "scripts/fixtures/issue-262-indirect-ambient"
+    const indirectRoot = "scripts/fixtures/registration-fixture-indirect-ambient"
     const indirectTypePath = `${indirectRoot}/type.ts`
     const indirectAugmenterPath = `${indirectRoot}/augmenter.ts`
     const indirectConsumerPath = `${indirectRoot}/consumer.ts`
     const indirectAugmenter: CapabilitySourceFile = {
       path: indirectAugmenterPath,
       source:
-        'import type { Issue262AmbientType } from "./type.js"\nexport {}; declare global { const issue262IndirectAmbientValue: Issue262AmbientType }'
+        'import type { RegistrationFixtureAmbientType } from "./type.js"\nexport {}; declare global { const registrationFixtureIndirectAmbientValue: RegistrationFixtureAmbientType }'
     }
     const indirectConsumer: CapabilitySourceFile = {
       path: indirectConsumerPath,
-      source: "export const issue262IndirectConsumerValue: number = issue262IndirectAmbientValue"
+      source: "export const registrationFixtureIndirectConsumerValue: number = registrationFixtureIndirectAmbientValue"
     }
     inspectCapabilitySourceProgram([
-      { path: indirectTypePath, source: "export type Issue262AmbientType = number" },
+      { path: indirectTypePath, source: "export type RegistrationFixtureAmbientType = number" },
       indirectAugmenter,
       indirectConsumer
     ])
     const changedSources = [
-      { path: indirectTypePath, source: "export type Issue262AmbientType = string" },
+      { path: indirectTypePath, source: "export type RegistrationFixtureAmbientType = string" },
       indirectAugmenter,
       indirectConsumer
     ]
     const changedIndirectIssues = runCapabilityRegistrationGate(capabilityRegistrationInventory, changedSources)
     const changedDiagnostics = inspectCapabilitySourceProgram(changedSources)
 
-    const freshIndirectRoot = "scripts/fixtures/issue-262-fresh-indirect-ambient"
+    const freshIndirectRoot = "scripts/fixtures/registration-fixture-fresh-indirect-ambient"
     const freshIndirectIssues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [
-      { path: `${freshIndirectRoot}/type.ts`, source: "export type Issue262AmbientType = string" },
+      { path: `${freshIndirectRoot}/type.ts`, source: "export type RegistrationFixtureAmbientType = string" },
       {
         path: `${freshIndirectRoot}/augmenter.ts`,
         source:
-          'import type { Issue262AmbientType } from "./type.js"\nexport {}; declare global { const issue262IndirectAmbientValue: Issue262AmbientType }'
+          'import type { RegistrationFixtureAmbientType } from "./type.js"\nexport {}; declare global { const registrationFixtureIndirectAmbientValue: RegistrationFixtureAmbientType }'
       },
       {
         path: `${freshIndirectRoot}/consumer.ts`,
-        source: "export const issue262IndirectConsumerValue: number = issue262IndirectAmbientValue"
+        source:
+          "export const registrationFixtureIndirectConsumerValue: number = registrationFixtureIndirectAmbientValue"
       }
     ])
     const compilerIssues = (issues: ReadonlyArray<string>) =>
@@ -1274,12 +1275,12 @@ describe("capability registration gate", () => {
   })
 
   it("fails closed when a changed dependency removes an imported export", () => {
-    const dependencyPath = "scripts/fixtures/issue-262-dependency.ts"
-    const consumerPath = "scripts/fixtures/issue-262-dependency-consumer.ts"
+    const dependencyPath = "scripts/fixtures/registration-fixture-dependency.ts"
+    const consumerPath = "scripts/fixtures/registration-fixture-dependency-consumer.ts"
     const consumer: CapabilitySourceFile = {
       path: consumerPath,
       source:
-        'import { dependencyValue } from "./issue-262-dependency.js"\nexport const consumerValue = dependencyValue'
+        'import { dependencyValue } from "./registration-fixture-dependency.js"\nexport const consumerValue = dependencyValue'
     }
     const validDependency: CapabilitySourceFile = { path: dependencyPath, source: "export const dependencyValue = 1" }
     const removedExport: CapabilitySourceFile = { path: dependencyPath, source: "export const replacementValue = 1" }
@@ -1295,13 +1296,13 @@ describe("capability registration gate", () => {
   })
 
   it("fails closed when a removed dependency remains imported", () => {
-    const dependencyPath = "scripts/fixtures/issue-262-removed-dependency.ts"
-    const consumerPath = "scripts/fixtures/issue-262-removed-dependency-consumer.ts"
+    const dependencyPath = "scripts/fixtures/registration-fixture-removed-dependency.ts"
+    const consumerPath = "scripts/fixtures/registration-fixture-removed-dependency-consumer.ts"
     const dependency: CapabilitySourceFile = { path: dependencyPath, source: "export const dependencyValue = 1" }
     const consumer: CapabilitySourceFile = {
       path: consumerPath,
       source:
-        'import { dependencyValue } from "./issue-262-removed-dependency.js"\nexport const consumerValue = dependencyValue'
+        'import { dependencyValue } from "./registration-fixture-removed-dependency.js"\nexport const consumerValue = dependencyValue'
     }
 
     inspectCapabilitySourceProgram([dependency, consumer])
@@ -1311,8 +1312,8 @@ describe("capability registration gate", () => {
   })
 
   it("fails closed when a changed import-type dependency removes an exported type", () => {
-    const dependencyPath = "scripts/fixtures/issue-262-import-type-dependency.ts"
-    const consumerPath = "scripts/fixtures/issue-262-import-type-consumer.ts"
+    const dependencyPath = "scripts/fixtures/registration-fixture-import-type-dependency.ts"
+    const consumerPath = "scripts/fixtures/registration-fixture-import-type-consumer.ts"
     const dependency: CapabilitySourceFile = {
       path: dependencyPath,
       source: "export interface DependencyShape { readonly value: number }"
@@ -1320,7 +1321,7 @@ describe("capability registration gate", () => {
     const consumer: CapabilitySourceFile = {
       path: consumerPath,
       source:
-        'type DependencyShape = import("./issue-262-import-type-dependency.js").DependencyShape\nexport const consumerValue: DependencyShape = { value: 1 }'
+        'type DependencyShape = import("./registration-fixture-import-type-dependency.js").DependencyShape\nexport const consumerValue: DependencyShape = { value: 1 }'
     }
     const changedDependency: CapabilitySourceFile = {
       path: dependencyPath,
@@ -1334,8 +1335,8 @@ describe("capability registration gate", () => {
   })
 
   it("fails closed when a removed triple-slash dependency remains referenced", () => {
-    const dependencyPath = "scripts/fixtures/issue-262-triple-reference-dependency.ts"
-    const consumerPath = "scripts/fixtures/issue-262-triple-reference-consumer.ts"
+    const dependencyPath = "scripts/fixtures/registration-fixture-triple-reference-dependency.ts"
+    const consumerPath = "scripts/fixtures/registration-fixture-triple-reference-consumer.ts"
     const dependency: CapabilitySourceFile = {
       path: dependencyPath,
       source: "type TripleReferenceShape = { readonly value: number }"
@@ -1343,7 +1344,7 @@ describe("capability registration gate", () => {
     const consumer: CapabilitySourceFile = {
       path: consumerPath,
       source:
-        '/// <reference path="./issue-262-triple-reference-dependency.ts" />\nexport const consumerValue: TripleReferenceShape = { value: 1 }'
+        '/// <reference path="./registration-fixture-triple-reference-dependency.ts" />\nexport const consumerValue: TripleReferenceShape = { value: 1 }'
     }
 
     inspectCapabilitySourceProgram([dependency, consumer])
@@ -1353,13 +1354,13 @@ describe("capability registration gate", () => {
   })
 
   it("fails closed when a changed dynamic-import dependency removes an exported value", () => {
-    const dependencyPath = "scripts/fixtures/issue-262-dynamic-import-dependency.ts"
-    const consumerPath = "scripts/fixtures/issue-262-dynamic-import-consumer.ts"
+    const dependencyPath = "scripts/fixtures/registration-fixture-dynamic-import-dependency.ts"
+    const consumerPath = "scripts/fixtures/registration-fixture-dynamic-import-consumer.ts"
     const dependency: CapabilitySourceFile = { path: dependencyPath, source: "export const dynamicValue = 1" }
     const consumer: CapabilitySourceFile = {
       path: consumerPath,
       source:
-        'export const consumerValue = import("./issue-262-dynamic-import-dependency.js").then(({ dynamicValue }) => dynamicValue)'
+        'export const consumerValue = import("./registration-fixture-dynamic-import-dependency.js").then(({ dynamicValue }) => dynamicValue)'
     }
     const changedDependency: CapabilitySourceFile = {
       path: dependencyPath,
@@ -1373,13 +1374,13 @@ describe("capability registration gate", () => {
   })
 
   it("fails closed when a changed require dependency removes an exported value", () => {
-    const dependencyPath = "scripts/fixtures/issue-262-require-dependency.ts"
-    const consumerPath = "scripts/fixtures/issue-262-require-consumer.ts"
+    const dependencyPath = "scripts/fixtures/registration-fixture-require-dependency.ts"
+    const consumerPath = "scripts/fixtures/registration-fixture-require-consumer.ts"
     const dependency: CapabilitySourceFile = { path: dependencyPath, source: "export const requiredValue = 1" }
     const consumer: CapabilitySourceFile = {
       path: consumerPath,
       source:
-        'import dependency = require("./issue-262-require-dependency.js")\nexport const consumerValue = dependency.requiredValue'
+        'import dependency = require("./registration-fixture-require-dependency.js")\nexport const consumerValue = dependency.requiredValue'
     }
     const changedDependency: CapabilitySourceFile = {
       path: dependencyPath,
@@ -1393,13 +1394,13 @@ describe("capability registration gate", () => {
   })
 
   it("rechecks an unchanged consumer after a changed ordinary require call dependency", () => {
-    const dependencyPath = "scripts/fixtures/issue-262-require-call-dependency.ts"
-    const consumerPath = "scripts/fixtures/issue-262-require-call-consumer.ts"
+    const dependencyPath = "scripts/fixtures/registration-fixture-require-call-dependency.ts"
+    const consumerPath = "scripts/fixtures/registration-fixture-require-call-consumer.ts"
     const dependency: CapabilitySourceFile = { path: dependencyPath, source: "export const requiredValue = 1" }
     const consumer: CapabilitySourceFile = {
       path: consumerPath,
       source:
-        'declare function require(path: string): unknown\nconst dependency = require("./issue-262-require-call-dependency.js")\nconst latentError: string = 1\nexport const consumerValue = dependency'
+        'declare function require(path: string): unknown\nconst dependency = require("./registration-fixture-require-call-dependency.js")\nconst latentError: string = 1\nexport const consumerValue = dependency'
     }
     const changedDependency: CapabilitySourceFile = {
       path: dependencyPath,
@@ -1413,13 +1414,13 @@ describe("capability registration gate", () => {
   })
 
   it("rechecks an unchanged consumer after an ordinary require call dependency is removed", () => {
-    const dependencyPath = "scripts/fixtures/issue-262-require-call-removed-dependency.ts"
-    const consumerPath = "scripts/fixtures/issue-262-require-call-removed-consumer.ts"
+    const dependencyPath = "scripts/fixtures/registration-fixture-require-call-removed-dependency.ts"
+    const consumerPath = "scripts/fixtures/registration-fixture-require-call-removed-consumer.ts"
     const dependency: CapabilitySourceFile = { path: dependencyPath, source: "export const requiredValue = 1" }
     const consumer: CapabilitySourceFile = {
       path: consumerPath,
       source:
-        'declare function require(path: string): unknown\nconst dependency = require("./issue-262-require-call-removed-dependency.js")\nconst latentError: string = 1\nexport const consumerValue = dependency'
+        'declare function require(path: string): unknown\nconst dependency = require("./registration-fixture-require-call-removed-dependency.js")\nconst latentError: string = 1\nexport const consumerValue = dependency'
     }
 
     inspectCapabilitySourceProgram([dependency, consumer])
@@ -1429,35 +1430,41 @@ describe("capability registration gate", () => {
   })
 
   it("keeps exact source-array identity caching and refreshes Program recency", () => {
-    const baselinePath = "scripts/fixtures/issue-262-cache-identity.ts"
+    const baselinePath = "scripts/fixtures/registration-fixture-cache-identity.ts"
     const baseline = [{ path: baselinePath, source: "export const cached = 1" }]
     const baselineDiagnostics = inspectCapabilitySourceProgram(baseline)
     inspectCapabilitySourceProgram([
-      { path: "scripts/fixtures/issue-262-cache-displacement-a.ts", source: "export const displacementA = 1" },
-      { path: "scripts/fixtures/issue-262-cache-displacement-b.ts", source: "export const displacementB = 2" }
+      {
+        path: "scripts/fixtures/registration-fixture-cache-displacement-a.ts",
+        source: "export const displacementA = 1"
+      },
+      {
+        path: "scripts/fixtures/registration-fixture-cache-displacement-b.ts",
+        source: "export const displacementB = 2"
+      }
     ])
 
     expect(inspectCapabilitySourceProgram(baseline)).toBe(baselineDiagnostics)
     const expanded = inspectCapabilitySourceProgram([
       ...baseline,
-      { path: "scripts/fixtures/issue-262-cache-expanded.ts", source: "export const expanded = 2" }
+      { path: "scripts/fixtures/registration-fixture-cache-expanded.ts", source: "export const expanded = 2" }
     ])
     expect(expanded.reusedSourcePaths).toContain(baselinePath)
-    expect(expanded.rebuiltSourcePaths).toContain("scripts/fixtures/issue-262-cache-expanded.ts")
+    expect(expanded.rebuiltSourcePaths).toContain("scripts/fixtures/registration-fixture-cache-expanded.ts")
   })
 
   it("audits source text without loading or invoking a live provider", () => {
     const providerLayer: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-79-provider-layer.ts",
+      path: "scripts/fixtures/registration-fixture-provider-layer.ts",
       source: [
         'throw new Error("capability source audit evaluated the provider fixture")',
         'export const unregisteredProviderLayer = Layer.effect(Provider, () => fetch("https://provider.invalid"))'
       ].join("\n")
     }
     const providerComposition: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-79-provider-composition.ts",
+      path: "scripts/fixtures/registration-fixture-provider-composition.ts",
       source:
-        'import { unregisteredProviderLayer } from "./issue-79-provider-layer.js"\nexport const assembled = unregisteredProviderLayer'
+        'import { unregisteredProviderLayer } from "./registration-fixture-provider-layer.js"\nexport const assembled = unregisteredProviderLayer'
     }
     const inventory = {
       ...capabilityRegistrationInventory,
@@ -1498,8 +1505,8 @@ describe("capability registration gate", () => {
     expect(
       boundedQualityGateCommand({
         gate: {
-          args: ["test:issue-268-c4"],
-          name: "issue 268 fresh-process repeatability",
+          args: ["test:delivery-repeatability"],
+          name: "delivery repeatability",
           terminationGrace: 15_000,
           timeout: 19 * 60_000
         },
@@ -1507,7 +1514,7 @@ describe("capability registration gate", () => {
         pnpmEntryPoint: "/fixture/pnpm.cjs"
       })
     ).toMatchObject({
-      args: ["/fixture/pnpm.cjs", "--silent", "test:issue-268-c4"],
+      args: ["/fixture/pnpm.cjs", "--silent", "test:delivery-repeatability"],
       relayParentSignals: true,
       terminationGraceMilliseconds: 15_000
     })

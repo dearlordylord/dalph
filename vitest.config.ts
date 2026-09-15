@@ -10,6 +10,7 @@ const coverageThresholds = Object.fromEntries(
 const mbtTestPattern = "packages/**/*.mbt.test.ts"
 const acceptedResultIntegrationMbtTestPattern =
   "packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts"
+const deliveryRepeatabilityTestPattern = "packages/dalph/test/cassettes/delivery-repeatability.test.ts"
 const capabilityRegistrationTestPattern = "scripts/capability-registration.test.ts"
 const performanceTestPattern = "**/*.performance.test.ts"
 const recordedCatalogCoverageTestPattern = "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts"
@@ -21,11 +22,13 @@ const ordinaryWorkerCount = 4
 // local/hosted runners now that the maintained-catalog proof runs once outside
 // coverage.
 const coverageWorkerCount = 4
+const runDeliveryRepeatability = processEnvironment["DALPH_RUN_DELIVERY_REPEATABILITY"] === "1"
+const runQualificationTests = processEnvironment["DALPH_RUN_QUALIFICATION_TESTS"] === "1"
 const ordinaryTestIncludes = [
   "src/**/*.test.ts",
   "packages/**/*.test.ts",
   "scripts/**/*.test.ts",
-  "scripts/run-issue-268-c4.test.mjs",
+  "scripts/run-delivery-repeatability.test.mjs",
   "test/**/*.test.ts"
 ]
 // Inline projects do not inherit root Vite aliases. Every test interpretation
@@ -54,9 +57,10 @@ export default defineConfig(({ mode }) => ({
       "**/node_modules/**",
       "**/dist/**",
       ...(mode === "mbt" ? [] : [mbtTestPattern]),
-      ...(mode === "coverage"
-        ? [capabilityRegistrationTestPattern, performanceTestPattern, recordedCatalogCoverageTestPattern]
-        : [])
+      ...(runQualificationTests || runDeliveryRepeatability
+        ? []
+        : [deliveryRepeatabilityTestPattern, capabilityRegistrationTestPattern, recordedCatalogCoverageTestPattern]),
+      ...(mode === "coverage" ? [performanceTestPattern] : [])
     ],
     include: mode === "mbt" ? [mbtTestPattern] : ordinaryTestIncludes,
     maxWorkers: mode === "coverage" ? coverageWorkerCount : ordinaryWorkerCount,

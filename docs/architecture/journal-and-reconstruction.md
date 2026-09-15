@@ -193,7 +193,7 @@ resource. Each obligation ends through its own established disposition or a
 durable relinquishment supported by current authority evidence.
 
 See [ADR 0005](../adr/0005-track-workflow-responsibility-per-subject.md) and
-[issue-55-localize-task-conflicts.md](../scenarios/issue-55-localize-task-conflicts.md).
+[localize-task-conflicts.md](../scenarios/localize-task-conflicts.md).
 
 ## Later-activation summary
 

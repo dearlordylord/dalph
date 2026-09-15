@@ -39,10 +39,10 @@ const branchAuthorization = BranchCleanupAuthorization.make({
   disposition: authorization.disposition,
   evidenceRevision: BranchCleanupEvidenceRevision.make(1),
   expectedHead: baseSha,
-  locator: TaskBranchRef.make("refs/heads/task/issue-69-p1"),
+  locator: TaskBranchRef.make("refs/heads/task/cleanup-p1"),
   observationAt: authorization.observationAt,
   observationOperationId: authorization.observationOperationId,
-  operationId: OperationId.make("issue-69-preserving-branch"),
+  operationId: OperationId.make("cleanup-preserving-branch"),
   owner: BranchCleanupOwner.make({ attemptId: attempt.attemptId }),
   worktreeCleanupOperationId: authorization.operationId,
   writerQuiescent: true
@@ -53,37 +53,37 @@ const predecessor = IntegratorSessionCorrelation.make({
     commit: baseSha,
     evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("a".repeat(64)) })
   }),
-  candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-preserving-p1"),
+  candidateResource: IntegratorCandidateResourceLocator.make("candidate:cleanup-preserving-p1"),
   expectedTargetHead: baseSha,
   integrationTarget: IntegrationTarget.make({
     ref: IntegrationTargetRef.make("refs/heads/main"),
-    repository: GitRepositoryLocator.make("repo:issue-69-preserving")
+    repository: GitRepositoryLocator.make("repo:cleanup-preserving")
   }),
   plannedAttempt: attempt,
   queuedAt: JournalPosition.make(2),
-  sessionId: IntegratorSessionId.make("session:issue-69-preserving-p1"),
+  sessionId: IntegratorSessionId.make("session:cleanup-preserving-p1"),
   startedAt: JournalPosition.make(6),
   targetLineageObservedAt: JournalPosition.make(4)
 })
 
 const candidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
-  causalPredecessors: [OperationId.make("issue-69-preserving-full-rerun")],
+  causalPredecessors: [OperationId.make("cleanup-preserving-full-rerun")],
   disposition: IntegratorCandidateCleanupDisposition.make({
     directionAppliedAt: JournalPosition.make(10),
     dispositionAt: JournalPosition.make(9),
     predecessor,
     successor: IntegratorSessionCorrelation.make({
       ...predecessor,
-      candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-preserving-p2"),
-      sessionId: IntegratorSessionId.make("session:issue-69-preserving-p2"),
+      candidateResource: IntegratorCandidateResourceLocator.make("candidate:cleanup-preserving-p2"),
+      sessionId: IntegratorSessionId.make("session:cleanup-preserving-p2"),
       targetLineageObservedAt: JournalPosition.make(12)
     })
   }),
   evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
   locator: predecessor.candidateResource,
   observationAt: predecessor.targetLineageObservedAt,
-  observationOperationId: OperationId.make("issue-69-preserving-candidate-observation"),
-  operationId: OperationId.make("issue-69-preserving-candidate"),
+  observationOperationId: OperationId.make("cleanup-preserving-candidate-observation"),
+  operationId: OperationId.make("cleanup-preserving-candidate"),
   owner: IntegratorCandidateCleanupOwner.make({ sessionId: predecessor.sessionId }),
   writerQuiescent: true
 })

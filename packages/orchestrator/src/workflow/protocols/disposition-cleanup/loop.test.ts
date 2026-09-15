@@ -51,22 +51,22 @@ const begin = Effect.fn("DispositionCleanupLoopTest.begin")(function* (_target?:
   return journal
 })
 
-const foreignRunId = RunId.make("issue-69-foreign-run")
+const foreignRunId = RunId.make("cleanup-foreign-run")
 const foreignAttempt = PlannedTaskAttempt.make({
   ...attempt,
-  attemptId: AttemptId.make("issue-69-foreign-p1"),
-  branch: TaskBranchRef.make("refs/heads/task/issue-69-foreign-p1"),
+  attemptId: AttemptId.make("cleanup-foreign-p1"),
+  branch: TaskBranchRef.make("refs/heads/task/cleanup-foreign-p1"),
   runId: foreignRunId,
-  taskId: TaskId.make("issue-69-foreign-task"),
-  worktree: WorktreeLocator.make("/tmp/issue-69-foreign-p1")
+  taskId: TaskId.make("cleanup-foreign-task"),
+  worktree: WorktreeLocator.make("/tmp/cleanup-foreign-p1")
 })
 const foreignSuccessorAttempt = PlannedTaskAttempt.make({
   ...successor,
-  attemptId: AttemptId.make("issue-69-foreign-p2"),
-  branch: TaskBranchRef.make("refs/heads/task/issue-69-foreign-p2"),
+  attemptId: AttemptId.make("cleanup-foreign-p2"),
+  branch: TaskBranchRef.make("refs/heads/task/cleanup-foreign-p2"),
   runId: foreignRunId,
   taskId: foreignAttempt.taskId,
-  worktree: WorktreeLocator.make("/tmp/issue-69-foreign-p2")
+  worktree: WorktreeLocator.make("/tmp/cleanup-foreign-p2")
 })
 const foreignAttemptDisposition = PlannedAttemptCleanupDisposition.cases.Superseded.make({
   dispositionAt: JournalPosition.make(33),
@@ -74,16 +74,16 @@ const foreignAttemptDisposition = PlannedAttemptCleanupDisposition.cases.Superse
   successorAttempt: foreignSuccessorAttempt
 })
 const foreignBranchAuthorization = BranchCleanupAuthorization.make({
-  causalPredecessors: [OperationId.make("issue-69-foreign-branch-source")],
+  causalPredecessors: [OperationId.make("cleanup-foreign-branch-source")],
   disposition: foreignAttemptDisposition,
   evidenceRevision: BranchCleanupEvidenceRevision.make(1),
   expectedHead: foreignAttempt.baseSha,
   locator: foreignAttempt.branch,
   observationAt: JournalPosition.make(30),
-  observationOperationId: OperationId.make("issue-69-foreign-branch-observation"),
-  operationId: OperationId.make("issue-69-foreign-branch-cleanup"),
+  observationOperationId: OperationId.make("cleanup-foreign-branch-observation"),
+  operationId: OperationId.make("cleanup-foreign-branch-cleanup"),
   owner: BranchCleanupOwner.make({ attemptId: foreignAttempt.attemptId }),
-  worktreeCleanupOperationId: OperationId.make("issue-69-foreign-worktree-cleanup"),
+  worktreeCleanupOperationId: OperationId.make("cleanup-foreign-worktree-cleanup"),
   writerQuiescent: true
 })
 const foreignCandidatePredecessor = IntegratorSessionCorrelation.make({
@@ -91,26 +91,26 @@ const foreignCandidatePredecessor = IntegratorSessionCorrelation.make({
     commit: foreignAttempt.baseSha,
     evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("f".repeat(64)) })
   }),
-  candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-foreign-p1"),
+  candidateResource: IntegratorCandidateResourceLocator.make("candidate:cleanup-foreign-p1"),
   expectedTargetHead: foreignAttempt.baseSha,
   integrationTarget: IntegrationTarget.make({
-    repository: GitRepositoryLocator.make("repo:issue-69-foreign"),
+    repository: GitRepositoryLocator.make("repo:cleanup-foreign"),
     ref: IntegrationTargetRef.make("refs/heads/main")
   }),
   plannedAttempt: foreignAttempt,
   queuedAt: JournalPosition.make(2),
-  sessionId: IntegratorSessionId.make("session:issue-69-foreign-p1"),
+  sessionId: IntegratorSessionId.make("session:cleanup-foreign-p1"),
   startedAt: JournalPosition.make(6),
   targetLineageObservedAt: JournalPosition.make(4)
 })
 const foreignCandidateSuccessor = IntegratorSessionCorrelation.make({
   ...foreignCandidatePredecessor,
-  candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-foreign-p2"),
-  sessionId: IntegratorSessionId.make("session:issue-69-foreign-p2"),
+  candidateResource: IntegratorCandidateResourceLocator.make("candidate:cleanup-foreign-p2"),
+  sessionId: IntegratorSessionId.make("session:cleanup-foreign-p2"),
   targetLineageObservedAt: JournalPosition.make(12)
 })
 const foreignCandidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
-  causalPredecessors: [OperationId.make("issue-69-foreign-candidate-source")],
+  causalPredecessors: [OperationId.make("cleanup-foreign-candidate-source")],
   disposition: IntegratorCandidateCleanupDisposition.make({
     directionAppliedAt: JournalPosition.make(10),
     dispositionAt: JournalPosition.make(9),
@@ -120,8 +120,8 @@ const foreignCandidateAuthorization = IntegratorCandidateCleanupAuthorization.ma
   evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
   locator: foreignCandidatePredecessor.candidateResource,
   observationAt: foreignCandidatePredecessor.targetLineageObservedAt,
-  observationOperationId: OperationId.make("issue-69-foreign-candidate-observation"),
-  operationId: OperationId.make("issue-69-foreign-candidate-cleanup"),
+  observationOperationId: OperationId.make("cleanup-foreign-candidate-observation"),
+  operationId: OperationId.make("cleanup-foreign-candidate-cleanup"),
   owner: IntegratorCandidateCleanupOwner.make({ sessionId: foreignCandidatePredecessor.sessionId }),
   writerQuiescent: true
 })

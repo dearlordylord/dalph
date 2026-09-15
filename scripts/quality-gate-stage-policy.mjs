@@ -100,10 +100,10 @@ export const fullQualityGateManifest = (baseSha, invocation) => {
   const manifest = [
     ...prefix,
     {
-      id: "issue-268-repeatability",
+      id: "delivery-repeatability",
       boundary: "qualification",
-      args: ["test:issue-268-c4"],
-      name: "issue 268 fresh-process repeatability",
+      args: ["test:delivery-repeatability"],
+      name: "delivery repeatability",
       terminationGrace: 15 * SECOND,
       timeout: 19 * 60 * SECOND,
       artifactRoots: []
@@ -120,7 +120,7 @@ export const fullQualityGateManifest = (baseSha, invocation) => {
     {
       id: "coverage",
       boundary: "qualification",
-      args: ["test:coverage"],
+      args: ["test"],
       name: "tests and coverage",
       environmentPolicy: "coverage-base-warning",
       timeout: 20 * 60 * SECOND,

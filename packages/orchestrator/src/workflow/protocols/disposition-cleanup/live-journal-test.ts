@@ -12,7 +12,7 @@ import { JournalHistoryInvalid, JournalStore, type JournalRecord } from "../../.
 import type { JournalDatabaseLocator } from "../../../workflow-journal/identity.js"
 import { runId } from "./fixtures.js"
 
-const target = FixtureTarget.make("issue-69-disposition-cleanup")
+const target = FixtureTarget.make("cleanup-disposition-cleanup")
 const beginning = makeWorkflowRunBeganRecord(
   runId,
   target,

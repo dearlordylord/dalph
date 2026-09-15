@@ -567,6 +567,6 @@ module integrationFinalityNegativeTest {
       .then(recordCompletionAttemptIntent)
       .then(requestCompleteTask)
       .then(makeFourthCompleteTaskRequest)
-      .expect(not(completionRequestsAreBoundedForIssue61))
+      .expect(not(completionRequestsAreBounded))
   }
 }

@@ -142,7 +142,7 @@ export const runBoundedCommand = ({
           logPath,
           log: artifactEvidence(logPath),
           coverage: obligation.intent.command.args.some((argument) =>
-            ["test:coverage", "coverage:body"].includes(argument)
+            ["test", "test:coverage", "coverage:body"].includes(argument)
           )
             ? {
                 final: artifactEvidence(

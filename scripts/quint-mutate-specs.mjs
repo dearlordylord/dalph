@@ -136,7 +136,7 @@ const SPECS = [
       "settledTaskRequiresExactCleanup",
       "subjectSettlementIsLocal",
       "emptyFrontierDoesNotSettleRetainedResponsibility",
-      "runTerminationRemainsOwnedByIssue102",
+      "runTerminationRequiresWholeRunSettlement",
       "dependantReleaseBoundaryRemainsExternal"
     ],
     witnesses: [

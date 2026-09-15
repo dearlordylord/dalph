@@ -7,7 +7,7 @@ owns it. Local computation is measured separately from tracker, Git, and
 execution-substrate latency.
 
 The chronology and acceptance mapping are in
-[issue-104-control-plane-latency-and-responsiveness.md](../scenarios/issue-104-control-plane-latency-and-responsiveness.md).
+[control-plane-latency-and-responsiveness.md](../scenarios/control-plane-latency-and-responsiveness.md).
 
 ## How to read a budget
 

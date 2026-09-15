@@ -493,7 +493,7 @@ module integrationFinality {
   val completionAttemptIntentPrecedesRequest: bool =
     state.promoted.completionRequests <= state.promoted.completionAttemptIntents
 
-  val completionRequestsAreBoundedForIssue61: bool =
+  val completionRequestsAreBounded: bool =
     state.promoted.completionRequests <= COMPLETE_TASK_REQUEST_LIMIT
 
   val completionRetryRequiresExactRequestLookup: bool =
@@ -623,7 +623,7 @@ module integrationFinality {
     not(state.frontierEmpty and (state.promoted.responsibilityHeld or state.unrelated.responsibilityHeld))
       or not(state.runTerminated)
 
-  val runTerminationRemainsOwnedByIssue102: bool = not(state.runTerminated)
+  val runTerminationRequiresWholeRunSettlement: bool = not(state.runTerminated)
 
   // This subject-scoped model never performs the external scheduler action
   // that starts newly eligible dependant work.

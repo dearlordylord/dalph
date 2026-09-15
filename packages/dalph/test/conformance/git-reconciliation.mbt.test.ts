@@ -115,7 +115,7 @@ const independentTask = {
 }
 
 /**
- * The issue-138 model actions use one real journal and one real target-resource
+ * The pre-promotion model actions use one real journal and one real target-resource
  * owner per driver.  The model projection below is still intentionally small,
  * but every blocker, reread, supersession, and restart goes through the same
  * production append/reconstruct/frontier seams as the coordinator.

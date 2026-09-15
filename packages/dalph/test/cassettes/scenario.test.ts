@@ -2015,12 +2015,12 @@ it.effect("A tracker client changes A while Dalph's completion request is pendin
     }
     expect(run.records.filter(({ event }) => event._tag === "CompletionTaskAttemptIntended")).toHaveLength(1)
     expect(run.records.some(({ event }) => event._tag === "CompletionClaimDeletionIntended")).toBe(false)
-    const issue61ConflictFrames = run.deliveryFrames.filter(
+    const conflictConflictFrames = run.deliveryFrames.filter(
       ({ graph }) => graph._tag === "Established" && String(graph.revision).startsWith("delivery-story-S3-")
     )
-    expect(issue61ConflictFrames.length).toBeGreaterThan(0)
+    expect(conflictConflictFrames.length).toBeGreaterThan(0)
     expect(
-      issue61ConflictFrames.every(
+      conflictConflictFrames.every(
         ({ graph }) =>
           graph._tag === "Established" &&
           graph.tasks.some(({ id, prerequisiteIds }) => id === TaskId.make("C") && prerequisiteIds.length === 0) &&
@@ -2460,7 +2460,7 @@ it.effect(
     Effect.gen(function* () {
       const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.prePromotionBlocker)
       const blockerFrame = run.deliveryFrames.find(
-        (frame) => frame.graph._tag === "Established" && frame.graph.revision === "issue-138-pre-promotion-blocker"
+        (frame) => frame.graph._tag === "Established" && frame.graph.revision === "pre-promotion-blocker"
       )
       const started =
         run.history._tag === "ValidWorkflowJournalHistory"
@@ -2504,9 +2504,7 @@ it.effect("keeps an unfinished Integrator session dormant when a blocker appears
       ({ event }) =>
         event._tag === "TaskTrackerFactsObserved" &&
         event.observation._tag === "CompleteTaskTrackerFacts" &&
-        event.observation.factFamilies.some(
-          ({ contentIdentity }) => contentIdentity === "issue-138-pre-promotion-blocker"
-        )
+        event.observation.factFamilies.some(({ contentIdentity }) => contentIdentity === "pre-promotion-blocker")
     )
     if (blockerOutcome?.event._tag !== "TaskTrackerFactsObserved") {
       return yield* Effect.die("missing blocker observation")
@@ -2563,7 +2561,7 @@ it.effect("delegates changed H after a cleared blocker without reusing M or crea
     )
     expect(dependencyWaitFrame).toBeDefined()
     const blockerFrame = run.deliveryFrames.find(
-      (frame) => frame.graph._tag === "Established" && frame.graph.revision === "issue-138-pre-promotion-blocker"
+      (frame) => frame.graph._tag === "Established" && frame.graph.revision === "pre-promotion-blocker"
     )
     expect(blockerFrame?.frontier).toEqual(
       expect.arrayContaining([
@@ -2573,7 +2571,7 @@ it.effect("delegates changed H after a cleared blocker without reusing M or crea
       ])
     )
     const clearedFrame = run.deliveryFrames.find(
-      (frame) => frame.graph._tag === "Established" && frame.graph.revision === "issue-138-pre-promotion-edge-removed"
+      (frame) => frame.graph._tag === "Established" && frame.graph.revision === "pre-promotion-edge-removed"
     )
     expect(clearedFrame?.frontier).toEqual(
       expect.arrayContaining([
@@ -2586,7 +2584,7 @@ it.effect("delegates changed H after a cleared blocker without reusing M or crea
       ({ event }) =>
         event._tag === "TaskTrackerFactsObserved" &&
         event.observation._tag === "CompleteTaskTrackerFacts" &&
-        event.observation.factFamilies[0].contentIdentity === "issue-138-pre-promotion-blocker"
+        event.observation.factFamilies[0].contentIdentity === "pre-promotion-blocker"
     )
     expect(blockerRecordIndex).toBeGreaterThan(0)
     const blockedHistory = reduceWorkflowJournalHistory(run.runId, run.records.slice(0, blockerRecordIndex + 1))
@@ -2690,8 +2688,7 @@ it.effect("durably waits after an unreadable blocker restart read and resumes on
     expect(run.records.some(({ event }) => event._tag.startsWith("TargetPromotion"))).toBe(false)
     expect(run.records.some(({ event }) => event._tag.startsWith("Completion"))).toBe(false)
     const resumed = run.deliveryFrames.find(
-      (frame) =>
-        frame.graph._tag === "Established" && frame.graph.revision === "issue-138-pre-promotion-blocker-recovery"
+      (frame) => frame.graph._tag === "Established" && frame.graph.revision === "pre-promotion-blocker-recovery"
     )
     expect(resumed?.frontier).toEqual(
       expect.arrayContaining([expect.objectContaining({ taskId: "A", standing: "Excluded" })])
@@ -2729,7 +2726,7 @@ it.effect("preserves promotion proof and releases target ownership before tracke
     const run = yield* runAuthoredScenarioCassette(blockersAroundPromotionAuthoredCassette)
     const promotion = run.records.find(({ event }) => event._tag === "TargetPromotionObservedSuccess")
     const blockerFrame = run.deliveryFrames.find(
-      (frame) => frame.graph._tag === "Established" && frame.graph.revision === "issue-138-post-promotion-blocker"
+      (frame) => frame.graph._tag === "Established" && frame.graph.revision === "post-promotion-blocker"
     )
 
     expect(promotion?.event._tag).toBe("TargetPromotionObservedSuccess")
@@ -2758,7 +2755,7 @@ it.effect("reconstructs a post-promotion blocker without repeating Git promotion
     expect(run.records.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(1)
     expect(run.records.some(({ event }) => event._tag === "CompletionClaimReplaced")).toBe(false)
     const recovered = run.deliveryFrames.findLast(
-      ({ graph }) => graph._tag === "Established" && graph.revision === "issue-138-post-promotion-blocker"
+      ({ graph }) => graph._tag === "Established" && graph.revision === "post-promotion-blocker"
     )
     expect(recovered?.heldPositions).toEqual([])
     expect(recovered?.frontier).toEqual(

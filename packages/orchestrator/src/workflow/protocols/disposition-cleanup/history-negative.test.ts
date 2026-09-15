@@ -39,7 +39,7 @@ const removed = WorktreeCleanupMutationResult.cases.Removed.make({
   revision: WorktreeCleanupEvidenceRevision.make(2)
 })
 
-const begin = Effect.fn("Issue69HistoryNegative.begin")(function* (_target?: string) {
+const begin = Effect.fn("CleanupCassetteHistoryNegative.begin")(function* (_target?: string) {
   const journal = yield* InRunJournal
   return journal
 })
@@ -78,7 +78,7 @@ const settledRecord = (records: ReadonlyArray<JournalRecord>) =>
 
 it.effect("rejects malformed worktree cleanup prefixes before retrying Git", () =>
   Effect.gen(function* () {
-    const records = yield* validHistory("issue-69-history-negative-prefix")
+    const records = yield* validHistory("cleanup-history-negative-prefix")
     const authorized = authRecord(records)
     const observationIntent = intentRecord(records)
     const observed = observedRecords(records)
@@ -182,7 +182,7 @@ it.effect("rejects malformed worktree cleanup prefixes before retrying Git", () 
 
 it.effect("rejects a settled worktree prefix whose absence or result no longer matches", () =>
   Effect.gen(function* () {
-    const records = yield* validHistory("issue-69-history-negative-settlement")
+    const records = yield* validHistory("cleanup-history-negative-settlement")
     const absence = absenceRecord(records)
     const settled = settledRecord(records)
     expect(absence?.event._tag).toBe("WorktreeCleanupAbsenceConfirmed")

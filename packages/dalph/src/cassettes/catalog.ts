@@ -3496,8 +3496,8 @@ export const targetPromotionSuccessAuthoredCassette: ScenarioCassette = promotio
   }
 )
 
-const issue138PrePromotionBlockerGraph = {
-  revision: "issue-138-pre-promotion-blocker",
+const prePromotionBlockerGraph = {
+  revision: "pre-promotion-blocker",
   tasks: [
     { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: ["B"] },
     { id: "B", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
@@ -3505,8 +3505,8 @@ const issue138PrePromotionBlockerGraph = {
   ]
 } as const
 
-const issue138PrePromotionClearedGraph = {
-  revision: "issue-138-pre-promotion-edge-removed",
+const prePromotionClearedGraph = {
+  revision: "pre-promotion-edge-removed",
   tasks: [
     { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
     { id: "B", lifecycle: { _tag: "TerminalWithoutSuccess" }, parentTaskId: null, prerequisiteIds: [] },
@@ -3514,8 +3514,8 @@ const issue138PrePromotionClearedGraph = {
   ]
 } as const
 
-const issue138PrePromotionRecoveryGraph = {
-  revision: "issue-138-pre-promotion-blocker-recovery",
+const prePromotionRecoveryGraph = {
+  revision: "pre-promotion-blocker-recovery",
   tasks: [
     { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: ["B"] },
     { id: "B", lifecycle: { _tag: "TerminalWithoutSuccess" }, parentTaskId: null, prerequisiteIds: [] },
@@ -3523,8 +3523,8 @@ const issue138PrePromotionRecoveryGraph = {
   ]
 } as const
 
-const issue138PostPromotionBlockerGraph = {
-  revision: "issue-138-post-promotion-blocker",
+const postPromotionBlockerGraph = {
+  revision: "post-promotion-blocker",
   tasks: [
     { id: "A", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: ["B"] },
     { id: "B", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
@@ -3544,11 +3544,11 @@ export const prePromotionBlockerAuthoredCassette: ScenarioCassette = Schema.deco
         ? [item]
         : [
             { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-            { _tag: "TrackerGraphReadReturned", graph: issue138PrePromotionBlockerGraph },
+            { _tag: "TrackerGraphReadReturned", graph: prePromotionBlockerGraph },
             { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
             { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
             { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-            { _tag: "TrackerGraphReadReturned", graph: issue138PrePromotionBlockerGraph },
+            { _tag: "TrackerGraphReadReturned", graph: prePromotionBlockerGraph },
             { _tag: "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions", taskIds: ["B", "C"] },
             item
           ]
@@ -3557,12 +3557,10 @@ export const prePromotionBlockerAuthoredCassette: ScenarioCassette = Schema.deco
 )
 
 const prePromotionBlockerFinalGraphAt = prePromotionBlockerAuthoredCassette.story.findLastIndex(
-  (item) =>
-    item._tag === "TrackerGraphReadReturned" && item.graph.revision === issue138PrePromotionBlockerGraph.revision
+  (item) => item._tag === "TrackerGraphReadReturned" && item.graph.revision === prePromotionBlockerGraph.revision
 )
 const prePromotionBlockerInitialGraphReturnedAt = prePromotionBlockerAuthoredCassette.story.findIndex(
-  (item) =>
-    item._tag === "TrackerGraphReadReturned" && item.graph.revision === issue138PrePromotionBlockerGraph.revision
+  (item) => item._tag === "TrackerGraphReadReturned" && item.graph.revision === prePromotionBlockerGraph.revision
 )
 
 /** The blocker clears, H advances to H2, and #223 waits for #68 without reusing M or creating S2. */
@@ -3592,10 +3590,10 @@ export const prePromotionBlockerClearAndSupersessionAuthoredCassette: ScenarioCa
     if (item._tag !== "ExpectedBehavior") return [item]
     return [
       { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: issue138PrePromotionClearedGraph },
+      { _tag: "TrackerGraphReadReturned", graph: prePromotionClearedGraph },
       { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
       { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-      { _tag: "TrackerGraphReadReturned", graph: issue138PrePromotionClearedGraph },
+      { _tag: "TrackerGraphReadReturned", graph: prePromotionClearedGraph },
       {
         _tag: "CoordinatorActivationReturned",
         decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
@@ -3683,14 +3681,14 @@ export const prePromotionBlockerRecoveryAuthoredCassette: ScenarioCassette = Sch
           _tag: "DalphSelects" as const,
           operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" as const }
         },
-        { _tag: "TrackerGraphReadReturned" as const, graph: issue138PrePromotionRecoveryGraph },
+        { _tag: "TrackerGraphReadReturned" as const, graph: prePromotionRecoveryGraph },
         { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId: "A" as const } },
         { _tag: "TaskClaimCurrentReadReturned" as const, taskId: "A" as const },
         {
           _tag: "DalphSelects" as const,
           operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" as const }
         },
-        { _tag: "TrackerGraphReadReturned" as const, graph: issue138PrePromotionRecoveryGraph },
+        { _tag: "TrackerGraphReadReturned" as const, graph: prePromotionRecoveryGraph },
         { _tag: "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions", taskIds: ["B", "C"] },
         {
           _tag: "CoordinatorActivationReturned" as const,
@@ -3724,14 +3722,14 @@ export const prePromotionBlockerUnreadableReadRecoveryAuthoredCassette: Scenario
           _tag: "DalphSelects" as const,
           operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" as const }
         },
-        { _tag: "TrackerGraphReadReturned" as const, graph: issue138PrePromotionRecoveryGraph },
+        { _tag: "TrackerGraphReadReturned" as const, graph: prePromotionRecoveryGraph },
         { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId: "A" as const } },
         { _tag: "TaskClaimCurrentReadReturned" as const, taskId: "A" as const },
         {
           _tag: "DalphSelects" as const,
           operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" as const }
         },
-        { _tag: "TrackerGraphReadReturned" as const, graph: issue138PrePromotionRecoveryGraph },
+        { _tag: "TrackerGraphReadReturned" as const, graph: prePromotionRecoveryGraph },
         { _tag: "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions", taskIds: ["B", "C"] },
         {
           _tag: "CoordinatorActivationReturned" as const,
@@ -3764,9 +3762,9 @@ export const blockersAroundPromotionAuthoredCassette: ScenarioCassette = Schema.
       ? [item]
       : [
           { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-          { _tag: "TrackerGraphReadReturned", graph: issue138PostPromotionBlockerGraph },
+          { _tag: "TrackerGraphReadReturned", graph: postPromotionBlockerGraph },
           { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-          { _tag: "TrackerGraphReadReturned", graph: issue138PostPromotionBlockerGraph },
+          { _tag: "TrackerGraphReadReturned", graph: postPromotionBlockerGraph },
           { _tag: "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions", taskIds: ["B", "C"] },
           item
         ]
@@ -3781,12 +3779,12 @@ export const postPromotionBlockerRecoveryAuthoredCassette: ScenarioCassette = Sc
   name: "a post-promotion blocker survives coordinator process loss",
   story: blockersAroundPromotionAuthoredCassette.story.flatMap(
     (item): ReadonlyArray<unknown> =>
-      item._tag === "TrackerGraphReadReturned" && item.graph.revision === issue138PostPromotionBlockerGraph.revision
+      item._tag === "TrackerGraphReadReturned" && item.graph.revision === postPromotionBlockerGraph.revision
         ? [
             item,
             { _tag: "CoordinatorProcessDies" },
             { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-            { _tag: "TrackerGraphReadReturned", graph: issue138PostPromotionBlockerGraph }
+            { _tag: "TrackerGraphReadReturned", graph: postPromotionBlockerGraph }
           ]
         : [item]
   )

@@ -30,7 +30,7 @@ it(
 
     expect(result.exitCode).toBe(0)
     expect(invocationArguments).toContainEqual(["check:complexity", `--candidate=${baseSha}`])
-    expect(invocationCoverageBases).toContainEqual(["test:coverage", baseSha])
+    expect(invocationCoverageBases).toContainEqual(["test", baseSha])
     expect(qualityGateTestEnvironment(baseSha, { DALPH_COVERAGE_BASE_SHA: "stale" }).DALPH_COVERAGE_BASE_SHA).toBe(
       baseSha
     )

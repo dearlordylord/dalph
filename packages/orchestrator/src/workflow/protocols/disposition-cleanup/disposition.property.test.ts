@@ -79,23 +79,23 @@ const candidateAcceptedResult = AcceptedResult.make({
 })
 const candidateTarget = IntegrationTarget.make({
   ref: IntegrationTargetRef.make("refs/heads/main"),
-  repository: GitRepositoryLocator.make("repo:issue-69-property")
+  repository: GitRepositoryLocator.make("repo:cleanup-property")
 })
 const candidateAttempt = PlannedTaskAttempt.make({
   ...attempt,
-  attemptId: AttemptId.make("issue-69-property-candidate-attempt"),
-  branch: TaskBranchRef.make("refs/heads/task/issue-69-property-candidate"),
-  taskId: TaskId.make("issue-69-property-candidate-task"),
-  worktree: WorktreeLocator.make("/tmp/issue-69-property-candidate")
+  attemptId: AttemptId.make("cleanup-property-candidate-attempt"),
+  branch: TaskBranchRef.make("refs/heads/task/cleanup-property-candidate"),
+  taskId: TaskId.make("cleanup-property-candidate-task"),
+  worktree: WorktreeLocator.make("/tmp/cleanup-property-candidate")
 })
 const candidatePredecessor = IntegratorSessionCorrelation.make({
   acceptedResult: candidateAcceptedResult,
-  candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-property-p1"),
+  candidateResource: IntegratorCandidateResourceLocator.make("candidate:cleanup-property-p1"),
   expectedTargetHead: baseSha,
   integrationTarget: candidateTarget,
   plannedAttempt: candidateAttempt,
   queuedAt: JournalPosition.make(17),
-  sessionId: IntegratorSessionId.make("session:issue-69-property-p1"),
+  sessionId: IntegratorSessionId.make("session:cleanup-property-p1"),
   startedAt: JournalPosition.make(18),
   targetLineageObservedAt: JournalPosition.make(20)
 })
@@ -117,13 +117,13 @@ const candidateDisposition = IntegratorCandidateCleanupDisposition.make({
   successor: candidateSuccessor
 })
 const candidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
-  causalPredecessors: [OperationId.make("issue-69-property-full-rerun")],
+  causalPredecessors: [OperationId.make("cleanup-property-full-rerun")],
   disposition: candidateDisposition,
   evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
   locator: candidatePredecessor.candidateResource,
   observationAt: JournalPosition.make(20),
-  observationOperationId: OperationId.make("session:issue-69-property-p1:predecessor-lineage"),
-  operationId: OperationId.make("issue-69-property-candidate-cleanup"),
+  observationOperationId: OperationId.make("session:cleanup-property-p1:predecessor-lineage"),
+  operationId: OperationId.make("cleanup-property-candidate-cleanup"),
   owner: IntegratorCandidateCleanupOwner.make({ sessionId: candidatePredecessor.sessionId }),
   writerQuiescent: true
 })
@@ -133,7 +133,7 @@ const settledWorktreeAuthorization = WorktreeCleanupAuthorization.make({
   disposition: PlannedAttemptCleanupDisposition.cases.Settled.make({
     dispositionAt: JournalPosition.make(24),
     plannedAttempt: attempt,
-    settlementOperationId: OperationId.make("issue-69-property-settlement")
+    settlementOperationId: OperationId.make("cleanup-property-settlement")
   })
 })
 
@@ -146,7 +146,7 @@ const branchAuthorizationFor = (worktree: WorktreeCleanupAuthorization) =>
     locator: attempt.branch,
     observationAt: worktree.observationAt,
     observationOperationId: worktree.observationOperationId,
-    operationId: OperationId.make("issue-69-property-branch-cleanup"),
+    operationId: OperationId.make("cleanup-property-branch-cleanup"),
     owner: BranchCleanupOwner.make({ attemptId: attempt.attemptId }),
     worktreeCleanupOperationId: worktree.operationId,
     writerQuiescent: true
@@ -166,7 +166,7 @@ const worktreeObservationFor = (value: PropertyCase, exact: boolean): WorktreeCl
   }
   if (!value.locatorMatches || !value.ownerMatches) {
     return WorktreeCleanupObservation.cases.Foreign.make({
-      locator: value.locatorMatches ? attempt.worktree : WorktreeLocator.make("/tmp/issue-69-property-foreign"),
+      locator: value.locatorMatches ? attempt.worktree : WorktreeLocator.make("/tmp/cleanup-property-foreign"),
       observedBranch: value.ownerMatches ? attempt.branch : TaskBranchRef.make("refs/heads/task/foreign"),
       observedHead: baseSha,
       reason: value.ownerMatches ? "MovedRegistration" : "OtherOwner",
@@ -222,7 +222,7 @@ const candidateObservationFor = (value: PropertyCase, exact: boolean): Integrato
   }
   if (!value.locatorMatches) {
     return IntegratorCandidateCleanupObservation.cases.Foreign.make({
-      locator: IntegratorCandidateResourceLocator.make("candidate:issue-69-property-foreign"),
+      locator: IntegratorCandidateResourceLocator.make("candidate:cleanup-property-foreign"),
       observedSessionId: candidatePredecessor.sessionId,
       reason: "Transferred",
       revision: IntegratorCandidateCleanupEvidenceRevision.make(revisionMatches ? 1 : 2)
@@ -233,7 +233,7 @@ const candidateObservationFor = (value: PropertyCase, exact: boolean): Integrato
     revision: IntegratorCandidateCleanupEvidenceRevision.make(revisionMatches ? 1 : 2),
     sessionId: value.ownerMatches
       ? candidatePredecessor.sessionId
-      : IntegratorSessionId.make("session:issue-69-property-foreign"),
+      : IntegratorSessionId.make("session:cleanup-property-foreign"),
     writerQuiescent: true
   })
 }
@@ -244,7 +244,7 @@ const runPropertyCase = Effect.fn("DispositionCleanup.propertyCase")(function* (
     yield* appendCandidateProvenance(
       candidatePredecessor,
       candidateSuccessor,
-      "issue-69-property-full-rerun",
+      "cleanup-property-full-rerun",
       "StartupValid"
     )
     yield* appendReplacementProvenance(attempt, successor, "StartupValid")
@@ -253,7 +253,7 @@ const runPropertyCase = Effect.fn("DispositionCleanup.propertyCase")(function* (
     value.disposition === "Superseded"
       ? (deriveCleanupAuthorizations(yield* journal.read(runId)).worktree[0] ?? authorization)
       : value.disposition === "Abandoned"
-        ? yield* appendAbandonedProvenance(attempt, OperationId.make("issue-69-property-abandoned-cleanup"))
+        ? yield* appendAbandonedProvenance(attempt, OperationId.make("cleanup-property-abandoned-cleanup"))
         : settledWorktreeAuthorization
   const exactFacts =
     value.exact &&
@@ -270,7 +270,7 @@ const runPropertyCase = Effect.fn("DispositionCleanup.propertyCase")(function* (
       ? candidateBase
       : IntegratorCandidateCleanupAuthorization.make({
           ...candidateBase,
-          causalPredecessors: [OperationId.make("issue-69-property-foreign-cause")]
+          causalPredecessors: [OperationId.make("cleanup-property-foreign-cause")]
         })
   const branch = branchAuthorizationFor(worktree)
   const outcomes = {
@@ -428,19 +428,19 @@ it("rejects typed cleanup subjects that name a foreign resource", () => {
   expect(
     Schema.is(WorktreeCleanupAuthorization)({
       ...authorization,
-      locator: WorktreeLocator.make("/tmp/issue-69-property-foreign")
+      locator: WorktreeLocator.make("/tmp/cleanup-property-foreign")
     })
   ).toBe(false)
   expect(
     Schema.is(BranchCleanupAuthorization)({
       ...branchAuthorizationFor(authorization),
-      locator: TaskBranchRef.make("refs/heads/task/issue-69-property-foreign")
+      locator: TaskBranchRef.make("refs/heads/task/cleanup-property-foreign")
     })
   ).toBe(false)
   expect(
     Schema.is(IntegratorCandidateCleanupAuthorization)({
       ...candidateAuthorization,
-      locator: IntegratorCandidateResourceLocator.make("candidate:issue-69-property-foreign")
+      locator: IntegratorCandidateResourceLocator.make("candidate:cleanup-property-foreign")
     })
   ).toBe(false)
 })

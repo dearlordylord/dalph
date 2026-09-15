@@ -14,7 +14,7 @@ it(
     expect(result.exitCode).toBe(0)
     expect(invocations.filter((command) => command === "test:capability-registration")).toHaveLength(1)
     expect(capabilityIndex).toBeGreaterThan(-1)
-    expect(invocations[capabilityIndex + 1]).toBe("test:issue-268-c4")
+    expect(invocations[capabilityIndex + 1]).toBe("test:delivery-repeatability")
   },
   qualityGateFixtureTestTimeoutMilliseconds
 )
@@ -32,7 +32,7 @@ it(
     expect(invocations.filter((command) => command === "test:capability-registration")).toHaveLength(1)
     expect(invocations.at(-1)).toBe("test:capability-registration")
     expect(invocations).toContain("test:ci-change-classification")
-    expect(invocations).not.toContain("test:coverage")
+    expect(invocations).not.toContain("test")
   },
   qualityGateFixtureTestTimeoutMilliseconds
 )
@@ -41,14 +41,22 @@ it("keeps the exact combined exclusions out of ordinary tests and in coverage", 
   const ordinary = resolveVitestConfig("test")
   const coverage = resolveVitestConfig("coverage")
 
-  expect(ordinary.test?.exclude).toEqual(["**/node_modules/**", "**/dist/**", "packages/**/*.mbt.test.ts"])
+  expect(ordinary.test?.exclude).toEqual([
+    "**/node_modules/**",
+    "**/dist/**",
+    "packages/**/*.mbt.test.ts",
+    "packages/dalph/test/cassettes/delivery-repeatability.test.ts",
+    "scripts/capability-registration.test.ts",
+    "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts"
+  ])
   expect(coverage.test?.exclude).toEqual([
     "**/node_modules/**",
     "**/dist/**",
     "packages/**/*.mbt.test.ts",
+    "packages/dalph/test/cassettes/delivery-repeatability.test.ts",
     "scripts/capability-registration.test.ts",
-    "**/*.performance.test.ts",
-    "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts"
+    "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts",
+    "**/*.performance.test.ts"
   ])
   expect(coverage.test?.include).toEqual(ordinary.test?.include)
   expect(coverage.test?.coverage?.thresholds).toEqual({ branches: 75, functions: 75, lines: 75, statements: 75 })

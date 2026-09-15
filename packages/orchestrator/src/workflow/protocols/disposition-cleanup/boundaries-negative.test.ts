@@ -21,7 +21,7 @@ import {
 import { WorktreeCleanupBoundary } from "./worktree.js"
 import { authorization, attempt, baseSha } from "./fixtures.js"
 
-const target = GitCommonDirectoryTarget.make("/tmp/issue-69-negative-boundaries.git")
+const target = GitCommonDirectoryTarget.make("/tmp/cleanup-negative-boundaries.git")
 const ownerLayer = Layer.succeed(
   CoordinatorOwnership,
   CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })

@@ -19,7 +19,7 @@ it(
     expect(result.exitCode).toBe(0)
     expect(invocations.filter((command) => command === "test:recorded-catalog")).toHaveLength(1)
     expect(recordedCatalogIndex).toBeGreaterThan(-1)
-    expect(invocations[recordedCatalogIndex + 1]).toBe("test:coverage")
+    expect(invocations[recordedCatalogIndex + 1]).toBe("test")
   },
   qualityGateFixtureTestTimeoutMilliseconds
 )
@@ -36,7 +36,7 @@ it(
     expect(result.output).toContain("Quality gate 'maintained recorded-catalog semantics' failed with exit 23")
     expect(invocations.filter((command) => command === "test:recorded-catalog")).toHaveLength(1)
     expect(invocations.at(-1)).toBe("test:recorded-catalog")
-    expect(invocations).not.toContain("test:coverage")
+    expect(invocations).not.toContain("test")
   },
   qualityGateFixtureTestTimeoutMilliseconds
 )
@@ -69,7 +69,14 @@ it("coverage excludes the monolithic proof while retaining its thresholds and ot
   const ordinary = resolveVitestConfig("test")
   const coverage = resolveVitestConfig("coverage")
 
-  expect(ordinary.test?.exclude).toEqual(["**/node_modules/**", "**/dist/**", "packages/**/*.mbt.test.ts"])
+  expect(ordinary.test?.exclude).toEqual([
+    "**/node_modules/**",
+    "**/dist/**",
+    "packages/**/*.mbt.test.ts",
+    "packages/dalph/test/cassettes/delivery-repeatability.test.ts",
+    "scripts/capability-registration.test.ts",
+    "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts"
+  ])
   expect(coverage.test?.exclude).toContain(recordedCatalogTest)
   expect(coverage.test?.exclude).toContain("packages/**/*.mbt.test.ts")
   expect(coverage.test?.exclude?.filter((pattern) => pattern === recordedCatalogTest)).toHaveLength(1)

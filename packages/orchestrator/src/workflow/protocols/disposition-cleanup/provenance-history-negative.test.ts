@@ -239,7 +239,7 @@ const branchAuthorization = BranchCleanupAuthorization.make({
   locator: attempt.branch,
   observationAt: authorization.observationAt,
   observationOperationId: authorization.observationOperationId,
-  operationId: OperationId.make("issue-69-provenance-history-branch"),
+  operationId: OperationId.make("cleanup-provenance-history-branch"),
   owner: BranchCleanupOwner.make({ attemptId: attempt.attemptId }),
   worktreeCleanupOperationId: authorization.operationId,
   writerQuiescent: true
@@ -259,17 +259,17 @@ const candidateAcceptedResult = AcceptedResult.make({
   evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("a".repeat(64)) })
 })
 const candidateTarget = IntegrationTarget.make({
-  repository: GitRepositoryLocator.make("repo:issue-69-provenance-history"),
+  repository: GitRepositoryLocator.make("repo:cleanup-provenance-history"),
   ref: IntegrationTargetRef.make("refs/heads/main")
 })
 const candidatePredecessor = IntegratorSessionCorrelation.make({
   acceptedResult: candidateAcceptedResult,
-  candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-history-p1"),
+  candidateResource: IntegratorCandidateResourceLocator.make("candidate:cleanup-history-p1"),
   expectedTargetHead: baseSha,
   integrationTarget: candidateTarget,
   plannedAttempt: attempt,
   queuedAt: JournalPosition.make(17),
-  sessionId: IntegratorSessionId.make("session:issue-69-history-p1"),
+  sessionId: IntegratorSessionId.make("session:cleanup-history-p1"),
   startedAt: JournalPosition.make(18),
   targetLineageObservedAt: JournalPosition.make(20)
 })
@@ -285,7 +285,7 @@ const candidateSuccessor = integratorSuccessorCorrelationFor({
   targetLineageObservedAt: JournalPosition.make(27)
 })
 const candidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
-  causalPredecessors: [OperationId.make("issue-69-provenance-history-full-rerun")],
+  causalPredecessors: [OperationId.make("cleanup-provenance-history-full-rerun")],
   disposition: IntegratorCandidateCleanupDisposition.make({
     directionAppliedAt: JournalPosition.make(25),
     dispositionAt: JournalPosition.make(24),
@@ -296,7 +296,7 @@ const candidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
   locator: candidatePredecessor.candidateResource,
   observationAt: JournalPosition.make(20),
   observationOperationId: OperationId.make(`${candidatePredecessor.sessionId}:predecessor-lineage`),
-  operationId: OperationId.make("issue-69-provenance-history-candidate"),
+  operationId: OperationId.make("cleanup-provenance-history-candidate"),
   owner: IntegratorCandidateCleanupOwner.make({ sessionId: candidatePredecessor.sessionId }),
   writerQuiescent: true
 })
@@ -307,7 +307,7 @@ const validCandidateHistory = (target: string) =>
     yield* appendCandidateProvenance(
       candidatePredecessor,
       candidateSuccessor,
-      "issue-69-provenance-history-full-rerun",
+      "cleanup-provenance-history-full-rerun",
       "StartupValid"
     )
     yield* runIntegratorCandidateCleanup(candidateAuthorization)
@@ -325,7 +325,7 @@ const expectInvalid = (
 
 it.effect("rejects malformed, foreign, duplicate, and reordered worktree settlement provenance", () =>
   Effect.gen(function* () {
-    const records = yield* validWorktreeHistory("issue-69-provenance-history-worktree")
+    const records = yield* validWorktreeHistory("cleanup-provenance-history-worktree")
     const authorized = records.find(tag("WorktreeCleanupAuthorized"))
     const observed = records.filter(tag("WorktreeCleanupObserved"))
     const absence = records.find(tag("WorktreeCleanupAbsenceConfirmed"))
@@ -917,7 +917,7 @@ it.effect("rejects abandoned provenance with a non-command quiescence proof", ()
 
 it.effect("rejects malformed branch history identities while retaining valid settlement", () =>
   Effect.gen(function* () {
-    const branchRecords = yield* validBranchHistory("issue-69-provenance-history-branch")
+    const branchRecords = yield* validBranchHistory("cleanup-provenance-history-branch")
     const branchObserved = branchRecords.filter(tag("BranchCleanupObserved"))
     const branchSettled = branchRecords.find(tag("BranchCleanupSettled"))
     const branchCases: ReadonlyArray<readonly [string, ReadonlyArray<JournalRecord>]> = [
@@ -1093,7 +1093,7 @@ it.effect("rejects malformed branch history identities while retaining valid set
 
 it.effect("rejects malformed candidate history identities while retaining valid settlement", () =>
   Effect.gen(function* () {
-    const candidateRecords = yield* validCandidateHistory("issue-69-provenance-history-candidate")
+    const candidateRecords = yield* validCandidateHistory("cleanup-provenance-history-candidate")
     const candidateObserved = candidateRecords.filter(tag("IntegratorCandidateCleanupObserved"))
     const candidateSettled = candidateRecords.find(tag("IntegratorCandidateCleanupSettled"))
     const candidateCases: ReadonlyArray<readonly [string, ReadonlyArray<JournalRecord>]> = [
@@ -1214,7 +1214,7 @@ it.effect("rejects malformed candidate history identities while retaining valid 
 
 it.effect("rejects foreign, duplicate, and reordered FullRerun candidate provenance", () =>
   Effect.gen(function* () {
-    const records = yield* validCandidateHistory("issue-69-provenance-history-candidate-provenance")
+    const records = yield* validCandidateHistory("cleanup-provenance-history-candidate-provenance")
     const direction = records.find(tag("IntegrationQuarantineDirectionApplied"))
     const quarantine = records.find(tag("IntegrationQuarantined"))
     const successorRecord = records.find(tag("IntegratorSuccessorSessionFixed"))
@@ -1326,11 +1326,11 @@ it.effect("rejects foreign, duplicate, and reordered FullRerun candidate provena
 it.effect("rejects a foreign FullRerun relation from raw and indexed cold projections", () => {
   const preservationReason = "multiple FullRerun successors describe one Integrator predecessor"
   return Effect.gen(function* () {
-    const journal = yield* begin("issue-69-foreign-full-rerun")
+    const journal = yield* begin("cleanup-foreign-full-rerun")
     yield* appendCandidateProvenance(
       candidatePredecessor,
       candidateSuccessor,
-      "issue-69-provenance-history-full-rerun",
+      "cleanup-provenance-history-full-rerun",
       "StartupValid"
     )
     const records = yield* journal.read(runId)
@@ -1341,7 +1341,7 @@ it.effect("rejects a foreign FullRerun relation from raw and indexed cold projec
     const foreignPredecessor = IntegratorSessionCorrelation.make({
       ...candidatePredecessor,
       candidateResource: IntegratorCandidateResourceLocator.make("candidate:foreign-predecessor"),
-      plannedAttempt: { ...attempt, attemptId: AttemptId.make("issue-69-foreign-predecessor") }
+      plannedAttempt: { ...attempt, attemptId: AttemptId.make("cleanup-foreign-predecessor") }
     })
     const foreignSuccessor = IntegratorSessionCorrelation.make({
       ...candidateSuccessor,

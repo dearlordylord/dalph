@@ -37,9 +37,9 @@ interface DeliveryStoryAcceptanceTest {
     | "packages/orchestrator/src/workflow/protocols/integrator/successor-session.test.ts"
     | "packages/dalph/test/cassettes/scenario.test.ts"
     | "packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts"
-    | "packages/dalph/test/cassettes/issue-337-capstone.execution.test.ts"
-    | "packages/dalph/test/cassettes/issue-274-lifecycle-resume.test.ts"
-    | "packages/dalph/test/cassettes/issue-275-active-graph-refresh.test.ts"
+    | "packages/dalph/test/cassettes/capstone.execution.test.ts"
+    | "packages/dalph/test/cassettes/lifecycle-resume.test.ts"
+    | "packages/dalph/test/cassettes/active-graph-refresh.test.ts"
     | "prototypes/reducer-lab/src/cassette-lab.smoke.ts"
 }
 
@@ -88,8 +88,8 @@ const orchestratorTest = (
 
 const topologyTest = capstoneTest("consumes a staggered graph while restart-added X waits for recovered capacity")
 const restartTest = capstoneTest("preserves the double-diamond middle positions across coordinator restart")
-const issue268CheckpointTable = capstoneTest("emits the exact DS01 through DS13 delivery checkpoint table")
-const issue268OccurrenceCassette = capstoneTest("consumes exactly the accepted issue 268 occurrence inventory")
+const controlledCheckpointTable = capstoneTest("emits the exact DS01 through DS13 delivery checkpoint table")
+const controlledOccurrenceCassette = capstoneTest("consumes exactly the accepted controlled occurrence inventory")
 const ds14ThroughDs17Test = capstoneTest(
   "executes DS-14 through DS-17 from rejected exact-head offer through Operator-authorized successor finality"
 )
@@ -109,18 +109,18 @@ const ds14ThroughDs17PrefixHistoryTest = capstoneTest(
 const ds14ThroughDs17ComposedRestartTest = capstoneTest(
   "resumes the composed DS-14 through DS-17 path after every CAS-to-successor durable checkpoint"
 )
-const issue337CapstoneTest = (name: string): DeliveryStoryAcceptanceTest => ({
+const deliveryCapstoneTest = (name: string): DeliveryStoryAcceptanceTest => ({
   declaration: "it.effect",
   name,
-  sourceFile: "packages/dalph/test/cassettes/issue-337-capstone.execution.test.ts"
+  sourceFile: "packages/dalph/test/cassettes/capstone.execution.test.ts"
 })
-const issue337CapstoneExecutionTest = issue337CapstoneTest(
+const deliveryCapstoneExecutionTest = deliveryCapstoneTest(
   "maintained deliveryInvariantStoryCapstone executes all 22 beats in one exact Run"
 )
-const issue337CapstoneCleanupTest = issue337CapstoneTest(
+const deliveryCapstoneCleanupTest = deliveryCapstoneTest(
   "completes the uninterrupted seven-task run after reconciling A FullRerun predecessor cleanup"
 )
-const issue337CapstoneReplayTest = issue337CapstoneTest(
+const deliveryCapstoneReplayTest = deliveryCapstoneTest(
   "replays the maintained capstone with the same exact chronology"
 )
 const ds17FinalityRestartTests = [
@@ -165,8 +165,8 @@ const successorDeliveryRestartTest = orchestratorTest(
   "it",
   "delivers the already-recorded FullRerun successor after restart"
 )
-const issue268CassetteKeys = ["controlled:issue268Ds01ThroughDs13"] as const
-const issue268BeatIds = deliveryStoryBeatIds.slice(0, deliveryStoryBeatIds.indexOf("DS-13") + 1)
+const controlledCassetteKeys = ["controlled:controlledDs01ThroughDs13"] as const
+const controlledDeliveryBeatIds = deliveryStoryBeatIds.slice(0, deliveryStoryBeatIds.indexOf("DS-13") + 1)
 const capstoneCassetteKey = "authored:deliveryInvariantStoryCapstone" as const
 
 const slice = (
@@ -188,13 +188,13 @@ export const deliveryStoryManifest = {
   cassetteAcceptanceTests: [topologyTest, restartTest],
   sourceDocument: "docs/DELIVERY-STORY.md" as const,
   beats: [
-    ...issue268BeatIds.map((beatId) =>
+    ...controlledDeliveryBeatIds.map((beatId) =>
       slice(
         beatId,
-        [...issue268CassetteKeys, capstoneCassetteKey],
-        issue268CheckpointTable,
-        issue268OccurrenceCassette,
-        issue337CapstoneExecutionTest
+        [...controlledCassetteKeys, capstoneCassetteKey],
+        controlledCheckpointTable,
+        controlledOccurrenceCassette,
+        deliveryCapstoneExecutionTest
       )
     ),
     slice(
@@ -204,7 +204,7 @@ export const deliveryStoryManifest = {
       ds14ThroughDs17ComposedRestartTest,
       ds14ThroughDs17PrefixHistoryTest,
       scenarioTest("continues an accepted result after process death and crosses its integration cutoff once"),
-      issue337CapstoneExecutionTest
+      deliveryCapstoneExecutionTest
     ),
     slice(
       "DS-15",
@@ -213,7 +213,7 @@ export const deliveryStoryManifest = {
       ds15NegativeTest,
       ds14ThroughDs17ComposedRestartTest,
       ds14ThroughDs17PrefixHistoryTest,
-      issue337CapstoneExecutionTest
+      deliveryCapstoneExecutionTest
     ),
     slice(
       "DS-16",
@@ -225,7 +225,7 @@ export const deliveryStoryManifest = {
       ds14ThroughDs17ComposedRestartTest,
       ds14ThroughDs17PrefixHistoryTest,
       promotionStaleRestartTest,
-      issue337CapstoneExecutionTest
+      deliveryCapstoneExecutionTest
     ),
     slice(
       "DS-17",
@@ -256,58 +256,58 @@ export const deliveryStoryManifest = {
       scenarioTest("deletes only the exact completion claim after focused task success"),
       scenarioTest("reconciles a lost completion-claim deletion without reopening success"),
       scenarioTest("reconstructs and round-trips interrupted and settled completion-cleanup Run prefixes"),
-      issue337CapstoneExecutionTest,
-      issue337CapstoneCleanupTest,
-      issue337CapstoneReplayTest
+      deliveryCapstoneExecutionTest,
+      deliveryCapstoneCleanupTest,
+      deliveryCapstoneReplayTest
     ),
     slice(
       "DS-18",
-      ["controlled:issue274LifecycleReopen", capstoneCassetteKey],
+      ["controlled:retainedCLifecycleReopen", capstoneCassetteKey],
       {
         declaration: "it.effect",
-        sourceFile: "packages/dalph/test/cassettes/issue-274-lifecycle-resume.test.ts",
+        sourceFile: "packages/dalph/test/cassettes/lifecycle-resume.test.ts",
         name: "reopens C and resumes its original attempt only after accepted capacity three"
       },
-      issue337CapstoneExecutionTest
+      deliveryCapstoneExecutionTest
     ),
     slice(
       "DS-19",
-      ["controlled:issue274LifecycleReopen", "controlled:issue274LostResumeResponse", capstoneCassetteKey],
+      ["controlled:retainedCLifecycleReopen", "controlled:retainedCLostResumeResponse", capstoneCassetteKey],
       {
         declaration: "it.effect",
-        sourceFile: "packages/dalph/test/cassettes/issue-274-lifecycle-resume.test.ts",
+        sourceFile: "packages/dalph/test/cassettes/lifecycle-resume.test.ts",
         name: "reopens C and resumes its original attempt only after accepted capacity three"
       },
       {
         declaration: "it.effect",
-        sourceFile: "packages/dalph/test/cassettes/issue-274-lifecycle-resume.test.ts",
+        sourceFile: "packages/dalph/test/cassettes/lifecycle-resume.test.ts",
         name: "reconciles C's lost Resume response after restart without another Begin or Resume"
       },
-      issue337CapstoneExecutionTest
+      deliveryCapstoneExecutionTest
     ),
     slice(
       "DS-20",
-      ["controlled:issue275ActiveGraphRefresh", capstoneCassetteKey],
+      ["controlled:activeGraphRefresh", capstoneCassetteKey],
       {
         declaration: "it.effect",
-        sourceFile: "packages/dalph/test/cassettes/issue-275-active-graph-refresh.test.ts",
+        sourceFile: "packages/dalph/test/cassettes/active-graph-refresh.test.ts",
         name: "observes F and G without admitting either while B C and D retain every exact position"
       },
-      issue337CapstoneExecutionTest
+      deliveryCapstoneExecutionTest
     ),
     slice(
       "DS-21",
       [capstoneCassetteKey],
-      issue337CapstoneExecutionTest,
-      issue337CapstoneCleanupTest,
-      issue337CapstoneReplayTest
+      deliveryCapstoneExecutionTest,
+      deliveryCapstoneCleanupTest,
+      deliveryCapstoneReplayTest
     ),
     slice(
       "DS-22",
       [capstoneCassetteKey],
-      issue337CapstoneExecutionTest,
-      issue337CapstoneCleanupTest,
-      issue337CapstoneReplayTest
+      deliveryCapstoneExecutionTest,
+      deliveryCapstoneCleanupTest,
+      deliveryCapstoneReplayTest
     )
   ] satisfies ReadonlyArray<DeliveryStoryBeatManifestEntry>
 } as const

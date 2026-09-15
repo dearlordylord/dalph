@@ -45,8 +45,8 @@ import {
   IntegratorSessionId
 } from "../integrator/events.js"
 
-const target = GitCommonDirectoryTarget.make("/tmp/issue-69-boundary-git")
-const lock = GitCommonDirectoryLocator.make("/tmp/issue-69-boundary-git")
+const target = GitCommonDirectoryTarget.make("/tmp/cleanup-boundary-git")
+const lock = GitCommonDirectoryLocator.make("/tmp/cleanup-boundary-git")
 const ownershipLost = new CoordinatorOwnershipLost({ gitCommonDirectory: lock })
 
 const commandLayer = (calls: Ref.Ref<number>) =>
@@ -111,22 +111,22 @@ const candidatePredecessor = IntegratorSessionCorrelation.make({
     commit: baseSha,
     evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("a".repeat(64)) })
   }),
-  candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-boundary-p1"),
+  candidateResource: IntegratorCandidateResourceLocator.make("candidate:cleanup-boundary-p1"),
   expectedTargetHead: baseSha,
   integrationTarget: IntegrationTarget.make({
     ref: IntegrationTargetRef.make("refs/heads/main"),
-    repository: GitRepositoryLocator.make("repo:issue-69-boundary")
+    repository: GitRepositoryLocator.make("repo:cleanup-boundary")
   }),
   plannedAttempt: attempt,
   queuedAt: JournalPosition.make(2),
-  sessionId: IntegratorSessionId.make("session:issue-69-boundary-p1"),
+  sessionId: IntegratorSessionId.make("session:cleanup-boundary-p1"),
   startedAt: JournalPosition.make(6),
   targetLineageObservedAt: JournalPosition.make(4)
 })
 const candidateSuccessor = IntegratorSessionCorrelation.make({
   ...candidatePredecessor,
-  candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-boundary-p2"),
-  sessionId: IntegratorSessionId.make("session:issue-69-boundary-p2"),
+  candidateResource: IntegratorCandidateResourceLocator.make("candidate:cleanup-boundary-p2"),
+  sessionId: IntegratorSessionId.make("session:cleanup-boundary-p2"),
   targetLineageObservedAt: JournalPosition.make(12)
 })
 const candidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
@@ -229,7 +229,7 @@ it.effect("classifies a missing branch ref reported as not a valid ref as absent
         Ref.update(calls, (count) => count + 1).pipe(
           Effect.as({
             exitCode: 1,
-            stderr: "fatal: cannot change to '/tmp/issue-69-p1': No such file or directory",
+            stderr: "fatal: cannot change to '/tmp/cleanup-p1': No such file or directory",
             stdout: ""
           })
         ),
@@ -284,7 +284,7 @@ it.effect("rejects malformed or ambiguous porcelain blocks as unreadable", () =>
                 exitCode: 0,
                 stderr: "",
                 stdout:
-                  "worktree /tmp/issue-69-p1\nHEAD 1111111111111111111111111111111111111111\n\nworktree /tmp/issue-69-p2\n"
+                  "worktree /tmp/cleanup-p1\nHEAD 1111111111111111111111111111111111111111\n\nworktree /tmp/cleanup-p2\n"
               })
             )
           : Ref.update(calls, (count) => count + 1).pipe(

@@ -109,8 +109,8 @@ A confirmed pause is passive. It schedules no Run-specific polling or timer by
 itself.
 
 See [ADR 0008](../adr/0008-derive-run-scoped-pause-state.md),
-[Run Pause scenarios](../scenarios/issue-134-pause-whole-run.md), and
-[task Pause scenarios](../scenarios/issue-135-pause-task-grouping-descendants.md).
+[Run Pause scenarios](../scenarios/pause-whole-run.md), and
+[task Pause scenarios](../scenarios/pause-task-grouping-descendants.md).
 
 ## Frontier and bounded tickets
 
@@ -167,8 +167,8 @@ Integration-resource ownership is separate from task-work capacity and is
 serialized by repository/ref target according to the integration protocol.
 
 See [ADR 0009](../adr/0009-separate-frontier-from-bounded-admission.md),
-[issue-54-resize-task-admission.md](../scenarios/issue-54-resize-task-admission.md),
-and [issue-131-conflicting-capacity-observation.md](../scenarios/issue-131-conflicting-capacity-observation.md).
+[resize-task-admission.md](../scenarios/resize-task-admission.md),
+and [conflicting-capacity-observation.md](../scenarios/conflicting-capacity-observation.md).
 
 ## Wait, pause, isolation, relinquishment, and settlement
 

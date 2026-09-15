@@ -1000,7 +1000,7 @@ export const createQuintEffectiveProfile = ({ purpose = "hosted" } = {}) => {
     "completionClaimDeletionRequestsAreBounded",
     "completionIntentPrecedesRequest",
     "completionAttemptIntentPrecedesRequest",
-    "completionRequestsAreBoundedForIssue61",
+    "completionRequestsAreBounded",
     "completionRetryRequiresExactRequestLookup",
     "completionLookupRequiresPostLossConfirmation",
     "completionRequestUsesExactPremises",
@@ -1018,7 +1018,7 @@ export const createQuintEffectiveProfile = ({ purpose = "hosted" } = {}) => {
     "settledTaskRequiresExactCleanup",
     "subjectSettlementIsLocal",
     "emptyFrontierDoesNotSettleRetainedResponsibility",
-    "runTerminationRemainsOwnedByIssue102",
+    "runTerminationRequiresWholeRunSettlement",
     "dependantReleaseBoundaryRemainsExternal"
   ]
 

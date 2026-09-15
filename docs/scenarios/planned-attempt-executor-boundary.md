@@ -2,7 +2,7 @@
 
 Status: accepted for the production-shaped fake-executor milestone and amended
 by issue 264's autonomous-work protocol. See
-[issue-264-autonomous-executor-work.md](issue-264-autonomous-executor-work.md).
+[autonomous-executor-work.md](autonomous-executor-work.md).
 
 These scenarios define only what generic Dalph needs in order to consume a task
 graph with a controlled fake executor. They do not specify coding-agent,

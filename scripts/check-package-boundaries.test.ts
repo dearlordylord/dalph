@@ -15,7 +15,7 @@ const productionTypeScriptFilesUnder = (directory: string): ReadonlyArray<string
   })
 
 it("accepts the checked-in package source roles", () => {
-  const source = readFileSync(new URL("./fixtures/issue216-forbidden-dispatch.fixture.ts.txt", import.meta.url), "utf8")
+  const source = readFileSync(new URL("./fixtures/forbidden-dispatch.fixture.ts.txt", import.meta.url), "utf8")
   const violations = sourceBoundaryViolations([
     {
       packageName: "orchestrator",
@@ -48,7 +48,7 @@ it("accepts the checked-in package source roles", () => {
 })
 
 it("rejects a dispatch fixture that imports and invokes target promotion", () => {
-  const source = readFileSync(new URL("./fixtures/issue216-forbidden-dispatch.fixture.ts.txt", import.meta.url), "utf8")
+  const source = readFileSync(new URL("./fixtures/forbidden-dispatch.fixture.ts.txt", import.meta.url), "utf8")
   const violations = sourceBoundaryViolations([
     {
       packageName: "orchestrator",

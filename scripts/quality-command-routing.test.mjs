@@ -289,7 +289,7 @@ test("hosted quality dispatch excludes local formal integration and MBT regardle
   assert.ok(calls.length > 0)
   assert.ok(calls.every((call) => call.boundary === "hosted-stage"))
   const commands = calls.map((call) => call.command.args[2])
-  assert.ok(commands.includes("test:coverage"))
+  assert.ok(commands.includes("test"))
   assert.ok(!commands.includes("test:mbt"))
   assert.ok(!commands.includes("check:quint"))
   assert.ok(!commands.includes("check:ci:formal"))

@@ -275,11 +275,11 @@ finalization. Restart restores no Exit mode or timer and uses ordinary Run
 establishment and owning-boundary reconciliation.
 
 The accepted chronology is in
-[issue-169-graceful-application-exit.md](scenarios/issue-169-graceful-application-exit.md),
+[graceful-application-exit.md](scenarios/graceful-application-exit.md),
 the exact model/test mapping is in
-[issue-203-application-exit-model-mapping.md](scenarios/issue-203-application-exit-model-mapping.md),
+[application-exit-model-mapping.md](scenarios/application-exit-model-mapping.md),
 the corrected outer-Integrator boundary mapping is in
-[issue-224-outer-integrator-application-exit.md](scenarios/issue-224-outer-integrator-application-exit.md),
+[outer-integrator-application-exit.md](scenarios/outer-integrator-application-exit.md),
 and the durable-boundary trade-off is recorded in
 [ADR 0013](adr/0013-bound-graceful-application-exit.md).
 The five-second local drain boundary and its separation from executor and
@@ -323,8 +323,8 @@ task Pause are separate journaled directions; task Pause follows current
 tracker grouping descendants rather than dependency edges.
 
 Detailed behavior lives in [ADR 0008](adr/0008-derive-run-scoped-pause-state.md),
-[Run Pause scenarios](scenarios/issue-134-pause-whole-run.md), and
-[task Pause scenarios](scenarios/issue-135-pause-task-grouping-descendants.md).
+[Run Pause scenarios](scenarios/pause-whole-run.md), and
+[task Pause scenarios](scenarios/pause-task-grouping-descendants.md).
 
 ## Frontier Derivation, Scheduling, and Capacity
 
@@ -375,7 +375,7 @@ releasing anything.
 The label representation and provider limits are in
 [Tracker Graph and Claims](architecture/tracker-graph-and-claims.md); recovery
 chronology is in
-[issue-137-reconcile-task-claims.md](scenarios/issue-137-reconcile-task-claims.md).
+[reconcile-task-claims.md](scenarios/reconcile-task-claims.md).
 
 ## Durable Task-Attempt Planning
 
@@ -396,7 +396,7 @@ preserves the observed resources and fails closed; this protocol does not
 repair, reset, prune, move, clean, or delete them.
 
 See [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md)
-and [issue-139-reconcile-git-facts.md](scenarios/issue-139-reconcile-git-facts.md).
+and [reconcile-git-facts.md](scenarios/reconcile-git-facts.md).
 
 ## Planned-Attempt Executor Boundary
 
@@ -462,7 +462,7 @@ reach target promotion. A conclusive unsuccessful report or an invalid
 reported candidate enters the #68 quarantine and operator-direction protocol.
 
 See [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md),
-[issue-56-queue-accepted-integration.md](scenarios/issue-56-queue-accepted-integration.md),
+[queue-accepted-integration.md](scenarios/queue-accepted-integration.md),
 and [issue #222](https://github.com/dearlordylord/dalph/issues/222). The
 historical issue-57 and issue-59 scenarios predate this boundary correction and
 are not current acceptance authority.

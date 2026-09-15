@@ -37,13 +37,13 @@ it("varies locator, owner, terminal occurrence, and observation revision without
             ? PlannedAttemptCleanupDisposition.cases.Abandoned.make({
                 dispositionAt: JournalPosition.make(2),
                 plannedAttempt: attempt,
-                requestId: AttemptChoiceRequestId.make({ nonce: "issue-69-stop", runId })
+                requestId: AttemptChoiceRequestId.make({ nonce: "cleanup-stop", runId })
               })
             : occurrence === "Settled"
               ? PlannedAttemptCleanupDisposition.cases.Settled.make({
                   dispositionAt: JournalPosition.make(2),
                   plannedAttempt: attempt,
-                  settlementOperationId: OperationId.make("issue-69-settlement")
+                  settlementOperationId: OperationId.make("cleanup-settlement")
                 })
               : PlannedAttemptCleanupDisposition.cases.Superseded.make({
                   dispositionAt: JournalPosition.make(2),

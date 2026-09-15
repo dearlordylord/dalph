@@ -33,24 +33,24 @@
       "justification": "validateProfile validates one supplied formal profile from source and run identity through both shard reports, timings, positions, and canonical schema construction before returning it; its branches are the fail-closed clauses of that one boundary, and splitting them would separate the reports from the evidence they prove."
     }
   },
-  "packages/dalph/test-support/issue-268-controlled-characterization.ts": {
+  "packages/dalph/test-support/controlled-characterization.ts": {
     "complexity": {
       "count": 7,
       "justification": "The four added DS-19 fixture functions retain one chronological view of real Resume, crash-cut, capacity, and restart boundaries; splitting those test-only timelines would separate controls from the occurrence they prove."
     }
   },
-  "packages/dalph/test-support/issue-268-controlled-occurrences.ts": {
+  "packages/dalph/test-support/controlled-occurrences.ts": {
     "complexity": {
       "count": 1
     }
   },
-  "packages/dalph/test-support/issue-278-normal-termination.ts": {
+  "packages/dalph/test-support/normal-termination.ts": {
     "complexity": {
       "count": 1,
       "justification": "This controlled six-task harness keeps tracker lifecycle, exact claim observations, Gfinal freshness, crash cuts, and lost termination acknowledgement in one production-shaped chronology so restart assertions share the same durable prefix; splitting it would make the cross-boundary evidence non-equivalent."
     }
   },
-  "packages/dalph/test-support/issue-278-settled-a.ts": {
+  "packages/dalph/test-support/settled-a.ts": {
     "complexity": {
       "count": 2,
       "justification": "This controlled A-prefix fixture keeps one exact ordinary-settlement chronology, validating production reconstruction and evidence reseeding before the six-task finality composition; splitting it would detach the seed from the history it proves."

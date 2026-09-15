@@ -105,9 +105,9 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
         if (replacement?._tag !== "PlannedAttemptReplaced")
           return yield* Effect.die("missing exact replacement evidence")
         expect(replacement.successorPlan.plannedAttempt).toMatchObject({
-          attemptId: "issue-69-maintained-p2",
-          branch: "refs/heads/task/issue-69-maintained-p2",
-          worktree: "/tmp/issue-69-maintained-p2",
+          attemptId: "cleanup-maintained-p2",
+          branch: "refs/heads/task/cleanup-maintained-p2",
+          worktree: "/tmp/cleanup-maintained-p2",
           taskRevision: encodeTaskRevisionFingerprint(
             JSON.stringify({ body: "cleanup provenance witness", title: "cleanup provenance witness" })
           )
@@ -223,21 +223,21 @@ it.effect("runs each authored cleanup chronology and records its exact event fam
         if (successorFixed?._tag !== "IntegratorSuccessorSessionFixed") {
           return yield* Effect.die("missing exact successor session evidence")
         }
-        expect(successorFixed.predecessor.candidateResource).toBe("candidate:issue-69-maintained-p1")
+        expect(successorFixed.predecessor.candidateResource).toBe("candidate:cleanup-maintained-p1")
         expect(successorFixed.successor.candidateResource).toBe(
           [
             "integrator-resource:full-rerun-successor",
-            "session:issue-69-maintained-p1",
-            "candidate:issue-69-maintained-p1",
-            "issue-69-maintained-cassette-run",
-            "issue-69-maintained-p1",
+            "session:cleanup-maintained-p1",
+            "candidate:cleanup-maintained-p1",
+            "cleanup-maintained-cassette-run",
+            "cleanup-maintained-p1",
             18,
             24,
             25,
             27,
             successorFixed.successor.expectedTargetHead,
             successorFixed.successor.acceptedResult.commit,
-            "repo:issue-69-maintained",
+            "repo:cleanup-maintained",
             "refs/heads/main"
           ].join(":")
         )

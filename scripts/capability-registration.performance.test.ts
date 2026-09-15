@@ -53,27 +53,27 @@ const measured = (
 describe("capability registration performance evidence", () => {
   it("reports named source-audit rows and their tree reuse counters", () => {
     const baseline = repositorySources.map((file) => ({ ...file }))
-    const samePath = "scripts/fixtures/issue-262-benchmark-semantic.ts"
+    const samePath = "scripts/fixtures/registration-fixture-benchmark-semantic.ts"
     const validSamePathSource: CapabilitySourceFile = {
       path: samePath,
       source: 'export const semanticValue: string = "valid"'
     }
     const samePathMutation: CapabilitySourceFile = { path: samePath, source: "export const semanticValue: string = 1" }
     const addedLayer: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-262-benchmark-layer.ts",
+      path: "scripts/fixtures/registration-fixture-benchmark-layer.ts",
       source: [
         "declare const Layer: { succeed: (...args: ReadonlyArray<unknown>) => unknown }",
         "export const benchmarkLayer = Layer.succeed(undefined, {})"
       ].join("\n")
     }
     const addedReexport: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-262-benchmark-reexport.ts",
-      source: 'export { benchmarkLayer as reexportedLayer } from "./issue-262-benchmark-layer.js"'
+      path: "scripts/fixtures/registration-fixture-benchmark-reexport.ts",
+      source: 'export { benchmarkLayer as reexportedLayer } from "./registration-fixture-benchmark-layer.js"'
     }
     const addedComposition: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-262-benchmark-composition.ts",
+      path: "scripts/fixtures/registration-fixture-benchmark-composition.ts",
       source:
-        'import { reexportedLayer } from "./issue-262-benchmark-reexport.js"\nexport const benchmarkAssembly = reexportedLayer'
+        'import { reexportedLayer } from "./registration-fixture-benchmark-reexport.js"\nexport const benchmarkAssembly = reexportedLayer'
     }
     const addedRootsInventory = {
       ...capabilityRegistrationInventory,
@@ -83,7 +83,7 @@ describe("capability registration performance evidence", () => {
       ]
     }
     const providerLayer: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-262-benchmark-provider-layer.ts",
+      path: "scripts/fixtures/registration-fixture-benchmark-provider-layer.ts",
       source: [
         "declare const Layer: { effect: (...args: ReadonlyArray<unknown>) => unknown }",
         "declare const Provider: unique symbol",
@@ -92,9 +92,9 @@ describe("capability registration performance evidence", () => {
       ].join("\n")
     }
     const providerComposition: CapabilitySourceFile = {
-      path: "scripts/fixtures/issue-262-benchmark-provider-composition.ts",
+      path: "scripts/fixtures/registration-fixture-benchmark-provider-composition.ts",
       source:
-        'import { benchmarkProviderLayer } from "./issue-262-benchmark-provider-layer.js"\nexport const benchmarkProviderAssembly = benchmarkProviderLayer'
+        'import { benchmarkProviderLayer } from "./registration-fixture-benchmark-provider-layer.js"\nexport const benchmarkProviderAssembly = benchmarkProviderLayer'
     }
     const providerInventory = {
       ...capabilityRegistrationInventory,

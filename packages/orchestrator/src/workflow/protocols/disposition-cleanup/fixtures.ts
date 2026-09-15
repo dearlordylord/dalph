@@ -23,26 +23,26 @@ import { replacementPredecessorsFor, replacementWorktreeObservationOperationIdFo
 const dispositionPosition = 33
 const authorizationObservationPosition = 30
 
-export const runId = RunId.make("issue-69-worktree-run")
+export const runId = RunId.make("cleanup-worktree-run")
 export const baseSha = GitCommitSha.make("1111111111111111111111111111111111111111")
 export const attempt = PlannedTaskAttempt.make({
-  attemptId: AttemptId.make("issue-69-p1"),
+  attemptId: AttemptId.make("cleanup-p1"),
   baseSha,
-  branch: TaskBranchRef.make("refs/heads/task/issue-69-p1"),
-  executor: TaskExecutorLocator.make("executor:issue-69"),
+  branch: TaskBranchRef.make("refs/heads/task/cleanup-p1"),
+  executor: TaskExecutorLocator.make("executor:cleanup"),
   runId,
-  taskId: TaskId.make("issue-69-task"),
+  taskId: TaskId.make("cleanup-task"),
   taskRevision: TaskRevision.make("revision:1"),
-  worktree: WorktreeLocator.make("/tmp/issue-69-p1")
+  worktree: WorktreeLocator.make("/tmp/cleanup-p1")
 })
 export const successor = PlannedTaskAttempt.make({
   ...attempt,
-  attemptId: AttemptId.make("issue-69-p2"),
-  branch: TaskBranchRef.make("refs/heads/task/issue-69-p2"),
+  attemptId: AttemptId.make("cleanup-p2"),
+  branch: TaskBranchRef.make("refs/heads/task/cleanup-p2"),
   taskRevision: encodeTaskRevisionFingerprint(
     JSON.stringify({ body: "cleanup provenance witness", title: "cleanup provenance witness" })
   ),
-  worktree: WorktreeLocator.make("/tmp/issue-69-p2")
+  worktree: WorktreeLocator.make("/tmp/cleanup-p2")
 })
 export const disposition = PlannedAttemptCleanupDisposition.cases.Superseded.make({
   dispositionAt: JournalPosition.make(dispositionPosition),
@@ -57,7 +57,7 @@ export const authorization = WorktreeCleanupAuthorization.make({
   locator: attempt.worktree,
   observationAt: JournalPosition.make(authorizationObservationPosition),
   observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
-  operationId: OperationId.make("issue-69-worktree-cleanup"),
+  operationId: OperationId.make("cleanup-worktree-cleanup"),
   owner: WorktreeCleanupOwner.make({ attemptId: attempt.attemptId, branch: attempt.branch }),
   writerQuiescent: true
 })

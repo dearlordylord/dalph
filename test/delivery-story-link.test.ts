@@ -8,25 +8,25 @@ import {
   renderDeliveryStoryManifest
 } from "../packages/dalph/src/cassettes/delivery-story-manifest.js"
 import { maintainedIntegrationFinalityProtocolCassetteCatalog } from "../packages/dalph/src/cassettes/integration-finality-protocol-cassette-domain.js"
-import { issue268ControlledDeliveryCassetteCatalog } from "../packages/dalph/test-support/issue-268-controlled-occurrence-cassette.js"
-import { issue274RetainedCCassetteCatalog } from "../packages/dalph/test-support/issue-274-retained-c-cassette.js"
-import { issue275ActiveGraphRefreshCassetteCatalog } from "../packages/dalph/test-support/issue-275-active-graph-refresh-cassette.js"
+import { controlledDeliveryCassetteCatalog } from "../packages/dalph/test-support/controlled-occurrence-cassette.js"
+import { retainedCCassetteCatalog } from "../packages/dalph/test-support/retained-c-cassette.js"
+import { activeGraphRefreshCassetteCatalog } from "../packages/dalph/test-support/active-graph-refresh-cassette.js"
 import {
-  issue268AcceptedOccurrenceOrder,
-  issue268AcceptedOccurrenceOrderDigest
-} from "../packages/dalph/test-support/issue-268-controlled-occurrence-cassette-data.js"
+  acceptedOccurrenceOrder,
+  acceptedOccurrenceOrderDigest
+} from "../packages/dalph/test-support/controlled-occurrence-cassette-data.js"
 
 it("keeps the issue 276 position slice alongside the complete DS-21 capstone", () => {
   const beat = deliveryStoryManifest.beats.find(({ beatId }) => beatId === "DS-21")
   expect(beat?.coverage._tag).toBe("DemonstratedByMaintainedSlice")
   if (beat?.coverage._tag !== "DemonstratedByMaintainedSlice") return expect.fail("DS-21 capstone coverage is missing")
   expect(beat.coverage.cassetteKeys).toContain("authored:deliveryInvariantStoryCapstone")
-  const scenarioName = "issue-276-release-exact-task-positions.md"
+  const scenarioName = "release-exact-task-positions.md"
   const index = readFileSync(new URL("../docs/scenarios/README.md", import.meta.url), "utf8")
   expect(index).toContain(scenarioName)
   const scenario = readFileSync(new URL(`../docs/scenarios/${scenarioName}`, import.meta.url), "utf8")
   const tests = readFileSync(
-    new URL("../packages/dalph/test/cassettes/issue-276-position-release.test.ts", import.meta.url),
+    new URL("../packages/dalph/test/cassettes/position-release.test.ts", import.meta.url),
     "utf8"
   )
   for (const name of [
@@ -42,7 +42,7 @@ it("delivery story manifest names the executed capstone and contains no unsuppor
   expect(maintainedAuthoredCassetteCatalog.deliveryInvariantStoryCapstone).toBeDefined()
   expect(deliveryStoryManifest.beats).toHaveLength(22)
   const capstoneTests = readFileSync(
-    new URL("../packages/dalph/test/cassettes/issue-337-capstone.execution.test.ts", import.meta.url),
+    new URL("../packages/dalph/test/cassettes/capstone.execution.test.ts", import.meta.url),
     "utf8"
   )
   for (const name of [
@@ -74,9 +74,9 @@ it("keeps every delivery-story beat linked to maintained evidence or an explicit
       (catalog === "authored" && name !== undefined && name in maintainedAuthoredCassetteCatalog) ||
       (catalog === "controlled" &&
         name !== undefined &&
-        (name in issue268ControlledDeliveryCassetteCatalog ||
-          name in issue274RetainedCCassetteCatalog ||
-          name in issue275ActiveGraphRefreshCassetteCatalog)) ||
+        (name in controlledDeliveryCassetteCatalog ||
+          name in retainedCCassetteCatalog ||
+          name in activeGraphRefreshCassetteCatalog)) ||
       (catalog === "integration-finality" &&
         name !== undefined &&
         name in maintainedIntegrationFinalityProtocolCassetteCatalog)
@@ -98,8 +98,8 @@ it("keeps every delivery-story beat linked to maintained evidence or an explicit
   expect(document).toContain("`authored:deliveryInvariantStoryCapstone`")
   expect(deliveryStoryManifest.cassetteAcceptanceTests.length).toBeGreaterThan(0)
   expect(deliveryStoryManifest.cassetteAcceptanceTests.every(acceptanceTestExists)).toBe(true)
-  expect(createHash("sha256").update(JSON.stringify(issue268AcceptedOccurrenceOrder)).digest("hex")).toBe(
-    issue268AcceptedOccurrenceOrderDigest
+  expect(createHash("sha256").update(JSON.stringify(acceptedOccurrenceOrder)).digest("hex")).toBe(
+    acceptedOccurrenceOrderDigest
   )
   for (const { coverage } of deliveryStoryManifest.beats) {
     if (coverage._tag === "NotImplemented") {

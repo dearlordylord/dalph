@@ -67,26 +67,26 @@ import {
 } from "../planned-attempt-executor-work/events.js"
 import { dispositionCleanupContract } from "../../../../test/contracts/disposition-cleanup-contract.js"
 
-const runId = RunId.make("issue-69-worktree-run")
+const runId = RunId.make("cleanup-worktree-run")
 const baseSha = GitCommitSha.make("1111111111111111111111111111111111111111")
 const attempt = PlannedTaskAttempt.make({
-  attemptId: AttemptId.make("issue-69-p1"),
+  attemptId: AttemptId.make("cleanup-p1"),
   baseSha,
-  branch: TaskBranchRef.make("refs/heads/task/issue-69-p1"),
-  executor: TaskExecutorLocator.make("executor:issue-69"),
+  branch: TaskBranchRef.make("refs/heads/task/cleanup-p1"),
+  executor: TaskExecutorLocator.make("executor:cleanup"),
   runId,
-  taskId: TaskId.make("issue-69-task"),
+  taskId: TaskId.make("cleanup-task"),
   taskRevision: TaskRevision.make("revision:1"),
-  worktree: WorktreeLocator.make("/tmp/issue-69-p1")
+  worktree: WorktreeLocator.make("/tmp/cleanup-p1")
 })
 const successor = PlannedTaskAttempt.make({
   ...attempt,
-  attemptId: AttemptId.make("issue-69-p2"),
-  branch: TaskBranchRef.make("refs/heads/task/issue-69-p2"),
+  attemptId: AttemptId.make("cleanup-p2"),
+  branch: TaskBranchRef.make("refs/heads/task/cleanup-p2"),
   taskRevision: encodeTaskRevisionFingerprint(
     JSON.stringify({ body: "cleanup provenance witness", title: "cleanup provenance witness" })
   ),
-  worktree: WorktreeLocator.make("/tmp/issue-69-p2")
+  worktree: WorktreeLocator.make("/tmp/cleanup-p2")
 })
 const disposition = PlannedAttemptCleanupDisposition.cases.Superseded.make({
   dispositionAt: JournalPosition.make(33),
@@ -101,7 +101,7 @@ const authorization = WorktreeCleanupAuthorization.make({
   locator: attempt.worktree,
   observationAt: JournalPosition.make(30),
   observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
-  operationId: OperationId.make("issue-69-worktree-cleanup"),
+  operationId: OperationId.make("cleanup-worktree-cleanup"),
   owner: WorktreeCleanupOwner.make({ attemptId: attempt.attemptId, branch: attempt.branch }),
   writerQuiescent: true
 })
@@ -154,18 +154,18 @@ it.effect("controlled worktree cleanup satisfies the shared boundary contract", 
 
 const secondAttempt = PlannedTaskAttempt.make({
   ...attempt,
-  attemptId: AttemptId.make("issue-69-p1-second"),
-  branch: TaskBranchRef.make("refs/heads/task/issue-69-p1-second"),
-  worktree: WorktreeLocator.make("/tmp/issue-69-p1-second")
+  attemptId: AttemptId.make("cleanup-p1-second"),
+  branch: TaskBranchRef.make("refs/heads/task/cleanup-p1-second"),
+  worktree: WorktreeLocator.make("/tmp/cleanup-p1-second")
 })
 
 const loopAttempt = (suffix: string) =>
   PlannedTaskAttempt.make({
     ...attempt,
-    attemptId: AttemptId.make(`issue-69-${suffix}`),
-    branch: TaskBranchRef.make(`refs/heads/task/issue-69-${suffix}`),
+    attemptId: AttemptId.make(`cleanup-${suffix}`),
+    branch: TaskBranchRef.make(`refs/heads/task/cleanup-${suffix}`),
     taskRevision: TaskRevision.make(`revision:${suffix}`),
-    worktree: WorktreeLocator.make(`/tmp/issue-69-${suffix}`)
+    worktree: WorktreeLocator.make(`/tmp/cleanup-${suffix}`)
   })
 
 const fairnessAttempts = [secondAttempt, loopAttempt("p3"), loopAttempt("p4")]
@@ -238,7 +238,7 @@ it.effect("ordinary activation selects two exact worktree operations independent
     const contradictoryAuthorization = WorktreeCleanupAuthorization.make({
       ...firstAuthorization,
       expectedHead: GitCommitSha.make("2".repeat(40)),
-      operationId: OperationId.make("issue-69-contradictory-cleanup")
+      operationId: OperationId.make("cleanup-contradictory-cleanup")
     })
     yield* journal.append(
       runId,
@@ -329,7 +329,7 @@ it.effect("ordinary activation selects two exact worktree operations independent
 it.effect("ordinary activation derives authorization from terminal facts before crossing the boundary", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendAbandonedProvenance(attempt, OperationId.make("issue-69-terminal-facts"))
+    yield* appendAbandonedProvenance(attempt, OperationId.make("cleanup-terminal-facts"))
     const before = yield* journal.read(runId)
     expect(before.some(({ event }) => event._tag === "WorktreeCleanupAuthorized")).toBe(false)
 
@@ -381,8 +381,8 @@ it.effect("does not let a forged same-disposition authorization suppress canonic
     const canonical = yield* appendAbandonedProvenance(attempt)
     const forged = WorktreeCleanupAuthorization.make({
       ...canonical,
-      causalPredecessors: [OperationId.make("issue-69-foreign-causal-witness")],
-      operationId: OperationId.make("issue-69-forged-recovery")
+      causalPredecessors: [OperationId.make("cleanup-foreign-causal-witness")],
+      operationId: OperationId.make("cleanup-forged-recovery")
     })
     yield* journal.append(
       runId,
@@ -413,8 +413,8 @@ it.effect("does not let a forged same-disposition authorization suppress canonic
 it.effect("ordinary activation runs two terminal responsibilities and excludes a forged authorization", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendAbandonedProvenance(attempt, OperationId.make("issue-69-two-terminal-first"))
-    yield* appendAbandonedProvenance(secondAttempt, OperationId.make("issue-69-two-terminal-second"))
+    yield* appendAbandonedProvenance(attempt, OperationId.make("cleanup-two-terminal-first"))
+    yield* appendAbandonedProvenance(secondAttempt, OperationId.make("cleanup-two-terminal-second"))
     const activation = yield* makeDispositionCleanupActivation(runId)
     const validAuthorizations = activation.responsibilities.worktree
     expect(validAuthorizations).toHaveLength(2)
@@ -423,7 +423,7 @@ it.effect("ordinary activation runs two terminal responsibilities and excludes a
     const forged = WorktreeCleanupAuthorization.make({
       ...first,
       expectedHead: GitCommitSha.make("2".repeat(40)),
-      operationId: OperationId.make("issue-69-forged-terminal-authorization")
+      operationId: OperationId.make("cleanup-forged-terminal-authorization")
     })
     yield* journal.append(
       runId,
@@ -1109,7 +1109,7 @@ it.effect("ignores malformed cleanup history for an unrelated operation", () =>
     yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const unrelated = WorktreeCleanupAuthorization.make({
       ...authorization,
-      operationId: OperationId.make("issue-69-unrelated-cleanup")
+      operationId: OperationId.make("cleanup-unrelated-cleanup")
     })
     const ordinal = CleanupObservationOrdinal.make(1)
     yield* journal.append(
@@ -1156,11 +1156,11 @@ it("does not authorize cleanup for a current quarantine without a terminal dispo
 it.effect("does not treat nonterminal TargetLineageObserved as a planned-attempt settlement", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    const settlementOperationId = OperationId.make("issue-69-nonterminal-settlement-read")
+    const settlementOperationId = OperationId.make("cleanup-nonterminal-settlement-read")
     const operation = makeTargetLineageObservationOperation({
       integrationTarget: IntegrationTarget.make({
         ref: IntegrationTargetRef.make("refs/heads/main"),
-        repository: GitRepositoryLocator.make("repo:issue-69")
+        repository: GitRepositoryLocator.make("repo:cleanup")
       }),
       operationId: settlementOperationId,
       plannedAttempt: attempt,
@@ -1216,7 +1216,7 @@ it.effect("preserves an authorization whose observation provenance is forged", (
     const forged = WorktreeCleanupAuthorization.make({
       ...authorization,
       observationAt: authorization.disposition.dispositionAt,
-      observationOperationId: OperationId.make("issue-69-fake-observation")
+      observationOperationId: OperationId.make("cleanup-fake-observation")
     })
     const result = yield* runWorktreeCleanup(forged)
     expect(result._tag).toBe("Preserved")
@@ -1232,7 +1232,7 @@ it.effect("rejects a replacement when a same-operation tracker read names a fore
     const journal = yield* InRunJournal
     yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const records = yield* journal.read(runId)
-    const foreignTarget = FixtureTarget.make("issue-69-foreign-tracker-read")
+    const foreignTarget = FixtureTarget.make("cleanup-foreign-tracker-read")
     const foreignRecords = records.map((record) =>
       record.event._tag === "TaskTrackerReadIntentRecorded" && record.event.operation._tag === "ReadTrackerGraph"
         ? { ...record, event: { ...record.event, operation: { ...record.event.operation, target: foreignTarget } } }

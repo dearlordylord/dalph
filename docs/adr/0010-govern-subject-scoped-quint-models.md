@@ -43,7 +43,7 @@ task identities by every boundary outcome and repeated recovery cycle; the
 canonical product did not complete within the repository's exhaustive gate.
 
 This split is accepted only with the refinement mapping and test ownership in
-`docs/scenarios/issue-315-preserve-bounded-fresh-admission.md`. Every canonical
+`docs/scenarios/preserve-bounded-fresh-admission.md`. Every canonical
 state and action must map to an action in each relevant projection or to an
 explicit stutter that cannot change the projected property. A counter-only
 capacity projection is not an acceptable substitute because it cannot express

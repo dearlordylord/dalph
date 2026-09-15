@@ -57,7 +57,7 @@ separate journaled Git reads. A non-ready observation can constrain the exact
 attempt and require safe executor suspension, but does not release the task
 claim or silently dispose the worktree.
 
-See [issue-139-reconcile-git-facts.md](../scenarios/issue-139-reconcile-git-facts.md).
+See [reconcile-git-facts.md](../scenarios/reconcile-git-facts.md).
 
 ## Planned-attempt executor boundary
 
@@ -127,7 +127,7 @@ accepted result and integration obligation remain. Runtime releases the target
 resource while preserving same-target order. Another target may continue.
 
 See
-[issue-56-queue-accepted-integration.md](../scenarios/issue-56-queue-accepted-integration.md)
+[queue-accepted-integration.md](../scenarios/queue-accepted-integration.md)
 and the
 [`acceptedResultIntegration` Quint model](../../specs/acceptedResultIntegration.qnt).
 
@@ -178,5 +178,5 @@ integration responsibility remains the same-target FIFO blocker for later
 tracker completion and settlement, while work for another target can proceed.
 
 See
-[the reported candidate reaching promotion](../scenarios/issue-223-migrate-promotion-and-finality.md#the-reported-and-git-qualified-candidate-reaches-promotion)
-and [ambiguous or stale promotion](../scenarios/issue-223-migrate-promotion-and-finality.md#an-ambiguous-or-stale-promotion-preserves-the-exact-work).
+[the reported candidate reaching promotion](../scenarios/migrate-promotion-and-finality.md#the-reported-and-git-qualified-candidate-reaches-promotion)
+and [ambiguous or stale promotion](../scenarios/migrate-promotion-and-finality.md#an-ambiguous-or-stale-promotion-preserves-the-exact-work).

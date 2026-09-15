@@ -82,24 +82,24 @@ const acceptedResult = AcceptedResult.make({
   evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("a".repeat(64)) })
 })
 const target = IntegrationTarget.make({
-  repository: GitRepositoryLocator.make("repo:issue-69"),
+  repository: GitRepositoryLocator.make("repo:cleanup"),
   ref: IntegrationTargetRef.make("refs/heads/main")
 })
 const candidateAttempt = PlannedTaskAttempt.make({
   ...attempt,
-  attemptId: AttemptId.make("issue-69-candidate-attempt"),
-  branch: TaskBranchRef.make("refs/heads/task/issue-69-candidate"),
-  taskId: TaskId.make("issue-69-candidate-task"),
-  worktree: WorktreeLocator.make("/tmp/issue-69-candidate")
+  attemptId: AttemptId.make("cleanup-candidate-attempt"),
+  branch: TaskBranchRef.make("refs/heads/task/cleanup-candidate"),
+  taskId: TaskId.make("cleanup-candidate-task"),
+  worktree: WorktreeLocator.make("/tmp/cleanup-candidate")
 })
 const predecessor = IntegratorSessionCorrelation.make({
   acceptedResult,
-  candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-p1"),
+  candidateResource: IntegratorCandidateResourceLocator.make("candidate:cleanup-p1"),
   expectedTargetHead: baseSha,
   integrationTarget: target,
   plannedAttempt: candidateAttempt,
   queuedAt: JournalPosition.make(17),
-  sessionId: IntegratorSessionId.make("session:issue-69-p1"),
+  sessionId: IntegratorSessionId.make("session:cleanup-p1"),
   startedAt: JournalPosition.make(18),
   targetLineageObservedAt: JournalPosition.make(20)
 })
@@ -121,13 +121,13 @@ const disposition = IntegratorCandidateCleanupDisposition.make({
   successor
 })
 const authorization = IntegratorCandidateCleanupAuthorization.make({
-  causalPredecessors: [OperationId.make("issue-69-full-rerun")],
+  causalPredecessors: [OperationId.make("cleanup-full-rerun")],
   disposition,
   evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
   locator: predecessor.candidateResource,
   observationAt: JournalPosition.make(20),
-  observationOperationId: OperationId.make("session:issue-69-p1:predecessor-lineage"),
-  operationId: OperationId.make("issue-69-candidate-cleanup"),
+  observationOperationId: OperationId.make("session:cleanup-p1:predecessor-lineage"),
+  operationId: OperationId.make("cleanup-candidate-cleanup"),
   owner: IntegratorCandidateCleanupOwner.make({ sessionId: predecessor.sessionId }),
   writerQuiescent: true
 })
@@ -139,8 +139,8 @@ const branchAuthorization = BranchCleanupAuthorization.make({
   expectedHead: baseSha,
   locator: attempt.branch,
   observationAt: JournalPosition.make(17),
-  observationOperationId: OperationId.make("issue-69-branch-observation"),
-  operationId: OperationId.make("issue-69-branch-cleanup"),
+  observationOperationId: OperationId.make("cleanup-branch-observation"),
+  operationId: OperationId.make("cleanup-branch-cleanup"),
   owner: BranchCleanupOwner.make({ attemptId: attempt.attemptId }),
   worktreeCleanupOperationId: worktreeAuthorization.operationId,
   writerQuiescent: true
@@ -221,10 +221,10 @@ it.effect("keeps provider-neutral candidate authority unavailable and scopes loo
 
 it.effect("table-reconciles changed candidate owner, locator, and revision without a mutation", () =>
   Effect.gen(function* () {
-    const foreignSession = IntegratorSessionId.make("session:issue-69-foreign")
+    const foreignSession = IntegratorSessionId.make("session:cleanup-foreign")
     const cases = [
       IntegratorCandidateCleanupObservation.cases.Foreign.make({
-        locator: IntegratorCandidateResourceLocator.make("candidate:issue-69-foreign"),
+        locator: IntegratorCandidateResourceLocator.make("candidate:cleanup-foreign"),
         observedSessionId: foreignSession,
         reason: "OtherSession",
         revision: IntegratorCandidateCleanupEvidenceRevision.make(2)
@@ -243,7 +243,7 @@ it.effect("table-reconciles changed candidate owner, locator, and revision witho
     for (const observation of cases) {
       const result = yield* Effect.gen(function* () {
         const journal = yield* InRunJournal
-        yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+        yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
         const outcome = yield* runIntegratorCandidateCleanup(authorization)
         const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
         const records = yield* journal.read(runId)
@@ -263,7 +263,7 @@ it.effect("table-reconciles changed candidate owner, locator, and revision witho
 
 it.effect("removes only a quarantined predecessor candidate", () =>
   Effect.gen(function* () {
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const boundary = yield* TestIntegratorCandidateCleanupBoundary
     expect(result._tag).toBe("Settled")
@@ -294,7 +294,7 @@ it.effect("removes only a quarantined predecessor candidate", () =>
 it.effect("does not settle a candidate removal with a stale revision", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const records = yield* journal.read(runId)
     expect(result._tag).toBe("Preserved")
@@ -326,7 +326,7 @@ it.effect("does not settle a candidate removal with a stale revision", () =>
 it.effect("settles an already-absent candidate without issuing a mutation", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const records = yield* journal.read(runId)
     expect(result._tag).toBe("Settled")
@@ -351,7 +351,7 @@ it.effect("settles an already-absent candidate without issuing a mutation", () =
 
 it.effect("preserves a post-mutation candidate observation that is not absent", () =>
   Effect.gen(function* () {
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
     expect(result._tag).toBe("Preserved")
@@ -383,7 +383,7 @@ it.effect("preserves a post-mutation candidate observation that is not absent", 
 
 it.effect("keeps an exact present candidate pending after a removal response", () =>
   Effect.gen(function* () {
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     expect(result._tag).toBe("Pending")
     expect(result._tag === "Pending" ? result.reason : "").toContain("remains unresolved")
@@ -411,7 +411,7 @@ it.effect("keeps an exact present candidate pending after a removal response", (
 
 it.effect("uses the explicit unreadable fallback when the candidate mutation script is exhausted", () =>
   Effect.gen(function* () {
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
     expect(result).toMatchObject({ _tag: "Pending", reason: "script exhausted" })
@@ -425,7 +425,7 @@ it.effect("uses the explicit unreadable fallback when the candidate mutation scr
 it.effect("keeps an unreadable candidate pending without a terminal contradiction", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
     const records = yield* journal.read(runId)
@@ -441,7 +441,7 @@ it.effect("keeps an unreadable candidate pending without a terminal contradictio
 it.effect("keeps an unreadable post-removal observation retryable", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const records = yield* journal.read(runId)
     expect(result._tag).toBe("Pending")
@@ -476,7 +476,7 @@ it.effect("keeps an unreadable post-removal observation retryable", () =>
 
 it.effect("replays a contradicted candidate without rereading or appending", () =>
   Effect.gen(function* () {
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const first = yield* runIntegratorCandidateCleanup(authorization)
     const second = yield* runIntegratorCandidateCleanup(authorization)
     const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
@@ -503,7 +503,7 @@ it.effect("replays a contradicted candidate without rereading or appending", () 
 it.effect("replays a settled predecessor candidate twice without a boundary call or journal write", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const first = yield* runIntegratorCandidateCleanup(authorization)
     const afterFirst = yield* journal.read(runId)
     const second = yield* runIntegratorCandidateCleanup(authorization)
@@ -540,7 +540,7 @@ it.effect("replays a settled predecessor candidate twice without a boundary call
 
 it.effect("preserves a live predecessor candidate writer", () =>
   Effect.gen(function* () {
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const boundary = yield* TestIntegratorCandidateCleanupBoundary
     expect(result._tag).toBe("Preserved")
@@ -576,7 +576,7 @@ it.effect("preserves a candidate authorization with missing FullRerun provenance
 
 it.effect("reconciles a lost predecessor-candidate response after restart without duplicate removal", () =>
   Effect.gen(function* () {
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const first = yield* runIntegratorCandidateCleanup(authorization)
     const second = yield* runIntegratorCandidateCleanup(authorization)
     const boundary = yield* TestIntegratorCandidateCleanupBoundary
@@ -610,20 +610,20 @@ it.effect("preserves a candidate when the mutation response names a foreign loca
   Effect.gen(function* () {
     const cases = [
       IntegratorCandidateCleanupMutationResult.cases.Removed.make({
-        locator: IntegratorCandidateResourceLocator.make("candidate:issue-69-foreign"),
+        locator: IntegratorCandidateResourceLocator.make("candidate:cleanup-foreign"),
         revision: IntegratorCandidateCleanupEvidenceRevision.make(1),
         sessionId: predecessor.sessionId
       }),
       IntegratorCandidateCleanupMutationResult.cases.Removed.make({
         locator: predecessor.candidateResource,
         revision: IntegratorCandidateCleanupEvidenceRevision.make(1),
-        sessionId: IntegratorSessionId.make("session:issue-69-foreign")
+        sessionId: IntegratorSessionId.make("session:cleanup-foreign")
       })
     ]
     for (const mutation of cases) {
       const result = yield* Effect.gen(function* () {
         const journal = yield* InRunJournal
-        yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+        yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
         const outcome = yield* runIntegratorCandidateCleanup(authorization)
         const boundary = yield* TestIntegratorCandidateCleanupBoundary
         return { calls: yield* boundary.calls(), outcome, records: yield* journal.read(runId) }
@@ -640,7 +640,7 @@ it.effect("preserves a candidate when the mutation response names a foreign loca
 
 it.effect("stops candidate mutation retries at the exact three-request bound", () =>
   Effect.gen(function* () {
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const results = [
       yield* runIntegratorCandidateCleanup(authorization),
       yield* runIntegratorCandidateCleanup(authorization),
@@ -689,7 +689,7 @@ it.effect("stops candidate mutation retries at the exact three-request bound", (
 it.effect("preserves a candidate when its cleanup history has no authorization prefix", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const ordinal = CleanupObservationOrdinal.make(1)
     yield* journal.append(
       runId,
@@ -729,7 +729,7 @@ it("rejects a FullRerun successor that changes responsibility facts", () => {
 it.effect("rejects a FullRerun quarantine under a foreign key", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const records = yield* journal.read(runId)
     const foreign = records.map((record) =>
       record.event._tag === "IntegrationQuarantined"
@@ -743,7 +743,7 @@ it.effect("rejects a FullRerun quarantine under a foreign key", () =>
 it.effect("rejects a FullRerun direction or target-lineage intent under a foreign key", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const records = yield* journal.read(runId)
     const foreignDirection = records.map((record) =>
       record.event._tag === "IntegrationQuarantineDirectionApplied"
@@ -766,7 +766,7 @@ it.effect("rejects a FullRerun direction or target-lineage intent under a foreig
 it.effect("rejects a provider-failure quarantine without its activity-absence witness", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const records = yield* journal.read(runId)
     const incomplete = records.filter(({ event }) => event._tag !== "IntegrationProviderRunActivityAbsent")
     expect(validateIntegratorCandidateCleanupProvenance(incomplete, authorization)._tag).toBe("Invalid")
@@ -776,7 +776,7 @@ it.effect("rejects a provider-failure quarantine without its activity-absence wi
 it.effect("excludes a FullRerun successor when its successor target-lineage witness is absent", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const records = (yield* journal.read(runId)).filter(
       ({ event }) =>
         event._tag !== "TargetLineageObserved" || event.plannedAttempt.attemptId !== successor.plannedAttempt.attemptId
@@ -788,7 +788,7 @@ it.effect("excludes a FullRerun successor when its successor target-lineage witn
 it.effect("excludes a FullRerun successor when its provider-absence authority is incomplete", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const records = (yield* journal.read(runId)).filter(
       ({ event }) => event._tag !== "IntegrationProviderRunActivityAbsent"
     )
@@ -799,7 +799,7 @@ it.effect("excludes a FullRerun successor when its provider-absence authority is
 it.effect("excludes a FullRerun successor when its direction application is absent", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const records = (yield* journal.read(runId)).filter(
       ({ event }) => event._tag !== "IntegrationQuarantineDirectionApplied"
     )
@@ -810,7 +810,7 @@ it.effect("excludes a FullRerun successor when its direction application is abse
 it.effect("rejects duplicate successor settlement evidence before candidate authorization", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const records = yield* journal.read(runId)
     const successorFixed = records.find(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
     expect(successorFixed).toBeDefined()
@@ -827,7 +827,7 @@ it.effect("rejects duplicate successor settlement evidence before candidate auth
 it.effect("keeps candidate responsibility selection independent of a worktree terminal event", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const activation = yield* activateDispositionCleanup(runId, () =>
       Effect.succeed(IntegratorCandidateCleanupEvidenceRevision.make(1))
     )
@@ -856,7 +856,7 @@ it.effect("keeps candidate responsibility selection independent of a worktree te
 
 it.effect("carries the exact provider-private revision into candidate cleanup authorization", () =>
   Effect.gen(function* () {
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-provider-revision", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-provider-revision", "StartupValid")
     const expected = IntegratorCandidateCleanupEvidenceRevision.make(9)
     const activation = yield* activateDispositionCleanup(runId, () => Effect.succeed(expected))
     expect(activation.candidate[0]?.evidenceRevision).toBe(expected)
@@ -866,7 +866,7 @@ it.effect("carries the exact provider-private revision into candidate cleanup au
 it.effect("does not append a duplicate candidate authorization on repeated activation", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const revisionReader = () => Effect.succeed(IntegratorCandidateCleanupEvidenceRevision.make(1))
     yield* appendDerivedCleanupAuthorizations(runId, ["candidate"], revisionReader)
     yield* appendDerivedCleanupAuthorizations(runId, ["candidate"], revisionReader)
@@ -878,7 +878,7 @@ it.effect("does not append a duplicate candidate authorization on repeated activ
 
 it.effect("fails closed when ordinary activation has no private revision reader", () =>
   Effect.gen(function* () {
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const activation = yield* Effect.exit(makeDispositionCleanupActivation(runId))
     expect(activation._tag).toBe("Failure")
   }).pipe(
@@ -913,7 +913,7 @@ it.effect("fails closed when ordinary activation has no private revision reader"
 it.effect("does not silently omit candidate authorization when evidence reread fails", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const activation = yield* Effect.exit(
       activateDispositionCleanup(runId, () => Effect.fail("provider private revision is unreadable"))
     )
@@ -927,7 +927,7 @@ it.effect("does not silently omit candidate authorization when evidence reread f
 it.effect("does not let a candidate terminal fact suppress a worktree responsibility", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     yield* appendReplacementProvenance(attempt, replacementSuccessor, "StartupValid")
     const activation = yield* activateDispositionCleanup(runId, () =>
       Effect.succeed(IntegratorCandidateCleanupEvidenceRevision.make(1))
@@ -943,7 +943,7 @@ it.effect("does not let a candidate terminal fact suppress a worktree responsibi
         detail: "candidate terminal fact is unrelated to worktree responsibility",
         observation: present,
         occurrenceClassification: "NonActionOccurrence",
-        operationId: OperationId.make("issue-69-independent-worktree-selection:contradiction"),
+        operationId: OperationId.make("cleanup-independent-worktree-selection:contradiction"),
         version: workflowJournalEventVersion
       })
     )
@@ -956,11 +956,11 @@ it.effect("does not let a candidate terminal fact suppress a worktree responsibi
 it.effect("does not let a self-consistent forged candidate authorization suppress canonical derivation", () =>
   Effect.gen(function* () {
     const journal = yield* InRunJournal
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
     const forged = IntegratorCandidateCleanupAuthorization.make({
       ...authorization,
-      causalPredecessors: [OperationId.make("issue-69-foreign-candidate-causal")],
-      operationId: OperationId.make("issue-69-forged-candidate-authorization")
+      causalPredecessors: [OperationId.make("cleanup-foreign-candidate-causal")],
+      operationId: OperationId.make("cleanup-forged-candidate-authorization")
     })
     yield* journal.append(
       runId,
@@ -976,7 +976,7 @@ it.effect("does not let a self-consistent forged candidate authorization suppres
       Effect.succeed(IntegratorCandidateCleanupEvidenceRevision.make(1))
     )
     expect(activation.candidate.map(({ operationId }) => operationId)).toEqual([
-      "disposition-cleanup:integrator-candidate:session:issue-69-p1"
+      "disposition-cleanup:integrator-candidate:session:cleanup-p1"
     ])
     expect(
       (yield* journal.read(runId)).filter(({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized")

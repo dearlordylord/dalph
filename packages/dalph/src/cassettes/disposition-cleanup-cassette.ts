@@ -68,17 +68,21 @@ import {
   worktreeCleanupTestLayer
 } from "@dalph/orchestrator"
 
-const issue69P1Worktree = WorktreeLocator.make("/tmp/issue-69-maintained-p1")
-const issue69P1Branch = TaskBranchRef.make("refs/heads/task/issue-69-maintained-p1")
-const issue69AbandonedCleanupOperation = OperationId.make("issue-69-maintained-abandoned-worktree-cleanup")
-const issue69P1Candidate = IntegratorCandidateResourceLocator.make("candidate:issue-69-maintained-p1")
-const issue69P1Session = IntegratorSessionId.make("session:issue-69-maintained-p1")
-const issue69DerivedWorktreeOperation = OperationId.make("disposition-cleanup:worktree:issue-69-maintained-p1")
-const issue69DerivedBranchOperation = OperationId.make("disposition-cleanup:branch:issue-69-maintained-p1")
-const issue69DerivedAbandonedWorktreeOperation = OperationId.make("disposition-cleanup:worktree:issue-69-maintained-p1")
-const issue69DerivedAbandonedBranchOperation = OperationId.make("disposition-cleanup:branch:issue-69-maintained-p1")
-const issue69DerivedCandidateOperation = OperationId.make(
-  "disposition-cleanup:integrator-candidate:session:issue-69-maintained-p1"
+const cleanupCassetteP1Worktree = WorktreeLocator.make("/tmp/cleanup-maintained-p1")
+const cleanupCassetteP1Branch = TaskBranchRef.make("refs/heads/task/cleanup-maintained-p1")
+const cleanupCassetteAbandonedCleanupOperation = OperationId.make("cleanup-maintained-abandoned-worktree-cleanup")
+const cleanupCassetteP1Candidate = IntegratorCandidateResourceLocator.make("candidate:cleanup-maintained-p1")
+const cleanupCassetteP1Session = IntegratorSessionId.make("session:cleanup-maintained-p1")
+const cleanupCassetteDerivedWorktreeOperation = OperationId.make("disposition-cleanup:worktree:cleanup-maintained-p1")
+const cleanupCassetteDerivedBranchOperation = OperationId.make("disposition-cleanup:branch:cleanup-maintained-p1")
+const cleanupCassetteDerivedAbandonedWorktreeOperation = OperationId.make(
+  "disposition-cleanup:worktree:cleanup-maintained-p1"
+)
+const cleanupCassetteDerivedAbandonedBranchOperation = OperationId.make(
+  "disposition-cleanup:branch:cleanup-maintained-p1"
+)
+const cleanupCassetteDerivedCandidateOperation = OperationId.make(
+  "disposition-cleanup:integrator-candidate:session:cleanup-maintained-p1"
 )
 
 /** Concrete controlled-boundary subject retained by the maintained cassette. */
@@ -107,47 +111,47 @@ const DispositionCleanupBoundaryCall = Schema.TaggedUnion({
 })
 type DispositionCleanupBoundaryCall = typeof DispositionCleanupBoundaryCall.Type
 
-const expectedWorktreeObserve = (ordinal: number, operationId = issue69DerivedWorktreeOperation) =>
+const expectedWorktreeObserve = (ordinal: number, operationId = cleanupCassetteDerivedWorktreeOperation) =>
   DispositionCleanupBoundaryCall.cases.WorktreeObserve.make({
-    locator: issue69P1Worktree,
+    locator: cleanupCassetteP1Worktree,
     operationId,
     ordinal: CleanupObservationOrdinal.make(ordinal)
   })
-const expectedWorktreeRemove = (ordinal: number, operationId = issue69DerivedWorktreeOperation) =>
+const expectedWorktreeRemove = (ordinal: number, operationId = cleanupCassetteDerivedWorktreeOperation) =>
   DispositionCleanupBoundaryCall.cases.WorktreeRemove.make({
-    branch: issue69P1Branch,
-    locator: issue69P1Worktree,
+    branch: cleanupCassetteP1Branch,
+    locator: cleanupCassetteP1Worktree,
     operationId,
     ordinal: CleanupMutationOrdinal.make(ordinal)
   })
-const expectedBranchObserve = (ordinal: number, operationId = issue69DerivedBranchOperation) =>
+const expectedBranchObserve = (ordinal: number, operationId = cleanupCassetteDerivedBranchOperation) =>
   DispositionCleanupBoundaryCall.cases.BranchObserve.make({
-    branch: issue69P1Branch,
+    branch: cleanupCassetteP1Branch,
     operationId,
     ordinal: CleanupObservationOrdinal.make(ordinal)
   })
-const expectedBranchRemove = (ordinal: number, operationId = issue69DerivedBranchOperation) =>
+const expectedBranchRemove = (ordinal: number, operationId = cleanupCassetteDerivedBranchOperation) =>
   DispositionCleanupBoundaryCall.cases.BranchRemove.make({
-    branch: issue69P1Branch,
+    branch: cleanupCassetteP1Branch,
     operationId,
     ordinal: CleanupMutationOrdinal.make(ordinal)
   })
 const expectedCandidateObserve = (ordinal: number) =>
   DispositionCleanupBoundaryCall.cases.CandidateObserve.make({
-    locator: issue69P1Candidate,
-    operationId: issue69DerivedCandidateOperation,
+    locator: cleanupCassetteP1Candidate,
+    operationId: cleanupCassetteDerivedCandidateOperation,
     ordinal: CleanupObservationOrdinal.make(ordinal),
-    sessionId: issue69P1Session
+    sessionId: cleanupCassetteP1Session
   })
 const expectedCandidateRemove = (ordinal: number) =>
   DispositionCleanupBoundaryCall.cases.CandidateRemove.make({
-    locator: issue69P1Candidate,
-    operationId: issue69DerivedCandidateOperation,
+    locator: cleanupCassetteP1Candidate,
+    operationId: cleanupCassetteDerivedCandidateOperation,
     ordinal: CleanupMutationOrdinal.make(ordinal),
-    sessionId: issue69P1Session
+    sessionId: cleanupCassetteP1Session
   })
 
-const issue69SecondObservationOrdinal = 2
+const cleanupCassetteSecondObservationOrdinal = 2
 
 /** Maintained chronological cleanup story, independent for each authority family. */
 export const DispositionCleanupCassette = Schema.Struct({
@@ -175,10 +179,10 @@ export const dispositionCleanupAuthoredCassetteCatalog = {
     expectedBoundaryCalls: [
       expectedWorktreeObserve(1),
       expectedWorktreeRemove(1),
-      expectedWorktreeObserve(issue69SecondObservationOrdinal),
+      expectedWorktreeObserve(cleanupCassetteSecondObservationOrdinal),
       expectedBranchObserve(1),
       expectedBranchRemove(1),
-      expectedBranchObserve(issue69SecondObservationOrdinal)
+      expectedBranchObserve(cleanupCassetteSecondObservationOrdinal)
     ],
     forbiddenResult: "delete P2, a moved/untracked resource, or workflow-journal evidence",
     name: "Restarted task disposes only settled P1 resources",
@@ -195,10 +199,13 @@ export const dispositionCleanupAuthoredCassetteCatalog = {
   abandonedWorktree: DispositionCleanupCassette.make({
     actor: "Alice",
     expectedBoundaryCalls: [
-      expectedWorktreeObserve(1, issue69DerivedAbandonedWorktreeOperation),
-      expectedWorktreeRemove(1, issue69DerivedAbandonedWorktreeOperation),
-      expectedWorktreeObserve(issue69SecondObservationOrdinal, issue69DerivedAbandonedWorktreeOperation),
-      expectedBranchObserve(1, issue69DerivedAbandonedBranchOperation)
+      expectedWorktreeObserve(1, cleanupCassetteDerivedAbandonedWorktreeOperation),
+      expectedWorktreeRemove(1, cleanupCassetteDerivedAbandonedWorktreeOperation),
+      expectedWorktreeObserve(
+        cleanupCassetteSecondObservationOrdinal,
+        cleanupCassetteDerivedAbandonedWorktreeOperation
+      ),
+      expectedBranchObserve(1, cleanupCassetteDerivedAbandonedBranchOperation)
     ],
     forbiddenResult: "delete an abandoned worktree without the exact Stop and executor witness",
     name: "Stop settles the abandoned worktree through exact executor evidence",
@@ -229,7 +236,7 @@ export const dispositionCleanupAuthoredCassetteCatalog = {
     expectedBoundaryCalls: [
       expectedCandidateObserve(1),
       expectedCandidateRemove(1),
-      expectedCandidateObserve(issue69SecondObservationOrdinal)
+      expectedCandidateObserve(cleanupCassetteSecondObservationOrdinal)
     ],
     forbiddenResult: "delete S1 history, C2, or the live successor candidate",
     name: "FullRerun disposes only the quarantined predecessor candidate",
@@ -329,87 +336,87 @@ export const dispositionCleanupRecordedCassetteCatalog = {
 export type DispositionCleanupRecordedCassette =
   (typeof dispositionCleanupRecordedCassetteCatalog)[keyof typeof dispositionCleanupRecordedCassetteCatalog]
 
-const issue69RunId = RunId.make("issue-69-maintained-cassette-run")
-const issue69ShaLength = 40
-const issue69EvidenceDigestLength = 64
-const issue69QueuedAtPosition = 17
-const issue69StartedAtPosition = 18
-const issue69TargetLineagePosition = 20
-const issue69SuccessorTargetLineagePosition = 27
-const issue69QuarantinePosition = 24
-const issue69DirectionPosition = 25
-const issue69SecondEvidenceRevision = 2
-const issue69BaseSha = GitCommitSha.make("1".repeat(issue69ShaLength))
-const issue69Attempt = PlannedTaskAttempt.make({
-  attemptId: AttemptId.make("issue-69-maintained-p1"),
-  baseSha: issue69BaseSha,
-  branch: issue69P1Branch,
-  executor: TaskExecutorLocator.make("executor:issue-69-maintained"),
-  runId: issue69RunId,
-  taskId: TaskId.make("issue-69-maintained-task"),
-  taskRevision: TaskRevision.make("issue-69-maintained-revision"),
-  worktree: issue69P1Worktree
+const cleanupCassetteRunId = RunId.make("cleanup-maintained-cassette-run")
+const cleanupCassetteShaLength = 40
+const cleanupCassetteEvidenceDigestLength = 64
+const cleanupCassetteQueuedAtPosition = 17
+const cleanupCassetteStartedAtPosition = 18
+const cleanupCassetteTargetLineagePosition = 20
+const cleanupCassetteSuccessorTargetLineagePosition = 27
+const cleanupCassetteQuarantinePosition = 24
+const cleanupCassetteDirectionPosition = 25
+const cleanupCassetteSecondEvidenceRevision = 2
+const cleanupCassetteBaseSha = GitCommitSha.make("1".repeat(cleanupCassetteShaLength))
+const cleanupCassetteAttempt = PlannedTaskAttempt.make({
+  attemptId: AttemptId.make("cleanup-maintained-p1"),
+  baseSha: cleanupCassetteBaseSha,
+  branch: cleanupCassetteP1Branch,
+  executor: TaskExecutorLocator.make("executor:cleanup-maintained"),
+  runId: cleanupCassetteRunId,
+  taskId: TaskId.make("cleanup-maintained-task"),
+  taskRevision: TaskRevision.make("cleanup-maintained-revision"),
+  worktree: cleanupCassetteP1Worktree
 })
-const issue69Successor = PlannedTaskAttempt.make({
-  ...issue69Attempt,
-  attemptId: AttemptId.make("issue-69-maintained-p2"),
-  branch: TaskBranchRef.make("refs/heads/task/issue-69-maintained-p2"),
+const cleanupCassetteSuccessor = PlannedTaskAttempt.make({
+  ...cleanupCassetteAttempt,
+  attemptId: AttemptId.make("cleanup-maintained-p2"),
+  branch: TaskBranchRef.make("refs/heads/task/cleanup-maintained-p2"),
   taskRevision: encodeTaskRevisionFingerprint(
     JSON.stringify({ body: "cleanup provenance witness", title: "cleanup provenance witness" })
   ),
-  worktree: WorktreeLocator.make("/tmp/issue-69-maintained-p2")
+  worktree: WorktreeLocator.make("/tmp/cleanup-maintained-p2")
 })
-const issue69IntegrationTarget = IntegrationTarget.make({
+const cleanupCassetteIntegrationTarget = IntegrationTarget.make({
   ref: IntegrationTargetRef.make("refs/heads/main"),
-  repository: GitRepositoryLocator.make("repo:issue-69-maintained")
+  repository: GitRepositoryLocator.make("repo:cleanup-maintained")
 })
-const issue69AcceptedResult = AcceptedResult.make({
-  commit: issue69BaseSha,
+const cleanupCassetteAcceptedResult = AcceptedResult.make({
+  commit: cleanupCassetteBaseSha,
   evidenceManifest: EvidenceReference.make({
     byteLength: 1,
-    digest: EvidenceDigest.make("a".repeat(issue69EvidenceDigestLength))
+    digest: EvidenceDigest.make("a".repeat(cleanupCassetteEvidenceDigestLength))
   })
 })
-const issue69Predecessor = IntegratorSessionCorrelation.make({
-  acceptedResult: issue69AcceptedResult,
-  candidateResource: issue69P1Candidate,
-  expectedTargetHead: issue69BaseSha,
-  integrationTarget: issue69IntegrationTarget,
-  plannedAttempt: issue69Attempt,
-  queuedAt: JournalPosition.make(issue69QueuedAtPosition),
-  sessionId: issue69P1Session,
-  startedAt: JournalPosition.make(issue69StartedAtPosition),
-  targetLineageObservedAt: JournalPosition.make(issue69TargetLineagePosition)
+const cleanupCassettePredecessor = IntegratorSessionCorrelation.make({
+  acceptedResult: cleanupCassetteAcceptedResult,
+  candidateResource: cleanupCassetteP1Candidate,
+  expectedTargetHead: cleanupCassetteBaseSha,
+  integrationTarget: cleanupCassetteIntegrationTarget,
+  plannedAttempt: cleanupCassetteAttempt,
+  queuedAt: JournalPosition.make(cleanupCassetteQueuedAtPosition),
+  sessionId: cleanupCassetteP1Session,
+  startedAt: JournalPosition.make(cleanupCassetteStartedAtPosition),
+  targetLineageObservedAt: JournalPosition.make(cleanupCassetteTargetLineagePosition)
 })
-const issue69SuccessorSession = integratorSuccessorCorrelationFor({
-  predecessor: issue69Predecessor,
-  quarantineAt: JournalPosition.make(issue69QuarantinePosition),
-  directionAppliedAt: JournalPosition.make(issue69DirectionPosition),
+const cleanupCassetteSuccessorSession = integratorSuccessorCorrelationFor({
+  predecessor: cleanupCassettePredecessor,
+  quarantineAt: JournalPosition.make(cleanupCassetteQuarantinePosition),
+  directionAppliedAt: JournalPosition.make(cleanupCassetteDirectionPosition),
   targetLineage: {
     plannedBaseIsAncestorOfTargetHead: true,
-    plannedBaseSha: issue69Attempt.baseSha,
-    targetHeadSha: issue69BaseSha
+    plannedBaseSha: cleanupCassetteAttempt.baseSha,
+    targetHeadSha: cleanupCassetteBaseSha
   },
-  targetLineageObservedAt: JournalPosition.make(issue69SuccessorTargetLineagePosition)
+  targetLineageObservedAt: JournalPosition.make(cleanupCassetteSuccessorTargetLineagePosition)
 })
 const worktreePresent = WorktreeCleanupObservation.cases.Present.make({
-  attemptId: issue69Attempt.attemptId,
-  branch: issue69Attempt.branch,
-  headSha: issue69BaseSha,
-  locator: issue69Attempt.worktree,
+  attemptId: cleanupCassetteAttempt.attemptId,
+  branch: cleanupCassetteAttempt.branch,
+  headSha: cleanupCassetteBaseSha,
+  locator: cleanupCassetteAttempt.worktree,
   revision: WorktreeCleanupEvidenceRevision.make(1),
   writerQuiescent: true
 })
 const branchPresent = BranchCleanupObservation.cases.Present.make({
-  branch: issue69Attempt.branch,
-  headSha: issue69BaseSha,
+  branch: cleanupCassetteAttempt.branch,
+  headSha: cleanupCassetteBaseSha,
   registeredWorktree: null,
   revision: BranchCleanupEvidenceRevision.make(1)
 })
 const candidatePresent = IntegratorCandidateCleanupObservation.cases.Present.make({
-  locator: issue69Predecessor.candidateResource,
+  locator: cleanupCassettePredecessor.candidateResource,
   revision: IntegratorCandidateCleanupEvidenceRevision.make(1),
-  sessionId: issue69Predecessor.sessionId,
+  sessionId: cleanupCassettePredecessor.sessionId,
   writerQuiescent: true
 })
 
@@ -756,52 +763,55 @@ const expectedTranscriptWitnessesFor = (
         call._tag === "WorktreeObserve"
           ? cassette.scenario === "ChangedGitFactsPreserveResources"
             ? WorktreeCleanupObservation.cases.Foreign.make({
-                locator: issue69Attempt.worktree,
+                locator: cleanupCassetteAttempt.worktree,
                 observedBranch: TaskBranchRef.make("refs/heads/other"),
-                observedHead: issue69BaseSha,
+                observedHead: cleanupCassetteBaseSha,
                 reason: "OtherBranch",
-                revision: WorktreeCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+                revision: WorktreeCleanupEvidenceRevision.make(cleanupCassetteSecondEvidenceRevision)
               })
             : Number(call.ordinal) === 1
               ? worktreePresent
               : WorktreeCleanupObservation.cases.Absent.make({
-                  locator: issue69Attempt.worktree,
-                  revision: WorktreeCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+                  locator: cleanupCassetteAttempt.worktree,
+                  revision: WorktreeCleanupEvidenceRevision.make(cleanupCassetteSecondEvidenceRevision)
                 })
           : call._tag === "BranchObserve"
             ? cassette.scenario === "AbandonedWorktree"
-              ? BranchCleanupObservation.cases.Unreadable.make({ branch: issue69P1Branch, detail: "script exhausted" })
+              ? BranchCleanupObservation.cases.Unreadable.make({
+                  branch: cleanupCassetteP1Branch,
+                  detail: "script exhausted"
+                })
               : Number(call.ordinal) === 1
                 ? branchPresent
                 : BranchCleanupObservation.cases.Absent.make({
-                    branch: issue69P1Branch,
-                    revision: BranchCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+                    branch: cleanupCassetteP1Branch,
+                    revision: BranchCleanupEvidenceRevision.make(cleanupCassetteSecondEvidenceRevision)
                   })
             : call._tag === "CandidateObserve"
               ? Number(call.ordinal) === 1
                 ? candidatePresent
                 : IntegratorCandidateCleanupObservation.cases.Absent.make({
-                    locator: issue69P1Candidate,
-                    revision: IntegratorCandidateCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+                    locator: cleanupCassetteP1Candidate,
+                    revision: IntegratorCandidateCleanupEvidenceRevision.make(cleanupCassetteSecondEvidenceRevision)
                   })
               : null
       const result =
         call._tag === "WorktreeRemove"
           ? WorktreeCleanupMutationResult.cases.Removed.make({
-              branch: issue69P1Branch,
-              locator: issue69P1Worktree,
-              revision: WorktreeCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+              branch: cleanupCassetteP1Branch,
+              locator: cleanupCassetteP1Worktree,
+              revision: WorktreeCleanupEvidenceRevision.make(cleanupCassetteSecondEvidenceRevision)
             })
           : call._tag === "BranchRemove"
             ? BranchCleanupMutationResult.cases.Removed.make({
-                branch: issue69P1Branch,
-                revision: BranchCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+                branch: cleanupCassetteP1Branch,
+                revision: BranchCleanupEvidenceRevision.make(cleanupCassetteSecondEvidenceRevision)
               })
             : call._tag === "CandidateRemove"
               ? IntegratorCandidateCleanupMutationResult.cases.Removed.make({
-                  locator: issue69P1Candidate,
-                  revision: IntegratorCandidateCleanupEvidenceRevision.make(issue69SecondEvidenceRevision),
-                  sessionId: issue69P1Session
+                  locator: cleanupCassetteP1Candidate,
+                  revision: IntegratorCandidateCleanupEvidenceRevision.make(cleanupCassetteSecondEvidenceRevision),
+                  sessionId: cleanupCassetteP1Session
                 })
               : null
       return Object.freeze(
@@ -823,7 +833,7 @@ const expectedTranscriptWitnessesFor = (
             : isWorktree && call._tag === "WorktreeRemove"
               ? call.branch
               : isWorktree
-                ? issue69P1Branch
+                ? cleanupCassetteP1Branch
                 : null,
           call,
           evidenceRevision: isWorktree
@@ -833,9 +843,9 @@ const expectedTranscriptWitnessesFor = (
               : IntegratorCandidateCleanupEvidenceRevision.make(1),
           locator: isWorktree || isCandidate ? call.locator : null,
           observation,
-          ownerAttemptId: isWorktree || isBranch ? issue69Attempt.attemptId : null,
-          ownerBranch: isWorktree ? issue69P1Branch : null,
-          ownerSessionId: isCandidate ? issue69P1Session : null,
+          ownerAttemptId: isWorktree || isBranch ? cleanupCassetteAttempt.attemptId : null,
+          ownerBranch: isWorktree ? cleanupCassetteP1Branch : null,
+          ownerSessionId: isCandidate ? cleanupCassetteP1Session : null,
           result
         })
       )
@@ -900,7 +910,7 @@ export interface FullRerunPredecessorCleanupFromHistoryRun {
  * Reopens the exact pre-termination prefix and invokes the same ordinary
  * activation capability used by production. The controlled boundary supplies
  * observations only; authorization is still derived from the durable
- * S1/quarantine/FullRerun/S2 history by the generic issue-69 protocol.
+ * S1/quarantine/FullRerun/S2 history by the generic cleanup protocol.
  */
 export const runFullRerunPredecessorCleanupFromHistory = Effect.fn(
   "DispositionCleanupCassette.runFullRerunPredecessorCleanupFromHistory"
@@ -978,15 +988,15 @@ export const runDispositionCleanupCassette: (
           observations: [
             worktreePresent,
             WorktreeCleanupObservation.cases.Absent.make({
-              locator: issue69Attempt.worktree,
-              revision: WorktreeCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+              locator: cleanupCassetteAttempt.worktree,
+              revision: WorktreeCleanupEvidenceRevision.make(cleanupCassetteSecondEvidenceRevision)
             })
           ],
           mutations: [
             WorktreeCleanupMutationResult.cases.Removed.make({
-              branch: issue69Attempt.branch,
-              locator: issue69Attempt.worktree,
-              revision: WorktreeCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+              branch: cleanupCassetteAttempt.branch,
+              locator: cleanupCassetteAttempt.worktree,
+              revision: WorktreeCleanupEvidenceRevision.make(cleanupCassetteSecondEvidenceRevision)
             })
           ]
         }
@@ -994,11 +1004,11 @@ export const runDispositionCleanupCassette: (
         ? {
             observations: [
               WorktreeCleanupObservation.cases.Foreign.make({
-                locator: issue69Attempt.worktree,
+                locator: cleanupCassetteAttempt.worktree,
                 observedBranch: TaskBranchRef.make("refs/heads/other"),
-                observedHead: issue69BaseSha,
+                observedHead: cleanupCassetteBaseSha,
                 reason: "OtherBranch",
-                revision: WorktreeCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+                revision: WorktreeCleanupEvidenceRevision.make(cleanupCassetteSecondEvidenceRevision)
               })
             ]
           }
@@ -1009,14 +1019,14 @@ export const runDispositionCleanupCassette: (
           observations: [
             branchPresent,
             BranchCleanupObservation.cases.Absent.make({
-              branch: issue69Attempt.branch,
-              revision: BranchCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+              branch: cleanupCassetteAttempt.branch,
+              revision: BranchCleanupEvidenceRevision.make(cleanupCassetteSecondEvidenceRevision)
             })
           ],
           mutations: [
             BranchCleanupMutationResult.cases.Removed.make({
-              branch: issue69Attempt.branch,
-              revision: BranchCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+              branch: cleanupCassetteAttempt.branch,
+              revision: BranchCleanupEvidenceRevision.make(cleanupCassetteSecondEvidenceRevision)
             })
           ]
         }
@@ -1027,15 +1037,15 @@ export const runDispositionCleanupCassette: (
           observations: [
             candidatePresent,
             IntegratorCandidateCleanupObservation.cases.Absent.make({
-              locator: issue69Predecessor.candidateResource,
-              revision: IntegratorCandidateCleanupEvidenceRevision.make(issue69SecondEvidenceRevision)
+              locator: cleanupCassettePredecessor.candidateResource,
+              revision: IntegratorCandidateCleanupEvidenceRevision.make(cleanupCassetteSecondEvidenceRevision)
             })
           ],
           mutations: [
             IntegratorCandidateCleanupMutationResult.cases.Removed.make({
-              locator: issue69Predecessor.candidateResource,
-              revision: IntegratorCandidateCleanupEvidenceRevision.make(issue69SecondEvidenceRevision),
-              sessionId: issue69Predecessor.sessionId
+              locator: cleanupCassettePredecessor.candidateResource,
+              revision: IntegratorCandidateCleanupEvidenceRevision.make(cleanupCassetteSecondEvidenceRevision),
+              sessionId: cleanupCassettePredecessor.sessionId
             })
           ]
         }
@@ -1049,11 +1059,11 @@ export const runDispositionCleanupCassette: (
   return yield* Effect.gen(function* () {
     const journal = yield* JournalStore
     yield* journal.beginRun(
-      issue69RunId,
-      FixtureTarget.make("issue-69-maintained-target"),
+      cleanupCassetteRunId,
+      FixtureTarget.make("cleanup-maintained-target"),
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
-    const initial = reduceWorkflowJournalHistory(issue69RunId, yield* journal.read(issue69RunId))
+    const initial = reduceWorkflowJournalHistory(cleanupCassetteRunId, yield* journal.read(cleanupCassetteRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") {
       return yield* Effect.die("cleanup cassette initial history is invalid")
     }
@@ -1062,21 +1072,21 @@ export const runDispositionCleanupCassette: (
         cassette.scenario === "SupersededWorktreeAndBranch" ||
         cassette.scenario === "ChangedGitFactsPreserveResources"
       ) {
-        yield* appendReplacementProvenance(issue69Attempt, issue69Successor, "StartupValid")
+        yield* appendReplacementProvenance(cleanupCassetteAttempt, cleanupCassetteSuccessor, "StartupValid")
       } else if (cassette.scenario === "AbandonedWorktree") {
-        yield* appendAbandonedProvenance(issue69Attempt, issue69AbandonedCleanupOperation)
+        yield* appendAbandonedProvenance(cleanupCassetteAttempt, cleanupCassetteAbandonedCleanupOperation)
       } else if (cassette.scenario === "FullRerunPredecessorCandidate") {
         yield* appendCandidateProvenance(
-          issue69Predecessor,
-          issue69SuccessorSession,
-          "issue-69-maintained-full-rerun",
+          cleanupCassettePredecessor,
+          cleanupCassetteSuccessorSession,
+          "cleanup-maintained-full-rerun",
           "StartupValid"
         )
       } else {
-        yield* appendCurrentQuarantineProvenance(issue69Predecessor, "StartupValid")
+        yield* appendCurrentQuarantineProvenance(cleanupCassettePredecessor, "StartupValid")
       }
-      const upstreamBeforeCleanup = yield* journal.read(issue69RunId)
-      const loop = yield* runDispositionCleanupLoop(issue69RunId, undefined, () =>
+      const upstreamBeforeCleanup = yield* journal.read(cleanupCassetteRunId)
+      const loop = yield* runDispositionCleanupLoop(cleanupCassetteRunId, undefined, () =>
         Effect.succeed(candidatePresent.revision)
       )
       let terminalResult: string
@@ -1107,7 +1117,7 @@ export const runDispositionCleanupCassette: (
         terminalResult = "No cleanup responsibility"
       }
       const sentinelsBefore = upstreamSentinelsFor(upstreamBeforeCleanup)
-      const records = yield* journal.read(issue69RunId)
+      const records = yield* journal.read(cleanupCassetteRunId)
       const worktreeCalls = yield* (yield* TestWorktreeCleanupBoundary).calls()
       const branchCalls = yield* (yield* TestBranchCleanupBoundary).calls()
       const candidateCalls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
@@ -1151,12 +1161,12 @@ export const runDispositionCleanupCassette: (
         if (cassette.scenario === "SupersededWorktreeAndBranch") {
           switch (call._tag) {
             case "WorktreeObserve":
-              return call.locator === issue69P1Worktree
+              return call.locator === cleanupCassetteP1Worktree
             case "WorktreeRemove":
-              return call.locator === issue69P1Worktree && call.branch === issue69P1Branch
+              return call.locator === cleanupCassetteP1Worktree && call.branch === cleanupCassetteP1Branch
             case "BranchObserve":
             case "BranchRemove":
-              return call.branch === issue69P1Branch
+              return call.branch === cleanupCassetteP1Branch
             case "CandidateObserve":
             case "CandidateRemove":
               return false
@@ -1164,19 +1174,20 @@ export const runDispositionCleanupCassette: (
         }
         if (cassette.scenario === "AbandonedWorktree") {
           return call._tag === "WorktreeObserve" || call._tag === "WorktreeRemove"
-            ? call.locator === issue69P1Worktree && call.operationId === issue69DerivedAbandonedWorktreeOperation
+            ? call.locator === cleanupCassetteP1Worktree &&
+                call.operationId === cleanupCassetteDerivedAbandonedWorktreeOperation
             : call._tag === "BranchObserve" &&
-                call.branch === issue69P1Branch &&
-                call.operationId === issue69DerivedAbandonedBranchOperation
+                call.branch === cleanupCassetteP1Branch &&
+                call.operationId === cleanupCassetteDerivedAbandonedBranchOperation
         }
         if (cassette.scenario === "ChangedGitFactsPreserveResources") {
-          return call._tag === "WorktreeObserve" && call.locator === issue69P1Worktree
+          return call._tag === "WorktreeObserve" && call.locator === cleanupCassetteP1Worktree
         }
         if (cassette.scenario === "FullRerunPredecessorCandidate") {
           return (
             (call._tag === "CandidateObserve" || call._tag === "CandidateRemove") &&
-            call.locator === issue69P1Candidate &&
-            call.sessionId === issue69P1Session
+            call.locator === cleanupCassetteP1Candidate &&
+            call.sessionId === cleanupCassetteP1Session
           )
         }
         return false
@@ -1203,12 +1214,12 @@ export const runDispositionCleanupCassette: (
           ? boundaryCalls.every((call) => {
               switch (call._tag) {
                 case "WorktreeObserve":
-                  return call.locator === issue69P1Worktree
+                  return call.locator === cleanupCassetteP1Worktree
                 case "WorktreeRemove":
-                  return call.locator === issue69P1Worktree && call.branch === issue69P1Branch
+                  return call.locator === cleanupCassetteP1Worktree && call.branch === cleanupCassetteP1Branch
                 case "BranchObserve":
                 case "BranchRemove":
-                  return call.branch === issue69P1Branch
+                  return call.branch === cleanupCassetteP1Branch
                 case "CandidateObserve":
                 case "CandidateRemove":
                   return false
@@ -1220,11 +1231,11 @@ export const runDispositionCleanupCassette: (
             ? boundaryCalls.every(
                 (call) =>
                   ((call._tag === "WorktreeObserve" || call._tag === "WorktreeRemove") &&
-                    call.locator === issue69P1Worktree &&
-                    call.operationId === issue69DerivedAbandonedWorktreeOperation) ||
+                    call.locator === cleanupCassetteP1Worktree &&
+                    call.operationId === cleanupCassetteDerivedAbandonedWorktreeOperation) ||
                   (call._tag === "BranchObserve" &&
-                    call.branch === issue69P1Branch &&
-                    call.operationId === issue69DerivedAbandonedBranchOperation)
+                    call.branch === cleanupCassetteP1Branch &&
+                    call.operationId === cleanupCassetteDerivedAbandonedBranchOperation)
               ) &&
               records.some(({ event }) => event._tag === "AttemptImplementationAbandoned") &&
               !records.some(
@@ -1236,14 +1247,15 @@ export const runDispositionCleanupCassette: (
                   )
               )
             : cassette.scenario === "ChangedGitFactsPreserveResources"
-              ? boundaryCalls.every((call) => call._tag === "WorktreeObserve" && call.locator === issue69P1Worktree) &&
-                records.some(({ event }) => event._tag === "WorktreeCleanupContradicted")
+              ? boundaryCalls.every(
+                  (call) => call._tag === "WorktreeObserve" && call.locator === cleanupCassetteP1Worktree
+                ) && records.some(({ event }) => event._tag === "WorktreeCleanupContradicted")
               : cassette.scenario === "FullRerunPredecessorCandidate"
                 ? boundaryCalls.every(
                     (call) =>
                       (call._tag === "CandidateObserve" || call._tag === "CandidateRemove") &&
-                      call.locator === issue69P1Candidate &&
-                      call.sessionId === issue69P1Session
+                      call.locator === cleanupCassetteP1Candidate &&
+                      call.sessionId === cleanupCassetteP1Session
                   ) && records.some(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
                 : boundaryCalls.length === 0 && records.every(({ event }) => !event._tag.includes("Cleanup"))
       if (!forbiddenSatisfied) {
@@ -1267,7 +1279,9 @@ export const runDispositionCleanupCassette: (
         version: 1
       })
     }).pipe(
-      Effect.provide(journalLayer(issue69RunId, FixtureTarget.make("issue-69-maintained-target"), initial, journal))
+      Effect.provide(
+        journalLayer(cleanupCassetteRunId, FixtureTarget.make("cleanup-maintained-target"), initial, journal)
+      )
     )
   }).pipe(Effect.provide(layers))
 })
