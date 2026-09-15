@@ -231,7 +231,10 @@ const gitAuthorityInputs = (root, logicalInvocation, environment, gitDirectory, 
   // plain --git-path output against this worktree while retaining those links.
   const path = (name) => resolve(root, git(root, ["rev-parse", "--git-path", name], environment).trim())
   const indexLock = join(gitDirectory, "index.lock")
-  const transientCoordinationRoots = [indexLock]
+  // Shared worktrees may briefly lock packed refs while another branch is
+  // created or removed. The lock inode is coordination state; the packed-ref
+  // authority file itself remains observed below.
+  const transientCoordinationRoots = [indexLock, join(commonDirectory, "packed-refs.lock")]
   const paths = [
     join(gitDirectory, "HEAD"),
     join(gitDirectory, "HEAD.lock"),
