@@ -20,7 +20,11 @@ type WarmRunnerOptions = {
   readonly onIteration: (record: IterationRecord) => void
 }
 // eslint-disable-next-line functional/no-mixed-types -- Test doubles intentionally combine callbacks and scalar controls.
-type FreshRunnerOptions = { readonly iterations: number; readonly onIteration: (record: IterationRecord) => void }
+type FreshRunnerOptions = {
+  readonly iterations: number
+  readonly onIteration: (record: IterationRecord) => void
+  readonly totalTimeoutMilliseconds?: number
+}
 
 const passedWarmResult = () => ({
   testModules: [
@@ -171,6 +175,49 @@ test("warm mode retains a fresh-process sample and labels both execution phases"
     { mode: "fresh", phase: "fresh-sample" }
   ])
   expect(warmCalls[0]?.beforeIteration).toEqual(expect.any(Function))
+})
+
+test("bounds the fresh sample by the remaining warm deadline", async () => {
+  let currentTime = 0
+  const freshCalls: Array<FreshRunnerOptions> = []
+  const warmRecord = {
+    acceptedOrderDigest: deliveryRepeatabilityExpectedAcceptedOrderDigest,
+    iteration: 1,
+    occurrenceCount: deliveryRepeatabilityExpectedOccurrenceCount,
+    status: "PASS"
+  }
+
+  await expect(
+    runDeliveryRepeatability({
+      freshSampleIterations: 1,
+      iterations: 1,
+      mode: "warm",
+      now: () => currentTime,
+      onIteration: () => undefined,
+      resolveCandidateSha: async () => candidateSha,
+      resolveCandidateTree: async () => "",
+      runFreshTarget: async (options: FreshRunnerOptions) => {
+        freshCalls.push(options)
+        currentTime = 10_001
+        return {
+          acceptedOrderDigest: deliveryRepeatabilityExpectedAcceptedOrderDigest,
+          candidateSha,
+          elapsedMilliseconds: 1,
+          iterations: [warmRecord],
+          occurrenceCount: deliveryRepeatabilityExpectedOccurrenceCount
+        }
+      },
+      runWarmTarget: async (options: WarmRunnerOptions) => {
+        await options.beforeIteration(1)
+        options.onIteration(warmRecord)
+        currentTime = 2_000
+        return [warmRecord]
+      },
+      totalTimeoutMilliseconds: 10_000
+    })
+  ).rejects.toThrow(/absolute deadline expired after fresh sample/u)
+
+  expect(freshCalls[0]?.totalTimeoutMilliseconds).toBe(8_000)
 })
 
 test("keeps fresh mode as the default and delegates its acceptance runner", async () => {
