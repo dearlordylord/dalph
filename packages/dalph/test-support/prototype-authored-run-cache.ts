@@ -7,6 +7,7 @@ import {
   type AuthoredScenarioCassetteRunFailure,
   type AuthoredScenarioCassetteRunOptions
 } from "../src/cassettes/authored-runner.js"
+import { projectRecordedCassette } from "../src/cassettes/recorded.js"
 
 export interface AuthoredRunCacheKey {
   readonly candidateRevision: string
@@ -84,6 +85,18 @@ export type AuthoredScenarioRunCache = AuthoredRunCache<
 
 /** One cache instance is shared by every test helper in this process. */
 export const sharedAuthoredScenarioRunCache: AuthoredScenarioRunCache = makeAuthoredRunCache()
+
+type RecordedCassetteProjection = Effect.Success<ReturnType<typeof projectRecordedCassette>>
+const recordedCassetteProjectionCache = new WeakMap<object, RecordedCassetteProjection>()
+
+/** Reuse successful projections for the same immutable record array in this process. */
+export const runCachedRecordedCassette = (records: Parameters<typeof projectRecordedCassette>[0]) => {
+  const cached = recordedCassetteProjectionCache.get(records)
+  if (cached !== undefined) return Effect.succeed(cached)
+  return projectRecordedCassette(records).pipe(
+    Effect.tap((projected) => Effect.sync(() => recordedCassetteProjectionCache.set(records, projected)))
+  )
+}
 
 const cacheArgument = (
   value: AuthoredScenarioCassetteRunOptions | AuthoredScenarioRunCache | undefined
