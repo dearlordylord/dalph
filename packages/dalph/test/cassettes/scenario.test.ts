@@ -209,6 +209,10 @@ import { controlledExecutorLayer } from "../../src/cassettes/authored-adapters.j
 import { controlledTrackerAuthorityLayer } from "../../src/cassettes/authored-tracker-authority.js"
 import { makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
 import { assertAuthoredExpectedBehavior } from "../../src/cassettes/authored-outcomes.js"
+import {
+  authoredRunInputDigest,
+  runCachedAuthoredScenarioCassette
+} from "../../test-support/prototype-authored-run-cache.js"
 
 const evidenceDigestHexLength = 64
 
@@ -292,9 +296,15 @@ const useAuthoredScenarioCassette = <A, E, R>(
   use: (run: Effect.Success<ReturnType<typeof runAuthoredScenarioCassetteWithCrypto>>) => Effect.Effect<A, E, R>
 ) => useAuthoredScenarioCassetteWithCrypto(input, use).pipe(Effect.provide(NodeCrypto.layer))
 
-const cachedDependentTasksRun = Effect.runSync(
-  Effect.cached(runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette))
-)
+const cachedDependentTasksRun = runCachedAuthoredScenarioCassette(
+  {
+    candidateRevision: "scenario-tests",
+    cassetteIdentity: "dependentTasksCompleteInOneRun",
+    inputDigest: authoredRunInputDigest(dependentTasksCompleteInOneRunAuthoredCassette),
+    runtimeSchemaVersion: "authored-runner-v1"
+  },
+  dependentTasksCompleteInOneRunAuthoredCassette
+).pipe(Effect.provide(NodeCrypto.layer))
 
 const expectRecordedRoundTrip = (records: ReadonlyArray<JournalRecord>, recorded: RecordedCassette) =>
   expect(
