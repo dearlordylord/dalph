@@ -8,7 +8,13 @@ import {
   ExecutorProfileId,
   ExecutorProviderConfigReference
 } from "./executor-profile.js"
-import { KimiAcpClient, KimiAcpFailure, nodeKimiAcpClientLayer, preflightKimiExecutable } from "./kimi-acp.js"
+import {
+  KimiAcpClient,
+  KimiAcpFailure,
+  KimiAcpSessionId,
+  nodeKimiAcpClientLayer,
+  preflightKimiExecutable
+} from "./kimi-acp.js"
 
 const profile = ExecutorProfile.make({
   adapter: "kimi-acp",
@@ -140,6 +146,101 @@ it.effect("performs the ACP authentication and model-selection handshake in orde
       const sessionId = yield* client.newSession("/srv/dalph/repository")
       expect(sessionId).toBe("kimi-session")
       expect(requests).toEqual(["initialize", "initialized", "authenticate", "session/new", "session/set_model"])
+      expect(commands).toHaveLength(2)
+    })
+  )
+)
+
+it.effect("records ACP progress and rejects a permission request under the deny policy", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const commands: Array<ChildProcess.Command> = []
+      const requests: Array<string> = []
+      const permissionReplies: Array<unknown> = []
+      const output = yield* Queue.unbounded<Uint8Array>()
+      const encoder = new TextEncoder()
+      const decoder = new TextDecoder()
+      const session = KimiAcpSessionId.make("kimi-progress-session")
+      const interactiveHandle = ChildProcessSpawner.makeHandle({
+        pid: ChildProcessSpawner.ProcessId(3),
+        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+        isRunning: Effect.succeed(true),
+        kill: () => Effect.void,
+        stdin: Sink.forEach((chunk: Uint8Array) =>
+          Effect.gen(function* () {
+            const message = JSON.parse(decoder.decode(chunk)) as { id?: number; method?: string; result?: unknown }
+            if (message.method !== undefined) requests.push(message.method)
+            if (message.id === 99) {
+              permissionReplies.push(message.result)
+              return
+            }
+            if (message.id === undefined) return
+            const result =
+              message.method === "initialize"
+                ? { agentCapabilities: { sessionCapabilities: { loadSession: true, resume: true, close: true } } }
+                : message.method === "session/new"
+                  ? { sessionId: session }
+                  : {}
+            if (message.method === "session/prompt") {
+              yield* Queue.offer(
+                output,
+                encoder.encode(
+                  `${JSON.stringify({
+                    jsonrpc: "2.0",
+                    method: "session/update",
+                    params: { sessionId: session, update: { state: "running", text: "working" } }
+                  })}\n`
+                )
+              )
+              yield* Queue.offer(
+                output,
+                encoder.encode(
+                  `${JSON.stringify({
+                    jsonrpc: "2.0",
+                    id: 99,
+                    method: "session/request_permission",
+                    params: { sessionId: session, options: [{ optionId: "allow" }] }
+                  })}\n`
+                )
+              )
+            }
+            yield* Queue.offer(
+              output,
+              encoder.encode(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result })}\n`)
+            )
+          })
+        ),
+        stdout: Stream.fromQueue(output),
+        stderr: Stream.empty,
+        all: Stream.empty,
+        getInputFd: () => Sink.drain,
+        getOutputFd: () => Stream.empty,
+        unref: Effect.succeed(Effect.void)
+      })
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.sync(() => {
+          commands.push(command)
+          const isPreflight = ChildProcess.isStandardCommand(command) && command.options.stdin === "ignore"
+          return isPreflight ? fakeHandle(0) : interactiveHandle
+        })
+      )
+      const services = yield* Effect.provide(
+        Layer.build(nodeKimiAcpClientLayer(profile, { preflightCwd: "/srv/dalph/repository" })),
+        Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)
+      )
+      const client = Context.get(services, KimiAcpClient)
+      yield* client.newSession("/srv/dalph/repository")
+      yield* client.prompt(session, "do work")
+      const observation = yield* client.observe(session)
+      expect(observation).toMatchObject({
+        sessionId: session,
+        status: "executing",
+        updateCount: 1,
+        lastMessage: "working",
+        permissionDenied: true
+      })
+      expect(permissionReplies).toEqual([{ outcome: { outcome: "cancelled" } }])
+      expect(requests).toContain("session/prompt")
       expect(commands).toHaveLength(2)
     })
   )
