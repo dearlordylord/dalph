@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest"
-import { Effect, Layer, Ref } from "effect"
+import { Effect, Ref } from "effect"
 import {
   GithubGraphqlClient,
   GithubGraphqlRequest,
@@ -7,7 +7,7 @@ import {
   GithubRepositoryOwner,
   type GithubGraphqlRequest as GithubGraphqlRequestType
 } from "@dalph/orchestrator"
-import { guardedGithubClientLayer } from "./production-host.js"
+import { makeGuardedGithubClient } from "./production-host.js"
 
 it.effect("production GitHub wrapper rejects before its transport after the bounded window", () =>
   Effect.gen(function* () {
@@ -21,11 +21,9 @@ it.effect("production GitHub wrapper rejects before its transport after the boun
       repository: GithubRepositoryName.make("dalph")
     })
 
-    const failure = yield* Effect.gen(function* () {
-      const guarded = yield* GithubGraphqlClient
-      yield* Effect.forEach(Array.from({ length: 120 }), () => guarded.execute(request))
-      return yield* guarded.execute(request).pipe(Effect.flip)
-    }).pipe(Effect.provide(guardedGithubClientLayer(Layer.succeed(GithubGraphqlClient, client))))
+    const guarded = yield* makeGuardedGithubClient(client)
+    yield* Effect.forEach(Array.from({ length: 120 }), () => guarded.execute(request))
+    const failure = yield* guarded.execute(request).pipe(Effect.flip)
 
     expect(failure).toMatchObject({
       _tag: "GithubGraphqlClient.RequestError",

@@ -223,29 +223,37 @@ const codexRequestCircuitOpenDetail =
   "Codex app-server request circuit is open after 240 requests in 60 seconds; retrying is locally deferred for 30 seconds"
 
 /**
- * Decorates the one production GitHub client after its transport is selected.
- * The client owns request/error typing; the host owns admission policy and
- * creates one circuit state for this provider instance.
+ * Builds the host-owned GitHub client decorator. The Layer remains private to
+ * production composition; this service seam keeps its focused boundary test
+ * from requiring an exported production Layer. The client owns request/error
+ * typing; the host owns admission policy and creates one circuit state for
+ * this provider instance.
  */
-export const guardedGithubClientLayer = <E, R>(
+export const makeGuardedGithubClient = Effect.fn("ProductionHost.makeGuardedGithubClient")(function* (
+  client: GithubGraphqlClient["Service"]
+) {
+  const requestCircuit = yield* makeRequestCircuit({
+    onOpen: (operation: GithubGraphqlRequest["_tag"]) =>
+      new GithubGraphqlRequestError({ detail: githubRequestCircuitOpenDetail, kind: "CircuitOpen", operation }),
+    policy: githubRequestCircuitPolicy
+  })
+  function execute(request: GithubGraphqlReadRequest): GithubGraphqlReadExecution
+  function execute(request: GithubGraphqlMutationRequest): GithubGraphqlMutationExecution
+  function execute(request: GithubGraphqlRequest): GithubGraphqlExecution
+  function execute(request: GithubGraphqlRequest) {
+    return requestCircuit.run(request._tag, client.execute(request))
+  }
+  return GithubGraphqlClient.of({ execute })
+})
+
+/** Decorates the one production GitHub client after its transport is selected. */
+const guardedGithubClientLayer = <E, R>(
   layer: Layer.Layer<GithubGraphqlClient, E, R>
 ): Layer.Layer<GithubGraphqlClient, E, R> =>
   Layer.effect(
     GithubGraphqlClient,
     Effect.gen(function* () {
-      const client = yield* GithubGraphqlClient
-      const requestCircuit = yield* makeRequestCircuit({
-        onOpen: (operation: GithubGraphqlRequest["_tag"]) =>
-          new GithubGraphqlRequestError({ detail: githubRequestCircuitOpenDetail, kind: "CircuitOpen", operation }),
-        policy: githubRequestCircuitPolicy
-      })
-      function execute(request: GithubGraphqlReadRequest): GithubGraphqlReadExecution
-      function execute(request: GithubGraphqlMutationRequest): GithubGraphqlMutationExecution
-      function execute(request: GithubGraphqlRequest): GithubGraphqlExecution
-      function execute(request: GithubGraphqlRequest) {
-        return requestCircuit.run(request._tag, client.execute(request))
-      }
-      return GithubGraphqlClient.of({ execute })
+      return yield* makeGuardedGithubClient(yield* GithubGraphqlClient)
     })
   ).pipe(Layer.provide(layer))
 
