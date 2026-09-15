@@ -27,7 +27,7 @@ const kimi = ExecutorProfile.make({
   adapter: "kimi-acp",
   executable: "kimi",
   id: ExecutorProfileId.make("kimi/for-coding"),
-  model: ExecutorModelAlias.make("kimi-for-coding"),
+  model: ExecutorModelAlias.make("kimi-code/kimi-for-coding"),
   permissionPolicy: "deny",
   provider: "kimi",
   providerConfigRef: ExecutorProviderConfigReference.make("kimi-for-coding")

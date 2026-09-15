@@ -67,7 +67,7 @@ describe("production repository host configuration", () => {
             adapter: "kimi-acp",
             executable: "kimi",
             id: "kimi/for-coding",
-            model: "kimi-for-coding",
+            model: "kimi-code/kimi-for-coding",
             permissionPolicy: "deny",
             provider: "kimi",
             providerConfigRef: "kimi-for-coding"

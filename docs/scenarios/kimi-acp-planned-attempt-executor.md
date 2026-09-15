@@ -1,6 +1,6 @@
 # Select Kimi ACP for one planned attempt
 
-Status: implemented bounded slice for issue [#379](https://github.com/dearlordylord/dalph/issues/379). The profile registry, production profile resolution, executable and disposable protocol/credential preflight, provider-private session recovery, cross-process private-store lease, and controlled Kimi adapter cover the deterministic selection and lifecycle seam; live-wire qualification remains follow-up acceptance work.
+Status: implemented and live-qualified for issue [#379](https://github.com/dearlordylord/dalph/issues/379). The profile registry, production profile resolution, executable and disposable protocol/credential preflight, provider-private session recovery, cross-process private-store lease, controlled Kimi adapter, and one bounded live Kimi ACP session cover the deterministic selection and lifecycle seam.
 
 ## Alice selects a Kimi profile before work begins
 
@@ -11,8 +11,8 @@ task lifecycle, and claim. Git owns the exact planned Base SHA, branch, and
 worktree. The execution substrate will own the Kimi child process and ACP
 session. The Dalph Journal has no Kimi credential or raw ACP message. A
 controlled decoded profile set may contain a Codex default and the explicit
-`kimi/for-coding` profile, whose non-secret provider reference is
-`kimi-for-coding`; the credential itself remains in the host environment.
+`kimi/for-coding` profile, whose non-secret model alias is
+`kimi-code/kimi-for-coding`; the credential itself remains in the host environment.
 
 ### Trigger and boundary calls
 
@@ -44,7 +44,9 @@ claim a task before selection validation.
 No person triggers this automatic step. Dalph has one planned attempt with an
 immutable `(RunId, AttemptId)`, authored task-work specification fingerprint,
 and exact worktree. The selected executor locator is
-`executor:kimi/for-coding`; no Kimi session exists for this correlation.
+`executor:kimi/for-coding`; no Kimi session exists for this correlation. The
+production profile selects the provider-qualified model alias
+`kimi-code/kimi-for-coding`.
 
 ### Trigger and boundary calls
 
@@ -102,6 +104,8 @@ without accepted evidence.
 | Dalph restarts while Kimi is executing and observes the same session without a new prompt. | `kimi-planned-attempt-executor.test.ts`: `reconnects a persisted executing session after restart without sending another prompt`; `kimi-attempt-store.test.ts`: persistence and malformed-state tests |
 | An unavailable Kimi executable or unsupported/unauthenticated ACP is rejected before executor activation. | `kimi-acp.test.ts`: `fails Kimi layer construction when the configured executable exits unsuccessfully`; `rejects unsupported ACP session capabilities during protocol preflight`; `rejects missing Kimi authentication during protocol preflight` |
 | ACP wire ordering, stderr isolation, progress updates, permission policy, and malformed/provider failures are exercised without a live Kimi account. | `kimi-acp.test.ts`: `performs the ACP authentication and model-selection handshake in order`; `records ACP progress and rejects a permission request under the deny policy` |
+| The configured provider-qualified model is accepted by a live Kimi account, one session reaches terminal `end_turn`, and no permission request is made. | Bounded live probe on 2026-09-15: `kimi-code/kimi-for-coding`, isolated `/tmp` cwd, session `session_22350bdb-47c2-4de2-aa0d-310a829fa286`, observation `status=terminal`, `stopReason=end_turn`, `permissionDenied=false`; issue #379 evidence comment |
 
 The controlled tests are the maintained catalog entry for this boundary; they
-do not claim that a live Kimi account or model is available in CI.
+do not claim that a live Kimi account or model is available in CI; the live
+probe above is retained as dated acceptance evidence rather than a CI test.
