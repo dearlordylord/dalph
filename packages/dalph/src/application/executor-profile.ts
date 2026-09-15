@@ -3,11 +3,7 @@ import { Context, Effect, Layer, Option, Schema } from "effect"
 
 /** Stable operator-facing name for one executor configuration. */
 export const ExecutorProfileId = Schema.NonEmptyString.check(
-  Schema.makeFilter((value) =>
-    /^[a-z0-9][a-z0-9._/-]*$/u.test(value)
-      ? undefined
-      : "executor profile id must use lowercase letters, digits, dots, underscores, slashes, or hyphens"
-  )
+  Schema.isPattern(/^[a-z0-9][a-z0-9._/-]*$/u, { description: "a lowercase executor profile id" })
 ).pipe(Schema.brand("ExecutorProfileId"))
 export type ExecutorProfileId = typeof ExecutorProfileId.Type
 
