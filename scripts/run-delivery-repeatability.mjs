@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
+import { clearTimeout, setTimeout } from "node:timers"
 
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 
@@ -249,6 +250,10 @@ export const runFreshDeliveryTarget = async (options = {}) => {
   const progress = options.onIteration ?? defaultProgressReporter
   const resolveCandidateSha = options.resolveCandidateSha ?? defaultCandidateShaResolver
   const resolveCandidateTree = options.resolveCandidateTree ?? defaultCandidateTreeResolver
+  const expectedCandidateSha = options.expectedCandidateSha
+  if (expectedCandidateSha !== undefined && !/^[0-9a-f]{40,64}$/u.test(expectedCandidateSha)) {
+    throw new Error(`delivery repeatability expected candidate HEAD SHA was invalid: ${String(expectedCandidateSha)}`)
+  }
   if (typeof resolveCandidateSha !== "function")
     throw new Error("delivery repeatability candidate SHA resolver must be a function")
   if (typeof resolveCandidateTree !== "function")
@@ -324,6 +329,11 @@ export const runFreshDeliveryTarget = async (options = {}) => {
 
   try {
     candidateSha = await readCandidateSha("before iteration 1")
+    if (expectedCandidateSha !== undefined && candidateSha !== expectedCandidateSha) {
+      throw new Error(
+        `delivery repeatability candidate HEAD changed before fresh sample: expected ${expectedCandidateSha}, received ${candidateSha}`
+      )
+    }
     const initialCandidateTree = await readCandidateTree("before iteration 1")
     requireCleanCandidateTree(initialCandidateTree, "before iteration 1")
     for (let iteration = 1; iteration <= iterations; iteration += 1) {
@@ -473,11 +483,16 @@ export const runWarmedDeliveryTarget = async (options = {}) => {
   if (!Number.isInteger(iterations) || iterations <= 0) {
     throw new Error(`delivery repeatability warm iterations must be a positive integer, received ${String(iterations)}`)
   }
-  const childTimeoutMilliseconds =
-    options.childTimeoutMilliseconds ?? deliveryRepeatabilityChildTimeoutMilliseconds
+  const childTimeoutMilliseconds = options.childTimeoutMilliseconds ?? deliveryRepeatabilityChildTimeoutMilliseconds
   if (!Number.isInteger(childTimeoutMilliseconds) || childTimeoutMilliseconds <= 0) {
     throw new Error(
       `delivery repeatability warm test timeout must be a positive integer, received ${String(childTimeoutMilliseconds)}`
+    )
+  }
+  const totalTimeoutMilliseconds = options.totalTimeoutMilliseconds ?? iterations * childTimeoutMilliseconds
+  if (!Number.isInteger(totalTimeoutMilliseconds) || totalTimeoutMilliseconds <= 0) {
+    throw new Error(
+      `delivery repeatability warm total timeout must be a positive integer, received ${String(totalTimeoutMilliseconds)}`
     )
   }
   const createVitest = options.createVitest ?? defaultCreateVitest
@@ -489,22 +504,57 @@ export const runWarmedDeliveryTarget = async (options = {}) => {
   const onIteration = options.onIteration ?? (() => undefined)
   if (typeof onIteration !== "function") throw new Error("delivery repeatability warm onIteration must be a function")
 
-  let vitest
-  try {
-    vitest = await createVitest("test", {
-      fileParallelism: false,
-      isolate: false,
-      maxWorkers: 1,
-      minWorkers: 1,
-      pool: "forks",
-      reporters: [],
-      root: process.cwd(),
-      run: true,
-      silent: true,
-      testNamePattern: deliveryRepeatabilityTargetTestNamePattern,
-      testTimeout: childTimeoutMilliseconds,
-      watch: false
+  const now = options.now ?? (() => performance.now())
+  const deadline = now() + totalTimeoutMilliseconds
+  const lifecycleRemaining = (phase) => {
+    const remainingMilliseconds = Math.floor(deadline - now())
+    if (remainingMilliseconds <= 0) {
+      throw new Error(`delivery repeatability warm total timeout exceeded during ${phase}`)
+    }
+    return remainingMilliseconds
+  }
+  const awaitLifecycle = async (phase, operation) => {
+    const remainingMilliseconds = lifecycleRemaining(phase)
+    let timeout
+    const operationPromise = Promise.resolve().then(operation)
+    const timeoutPromise = new Promise((_, reject) => {
+      timeout = setTimeout(
+        () => reject(new Error(`delivery repeatability warm total timeout exceeded during ${phase}`)),
+        remainingMilliseconds
+      )
     })
+    try {
+      const result = await Promise.race([operationPromise, timeoutPromise])
+      if (now() > deadline) {
+        throw new Error(`delivery repeatability warm total timeout exceeded during ${phase}`)
+      }
+      return result
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+
+  let vitest
+  let completed = []
+  let lifecycleFailure
+  try {
+    const createTimeoutMilliseconds = Math.min(childTimeoutMilliseconds, lifecycleRemaining("creating Vitest"))
+    vitest = await awaitLifecycle("creating Vitest", () =>
+      createVitest("test", {
+        fileParallelism: false,
+        isolate: false,
+        maxWorkers: 1,
+        minWorkers: 1,
+        pool: "forks",
+        reporters: [],
+        root: process.cwd(),
+        run: true,
+        silent: true,
+        testNamePattern: deliveryRepeatabilityTargetTestNamePattern,
+        testTimeout: createTimeoutMilliseconds,
+        watch: false
+      })
+    )
     if (!isRecord(vitest)) throw new Error("delivery repeatability Vitest factory returned an invalid instance")
     if (
       (typeof vitest.standalone !== "function" && typeof vitest.init !== "function") ||
@@ -516,23 +566,28 @@ export const runWarmedDeliveryTarget = async (options = {}) => {
       throw new Error("delivery repeatability Vitest instance lacks the persistent-run API")
     }
 
-    if (typeof vitest.standalone === "function") await vitest.standalone()
-    else await vitest.init()
-    const specifications = await vitest.getRelevantTestSpecifications([deliveryRepeatabilityTargetTestPath])
+    if (typeof vitest.standalone === "function") await awaitLifecycle("initializing Vitest", () => vitest.standalone())
+    else await awaitLifecycle("initializing Vitest", () => vitest.init())
+    const specifications = await awaitLifecycle("resolving the warm target", () =>
+      vitest.getRelevantTestSpecifications([deliveryRepeatabilityTargetTestPath])
+    )
     if (!Array.isArray(specifications) || specifications.length !== 1) {
       throw new Error(
         `delivery repeatability warm target resolution expected one file, received ${String(specifications?.length)}`
       )
     }
 
-    const completed = []
+    completed = []
     for (let iteration = 1; iteration <= iterations; iteration += 1) {
-      await beforeIteration(iteration)
-      const iterationStartedAt = performance.now()
+      await awaitLifecycle(`before warm iteration ${iteration}`, () => beforeIteration(iteration))
+      const iterationStartedAt = now()
       let runResult
       try {
-        runResult = await vitest.runTestSpecifications(specifications, false)
+        runResult = await awaitLifecycle(`warm iteration ${iteration}`, () =>
+          vitest.runTestSpecifications(specifications, false)
+        )
       } catch (error) {
+        if (/total timeout exceeded/u.test(errorMessage(error))) throw error
         throw new Error(`delivery repeatability warm iteration ${iteration} failed: ${errorMessage(error)}`)
       }
       let record
@@ -543,7 +598,7 @@ export const runWarmedDeliveryTarget = async (options = {}) => {
       }
       const iterationResult = {
         ...record,
-        elapsedMilliseconds: Number((performance.now() - iterationStartedAt).toFixed(2)),
+        elapsedMilliseconds: Number((now() - iterationStartedAt).toFixed(2)),
         iteration,
         iterations,
         mode: "warm",
@@ -551,12 +606,22 @@ export const runWarmedDeliveryTarget = async (options = {}) => {
         status: "PASS"
       }
       completed.push(iterationResult)
-      await onIteration(iterationResult)
+      await awaitLifecycle(`reporting warm iteration ${iteration}`, () => onIteration(iterationResult))
     }
-    return completed
-  } finally {
-    if (isRecord(vitest) && typeof vitest.close === "function") await vitest.close()
+  } catch (error) {
+    lifecycleFailure = error
   }
+
+  if (isRecord(vitest) && typeof vitest.close === "function") {
+    try {
+      await awaitLifecycle("closing Vitest", () => vitest.close())
+    } catch (error) {
+      if (lifecycleFailure === undefined) lifecycleFailure = error
+    }
+  }
+
+  if (lifecycleFailure !== undefined) throw lifecycleFailure
+  return completed
 }
 
 const defaultProgressReporterWithMode = ({
@@ -637,8 +702,7 @@ export const runDeliveryRepeatability = async (options = {}) => {
       `delivery repeatability fresh sample iterations must be a positive integer, received ${String(freshSampleIterations)}`
     )
   }
-  const childTimeoutMilliseconds =
-    options.childTimeoutMilliseconds ?? deliveryRepeatabilityChildTimeoutMilliseconds
+  const childTimeoutMilliseconds = options.childTimeoutMilliseconds ?? deliveryRepeatabilityChildTimeoutMilliseconds
   if (!Number.isInteger(childTimeoutMilliseconds) || childTimeoutMilliseconds <= 0) {
     throw new Error(
       `delivery repeatability child timeout must be a positive integer, received ${String(childTimeoutMilliseconds)}`
@@ -699,6 +763,18 @@ export const runDeliveryRepeatability = async (options = {}) => {
     }
     return resolved.trimEnd()
   }
+  const requireCleanCandidateTree = (status, phase) => {
+    if (status !== "") {
+      throw new Error(`delivery repeatability candidate tree was not clean ${phase}: ${status}`)
+    }
+  }
+  const requireSameCandidateSha = (observed, phase) => {
+    if (candidateSha !== observed) {
+      throw new Error(
+        `delivery repeatability candidate HEAD changed ${phase}: expected ${candidateSha}, received ${observed}`
+      )
+    }
+  }
 
   const candidateTree = await readCandidateTree("before warm mode")
   if (candidateTree !== "")
@@ -726,6 +802,7 @@ export const runDeliveryRepeatability = async (options = {}) => {
     beforeIteration,
     childTimeoutMilliseconds,
     iterations: warmIterations,
+    totalTimeoutMilliseconds: Math.floor(deadline - now()),
     onIteration: (record) => progress({ ...record, mode: "warm", phase: "warm" })
   })
   if (!Array.isArray(warmIterationsResult) || warmIterationsResult.length !== warmIterations) {
@@ -744,6 +821,44 @@ export const runDeliveryRepeatability = async (options = {}) => {
   if (finalWarmTree !== "")
     throw new Error(`delivery repeatability candidate tree was not clean after warm mode: ${finalWarmTree}`)
 
+  const freshCandidateSha = await readCandidateSha("before fresh sample")
+  requireSameCandidateSha(freshCandidateSha, "before fresh sample")
+  const freshCandidateTree = await readCandidateTree("before fresh sample")
+  requireCleanCandidateTree(freshCandidateTree, "before fresh sample")
+
+  const resolveFreshCandidateSha = async (resolverOptions) => {
+    let resolved
+    try {
+      resolved = await resolveCandidateSha(resolverOptions)
+    } catch (error) {
+      throw new Error(`delivery repeatability candidate HEAD lookup failed during fresh sample: ${errorMessage(error)}`)
+    }
+    if (typeof resolved !== "string" || !/^[0-9a-f]{40,64}$/u.test(resolved)) {
+      throw new Error(`delivery repeatability candidate HEAD lookup returned an invalid SHA during fresh sample`)
+    }
+    if (resolved !== candidateSha) {
+      throw new Error(
+        `delivery repeatability candidate HEAD changed during fresh sample: expected ${candidateSha}, received ${resolved}`
+      )
+    }
+    return resolved
+  }
+  const resolveFreshCandidateTree = async (resolverOptions) => {
+    let resolved
+    try {
+      resolved = await resolveCandidateTree(resolverOptions)
+    } catch (error) {
+      throw new Error(`delivery repeatability candidate tree lookup failed during fresh sample: ${errorMessage(error)}`)
+    }
+    if (typeof resolved !== "string") {
+      throw new Error(`delivery repeatability candidate tree lookup returned an invalid status during fresh sample`)
+    }
+    const tree = resolved.trimEnd()
+    if (tree !== "") {
+      throw new Error(`delivery repeatability candidate tree changed during fresh sample: ${tree}`)
+    }
+    return tree
+  }
   const freshSampleTimeoutMilliseconds = Math.floor(deadline - now())
   if (freshSampleTimeoutMilliseconds <= 0) {
     throw new Error("delivery repeatability absolute deadline expired before fresh sample")
@@ -751,11 +866,18 @@ export const runDeliveryRepeatability = async (options = {}) => {
   const freshResult = await freshRunner({
     ...options,
     childTimeoutMilliseconds,
+    expectedCandidateSha: candidateSha,
     iterations: freshSampleIterations,
+    resolveCandidateSha: resolveFreshCandidateSha,
+    resolveCandidateTree: resolveFreshCandidateTree,
     totalTimeoutMilliseconds: freshSampleTimeoutMilliseconds,
     onIteration: (record) => progress({ ...record, mode: "fresh", phase: "fresh-sample" })
   })
   if (now() > deadline) throw new Error("delivery repeatability absolute deadline expired after fresh sample")
+  const finalFreshSha = await readCandidateSha("after fresh sample")
+  requireSameCandidateSha(finalFreshSha, "after fresh sample")
+  const finalFreshTree = await readCandidateTree("after fresh sample")
+  requireCleanCandidateTree(finalFreshTree, "after fresh sample")
   const warmRecords = warmIterationsResult.map((record) => ({ ...record, candidateSha, mode: "warm", phase: "warm" }))
   const freshRecords = freshResult.iterations.map((record) => ({ ...record, mode: "fresh", phase: "fresh-sample" }))
   return {
@@ -776,7 +898,7 @@ export const runDeliveryRepeatability = async (options = {}) => {
   }
 }
 
-const isMainModule = process.argv[1] !== undefined && pathToFileURL(process.argv[1]).href === import.meta.url
+const isMainModule = pathToFileURL(process.argv[1] ?? "").href === import.meta.url
 
 if (isMainModule) {
   runDeliveryRepeatability({ mode: readMode(process.argv.slice(2)) }).then(

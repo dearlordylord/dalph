@@ -21,8 +21,10 @@ type WarmRunnerOptions = {
 }
 // eslint-disable-next-line functional/no-mixed-types -- Test doubles intentionally combine callbacks and scalar controls.
 type FreshRunnerOptions = {
+  readonly expectedCandidateSha?: string
   readonly iterations: number
   readonly onIteration: (record: IterationRecord) => void
+  readonly resolveCandidateSha?: (options: Record<string, unknown>) => Promise<string>
   readonly totalTimeoutMilliseconds?: number
 }
 
@@ -97,7 +99,7 @@ test("warm mode retains a fresh-process sample and labels both execution phases"
   const warmCalls: Array<WarmRunnerOptions> = []
   const freshCalls: Array<FreshRunnerOptions> = []
   const candidateTrees = ["", "", "", "", ""]
-  const candidateShas = [candidateSha, candidateSha, candidateSha, candidateSha]
+  const candidateShas = [candidateSha, candidateSha, candidateSha, candidateSha, candidateSha]
   const warmRecords = [
     {
       acceptedOrderDigest: deliveryRepeatabilityExpectedAcceptedOrderDigest,
@@ -158,7 +160,7 @@ test("warm mode retains a fresh-process sample and labels both execution phases"
 
   expect(warmCalls).toHaveLength(1)
   expect(freshCalls).toHaveLength(1)
-  expect(freshCalls[0]).toMatchObject({ iterations: 1 })
+  expect(freshCalls[0]).toMatchObject({ expectedCandidateSha: candidateSha, iterations: 1 })
   expect(result).toMatchObject({
     acceptedOrderDigest: deliveryRepeatabilityExpectedAcceptedOrderDigest,
     candidateSha,
@@ -263,4 +265,123 @@ test("rejects an invalid warmed target result before reporting a pass", async ()
 
 test("rejects unknown repeatability modes before starting a runner", async () => {
   await expect(runDeliveryRepeatability({ mode: "unknown" })).rejects.toThrow(/mode must be one of fresh, warm/u)
+})
+
+test("requires the fresh sample to retain the candidate captured before warm mode", async () => {
+  const changedCandidateSha = "fedcba9876543210fedcba9876543210fedcba98"
+  const candidateShas = [candidateSha, candidateSha, candidateSha, changedCandidateSha]
+  const candidateTrees = ["", "", ""]
+  const warmRecord = {
+    acceptedOrderDigest: deliveryRepeatabilityExpectedAcceptedOrderDigest,
+    iteration: 1,
+    occurrenceCount: deliveryRepeatabilityExpectedOccurrenceCount,
+    status: "PASS"
+  }
+
+  await expect(
+    runDeliveryRepeatability({
+      freshSampleIterations: 1,
+      iterations: 1,
+      mode: "warm",
+      onIteration: () => undefined,
+      resolveCandidateSha: async () => {
+        const resolved = candidateShas.shift()
+        if (resolved === undefined) throw new Error("missing candidate SHA")
+        return resolved
+      },
+      resolveCandidateTree: async () => {
+        const resolved = candidateTrees.shift()
+        if (resolved === undefined) throw new Error("missing candidate tree")
+        return resolved
+      },
+      runFreshTarget: async (options: FreshRunnerOptions) => {
+        expect(options.expectedCandidateSha).toBe(candidateSha)
+        const resolveFreshCandidateSha = options.resolveCandidateSha
+        if (resolveFreshCandidateSha === undefined) throw new Error("fresh SHA resolver was not provided")
+        await resolveFreshCandidateSha({ phase: "fresh iteration 1" })
+        return {
+          acceptedOrderDigest: deliveryRepeatabilityExpectedAcceptedOrderDigest,
+          candidateSha,
+          elapsedMilliseconds: 1,
+          iterations: [warmRecord],
+          occurrenceCount: deliveryRepeatabilityExpectedOccurrenceCount
+        }
+      },
+      runWarmTarget: async (options: WarmRunnerOptions) => {
+        await options.beforeIteration(1)
+        options.onIteration(warmRecord)
+        return [warmRecord]
+      }
+    })
+  ).rejects.toThrow(/candidate HEAD changed during fresh sample/u)
+})
+
+test("rejects a dirty candidate tree before the fresh sample", async () => {
+  const candidateTrees = ["", "", " M changed.ts"]
+  const candidateShas = [candidateSha, candidateSha, candidateSha]
+  const warmRecord = {
+    acceptedOrderDigest: deliveryRepeatabilityExpectedAcceptedOrderDigest,
+    iteration: 1,
+    occurrenceCount: deliveryRepeatabilityExpectedOccurrenceCount,
+    status: "PASS"
+  }
+
+  await expect(
+    runDeliveryRepeatability({
+      freshSampleIterations: 1,
+      iterations: 1,
+      mode: "warm",
+      onIteration: () => undefined,
+      resolveCandidateSha: async () => {
+        const resolved = candidateShas.shift()
+        if (resolved === undefined) throw new Error("missing candidate SHA")
+        return resolved
+      },
+      resolveCandidateTree: async () => {
+        const resolved = candidateTrees.shift()
+        if (resolved === undefined) throw new Error("missing candidate tree")
+        return resolved
+      },
+      runFreshTarget: async () => {
+        throw new Error("fresh sample must not start with a dirty candidate tree")
+      },
+      runWarmTarget: async (options: WarmRunnerOptions) => {
+        await options.beforeIteration(1)
+        options.onIteration(warmRecord)
+        return [warmRecord]
+      }
+    })
+  ).rejects.toThrow(/candidate tree was not clean before fresh sample:  M changed\.ts/u)
+})
+
+test("bounds a hung persistent warm iteration by its total timeout", async () => {
+  const specification = { moduleId: deliveryRepeatabilityTargetTestPath }
+  await expect(
+    runWarmedDeliveryTarget({
+      createVitest: async () => ({
+        close: async () => undefined,
+        getRelevantTestSpecifications: async () => [specification],
+        init: async () => undefined,
+        runTestSpecifications: async () => new Promise(() => undefined)
+      }),
+      iterations: 1,
+      totalTimeoutMilliseconds: 20
+    })
+  ).rejects.toThrow(/total timeout.*warm iteration 1/u)
+})
+
+test("bounds a hung persistent warm close by its total timeout", async () => {
+  const specification = { moduleId: deliveryRepeatabilityTargetTestPath }
+  await expect(
+    runWarmedDeliveryTarget({
+      createVitest: async () => ({
+        close: async () => new Promise(() => undefined),
+        getRelevantTestSpecifications: async () => [specification],
+        init: async () => undefined,
+        runTestSpecifications: async () => passedWarmResult()
+      }),
+      iterations: 1,
+      totalTimeoutMilliseconds: 20
+    })
+  ).rejects.toThrow(/total timeout.*closing Vitest/u)
 })
