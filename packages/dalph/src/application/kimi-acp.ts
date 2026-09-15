@@ -539,12 +539,6 @@ export const nodeKimiAcpClientLayer = (
       const cancel = Effect.fn("KimiAcp.cancel")(function* (sessionId: KimiAcpSessionId) {
         const client = yield* requireRpc()
         yield* client.notify("session/cancel", "session/cancel", { sessionId })
-        yield* Ref.update(sessions, (current) => {
-          const state = current.get(sessionId)
-          return state === undefined
-            ? current
-            : new Map([...current, [sessionId, { ...state, status: "idle" }] as const])
-        })
       })
       const close = Effect.gen(function* () {
         const current = yield* Ref.get(rpc)

@@ -219,6 +219,21 @@ export const kimiPlannedAttemptExecutorLayer = Layer.effectContext(
       yield* client
         .cancel(existing.sessionId)
         .pipe(Effect.mapError((error) => commandFailure("Suspend", correlation, error)))
+      const afterCancel = yield* client
+        .observe(existing.sessionId)
+        .pipe(Effect.mapError((error) => commandFailure("Suspend", correlation, error)))
+      if (afterCancel.status !== "idle")
+        return yield* Effect.fail(
+          commandFailure(
+            "Suspend",
+            correlation,
+            new KimiAcpFailure({
+              detail: "Kimi did not confirm an idle session after cancellation",
+              kind: "Provider",
+              operation: "session/cancel"
+            })
+          )
+        )
       const next = { ...existing, status: "suspended" as const }
       yield* put(next)
       return suspended(correlation)
