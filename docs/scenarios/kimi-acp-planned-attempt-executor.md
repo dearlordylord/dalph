@@ -1,6 +1,6 @@
 # Select Kimi ACP for one planned attempt
 
-Status: implemented bounded slice for issue [#379](https://github.com/dearlordylord/dalph/issues/379). The profile registry, production profile resolution, executable preflight, and controlled Kimi adapter cover the deterministic selection and lifecycle seam; credential/ACP capability preflight, durable recovery, and live-wire qualification remain follow-up acceptance work.
+Status: implemented bounded slice for issue [#379](https://github.com/dearlordylord/dalph/issues/379). The profile registry, production profile resolution, executable preflight, provider-private session recovery, and controlled Kimi adapter cover the deterministic selection and lifecycle seam; full pre-claim credential/ACP capability qualification and live-wire qualification remain follow-up acceptance work.
 
 ## Alice selects a Kimi profile before work begins
 
@@ -75,8 +75,10 @@ prompt is sent and the same Begin can be retried after reconciliation. A
 requested suspension sends `session/cancel`, observes the session, and only
 returns `ExecutorWorkSafelySuspended` after an idle observation; resume uses
 the same in-process ACP session id, then sends the same authored specification
-body. Durable restart reconciliation and lost `session/new` acknowledgement
-handling remain open.
+body. The provider-private store reloads the exact session association on
+restart and passive observation; a malformed store, missing session, or lost
+`session/new` acknowledgement remains a typed failure rather than a new
+session.
 
 ### Visible and forbidden result
 
@@ -96,6 +98,7 @@ without accepted evidence.
 | Missing, unknown, and duplicate profile selection fails before any external boundary. | `executor-profile.test.ts`: `returns typed failures for missing and unknown profile selections`; `fails closed when profile identifiers collide` |
 | One exact attempt initializes, creates one ACP session, and sends its authored body through the generic contract. | `kimi-planned-attempt-executor.test.ts`: `initializes in the exact worktree, creates one session, and sends the authored body`; the shared `plannedAttemptExecutorContract` registered as `Kimi ACP controlled` |
 | A suspension cancels and a resume reuses the same ACP session and body. | `kimi-planned-attempt-executor.test.ts`: `cancels and resumes the same ACP session through the generic command boundary` |
+| Dalph restarts while Kimi is executing and observes the same session without a new prompt. | `kimi-planned-attempt-executor.test.ts`: `reconnects a persisted executing session after restart without sending another prompt`; `kimi-attempt-store.test.ts`: persistence and malformed-state tests |
 | An unavailable Kimi executable is rejected before executor activation. | `kimi-acp.test.ts`: `fails Kimi layer construction when the configured executable exits unsuccessfully` |
 | ACP wire ordering, stderr isolation, permission policy, and malformed/provider failures are exercised without a live Kimi account. | `kimi-acp.test.ts`: `performs the ACP authentication and model-selection handshake in order`; the broader recorded progress/permission fixture remains follow-up work. |
 
