@@ -532,9 +532,14 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           requestedExecutorLocator === "executor:default" && configuration.executorProfileDefault !== undefined
             ? TaskExecutorLocator.make(`executor:${configuration.executorProfileDefault}`)
             : requestedExecutorLocator
-        const selectedProfile = executorLocator.startsWith("codex:")
-          ? codexProfile
-          : yield* resolveExecutorProfileLocator(configuredProfiles, executorLocator)
+        const selectedProfile =
+          executorLocator.startsWith("codex:") && configuration.executorProfiles === undefined
+            ? codexProfile
+            : yield* resolveExecutorProfileLocator(configuredProfiles, executorLocator)
+        const selectedConfiguration =
+          selectedProfile.adapter === "codex-app-server"
+            ? { ...configuration, codexExecutable: selectedProfile.executable }
+            : configuration
         const workflowApplicationExitObserver = adapters.workflowApplicationExitObserver
         /* v8 ignore start -- @preserve Hermetic host tests replace the live GitHub boundary; this assignment retains the production-only provider default. */
         const githubClientLayer = guardedGithubClientLayer(
@@ -559,7 +564,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
             new CodexAppServerFailure({ detail: codexRequestCircuitOpenDetail, kind: "CircuitOpen", operation }),
           policy: codexRequestCircuitPolicy
         })
-        const suppliedCodexAppServerLayer = adapters.codexAppServer?.(configuration, codexRequestBoundary)
+        const suppliedCodexAppServerLayer = adapters.codexAppServer?.(selectedConfiguration, codexRequestBoundary)
         /* v8 ignore start -- @preserve Hermetic host tests replace the process boundary; this assignment retains the production Codex app-server default. */
         const appLayerWithoutApplicationExit: Layer.Layer<
           CodexAppServer,
@@ -567,7 +572,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           ApplicationExitShell
         > =
           suppliedCodexAppServerLayer ??
-          defaultCodexAppServerLayer(configuration, attemptStoreLayer, codexProcessNative, codexRequestBoundary)
+          defaultCodexAppServerLayer(selectedConfiguration, attemptStoreLayer, codexProcessNative, codexRequestBoundary)
         /* v8 ignore stop */
         const appLayerWithoutCircuit: Layer.Layer<
           CodexAppServer,
