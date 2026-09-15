@@ -1,5 +1,6 @@
-import { Context, Crypto, Effect, Layer, Ref, Stream } from "effect"
+import { Context, Crypto, Effect, Layer, Option, Ref, Stream } from "effect"
 import { NodeCrypto } from "@effect/platform-node"
+import { GitCommand } from "@dalph/orchestrator"
 import {
   CodexAppServer,
   CodexAppServerFailure,
@@ -84,6 +85,7 @@ export const kimiIntegratorProviderLayer = Layer.effectContext(
   Effect.gen(function* () {
     const client = yield* KimiAcpClient
     const crypto = yield* Crypto.Crypto
+    const git = yield* Effect.serviceOption(GitCommand)
     const incarnation = CodexServerIncarnation.make(
       `kimi-integrator:${yield* crypto.randomUUIDv4.pipe(Effect.mapError((error) => operationFailure("initialize", String(error))))}`
     )
@@ -155,6 +157,22 @@ export const kimiIntegratorProviderLayer = Layer.effectContext(
             CodexOwnedTurnToken.make(
               `kimi-integrator:${yield* crypto.randomUUIDv4.pipe(Effect.mapError((error) => operationFailure("turn/start", String(error))))}`
             )
+          const acceptedCommit = /^Accepted commit C: ([0-9a-f]{40})$/mu.exec(text)?.[1]
+          if (acceptedCommit !== undefined && Option.isSome(git)) {
+            const ancestor = yield* git.value
+              .runInWorktree(_cwd, ["merge-base", "--is-ancestor", acceptedCommit, "HEAD"])
+              .pipe(mapFailure("turn/start"))
+            if (ancestor.exitCode !== 0) {
+              const merged = yield* git.value
+                .runInWorktree(_cwd, ["merge", "--no-ff", "--no-edit", "--", acceptedCommit])
+                .pipe(mapFailure("turn/start"))
+              if (merged.exitCode !== 0) {
+                return yield* Effect.fail(
+                  operationFailure("turn/start", merged.stderr.trim() || "could not prepare the integration merge")
+                )
+              }
+            }
+          }
           yield* client.prompt(clientSessionId(sessionId), text).pipe(mapFailure("turn/start"))
           const observation = yield* client.observe(clientSessionId(sessionId)).pipe(mapFailure("turn/start"))
           const turn = turnFor(threadId, token, observation)

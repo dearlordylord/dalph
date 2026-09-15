@@ -68,6 +68,8 @@ const promptFor = (run: IntegratorRunCorrelation, candidatePath: IntegratorCandi
     `Accepted commit C: ${run.session.acceptedResult.commit}`,
     `Candidate worktree: ${candidatePath}`,
     `Exact integration run: ${run.session.sessionId}/${run.ordinal}`,
+    "The candidate worktree starts at unchanged target head H.",
+    `Prepare the candidate as the exact integration merge of H and accepted commit C (${run.session.acceptedResult.commit}); the candidate commit must have H and C as its direct parents. Do not cherry-pick C, recreate the task change, or update the target ref.`,
     "Work only inside the candidate worktree. Do not update the target ref.",
     'Return exactly one terminal JSON object: {"version":1,"outcome":"PreparedCandidate","candidate":"<git commit text>"} or {"version":1,"outcome":"NotPrepared","detail":"<safe non-empty detail>"}.'
   ].join("\n")
