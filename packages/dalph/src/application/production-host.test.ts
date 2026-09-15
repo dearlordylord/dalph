@@ -17,6 +17,9 @@ import {
   GithubIssueTarget,
   GithubRepositoryNodeId,
   InitialControlPolicy,
+  Integrator,
+  IntegratorCandidateProviderAuthority,
+  unavailableIntegratorCandidateProviderAuthority,
   JournalDatabaseLocator,
   JournalPosition,
   JournaledRunEstablished,
@@ -75,6 +78,7 @@ import {
   type ProductionRepositoryHostAdapters,
   type ProductionRepositoryHostBoundary,
   type ProductionRepositoryHostGraph,
+  lazyIntegratorLayer,
   productionRepositoryHostGraph,
   withProductionRepositoryHost
 } from "./production-host.js"
@@ -203,6 +207,29 @@ it("ordinary Exit shells cannot inhabit the production-host shell boundary", () 
   expectTypeOf<ApplicationExitShell["Service"]>().not.toMatchTypeOf<ProductionHostApplicationExitShellService>()
   expectTypeOf<SuppliedHostShell>().toEqualTypeOf<ProductionHostApplicationExitShellService>()
 })
+
+it.effect("lazy Kimi Integrator composition defers Codex provider acquisition until use", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const acquisitions = yield* Ref.make(0)
+      const providerLayer = Layer.effectContext(
+        Effect.gen(function* () {
+          yield* Ref.update(acquisitions, (count) => count + 1)
+          return Context.empty().pipe(
+            Context.add(Integrator, Integrator.of({ prepare: () => Effect.die("lazy provider fixture") })),
+            Context.add(IntegratorCandidateProviderAuthority, unavailableIntegratorCandidateProviderAuthority)
+          )
+        })
+      )
+      const services = yield* Layer.build(lazyIntegratorLayer(providerLayer))
+      expect(yield* Ref.get(acquisitions)).toBe(0)
+
+      const integrator = Context.get(services, Integrator)
+      yield* Effect.exit(integrator.prepare(undefined as never))
+      expect(yield* Ref.get(acquisitions)).toBe(1)
+    })
+  )
+)
 
 it.effect("production host composition keeps ambient Codex home separate from executor private state", () =>
   Effect.scoped(

@@ -25,6 +25,8 @@ import {
   GitCommand,
   type GitCommandService,
   InitialControlPolicy,
+  IntegratorCallFailure,
+  IntegratorProviderActivityAbsent,
   Integrator,
   IntegratorCandidateProviderAuthority,
   type JournaledRunTerminationSource,
@@ -443,6 +445,57 @@ const observedIntegratorLayer = <E, R>(
 }
 
 /**
+ * Defers a provider layer until one of its capabilities is actually used.
+ * The build memo and scope are retained so the deferred Codex process and
+ * Integrator private store still have one owner and one finalizer.
+ */
+export const lazyIntegratorLayer = <E, R>(
+  layer: Layer.Layer<Integrator | IntegratorCandidateProviderAuthority, E, R>
+): Layer.Layer<Integrator | IntegratorCandidateProviderAuthority, E, R> =>
+  Layer.fromBuildMemo((memoMap, scope) =>
+    Effect.gen(function* () {
+      const input = yield* Effect.context<R>()
+      const build = yield* Effect.cached(Layer.buildWithMemoMap(layer, memoMap, scope).pipe(Effect.provide(input)))
+      const provider = <A, E2>(
+        effect: (
+          context: Context.Context<Integrator | IntegratorCandidateProviderAuthority>
+        ) => Effect.Effect<A, E2, never>
+      ): Effect.Effect<A, E | E2> => build.pipe(Effect.flatMap(effect))
+      const integrator = Integrator.of({
+        prepare: (request) =>
+          provider((context) => Context.get(context, Integrator).prepare(request)).pipe(
+            Effect.mapError((error) =>
+              error instanceof IntegratorCallFailure || error instanceof IntegratorProviderActivityAbsent
+                ? error
+                : new IntegratorCallFailure({ correlation: request.correlation, detail: String(error) })
+            )
+          )
+      })
+      const authority = IntegratorCandidateProviderAuthority.of({
+        readEvidenceRevision: (subject) =>
+          provider((context) => {
+            const read = Context.get(context, IntegratorCandidateProviderAuthority).readEvidenceRevision
+            return read === undefined
+              ? Effect.fail("provider authority does not expose evidence revisions")
+              : read(subject)
+          }),
+        observe: (authorization) =>
+          provider((context) => Context.get(context, IntegratorCandidateProviderAuthority).observe(authorization)).pipe(
+            Effect.orDie
+          ),
+        remove: (authorization, attempt) =>
+          provider((context) =>
+            Context.get(context, IntegratorCandidateProviderAuthority).remove(authorization, attempt)
+          ).pipe(Effect.orDie)
+      })
+      return Context.empty().pipe(
+        Context.add(Integrator, integrator),
+        Context.add(IntegratorCandidateProviderAuthority, authority)
+      )
+    })
+  )
+
+/**
  * Keeps the coordinator lock held until the host scope closes after its caller
  * reports the exact lifecycle result and returns. The application shell owns
  * the decision and bounded drain; scope finalization owns the final lock release.
@@ -661,11 +714,13 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           ),
           adapters.boundaryObserver
         )
+        const selectedIntegratorLayer =
+          selectedProfile.adapter === "kimi-acp" ? lazyIntegratorLayer(integratorLayer) : integratorLayer
         const sharedServices = Layer.mergeAll(
           githubAuthorityLayer,
           evidenceLayer,
           executorLayer,
-          integratorLayer,
+          selectedIntegratorLayer,
           promotionLayer,
           adapters.workflowTrace?.() ?? defaultWorkflowTraceLayer
         )

@@ -75,6 +75,8 @@ export interface KimiAcpClientService {
   readonly prompt: (sessionId: KimiAcpSessionId, text: string) => Effect.Effect<void, KimiAcpFailure>
   readonly observe: (sessionId: KimiAcpSessionId) => Effect.Effect<KimiAcpSessionObservation, KimiAcpFailure>
   readonly cancel: (sessionId: KimiAcpSessionId) => Effect.Effect<void, KimiAcpFailure>
+  /** Closes one terminal session while retaining the shared ACP process for other attempts. */
+  readonly closeSession: (sessionId: KimiAcpSessionId) => Effect.Effect<void, KimiAcpFailure>
   readonly close: () => Effect.Effect<void, KimiAcpFailure>
 }
 
@@ -582,6 +584,10 @@ const baseNodeKimiAcpClientLayer = (
         const client = yield* requireRpc()
         yield* client.notify("session/cancel", "session/cancel", { sessionId })
       })
+      const closeSession = Effect.fn("KimiAcp.closeSession")(function* (sessionId: KimiAcpSessionId) {
+        const client = yield* requireRpc()
+        yield* client.notify("session/close", "session/close", { sessionId })
+      })
       const close = Effect.gen(function* () {
         const current = yield* Ref.get(rpc)
         if (Option.isSome(current)) {
@@ -611,6 +617,7 @@ const baseNodeKimiAcpClientLayer = (
         prompt,
         observe,
         cancel,
+        closeSession,
         close: () => close
       })
     })

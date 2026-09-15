@@ -1,6 +1,6 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { AttemptId, RunId, TaskExecutorLocator, WorktreeLocator } from "@dalph/contracts"
+import { AttemptId, GitCommitSha, RunId, TaskExecutorLocator, WorktreeLocator } from "@dalph/contracts"
 import { Effect, Exit, FileSystem, Layer, Option, Path } from "effect"
 import { expect } from "vitest"
 import type { KimiAttemptPrivatePhase } from "./kimi-attempt-store.js"
@@ -15,11 +15,13 @@ const runId = RunId.make("run:kimi-private-store")
 const attemptId = AttemptId.make("attempt:kimi-private-store")
 const record = KimiAttemptPrivateRecord.make({
   attemptId,
+  baseSha: GitCommitSha.make("1".repeat(40)),
   executor: TaskExecutorLocator.make("executor:kimi/for-coding"),
   phase: "Executing" satisfies KimiAttemptPrivatePhase,
   runId,
   sessionId: KimiAcpSessionId.make("kimi-session-private-store"),
-  worktree: WorktreeLocator.make("/worktrees/kimi-private-store")
+  worktree: WorktreeLocator.make("/worktrees/kimi-private-store"),
+  sessionClosed: false
 })
 
 const layerAt = (stateDirectory: string) =>

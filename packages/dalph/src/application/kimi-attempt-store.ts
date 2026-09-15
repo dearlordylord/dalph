@@ -1,7 +1,14 @@
 /* eslint-disable import/no-nodejs-modules -- the adapter owns its private path boundary. */
 
 import nodePath from "node:path"
-import { AttemptId, RunId, TaskExecutorLocator, WorktreeLocator } from "@dalph/contracts"
+import {
+  AttemptId,
+  GitCommitSha,
+  PlannedAttemptExecutorResult,
+  RunId,
+  TaskExecutorLocator,
+  WorktreeLocator
+} from "@dalph/contracts"
 import { Context, Effect, FileSystem, Layer, Option, Path, Ref, Schema, Semaphore } from "effect"
 import { CodexAttemptStoreNative, nodeCodexAttemptStoreNativeLayer } from "./codex-attempt-store-native.js"
 import {
@@ -31,11 +38,17 @@ export type KimiAttemptPrivatePhase = typeof KimiAttemptPrivatePhase.Type
  */
 export const KimiAttemptPrivateRecord = Schema.Struct({
   attemptId: AttemptId,
+  /** Exact planned Base used to distinguish a real executor commit on recovery. */
+  baseSha: GitCommitSha,
   executor: TaskExecutorLocator,
   phase: KimiAttemptPrivatePhase,
   runId: RunId,
   sessionId: KimiAcpSessionId,
-  worktree: WorktreeLocator
+  worktree: WorktreeLocator,
+  /** Sealed terminal result retained so recovery never needs a live provider session. */
+  terminal: Schema.optionalKey(PlannedAttemptExecutorResult),
+  /** Set only after the terminal ACP session-close boundary is acknowledged. */
+  sessionClosed: Schema.Boolean
 })
 export type KimiAttemptPrivateRecord = typeof KimiAttemptPrivateRecord.Type
 

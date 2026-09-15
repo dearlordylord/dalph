@@ -7,6 +7,7 @@ import {
   PlannedAttemptExecutor,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
+  PlannedAttemptExecutorResult,
   PlannedAttemptExecutorRequest,
   PlannedTaskAttempt,
   RunId,
@@ -86,6 +87,10 @@ const makeService = () => {
       Effect.sync(() => {
         calls.push(`session/cancel:${id}`)
         status = "idle"
+      }),
+    closeSession: (id) =>
+      Effect.sync(() => {
+        calls.push(`session/close:${id}`)
       }),
     close: () => Effect.void
   }
@@ -322,8 +327,62 @@ it.effect("reports Accepted only after the terminal commit matches HEAD and rere
     expect(controlled.calls).toEqual([
       `initialize:${cwd}`,
       `session/new:${cwd}`,
-      `prompt:${sessionId}:Implement Kimi boundary`
+      `prompt:${sessionId}:Implement Kimi boundary`,
+      `session/close:${sessionId}`
     ])
+  }).pipe(Effect.provide(acceptanceTestLayer(controlled.service, boundaries)))
+})
+
+it.effect("recovers a sealed terminal result without loading the closed Kimi session", () => {
+  const controlled = makeService()
+  const { correlation, request } = makeRequest()
+  const writes: Array<KimiAttemptPrivateRecord> = []
+  return Effect.gen(function* () {
+    yield* Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      yield* executor.begin(request, { _tag: "InitialDelivery" })
+      controlled.complete("Kimi finished without a provider commit")
+      yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+    }).pipe(Effect.provide(testLayerWithPrivateStore(controlled.service, [], (record) => writes.push(record))))
+    const sealed = writes[writes.length - 1]
+    if (sealed === undefined) return yield* Effect.die("Kimi terminal state was not persisted")
+    expect(sealed.sessionClosed).toBe(true)
+    expect(sealed.terminal).toEqual(PlannedAttemptExecutorResult.cases.Completed.make({}))
+
+    const beforeRestartCalls = controlled.calls.length
+    yield* Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toEqual(
+        PlannedAttemptExecutorProjection.cases.Exact.make({
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+            correlation,
+            result: PlannedAttemptExecutorResult.cases.Completed.make({})
+          })
+        })
+      )
+    }).pipe(Effect.provide(testLayerWithPrivateStore(controlled.service, [sealed])))
+    expect(controlled.calls.slice(beforeRestartCalls)).toEqual([])
+  })
+})
+
+it.effect("seals Accepted from a changed exact worktree when Kimi omits a commit marker", () => {
+  const controlled = makeService()
+  const { correlation, request } = makeRequest()
+  const head = GitCommitSha.make("c".repeat(40))
+  const boundaries = makeAcceptanceBoundaries(head, acceptedDigest)
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request, { _tag: "InitialDelivery" })
+    controlled.complete("Implemented the task and committed it.")
+
+    const projected = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+    expect(projected).toMatchObject({
+      _tag: "Exact",
+      report: { _tag: "ExecutorWorkTerminal", result: { _tag: "Accepted" } }
+    })
+    expect(boundaries.gitCalls).toEqual([["rev-parse", "HEAD"]])
+    expect(boundaries.evidencePutCalls()).toBe(1)
+    expect(controlled.calls).toContain(`session/close:${sessionId}`)
   }).pipe(Effect.provide(acceptanceTestLayer(controlled.service, boundaries)))
 })
 
