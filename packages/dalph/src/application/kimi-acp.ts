@@ -361,16 +361,43 @@ const initializeCapabilities = (value: unknown): KimiAcpCapabilities | KimiAcpFa
 }
 
 const nodeConfig = { clientName: "dalph", clientVersion: "0.0.0" } as const
+type KimiAcpNodeConfiguration = Partial<typeof nodeConfig> & { readonly preflightCwd?: string }
+
+/**
+ * Checks the configured Kimi executable without opening an ACP session or
+ * exposing provider output. The node layer runs this before it can be
+ * assembled into an activating production graph, so an unavailable command
+ * fails before task-claim admission.
+ */
+export const preflightKimiExecutable = Effect.fn("KimiAcp.preflightExecutable")(function* (
+  profile: ExecutorProfile,
+  cwd?: string
+) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+  const command = ChildProcess.make(profile.executable, ["--version"], {
+    ...(cwd === undefined ? {} : { cwd }),
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+    extendEnv: true
+  })
+  const exitCode = yield* spawner
+    .exitCode(command)
+    .pipe(Effect.mapError(() => failure("initialize", "Unavailable", "Kimi executable preflight could not start")))
+  if (exitCode !== 0)
+    return yield* Effect.fail(failure("initialize", "Unavailable", "Kimi executable preflight failed"))
+})
 
 /** Starts `kimi acp` lazily at the first exact worktree boundary. */
 export const nodeKimiAcpClientLayer = (
   profile: ExecutorProfile,
-  config: Partial<typeof nodeConfig> = {}
+  config: KimiAcpNodeConfiguration = {}
 ): Layer.Layer<KimiAcpClient, KimiAcpFailure, ChildProcessSpawner.ChildProcessSpawner> =>
   Layer.effect(
     KimiAcpClient,
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      yield* preflightKimiExecutable(profile, config.preflightCwd)
       const layerScope = yield* Scope.Scope
       const rpc = yield* Ref.make<Option.Option<KimiAcpRpc>>(Option.none())
       const sessions = yield* Ref.make<ReadonlyMap<KimiAcpSessionId, SessionState>>(new Map())

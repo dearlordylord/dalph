@@ -57,6 +57,7 @@ export {
   KimiAcpSessionObservation,
   controlledKimiAcpClientLayer,
   kimiAcpProfileArguments,
+  preflightKimiExecutable,
   nodeKimiAcpClientLayer
 } from "./application/kimi-acp.js"
 export {

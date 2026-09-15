@@ -620,7 +620,11 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           selectedProfile.adapter === "kimi-acp"
             ? observedPlannedAttemptExecutorLayer(
                 kimiPlannedAttemptExecutorLayer.pipe(
-                  Layer.provide(nodeKimiAcpClientLayer(selectedProfile).pipe(Layer.provide(NodeServices.layer))),
+                  Layer.provide(
+                    nodeKimiAcpClientLayer(selectedProfile, { preflightCwd: configuration.repository }).pipe(
+                      Layer.provide(NodeServices.layer)
+                    )
+                  ),
                   Layer.provide(evidenceLayer),
                   Layer.provide(gitCommandLayer),
                   Layer.provide(NodeCrypto.layer),
