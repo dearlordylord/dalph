@@ -29,6 +29,7 @@ import {
 } from "./kimi-acp.js"
 import type { KimiAcpClientService as KimiAcpClientServiceType } from "./kimi-acp.js"
 import { kimiPlannedAttemptExecutorLayer } from "./kimi-planned-attempt-executor.js"
+import { memoryKimiAttemptPrivateStoreLayer, type KimiAttemptPrivateRecord } from "./kimi-attempt-store.js"
 import { plannedAttemptExecutorContract } from "../../../orchestrator/test/contracts/planned-attempt-executor-contract.js"
 
 const sessionId = KimiAcpSessionId.make("kimi-session-1")
@@ -123,6 +124,17 @@ const makeRequest = () => {
 
 const testLayer = (service: KimiAcpClientServiceType) =>
   kimiPlannedAttemptExecutorLayer.pipe(Layer.provide(controlledKimiAcpClientLayer(service)))
+
+const testLayerWithPrivateStore = (
+  service: KimiAcpClientServiceType,
+  initial: Parameters<typeof memoryKimiAttemptPrivateStoreLayer>[0] = [],
+  observeWrite?: Parameters<typeof memoryKimiAttemptPrivateStoreLayer>[1]
+) =>
+  kimiPlannedAttemptExecutorLayer.pipe(
+    Layer.provide(
+      Layer.mergeAll(controlledKimiAcpClientLayer(service), memoryKimiAttemptPrivateStoreLayer(initial, observeWrite))
+    )
+  )
 
 const acceptedDigest = EvidenceDigest.make("00".repeat(32))
 const mismatchedDigest = EvidenceDigest.make("ff".repeat(32))
@@ -251,6 +263,33 @@ it.effect("cancels and resumes the same ACP session through the generic command 
       `prompt:${sessionId}:Implement Kimi boundary`
     ])
   }).pipe(Effect.provide(testLayer(controlled.service)))
+})
+
+it.effect("reconnects a persisted executing session after restart without sending another prompt", () => {
+  const controlled = makeService()
+  const { attempt, correlation, request } = makeRequest()
+  const writes: Array<KimiAttemptPrivateRecord> = []
+  return Effect.gen(function* () {
+    yield* Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      yield* executor.begin(request, { _tag: "InitialDelivery" })
+    }).pipe(Effect.provide(testLayerWithPrivateStore(controlled.service, [], (record) => writes.push(record))))
+    const retained = writes[writes.length - 1]
+    if (retained === undefined) return yield* Effect.die("Kimi private session was not persisted")
+
+    const beforeRestartCalls = controlled.calls.length
+    yield* Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toEqual(
+        PlannedAttemptExecutorProjection.cases.Exact.make({
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+        })
+      )
+    }).pipe(Effect.provide(testLayerWithPrivateStore(controlled.service, [retained])))
+
+    expect(controlled.calls.slice(beforeRestartCalls)).toEqual([`session/load:${sessionId}:${cwd}`])
+    expect(attempt.executor).toBe("executor:kimi/for-coding")
+  })
 })
 
 it.effect("reports Accepted only after the terminal commit matches HEAD and reread evidence digest", () => {
