@@ -8,7 +8,6 @@ import {
 const structuralCommands = [
   "check:artifacts",
   "typecheck",
-  "typecheck:effect",
   "lint:code",
   "check:circular",
   "check:complexity",

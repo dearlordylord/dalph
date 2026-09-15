@@ -45,8 +45,7 @@ export const boundedQualityGateCommand = ({ gate, nodeExecutable, pnpmEntryPoint
 /** Structural checks run once before qualification; production artifacts are prepared before source checks. */
 export const preflightQualityGates = (baseSha) => [
   { args: ["check:artifacts"], name: "build and production artifacts", timeout: 5 * 60 * SECOND },
-  { args: ["typecheck"], name: "typecheck", timeout: 2 * 60 * SECOND },
-  { args: ["typecheck:effect"], name: "Effect diagnostics", timeout: 3 * 60 * SECOND },
+  { args: ["typecheck"], name: "typecheck (including Effect diagnostics)", timeout: 2 * 60 * SECOND },
   { args: ["lint:code", "--census"], name: "format and lint", timeout: 5 * 60 * SECOND },
   { args: ["check:circular"], name: "dependency cycles", timeout: 60 * SECOND },
   complexityQualityGate(baseSha),
@@ -68,7 +67,6 @@ export const fullQualityGateManifest = (baseSha, invocation) => {
   const preflightIds = [
     "production-artifacts",
     "typecheck",
-    "effect-diagnostics",
     "format-lint",
     "dependency-cycles",
     "complexity",

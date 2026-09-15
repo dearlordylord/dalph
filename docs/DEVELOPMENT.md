@@ -121,13 +121,13 @@ All commands below use `pnpm`. Script definitions live in
 | `bootstrap:worktree` | Initialize repository submodules, install the frozen dependency graph, clean-build and validate production artifacts, then relink and verify generated workspace bins. |
 | `check:artifacts` | Clean-build production packages in dependency order, then validate normal exports, declarations, bins, package boundaries, and packed contents. |
 | `vitest run <test-file>` | Focused development check. `test` runs the covered core suite. |
-| `typecheck` | Strict TypeScript-Go with Effect errors; suggestions remain nonfatal. |
-| `typecheck:effect` | Dedicated strict Effect pass over the whole project; errors and warnings fail, JSON output. |
+| `typecheck` | Strict TypeScript-Go plus Effect errors/warnings; suggestions remain nonfatal. |
+| `typecheck:effect` | Optional standalone Effect diagnostics; errors/warnings fail, JSON output. |
 | `typecheck:effect:changed` | Effect pass over files changed against `DALPH_DIAGNOSTICS_BASE`, or the explicitly reported moving `origin/master` fallback; falls back to the project pass above twelve changed files. |
 | `lint:code` | Type-aware Oxlint, compatibility ESLint, dprint; warnings fail. File-scoped runs check the compatibility graph only with `--compatibility`. |
 | `lint:changed` | Oxlint, compatibility ESLint, and dprint over files changed against `DALPH_DIAGNOSTICS_BASE`, or the explicitly reported moving `origin/master` fallback; compatibility ESLint receives only the changed TypeScript files. |
-| `check:preflight --candidate=<base sha>` | Pre-freeze structural census: report all independent typecheck, Effect, lint/format, cycle, complexity, duplication, CI classifier, secrets and artifact failures. Runs no coverage, catalog, Lab or MBT suites. |
-| `check:fast` | Development-loop tier: `typecheck`, `lint:changed`, `typecheck:effect:changed`. A planned task attempt sets `DALPH_DIAGNOSTICS_BASE` to its exact Base SHA. |
+| `check:preflight --candidate=<base sha>` | Pre-freeze structural census: report typecheck (including Effect), lint/format, cycle, complexity, duplication, CI classifier, secrets and artifact failures. Runs no coverage, catalog, Lab or MBT suites. |
+| `check:fast` | Development-loop tier: `typecheck`, `lint:changed`. A planned task attempt sets `DALPH_DIAGNOSTICS_BASE` to its exact Base SHA. |
 | `check:circular` | Reject runtime dependency cycles. |
 | `check:complexity` | Reject increased per-file counts of production functions above complexity eight. |
 | `check:duplicates` | Enforce the configured duplication budget. |
@@ -135,6 +135,7 @@ All commands below use `pnpm`. Script definitions live in
 | `test` | Enforce separate production/evaluation coverage and changed-line floors below; takes an admission slot. |
 | `test:mbt` | Explicit manual Quint-connected conformance run; temporarily excluded from automatic verification pending [#363](https://github.com/dearlordylord/dalph/issues/363), which restores replay from pre-generated traces. |
 | `test:delivery-repeatability` | Run the accepted DS01–DS13 delivery checkpoint table and strict occurrence order in twenty consecutive fresh processes; stop at the first incomplete or divergent run. This is the dedicated delivery-repeatability qualification command. |
+| `test:delivery-repeatability:warm` | Reuse one persistent Vitest worker for twenty target executions, then run a three-process fresh sample for process-isolation evidence. Warm success is a performance/cache signal and does not replace the fresh acceptance path. |
 | `test:ci-change-classification` | Prove the docs-only CI allowlist and fail-closed classification. |
 
 | `check:lab` | Reducer Lab typecheck, maintained-cassette smoke, build; no browser. |
@@ -155,7 +156,7 @@ This is an accepted trade-off: hosted and frozen-candidate verification run
 whole-project compatibility ESLint, so a whole-program or graph-only
 compatibility finding can surface at candidate qualification rather than during
 the edit loop. This scope applies to compatibility ESLint only;
-`typecheck:effect:changed` remains a separate Effect diagnostic and retains its
+`typecheck:effect:changed` remains an optional JSON diagnostic command and retains its
 documented fallback to the whole-project pass when more than twelve files
 change. When the changed set has no compatible TypeScript/TSX file, the
 compatibility process is not started.
@@ -278,9 +279,9 @@ boundary, journal fact, retry, or cleanup behavior.
 | --- | --- |
 | A detached writer reports fixture readiness before its parent can publish the post-spawn observation; the test waits for the exact observed variant, kills the enclosing observer, and proves corrupting that variant cannot clear either fence | `scripts/gate-custody.test.mjs`: `formal-copy observer death preserves registered detached writer custody before any next launch` |
 
-Fresh full gates prepare the Effect diagnostics platform binary executable bit
-before observing inputs; resume retains changed installation modes and refuses
-reuse. Already prepared diagnostics binaries are left untouched. Fresh full gates also
+Fresh dependency setup prepares the patched TypeScript-Go binary before full-gate
+input observation; resume retains changed installation modes and refuses reuse.
+Already prepared binaries are left untouched. Fresh full gates also
 ask pnpm to validate workspace dependencies before observation, failing on an
 outdated installation rather than installing. Its consumed workspace-state file
 remains hashed and watched; resume never refreshes it before checking identity.
