@@ -23,7 +23,7 @@
         "diagnosticSeverity": {
           "lazyEffect": "off"
         },
-        "ignoreEffectWarningsInTscExitCode": true,
+        "ignoreEffectWarningsInTscExitCode": false,
         "overrides": [
           {
             "include": ["src/**/*.ts"],
