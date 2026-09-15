@@ -128,7 +128,8 @@ it.effect("performs the ACP authentication and model-selection handshake in orde
       const spawner = ChildProcessSpawner.make((command) =>
         Effect.sync(() => {
           commands.push(command)
-          return command.options.stdin === "ignore" ? fakeHandle(0) : interactiveHandle
+          const isPreflight = ChildProcess.isStandardCommand(command) && command.options.stdin === "ignore"
+          return isPreflight ? fakeHandle(0) : interactiveHandle
         })
       )
       const services = yield* Effect.provide(
