@@ -97,7 +97,7 @@ without accepted evidence.
 | One exact attempt initializes, creates one ACP session, and sends its authored body through the generic contract. | `kimi-planned-attempt-executor.test.ts`: `initializes in the exact worktree, creates one session, and sends the authored body`; the shared `plannedAttemptExecutorContract` registered as `Kimi ACP controlled` |
 | A suspension cancels and a resume reuses the same ACP session and body. | `kimi-planned-attempt-executor.test.ts`: `cancels and resumes the same ACP session through the generic command boundary` |
 | An unavailable Kimi executable is rejected before executor activation. | `kimi-acp.test.ts`: `fails Kimi layer construction when the configured executable exits unsuccessfully` |
-| ACP wire ordering, stderr isolation, permission policy, and malformed/provider failures are exercised without a live Kimi account. | The controlled service seam exists in `controlledKimiAcpClientLayer`; a recorded stdio/child-process fixture is still required before this row can be accepted. |
+| ACP wire ordering, stderr isolation, permission policy, and malformed/provider failures are exercised without a live Kimi account. | `kimi-acp.test.ts`: `performs the ACP authentication and model-selection handshake in order`; the broader recorded progress/permission fixture remains follow-up work. |
 
 The controlled tests are the maintained catalog entry for this boundary; they
 do not claim that a live Kimi account or model is available in CI.
