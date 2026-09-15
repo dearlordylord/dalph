@@ -77,6 +77,7 @@ import { nodeCodexAttemptStoreLayer } from "./codex-attempt-store.js"
 import { nodeCodexProcessNativeService, type CodexProcessNativeService } from "./codex-process-native.js"
 import { nodeCodexPlannedAttemptExecutorLayer } from "./codex-planned-attempt-executor.js"
 import { nodeKimiAcpClientLayer } from "./kimi-acp.js"
+import { nodeKimiAttemptPrivateStoreLayer } from "./kimi-attempt-store.js"
 import { kimiPlannedAttemptExecutorLayer } from "./kimi-planned-attempt-executor.js"
 import { nodeCodexIntegratorLayer } from "./codex-integrator.js"
 import { CodexIntegratorConfiguration } from "./codex-integrator-private-store.js"
@@ -616,6 +617,11 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
                     nodeKimiAcpClientLayer(selectedProfile, { preflightCwd: configuration.repository }).pipe(
                       Layer.provide(NodeServices.layer)
                     )
+                  ),
+                  Layer.provide(
+                    nodeKimiAttemptPrivateStoreLayer({
+                      stateDirectory: configuration.codexExecutorPrivateStateDirectory
+                    }).pipe(Layer.provide(NodeServices.layer))
                   ),
                   Layer.provide(evidenceLayer),
                   Layer.provide(gitCommandLayer),

@@ -65,6 +65,14 @@ export {
   nodeKimiPlannedAttemptExecutorLayer
 } from "./application/kimi-planned-attempt-executor.js"
 export {
+  KimiAttemptPrivatePhase,
+  KimiAttemptPrivateRecord,
+  KimiAttemptPrivateStore,
+  KimiAttemptStoreFailure,
+  memoryKimiAttemptPrivateStoreLayer,
+  nodeKimiAttemptPrivateStoreLayer
+} from "./application/kimi-attempt-store.js"
+export {
   CodexReplacementAuthority,
   CodexReplacementAuthorityFailure,
   CodexReplacementAuthorityProof,
