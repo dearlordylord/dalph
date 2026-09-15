@@ -506,6 +506,12 @@ export const runWarmedDeliveryTarget = async (options = {}) => {
 
   const now = options.now ?? (() => performance.now())
   const deadline = now() + totalTimeoutMilliseconds
+  const closeTimeoutMilliseconds = options.closeTimeoutMilliseconds ?? Math.min(childTimeoutMilliseconds, 5_000)
+  if (!Number.isInteger(closeTimeoutMilliseconds) || closeTimeoutMilliseconds <= 0) {
+    throw new Error(
+      `delivery repeatability warm close timeout must be a positive integer, received ${String(closeTimeoutMilliseconds)}`
+    )
+  }
   const lifecycleRemaining = (phase) => {
     const remainingMilliseconds = Math.floor(deadline - now())
     if (remainingMilliseconds <= 0) {
@@ -614,7 +620,24 @@ export const runWarmedDeliveryTarget = async (options = {}) => {
 
   if (isRecord(vitest) && typeof vitest.close === "function") {
     try {
-      await awaitLifecycle("closing Vitest", () => vitest.close())
+      const closeRemaining = deadline - now()
+      if (closeRemaining > 0 && lifecycleFailure === undefined) {
+        await awaitLifecycle("closing Vitest", () => vitest.close())
+      } else {
+        let closeTimer
+        const closePromise = Promise.resolve().then(() => vitest.close())
+        const closeTimeout = new Promise((_, reject) => {
+          closeTimer = setTimeout(
+            () => reject(new Error(`delivery repeatability warm closing Vitest exceeded cleanup timeout`)),
+            closeTimeoutMilliseconds
+          )
+        })
+        try {
+          await Promise.race([closePromise, closeTimeout])
+        } finally {
+          clearTimeout(closeTimer)
+        }
+      }
     } catch (error) {
       if (lifecycleFailure === undefined) lifecycleFailure = error
     }

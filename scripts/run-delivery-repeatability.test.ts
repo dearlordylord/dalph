@@ -356,10 +356,13 @@ test("rejects a dirty candidate tree before the fresh sample", async () => {
 
 test("bounds a hung persistent warm iteration by its total timeout", async () => {
   const specification = { moduleId: deliveryRepeatabilityTargetTestPath }
+  let closeCalls = 0
   await expect(
     runWarmedDeliveryTarget({
       createVitest: async () => ({
-        close: async () => undefined,
+        close: async () => {
+          closeCalls += 1
+        },
         getRelevantTestSpecifications: async () => [specification],
         init: async () => undefined,
         runTestSpecifications: async () => new Promise(() => undefined)
@@ -368,6 +371,7 @@ test("bounds a hung persistent warm iteration by its total timeout", async () =>
       totalTimeoutMilliseconds: 20
     })
   ).rejects.toThrow(/total timeout.*warm iteration 1/u)
+  expect(closeCalls).toBe(1)
 })
 
 test("bounds a hung persistent warm close by its total timeout", async () => {
