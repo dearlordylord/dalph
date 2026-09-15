@@ -486,6 +486,10 @@ export const nodeKimiAcpClientLayer = (
         const capabilities = initializeCapabilities(response)
         if (capabilities instanceof KimiAcpFailure) return yield* Effect.fail(capabilities)
         yield* client.notify("initialize", "initialized", {})
+        // Kimi's ACP login method is deterministic: an already-authenticated
+        // host succeeds, while a missing token becomes a typed failure rather
+        // than opening a terminal login flow in a headless run.
+        yield* client.request("authenticate", "authenticate", { methodId: "login" })
         yield* Ref.set(initialized, Option.some(capabilities))
         return capabilities
       })
@@ -505,7 +509,9 @@ export const nodeKimiAcpClientLayer = (
           mcpServers: [],
           _meta: { dalph: { model: profile.model, provider: profile.provider } }
         })
-        return yield* afterSession("session/new", response, cwd)
+        const sessionId = yield* afterSession("session/new", response, cwd)
+        yield* client.request("session/set_model", "session/set_model", { sessionId, modelId: profile.model })
+        return sessionId
       })
       const restore = (operation: "session/load" | "session/resume", sessionId: KimiAcpSessionId, cwd: string) =>
         Effect.gen(function* () {
@@ -515,6 +521,10 @@ export const nodeKimiAcpClientLayer = (
           const restored = yield* afterSession(operation, response, cwd)
           if (restored !== sessionId)
             return yield* Effect.fail(failure(operation, "Protocol", "Kimi resumed a different session"))
+          yield* client.request("session/set_model", "session/set_model", {
+            sessionId: restored,
+            modelId: profile.model
+          })
           return restored
         })
       const loadSession = Effect.fn("KimiAcp.loadSession")(function* (sessionId: KimiAcpSessionId, cwd: string) {
