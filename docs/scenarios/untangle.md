@@ -52,6 +52,23 @@ app-server factories receive the same boundary as an optional second argument,
 but a factory that ignores it and performs a raw construction-time request is
 outside this host-owned boundary and must be treated as an explicit bypass.
 
+## Executor child runs in Dalph's unattended production mode
+
+When Alice runs the production command, Dalph starts the configured Codex
+executable as a child app-server. Dalph supplies Codex's supported
+`--dangerously-bypass-approvals-and-sandbox` global option before the
+`app-server` subcommand. The child therefore does not stop for an approval
+request when it needs to inspect or edit the exact task worktree, and it does
+not try to create the container's unavailable bwrap namespace for each shell
+command.
+
+The child command and its exact process identity are recorded before the
+transport handshake. If the child exits or the process identity changes,
+Dalph reports the typed app-server failure and preserves the recoverable Run;
+it does not silently fall back to an approval prompt or launch a second child.
+The forbidden result is an unattended production Run waiting forever for an
+unanswerable `item/commandExecution/requestApproval` request.
+
 ## Output and graceful Exit
 
 While the task is executing, the production CLI must keep status and history
@@ -81,5 +98,8 @@ its redacted stable lifecycle code.
   production CLI; the first value remains immediate, later values are limited
   to a one-second publication window, and the terminal synchronized status
   remains visible.
+- `launches the Codex child with unattended production flags` proves the child
+  receives the YOLO flag before `app-server` and that the durable launch
+  command records the same arguments.
 - Existing production CLI and application Exit tests continue to prove public
   redaction and exact lifecycle dispositions.

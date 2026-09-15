@@ -1943,6 +1943,13 @@ export interface CodexAppServerLayerConfig {
   readonly environment?: Readonly<Record<string, string>>
 }
 
+/**
+ * Dalph owns the production Codex child boundary. The global YOLO option is
+ * explicit in the durable command so an unattended Run cannot pause at a
+ * provider approval request or attempt the unavailable container sandbox.
+ */
+export const codexAppServerLaunchArguments = ["--dangerously-bypass-approvals-and-sandbox", "app-server"] as const
+
 const defaultConfig: Required<Pick<CodexAppServerLayerConfig, "clientName" | "clientVersion" | "executable">> &
   Pick<CodexAppServerLayerConfig, "environment"> = {
   executable: "codex",
@@ -2402,8 +2409,8 @@ export const launchCommandFacts = (
   native: CodexProcessNativeService = nodeCodexProcessNativeService
 ): LaunchCommandFacts | CodexServerOwnershipProjection => {
   const expectedExecutable = launch.command[0]
-  const expectedMode = launch.command[1]
-  if (expectedExecutable === undefined || expectedMode !== "app-server") {
+  const expectedMode = launch.command.includes("app-server") ? "app-server" : undefined
+  if (expectedExecutable === undefined || expectedMode === undefined) {
     return { _tag: "Unreadable", detail: "server launch command is incomplete" }
   }
   /* v8 ignore next -- @preserve Supported-host launch policies exhaust Linux, Darwin, and Windows. */
@@ -2817,12 +2824,12 @@ export const codexAppServerLayer = (
       const applicationExit = yield* Effect.serviceOption(ApplicationExitShell)
       const processGroupCensus = yield* Effect.serviceOption(CodexProcessGroupCensus)
       const selected = { ...defaultConfig, ...config }
-      const command = [selected.executable, "app-server"] as const
+      const command = [selected.executable, ...codexAppServerLaunchArguments] as const
       const incarnation = newIncarnation()
       const leaseOwner = yield* ownershipGate(store, ownership, incarnation, command, native)
       const handle = yield* spawner
         .spawn(
-          ChildProcess.make(selected.executable, ["app-server"], {
+          ChildProcess.make(selected.executable, [...codexAppServerLaunchArguments], {
             stdin: { stream: "pipe", endOnDone: false },
             stdout: "pipe",
             stderr: "pipe",

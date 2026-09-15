@@ -14,6 +14,7 @@ import {
 import {
   CodexAppServer,
   CodexAppServerFailure,
+  codexAppServerLaunchArguments,
   type CodexAppServerLayerConfig,
   type CodexAppServerRequestBoundary,
   CodexProcessStartIdentity,
@@ -360,7 +361,7 @@ it.effect("rejects initialize before the app-server transport runs when composit
   )
 )
 
-it.effect("forwards isolated qualification environment only at the child launch boundary", () =>
+it.effect("launches the Codex child with unattended production flags", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
@@ -390,7 +391,7 @@ it.effect("forwards isolated qualification environment only at the child launch 
           JSON.parse(yield* fileSystem.readFileString(capture))
         )
         expect(captured).toEqual({
-          arguments: ["app-server"],
+          arguments: [...codexAppServerLaunchArguments],
           codexHome: "/isolated/qualification-codex-home",
           hasOpenAiApiKey: nodeProcess.env["OPENAI_API_KEY"] !== undefined,
           hasProviderCredential: nodeProcess.env["DALPH_CODEX_PROVIDER_CREDENTIAL"] !== undefined,
@@ -435,12 +436,12 @@ it.effect("starts codex app-server without provider credential or CODEX_HOME ove
         const launch = yield* store.readServerLaunch()
         expect(Option.isSome(launch)).toBe(true)
         if (Option.isNone(launch)) return
-        expect(launch.value.command).toEqual([executable, "app-server"])
+        expect(launch.value.command).toEqual([executable, ...codexAppServerLaunchArguments])
 
         const captured = yield* Schema.decodeUnknownEffect(QualificationEnvironmentCapture)(
           JSON.parse(yield* fileSystem.readFileString(capture))
         )
-        expect(captured.arguments).toEqual(["app-server"])
+        expect(captured.arguments).toEqual([...codexAppServerLaunchArguments])
         expect(captured.codexHome).toBe(nodeProcess.env["CODEX_HOME"])
         expect(captured.hasOpenAiApiKey).toBe(nodeProcess.env["OPENAI_API_KEY"] !== undefined)
         expect(captured.hasProviderCredential).toBe(nodeProcess.env["DALPH_CODEX_PROVIDER_CREDENTIAL"] !== undefined)
