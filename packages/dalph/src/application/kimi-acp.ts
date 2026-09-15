@@ -171,7 +171,7 @@ interface KimiAcpRpc {
     method: string,
     params?: unknown
   ) => Effect.Effect<void, KimiAcpFailure>
-  readonly close: Effect.Effect<void, KimiAcpFailure>
+  readonly close: () => Effect.Effect<void, KimiAcpFailure>
 }
 
 const requestTimeout = 60
@@ -320,7 +320,7 @@ const makeRpc = Effect.fn("KimiAcp.makeRpc")(function* (
       Effect.catch(() => Effect.void)
     )
   })
-  return { request, notify, close }
+  return { request, notify, close: () => close }
 })
 
 const sessionIdFrom = (operation: KimiAcpOperation, value: unknown): KimiAcpSessionId | KimiAcpFailure => {
@@ -535,12 +535,12 @@ export const nodeKimiAcpClientLayer = (
                 .pipe(Effect.ignore),
             { discard: true }
           )
-          yield* current.value.close
+          yield* current.value.close()
         }
       })
       yield* Effect.addFinalizer(() =>
         Ref.get(rpc).pipe(
-          Effect.flatMap((current) => (Option.isSome(current) ? current.value.close : Effect.void)),
+          Effect.flatMap((current) => (Option.isSome(current) ? current.value.close() : Effect.void)),
           Effect.orDie
         )
       )

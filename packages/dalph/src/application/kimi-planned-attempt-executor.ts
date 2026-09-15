@@ -34,8 +34,7 @@ const hexByteWidth = 2
 
 const isJsonRecord = (value: unknown): value is JsonRecord => typeof value === "object" && value !== null
 
-const correlationOf = (attempt: PlannedTaskAttempt): PlannedAttemptExecutorCorrelation =>
-  plannedAttemptExecutorCorrelation(attempt)
+const correlationOf = plannedAttemptExecutorCorrelation
 
 const executing = (correlation: PlannedAttemptExecutorCorrelation): PlannedAttemptExecutorReportType =>
   PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
