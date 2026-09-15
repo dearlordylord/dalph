@@ -1,6 +1,6 @@
 # Select Kimi ACP for one planned attempt
 
-Status: accepted operational contract for issue [#379](https://github.com/dearlordylord/dalph/issues/379). The profile registry and controlled Kimi adapter implement the bounded selection, lifecycle, and protocol boundary described here. Real-provider qualification remains a separate host exercise.
+Status: implemented bounded slice for issue [#379](https://github.com/dearlordylord/dalph/issues/379). The profile registry and controlled Kimi adapter cover the deterministic selection and lifecycle seam; production default/preflight, durable recovery, and live-wire qualification remain follow-up acceptance work.
 
 ## Alice selects a Kimi profile before work begins
 
@@ -10,18 +10,19 @@ Alice starts a Dalph production Run. The task tracker owns the task identity,
 task lifecycle, and claim. Git owns the exact planned Base SHA, branch, and
 worktree. The execution substrate will own the Kimi child process and ACP
 session. The Dalph Journal has no Kimi credential or raw ACP message. A
-decoded host profile set contains a Codex default and the explicit
+controlled decoded profile set may contain a Codex default and the explicit
 `kimi/for-coding` profile, whose non-secret provider reference is
 `kimi-for-coding`; the credential itself remains in the host environment.
 
 ### Trigger and boundary calls
 
-Alice selects `kimi/for-coding`, or leaves selection empty and relies on the
-configured host default. The host resolves the explicit selection first,
-then the selection's host default, then the configured host default. It maps
-the selected profile to the stable executor locator
-`executor:kimi/for-coding`. The profile is resolved before a task claim or a
-`PlannedAttemptExecutor.begin` command is allowed to cross its boundary.
+In the controlled registry, Alice selects `kimi/for-coding`, or leaves
+selection empty and relies on the configured host default. The registry
+resolves explicit selection before the selection's host default, then the
+configured host default, and maps the profile to the stable executor locator
+`executor:kimi/for-coding`. Production currently accepts that exact Kimi
+locator before the host's GitHub boundary; wiring arbitrary decoded profile
+sets and a default into production remains open.
 
 If no profile is selected, the registry returns `MissingSelection`. If the
 selected id is absent, it returns `UnknownProfile`; duplicate ids return
@@ -59,8 +60,9 @@ diagnostics and never parsed as protocol.
 
 The adapter records its private session state before the prompt boundary and
 returns only `ExecutorWorkExecuting` with the generic correlation. A malformed
-response, unavailable executable, unsupported capability, authentication
-failure, or provider error becomes a typed command failure. An unattended
+response, unsupported capability, authentication failure, or provider error
+becomes a typed command failure. Executable/credential preflight before claim
+is not yet wired in the production host. An unattended
 permission request selects the first ACP option; deny and interactive
 policies cancel the request and mark permission denied. No credential or raw
 ACP envelope enters the Journal.
@@ -68,13 +70,12 @@ ACP envelope enters the Journal.
 ### Crash, retry, and suspension
 
 If process startup or initialization fails before `session/new`, no task
-prompt is sent and the same Begin can be retried after reconciliation. If
-the prompt response is lost, passive observation reads the retained session
-state before any retry. A requested suspension sends `session/cancel` and
-returns `ExecutorWorkSafelySuspended`; resume uses the same ACP session id,
-then sends the same authored specification body. The adapter never creates a
-second session for the same generic correlation merely because an
-acknowledgement was lost.
+prompt is sent and the same Begin can be retried after reconciliation. A
+requested suspension sends `session/cancel`, observes the session, and only
+returns `ExecutorWorkSafelySuspended` after an idle observation; resume uses
+the same in-process ACP session id, then sends the same authored specification
+body. Durable restart reconciliation and lost `session/new` acknowledgement
+handling remain open.
 
 ### Visible and forbidden result
 
@@ -94,7 +95,7 @@ without accepted evidence.
 | Missing, unknown, and duplicate profile selection fails before any external boundary. | `executor-profile.test.ts`: `returns typed failures for missing and unknown profile selections`; `fails closed when profile identifiers collide` |
 | One exact attempt initializes, creates one ACP session, and sends its authored body through the generic contract. | `kimi-planned-attempt-executor.test.ts`: `initializes in the exact worktree, creates one session, and sends the authored body`; the shared `plannedAttemptExecutorContract` registered as `Kimi ACP controlled` |
 | A suspension cancels and a resume reuses the same ACP session and body. | `kimi-planned-attempt-executor.test.ts`: `cancels and resumes the same ACP session through the generic command boundary` |
-| ACP wire ordering, stderr isolation, permission policy, and malformed/provider failures are exercised without a live Kimi account. | Controlled ACP transport fixture seam in `controlledKimiAcpClientLayer`; live child qualification is intentionally outside this deterministic acceptance gate. |
+| ACP wire ordering, stderr isolation, permission policy, and malformed/provider failures are exercised without a live Kimi account. | The controlled service seam exists in `controlledKimiAcpClientLayer`; a recorded stdio/child-process fixture is still required before this row can be accepted. |
 
 The controlled tests are the maintained catalog entry for this boundary; they
 do not claim that a live Kimi account or model is available in CI.
