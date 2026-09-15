@@ -614,9 +614,10 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
             ? observedPlannedAttemptExecutorLayer(
                 kimiPlannedAttemptExecutorLayer.pipe(
                   Layer.provide(
-                    nodeKimiAcpClientLayer(selectedProfile, { preflightCwd: configuration.repository }).pipe(
-                      Layer.provide(NodeServices.layer)
-                    )
+                    nodeKimiAcpClientLayer(selectedProfile, {
+                      preflightCwd: configuration.repository,
+                      preflightProtocol: true
+                    }).pipe(Layer.provide(NodeServices.layer))
                   ),
                   Layer.provide(
                     nodeKimiAttemptPrivateStoreLayer({

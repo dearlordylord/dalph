@@ -361,7 +361,11 @@ const initializeCapabilities = (value: unknown): KimiAcpCapabilities | KimiAcpFa
 }
 
 const nodeConfig = { clientName: "dalph", clientVersion: "0.0.0" } as const
-type KimiAcpNodeConfiguration = Partial<typeof nodeConfig> & { readonly preflightCwd?: string }
+type KimiAcpNodeConfiguration = Partial<typeof nodeConfig> & {
+  readonly preflightCwd?: string
+  /** Run a disposable ACP initialize/auth/session probe before activation. */
+  readonly preflightProtocol?: boolean
+}
 
 /**
  * Checks the configured Kimi executable without opening an ACP session or
@@ -389,7 +393,7 @@ export const preflightKimiExecutable = Effect.fn("KimiAcp.preflightExecutable")(
 })
 
 /** Starts `kimi acp` lazily at the first exact worktree boundary. */
-export const nodeKimiAcpClientLayer = (
+const baseNodeKimiAcpClientLayer = (
   profile: ExecutorProfile,
   config: KimiAcpNodeConfiguration = {}
 ): Layer.Layer<KimiAcpClient, KimiAcpFailure, ChildProcessSpawner.ChildProcessSpawner> =>
@@ -610,5 +614,38 @@ export const nodeKimiAcpClientLayer = (
       })
     })
   )
+
+/**
+ * Builds the ACP client, optionally qualifying credentials and session support
+ * with a disposable authenticated session before activation. The probe uses a
+ * separate process and is always closed; the returned client starts lazily in
+ * the exact attempt worktree.
+ */
+export const nodeKimiAcpClientLayer = (
+  profile: ExecutorProfile,
+  config: KimiAcpNodeConfiguration = {}
+): Layer.Layer<KimiAcpClient, KimiAcpFailure, ChildProcessSpawner.ChildProcessSpawner> => {
+  const preflightCwd = config.preflightCwd
+  if (config.preflightProtocol !== true || preflightCwd === undefined) {
+    return baseNodeKimiAcpClientLayer(profile, config)
+  }
+  return Layer.effect(
+    KimiAcpClient,
+    Effect.gen(function* () {
+      const scope = yield* Scope.Scope
+      const probeContext = yield* Layer.build(baseNodeKimiAcpClientLayer(profile, config)).pipe(
+        Effect.provideService(Scope.Scope, scope)
+      )
+      const probe = Context.get(probeContext, KimiAcpClient)
+      yield* Effect.gen(function* () {
+        yield* probe.newSession(preflightCwd)
+      }).pipe(Effect.ensuring(probe.close().pipe(Effect.ignore)))
+      const activeContext = yield* Layer.build(baseNodeKimiAcpClientLayer(profile, config)).pipe(
+        Effect.provideService(Scope.Scope, scope)
+      )
+      return Context.get(activeContext, KimiAcpClient)
+    })
+  )
+}
 
 export const kimiAcpProfileArguments = (_profile: ExecutorProfile): ReadonlyArray<string> => ["acp"]

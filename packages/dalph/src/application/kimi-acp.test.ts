@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import { Context, Effect, Layer, Queue, Sink, Stream } from "effect"
+import { Cause, Context, Effect, Exit, Layer, Option, Queue, Sink, Stream } from "effect"
 import { expect } from "vitest"
 import {
   ExecutorModelAlias,
@@ -241,6 +241,119 @@ it.effect("records ACP progress and rejects a permission request under the deny 
       })
       expect(permissionReplies).toEqual([{ outcome: { outcome: "cancelled" } }])
       expect(requests).toContain("session/prompt")
+      expect(commands).toHaveLength(2)
+    })
+  )
+)
+
+it.effect("rejects unsupported ACP session capabilities during protocol preflight", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const commands: Array<ChildProcess.Command> = []
+      const output = yield* Queue.unbounded<Uint8Array>()
+      const encoder = new TextEncoder()
+      const decoder = new TextDecoder()
+      const probeHandle = ChildProcessSpawner.makeHandle({
+        pid: ChildProcessSpawner.ProcessId(4),
+        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+        isRunning: Effect.succeed(true),
+        kill: () => Effect.void,
+        stdin: Sink.forEach((chunk: Uint8Array) =>
+          Effect.gen(function* () {
+            const message = JSON.parse(decoder.decode(chunk)) as { id?: number }
+            if (message.id === undefined) return
+            yield* Queue.offer(
+              output,
+              encoder.encode(
+                `${JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: message.id,
+                  result: {
+                    agentCapabilities: { sessionCapabilities: { loadSession: false, resume: true, close: true } }
+                  }
+                })}\n`
+              )
+            )
+          })
+        ),
+        stdout: Stream.fromQueue(output),
+        stderr: Stream.empty,
+        all: Stream.empty,
+        getInputFd: () => Sink.drain,
+        getOutputFd: () => Stream.empty,
+        unref: Effect.succeed(Effect.void)
+      })
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.sync(() => {
+          commands.push(command)
+          const isPreflight = ChildProcess.isStandardCommand(command) && command.options.stdin === "ignore"
+          return isPreflight ? fakeHandle(0) : probeHandle
+        })
+      )
+      const result = yield* Layer.build(
+        nodeKimiAcpClientLayer(profile, { preflightCwd: "/srv/dalph/repository", preflightProtocol: true })
+      ).pipe(Effect.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)), Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result)) {
+        const error = Cause.findErrorOption(result.cause)
+        expect(Option.isSome(error) && error.value).toMatchObject({ operation: "initialize", kind: "Unsupported" })
+      }
+      expect(commands).toHaveLength(2)
+    })
+  )
+)
+
+it.effect("rejects missing Kimi authentication during protocol preflight", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const commands: Array<ChildProcess.Command> = []
+      const output = yield* Queue.unbounded<Uint8Array>()
+      const encoder = new TextEncoder()
+      const decoder = new TextDecoder()
+      const probeHandle = ChildProcessSpawner.makeHandle({
+        pid: ChildProcessSpawner.ProcessId(5),
+        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+        isRunning: Effect.succeed(true),
+        kill: () => Effect.void,
+        stdin: Sink.forEach((chunk: Uint8Array) =>
+          Effect.gen(function* () {
+            const message = JSON.parse(decoder.decode(chunk)) as { id?: number; method?: string }
+            if (message.id === undefined) return
+            const response =
+              message.method === "initialize"
+                ? {
+                    jsonrpc: "2.0",
+                    id: message.id,
+                    result: {
+                      agentCapabilities: { sessionCapabilities: { loadSession: true, resume: true, close: true } }
+                    }
+                  }
+                : { jsonrpc: "2.0", id: message.id, error: { code: -32000, message: "authentication required" } }
+            yield* Queue.offer(output, encoder.encode(`${JSON.stringify(response)}\n`))
+          })
+        ),
+        stdout: Stream.fromQueue(output),
+        stderr: Stream.empty,
+        all: Stream.empty,
+        getInputFd: () => Sink.drain,
+        getOutputFd: () => Stream.empty,
+        unref: Effect.succeed(Effect.void)
+      })
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.sync(() => {
+          commands.push(command)
+          const isPreflight = ChildProcess.isStandardCommand(command) && command.options.stdin === "ignore"
+          return isPreflight ? fakeHandle(0) : probeHandle
+        })
+      )
+      const result = yield* Layer.build(
+        nodeKimiAcpClientLayer(profile, { preflightCwd: "/srv/dalph/repository", preflightProtocol: true })
+      ).pipe(Effect.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)), Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result)) {
+        const error = Cause.findErrorOption(result.cause)
+        expect(Option.isSome(error) && error.value).toMatchObject({ operation: "authenticate", kind: "Authentication" })
+      }
       expect(commands).toHaveLength(2)
     })
   )

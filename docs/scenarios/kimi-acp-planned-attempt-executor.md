@@ -1,6 +1,6 @@
 # Select Kimi ACP for one planned attempt
 
-Status: implemented bounded slice for issue [#379](https://github.com/dearlordylord/dalph/issues/379). The profile registry, production profile resolution, executable preflight, provider-private session recovery, and controlled Kimi adapter cover the deterministic selection and lifecycle seam; full pre-claim credential/ACP capability qualification and live-wire qualification remain follow-up acceptance work.
+Status: implemented bounded slice for issue [#379](https://github.com/dearlordylord/dalph/issues/379). The profile registry, production profile resolution, executable and disposable protocol/credential preflight, provider-private session recovery, and controlled Kimi adapter cover the deterministic selection and lifecycle seam; live-wire qualification remains follow-up acceptance work.
 
 ## Alice selects a Kimi profile before work begins
 
@@ -63,7 +63,8 @@ returns only `ExecutorWorkExecuting` with the generic correlation. A malformed
 response, unsupported capability, authentication failure, or provider error
 becomes a typed command failure. Production runs an executable `--version`
 preflight in the configured repository directory before the Kimi layer can be
-activated; credential and ACP capability preflight remain follow-up work. An unattended
+activated, then runs a disposable ACP initialize/authenticate/session probe in
+that same repository. An unattended
 permission request selects the first ACP option; deny and interactive
 policies cancel the request and mark permission denied. No credential or raw
 ACP envelope enters the Journal.
@@ -99,7 +100,7 @@ without accepted evidence.
 | One exact attempt initializes, creates one ACP session, and sends its authored body through the generic contract. | `kimi-planned-attempt-executor.test.ts`: `initializes in the exact worktree, creates one session, and sends the authored body`; the shared `plannedAttemptExecutorContract` registered as `Kimi ACP controlled` |
 | A suspension cancels and a resume reuses the same ACP session and body. | `kimi-planned-attempt-executor.test.ts`: `cancels and resumes the same ACP session through the generic command boundary` |
 | Dalph restarts while Kimi is executing and observes the same session without a new prompt. | `kimi-planned-attempt-executor.test.ts`: `reconnects a persisted executing session after restart without sending another prompt`; `kimi-attempt-store.test.ts`: persistence and malformed-state tests |
-| An unavailable Kimi executable is rejected before executor activation. | `kimi-acp.test.ts`: `fails Kimi layer construction when the configured executable exits unsuccessfully` |
+| An unavailable Kimi executable or unsupported/unauthenticated ACP is rejected before executor activation. | `kimi-acp.test.ts`: `fails Kimi layer construction when the configured executable exits unsuccessfully`; `rejects unsupported ACP session capabilities during protocol preflight`; `rejects missing Kimi authentication during protocol preflight` |
 | ACP wire ordering, stderr isolation, progress updates, permission policy, and malformed/provider failures are exercised without a live Kimi account. | `kimi-acp.test.ts`: `performs the ACP authentication and model-selection handshake in order`; `records ACP progress and rejects a permission request under the deny policy` |
 
 The controlled tests are the maintained catalog entry for this boundary; they
