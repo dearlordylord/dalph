@@ -32,6 +32,7 @@ export {
   IntegratorPrivateStoreLocator
 } from "./application/codex-integrator-private-store.js"
 export { codexIntegratorLayer, nodeCodexIntegratorLayer } from "./application/codex-integrator.js"
+export { kimiIntegratorProviderLayer, nodeKimiIntegratorLayer } from "./application/kimi-integrator-provider.js"
 export {
   ExecutorAdapterKind,
   ExecutorModelAlias,

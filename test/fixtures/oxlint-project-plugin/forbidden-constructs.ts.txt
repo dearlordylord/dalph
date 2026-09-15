@@ -3,6 +3,9 @@ import { vi as importedVi } from "vitest"
 import * as EffectNamespace from "effect"
 import { Schema as RenamedSchema } from "effect"
 import * as fastCheck from "fast-check"
+import { randomUUID } from "node:crypto"
+import { randomUUID as uuid } from "node:crypto"
+import * as nodeCrypto from "node:crypto"
 
 const { mock: renamedMock, ["spyOn"]: renamedSpyOn } = vi
 const value = "value"
@@ -14,6 +17,10 @@ const child = class Child extends Parent {}
 Date["now"]()
 new Date()
 Math["random"]()
+randomUUID()
+uuid()
+nodeCrypto.randomUUID()
+crypto.randomUUID()
 require("node:fs")
 vi.mock("module")
 vi["doMock"]("module")

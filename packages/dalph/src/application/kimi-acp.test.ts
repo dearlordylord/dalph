@@ -204,7 +204,23 @@ it.effect("records ACP progress and rejects a permission request under the deny 
                   `${JSON.stringify({
                     jsonrpc: "2.0",
                     method: "session/update",
-                    params: { sessionId: session, update: { state: "running", text: "working" } }
+                    params: {
+                      sessionId: session,
+                      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "work" } }
+                    }
+                  })}\n`
+                )
+              )
+              yield* Queue.offer(
+                output,
+                encoder.encode(
+                  `${JSON.stringify({
+                    jsonrpc: "2.0",
+                    method: "session/update",
+                    params: {
+                      sessionId: session,
+                      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "ing" } }
+                    }
                   })}\n`
                 )
               )
@@ -251,7 +267,7 @@ it.effect("records ACP progress and rejects a permission request under the deny 
       expect(observation).toMatchObject({
         sessionId: session,
         status: "executing",
-        updateCount: 1,
+        updateCount: 2,
         lastMessage: "working",
         permissionDenied: true
       })

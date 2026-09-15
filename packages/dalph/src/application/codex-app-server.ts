@@ -1,13 +1,14 @@
 /* eslint-disable import/no-nodejs-modules -- the process adapter is the one explicit execution-substrate boundary. */
 /* eslint-disable max-lines -- The protocol transport and ownership gate form one audited application boundary. */
-import { randomUUID } from "node:crypto"
 import nodePath from "node:path"
+import { NodeCrypto } from "@effect/platform-node"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import type { ChildProcessHandle } from "effect/unstable/process/ChildProcessSpawner"
 import { PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import type { Scope } from "effect"
 import {
   Context,
+  Crypto,
   Data,
   Deferred,
   Duration,
@@ -1958,9 +1959,16 @@ const defaultConfig: Required<Pick<CodexAppServerLayerConfig, "clientName" | "cl
   environment: {}
 }
 
-const newIncarnation = (): CodexServerIncarnation => CodexServerIncarnation.make(randomUUID())
+const newIncarnation = (crypto: Crypto.Crypto): Effect.Effect<CodexServerIncarnation, CodexAppServerFailure> =>
+  crypto.randomUUIDv4.pipe(
+    Effect.map((value) => CodexServerIncarnation.make(value)),
+    Effect.mapError((error) => operationFailure("initialize", "Unavailable", error))
+  )
 
-const unavailableAppServer = (failure: CodexAppServerFailure): CodexAppServerService => {
+const unavailableAppServer = (
+  failure: CodexAppServerFailure,
+  incarnation: CodexServerIncarnation
+): CodexAppServerService => {
   const fail = (operation: CodexAppServerOperation) =>
     Effect.fail(
       new CodexAppServerFailure({
@@ -1973,7 +1981,7 @@ const unavailableAppServer = (failure: CodexAppServerFailure): CodexAppServerSer
       })
     )
   return {
-    incarnation: newIncarnation(),
+    incarnation,
     attachTurnCompletedHints: Effect.succeed(Stream.empty),
     attachOwnedActivityHints: Effect.succeed(Stream.empty),
     startThread: () => fail("thread/start"),
@@ -2242,6 +2250,7 @@ const registerApplicationServerDrain = (
   })
 
 const makeApplicationLeaseOwner = (
+  crypto: Crypto.Crypto,
   native: CodexProcessNativeService = nodeCodexProcessNativeService
 ): Effect.Effect<CodexServerLeaseRecord, CodexAppServerFailure> =>
   Effect.tryPromise({
@@ -2251,12 +2260,15 @@ const makeApplicationLeaseOwner = (
     Effect.flatMap((processIdentity) =>
       processIdentity === undefined
         ? Effect.fail(operationFailure("initialize", "Ownership", "current process-start identity is unreadable"))
-        : Effect.succeed(
-            CodexServerLeaseRecord.make({
-              pid: native.pid,
-              processIdentity: CodexProcessIdentity.make(processIdentity),
-              incarnation: CodexServerLeaseIncarnation.make(randomUUID())
-            })
+        : crypto.randomUUIDv4.pipe(
+            Effect.map((uuid) =>
+              CodexServerLeaseRecord.make({
+                pid: native.pid,
+                processIdentity: CodexProcessIdentity.make(processIdentity),
+                incarnation: CodexServerLeaseIncarnation.make(uuid)
+              })
+            ),
+            Effect.mapError((error) => operationFailure("initialize", "Unavailable", error))
           )
     )
   )
@@ -2377,9 +2389,10 @@ const ownershipGate = Effect.fn("CodexAppServer.ownershipGate")(function* (
   ownership: CodexProcessOwnershipService,
   incarnation: CodexServerIncarnation,
   command: ReadonlyArray<string>,
+  crypto: Crypto.Crypto,
   native: CodexProcessNativeService = nodeCodexProcessNativeService
 ) {
-  const leaseOwner = yield* makeApplicationLeaseOwner(native)
+  const leaseOwner = yield* makeApplicationLeaseOwner(crypto, native)
   const observeLease = (
     owner: CodexServerLeaseRecord
   ): Effect.Effect<CodexServerLeaseOwnerProjection, CodexAttemptStoreFailure> =>
@@ -2816,7 +2829,11 @@ export const codexAppServerLayer = (
 ): Layer.Layer<
   CodexAppServer,
   CodexAppServerFailure | CodexAttemptStoreFailure,
-  CodexAttemptStore | CodexProcessNative | CodexProcessOwnership | ChildProcessSpawner.ChildProcessSpawner
+  | CodexAttemptStore
+  | CodexProcessNative
+  | CodexProcessOwnership
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Crypto.Crypto
 > =>
   Layer.effect(
     CodexAppServer,
@@ -2825,12 +2842,13 @@ export const codexAppServerLayer = (
       const store = yield* CodexAttemptStore
       const ownership = yield* CodexProcessOwnership
       const native = yield* CodexProcessNative
+      const crypto = yield* Crypto.Crypto
       const applicationExit = yield* Effect.serviceOption(ApplicationExitShell)
       const processGroupCensus = yield* Effect.serviceOption(CodexProcessGroupCensus)
       const selected = { ...defaultConfig, ...config }
       const command = [selected.executable, ...codexAppServerLaunchArguments] as const
-      const incarnation = newIncarnation()
-      const leaseOwner = yield* ownershipGate(store, ownership, incarnation, command, native)
+      const incarnation = yield* newIncarnation(crypto)
+      const leaseOwner = yield* ownershipGate(store, ownership, incarnation, command, crypto, native)
       const handle = yield* spawner
         .spawn(
           ChildProcess.make(selected.executable, [...codexAppServerLaunchArguments], {
@@ -3056,7 +3074,9 @@ export const codexAppServerLayer = (
       } satisfies CodexAppServerService
     }).pipe(
       Effect.catch((error) =>
-        error instanceof CodexAppServerFailure ? Effect.succeed(unavailableAppServer(error)) : Effect.fail(error)
+        error instanceof CodexAppServerFailure
+          ? Effect.succeed(unavailableAppServer(error, CodexServerIncarnation.make("unavailable")))
+          : Effect.fail(error)
       )
     )
   )
@@ -3121,5 +3141,6 @@ export const codexAppServerNodeLayer = (
         Effect.map(CodexProcessGroupCensus, (groupCensus) => makeNodeCodexProcessOwnershipService(groupCensus, native))
       )
     ),
-    Layer.provide(Layer.succeed(CodexProcessGroupCensus, makeNodeCodexProcessGroupCensusService(native)))
+    Layer.provide(Layer.succeed(CodexProcessGroupCensus, makeNodeCodexProcessGroupCensusService(native))),
+    Layer.provide(NodeCrypto.layer)
   )

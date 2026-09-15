@@ -78,7 +78,6 @@ import {
   type ProductionRepositoryHostAdapters,
   type ProductionRepositoryHostBoundary,
   type ProductionRepositoryHostGraph,
-  lazyIntegratorLayer,
   productionRepositoryHostGraph,
   withProductionRepositoryHost
 } from "./production-host.js"
@@ -208,7 +207,7 @@ it("ordinary Exit shells cannot inhabit the production-host shell boundary", () 
   expectTypeOf<SuppliedHostShell>().toEqualTypeOf<ProductionHostApplicationExitShellService>()
 })
 
-it.effect("lazy Kimi Integrator composition defers Codex provider acquisition until use", () =>
+it.effect("an Integrator provider layer acquires eagerly at construction", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const acquisitions = yield* Ref.make(0)
@@ -221,11 +220,7 @@ it.effect("lazy Kimi Integrator composition defers Codex provider acquisition un
           )
         })
       )
-      const services = yield* Layer.build(lazyIntegratorLayer(providerLayer))
-      expect(yield* Ref.get(acquisitions)).toBe(0)
-
-      const integrator = Context.get(services, Integrator)
-      yield* Effect.exit(integrator.prepare(undefined as never))
+      yield* Layer.build(providerLayer)
       expect(yield* Ref.get(acquisitions)).toBe(1)
     })
   )

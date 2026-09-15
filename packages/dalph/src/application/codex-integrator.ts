@@ -1,8 +1,8 @@
-/* eslint-disable import/no-nodejs-modules -- this adapter is the explicit provider and filesystem boundary. */
+/* eslint-disable import/no-nodejs-modules, max-lines -- this adapter is the explicit provider and filesystem boundary. */
 
-import { randomUUID } from "node:crypto"
 import nodePath from "node:path"
-import { Context, Effect, FileSystem, Layer, Option, Semaphore } from "effect"
+import { NodeCrypto } from "@effect/platform-node"
+import { Context, Crypto, Effect, FileSystem, Layer, Option, Semaphore } from "effect"
 import {
   CodexAppServer,
   CodexOwnedActivityCensus,
@@ -104,7 +104,11 @@ const runFor = (
 ): CodexIntegratorPrivateRun | undefined =>
   privateRuns(record).find((item) => runCorrelationEquals(item.correlation, run))
 
-const newToken = (): CodexOwnedTurnToken => CodexOwnedTurnToken.make(`dalph-integrator-${randomUUID()}`)
+const newToken = (crypto: Crypto.Crypto) =>
+  crypto.randomUUIDv4.pipe(
+    Effect.map((value) => CodexOwnedTurnToken.make(`dalph-integrator-${value}`)),
+    Effect.mapError((error) => providerFailure(String(error)))
+  )
 
 const ensureRunPreconditionError = (
   record: CodexIntegratorPrivateRecord,
@@ -119,7 +123,8 @@ const ensureRun = Effect.fn("CodexIntegrator.ensureRun")(function* (
   store: CodexIntegratorPrivateStoreService,
   record: CodexIntegratorPrivateRecord,
   run: IntegratorRunCorrelation,
-  app: CodexAppServer["Service"]
+  app: CodexAppServer["Service"],
+  crypto: Crypto.Crypto
 ) {
   const preconditionError = ensureRunPreconditionError(record, run)
   if (preconditionError !== undefined) return yield* Effect.fail(providerFailure(preconditionError))
@@ -129,7 +134,10 @@ const ensureRun = Effect.fn("CodexIntegrator.ensureRun")(function* (
   /* v8 ignore next -- @preserve The private-record validator rejects duplicate ordinals before recovery reaches this guard. */
   if (ordinalCollision !== undefined)
     return yield* Effect.fail(providerFailure("private run ordinal is bound to another session"))
-  const created = CodexIntegratorPrivateRun.cases.IntentRecorded.make({ correlation: run, token: newToken() })
+  const created = CodexIntegratorPrivateRun.cases.IntentRecorded.make({
+    correlation: run,
+    token: yield* newToken(crypto)
+  })
   const next = recordRunIntent(record, created, app.incarnation)
   if (next === undefined)
     return yield* Effect.fail(providerFailure("provider run requires an established owned thread"))
@@ -344,7 +352,8 @@ const createPrivateRecord = Effect.fn("CodexIntegrator.createPrivateRecord")(fun
   run: IntegratorRunCorrelation,
   candidatePath: IntegratorCandidateWorktreePath,
   app: CodexAppServer["Service"],
-  store: CodexIntegratorPrivateStoreService
+  store: CodexIntegratorPrivateStoreService,
+  crypto: Crypto.Crypto
 ) {
   const initialRunError = newPrivateRecordRunError(run)
   if (initialRunError !== undefined) return yield* Effect.fail(providerFailure(initialRunError))
@@ -358,7 +367,9 @@ const createPrivateRecord = Effect.fn("CodexIntegrator.createPrivateRecord")(fun
     correlation: run.session,
     initialRun: run,
     revision: revision(1),
-    threadToken: CodexThreadOwnershipToken.make(`dalph-integrator-thread-${randomUUID()}`)
+    threadToken: CodexThreadOwnershipToken.make(
+      `dalph-integrator-thread-${yield* crypto.randomUUIDv4.pipe(Effect.mapError((error) => providerFailure(String(error))))}`
+    )
   })
   yield* boundary(store.write(created))
   return created
@@ -367,7 +378,8 @@ const checkConfigAndRecord = Effect.fn("CodexIntegrator.checkConfigAndRecord")(f
   config: CodexIntegratorConfiguration,
   store: CodexIntegratorPrivateStoreService,
   run: IntegratorRunCorrelation,
-  app: CodexAppServer["Service"]
+  app: CodexAppServer["Service"],
+  crypto: Crypto.Crypto
 ) {
   const invalidConfig = configError(config)
   /* v8 ignore next -- @preserve CodexIntegratorConfiguration brands the canonical root before this boundary is callable. */
@@ -380,7 +392,7 @@ const checkConfigAndRecord = Effect.fn("CodexIntegrator.checkConfigAndRecord")(f
   }
   const found = yield* boundary(store.read(run.session.sessionId))
   if (Option.isSome(found)) return yield* reconcilePrivateRecord(found.value, run, candidatePath, app, store)
-  return yield* createPrivateRecord(run, candidatePath, app, store)
+  return yield* createPrivateRecord(run, candidatePath, app, store, crypto)
 })
 const integratorServiceFor = (
   config: CodexIntegratorConfiguration,
@@ -390,7 +402,8 @@ const integratorServiceFor = (
   fileSystem: FileSystem.FileSystem,
   store: CodexIntegratorPrivateStoreService,
   gate: Semaphore.Semaphore,
-  ownership: CoordinatorOwnership["Service"]
+  ownership: CoordinatorOwnership["Service"],
+  crypto: Crypto.Crypto
 ) =>
   Integrator.of({
     prepare: (request: IntegratorRequest) =>
@@ -398,7 +411,7 @@ const integratorServiceFor = (
         .withPermits(1)(
           Effect.gen(function* () {
             const run = request.correlation
-            const initial = yield* checkConfigAndRecord(config, store, run, app)
+            const initial = yield* checkConfigAndRecord(config, store, run, app, crypto)
             const materialized = yield* ensureCandidateWorktree(commands, fileSystem, config, initial, store, ownership)
             const threaded = yield* ensureThread(app, materialized, store)
             // A new Retry may record its run-two token only after the retained thread is freshly writer-free.
@@ -406,7 +419,7 @@ const integratorServiceFor = (
               yield* observeQuiescence(app, census, threaded.thread)
             }
             // The thread id is durable before the first exact provider-run token is recorded.
-            const ensured = yield* ensureRun(store, threaded.record, run, app)
+            const ensured = yield* ensureRun(store, threaded.record, run, app, crypto)
             return yield* executeRun(app, census, store, ensured.record, ensured.run, threaded.thread)
           })
         )
@@ -427,11 +440,12 @@ export const codexIntegratorLayer = (config: CodexIntegratorConfiguration) =>
       const fileSystem = yield* FileSystem.FileSystem
       const store = yield* CodexIntegratorPrivateStore
       const ownership = yield* CoordinatorOwnership
+      const crypto = yield* Crypto.Crypto
       const gate = yield* Semaphore.make(1)
       return Context.empty().pipe(
         Context.add(
           Integrator,
-          integratorServiceFor(config, app, census, commands, fileSystem, store, gate, ownership)
+          integratorServiceFor(config, app, census, commands, fileSystem, store, gate, ownership, crypto)
         ),
         Context.add(
           IntegratorCandidateProviderAuthority,
@@ -443,4 +457,7 @@ export const codexIntegratorLayer = (config: CodexIntegratorConfiguration) =>
 
 /** Node-backed provider composition with private durable storage. */
 export const nodeCodexIntegratorLayer = (config: CodexIntegratorConfiguration) =>
-  codexIntegratorLayer(config).pipe(Layer.provide(nodeCodexIntegratorPrivateStoreLayer(config)))
+  codexIntegratorLayer(config).pipe(
+    Layer.provide(nodeCodexIntegratorPrivateStoreLayer(config)),
+    Layer.provide(NodeCrypto.layer)
+  )

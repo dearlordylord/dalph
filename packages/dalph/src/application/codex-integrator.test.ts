@@ -1,4 +1,4 @@
-import { NodeFileSystem } from "@effect/platform-node"
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node"
 import {
   AcceptedResult,
   AttemptId,
@@ -568,6 +568,7 @@ const providerLayer = (config: CodexIntegratorConfiguration, options: FixtureOpt
   codexIntegratorLayer(config).pipe(
     Layer.provideMerge(
       Layer.mergeAll(
+        NodeCrypto.layer,
         NodeFileSystem.layer,
         memoryCodexIntegratorPrivateStoreLayer(options.initialRecords, (record) => {
           options.privateWrites?.push(record)
@@ -1094,6 +1095,7 @@ describe("Codex Integrator", () => {
       repository
     })
     const dependencies = Layer.mergeAll(
+      NodeCrypto.layer,
       NodeFileSystem.layer,
       memoryCodexIntegratorPrivateStoreLayer(),
       fixtureLayerWithoutOwnership().pipe(Layer.provide(NodeFileSystem.layer)),

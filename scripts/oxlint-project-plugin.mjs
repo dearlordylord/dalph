@@ -56,6 +56,38 @@ const noAmbientCapabilityBypass = {
   })
 }
 
+const cryptoRandomUuidInEffect = {
+  create: (context) => {
+    const namedBindings = new Set()
+    const namespaceBindings = new Set()
+    return {
+      ImportDeclaration: (node) => {
+        if (node.source.value !== "node:crypto") return
+        for (const specifier of node.specifiers) {
+          if (specifier.type === "ImportSpecifier" && isIdentifier(specifier.imported, "randomUUID")) {
+            namedBindings.add(specifier.local.name)
+            report(context, specifier, "Inject UUID generation through Effect Crypto instead of importing randomUUID.")
+          }
+          if (specifier.type === "ImportNamespaceSpecifier") namespaceBindings.add(specifier.local.name)
+        }
+      },
+      CallExpression: (node) => {
+        if (isIdentifier(node.callee) && namedBindings.has(node.callee.name)) {
+          report(context, node, "Inject UUID generation through Effect Crypto instead of calling randomUUID().")
+        }
+        if (
+          node.callee.type === "MemberExpression" &&
+          isIdentifier(node.callee.object) &&
+          (namespaceBindings.has(node.callee.object.name) || node.callee.object.name === "crypto") &&
+          memberName(node.callee) === "randomUUID"
+        ) {
+          report(context, node, "Inject UUID generation through Effect Crypto instead of calling randomUUID().")
+        }
+      }
+    }
+  }
+}
+
 const noClockRead = {
   create: (context) => ({
     NewExpression: (node) => {
@@ -303,6 +335,7 @@ export default {
   rules: {
     "effect-class-inheritance-only": effectClassInheritanceOnly,
     "no-ambient-capability-bypass": noAmbientCapabilityBypass,
+    "crypto-random-uuid-in-effect": cryptoRandomUuidInEffect,
     "no-clock-read": noClockRead,
     "no-double-type-assertion": noDoubleTypeAssertion,
     "no-module-mocks": noModuleMocks,

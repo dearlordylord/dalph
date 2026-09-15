@@ -21,6 +21,7 @@
       {
         "name": "@effect/language-service",
         "diagnosticSeverity": {
+          "cryptoRandomUUIDInEffect": "error",
           "lazyEffect": "off"
         },
         "ignoreEffectWarningsInTscExitCode": false,

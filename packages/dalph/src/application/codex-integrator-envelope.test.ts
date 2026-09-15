@@ -77,6 +77,15 @@ describe("Codex Integrator result envelope", () => {
     expect(notPrepared._tag).toBe("NotPrepared")
   })
 
+  it("accepts a terminal envelope after provider progress prose", async () => {
+    const prepared = await decode(
+      turn(
+        'I verified the candidate and left the target unchanged.\\n\\n{"outcome":"PreparedCandidate","version":1,"candidate":"refs/heads/candidate"}'
+      )
+    )
+    expect(prepared).toMatchObject({ _tag: "PreparedCandidate", candidateText: "refs/heads/candidate" })
+  })
+
   it("rejects missing, non-object, unknown, and empty envelope fields", async () => {
     const values = [
       await decode(turn("", [null, { type: "toolResult", text: "not an agent message" }])),

@@ -67,6 +67,7 @@ const runFixture = (fixtureName: string, extraArguments: ReadonlyArray<string> =
               [
                 "effect-class-inheritance-only",
                 "no-ambient-capability-bypass",
+                "crypto-random-uuid-in-effect",
                 "no-clock-read",
                 "no-double-type-assertion",
                 "no-module-mocks",
@@ -113,6 +114,7 @@ it.effect(
 
       for (const rule of [
         "no-ambient-capability-bypass",
+        "crypto-random-uuid-in-effect",
         "no-clock-read",
         "no-double-type-assertion",
         "no-module-mocks",

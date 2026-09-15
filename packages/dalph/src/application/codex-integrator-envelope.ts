@@ -48,11 +48,29 @@ const decodeEnvelopeObject = (value: Record<string, unknown>, run: IntegratorRun
   return malformedEnvelope(run)
 }
 
+/**
+ * Providers may stream progress prose before their one terminal envelope.
+ * Accept only a valid JSON object that reaches the end of the message; the
+ * envelope decoder still rejects extra keys, wrong versions, and bad fields.
+ */
+const parseTerminalEnvelope = (text: string): Record<string, unknown> | undefined => {
+  const trimmed = text.trim()
+  for (let start = trimmed.lastIndexOf("{"); start >= 0; start = trimmed.lastIndexOf("{", start - 1)) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed.slice(start))
+      if (isRecord(parsed) && hasEnvelopeShape(parsed)) return parsed
+    } catch {
+      continue
+    }
+  }
+  return undefined
+}
+
 export const exactEnvelope = (
   turn: CodexTurnSnapshot,
   run: IntegratorRunCorrelation
 ): Effect.Effect<IntegratorResult> =>
-  Effect.gen(function* () {
+  Effect.sync(() => {
     const messages = turn.items.filter(isAgentMessage)
     const finalMessage = messages.at(lastElementOffset)
     if (finalMessage === undefined) {
@@ -61,10 +79,6 @@ export const exactEnvelope = (
         detail: IntegratorNotPreparedDetail.make("Codex returned no unique result envelope")
       })
     }
-    const parsed = yield* Effect.try({
-      try: (): unknown => JSON.parse(collectText(finalMessage)),
-      catch: () => undefined
-    }).pipe(Effect.option)
-    if (Option.isNone(parsed) || !isRecord(parsed.value)) return malformedEnvelope(run)
-    return decodeEnvelopeObject(parsed.value, run)
+    const parsed = parseTerminalEnvelope(collectText(finalMessage))
+    return parsed === undefined ? malformedEnvelope(run) : decodeEnvelopeObject(parsed, run)
   })

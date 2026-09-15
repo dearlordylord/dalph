@@ -133,6 +133,8 @@ const initialSessionState = (sessionId: KimiAcpSessionId, cwd: string): SessionS
 })
 
 const stateText = (update: JsonRecord): string | undefined => {
+  const updateKind = update["sessionUpdate"] ?? update["session_update"]
+  if (updateKind !== undefined && updateKind !== "agent_message_chunk") return undefined
   const direct = asNonEmptyString(update["text"])
   if (direct !== undefined) return direct
   const content = update["content"]
@@ -425,7 +427,9 @@ const baseNodeKimiAcpClientLayer = (
           const next: SessionState = {
             ...nextBase,
             ...(nextStatus === undefined ? {} : { status: nextStatus }),
-            ...(text === undefined ? {} : { lastMessage: text }),
+            // ACP's agent_message_chunk text is a delta, not a replacement;
+            // retain the complete terminal message for the generic drivers.
+            ...(text === undefined ? {} : { lastMessage: `${prior.lastMessage ?? ""}${text}` }),
             ...(nextStatusReason === undefined ? {} : { stopReason: nextStatusReason })
           }
           return new Map([...current, [sessionId, next] as const])
@@ -546,7 +550,19 @@ const baseNodeKimiAcpClientLayer = (
           const state = current.get(sessionId)
           return state === undefined
             ? current
-            : new Map([...current, [sessionId, { ...state, status: "executing" }] as const])
+            : new Map([
+                ...current,
+                [
+                  sessionId,
+                  {
+                    sessionId: state.sessionId,
+                    cwd: state.cwd,
+                    status: "executing" as const,
+                    updateCount: state.updateCount,
+                    permissionDenied: state.permissionDenied
+                  }
+                ] as const
+              ])
         })
         const response = yield* client.request("session/prompt", "session/prompt", {
           sessionId,

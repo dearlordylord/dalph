@@ -111,6 +111,7 @@
     ],
     "dalph/effect-class-inheritance-only": "error",
     "dalph/no-ambient-capability-bypass": "error",
+    "dalph/crypto-random-uuid-in-effect": "error",
     "dalph/no-clock-read": "error",
     "dalph/no-module-mocks": "error",
     "dalph/no-type-assertion": "error",
@@ -196,6 +197,7 @@
       "rules": {
         "dalph/effect-class-inheritance-only": "off",
         "dalph/no-ambient-capability-bypass": "off",
+        "dalph/crypto-random-uuid-in-effect": "off",
         "dalph/no-throw-statement": "off",
         "import/no-nodejs-modules": "off",
         "max-lines": "off",
@@ -209,6 +211,7 @@
       "rules": {
         "dalph/effect-class-inheritance-only": "off",
         "dalph/no-ambient-capability-bypass": "off",
+        "dalph/crypto-random-uuid-in-effect": "off",
         "dalph/no-throw-statement": "off",
         "import/no-nodejs-modules": "off",
         "max-lines": "off",

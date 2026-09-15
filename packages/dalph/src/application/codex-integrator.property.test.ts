@@ -1,5 +1,5 @@
 /* eslint-disable import/no-nodejs-modules -- the property checks the path boundary with Node's canonical path rules. */
-import { NodeFileSystem } from "@effect/platform-node"
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node"
 import nodePath from "node:path"
 import {
   AcceptedResult,
@@ -413,6 +413,7 @@ const authorityProviderLayer = (config: CodexIntegratorConfiguration, options: A
   codexIntegratorLayer(config).pipe(
     Layer.provideMerge(
       Layer.mergeAll(
+        NodeCrypto.layer,
         NodeFileSystem.layer,
         memoryCodexIntegratorPrivateStoreLayer(),
         authorityFixtureLayer(options).pipe(Layer.provide(NodeFileSystem.layer))
