@@ -92,7 +92,7 @@ without accepted evidence.
 
 | Chronological scenario | Acceptance test or fixture |
 | --- | --- |
-| Alice explicitly selects Kimi over a Codex host default and receives a stable locator. | `executor-profile.test.ts`: `resolves an explicit Kimi profile before a host Codex default` |
+| Alice explicitly selects Kimi over a Codex host default and receives a stable locator. | `executor-profile.test.ts`: `resolves an explicit Kimi profile before a host Codex default`; `production-configuration.test.ts`: `decodes configured executor profiles and a host default` |
 | Missing, unknown, and duplicate profile selection fails before any external boundary. | `executor-profile.test.ts`: `returns typed failures for missing and unknown profile selections`; `fails closed when profile identifiers collide` |
 | One exact attempt initializes, creates one ACP session, and sends its authored body through the generic contract. | `kimi-planned-attempt-executor.test.ts`: `initializes in the exact worktree, creates one session, and sends the authored body`; the shared `plannedAttemptExecutorContract` registered as `Kimi ACP controlled` |
 | A suspension cancels and a resume reuses the same ACP session and body. | `kimi-planned-attempt-executor.test.ts`: `cancels and resumes the same ACP session through the generic command boundary` |
