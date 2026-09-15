@@ -9,7 +9,8 @@ import {
   ExecutorProfileRegistry,
   ExecutorProfileResolutionFailure,
   executorLocatorForProfile,
-  executorProfileRegistryLayer
+  executorProfileRegistryLayer,
+  resolveExecutorProfileLocator
 } from "./executor-profile.js"
 
 const codex = ExecutorProfile.make({
@@ -69,4 +70,17 @@ it.effect("fails closed when profile identifiers collide", () =>
       expect(Option.isSome(error) && error.value).toMatchObject({ kind: "DuplicateProfile" })
     }
   }).pipe(Effect.provide(executorProfileRegistryLayer([codex, codex])))
+)
+
+it.effect("rejects duplicate configured profiles before locator resolution", () =>
+  Effect.gen(function* () {
+    const result = yield* resolveExecutorProfileLocator([codex, codex], executorLocatorForProfile(codex)).pipe(
+      Effect.exit
+    )
+    expect(Exit.isFailure(result)).toBe(true)
+    if (Exit.isFailure(result)) {
+      const error = Cause.findErrorOption(result.cause)
+      expect(Option.isSome(error) && error.value).toMatchObject({ kind: "DuplicateProfile" })
+    }
+  })
 )
