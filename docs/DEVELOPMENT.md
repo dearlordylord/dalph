@@ -135,6 +135,7 @@ All commands below use `pnpm`. Script definitions live in
 | `test` | Enforce separate production/evaluation coverage and changed-line floors below; takes an admission slot. |
 | `test:mbt` | Explicit manual Quint-connected conformance run; temporarily excluded from automatic verification pending [#363](https://github.com/dearlordylord/dalph/issues/363), which restores replay from pre-generated traces. |
 | `test:delivery-repeatability` | Run the accepted DS01–DS13 delivery checkpoint table and strict occurrence order in twenty consecutive fresh processes; stop at the first incomplete or divergent run. This is the dedicated delivery-repeatability qualification command. |
+| `test:delivery-repeatability:warm` | Reuse one persistent Vitest worker for twenty target executions, then run a three-process fresh sample for process-isolation evidence. Warm success is a performance/cache signal and does not replace the fresh acceptance path. |
 | `test:ci-change-classification` | Prove the docs-only CI allowlist and fail-closed classification. |
 
 | `check:lab` | Reducer Lab typecheck, maintained-cassette smoke, build; no browser. |

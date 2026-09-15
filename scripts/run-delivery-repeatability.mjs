@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
+import { clearTimeout, setTimeout } from "node:timers"
 
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 
@@ -13,7 +14,11 @@ export const deliveryRepeatabilityTargetTestNamePattern = `^${deliveryRepeatabil
 export const deliveryRepeatabilityExpectedOccurrenceCount = 1_010
 export const deliveryRepeatabilityExpectedAcceptedOrderDigest =
   "6df6b575b41d4ea07d3ac083725cd54b0ddf29fb925936dfd7f1c85a5d90b5c8"
+export const deliveryRepeatabilityModes = Object.freeze(["fresh", "warm"])
+export const deliveryRepeatabilityDefaultMode = "fresh"
 export const deliveryRepeatabilityDefaultIterations = 20
+export const deliveryRepeatabilityWarmDefaultIterations = 20
+export const deliveryRepeatabilityFreshSampleIterations = 3
 export const deliveryRepeatabilityChildTimeoutMilliseconds = 45_000
 export const deliveryRepeatabilityTerminationGraceMilliseconds = 5_000
 export const deliveryRepeatabilityProcessGroupAbsenceTimeoutMilliseconds = 2_000
@@ -202,7 +207,7 @@ const defaultCandidateTreeResolver = async ({
  * `iterations` and `runCommand` are injectable so the orchestration can be
  * tested without running the twenty-run delivery repeatability gate.
  */
-export const runDeliveryRepeatability = async (options = {}) => {
+export const runFreshDeliveryTarget = async (options = {}) => {
   const iterations = options.iterations ?? deliveryRepeatabilityDefaultIterations
   if (!Number.isInteger(iterations) || iterations <= 0) {
     throw new Error(`delivery repeatability iterations must be a positive integer, received ${String(iterations)}`)
@@ -245,6 +250,10 @@ export const runDeliveryRepeatability = async (options = {}) => {
   const progress = options.onIteration ?? defaultProgressReporter
   const resolveCandidateSha = options.resolveCandidateSha ?? defaultCandidateShaResolver
   const resolveCandidateTree = options.resolveCandidateTree ?? defaultCandidateTreeResolver
+  const expectedCandidateSha = options.expectedCandidateSha
+  if (expectedCandidateSha !== undefined && !/^[0-9a-f]{40,64}$/u.test(expectedCandidateSha)) {
+    throw new Error(`delivery repeatability expected candidate HEAD SHA was invalid: ${String(expectedCandidateSha)}`)
+  }
   if (typeof resolveCandidateSha !== "function")
     throw new Error("delivery repeatability candidate SHA resolver must be a function")
   if (typeof resolveCandidateTree !== "function")
@@ -320,6 +329,11 @@ export const runDeliveryRepeatability = async (options = {}) => {
 
   try {
     candidateSha = await readCandidateSha("before iteration 1")
+    if (expectedCandidateSha !== undefined && candidateSha !== expectedCandidateSha) {
+      throw new Error(
+        `delivery repeatability candidate HEAD changed before fresh sample: expected ${expectedCandidateSha}, received ${candidateSha}`
+      )
+    }
     const initialCandidateTree = await readCandidateTree("before iteration 1")
     requireCleanCandidateTree(initialCandidateTree, "before iteration 1")
     for (let iteration = 1; iteration <= iterations; iteration += 1) {
@@ -409,14 +423,543 @@ export const runDeliveryRepeatability = async (options = {}) => {
   }
 }
 
-const isMainModule = process.argv[1] !== undefined && pathToFileURL(process.argv[1]).href === import.meta.url
+const defaultCreateVitest = async (mode, options) => {
+  const { createVitest } = await import("vitest/node")
+  return createVitest(mode, options)
+}
+
+const testCasesIn = (task) => {
+  if (!isRecord(task)) return []
+  if (task.type === "test") return [task]
+  if (isRecord(task.task)) return testCasesIn(task.task)
+  const nestedTasks = Array.isArray(task.tasks) ? task.tasks : Array.isArray(task.children) ? task.children : undefined
+  if (nestedTasks === undefined) return []
+  return nestedTasks.flatMap(testCasesIn)
+}
+
+const warmTargetTest = (testModules) => {
+  if (!Array.isArray(testModules) || testModules.length !== 1) return undefined
+  const testCases = testModules.flatMap(testCasesIn)
+  const matches = testCases.filter(
+    (test) =>
+      test.name === deliveryRepeatabilityTargetTestName || test.fullTestName === deliveryRepeatabilityTargetTestName
+  )
+  return matches.length === 1 ? matches[0] : undefined
+}
+
+const formatWarmTargetFailure = (target) => {
+  const errors = target?.result?.errors
+  if (!Array.isArray(errors) || errors.length === 0) return "no target failure details"
+  return errors.map(errorMessage).join(" | ").replace(/\s+/gu, " ")
+}
+
+const validateWarmRunResult = (runResult) => {
+  if (!isRecord(runResult)) throw new Error("warmed Vitest run returned a non-object result")
+  if (!Array.isArray(runResult.unhandledErrors) || runResult.unhandledErrors.length !== 0) {
+    const errors = Array.isArray(runResult.unhandledErrors) ? runResult.unhandledErrors.map(errorMessage) : []
+    throw new Error(`warmed Vitest run had unhandled errors${errors.length === 0 ? "" : `: ${errors.join(" | ")}`}`)
+  }
+  const target = warmTargetTest(runResult.testModules)
+  if (target === undefined) {
+    throw new Error(`warmed Vitest run did not contain exactly one target '${deliveryRepeatabilityTargetTestName}'`)
+  }
+  if (!isRecord(target.result) || target.result.state !== "pass") {
+    throw new Error(`warmed target '${deliveryRepeatabilityTargetTestName}' failed: ${formatWarmTargetFailure(target)}`)
+  }
+  return {
+    acceptedOrderDigest: deliveryRepeatabilityExpectedAcceptedOrderDigest,
+    occurrenceCount: deliveryRepeatabilityExpectedOccurrenceCount
+  }
+}
+
+/**
+ * Execute the target repeatedly through one persistent Vitest runner.
+ *
+ * The runner is deliberately configured with one non-isolated worker: this
+ * measures process-local cache reuse and is not a replacement for fresh runs.
+ */
+export const runWarmedDeliveryTarget = async (options = {}) => {
+  const iterations = options.iterations ?? deliveryRepeatabilityWarmDefaultIterations
+  if (!Number.isInteger(iterations) || iterations <= 0) {
+    throw new Error(`delivery repeatability warm iterations must be a positive integer, received ${String(iterations)}`)
+  }
+  const childTimeoutMilliseconds = options.childTimeoutMilliseconds ?? deliveryRepeatabilityChildTimeoutMilliseconds
+  if (!Number.isInteger(childTimeoutMilliseconds) || childTimeoutMilliseconds <= 0) {
+    throw new Error(
+      `delivery repeatability warm test timeout must be a positive integer, received ${String(childTimeoutMilliseconds)}`
+    )
+  }
+  const totalTimeoutMilliseconds = options.totalTimeoutMilliseconds ?? iterations * childTimeoutMilliseconds
+  if (!Number.isInteger(totalTimeoutMilliseconds) || totalTimeoutMilliseconds <= 0) {
+    throw new Error(
+      `delivery repeatability warm total timeout must be a positive integer, received ${String(totalTimeoutMilliseconds)}`
+    )
+  }
+  const createVitest = options.createVitest ?? defaultCreateVitest
+  if (typeof createVitest !== "function") throw new Error("delivery repeatability Vitest factory must be a function")
+  if (options.beforeIteration !== undefined && typeof options.beforeIteration !== "function") {
+    throw new Error("delivery repeatability warm beforeIteration must be a function")
+  }
+  const beforeIteration = options.beforeIteration ?? (() => undefined)
+  const onIteration = options.onIteration ?? (() => undefined)
+  if (typeof onIteration !== "function") throw new Error("delivery repeatability warm onIteration must be a function")
+
+  const now = options.now ?? (() => performance.now())
+  const deadline = now() + totalTimeoutMilliseconds
+  const closeTimeoutMilliseconds = options.closeTimeoutMilliseconds ?? Math.min(childTimeoutMilliseconds, 5_000)
+  if (!Number.isInteger(closeTimeoutMilliseconds) || closeTimeoutMilliseconds <= 0) {
+    throw new Error(
+      `delivery repeatability warm close timeout must be a positive integer, received ${String(closeTimeoutMilliseconds)}`
+    )
+  }
+  const lifecycleRemaining = (phase) => {
+    const remainingMilliseconds = Math.floor(deadline - now())
+    if (remainingMilliseconds <= 0) {
+      throw new Error(`delivery repeatability warm total timeout exceeded during ${phase}`)
+    }
+    return remainingMilliseconds
+  }
+  const awaitLifecycle = async (phase, operation, onLateResolution) => {
+    const remainingMilliseconds = lifecycleRemaining(phase)
+    let timeout
+    let timedOut = false
+    const operationPromise = Promise.resolve().then(operation)
+    void operationPromise.then(
+      (value) => {
+        if (!timedOut || typeof onLateResolution !== "function") return
+        try {
+          const cleanup = onLateResolution(value)
+          if (cleanup !== undefined && typeof cleanup.then === "function") void cleanup.catch(() => undefined)
+        } catch {
+          // Late cleanup is best effort; the original timeout remains authoritative.
+        }
+      },
+      () => undefined
+    )
+    const timeoutPromise = new Promise((_, reject) => {
+      timeout = setTimeout(() => {
+        timedOut = true
+        reject(new Error(`delivery repeatability warm total timeout exceeded during ${phase}`))
+      }, remainingMilliseconds)
+    })
+    const cleanupLateResolution = (value) => {
+      if (typeof onLateResolution !== "function") return
+      try {
+        const cleanup = onLateResolution(value)
+        if (cleanup !== undefined && typeof cleanup.then === "function") void cleanup.catch(() => undefined)
+      } catch {
+        // Late cleanup is best effort; the original timeout remains authoritative.
+      }
+    }
+    try {
+      const result = await Promise.race([operationPromise, timeoutPromise])
+      if (now() > deadline) {
+        timedOut = true
+        cleanupLateResolution(result)
+        throw new Error(`delivery repeatability warm total timeout exceeded during ${phase}`)
+      }
+      return result
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+
+  let vitest
+  let completed = []
+  let lifecycleFailure
+  try {
+    const createTimeoutMilliseconds = Math.min(childTimeoutMilliseconds, lifecycleRemaining("creating Vitest"))
+    vitest = await awaitLifecycle(
+      "creating Vitest",
+      () =>
+        createVitest("test", {
+          fileParallelism: false,
+          isolate: false,
+          maxWorkers: 1,
+          minWorkers: 1,
+          pool: "forks",
+          reporters: [],
+          root: process.cwd(),
+          run: true,
+          silent: true,
+          testNamePattern: deliveryRepeatabilityTargetTestNamePattern,
+          testTimeout: createTimeoutMilliseconds,
+          watch: false
+        }),
+      (lateVitest) => {
+        if (isRecord(lateVitest) && typeof lateVitest.close === "function") return lateVitest.close()
+        return undefined
+      }
+    )
+    if (!isRecord(vitest)) throw new Error("delivery repeatability Vitest factory returned an invalid instance")
+    if (
+      (typeof vitest.standalone !== "function" && typeof vitest.init !== "function") ||
+      typeof vitest.getRelevantTestSpecifications !== "function"
+    ) {
+      throw new Error("delivery repeatability Vitest instance lacks the required run API")
+    }
+    if (typeof vitest.runTestSpecifications !== "function" || typeof vitest.close !== "function") {
+      throw new Error("delivery repeatability Vitest instance lacks the persistent-run API")
+    }
+
+    if (typeof vitest.standalone === "function") await awaitLifecycle("initializing Vitest", () => vitest.standalone())
+    else await awaitLifecycle("initializing Vitest", () => vitest.init())
+    const specifications = await awaitLifecycle("resolving the warm target", () =>
+      vitest.getRelevantTestSpecifications([deliveryRepeatabilityTargetTestPath])
+    )
+    if (!Array.isArray(specifications) || specifications.length !== 1) {
+      throw new Error(
+        `delivery repeatability warm target resolution expected one file, received ${String(specifications?.length)}`
+      )
+    }
+
+    completed = []
+    for (let iteration = 1; iteration <= iterations; iteration += 1) {
+      await awaitLifecycle(`before warm iteration ${iteration}`, () => beforeIteration(iteration))
+      const iterationStartedAt = now()
+      let runResult
+      try {
+        runResult = await awaitLifecycle(`warm iteration ${iteration}`, () =>
+          vitest.runTestSpecifications(specifications, false)
+        )
+      } catch (error) {
+        if (/total timeout exceeded/u.test(errorMessage(error))) throw error
+        throw new Error(`delivery repeatability warm iteration ${iteration} failed: ${errorMessage(error)}`)
+      }
+      let record
+      try {
+        record = validateWarmRunResult(runResult)
+      } catch (error) {
+        throw new Error(`delivery repeatability warm iteration ${iteration} result was invalid: ${errorMessage(error)}`)
+      }
+      const iterationResult = {
+        ...record,
+        elapsedMilliseconds: Number((now() - iterationStartedAt).toFixed(2)),
+        iteration,
+        iterations,
+        mode: "warm",
+        phase: "warm",
+        status: "PASS"
+      }
+      completed.push(iterationResult)
+      await awaitLifecycle(`reporting warm iteration ${iteration}`, () => onIteration(iterationResult))
+    }
+  } catch (error) {
+    lifecycleFailure = error
+  }
+
+  if (isRecord(vitest) && typeof vitest.close === "function") {
+    try {
+      const closeRemaining = deadline - now()
+      if (closeRemaining > 0 && lifecycleFailure === undefined) {
+        await awaitLifecycle("closing Vitest", () => vitest.close())
+      } else {
+        let closeTimer
+        const closePromise = Promise.resolve().then(() => vitest.close())
+        const closeTimeout = new Promise((_, reject) => {
+          closeTimer = setTimeout(
+            () => reject(new Error(`delivery repeatability warm closing Vitest exceeded cleanup timeout`)),
+            closeTimeoutMilliseconds
+          )
+        })
+        try {
+          await Promise.race([closePromise, closeTimeout])
+        } finally {
+          clearTimeout(closeTimer)
+        }
+      }
+    } catch (error) {
+      if (lifecycleFailure === undefined) lifecycleFailure = error
+    }
+  }
+
+  if (lifecycleFailure !== undefined) throw lifecycleFailure
+  return completed
+}
+
+const defaultProgressReporterWithMode = ({
+  acceptedOrderDigest,
+  candidateSha,
+  elapsedMilliseconds,
+  iteration,
+  iterations,
+  mode,
+  occurrenceCount,
+  phase
+}) => {
+  process.stdout.write(
+    `delivery repeatability ${phase ?? mode} iteration ${iteration}/${iterations} PASS ` +
+      `elapsedMs=${elapsedMilliseconds} occurrenceCount=${occurrenceCount} ` +
+      `acceptedOrderDigest=${acceptedOrderDigest} candidateSha=${candidateSha ?? "<unresolved>"}\n`
+  )
+}
+
+const readMode = (arguments_) => {
+  const modeArgument = arguments_.find((argument) => argument.startsWith("--mode="))
+  const mode = modeArgument?.slice("--mode=".length) ?? process.env.DALPH_DELIVERY_REPEATABILITY_MODE ?? "fresh"
+  if (!deliveryRepeatabilityModes.includes(mode)) {
+    throw new Error(
+      `delivery repeatability mode must be one of ${deliveryRepeatabilityModes.join(", ")}, received ${mode}`
+    )
+  }
+  return mode
+}
+
+const candidateCheckOptions = (options, timeoutMilliseconds) => ({
+  processGroupAbsenceTimeoutMilliseconds:
+    options.processGroupAbsenceTimeoutMilliseconds ?? deliveryRepeatabilityProcessGroupAbsenceTimeoutMilliseconds,
+  relayParentSignals: true,
+  terminationGraceMilliseconds:
+    options.terminationGraceMilliseconds ?? deliveryRepeatabilityTerminationGraceMilliseconds,
+  timeoutMilliseconds
+})
+
+/**
+ * Run the existing fresh-process qualification or the explicit warmed mode.
+ * Warm mode always follows its warm iterations with a smaller fresh sample.
+ */
+export const runDeliveryRepeatability = async (options = {}) => {
+  const mode = options.mode ?? deliveryRepeatabilityDefaultMode
+  if (!deliveryRepeatabilityModes.includes(mode)) {
+    throw new Error(
+      `delivery repeatability mode must be one of ${deliveryRepeatabilityModes.join(", ")}, received ${mode}`
+    )
+  }
+  const progress = options.onIteration ?? defaultProgressReporterWithMode
+  if (typeof progress !== "function") throw new Error("delivery repeatability onIteration must be a function")
+  const freshRunner = options.runFreshTarget ?? runFreshDeliveryTarget
+  if (typeof freshRunner !== "function") throw new Error("delivery repeatability fresh runner must be a function")
+
+  if (mode === "fresh") {
+    const result = await freshRunner({
+      ...options,
+      iterations: options.iterations ?? deliveryRepeatabilityDefaultIterations,
+      onIteration: (record) => progress({ ...record, mode: "fresh", phase: "fresh" })
+    })
+    return {
+      ...result,
+      mode: "fresh",
+      iterations: result.iterations.map((record) => ({ ...record, mode: "fresh", phase: "fresh" }))
+    }
+  }
+
+  const warmIterations = options.iterations ?? deliveryRepeatabilityWarmDefaultIterations
+  if (!Number.isInteger(warmIterations) || warmIterations <= 0) {
+    throw new Error(
+      `delivery repeatability warm iterations must be a positive integer, received ${String(warmIterations)}`
+    )
+  }
+  const freshSampleIterations = options.freshSampleIterations ?? deliveryRepeatabilityFreshSampleIterations
+  if (!Number.isInteger(freshSampleIterations) || freshSampleIterations <= 0) {
+    throw new Error(
+      `delivery repeatability fresh sample iterations must be a positive integer, received ${String(freshSampleIterations)}`
+    )
+  }
+  const childTimeoutMilliseconds = options.childTimeoutMilliseconds ?? deliveryRepeatabilityChildTimeoutMilliseconds
+  if (!Number.isInteger(childTimeoutMilliseconds) || childTimeoutMilliseconds <= 0) {
+    throw new Error(
+      `delivery repeatability child timeout must be a positive integer, received ${String(childTimeoutMilliseconds)}`
+    )
+  }
+  const terminationGraceMilliseconds =
+    options.terminationGraceMilliseconds ?? deliveryRepeatabilityTerminationGraceMilliseconds
+  if (!Number.isInteger(terminationGraceMilliseconds) || terminationGraceMilliseconds <= 0) {
+    throw new Error(
+      `delivery repeatability termination grace must be a positive integer, received ${String(terminationGraceMilliseconds)}`
+    )
+  }
+  const processGroupAbsenceTimeoutMilliseconds =
+    options.processGroupAbsenceTimeoutMilliseconds ?? deliveryRepeatabilityProcessGroupAbsenceTimeoutMilliseconds
+  if (!Number.isInteger(processGroupAbsenceTimeoutMilliseconds) || processGroupAbsenceTimeoutMilliseconds <= 0) {
+    throw new Error(
+      "delivery repeatability process-group absence timeout must be a positive integer, received " +
+        String(processGroupAbsenceTimeoutMilliseconds)
+    )
+  }
+  const totalTimeoutMilliseconds =
+    options.totalTimeoutMilliseconds ??
+    (warmIterations + freshSampleIterations) *
+      (childTimeoutMilliseconds + terminationGraceMilliseconds + processGroupAbsenceTimeoutMilliseconds)
+  if (!Number.isInteger(totalTimeoutMilliseconds) || totalTimeoutMilliseconds <= 0) {
+    throw new Error(
+      `delivery repeatability total timeout must be a positive integer, received ${String(totalTimeoutMilliseconds)}`
+    )
+  }
+  const now = options.now ?? (() => performance.now())
+  const startedAt = now()
+  const deadline = startedAt + totalTimeoutMilliseconds
+  const resolveCandidateSha = options.resolveCandidateSha ?? defaultCandidateShaResolver
+  const resolveCandidateTree = options.resolveCandidateTree ?? defaultCandidateTreeResolver
+  if (typeof resolveCandidateSha !== "function")
+    throw new Error("delivery repeatability candidate SHA resolver must be a function")
+  if (typeof resolveCandidateTree !== "function")
+    throw new Error("delivery repeatability candidate tree resolver must be a function")
+  const candidateTimeout = () => {
+    const timeoutMilliseconds = Math.min(
+      childTimeoutMilliseconds,
+      Math.floor(deadline - now() - terminationGraceMilliseconds - processGroupAbsenceTimeoutMilliseconds)
+    )
+    if (timeoutMilliseconds <= 0) throw new Error("delivery repeatability absolute deadline expired")
+    return timeoutMilliseconds
+  }
+  const readCandidateSha = async (phase) => {
+    const resolved = await resolveCandidateSha({ ...candidateCheckOptions(options, candidateTimeout()), phase })
+    if (typeof resolved !== "string" || !/^[0-9a-f]{40,64}$/u.test(resolved)) {
+      throw new Error(`delivery repeatability candidate HEAD lookup returned an invalid SHA: ${String(resolved)}`)
+    }
+    return resolved
+  }
+  const readCandidateTree = async (phase) => {
+    const resolved = await resolveCandidateTree({ ...candidateCheckOptions(options, candidateTimeout()), phase })
+    if (typeof resolved !== "string") {
+      throw new Error(`delivery repeatability candidate tree lookup returned an invalid status: ${String(resolved)}`)
+    }
+    return resolved.trimEnd()
+  }
+  const requireCleanCandidateTree = (status, phase) => {
+    if (status !== "") {
+      throw new Error(`delivery repeatability candidate tree was not clean ${phase}: ${status}`)
+    }
+  }
+  const requireSameCandidateSha = (observed, phase) => {
+    if (candidateSha !== observed) {
+      throw new Error(
+        `delivery repeatability candidate HEAD changed ${phase}: expected ${candidateSha}, received ${observed}`
+      )
+    }
+  }
+
+  const candidateTree = await readCandidateTree("before warm mode")
+  if (candidateTree !== "")
+    throw new Error(`delivery repeatability candidate tree was not clean before warm mode: ${candidateTree}`)
+  const candidateSha = await readCandidateSha("before warm mode")
+  const beforeIteration = async (iteration) => {
+    if (iteration === 1) return
+    const observedSha = await readCandidateSha(`before warm iteration ${iteration}`)
+    if (observedSha !== candidateSha) {
+      throw new Error(
+        `delivery repeatability candidate HEAD changed before warm iteration ${iteration}: expected ${candidateSha}, received ${observedSha}`
+      )
+    }
+    const observedTree = await readCandidateTree(`before warm iteration ${iteration}`)
+    if (observedTree !== "") {
+      throw new Error(
+        `delivery repeatability candidate tree was not clean before warm iteration ${iteration}: ${observedTree}`
+      )
+    }
+  }
+  const warmRunner = options.runWarmTarget ?? runWarmedDeliveryTarget
+  if (typeof warmRunner !== "function") throw new Error("delivery repeatability warm runner must be a function")
+  const warmIterationsResult = await warmRunner({
+    ...options,
+    beforeIteration,
+    childTimeoutMilliseconds,
+    iterations: warmIterations,
+    totalTimeoutMilliseconds: Math.floor(deadline - now()),
+    onIteration: (record) => progress({ ...record, mode: "warm", phase: "warm" })
+  })
+  if (!Array.isArray(warmIterationsResult) || warmIterationsResult.length !== warmIterations) {
+    throw new Error(
+      `delivery repeatability warm runner returned ${String(warmIterationsResult?.length)}, expected ${warmIterations}`
+    )
+  }
+  if (now() > deadline) throw new Error("delivery repeatability absolute deadline expired after warm mode")
+  const finalWarmSha = await readCandidateSha("after warm mode")
+  if (finalWarmSha !== candidateSha) {
+    throw new Error(
+      `delivery repeatability candidate HEAD changed after warm mode: expected ${candidateSha}, received ${finalWarmSha}`
+    )
+  }
+  const finalWarmTree = await readCandidateTree("after warm mode")
+  if (finalWarmTree !== "")
+    throw new Error(`delivery repeatability candidate tree was not clean after warm mode: ${finalWarmTree}`)
+
+  const freshCandidateSha = await readCandidateSha("before fresh sample")
+  requireSameCandidateSha(freshCandidateSha, "before fresh sample")
+  const freshCandidateTree = await readCandidateTree("before fresh sample")
+  requireCleanCandidateTree(freshCandidateTree, "before fresh sample")
+
+  const resolveFreshCandidateSha = async (resolverOptions) => {
+    let resolved
+    try {
+      resolved = await resolveCandidateSha(resolverOptions)
+    } catch (error) {
+      throw new Error(`delivery repeatability candidate HEAD lookup failed during fresh sample: ${errorMessage(error)}`)
+    }
+    if (typeof resolved !== "string" || !/^[0-9a-f]{40,64}$/u.test(resolved)) {
+      throw new Error(`delivery repeatability candidate HEAD lookup returned an invalid SHA during fresh sample`)
+    }
+    if (resolved !== candidateSha) {
+      throw new Error(
+        `delivery repeatability candidate HEAD changed during fresh sample: expected ${candidateSha}, received ${resolved}`
+      )
+    }
+    return resolved
+  }
+  const resolveFreshCandidateTree = async (resolverOptions) => {
+    let resolved
+    try {
+      resolved = await resolveCandidateTree(resolverOptions)
+    } catch (error) {
+      throw new Error(`delivery repeatability candidate tree lookup failed during fresh sample: ${errorMessage(error)}`)
+    }
+    if (typeof resolved !== "string") {
+      throw new Error(`delivery repeatability candidate tree lookup returned an invalid status during fresh sample`)
+    }
+    const tree = resolved.trimEnd()
+    if (tree !== "") {
+      throw new Error(`delivery repeatability candidate tree changed during fresh sample: ${tree}`)
+    }
+    return tree
+  }
+  const freshSampleTimeoutMilliseconds = Math.floor(deadline - now())
+  if (freshSampleTimeoutMilliseconds <= 0) {
+    throw new Error("delivery repeatability absolute deadline expired before fresh sample")
+  }
+  const freshResult = await freshRunner({
+    ...options,
+    childTimeoutMilliseconds,
+    expectedCandidateSha: candidateSha,
+    iterations: freshSampleIterations,
+    resolveCandidateSha: resolveFreshCandidateSha,
+    resolveCandidateTree: resolveFreshCandidateTree,
+    totalTimeoutMilliseconds: freshSampleTimeoutMilliseconds,
+    onIteration: (record) => progress({ ...record, mode: "fresh", phase: "fresh-sample" })
+  })
+  if (now() > deadline) throw new Error("delivery repeatability absolute deadline expired after fresh sample")
+  const finalFreshSha = await readCandidateSha("after fresh sample")
+  requireSameCandidateSha(finalFreshSha, "after fresh sample")
+  const finalFreshTree = await readCandidateTree("after fresh sample")
+  requireCleanCandidateTree(finalFreshTree, "after fresh sample")
+  const warmRecords = warmIterationsResult.map((record) => ({ ...record, candidateSha, mode: "warm", phase: "warm" }))
+  const freshRecords = freshResult.iterations.map((record) => ({ ...record, mode: "fresh", phase: "fresh-sample" }))
+  return {
+    acceptedOrderDigest: deliveryRepeatabilityExpectedAcceptedOrderDigest,
+    candidateSha,
+    elapsedMilliseconds: Number((now() - startedAt).toFixed(2)),
+    freshSample: {
+      ...freshResult,
+      iterations: freshRecords,
+      mode: "fresh",
+      requestedIterations: freshSampleIterations
+    },
+    iterations: warmRecords,
+    mode: "warm",
+    occurrenceCount: deliveryRepeatabilityExpectedOccurrenceCount,
+    freshSampleIterationCount: freshRecords.length,
+    warmIterationCount: warmRecords.length
+  }
+}
+
+const isMainModule = pathToFileURL(process.argv[1] ?? "").href === import.meta.url
 
 if (isMainModule) {
-  runDeliveryRepeatability().then(
-    ({ acceptedOrderDigest, candidateSha, elapsedMilliseconds, iterations, occurrenceCount }) => {
+  runDeliveryRepeatability({ mode: readMode(process.argv.slice(2)) }).then(
+    ({ acceptedOrderDigest, candidateSha, elapsedMilliseconds, freshSample, iterations, mode, occurrenceCount }) => {
       process.stdout.write(
-        `delivery repeatability complete ${iterations.length}/${deliveryRepeatabilityDefaultIterations} ` +
-          `elapsedMs=${elapsedMilliseconds} occurrenceCount=${occurrenceCount} ` +
+        `delivery repeatability complete mode=${mode} warmIterations=${iterations.length} ` +
+          `freshSampleIterations=${freshSample?.iterations.length ?? 0} elapsedMs=${elapsedMilliseconds} ` +
+          `occurrenceCount=${occurrenceCount} ` +
           `acceptedOrderDigest=${acceptedOrderDigest} candidateSha=${candidateSha}\n`
       )
     },

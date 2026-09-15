@@ -163,7 +163,6 @@ import {
   lostPlannedWorktreeSafelySuspendsAuthoredCassette,
   maintainedAuthoredCassetteCatalog,
   measureTrackerObservationEncoding,
-  projectRecordedCassette,
   postIntegrationAttemptChoiceRejectedAuthoredCassette,
   prePromotionBlockerAuthoredCassette,
   prerequisiteReopensDuringCompletionAuthoredCassette,
@@ -209,6 +208,11 @@ import { controlledExecutorLayer } from "../../src/cassettes/authored-adapters.j
 import { controlledTrackerAuthorityLayer } from "../../src/cassettes/authored-tracker-authority.js"
 import { makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
 import { assertAuthoredExpectedBehavior } from "../../src/cassettes/authored-outcomes.js"
+import {
+  authoredRunInputDigest,
+  runCachedAuthoredScenarioCassette,
+  runCachedRecordedCassette
+} from "../../test-support/prototype-authored-run-cache.js"
 
 const evidenceDigestHexLength = 64
 
@@ -285,16 +289,30 @@ const singleton = singletonTaskCompletesAuthoredCassette
 const runAuthoredScenarioCassette = (
   input: unknown,
   options: Parameters<typeof runAuthoredScenarioCassetteWithCrypto>[1] = {}
-) => runAuthoredScenarioCassetteWithCrypto(input, options).pipe(Effect.provide(NodeCrypto.layer))
+) => {
+  const inputDigest = authoredRunInputDigest(input)
+  const run =
+    Object.keys(options).length === 0
+      ? runCachedAuthoredScenarioCassette(
+          {
+            candidateRevision: "scenario-tests",
+            cassetteIdentity: inputDigest,
+            inputDigest,
+            runtimeSchemaVersion: "authored-runner-v1"
+          },
+          input
+        )
+      : runAuthoredScenarioCassetteWithCrypto(input, options)
+  return run.pipe(Effect.provide(NodeCrypto.layer))
+}
+const projectRecordedCassette = runCachedRecordedCassette
 
 const useAuthoredScenarioCassette = <A, E, R>(
   input: unknown,
   use: (run: Effect.Success<ReturnType<typeof runAuthoredScenarioCassetteWithCrypto>>) => Effect.Effect<A, E, R>
 ) => useAuthoredScenarioCassetteWithCrypto(input, use).pipe(Effect.provide(NodeCrypto.layer))
 
-const cachedDependentTasksRun = Effect.runSync(
-  Effect.cached(runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette))
-)
+const cachedDependentTasksRun = runAuthoredScenarioCassette(dependentTasksCompleteInOneRunAuthoredCassette)
 
 const expectRecordedRoundTrip = (records: ReadonlyArray<JournalRecord>, recorded: RecordedCassette) =>
   expect(
@@ -4414,8 +4432,8 @@ it.effect("keeps the maintained singleton Run active while its tracker task rema
 
 it.effect("assigns a fresh exact run identity each time the same tracker target starts", () =>
   Effect.gen(function* () {
-    const first = yield* runAuthoredScenarioCassette(singleton)
-    const second = yield* runAuthoredScenarioCassette(singleton)
+    const first = yield* runAuthoredScenarioCassetteWithCrypto(singleton).pipe(Effect.provide(NodeCrypto.layer))
+    const second = yield* runAuthoredScenarioCassetteWithCrypto(singleton).pipe(Effect.provide(NodeCrypto.layer))
     const command = singleton.story.find((item) => item._tag === "RunCoordinator")
     if (command?._tag !== "RunCoordinator") return yield* Effect.die("maintained story has no coordinator command")
 
