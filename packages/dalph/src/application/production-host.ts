@@ -510,11 +510,15 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const isKnownCodexLocator = executorLocator.startsWith("codex:")
         const isKnownKimiLocator = executorLocator === kimiLocator
         if (!isKnownCodexLocator && !isKnownKimiLocator) {
+          const rawProfileId = executorLocator.replace(/^executor:/u, "unknown/")
+          const profileId = /^[a-z0-9][a-z0-9._/-]*$/u.test(rawProfileId)
+            ? ExecutorProfileId.make(rawProfileId)
+            : undefined
           return yield* Effect.fail(
             new ExecutorProfileResolutionFailure({
               detail: `executor locator ${executorLocator} is not configured`,
               kind: "UnknownProfile",
-              profileId: ExecutorProfileId.make(executorLocator.replace(/^executor:/u, "unknown/"))
+              ...(profileId === undefined ? {} : { profileId })
             })
           )
         }
