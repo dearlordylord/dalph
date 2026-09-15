@@ -154,6 +154,14 @@ export const ProductionRepositoryHostConfiguration = Schema.Struct({
 }).check(hostPathRelationships)
 export type ProductionRepositoryHostConfiguration = typeof ProductionRepositoryHostConfiguration.Type
 
+/** Resolves the run's explicit or host-default locator before attempt planning. */
+export const productionExecutorLocator = (
+  configuration: Pick<ProductionRepositoryHostConfiguration, "plannedAttemptExecutor" | "executorProfileDefault">
+): TaskExecutorLocator =>
+  configuration.plannedAttemptExecutor === "executor:default" && configuration.executorProfileDefault !== undefined
+    ? TaskExecutorLocator.make(`executor:${configuration.executorProfileDefault}`)
+    : configuration.plannedAttemptExecutor
+
 /** Safe startup failure: field and subject are retained, rejected bytes are not. */
 export class ProductionRepositoryHostConfigurationError extends Schema.TaggedError<ProductionRepositoryHostConfigurationError>()(
   "ProductionRepositoryHostConfigurationError",

@@ -22,6 +22,7 @@ import {
 } from "./production-hermetic-contract.js"
 import {
   deriveProductionPlannedAttemptLocations,
+  productionExecutorLocator,
   type ProductionRepositoryHostConfiguration
 } from "./production-configuration.js"
 
@@ -73,7 +74,7 @@ export const qualificationPlannedAttemptFor = (context: QualificationContext): P
       PlannedTaskAttemptOrdinal.make(0)
     ),
     baseSha: context.configuration.plannedAttemptBaseSha,
-    executor: context.configuration.plannedAttemptExecutor,
+    executor: productionExecutorLocator(context.configuration),
     runId: context.runId,
     taskId: context.taskId,
     taskRevision: context.specification.fingerprint

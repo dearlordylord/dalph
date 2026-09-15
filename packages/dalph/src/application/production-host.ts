@@ -1,11 +1,6 @@
 /* eslint-disable max-lines -- Production host composition keeps one scoped lifecycle and its qualification seams auditable. */
 import { NodeCrypto, NodeHttpClient, NodeServices } from "@effect/platform-node"
-import {
-  IntegrationTarget,
-  PlannedAttemptExecutor,
-  PlannedAttemptExecutorLifecycleObservation,
-  TaskExecutorLocator
-} from "@dalph/contracts"
+import { IntegrationTarget, PlannedAttemptExecutor, PlannedAttemptExecutorLifecycleObservation } from "@dalph/contracts"
 import {
   GithubGraphqlClient,
   type GithubGraphqlExecution,
@@ -88,6 +83,7 @@ import { CodexIntegratorConfiguration } from "./codex-integrator-private-store.j
 import {
   type ProductionRepositoryHostConfiguration,
   decodeProductionRepositoryHostConfiguration,
+  productionExecutorLocator,
   productionPlannedTaskAttemptLayer
 } from "./production-configuration.js"
 import {
@@ -509,7 +505,6 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const ownership = yield* CoordinatorOwnership
         const journal = yield* JournalStore
         const lifecycle = yield* RunLifecycleJournal
-        const requestedExecutorLocator = configuration.plannedAttemptExecutor
         const kimiProfile = ExecutorProfile.make({
           adapter: "kimi-acp",
           executable: "kimi",
@@ -528,10 +523,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           provider: "codex"
         })
         const configuredProfiles = configuration.executorProfiles ?? [codexProfile, kimiProfile]
-        const executorLocator =
-          requestedExecutorLocator === "executor:default" && configuration.executorProfileDefault !== undefined
-            ? TaskExecutorLocator.make(`executor:${configuration.executorProfileDefault}`)
-            : requestedExecutorLocator
+        const executorLocator = productionExecutorLocator(configuration)
         const selectedProfile =
           executorLocator.startsWith("codex:") && configuration.executorProfiles === undefined
             ? codexProfile
