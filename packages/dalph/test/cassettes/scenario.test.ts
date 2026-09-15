@@ -4432,8 +4432,8 @@ it.effect("keeps the maintained singleton Run active while its tracker task rema
 
 it.effect("assigns a fresh exact run identity each time the same tracker target starts", () =>
   Effect.gen(function* () {
-    const first = yield* runAuthoredScenarioCassette(singleton)
-    const second = yield* runAuthoredScenarioCassette(singleton)
+    const first = yield* runAuthoredScenarioCassetteWithCrypto(singleton).pipe(Effect.provide(NodeCrypto.layer))
+    const second = yield* runAuthoredScenarioCassetteWithCrypto(singleton).pipe(Effect.provide(NodeCrypto.layer))
     const command = singleton.story.find((item) => item._tag === "RunCoordinator")
     if (command?._tag !== "RunCoordinator") return yield* Effect.die("maintained story has no coordinator command")
 
