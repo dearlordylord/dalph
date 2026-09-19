@@ -54,13 +54,15 @@ import {
   type TraceReaderService,
   type RequestCircuitPolicy,
   asApplicationExitShellService,
+  discoverProductionRun,
   makeProductionHostApplicationExitShell,
-  selectProductionRun
+  selectDiscoveredProductionRun
 } from "@dalph/orchestrator"
 import { Context, Deferred, Effect, Layer, type Scope } from "effect"
 import {
   CodexAppServer,
   CodexAppServerFailure,
+  type CodexAppServerService,
   codexAppServerNodeLayer,
   codexOwnedActivityCensusLayer,
   type CodexAppServerRequestBoundary,
@@ -115,6 +117,11 @@ export interface ProductionHostObservation {
 
 type ProductionHostFoundation = CoordinatorOwnership | JournalStore | RunLifecycleJournal
 
+/** Provider resources acquired once and retained until the enclosing host scope closes. */
+type ProductionHostProviderAdmission =
+  | { readonly _tag: "CodexAppServer"; readonly appServer: CodexAppServerService }
+  | { readonly _tag: "NonCodex" }
+
 /** Construction-time taps for the one host shell; they cannot replace its authority or identity. */
 interface ProductionRepositoryHostApplicationExitConstructionOptions {
   readonly requestObserver?: ProductionApplicationExitRequestObserver
@@ -155,11 +162,11 @@ type ProductionRepositoryHostApplicationExitObserver = (
  * the one exact Run graph from those same scoped service instances.
  */
 export interface ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, RRun, EActivation> {
-  /** Completes provider admission before Run selection can allocate or recover a Run. */
-  readonly admit?: (
+  /** Acquires and proves the exact provider instance that the selected Run will use. */
+  readonly acquireProvider: (
     configuration: ProductionRepositoryHostConfiguration,
     applicationExit: ProductionHostApplicationExitShellService
-  ) => Effect.Effect<void, unknown, never>
+  ) => Effect.Effect<ProductionHostProviderAdmission, unknown, Scope.Scope>
   readonly foundation: (
     configuration: ProductionRepositoryHostConfiguration
   ) => Layer.Layer<ProductionHostFoundation, EFoundation, RFoundation>
@@ -169,7 +176,8 @@ export interface ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, R
     configuration: ProductionRepositoryHostConfiguration,
     selection: ProductionRunSelection,
     onFailure: (failure: EActivation) => Effect.Effect<void>,
-    applicationExit: ProductionHostApplicationExitShellService
+    applicationExit: ProductionHostApplicationExitShellService,
+    provider: ProductionHostProviderAdmission
   ) => Layer.Layer<JournaledRunObservationSource | RunReactivationOwner, ERun, ProductionHostFoundation | RRun>
 }
 
@@ -510,49 +518,52 @@ const makeHostApplicationExitShell = Effect.fn("ProductionRepositoryHost.makeApp
 export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, ETrace = never>(
   adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace> = {}
 ) => ({
-  admit: (
+  acquireProvider: (
     configuration: ProductionRepositoryHostConfiguration,
     applicationExit: ProductionHostApplicationExitShellService
   ) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const selectedProfile = yield* selectedProductionExecutorProfile(configuration)
-        if (selectedProfile.adapter !== "codex-app-server") return
-        const selectedConfiguration = { ...configuration, codexExecutable: selectedProfile.executable }
-        const attemptStoreLayer = nodeCodexAttemptStoreLayer({
-          stateDirectory: configuration.codexExecutorPrivateStateDirectory
-        }).pipe(Layer.provide(NodeServices.layer))
-        const codexProcessNative = adapters.codexProcessNative ?? nodeCodexProcessNativeService
-        const requestBoundary = yield* makeRequestCircuit<CodexAppServerRequestOperation, CodexAppServerFailure>({
-          onOpen: (operation) =>
-            new CodexAppServerFailure({ detail: codexRequestCircuitOpenDetail, kind: "CircuitOpen", operation }),
-          policy: codexRequestCircuitPolicy
-        })
-        const supplied = adapters.codexAppServer?.(selectedConfiguration, requestBoundary)
-        const appLayerWithoutApplicationExit: Layer.Layer<
-          CodexAppServer,
-          ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>,
-          ApplicationExitShell
-        > =
-          supplied ??
-          defaultCodexAppServerLayer(selectedConfiguration, attemptStoreLayer, codexProcessNative, requestBoundary)
-        const appLayer = appLayerWithoutApplicationExit.pipe(
-          Layer.provide(Layer.succeed(ApplicationExitShell, asApplicationExitShellService(applicationExit)))
-        )
-        const context = yield* Layer.build(appLayer)
-        const app = Context.get(context, CodexAppServer)
-        if (app.unattendedPolicyAdmission === undefined) {
-          return yield* Effect.fail(
-            new CodexAppServerFailure({
-              detail: "Codex app-server did not expose effective unattended-policy admission",
-              kind: "Protocol",
-              operation: "config/read"
-            })
-          )
-        }
-        yield* app.unattendedPolicyAdmission
+    Effect.gen(function* () {
+      const selectedProfile = yield* selectedProductionExecutorProfile(configuration)
+      if (selectedProfile.adapter !== "codex-app-server") return { _tag: "NonCodex" as const }
+      const selectedConfiguration = { ...configuration, codexExecutable: selectedProfile.executable }
+      const attemptStoreLayer = nodeCodexAttemptStoreLayer({
+        stateDirectory: configuration.codexExecutorPrivateStateDirectory
+      }).pipe(Layer.provide(NodeServices.layer))
+      const codexProcessNative = adapters.codexProcessNative ?? nodeCodexProcessNativeService
+      const requestBoundary = yield* makeRequestCircuit<CodexAppServerRequestOperation, CodexAppServerFailure>({
+        onOpen: (operation) =>
+          new CodexAppServerFailure({ detail: codexRequestCircuitOpenDetail, kind: "CircuitOpen", operation }),
+        policy: codexRequestCircuitPolicy
       })
-    ),
+      const supplied = adapters.codexAppServer?.(selectedConfiguration, requestBoundary)
+      const appLayerWithoutApplicationExit: Layer.Layer<
+        CodexAppServer,
+        ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>,
+        ApplicationExitShell
+      > =
+        supplied ??
+        defaultCodexAppServerLayer(selectedConfiguration, attemptStoreLayer, codexProcessNative, requestBoundary)
+      const appLayerWithoutCircuit = appLayerWithoutApplicationExit.pipe(
+        Layer.provide(Layer.succeed(ApplicationExitShell, asApplicationExitShellService(applicationExit)))
+      )
+      const appLayer =
+        supplied === undefined
+          ? appLayerWithoutCircuit
+          : guardedCodexAppServerLayer(appLayerWithoutCircuit, requestBoundary)
+      const context = yield* Layer.build(appLayer)
+      const app = Context.get(context, CodexAppServer)
+      if (app.unattendedPolicyAdmission === undefined) {
+        return yield* Effect.fail(
+          new CodexAppServerFailure({
+            detail: "Codex app-server did not expose effective unattended-policy admission",
+            kind: "Protocol",
+            operation: "config/read"
+          })
+        )
+      }
+      yield* app.unattendedPolicyAdmission
+      return { _tag: "CodexAppServer" as const, appServer: app }
+    }),
   makeApplicationExit: () =>
     makeHostApplicationExitShell({
       ...(adapters.applicationExitRequestObserver === undefined
@@ -582,7 +593,8 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
     configuration: ProductionRepositoryHostConfiguration,
     selection: ProductionRunSelection,
     onFailure: (failure: TaskTrackerMutationThrottled) => Effect.Effect<void>,
-    applicationExit: ProductionHostApplicationExitShellService
+    applicationExit: ProductionHostApplicationExitShellService,
+    provider: ProductionHostProviderAdmission
   ) =>
     Layer.unwrap(
       // eslint-disable-next-line complexity -- One production graph resolves optional edge adapters and observation while preserving one scoped service topology.
@@ -592,10 +604,6 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const lifecycle = yield* RunLifecycleJournal
         const executorLocator = productionExecutorLocator(configuration)
         const selectedProfile = yield* selectedProductionExecutorProfile(configuration)
-        const selectedConfiguration =
-          selectedProfile.adapter === "codex-app-server"
-            ? { ...configuration, codexExecutable: selectedProfile.executable }
-            : configuration
         const kimiPrivateStateDirectory = productionKimiExecutorPrivateStateDirectory(configuration)
         const workflowApplicationExitObserver = adapters.workflowApplicationExitObserver
         /* v8 ignore start -- @preserve Hermetic host tests replace the live GitHub boundary; this assignment retains the production-only provider default. */
@@ -616,31 +624,28 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           stateDirectory: configuration.codexExecutorPrivateStateDirectory
         }).pipe(Layer.provide(NodeServices.layer))
         const codexProcessNative = adapters.codexProcessNative ?? nodeCodexProcessNativeService
-        const codexRequestBoundary = yield* makeRequestCircuit<CodexAppServerRequestOperation, CodexAppServerFailure>({
-          onOpen: (operation) =>
-            new CodexAppServerFailure({ detail: codexRequestCircuitOpenDetail, kind: "CircuitOpen", operation }),
-          policy: codexRequestCircuitPolicy
-        })
-        const suppliedCodexAppServerLayer = adapters.codexAppServer?.(selectedConfiguration, codexRequestBoundary)
-        /* v8 ignore start -- @preserve Hermetic host tests replace the process boundary; this assignment retains the production Codex app-server default. */
-        const appLayerWithoutApplicationExit: Layer.Layer<
-          CodexAppServer,
-          ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>,
-          ApplicationExitShell
-        > =
-          suppliedCodexAppServerLayer ??
-          defaultCodexAppServerLayer(selectedConfiguration, attemptStoreLayer, codexProcessNative, codexRequestBoundary)
-        /* v8 ignore stop */
-        const appLayerWithoutCircuit: Layer.Layer<
-          CodexAppServer,
-          ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>
-        > = appLayerWithoutApplicationExit.pipe(
-          Layer.provide(Layer.succeed(ApplicationExitShell, asApplicationExitShellService(applicationExit)))
-        )
+        if (selectedProfile.adapter === "codex-app-server" && provider._tag !== "CodexAppServer") {
+          return yield* Effect.fail(
+            new CodexAppServerFailure({
+              detail: "Codex Run did not retain its admitted app-server instance",
+              kind: "Protocol",
+              operation: "config/read"
+            })
+          )
+        }
         const appLayer =
-          suppliedCodexAppServerLayer === undefined
-            ? appLayerWithoutCircuit
-            : guardedCodexAppServerLayer(appLayerWithoutCircuit, codexRequestBoundary)
+          provider._tag === "CodexAppServer"
+            ? Layer.succeed(CodexAppServer, provider.appServer)
+            : Layer.effect(
+                CodexAppServer,
+                Effect.fail(
+                  new CodexAppServerFailure({
+                    detail: "non-Codex provider has no app-server instance",
+                    kind: "Protocol",
+                    operation: "initialize"
+                  })
+                )
+              )
         const gitCommandLayer = observedGitCommandLayer(
           nodeGitCommandLayer.pipe(Layer.provide(NodeServices.layer)),
           adapters.boundaryObserver
@@ -848,9 +853,10 @@ export const withDecodedProductionRepositoryHost = <A, EUse, RUse, EFoundation, 
   Effect.scoped(
     Effect.gen(function* () {
       const applicationExit = yield* graph.makeApplicationExit()
-      if (graph.admit !== undefined) yield* graph.admit(configuration, applicationExit)
       const foundation = yield* Layer.build(graph.foundation(configuration))
-      const selection = yield* selectProductionRun(configuration.target).pipe(Effect.provide(foundation))
+      const discovery = yield* discoverProductionRun(configuration.target).pipe(Effect.provide(foundation))
+      const provider = yield* graph.acquireProvider(configuration, applicationExit)
+      const selection = yield* selectDiscoveredProductionRun(configuration.target, discovery)
       const traceReaderContext = yield* Layer.build(TraceReaderLayer).pipe(Effect.provide(foundation))
       const traceReader = Context.get(traceReaderContext, TraceReader)
       const activationFailure = yield* Deferred.make<never, EActivation>()
@@ -859,7 +865,8 @@ export const withDecodedProductionRepositoryHost = <A, EUse, RUse, EFoundation, 
           configuration,
           selection,
           (failure) => Deferred.fail(activationFailure, failure).pipe(Effect.asVoid),
-          applicationExit
+          applicationExit,
+          provider
         )
       ).pipe(Effect.provide(foundation))
       const source = Context.get(run, JournaledRunObservationSource)

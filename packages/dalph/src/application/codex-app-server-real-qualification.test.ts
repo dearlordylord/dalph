@@ -456,7 +456,10 @@ const processId = (child: ChildProcessWithoutNullStreams): number => {
   return child.pid
 }
 
-const runTurn = async (running: RunningFixture, text: string): Promise<RpcMessage> => {
+const runTurn = async (
+  running: Pick<RunningFixture, "rpc" | "threadId" | "worktree">,
+  text: string
+): Promise<RpcMessage> => {
   const response = await running.rpc.request("turn/start", {
     approvalPolicy: "never",
     threadId: running.threadId,
@@ -699,7 +702,7 @@ describe("#75 real built Codex app-server qualification", () => {
         ) {
           if (launched.threadId === undefined) throw new Error(`${cut} requires a materialized thread`)
           await runTurn(
-            { ...fixture, child: launched.child, rpc: launched.rpc, threadId: launched.threadId },
+            { rpc: launched.rpc, threadId: launched.threadId, worktree: fixture.worktree },
             `run_id: qualification-run attempt_id: qualification-attempt ${cut}`
           )
         }

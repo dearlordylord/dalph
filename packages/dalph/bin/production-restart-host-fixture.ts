@@ -130,6 +130,7 @@ const makeGithubClient = (
 
 const fakeCodexAppServer = CodexAppServerService.of({
   incarnation: CodexServerIncarnation.make("production-restart-child-incarnation"),
+  unattendedPolicyAdmission: Effect.void,
   attachTurnCompletedHints: Effect.succeed(Stream.empty),
   attachOwnedActivityHints: Effect.succeed(Stream.empty),
   startThread: () => Effect.die("restart fixture must not start a Codex thread"),

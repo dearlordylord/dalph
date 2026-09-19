@@ -15,6 +15,10 @@ export const ProductionRunSelection = Schema.TaggedUnion({
 })
 export type ProductionRunSelection = typeof ProductionRunSelection.Type
 
+/** Journal-only production discovery, before a fresh Run identity may be allocated. */
+export const ProductionRunDiscovery = Schema.TaggedUnion({ Fresh: {}, Recovered: { runId: AllocatedWorkflowRunId } })
+export type ProductionRunDiscovery = typeof ProductionRunDiscovery.Type
+
 const ProductionRunSelectionConflictEntry = Schema.Struct({ runId: RunId, target: TrackerTarget })
 
 /** Valid unfinished histories cannot be assigned safely to the requested repository host. */
@@ -45,7 +49,7 @@ const recordedTarget = (
  * coordinator scope, Dalph validates every Hot history before it either reuses
  * the sole matching unfinished Run or allocates one genuinely fresh identity.
  */
-export const selectProductionRun = Effect.fn("ProductionHost.selectRun")(function* (target: TrackerTarget) {
+export const discoverProductionRun = Effect.fn("ProductionHost.discoverRun")(function* (target: TrackerTarget) {
   const journal = yield* RunLifecycleJournal
   const scan = yield* journal.scanHot()
   const reductions = scan.runs.map(({ records, runId }) => reduceWorkflowJournalHistory(runId, records))
@@ -76,6 +80,21 @@ export const selectProductionRun = Effect.fn("ProductionHost.selectRun")(functio
   }
   const recovered = firstConflict
   return recovered === undefined
+    ? ProductionRunDiscovery.cases.Fresh.make({})
+    : ProductionRunDiscovery.cases.Recovered.make({ runId: AllocatedWorkflowRunId.make(recovered.runId) })
+})
+
+/** Allocates only after the caller has completed every required fresh-Run admission. */
+export const selectDiscoveredProductionRun = Effect.fn("ProductionHost.selectDiscoveredRun")(function* (
+  target: TrackerTarget,
+  discovery: ProductionRunDiscovery
+) {
+  return discovery._tag === "Fresh"
     ? ProductionRunSelection.cases.Allocated.make({ runId: yield* freshWorkflowRunId(target) })
-    : ProductionRunSelection.cases.Recovered.make({ runId: AllocatedWorkflowRunId.make(recovered.runId) })
+    : ProductionRunSelection.cases.Recovered.make({ runId: discovery.runId })
+})
+
+/** Compatibility composition for callers with no provider admission between discovery and allocation. */
+export const selectProductionRun = Effect.fn("ProductionHost.selectRun")(function* (target: TrackerTarget) {
+  return yield* selectDiscoveredProductionRun(target, yield* discoverProductionRun(target))
 })

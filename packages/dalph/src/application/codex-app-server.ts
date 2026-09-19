@@ -426,7 +426,7 @@ export interface CodexAppServerService {
   readonly attachTurnCompletedHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
   /** Broadcast owned-activity hints; consumers must reread the exact process/activity census. */
   readonly attachOwnedActivityHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
-  /** Present only when this service proved Dalph's required effective task policy. */
+  /** Present only when this service can prove Dalph's required effective task policy. */
   readonly unattendedPolicyAdmission?: Effect.Effect<void, CodexAppServerFailure>
   readonly startThread: (
     cwd: string,
@@ -1671,7 +1671,8 @@ type PendingJsonRpcRequest = {
 type JsonRpcEnvelope =
   | { readonly _tag: "ServerRequest"; readonly method: string }
   | { readonly _tag: "Notification"; readonly method: string }
-  | { readonly _tag: "Response"; readonly id: number; readonly result?: unknown; readonly error?: unknown }
+  | { readonly _tag: "SuccessResponse"; readonly id: number; readonly result: unknown }
+  | { readonly _tag: "ErrorResponse"; readonly id: number; readonly error: JsonObject }
   | { readonly _tag: "Malformed"; readonly detail: string }
 
 const hasJsonRpcField = (message: JsonObject, field: string): boolean =>
@@ -1721,10 +1722,15 @@ const classifyJsonRpcEnvelope = (message: JsonObject): JsonRpcEnvelope => {
   if (hasResult === hasError) {
     return { _tag: "Malformed", detail: "JSON-RPC response must contain exactly one result or error" }
   }
-  if (hasError && !isJsonObject(message["error"])) {
+  const error = message["error"]
+  if (hasError && !isJsonObject(error)) {
     return { _tag: "Malformed", detail: "JSON-RPC response error is invalid" }
   }
-  return { _tag: "Response", id, ...(hasResult ? { result: message["result"] } : { error: message["error"] }) }
+  return hasResult
+    ? { _tag: "SuccessResponse", id, result: message["result"] }
+    : isJsonObject(error)
+      ? { _tag: "ErrorResponse", id, error }
+      : { _tag: "Malformed", detail: "JSON-RPC response error is invalid" }
 }
 
 const codexApprovalRequestMethods = new Set([
@@ -1836,7 +1842,7 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
           return result.pipe(
             Effect.flatMap((maybeDeferred) => {
               if (Option.isNone(maybeDeferred)) return Effect.void
-              if (envelope.error !== undefined) {
+              if (envelope._tag === "ErrorResponse") {
                 return Deferred.fail(
                   maybeDeferred.value.deferred,
                   jsonRpcResponseFailure(maybeDeferred.value.operation, envelope.error)

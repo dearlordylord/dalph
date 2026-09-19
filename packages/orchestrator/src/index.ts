@@ -668,8 +668,11 @@ export {
   freshWorkflowRunId
 } from "./coordination/run/fresh-run-identity.js"
 export {
+  ProductionRunDiscovery,
   ProductionRunSelection,
   ProductionRunSelectionConflict,
+  discoverProductionRun,
+  selectDiscoveredProductionRun,
   selectProductionRun
 } from "./coordination/run/production-run-selection.js"
 export {

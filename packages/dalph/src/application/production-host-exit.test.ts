@@ -61,6 +61,7 @@ const makeHostGraph = (
   onRun: (applicationExit: ProductionHostApplicationExitShellService) => Effect.Effect<void, never, Scope.Scope>
 ) =>
   ({
+    acquireProvider: () => Effect.succeed({ _tag: "NonCodex" as const }),
     foundation: () => foundation,
     makeApplicationExit: () => makeProductionHostApplicationExitShell(),
     run: (configuration: ProductionRepositoryHostConfiguration, selection, _onFailure, applicationExit) =>
