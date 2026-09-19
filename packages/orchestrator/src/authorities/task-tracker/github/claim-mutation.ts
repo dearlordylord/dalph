@@ -15,6 +15,12 @@ import {
   FindClaimLabelResponse,
   GithubGraphqlErrors
 } from "./claim-label-response.js"
+import {
+  githubClaimDescriptionFits,
+  githubClaimDescriptionFor,
+  githubClaimDescriptionSeparator,
+  githubClaimDescriptionVersion
+} from "./claim-representation.js"
 import { decodeGithubTaskId } from "./task-identity.js"
 import {
   ActiveTaskClaim,
@@ -36,9 +42,6 @@ const GithubClaimDescriptionFields = Schema.Struct({
   token: ActiveTaskClaim.fields.token
 })
 
-const githubClaimDescriptionVersion = "1"
-const githubClaimDescriptionSeparator = "|"
-const githubClaimDescriptionMaximumLength = 100
 type GithubClaimRecord =
   | { readonly _tag: "Unclaimed"; readonly observation: UnclaimedTask }
   | { readonly _tag: "Active"; readonly labelId: GithubLabelNodeId; readonly observation: ActiveTaskClaim }
@@ -49,10 +52,8 @@ const decodeCoordinates = (taskId: TaskId) =>
   )
 
 const descriptionFor = (acquisition: TaskClaimAcquisition): Effect.Effect<string, TaskClaimRequestFailure> => {
-  const components = [acquisition.operationId, acquisition.owner, acquisition.token]
-  const description = [githubClaimDescriptionVersion, ...components].join(githubClaimDescriptionSeparator)
-  return components.some((component) => component.includes(githubClaimDescriptionSeparator)) ||
-    description.length > githubClaimDescriptionMaximumLength
+  const description = githubClaimDescriptionFor(acquisition)
+  return !githubClaimDescriptionFits(acquisition)
     ? Effect.fail(
         new TaskClaimRequestFailure({
           acquisition,

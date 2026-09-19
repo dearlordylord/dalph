@@ -257,6 +257,17 @@ export {
 export { githubTaskIdFor, trackerRevisionFor } from "./authorities/task-tracker/github/task-identity.js"
 export { githubFocusedCompletionRevisionFor } from "./authorities/task-tracker/github/focused-completion-reader.js"
 export {
+  GithubClaimOwner,
+  githubClaimDescriptionFits,
+  githubClaimDescriptionFor,
+  githubClaimDescriptionMaximumLength,
+  githubClaimDescriptionSeparator,
+  githubClaimDescriptionVersion,
+  githubClaimGeneratedIdentityMaximumLength,
+  githubClaimOwnerConstraint,
+  githubClaimOwnerMaximumLength
+} from "./authorities/task-tracker/github/claim-representation.js"
+export {
   githubTrackerMutationLayer,
   githubTrackerMutationNodeLayer
 } from "./authorities/task-tracker/github/claim-mutation.js"

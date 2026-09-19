@@ -16,7 +16,7 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import {
-  ClaimOwner,
+  GithubClaimOwner,
   defaultGithubGraphqlEndpoint,
   EvidenceStoreLocator,
   GitCommonDirectoryLocator,
@@ -148,7 +148,7 @@ export const ProductionRepositoryHostConfiguration = Schema.Struct({
   plannedAttemptExecutor: TaskExecutorLocator,
   executorProfiles: Schema.optionalKey(Schema.Array(ExecutorProfile)),
   executorProfileDefault: Schema.optionalKey(ExecutorProfileId),
-  claimOwner: ClaimOwner,
+  claimOwner: GithubClaimOwner,
   taskWorkCapacity: TaskWorkCapacity,
   journalDatabase: CanonicalJournalDatabaseLocator,
   evidenceStoreRoot: CanonicalEvidenceStoreLocator,
