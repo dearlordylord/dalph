@@ -320,7 +320,7 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
           ticketDeliveries: delivery.ticketDeliveries,
           trackerGraph: delivery.graph
         }))
-        const sampleEvaluation = input.publicationConsistency.withStablePublication(
+        const sampleEvaluationUnprofiled = input.publicationConsistency.withStablePublication(
           Effect.all({
             current: current.get,
             facts: facts.get,
@@ -345,6 +345,34 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
             })
           )
         )
+        let previousSample: DeliveryRuntimeEvaluation | undefined
+        const sampleEvaluation = Effect.suspend(() => {
+          const startedAt = performance.now()
+          return sampleEvaluationUnprofiled.pipe(
+            Effect.tap((sample) =>
+              Effect.sync(() => {
+                const profiling = globalThis as typeof globalThis & {
+                  __dalphCassetteProfile?: {
+                    sampleCount: number
+                    sampleEqualToPrevious: number
+                    sampleMilliseconds: number
+                  }
+                }
+                const stats = (profiling.__dalphCassetteProfile ??= {
+                  sampleCount: 0,
+                  sampleEqualToPrevious: 0,
+                  sampleMilliseconds: 0
+                })
+                stats.sampleCount++
+                stats.sampleMilliseconds += performance.now() - startedAt
+                if (previousSample !== undefined && Equal.equals(previousSample, sample)) {
+                  stats.sampleEqualToPrevious++
+                }
+                previousSample = sample
+              })
+            )
+          )
+        })
         const invalidations: Stream.Stream<void, E | DeliveryRelationSourceError> = Stream.scoped(
           Stream.unwrap(
             Effect.all({

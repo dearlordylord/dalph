@@ -3407,6 +3407,16 @@ const runAuthoredScenarioCassetteWith = (request: {
         const reader = yield* TraceReader
         return yield* reader.prepare(runId)
       }).pipe(Effect.provide(TraceReaderLayer.pipe(Layer.provide(journalLayer))))
+      console.log(
+        "DALPH_CASSETTE_PRODUCTION_PROFILE",
+        JSON.stringify(
+          (
+            globalThis as typeof globalThis & {
+              __dalphCassetteProfile?: unknown
+            }
+          ).__dalphCassetteProfile
+        )
+      )
       const run = {
         activationOrdinals,
         cassette,

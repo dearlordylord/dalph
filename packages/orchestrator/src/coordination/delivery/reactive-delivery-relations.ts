@@ -223,6 +223,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
   })
 
   const deriveBundle = Effect.fn("DeliveryRelations.deriveBundle")(function* () {
+    const startedAt = performance.now()
     const { journal, projection } = yield* readCoherentJournalProjection()
     const policy = yield* Option.match(journal.reconstructed.controlPolicy, {
       onNone: () => Effect.fail(new DeliveryControlPolicyMissing()),
@@ -294,7 +295,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       runId,
       safeContinuationRevalidations
     })
-    return {
+    const bundle = {
       actionInputs: {
         freshTaskCandidateFrontier: freshTaskCandidates,
         freshTaskCandidates: freshTaskCandidates.candidates,
@@ -317,6 +318,23 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       },
       publication: { exactEvidence, graph: journal.graph, policy }
     } satisfies ReactiveDeliveryBundle
+    const profiling = globalThis as typeof globalThis & {
+      __dalphCassetteProfile?: {
+        deriveCount?: number
+        deriveMilliseconds?: number
+        sampleCount: number
+        sampleEqualToPrevious: number
+        sampleMilliseconds: number
+      }
+    }
+    const stats = (profiling.__dalphCassetteProfile ??= {
+      sampleCount: 0,
+      sampleEqualToPrevious: 0,
+      sampleMilliseconds: 0
+    })
+    stats.deriveCount = (stats.deriveCount ?? 0) + 1
+    stats.deriveMilliseconds = (stats.deriveMilliseconds ?? 0) + performance.now() - startedAt
+    return bundle
   })
 
   type ReactiveDeliveryFailure = Effect.Error<ReturnType<typeof deriveBundle>>

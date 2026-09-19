@@ -45,47 +45,17 @@ jobs:
           pnpm --version > benchmark-results/pnpm-version.txt
           git rev-parse HEAD > benchmark-results/commit.txt
 
-      - name: Warm focused cassette path
-        run: >-
-          pnpm exec vitest run
-          packages/dalph/test/cassettes/authored-delivery-status.test.ts
-          -t 'authored capstone carries exact canonical status'
-          --pool=forks
-          --no-file-parallelism
-
-      - name: Measure five isolated focused runs
+      - name: Measure instrumented focused run
         run: |
-          for run in 1 2 3 4 5; do
-            /usr/bin/time \
-              -f '%e' \
-              -o "benchmark-results/wall-${run}.txt" \
-              pnpm exec vitest run \
-                packages/dalph/test/cassettes/authored-delivery-status.test.ts \
-                -t 'authored capstone carries exact canonical status' \
-                --pool=forks \
-                --no-file-parallelism \
-                --reporter=json \
-                --outputFile="benchmark-results/vitest-${run}.json"
-          done
-
-      - name: Summarize measurements
-        run: |
-          node -e '
-            const fs = require("node:fs")
-            const values = Array.from({ length: 5 }, (_, index) =>
-              Number(fs.readFileSync(`benchmark-results/wall-${index + 1}.txt`, "utf8").trim())
-            )
-            const sorted = [...values].sort((left, right) => left - right)
-            const summary = {
-              unit: "seconds",
-              wall: values,
-              min: sorted[0],
-              median: sorted[Math.floor(sorted.length / 2)],
-              max: sorted.at(-1)
-            }
-            fs.writeFileSync("benchmark-results/summary.json", `${JSON.stringify(summary, null, 2)}\n`)
-            console.log(JSON.stringify(summary, null, 2))
-          '
+          /usr/bin/time \
+            -f '%e' \
+            -o benchmark-results/instrumented-wall.txt \
+            pnpm exec vitest run \
+              packages/dalph/test/cassettes/authored-delivery-status.test.ts \
+              -t 'authored capstone carries exact canonical status' \
+              --pool=forks \
+              --no-file-parallelism \
+            2>&1 | tee benchmark-results/instrumented.log
 
       - name: Upload benchmark evidence
         if: always()
