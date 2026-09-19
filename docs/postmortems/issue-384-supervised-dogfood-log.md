@@ -143,6 +143,84 @@ an attributable full-gate result. Baseline failures force the supervisor to
 distinguish candidate regressions manually and prevent required qualification
 from proving the candidate.
 
+### The task agent stopped after broad gate repair without sealing the attempt
+
+The task agent produced implementation commit
+`2f8c37059b163e426453a36041a87023fe900950`. Its first full gate,
+`5582cf6f-e9a1-415e-b44f-75100432a8d8`, stopped in preflight with closed
+registration, stopped custody, and unproven qualification. The agent then
+expanded the task candidate to repair complexity, formal-manifest,
+capability-registration, and unrelated Kimi/type-lint findings exposed by that
+gate. It stopped producing rollout activity after making those edits and did
+not commit them or return a terminal executor report.
+
+At the recorded 17:00 EDT stop time, the supervisor stopped Dalph and the Codex
+app-server cleanly, retained the task worktree, repaired one malformed JSON
+edit and a cascading lint failure, ran `pnpm check:fast`, and committed the
+retained edits as `0ec589dad1b2cb4fcbd2dc66fd9485bc024f644f`. The Dalph
+journal still projects the executor responsibility as running because the
+provider never returned its terminal report.
+
+Needed improvement: bound nonterminal provider reasoning after repository
+effects, surface the last durable executor observation, and provide a public
+way to request a terminal report or disposition without discarding a valid
+candidate.
+
+### A second full gate surfaced a clone-wide lint census after focused checks passed
+
+The supervisor froze repaired candidate `0ec589dad1b2cb4fcbd2dc66fd9485bc024f644f`
+and ran full gate `66776dd5-8afb-4356-9695-fb41638dd248`. The gate ran from
+21:05:32Z to 21:10:22Z. Registration closed and custody stopped, but
+qualification remained unproven because `pnpm lint:code --census` reported
+type-aware findings across many existing `scripts/*` files. Build/artifact,
+cycle, complexity, duplication, secret, and focused test stages shown in the
+preflight output passed; qualification stages did not start.
+
+This was the second broad gate that failed before producing candidate
+qualification after the candidate's pinned-base `check:fast` passed. Another
+broad rerun without a distinguishing repair is prohibited by the repository's
+finite-work guidance.
+
+Needed improvement: keep the clone-wide compatibility census green at the
+planned Base, or provide attributable baseline evidence without requiring a
+task agent to absorb unrelated repository repair.
+
+### Review found that publication remains optional and starts too late
+
+The candidate adds `publication` as an optional production configuration value.
+When it is absent, the existing `RunTargetPromotion` action skips remote
+publication, promotes the local target, and can continue to tracker completion.
+When it is present, its first remote observation or push happens only after task
+claim, execution, integration, and candidate qualification.
+
+Issue #384 requires one explicit destination to be validated before task claim,
+requires the configured branch to exist and be compatible with the local target,
+and forbids missing or changed destination configuration for unfinished history.
+The candidate therefore preserves the exact local-only completion path that the
+ticket removes and cannot catch a safely advanced local target up to the remote
+head before fixing the Integrator session.
+
+Needed improvement: admit and pin the remote destination during Run
+establishment, prove the existing remote head and ancestry before claim/provider
+work, and make publication proof a mandatory premise of promotion and finality.
+
+### Definite remote rejection is not distinguished from a safe race
+
+The Git adapter records every parsed `!` porcelain status as a generic
+`Rejected` result. The protocol observes the remote afterward. If the remote is
+still an ancestor of the candidate, the next activation automatically retries
+the push while allowance remains. That behavior is correct for a non-fast-forward
+race which fresh facts prove can now fast-forward, but it also retries branch
+policy, authentication, and throttling rejections that leave the remote head
+unchanged.
+
+Issue #384 requires those definite denials to retain work and forbids automatic
+retry, especially for throttled mutations.
+
+Needed improvement: preserve a typed rejection cause from Git's correlated
+per-ref/transport result and authorize automatic retry only for the exact safe
+fast-forward race case.
+
 ## Effective behavior worth retaining
 
 - Exact-Base task worktrees and distinct journals/private stores allowed failed
@@ -158,8 +236,8 @@ from proving the candidate.
 
 ## Run still in progress
 
-The corrected attempt is implementing #384 in its isolated task worktree. This
-log must be extended with the final task commit, focused/model/gate results,
-Integrator and local-promotion behavior, manual remote publication result,
+The retained task candidate is under supervisor repair after scoped review.
+This log must still be extended with the repaired commit, focused/model/gate
+results, Dalph restart and Integrator behavior, remote publication result,
 tracker reconciliation, and any additional stalls before the dogfood exercise
 is considered closed.
