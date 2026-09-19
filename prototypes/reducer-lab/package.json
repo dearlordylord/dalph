@@ -10,6 +10,7 @@
     "check:browser": "node scripts/run-browser-smoke.mjs",
     "dev": "vite --host 0.0.0.0",
     "smoke": "node scripts/smoke.mjs",
+    "smoke:url-state": "node scripts/url-state-smoke.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

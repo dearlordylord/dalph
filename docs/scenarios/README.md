@@ -79,6 +79,7 @@ Git history.
 
 ## Cassettes, presentation, and composed delivery
 
+- [Preserve the selected cassette and playback moment in the URL](reducer-lab-url-selection.md)
 - [Authored-cassette abstraction levels](authored-cassette-abstraction-levels.md)
 - [Qualify the recovery-prefix harness against both journal stores](qualify-recovery-prefix-harness.md)
 - [Domain-readable authored and recorded cassettes](domain-readable-cassettes.md)

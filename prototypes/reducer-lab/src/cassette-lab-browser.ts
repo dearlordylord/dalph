@@ -18,9 +18,15 @@ import {
   makeDeliveryWorkbenchPlaybackRuntime,
   renderCassetteDeliveryWorkbench
 } from "./cassette-lab-workbench.ts"
-import { PlaybackRunStarted } from "./delivery-playback.ts"
+import { PlaybackRunStarted, projectDeliveryPlayback } from "./delivery-playback.ts"
 import { continuationAuthorizationProjectionOf } from "./continuation-authorization-lab.ts"
 import { renderCassetteRawEvidence } from "./cassette-raw-evidence.ts"
+import {
+  browserCassetteLabUrlAdapter,
+  type CassetteLabUrlAdapter,
+  decodeCassetteLabUrlSelection,
+  encodeCassetteLabUrlSelection
+} from "./cassette-lab-url-state.ts"
 import type { AuthoredDeliveryFrame, AuthoredObservationMoment } from "../../../packages/dalph/src/cassettes/authored-runner.ts"
 
 export const singleCassetteSettledEvent = "dalph-cassette-lab:single-settled"
@@ -39,10 +45,12 @@ export interface CassetteLabBrowserInput {
     catalogKey: MaintainedCassetteKey,
     observer?: CassetteRunObserver
   ) => Promise<CassetteLabResult>
+  readonly urlAdapter?: CassetteLabUrlAdapter
 }
 
 const browserBatchConcurrency = 1
 const liveDeliveryRenderIntervalMs = 100
+const urlSubscriptionByRoot = new WeakMap<HTMLElement, () => void>()
 
 const appendTextElement = <K extends keyof HTMLElementTagNameMap>(
   parent: HTMLElement,
@@ -258,21 +266,47 @@ const defectDetail = (error: unknown): string => error instanceof Error ? error.
 export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   const { revision, root, rows, runCassette } = input
   const reloadLab = input.reloadLab ?? (() => globalThis.location.reload())
+  const urlAdapter = input.urlAdapter ?? browserCassetteLabUrlAdapter()
   document.title = "Dalph reducer lab"
-  const rowByKey = new Map(rows.map((row) => [row.catalogKey, row]))
+  const rowByKey = new Map<string, CassetteRow>(rows.map((row) => [row.catalogKey, row]))
   const states = new Map<MaintainedCassetteKey, CassetteState>(
     rows.map(({ catalogKey }) => [catalogKey, { _tag: "NotRun" }])
   )
-  let selectedKey: MaintainedCassetteKey | undefined = rows[0]?.catalogKey
+  const initialUrlSelection = decodeCassetteLabUrlSelection(urlAdapter.read())
+  const initialUrlRow = initialUrlSelection.cassetteKey === null
+    ? undefined
+    : rowByKey.get(initialUrlSelection.cassetteKey)
+  let selectedKey: MaintainedCassetteKey | undefined = initialUrlRow?.catalogKey ?? rows[0]?.catalogKey
+  let requestedStepIndex = initialUrlRow === undefined ? null : initialUrlSelection.stepIndex
   let evidenceOpen = false
   let busy = false
   let selectedSurface: {
     readonly catalogKey: MaintainedCassetteKey
+    readonly restorePlaybackStep: (stepIndex: number | null) => void
     readonly update: (state: CassetteState) => void
     readonly updateDeliveryFrame: (state: CassetteState) => void
     readonly updateTraceStatus: (state: CassetteState) => void
   } | undefined
   const playbackByKey = new Map<MaintainedCassetteKey, ReturnType<typeof makeDeliveryWorkbenchPlaybackRuntime>>()
+
+  const retainedStepIndex = (catalogKey: MaintainedCassetteKey): number | null => {
+    const playback = playbackByKey.get(catalogKey)
+    if (playback === undefined) return null
+    const projection = projectDeliveryPlayback(playback.current())
+    return projection.followingLive ? null : projection.currentFrameIndex
+  }
+
+  const replaceEncodedUrlSelection = (cassetteKey: string | null, stepIndex: number | null): void => {
+    const current = urlAdapter.read()
+    const next = encodeCassetteLabUrlSelection(current, {
+      cassetteKey,
+      stepIndex
+    })
+    if (next.href !== current.href) urlAdapter.replace(next)
+  }
+
+  const replaceUrlSelection = (): void =>
+    replaceEncodedUrlSelection(selectedKey ?? null, selectedKey === undefined ? null : requestedStepIndex)
 
   const header = document.createElement("header")
   appendTextElement(header, "h1", "Dalph reducer lab")
@@ -376,6 +410,8 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       link.addEventListener("click", (event) => {
         event.preventDefault()
         selectedKey = row.catalogKey
+        requestedStepIndex = retainedStepIndex(row.catalogKey)
+        replaceUrlSelection()
         cassetteSearch.value = row.catalogKey
         updateSearchStatus()
         evidenceOpen = true
@@ -466,7 +502,15 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       row,
       state,
       playback,
-      row.surface._tag === "AuthoredDeliverySurface" ? rowControls : undefined
+      row.surface._tag === "AuthoredDeliverySurface" ? rowControls : undefined,
+      {
+        onStepChanged: (stepIndex) => {
+          if (selectedKey !== row.catalogKey) return
+          requestedStepIndex = stepIndex
+          replaceUrlSelection()
+        },
+        requestedStepIndex
+      }
     )
 
     const evidenceHost = document.createElement("div")
@@ -511,6 +555,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     }
     selectedSurface = {
       catalogKey: row.catalogKey,
+      restorePlaybackStep: (stepIndex) => workbench.restorePlaybackStep(stepIndex),
       update,
       updateDeliveryFrame: (nextState) => {
         workbench.updateTraceStatus(nextState)
@@ -664,6 +709,8 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     updateSearchStatus()
     if (next === undefined || next.catalogKey === selectedKey) return
     selectedKey = next.catalogKey
+    requestedStepIndex = retainedStepIndex(next.catalogKey)
+    replaceUrlSelection()
     evidenceOpen = false
     renderSelected()
   }
@@ -702,9 +749,39 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   })
   reloadButton.addEventListener("click", reloadLab)
 
+  const applyUrlSelection = (): void => {
+    const decoded = decodeCassetteLabUrlSelection(urlAdapter.read())
+    const row = decoded.cassetteKey === null
+      ? undefined
+      : rowByKey.get(decoded.cassetteKey)
+    selectedKey = row?.catalogKey ?? rows[0]?.catalogKey
+    requestedStepIndex = row === undefined ? null : decoded.stepIndex
+    evidenceOpen = false
+    cassetteSearch.value = selectedKey ?? ""
+    refreshSelector()
+    renderSelected()
+    selectedSurface?.restorePlaybackStep(requestedStepIndex)
+    if (decoded.invalid || decoded.cassetteKey !== null && row === undefined) {
+      replaceEncodedUrlSelection(null, null)
+    }
+    if (row !== undefined && states.get(row.catalogKey)?._tag === "NotRun" && !busy) {
+      void runKeys([row.catalogKey], true).then(() =>
+        root.dispatchEvent(new Event(singleCassetteSettledEvent)))
+    }
+  }
+
   root.replaceChildren(header, controls, sharedSurface)
   cassetteSearch.value = selectedKey ?? ""
   refreshSelector()
   renderSelected()
   updateAggregate()
+  if (initialUrlSelection.invalid || initialUrlSelection.cassetteKey !== null && initialUrlRow === undefined) {
+    replaceEncodedUrlSelection(null, null)
+  }
+  urlSubscriptionByRoot.get(root)?.()
+  urlSubscriptionByRoot.set(root, urlAdapter.subscribe(applyUrlSelection))
+  if (initialUrlRow !== undefined && states.get(initialUrlRow.catalogKey)?._tag === "NotRun") {
+    void runKeys([initialUrlRow.catalogKey], true).then(() =>
+      root.dispatchEvent(new Event(singleCassetteSettledEvent)))
+  }
 }

@@ -782,13 +782,20 @@ export const makeDeliveryWorkbenchPlaybackRuntime = (): DeliveryWorkbenchPlaybac
 
 interface DeliveryTimelineController {
   readonly destroy: () => void
+  readonly restoreStep: (stepIndex: number | null) => void
   readonly update: (moments: ReadonlyArray<AuthoredObservationMoment>, running: boolean) => void
 }
 
 export interface DeliveryWorkbenchController {
+  readonly restorePlaybackStep: (stepIndex: number | null) => void
   readonly update: (state: CassetteState) => void
   /** Updates only the passive status region; the selected historical trace is not reread. */
   readonly updateTraceStatus: (state: CassetteState) => void
+}
+
+export interface DeliveryWorkbenchUrlSelection {
+  readonly onStepChanged: (stepIndex: number | null) => void
+  readonly requestedStepIndex: number | null
 }
 
 type AuthoredObligationDiagnostic = AuthoredDeliveryFrame["deliveries"][number]["obligations"][number]
@@ -1443,7 +1450,8 @@ const renderTimeline = (
   row: AuthoredRow,
   initialMoments: ReadonlyArray<AuthoredObservationMoment>,
   playback: DeliveryWorkbenchPlaybackRuntime,
-  initiallyRunning: boolean
+  initiallyRunning: boolean,
+  urlSelection?: DeliveryWorkbenchUrlSelection
 ): DeliveryTimelineController => {
   const readingGuide = document.createElement("details")
   readingGuide.className = "delivery-reading-guide"
@@ -1942,23 +1950,49 @@ const renderTimeline = (
     }
   }
 
-  const dispatchPlayback = (message: DeliveryPlaybackMessage): void => {
+  const urlStepIndex = (): number | null => {
+    const projection = projectDeliveryPlayback(playback.current())
+    return projection.followingLive ? null : projection.currentFrameIndex
+  }
+
+  const dispatchPlayback = (message: DeliveryPlaybackMessage, persistStep = false): void => {
     const { changed, commands } = playback.dispatch(message)
     if (!changed && commands.length === 0) return
     renderPlayback(commands)
+    if (persistStep) urlSelection?.onStepChanged(urlStepIndex())
   }
 
-  follow.addEventListener("click", () => dispatchPlayback(FollowLiveRequested()))
+  let pendingStepIndex: number | null | undefined = urlSelection?.requestedStepIndex
+  const restoreStep = (stepIndex: number | null): void => {
+    pendingStepIndex = stepIndex
+    if (stepIndex === null) {
+      pendingStepIndex = undefined
+      dispatchPlayback(FollowLiveRequested())
+      return
+    }
+    const projection = projectDeliveryPlayback(playback.current())
+    if (projection.frameOptions.some(({ frameIndex }) => frameIndex === stepIndex)) {
+      pendingStepIndex = undefined
+      dispatchPlayback(ExactFrameSelected({ frameIndex: DeliveryFrameIndex.make(stepIndex) }))
+      return
+    }
+    if (!running) {
+      pendingStepIndex = undefined
+      urlSelection?.onStepChanged(null)
+    }
+  }
+
+  follow.addEventListener("click", () => dispatchPlayback(FollowLiveRequested(), true))
   previous.addEventListener("click", () =>
-    dispatchPlayback(PreviousFrameRequested({ source: "PlaybackControl" })))
+    dispatchPlayback(PreviousFrameRequested({ source: "PlaybackControl" }), true))
   next.addEventListener("click", () =>
-    dispatchPlayback(NextFrameRequested({ source: "PlaybackControl" })))
+    dispatchPlayback(NextFrameRequested({ source: "PlaybackControl" }), true))
   previousLandmark.addEventListener("click", () =>
-    dispatchPlayback(PreviousLandmarkRequested({ source: "PlaybackControl" })))
+    dispatchPlayback(PreviousLandmarkRequested({ source: "PlaybackControl" }), true))
   nextLandmark.addEventListener("click", () =>
-    dispatchPlayback(NextLandmarkRequested({ source: "PlaybackControl" })))
+    dispatchPlayback(NextLandmarkRequested({ source: "PlaybackControl" }), true))
   select.addEventListener("change", () =>
-    dispatchPlayback(ExactFrameSelected({ frameIndex: DeliveryFrameIndex.make(Number(select.value)) })))
+    dispatchPlayback(ExactFrameSelected({ frameIndex: DeliveryFrameIndex.make(Number(select.value)) }), true))
   const keyboardSurface = parent.closest<HTMLElement>("[data-role='delivery-workbench']") ?? parent
   const handleKeyboard = (event: KeyboardEvent): void => {
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
@@ -1977,7 +2011,7 @@ const renderTimeline = (
       event.preventDefault()
       return
     }
-    dispatchPlayback(message)
+    dispatchPlayback(message, true)
     event.preventDefault()
   }
   keyboardSurface.addEventListener("keydown", handleKeyboard)
@@ -1998,10 +2032,12 @@ const renderTimeline = (
     running = nextRunning
     refreshSettlementCoverage()
     dispatchPlayback(FramesUpdated({ frames: playbackFrames(), running }))
+    if (pendingStepIndex !== undefined) restoreStep(pendingStepIndex)
   }
   update(initialMoments, initiallyRunning)
   return {
     destroy: () => keyboardSurface.removeEventListener("keydown", handleKeyboard),
+    restoreStep,
     update
   }
 }
@@ -2021,14 +2057,22 @@ export const renderCassetteDeliveryWorkbench = (
   row: CassetteRow,
   state: CassetteState,
   playback: DeliveryWorkbenchPlaybackRuntime = makeDeliveryWorkbenchPlaybackRuntime(),
-  cassetteControls?: HTMLElement
+  cassetteControls?: HTMLElement,
+  urlSelection?: DeliveryWorkbenchUrlSelection
 ): DeliveryWorkbenchController => {
   host.replaceChildren()
   if (row.surface._tag !== "AuthoredDeliverySurface") {
-    return { update: () => undefined, updateTraceStatus: () => undefined }
+    return {
+      restorePlaybackStep: (stepIndex) => {
+        if (stepIndex !== null) urlSelection?.onStepChanged(null)
+      },
+      update: () => undefined,
+      updateTraceStatus: () => undefined
+    }
   }
   const authoredRow: AuthoredRow = { ...row, surface: row.surface }
   let currentState = state
+  let requestedStepIndex = urlSelection?.requestedStepIndex ?? null
   let timeline: DeliveryTimelineController | undefined
   let traceHistory: TraceHistoryController | undefined
   let renderedPreparedTrace: PreparedTrace | null | undefined
@@ -2079,13 +2123,26 @@ export const renderCassetteDeliveryWorkbench = (
     const heading = appendText(deliveryTimelineHost, "h4", "Production delivery timeline · auxiliary chronology")
     heading.tabIndex = -1
     if (moments !== null && moments.length > 0) {
-      timeline = renderTimeline(deliveryTimelineHost, authoredRow, moments, playback, currentState._tag === "Running")
+      timeline = renderTimeline(
+        deliveryTimelineHost,
+        authoredRow,
+        moments,
+        playback,
+        currentState._tag === "Running",
+        urlSelection === undefined
+          ? undefined
+          : { ...urlSelection, requestedStepIndex }
+      )
     } else {
       renderNotObserved(deliveryTimelineHost, authoredRow, currentState)
     }
   }
   renderContents()
   return {
+    restorePlaybackStep: (stepIndex) => {
+      requestedStepIndex = stepIndex
+      timeline?.restoreStep(stepIndex)
+    },
     update: (nextState) => {
       currentState = nextState
       renderContents()
