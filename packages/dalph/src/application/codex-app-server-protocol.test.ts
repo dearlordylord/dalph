@@ -417,6 +417,14 @@ const onMessage = (message) => {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: "bad", result: {} }) + "\n")
     return
   }
+  if (mode === "server-request-id-collision" && requestNumber === 1) {
+    process.stdout.write(
+      JSON.stringify({ jsonrpc: "2.0", id: message.id, method: "server/request", params: { opaque: true } }) + "\n"
+    )
+  }
+  if (mode === "malformed-envelope" && requestNumber === 1) {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0" }) + "\n")
+  }
   if (mode === "unknown-response-id" && requestNumber === 1) {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 999, result: {} }) + "\n")
   }
@@ -1077,6 +1085,31 @@ it.effect("bounds an unanswered turn start and permits one bounded exact-thread 
   )
 )
 
+it.effect("does not let an ID-bearing server request settle a colliding outbound request", () =>
+  withFixture("server-request-id-collision", (app) =>
+    Effect.map(app.startThread("/fixture/worktree"), (thread) => {
+      expect(thread.id).toBe("protocol-thread")
+      return thread.status
+    })
+  )
+)
+
+it.effect("fails malformed JSON-RPC envelopes through the typed protocol boundary", () =>
+  withFixture("malformed-envelope", (app) =>
+    Effect.gen(function* () {
+      const result = yield* Effect.exit(app.startThread("/fixture/worktree"))
+      expectAppFailure(result, "initialize")
+      if (Exit.isFailure(result)) {
+        const failure = Cause.findErrorOption(result.cause)
+        if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+          expect(failure.value).toMatchObject({ kind: "Protocol" })
+          expect(failure.value.detail).toContain("must contain method or id")
+        }
+      }
+    })
+  )
+)
+
 it.effect("ignores a response for an unknown request id before matching the real response", () =>
   withFixture("unknown-response-id", (app) =>
     Effect.map(app.startThread("/fixture/worktree"), (thread) => {
@@ -1092,7 +1125,7 @@ it.effect("keeps diagnostic stderr, blank lines, and notifications outside proto
   )
 )
 
-it.effect("forwards only the qualified turn/completed method as a non-authoritative lifecycle hint", () =>
+it.effect("keeps existing ID-less completion notifications as wake hints only", () =>
   withFixture("turn-completed-hint", (app) =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -1665,6 +1665,65 @@ type PendingJsonRpcRequest = {
   readonly operation: CodexAppServerRequestOperation
 }
 
+type JsonRpcEnvelope =
+  | { readonly _tag: "ServerRequest"; readonly method: string }
+  | { readonly _tag: "Notification"; readonly method: string }
+  | { readonly _tag: "Response"; readonly id: number; readonly result?: unknown; readonly error?: unknown }
+  | { readonly _tag: "Malformed"; readonly detail: string }
+
+const hasJsonRpcField = (message: JsonObject, field: string): boolean =>
+  Object.prototype.hasOwnProperty.call(message, field)
+
+const isJsonRpcId = (value: unknown): boolean =>
+  value === null || typeof value === "string" || (typeof value === "number" && Number.isFinite(value))
+
+/**
+ * Routes a decoded JSON-RPC object by its wire shape before touching pending
+ * outbound requests. An ID-bearing method is provider work for the client,
+ * not a response to one of Dalph's requests.
+ */
+const classifyJsonRpcEnvelope = (message: JsonObject): JsonRpcEnvelope => {
+  if (message["jsonrpc"] !== "2.0") {
+    return { _tag: "Malformed", detail: "JSON-RPC envelope version is invalid" }
+  }
+  const hasMethod = hasJsonRpcField(message, "method")
+  const hasId = hasJsonRpcField(message, "id")
+  const hasResult = hasJsonRpcField(message, "result")
+  const hasError = hasJsonRpcField(message, "error")
+  if (hasMethod) {
+    const method = message["method"]
+    if (typeof method !== "string") {
+      return { _tag: "Malformed", detail: "JSON-RPC envelope method is invalid" }
+    }
+    if (hasResult || hasError) {
+      return {
+        _tag: "Malformed",
+        detail: hasId
+          ? "JSON-RPC server request cannot contain result or error"
+          : "JSON-RPC notification cannot contain result or error"
+      }
+    }
+    if (hasId && !isJsonRpcId(message["id"])) {
+      return { _tag: "Malformed", detail: "JSON-RPC server request id is invalid" }
+    }
+    return hasId ? { _tag: "ServerRequest", method } : { _tag: "Notification", method }
+  }
+  if (!hasId) {
+    return { _tag: "Malformed", detail: "JSON-RPC envelope must contain method or id" }
+  }
+  const id = message["id"]
+  if (typeof id !== "number" || !Number.isSafeInteger(id) || id < 1) {
+    return { _tag: "Malformed", detail: "JSON-RPC response id is invalid" }
+  }
+  if (hasResult === hasError) {
+    return { _tag: "Malformed", detail: "JSON-RPC response must contain exactly one result or error" }
+  }
+  if (hasError && !isJsonObject(message["error"])) {
+    return { _tag: "Malformed", detail: "JSON-RPC response error is invalid" }
+  }
+  return { _tag: "Response", id, ...(hasResult ? { result: message["result"] } : { error: message["error"] }) }
+}
+
 const jsonRpcInvalidRequestCode = -32600
 const jsonRpcResponseDeadline = Duration.seconds(60) // eslint-disable-line no-magic-numbers -- accepted Codex RPC acknowledgement bound
 
@@ -1725,24 +1784,25 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
             : Effect.fail(operationFailure("initialize", "Protocol", "JSON-RPC message is not an object"))
         ),
         Effect.flatMap((message) => {
-          const id = message["id"]
-          if (id === undefined) {
-            if (message["method"] === "turn/completed") {
+          const envelope = classifyJsonRpcEnvelope(message)
+          if (envelope._tag === "Malformed") {
+            return failPending(operationFailure("initialize", "Protocol", envelope.detail))
+          }
+          if (envelope._tag === "ServerRequest") return Effect.void
+          if (envelope._tag === "Notification") {
+            if (envelope.method === "turn/completed") {
               return PubSub.publish(turnCompletedHints, undefined).pipe(Effect.asVoid)
             }
-            return message["method"] === "item/completed"
+            return envelope.method === "item/completed"
               ? PubSub.publish(ownedActivityHints, undefined).pipe(Effect.asVoid)
               : Effect.void
-          }
-          if (typeof id !== "number") {
-            return failPending(operationFailure("initialize", "Protocol", "JSON-RPC response id is invalid"))
           }
           const result = Ref.updateAndGet(responseCount, (current) => current + 1).pipe(
             Effect.andThen(
               Ref.modify(pending, (current) => {
-                const request = current.get(id)
+                const request = current.get(envelope.id)
                 if (request === undefined) return [Option.none<PendingJsonRpcRequest>(), current] as const
-                const next = new Map([...current].filter(([key]) => key !== id))
+                const next = new Map([...current].filter(([key]) => key !== envelope.id))
                 return [Option.some(request), next] as const
               })
             )
@@ -1750,13 +1810,13 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
           return result.pipe(
             Effect.flatMap((maybeDeferred) => {
               if (Option.isNone(maybeDeferred)) return Effect.void
-              if (typeof message["error"] === "object" && message["error"] !== null) {
+              if (envelope.error !== undefined) {
                 return Deferred.fail(
                   maybeDeferred.value.deferred,
-                  jsonRpcResponseFailure(maybeDeferred.value.operation, message["error"])
+                  jsonRpcResponseFailure(maybeDeferred.value.operation, envelope.error)
                 )
               }
-              return Deferred.succeed(maybeDeferred.value.deferred, message["result"])
+              return Deferred.succeed(maybeDeferred.value.deferred, envelope.result)
             })
           )
         }),
