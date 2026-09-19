@@ -467,10 +467,21 @@ export const commitFromTurn = (
   return GitCommitSha.make(String([...candidates][0]))
 }
 
-const taskTurnText = (attempt: PlannedTaskAttempt, specification: TaskWorkSpecification): string =>
+export const defaultCodexTaskInstructions: ReadonlyArray<string> = [
+  "Before returning an accepted result, use a fresh `gpt-5.6-sol` medium-reasoning sub-agent to review the candidate against the issue, linked specifications, repository instructions, and `Base..HEAD`. Fix reasonable blocking findings and repeat with a fresh reviewer, stopping as soon as a review reports no reasonable blocking findings. Run at most four review rounds. If reasonable blocking findings remain after the fourth review, report failure and do not return an accepted result."
+]
+
+const taskTurnText = (
+  attempt: PlannedTaskAttempt,
+  specification: TaskWorkSpecification,
+  taskInstructions: ReadonlyArray<string>
+): string =>
   [
     `# ${specification.title}`,
     specification.body,
+    "",
+    "Dalph executor instructions:",
+    ...taskInstructions.map((instruction, index) => `${index + 1}. ${instruction}`),
     "",
     "Dalph immutable attempt facts:",
     `run_id: ${attempt.runId}`,
@@ -616,10 +627,11 @@ const replacementTaskTurnText = (
   attempt: PlannedTaskAttempt,
   specification: TaskWorkSpecification,
   evidence: CodexPurgedWorkUnitEvidence,
-  operationId: CodexReplacementOperationId
+  operationId: CodexReplacementOperationId,
+  taskInstructions: ReadonlyArray<string>
 ): string =>
   [
-    taskTurnText(attempt, specification),
+    taskTurnText(attempt, specification, taskInstructions),
     "",
     "Dalph provider work-unit replacement evidence:",
     `replacement_operation_id: ${operationId}`,
@@ -844,6 +856,8 @@ const defaultCodexOwnedActivityObservationInterval = CodexOwnedActivityObservati
 
 interface CodexPlannedAttemptExecutorLayerOptions {
   readonly ownedActivityObservationInterval?: CodexOwnedActivityObservationInterval
+  /** Instructions inside one opaque provider turn; an explicit empty list omits the default review policy. */
+  readonly taskInstructions?: ReadonlyArray<string>
 }
 
 /**
@@ -851,7 +865,8 @@ interface CodexPlannedAttemptExecutorLayerOptions {
  * generic boundary receives only normalized #140/#168 reports.
  */
 const makeCodexPlannedAttemptExecutorContext = (
-  ownedActivityObservationInterval: CodexOwnedActivityObservationInterval
+  ownedActivityObservationInterval: CodexOwnedActivityObservationInterval,
+  taskInstructions: ReadonlyArray<string>
 ) =>
   Effect.gen(function* () {
     const app = yield* CodexAppServer
@@ -1349,7 +1364,12 @@ const makeCodexPlannedAttemptExecutorContext = (
       intent: CodexIntentRecord
     ) {
       return yield* app
-        .startTurn(intent.threadId, attempt.worktree, taskTurnText(attempt, specification), intent.currentToken)
+        .startTurn(
+          intent.threadId,
+          attempt.worktree,
+          taskTurnText(attempt, specification, taskInstructions),
+          intent.currentToken
+        )
         .pipe(
           Effect.map((turn): StartedTurnResult => ({ _tag: "Turn", turn })),
           Effect.catch((error) =>
@@ -2506,7 +2526,13 @@ const makeCodexPlannedAttemptExecutorContext = (
         .startTurn(
           predecessor.threadId,
           request.plannedAttempt.worktree,
-          replacementTaskTurnText(request.plannedAttempt, request.specification, predecessor, ledger.operationId),
+          replacementTaskTurnText(
+            request.plannedAttempt,
+            request.specification,
+            predecessor,
+            ledger.operationId,
+            taskInstructions
+          ),
           replacementToken
         )
         .pipe(Effect.result)
@@ -2696,7 +2722,8 @@ const makeCodexPlannedAttemptExecutorContext = (
 export const codexPlannedAttemptExecutorLayerWithOptions = (options: CodexPlannedAttemptExecutorLayerOptions = {}) =>
   Layer.effectContext(
     makeCodexPlannedAttemptExecutorContext(
-      options.ownedActivityObservationInterval ?? defaultCodexOwnedActivityObservationInterval
+      options.ownedActivityObservationInterval ?? defaultCodexOwnedActivityObservationInterval,
+      options.taskInstructions ?? defaultCodexTaskInstructions
     )
   )
 

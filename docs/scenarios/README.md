@@ -42,6 +42,7 @@ Git history.
 
 ## Executor work and recovery
 
+- [Ask Codex to review a candidate before accepting it](codex-bounded-review-instruction.md)
 - [Replace one purged Codex work unit in the retained planned attempt](replace-purged-codex-work-unit.md)
 - [First concrete executor: persistent Codex app-server threads](codex-app-server-executor.md)
 - [Select Kimi ACP for one planned attempt](kimi-acp-planned-attempt-executor.md)

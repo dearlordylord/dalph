@@ -110,7 +110,8 @@ import {
   CodexOwnedActivityObservationInterval,
   controlledCodexReplacementAuthorityLayer,
   codexPlannedAttemptExecutorLayer,
-  codexPlannedAttemptExecutorLayerWithOptions
+  codexPlannedAttemptExecutorLayerWithOptions,
+  defaultCodexTaskInstructions
 } from "./codex-planned-attempt-executor.js"
 
 const head = GitCommitSha.make("a".repeat(40))
@@ -771,6 +772,38 @@ const layerForImplementation =
   }
 
 const layerFor = layerForImplementation(codexPlannedAttemptExecutorLayer)
+
+it.effect("supplies the bounded fresh-review instruction in the default task prompt", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request, { _tag: "InitialDelivery" })
+
+    expect(harness.turnTexts).toHaveLength(1)
+    expect(harness.turnTexts[0]).toContain("Dalph executor instructions:")
+    expect(harness.turnTexts[0]).toContain(defaultCodexTaskInstructions[0])
+    expect(harness.turnTexts[0]).toContain("stopping as soon as a review reports no reasonable blocking findings")
+    expect(harness.turnTexts[0]).toContain("Run at most four review rounds")
+    expect(harness.turnTexts[0]).toContain("report failure and do not return an accepted result")
+    expect(harness.turnTexts[0]?.trimEnd()).toMatch(
+      /Accepted results must be the final JSON object \{"commit":"<40-hex>","correlation":\{"runId":"\.\.\.","attemptId":"\.\.\."\}\}\.$/u
+    )
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("replaces the default task instructions through executor-layer options", () => {
+  const harness = makeHarness()
+  const configuredInstruction = "Use the configured executor review policy."
+  const configuredLayer = codexPlannedAttemptExecutorLayerWithOptions({ taskInstructions: [configuredInstruction] })
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request, { _tag: "InitialDelivery" })
+
+    expect(harness.turnTexts).toHaveLength(1)
+    expect(harness.turnTexts[0]).toContain(`1. ${configuredInstruction}`)
+    expect(harness.turnTexts[0]).not.toContain(defaultCodexTaskInstructions[0])
+  }).pipe(Effect.provide(layerForImplementation(configuredLayer)(harness)))
+})
 
 const mutatedEvidenceStoreLayer = (mode: "manifest" | "reference" | "malformed"): Layer.Layer<EvidenceStore> =>
   Layer.effect(
