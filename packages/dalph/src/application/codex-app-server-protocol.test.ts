@@ -419,6 +419,9 @@ const onMessage = (message) => {
   if (message.method === "initialized") return
   requestNumber += 1
   if (message.method === "thread/read") threadReadNumber += 1
+  if (mode === "idle-malformed-before-next-request") {
+    fs.appendFileSync(process.argv[1] + ".requests", message.method + "\n")
+  }
   if (
     (mode === "initialize-unanswered" && message.method === "initialize") ||
     (mode === "thread-start-unanswered" && message.method === "thread/start")
@@ -445,6 +448,12 @@ const onMessage = (message) => {
   }
   if (mode === "malformed-envelope" && requestNumber === 1) {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0" }) + "\n")
+  }
+  if (mode === "idle-malformed-before-next-request" && message.method === "thread/start") {
+    write(message.id, responseFor(message.method, message.params))
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0" }) + "\n")
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed" }) + "\n")
+    return
   }
   if (mode === "unknown-response-id" && requestNumber === 1) {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 999, result: {} }) + "\n")
@@ -1192,6 +1201,35 @@ it.effect("fails malformed JSON-RPC envelopes through the typed protocol boundar
         }
       }
     })
+  )
+)
+
+it.effect("keeps an idle malformed JSON-RPC failure sticky before the next request", () =>
+  withFixture("idle-malformed-before-next-request", (app, root) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const hints = yield* app.attachTurnCompletedHints
+        const malformedObserved = yield* hints.pipe(Stream.runHead, Effect.forkChild)
+        const thread = yield* app.startThread("/fixture/worktree")
+        expect(thread.id).toBe("protocol-thread")
+        expect(yield* Fiber.join(malformedObserved)).toEqual(Option.some(undefined))
+
+        const result = yield* Effect.exit(app.readThread(thread.id))
+        expectAppFailure(result, "initialize")
+        if (Exit.isFailure(result)) {
+          const failure = Cause.findErrorOption(result.cause)
+          if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+            expect(failure.value).toMatchObject({ kind: "Protocol", operation: "initialize" })
+            expect(failure.value.detail).toContain("must contain method or id")
+          }
+        }
+        expect(yield* fileSystem.readFileString(path.join(root, "idle-malformed-before-next-request.requests"))).toBe(
+          "initialize\nthread/start\n"
+        )
+      })
+    )
   )
 )
 

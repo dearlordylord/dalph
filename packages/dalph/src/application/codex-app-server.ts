@@ -1786,6 +1786,10 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
       (current) =>
         [[...current.values()].map((request) => Deferred.fail(request.deferred, failure)), new Map()] as const
     ).pipe(Effect.flatMap((effects) => Effect.forEach(effects, (effect) => effect, { discard: true })))
+  // Protocol corruption disables this client even when no request is waiting;
+  // otherwise an idle malformed line would be forgotten after failPending.
+  const failProtocol = (failure: CodexAppServerFailure) =>
+    Ref.set(terminalProtocolFailure, Option.some(failure)).pipe(Effect.andThen(failPending(failure)))
   const reader = handle.stdout.pipe(
     Stream.decodeText(),
     Stream.splitLines,
@@ -1806,7 +1810,7 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
         Effect.flatMap((message) => {
           const envelope = classifyJsonRpcEnvelope(message)
           if (envelope._tag === "Malformed") {
-            return failPending(operationFailure("initialize", "Protocol", envelope.detail))
+            return failProtocol(operationFailure("initialize", "Protocol", envelope.detail))
           }
           if (envelope._tag === "ServerRequest") {
             if (!isCodexApprovalRequest(envelope.method)) return Effect.void
@@ -1853,7 +1857,7 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
           )
         }),
         Effect.catch((error) =>
-          failPending(
+          failProtocol(
             /* v8 ignore next -- @preserve Reader parsing and protocol validation normalize every failure into CodexAppServerFailure before this catch. */
             error instanceof CodexAppServerFailure ? error : operationFailure("initialize", "Protocol", error)
           )
