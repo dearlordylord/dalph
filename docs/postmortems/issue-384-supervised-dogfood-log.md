@@ -368,3 +368,49 @@ The executor receives issue #384 by tracker link and owns implementation,
 review, and repair. The supervisor will provide custody, time bounds, process
 evidence, and the transitional ordinary fast-forward publication only. The
 outer run stop is 19:22 EDT.
+
+### Review-instructed canary stopped on an unbounded executor edit
+
+The fresh Run started at 18:33 EDT and the supervisor stopped it at 18:42 EDT,
+well before the outer deadline. Dalph acquired one task claim, created one exact
+Base worktree, and began one Codex turn under the intended unattended policy.
+The executor found the accepted parent scenario, mapped the remote-first cut to
+the governing documentation, both Quint models, the runtime boundary and the
+S1/S3/S5--S8 tests, then began implementation without supervisor steering.
+
+The executor subsequently issued a JavaScript tool script whose `while (true)`
+loop repeatedly applied this transformation to every occurrence in two Quint
+test files:
+
+```text
+.then(offerPromotionPremise(1))
+```
+
+became a sequence which ended with the same
+`.then(offerPromotionPremise(1))` text. A successful patch therefore recreated
+its own match and the loop could not reach its intended no-match exit. In about
+95 seconds, `specs/acceptedResultIntegration_test.qnt` grew to 92,674 bytes and
+added 1,470 lines while the number of remaining matches stayed at eight. The
+negative test had not yet been reached. The supervisor sent SIGINT rather than
+allowing the loop to consume disk until the outer deadline. Dalph exited with
+status 130 and no supervised process remains.
+
+This attempt did not reach focused checks, the full gate, a candidate commit or
+the configured independent review rounds. Issue #384 remains open and no
+candidate was published. The exact dirty worktree is retained under
+`/tmp/dalph-384-review-canary.RuqT7G/task-worktrees`; the Codex rollout is
+1,487,514 bytes with SHA-256
+`71821b3173718959a1b0588afaa2992d6711a330ab4ebbdce277755d0748994d`.
+The 200,208,593-byte CLI stream and 348-row Journal are retained in the same run
+root.
+
+The stopped Run's repository-scoped claim record remains as
+`dalph-claim-20265f7f41bde838eca510225e8f5821` with owner `dalph:384b` and its
+exact operation/token. The supervisor did not delete it: issue #390 records
+that process exit and absence from the issue's visible labels do not authorize
+claim release or replacement. A subsequent #384 canary therefore needs the
+accepted recovery/release mechanism from #390, or an explicitly authorized
+disposition that provides equivalent proof. The new evidence also shows that
+an accepted provider turn can remain live while a self-matching tool loop
+performs unbounded writes; provider-response liveness alone does not bound that
+effect.
