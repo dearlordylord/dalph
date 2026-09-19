@@ -349,3 +349,22 @@ Dalph claim label or supervised process remained. The supervisor did not push:
 the candidate is unqualified, has unresolved specification blockers, and an
 ordinary push can no longer fast-forward the advanced hosted branch without a
 new integration candidate.
+
+## Review-instructed fresh canary
+
+The supervisor started a fresh issue #384 canary on 2026-09-19 at 18:30 EDT.
+The runtime is the clean detached build at
+`1e61fe2e5b824110d7a261751e187b109b69586c`, which adds the configurable,
+bounded internal Codex review instruction. The executor is Codex
+`gpt-5.6-sol` at medium reasoning effort in an isolated unattended Codex home.
+The clean target clone and all run evidence are rooted at
+`/tmp/dalph-384-review-canary.RuqT7G`.
+
+Before starting the run, the supervisor proved that the prior run's exact
+Dalph-owned claim label was attached to no issue and deleted that stale label.
+A recurrence of the claim, approval-policy, or provider-stall failures tracked
+by issue #390 will stop this canary; the supervisor will not repair around it.
+The executor receives issue #384 by tracker link and owns implementation,
+review, and repair. The supervisor will provide custody, time bounds, process
+evidence, and the transitional ordinary fast-forward publication only. The
+outer run stop is 19:22 EDT.
