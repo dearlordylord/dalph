@@ -185,6 +185,15 @@ Needed improvement: keep the clone-wide compatibility census green at the
 planned Base, or provide attributable baseline evidence without requiring a
 task agent to absorb unrelated repository repair.
 
+The supervisor later ran the exact `pnpm lint:code --census` command at untouched
+Base `c227fe92288f321c944d6c6fb1df632e697ea089`, temporarily reusing the
+candidate's frozen dependency tree. It failed in 56 seconds with the same broad
+class of `scripts/*` type-aware findings, including `no-floating-promises` and
+`no-unnecessary-condition`. The temporary dependency link was removed and the
+Base checkout remained clean. This proves the clone-wide lint obstruction
+predates #384; it does not waive the required full gate or the candidate's
+separate specification blockers.
+
 ### Review found that publication remains optional and starts too late
 
 The candidate adds `publication` as an optional production configuration value.
