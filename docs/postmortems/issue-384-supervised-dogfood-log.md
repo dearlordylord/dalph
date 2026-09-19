@@ -242,6 +242,28 @@ fresh tracker-read operations or republish the complete expanding status. It
 needs a stable wait keyed to a provider observation/wakeup, bounded polling, and
 incremental or size-bounded presentation.
 
+### Resuming the exact Codex thread directly also failed to advance
+
+To distinguish coordinator recovery from provider behavior, the supervisor used
+Codex's supported `exec resume` interface on the exact recorded thread
+`01a0bb3a-3e2f-7b53-98cf-5fb72159da2c`, with the same Sol model, medium
+reasoning, unattended policy, and worktree. The follow-up named the scoped
+review blockers, prohibited another full gate, and requested focused checks and
+one repair commit.
+
+The thread read the relevant publication/configuration files, then produced no
+tool call, message, worktree edit, or commit for the rest of its bounded run.
+The supervisor stopped it at the announced 17:30 EDT boundary after about 13
+minutes. The candidate remained clean at `0ec589dad1b2cb4fcbd2dc66fd9485bc024f644f`.
+
+This experiment separates two failures: Dalph adds a tracker/status storm while
+waiting on an unreadable executor, and the provider thread itself can remain
+nonterminal after a concrete bounded follow-up.
+
+Needed improvement: retain a finite provider-response deadline and expose a
+typed stopped/suspended disposition that permits supervised replacement or
+manual candidate adoption without editing private state.
+
 ## Effective behavior worth retaining
 
 - Exact-Base task worktrees and distinct journals/private stores allowed failed
