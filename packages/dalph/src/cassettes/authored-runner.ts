@@ -165,22 +165,36 @@ import {
 import { authoredCandidateCleanupBoundaryLayer } from "./authored-candidate-cleanup.js"
 import { authoredDeliveryStatusReadOf, AuthoredDeliveryStatusRead } from "./authored-delivery-status.js"
 
-export interface AuthoredScenarioCassetteRun {
+interface AuthoredScenarioCassetteRunBase {
   readonly activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType>
   readonly cassette: ScenarioCassette
-  readonly deliveryFrames: ReadonlyArray<AuthoredDeliveryFrame>
+  readonly diagnostics: "full" | "status"
   readonly observationCaptures: ReadonlyArray<AuthoredObservationCapture>
-  readonly observationMoments: ReadonlyArray<AuthoredObservationMoment>
   readonly history: ReturnType<typeof reduceWorkflowJournalHistory>
   readonly observedBehavior: AuthoredObservedBehavior
   readonly records: ReadonlyArray<JournalRecord>
   readonly runId: RunId
-  /** One captured production trace; selecting an exact cursor materializes its full public payload. */
-  readonly preparedTrace: PreparedTrace
   readonly observationPlaybackWork: AuthoredObservationPlaybackWork
   /** One completed-output snapshot copy, separate from capture append/projection work. */
   readonly observationCaptureSnapshotCopiedReferences: number
 }
+
+/** Completed cassette output with every delivery frame, observation moment, and historical trace prepared. */
+export interface AuthoredScenarioCassetteRun extends AuthoredScenarioCassetteRunBase {
+  readonly diagnostics: "full"
+  readonly deliveryFrames: ReadonlyArray<AuthoredDeliveryFrame>
+  readonly observationMoments: ReadonlyArray<AuthoredObservationMoment>
+  /** One captured production trace; selecting an exact cursor materializes its full public payload. */
+  readonly preparedTrace: PreparedTrace
+}
+
+/** Completed cassette output retaining ordered status evidence without delivery-frame or trace projection. */
+export interface AuthoredScenarioCassetteStatusRun extends AuthoredScenarioCassetteRunBase {
+  readonly diagnostics: "status"
+  readonly observationStatuses: ReadonlyArray<AuthoredObservationStatus>
+}
+
+type AuthoredScenarioCassetteOutput = AuthoredScenarioCassetteRun | AuthoredScenarioCassetteStatusRun
 
 interface AuthoredTaggedDiagnostic {
   readonly kind: string
@@ -244,6 +258,11 @@ interface AuthoredObservationCorrelation {
   readonly activationOrdinal: AuthoredRunActivationOrdinalType
   readonly captureOrder: AuthoredObservationCaptureOrder
   readonly storyPosition: AuthoredStoryPosition
+}
+
+/** Latest canonical status paired with the exact raw-capture correlation that observed or carried it. */
+export interface AuthoredObservationStatus extends AuthoredObservationCorrelation {
+  readonly deliveryStatusRead: AuthoredDeliveryStatusRead
 }
 
 /** Raw capture retained in exact local arrival order before Delivery projection is evaluated. */
@@ -366,7 +385,7 @@ export interface AuthoredDeliveryPublication {
   readonly bundle: DeliveryRelationInputBundle
 }
 
-export interface AuthoredScenarioCassetteRunOptions {
+interface AuthoredScenarioCassetteCommonRunOptions {
   /** Synchronous passive diagnostic at the exact Ready-to-canonical-read boundary; no projection is recomputed by Lab. */
   readonly onDeliveryStatusRead?: (
     observation: DeliveryRuntimeReadyObservation,
@@ -376,9 +395,23 @@ export interface AuthoredScenarioCassetteRunOptions {
   readonly onDeliveryPublication?: (publication: AuthoredDeliveryPublication) => void
   /** Synchronous raw notification in the same deterministic order retained by the completed run. */
   readonly onObservationCapture?: (capture: AuthoredObservationCapture) => void
+}
+
+export interface AuthoredScenarioCassetteFullRunOptions extends AuthoredScenarioCassetteCommonRunOptions {
+  readonly diagnostics?: "full"
   /** Derived playback notification from the scoped worker, outside the workflow observer turn. */
   readonly onObservationMoment?: (moment: AuthoredObservationMoment) => Effect.Effect<void>
 }
+
+export interface AuthoredScenarioCassetteStatusRunOptions extends AuthoredScenarioCassetteCommonRunOptions {
+  readonly diagnostics: "status"
+  /** Status output has no fully projected observation moment to publish. */
+  readonly onObservationMoment?: never
+}
+
+export type AuthoredScenarioCassetteRunOptions =
+  | AuthoredScenarioCassetteFullRunOptions
+  | AuthoredScenarioCassetteStatusRunOptions
 
 type AuthoredPauseObservationResult = (typeof AuthoredCassetteStoryItem.cases.PauseProgressObserved.Type)["result"]
 type AuthoredPauseResponsibility =
@@ -1192,6 +1225,20 @@ export const evaluateAuthoredObservationCapture: (
     } satisfies AuthoredObservationMoment
   })
 
+/** Carries only canonical status across the exact raw-capture order; delivery publications remain unevaluated. */
+export const evaluateAuthoredObservationStatus = Effect.fn("AuthoredCassette.evaluateObservationStatus")(
+  (capture: AuthoredObservationCapture, previous: AuthoredObservationStatus | null) =>
+    Effect.succeed({
+      activationOrdinal: capture.activationOrdinal,
+      captureOrder: capture.captureOrder,
+      storyPosition: capture.storyPosition,
+      deliveryStatusRead:
+        capture._tag === "DeliveryStatusCaptured"
+          ? capture.deliveryStatusRead
+          : (previous?.deliveryStatusRead ?? AuthoredDeliveryStatusRead.Unobserved())
+    } satisfies AuthoredObservationStatus)
+)
+
 const authoredSettlementYieldTurns = 10
 
 const operatorControlFailureMatches = (
@@ -1493,10 +1540,20 @@ const runAuthoredScenarioCassetteWith = (request: {
         readonly nextOrder: number
         readonly acceptingPlayback: boolean
       }>({ captures: MutableList.make(), nextOrder: 1, acceptingPlayback: true })
-      const observationPlayback = yield* makeAuthoredObservationPlayback(
-        evaluateAuthoredObservationCapture,
-        options.onObservationMoment
-      )
+      const diagnostics = options.diagnostics ?? "full"
+      const observationPlayback =
+        diagnostics === "status"
+          ? {
+              _tag: "Status" as const,
+              playback: yield* makeAuthoredObservationPlayback(evaluateAuthoredObservationStatus, undefined, false)
+            }
+          : {
+              _tag: "Full" as const,
+              playback: yield* makeAuthoredObservationPlayback(
+                evaluateAuthoredObservationCapture,
+                options.onObservationMoment
+              )
+            }
       const appendObservation = Effect.fn("AuthoredCassette.appendObservation")(function* (
         observation: AuthoredObservationCaptureInput,
         storyPosition: AuthoredStoryPosition
@@ -1523,7 +1580,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                   ? { ...correlation, _tag: observation._tag, deliveryStatusRead: observation.deliveryStatusRead }
                   : { ...correlation, _tag: observation._tag, liveOwners: observation.liveOwners }
           MutableList.append(captures, captured)
-          if (acceptingPlayback) observationPlayback.appendUnsafe(captured)
+          if (acceptingPlayback) observationPlayback.playback.appendUnsafe(captured)
           return [captured, { captures, nextOrder: nextOrder + 1, acceptingPlayback }]
         })
         yield* Effect.exit(Effect.sync(() => options.onObservationCapture?.(capture)))
@@ -1589,7 +1646,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                 deliveryStatusRead: authoredDeliveryStatusReadOf({ _tag: "Run", runId }, observation)
               }
               MutableList.append(state.captures, capture)
-              if (state.acceptingPlayback) observationPlayback.appendUnsafe(capture)
+              if (state.acceptingPlayback) observationPlayback.playback.appendUnsafe(capture)
               try {
                 options.onDeliveryStatusRead?.(observation, capture.deliveryStatusRead)
                 options.onObservationCapture?.(capture)
@@ -2208,6 +2265,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       const coordinatorOwnershipLayer = Layer.succeed(CoordinatorOwnership, coordinatorOwnership)
       const latestRuntimeActivationOrdinal = yield* Ref.make(0)
       const latestJournalContext = yield* Ref.make<
+        // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- Compatibility lint cannot resolve this Context tag through the workspace barrel.
         Option.Option<Context.Context<AcceptedJournalReader | InRunJournal>>
       >(Option.none())
       const survivingExecutorReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
@@ -2249,6 +2307,7 @@ const runAuthoredScenarioCassetteWith = (request: {
             yield* Ref.set(activeDeliveryActivation, activationOrdinal)
             yield* Ref.set(
               latestJournalContext,
+              // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- Compatibility lint cannot resolve this Context tag through the workspace barrel.
               Option.some(yield* Effect.context<AcceptedJournalReader | InRunJournal>())
             )
             const context = yield* Layer.build(activationLayer)
@@ -3377,7 +3436,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       })
       const execution = yield* Effect.raceFirst(
         processProvidedCoordinatorExecution,
-        observationPlayback.awaitFailure
+        observationPlayback.playback.awaitFailure
       ).pipe(
         Effect.provideService(DeliveryRelationPublicationObserver, publicationObserver),
         Effect.provideService(DeliveryRuntimeObservationObserver, runtimeObservationObserver)
@@ -3399,28 +3458,47 @@ const runAuthoredScenarioCassetteWith = (request: {
         Object.freeze(MutableList.toArray(state.captures)),
         { ...state, acceptingPlayback: false }
       ])
-      const { moments: observationMoments, work: observationPlaybackWork } = yield* observationPlayback.finish
-      const deliveryFrames = observationMoments.flatMap((moment) =>
-        moment._tag === "DeliveryPublicationMoment" ? [moment.deliveryFrame] : []
-      )
-      const preparedTrace = yield* Effect.gen(function* () {
-        const reader = yield* TraceReader
-        return yield* reader.prepare(runId)
-      }).pipe(Effect.provide(TraceReaderLayer.pipe(Layer.provide(journalLayer))))
-      const run = {
+      const commonOutput = {
         activationOrdinals,
         cassette,
-        deliveryFrames,
         history: reduceWorkflowJournalHistory(runId, records),
         observationCaptures,
-        observationMoments,
-        observationPlaybackWork,
         observationCaptureSnapshotCopiedReferences: observationCaptures.length,
         observedBehavior,
         records,
-        runId,
-        preparedTrace
-      } satisfies AuthoredScenarioCassetteRun
+        runId
+      }
+      const run: AuthoredScenarioCassetteOutput = yield* observationPlayback._tag === "Status"
+        ? observationPlayback.playback.finish.pipe(
+            Effect.map(
+              ({ moments: observationStatuses, work: observationPlaybackWork }) =>
+                ({
+                  ...commonOutput,
+                  diagnostics: "status",
+                  observationPlaybackWork,
+                  observationStatuses
+                }) satisfies AuthoredScenarioCassetteStatusRun
+            )
+          )
+        : Effect.gen(function* () {
+            const { moments: observationMoments, work: observationPlaybackWork } =
+              yield* observationPlayback.playback.finish
+            const deliveryFrames = observationMoments.flatMap((moment) =>
+              moment._tag === "DeliveryPublicationMoment" ? [moment.deliveryFrame] : []
+            )
+            const preparedTrace = yield* Effect.gen(function* () {
+              const reader = yield* TraceReader
+              return yield* reader.prepare(runId)
+            }).pipe(Effect.provide(TraceReaderLayer.pipe(Layer.provide(journalLayer))))
+            return {
+              ...commonOutput,
+              deliveryFrames,
+              diagnostics: "full",
+              observationMoments,
+              observationPlaybackWork,
+              preparedTrace
+            } satisfies AuthoredScenarioCassetteRun
+          })
       const journalContext = Option.getOrThrowWith(
         yield* Ref.get(latestJournalContext),
         () => new Error("authored Run completed without establishing its live Journal context")
@@ -3441,31 +3519,42 @@ const isAuthoredScenarioCassetteRunFailure = (failure: unknown): failure is Auth
 const authoredScenarioCassetteRunFailureOf = (failure: unknown): AuthoredScenarioCassetteRunFailure =>
   isAuthoredScenarioCassetteRunFailure(failure) ? failure : { _tag: "AuthoredScenarioCassetteUnknownFailure" }
 
-export const runAuthoredScenarioCassette: (
+export function runAuthoredScenarioCassette(
   input: unknown,
-  options?: AuthoredScenarioCassetteRunOptions
-) => Effect.Effect<AuthoredScenarioCassetteRun, AuthoredScenarioCassetteRunFailure, Crypto.Crypto> = (
-  input,
-  options = {}
-) =>
-  Effect.scoped(runAuthoredScenarioCassetteWith({ input, options })).pipe(
+  options: AuthoredScenarioCassetteStatusRunOptions
+): Effect.Effect<AuthoredScenarioCassetteStatusRun, AuthoredScenarioCassetteRunFailure, Crypto.Crypto>
+export function runAuthoredScenarioCassette(
+  input: unknown,
+  options?: AuthoredScenarioCassetteFullRunOptions
+): Effect.Effect<AuthoredScenarioCassetteRun, AuthoredScenarioCassetteRunFailure, Crypto.Crypto>
+export function runAuthoredScenarioCassette(
+  input: unknown,
+  options: AuthoredScenarioCassetteRunOptions = {}
+): Effect.Effect<AuthoredScenarioCassetteOutput, AuthoredScenarioCassetteRunFailure, Crypto.Crypto> {
+  return Effect.scoped(runAuthoredScenarioCassetteWith({ input, options })).pipe(
     Effect.map(({ run }) => run),
     Effect.mapError(authoredScenarioCassetteRunFailureOf)
   )
+}
 
 /** Uses one authored Run while its exact process-local accepted Journal remains live. */
 export const useAuthoredScenarioCassette = <A, E, R>(
   input: unknown,
   use: (run: AuthoredScenarioCassetteRun) => Effect.Effect<A, E, R>,
-  options: AuthoredScenarioCassetteRunOptions = {}
+  options: AuthoredScenarioCassetteFullRunOptions = {}
 ): Effect.Effect<
   A,
   AuthoredScenarioCassetteRunFailure | E,
+  // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- Compatibility lint cannot resolve this Context tag through the workspace barrel.
   Crypto.Crypto | Exclude<R, AcceptedJournalReader | InRunJournal>
 > =>
   Effect.scoped(
     runAuthoredScenarioCassetteWith({ input, options }).pipe(
       Effect.mapError(authoredScenarioCassetteRunFailureOf),
-      Effect.flatMap(({ journalContext, run }) => use(run).pipe(Effect.provide(journalContext)))
+      Effect.flatMap(({ journalContext, run }) =>
+        run.diagnostics === "full"
+          ? use(run).pipe(Effect.provide(journalContext))
+          : Effect.die("full authored cassette output unexpectedly omitted")
+      )
     )
   )

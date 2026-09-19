@@ -3,9 +3,9 @@ import { NodeCrypto } from "@effect/platform-node"
 import { Crypto, Effect } from "effect"
 import {
   runAuthoredScenarioCassette,
+  type AuthoredScenarioCassetteFullRunOptions,
   type AuthoredScenarioCassetteRun,
-  type AuthoredScenarioCassetteRunFailure,
-  type AuthoredScenarioCassetteRunOptions
+  type AuthoredScenarioCassetteRunFailure
 } from "../src/cassettes/authored-runner.js"
 import { projectRecordedCassette } from "../src/cassettes/recorded.js"
 
@@ -99,10 +99,10 @@ export const runCachedRecordedCassette = (records: Parameters<typeof projectReco
 }
 
 const cacheArgument = (
-  value: AuthoredScenarioCassetteRunOptions | AuthoredScenarioRunCache | undefined
+  value: AuthoredScenarioCassetteFullRunOptions | AuthoredScenarioRunCache | undefined
 ): value is AuthoredScenarioRunCache => value !== undefined && "getOrRun" in value
 
-const hasAuthoredRunOptions = (options: AuthoredScenarioCassetteRunOptions | undefined): boolean =>
+const hasAuthoredRunOptions = (options: AuthoredScenarioCassetteFullRunOptions | undefined): boolean =>
   options !== undefined && Object.keys(options).length > 0
 
 /**
@@ -120,13 +120,13 @@ export function runCachedAuthoredScenarioCassette(
 export function runCachedAuthoredScenarioCassette(
   key: AuthoredRunCacheKey,
   input: unknown,
-  options: AuthoredScenarioCassetteRunOptions,
+  options: AuthoredScenarioCassetteFullRunOptions,
   cache?: AuthoredScenarioRunCache
 ): Effect.Effect<AuthoredScenarioCassetteRun, AuthoredScenarioCassetteRunFailure, Crypto.Crypto>
 export function runCachedAuthoredScenarioCassette(
   key: AuthoredRunCacheKey,
   input: unknown,
-  optionsOrCache?: AuthoredScenarioCassetteRunOptions | AuthoredScenarioRunCache,
+  optionsOrCache?: AuthoredScenarioCassetteFullRunOptions | AuthoredScenarioRunCache,
   suppliedCache?: AuthoredScenarioRunCache
 ): Effect.Effect<AuthoredScenarioCassetteRun, AuthoredScenarioCassetteRunFailure, Crypto.Crypto> {
   const options = cacheArgument(optionsOrCache) ? undefined : optionsOrCache

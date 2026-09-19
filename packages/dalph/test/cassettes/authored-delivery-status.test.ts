@@ -30,6 +30,7 @@ const cachedCapstoneRun = Effect.runSync(
         readonly read: AuthoredDeliveryStatusRead
       }> = []
       const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStoryCapstone, {
+        diagnostics: "status",
         onDeliveryStatusRead: (observation, read) => {
           observed.push({ observation, read })
         }
@@ -64,10 +65,18 @@ it.effect(
         run.observationCaptures.filter((capture) => capture._tag === "DeliveryRuntimeOwnersCaptured").length
       )
       for (const capture of statusCaptures) {
-        const moment = run.observationMoments.find((candidate) => candidate.captureOrder === capture.captureOrder)
-        expect(moment?._tag).toBe("DeliveryStatusMoment")
-        expect(moment?.deliveryStatusRead).toBe(capture.deliveryStatusRead)
+        const status = run.observationStatuses.find((candidate) => candidate.captureOrder === capture.captureOrder)
+        expect(status?.deliveryStatusRead).toBe(capture.deliveryStatusRead)
       }
+      expect(run.diagnostics).toBe("status")
+      expect(run.observationStatuses).toHaveLength(run.observationCaptures.length)
+      expect(run.observationStatuses.map(({ captureOrder }) => captureOrder)).toEqual(
+        run.observationCaptures.map(({ captureOrder }) => captureOrder)
+      )
+      expect(run.observationPlaybackWork.projectedPublications).toBe(0)
+      expect("deliveryFrames" in run).toBe(false)
+      expect("observationMoments" in run).toBe(false)
+      expect("preparedTrace" in run).toBe(false)
       expect(observed.map(({ read }) => read)).toEqual(
         statusCaptures.map(({ deliveryStatusRead }) => deliveryStatusRead)
       )
@@ -87,7 +96,7 @@ it.effect(
           )
         })
       ).toBe(true)
-      const first = run.observationMoments[0]
+      const first = run.observationStatuses[0]
       expect(first?.deliveryStatusRead).toEqual({ _tag: "Unobserved" })
       const observation = observed[0]?.observation
       if (observation === undefined) return expect.fail("missing actual Ready observation")

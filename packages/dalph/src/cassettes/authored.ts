@@ -24,13 +24,18 @@ export {
   evaluateAuthoredDeliveryPublication,
   evaluateAuthoredObservationCapture,
   evaluateAuthoredObservationChronology,
+  evaluateAuthoredObservationStatus,
   runAuthoredScenarioCassette,
   useAuthoredScenarioCassette,
   type AuthoredDeliveryFrame,
   type AuthoredDeliveryPublication,
   type AuthoredObservationCapture,
   type AuthoredObservationMoment,
+  type AuthoredObservationStatus,
   type AuthoredScenarioCassetteRun,
+  type AuthoredScenarioCassetteFullRunOptions,
   type AuthoredScenarioCassetteRunOptions,
-  type AuthoredScenarioCassetteRunFailure
+  type AuthoredScenarioCassetteRunFailure,
+  type AuthoredScenarioCassetteStatusRun,
+  type AuthoredScenarioCassetteStatusRunOptions
 } from "./authored-runner.js"

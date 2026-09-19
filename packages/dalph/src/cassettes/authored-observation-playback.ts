@@ -14,12 +14,13 @@ export interface AuthoredObservationPlaybackWork {
 }
 
 /** One Run's ordered playback; callbacks receive individual immutable moments, not its builder. */
-export const makeAuthoredObservationPlayback = Effect.fn("AuthoredCassette.makeObservationPlayback")(function* <E>(
-  evaluate: (
-    capture: AuthoredObservationCapture,
-    previous: AuthoredObservationMoment | null
-  ) => Effect.Effect<AuthoredObservationMoment, E>,
-  onMoment?: (moment: AuthoredObservationMoment) => Effect.Effect<void, E>
+export const makeAuthoredObservationPlayback = Effect.fn("AuthoredCassette.makeObservationPlayback")(function* <
+  Moment = AuthoredObservationMoment,
+  E = never
+>(
+  evaluate: (capture: AuthoredObservationCapture, previous: Moment | null) => Effect.Effect<Moment, E>,
+  onMoment?: (moment: Moment) => Effect.Effect<void, E>,
+  projectsDeliveryPublications = true
 ) {
   let acceptingCaptures = true
   const commands = yield* Effect.acquireRelease(Queue.unbounded<PlaybackCommand>(), (queue) =>
@@ -31,13 +32,15 @@ export const makeAuthoredObservationPlayback = Effect.fn("AuthoredCassette.makeO
   let projectedCaptures = 0
   let projectedPublications = 0
   const worker = yield* Effect.gen(function* () {
-    const moments = MutableList.make<AuthoredObservationMoment>()
-    let previousMoment: AuthoredObservationMoment | null = null
+    const moments = MutableList.make<Moment>()
+    let previousMoment: Moment | null = null
     let command = yield* Queue.take(commands)
     while (command._tag === "Capture") {
       projectedCaptures++
-      if (command.capture._tag === "DeliveryPublicationCaptured") projectedPublications++
-      const moment: AuthoredObservationMoment = yield* evaluate(command.capture, previousMoment)
+      if (projectsDeliveryPublications && command.capture._tag === "DeliveryPublicationCaptured") {
+        projectedPublications++
+      }
+      const moment: Moment = yield* evaluate(command.capture, previousMoment)
       MutableList.append(moments, moment)
       previousMoment = moment
       if (onMoment !== undefined) yield* onMoment(moment)
