@@ -22,13 +22,16 @@ import { describe, expect } from "vitest"
 import {
   CoordinatorOwnership,
   GitCommand,
+  GitCommandInvocationFailure,
+  GitCommonDirectoryLocator,
   Integrator,
   IntegratorCandidateResourceLocator,
   IntegratorRequest,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorSessionCorrelation,
-  IntegratorSessionId
+  IntegratorSessionId,
+  JournalPosition
 } from "@dalph/orchestrator"
 import { CodexAppServer } from "./codex-app-server.js"
 import { CodexOwnedTurnToken, CodexThreadOwnershipToken } from "./codex-attempt-store.js"
@@ -77,6 +80,7 @@ describe("Kimi Integrator provider adapter", () => {
       const turnToken = CodexOwnedTurnToken.make("turn-token")
       const thread = yield* app.startThread(observation.cwd, threadToken)
       yield* app.startTurn(thread.id, observation.cwd, "integrate", turnToken)
+      if (app.listThreads === undefined) return yield* Effect.die("Kimi app-server did not expose thread/list")
       const listed = yield* app.listThreads()
 
       expect(calls).toEqual([
@@ -98,7 +102,7 @@ describe("Kimi Integrator provider adapter", () => {
         const repository = GitRepositoryLocator.make(`${root}/repository.git`)
         const config = CodexIntegratorConfiguration.make({
           candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make(root),
-          commonDirectory: repository,
+          commonDirectory: GitCommonDirectoryLocator.make(`${root}/repository.git`),
           privateStoreLocator: IntegratorPrivateStoreLocator.make(`${root}/integrator-private.json`),
           repository
         })
@@ -124,10 +128,10 @@ describe("Kimi Integrator provider adapter", () => {
             taskRevision: TaskRevision.make("revision"),
             worktree: WorktreeLocator.make(`${root}/planned`)
           }),
-          queuedAt: 1,
+          queuedAt: JournalPosition.make(1),
           sessionId: IntegratorSessionId.make("session"),
-          startedAt: 2,
-          targetLineageObservedAt: 3
+          startedAt: JournalPosition.make(2),
+          targetLineageObservedAt: JournalPosition.make(3)
         })
         const sessionId = KimiAcpSessionId.make("kimi-integrator-session")
         const observation = {
@@ -163,9 +167,12 @@ describe("Kimi Integrator provider adapter", () => {
             }
             if (args[0] === "worktree" && args[1] === "add") {
               registered = true
-              return fileSystem
-                .makeDirectory(candidatePath, { recursive: true })
-                .pipe(Effect.as({ exitCode: 0, stderr: "", stdout: "" }))
+              return fileSystem.makeDirectory(candidatePath, { recursive: true }).pipe(
+                Effect.mapError(
+                  (failure) => new GitCommandInvocationFailure({ detail: `candidate setup failed: ${String(failure)}` })
+                ),
+                Effect.as({ exitCode: 0, stderr: "", stdout: "" })
+              )
             }
             return Effect.succeed({ exitCode: 0, stderr: "", stdout: "" })
           },
