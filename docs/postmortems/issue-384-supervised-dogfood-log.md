@@ -289,6 +289,25 @@ advancing. The direct Codex resume was also a manual diagnostic experiment; it
 was not a Dalph-owned review cycle. The run therefore did not test an
 autonomous review loop because no such production loop is currently composed.
 
+The provider transcript also rules out missing specification context as the
+initial cause. The executor read the complete accepted direct-publication
+scenario and initially planned explicit S1/S3/S5/S6/S7/S8 coverage plus scoped
+review closure. It then selected what it called the "smallest complete protocol
+boundary": publication events, a Git adapter, late promotion composition and
+focused component/model tests. It committed after those checks and described
+the candidate as internally consistent without completing or reconciling the
+original scenario-to-test plan. The optional configuration and post-integration
+entry point were visible in the files it changed. Its attention then moved to
+full-gate metadata and unrelated baseline repair. No later independent review
+returned the omitted acceptance obligations to the implementer.
+
+The initial implementation failure was therefore scope drift from an
+end-to-end accepted slice into a component milestone, combined with an
+unenforced planning checklist. The system failure was allowing that drift to
+remain unchallenged: passing focused checks and a commit were treated as enough
+progress even though named acceptance evidence and review closure were still
+absent.
+
 Needed improvement: specify and implement a finite production executor
 algorithm which obtains independent specification and standards findings,
 hands attributable findings back to an implementer, reruns only affected review
