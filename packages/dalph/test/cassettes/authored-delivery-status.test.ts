@@ -3,7 +3,12 @@ import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
-import { deliveryStatusOf, DeliveryStatusRunMismatch, type DeliveryRuntimeReadyObservation } from "@dalph/orchestrator"
+import {
+  deliveryStatusOf,
+  DeliveryStatusRunMismatch,
+  type DeliveryRuntimeReadyObservation,
+  type JournalRecord
+} from "@dalph/orchestrator"
 import {
   authoredDeliveryStatusReadOf,
   type AuthoredDeliveryStatusRead
@@ -13,10 +18,12 @@ import { runAuthoredScenarioCassette, evaluateAuthoredObservationCapture } from 
 import { comparisonValue } from "./delivery-capstone-replay-comparison.test-support.js"
 import { canonicalIdentity } from "../../../orchestrator/src/coordination/delivery/delivery-status-order.js"
 import { acceptedManifestReferenceFor } from "./delivery-capstone-authored-correlations.test-support.js"
+import { restartPredecessorCleanupAfterRemoval } from "./delivery-predecessor-cleanup-restart.test-support.js"
 
-it.effect(
-  "authored capstone carries exact canonical status or typed failure at its observation moment",
-  () =>
+const capstoneTimeout = 600_000
+
+const cachedCapstoneRun = Effect.runSync(
+  Effect.cached(
     Effect.gen(function* () {
       const observed: Array<{
         readonly observation: DeliveryRuntimeReadyObservation
@@ -27,6 +34,30 @@ it.effect(
           observed.push({ observation, read })
         }
       })
+      return { observed, run }
+    }).pipe(Effect.provide(NodeCrypto.layer))
+  )
+)
+
+const exactlyOne = <Tag extends JournalRecord["event"]["_tag"]>(
+  records: ReadonlyArray<JournalRecord>,
+  tag: Tag
+): JournalRecord & { readonly event: Extract<JournalRecord["event"], { readonly _tag: Tag }> } => {
+  const matches = records.filter(
+    (record): record is JournalRecord & { readonly event: Extract<JournalRecord["event"], { readonly _tag: Tag }> } =>
+      record.event._tag === tag
+  )
+  expect(matches).toHaveLength(1)
+  const match = matches[0]
+  if (match === undefined) throw new Error(`missing ${tag}`)
+  return match
+}
+
+it.effect(
+  "authored capstone carries exact canonical status or typed failure at its observation moment",
+  () =>
+    Effect.gen(function* () {
+      const { observed, run } = yield* cachedCapstoneRun
       const statusCaptures = run.observationCaptures.filter((capture) => capture._tag === "DeliveryStatusCaptured")
       expect(statusCaptures.length).toBeGreaterThan(0)
       expect(statusCaptures.length).toBeGreaterThan(
@@ -69,8 +100,62 @@ it.effect(
       const failedMoment = yield* evaluateAuthoredObservationCapture({ ...capture, deliveryStatusRead: failure }, null)
       expect(failedMoment.deliveryStatusRead).toBe(failure)
       expect(failedMoment.deliveryFrame).toBeNull()
-    }).pipe(Effect.provide(NodeCrypto.layer)),
-  600_000
+    }),
+  capstoneTimeout
+)
+
+it.effect(
+  "reopens A cleanup after exact removal before response and settles only after owning-boundary absence",
+  () =>
+    Effect.gen(function* () {
+      const { run } = yield* cachedCapstoneRun
+      const cleanupIndex = run.records.findIndex(({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized")
+      expect(cleanupIndex).toBeGreaterThan(0)
+      const retained = run.records.slice(0, cleanupIndex)
+      const result = yield* restartPredecessorCleanupAfterRemoval(retained)
+      expect(result.prefix.at(-1)?.event._tag).toBe("IntegratorCandidateCleanupMutationIntended")
+      expect(
+        result.prefix.some(
+          ({ event }) =>
+            event._tag === "IntegratorCandidateCleanupMutationResultRecorded" ||
+            event._tag === "IntegratorCandidateCleanupSettled"
+        )
+      ).toBe(false)
+      expect(result.reopened).toEqual(result.prefix)
+      expect(result.records.slice(0, result.prefix.length)).toEqual(result.prefix)
+      const predecessor = exactlyOne(
+        retained.filter(
+          ({ event }) => event._tag === "IntegratorSessionFixed" && event.correlation.plannedAttempt.taskId === "A"
+        ),
+        "IntegratorSessionFixed"
+      ).event.correlation
+      const successor = exactlyOne(
+        retained.filter(
+          ({ event }) =>
+            event._tag === "IntegratorSuccessorSessionFixed" && event.predecessor.plannedAttempt.taskId === "A"
+        ),
+        "IntegratorSuccessorSessionFixed"
+      )
+      expect(result.calls.map(({ tag }) => tag)).toEqual(["Observe", "Remove", "Observe"])
+      expect(
+        result.calls.every(
+          ({ locator, sessionId }) => locator === predecessor.candidateResource && sessionId === predecessor.sessionId
+        )
+      ).toBe(true)
+      const absent = exactlyOne(result.records, "IntegratorCandidateCleanupAbsenceConfirmed")
+      const settled = exactlyOne(result.records, "IntegratorCandidateCleanupSettled")
+      expect(absent.event.cause).toBe("MutationResponseReconciliation")
+      expect(settled.position).toBeGreaterThan(absent.position)
+      expect(absent.position).toBeGreaterThan(result.prefix.length)
+      expect(result.records.filter(({ event }) => !event._tag.startsWith("IntegratorCandidateCleanup"))).toEqual(
+        retained
+      )
+      expect(result.records).toContainEqual(successor)
+      expect(absent.event.authorization.disposition.predecessor).toEqual(predecessor)
+      expect(absent.event.authorization.disposition.successor).toEqual(successor.event.successor)
+      expect(result.result.remaining.candidate).toEqual([])
+    }),
+  capstoneTimeout
 )
 
 it("status conflict replay normalizes only the proposal Run and preserves different task and operation identities", () => {
