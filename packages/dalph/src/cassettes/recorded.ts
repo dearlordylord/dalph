@@ -1608,6 +1608,7 @@ export const verifyRecordedCassetteRoundTrip = (
   let sourceHistory: ReturnType<typeof reduceWorkflowJournalHistory> | undefined
   let sourceMeanings: Array<RecordedCassetteEntry> | undefined
   let actualMeanings: Array<RecordedCassetteEntry> | undefined
+  let workflowHistoryEquivalentSoFar: boolean | undefined
   return records.map((sourceRecord, index) => {
     const checkpoint = index + 1
     // Validate this source occurrence first from its own accepted predecessor;
@@ -1643,12 +1644,27 @@ export const verifyRecordedCassetteRoundTrip = (
     return checkpointComparison(checkpoint, expected, actual, () => {
       // Keep projection after state/selection comparisons, as in the cold path.
       // The two meaning prefixes belong only to these separately folded inputs.
-      sourceMeanings = prepareWorkflowMeanings(expected, sourceMeanings, sourceRecord)
-      actualMeanings = prepareWorkflowMeanings(actual, actualMeanings, selectedActualRecord)
-      return (
-        semanticJson(sourceMeanings ?? semanticWorkflowHistory(expected)) ===
-        semanticJson(actualMeanings ?? semanticWorkflowHistory(actual))
-      )
+      const sourceMeaningCount = sourceMeanings?.length
+      const actualMeaningCount = actualMeanings?.length
+      const nextSourceMeanings = prepareWorkflowMeanings(expected, sourceMeanings, sourceRecord)
+      const nextActualMeanings = prepareWorkflowMeanings(actual, actualMeanings, selectedActualRecord)
+      sourceMeanings = nextSourceMeanings
+      actualMeanings = nextActualMeanings
+      const priorWorkflowHistoryEquivalent = workflowHistoryEquivalentSoFar
+      const equivalent =
+        sourceMeaningCount !== undefined &&
+        actualMeaningCount !== undefined &&
+        nextSourceMeanings !== undefined &&
+        nextActualMeanings !== undefined &&
+        nextSourceMeanings.length === sourceMeaningCount + 1 &&
+        nextActualMeanings.length === actualMeaningCount + 1 &&
+        priorWorkflowHistoryEquivalent !== undefined
+        ? semanticJson(nextSourceMeanings[sourceMeaningCount]) ===
+            semanticJson(nextActualMeanings[actualMeaningCount]) && priorWorkflowHistoryEquivalent
+        : semanticJson(nextSourceMeanings ?? semanticWorkflowHistory(expected)) ===
+          semanticJson(nextActualMeanings ?? semanticWorkflowHistory(actual))
+      workflowHistoryEquivalentSoFar = equivalent
+      return equivalent
     })
   })
 }
