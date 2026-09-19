@@ -397,6 +397,7 @@ interface AuthoredScenarioCassetteCommonRunOptions {
   readonly onObservationCapture?: (capture: AuthoredObservationCapture) => void
 }
 
+// eslint-disable-next-line functional/no-mixed-types -- Full cassette runs add one Effectful lifecycle observer to the common synchronous callbacks.
 export interface AuthoredScenarioCassetteFullRunOptions extends AuthoredScenarioCassetteCommonRunOptions {
   readonly diagnostics?: "full"
   /** Derived playback notification from the scoped worker, outside the workflow observer turn. */
@@ -2265,7 +2266,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       const coordinatorOwnershipLayer = Layer.succeed(CoordinatorOwnership, coordinatorOwnership)
       const latestRuntimeActivationOrdinal = yield* Ref.make(0)
       const latestJournalContext = yield* Ref.make<
-        // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- Compatibility lint cannot resolve this Context tag through the workspace barrel.
+        // eslint-disable-next-line typescript/no-redundant-type-constituents -- Compatibility lint cannot resolve this Context tag through the workspace barrel.
         Option.Option<Context.Context<AcceptedJournalReader | InRunJournal>>
       >(Option.none())
       const survivingExecutorReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
@@ -2307,7 +2308,7 @@ const runAuthoredScenarioCassetteWith = (request: {
             yield* Ref.set(activeDeliveryActivation, activationOrdinal)
             yield* Ref.set(
               latestJournalContext,
-              // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- Compatibility lint cannot resolve this Context tag through the workspace barrel.
+              // eslint-disable-next-line typescript/no-redundant-type-constituents -- Compatibility lint cannot resolve this Context tag through the workspace barrel.
               Option.some(yield* Effect.context<AcceptedJournalReader | InRunJournal>())
             )
             const context = yield* Layer.build(activationLayer)
@@ -3260,10 +3261,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           activationInterval: quietInterval,
           failureCooldown: quietInterval,
           installAcceptedRunReactivationObservers: ({ acceptedFactPublication, control }) =>
-            bootstrap.registerAcceptedRunReactivationObservers({
-              control,
-              acceptedFactPublication: () => acceptedFactPublication
-            }),
+            bootstrap.registerAcceptedRunReactivationObservers({ control, acceptedFactPublication }),
           isTerminationFailure: (cause) => cause instanceof WorkflowRunAlreadyTerminated,
           onFailure: (failure) =>
             Queue.offer(activationExits, { _tag: "OwnerFailed", cause: Cause.fail(failure) }).pipe(Effect.asVoid),
@@ -3545,7 +3543,7 @@ export const useAuthoredScenarioCassette = <A, E, R>(
 ): Effect.Effect<
   A,
   AuthoredScenarioCassetteRunFailure | E,
-  // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- Compatibility lint cannot resolve this Context tag through the workspace barrel.
+  // eslint-disable-next-line typescript/no-redundant-type-constituents -- Compatibility lint cannot resolve this Context tag through the workspace barrel.
   Crypto.Crypto | Exclude<R, AcceptedJournalReader | InRunJournal>
 > =>
   Effect.scoped(

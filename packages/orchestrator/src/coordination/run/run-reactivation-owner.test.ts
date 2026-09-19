@@ -18,7 +18,11 @@ import {
   type RunReactivationOwnerService,
   runReactivationOwnerLayer
 } from "./run-reactivation-owner.js"
-import type { AcceptedRunControlObserver } from "./run.js"
+import {
+  AcceptedRunFactPublication,
+  type AcceptedRunControlObserver,
+  type AcceptedRunFactPublication as AcceptedRunFactPublicationValue
+} from "./run.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { makeCurrentSignal } from "../delivery/relations.js"
 import {
@@ -325,6 +329,57 @@ it.effect("coalesces concurrent hints behind one activation", () =>
             yield* Effect.yieldNow
             expect(yield* Ref.get(activationCount)).toBe(2)
             expect(yield* Ref.get(maximumConcurrent)).toBe(1)
+          })
+      )
+    })
+  )
+)
+
+it.effect("an unchanged retained wait retracts only its publication-owned trailing activation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const firstStarted = yield* Deferred.make<void>()
+      const releaseFirst = yield* Deferred.make<void>()
+      const secondStarted = yield* Deferred.make<void>()
+      const publicationObserver =
+        yield* Deferred.make<(publication: AcceptedRunFactPublicationValue) => Effect.Effect<void>>()
+      const activations = yield* Ref.make(0)
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-retained-wait-publication"),
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: () =>
+            Ref.updateAndGet(activations, (current) => current + 1).pipe(
+              Effect.tap((count) =>
+                count === 1
+                  ? Deferred.succeed(firstStarted, undefined).pipe(Effect.andThen(Deferred.await(releaseFirst)))
+                  : Deferred.succeed(secondStarted, undefined)
+              ),
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            ),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: ({ acceptedFactPublication }) =>
+            Deferred.succeed(publicationObserver, acceptedFactPublication),
+          onFailure: () => Effect.void
+        },
+        (owner) =>
+          Effect.gen(function* () {
+            yield* Deferred.await(firstStarted)
+            const publish = yield* Deferred.await(publicationObserver)
+            yield* publish(AcceptedRunFactPublication.WorkflowProgress())
+            yield* publish(AcceptedRunFactPublication.RetainedWait())
+            yield* Deferred.succeed(releaseFirst, undefined)
+            yield* Effect.yieldNow
+            yield* TestClock.adjust("30 minutes")
+            expect(yield* Ref.get(activations)).toBe(1)
+
+            yield* owner.hint(RunReactivationHint.OperatorWake())
+            yield* Deferred.await(secondStarted)
+            expect(yield* Ref.get(activations)).toBe(2)
           })
       )
     })

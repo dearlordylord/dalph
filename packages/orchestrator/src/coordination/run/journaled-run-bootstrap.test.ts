@@ -3704,8 +3704,10 @@ it.effect(
           installAcceptedRunReactivationObservers: (observers) =>
             bootstrap.registerAcceptedRunReactivationObservers({
               control: observers.control,
-              acceptedFactPublication: () =>
-                Ref.update(hints, (current) => current + 1).pipe(Effect.andThen(observers.acceptedFactPublication))
+              acceptedFactPublication: (publication) =>
+                Ref.update(hints, (current) => current + 1).pipe(
+                  Effect.andThen(observers.acceptedFactPublication(publication))
+                )
             }),
           activate: (opportunity) =>
             Effect.gen(function* () {

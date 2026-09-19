@@ -1601,9 +1601,9 @@ const runControlledStartupCharacterizationFor = (
                 installAcceptedRunReactivationObservers: ({ acceptedFactPublication, control }) =>
                   sharedBootstrap
                     .registerAcceptedRunReactivationObservers({
-                      acceptedFactPublication: () =>
+                      acceptedFactPublication: (publication) =>
                         Ref.update(acceptedPublicationCount, (count) => count + 1).pipe(
-                          Effect.andThen(acceptedFactPublication)
+                          Effect.andThen(acceptedFactPublication(publication))
                         ),
                       control
                     })
@@ -1748,7 +1748,7 @@ const runControlledStartupCharacterizationFor = (
             sharedBootstrap
               .registerAcceptedRunReactivationObservers({
                 control: observers.control,
-                acceptedFactPublication: () => observers.acceptedFactPublication
+                acceptedFactPublication: observers.acceptedFactPublication
               })
               .pipe(Effect.orDie),
           nextPublication: Queue.take(publicationQueue),

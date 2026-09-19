@@ -685,6 +685,8 @@ export {
   type RunReactivationControlState,
   type AcceptedRunControlDirection,
   type AcceptedRunControlObserver,
+  AcceptedRunFactPublication,
+  type AcceptedRunFactPublication as AcceptedRunFactPublicationValue,
   type AcceptedRunFactPublicationObserver,
   type AcceptedRunReactivationObservers,
   JournaledRunReactivationObserverAlreadyRegistered,

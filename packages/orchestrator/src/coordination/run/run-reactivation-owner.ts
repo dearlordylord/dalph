@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The owner keeps its gate, worker, and callback races in one auditable lifecycle boundary. */
 import {
   Context,
   Data,
@@ -18,7 +19,12 @@ import type { RunId } from "@dalph/contracts"
 import type { RunFinalityDecision as RunFinalityDecisionValue } from "../frontier/frontier.js"
 import { ApplicationExitShell } from "../application-exit/application-shell.js"
 import { attachCurrentSignal, type CurrentSignal } from "../delivery/relations.js"
-import type { AcceptedRunControlDirection, AcceptedRunControlObserver, RunReactivationControlState } from "./run.js"
+import type {
+  AcceptedRunControlDirection,
+  AcceptedRunControlObserver,
+  AcceptedRunFactPublication,
+  RunReactivationControlState
+} from "./run.js"
 import { type ActiveWorkAuthorityRefreshSource, RunActivationOpportunity } from "./run-activation-opportunity.js"
 
 /** A non-authoritative request to ask the ordinary Run entry for current facts. */
@@ -62,7 +68,7 @@ export interface RunReactivationOwnerOptions<E, R = never, EInstall = E> {
   /** Installs the Journal callbacks before the worker can consume its startup hint. */
   readonly installAcceptedRunReactivationObservers: (observers: {
     readonly control: AcceptedRunControlObserver
-    readonly acceptedFactPublication: Effect.Effect<void>
+    readonly acceptedFactPublication: (publication: AcceptedRunFactPublication) => Effect.Effect<void>
   }) => Effect.Effect<void, EInstall, R>
   /** Optional process-local timer lifecycle observation for diagnostics. */
   readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
@@ -97,6 +103,7 @@ type RunReactivationMessage =
 
 type TrailingActivationKind =
   | { readonly _tag: "Ordinary" }
+  | { readonly _tag: "AcceptedFactPublication" }
   | { readonly _tag: "ActiveWorkAuthorityRefresh"; readonly source: ActiveWorkAuthorityRefreshSource }
 
 /**
@@ -155,6 +162,8 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
       const activationPhase = yield* Ref.make<ActivationPhase>({ _tag: "Idle", generation: 0 })
       /** A trailing activation cannot be displaced by later one-slot hints. */
       const trailingActivationObligation = yield* Ref.make<Option.Option<TrailingActivationObligation>>(Option.none())
+      /** A retained wait can race the worker while both cross the activation-finalization gate. */
+      const retainedWaitGeneration = yield* Ref.make<Option.Option<number>>(Option.none())
       // Registration precedes the authoritative read below. The callback can
       // therefore capture a Pause accepted in the attach/read interval; the
       // mandatory reread then current-first replays the durable state.
@@ -232,13 +241,19 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
       const trailingKindFor = (hint: RunReactivationHint): TrailingActivationKind =>
         hint._tag === "TrackerNotification" || hint._tag === "Timer"
           ? { _tag: "ActiveWorkAuthorityRefresh", source: hint._tag }
-          : { _tag: "Ordinary" }
+          : hint._tag === "AcceptedFactPublication"
+            ? { _tag: "AcceptedFactPublication" }
+            : { _tag: "Ordinary" }
 
       const recordTrailingActivationInsideGate = (generation: number, kind: TrailingActivationKind) =>
         Effect.gen(function* () {
           const current = yield* Ref.get(trailingActivationObligation)
           if (Option.isSome(current)) {
-            if (current.value.kind._tag === "Ordinary" && kind._tag === "ActiveWorkAuthorityRefresh") {
+            const currentKind = current.value.kind
+            const strengthensAcceptedPublication =
+              currentKind._tag === "AcceptedFactPublication" && kind._tag !== "AcceptedFactPublication"
+            const strengthensOrdinary = currentKind._tag === "Ordinary" && kind._tag === "ActiveWorkAuthorityRefresh"
+            if (strengthensAcceptedPublication || strengthensOrdinary) {
               yield* Ref.set(trailingActivationObligation, Option.some({ ...current.value, kind }))
             }
             return
@@ -291,6 +306,25 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
         // the hint in the one trailing activation.
         const arrivalPhase = yield* Ref.get(activationPhase)
         yield* commandGate.withPermit(offerHintInsideGate(hint, arrivalPhase))
+      })
+
+      const acceptedFactPublication = Effect.fn("RunReactivationOwner.acceptedFactPublication")(function* (
+        publication: AcceptedRunFactPublication
+      ) {
+        if (publication._tag === "WorkflowProgress") {
+          yield* offerHint(RunReactivationHint.AcceptedFactPublication())
+          return
+        }
+        const arrivalPhase = yield* Ref.get(activationPhase)
+        yield* Ref.set(retainedWaitGeneration, Option.some(arrivalPhase.generation))
+        yield* commandGate.withPermit(
+          Effect.gen(function* () {
+            const pending = yield* Ref.get(trailingActivationObligation)
+            if (Option.isNone(pending) || pending.value.kind._tag !== "AcceptedFactPublication") return
+            yield* Ref.set(trailingActivationObligation, Option.none())
+            yield* Queue.clear(messages)
+          })
+        )
       })
 
       const startTrackerNotificationSource = Effect.fn("RunReactivationOwner.startTrackerNotificationSource")(() =>
@@ -394,10 +428,7 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
 
       yield* applicationExit.registerProcessLocalDrain({ closeProcessLocalResources: requestStop() })
       yield* startupPreparation.cancel
-      yield* options.installAcceptedRunReactivationObservers({
-        control: acceptedControl,
-        acceptedFactPublication: offerHint(RunReactivationHint.AcceptedFactPublication())
-      })
+      yield* options.installAcceptedRunReactivationObservers({ control: acceptedControl, acceptedFactPublication })
       const control = yield* options.readControl.pipe(Effect.tapError(options.onFailure))
       // A callback may win while the Journal read is in flight. Do not let a
       // stale read overwrite that later accepted fact; otherwise the read is
@@ -467,16 +498,29 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
                   // releasing the gate so later hints follow the coalescing
                   // rules for this new activation.
                   yield* Ref.set(trailingActivationObligation, Option.none())
+                  const retainedGeneration = yield* Ref.get(retainedWaitGeneration)
+                  if (
+                    pending.value.kind._tag === "AcceptedFactPublication" &&
+                    Option.isSome(retainedGeneration) &&
+                    retainedGeneration.value === pending.value.generation
+                  ) {
+                    return Option.none<{
+                      readonly hint: RunReactivationHint | undefined
+                      readonly activationKind: "Ordinary" | "ActiveWorkAuthorityRefresh"
+                    }>()
+                  }
                   yield* Ref.set(activationPhase, {
                     _tag: "Running" as const,
                     generation: phase._tag === "Finalizing" ? phase.generation + 1 : phase.generation
                   })
-                  return pending.value.kind._tag === "ActiveWorkAuthorityRefresh"
-                    ? {
-                        hint: RunReactivationHint[pending.value.kind.source](),
-                        activationKind: "ActiveWorkAuthorityRefresh" as const
-                      }
-                    : { hint: undefined, activationKind: "Ordinary" as const }
+                  return Option.some(
+                    pending.value.kind._tag === "ActiveWorkAuthorityRefresh"
+                      ? {
+                          hint: RunReactivationHint[pending.value.kind.source](),
+                          activationKind: "ActiveWorkAuthorityRefresh" as const
+                        }
+                      : { hint: undefined, activationKind: "Ordinary" as const }
+                  )
                 }
                 if (next._tag === "TrailingActivation") {
                   return yield* Effect.die("Run reactivation consumed an unrecorded trailing obligation")
@@ -486,16 +530,20 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
                   _tag: "Running" as const,
                   generation: phase._tag === "Finalizing" ? phase.generation + 1 : phase.generation
                 })
-                return {
+                return Option.some({
                   hint,
                   activationKind:
                     hint._tag === "TrackerNotification" || hint._tag === "Timer"
                       ? ("ActiveWorkAuthorityRefresh" as const)
                       : ("Ordinary" as const)
-                }
+                })
               })
             )
-            yield* processHint(activation.hint).pipe(
+            if (Option.isNone(activation)) {
+              yield* loop()
+              return
+            }
+            yield* processHint(activation.value.hint).pipe(
               Effect.ensuring(
                 commandGate.withPermit(
                   Effect.gen(function* () {
@@ -505,7 +553,7 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
                     }
                     yield* Ref.set(activationPhase, { _tag: "Finalizing" as const, generation: phase.generation })
                     if (options.onActivationFinalizationStart !== undefined) {
-                      yield* options.onActivationFinalizationStart(activation.activationKind)
+                      yield* options.onActivationFinalizationStart(activation.value.activationKind)
                     }
                     // A producer can win the tiny take/admission interval
                     // before the Running phase is recorded. Normalize that

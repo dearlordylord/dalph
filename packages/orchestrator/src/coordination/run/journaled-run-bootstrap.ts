@@ -67,6 +67,7 @@ import {
   JournaledRunIdentityMismatch,
   JournaledRunNotActive,
   JournaledRunReactivationObserverAlreadyRegistered,
+  AcceptedRunFactPublication,
   type JournaledRunBootstrapService,
   type JournaledRunProcessServices,
   type JournaledRunServices,
@@ -143,6 +144,21 @@ export const JournaledRunEstablished = Schema.Struct({
   target: TrackerTarget
 })
 export type JournaledRunEstablished = typeof JournaledRunEstablished.Type
+
+/**
+ * These accepted observations preserve an existing wait. Their own delivery
+ * publication cannot be used as evidence that the outside world changed.
+ */
+const acceptedPublicationForRecord = (record: JournalRecord) => {
+  const event = record.event
+  const retainedExecutorWait =
+    (event._tag === "PlannedAttemptExecutorStateObserved" ||
+      event._tag === "PlannedAttemptExecutorCommandProjectionObserved") &&
+    event.observation._tag === "ExecutorStateUnreadable"
+  return retainedExecutorWait || event._tag === "TaskClaimAcquisitionRejected"
+    ? AcceptedRunFactPublication.RetainedWait()
+    : AcceptedRunFactPublication.WorkflowProgress()
+}
 
 /** The exact acknowledged terminal occurrence that closes one selected Run. */
 export const JournaledRunTermination = Schema.Struct({
@@ -603,7 +619,8 @@ export const journaledRunBootstrapLayer = (
                         Effect.flatMap((observers) =>
                           Option.match(observers, {
                             onNone: () => Effect.void,
-                            onSome: ({ acceptedFactPublication }) => acceptedFactPublication()
+                            onSome: ({ acceptedFactPublication }) =>
+                              acceptedFactPublication(AcceptedRunFactPublication.WorkflowProgress())
                           })
                         )
                       )
@@ -670,9 +687,16 @@ export const journaledRunBootstrapLayer = (
                       current !== null && acceptedAt <= current ? [false, current] : [true, acceptedAt]
                     )
                     if (!advanced) return
+                    const records = yield* processJournal.journal.read(runId).pipe(Effect.orDie)
+                    const record = records.find(({ position }) => position === acceptedAt)
                     yield* Option.match(reactivationObservers, {
                       onNone: () => Effect.void,
-                      onSome: ({ acceptedFactPublication }) => acceptedFactPublication()
+                      onSome: ({ acceptedFactPublication }) =>
+                        acceptedFactPublication(
+                          record === undefined
+                            ? AcceptedRunFactPublication.WorkflowProgress()
+                            : acceptedPublicationForRecord(record)
+                        )
                     })
                   })
               })

@@ -327,10 +327,7 @@ export const productionRunReactivationLayer = <EInitial, RInitial>(
     installAcceptedRunReactivationObservers: ({ acceptedFactPublication, control }) =>
       Effect.gen(function* () {
         const bootstrap = yield* JournaledRunBootstrap
-        yield* bootstrap.registerAcceptedRunReactivationObservers({
-          control,
-          acceptedFactPublication: () => acceptedFactPublication
-        })
+        yield* bootstrap.registerAcceptedRunReactivationObservers({ control, acceptedFactPublication })
       }),
     isTerminationFailure: isWorkflowRunAlreadyTerminated,
     isNonRetryableFailure: isNonRetryableProductionActivationFailure,
