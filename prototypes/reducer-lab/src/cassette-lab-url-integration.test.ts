@@ -7,6 +7,7 @@ import {
 import {
   maintainedCassetteRows,
   runMaintainedCassette,
+  type CassetteRunObserver,
   type MaintainedCassetteKey
 } from "./cassette-lab.ts"
 import type { CassetteLabUrlAdapter } from "./cassette-lab-url-state.ts"
@@ -70,14 +71,16 @@ if (
     `https://lab.example.test/reducer?keep=yes&cassette=${encodeURIComponent(urlFixtureRow.catalogKey)}&step=2#evidence`
   )
   const calls: Array<MaintainedCassetteKey> = []
+  const observers: Array<CassetteRunObserver | undefined> = []
   const settled = new Promise<void>((resolve) =>
     root.addEventListener(singleCassetteSettledEvent, () => resolve(), { once: true }))
   mountCassetteLab({
     revision: "acceptance-revision",
     root,
     rows: maintainedCassetteRows,
-    runCassette: async (catalogKey) => {
+    runCassette: async (catalogKey, observer) => {
       calls.push(catalogKey)
+      observers.push(observer)
       return urlFixtureResult
     },
     urlAdapter: url.adapter
@@ -85,6 +88,7 @@ if (
   assert.equal(document.querySelector("article")?.getAttribute("data-catalog-key"), urlFixtureRow.catalogKey)
   await settled
   assert.deepEqual(calls, [urlFixtureRow.catalogKey], "Refresh must execute the exact URL-selected cassette once")
+  assert.deepEqual(observers, [undefined], "Refresh restoration must not attach live presentation updates")
   assert.equal(
     document.querySelector<HTMLElement>(".delivery-timeline-controls output")?.textContent?.startsWith("2 / "),
     true,
@@ -104,12 +108,14 @@ if (
   const { document, root } = installDom()
   const url = controlledUrlAdapter("https://lab.example.test/reducer?keep=yes")
   let runCount = 0
+  const observers: Array<CassetteRunObserver | undefined> = []
   mountCassetteLab({
     revision: "acceptance-revision",
     root,
     rows: [urlFixtureRow],
-    runCassette: async () => {
+    runCassette: async (_catalogKey, observer) => {
       runCount += 1
+      observers.push(observer)
       return urlFixtureResult
     },
     urlAdapter: url.adapter
@@ -124,10 +130,33 @@ if (
   await settled
   assert.equal(document.querySelector("article")?.getAttribute("data-catalog-key"), urlFixtureRow.catalogKey)
   assert.equal(runCount, 1, "Browser navigation must execute a valid cassette that has not run locally")
+  assert.deepEqual(observers, [undefined], "Browser navigation restoration must remain quiet")
   assert.equal(url.current().searchParams.get("step"), "1")
   assert.equal(
     document.querySelector<HTMLElement>(".delivery-timeline-controls output")?.textContent?.startsWith("1 / "),
     true
   )
   console.log("✓ browser navigation executes a valid cassette that has not run locally")
+}
+
+{
+  const { document, root } = installDom()
+  const url = controlledUrlAdapter("https://lab.example.test/reducer")
+  const observers: Array<CassetteRunObserver | undefined> = []
+  mountCassetteLab({
+    revision: "acceptance-revision",
+    root,
+    rows: [urlFixtureRow],
+    runCassette: async (_catalogKey, observer) => {
+      observers.push(observer)
+      return urlFixtureResult
+    },
+    urlAdapter: url.adapter
+  })
+  const settled = new Promise<void>((resolve) =>
+    root.addEventListener(singleCassetteSettledEvent, () => resolve(), { once: true }))
+  document.querySelector<HTMLButtonElement>("button[aria-label^='Run selected cassette:']")?.click()
+  await settled
+  assert.equal(typeof observers[0]?.onObservationMoment, "function")
+  console.log("✓ manual execution retains live cassette observation updates")
 }

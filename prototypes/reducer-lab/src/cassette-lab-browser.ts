@@ -575,7 +575,11 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
     renderSelected()
   }
 
-  const runKeys = async (keys: ReadonlyArray<MaintainedCassetteKey>, single: boolean): Promise<void> => {
+  const runKeys = async (
+    keys: ReadonlyArray<MaintainedCassetteKey>,
+    single: boolean,
+    publishLiveObservations = true
+  ): Promise<void> => {
     if (keys.length === 0) return
     setBusy(true)
     if (single) {
@@ -634,24 +638,26 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
               }
             }))
           }
-          const observer: CassetteRunObserver = {
-            onObservationMoment: (moment) => {
-              const state = states.get(catalogKey)
-              if (
-                state?._tag !== "Running"
-                || state.deliveryFrames === null
-                || state.observationMoments === null
-              ) return
-              if (moment._tag === "DeliveryPublicationMoment") liveFrames.push(moment.deliveryFrame)
-              liveMoments.push(moment)
-              if (!hasRenderedLiveObservation) {
-                hasRenderedLiveObservation = true
-                renderLatestLiveObservation()
-              } else {
-                liveDeliveryRenderTimer ??= setTimeout(renderLatestLiveObservation, liveDeliveryRenderIntervalMs)
+          const observer: CassetteRunObserver | undefined = publishLiveObservations
+            ? {
+                onObservationMoment: (moment) => {
+                  const state = states.get(catalogKey)
+                  if (
+                    state?._tag !== "Running"
+                    || state.deliveryFrames === null
+                    || state.observationMoments === null
+                  ) return
+                  if (moment._tag === "DeliveryPublicationMoment") liveFrames.push(moment.deliveryFrame)
+                  liveMoments.push(moment)
+                  if (!hasRenderedLiveObservation) {
+                    hasRenderedLiveObservation = true
+                    renderLatestLiveObservation()
+                  } else {
+                    liveDeliveryRenderTimer ??= setTimeout(renderLatestLiveObservation, liveDeliveryRenderIntervalMs)
+                  }
+                }
               }
-            }
-          }
+            : undefined
           const result = await runCassette(catalogKey, observer)
           if (liveDeliveryRenderTimer !== undefined) clearTimeout(liveDeliveryRenderTimer)
           states.set(catalogKey, { _tag: "Settled", result })
@@ -765,7 +771,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
       replaceEncodedUrlSelection(null, null)
     }
     if (row !== undefined && states.get(row.catalogKey)?._tag === "NotRun" && !busy) {
-      void runKeys([row.catalogKey], true).then(() =>
+      void runKeys([row.catalogKey], true, false).then(() =>
         root.dispatchEvent(new Event(singleCassetteSettledEvent)))
     }
   }
@@ -781,7 +787,7 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   urlSubscriptionByRoot.get(root)?.()
   urlSubscriptionByRoot.set(root, urlAdapter.subscribe(applyUrlSelection))
   if (initialUrlRow !== undefined && states.get(initialUrlRow.catalogKey)?._tag === "NotRun") {
-    void runKeys([initialUrlRow.catalogKey], true).then(() =>
+    void runKeys([initialUrlRow.catalogKey], true, false).then(() =>
       root.dispatchEvent(new Event(singleCassetteSettledEvent)))
   }
 }

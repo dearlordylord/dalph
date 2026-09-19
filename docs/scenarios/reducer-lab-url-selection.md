@@ -21,9 +21,13 @@ selected maintained cassette before its graph and timeline can be restored.
 
 On mount, the Lab reads the current URL. A valid `cassette` selects and
 automatically starts that exact maintained cassette through its existing
-controlled production runner. A valid positive-integer `step` remains a
-pending inspection request while execution publishes observed moments. When
-the moment exists, the Lab inspects it instead of following the newest moment.
+controlled production runner. This URL-triggered restoration does not attach a
+live-observation callback or schedule intermediate presentation updates; it
+renders the settled result once. It has no presentation timeout or deadline. A
+valid positive-integer `step` remains a pending inspection request until the
+settled execution contains that moment. The Lab then inspects it instead of
+following the newest moment. An explicit manual run retains live observation
+updates.
 
 When the maintainer selects another cassette in the Lab, the Lab replaces the
 URL's `cassette`, restores that cassette's retained local step when one exists,
@@ -69,8 +73,10 @@ no production retry or recovery behavior.
   plus pathname/hash/unowned-query preservation.
 - `refresh executes the URL-selected cassette and restores its playback step`
   mounts against a controlled URL/history adapter, proves one automatic runner
-  call restores the requested moment, and proves playback and Live changes
-  replace only the owned URL keys.
+  call without a live observer restores the requested moment, and proves
+  playback and Live changes replace only the owned URL keys.
 - `browser navigation executes a valid cassette that has not run locally`
-  injects a navigation event and proves the selected surface, automatic
+  injects a navigation event and proves the selected surface, quiet automatic
   execution, and pending step follow the URL exactly once.
+- `manual execution retains live cassette observation updates` proves an
+  explicit Run action still supplies the existing live-observation callback.
