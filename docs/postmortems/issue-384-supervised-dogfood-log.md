@@ -273,6 +273,29 @@ Needed improvement: retain a finite provider-response deadline and expose a
 typed stopped/suspended disposition that permits supervised replacement or
 manual candidate adoption without editing private state.
 
+### No autonomous review-and-repair loop ran
+
+Dalph sent one Begin command through the planned-attempt executor boundary and
+then passively observed that executor. It did not start an independent
+specification or repository-standards review, did not turn review findings into
+a repair handback, and did not require finding closure before accepting an
+executor result. The current domain and architecture explicitly leave review,
+retry, handback, restoration and convergence inside a future opaque production
+executor algorithm.
+
+The review which found the optional-publication, late-admission, rejection and
+acceptance-evidence gaps was a supervisor action after the provider stopped
+advancing. The direct Codex resume was also a manual diagnostic experiment; it
+was not a Dalph-owned review cycle. The run therefore did not test an
+autonomous review loop because no such production loop is currently composed.
+
+Needed improvement: specify and implement a finite production executor
+algorithm which obtains independent specification and standards findings,
+hands attributable findings back to an implementer, reruns only affected review
+axes, and returns terminal success only after every blocking finding is closed
+and required acceptance evidence is mapped. Dalph's generic orchestration
+boundary can remain coarse while the executor owns this internal convergence.
+
 ## Effective behavior worth retaining
 
 - Exact-Base task worktrees and distinct journals/private stores allowed failed
@@ -286,13 +309,18 @@ manual candidate adoption without editing private state.
   before runtime behavior, then integrated the new durable events through the
   journal, cassette, renaming, and occurrence-projection contracts.
 
-## Run still in progress
+## Run disposition
 
-The retained task candidate is under supervisor repair after scoped review.
-This log must still be extended with the repaired commit, focused/model/gate
-results, Dalph restart and Integrator behavior, remote publication result,
-tracker reconciliation, and any additional stalls before the dogfood exercise
-is considered closed.
+The retained candidate is evidence from the autonomous attempt. The supervisor
+will not repair it into the #384 solution because doing so would bypass the
+dogfood objective: Dalph's executor must be able to discover and close the
+specification gaps itself. A later #384 attempt should start only after the
+operational failures and the missing autonomous review-and-repair capability
+have an accepted path.
+
+The demonstrated operational failures are tracked in
+[issue #390](https://github.com/dearlordylord/dalph/issues/390). General bounded
+status output and graceful Exit remain tracked in issue #378.
 
 At the final custody check, hosted `master` had advanced from the planned Base
 to `986d5b8321bc6b75f9dc9663306f8df46c39495c`. The isolated target checkout
