@@ -293,3 +293,12 @@ This log must still be extended with the repaired commit, focused/model/gate
 results, Dalph restart and Integrator behavior, remote publication result,
 tracker reconciliation, and any additional stalls before the dogfood exercise
 is considered closed.
+
+At the final custody check, hosted `master` had advanced from the planned Base
+to `986d5b8321bc6b75f9dc9663306f8df46c39495c`. The isolated target checkout
+remained clean at the planned Base, the task candidate remained clean at
+`0ec589dad1b2cb4fcbd2dc66fd9485bc024f644f`, issue #384 remained open, and no
+Dalph claim label or supervised process remained. The supervisor did not push:
+the candidate is unqualified, has unresolved specification blockers, and an
+ordinary push can no longer fast-forward the advanced hosted branch without a
+new integration candidate.
