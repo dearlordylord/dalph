@@ -14,6 +14,7 @@ import nodeProcess from "node:process"
 import { promisify } from "node:util"
 import { Schema } from "effect"
 import { describe, expect, it } from "vitest"
+import { codexAppServerLaunchArguments } from "./codex-app-server.js"
 
 const execFile = promisify(nodeExecFile)
 const qualificationEnabled = nodeProcess.env["DALPH_RUN_REAL_CODEX_QUALIFICATION"] === "1"
@@ -227,6 +228,12 @@ type RpcMessage = typeof RpcMessage.Type
 
 const IdentifiedProtocolValue = Schema.Struct({ id: Schema.String })
 
+const EffectiveUnattendedThreadPolicy = Schema.Struct({
+  approvalPolicy: Schema.Literal("never"),
+  sandbox: Schema.Struct({ type: Schema.Literal("dangerFullAccess") })
+})
+type EffectiveUnattendedThreadPolicy = typeof EffectiveUnattendedThreadPolicy.Type
+
 class JsonRpcFixtureClient {
   private nextId = 1
   private readonly pending = new Map<number, { resolve: (value: RpcMessage) => void; reject: (error: Error) => void }>()
@@ -236,6 +243,7 @@ class JsonRpcFixtureClient {
     Array<{ readonly resolve: (value: RpcMessage) => void; readonly timeout: ReturnType<typeof setTimeout> }>
   >()
   private buffer = ""
+  readonly serverRequests: Array<RpcMessage> = []
 
   constructor(readonly child: ChildProcessWithoutNullStreams) {
     child.stdout.setEncoding("utf8")
@@ -289,6 +297,7 @@ class JsonRpcFixtureClient {
       this.buffer = this.buffer.slice(lineEnd + 1)
       if (line.length > 0) {
         const message = Schema.decodeUnknownSync(RpcMessage)(JSON.parse(line))
+        if (message.id !== undefined && message.method !== undefined) this.serverRequests.push(message)
         if (message.id === undefined) {
           this.notifications.push(message)
           if (message.method !== undefined) {
@@ -326,6 +335,7 @@ interface RunningFixture extends GitFixture {
   readonly child: ChildProcessWithoutNullStreams
   readonly rpc: JsonRpcFixtureClient
   readonly threadId: string
+  readonly threadPolicy: EffectiveUnattendedThreadPolicy
 }
 
 const runGit = async (cwd: string, ...args: ReadonlyArray<string>): Promise<string> => {
@@ -362,8 +372,8 @@ const createGitFixture = async (mode: QualificationMode): Promise<GitFixture> =>
   const config = [
     'model = "fixture-model"',
     'model_provider = "fixture"',
-    'approval_policy = "never"',
-    'sandbox_mode = "danger-full-access"',
+    'approval_policy = "on-request"',
+    'sandbox_mode = "read-only"',
     "",
     "[model_providers.fixture]",
     'name = "Dalph deterministic qualification fixture"',
@@ -387,17 +397,24 @@ const launchCodex = async (
   readonly child: ChildProcessWithoutNullStreams
   readonly rpc: JsonRpcFixtureClient
   readonly threadId: string
+  readonly threadPolicy: EffectiveUnattendedThreadPolicy
 }> => {
   const launched = await launchCodexProcess(fixture)
-  const started = await launched.rpc.request("thread/start", { cwd: fixture.worktree, ephemeral: false })
+  const started = await launched.rpc.request("thread/start", {
+    approvalPolicy: "never",
+    cwd: fixture.worktree,
+    ephemeral: false,
+    sandbox: "danger-full-access"
+  })
   const thread = Schema.decodeUnknownSync(IdentifiedProtocolValue)(started.result?.["thread"])
-  return { ...launched, threadId: thread.id }
+  const threadPolicy = Schema.decodeUnknownSync(EffectiveUnattendedThreadPolicy)(started.result)
+  return { ...launched, threadId: thread.id, threadPolicy }
 }
 
 const launchCodexProcess = async (
   fixture: GitFixture
 ): Promise<{ readonly child: ChildProcessWithoutNullStreams; readonly rpc: JsonRpcFixtureClient }> => {
-  const child = spawn(codexExecutable, ["app-server", "--stdio"], {
+  const child = spawn(codexExecutable, [...codexAppServerLaunchArguments, "--stdio"], {
     cwd: fixture.worktree,
     detached: true,
     env: {
@@ -441,8 +458,10 @@ const processId = (child: ChildProcessWithoutNullStreams): number => {
 
 const runTurn = async (running: RunningFixture, text: string): Promise<RpcMessage> => {
   const response = await running.rpc.request("turn/start", {
+    approvalPolicy: "never",
     threadId: running.threadId,
     cwd: running.worktree,
+    sandboxPolicy: { type: "dangerFullAccess" },
     input: [{ type: "text", text }]
   })
   return response
@@ -469,12 +488,14 @@ describe("#75 real built Codex app-server qualification", () => {
           "run_id: qualification-run attempt_id: qualification-attempt create and materialize"
         )
         expect(response.result?.["turn"]).toMatchObject({ status: "inProgress" })
+        expect(fixture.threadPolicy).toEqual({ approvalPolicy: "never", sandbox: { type: "dangerFullAccess" } })
         await fixture.rpc.waitForNotification("turn/completed")
         const read = await fixture.rpc.request("thread/read", { threadId: fixture.threadId, includeTurns: true })
         expect(read.result?.["thread"]).toMatchObject({ id: fixture.threadId, cwd: fixture.worktree })
         expect(fixture.model.calls).toHaveLength(2)
         expect(await runGit(fixture.worktree, "rev-parse", "HEAD")).not.toBe(fixture.baseSha)
         expect(await runGit(fixture.worktree, "show", "HEAD:dalph-real-codex.txt")).toBe("real-codex-qualification")
+        expect(fixture.rpc.serverRequests).toEqual([])
       } finally {
         await cleanupFixture(fixture, fixture.child)
       }

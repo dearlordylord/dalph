@@ -155,6 +155,11 @@ type ProductionRepositoryHostApplicationExitObserver = (
  * the one exact Run graph from those same scoped service instances.
  */
 export interface ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, RRun, EActivation> {
+  /** Completes provider admission before Run selection can allocate or recover a Run. */
+  readonly admit?: (
+    configuration: ProductionRepositoryHostConfiguration,
+    applicationExit: ProductionHostApplicationExitShellService
+  ) => Effect.Effect<void, unknown, never>
   readonly foundation: (
     configuration: ProductionRepositoryHostConfiguration
   ) => Layer.Layer<ProductionHostFoundation, EFoundation, RFoundation>
@@ -324,12 +329,46 @@ const defaultCodexAppServerLayer = (
     {
       executable: configuration.codexExecutable,
       clientName: configuration.codexClientName,
-      clientVersion: configuration.codexClientVersion
+      clientVersion: configuration.codexClientVersion,
+      requireUnattendedPolicy: true
     },
     native,
     requestBoundary
   ).pipe(Layer.provide(attemptStore), Layer.provide(NodeServices.layer))
 }
+
+const defaultProductionExecutorProfiles = (
+  configuration: ProductionRepositoryHostConfiguration
+): readonly [ExecutorProfile, ExecutorProfile] => [
+  ExecutorProfile.make({
+    adapter: "codex-app-server",
+    executable: configuration.codexExecutable,
+    id: ExecutorProfileId.make("codex/production"),
+    model: ExecutorModelAlias.make("default"),
+    permissionPolicy: "unattended",
+    provider: "codex"
+  }),
+  ExecutorProfile.make({
+    adapter: "kimi-acp",
+    executable: "kimi",
+    id: ExecutorProfileId.make("kimi/for-coding"),
+    model: ExecutorModelAlias.make("kimi-code/kimi-for-coding"),
+    permissionPolicy: "unattended",
+    provider: "kimi",
+    providerConfigRef: ExecutorProviderConfigReference.make("kimi-for-coding")
+  })
+]
+
+const selectedProductionExecutorProfile = Effect.fn("ProductionRepositoryHost.selectedExecutorProfile")(function* (
+  configuration: ProductionRepositoryHostConfiguration
+) {
+  const defaults = defaultProductionExecutorProfiles(configuration)
+  const configuredProfiles = configuration.executorProfiles ?? defaults
+  const executorLocator = productionExecutorLocator(configuration)
+  return executorLocator.startsWith("codex:") && configuration.executorProfiles === undefined
+    ? defaults[0]
+    : yield* resolveExecutorProfileLocator(configuredProfiles, executorLocator)
+})
 
 const observedLayerBuild = <A, E, R>(
   layer: Layer.Layer<A, E, R>,
@@ -471,6 +510,49 @@ const makeHostApplicationExitShell = Effect.fn("ProductionRepositoryHost.makeApp
 export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, ETrace = never>(
   adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace> = {}
 ) => ({
+  admit: (
+    configuration: ProductionRepositoryHostConfiguration,
+    applicationExit: ProductionHostApplicationExitShellService
+  ) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const selectedProfile = yield* selectedProductionExecutorProfile(configuration)
+        if (selectedProfile.adapter !== "codex-app-server") return
+        const selectedConfiguration = { ...configuration, codexExecutable: selectedProfile.executable }
+        const attemptStoreLayer = nodeCodexAttemptStoreLayer({
+          stateDirectory: configuration.codexExecutorPrivateStateDirectory
+        }).pipe(Layer.provide(NodeServices.layer))
+        const codexProcessNative = adapters.codexProcessNative ?? nodeCodexProcessNativeService
+        const requestBoundary = yield* makeRequestCircuit<CodexAppServerRequestOperation, CodexAppServerFailure>({
+          onOpen: (operation) =>
+            new CodexAppServerFailure({ detail: codexRequestCircuitOpenDetail, kind: "CircuitOpen", operation }),
+          policy: codexRequestCircuitPolicy
+        })
+        const supplied = adapters.codexAppServer?.(selectedConfiguration, requestBoundary)
+        const appLayerWithoutApplicationExit: Layer.Layer<
+          CodexAppServer,
+          ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>,
+          ApplicationExitShell
+        > =
+          supplied ??
+          defaultCodexAppServerLayer(selectedConfiguration, attemptStoreLayer, codexProcessNative, requestBoundary)
+        const appLayer = appLayerWithoutApplicationExit.pipe(
+          Layer.provide(Layer.succeed(ApplicationExitShell, asApplicationExitShellService(applicationExit)))
+        )
+        const context = yield* Layer.build(appLayer)
+        const app = Context.get(context, CodexAppServer)
+        if (app.unattendedPolicyAdmission === undefined) {
+          return yield* Effect.fail(
+            new CodexAppServerFailure({
+              detail: "Codex app-server did not expose effective unattended-policy admission",
+              kind: "Protocol",
+              operation: "config/read"
+            })
+          )
+        }
+        yield* app.unattendedPolicyAdmission
+      })
+    ),
   makeApplicationExit: () =>
     makeHostApplicationExitShell({
       ...(adapters.applicationExitRequestObserver === undefined
@@ -508,29 +590,8 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const ownership = yield* CoordinatorOwnership
         const journal = yield* JournalStore
         const lifecycle = yield* RunLifecycleJournal
-        const kimiProfile = ExecutorProfile.make({
-          adapter: "kimi-acp",
-          executable: "kimi",
-          id: ExecutorProfileId.make("kimi/for-coding"),
-          model: ExecutorModelAlias.make("kimi-code/kimi-for-coding"),
-          permissionPolicy: "unattended",
-          provider: "kimi",
-          providerConfigRef: ExecutorProviderConfigReference.make("kimi-for-coding")
-        })
-        const codexProfile = ExecutorProfile.make({
-          adapter: "codex-app-server",
-          executable: configuration.codexExecutable,
-          id: ExecutorProfileId.make("codex/production"),
-          model: ExecutorModelAlias.make("default"),
-          permissionPolicy: "unattended",
-          provider: "codex"
-        })
-        const configuredProfiles = configuration.executorProfiles ?? [codexProfile, kimiProfile]
         const executorLocator = productionExecutorLocator(configuration)
-        const selectedProfile =
-          executorLocator.startsWith("codex:") && configuration.executorProfiles === undefined
-            ? codexProfile
-            : yield* resolveExecutorProfileLocator(configuredProfiles, executorLocator)
+        const selectedProfile = yield* selectedProductionExecutorProfile(configuration)
         const selectedConfiguration =
           selectedProfile.adapter === "codex-app-server"
             ? { ...configuration, codexExecutable: selectedProfile.executable }
@@ -786,11 +847,12 @@ export const withDecodedProductionRepositoryHost = <A, EUse, RUse, EFoundation, 
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
+      const applicationExit = yield* graph.makeApplicationExit()
+      if (graph.admit !== undefined) yield* graph.admit(configuration, applicationExit)
       const foundation = yield* Layer.build(graph.foundation(configuration))
       const selection = yield* selectProductionRun(configuration.target).pipe(Effect.provide(foundation))
       const traceReaderContext = yield* Layer.build(TraceReaderLayer).pipe(Effect.provide(foundation))
       const traceReader = Context.get(traceReaderContext, TraceReader)
-      const applicationExit = yield* graph.makeApplicationExit()
       const activationFailure = yield* Deferred.make<never, EActivation>()
       const run = yield* Layer.build(
         graph.run(

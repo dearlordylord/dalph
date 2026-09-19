@@ -237,6 +237,7 @@ export interface CodexBackgroundTerminal {
 /** App-server request boundary failures are deliberately richer than generic executor failures. */
 const CodexAppServerOperation = Schema.Literals([
   "initialize",
+  "config/read",
   "thread/start",
   "thread/list",
   "thread/read",
@@ -425,6 +426,8 @@ export interface CodexAppServerService {
   readonly attachTurnCompletedHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
   /** Broadcast owned-activity hints; consumers must reread the exact process/activity census. */
   readonly attachOwnedActivityHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
+  /** Present only when this service proved Dalph's required effective task policy. */
+  readonly unattendedPolicyAdmission?: Effect.Effect<void, CodexAppServerFailure>
   readonly startThread: (
     cwd: string,
     ownedThreadToken?: CodexThreadOwnershipToken
@@ -1651,7 +1654,7 @@ interface JsonRpcClient {
     params?: unknown
   ) => Effect.Effect<unknown, CodexAppServerFailure, never>
   readonly requestBounded: (
-    operation: "initialize" | "thread/start" | "thread/read" | "turn/start",
+    operation: "initialize" | "config/read" | "thread/start" | "thread/read" | "turn/start",
     method: string,
     params?: unknown
   ) => Effect.Effect<unknown, CodexAppServerFailure, never>
@@ -1724,6 +1727,16 @@ const classifyJsonRpcEnvelope = (message: JsonObject): JsonRpcEnvelope => {
   return { _tag: "Response", id, ...(hasResult ? { result: message["result"] } : { error: message["error"] }) }
 }
 
+const codexApprovalRequestMethods = new Set([
+  "applyPatchApproval",
+  "execCommandApproval",
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "item/permissions/requestApproval"
+])
+
+const isCodexApprovalRequest = (method: string): boolean => codexApprovalRequestMethods.has(method)
+
 const jsonRpcInvalidRequestCode = -32600
 const jsonRpcResponseDeadline = Duration.seconds(60) // eslint-disable-line no-magic-numbers -- accepted Codex RPC acknowledgement bound
 
@@ -1753,6 +1766,7 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   const deadlineClose = yield* Deferred.make<Effect.Effect<void, CodexAppServerFailure>>()
   const sentCount = yield* Ref.make(0)
   const responseCount = yield* Ref.make(0)
+  const terminalProtocolFailure = yield* Ref.make<Option.Option<CodexAppServerFailure>>(Option.none())
   // Provider notifications are wake hints only; one pending wake is enough
   // because every consumer rereads the provider-owned state.
   const turnCompletedHints = yield* PubSub.sliding<void>(1)
@@ -1788,7 +1802,19 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
           if (envelope._tag === "Malformed") {
             return failPending(operationFailure("initialize", "Protocol", envelope.detail))
           }
-          if (envelope._tag === "ServerRequest") return Effect.void
+          if (envelope._tag === "ServerRequest") {
+            if (!isCodexApprovalRequest(envelope.method)) return Effect.void
+            const failure = operationFailure(
+              "turn/start",
+              "Protocol",
+              "unattended Codex task received unexpected approval request " + String(envelope.method)
+            )
+            return Ref.set(terminalProtocolFailure, Option.some(failure)).pipe(
+              Effect.andThen(failPending(failure)),
+              Effect.andThen(PubSub.publish(turnCompletedHints, undefined)),
+              Effect.asVoid
+            )
+          }
           if (envelope._tag === "Notification") {
             if (envelope.method === "turn/completed") {
               return PubSub.publish(turnCompletedHints, undefined).pipe(Effect.asVoid)
@@ -1861,6 +1887,8 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   ) {
     const isClosed = yield* Ref.get(closed)
     if (isClosed) return yield* Effect.fail(operationFailure(operation, "Unavailable", "app-server is closed"))
+    const terminalFailure = yield* Ref.get(terminalProtocolFailure)
+    if (Option.isSome(terminalFailure)) return yield* Effect.fail(terminalFailure.value)
     const id = yield* Ref.modify(nextId, (current) => [current, current + 1] as const)
     const deferred = yield* Deferred.make<unknown, CodexAppServerFailure>()
     const removePending = Ref.update(pending, (current) => {
@@ -1961,6 +1989,25 @@ const CodexInitializeResponse = Schema.Struct({
   platformOs: Schema.Literals(["linux", "macos", "windows"])
 })
 
+/** The effective app-server configuration Dalph requires before production task admission. */
+const CodexUnattendedPolicyConfiguration = Schema.Struct({
+  approval_policy: Schema.Literal("never"),
+  sandbox_mode: Schema.Literal("danger-full-access")
+})
+
+const CodexConfigReadResponse = Schema.Struct({ config: CodexUnattendedPolicyConfiguration })
+
+const normalizeUnattendedPolicyResponse = (value: unknown): CodexAppServerFailure | true => {
+  const decoded = Schema.decodeUnknownResult(CodexConfigReadResponse)(value)
+  return Result.isSuccess(decoded)
+    ? true
+    : operationFailure(
+        "config/read",
+        "Protocol",
+        `Codex app-server cannot prove approval_policy=never and sandbox_mode=danger-full-access: ${String(decoded.failure)}`
+      )
+}
+
 export const normalizeInitializeResponse = (
   value: unknown,
   native: CodexProcessNativeService = nodeCodexProcessNativeService
@@ -2002,14 +2049,22 @@ export interface CodexAppServerLayerConfig {
    * one isolated Codex home and controlled provider environment.
    */
   readonly environment?: Readonly<Record<string, string>>
+  /** Fail initialization unless config/read proves Dalph's required unattended policy. */
+  readonly requireUnattendedPolicy?: boolean
 }
 
 /**
- * Dalph owns the production Codex child boundary. The global YOLO option is
- * explicit in the durable command so an unattended Run cannot pause at a
- * provider approval request or attempt the unavailable container sandbox.
+ * Dalph owns the production Codex child boundary. Process-local config
+ * overrides are explicit in the durable command; production also proves them
+ * through config/read before admitting a Run.
  */
-export const codexAppServerLaunchArguments = ["--dangerously-bypass-approvals-and-sandbox", "app-server"] as const
+export const codexAppServerLaunchArguments = [
+  "-c",
+  'approval_policy="never"',
+  "-c",
+  'sandbox_mode="danger-full-access"',
+  "app-server"
+] as const
 
 const defaultConfig: Required<Pick<CodexAppServerLayerConfig, "clientName" | "clientVersion" | "executable">> &
   Pick<CodexAppServerLayerConfig, "environment"> = {
@@ -2034,7 +2089,8 @@ const unavailableAppServer = (
       new CodexAppServerFailure({
         // Keep a rejected initialize handshake distinguishable from a later
         // request that merely happens to observe the unavailable service.
-        operation: failure.operation === "initialize" ? "initialize" : operation,
+        operation:
+          failure.operation === "initialize" || failure.operation === "config/read" ? failure.operation : operation,
         kind: failure.kind,
         detail: failure.detail,
         ...(failure.rpcSnapshot === undefined ? {} : { rpcSnapshot: failure.rpcSnapshot })
@@ -2044,6 +2100,7 @@ const unavailableAppServer = (
     incarnation,
     attachTurnCompletedHints: Effect.succeed(Stream.empty),
     attachOwnedActivityHints: Effect.succeed(Stream.empty),
+    unattendedPolicyAdmission: fail("config/read"),
     startThread: () => fail("thread/start"),
     readThread: () => fail("thread/read"),
     resumeThread: () => fail("thread/resume"),
@@ -2879,9 +2936,10 @@ export const closeHandleFailure = (error: unknown): CodexAppServerFailure =>
 
 /**
  * Real application-scoped app-server layer. It delegates authentication,
- * provider, model, sandbox, approval, instruction, skill, and MCP selection to
- * the installed Codex CLI's inherited environment and configuration. The
- * exact worktree is supplied per thread and turn.
+ * provider, model, instruction, skill, and MCP selection to the installed
+ * Codex CLI. Dalph pins and, when requested by production admission, proves
+ * the unattended approval and sandbox policy. The exact worktree is supplied
+ * per thread and turn.
  */
 export const codexAppServerLayer = (
   config: CodexAppServerLayerConfig = {},
@@ -2997,14 +3055,21 @@ export const codexAppServerLayer = (
       const normalizedInitialize = normalizeInitializeResponse(initializeResponse, native)
       if (normalizedInitialize !== true) return yield* Effect.fail(normalizedInitialize)
       yield* rpc.notify("initialized")
+      if (selected.requireUnattendedPolicy === true) {
+        const configReadResponse = yield* rpc.requestBounded("config/read", "config/read", { includeLayers: false })
+        const normalizedPolicy = normalizeUnattendedPolicyResponse(configReadResponse)
+        if (normalizedPolicy !== true) return yield* Effect.fail(normalizedPolicy)
+      }
       const startThread = Effect.fn("CodexAppServer.startThread")(function* (
         cwd: string,
         ownedThreadToken?: CodexThreadOwnershipToken
       ) {
         const response = responseObject(
           yield* rpc.requestBounded("thread/start", "thread/start", {
+            approvalPolicy: "never",
             cwd,
             ephemeral: false,
+            sandbox: "danger-full-access",
             ...(ownedThreadToken === undefined ? {} : { metadata: { dalphOwnedThreadToken: ownedThreadToken } })
           }),
           "thread/start"
@@ -3060,8 +3125,10 @@ export const codexAppServerLayer = (
       ) {
         const response = responseObject(
           yield* rpc.requestBounded("turn/start", "turn/start", {
+            approvalPolicy: "never",
             threadId,
             cwd,
+            sandboxPolicy: { type: "dangerFullAccess" },
             input: [
               { type: "text", text: ownedTurnToken === undefined ? text : codexOwnedTurnInput(text, ownedTurnToken) }
             ]
@@ -3121,6 +3188,7 @@ export const codexAppServerLayer = (
         attachOwnedActivityHints: rpc.attachOwnedActivityHints,
         incarnation: liveIncarnation,
         serverPid: childPid,
+        ...(selected.requireUnattendedPolicy === true ? { unattendedPolicyAdmission: Effect.void } : {}),
         startThread,
         listThreads,
         listThreadsComplete: true,

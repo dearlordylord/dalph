@@ -56,10 +56,31 @@ const responseFor = (method, params = {}) => {
     }
   }
   if (mode === "non-openai-provider-credential" && method === "initialize") {
-    const argumentsAreExact = process.argv.slice(2).join("\n") === "app-server"
+    const argumentsAreExact = process.argv.slice(2).join("\n") === '-c\napproval_policy="never"\n-c\nsandbox_mode="danger-full-access"\napp-server'
     return process.env.DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL === "fixture-provider-key" && argumentsAreExact
       ? { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "unix", platformOs: "linux" }
       : { userAgent: "", codexHome: "", platformFamily: "unix", platformOs: "linux" }
+  }
+  if (mode === "unattended-policy" && method === "initialize") {
+    const argumentsAreExact = process.argv.slice(2).join("\n") === '-c\napproval_policy="never"\n-c\nsandbox_mode="danger-full-access"\napp-server'
+    return argumentsAreExact
+      ? { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "unix", platformOs: "linux" }
+      : { userAgent: "", codexHome: "", platformFamily: "unix", platformOs: "linux" }
+  }
+  if (method === "config/read") {
+    return mode === "unsupported-unattended-policy"
+      ? { config: { approval_policy: "on-request", sandbox_mode: "workspace-write" } }
+      : { config: { approval_policy: "never", sandbox_mode: "danger-full-access" } }
+  }
+  if (mode === "unattended-policy" && method === "thread/start") {
+    return params.approvalPolicy === "never" && params.sandbox === "danger-full-access"
+      ? { thread: validThread }
+      : { thread: null }
+  }
+  if (mode === "unattended-policy" && method === "turn/start") {
+    return params.approvalPolicy === "never" && params.sandboxPolicy?.type === "dangerFullAccess"
+      ? { turn: validTurn }
+      : { turn: null }
   }
   if (mode === "initialize-rpc-error" && method === "initialize") return { error: true }
   if (mode === "initialize-family-contradiction" && method === "initialize") {
@@ -451,6 +472,16 @@ const onMessage = (message) => {
   if (mode === "turn-completed-burst" && message.method === "thread/read" && threadReadNumber === 2) {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { terminal: true } }) + "\n")
   }
+  if (mode === "unexpected-approval-request" && message.method === "turn/start") {
+    write(message.id, responseFor(message.method, message.params))
+    process.stdout.write(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 99,
+      method: "item/commandExecution/requestApproval",
+      params: { reason: "must never be requested" }
+    }) + "\n")
+    return
+  }
   if (mode === "non-object-message" && requestNumber === 1) {
     process.stdout.write(JSON.stringify("not-an-object") + "\n")
     return
@@ -517,7 +548,7 @@ const expectAppFailure = (exit: Exit.Exit<unknown, unknown>, operation: string):
 const withFixture = <A>(
   mode: string,
   action: (app: CodexAppServerService, root: string) => Effect.Effect<A, unknown, FileSystem.FileSystem | Path.Path>,
-  config: { readonly environment?: Readonly<Record<string, string>> } = {}
+  config: { readonly environment?: Readonly<Record<string, string>>; readonly requireUnattendedPolicy?: boolean } = {}
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -1004,6 +1035,60 @@ it.effect("classifies transport protocol errors without fabricating a thread", (
           expectAppFailure(result, operation)
         })
       )
+  )
+)
+
+it.effect("pins and proves all-yes unattended policy for every task thread and turn", () =>
+  withFixture(
+    "unattended-policy",
+    (app) =>
+      Effect.gen(function* () {
+        const thread = yield* app.startThread("/fixture/worktree")
+        const turn = yield* app.startTurn(thread.id, "/fixture/worktree", "work")
+        expect(turn.id).toBe("protocol-turn")
+      }),
+    { requireUnattendedPolicy: true }
+  )
+)
+
+it.effect("fails policy admission before creating a task thread when effective policy is unsupported", () =>
+  withFixture(
+    "unsupported-unattended-policy",
+    (app) =>
+      Effect.gen(function* () {
+        const exit = yield* Effect.exit(app.startThread("/fixture/worktree"))
+        expectAppFailure(exit, "config/read")
+        if (Exit.isFailure(exit)) {
+          const failure = Cause.findErrorOption(exit.cause)
+          if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+            expect(failure.value.kind).toBe("Protocol")
+          }
+        }
+      }),
+    { requireUnattendedPolicy: true }
+  )
+)
+
+it.effect("turns an unexpected approval request into a sticky provider-protocol failure", () =>
+  withFixture("unexpected-approval-request", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hints = yield* app.attachTurnCompletedHints
+        const approvalObserved = yield* hints.pipe(Stream.runHead, Effect.forkChild)
+        const thread = yield* app.startThread("/fixture/worktree")
+        yield* app.startTurn(thread.id, "/fixture/worktree", "work")
+        expect(yield* Fiber.join(approvalObserved)).toEqual(Option.some(undefined))
+        const exit = yield* Effect.exit(app.readThread(thread.id))
+        expectAppFailure(exit, "turn/start")
+        if (Exit.isFailure(exit)) {
+          const failure = Cause.findErrorOption(exit.cause)
+          if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+            expect(failure.value).toMatchObject({ kind: "Protocol", operation: "turn/start" })
+            expect(failure.value.detail).toContain("unexpected approval request")
+          }
+        }
+      })
+    )
   )
 )
 

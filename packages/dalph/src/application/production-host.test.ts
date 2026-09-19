@@ -88,7 +88,7 @@ import {
 } from "./production.js"
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 import { ProductionRepositoryHostConfigurationError } from "./production-configuration.js"
-import { CodexAppServer, codexAppServerLaunchArguments } from "./codex-app-server.js"
+import { CodexAppServer, CodexAppServerFailure, codexAppServerLaunchArguments } from "./codex-app-server.js"
 import { CodexServerIncarnation } from "./codex-attempt-store.js"
 import { isolatedCodexProcessNativeService } from "../../test-support/isolated-codex-process-native.js"
 import { completedRunFinalityFixture } from "../../../orchestrator/test/run-finality.js"
@@ -572,6 +572,7 @@ it.effect("next host invocation recovers the same Run and authority-reads before
       const activationFailures = yield* Ref.make<ReadonlyArray<string>>([])
       const app = CodexAppServer.of({
         incarnation: CodexServerIncarnation.make("production-throttle-recovery-incarnation"),
+        unattendedPolicyAdmission: Effect.void,
         attachTurnCompletedHints: Effect.succeed(Stream.empty),
         attachOwnedActivityHints: Effect.succeed(Stream.empty),
         startThread: () => Effect.die("throttle recovery must not start a Codex thread"),
@@ -702,7 +703,7 @@ it.effect("next host invocation recovers the same Run and authority-reads before
       expect(yield* Ref.get(activations)).toBe(2)
       expect(recordsAfterFirst.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
       expect(recordsAfterSecond.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
-      expect(yield* Ref.get(appClosed)).toBe(2)
+      expect(yield* Ref.get(appClosed)).toBe(4)
     })
   ).pipe(Effect.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, NodeServices.layer, NodeCrypto.layer)))
 )
@@ -743,6 +744,39 @@ it.effect("invalid production host configuration opens no scoped production grap
 
     expect(failure).toBeInstanceOf(ProductionRepositoryHostConfigurationError)
     expect(yield* Ref.get(opened)).toBe(0)
+  }).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("Codex policy admission fails before foundation, Run selection, tracker, thread, or turn boundaries", () =>
+  Effect.gen(function* () {
+    const boundaries = yield* Ref.make<ReadonlyArray<string>>([])
+    const failure = new CodexAppServerFailure({
+      detail: "controlled app-server cannot prove unattended policy",
+      kind: "Protocol",
+      operation: "config/read"
+    })
+    const graph = {
+      admit: () =>
+        Ref.update(boundaries, (current) => [...current, "codex.policy.admit"]).pipe(Effect.andThen(failure)),
+      foundation: () =>
+        Layer.mergeAll(
+          ownershipLayer,
+          memoryJournalStoreLayer,
+          Layer.effectDiscard(Ref.update(boundaries, (current) => [...current, "foundation.open"]))
+        ),
+      makeApplicationExit: () => makeProductionHostApplicationExitShell(),
+      run: () =>
+        Layer.effectContext(
+          Ref.update(boundaries, (current) => [...current, "run.open"]).pipe(
+            Effect.andThen(Effect.die("policy rejection must make the Run graph unreachable"))
+          )
+        )
+    } satisfies ProductionRepositoryHostGraph<never, never, never, never, never>
+
+    const exit = yield* Effect.exit(withProductionRepositoryHost(validRawConfiguration(), graph, () => Effect.void))
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) expect(Cause.findErrorOption(exit.cause)).toEqual(Option.some(failure))
+    expect(yield* Ref.get(boundaries)).toEqual(["codex.policy.admit"])
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
@@ -838,6 +872,7 @@ it.effect("cold production host records one beginning before the first GitHub de
       })
       const app = CodexAppServer.of({
         incarnation: CodexServerIncarnation.make("production-host-test-incarnation"),
+        unattendedPolicyAdmission: Effect.void,
         attachTurnCompletedHints: Effect.succeed(Stream.empty),
         attachOwnedActivityHints: Effect.succeed(Stream.empty),
         startThread: () => Effect.die("no task may start in the empty graph fixture"),
@@ -912,7 +947,7 @@ it.effect("cold production host records one beginning before the first GitHub de
       expect(observed.cursor).toEqual(
         TraceCursor.make({ position: JournalPosition.make(2), runId: observed.selection.runId })
       )
-      expect(yield* Ref.get(appAcquisitions)).toBe(1)
+      expect(yield* Ref.get(appAcquisitions)).toBe(2)
       expect(yield* Ref.get(githubAcquisitions)).toBe(1)
       const exitObservations = yield* Ref.get(applicationExitObservations)
       expect(exitObservations.some(([boundary]) => boundary === "codex-app-server")).toBe(true)
@@ -952,6 +987,7 @@ it.effect("production host connects supplied Exit request and trace observers", 
       })
       const app = CodexAppServer.of({
         incarnation: CodexServerIncarnation.make("production-host-exit-observer-incarnation"),
+        unattendedPolicyAdmission: Effect.void,
         attachTurnCompletedHints: Effect.succeed(Stream.empty),
         attachOwnedActivityHints: Effect.succeed(Stream.empty),
         startThread: () => Effect.die("Exit observer fixture must not start a Codex thread"),
@@ -1297,6 +1333,7 @@ const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) 
   const githubClient = GithubGraphqlClient.of({ execute: () => boundaryFailure("githubGraphqlRequests") })
   const app = CodexAppServer.of({
     incarnation: CodexServerIncarnation.make("production-unsafe-discovery-incarnation"),
+    unattendedPolicyAdmission: Effect.void,
     attachTurnCompletedHints: Effect.succeed(Stream.empty),
     attachOwnedActivityHints: Effect.succeed(Stream.empty),
     startThread: () => boundaryFailure("executorCalls"),
@@ -1446,6 +1483,7 @@ it.effect("terminal Run is not reactivated", () =>
       })
       const app = CodexAppServer.of({
         incarnation: CodexServerIncarnation.make("production-terminal-test-incarnation"),
+        unattendedPolicyAdmission: Effect.void,
         attachTurnCompletedHints: Effect.succeed(Stream.empty),
         attachOwnedActivityHints: Effect.succeed(Stream.empty),
         startThread: () => Effect.die("terminal fixture must not start a task thread"),
@@ -1474,7 +1512,7 @@ it.effect("terminal Run is not reactivated", () =>
 
       expect(observed._tag).toBe("Allocated")
       expect(observed.runId).not.toBe(terminalRunId)
-      expect(yield* Ref.get(appAcquisitions)).toBe(1)
+      expect(yield* Ref.get(appAcquisitions)).toBe(2)
       expect(yield* Ref.get(githubAcquisitions)).toBe(1)
       const recordsContext = yield* Layer.build(
         sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
@@ -1628,6 +1666,7 @@ it.effect(
         const codexCall = (operation: string) => () => boundaryCall(`codex.${operation}`)
         const app = CodexAppServer.of({
           incarnation: CodexServerIncarnation.make("production-host-ownership-test-incarnation"),
+          unattendedPolicyAdmission: Effect.void,
           attachTurnCompletedHints: Effect.succeed(Stream.empty),
           attachOwnedActivityHints: Effect.succeed(Stream.empty),
           startThread: codexCall("startThread"),
