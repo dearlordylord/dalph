@@ -13,7 +13,11 @@ import { makeWorkflowRunBeganRecord, makeWorkflowRunTerminatedRecord } from "../
 import { RunLifecycleJournal } from "../../workflow-journal/store.js"
 import { completedRunFinalityFixture } from "../../../test/run-finality.js"
 import { StartupRecoveryBlocked } from "./startup-recovery.js"
-import { ProductionRunSelectionConflict, selectProductionRun } from "./production-run-selection.js"
+import {
+  discoverProductionRun,
+  ProductionRunSelectionConflict,
+  selectDiscoveredProductionRun
+} from "./production-run-selection.js"
 
 const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 
@@ -22,7 +26,9 @@ const journalLayer = (scan: JournalScan) => Layer.mock(RunLifecycleJournal, { sc
 it.effect("allocates one fresh production Run only when no unfinished history exists", () =>
   Effect.gen(function* () {
     const target = FixtureTarget.make("production-host-empty")
-    const selected = yield* selectProductionRun(target)
+    const discovery = yield* discoverProductionRun(target)
+    expect(discovery).toEqual({ _tag: "Fresh" })
+    const selected = yield* selectDiscoveredProductionRun(target, discovery)
 
     expect(selected._tag).toBe("Allocated")
     expect(selected.runId).toMatch(/^r1\./)
@@ -33,7 +39,9 @@ it.effect("selects the sole exact unfinished production Run without allocating a
   Effect.gen(function* () {
     const target = FixtureTarget.make("production-host-recovered")
     const runId = RunId.make("existing-production-run")
-    const selected = yield* selectProductionRun(target)
+    const discovery = yield* discoverProductionRun(target)
+    expect(discovery).toEqual({ _tag: "Recovered", runId })
+    const selected = yield* selectDiscoveredProductionRun(target, discovery)
 
     expect(selected).toEqual({ _tag: "Recovered", runId })
   }).pipe(
@@ -63,7 +71,7 @@ it.effect("rejects one unfinished production Run for another target", () => {
   const recordedTarget = FixtureTarget.make("production-host-recorded-target")
   const runId = RunId.make("mismatched-unfinished-run")
   return Effect.gen(function* () {
-    const failure = yield* selectProductionRun(requestedTarget).pipe(Effect.flip)
+    const failure = yield* discoverProductionRun(requestedTarget).pipe(Effect.flip)
 
     expect(failure).toEqual(
       new ProductionRunSelectionConflict({ conflicts: [{ runId, target: recordedTarget }], requestedTarget })
@@ -84,7 +92,9 @@ it.effect("excludes a valid terminal history and allocates one fresh production 
   const target = FixtureTarget.make("production-host-after-terminal")
   const fixture = completedRunFinalityFixture({ runId, target })
   return Effect.gen(function* () {
-    const selected = yield* selectProductionRun(target)
+    const discovery = yield* discoverProductionRun(target)
+    expect(discovery).toEqual({ _tag: "Fresh" })
+    const selected = yield* selectDiscoveredProductionRun(target, discovery)
 
     expect(selected._tag).toBe("Allocated")
     expect(selected.runId).not.toBe(runId)
@@ -124,7 +134,7 @@ it.effect("names every unfinished Run when production discovery is unsafe", () =
     const requestedTarget = FixtureTarget.make("production-host-requested")
     const firstRunId = RunId.make("first-unfinished-run")
     const secondRunId = RunId.make("second-unfinished-run")
-    const failure = yield* selectProductionRun(requestedTarget).pipe(Effect.flip)
+    const failure = yield* discoverProductionRun(requestedTarget).pipe(Effect.flip)
 
     expect(failure).toBeInstanceOf(ProductionRunSelectionConflict)
     expect(failure).toMatchObject({ conflicts: [{ runId: firstRunId }, { runId: secondRunId }], requestedTarget })
@@ -163,7 +173,7 @@ it.effect("names every unfinished Run when production discovery is unsafe", () =
 it.effect("fails malformed production discovery before allocating a Run", () =>
   Effect.gen(function* () {
     const target = FixtureTarget.make("production-host-malformed")
-    const failure = yield* selectProductionRun(target).pipe(Effect.flip)
+    const failure = yield* discoverProductionRun(target).pipe(Effect.flip)
 
     expect(failure).toBeInstanceOf(StartupRecoveryBlocked)
     expect(failure).toMatchObject({ issues: [{ _tag: "JournalSemanticIssue", runId: RunId.make("malformed-run") }] })
@@ -189,7 +199,7 @@ it.effect("fails when a discovered Hot Run has an invalid journal history", () =
   const runId = RunId.make("invalid-hot-history-run")
   const beginning = makeWorkflowRunBeganRecord(runId, target, policy)
   return Effect.gen(function* () {
-    const failure = yield* selectProductionRun(target).pipe(Effect.flip)
+    const failure = yield* discoverProductionRun(target).pipe(Effect.flip)
 
     expect(failure).toBeInstanceOf(StartupRecoveryBlocked)
     expect(failure).toMatchObject({ issues: expect.arrayContaining([expect.objectContaining({ runId })]) })

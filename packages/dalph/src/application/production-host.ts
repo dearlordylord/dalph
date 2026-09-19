@@ -161,12 +161,12 @@ type ProductionRepositoryHostApplicationExitObserver = (
  * Builds the live repository owner and Journal before selection, then builds
  * the one exact Run graph from those same scoped service instances.
  */
-export interface ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, RRun, EActivation> {
+export interface ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, RRun, EActivation, EProvider> {
   /** Acquires and proves the exact provider instance that the selected Run will use. */
   readonly acquireProvider: (
     configuration: ProductionRepositoryHostConfiguration,
     applicationExit: ProductionHostApplicationExitShellService
-  ) => Effect.Effect<ProductionHostProviderAdmission, unknown, Scope.Scope>
+  ) => Effect.Effect<ProductionHostProviderAdmission, EProvider, Scope.Scope>
   readonly foundation: (
     configuration: ProductionRepositoryHostConfiguration
   ) => Layer.Layer<ProductionHostFoundation, EFoundation, RFoundation>
@@ -845,9 +845,19 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
  * before live acquisition; the callback receives a scoped observation only
  * after the selected Run's durable beginning has been acknowledged.
  */
-export const withDecodedProductionRepositoryHost = <A, EUse, RUse, EFoundation, RFoundation, ERun, RRun, EActivation>(
+export const withDecodedProductionRepositoryHost = <
+  A,
+  EUse,
+  RUse,
+  EFoundation,
+  RFoundation,
+  ERun,
+  RRun,
+  EActivation,
+  EProvider
+>(
   configuration: ProductionRepositoryHostConfiguration,
-  graph: ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, RRun, EActivation>,
+  graph: ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, RRun, EActivation, EProvider>,
   use: (observation: ProductionHostObservation) => Effect.Effect<A, EUse, RUse>
 ) =>
   Effect.scoped(
@@ -890,9 +900,19 @@ export const withDecodedProductionRepositoryHost = <A, EUse, RUse, EFoundation, 
   )
 
 /** Raw callers cross the #259 schema authority exactly once before live acquisition. */
-export const withProductionRepositoryHost = <A, EUse, RUse, EFoundation, RFoundation, ERun, RRun, EActivation>(
+export const withProductionRepositoryHost = <
+  A,
+  EUse,
+  RUse,
+  EFoundation,
+  RFoundation,
+  ERun,
+  RRun,
+  EActivation,
+  EProvider
+>(
   input: unknown,
-  graph: ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, RRun, EActivation>,
+  graph: ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, RRun, EActivation, EProvider>,
   use: (observation: ProductionHostObservation) => Effect.Effect<A, EUse, RUse>
 ) =>
   decodeProductionRepositoryHostConfiguration(input).pipe(

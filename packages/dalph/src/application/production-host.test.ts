@@ -79,6 +79,7 @@ import {
   type ProductionRepositoryHostBoundary,
   type ProductionRepositoryHostGraph,
   productionRepositoryHostGraph,
+  withDecodedProductionRepositoryHost,
   withProductionRepositoryHost
 } from "./production-host.js"
 
@@ -86,8 +87,11 @@ import {
   isNonRetryableProductionActivationFailure,
   type ProductionWorkflowApplicationExitBoundary
 } from "./production.js"
-import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
-import { ProductionRepositoryHostConfigurationError } from "./production-configuration.js"
+import {
+  decodeProductionRepositoryHostConfiguration,
+  type ProductionRepositoryHostConfiguration,
+  ProductionRepositoryHostConfigurationError
+} from "./production-configuration.js"
 import { CodexAppServer, CodexAppServerFailure, codexAppServerLaunchArguments } from "./codex-app-server.js"
 import { CodexServerIncarnation } from "./codex-attempt-store.js"
 import { isolatedCodexProcessNativeService } from "../../test-support/isolated-codex-process-native.js"
@@ -387,7 +391,7 @@ it.effect(
               )
             })
           )
-      } satisfies ProductionRepositoryHostGraph<never, never, never, never, never>
+      } satisfies ProductionRepositoryHostGraph<never, never, never, never, never, never>
 
       const selection = yield* withProductionRepositoryHost(validRawConfiguration(), graph, (observation) =>
         Ref.update(events, (current) => [...current, "observation-returned", "github-read"]).pipe(
@@ -460,7 +464,7 @@ it.effect("production host exposes TaskTrackerMutationThrottled unchanged and te
       // Keep the failure type at this seam explicit: #257 owns conversion
       // from GitHub's mutation throttle to this provider-neutral error.
       // The host only observes and propagates the already typed result.
-    } satisfies ProductionRepositoryHostGraph<never, never, never, never, TaskTrackerMutationThrottled>
+    } satisfies ProductionRepositoryHostGraph<never, never, never, never, TaskTrackerMutationThrottled, never>
 
     const hostFiber = yield* withProductionRepositoryHost(validRawConfiguration(), graph, () =>
       Deferred.succeed(useEntered, undefined).pipe(Effect.andThen(Effect.never))
@@ -741,7 +745,7 @@ it.effect("invalid production host configuration opens no scoped production grap
           ),
           Layer.succeed(RunReactivationOwner, RunReactivationOwner.of({ hint: () => Effect.void }))
         )
-    } satisfies ProductionRepositoryHostGraph<never, never, never, never, never>
+    } satisfies ProductionRepositoryHostGraph<never, never, never, never, never, never>
     const failure = yield* withProductionRepositoryHost(
       { ...validRawConfiguration(), taskWorkCapacity: 0 },
       graph,
@@ -763,7 +767,7 @@ it.effect(
         kind: "Protocol",
         operation: "config/read"
       })
-      const graph = {
+      const graph: ProductionRepositoryHostGraph<never, never, never, never, never, CodexAppServerFailure> = {
         acquireProvider: () =>
           Ref.update(boundaries, (current) => [...current, "codex.policy.admit"]).pipe(Effect.andThen(failure)),
         foundation: () =>
@@ -779,9 +783,15 @@ it.effect(
               Effect.andThen(Effect.die("policy rejection must make the Run graph unreachable"))
             )
           )
-      } satisfies ProductionRepositoryHostGraph<never, never, never, never, never>
+      }
 
-      const exit = yield* Effect.exit(withProductionRepositoryHost(validRawConfiguration(), graph, () => Effect.void))
+      const configuration = yield* decodeProductionRepositoryHostConfiguration(validRawConfiguration())
+      const host = withDecodedProductionRepositoryHost(configuration, graph, () => Effect.void)
+      type HostFailure = Effect.Error<typeof host>
+      expectTypeOf<CodexAppServerFailure>().toExtend<HostFailure>()
+      expectTypeOf<unknown>().not.toEqualTypeOf<HostFailure>()
+
+      const exit = yield* Effect.exit(host)
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isFailure(exit)) expect(Cause.findErrorOption(exit.cause)).toEqual(Option.some(failure))
       expect(yield* Ref.get(boundaries)).toEqual(["foundation.open", "codex.policy.admit"])
@@ -843,7 +853,7 @@ it.effect("allocated and recovered selections identify the exact Run and never a
             )
           })
         )
-    } satisfies ProductionRepositoryHostGraph<never, never, never, never, never>
+    } satisfies ProductionRepositoryHostGraph<never, never, never, never, never, never>
 
     const selection = yield* withProductionRepositoryHost(validRawConfiguration(), graph, (observation) =>
       Effect.succeed(observation.selection)

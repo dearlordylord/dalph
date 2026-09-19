@@ -102,7 +102,7 @@ const makeHostGraph = (
           )
         })
       )
-  }) satisfies ProductionRepositoryHostGraph<never, never, never, never, never>
+  }) satisfies ProductionRepositoryHostGraph<never, never, never, never, never, never>
 
 /**
  * Scenario mapping: Alice's host request returns its typed lifecycle result

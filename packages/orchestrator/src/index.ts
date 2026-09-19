@@ -658,8 +658,7 @@ export {
   ProductionRunSelection,
   ProductionRunSelectionConflict,
   discoverProductionRun,
-  selectDiscoveredProductionRun,
-  selectProductionRun
+  selectDiscoveredProductionRun
 } from "./coordination/run/production-run-selection.js"
 export {
   JournaledRunBootstrap,

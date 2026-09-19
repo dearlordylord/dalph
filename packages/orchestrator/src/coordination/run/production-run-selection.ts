@@ -93,8 +93,3 @@ export const selectDiscoveredProductionRun = Effect.fn("ProductionHost.selectDis
     ? ProductionRunSelection.cases.Allocated.make({ runId: yield* freshWorkflowRunId(target) })
     : ProductionRunSelection.cases.Recovered.make({ runId: discovery.runId })
 })
-
-/** Compatibility composition for callers with no provider admission between discovery and allocation. */
-export const selectProductionRun = Effect.fn("ProductionHost.selectRun")(function* (target: TrackerTarget) {
-  return yield* selectDiscoveredProductionRun(target, yield* discoverProductionRun(target))
-})
