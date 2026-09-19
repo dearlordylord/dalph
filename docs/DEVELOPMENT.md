@@ -724,6 +724,13 @@ repository.
 
 #### 3. Write the complete non-secret configuration
 
+The [direct remote publication specification for acceptance](scenarios/direct-remote-publication.md)
+adds an explicit remote/ref and publication proof before task completion. The
+normal path uses Git's exact push acknowledgement; interrupted or ambiguous
+paths reconcile as specified. This contract is not implemented by this walkthrough.
+Future dogfood qualification must capture the actual remote head containing the
+integrated commit; a local head and closed GitHub issue alone cannot prove it.
+
 Create disjoint sibling locations under the disposable root. The two worktree
 roots must not contain each other or the repository/private state. The Journal
 database, evidence root, Codex executor-private state directory, and Integrator private-store

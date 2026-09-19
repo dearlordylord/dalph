@@ -2,6 +2,14 @@
 
 ## Full dogfood delivery gate
 
+The [direct remote publication specification for acceptance](direct-remote-publication.md)
+adds publication before local promotion and tracker completion. The normal
+workflow records Git's exact push acknowledgement; dogfood independently checks
+the hosted branch and retains that evidence alongside local Git and cleanup
+evidence. The local-only chronology below
+records the current contract; it does not prove that proposed remote delivery
+requirement. Its extension is owned by the linked specification.
+
 Alice runs the shipped production CLI against one fresh issue in the dedicated
 disposable dogfood repository. Before the command starts, the issue is open and
 eligible, the repository is at the declared Base SHA, no claim label or task

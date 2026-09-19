@@ -1158,6 +1158,24 @@ running activity. It does not prove tracker completion or settle the retained
 integration responsibility.
 _Avoid_: Candidate submission, agent completion, promotion alone, tracker completion
 
+**Remote publication target**:
+The explicitly selected remote Git repository and branch that receive a task's
+integrated commit. It is distinct from the local integration repository/ref.
+_Avoid_: Local integration target, inferred default branch, remote-tracking ref
+
+**Remote publication proof**:
+A successful remote acknowledgement of the exact branch update, or a remote
+observation proving that branch contains the exact integrated commit. It does
+not prove tracker completion or prevent later outside branch changes.
+_Avoid_: Uncorrelated process success, local promotion proof, equivalent patch, cached origin ref
+
+**Retained-delivery resumption**:
+The Operator's request to reconsider the unfinished delivery of an already
+accepted task result after a temporary constraint changes. It preserves the
+task attempt and remaining allowance and does not itself prove progress or
+remove Pause.
+_Avoid_: Task rerun, budget grant, publication success, Unpause
+
 **Integration quarantine**:
 The durable disposition that stops automatic work for one exact integration
 responsibility while preserving its integration-ready result, integration session,
