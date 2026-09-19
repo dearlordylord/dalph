@@ -221,6 +221,27 @@ Needed improvement: preserve a typed rejection cause from Git's correlated
 per-ref/transport result and authorize automatic retry only for the exact safe
 fast-forward race case.
 
+### Restarting a nonterminal executor caused an unbounded read-and-status storm
+
+After the second gate, the supervisor restarted the retained Run to let the
+same Codex thread return its terminal report. In about 38 seconds the process
+wrote 158 MiB of public NDJSON and consumed roughly one CPU core. The Journal
+grew to 3,679 records: 1,834 `TaskTrackerReadIntentRecorded` events and 1,832
+`TaskTrackerFactsObserved` events, while the only executor report remained the
+original `ExecutorWorkExecuting` at position 232 and its last durable state
+observation remained `ExecutorStateUnreadable` at position 233. No integration
+event was recorded.
+
+The supervisor stopped the process cleanly rather than waiting for the five
+minute bound because direct Journal evidence distinguished tracker churn from
+executor progress. Raw output is retained at
+`/tmp/dalph-384-supervised.7kSCeQ/evidence/run-384-resume-after-gate.ndjson`.
+
+Needed improvement: a nonterminal executor wait must not continuously allocate
+fresh tracker-read operations or republish the complete expanding status. It
+needs a stable wait keyed to a provider observation/wakeup, bounded polling, and
+incremental or size-bounded presentation.
+
 ## Effective behavior worth retaining
 
 - Exact-Base task worktrees and distinct journals/private stores allowed failed
