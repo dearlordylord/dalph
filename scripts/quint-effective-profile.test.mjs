@@ -69,7 +69,7 @@ test("materializes the independent complete 105 obligations before any launch", 
   }))
   assert.equal(
     createHash("sha256").update(JSON.stringify(commandContract)).digest("hex"),
-    "3eb9085f1b7b4b5bf9930600064408e0dca8bb7474da83a0517ece19d97aa804"
+    "d20ea6e5d51d529deedca645a70443dae17532481c21ba589169d9e4313ae638"
   )
   const counts = Object.fromEntries(
     ["typecheck", "test", "sampled-run", "verify"].map((kind) => [

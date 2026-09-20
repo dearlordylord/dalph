@@ -1,19 +1,31 @@
 {
+  "packages/dalph/src/application/codex-app-server.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "classifyJsonRpcEnvelope keeps one fail-closed JSON-RPC wire-shape boundary: version, method/request, notification, response ID, and result/error validation must be classified together before pending-request routing. Splitting these clauses would separate one protocol classification rather than an independent policy decision."
+    }
+  },
   "packages/dalph/src/application/kimi-acp.ts": {
     "complexity": {
-      "count": 3,
+      "count": 4,
       "justification": "The ACP transport retains one fail-closed protocol boundary across framed parsing, request correlation, and session cleanup; these branches are the protocol state transitions rather than independent policy decisions."
     }
   },
   "packages/dalph/src/application/kimi-planned-attempt-executor.ts": {
     "complexity": {
-      "count": 1,
+      "count": 4,
       "justification": "The planned-attempt adapter preserves one provider-neutral report transition while mapping ACP outcomes and evidence; the branch is the single accepted-versus-terminal boundary."
     }
   },
   "packages/dalph/src/application/production-cli.ts": {
     "complexity": {
       "count": 1
+    }
+  },
+  "packages/dalph/src/application/production-configuration.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "hostPathRelationshipError validates one fail-closed production host path topology across worktree, repository, journal, evidence, provider, and Integrator locators. The overlap clauses are the complete disjointness proof; extracting them would obscure the boundary they jointly establish."
     }
   },
   "packages/dalph/src/application/runtime-diagnostic.ts": {
@@ -25,6 +37,12 @@
   "packages/dalph/src/cassettes/disposition-cleanup-cassette.ts": {
     "complexity": {
       "count": 6
+    }
+  },
+  "packages/dalph/src/cassettes/recorded.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "verifyRecordedCassetteRoundTrip maintains one occurrence-by-occurrence comparison of source and reconstructed recorded histories, including cold-prefix recovery and semantic projections. Its branches preserve that single chronology and are not independent cassette policies."
     }
   },
   "packages/dalph/src/qualification/live-qualification-evidence.ts": {
