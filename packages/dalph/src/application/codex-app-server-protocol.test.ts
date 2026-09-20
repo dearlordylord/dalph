@@ -464,7 +464,8 @@ const onMessage = (message) => {
   }
   if (
     (mode === "initialize-unanswered" && message.method === "initialize") ||
-    (mode === "thread-start-unanswered" && message.method === "thread/start")
+    (mode === "thread-start-unanswered" && message.method === "thread/start") ||
+    (mode === "thread-resume-unanswered" && message.method === "thread/resume")
   ) {
     fs.writeFileSync(process.argv[1] + ".received", message.method)
     return
@@ -638,7 +639,7 @@ const withFixture = <A>(
   )
 
 const unansweredFixture = (
-  mode: "initialize-unanswered" | "thread-start-unanswered",
+  mode: "initialize-unanswered" | "thread-start-unanswered" | "thread-resume-unanswered",
   action: (app: CodexAppServerService) => Effect.Effect<unknown, CodexAppServerFailure>
 ) =>
   Effect.scoped(
@@ -1195,6 +1196,27 @@ it.effect("bounds an unanswered thread start without fabricating a task turn and
         expect(JSON.stringify(failure.value)).not.toMatch(
           /credential-must-not-escape|DALPH_SECRET_SENTINEL|prompt-and-secret-must-not-escape/
         )
+      }
+    }
+  })
+)
+
+it.effect("bounds an unanswered retained-thread resume and closes its exact owned child once", () =>
+  Effect.gen(function* () {
+    const exit = yield* unansweredFixture("thread-resume-unanswered", (app) =>
+      Effect.gen(function* () {
+        const thread = yield* app.startThread("/fixture/worktree")
+        return yield* app.resumeThread(thread.id, "/fixture/worktree")
+      })
+    )
+    expectAppFailure(exit, "thread/resume")
+    if (Exit.isFailure(exit)) {
+      const failure = Cause.findErrorOption(exit.cause)
+      if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+        expect(failure.value).toMatchObject({
+          kind: "Unavailable",
+          rpcSnapshot: { requestId: 3, method: "thread/resume", sentCount: 3, responseCount: 2, pendingCount: 0 }
+        })
       }
     }
   })
