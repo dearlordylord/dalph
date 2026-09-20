@@ -241,6 +241,9 @@ it("renders task-local available and absent status without inferring historical 
   expect(renderTraceStatus({ _tag: "TaskAbsentFromCurrentGraph", graphSource, subject })).toBe(
     `Absent from current graph · Task ${executorAttempt.taskId} in Run ${runId}`
   )
+  expect(
+    renderTraceStatus({ _tag: "DeliveryStatusClosed", final: { _tag: "DeliveryStatusNotReady", subject }, subject })
+  ).toBe(`Closed with final DeliveryStatusNotReady · Task ${executorAttempt.taskId} in Run ${runId}`)
 })
 
 it.effect("reads one exact production cursor through TraceReader and writes its schema-versioned view", () =>

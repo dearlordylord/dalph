@@ -6,10 +6,13 @@ import {
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorBeginProofId,
   PlannedAttemptExecutorBeginDelivery,
+  PlannedAttemptExecutorResult,
   PlannedAttemptExecutorReport,
   plannedAttemptExecutorCorrelation,
-  plannedAttemptExecutorCorrelationKey
+  plannedAttemptExecutorCorrelationKey,
+  samePlannedAttemptExecutorReport
 } from "./executor.js"
+import { EvidenceDigest } from "./evidence.js"
 import { GitCommitSha, TaskBranchRef, WorktreeLocator } from "./git-locator.js"
 import { AttemptId, PlannedTaskAttempt } from "./planned-attempt.js"
 import { TaskId, TaskRevision } from "./task-identity.js"
@@ -71,6 +74,37 @@ it.each([
       Schema.encodeUnknownSync(PlannedAttemptExecutorReport)(report)
     )
   ).toEqual(report)
+})
+
+it("compares terminal executor results by exact outcome and accepted evidence", () => {
+  const terminal = (result: PlannedAttemptExecutorResult) =>
+    PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result })
+  const completed = PlannedAttemptExecutorResult.cases.Completed.make({})
+  const failed = PlannedAttemptExecutorResult.cases.Failed.make({})
+  const accepted = (commit: string, byteLength: number, digest: string) =>
+    PlannedAttemptExecutorResult.cases.Accepted.make({
+      acceptedResult: {
+        commit: GitCommitSha.make(commit),
+        evidenceManifest: { byteLength, digest: EvidenceDigest.make(digest) }
+      }
+    })
+
+  expect(samePlannedAttemptExecutorReport(terminal(completed), terminal(failed))).toBe(false)
+  expect(samePlannedAttemptExecutorReport(terminal(completed), terminal(completed))).toBe(true)
+
+  const exactAccepted = terminal(accepted("2".repeat(40), 12, "3".repeat(64)))
+  expect(samePlannedAttemptExecutorReport(exactAccepted, terminal(accepted("2".repeat(40), 12, "3".repeat(64))))).toBe(
+    true
+  )
+  expect(samePlannedAttemptExecutorReport(exactAccepted, terminal(accepted("4".repeat(40), 12, "3".repeat(64))))).toBe(
+    false
+  )
+  expect(samePlannedAttemptExecutorReport(exactAccepted, terminal(accepted("2".repeat(40), 13, "3".repeat(64))))).toBe(
+    false
+  )
+  expect(samePlannedAttemptExecutorReport(exactAccepted, terminal(accepted("2".repeat(40), 12, "5".repeat(64))))).toBe(
+    false
+  )
 })
 
 it.each([
