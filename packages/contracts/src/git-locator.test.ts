@@ -29,12 +29,13 @@ it("accepts a full Git integration target branch ref", () => {
   expect(Schema.decodeUnknownSync(IntegrationTargetRef)("refs/heads/master")).toBe("refs/heads/master")
 })
 
-it.each(["https://token@example.invalid/repository.git", "https://example.invalid/repository.git?token=secret"])(
-  "rejects credential-bearing remote publication endpoint %s",
-  (endpoint) => {
-    expect(() => Schema.decodeUnknownSync(RemotePublicationEndpoint)(endpoint)).toThrow()
-  }
-)
+it.each([
+  "https://token@example.invalid/repository.git",
+  "https://example.invalid/repository.git?token=secret",
+  "user:password@example.invalid:repository.git"
+])("rejects credential-bearing remote publication endpoint %s", (endpoint) => {
+  expect(() => Schema.decodeUnknownSync(RemotePublicationEndpoint)(endpoint)).toThrow()
+})
 
 it("accepts a credential-free SSH endpoint and distinct publication branch", () => {
   const endpoint = Schema.decodeUnknownSync(RemotePublicationEndpoint)("git@example.invalid:repository.git")

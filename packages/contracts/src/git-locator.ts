@@ -46,6 +46,9 @@ const hasInvalidRemotePublicationEndpointShape = (endpoint: string): boolean => 
   if (endpoint.trim().length === 0 || endpoint.startsWith("-")) return true
   // oxlint-disable-next-line no-control-regex -- Git endpoints reject ASCII control characters.
   if (/[\u0000-\u001f\u007f]/.test(endpoint)) return true
+  // SCP-like SSH syntax has no URL parser branch; reject a password-bearing
+  // userinfo prefix before it can be interpreted as a remote destination.
+  if (/^[^@/\s:]+:[^@\s]*@[^:/\s]+:/u.test(endpoint)) return true
 
   const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:/.exec(endpoint)?.[0]?.replace(/:$/u, "").toLowerCase()
   if (scheme === "ext") return true
