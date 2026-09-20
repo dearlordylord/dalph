@@ -7,10 +7,16 @@ import type { KimiAttemptPrivatePhase } from "./kimi-attempt-store.js"
 import {
   KimiAttemptPrivateRecord,
   KimiAttemptPrivateStore,
+  KimiAttemptStoreFailure,
+  kimiAttemptPrivateStoreLayer,
   memoryKimiAttemptPrivateStoreLayer,
   nodeKimiAttemptPrivateStoreLayer
 } from "./kimi-attempt-store.js"
 import { KimiAcpSessionId } from "./kimi-acp.js"
+import {
+  controlledCodexAttemptStoreNativeLayer,
+  type CodexAttemptStoreNativeService
+} from "./codex-attempt-store-native.js"
 
 const runId = RunId.make("run:kimi-private-store")
 const attemptId = AttemptId.make("attempt:kimi-private-store")
@@ -108,20 +114,38 @@ it.effect("fails closed on duplicate attempt associations and aliased Kimi sessi
 )
 
 it.effect("rejects unsafe Kimi state directories before filesystem access", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const relative = yield* Effect.gen(function* () {
+  Effect.gen(function* () {
+    let nativeCalls = 0
+    const touched = (): never => {
+      nativeCalls += 1
+      throw new Error("unsafe Kimi state configuration reached the native filesystem boundary")
+    }
+    const native: CodexAttemptStoreNativeService = {
+      lock: touched,
+      lstat: touched,
+      mkdir: touched,
+      open: touched,
+      path: { join: touched, parse: touched, sep: "/" },
+      processUid: touched
+    }
+    const controlledLayer = (stateDirectory: string) =>
+      kimiAttemptPrivateStoreLayer({ stateDirectory }).pipe(
+        Layer.provide(controlledCodexAttemptStoreNativeLayer(native)),
+        Layer.provide(NodeServices.layer)
+      )
+    for (const stateDirectory of ["relative/private", "/tmp/../private"]) {
+      const failure = yield* Effect.gen(function* () {
         yield* KimiAttemptPrivateStore
-        return true
-      }).pipe(Effect.provide(layerAt("relative/private")), Effect.exit)
-      const traversal = yield* Effect.gen(function* () {
-        yield* KimiAttemptPrivateStore
-        return true
-      }).pipe(Effect.provide(layerAt("/tmp/../private")), Effect.exit)
-      expect(Exit.isFailure(relative)).toBe(true)
-      expect(Exit.isFailure(traversal)).toBe(true)
-    }).pipe(Effect.provide(NodeServices.layer))
-  )
+      }).pipe(Effect.provide(controlledLayer(stateDirectory)), Effect.flip)
+      expect(failure).toEqual(
+        new KimiAttemptStoreFailure({
+          detail: "Kimi private state directory must be an absolute, normalized path without traversal",
+          operation: "configure"
+        })
+      )
+    }
+    expect(nativeCalls).toBe(0)
+  })
 )
 
 it.effect("fails closed when the configured Kimi state path is a regular file", () =>

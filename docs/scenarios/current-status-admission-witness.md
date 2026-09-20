@@ -345,7 +345,7 @@ adds no recovery request or automatic qualification rerun.
 
 ## Alice sees the newest passive status and truthful closure during recovery
 
-Status: accepted narrow publication repair for issue #391. This scenario
+Status: accepted narrow publication repair for issue #378. This scenario
 preserves the current-first public Run presenter and the separate history,
 Run-disposition, and application-Exit records. It changes only how the
 process-local presenter coalesces passive values and proves closure; it adds no
