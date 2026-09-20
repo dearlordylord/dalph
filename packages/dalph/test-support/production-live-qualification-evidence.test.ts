@@ -341,6 +341,48 @@ it.effect(
     }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
+it.effect("Alice rejects one-fact mutations at every remaining live evidence validation boundary", () =>
+  Effect.gen(function* () {
+    const input = yield* validInput()
+    const duplicateOperationCount = {
+      ...input,
+      operationCounts: [
+        ...input.operationCounts.slice(0, 1),
+        ...input.operationCounts.slice(0, 1),
+        ...input.operationCounts.slice(1)
+      ]
+    }
+    for (const changed of [
+      duplicateOperationCount,
+      { ...input, fixture: { ...input.fixture, labelNodeIds: [labelNodeId, labelNodeId] } },
+      { ...input, journal: { ...input.journal, occurrences: [...input.journal.occurrences].reverse() } },
+      { ...input, composition: { ...input.composition, applicationServerProcessIdentities: ["not-a-linux-process"] } },
+      { ...input, journal: { ...input.journal, positions: input.journal.positions.slice(0, 1) } },
+      { ...input, final: { ...input.final, run: { ...input.final.run, runId: RunId.make("different-run") } } },
+      {
+        ...input,
+        cleanup: {
+          ...input.cleanup,
+          github: {
+            ...input.cleanup.github,
+            resolvedLabels: [...input.cleanup.github.resolvedLabels, ...input.cleanup.github.resolvedLabels]
+          }
+        }
+      }
+    ]) {
+      expect(yield* makeProductionLiveQualificationEvidence(changed).pipe(Effect.flip)).toEqual(
+        qualificationFailed("EvidenceValidation")
+      )
+    }
+    expect(
+      yield* Schema.decodeUnknownEffect(ProductionLiveQualificationEvidence)({
+        ...input,
+        hosted: { ...input.hosted, sourceSha: sha("9") }
+      }).pipe(Effect.flip)
+    ).toBeDefined()
+  }).pipe(Effect.provide(NodeCrypto.layer))
+)
+
 it.effect("Alice receives only same-source protected hosted and required dedicated plus stressed provenance", () =>
   Effect.gen(function* () {
     const input = yield* validInput()
@@ -487,6 +529,16 @@ it.effect("Alice receives one schema-versioned artifact replaced at the same pat
         artifactStage: "PreCleanup",
         cleanup: { _tag: "Pending" }
       })
+      expect(
+        yield* captureProductionLiveQualificationPreCleanupEvidence(container, artifact, input).pipe(Effect.flip)
+      ).toEqual(qualificationFailed("EvidenceValidation"))
+      expect(
+        yield* publishProductionLiveQualificationEvidence(container, artifact, {
+          ...input,
+          artifactStage: "PreCleanup",
+          cleanup: { _tag: "Pending" }
+        }).pipe(Effect.flip)
+      ).toEqual(qualificationFailed("EvidenceValidation"))
       expect(JSON.parse(yield* fs.readFileString(artifact))).toMatchObject({ artifactStage: "PreCleanup" })
       const outcome = yield* publishProductionLiveQualificationEvidence(container, artifact, input)
       expect(outcome._tag).toBe("Qualified")

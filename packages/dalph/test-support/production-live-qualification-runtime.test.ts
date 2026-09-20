@@ -71,6 +71,7 @@ import {
   type JournalRecord,
   type WorkflowJournalEvent
 } from "@dalph/orchestrator"
+import { ProductionLiveFixtureCleanup } from "../src/qualification/live-fixture-cleanup.js"
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
@@ -687,6 +688,14 @@ describe("#307 production live qualification runtime", () => {
     await expect(
       Effect.runPromise(decodeProductionLiveQualificationManifest({ ...input, githubToken: "must-not-be-here" }))
     ).rejects.toBeDefined()
+    await expect(
+      Effect.runPromise(decodeProductionLiveQualificationManifest({ ...input, codexExecutable: "relative/codex" }))
+    ).rejects.toBeDefined()
+    await expect(
+      Effect.runPromise(
+        decodeProductionLiveQualificationManifest({ ...input, sourceRepository: "relative/repository" })
+      )
+    ).rejects.toBeDefined()
   })
 
   it("rejects the outer controller as the shipped child and requires a distinct outside-Q retention report", async () => {
@@ -1027,6 +1036,24 @@ describe("#307 production live qualification runtime", () => {
           expect(report.local.every(({ disposition }) => disposition === "Retained")).toBe(true)
           expect(report.local.map(({ locator }) => locator)).toContain(fixture.localManifest.container.locator)
           expect(yield* fs.exists(fixture.configuration.repository)).toBe(true)
+          yield* writeProductionLiveQualificationFailureRetentionReport({
+            manifest,
+            phase: "Cleanup",
+            githubFixture: undefined,
+            forwarder: undefined,
+            localFixture: fixture,
+            localContainer: undefined,
+            cleanupState: {
+              local: ProductionLiveFixtureCleanup.cases.Removed.make({
+                removed: fixture.localManifest.resources,
+                retained: []
+              })
+            }
+          })
+          const removedReport = yield* decodeProductionLiveQualificationRetentionReport(
+            JSON.parse(yield* fs.readFileString(manifest.retentionReport))
+          )
+          expect(removedReport.local.every(({ disposition }) => disposition === "Removed")).toBe(true)
           yield* fs.remove(fixture.localManifest.container.locator, { recursive: true })
         })
       ).pipe(Effect.provide(layer))
