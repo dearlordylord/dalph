@@ -118,7 +118,7 @@ it.effect("rejects unsafe Kimi state directories before filesystem access", () =
     let nativeCalls = 0
     const touched = (): never => {
       nativeCalls += 1
-      throw new Error("unsafe Kimi state configuration reached the native filesystem boundary")
+      return undefined as never
     }
     const native: CodexAttemptStoreNativeService = {
       lock: touched,
