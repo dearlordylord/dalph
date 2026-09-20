@@ -1,12 +1,25 @@
 /* eslint-disable max-lines -- The complete executor protocol action map stays visible in one adapter. */
+/* eslint-disable import/no-nodejs-modules -- Conformance instrumentation reads repository provenance and CPU. */
+/* eslint-disable no-restricted-globals -- Conformance instrumentation records process provenance and CPU. */
+/* eslint-disable no-magic-numbers -- Focused conformance seeds, ordinals, and timeout bounds are protocol fixtures. */
+/* eslint-disable functional/no-throw-statements -- Invalid directed observations fail closed. */
 import { it } from "@effect/vitest"
-import { defineDriver, ITFBigInt, stateCheck, quintRun } from "@firfi/quint-connect/effect"
+import {
+  defineDriver,
+  ITFBigInt,
+  stateCheck,
+  quintRun,
+  quintRunWithTraceGeneration,
+  generateTraces,
+  TraceGeneration
+} from "@firfi/quint-connect/effect"
 import { expect } from "vitest"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import {
   AttemptId,
   GitCommitSha,
   PlannedAttemptExecutor,
+  type PlannedAttemptExecutorCorrelation,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorBeginProofId,
   PlannedAttemptExecutorReport,
@@ -34,7 +47,7 @@ import {
   resumePlannedAttemptExecutorWork,
   TaskWorkCapacity
 } from "../../../orchestrator/src/index.js"
-import { Context, Deferred, Effect, Fiber, Layer, Ref, Schema, Scope } from "effect"
+import { Cause, Clock, Context, Deferred, Duration, Effect, Fiber, Layer, Ref, Schema, Scope } from "effect"
 import { AcceptedJournalReader } from "../../../orchestrator/src/workflow-journal/accepted-reader.js"
 import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
 import { makeExecutorResumeModelFixture } from "./planned-attempt-executor-resume-fixture.js"
@@ -42,7 +55,11 @@ import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-j
 import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
 import { runPlannedAttemptExecutorResumeRedelivery } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/resume-redelivery.js"
 import type { PlannedAttemptContinuationWitness } from "../../../orchestrator/src/workflow/protocols/planned-attempt-continuation/events.js"
-import type { PlannedAttemptExecutorCommandOrdinal } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/events.js"
+import {
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorResumeRedeliveryOrdinal
+} from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/events.js"
+import type { PlannedAttemptExecutorCommandProjectionOrdinal } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/events.js"
 import type { SafeContinuationRevalidationEligibility } from "../../../orchestrator/src/coordination/frontier/fresh-facts.js"
 import { requiredPlannedAttemptPositionsOf } from "../../../orchestrator/src/coordination/run/required-planned-attempt-positions.js"
 import { ActiveTaskClaim } from "../../../orchestrator/src/authorities/task-tracker/claim-mutation.js"
@@ -83,12 +100,45 @@ import {
   taskTrackerFactsObservedEvent
 } from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
 import { InRunJournal } from "../../../orchestrator/src/workflow-journal/store.js"
+import { JournalRecordKey } from "../../../orchestrator/src/workflow-journal/identity.js"
 import {
   intentRecordKey,
   outcomeRecordKey,
   attemptPlanRecordKey
 } from "../../../orchestrator/src/workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../../orchestrator/src/workflow/kernel/event.js"
+import {
+  checkReverseTrace,
+  checkReverseTraceWithOracle,
+  checkReverseTraceWithReversedEnumeration,
+  checkReverseCollection,
+  decodeReverseProjection,
+  reverseModelStep,
+  reverseModelSourceSha256,
+  reverseProjectionFieldManifest,
+  reverseProjectionId,
+  reverseProjectionVersion,
+  reverseTraceVersion,
+  modelPathSemanticIdentity,
+  modelTransitionSemanticIdentity,
+  projectModelEnvironment,
+  type ReverseCollection,
+  type ReverseExecutorObservation,
+  type ReverseJournalObservation,
+  type ReverseOutcome,
+  type ReverseTrace,
+  type ReverseTraceEvent
+} from "./planned-attempt-executor-reverse.js"
+import {
+  loadCanonicalMbtStepOracle,
+  loadOracleFromBytes,
+  loadResumeRedeliveryOracle,
+  quintModelStateIdentity
+} from "./quint-evaluator-frontier.js"
+import { version as quintVersion } from "@informalsystems/quint/dist/src/version.js"
+import { createHash } from "node:crypto"
+import { readFileSync } from "node:fs"
+import { currentSourceInputDigest, repositoryHead } from "./gate-run-identity-adapter.js"
 
 const specification = makeTaskWorkSpecification({
   body: "Complete the model task.",
@@ -179,7 +229,7 @@ const SpecProjection = Schema.Struct({
 
 const variantTag = (value: unknown): string =>
   typeof value === "object" && value !== null && "tag" in value ? String(value.tag) : String(value)
-const pickedTag = (value: unknown): string => variantTag(value)
+const pickedTag = variantTag
 const reportFrom = (value: unknown): PlannedAttemptExecutorReport => {
   switch (pickedTag(value)) {
     case "ExecutorWorkSafelySuspended":
@@ -193,6 +243,20 @@ const reportFrom = (value: unknown): PlannedAttemptExecutorReport => {
       return PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
   }
 }
+
+type ReverseDriverCapture = {
+  readonly journal: Array<ReverseJournalObservation>
+  readonly executor: Array<ReverseExecutorObservation>
+  readonly eligibility: Array<SafeContinuationRevalidationEligibility>
+  readonly witnesses: Array<PlannedAttemptContinuationWitness>
+  readonly projections: Array<ReturnType<typeof decodeReverseProjection>>
+  processCuts: number
+  eligibilityReads: number
+  witnessReads: number
+}
+
+let activeReverseDriverCapture: ReverseDriverCapture | undefined
+let activeReverseDriverStop: (() => Effect.Effect<void, never, never>) | undefined
 
 const executorConformanceDriver = defineDriver(
   {
@@ -263,6 +327,111 @@ const executorConformanceDriver = defineDriver(
     let resumeEligibility: SafeContinuationRevalidationEligibility | undefined
     let resumeReservation: DeliveryAdmissionReservation | undefined
     let redeliveryCalls: ReadonlyArray<PlannedAttemptExecutorCommandOrdinal> = []
+    let observedAttemptId: AttemptId | undefined
+    let liveExecutorOperation: ReverseExecutorObservation["operation"] | undefined
+    let liveExecutorCorrelation: ReverseExecutorObservation["correlation"] | undefined
+    const reverseCapture: ReverseDriverCapture = {
+      journal: [],
+      executor: [],
+      eligibility: [],
+      witnesses: [],
+      projections: [],
+      processCuts: 0,
+      eligibilityReads: 0,
+      witnessReads: 0
+    }
+    activeReverseDriverCapture = reverseCapture
+    activeReverseDriverStop = () =>
+      Effect.gen(function* () {
+        const detached = [pendingCommand, pendingProjection, pendingState]
+        pendingCommand = undefined
+        pendingProjection = undefined
+        pendingState = undefined
+        for (const fiber of detached) {
+          if (fiber === undefined) continue
+          yield* Fiber.interrupt(fiber)
+        }
+      })
+
+    const recordExecutorCall = (
+      operation: ReverseExecutorObservation["operation"],
+      phase: ReverseExecutorObservation["phase"],
+      arguments_: ReverseExecutorObservation["arguments"] = [],
+      result?: ReverseExecutorObservation["result"],
+      observedCorrelation?: ReverseExecutorObservation["correlation"]
+    ) => {
+      const correlation = observedCorrelation ?? liveExecutorCorrelation
+      if (correlation === undefined) throw new Error(`executor ${operation} observation omitted correlation`)
+      const reportTagOf = (value: ReverseExecutorObservation["result"]): ReverseExecutorObservation["report"] => {
+        if (value === undefined) return undefined
+        if ("report" in value) return value.report._tag
+        return value._tag
+      }
+      reverseCapture.executor.push({
+        operation,
+        phase,
+        correlation,
+        arguments: arguments_,
+        result,
+        request:
+          phase === "call" && operation !== "observe"
+            ? operation === "begin"
+              ? "Begin"
+              : operation === "resume"
+                ? "Resume"
+                : "Suspend"
+            : undefined,
+        report: phase === "return" ? reportTagOf(result) : undefined
+      })
+      if (phase === "call") {
+        liveExecutorOperation = operation
+        liveExecutorCorrelation = correlation
+      } else {
+        liveExecutorOperation = undefined
+        liveExecutorCorrelation = undefined
+      }
+    }
+    const recordJournalObservation = (record: JournalRecord, existing: boolean) => {
+      const event = record.event
+      const eventAttemptId = (() => {
+        if (event._tag === "TaskAttemptPlanned") return event.operation.plannedAttempt.attemptId
+        if (
+          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ||
+          event._tag === "PlannedAttemptExecutorCommandIntended" ||
+          event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended" ||
+          event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+          event._tag === "PlannedAttemptExecutorCommandResponseContradicted" ||
+          event._tag === "PlannedAttemptExecutorCommandResponseObserved" ||
+          event._tag === "PlannedAttemptExecutorStateObserved"
+        )
+          return event.plannedAttempt.attemptId
+        return undefined
+      })()
+      if (eventAttemptId !== undefined) observedAttemptId ??= eventAttemptId
+      const attemptId =
+        eventAttemptId ?? (event._tag === "PlannedAttemptExecutorWorkReported" ? observedAttemptId : undefined)
+      const commandOrdinal = (() => {
+        if (event._tag === "PlannedAttemptExecutorCommandIntended") return event.ordinal
+        if (
+          event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended" ||
+          event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+          event._tag === "PlannedAttemptExecutorCommandResponseContradicted" ||
+          event._tag === "PlannedAttemptExecutorCommandResponseObserved"
+        )
+          return event.commandOrdinal
+        return undefined
+      })()
+      reverseCapture.journal.push({
+        record,
+        key: record.key,
+        position: record.position,
+        event: event._tag,
+        runId: record.runId,
+        attemptId,
+        commandOrdinal,
+        existing
+      })
+    }
 
     const scope = executorConformanceScope
     if (scope === undefined) return Effect.runSync(Effect.die("executor model requires a live Journal scope"))
@@ -306,11 +475,17 @@ const executorConformanceDriver = defineDriver(
       append: (eventRunId, key, event) =>
         Effect.gen(function* () {
           const existing = records.find((record) => record.runId === eventRunId && record.key === key)
-          if (existing !== undefined) return existing
+          if (existing !== undefined) {
+            recordJournalObservation(existing, true)
+            return existing
+          }
           const record = yield* liveInRunJournal.append(eventRunId, key, event)
           records = yield* liveInRunJournal.read(eventRunId)
+          const appended =
+            records.find((candidate) => candidate.key === key && candidate.runId === eventRunId) ?? record
+          recordJournalObservation(appended, false)
           yield* appendAcceptedRecord(event)
-          return record
+          return appended
         }),
       read: (requestedRunId) => liveInRunJournal.read(requestedRunId)
     })
@@ -424,24 +599,39 @@ const executorConformanceDriver = defineDriver(
       Layer.succeed(Journal, liveJournal)
     )
     const executor = PlannedAttemptExecutor.of({
-      observe: () =>
-        Effect.succeed(
+      observe: (observedCorrelation, purpose) => {
+        recordExecutorCall("observe", "call", [observedCorrelation, purpose], undefined, observedCorrelation)
+        const projection =
           currentProjection ??
-            (authorityReport === undefined
-              ? PlannedAttemptExecutorProjection.cases.NoReport.make({
-                  correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
-                })
-              : PlannedAttemptExecutorProjection.cases.Exact.make({ report: authorityReport }))
-        ),
-      requestSuspension: () =>
+          (authorityReport === undefined
+            ? PlannedAttemptExecutorProjection.cases.NoReport.make({
+                correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+              })
+            : PlannedAttemptExecutorProjection.cases.Exact.make({ report: authorityReport }))
+        recordExecutorCall("observe", "return", [], projection)
+        return Effect.succeed(projection)
+      },
+      requestSuspension: (suspensionAttempt) =>
         Effect.gen(function* () {
+          const directCorrelation: PlannedAttemptExecutorCorrelation = {
+            attemptId: suspensionAttempt.attemptId,
+            runId: suspensionAttempt.runId
+          }
+          recordExecutorCall("requestSuspension", "call", [suspensionAttempt], undefined, directCorrelation)
           currentCommandCalled = true
           commandCalls += 1
           yield* Deferred.succeed(commandCallSignal, undefined)
-          return yield* Deferred.await(commandResponse)
+          const report = yield* Deferred.await(commandResponse)
+          recordExecutorCall("requestSuspension", "return", [], report)
+          return report
         }),
-      begin: (request) =>
+      begin: (request, delivery) =>
         Effect.gen(function* () {
+          const directCorrelation: PlannedAttemptExecutorCorrelation = {
+            attemptId: request.plannedAttempt.attemptId,
+            runId: request.plannedAttempt.runId
+          }
+          recordExecutorCall("begin", "call", [request, delivery], undefined, directCorrelation)
           currentCommandCalled = true
           if (
             request.specification.body !== specification.body ||
@@ -456,10 +646,17 @@ const executorConformanceDriver = defineDriver(
           yield* Deferred.await(beginTurnGate)
           beginTurnCrossingCount += 1
           yield* Deferred.succeed(beginTurnSignal, undefined)
-          return yield* Deferred.await(commandResponse)
+          const report = yield* Deferred.await(commandResponse)
+          recordExecutorCall("begin", "return", [], report)
+          return report
         }),
-      resume: () =>
+      resume: (request) =>
         Effect.gen(function* () {
+          const directCorrelation: PlannedAttemptExecutorCorrelation = {
+            attemptId: request.plannedAttempt.attemptId,
+            runId: request.plannedAttempt.runId
+          }
+          recordExecutorCall("resume", "call", [request], undefined, directCorrelation)
           currentCommandCalled = true
           commandCalls += 1
           const latestDelivery = records.findLast(
@@ -470,7 +667,9 @@ const executorConformanceDriver = defineDriver(
           if (latestDelivery?._tag === "PlannedAttemptExecutorResumeRedeliveryIntended")
             redeliveryCalls = [...redeliveryCalls, latestDelivery.commandOrdinal]
           yield* Deferred.succeed(commandCallSignal, undefined)
-          return yield* Deferred.await(commandResponse)
+          const report = yield* Deferred.await(commandResponse)
+          recordExecutorCall("resume", "return", [], report)
+          return report
         })
     })
     const workflowLayer = Layer.merge(journalLayer, Layer.succeed(PlannedAttemptExecutor, executor))
@@ -649,6 +848,14 @@ const executorConformanceDriver = defineDriver(
     return {
       init: () =>
         Effect.gen(function* () {
+          reverseCapture.journal.length = 0
+          reverseCapture.executor.length = 0
+          reverseCapture.eligibility.length = 0
+          reverseCapture.witnesses.length = 0
+          reverseCapture.projections.length = 0
+          reverseCapture.processCuts = 0
+          reverseCapture.eligibilityReads = 0
+          reverseCapture.witnessReads = 0
           if (pendingCommand !== undefined) yield* Fiber.interrupt(pendingCommand)
           if (pendingProjection !== undefined) yield* Fiber.interrupt(pendingProjection)
           if (pendingState !== undefined) yield* Fiber.interrupt(pendingState)
@@ -658,6 +865,7 @@ const executorConformanceDriver = defineDriver(
           resumeEligibility = undefined
           resumeReservation = undefined
           redeliveryCalls = []
+          observedAttemptId = undefined
           authorityReport = undefined
           currentProjection = undefined
           commandCalls = 0
@@ -725,7 +933,9 @@ const executorConformanceDriver = defineDriver(
       readResumeContinuationWitness: () =>
         Effect.gen(function* () {
           resumeEligibility = yield* resumeFixture.eligibility()
+          reverseCapture.eligibilityReads += 1
           const eligibility = resumeEligibility
+          reverseCapture.eligibility.push(eligibility)
           const admission = yield* requireController()
           yield* admission.synchronize(
             yield* makeFreshTaskAdmissionBasis({
@@ -744,6 +954,8 @@ const executorConformanceDriver = defineDriver(
           if (decision._tag !== "Admitted") return yield* Effect.die("retry reservation was rejected")
           resumeReservation = decision.reservation
           resumeWitness = yield* resumeFixture.readWitnesses()
+          reverseCapture.witnessReads += 1
+          reverseCapture.witnesses.push(resumeWitness)
         }).pipe(Effect.orDie),
       recordResumeRedeliveryIntent: () =>
         Effect.gen(function* () {
@@ -800,7 +1012,11 @@ const executorConformanceDriver = defineDriver(
       callResumeRedelivery: () => call().pipe(Effect.orDie),
       crashResumeDelivery: () =>
         Effect.gen(function* () {
-          if (pendingCommand !== undefined) yield* Fiber.interrupt(pendingCommand)
+          if (pendingCommand !== undefined) {
+            yield* Fiber.interrupt(pendingCommand)
+            if (liveExecutorOperation !== undefined) recordExecutorCall(liveExecutorOperation, "interrupted")
+          }
+          reverseCapture.processCuts += 1
           pendingCommand = undefined
           if (resumeReservation !== undefined) yield* (yield* requireController()).complete(resumeReservation)
           resumeReservation = undefined
@@ -1024,7 +1240,7 @@ const executorConformanceDriver = defineDriver(
           const responseAmbiguous =
             unmatched !== undefined && (currentCommandCalled || resumeRecoveryRequired) && pendingCommand === undefined
           const lastResume = intents.findLast((intent) => intent.command === "Resume")
-          return {
+          const projection = {
             resumeRecovery: {
               projectionOrdinal: BigInt(
                 lastResume === undefined
@@ -1099,6 +1315,8 @@ const executorConformanceDriver = defineDriver(
                 event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkTerminal"
             )
           }
+          yield* Effect.sync(() => reverseCapture.projections.push(projection))
+          return projection
         })
     }
   }
@@ -1110,6 +1328,464 @@ const scopedExecutorConformanceDriver = {
     return executorConformanceDriver.create()
   }
 }
+
+type DirectedRawStep = {
+  readonly preProjection: ReturnType<typeof decodeReverseProjection> | undefined
+  readonly postProjection: ReturnType<typeof decodeReverseProjection>
+  readonly journal: ReadonlyArray<ReverseJournalObservation>
+  readonly executor: ReadonlyArray<ReverseExecutorObservation>
+  readonly eligibility: ReadonlyArray<SafeContinuationRevalidationEligibility>
+  readonly witnesses: ReadonlyArray<PlannedAttemptContinuationWitness>
+  readonly processCuts: number
+  readonly eligibilityReads: number
+  readonly witnessReads: number
+}
+
+type ReverseRunSignal = ReturnType<typeof Deferred.makeUnsafe<void>>
+type ReverseRunControl = {
+  readonly blockAt: string | undefined
+  readonly reached: ReverseRunSignal
+  readonly release: ReverseRunSignal
+  readonly processCutReached: ReverseRunSignal
+  readonly observationStreamClosed: ReverseRunSignal
+  readonly completed: ReverseRunSignal
+  readonly raw: Array<DirectedRawStep>
+  readonly closeAfterProcessCut: boolean
+}
+
+const makeReverseRunControl = (blockAt: string | undefined, closeAfterProcessCut = false): ReverseRunControl => ({
+  blockAt,
+  reached: Deferred.makeUnsafe<void>(),
+  release: Deferred.makeUnsafe<void>(),
+  processCutReached: Deferred.makeUnsafe<void>(),
+  observationStreamClosed: Deferred.makeUnsafe<void>(),
+  completed: Deferred.makeUnsafe<void>(),
+  raw: [],
+  closeAfterProcessCut
+})
+
+type ReverseCaptureReader = () => Effect.Effect<ReverseDriverCapture, never, never>
+
+type ReverseCaptureMeasurement = { readonly wallMs: number; readonly cpuMs: number }
+
+let lastReverseCaptureMeasurement: ReverseCaptureMeasurement | undefined
+
+const reverseCaptureMeasurement = (): ReverseCaptureMeasurement => {
+  if (lastReverseCaptureMeasurement === undefined) throw new Error("reverse capture measurement is unavailable")
+  return lastReverseCaptureMeasurement
+}
+
+const reverseDriverCaptureOf = (): ReverseCaptureReader => () => {
+  const capture = activeReverseDriverCapture
+  if (capture === undefined) return Effect.die("reverse driver observation hook is missing")
+  return Effect.succeed({
+    journal: [...capture.journal],
+    executor: [...capture.executor],
+    eligibility: [...capture.eligibility],
+    witnesses: [...capture.witnesses],
+    projections: [...capture.projections],
+    processCuts: capture.processCuts,
+    eligibilityReads: capture.eligibilityReads,
+    witnessReads: capture.witnessReads
+  })
+}
+
+const reverseActionBoundary = (operation: string): ReverseTraceEvent["durableBoundary"] => {
+  if (operation === "init") return "initialization"
+  if (operation === "beginResponsibility") return "responsibility"
+  if (operation === "recordPreTurnThreadRead") return "stutter"
+  if (operation.includes("Intent")) return "intent"
+  if (operation.startsWith("call")) return "call"
+  if (operation.startsWith("receive")) return "response"
+  if (operation === "recordCommandProjection") return "projection"
+  if (operation.startsWith("settle")) return "settlement"
+  if (operation === "readResumeContinuationWitness") return "witness"
+  if (operation === "crashResumeDelivery") return "crash"
+  throw new Error(`reverse schedule operation is not a reviewed boundary: ${operation}`)
+}
+
+type ObservedSpanClassification = {
+  readonly action: string
+  readonly refinement: ReverseTraceEvent["refinement"]
+  readonly outcome: ReverseOutcome
+  readonly commandOrdinal: PlannedAttemptExecutorCommandOrdinal | undefined
+  readonly projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal | undefined
+  readonly redeliveryOrdinal: PlannedAttemptExecutorResumeRedeliveryOrdinal | undefined
+}
+
+const typedCommandOrdinalOf = (step: DirectedRawStep): PlannedAttemptExecutorCommandOrdinal | undefined =>
+  step.journal.findLast(({ record }) => {
+    const tag = record.event._tag
+    return (
+      tag === "PlannedAttemptExecutorCommandIntended" ||
+      tag === "PlannedAttemptExecutorResumeRedeliveryIntended" ||
+      tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+      tag === "PlannedAttemptExecutorCommandResponseObserved" ||
+      tag === "PlannedAttemptExecutorCommandResponseContradicted"
+    )
+  })?.commandOrdinal
+
+const typedProjectionOrdinalOf = (
+  step: DirectedRawStep
+): PlannedAttemptExecutorCommandProjectionOrdinal | undefined => {
+  const event = step.journal.findLast(
+    ({ record }) => record.event._tag === "PlannedAttemptExecutorCommandProjectionObserved"
+  )?.record.event
+  return event?._tag === "PlannedAttemptExecutorCommandProjectionObserved" ? event.projectionOrdinal : undefined
+}
+
+const typedRedeliveryOrdinalOf = (step: DirectedRawStep): PlannedAttemptExecutorResumeRedeliveryOrdinal | undefined => {
+  const event = step.journal.findLast(
+    ({ record }) => record.event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended"
+  )?.record.event
+  return event?._tag === "PlannedAttemptExecutorResumeRedeliveryIntended" ? event.redeliveryOrdinal : undefined
+}
+
+const classifyObservedSpan = (
+  step: DirectedRawStep,
+  index: number,
+  activeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal | undefined
+): ObservedSpanClassification => {
+  const candidates: Array<string> = []
+  const tags = step.journal.map(({ record }) => record.event._tag)
+  if (index === 0) candidates.push("init")
+  if (tags.includes("PlannedAttemptExecutorWorkResponsibilityBegan")) candidates.push("beginResponsibility")
+  const commandIntent = step.journal.find(({ record }) => record.event._tag === "PlannedAttemptExecutorCommandIntended")
+  if (commandIntent?.record.event._tag === "PlannedAttemptExecutorCommandIntended") {
+    candidates.push(
+      commandIntent.record.event.command === "Begin"
+        ? "recordBeginIntent"
+        : commandIntent.record.event.command === "Suspend"
+          ? "recordSuspendIntent"
+          : "recordResumeIntent"
+    )
+  }
+  if (tags.includes("PlannedAttemptExecutorResumeRedeliveryIntended")) candidates.push("recordResumeRedeliveryIntent")
+  if (tags.includes("PlannedAttemptExecutorCommandProjectionObserved")) candidates.push("recordCommandProjection")
+  if (tags.includes("PlannedAttemptExecutorCommandResponseObserved")) candidates.push("receiveCommandResponse")
+  if (tags.includes("PlannedAttemptExecutorWorkReported")) candidates.push("settleCommandResponse")
+  if (step.witnessReads > 0 || step.eligibilityReads > 0) candidates.push("readResumeContinuationWitness")
+  if (step.processCuts > 0) candidates.push("crashResumeDelivery")
+  const call = step.executor.find(({ phase }) => phase === "call")
+  if (call?.operation === "begin") candidates.push("callBegin")
+  if (call?.operation === "requestSuspension") candidates.push("callSuspend")
+  if (call?.operation === "resume") {
+    if (
+      step.preProjection !== undefined &&
+      step.preProjection.resumeRecovery.totalRedeliveryIntents > step.preProjection.resumeRecovery.redeliveryCallCount
+    )
+      candidates.push("callResumeRedelivery")
+    else candidates.push("callResume")
+  }
+  if (
+    candidates.length === 0 &&
+    step.journal.length > 0 &&
+    step.executor.length === 0 &&
+    activeCommandOrdinal !== undefined
+  )
+    candidates.push("settleCommandProjection")
+  if (candidates.length !== 1)
+    throw new Error(
+      `production observation span ${index} inferred ${candidates.length} boundaries: ${candidates.join(",")}`
+    )
+  const action = candidates[0]
+  if (action === undefined) throw new Error(`production observation span ${index} omitted its boundary`)
+  const commandOrdinal =
+    typedCommandOrdinalOf(step) ??
+    (action === "init" || action === "beginResponsibility" || action === "readResumeContinuationWitness"
+      ? undefined
+      : activeCommandOrdinal)
+  if (
+    action !== "init" &&
+    action !== "beginResponsibility" &&
+    action !== "readResumeContinuationWitness" &&
+    commandOrdinal === undefined
+  )
+    throw new Error(`production observation span ${index} omitted a typed command ordinal for ${action}`)
+  return {
+    action,
+    refinement:
+      action === "receiveCommandResponse" || action === "recordCommandProjection" || action === "callResumeRedelivery"
+        ? "hidden-model-choice"
+        : "direct-model-step",
+    outcome: step.processCuts === 0 ? "completed" : "crashed",
+    commandOrdinal,
+    projectionOrdinal: typedProjectionOrdinalOf(step),
+    redeliveryOrdinal: typedRedeliveryOrdinalOf(step)
+  }
+}
+
+const reverseTraceFromRaw = (
+  raw: ReadonlyArray<DirectedRawStep>,
+  faults: ReadonlyArray<string> = ["initial-resume-crash", "first-redelivery-crash"]
+): ReverseTrace => {
+  const first = raw[0]
+  if (first === undefined) throw new Error("reverse directed schedule produced no observations")
+  const correlation = raw.flatMap((step) => [
+    ...step.journal.flatMap((record) =>
+      record.attemptId === undefined ? [] : [{ runId: record.runId, attemptId: record.attemptId }]
+    ),
+    ...step.executor.map(({ correlation: observed }) => observed)
+  ])[0]
+  if (correlation === undefined) throw new Error("reverse observations omit correlation")
+  for (const observed of raw.flatMap((step) => [
+    ...step.journal.flatMap((record) =>
+      record.attemptId === undefined ? [] : [{ runId: record.runId, attemptId: record.attemptId }]
+    ),
+    ...step.executor.map(({ correlation: fact }) => fact)
+  ])) {
+    if (observed.runId !== correlation.runId || observed.attemptId !== correlation.attemptId)
+      throw new Error("reverse observations contain more than one subject identity")
+  }
+  let latestProjectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal | undefined
+  let latestRedeliveryOrdinal: PlannedAttemptExecutorResumeRedeliveryOrdinal | undefined
+  let activeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal | undefined
+  const events: Array<ReverseTraceEvent> = raw.map((step, index) => {
+    const classification = classifyObservedSpan(step, index, activeCommandOrdinal)
+    if (classification.projectionOrdinal !== undefined) latestProjectionOrdinal = classification.projectionOrdinal
+    if (classification.redeliveryOrdinal !== undefined) latestRedeliveryOrdinal = classification.redeliveryOrdinal
+    const implementationAction = classification.action
+    const commandOrdinal = classification.commandOrdinal
+    if (
+      implementationAction === "recordBeginIntent" ||
+      implementationAction === "recordResumeIntent" ||
+      implementationAction === "recordSuspendIntent" ||
+      implementationAction === "recordResumeRedeliveryIntent"
+    ) {
+      if (commandOrdinal === undefined) throw new Error(`observed ${implementationAction} omitted its command ordinal`)
+      activeCommandOrdinal = commandOrdinal
+    }
+    if (implementationAction === "settleCommandResponse") activeCommandOrdinal = undefined
+    return {
+      index,
+      implementationAction,
+      refinement: classification.refinement,
+      correlation,
+      commandOrdinal,
+      projectionOrdinal: latestProjectionOrdinal,
+      redeliveryOrdinal: latestRedeliveryOrdinal,
+      preProjection: step.preProjection,
+      postProjection: step.postProjection,
+      eligibility: step.eligibility,
+      witnesses: step.witnesses,
+      durableBoundary: reverseActionBoundary(implementationAction),
+      outcome: classification.outcome,
+      journal: step.journal,
+      executor: step.executor
+    }
+  })
+  const last = events.at(-1)
+  if (last === undefined) throw new Error("reverse directed schedule has no final observation")
+  return {
+    version: reverseTraceVersion,
+    model: {
+      specification: "specs/plannedAttemptExecutor.qnt",
+      step: reverseModelStep,
+      quintVersion,
+      checker: "typescript-evaluator-frontier",
+      sourceSha256: reverseModelSourceSha256
+    },
+    implementation: {
+      driver: "executorConformanceDriver",
+      version: "production-observation-driver-v2",
+      head: repositoryHead(process.cwd()),
+      sourceInputDigest: currentSourceInputDigest(process.cwd())
+    },
+    projection: {
+      id: reverseProjectionId,
+      version: reverseProjectionVersion,
+      fieldManifest: reverseProjectionFieldManifest
+    },
+    schedule: { id: "resume-redelivery-directed-production-v2", seed: "158", faults },
+    events,
+    terminal: { outcome: "completed", finalAction: last.implementationAction, finalStatus: last.postProjection.status }
+  }
+}
+
+const runDirectedResumeRedeliveryObserved = (
+  driverFactory: typeof scopedExecutorConformanceDriver = scopedExecutorConformanceDriver,
+  options: { readonly secondRedelivery?: boolean; readonly control?: ReverseRunControl } = {}
+) =>
+  Effect.gen(function* () {
+    const captureStartedWall = performance.now()
+    const captureStartedCpu = process.cpuUsage()
+    const driver = yield* driverFactory.create()
+    const getState = driver.getState
+    if (getState === undefined) return yield* Effect.die("reverse driver state observer is missing")
+    const capture = reverseDriverCaptureOf()
+    const raw = options.control?.raw ?? []
+    const action = (name: string) => {
+      const selected = driver.actions[name]
+      if (selected === undefined) throw new Error(`reverse driver action is missing: ${name}`)
+      return selected
+    }
+    const invoke = (name: string, picks: Record<string, unknown> = {}) =>
+      Effect.gen(function* () {
+        const before = yield* capture()
+        const preProjection = raw.length === 0 ? undefined : decodeReverseProjection(yield* getState())
+        yield* action(name).handler(picks)
+        const postProjection = decodeReverseProjection(yield* getState())
+        const after = yield* capture()
+        raw.push({
+          preProjection,
+          postProjection,
+          journal: after.journal.slice(before.journal.length),
+          executor: after.executor.slice(before.executor.length),
+          eligibility: after.eligibility.slice(before.eligibility.length),
+          witnesses: after.witnesses.slice(before.witnesses.length),
+          processCuts: after.processCuts - before.processCuts,
+          eligibilityReads: after.eligibilityReads - before.eligibilityReads,
+          witnessReads: after.witnessReads - before.witnessReads
+        })
+        if (options.control?.closeAfterProcessCut && after.processCuts > before.processCuts) {
+          yield* Deferred.succeed(options.control.processCutReached, undefined)
+          yield* Deferred.await(options.control.observationStreamClosed)
+          return yield* Effect.never
+        }
+        if (options.control?.blockAt === name) {
+          yield* Deferred.succeed(options.control.reached, undefined)
+          yield* Deferred.await(options.control.release)
+        }
+      })
+    yield* invoke("init")
+    yield* invoke("beginResponsibility")
+    yield* invoke("recordBeginIntent")
+    yield* invoke("callBegin")
+    yield* invoke("receiveCommandResponse", { report: "ExecutorWorkExecuting" })
+    yield* invoke("settleCommandResponse")
+    yield* invoke("recordSuspendIntent")
+    yield* invoke("callSuspend")
+    yield* invoke("receiveCommandResponse", { report: "ExecutorWorkSafelySuspended" })
+    yield* invoke("settleCommandResponse")
+    yield* invoke("recordResumeIntent")
+    yield* invoke("crashResumeDelivery")
+    yield* invoke("recordCommandProjection", { commandProjection: "CommandProjectionExactSafelySuspended" })
+    yield* invoke("settleCommandProjection")
+    yield* invoke("readResumeContinuationWitness")
+    yield* invoke("recordResumeRedeliveryIntent")
+    yield* invoke("callResumeRedelivery")
+    if (options.secondRedelivery ?? true) {
+      yield* invoke("crashResumeDelivery")
+      yield* invoke("recordCommandProjection", { commandProjection: "CommandProjectionExactSafelySuspended" })
+      yield* invoke("settleCommandProjection")
+      yield* invoke("readResumeContinuationWitness")
+      yield* invoke("recordResumeRedeliveryIntent")
+      yield* invoke("callResumeRedelivery")
+    }
+    yield* invoke("receiveCommandResponse", { report: "ExecutorWorkExecuting" })
+    yield* invoke("settleCommandResponse")
+    const trace = reverseTraceFromRaw(
+      raw,
+      (options.secondRedelivery ?? true) ? ["initial-resume-crash", "first-redelivery-crash"] : ["initial-resume-crash"]
+    )
+    const captureUsage = process.cpuUsage(captureStartedCpu)
+    lastReverseCaptureMeasurement = {
+      wallMs: performance.now() - captureStartedWall,
+      cpuMs: (captureUsage.user + captureUsage.system) / 1000
+    }
+    if (options.control !== undefined) yield* Deferred.succeed(options.control.completed, undefined)
+    return trace
+  })
+
+type ReverseCollectionMode = "completed" | "cancelled" | "timed-out" | "truncated"
+const reverseCollectionDeadlineMs = 25
+const realClockMillis = (): number => Number(process.hrtime.bigint() / 1_000_000n)
+const realDeadlineClock = Clock.Clock.of({
+  currentTimeMillisUnsafe: realClockMillis,
+  currentTimeMillis: Effect.sync(realClockMillis),
+  currentTimeNanosUnsafe: () => process.hrtime.bigint(),
+  currentTimeNanos: Effect.sync(() => process.hrtime.bigint()),
+  monotonicTimeNanosUnsafe: () => process.hrtime.bigint(),
+  monotonicTimeNanos: Effect.sync(() => process.hrtime.bigint()),
+  sleep: (duration) =>
+    Effect.promise(
+      () =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, Math.max(0, Duration.toMillis(duration)))
+        })
+    )
+})
+
+const stopDetachedReverseProduction = () => Effect.suspend(() => activeReverseDriverStop?.() ?? Effect.void)
+
+const reversePrefixOf = (
+  control: ReverseRunControl,
+  faults: ReadonlyArray<string>
+): ReadonlyArray<ReverseTraceEvent> => {
+  if (control.raw.length === 0) throw new Error("reverse collection stopped before one observable prefix event")
+  return reverseTraceFromRaw(control.raw, faults).events
+}
+
+/** Collects the directed run through real fibers and Deferred observation gates. */
+const collectDirectedReverseCollection = (mode: ReverseCollectionMode) =>
+  Effect.gen(function* () {
+    const faults = ["initial-resume-crash", "first-redelivery-crash"]
+    const control = makeReverseRunControl(
+      mode === "cancelled" ? "callSuspend" : mode === "timed-out" ? "callResumeRedelivery" : undefined,
+      mode === "truncated"
+    )
+    const run = yield* runDirectedResumeRedeliveryObserved(scopedExecutorConformanceDriver, { control }).pipe(
+      Effect.forkChild
+    )
+    if (mode === "completed") {
+      const trace = yield* Fiber.join(run)
+      return { _tag: "Completed" as const, trace }
+    }
+    if (mode === "cancelled") {
+      yield* Deferred.await(control.reached)
+      yield* stopDetachedReverseProduction()
+      yield* Fiber.interrupt(run)
+      const exit = yield* Fiber.await(run)
+      if (exit._tag === "Success") return yield* Effect.die("cancelled reverse run completed after interruption")
+      return {
+        _tag: "Cancelled" as const,
+        reason: "production fiber interrupted while its executor call was blocked",
+        prefix: reversePrefixOf(control, faults),
+        stopped: true as const
+      }
+    }
+    if (mode === "timed-out") {
+      const started = performance.now()
+      yield* Deferred.await(control.reached)
+      const deadlineExit = yield* Effect.exit(
+        Deferred.await(control.completed).pipe(
+          Effect.timeout(Duration.millis(reverseCollectionDeadlineMs)),
+          Effect.provideService(Clock.Clock, realDeadlineClock)
+        )
+      )
+      const timedOutByClock =
+        deadlineExit._tag === "Failure" &&
+        deadlineExit.cause.reasons.some((reason) => Cause.isFailReason(reason) && Cause.isTimeoutError(reason.error))
+      if (!timedOutByClock) return yield* Effect.die("timed-out reverse run did not observe a Clock TimeoutError")
+      yield* stopDetachedReverseProduction()
+      yield* Fiber.interrupt(run)
+      const exit = yield* Fiber.await(run)
+      if (exit._tag === "Success") return yield* Effect.die("timed-out reverse run completed after its deadline")
+      return {
+        _tag: "TimedOut" as const,
+        elapsedMs: performance.now() - started,
+        deadlineMs: reverseCollectionDeadlineMs,
+        timeoutCause: "ClockDeadlineExceeded" as const,
+        prefix: reversePrefixOf(control, faults),
+        stopped: true as const
+      }
+    }
+    yield* Deferred.await(control.processCutReached)
+    // Closing this observation stream is the process-cut boundary.  The run
+    // remains parked until the close is observed, then interruption proves the
+    // production fiber cannot continue from a truncated prefix.
+    yield* Deferred.succeed(control.observationStreamClosed, undefined)
+    yield* stopDetachedReverseProduction()
+    yield* Fiber.interrupt(run)
+    const exit = yield* Fiber.await(run)
+    if (exit._tag === "Success") return yield* Effect.die("truncated reverse run completed after stream close")
+    return {
+      _tag: "Truncated" as const,
+      reason: "observation stream closed after the production process cut",
+      prefix: reversePrefixOf(control, faults),
+      stopped: true as const
+    }
+  })
 
 const executorStateCheck = stateCheck(
   (raw) =>
@@ -1126,6 +1802,578 @@ const executorStateCheck = stateCheck(
     JSON.stringify(spec, (_, value) => (typeof value === "bigint" ? value.toString() : value)) ===
     JSON.stringify(implementation, (_, value) => (typeof value === "bigint" ? value.toString() : value))
 )
+
+const makeOmittedRetryDriver = (mutantObserved: Ref.Ref<boolean>) => ({
+  create: () =>
+    scopedExecutorConformanceDriver.create().pipe(
+      Effect.map((driver) => {
+        const callBeginPreTurn = driver.actions["callBeginPreTurn"]
+        if (callBeginPreTurn === undefined) throw new Error("reverse mutant driver action is missing")
+        return {
+          ...driver,
+          actions: {
+            ...driver.actions,
+            callBeginPreTurn: { ...callBeginPreTurn, handler: () => Ref.set(mutantObserved, true) }
+          }
+        }
+      })
+    )
+})
+
+const reverseCheckRejectsObserved = (trace: ReverseTrace) =>
+  Effect.promise(() =>
+    checkReverseTrace(trace).then(
+      () => false,
+      () => true
+    )
+  )
+
+const reverseObservedTraceDigest = (trace: ReverseTrace): string =>
+  createHash("sha256")
+    .update(JSON.stringify(trace, (_, value) => (typeof value === "bigint" ? `${value}n` : value)))
+    .digest("hex")
+
+const quintValueIdentity = (value: unknown): string =>
+  JSON.stringify(value, (_, nested) => (typeof nested === "bigint" ? `${nested}n` : nested))
+
+it.effect(
+  "retains canonical mbtStep ambiguity paths until Safe settlement",
+  () =>
+    Effect.promise(async () => {
+      const oracle = await loadCanonicalMbtStepOracle()
+      let state = oracle.initialState
+      const prefix = [] as Array<Awaited<ReturnType<typeof oracle.enumerateSuccessorsForAction>>[number]>
+      for (const action of [
+        "beginResponsibility",
+        "recordBeginIntent",
+        "callBegin",
+        "receiveCommandResponse",
+        "settleCommandResponse",
+        "recordSuspendIntent",
+        "callSuspend"
+      ]) {
+        const successors = oracle.enumerateSuccessorsForAction(state, action)
+        if (successors.length === 0) throw new Error(`canonical mbtStep has no ${action} successor`)
+        const transition =
+          action === "receiveCommandResponse"
+            ? successors.find(
+                (candidate) =>
+                  oracle.enumerateSuccessorsForAction(candidate.postState, "settleCommandResponse").length > 0
+              )
+            : successors[0]
+        if (transition === undefined) throw new Error(`canonical mbtStep ${action} successor disappeared`)
+        prefix.push(transition)
+        state = transition.postState
+      }
+      const responses = oracle.enumerateSuccessorsForAction(state, "receiveCommandResponse")
+      if (responses.length === 0) throw new Error("canonical mbtStep has no response successors")
+      const observedProjection = projectModelEnvironment(responses[0]?.postState ?? state)
+      const projectionMatches = responses.filter(
+        (transition) =>
+          quintValueIdentity(projectModelEnvironment(transition.postState)) === quintValueIdentity(observedProjection)
+      )
+      const fullStates = new Set(projectionMatches.map((transition) => quintModelStateIdentity(transition.postState)))
+      expect(fullStates.size).toBeGreaterThanOrEqual(2)
+      const safeSettlementProjection = projectionMatches
+        .flatMap((response) => oracle.enumerateSuccessorsForAction(response.postState, "settleCommandResponse"))
+        .map((settlement) => projectModelEnvironment(settlement.postState))
+        .find((projection) => projection.status === "StatusSafelySuspended")
+      if (safeSettlementProjection === undefined) throw new Error("canonical mbtStep has no observable Safe settlement")
+      const settledPaths = projectionMatches.flatMap((response) =>
+        oracle
+          .enumerateSuccessorsForAction(response.postState, "settleCommandResponse")
+          .filter(
+            (settlement) =>
+              quintValueIdentity(projectModelEnvironment(settlement.postState)) ===
+              quintValueIdentity(safeSettlementProjection)
+          )
+          .map((settlement) => [...prefix, response, settlement])
+      )
+      const settledPathIdentities = new Set(settledPaths.map(modelPathSemanticIdentity))
+      const settledStateIdentities = new Set(
+        settledPaths.map((path) => quintModelStateIdentity(path.at(-1)?.postState ?? state))
+      )
+      expect(settledPathIdentities.size).toBe(1)
+      expect(settledStateIdentities.size).toBe(1)
+      const reversedResponses = oracle.enumerateSuccessorsForActionReversed(state, "receiveCommandResponse")
+      const reversedSettledPathIdentities = new Set(
+        reversedResponses
+          .filter(
+            (transition) =>
+              quintValueIdentity(projectModelEnvironment(transition.postState)) ===
+              quintValueIdentity(observedProjection)
+          )
+          .flatMap((response) =>
+            oracle
+              .enumerateSuccessorsForActionReversed(response.postState, "settleCommandResponse")
+              .filter(
+                (settlement) =>
+                  quintValueIdentity(projectModelEnvironment(settlement.postState)) ===
+                  quintValueIdentity(safeSettlementProjection)
+              )
+              .map((settlement) => modelPathSemanticIdentity([...prefix, response, settlement]))
+          )
+      )
+      expect(reversedSettledPathIdentities).toEqual(settledPathIdentities)
+      const firstResponse = responses[0] ?? prefix[0]
+      if (firstResponse === undefined) throw new Error("canonical mbtStep response path is empty")
+      expect(modelTransitionSemanticIdentity(firstResponse)).toContain("branchIr")
+    }),
+  { timeout: 45_000 }
+)
+
+it.effect(
+  "checks the production-observed Resume-redelivery chronology with the Quint frontier",
+  () =>
+    Effect.gen(function* () {
+      const trace = yield* runDirectedResumeRedeliveryObserved()
+      const captureCost = reverseCaptureMeasurement()
+      expect(captureCost.wallMs).toBeGreaterThan(0)
+      expect(captureCost.cpuMs).toBeGreaterThanOrEqual(0)
+      const result = yield* Effect.promise(() => checkReverseTrace(trace))
+      expect(result.accepted).toBe(true)
+      expect(result.completePaths).toBeGreaterThan(0)
+      expect(result.frontierSizes.length).toBe(trace.events.length)
+      expect(result.paths).toHaveLength(result.completePaths)
+      expect(result.perEvent).toHaveLength(trace.events.length)
+      expect(result.perEvent.every(({ distinctFullStates, paths }) => paths >= distinctFullStates)).toBe(true)
+      const safeResponseIndex = trace.events.findIndex(
+        (event, index) =>
+          event.implementationAction === "receiveCommandResponse" &&
+          trace.events[index + 1]?.implementationAction === "settleCommandResponse" &&
+          trace.events[index + 1]?.postProjection.status === "StatusSafelySuspended"
+      )
+      if (safeResponseIndex < 0) throw new Error("production chronology omitted its observed Safe response")
+      const safeSettlementIndex = trace.events.findIndex(
+        (event, index) =>
+          index > safeResponseIndex &&
+          event.implementationAction === "settleCommandResponse" &&
+          event.postProjection.status === "StatusSafelySuspended"
+      )
+      if (safeSettlementIndex < 0) throw new Error("production chronology omitted its Safe settlement")
+      expect(result.perEvent[safeResponseIndex]?.distinctFullStates).toBe(1)
+      expect(result.perEvent[safeSettlementIndex]?.distinctFullStates).toBe(1)
+      expect(result.perEvent[safeSettlementIndex]?.paths).toBe(1)
+      const reversed = yield* Effect.promise(() => checkReverseTraceWithReversedEnumeration(trace))
+      expect(reversed.frontierSizes).toEqual(result.frontierSizes)
+      expect(reversed.perEvent[safeResponseIndex]?.distinctFullStates).toBe(1)
+      expect(reversed.perEvent[safeSettlementIndex]?.distinctFullStates).toBe(1)
+    }),
+  { timeout: 45_000 }
+)
+
+it.effect(
+  "accepts a foreign CorrelationContradiction and rejects subject-correlation mutation",
+  () =>
+    Effect.gen(function* () {
+      const trace = yield* runDirectedResumeRedeliveryObserved()
+      const oracle = yield* Effect.promise(loadResumeRedeliveryOracle)
+      const target = trace.events
+        .flatMap((event, eventIndex) =>
+          event.executor.map((observation, observationIndex) => ({ event, eventIndex, observation, observationIndex }))
+        )
+        .find(({ observation }) => observation.operation === "observe" && observation.phase === "return")
+      if (target === undefined || target.observation.result === undefined)
+        return yield* Effect.die("production chronology omitted an observe return for contradiction control")
+      const foreignCorrelation: PlannedAttemptExecutorCorrelation = {
+        runId: trace.events[0]?.correlation.runId ?? correlation.runId,
+        attemptId: AttemptId.make("foreign-observation")
+      }
+      const foreignReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+        correlation: foreignCorrelation
+      })
+      const contradiction = PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
+        expected: trace.events[0]?.correlation ?? correlation,
+        observed: foreignReport
+      })
+      const withForeignObservation: ReverseTrace = {
+        ...trace,
+        events: trace.events.map((event, eventIndex) =>
+          eventIndex !== target.eventIndex
+            ? event
+            : {
+                ...event,
+                executor: event.executor.map((observation, observationIndex) =>
+                  eventIndex === target.eventIndex && observationIndex === target.observationIndex
+                    ? { ...observation, result: contradiction, report: "CorrelationContradiction" as const }
+                    : observation
+                )
+              }
+        )
+      }
+      expect(
+        yield* Effect.promise(() => checkReverseTraceWithOracle(withForeignObservation, oracle).then(() => true))
+      ).toBe(true)
+      const subjectMutation: ReverseTrace = {
+        ...withForeignObservation,
+        events: withForeignObservation.events.map((event, eventIndex) =>
+          eventIndex !== target.eventIndex
+            ? event
+            : {
+                ...event,
+                executor: event.executor.map((observation, observationIndex) =>
+                  eventIndex === target.eventIndex && observationIndex === target.observationIndex
+                    ? {
+                        ...observation,
+                        result: {
+                          ...contradiction,
+                          observed: { ...foreignReport, correlation: trace.events[0]?.correlation ?? correlation }
+                        },
+                        report: "CorrelationContradiction" as const
+                      }
+                    : observation
+                )
+              }
+        )
+      }
+      expect(yield* reverseCheckRejectsObserved(subjectMutation)).toBe(true)
+    }),
+  { timeout: 45_000 }
+)
+
+it.effect(
+  "keeps the evaluator frontier sensitive to chronology, identity, durability, and terminal completeness",
+  () =>
+    Effect.gen(function* () {
+      const trace = yield* runDirectedResumeRedeliveryObserved()
+      const oracle = yield* Effect.promise(loadResumeRedeliveryOracle)
+      const rejectsWithLoadedOracle = (candidate: ReverseTrace) =>
+        Effect.promise(() =>
+          checkReverseTraceWithOracle(candidate, oracle, true).then(
+            () => false,
+            () => true
+          )
+        )
+      const renumber = (events: ReadonlyArray<ReverseTraceEvent>) => events.map((event, index) => ({ ...event, index }))
+      const eventAt = (index: number): ReverseTraceEvent => {
+        const event = trace.events[index]
+        if (event === undefined) throw new Error(`reverse control trace is missing event ${index}`)
+        return event
+      }
+      const secondProjection = eventAt(18)
+      const secondSettlement = eventAt(19)
+      const firstProjection = eventAt(12)
+      const firstCrash = eventAt(11)
+      const secondCrash = eventAt(17)
+      const firstJournal = firstProjection.journal[0]
+      if (firstJournal === undefined) throw new Error("reverse control trace is missing journal evidence")
+      const candidates: Array<ReverseTrace> = [
+        {
+          ...trace,
+          events: trace.events.map((event, index) =>
+            index === 24
+              ? {
+                  ...event,
+                  postProjection: {
+                    ...event.postProjection,
+                    resumeRecovery: { ...event.postProjection.resumeRecovery, redeliveryCallCount: 99n }
+                  }
+                }
+              : event
+          )
+        },
+        {
+          ...trace,
+          events: trace.events.map((event, index) =>
+            index === 3 ? { ...event, implementationAction: "callSuspend", durableBoundary: "call" } : event
+          )
+        },
+        {
+          ...trace,
+          events: trace.events.map((event, index) =>
+            index === 22 ? { ...event, refinement: "direct-model-step" } : event
+          )
+        },
+        {
+          ...trace,
+          events: trace.events.filter((_event, index) => index !== 18).map((event, index) => ({ ...event, index }))
+        },
+        {
+          ...trace,
+          events: renumber([
+            ...trace.events.slice(0, 18),
+            secondSettlement,
+            secondProjection,
+            ...trace.events.slice(20)
+          ])
+        },
+        {
+          ...trace,
+          events: trace.events.map((event, index) =>
+            index === 18 ? { ...event, postProjection: firstProjection.postProjection } : event
+          )
+        },
+        {
+          ...trace,
+          events: trace.events.map((event, index) =>
+            index === 16 ? { ...event, commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(2) } : event
+          )
+        },
+        {
+          ...trace,
+          events: trace.events.map((event, index) =>
+            index === 21
+              ? { ...event, redeliveryOrdinal: PlannedAttemptExecutorResumeRedeliveryOrdinal.make(1) }
+              : event
+          )
+        },
+        {
+          ...trace,
+          events: trace.events.slice(0, 12),
+          terminal: {
+            ...trace.terminal,
+            finalAction: firstCrash.implementationAction,
+            finalStatus: firstCrash.postProjection.status
+          }
+        },
+        {
+          ...trace,
+          events: trace.events.slice(0, 18),
+          terminal: {
+            ...trace.terminal,
+            finalAction: secondCrash.implementationAction,
+            finalStatus: secondCrash.postProjection.status
+          }
+        },
+        { ...trace, schedule: { ...trace.schedule, faults: ["initial-resume-crash"] } },
+        {
+          ...trace,
+          events: trace.events.map((event, index) =>
+            index === 0
+              ? { ...event, correlation: { ...event.correlation, attemptId: AttemptId.make("foreign") } }
+              : event
+          )
+        },
+        { ...trace, events: trace.events.map((event, index) => (index === 12 ? { ...event, journal: [] } : event)) },
+        {
+          ...trace,
+          events: trace.events.map((event, index) =>
+            index === 12 ? { ...event, journal: [...event.journal, firstJournal] } : event
+          )
+        },
+        {
+          ...trace,
+          events: trace.events.map((event, index) =>
+            index === 14 ? { ...event, journal: [...event.journal].reverse() } : event
+          )
+        },
+        {
+          ...trace,
+          events: trace.events.map((event, index) =>
+            index === 12
+              ? {
+                  ...event,
+                  journal: event.journal.map((record, recordIndex) =>
+                    recordIndex === 0
+                      ? {
+                          ...record,
+                          key: JournalRecordKey.make("attempt:1:executor-command:3:projection:99:observation")
+                        }
+                      : record
+                  )
+                }
+              : event
+          )
+        },
+        {
+          ...trace,
+          events: trace.events.map((event, index) =>
+            index === 12
+              ? {
+                  ...event,
+                  journal: event.journal.map((record, recordIndex) =>
+                    recordIndex === 0 ? { ...record, event: modelRunBegan.event._tag } : record
+                  )
+                }
+              : event
+          )
+        },
+        { ...trace, events: trace.events.map((event, index) => (index === 22 ? { ...event, executor: [] } : event)) }
+      ]
+      for (const candidate of candidates) expect(yield* rejectsWithLoadedOracle(candidate)).toBe(true)
+    }),
+  { timeout: 45_000 }
+)
+
+it.effect(
+  "enumerates ordinary Quint evaluator samples without collapsing full states",
+  () =>
+    Effect.promise(async () => {
+      const oracle = await loadResumeRedeliveryOracle()
+      const ordinary = oracle.ordinarySuccessor(oracle.initialState, 158n)
+      if (ordinary === undefined) throw new Error("ordinary evaluator sample did not produce a successor")
+      const exhaustive = oracle.enumerateSuccessorsForAction(
+        oracle.initialState,
+        ordinary.actionName ?? "beginResponsibility"
+      )
+      expect(
+        exhaustive.some(
+          (candidate) => quintModelStateIdentity(candidate.postState) === quintModelStateIdentity(ordinary.postState)
+        )
+      ).toBe(true)
+    }),
+  { timeout: 30_000 }
+)
+
+it.effect(
+  "proves a focused Quint guard mutation flips only the reverse-lane sample",
+  () =>
+    Effect.gen(function* () {
+      const canonicalTrace = yield* runDirectedResumeRedeliveryObserved()
+      const mutantTrace = yield* runDirectedResumeRedeliveryObserved(scopedExecutorConformanceDriver, {
+        secondRedelivery: false
+      })
+      const modelBytes = readFileSync("specs/plannedAttemptExecutor.qnt")
+      const focusedGuard =
+        "activeCommand(state.commandState).kind == BeginCommand or state.resumeRecovery.redeliveryIntents.length() == 2,"
+      const mutatedGuard =
+        "activeCommand(state.commandState).kind == BeginCommand or state.resumeRecovery.redeliveryIntents.length() >= 1,"
+      const modelSource = modelBytes.toString()
+      if (modelSource.split(focusedGuard).length !== 2) return yield* Effect.die("focused Quint guard is not unique")
+      const mutantOracle = yield* Effect.promise(() =>
+        loadOracleFromBytes(Buffer.from(modelSource.replace(focusedGuard, mutatedGuard), "utf8"))
+      )
+      const provenanceMutation = {
+        ...canonicalTrace,
+        model: { ...canonicalTrace.model, sourceSha256: mutantOracle.sourceSha256 }
+      }
+      expect(yield* reverseCheckRejectsObserved(provenanceMutation)).toBe(true)
+      const acceptedMutantTrace = {
+        ...mutantTrace,
+        model: { ...mutantTrace.model, sourceSha256: mutantOracle.sourceSha256 }
+      }
+      const frozenDigest = reverseObservedTraceDigest(acceptedMutantTrace)
+      const canonicalOracle = yield* Effect.promise(loadResumeRedeliveryOracle)
+      const canonicalRejectedOneRedelivery = {
+        ...mutantTrace,
+        model: { ...mutantTrace.model, sourceSha256: canonicalOracle.sourceSha256 }
+      }
+      expect(
+        yield* Effect.promise(() =>
+          checkReverseTraceWithOracle(canonicalRejectedOneRedelivery, canonicalOracle).then(
+            () => false,
+            () => true
+          )
+        )
+      ).toBe(true)
+      const mutantResult = yield* Effect.promise(() => checkReverseTraceWithOracle(acceptedMutantTrace, mutantOracle))
+      expect(mutantResult.accepted).toBe(true)
+      expect(reverseObservedTraceDigest(acceptedMutantTrace)).toBe(frozenDigest)
+    }),
+  { timeout: 45_000 }
+)
+
+it.effect(
+  "times public Quint generation separately from service-backed replay",
+  () =>
+    Effect.gen(function* () {
+      const directedTrace = yield* runDirectedResumeRedeliveryObserved()
+      const directedCapture = yield* reverseDriverCaptureOf()()
+      expect(directedTrace.events.length).toBeGreaterThan(0)
+      const options = {
+        backend: "typescript" as const,
+        spec: "specs/plannedAttemptExecutor.qnt",
+        step: "resumeRedeliveryMbtStep",
+        maxSamples: 1,
+        maxSteps: 40,
+        nTraces: 1,
+        seed: "158"
+      }
+      const generationStartedWall = performance.now()
+      const generationStartedCpu = process.cpuUsage()
+      const traces = yield* generateTraces(options)
+      const generationUsage = process.cpuUsage(generationStartedCpu)
+      expect(traces).toHaveLength(1)
+      const replayOnce = () =>
+        quintRunWithTraceGeneration({
+          ...options,
+          driverFactory: scopedExecutorConformanceDriver,
+          stateCheck: executorStateCheck
+        }).pipe(
+          Effect.provide(Layer.succeed(TraceGeneration, TraceGeneration.of({ generate: () => Effect.succeed(traces) })))
+        )
+      const replayStartedWall = performance.now()
+      const replayStartedCpu = process.cpuUsage()
+      const replay = yield* replayOnce()
+      const replayUsage = process.cpuUsage(replayStartedCpu)
+      const generatedCapture = yield* reverseDriverCaptureOf()()
+      expect(replay.tracesReplayed).toBe(1)
+      expect(generatedCapture.journal.length).toBeGreaterThan(0)
+      expect(generatedCapture.executor.length).toBeGreaterThan(0)
+      expect(generatedCapture.projections.length).toBeGreaterThan(0)
+      expect(generatedCapture.journal).toEqual(directedCapture.journal)
+      expect(generatedCapture.executor).toEqual(directedCapture.executor)
+      expect(generatedCapture.projections).not.toEqual(directedCapture.projections)
+      expect(generatedCapture.projections.length).not.toBe(directedCapture.projections.length)
+      expect(performance.now() - generationStartedWall).toBeGreaterThan(0)
+      expect((generationUsage.user + generationUsage.system) / 1000).toBeGreaterThanOrEqual(0)
+      expect(performance.now() - replayStartedWall).toBeGreaterThan(0)
+      expect((replayUsage.user + replayUsage.system) / 1000).toBeGreaterThanOrEqual(0)
+    }),
+  { timeout: 45_000 }
+)
+
+it.effect(
+  "fails closed for cancelled, timed-out, and truncated reverse collections",
+  () =>
+    Effect.gen(function* () {
+      const incomplete: ReadonlyArray<ReverseCollection> = [
+        yield* collectDirectedReverseCollection("cancelled"),
+        yield* collectDirectedReverseCollection("timed-out"),
+        yield* collectDirectedReverseCollection("truncated")
+      ]
+      expect(incomplete[0]?._tag).toBe("Cancelled")
+      expect(incomplete[1]?._tag).toBe("TimedOut")
+      expect(incomplete[2]?._tag).toBe("Truncated")
+      if (incomplete[1]?._tag === "TimedOut") {
+        expect(incomplete[1].timeoutCause).toBe("ClockDeadlineExceeded")
+        expect(incomplete[1].deadlineMs).toBe(reverseCollectionDeadlineMs)
+        expect(incomplete[1].elapsedMs).toBeGreaterThanOrEqual(reverseCollectionDeadlineMs)
+      }
+      for (const collection of incomplete)
+        expect(
+          yield* Effect.promise(() =>
+            checkReverseCollection(collection).then(
+              () => false,
+              () => true
+            )
+          )
+        ).toBe(true)
+      const completed = yield* collectDirectedReverseCollection("completed")
+      expect(yield* Effect.promise(() => checkReverseCollection(completed))).toMatchObject({ accepted: true })
+    }),
+  { timeout: 45_000 }
+)
+
+it.effect(
+  "retains model-generated coverage for an omitted implementation retry schedule",
+  () =>
+    Effect.gen(function* () {
+      const mutantObserved = yield* Ref.make(false)
+      const mutantDriver = makeOmittedRetryDriver(mutantObserved)
+      const reverseTrace = yield* runDirectedResumeRedeliveryObserved(mutantDriver)
+      const reverseResult = yield* Effect.promise(() => checkReverseTrace(reverseTrace))
+      expect(reverseResult.accepted).toBe(true)
+      expect(yield* Ref.get(mutantObserved)).toBe(false)
+      const modelReplay = yield* Effect.exit(
+        quintRun({
+          backend: "typescript",
+          driverFactory: mutantDriver,
+          maxSamples: 1,
+          maxSteps: 34,
+          nTraces: 1,
+          seed: "2",
+          spec: "specs/plannedAttemptExecutor.qnt",
+          stateCheck: executorStateCheck,
+          step: "mbtStep"
+        })
+      )
+      expect(modelReplay._tag).toBe("Failure")
+      expect(yield* Ref.get(mutantObserved)).toBe(true)
+    }),
+  { timeout: 45_000 }
+)
+
 quintIt(
   it.effect,
   "replays durable executor commands through production protocol and admission seams",
