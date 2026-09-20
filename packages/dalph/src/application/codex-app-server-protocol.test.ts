@@ -45,6 +45,7 @@ const validTurn = {
   ]
 }
 const write = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n")
+const writeVersionless = (id, result) => process.stdout.write(JSON.stringify({ id, result }) + "\n")
 const writeError = (id) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: "fixture failure" } }) + "\n")
 const responseFor = (method, params = {}) => {
   if (mode === "turn-start-unanswered-then-read" && method === "thread/read") {
@@ -420,6 +421,17 @@ const onMessage = (message) => {
   if (message.method === "initialized") return
   requestNumber += 1
   if (message.method === "thread/read") threadReadNumber += 1
+  if (mode === "versionless-envelope" && (message.method === "initialize" || message.method === "thread/start")) {
+    writeVersionless(message.id, responseFor(message.method, message.params))
+    if (message.method === "thread/start") {
+      process.stdout.write(JSON.stringify({ method: "turn/completed", params: { opaque: true } }) + "\n")
+    }
+    return
+  }
+  if (mode === "invalid-jsonrpc-version" && requestNumber === 1) {
+    process.stdout.write(JSON.stringify({ jsonrpc: "1.0", id: message.id, result: {} }) + "\n")
+    return
+  }
   if (mode === "idle-malformed-before-next-request") {
     fs.appendFileSync(process.argv[1] + ".requests", message.method + "\n")
   }
@@ -1058,6 +1070,7 @@ it.effect("classifies transport protocol errors without fabricating a thread", (
     [
       ["rpc-error", "thread/start"],
       ["malformed-json", "thread/start"],
+      ["invalid-jsonrpc-version", "initialize"],
       ["non-number-response-id", "initialize"],
       ["initialize-family-contradiction", "initialize"],
       ["non-object-message", "initialize"]
@@ -1348,6 +1361,20 @@ it.effect("keeps existing ID-less completion notifications as wake hints only", 
         const hints = yield* app.attachTurnCompletedHints
         const received = yield* hints.pipe(Stream.runHead, Effect.forkChild)
         yield* app.startThread("/fixture/worktree")
+        expect(yield* Fiber.join(received)).toEqual(Option.some(undefined))
+      })
+    )
+  )
+)
+
+it.effect("accepts Codex versionless JSON-RPC-shaped responses and notifications", () =>
+  withFixture("versionless-envelope", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hints = yield* app.attachTurnCompletedHints
+        const received = yield* hints.pipe(Stream.runHead, Effect.forkChild)
+        const thread = yield* app.startThread("/fixture/worktree")
+        expect(thread.id).toBe("protocol-thread")
         expect(yield* Fiber.join(received)).toEqual(Option.some(undefined))
       })
     )

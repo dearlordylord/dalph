@@ -1693,7 +1693,10 @@ const isJsonRpcId = (value: unknown): boolean =>
  * not a response to one of Dalph's requests.
  */
 const classifyJsonRpcEnvelope = (message: JsonObject): JsonRpcEnvelope => {
-  if (message["jsonrpc"] !== "2.0") {
+  // Codex app-server emits JSON-RPC-shaped messages without the optional
+  // version member; reject an explicit contradictory version but accept the
+  // provider's versionless response/notification envelopes.
+  if (hasJsonRpcField(message, "jsonrpc") && message["jsonrpc"] !== "2.0") {
     return { _tag: "Malformed", detail: "JSON-RPC envelope version is invalid" }
   }
   const hasMethod = hasJsonRpcField(message, "method")
