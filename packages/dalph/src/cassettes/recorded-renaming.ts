@@ -1917,15 +1917,15 @@ const renameRecordedCassetteEntry = (
             plannedAttempt: renamePlannedAttempt(observationEntry.subject.plannedAttempt, maps)
           })
         }),
-      CancelledAttemptImplementationResponsibilityRelinquished: (relinquishedEntry) =>
-        completeFields<typeof relinquishedEntry>({
-          _tag: "CancelledAttemptImplementationResponsibilityRelinquished",
-          authorizedClaim: renameActiveTaskClaim(relinquishedEntry.authorizedClaim, maps),
-          cancellationAppliedAt: preserveCassetteValue(relinquishedEntry.cancellationAppliedAt),
-          initiatedBy: preserveCassetteValue(relinquishedEntry.initiatedBy),
-          occurrenceClassification: preserveCassetteValue(relinquishedEntry.occurrenceClassification),
-          plannedAttempt: renamePlannedAttempt(relinquishedEntry.plannedAttempt, maps),
-          proof: preserveCassetteValue(relinquishedEntry.proof)
+      CancelledAttemptImplementationAbandoned: (abandonedEntry) =>
+        completeFields<typeof abandonedEntry>({
+          _tag: "CancelledAttemptImplementationAbandoned",
+          authorizedClaim: renameActiveTaskClaim(abandonedEntry.authorizedClaim, maps),
+          cancellationAppliedAt: preserveCassetteValue(abandonedEntry.cancellationAppliedAt),
+          initiatedBy: preserveCassetteValue(abandonedEntry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(abandonedEntry.occurrenceClassification),
+          plannedAttempt: renamePlannedAttempt(abandonedEntry.plannedAttempt, maps),
+          proof: preserveCassetteValue(abandonedEntry.proof)
         }),
       CancelledAttemptClaimNoReleaseObserved: (observationEntry) =>
         completeFields<typeof observationEntry>({

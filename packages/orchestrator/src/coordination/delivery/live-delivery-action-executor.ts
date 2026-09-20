@@ -37,7 +37,7 @@ type IdentityFreeTransition = Extract<
 
 const plannedAttemptTransitionTags: ReadonlySet<IdentityFreeTransition["_tag"]> = new Set([
   "AdvanceAttemptStoppage",
-  "RelinquishCancelledAttemptImplementation",
+  "AbandonCancelledAttemptImplementation",
   "ObservePlannedAttemptExecutorWork",
   "ResumePlannedAttemptExecutorWorkAfterCurrentFacts",
   "ReconcilePlannedAttemptExecutorWork",

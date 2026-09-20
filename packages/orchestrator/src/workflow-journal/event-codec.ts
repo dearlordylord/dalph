@@ -4,6 +4,10 @@ import { WorkflowJournalEvent } from "../workflow/registry/event.js"
 
 const CurrentPayload = Schema.Record(Schema.String, Schema.Unknown)
 
+const legacyCancelledAttemptImplementationEventKind =
+  "CancelledAttemptImplementationResponsibilityRelinquished" as const
+const cancelledAttemptImplementationAbandonedEventKind = "CancelledAttemptImplementationAbandoned" as const
+
 /** One normalized journal envelope prepared for immutable persistence. */
 export const EncodedJournalEvent = Schema.Struct({
   kind: JournalEventKind,
@@ -41,9 +45,13 @@ const decodePayload = (
  */
 export const decodeJournalEvent = Effect.fn("WorkflowJournal.decodeEvent")(function* (encoded: EncodedJournalEvent) {
   const payload = yield* decodePayload(encoded.payloadJson, encoded.kind, encoded.version)
+  const normalizedKind =
+    encoded.kind === legacyCancelledAttemptImplementationEventKind
+      ? cancelledAttemptImplementationAbandonedEventKind
+      : encoded.kind
   const candidate: unknown =
     encoded.version === workflowJournalEventVersion
-      ? { ...payload, _tag: encoded.kind, version: workflowJournalEventVersion }
+      ? { ...payload, _tag: normalizedKind, version: workflowJournalEventVersion }
       : undefined
   if (candidate === undefined) {
     return yield* new JournalEventDecodeIssue({

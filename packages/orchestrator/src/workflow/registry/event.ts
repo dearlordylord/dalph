@@ -48,7 +48,7 @@ import { BranchCleanupJournalEvent } from "../protocols/disposition-cleanup/bran
 import { IntegratorCandidateCleanupJournalEvent } from "../protocols/disposition-cleanup/integrator-candidate.js"
 import {
   CancelledAttemptClaimNoReleaseObservedEvent,
-  CancelledAttemptImplementationResponsibilityRelinquishedEvent,
+  CancelledAttemptImplementationAbandonedEvent,
   RunCancellationAppliedEvent
 } from "../protocols/run-cancellation/events.js"
 import { RunFinalityEvidence } from "../../coordination/frontier/run-finality.js"
@@ -195,7 +195,7 @@ export const WorkflowJournalEvent = Schema.Union([
   WorkflowRunBeganEvent,
   WorkflowRunTerminatedEvent,
   RunCancellationAppliedEvent,
-  CancelledAttemptImplementationResponsibilityRelinquishedEvent,
+  CancelledAttemptImplementationAbandonedEvent,
   CancelledAttemptClaimNoReleaseObservedEvent,
   TaskWorkCapacityChangedEvent,
   ControlDirectionAppliedEvent,

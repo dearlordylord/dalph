@@ -352,39 +352,37 @@ it.effect("projects and alpha-renames every Run cancellation cassette occurrence
     )
     for (const tag of [
       "RunCancellationApplied",
-      "CancelledAttemptImplementationResponsibilityRelinquished",
+      "CancelledAttemptImplementationAbandoned",
       "CancelledAttemptClaimNoReleaseObserved"
     ]) {
       expect(tags).toContain(tag)
     }
-    const relinquished = runningRecorded.entries.find(
-      (entry) => entry._tag === "CancelledAttemptImplementationResponsibilityRelinquished"
-    )
+    const abandoned = runningRecorded.entries.find((entry) => entry._tag === "CancelledAttemptImplementationAbandoned")
     const noRelease = foreignRecorded.entries.find((entry) => entry._tag === "CancelledAttemptClaimNoReleaseObserved")
-    if (relinquished?._tag !== "CancelledAttemptImplementationResponsibilityRelinquished") {
-      return yield* Effect.die("running cancellation cassette must record implementation relinquishment")
+    if (abandoned?._tag !== "CancelledAttemptImplementationAbandoned") {
+      return yield* Effect.die("running cancellation cassette must record implementation abandonment")
     }
     if (noRelease?._tag !== "CancelledAttemptClaimNoReleaseObserved") {
       return yield* Effect.die("foreign cancellation cassette must record claim preservation")
     }
     const cancellationClaimTokenRenamings = [
-      { from: relinquished.authorizedClaim.token, to: "renamed-cancelled-claim" },
+      { from: abandoned.authorizedClaim.token, to: "renamed-cancelled-claim" },
       { from: noRelease.expectedClaim.token, to: "renamed-cancelled-expected-claim" }
     ].filter((renaming, index, all) => all.findIndex(({ from }) => from === renaming.from) === index)
     const cancellationOperationRenamings = [
-      { from: relinquished.authorizedClaim.operationId, to: "renamed-cancelled-claim-operation" },
+      { from: abandoned.authorizedClaim.operationId, to: "renamed-cancelled-claim-operation" },
       { from: noRelease.expectedClaim.operationId, to: "renamed-cancelled-expected-claim-operation" },
       { from: noRelease.observationOperationId, to: "renamed-cancelled-observation-operation" }
     ].filter((renaming, index, all) => all.findIndex(({ from }) => from === renaming.from) === index)
     const cancellationRenaming = yield* Schema.decodeUnknownEffect(CassetteIdentityRenaming)({
-      attemptIds: [{ from: relinquished.plannedAttempt.attemptId, to: "renamed-cancelled-attempt" }],
+      attemptIds: [{ from: abandoned.plannedAttempt.attemptId, to: "renamed-cancelled-attempt" }],
       claimTokens: cancellationClaimTokenRenamings,
       integratorCandidateResourceLocators: [],
       integratorSessionIds: [],
       operationIds: cancellationOperationRenamings,
       runIds: [{ from: runningRecorded.runId, to: "renamed-cancelled-run" }],
-      taskBranchRefs: [{ from: relinquished.plannedAttempt.branch, to: "refs/heads/dalph/renamed-cancelled-attempt" }],
-      worktreeLocators: [{ from: relinquished.plannedAttempt.worktree, to: "/dalph/renamed-cancelled-attempt" }]
+      taskBranchRefs: [{ from: abandoned.plannedAttempt.branch, to: "refs/heads/dalph/renamed-cancelled-attempt" }],
+      worktreeLocators: [{ from: abandoned.plannedAttempt.worktree, to: "/dalph/renamed-cancelled-attempt" }]
     })
     const [renamedIdle, renamedRunning, renamedForeign, renamedIntegration] = yield* Effect.all([
       renameRecordedCassette(idleRecorded, cancellationRenaming),
@@ -413,7 +411,7 @@ it.effect("projects and alpha-renames every Run cancellation cassette occurrence
       .map(renderRecordedCassetteLyrics)
       .join("\n")
     expect(lyrics).toContain("Operator applied Run cancellation.")
-    expect(lyrics).toContain("relinquished implementation responsibility for cancelled attempt")
+    expect(lyrics).toContain("abandoned implementation responsibility for cancelled attempt")
     expect(lyrics).toContain("cancelling attempt")
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
@@ -7057,7 +7055,7 @@ it.effect(
         AttemptRestartAuthorityReadFailed: true,
         AttemptStoppageIntended: true,
         CancelledAttemptClaimNoReleaseObserved: true,
-        CancelledAttemptImplementationResponsibilityRelinquished: true,
+        CancelledAttemptImplementationAbandoned: true,
         ControlDirectionApplied: true,
         GitReadInitiated: true,
         IntegrationResponsibilityBegan: true,
@@ -7352,7 +7350,7 @@ it.effect(
       expect(stopLyrics).toContain("observed ExactExecutorReport while reconciling executor command")
       expect(stopLyrics).toContain("returned ExecutorWorkSafelySuspended")
       expect(stopLyrics).toContain("Operator applied Run cancellation")
-      expect(stopLyrics).toContain("relinquished implementation responsibility for cancelled attempt")
+      expect(stopLyrics).toContain("abandoned implementation responsibility for cancelled attempt")
       expect(stopLyrics).toContain("cancelling attempt")
       expect(renderRecordedCassetteLyrics(renamedRestartFailure)).toContain("GitWorktreeReadFailure boundary failed")
 

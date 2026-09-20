@@ -572,7 +572,9 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
   return {
     ...bootstrap,
     acceptedHistory: observation.acceptedHistory,
+    awaitEstablished: observation.awaitEstablished,
     applicationExitRequestBoundary: sharedApplicationExit.requestBoundary,
+    current: observation.current,
     runTermination: observation.runTermination
   }
 })
@@ -2221,6 +2223,11 @@ it.effect("rejects a terminated Run before constructing activation", () =>
       expect((yield* storage.auditAll()).runs).toContainEqual(expect.objectContaining({ runId, partition: "Cold" }))
       const bootstrap = yield* buildBootstrap(runId, storage)
       expect(yield* bootstrap.readRunReactivationControl(target, runId)).toBe("RunTerminated")
+      expect(yield* bootstrap.awaitEstablished).toEqual(
+        expect.objectContaining({ acceptedAt: expect.any(Number), runId, target })
+      )
+      expect(yield* bootstrap.runTermination.await).toMatchObject({ disposition: "Completed" })
+      expect(yield* bootstrap.acceptedHistory.get).toEqual((yield* bootstrap.runTermination.await).terminatedAt)
       const runtimeEntered = yield* Ref.make(false)
 
       const failure = yield* bootstrap

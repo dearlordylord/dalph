@@ -6,7 +6,13 @@ import { Effect, Layer, Match, Schema } from "effect"
 
 const FixtureEnvironment = Schema.Struct({
   DALPH_QUALIFICATION_CLAIM_STATE: Schema.NonEmptyString,
-  DALPH_QUALIFICATION_MODE: Schema.Literals(["first", "recovered", "terminal", "exit-during-attachment"])
+  DALPH_QUALIFICATION_MODE: Schema.Literals([
+    "first",
+    "recovered",
+    "terminal",
+    "exit-during-attachment",
+    "cancellation"
+  ])
 })
 
 const environment = Schema.decodeUnknownSync(FixtureEnvironment)(nodeProcess.env)
@@ -41,15 +47,38 @@ const graphResponse = (request: GithubGraphqlRequest) =>
           labelName: create.labelName,
           operationId: create.operationId
         })
-        return yield* Effect.never
+        if (environment.DALPH_QUALIFICATION_MODE !== "cancellation") return yield* Effect.never
+        return {
+          body: {
+            data: {
+              createLabel: {
+                label: {
+                  description: create.description,
+                  id: "production-public-recovery-label",
+                  name: create.labelName
+                }
+              }
+            }
+          }
+        }
       }),
     CreateIssue: () => Effect.die("qualification must not create an issue"),
-    DeleteClaimLabel: () => Effect.die("qualification must not delete the active claim"),
+    DeleteClaimLabel: (remove) =>
+      environment.DALPH_QUALIFICATION_MODE === "cancellation"
+        ? Effect.sync(() => {
+            nodeFs.rmSync(environment.DALPH_QUALIFICATION_CLAIM_STATE)
+            return { body: { data: { deleteLabel: { clientMutationId: remove.operationId } } } }
+          }).pipe(Effect.tap(() => observe({ _tag: "DeleteClaimLabelApplied", operationId: remove.operationId })))
+        : Effect.die("qualification must not delete the active claim"),
     DeleteIssue: () => Effect.die("qualification must not delete an issue"),
     FindClaimLabel: (find) =>
       Effect.gen(function* () {
         yield* observe({ _tag: "FindClaimLabelStarted", labelName: find.labelName })
-        if (environment.DALPH_QUALIFICATION_MODE === "first") {
+        if (
+          environment.DALPH_QUALIFICATION_MODE === "first" ||
+          (environment.DALPH_QUALIFICATION_MODE === "cancellation" &&
+            !nodeFs.existsSync(environment.DALPH_QUALIFICATION_CLAIM_STATE))
+        ) {
           return { body: { data: { node: { id: repositoryNodeId, label: null } } } }
         }
         const claim = yield* Schema.decodeUnknownEffect(
@@ -119,7 +148,22 @@ const graphResponse = (request: GithubGraphqlRequest) =>
           }
         }
       }),
-    ReadTaskWorkSpecification: () => Effect.never,
+    ReadTaskWorkSpecification: (read) =>
+      environment.DALPH_QUALIFICATION_MODE === "cancellation"
+        ? Effect.succeed({
+            body: {
+              data: {
+                node: {
+                  __typename: "Issue",
+                  body: "Retain this cancellation fixture worktree and evidence.",
+                  id: read.issueNodeId,
+                  repository: { id: repositoryNodeId },
+                  title: "Cancellation fixture"
+                }
+              }
+            }
+          })
+        : Effect.never,
     ReopenIssue: () => Effect.die("qualification must not reopen an issue"),
     ResolveIssue: () =>
       Effect.succeed({ body: { data: { repository: { id: repositoryNodeId, issue: { id: issueNodeId } } } } }),

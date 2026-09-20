@@ -414,3 +414,73 @@ disposition that provides equivalent proof. The new evidence also shows that
 an accepted provider turn can remain live while a self-matching tool loop
 performs unbounded writes; provider-response liveness alone does not bound that
 effect.
+
+### Issue #390 cancellation implementation and retained-run result
+
+On 2026-09-20, issue #390's production cancellation implementation passed its
+frozen full gate and was published to hosted `master` as
+`fb91ec236454034190c6ceb8bb43b55e1f193b1e`. The gate run was
+`1af7dee7-f92b-48f4-bb5c-18867d3c886c`; it passed 4,269 tests with 41 skipped,
+the required coverage thresholds, repeatability, formal checks, and baseline
+comparison.
+
+The supervisor then invoked the shipped command against the retained canary:
+
+```text
+dalph cancel github:dearlordylord/dalph#384 --production --config /tmp/dalph-384-review-canary.RuqT7G/production.json
+```
+
+The first invocation lacked provider authentication and failed before starting
+cancellation, with exit status 78 and no Journal mutation. A second invocation
+received the existing authenticated GitHub token through its process
+environment. It selected the exact unfinished Run and durably appended
+`RunCancellationApplied` at Journal position 349. Focused tracker observation
+then occupied positions 350--353.
+
+Cancellation stopped fail-closed with the public typed failure
+`cancellation.blocked`: it could not prove `UnsettledResponsibility` had ended.
+The retained executor-private record still describes the exact planned attempt
+as `Running`, while the prior Journal observations at positions 17--19 record
+`ExecutorWorkExecuting` followed by `ExecutorStateUnreadable`. No conclusive
+execution-substrate observation proves that the executor-owned containment has
+no live writer and cannot resume. The supervisor did not retry because the
+accepted unavailable-proof scenario says redelivery must not weaken that proof
+requirement.
+
+Accordingly, no `CancelledAttemptImplementationAbandoned` or
+`WorkflowRunTerminated` event was appended. The exact claim was not released,
+the task-work position and responsibility remain retained, and the dirty
+worktree, transcript, private executor state, and evidence remain preserved
+under `/tmp/dalph-384-review-canary.RuqT7G`. Issue #390 therefore has a shipped
+implementation but is not operationally closed. The next discriminating action
+is to determine why recovery cannot read or conclusively reconcile the retained
+executor containment, then rerun the same cancellation command only after that
+proof path is available. A fresh #384 attempt remains blocked.
+
+The retained evidence then exposed two narrower implementation gaps. Commit
+`da59b40e0cf9f88b08024073f6c3fa844386be09` lets durable Run cancellation
+select the exact suspension boundary after the earlier passive
+`ExecutorStateUnreadable`; full gate
+`988f4e17-852e-4dc5-a990-bbe2912c667d` passed 4,269 tests with 41 skipped.
+Commit `86ca4b57b50989064207d1f7478716dcee1bed96` bounds an unanswered retained
+Codex `thread/resume` request and closes its exact owned app-server; full gate
+`53b3e3da-7c56-451c-8acc-db796508db35` passed 4,270 tests with 41 skipped.
+Both commits were published to hosted `master`.
+
+The first repaired invocation proved that the recovered frontier proposes
+`SuspendPlannedAttemptExecutorWork` for the exact attempt. The proposal was
+consumed, but the real retained Codex provider did not return before the
+120-second outer bound. After the bounded-resume repair, reconciled invocations
+with 100-second and 180-second outer bounds also failed to return. Each stopped
+invocation left Journal position 357 as the last record: no executor command
+intent, abandonment, claim release, or termination crossed the Journal
+boundary. Each exact app-server PID was proved absent afterward. The rollout,
+run transcript, and six dirty worktree files remained unchanged; only the
+private app-server launch evidence advanced.
+
+The remaining blocker is below cancellation selection: the real retained
+provider's resume/deadline-close path does not return a typed result within 180
+seconds, despite its exact app-server process being absent after the caller's
+bounded stop. No further cancellation retry is authorized until that shutdown
+path is characterized and made finite. Issue #390 remains open, and starting a
+fresh #384 attempt remains blocked by the retained claim and responsibility.

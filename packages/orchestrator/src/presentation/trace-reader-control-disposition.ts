@@ -296,10 +296,10 @@ const reduceCancelledResponsibilityDisposition = (
   item: TraceHistoryItem,
   state: HistoricalFacetReductionState
 ): void => {
-  if (item.occurrence._tag !== "CancelledAttemptImplementationResponsibilityRelinquished") return
+  if (item.occurrence._tag !== "CancelledAttemptImplementationAbandoned") return
   const occurrence = item.occurrence
   state.dispositions.push(
-    state.factories.dispositionFact.CancelledAttemptResponsibilityRelinquished.make({
+    state.factories.dispositionFact.CancelledAttemptImplementationAbandoned.make({
       authorizedClaim: occurrence.authorizedClaim,
       cancellationAppliedAt: occurrence.cancellationAppliedAt,
       initiatedBy: occurrence.initiatedBy,

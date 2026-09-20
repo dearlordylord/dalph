@@ -73,7 +73,7 @@ export {
   AppliedRunCancellation,
   ApplyRunCancellationRequest,
   CancelledAttemptClaimNoReleaseObservedEvent,
-  CancelledAttemptImplementationResponsibilityRelinquishedEvent,
+  CancelledAttemptImplementationAbandonedEvent,
   RunCancellationAppliedEvent
 } from "./workflow/protocols/run-cancellation/events.js"
 export {
@@ -579,7 +579,7 @@ export {
   AttemptStoppageIntended,
   BranchCleanupOccurred,
   CancelledAttemptClaimNoReleaseObserved,
-  CancelledAttemptImplementationResponsibilityRelinquished,
+  CancelledAttemptImplementationAbandoned,
   IntegrationClaimDeletionOccurred,
   IntegrationClaimReplacementOccurred,
   HistoricalWorkflowOccurrence,
@@ -658,6 +658,7 @@ export {
   ProductionRunSelection,
   ProductionRunSelectionConflict,
   discoverProductionRun,
+  discoverProductionCancellationRun,
   selectDiscoveredProductionRun
 } from "./coordination/run/production-run-selection.js"
 export {
@@ -679,6 +680,7 @@ export {
   runWorkflowWithControlledDeliveryActionExecutor,
   runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh,
   runWorkflowWithActiveWorkAuthorityRefresh,
+  runCancellationWorkflow,
   runWorkflow
 } from "./coordination/run/run.js"
 export {

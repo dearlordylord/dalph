@@ -139,7 +139,7 @@ import {
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
 import {
-  CancelledAttemptImplementationResponsibilityRelinquishedEvent,
+  CancelledAttemptImplementationAbandonedEvent,
   RunCancellationAppliedEvent
 } from "../../workflow/protocols/run-cancellation/events.js"
 import { PlannedAttemptContinuationAuthorizedEvent } from "../../workflow/protocols/planned-attempt-continuation/events.js"
@@ -467,7 +467,7 @@ it("derives a fresh settlement proposal for the exact cancelled-attempt claim re
   const release = makeTaskClaimReleaseOperation({
     authority: TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.make({
       cancellationAppliedAt: JournalPosition.make(22),
-      implementationRelinquishedAt: JournalPosition.make(23),
+      implementationAbandonedAt: JournalPosition.make(23),
       observationOperationId
     }),
     predecessorOperationIds: [activeClaim.operationId, observationOperationId],
@@ -609,10 +609,10 @@ effectIt.effect("executes cancellation no-release only for a fresh foreign claim
         version: workflowJournalEventVersion
       })
     )
-    const relinquished = yield* harness.journal.append(
+    const abandoned = yield* harness.journal.append(
       runId,
       describeJournalEvent(
-        CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
+        CancelledAttemptImplementationAbandonedEvent.make({
           authorizedClaim: activeClaim,
           cancellationAppliedAt: cancellation.position,
           initiatedBy: { _tag: "DalphCoordinator" },
@@ -622,7 +622,7 @@ effectIt.effect("executes cancellation no-release only for a fresh foreign claim
           version: workflowJournalEventVersion
         })
       ).expectedKey,
-      CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
+      CancelledAttemptImplementationAbandonedEvent.make({
         authorizedClaim: activeClaim,
         cancellationAppliedAt: cancellation.position,
         initiatedBy: { _tag: "DalphCoordinator" },
@@ -683,7 +683,7 @@ effectIt.effect("executes cancellation no-release only for a fresh foreign claim
       plannedAttempt
     })
 
-    const missingReadIntentRecords = [cancellation, relinquished, observation]
+    const missingReadIntentRecords = [cancellation, abandoned, observation]
     expect(reduceWorkflowJournalHistory(runId, missingReadIntentRecords)._tag).toBe("InvalidWorkflowJournalHistory")
 
     const noPredecessorOperation = makeTaskClaimObservationOperation(
@@ -728,10 +728,10 @@ effectIt.effect("executes cancellation no-release only for a fresh foreign claim
     }
     const cases: ReadonlyArray<ReadonlyArray<JournalRecord>> = [
       [cancellation, readIntent, observation],
-      [cancellation, relinquished, readIntent],
-      [cancellation, relinquished, mismatchedReadKind, observation],
-      [cancellation, relinquished, noPredecessorRead, noPredecessorObservation],
-      [cancellation, relinquished, readIntent, exactObservation],
+      [cancellation, abandoned, readIntent],
+      [cancellation, abandoned, mismatchedReadKind, observation],
+      [cancellation, abandoned, noPredecessorRead, noPredecessorObservation],
+      [cancellation, abandoned, readIntent, exactObservation],
       yield* harness.records
     ]
     for (const rawBoundaryHistory of cases) {
@@ -742,7 +742,7 @@ effectIt.effect("executes cancellation no-release only for a fresh foreign claim
   })
 )
 
-effectIt.effect("executes cancellation settlement through suspension, relinquishment, reread, and exact release", () =>
+effectIt.effect("executes cancellation settlement through suspension, abandonment, reread, and exact release", () =>
   Effect.gen(function* () {
     const acquisitionOperation = makeTaskClaimAcquisitionOperation({
       acquisition: {
@@ -1009,20 +1009,20 @@ effectIt.effect("executes cancellation settlement through suspension, relinquish
     yield* live.execute({ _tag: "IdentityFreeAction", proposal: suspendProposal }, lease)
     expect((yield* harness.records).some(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toBe(true)
 
-    const relinquishedTransition = RunnableFrontierTransition.RelinquishCancelledAttemptImplementation({
+    const abandonedTransition = RunnableFrontierTransition.AbandonCancelledAttemptImplementation({
       plannedAttempt,
       proof: { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(2) }
     })
-    const relinquishedProposal = proposalsFor(relinquishedTransition).proposals[0]
-    if (relinquishedProposal === undefined || !isIdentityFreeProposal(relinquishedProposal)) {
-      return yield* Effect.die("missing cancellation relinquishment proposal")
+    const abandonedProposal = proposalsFor(abandonedTransition).proposals[0]
+    if (abandonedProposal === undefined || !isIdentityFreeProposal(abandonedProposal)) {
+      return yield* Effect.die("missing cancellation abandonment proposal")
     }
-    yield* live.execute({ _tag: "IdentityFreeAction", proposal: relinquishedProposal }, lease)
-    const afterRelinquishment = yield* harness.records
-    const relinquishedRecord = afterRelinquishment.findLast(
-      ({ event }) => event._tag === "CancelledAttemptImplementationResponsibilityRelinquished"
+    yield* live.execute({ _tag: "IdentityFreeAction", proposal: abandonedProposal }, lease)
+    const afterAbandonment = yield* harness.records
+    const abandonedRecord = afterAbandonment.findLast(
+      ({ event }) => event._tag === "CancelledAttemptImplementationAbandoned"
     )
-    if (relinquishedRecord === undefined) return yield* Effect.die("missing cancellation relinquishment event")
+    if (abandonedRecord === undefined) return yield* Effect.die("missing cancellation abandonment event")
 
     const claimReadOperation = makeTaskClaimObservationOperation(
       OperationId.make("route-matrix-cancellation-chronology-claim-read"),
@@ -1051,7 +1051,7 @@ effectIt.effect("executes cancellation settlement through suspension, relinquish
     const releaseOperation = makeTaskClaimReleaseOperation({
       authority: TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.make({
         cancellationAppliedAt: cancellationPosition,
-        implementationRelinquishedAt: relinquishedRecord.position,
+        implementationAbandonedAt: abandonedRecord.position,
         observationOperationId: claimReadOperation.operationId
       }),
       predecessorOperationIds: [activeClaim.operationId, claimReadOperation.operationId],
@@ -1099,7 +1099,7 @@ effectIt.effect("executes cancellation settlement through suspension, relinquish
           ({ event }) =>
             event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ||
             event._tag === "PlannedAttemptExecutorCommandIntended" ||
-            event._tag === "CancelledAttemptImplementationResponsibilityRelinquished"
+            event._tag === "CancelledAttemptImplementationAbandoned"
         )
         .every(({ event }) => "plannedAttempt" in event && event.plannedAttempt.worktree === plannedAttempt.worktree)
     ).toBe(true)
@@ -1175,20 +1175,20 @@ effectIt.effect("revalidates cancellation quiescence while holding the attempt p
       return { cancellation, harness, safeOrdinal }
     })
     const current = yield* makeCancellationHarness(false)
-    const transition = RunnableFrontierTransition.RelinquishCancelledAttemptImplementation({
+    const transition = RunnableFrontierTransition.AbandonCancelledAttemptImplementation({
       plannedAttempt,
       proof: { _tag: "AcceptedReport", reportOrdinal: current.safeOrdinal }
     })
     const proposal = proposalsFor(transition).proposals[0]
     if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
-      return yield* Effect.die("missing cancellation relinquishment proposal")
+      return yield* Effect.die("missing cancellation abandonment proposal")
     }
     const protocolController = yield* makePlannedAttemptProtocolController()
     const lease: DeliveryActionExecutionLease = {
       ...inertLease,
       withPlannedAttemptProtocol: (correlation, effect) => protocolController.withPermit(correlation, effect)
     }
-    const staleTransition = RunnableFrontierTransition.RelinquishCancelledAttemptImplementation({
+    const staleTransition = RunnableFrontierTransition.AbandonCancelledAttemptImplementation({
       plannedAttempt,
       proof: { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) }
     })
@@ -1197,9 +1197,7 @@ effectIt.effect("revalidates cancellation quiescence while holding the attempt p
       Effect.provideService(PlannedAttemptExecutor, inertPlannedAttemptExecutor)
     )
     expect(
-      (yield* current.harness.records).some(
-        ({ event }) => event._tag === "CancelledAttemptImplementationResponsibilityRelinquished"
-      )
+      (yield* current.harness.records).some(({ event }) => event._tag === "CancelledAttemptImplementationAbandoned")
     ).toBe(false)
 
     yield* executePlannedAttemptTransition({ _tag: "IdentityFreeAction", proposal }, transition, lease).pipe(
@@ -1207,18 +1205,17 @@ effectIt.effect("revalidates cancellation quiescence while holding the attempt p
       Effect.provideService(PlannedAttemptExecutor, inertPlannedAttemptExecutor)
     )
     expect(
-      (yield* current.harness.records).findLast(
-        ({ event }) => event._tag === "CancelledAttemptImplementationResponsibilityRelinquished"
-      )?.event
+      (yield* current.harness.records).findLast(({ event }) => event._tag === "CancelledAttemptImplementationAbandoned")
+        ?.event
     ).toMatchObject({
-      _tag: "CancelledAttemptImplementationResponsibilityRelinquished",
+      _tag: "CancelledAttemptImplementationAbandoned",
       authorizedClaim: activeClaim,
       cancellationAppliedAt: current.cancellation.position,
       plannedAttempt
     })
 
     const preCancellationSafe = yield* makeCancellationHarness(true)
-    const preCancellationTransition = RunnableFrontierTransition.RelinquishCancelledAttemptImplementation({
+    const preCancellationTransition = RunnableFrontierTransition.AbandonCancelledAttemptImplementation({
       plannedAttempt,
       proof: { _tag: "AcceptedReport", reportOrdinal: preCancellationSafe.safeOrdinal }
     })
@@ -1232,7 +1229,7 @@ effectIt.effect("revalidates cancellation quiescence while holding the attempt p
     )
     expect(
       (yield* preCancellationSafe.harness.records).some(
-        ({ event }) => event._tag === "CancelledAttemptImplementationResponsibilityRelinquished"
+        ({ event }) => event._tag === "CancelledAttemptImplementationAbandoned"
       )
     ).toBe(true)
   })
@@ -5731,7 +5728,7 @@ describe("delivery proposal route matrix", () => {
       const cancelledRelease = makeTaskClaimReleaseOperation({
         authority: TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.make({
           cancellationAppliedAt: JournalPosition.make(22),
-          implementationRelinquishedAt: JournalPosition.make(23),
+          implementationAbandonedAt: JournalPosition.make(23),
           observationOperationId: cancelledClaimOperation.operationId
         }),
         predecessorOperationIds: [activeClaim.operationId, cancelledClaimOperation.operationId],

@@ -956,7 +956,21 @@ export const journaledRunBootstrapLayer = (
           const establishedJournal = yield* establishStoredJournal(target)
           if (Option.isNone(establishedJournal)) return "RunUnpaused" as const
           const state = yield* establishedJournal.value.journal.state.get
-          if (lastJournalRecordOfKind(state.prefix, "WorkflowRunTerminated") !== undefined) {
+          const terminal = lastJournalRecordOfKind(state.prefix, "WorkflowRunTerminated")
+          if (terminal?.event._tag === "WorkflowRunTerminated") {
+            yield* processRuntimeCapabilities.observation.close
+            yield* Deferred.succeed(
+              runTermination,
+              JournaledRunTermination.make({
+                disposition: terminal.event.disposition,
+                terminatedAt: TraceCursor.make({ position: terminal.position, runId: terminal.runId })
+              })
+            )
+            yield* publishAcceptedHistory(terminal.runId, terminal.position)
+            yield* Deferred.succeed(
+              established,
+              JournaledRunEstablished.make({ acceptedAt: terminal.position, runId: terminal.runId, target })
+            )
             return "RunTerminated" as const
           }
           return state.reconstructed.pause.run._tag === "RunPaused" ? ("RunPaused" as const) : ("RunUnpaused" as const)

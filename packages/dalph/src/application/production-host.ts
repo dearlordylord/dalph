@@ -55,10 +55,11 @@ import {
   type RequestCircuitPolicy,
   asApplicationExitShellService,
   discoverProductionRun,
+  discoverProductionCancellationRun,
   makeProductionHostApplicationExitShell,
   selectDiscoveredProductionRun
 } from "@dalph/orchestrator"
-import { Context, Deferred, Effect, Layer, type Scope } from "effect"
+import { Context, Deferred, Effect, Layer, Schema, type Scope } from "effect"
 import {
   CodexAppServer,
   CodexAppServerFailure,
@@ -93,6 +94,7 @@ import {
 } from "./production-configuration.js"
 import {
   productionRunReactivationLayer,
+  type ProductionCancellationBlocked,
   productionWorkflowInterpreterLayer,
   productionTargetGitCommands,
   type ProductionApplicationExitRequestObserver,
@@ -114,6 +116,12 @@ export interface ProductionHostObservation {
   /** Exact lifecycle result reported before this host scope finalizes resources and ownership. */
   readonly applicationExitRequestBoundary: ApplicationExitRequestBoundaryService
 }
+
+/** The offline cancellation command found no unfinished Run for its exact target. */
+export class ProductionCancellationRunNotFound extends Schema.TaggedError<ProductionCancellationRunNotFound>()(
+  "ProductionCancellationRunNotFound",
+  {}
+) {}
 
 type ProductionHostFoundation = CoordinatorOwnership | JournalStore | RunLifecycleJournal
 
@@ -177,7 +185,8 @@ export interface ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, R
     selection: ProductionRunSelection,
     onFailure: (failure: EActivation) => Effect.Effect<void>,
     applicationExit: ProductionHostApplicationExitShellService,
-    provider: ProductionHostProviderAdmission
+    provider: ProductionHostProviderAdmission,
+    operation?: "Run" | "Cancel"
   ) => Layer.Layer<JournaledRunObservationSource | RunReactivationOwner, ERun, ProductionHostFoundation | RRun>
 }
 
@@ -592,9 +601,10 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
   run: (
     configuration: ProductionRepositoryHostConfiguration,
     selection: ProductionRunSelection,
-    onFailure: (failure: TaskTrackerMutationThrottled) => Effect.Effect<void>,
+    onFailure: (failure: TaskTrackerMutationThrottled | ProductionCancellationBlocked) => Effect.Effect<void>,
     applicationExit: ProductionHostApplicationExitShellService,
-    provider: ProductionHostProviderAdmission
+    provider: ProductionHostProviderAdmission,
+    operation: "Run" | "Cancel" = "Run"
   ) =>
     Layer.unwrap(
       // eslint-disable-next-line complexity -- One production graph resolves optional edge adapters and observation while preserving one scoped service topology.
@@ -823,6 +833,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           {
             activationInterval: configuration.activationInterval,
             failureCooldown: configuration.failureCooldown,
+            ...(operation === "Cancel" ? { cancelBeforeDelivery: true } : {}),
             ...(adapters.onActivationFinalizationStart === undefined
               ? {}
               : { onActivationFinalizationStart: adapters.onActivationFinalizationStart }),
@@ -858,13 +869,21 @@ export const withDecodedProductionRepositoryHost = <
 >(
   configuration: ProductionRepositoryHostConfiguration,
   graph: ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, RRun, EActivation, EProvider>,
-  use: (observation: ProductionHostObservation) => Effect.Effect<A, EUse, RUse>
+  use: (observation: ProductionHostObservation) => Effect.Effect<A, EUse, RUse>,
+  operation: "Run" | "Cancel" = "Run"
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
       const applicationExit = yield* graph.makeApplicationExit()
       const foundation = yield* Layer.build(graph.foundation(configuration))
-      const discovery = yield* discoverProductionRun(configuration.target).pipe(Effect.provide(foundation))
+      const discovery = yield* (
+        operation === "Cancel"
+          ? discoverProductionCancellationRun(configuration.target)
+          : discoverProductionRun(configuration.target)
+      ).pipe(Effect.provide(foundation))
+      if (operation === "Cancel" && discovery._tag === "Fresh") {
+        return yield* new ProductionCancellationRunNotFound()
+      }
       const provider = yield* graph.acquireProvider(configuration, applicationExit)
       const selection = yield* selectDiscoveredProductionRun(configuration.target, discovery)
       const traceReaderContext = yield* Layer.build(TraceReaderLayer).pipe(Effect.provide(foundation))
@@ -876,7 +895,8 @@ export const withDecodedProductionRepositoryHost = <
           selection,
           (failure) => Deferred.fail(activationFailure, failure).pipe(Effect.asVoid),
           applicationExit,
-          provider
+          provider,
+          operation
         )
       ).pipe(Effect.provide(foundation))
       const source = Context.get(run, JournaledRunObservationSource)

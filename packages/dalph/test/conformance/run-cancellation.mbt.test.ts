@@ -356,7 +356,7 @@ type SettlementPlannedTransition = Extract<
     readonly _tag:
       | "SuspendPlannedAttemptExecutorWork"
       | "ReconcilePlannedAttemptExecutorWork"
-      | "RelinquishCancelledAttemptImplementation"
+      | "AbandonCancelledAttemptImplementation"
       | "RecordCancelledAttemptClaimNoRelease"
   }
 >
@@ -2009,7 +2009,7 @@ const makeCancellationDriverImplementation = () => {
     yield* awaitSettlementCommand(completed)
   })
 
-  const relinquishCancelledAttempt = Effect.gen(function* () {
+  const abandonCancelledAttempt = Effect.gen(function* () {
     const safeReport = records.findLast(
       ({ event }) =>
         event._tag === "PlannedAttemptExecutorWorkReported" &&
@@ -2017,10 +2017,10 @@ const makeCancellationDriverImplementation = () => {
         event.report.correlation.attemptId === plannedAttempt.attemptId
     )
     if (safeReport === undefined || safeReport.event._tag !== "PlannedAttemptExecutorWorkReported") {
-      return yield* Effect.die("cancelled-attempt relinquishment requires the accepted safe executor report")
+      return yield* Effect.die("cancelled-attempt abandonment requires the accepted safe executor report")
     }
     yield* executePlannedSettlement(
-      RunnableFrontierTransition.RelinquishCancelledAttemptImplementation({
+      RunnableFrontierTransition.AbandonCancelledAttemptImplementation({
         plannedAttempt,
         proof: { _tag: "AcceptedReport", reportOrdinal: safeReport.event.ordinal }
       })
@@ -2028,34 +2028,34 @@ const makeCancellationDriverImplementation = () => {
     if (
       !records.some(
         ({ event }) =>
-          event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+          event._tag === "CancelledAttemptImplementationAbandoned" &&
           event.plannedAttempt.attemptId === plannedAttempt.attemptId
       )
     ) {
-      return yield* Effect.die("production cancellation adapter did not persist responsibility relinquishment")
+      return yield* Effect.die("production cancellation adapter did not persist responsibility abandonment")
     }
   })
 
   const cancelledClaimReleaseTransition = () =>
     Effect.gen(function* () {
       const cancellation = records.findLast(({ event }) => event._tag === "RunCancellationApplied")
-      const relinquishment = records.findLast(
+      const abandonment = records.findLast(
         ({ event }) =>
-          event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+          event._tag === "CancelledAttemptImplementationAbandoned" &&
           event.plannedAttempt.attemptId === plannedAttempt.attemptId
       )
       if (
         cancellation === undefined ||
-        relinquishment === undefined ||
+        abandonment === undefined ||
         cancellation.event._tag !== "RunCancellationApplied" ||
-        relinquishment.event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished"
+        abandonment.event._tag !== "CancelledAttemptImplementationAbandoned"
       ) {
-        return yield* Effect.die("cancellation claim release requires durable cancellation and relinquishment")
+        return yield* Effect.die("cancellation claim release requires durable cancellation and abandonment")
       }
       const operation = makeTaskClaimReleaseOperation({
         authority: TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.make({
           cancellationAppliedAt: cancellation.position,
-          implementationRelinquishedAt: relinquishment.position,
+          implementationAbandonedAt: abandonment.position,
           observationOperationId: claimReadOperationId
         }),
         predecessorOperationIds: [activeClaim.operationId, claimReadOperationId],
@@ -2266,7 +2266,7 @@ const makeCancellationDriverImplementation = () => {
         ) {
           return yield* Effect.die("production executor observation adapter did not persist the safe report")
         }
-        yield* relinquishCancelledAttempt
+        yield* abandonCancelledAttempt
         durable = { ...durable, executor: "SafelySuspended", executorSafeReports: durable.executorSafeReports + 1 }
         process = { ...process, executorPositionHeld: false }
       }),
@@ -2491,7 +2491,7 @@ const makeCancellationDriverImplementation = () => {
         ) {
           return yield* Effect.die("restart executor reconciliation duplicated the command or lost safe evidence")
         }
-        yield* relinquishCancelledAttempt
+        yield* abandonCancelledAttempt
         durable = { ...durable, executor: "SafelySuspended", executorSafeReports: 1 }
         process = { ...process, executorPositionHeld: false }
       }),

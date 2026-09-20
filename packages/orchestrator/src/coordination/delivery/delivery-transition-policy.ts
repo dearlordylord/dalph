@@ -19,7 +19,7 @@ export const deliveryTransitionPolicy = {
   AcquireStartedIntegrationTarget: policy("IdentityFree", "None"),
   AdvanceAttemptRestart: policy("IdentityFree", "PlannedAttempt"),
   AdvanceAttemptStoppage: policy("IdentityFree", "StopSubject"),
-  RelinquishCancelledAttemptImplementation: policy("IdentityFree", "PlannedAttempt"),
+  AbandonCancelledAttemptImplementation: policy("IdentityFree", "PlannedAttempt"),
   CheckTaskClaim: policy("AcceptedOperation", "None"),
   CommitFreshTaskClaimIntent: policy("FreshProvenance", "None"),
   CommitTaskClaimReacquisitionIntent: policy("NewOperation", "None"),

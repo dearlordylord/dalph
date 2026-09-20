@@ -34,8 +34,8 @@ export type AppliedRunCancellation = typeof AppliedRunCancellation.Type
  * claim disposition so safe suspension or terminal work never implies claim
  * release.
  */
-export const CancelledAttemptImplementationResponsibilityRelinquishedEvent = Schema.TaggedStruct(
-  "CancelledAttemptImplementationResponsibilityRelinquished",
+export const CancelledAttemptImplementationAbandonedEvent = Schema.TaggedStruct(
+  "CancelledAttemptImplementationAbandoned",
   {
     authorizedClaim: ActiveTaskClaim,
     cancellationAppliedAt: JournalPosition,
@@ -46,8 +46,7 @@ export const CancelledAttemptImplementationResponsibilityRelinquishedEvent = Sch
     version: Schema.Literal(workflowJournalEventVersion)
   }
 )
-export type CancelledAttemptImplementationResponsibilityRelinquishedEvent =
-  typeof CancelledAttemptImplementationResponsibilityRelinquishedEvent.Type
+export type CancelledAttemptImplementationAbandonedEvent = typeof CancelledAttemptImplementationAbandonedEvent.Type
 
 /**
  * A focused post-cancellation claim read proved the exact claim was absent or

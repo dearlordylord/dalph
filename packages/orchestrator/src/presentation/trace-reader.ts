@@ -450,7 +450,7 @@ export const TraceDispositionFact = Schema.TaggedUnion({
     plannedAttempt: PlannedTaskAttempt,
     source: TraceItemIdentity
   },
-  CancelledAttemptResponsibilityRelinquished: {
+  CancelledAttemptImplementationAbandoned: {
     authorizedClaim: ActiveTaskClaim,
     cancellationAppliedAt: JournalPosition,
     initiatedBy: WorkflowActor.cases.DalphCoordinator,
@@ -1667,7 +1667,7 @@ const taskIdsOfControlDispositionOccurrence = (
   occurrence: WorkflowOccurrenceValue
 ): ReadonlyArray<TaskId> | undefined => {
   if (
-    occurrence._tag === "CancelledAttemptImplementationResponsibilityRelinquished" ||
+    occurrence._tag === "CancelledAttemptImplementationAbandoned" ||
     occurrence._tag === "CancelledAttemptClaimNoReleaseObserved"
   ) {
     return [occurrence.plannedAttempt.taskId]

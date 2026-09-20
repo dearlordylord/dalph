@@ -135,7 +135,7 @@ export const TaskClaimReleaseAuthority = Schema.TaggedUnion({
   /** Durable provenance for one exact Run-cancellation claim disposition. */
   CancelledAttemptClaimReleaseAuthority: {
     cancellationAppliedAt: JournalPosition,
-    implementationRelinquishedAt: JournalPosition,
+    implementationAbandonedAt: JournalPosition,
     observationOperationId: OperationId
   },
   StoppedAttemptClaimReleaseAuthority: { observationOperationId: OperationId, requestId: AttemptChoiceRequestId },

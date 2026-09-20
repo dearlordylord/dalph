@@ -1654,7 +1654,7 @@ interface JsonRpcClient {
     params?: unknown
   ) => Effect.Effect<unknown, CodexAppServerFailure, never>
   readonly requestBounded: (
-    operation: "initialize" | "config/read" | "thread/start" | "thread/read" | "turn/start",
+    operation: "initialize" | "config/read" | "thread/start" | "thread/read" | "thread/resume" | "turn/start",
     method: string,
     params?: unknown
   ) => Effect.Effect<unknown, CodexAppServerFailure, never>
@@ -3151,7 +3151,7 @@ export const codexAppServerLayer = (
       })
       const resumeThread = Effect.fn("CodexAppServer.resumeThread")(function* (threadId: CodexThreadId, cwd: string) {
         const response = responseObject(
-          yield* rpc.request("thread/resume", "thread/resume", { threadId, cwd }),
+          yield* rpc.requestBounded("thread/resume", "thread/resume", { threadId, cwd }),
           "thread/resume"
         )
         if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)

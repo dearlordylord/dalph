@@ -63,12 +63,12 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
     readonly subject: AttemptChoiceSubject
   }
   AttemptStoppageWait: { readonly reason: "ExecutorContradictory" | "ExecutorExecuting" | "ExecutorUnavailable" }
-  /** Cancellation has proved exact executor quiescence; relinquishment is the next durable action. */
-  CancelledAttemptRelinquishmentRequired: {
+  /** Cancellation has proved exact executor quiescence; abandonment is the next durable action. */
+  CancelledAttemptAbandonmentRequired: {
     readonly plannedAttempt: PlannedTaskAttempt
     readonly proof: AttemptQuiescenceProof
   }
-  /** A post-relinquishment claim read proved an absent or foreign claim and must be journaled as no-release. */
+  /** A post-abandonment claim read proved an absent or foreign claim and must be journaled as no-release. */
   CancelledAttemptClaimNoReleaseRequired: {
     readonly observationOperationId: OperationId
     readonly plannedAttempt: PlannedTaskAttempt
@@ -182,7 +182,7 @@ export type PlannedAttemptExecutorDisposition =
           | "AttemptRestartWait"
           | "AttemptStoppageExecutorObservationRequired"
           | "AttemptStoppageWait"
-          | "CancelledAttemptRelinquishmentRequired"
+          | "CancelledAttemptAbandonmentRequired"
           | "CancelledAttemptClaimNoReleaseRequired"
           | "CancelledAttemptClaimObservationRequired"
           | "CancelledAttemptClaimReleaseRequired"
@@ -231,7 +231,7 @@ type WorkflowOperationDisposition = Exclude<
       | "AttemptRestartWait"
       | "AttemptStoppageExecutorObservationRequired"
       | "AttemptStoppageWait"
-      | "CancelledAttemptRelinquishmentRequired"
+      | "CancelledAttemptAbandonmentRequired"
       | "CancelledAttemptClaimNoReleaseRequired"
       | "CancelledAttemptClaimObservationRequired"
       | "CancelledAttemptClaimReleaseRequired"

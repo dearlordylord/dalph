@@ -603,11 +603,8 @@ type CancellationAppliedRecord = Omit<JournalRecord, "event"> & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "RunCancellationApplied" }>
 }
 
-type CancellationRelinquishedRecord = Omit<JournalRecord, "event"> & {
-  readonly event: Extract<
-    JournalRecord["event"],
-    { readonly _tag: "CancelledAttemptImplementationResponsibilityRelinquished" }
-  >
+type CancellationAbandonedRecord = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "CancelledAttemptImplementationAbandoned" }>
 }
 
 type CancellationNoReleaseRecord = Omit<JournalRecord, "event"> & {
@@ -633,19 +630,15 @@ const cancellationAppliedRecordFor = (records: JournalHistorySource): Cancellati
     (record): record is CancellationAppliedRecord => record.event._tag === "RunCancellationApplied"
   )
 
-const cancellationRelinquishedRecordFor = (
+const cancellationAbandonedRecordFor = (
   records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   cancellation: CancellationAppliedRecord
-): CancellationRelinquishedRecord | undefined =>
+): CancellationAbandonedRecord | undefined =>
   lastMatchingRecord(
-    journalRecordsForAttemptKind(
-      records,
-      plannedAttempt.attemptId,
-      "CancelledAttemptImplementationResponsibilityRelinquished"
-    ),
-    (record): record is CancellationRelinquishedRecord =>
-      record.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+    journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "CancelledAttemptImplementationAbandoned"),
+    (record): record is CancellationAbandonedRecord =>
+      record.event._tag === "CancelledAttemptImplementationAbandoned" &&
       plannedTaskAttemptEquivalence(record.event.plannedAttempt, plannedAttempt) &&
       record.event.cancellationAppliedAt === cancellation.position
   )
@@ -667,11 +660,11 @@ const cancellationQuiescenceEvidenceFor = (records: JournalHistorySource, planne
 const cancellationClaimObservationFor = (
   records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
-  relinquished: CancellationRelinquishedRecord,
+  abandoned: CancellationAbandonedRecord,
   releaseIntent: CancellationReleaseIntentRecord | undefined,
   immutableRunTarget?: TrackerTarget
 ): CancellationClaimObservationRecord | undefined => {
-  const after = releaseIntent?.position ?? relinquished.position
+  const after = releaseIntent?.position ?? abandoned.position
   return lastMatchingRecord(
     journalRecordsForTaskKind(records, plannedAttempt.taskId, "TaskTrackerFactsObserved"),
     (record): record is CancellationClaimObservationRecord => {
@@ -680,7 +673,7 @@ const cancellationClaimObservationFor = (
         records,
         record,
         plannedAttempt,
-        relinquished,
+        abandoned,
         releaseIntent,
         after,
         immutableRunTarget
@@ -731,7 +724,7 @@ const cancellationClaimObservationMatchesRead = (
   records: JournalHistorySource,
   observation: CancellationClaimObservationRecord,
   plannedAttempt: PlannedTaskAttempt,
-  relinquished: CancellationRelinquishedRecord,
+  abandoned: CancellationAbandonedRecord,
   releaseIntent: CancellationReleaseIntentRecord | undefined,
   after: JournalPosition,
   immutableRunTarget?: TrackerTarget
@@ -744,7 +737,7 @@ const cancellationClaimObservationMatchesRead = (
     taskTrackerTargetKey(operation.target) !== taskTrackerTargetKey(immutableRunTarget)
   )
     return false
-  if (!operation.predecessorOperationIds.includes(relinquished.event.authorizedClaim.operationId)) return false
+  if (!operation.predecessorOperationIds.includes(abandoned.event.authorizedClaim.operationId)) return false
   if (
     releaseIntent !== undefined &&
     !operation.predecessorOperationIds.includes(releaseIntent.event.operation.release.operationId)
@@ -756,39 +749,39 @@ const cancellationClaimObservationMatchesRead = (
 const cancellationReleaseIntentFor = (
   records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
-  relinquished: CancellationRelinquishedRecord
+  abandoned: CancellationAbandonedRecord
 ): CancellationReleaseIntentRecord | undefined =>
   lastMatchingRecord(
     journalRecordsForTaskKind(records, plannedAttempt.taskId, "TaskClaimReleaseIntended"),
     (record): record is CancellationReleaseIntentRecord =>
-      record.position > relinquished.position &&
+      record.position > abandoned.position &&
       record.event._tag === "TaskClaimReleaseIntended" &&
-      isExactTaskClaim(record.event.operation.release.claim, relinquished.event.authorizedClaim) &&
+      isExactTaskClaim(record.event.operation.release.claim, abandoned.event.authorizedClaim) &&
       record.event.operation.authority._tag === "CancelledAttemptClaimReleaseAuthority" &&
-      record.event.operation.authority.cancellationAppliedAt === relinquished.event.cancellationAppliedAt &&
-      record.event.operation.authority.implementationRelinquishedAt === relinquished.position &&
+      record.event.operation.authority.cancellationAppliedAt === abandoned.event.cancellationAppliedAt &&
+      record.event.operation.authority.implementationAbandonedAt === abandoned.position &&
       record.event.operation.release.claim.taskId === plannedAttempt.taskId
   )
 
 const cancellationNoReleaseFor = (
   records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
-  relinquished: CancellationRelinquishedRecord,
+  abandoned: CancellationAbandonedRecord,
   immutableRunTarget?: TrackerTarget
 ): CancellationNoReleaseRecord | undefined =>
   lastMatchingRecord(
     journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "CancelledAttemptClaimNoReleaseObserved"),
     (record): record is CancellationNoReleaseRecord =>
-      record.position > relinquished.position &&
+      record.position > abandoned.position &&
       record.event._tag === "CancelledAttemptClaimNoReleaseObserved" &&
       plannedTaskAttemptEquivalence(record.event.plannedAttempt, plannedAttempt) &&
-      record.event.cancellationAppliedAt === relinquished.event.cancellationAppliedAt &&
-      isExactTaskClaim(record.event.expectedClaim, relinquished.event.authorizedClaim) &&
+      record.event.cancellationAppliedAt === abandoned.event.cancellationAppliedAt &&
+      isExactTaskClaim(record.event.expectedClaim, abandoned.event.authorizedClaim) &&
       claimReadMatchesTarget(
         records,
         record.event.observationOperationId,
         plannedAttempt.taskId,
-        relinquished.position,
+        abandoned.position,
         record.position,
         immutableRunTarget
       )
@@ -796,7 +789,7 @@ const cancellationNoReleaseFor = (
 
 const cancellationReleaseSettledFor = (
   records: JournalHistorySource,
-  relinquished: CancellationRelinquishedRecord,
+  abandoned: CancellationAbandonedRecord,
   releaseIntent: CancellationReleaseIntentRecord | undefined,
   immutableRunTarget?: TrackerTarget
 ): boolean =>
@@ -805,18 +798,18 @@ const cancellationReleaseSettledFor = (
   claimReadMatchesTarget(
     records,
     releaseIntent.event.operation.authority.observationOperationId,
-    relinquished.event.authorizedClaim.taskId,
-    relinquished.position,
+    abandoned.event.authorizedClaim.taskId,
+    abandoned.position,
     releaseIntent.position,
     immutableRunTarget
   ) &&
   hasMatchingRecord(
-    journalRecordsForTaskKind(records, relinquished.event.authorizedClaim.taskId, "TaskClaimReleased"),
+    journalRecordsForTaskKind(records, abandoned.event.authorizedClaim.taskId, "TaskClaimReleased"),
     ({ event, position }) =>
-      position > relinquished.position &&
+      position > abandoned.position &&
       event._tag === "TaskClaimReleased" &&
       event.release.operationId === releaseIntent.event.operation.release.operationId &&
-      isExactTaskClaim(event.release.claim, relinquished.event.authorizedClaim)
+      isExactTaskClaim(event.release.claim, abandoned.event.authorizedClaim)
   )
 
 const cancellationIntegrationAdmittedBefore = (
@@ -837,7 +830,7 @@ const requiredCancelledAttemptClaimObservationDisposition = (
   records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   cancellation: CancellationAppliedRecord,
-  relinquished: CancellationRelinquishedRecord,
+  abandoned: CancellationAbandonedRecord,
   releaseIntent: CancellationReleaseIntentRecord | undefined,
   claimObservation: CancellationClaimObservationRecord | undefined,
   immutableRunTarget?: TrackerTarget
@@ -846,10 +839,10 @@ const requiredCancelledAttemptClaimObservationDisposition = (
   if (target === undefined) {
     return ResponsibilityDisposition.CancelledAttemptClaimPlanningWait({ reason: "TrackerTargetUnavailable" })
   }
-  const observationBaseline = releaseIntent?.position ?? relinquished.position
+  const observationBaseline = releaseIntent?.position ?? abandoned.position
   const after = claimObservation?.position ?? observationBaseline
   const predecessorOperationIds = [
-    relinquished.event.authorizedClaim.operationId,
+    abandoned.event.authorizedClaim.operationId,
     ...(releaseIntent === undefined ? [] : [releaseIntent.event.operation.release.operationId])
   ]
   return ResponsibilityDisposition.CancelledAttemptClaimObservationRequired({
@@ -869,21 +862,21 @@ const cancelledAttemptClaimDisposition = (
   records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   cancellation: CancellationAppliedRecord,
-  relinquished: CancellationRelinquishedRecord,
+  abandoned: CancellationAbandonedRecord,
   activationBaselinePosition: Option.Option<JournalPosition>,
   immutableRunTarget?: TrackerTarget
 ): PlannedAttemptExecutorDisposition => {
-  const noRelease = cancellationNoReleaseFor(records, plannedAttempt, relinquished, immutableRunTarget)
+  const noRelease = cancellationNoReleaseFor(records, plannedAttempt, abandoned, immutableRunTarget)
   if (noRelease !== undefined)
     return ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "NoRelease" })
-  const releaseIntent = cancellationReleaseIntentFor(records, plannedAttempt, relinquished)
-  if (cancellationReleaseSettledFor(records, relinquished, releaseIntent, immutableRunTarget)) {
+  const releaseIntent = cancellationReleaseIntentFor(records, plannedAttempt, abandoned)
+  if (cancellationReleaseSettledFor(records, abandoned, releaseIntent, immutableRunTarget)) {
     return ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "Released" })
   }
   const claimObservation = cancellationClaimObservationFor(
     records,
     plannedAttempt,
-    relinquished,
+    abandoned,
     releaseIntent,
     immutableRunTarget
   )
@@ -891,7 +884,7 @@ const cancelledAttemptClaimDisposition = (
     records,
     plannedAttempt,
     cancellation,
-    relinquished,
+    abandoned,
     activationBaselinePosition,
     releaseIntent,
     claimObservation,
@@ -903,7 +896,7 @@ const cancelledAttemptClaimObservationDisposition = (
   records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   cancellation: CancellationAppliedRecord,
-  relinquished: CancellationRelinquishedRecord,
+  abandoned: CancellationAbandonedRecord,
   activationBaselinePosition: Option.Option<JournalPosition>,
   releaseIntent: CancellationReleaseIntentRecord | undefined,
   claimObservation: CancellationClaimObservationRecord | undefined,
@@ -914,7 +907,7 @@ const cancelledAttemptClaimObservationDisposition = (
       records,
       plannedAttempt,
       cancellation,
-      relinquished,
+      abandoned,
       releaseIntent,
       claimObservation,
       immutableRunTarget
@@ -926,7 +919,7 @@ const cancelledAttemptClaimObservationDisposition = (
     })
   }
   const observation = claimObservation.event.observation.observation
-  if (observation._tag !== "ActiveTaskClaim" || !isExactTaskClaim(observation, relinquished.event.authorizedClaim)) {
+  if (observation._tag !== "ActiveTaskClaim" || !isExactTaskClaim(observation, abandoned.event.authorizedClaim)) {
     return ResponsibilityDisposition.CancelledAttemptClaimNoReleaseRequired({
       observationOperationId: claimObservation.event.operationId,
       plannedAttempt
@@ -943,7 +936,7 @@ const cancelledAttemptClaimObservationDisposition = (
         ...releaseIntent.event.operation,
         authority: TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.make({
           cancellationAppliedAt: authority.cancellationAppliedAt,
-          implementationRelinquishedAt: authority.implementationRelinquishedAt,
+          implementationAbandonedAt: authority.implementationAbandonedAt,
           observationOperationId: authority.observationOperationId
         })
       },
@@ -954,12 +947,12 @@ const cancelledAttemptClaimObservationDisposition = (
     operation: makeTaskClaimReleaseOperation({
       authority: TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.make({
         cancellationAppliedAt: cancellation.position,
-        implementationRelinquishedAt: relinquished.position,
+        implementationAbandonedAt: abandoned.position,
         observationOperationId: claimObservation.event.operationId
       }),
-      predecessorOperationIds: [relinquished.event.authorizedClaim.operationId, claimObservation.event.operationId],
+      predecessorOperationIds: [abandoned.event.authorizedClaim.operationId, claimObservation.event.operationId],
       release: {
-        claim: relinquished.event.authorizedClaim,
+        claim: abandoned.event.authorizedClaim,
         operationId: OperationId.make(`cancelled-attempt:${plannedAttempt.attemptId}:claim-release`)
       }
     }),
@@ -979,9 +972,9 @@ const cancelledAttemptDisposition = (
   }
   const quiescence = cancellationQuiescenceEvidenceFor(records, plannedAttempt)
   if (quiescence === undefined) return ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
-  const relinquished = cancellationRelinquishedRecordFor(records, plannedAttempt, cancellation)
-  if (relinquished === undefined) {
-    return ResponsibilityDisposition.CancelledAttemptRelinquishmentRequired({
+  const abandoned = cancellationAbandonedRecordFor(records, plannedAttempt, cancellation)
+  if (abandoned === undefined) {
+    return ResponsibilityDisposition.CancelledAttemptAbandonmentRequired({
       plannedAttempt,
       proof: cancellationProofFor(quiescence)
     })
@@ -990,7 +983,7 @@ const cancelledAttemptDisposition = (
     records,
     plannedAttempt,
     cancellation,
-    relinquished,
+    abandoned,
     activationBaselinePosition,
     immutableRunTarget
   )
@@ -1979,10 +1972,11 @@ export const deriveJournalResponsibilityFacts = (
       }
       if (restartDisposition !== undefined) return restartDisposition
       if (stopDisposition !== undefined) return stopDisposition
+      /** Cancellation must retry the exact stop boundary even when an earlier passive read was unavailable. */
+      if (cancellationDisposition !== undefined) return cancellationDisposition
       if (projectionWait) {
         return ResponsibilityDisposition.PlannedAttemptExecutorProjectionWait({ reason: projectionIssue.reason })
       }
-      if (cancellationDisposition !== undefined) return cancellationDisposition
       return nonterminalTaskStateDisposition()
     }
     const changedSpecificationDisposition = (): PlannedAttemptExecutorDisposition | undefined => {
@@ -2318,7 +2312,7 @@ const authorityFreshnessBaselineForAttempt = (
 
 const transitionTagsAllowedWhilePaused = new Set<RunnableFrontierTransition["_tag"]>([
   "AdvanceAttemptStoppage",
-  "RelinquishCancelledAttemptImplementation",
+  "AbandonCancelledAttemptImplementation",
   "CheckTaskClaim",
   "ObserveAttemptStoppageExecutor",
   "ObserveCancelledAttemptClaim",

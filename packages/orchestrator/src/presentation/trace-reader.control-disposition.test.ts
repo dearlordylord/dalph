@@ -45,7 +45,7 @@ import {
 } from "../workflow/protocols/attempt-choice/events.js"
 import {
   CancelledAttemptClaimNoReleaseObservedEvent,
-  CancelledAttemptImplementationResponsibilityRelinquishedEvent,
+  CancelledAttemptImplementationAbandonedEvent,
   RunCancellationAppliedEvent
 } from "../workflow/protocols/run-cancellation/events.js"
 import {
@@ -378,7 +378,7 @@ const cancellationSettlementRecords = (): ReadonlyArray<JournalRecord> => {
     ),
     record(
       9,
-      CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
+      CancelledAttemptImplementationAbandonedEvent.make({
         authorizedClaim: claim,
         cancellationAppliedAt,
         initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
@@ -549,19 +549,19 @@ it.effect("records an applied Run cancellation as its own Operator disposition",
   })
 )
 
-it.effect("fails closed for a cancelled-attempt relinquishment with malformed executor proof", () =>
+it.effect("fails closed for a cancelled-attempt abandonment with malformed executor proof", () =>
   Effect.gen(function* () {
     const records = cancellationSettlementRecords()
-    const relinquishment = records.at(-1)
-    if (relinquishment?.event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished") {
-      return yield* Effect.die("cancellation settlement fixture lacks relinquishment")
+    const abandonment = records.at(-1)
+    if (abandonment?.event._tag !== "CancelledAttemptImplementationAbandoned") {
+      return yield* Effect.die("cancellation settlement fixture lacks abandonment")
     }
     const malformed = [
       ...records.slice(0, -1),
       {
-        ...relinquishment,
-        event: CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
-          ...relinquishment.event,
+        ...abandonment,
+        event: CancelledAttemptImplementationAbandonedEvent.make({
+          ...abandonment.event,
           proof: { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(2) }
         })
       }
@@ -576,7 +576,7 @@ it.effect("fails closed for a cancelled-attempt relinquishment with malformed ex
     expect(failure).toBeInstanceOf(TraceProjectionInvalid)
     if (failure._tag !== "TraceProjectionInvalid") return
     expect(failure.detail).toContain(
-      "cancelled-attempt relinquishment requires current safe or terminal executor evidence"
+      "cancelled-attempt abandonment requires current safe or terminal executor evidence"
     )
   })
 )

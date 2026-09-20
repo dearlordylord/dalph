@@ -5,7 +5,7 @@ import {
   type IntegrationTarget,
   PlannedAttemptExecutor,
   type PlannedAttemptExecutorLifecycleObservation,
-  type RunId
+  RunId
 } from "@dalph/contracts"
 import {
   type JournaledRunObservationSource,
@@ -15,6 +15,7 @@ import {
   JournaledRunBootstrap,
   type JournaledRuntimeLayerInput,
   type RunActivationOpportunityValue,
+  type RunFinalityDecision,
   type TrackerGraphReader,
   attemptChoiceControlWithProvidedProtocolLayer,
   controlDirectionApplicationLayer,
@@ -61,6 +62,7 @@ import {
   type IntegratorCandidateProviderAuthorityService,
   runReactivationOwnerLayer,
   runWorkflowWithActiveWorkAuthorityRefresh,
+  runCancellationWorkflow,
   runWorkflow,
   type InitialControlPolicySource,
   type CurrentSignal,
@@ -107,8 +109,18 @@ export interface ProductionRunReactivationOptions {
   /** Required observation of every typed tracker/Git/journal failure; no activation failure is swallowed. */
   readonly onFailure: ProductionRunReactivationFailureObserver
   /** Optional separate channel for the exact failure that must escape the host. */
-  readonly onNonRetryableFailure?: (failure: TaskTrackerMutationThrottled) => Effect.Effect<void>
+  readonly onNonRetryableFailure?: (
+    failure: TaskTrackerMutationThrottled | ProductionCancellationBlocked
+  ) => Effect.Effect<void>
+  /** Apply Operator cancellation before this owner can enter ordinary delivery. */
+  readonly cancelBeforeDelivery?: boolean
 }
+
+/** One explicit cancellation activation could not prove every terminal precondition. */
+export class ProductionCancellationBlocked extends Schema.TaggedError<ProductionCancellationBlocked>()(
+  "ProductionCancellationBlocked",
+  { blocker: Schema.NonEmptyString, runId: RunId }
+) {}
 
 /** Observes every typed failure while the process-local Run owner cools down or stops. */
 export type ProductionRunReactivationFailureObserver = (failure: unknown) => Effect.Effect<void>
@@ -288,12 +300,20 @@ const defaultProductionRunReactivationCooldown = ProductionRunReactivationInterv
 const isWorkflowRunAlreadyTerminated = (failure: unknown): boolean => failure instanceof WorkflowRunAlreadyTerminated
 
 /**
- * A provider-throttled task mutation is the one activation failure that must
- * stop this process-local owner and escape the host. Other tracker, Git,
- * Journal, and executor failures remain ordinary #218 cooldown observations.
+ * Provider throttling and a conclusive cancellation blocker stop this
+ * process-local owner and escape the host. Other tracker, Git, Journal, and
+ * executor failures remain their precise ordinary #218 cooldown observations.
  */
-export const isNonRetryableProductionActivationFailure = (failure: unknown): failure is TaskTrackerMutationThrottled =>
-  failure instanceof TaskTrackerMutationThrottled
+export const isNonRetryableProductionActivationFailure = (
+  failure: unknown
+): failure is TaskTrackerMutationThrottled | ProductionCancellationBlocked =>
+  failure instanceof TaskTrackerMutationThrottled || failure instanceof ProductionCancellationBlocked
+
+/** Requires cancellation to discharge every terminal precondition before the production owner can close. */
+export const requireProductionCancellationTermination = (runId: RunId, decision: RunFinalityDecision) =>
+  decision._tag === "RunMayTerminate"
+    ? Effect.succeed(decision)
+    : Effect.fail(new ProductionCancellationBlocked({ blocker: decision.reason, runId }))
 
 /**
  * Supported production composition for one exact Run. It acquires one scoped
@@ -308,8 +328,14 @@ export const productionRunReactivationLayer = <EInitial, RInitial>(
   runId: RunId,
   options: ProductionRunReactivationOptions
 ) => {
-  const activation = (opportunity: RunActivationOpportunityValue) =>
-    runWorkflow(target, initialControlPolicySource, AllocatedWorkflowRunId.make(runId), opportunity)
+  const activation = (opportunity: RunActivationOpportunityValue) => {
+    if (options.cancelBeforeDelivery !== true) {
+      return runWorkflow(target, initialControlPolicySource, AllocatedWorkflowRunId.make(runId), opportunity)
+    }
+    return runCancellationWorkflow(target, initialControlPolicySource, AllocatedWorkflowRunId.make(runId)).pipe(
+      Effect.flatMap((decision) => requireProductionCancellationTermination(runId, decision))
+    )
+  }
   const activateActiveWorkAuthorityRefresh = (source: "TrackerNotification" | "Timer") =>
     runWorkflowWithActiveWorkAuthorityRefresh(
       target,

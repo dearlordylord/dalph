@@ -139,6 +139,7 @@ import { expect } from "vitest"
 import {
   applicationExitDispositionRecord,
   currentDeliveryStatusRecord,
+  decodeCancelInvocation,
   decodeRunInvocation,
   decodeProductionConfigurationLocator,
   encodeProductionCliRecord,
@@ -160,6 +161,7 @@ import { ObligationReference } from "./production-cli-status-identity-schema.js"
 import { decodeCliTarget, executeDryRun } from "./cli.js"
 import { productionCliHostObservationOf, runProductionCli } from "./live-cli.js"
 import type { ProductionHostObservation } from "./production-host.js"
+import { ProductionCancellationBlocked } from "./production.js"
 import type { ApplicationExitSignal, ApplicationExitSignalBoundary } from "./supervisor-exit.js"
 import { makeDryRunTrackerGraphReaderLayer } from "./dry-run.js"
 import { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
@@ -266,6 +268,25 @@ it.effect("keeps dry-run explicit and selects production only from --production"
         target: "github:octo/dalph#42"
       }).pipe(Effect.flip)
       expect(failure).toBeInstanceOf(ProductionCliUsageError)
+    }
+  })
+)
+
+it.effect("accepts cancellation only for one production GitHub target and absolute configuration", () =>
+  Effect.gen(function* () {
+    const cancellation = yield* decodeCancelInvocation({
+      config: "/tmp/dalph-production.json",
+      production: true,
+      target: "github:octo/dalph#42"
+    })
+    expect(cancellation).toMatchObject({ _tag: "CancelProduction" })
+
+    for (const input of [
+      { config: "/tmp/dalph-production.json", production: false, target: "github:octo/dalph#42" },
+      { config: undefined, production: true, target: "github:octo/dalph#42" },
+      { config: "/tmp/dalph-production.json", production: true, target: "packages/orchestrator/fixtures/empty.json" }
+    ]) {
+      expect(yield* decodeCancelInvocation(input).pipe(Effect.flip)).toBeInstanceOf(ProductionCliUsageError)
     }
   })
 )
@@ -740,6 +761,19 @@ it("maps a typed task-tracker throttle to a selected-Run delivery failure", () =
     }
   })
   expect(JSON.stringify(mapped)).not.toContain(throttle.detail)
+})
+
+it("maps a cancellation proof blocker without retaining private executor diagnostics", () => {
+  const blocker = new ProductionCancellationBlocked({ blocker: "PlannedAttemptExecutorOwnedActivitySurvived", runId })
+
+  const mapped = productionCliFailureForSelectedRun(blocker, runId)
+
+  expect(mapped).toMatchObject({
+    _tag: "ProductionCliCancellationError",
+    code: "cancellation.blocked",
+    detail: "cancellation could not prove PlannedAttemptExecutorOwnedActivitySurvived",
+    subject: runId
+  })
 })
 
 it.effect("delivery throttle closes presentation and host scope without requesting graceful Exit", () =>
@@ -3466,6 +3500,136 @@ it.effect("invokes one production host only after configuration and reports its 
       "HistoricalSnapshot",
       "RunDisposition"
     ])
+  })
+)
+
+it.effect("routes cancel through the production host cancellation operation", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const operations = yield* Ref.make<ReadonlyArray<string>>([])
+    const application = runProductionCli((_input, use, operation) =>
+      Ref.update(operations, (current) => [...current, operation ?? "Run"]).pipe(
+        Effect.andThen(
+          use(
+            {
+              acceptedHistory: currentSignalOf(cursor),
+              current: currentSignalOf({ _tag: "NotReady" as const }),
+              runTermination: completedRunTermination(),
+              selection: ProductionRunSelection.cases.Recovered.make({ runId }),
+              traceReader: { readAt: () => Effect.succeed(snapshot) }
+            },
+            inactiveApplicationExitRequestBoundary
+          )
+        )
+      )
+    )
+
+    yield* application(["cancel", "github:octo/dalph#42", "--production", "--config", "/tmp/production.json"]).pipe(
+      Effect.provide(liveCliLayer(lines, chronology)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ GITHUB_TOKEN: "github-secret" })))
+    )
+
+    expect(yield* Ref.get(operations)).toEqual(["Cancel"])
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)._tag)).toEqual([
+      "RunSelected",
+      "CurrentStatus",
+      "HistoricalSnapshot",
+      "RunDisposition"
+    ])
+  })
+)
+
+it.effect("writes one public cancellation failure for a typed startup boundary error", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const failure = new CoordinatorLockHeld({
+      gitCommonDirectory: GitCommonDirectoryLocator.make("/srv/dalph/repository.git")
+    })
+    const application = runProductionCli(() => Effect.fail(failure))
+
+    const observed = yield* application([
+      "cancel",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(liveCliLayer(lines, chronology)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ GITHUB_TOKEN: "github-secret" }))),
+      Effect.flip
+    )
+
+    expect(observed).toBe(failure)
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toEqual([
+      expect.objectContaining({ _tag: "Failure", code: "startup.ownership_conflict" })
+    ])
+  })
+)
+
+it.effect("does not invent public cancellation output for an unknown host failure", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const failure = new Error("unknown cancellation host failure")
+    const application = runProductionCli(() => Effect.fail(failure))
+
+    const observed = yield* application([
+      "cancel",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(liveCliLayer(lines, chronology)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ GITHUB_TOKEN: "github-secret" }))),
+      Effect.flip
+    )
+
+    expect(observed).toBe(failure)
+    expect(yield* Ref.get(lines)).toEqual([])
+  })
+)
+
+it.effect("does not recursively write when cancellation failure output is lost", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const writeAttempts = yield* Ref.make(0)
+    const startupFailure = new CoordinatorLockHeld({
+      gitCommonDirectory: GitCommonDirectoryLocator.make("/srv/dalph/repository.git")
+    })
+    const application = runProductionCli(() => Effect.fail(startupFailure))
+    const failingOutputLayer = Layer.succeed(
+      TraceOutput,
+      TraceOutput.of({
+        writeLine: () =>
+          Ref.update(writeAttempts, (count) => count + 1).pipe(
+            Effect.andThen(Effect.fail(new TraceOutputError({ detail: "private cancellation output loss" })))
+          )
+      })
+    )
+
+    const observed = yield* application([
+      "cancel",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(Layer.merge(liveCliLayer(lines, chronology), failingOutputLayer)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ GITHUB_TOKEN: "github-secret" }))),
+      Effect.flip
+    )
+
+    expect(observed).toBeInstanceOf(ProductionCliOutputError)
+    expect(yield* Ref.get(writeAttempts)).toBe(1)
+    expect(yield* Ref.get(lines)).toEqual([])
   })
 )
 

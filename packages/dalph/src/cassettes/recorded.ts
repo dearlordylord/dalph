@@ -67,7 +67,7 @@ import {
   type BranchCleanupJournalEvent,
   type IntegratorCandidateCleanupJournalEvent,
   type WorktreeCleanupJournalEvent,
-  CancelledAttemptImplementationResponsibilityRelinquishedEvent,
+  CancelledAttemptImplementationAbandonedEvent,
   CancelledAttemptClaimNoReleaseObservedEvent
 } from "@dalph/orchestrator"
 import {
@@ -682,7 +682,7 @@ type AttemptStopEvent = Extract<
       | "AttemptImplementationAbandoned"
       | "AttemptStoppageIntended"
       | "StoppedAttemptClaimNoReleaseObserved"
-      | "CancelledAttemptImplementationResponsibilityRelinquished"
+      | "CancelledAttemptImplementationAbandoned"
       | "CancelledAttemptClaimNoReleaseObserved"
   }
 >
@@ -691,7 +691,7 @@ const isAttemptStopEvent = (event: WorkflowJournalEvent): event is AttemptStopEv
   event._tag === "AttemptImplementationAbandoned" ||
   event._tag === "AttemptStoppageIntended" ||
   event._tag === "StoppedAttemptClaimNoReleaseObserved" ||
-  event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" ||
+  event._tag === "CancelledAttemptImplementationAbandoned" ||
   event._tag === "CancelledAttemptClaimNoReleaseObserved"
 
 const recordedAttemptStopEntryFor = (event: AttemptStopEvent): RecordedCassetteEntry =>
@@ -721,7 +721,7 @@ const recordedAttemptStopEntryFor = (event: AttemptStopEvent): RecordedCassetteE
       requestId: value.requestId,
       subject: value.subject
     }),
-    CancelledAttemptImplementationResponsibilityRelinquished: (value) => ({
+    CancelledAttemptImplementationAbandoned: (value) => ({
       _tag: value._tag,
       authorizedClaim: value.authorizedClaim,
       cancellationAppliedAt: value.cancellationAppliedAt,
@@ -1248,7 +1248,7 @@ type RecordedAttemptStopEntry = Extract<
       | "AttemptImplementationAbandoned"
       | "AttemptStoppageIntended"
       | "StoppedAttemptClaimNoReleaseObserved"
-      | "CancelledAttemptImplementationResponsibilityRelinquished"
+      | "CancelledAttemptImplementationAbandoned"
       | "CancelledAttemptClaimNoReleaseObserved"
   }
 >
@@ -1257,7 +1257,7 @@ const isRecordedAttemptStopEntry = (entry: RecordedCassetteEntry): entry is Reco
   entry._tag === "AttemptImplementationAbandoned" ||
   entry._tag === "AttemptStoppageIntended" ||
   entry._tag === "StoppedAttemptClaimNoReleaseObserved" ||
-  entry._tag === "CancelledAttemptImplementationResponsibilityRelinquished" ||
+  entry._tag === "CancelledAttemptImplementationAbandoned" ||
   entry._tag === "CancelledAttemptClaimNoReleaseObserved"
 
 const eventForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): WorkflowJournalEvent =>
@@ -1268,11 +1268,8 @@ const eventForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): Work
       AttemptImplementationAbandonedEvent.make({ ...value, version: workflowJournalEventVersion }),
     StoppedAttemptClaimNoReleaseObserved: (value) =>
       StoppedAttemptClaimNoReleaseObservedEvent.make({ ...value, version: workflowJournalEventVersion }),
-    CancelledAttemptImplementationResponsibilityRelinquished: (value) =>
-      CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
-        ...value,
-        version: workflowJournalEventVersion
-      }),
+    CancelledAttemptImplementationAbandoned: (value) =>
+      CancelledAttemptImplementationAbandonedEvent.make({ ...value, version: workflowJournalEventVersion }),
     CancelledAttemptClaimNoReleaseObserved: (value) =>
       CancelledAttemptClaimNoReleaseObservedEvent.make({ ...value, version: workflowJournalEventVersion })
   })
@@ -1918,8 +1915,8 @@ const lyricForRecordedAttemptStopEntry = (entry: RecordedAttemptStopEntry): stri
       `Dalph coordinator abandoned implementation attempt ${value.subject.plannedAttempt.attemptId} after proving executor quiescence.`,
     StoppedAttemptClaimNoReleaseObserved: (value) =>
       `The task tracker proved that stopping attempt ${value.subject.plannedAttempt.attemptId} must not release the current claim.`,
-    CancelledAttemptImplementationResponsibilityRelinquished: (value) =>
-      `Dalph coordinator relinquished implementation responsibility for cancelled attempt ${value.plannedAttempt.attemptId}.`,
+    CancelledAttemptImplementationAbandoned: (value) =>
+      `Dalph coordinator abandoned implementation responsibility for cancelled attempt ${value.plannedAttempt.attemptId}.`,
     CancelledAttemptClaimNoReleaseObserved: (value) =>
       `The task tracker proved that cancelling attempt ${value.plannedAttempt.attemptId} must not release the current claim.`
   })

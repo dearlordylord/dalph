@@ -84,6 +84,61 @@ export const discoverProductionRun = Effect.fn("ProductionHost.discoverRun")(fun
     : ProductionRunDiscovery.cases.Recovered.make({ runId: AllocatedWorkflowRunId.make(recovered.runId) })
 })
 
+/**
+ * Alice repeats an explicit cancellation command. Dalph first prefers the one
+ * unfinished Run, then admits one already-cancelled terminal history as the
+ * idempotent result. The complete audit keeps that result addressable after
+ * Journal retirement; ordinary production discovery remains Hot-only.
+ */
+export const discoverProductionCancellationRun = Effect.fn("ProductionHost.discoverCancellationRun")(function* (
+  target: TrackerTarget
+) {
+  const journal = yield* RunLifecycleJournal
+  const audit = yield* journal.auditAll()
+  const reductions = audit.runs.map(({ records, runId }) => reduceWorkflowJournalHistory(runId, records))
+  const issues = [
+    ...audit.issues,
+    ...reductions.flatMap((reduction) => (reduction._tag === "InvalidWorkflowJournalHistory" ? reduction.issues : []))
+  ]
+  if (issues.length > 0) return yield* new StartupRecoveryBlocked({ issues })
+
+  const valid = reductions.filter(
+    (reduction): reduction is Extract<typeof reduction, { readonly _tag: "ValidWorkflowJournalHistory" }> =>
+      reduction._tag === "ValidWorkflowJournalHistory"
+  )
+  const unfinished = valid.filter(isUnfinished)
+  const candidates =
+    unfinished.length > 0
+      ? unfinished
+      : valid.filter((reduction) => {
+          const evidence = reduction.runState.workflowHistory.evidence
+          const terminated = firstJournalRecordOfKind(evidence, "WorkflowRunTerminated")
+          return (
+            terminated?.event._tag === "WorkflowRunTerminated" &&
+            terminated.event.disposition === "Cancelled" &&
+            firstJournalRecordOfKind(evidence, "RunCancellationApplied") !== undefined
+          )
+        })
+  const conflicts = candidates.flatMap((reduction) => {
+    const candidateTarget = recordedTarget(reduction)
+    /* v8 ignore next -- @preserve Every valid unfinished or terminal cancellation candidate has WorkflowRunBegan. */
+    return candidateTarget === undefined ? [] : [{ runId: reduction.runId, target: candidateTarget }]
+  })
+  const [firstConflict, ...remainingConflicts] = conflicts
+  if (
+    firstConflict !== undefined &&
+    (remainingConflicts.length > 0 || taskTrackerTargetKey(firstConflict.target) !== taskTrackerTargetKey(target))
+  ) {
+    return yield* new ProductionRunSelectionConflict({
+      conflicts: [firstConflict, ...remainingConflicts],
+      requestedTarget: target
+    })
+  }
+  return firstConflict === undefined
+    ? ProductionRunDiscovery.cases.Fresh.make({})
+    : ProductionRunDiscovery.cases.Recovered.make({ runId: AllocatedWorkflowRunId.make(firstConflict.runId) })
+})
+
 /** Allocates only after the caller has completed every required fresh-Run admission. */
 export const selectDiscoveredProductionRun = Effect.fn("ProductionHost.selectDiscoveredRun")(function* (
   target: TrackerTarget,

@@ -37,6 +37,7 @@ Git history.
 - [Localize one task's conflict while an independent task continues](localize-task-conflicts.md)
 - [Observe a requested Pause reach its safe boundaries](observe-pause-progress.md)
 - [Cancel or continue an exact pre-integration attempt](cancel-or-continue-attempt.md)
+- [Cancel one production Run with an unusable executor](cancel-unusable-production-run.md)
 - [Replace an exact changed attempt from clean resources](clean-restart-changed-attempt.md)
 - [Establish a Run idempotently, then activate it once](run-establishment-and-activation.md)
 

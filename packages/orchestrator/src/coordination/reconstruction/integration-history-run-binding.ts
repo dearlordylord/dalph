@@ -197,7 +197,7 @@ const invalidRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | 
       ControlDirectionApplied: (candidate) =>
         invalidNestedRunBinding("control direction", [candidate.subject.runId], runId),
       RunCancellationApplied: () => undefined,
-      CancelledAttemptImplementationResponsibilityRelinquished: (candidate) =>
+      CancelledAttemptImplementationAbandoned: (candidate) =>
         invalidNestedRunBinding("cancelled-attempt responsibility", [candidate.plannedAttempt.runId], runId),
       CancelledAttemptClaimNoReleaseObserved: (candidate) =>
         invalidNestedRunBinding("cancelled-attempt claim observation", [candidate.plannedAttempt.runId], runId),

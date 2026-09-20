@@ -4,12 +4,12 @@ import { isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.
 import { authorizedClaimForAttempt } from "../run/recovery-authority.js"
 import {
   CancelledAttemptClaimNoReleaseObservedEvent,
-  CancelledAttemptImplementationResponsibilityRelinquishedEvent
+  CancelledAttemptImplementationAbandonedEvent
 } from "../../workflow/protocols/run-cancellation/events.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   cancelledAttemptClaimNoReleaseRecordKey,
-  cancelledAttemptImplementationResponsibilityRelinquishedRecordKey
+  cancelledAttemptImplementationAbandonedRecordKey
 } from "../../workflow-journal/record-key.js"
 import { InRunJournal } from "../../workflow-journal/store.js"
 import { type JournalRecord } from "../../workflow-journal/store.js"
@@ -53,7 +53,7 @@ type PlannedAttemptTransition = Extract<
       | "ObserveAttemptStoppageExecutor"
       | "ReconcilePlannedAttemptExecutorWork"
       | "RecordStoppedAttemptClaimNoRelease"
-      | "RelinquishCancelledAttemptImplementation"
+      | "AbandonCancelledAttemptImplementation"
       | "RecordCancelledAttemptClaimNoRelease"
       | "SuspendPlannedAttemptExecutorWork"
   }
@@ -74,14 +74,14 @@ const quiescenceProofMatchesEvidence = (
   return evidence.source._tag === "AcceptedReport" && evidence.source.ordinal === proof.reportOrdinal
 }
 
-type CancelledAttemptRelinquishmentTransition = Extract<
+type CancelledAttemptAbandonmentTransition = Extract<
   PlannedAttemptTransition,
-  { readonly _tag: "RelinquishCancelledAttemptImplementation" }
+  { readonly _tag: "AbandonCancelledAttemptImplementation" }
 >
 
-const cancelledAttemptRelinquishmentIsQuiescent = (
+const cancelledAttemptAbandonmentIsQuiescent = (
   records: JournalHistorySource,
-  transition: CancelledAttemptRelinquishmentTransition,
+  transition: CancelledAttemptAbandonmentTransition,
   evidence: PlannedAttemptExecutorEvidence | undefined
 ): boolean =>
   evidence !== undefined &&
@@ -96,20 +96,20 @@ const cancelledAttemptRelinquishmentIsQuiescent = (
   ) &&
   quiescenceProofMatchesEvidence(transition.proof, evidence)
 
-const cancelledAttemptRelinquishmentContext = (
+const cancelledAttemptAbandonmentContext = (
   records: JournalHistorySource,
-  transition: CancelledAttemptRelinquishmentTransition
+  transition: CancelledAttemptAbandonmentTransition
 ) => {
   if (
     Array.from(
       journalRecordsForAttemptKind(
         records,
         transition.plannedAttempt.attemptId,
-        "CancelledAttemptImplementationResponsibilityRelinquished"
+        "CancelledAttemptImplementationAbandoned"
       )
     ).some(
       ({ event }) =>
-        event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+        event._tag === "CancelledAttemptImplementationAbandoned" &&
         plannedTaskAttemptEquivalence(event.plannedAttempt, transition.plannedAttempt)
     )
   )
@@ -118,31 +118,31 @@ const cancelledAttemptRelinquishmentContext = (
   const authorizedClaim = authorizedClaimForAttempt(records, transition.plannedAttempt)?.claim
   if (cancellation === undefined || authorizedClaim === undefined) return undefined
   const evidence = latestPlannedAttemptExecutorEvidence(records, transition.plannedAttempt)
-  if (!cancelledAttemptRelinquishmentIsQuiescent(records, transition, evidence)) return undefined
+  if (!cancelledAttemptAbandonmentIsQuiescent(records, transition, evidence)) return undefined
   return { authorizedClaim, cancellation }
 }
 
-const executeCancelledAttemptRelinquishment = Effect.fn("DeliveryAction.executeCancelledAttemptRelinquishment")(
-  function* (transition: CancelledAttemptRelinquishmentTransition) {
-    const journal = yield* InRunJournal
-    const records = yield* (yield* AcceptedJournalReader).readAccepted(transition.plannedAttempt.runId)
-    const context = cancelledAttemptRelinquishmentContext(records, transition)
-    if (context === undefined) return
-    yield* journal.append(
-      transition.plannedAttempt.runId,
-      cancelledAttemptImplementationResponsibilityRelinquishedRecordKey(transition.plannedAttempt.attemptId),
-      CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
-        authorizedClaim: context.authorizedClaim,
-        cancellationAppliedAt: context.cancellation.position,
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        plannedAttempt: transition.plannedAttempt,
-        proof: transition.proof,
-        version: workflowJournalEventVersion
-      })
-    )
-  }
-)
+const executeCancelledAttemptAbandonment = Effect.fn("DeliveryAction.executeCancelledAttemptAbandonment")(function* (
+  transition: CancelledAttemptAbandonmentTransition
+) {
+  const journal = yield* InRunJournal
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(transition.plannedAttempt.runId)
+  const context = cancelledAttemptAbandonmentContext(records, transition)
+  if (context === undefined) return
+  yield* journal.append(
+    transition.plannedAttempt.runId,
+    cancelledAttemptImplementationAbandonedRecordKey(transition.plannedAttempt.attemptId),
+    CancelledAttemptImplementationAbandonedEvent.make({
+      authorizedClaim: context.authorizedClaim,
+      cancellationAppliedAt: context.cancellation.position,
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      plannedAttempt: transition.plannedAttempt,
+      proof: transition.proof,
+      version: workflowJournalEventVersion
+    })
+  )
+})
 
 type FocusedClaimObservationRecord = Omit<JournalRecord, "event"> & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }> & {
@@ -153,11 +153,8 @@ type FocusedClaimObservationRecord = Omit<JournalRecord, "event"> & {
   }
 }
 
-type CancelledAttemptRelinquishedRecord = Omit<JournalRecord, "event"> & {
-  readonly event: Extract<
-    JournalRecord["event"],
-    { readonly _tag: "CancelledAttemptImplementationResponsibilityRelinquished" }
-  >
+type CancelledAttemptAbandonedRecord = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "CancelledAttemptImplementationAbandoned" }>
 }
 
 type CancelledAttemptClaimNoReleaseTransition = Extract<
@@ -169,27 +166,27 @@ const hasMatchingCancelledAttemptClaimRead = (
   observation: FocusedClaimObservationRecord,
   readIntent: JournalRecord | undefined,
   transition: CancelledAttemptClaimNoReleaseTransition,
-  relinquished: CancelledAttemptRelinquishedRecord
+  abandoned: CancelledAttemptAbandonedRecord
 ): boolean => {
   if (readIntent?.event._tag !== "TaskTrackerReadIntentRecorded") return false
   if (readIntent.event.operation._tag !== "ReadTaskClaim") return false
   return (
     readIntent.event.operation.taskId === transition.plannedAttempt.taskId &&
-    readIntent.event.operation.predecessorOperationIds.includes(relinquished.event.authorizedClaim.operationId) &&
+    readIntent.event.operation.predecessorOperationIds.includes(abandoned.event.authorizedClaim.operationId) &&
     taskTrackerObservationMatchesRead(observation.event.observation, readIntent.event.operation)
   )
 }
 
-const exactCancelledAttemptRelinquishment = (
+const exactCancelledAttemptAbandonment = (
   records: JournalHistorySource,
   transition: CancelledAttemptClaimNoReleaseTransition
-): CancelledAttemptRelinquishedRecord | undefined => {
+): CancelledAttemptAbandonedRecord | undefined => {
   const candidate = lastJournalRecordForAttemptKind(
     records,
     transition.plannedAttempt.attemptId,
-    "CancelledAttemptImplementationResponsibilityRelinquished"
+    "CancelledAttemptImplementationAbandoned"
   )
-  return candidate?.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+  return candidate?.event._tag === "CancelledAttemptImplementationAbandoned" &&
     plannedTaskAttemptEquivalence(candidate.event.plannedAttempt, transition.plannedAttempt)
     ? { ...candidate, event: candidate.event }
     : undefined
@@ -213,12 +210,12 @@ const cancelledAttemptClaimNoReleaseFacts = (
     )
   )
     return undefined
-  const relinquished = exactCancelledAttemptRelinquishment(records, transition)
-  if (relinquished === undefined) return undefined
+  const abandoned = exactCancelledAttemptAbandonment(records, transition)
+  if (abandoned === undefined) return undefined
   const operationRecords = Array.from(journalRecordsForOperationId(records, transition.observationOperationId))
   const observation = operationRecords.findLast(
     (record): record is FocusedClaimObservationRecord =>
-      record.position > relinquished.position &&
+      record.position > abandoned.position &&
       record.event._tag === "TaskTrackerFactsObserved" &&
       record.event.operationId === transition.observationOperationId &&
       record.event.observation._tag === "FocusedTaskClaimFacts" &&
@@ -227,18 +224,18 @@ const cancelledAttemptClaimNoReleaseFacts = (
   if (observation === undefined) return undefined
   const readIntent = operationRecords.findLast(
     (record) =>
-      record.position > relinquished.position &&
+      record.position > abandoned.position &&
       record.position < observation.position &&
       record.event._tag === "TaskTrackerReadIntentRecorded" &&
       record.event.operation.operationId === observation.event.operationId
   )
-  if (!hasMatchingCancelledAttemptClaimRead(observation, readIntent, transition, relinquished)) return undefined
+  if (!hasMatchingCancelledAttemptClaimRead(observation, readIntent, transition, abandoned)) return undefined
   if (
     observation.event.observation.observation._tag === "ActiveTaskClaim" &&
-    isExactTaskClaim(observation.event.observation.observation, relinquished.event.authorizedClaim)
+    isExactTaskClaim(observation.event.observation.observation, abandoned.event.authorizedClaim)
   )
     return undefined
-  return { observation, relinquished }
+  return { observation, abandoned }
 }
 
 const executeCancelledAttemptClaimNoRelease = Effect.fn("DeliveryAction.executeCancelledAttemptClaimNoRelease")(
@@ -251,8 +248,8 @@ const executeCancelledAttemptClaimNoRelease = Effect.fn("DeliveryAction.executeC
       transition.plannedAttempt.runId,
       cancelledAttemptClaimNoReleaseRecordKey(transition.plannedAttempt.attemptId),
       CancelledAttemptClaimNoReleaseObservedEvent.make({
-        cancellationAppliedAt: facts.relinquished.event.cancellationAppliedAt,
-        expectedClaim: facts.relinquished.event.authorizedClaim,
+        cancellationAppliedAt: facts.abandoned.event.cancellationAppliedAt,
+        expectedClaim: facts.abandoned.event.authorizedClaim,
         observation: facts.observation.event.observation.observation,
         observationOperationId: facts.observation.event.operationId,
         occurrenceClassification: "NonActionOccurrence",
@@ -376,9 +373,9 @@ export const executePlannedAttemptTransition = Effect.fn("DeliveryAction.execute
     )
     return deliveryActionCompleted(action.proposal.id)
   }
-  if (transition._tag === "RelinquishCancelledAttemptImplementation") {
+  if (transition._tag === "AbandonCancelledAttemptImplementation") {
     yield* lease.withPlannedAttemptProtocol(plannedAttemptExecutorCorrelation(transition.plannedAttempt), () =>
-      executeCancelledAttemptRelinquishment(transition)
+      executeCancelledAttemptAbandonment(transition)
     )
     return deliveryActionCompleted(action.proposal.id)
   }

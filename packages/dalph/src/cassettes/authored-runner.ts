@@ -944,7 +944,7 @@ const proposalActionLabels = {
   ReplacePromotedTaskClaim: "Ask the tracker to replace the promoted task claim with its completion claim",
   RetryStoppedAttemptClaimRelease: "Retry the exact stopped-attempt claim release",
   RetryCancelledAttemptClaimRelease: "Retry the exact cancelled-attempt claim release",
-  RelinquishCancelledAttemptImplementation: "Relinquish the cancelled attempt's implementation responsibility",
+  AbandonCancelledAttemptImplementation: "Abandon the cancelled attempt's implementation responsibility",
   RunIntegrator: "Ask the outer Integrator to prepare or resume the exact integration session",
   ReconcileTargetPromotionAttempt: "Read Git once to reconcile an ambiguous promotion without retry authority",
   RunTargetPromotion: "Compare and set the integration target to the verified candidate commit",

@@ -501,13 +501,23 @@ _Avoid_: Executor terminal report, process exit, safe suspension
 
 **Run cancellation**:
 The Operator's durable direction to stop admitting forward work for one exact
-Run and settle or durably relinquish all of its existing workflow
+Run and settle or durably abandon all of its existing workflow
 responsibilities. It begins with `RunCancellationApplied`; the request alone is
 not the terminal result. V1 has no withdrawal command. After fresh
 classification, all-success is `Completed`; otherwise settled cancellation is
 `Cancelled`.
 _Avoid_: Attempt Stop, Run Pause, application Exit, executor suspension,
 `WorkflowRunTerminated(Cancelled)`
+
+**Cancellation-authorized implementation abandonment**:
+The durable Journal disposition that ends one exact planned attempt's
+executor-work responsibility after the executor proves its complete owned
+writer containment cannot write or resume. It preserves the worktree, commits,
+transcript, and evidence and authorizes only the later focused disposition of
+that attempt's exact task claim. A resumable safe-suspension report is evidence
+for the stop proof, not this permanent workflow disposition itself.
+_Avoid_: Safe suspension, executor success, executor failure, worktree cleanup,
+claim release
 
 **Workflow-journal history**:
 The ordered, decoded Dalph workflow-journal records for one exact `RunId`.

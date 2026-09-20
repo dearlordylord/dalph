@@ -46,6 +46,7 @@ import {
   memoryJournalStoreLayer,
   ProductionRunSelectionConflict,
   RunPolicyRevision,
+  RunFinalityDecision,
   sqliteJournalStoreLayer,
   StartupRecoveryBlocked,
   TaskWorkCapacityChangedEvent,
@@ -78,6 +79,7 @@ import {
   type ProductionRepositoryHostAdapters,
   type ProductionRepositoryHostBoundary,
   type ProductionRepositoryHostGraph,
+  ProductionCancellationRunNotFound,
   productionRepositoryHostGraph,
   withDecodedProductionRepositoryHost,
   withProductionRepositoryHost
@@ -85,6 +87,8 @@ import {
 
 import {
   isNonRetryableProductionActivationFailure,
+  ProductionCancellationBlocked,
+  requireProductionCancellationTermination,
   type ProductionWorkflowApplicationExitBoundary
 } from "./production.js"
 import {
@@ -321,12 +325,12 @@ it.effect("production host Exit succeeds when qualification observers are absent
   )
 )
 
-it("production host graph exposes only the precise non-retryable throttle callback", () => {
+it("production host graph exposes only explicit non-retryable activation failures", () => {
   const graph = productionRepositoryHostGraph()
   type ActivationFailure = Parameters<typeof graph.run>[2] extends (failure: infer Failure) => Effect.Effect<void>
     ? Failure
     : never
-  expectTypeOf<ActivationFailure>().toEqualTypeOf<TaskTrackerMutationThrottled>()
+  expectTypeOf<ActivationFailure>().toEqualTypeOf<TaskTrackerMutationThrottled | ProductionCancellationBlocked>()
 })
 
 it("uses one canonical fatal classifier for throttles and recoverable failures", () => {
@@ -342,8 +346,40 @@ it("uses one canonical fatal classifier for throttles and recoverable failures",
   })
 
   expect(isNonRetryableProductionActivationFailure(throttle)).toBe(true)
+  expect(
+    isNonRetryableProductionActivationFailure(
+      new ProductionCancellationBlocked({ blocker: "UnsettledResponsibility", runId: RunId.make("blocked-cancel") })
+    )
+  ).toBe(true)
   expect(isNonRetryableProductionActivationFailure(recoverable)).toBe(false)
 })
+
+it.effect("admits cancellation termination only after every terminal precondition is discharged", () => {
+  const runId = RunId.make("production-cancellation-finality")
+  return Effect.gen(function* () {
+    const terminal = RunFinalityDecision.RunMayTerminate()
+    expect(yield* requireProductionCancellationTermination(runId, terminal)).toBe(terminal)
+
+    const blocked = yield* requireProductionCancellationTermination(
+      runId,
+      RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+    ).pipe(Effect.flip)
+    expect(blocked).toEqual(new ProductionCancellationBlocked({ blocker: "UnsettledResponsibility", runId }))
+  })
+})
+
+it.effect("does not acquire a Codex provider for the built-in Kimi executor profile", () =>
+  Effect.gen(function* () {
+    const configuration = yield* decodeProductionRepositoryHostConfiguration({
+      ...validRawConfiguration(),
+      plannedAttemptExecutor: "executor:kimi/for-coding"
+    })
+    const applicationExit = yield* makeProductionHostApplicationExitShell()
+    const provider = yield* productionRepositoryHostGraph().acquireProvider(configuration, applicationExit)
+
+    expect(provider).toEqual({ _tag: "NonCodex" })
+  }).pipe(Effect.scoped)
+)
 
 it.effect(
   "production host returns ProductionHostObservation only after exact Run selection and acknowledged WorkflowRunBegan",
@@ -796,6 +832,28 @@ it.effect(
       if (Exit.isFailure(exit)) expect(Cause.findErrorOption(exit.cause)).toEqual(Option.some(failure))
       expect(yield* Ref.get(boundaries)).toEqual(["foundation.open", "codex.policy.admit"])
     }).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("production cancellation fails before provider acquisition when no unfinished Run exists", () =>
+  Effect.gen(function* () {
+    const boundaries = yield* Ref.make<ReadonlyArray<string>>([])
+    const graph: ProductionRepositoryHostGraph<never, never, never, never, never, never> = {
+      acquireProvider: () =>
+        Ref.update(boundaries, (current) => [...current, "provider.acquire"]).pipe(
+          Effect.as({ _tag: "NonCodex" as const })
+        ),
+      foundation: () => Layer.merge(ownershipLayer, memoryJournalStoreLayer),
+      makeApplicationExit: () => makeProductionHostApplicationExitShell(),
+      run: () => Layer.effectContext(Effect.die("a missing cancellation Run must not build the Run graph"))
+    }
+    const configuration = yield* decodeProductionRepositoryHostConfiguration(validRawConfiguration())
+    const failure = yield* withDecodedProductionRepositoryHost(configuration, graph, () => Effect.void, "Cancel").pipe(
+      Effect.flip
+    )
+
+    expect(failure).toBeInstanceOf(ProductionCancellationRunNotFound)
+    expect(yield* Ref.get(boundaries)).toEqual([])
+  }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
 it.effect("allocated and recovered selections identify the exact Run and never append a second beginning", () =>
