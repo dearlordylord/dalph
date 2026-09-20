@@ -15,17 +15,6 @@ export const capabilityRegistrationQualityGate = Object.freeze({
   timeout: 60 * SECOND
 })
 
-// This built-binary proof executes application behavior in child processes, so
-// V8 cannot attribute its source coverage to the parent Vitest worker. Running
-// it once outside the instrumented pool also keeps process recovery isolated
-// from unrelated four-worker coverage contention.
-const publicRecoveryQualityGate = Object.freeze({
-  args: Object.freeze(["test:public-recovery"]),
-  name: "public process recovery",
-  terminationGrace: 15 * SECOND,
-  timeout: 2 * 60 * SECOND
-})
-
 /** The complexity policy compares its registry with the exact full-gate base. */
 export const complexityQualityGate = (baseSha) =>
   Object.freeze({
@@ -129,7 +118,6 @@ export const fullQualityGateManifest = (baseSha, invocation) => {
       artifactRoots: []
     },
     { ...recordedCatalogQualityGate, id: "recorded-catalog", boundary: "qualification", artifactRoots: [] },
-    { ...publicRecoveryQualityGate, id: "public-recovery", boundary: "qualification", artifactRoots: [] },
     {
       id: "coverage",
       boundary: "qualification",

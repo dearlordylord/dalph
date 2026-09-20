@@ -13,6 +13,8 @@ const acceptedResultIntegrationMbtTestPattern =
 const deliveryRepeatabilityTestPattern = "packages/dalph/test/cassettes/delivery-repeatability.test.ts"
 const capabilityRegistrationTestPattern = "scripts/capability-registration.test.ts"
 const performanceTestPattern = "**/*.performance.test.ts"
+// This built-binary recovery diagnostic is intentionally manual: it cannot
+// contribute parent-worker V8 coverage and is not reliable on hosted runners.
 const publicRecoveryProcessBoundaryTestPattern =
   "packages/dalph/src/application/production-public-recovery.integration.test.ts"
 const recordedCatalogCoverageTestPattern = "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts"

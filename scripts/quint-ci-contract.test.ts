@@ -185,7 +185,6 @@ describe("hosted formal-model contract", () => {
     expect(stageCommands.slice(structuralCommands.length)).toEqual([
       "test:delivery-repeatability",
       "test:recorded-catalog",
-      "test:public-recovery",
       "test"
     ])
     expect(packageJson.scripts["check:ci:quality"]).not.toContain("test:mbt")

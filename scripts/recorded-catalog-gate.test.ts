@@ -19,7 +19,7 @@ it(
     expect(result.exitCode).toBe(0)
     expect(invocations.filter((command) => command === "test:recorded-catalog")).toHaveLength(1)
     expect(recordedCatalogIndex).toBeGreaterThan(-1)
-    expect(invocations[recordedCatalogIndex + 1]).toBe("test:public-recovery")
+    expect(invocations[recordedCatalogIndex + 1]).toBe("test")
   },
   qualityGateFixtureTestTimeoutMilliseconds
 )

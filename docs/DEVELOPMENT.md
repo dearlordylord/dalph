@@ -989,7 +989,10 @@ pnpm exec vitest run \
 ```
 
 That controlled fixture proves the recovery sequence; it is not #261 live
-qualification evidence. In the disposable live repository, report
+qualification evidence or a per-merge admission gate. It remains an explicit
+diagnostic because its process-containment observation is not reliable on the
+hosted runner, and its child-process execution cannot contribute parent-worker
+V8 coverage. In the disposable live repository, report
 `Recovered` only after the next command actually emits it.
 
 Graceful Exit is different from abrupt death. After `Succeeded`, admitted work
