@@ -2973,7 +2973,7 @@ it("keeps Stop's executor boundary bounded and preserves the task position", () 
   })
 })
 
-effectIt.effect("uses durable Run cancellation as the existing settlement selection boundary", () =>
+effectIt.effect("lets durable Run cancellation override an unreadable executor projection", () =>
   Effect.gen(function* () {
     const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
       correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
@@ -3001,7 +3001,11 @@ effectIt.effect("uses durable Run cancellation as the existing settlement select
       })
     )
     const runningReport = executorReport(14, executing, 1)
-    const cancellationPosition = JournalPosition.make(15)
+    const unreadableProjection = executorStateObservation(
+      15,
+      PlannedAttemptExecutorStateObservation.cases.ExecutorStateUnreadable.make({})
+    )
+    const cancellationPosition = JournalPosition.make(16)
     const cancellation = coverageRecord(
       Number(cancellationPosition),
       RunCancellationAppliedEvent.make({
@@ -3020,6 +3024,7 @@ effectIt.effect("uses durable Run cancellation as the existing settlement select
       beginIntent,
       beginResponse,
       runningReport,
+      unreadableProjection,
       cancellation
     ]
     const reduced = reduceWorkflowJournalHistory(coverageRunId, records)

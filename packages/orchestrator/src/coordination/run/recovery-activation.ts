@@ -1972,10 +1972,11 @@ export const deriveJournalResponsibilityFacts = (
       }
       if (restartDisposition !== undefined) return restartDisposition
       if (stopDisposition !== undefined) return stopDisposition
+      /** Cancellation must retry the exact stop boundary even when an earlier passive read was unavailable. */
+      if (cancellationDisposition !== undefined) return cancellationDisposition
       if (projectionWait) {
         return ResponsibilityDisposition.PlannedAttemptExecutorProjectionWait({ reason: projectionIssue.reason })
       }
-      if (cancellationDisposition !== undefined) return cancellationDisposition
       return nonterminalTaskStateDisposition()
     }
     const changedSpecificationDisposition = (): PlannedAttemptExecutorDisposition | undefined => {
