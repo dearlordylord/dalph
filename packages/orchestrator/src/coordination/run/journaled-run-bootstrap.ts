@@ -67,6 +67,7 @@ import {
   JournaledRunIdentityMismatch,
   JournaledRunNotActive,
   JournaledRunReactivationObserverAlreadyRegistered,
+  AcceptedRunFactPublication,
   type JournaledRunBootstrapService,
   type JournaledRunProcessServices,
   type JournaledRunServices,
@@ -603,7 +604,8 @@ export const journaledRunBootstrapLayer = (
                         Effect.flatMap((observers) =>
                           Option.match(observers, {
                             onNone: () => Effect.void,
-                            onSome: ({ acceptedFactPublication }) => acceptedFactPublication()
+                            onSome: ({ acceptedFactPublication }) =>
+                              acceptedFactPublication(AcceptedRunFactPublication.WorkflowProgress())
                           })
                         )
                       )
@@ -664,15 +666,17 @@ export const journaledRunBootstrapLayer = (
                 observe: (bundle) =>
                   Effect.gen(function* () {
                     yield* ambientPublicationObserver.observe(bundle)
-                    const acceptedAt = bundle.actionInputs.runtimeFacts.acceptedAt
+                    const runtimeFacts = bundle.actionInputs.runtimeFacts
+                    const acceptedAt = runtimeFacts.acceptedAt
                     if (acceptedAt === null) return
+                    const publicationClassification = runtimeFacts.acceptedFactPublication
                     const advanced = yield* Ref.modify(acceptedPublicationWatermark, (current) =>
                       current !== null && acceptedAt <= current ? [false, current] : [true, acceptedAt]
                     )
                     if (!advanced) return
                     yield* Option.match(reactivationObservers, {
                       onNone: () => Effect.void,
-                      onSome: ({ acceptedFactPublication }) => acceptedFactPublication()
+                      onSome: ({ acceptedFactPublication }) => acceptedFactPublication(publicationClassification)
                     })
                   })
               })

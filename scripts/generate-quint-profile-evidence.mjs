@@ -117,6 +117,6 @@ export const runCli = (values) => {
   return generateEvidence({ outputPath, profileArguments })
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   runCli(process.argv.slice(2))
 }

@@ -37,8 +37,8 @@ export const reconcileGateRun = ({ runDirectory, runId }) => {
     })
   )
 }
-if (process.argv[1] !== undefined && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
-  const runId = process.argv[2]
+if (pathToFileURL(resolve(process.argv[1] ?? "")).href === import.meta.url) {
+  const runId = process.argv.at(2)
   if (runId === undefined) throw new Error("Usage: pnpm gate:reconcile <run-id>")
   const location = repositoryLocation()
   console.log(JSON.stringify(reconcileGateRun({ runDirectory: join(location.custodyRoot, "runs", runId), runId })))

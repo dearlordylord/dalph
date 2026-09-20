@@ -329,12 +329,7 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
         activateActiveWorkAuthorityRefresh: () => Effect.die("six-task delivery has no tracker refresh stimulus"),
         readControl: bootstrap.readRunReactivationControl(target, runId),
         installAcceptedRunReactivationObservers: ({ acceptedFactPublication, control }) =>
-          bootstrap
-            .registerAcceptedRunReactivationObservers({
-              acceptedFactPublication: () => acceptedFactPublication,
-              control
-            })
-            .pipe(Effect.orDie),
+          bootstrap.registerAcceptedRunReactivationObservers({ acceptedFactPublication, control }).pipe(Effect.orDie),
         isTerminationFailure: () => false,
         onFailure: (error) => Deferred.succeed(failure, error).pipe(Effect.asVoid)
       }).pipe(Layer.provide(Layer.succeed(ApplicationExitShell, shell)))

@@ -1,6 +1,7 @@
 import { NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
+  AcceptedJournalReader,
   ActiveTaskClaim,
   ClaimOwner,
   ClaimToken,
@@ -18,6 +19,7 @@ import {
   JournaledRunBootstrap,
   JournalDatabaseLocator,
   JournalPosition,
+  journalRecordAt,
   type JournalRecord,
   JournalStore,
   makeTaskAttemptPlanOperation,
@@ -44,6 +46,7 @@ import {
   sqliteJournalTestLayer,
   intentRecordKey,
   outcomeRecordKey,
+  PassivePlannedAttemptProjectionPublication,
   makeCurrentSignal,
   PlannedTaskAttemptPlanner,
   RunFinalityDecision,
@@ -51,6 +54,7 @@ import {
   RunReactivationHint,
   RunReactivationOwner,
   TaskClaimAcquisitionPlanner,
+  TaskClaimConflict,
   TaskTrackerMutationThrottled,
   TaskClaimReadFailure,
   TaskWorkCapacity,
@@ -74,7 +78,8 @@ import {
   sqliteJournalStoreLayer,
   journalStoreCapabilities,
   JournalStorageUnavailable,
-  type AcceptedRunReactivationObservers
+  type AcceptedRunReactivationObservers,
+  AcceptedRunFactPublication
 } from "@dalph/orchestrator"
 import {
   AttemptId,
@@ -103,6 +108,7 @@ import {
   Deferred,
   Duration,
   Effect,
+  Exit,
   FileSystem,
   Layer,
   Path,
@@ -535,7 +541,7 @@ it.effect("production composition wires current-first tracker notifications and 
         ])
         const observers = yield* Ref.get(registeredObservers)
         if (observers === undefined) return yield* Effect.die("production owner did not register its observers")
-        yield* observers.acceptedFactPublication()
+        yield* observers.acceptedFactPublication(AcceptedRunFactPublication.WorkflowProgress())
         yield* Deferred.await(fourthActivation)
         expect(yield* Ref.get(activations)).toBe(4)
         expect(yield* Ref.get(opportunities)).toEqual([
@@ -612,6 +618,10 @@ type ProductionRefreshHarnessOptions = {
   readonly git?: "Ready" | "LostWorktree" | "LineageRewrite" | "Unreadable"
   readonly includeIndependentTask?: boolean
   readonly crash?: ProductionRefreshCrash
+  readonly actualOrdinaryStartup?: boolean
+  readonly historicalExecutingAt232?: boolean
+  readonly executorProjection?: "Exact" | "Unreadable"
+  readonly stableStartupWake?: "None" | "OperatorWake"
 }
 
 type ProductionRefreshCrash =
@@ -960,6 +970,35 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
               version: workflowJournalEventVersion
             })
           )
+          if (options.historicalExecutingAt232 === true) {
+            yield* Effect.forEach(
+              Array.from({ length: 109 }, (_, index) => index + 1),
+              (ordinal) => {
+                const operation = makeTrackerGraphObservationOperation(
+                  { _tag: "WorkflowEstablishment" },
+                  OperationId.make(`production-refresh-history-padding-${ordinal}`),
+                  target,
+                  [],
+                  graphTaskIds
+                )
+                return journal
+                  .append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+                  .pipe(
+                    Effect.andThen(
+                      journal.append(
+                        runId,
+                        outcomeRecordKey(operation.operationId),
+                        taskTrackerGraphFactsObserved(operation, {
+                          revision: TrackerRevision.make(`production-refresh-history-padding-${ordinal}`),
+                          taskIds: graphTaskIds
+                        })
+                      )
+                    )
+                  )
+              },
+              { discard: true }
+            )
+          }
           const executingReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
             correlation: plannedAttemptExecutorCorrelation(attempt)
           })
@@ -1247,6 +1286,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
         | undefined
       >(undefined)
       const latestJournalPosition = yield* Ref.make<JournalRecord["position"] | undefined>(undefined)
+      const stableJournalRecordsBeforeWake = yield* Ref.make<ReadonlyArray<JournalRecord> | undefined>(undefined)
       const failpoint = yield* Ref.make<ProductionRefreshFailpoint | undefined>(undefined)
       const failpointConsumed = yield* Ref.make(false)
       const activeReadStarted = yield* Deferred.make<void>()
@@ -1399,6 +1439,9 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                   const call = { command: "observe" as const, taskId: projectedTaskId }
                   yield* Ref.update(executorEntries, (calls) => [...calls, call])
                   yield* Ref.update(executorCalls, (calls) => [...calls, call])
+                  if (options.executorProjection === "Unreadable") {
+                    return PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation })
+                  }
                   const suspended = (yield* Ref.get(suspendedTasks)).has(projectedTaskId)
                   return PlannedAttemptExecutorProjection.cases.Exact.make({
                     report: suspended
@@ -1577,6 +1620,9 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
               )
             )
             const startupActivation = yield* Deferred.make<void>()
+            const ordinaryActivationSettled = yield* Queue.unbounded<Exit.Exit<unknown, unknown>>()
+            const ordinaryActivationFinalizationStarted = yield* Deferred.make<void>()
+            const activationHandedOffIdle = yield* Deferred.make<void>()
             const acceptedActivation = yield* Deferred.make<void>()
             const activeActivation = yield* Deferred.make<"Success" | "Failure">()
             const activeDecisions = yield* Ref.make<ReadonlyArray<RunFinalityDecision>>([])
@@ -1600,30 +1646,67 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                     ? ("ActiveWorkAuthorityRefresh" as const)
                     : ("OrdinaryRunEntry" as const)
                 const recordActivation = Ref.update(activationKinds, (current) => [...current, activationTag])
-                return activationOpportunity._tag === "OrdinaryRunEntry"
-                  ? recordActivation.pipe(
-                      Effect.andThen(
-                        Ref.modify(ordinaryActivationCount, (count) => {
-                          const next = count + 1
-                          return [next, next] as const
-                        })
-                      ),
-                      Effect.tap((count) =>
-                        count === 1
-                          ? Deferred.succeed(startupActivation, undefined)
-                          : count === 2
-                            ? Effect.gen(function* () {
-                                if (options.publishAfterActiveReturn === true) {
-                                  expect(yield* Ref.get(activeConcurrent)).toBe(0)
-                                }
-                                yield* Deferred.succeed(acceptedActivation, undefined)
-                              })
-                            : Effect.void
-                      ),
-                      Effect.andThen(
-                        Effect.succeed(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+                const ordinaryActivation =
+                  options.historicalExecutingAt232 === true
+                    ? applicationBootstrap.activate(
+                        target,
+                        initialControlPolicySource,
+                        allocatedRunId,
+                        Effect.gen(function* () {
+                          const executor = yield* PlannedAttemptExecutor
+                          const publication = yield* PassivePlannedAttemptProjectionPublication
+                          const projection = yield* executor
+                            .observe(plannedAttemptExecutorCorrelation(attempt), {
+                              _tag: "PassiveLifecycleObservation"
+                            })
+                            .pipe(Effect.orDie)
+                          yield* publication.publish(attempt, projection).pipe(
+                            Effect.catchTag("PlannedAttemptExecutorStateUnreadable", () => Effect.void),
+                            Effect.orDie
+                          )
+                          return {
+                            acceptedAt: null,
+                            decision: RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+                          } as const
+                        }),
+                        activationOpportunity
                       )
-                    )
+                    : applicationBootstrap.activate(
+                        target,
+                        initialControlPolicySource,
+                        allocatedRunId,
+                        program,
+                        activationOpportunity
+                      )
+                return activationOpportunity._tag === "OrdinaryRunEntry"
+                  ? options.actualOrdinaryStartup === true
+                    ? recordActivation.pipe(
+                        Effect.andThen(ordinaryActivation),
+                        Effect.onExit((exit) => Queue.offer(ordinaryActivationSettled, exit).pipe(Effect.asVoid))
+                      )
+                    : recordActivation.pipe(
+                        Effect.andThen(
+                          Ref.modify(ordinaryActivationCount, (count) => {
+                            const next = count + 1
+                            return [next, next] as const
+                          })
+                        ),
+                        Effect.tap((count) =>
+                          count === 1
+                            ? Deferred.succeed(startupActivation, undefined)
+                            : count === 2
+                              ? Effect.gen(function* () {
+                                  if (options.publishAfterActiveReturn === true) {
+                                    expect(yield* Ref.get(activeConcurrent)).toBe(0)
+                                  }
+                                  yield* Deferred.succeed(acceptedActivation, undefined)
+                                })
+                              : Effect.void
+                        ),
+                        Effect.andThen(
+                          Effect.succeed(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+                        )
+                      )
                   : Effect.gen(function* () {
                       yield* recordActivation
                       yield* Ref.update(activeSources, (sources) => [...sources, activationOpportunity.source])
@@ -1683,8 +1766,8 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                             // owner's next activation, not the finished runtime.
                             const observers = yield* Ref.get(registeredObservers)
                             if (observers === undefined) return yield* Effect.die("owner observers are missing")
-                            yield* observers.acceptedFactPublication()
-                            yield* observers.acceptedFactPublication()
+                            yield* observers.acceptedFactPublication(AcceptedRunFactPublication.WorkflowProgress())
+                            yield* observers.acceptedFactPublication(AcceptedRunFactPublication.WorkflowProgress())
                           })
                         : Effect.void
                     ),
@@ -1708,6 +1791,11 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                   source === "Timer" ? Duration.seconds(1) : Duration.hours(1)
                 ),
                 failureCooldown: ProductionRunReactivationInterval.make(Duration.seconds(1)),
+                onActivationFinalizationStart: (kind) =>
+                  kind === "Ordinary"
+                    ? Deferred.succeed(ordinaryActivationFinalizationStarted, undefined).pipe(Effect.asVoid)
+                    : Effect.void,
+                onActivationHandoffIdle: () => Deferred.succeed(activationHandedOffIdle, undefined).pipe(Effect.asVoid),
                 onFailure: () => Effect.void
               }
             ).pipe(
@@ -1745,12 +1833,36 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             )
             yield* Effect.gen(function* () {
               const owner = yield* RunReactivationOwner
+              const awaitOrdinaryActivation = Effect.gen(function* () {
+                const exit = yield* Queue.take(ordinaryActivationSettled)
+                if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause)
+              })
               yield* Effect.yieldNow
-              yield* Deferred.await(startupActivation)
-              if (source === "AcceptedFactPublication") {
+              if (options.actualOrdinaryStartup === true) {
+                yield* awaitOrdinaryActivation
+                yield* Deferred.await(ordinaryActivationFinalizationStarted)
+                yield* Deferred.await(activationHandedOffIdle)
+              } else {
+                yield* Deferred.await(startupActivation)
+              }
+              if (options.stableStartupWake !== undefined) {
+                yield* TestClock.adjust("30 minutes")
+                yield* Effect.yieldNow
+                const accepted = yield* Context.get(applicationContext, AcceptedJournalReader).readAccepted(runId)
+                yield* Ref.set(
+                  stableJournalRecordsBeforeWake,
+                  Array.from({ length: accepted.records.length }, (_, offset) =>
+                    journalRecordAt(accepted.records, offset)
+                  ).filter((record): record is JournalRecord => record !== undefined)
+                )
+                if (options.stableStartupWake === "OperatorWake") {
+                  yield* owner.hint(RunReactivationHint.OperatorWake())
+                  yield* awaitOrdinaryActivation
+                }
+              } else if (source === "AcceptedFactPublication") {
                 const observers = yield* Ref.get(registeredObservers)
                 if (observers === undefined) return yield* Effect.die("production owner did not register its observers")
-                yield* observers.acceptedFactPublication()
+                yield* observers.acceptedFactPublication(AcceptedRunFactPublication.WorkflowProgress())
                 yield* Deferred.await(acceptedActivation)
               } else if (source === "OperatorWake") {
                 yield* owner.hint(RunReactivationHint.OperatorWake())
@@ -1764,7 +1876,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 }
                 const observers = yield* Ref.get(registeredObservers)
                 if (observers === undefined) return yield* Effect.die("production owner did not register its observers")
-                yield* observers.acceptedFactPublication()
+                yield* observers.acceptedFactPublication(AcceptedRunFactPublication.WorkflowProgress())
                 yield* owner.hint(RunReactivationHint.Timer())
                 yield* owner.hint(RunReactivationHint.TrackerNotification())
                 yield* owner.hint(RunReactivationHint.Timer())
@@ -1821,7 +1933,10 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
               ...current,
               { processEnds: processEndsBeforeExplicitExit, requests: requestsBeforeExplicitExit }
             ])
-            const applicationExitResult = yield* applicationExit.requestBoundary.requestExit
+            const applicationExitResult =
+              options.stableStartupWake === undefined
+                ? yield* applicationExit.requestBoundary.requestExit
+                : ({ _tag: "Succeeded" } as const)
             const expectedApplicationExitResult =
               processCrash === "AfterConstraintBeforeSuspendIntent" ||
               processCrash === "SuspendResponseLost" ||
@@ -1829,16 +1944,19 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 ? "Failed"
                 : "Succeeded"
             expect(applicationExitResult._tag).toBe(expectedApplicationExitResult)
-            expect(yield* Ref.get(applicationExitRequests)).toBe(observeApplicationExit ? 1 : 0)
-            expect(yield* Ref.get(applicationProcessEnds)).toBe(observeApplicationExit ? 1 : 0)
-            if (observeApplicationExit) {
+            const explicitExitWasRequested = observeApplicationExit && options.stableStartupWake === undefined
+            expect(yield* Ref.get(applicationExitRequests)).toBe(explicitExitWasRequested ? 1 : 0)
+            expect(yield* Ref.get(applicationProcessEnds)).toBe(explicitExitWasRequested ? 1 : 0)
+            if (explicitExitWasRequested) {
               expect(yield* Ref.get(applicationExitEvents)).toContain("ExitResultReported")
             } else {
               expect(yield* Ref.get(applicationExitEvents)).toEqual([])
             }
             return {
               activeActivation:
-                source === "AcceptedFactPublication" || source === "OperatorWake"
+                source === "AcceptedFactPublication" ||
+                source === "OperatorWake" ||
+                options.stableStartupWake !== undefined
                   ? undefined
                   : yield* Deferred.await(activeActivation),
               activeDecisions: yield* Ref.get(activeDecisions)
@@ -1878,6 +1996,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
         firstJournalRecords,
         graphTaskIds: snapshot.taskIds(),
         journalRecords,
+        stableJournalRecordsBeforeWake: yield* Ref.get(stableJournalRecordsBeforeWake),
         taskWorkSnapshots: yield* Ref.get(taskWorkSnapshots),
         trackerCalls: yield* Ref.get(trackerCalls)
       }
@@ -1948,6 +2067,224 @@ const expectRunningResponsibilityRemains = (records: ReadonlyArray<JournalRecord
     )
   ).toHaveLength(0)
 }
+
+it.effect(
+  "a reopened SQLite Run keeps positions 232 and 233 stable until an outside wake",
+  () =>
+    Effect.gen(function* () {
+      const result = yield* runProductionRefreshHarness({
+        actualOrdinaryStartup: true,
+        executorProjection: "Unreadable",
+        historicalExecutingAt232: true,
+        stableStartupWake: "OperatorWake"
+      })
+
+      expect(result.activationKinds).toEqual(["OrdinaryRunEntry", "OrdinaryRunEntry"])
+      expect(result.stableJournalRecordsBeforeWake).toHaveLength(233)
+      expect(result.stableJournalRecordsBeforeWake?.[231]).toMatchObject({
+        position: 232,
+        event: { _tag: "PlannedAttemptExecutorWorkReported", report: { _tag: "ExecutorWorkExecuting" } }
+      })
+      expect(result.stableJournalRecordsBeforeWake?.[232]).toMatchObject({
+        position: 233,
+        event: { _tag: "PlannedAttemptExecutorStateObserved", observation: { _tag: "ExecutorStateUnreadable" } }
+      })
+      expect(result.executorEntries).toEqual([
+        { command: "observe", taskId: "A" },
+        { command: "observe", taskId: "A" }
+      ])
+      expect(result.executorCalls).toEqual([
+        { command: "observe", taskId: "A" },
+        { command: "observe", taskId: "A" }
+      ])
+      expect(result.journalRecords).toHaveLength(234)
+      expect(result.journalRecords[233]).toMatchObject({
+        position: 234,
+        event: { _tag: "PlannedAttemptExecutorStateObserved", observation: { _tag: "ExecutorStateUnreadable" } }
+      })
+      expect(result.trackerCalls).toEqual([])
+      expect(
+        result.journalRecords.filter(
+          ({ event, position }) =>
+            position > 232 &&
+            event._tag === "TaskTrackerReadIntentRecorded" &&
+            event.operation._tag === "ReadTrackerGraph"
+        )
+      ).toEqual([])
+      expect(
+        result.journalRecords.filter(
+          ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Begin"
+        )
+      ).toHaveLength(1)
+    }),
+  45_000
+)
+
+it.effect(
+  "a rejected fresh foreign claim remains visible without re-reading the graph",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem
+        const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-rejected-fresh-claim-" })
+        const git = yield* GitCommand
+        yield* git.runInWorktree(directory, ["init", "--initial-branch=master"])
+        yield* git.runInWorktree(directory, ["config", "user.email", "dalph@example.invalid"])
+        yield* git.runInWorktree(directory, ["config", "user.name", "Dalph Test"])
+        yield* fileSystem.writeFileString(`${directory}/README.md`, "rejected fresh claim\n")
+        yield* git.runInWorktree(directory, ["add", "README.md"])
+        yield* git.runInWorktree(directory, ["commit", "-m", "initial"])
+
+        const runId = RunId.make("production-rejected-fresh-claim-run")
+        const target = FixtureTarget.make("production-rejected-fresh-claim-target")
+        const taskId = TaskId.make("rejected-fresh-task")
+        const specification = makeTaskWorkSpecification({ body: "Do rejected work.", taskId, title: "Rejected work" })
+        const projected = projectTrackerSnapshot({
+          revision: "rejected-fresh-graph",
+          rootTaskId: taskId,
+          tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+        })
+        if (projected._tag === "Invalid") return yield* Effect.die("rejected fresh fixture graph must be valid")
+        const journalFilename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
+        const journalContext = yield* Layer.build(sqliteJournalTestLayer({ filename: journalFilename }))
+        const graphReads = yield* Ref.make(0)
+        const claimAttempts = yield* Ref.make(0)
+        const claimReads = yield* Ref.make(0)
+        const activationCount = yield* Ref.make(0)
+        const activationSettled = yield* Deferred.make<void>()
+        const retainedWaitPublished = yield* Deferred.make<void>()
+        const foreign = ActiveTaskClaim.make({
+          operationId: OperationId.make("foreign-rejected-operation"),
+          owner: ClaimOwner.make("foreign-owner"),
+          taskId,
+          token: ClaimToken.make("foreign-token")
+        })
+        const trackerMutation = TrackerMutation.of({
+          acquireTaskClaim: (attempted) =>
+            Ref.update(claimAttempts, (count) => count + 1).pipe(
+              Effect.andThen(new TaskClaimConflict({ attempted, observed: foreign }))
+            ),
+          readTaskClaim: () => Ref.update(claimReads, (count) => count + 1).pipe(Effect.as(foreign)),
+          releaseTaskClaim: () => Effect.die("a rejected fresh claim must not be released")
+        })
+        const trackerGraphReader = TrackerGraphReader.of({
+          read: () => Ref.update(graphReads, (count) => count + 1).pipe(Effect.as(projected.snapshot)),
+          readTaskWorkSpecification: () => Effect.succeed(specification)
+        })
+        const executor = PlannedAttemptExecutor.of({
+          begin: () => Effect.die("a rejected fresh claim must not begin executor work"),
+          observe: () => Effect.die("a rejected fresh claim has no executor work to observe"),
+          requestSuspension: () => Effect.die("a rejected fresh claim has no executor work to suspend"),
+          resume: () => Effect.die("a rejected fresh claim has no executor work to resume")
+        })
+        const application = productionWorkflowInterpreterLayer(
+          runId,
+          GitCommonDirectoryTarget.make(`${directory}/.git`),
+          GitRepositoryLocator.make(directory),
+          IntegrationTarget.make({
+            repository: GitRepositoryLocator.make(`${directory}/.git`),
+            ref: IntegrationTargetRef.make("refs/heads/master")
+          }),
+          Layer.succeed(TrackerMutation, trackerMutation),
+          controlledSynchronousPlannedAttemptExecutorLayer(Layer.succeed(PlannedAttemptExecutor, executor)),
+          unavailableIntegratorCandidateProviderAuthority,
+          { journalStoreLayer: Layer.succeedContext(journalContext) }
+        ).pipe(
+          Layer.provide(Layer.succeed(TrackerGraphReader, trackerGraphReader)),
+          Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+        )
+        const applicationContext = yield* Layer.build(application).pipe(
+          Effect.provide(nodePathAndFileSystemLayer),
+          Effect.provide(nodeGitCommandLayer),
+          Effect.provide(NodeServices.layer),
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: journalFilename })))
+        )
+        const bootstrap = Context.get(applicationContext, JournaledRunBootstrap)
+        const observedBootstrap = JournaledRunBootstrap.of({
+          ...bootstrap,
+          activate: (...input) =>
+            Ref.update(activationCount, (count) => count + 1).pipe(
+              Effect.andThen(bootstrap.activate(...input)),
+              Effect.ensuring(Deferred.succeed(activationSettled, undefined))
+            ),
+          registerAcceptedRunReactivationObservers: (observers) =>
+            bootstrap.registerAcceptedRunReactivationObservers({
+              ...observers,
+              acceptedFactPublication: (publication) =>
+                (publication._tag === "RetainedWait"
+                  ? Deferred.succeed(retainedWaitPublished, undefined)
+                  : Effect.void
+                ).pipe(Effect.andThen(observers.acceptedFactPublication(publication)))
+            })
+        })
+        const ownerLayer = productionRunReactivationLayer(
+          target,
+          Effect.succeed(InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })),
+          runId,
+          {
+            activationInterval: ProductionRunReactivationInterval.make(Duration.hours(1)),
+            failureCooldown: ProductionRunReactivationInterval.make(Duration.seconds(1)),
+            onFailure: () => Effect.void
+          }
+        ).pipe(
+          Layer.provide(Layer.succeed(JournaledRunBootstrap, observedBootstrap)),
+          Layer.provide(Layer.succeed(ApplicationExitShell, Context.get(applicationContext, ApplicationExitShell))),
+          Layer.provide(
+            Layer.succeed(
+              TaskClaimAcquisitionPlanner,
+              TaskClaimAcquisitionPlanner.of({
+                plan: (operationId) =>
+                  Effect.succeed({
+                    operationId,
+                    owner: ClaimOwner.make("dalph"),
+                    taskId,
+                    token: ClaimToken.make("rejected-fresh-token")
+                  })
+              })
+            )
+          ),
+          Layer.provide(
+            Layer.mock(PlannedTaskAttemptPlanner, { plan: () => Effect.die("claim rejection stops planning") })
+          )
+        )
+
+        yield* Effect.gen(function* () {
+          yield* RunReactivationOwner
+          yield* Deferred.await(retainedWaitPublished)
+          yield* Deferred.await(activationSettled)
+          yield* TestClock.adjust("30 minutes")
+          yield* Effect.yieldNow
+        }).pipe(Effect.provide(ownerLayer))
+
+        const records = yield* Context.get(journalContext, JournalStore).read(runId)
+        const rejected = records.filter(({ event }) => event._tag === "TaskClaimAcquisitionRejected")
+        expect(yield* Ref.get(activationCount), JSON.stringify(records.map(({ event }) => event._tag))).toBe(1)
+        expect(rejected).toHaveLength(1)
+        expect(rejected[0]?.event).toMatchObject({
+          _tag: "TaskClaimAcquisitionRejected",
+          observed: { owner: "foreign-owner", taskId, token: "foreign-token" },
+          reason: "ForeignClaim"
+        })
+        expect(yield* Ref.get(graphReads)).toBe(2)
+        expect(yield* Ref.get(claimReads)).toBe(1)
+        expect(yield* Ref.get(claimAttempts)).toBe(0)
+        expect(
+          records.filter(
+            ({ event, position }) =>
+              event._tag === "TaskTrackerReadIntentRecorded" &&
+              event.operation._tag === "ReadTrackerGraph" &&
+              position > (rejected[0]?.position ?? 0)
+          )
+        ).toEqual([])
+        expect(records.some(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")).toBe(false)
+      }).pipe(
+        Effect.provide(nodePathAndFileSystemLayer),
+        Effect.provide(nodeGitCommandLayer),
+        Effect.provide(NodeServices.layer)
+      )
+    ),
+  30_000
+)
 
 it.effect(
   "unchanged active-work refresh calls each ordinary provider once records reconfirmation and does not loop",

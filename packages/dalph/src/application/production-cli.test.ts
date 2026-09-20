@@ -27,6 +27,7 @@ import {
   type CurrentSignal,
   currentSignalFromCurrentFirstStream,
   currentSignalOf,
+  makeCurrentSignal,
   type CurrentDeliveryStatus,
   type DeliveryStatusEntry,
   type DeliveryRuntimeObservationState,
@@ -1647,7 +1648,7 @@ it.effect("attaches current-first without missing a delivery publication racing 
       Stream.make({ _tag: "NotReady" as const }, { _tag: "Closed" as const, final: null })
     )
 
-    yield* presentSelectedProductionRun(
+    const presentation = yield* presentSelectedProductionRun(
       {
         acceptedHistory: currentSignalOf(cursor),
         current,
@@ -1656,18 +1657,20 @@ it.effect("attaches current-first without missing a delivery publication racing 
         traceReader: { readAt: () => Effect.succeed(snapshot) }
       },
       (line) => Ref.update(lines, (current) => [...current, line])
-    )
+    ).pipe(Effect.forkChild)
+
+    yield* Fiber.join(presentation)
 
     const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
     expect(records.map(({ _tag }) => _tag)).toEqual([
       "RunSelected",
       "CurrentStatus",
-      "CurrentStatus",
       "HistoricalSnapshot",
+      "CurrentStatus",
       "RunDisposition"
     ])
     expect(records[1]?.status._tag).toBe("DeliveryStatusNotReady")
-    expect(records[2]?.status).toEqual({ _tag: "DeliveryStatusClosed", final: null, subject: { _tag: "Run", runId } })
+    expect(records[3]?.status).toEqual({ _tag: "DeliveryStatusClosed", final: null, subject: { _tag: "Run", runId } })
   })
 )
 
@@ -2308,6 +2311,7 @@ it.effect("presents Alice's nonterminal status change before the accepted Run te
 
     yield* Deferred.await(initialStatus)
     yield* Queue.offer(changes, observationState)
+    yield* TestClock.adjust("1 second")
     yield* Deferred.await(statusChanged)
     yield* Deferred.succeed(termination, {
       disposition: RunTerminationDisposition.make("Completed"),
@@ -2355,6 +2359,120 @@ it.effect("rate-limits a rapid passive status source before it reaches stdout", 
     expect(statuses.length).toBeGreaterThanOrEqual(1)
     expect(statuses.length).toBeLessThanOrEqual(2)
     expect(statuses.at(-1)?.status._tag).toBe("DeliveryStatusAvailable")
+  })
+)
+
+it.effect(
+  "publishes the first recovered status immediately and the newest silent passive update after one second",
+  () =>
+    Effect.gen(function* () {
+      const lines = yield* Ref.make<ReadonlyArray<string>>([])
+      const initialPublished = yield* Deferred.make<void>()
+      const newestPublished = yield* Deferred.make<void>()
+      const termination = yield* Deferred.make<{
+        readonly disposition: RunTerminationDisposition
+        readonly terminatedAt: TraceCursor
+      }>()
+      const observationState = projectedStatusFixture()
+      if (observationState._tag !== "Ready") return expect.fail("the projected fixture must be ready")
+      const newestState: DeliveryRuntimeObservationState = { _tag: "Closed", final: observationState }
+      const changes = yield* Queue.unbounded<DeliveryRuntimeObservationState>()
+      const consumed = yield* Queue.unbounded<DeliveryRuntimeObservationState["_tag"]>()
+      const current = currentSignalFromCurrentFirstStream(
+        Stream.concat(
+          Stream.make({ _tag: "NotReady" as const }),
+          Stream.fromQueue(changes).pipe(Stream.tap((value) => Queue.offer(consumed, value._tag)))
+        )
+      )
+
+      const presentation = yield* presentSelectedProductionRun(
+        {
+          acceptedHistory: currentSignalOf(cursor),
+          current,
+          runTermination: { await: Deferred.await(termination), poll: Effect.succeed(Option.none()) },
+          selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+          traceReader: { readAt: () => Effect.succeed(snapshot) }
+        },
+        (line) => {
+          const record = JSON.parse(line)
+          return Ref.update(lines, (current) => [...current, line]).pipe(
+            Effect.andThen(
+              record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusNotReady"
+                ? Deferred.succeed(initialPublished, undefined)
+                : record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusClosed"
+                  ? Deferred.succeed(newestPublished, undefined)
+                  : Effect.void
+            )
+          )
+        }
+      ).pipe(Effect.forkChild)
+
+      yield* Deferred.await(initialPublished)
+      yield* Queue.offerAll(changes, [observationState, newestState])
+      expect([yield* Queue.take(consumed), yield* Queue.take(consumed)]).toEqual(["Ready", "Closed"])
+      expect(yield* Deferred.isDone(newestPublished)).toBe(false)
+
+      yield* TestClock.adjust("999 millis")
+      yield* Effect.yieldNow
+      expect(yield* Deferred.isDone(newestPublished)).toBe(false)
+
+      yield* TestClock.adjust("1 millis")
+      yield* Effect.yieldNow
+      expect(yield* Deferred.isDone(newestPublished)).toBe(true)
+
+      yield* Deferred.succeed(termination, {
+        disposition: RunTerminationDisposition.make("Completed"),
+        terminatedAt: cursor
+      })
+      yield* Fiber.join(presentation)
+
+      const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+      expect(records.filter(({ _tag }) => _tag === "CurrentStatus").map(({ status }) => status._tag)).toEqual([
+        "DeliveryStatusNotReady",
+        "DeliveryStatusClosed"
+      ])
+    })
+)
+
+it.effect("publishes a passive status immediately when it arrives after an idle window", () =>
+  Effect.gen(function* () {
+    const initialPublished = yield* Deferred.make<void>()
+    const laterPublished = yield* Deferred.make<void>()
+    const termination = yield* Deferred.make<{
+      readonly disposition: RunTerminationDisposition
+      readonly terminatedAt: TraceCursor
+    }>()
+    const changes = yield* Queue.unbounded<DeliveryRuntimeObservationState>()
+    const current = currentSignalFromCurrentFirstStream(
+      Stream.concat(Stream.make({ _tag: "NotReady" as const }), Stream.fromQueue(changes))
+    )
+    const presentation = yield* presentSelectedProductionRun(
+      {
+        acceptedHistory: currentSignalOf(cursor),
+        current,
+        runTermination: { await: Deferred.await(termination), poll: Effect.succeed(Option.none()) },
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        traceReader: { readAt: () => Effect.succeed(snapshot) }
+      },
+      (line) => {
+        const record = JSON.parse(line)
+        if (record._tag !== "CurrentStatus") return Effect.void
+        return record.status._tag === "DeliveryStatusNotReady"
+          ? Deferred.succeed(initialPublished, undefined)
+          : Deferred.succeed(laterPublished, undefined)
+      }
+    ).pipe(Effect.forkChild)
+
+    yield* Deferred.await(initialPublished)
+    yield* TestClock.adjust("2 seconds")
+    yield* Queue.offer(changes, projectedStatusFixture())
+    yield* Deferred.await(laterPublished)
+
+    yield* Deferred.succeed(termination, {
+      disposition: RunTerminationDisposition.make("Completed"),
+      terminatedAt: cursor
+    })
+    yield* Fiber.join(presentation)
   })
 )
 
@@ -2733,12 +2851,56 @@ const activeProductionCliObservation = () => ({
   traceReader: { readAt: () => Effect.succeed(snapshot) }
 })
 
+const closingProductionCliObservation = (attachments: Ref.Ref<number>) => ({
+  ...activeProductionCliObservation(),
+  current: makeCurrentSignal(
+    Ref.getAndUpdate(attachments, (count) => count + 1).pipe(
+      Effect.map((count) => ({
+        changes: Stream.never,
+        current: count === 0 ? ({ _tag: "NotReady" } as const) : ({ _tag: "Closed", final: null } as const)
+      }))
+    )
+  )
+})
+
+it.effect("successful application Exit without authoritative Closed fails without a synthetic terminal record", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const presentedResults = yield* Ref.make(0)
+
+    const failure = yield* presentSelectedProductionRun(
+      activeProductionCliObservation(),
+      (line) => Ref.update(lines, (current) => [...current, line]),
+      Effect.void,
+      {
+        awaitRequest: Effect.void,
+        awaitResult: Effect.succeed(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 })),
+        presentResult: () => Ref.update(presentedResults, (count) => count + 1)
+      }
+    ).pipe(Effect.flip)
+
+    expect(failure).toMatchObject({
+      _tag: "ProductionCliStatusError",
+      code: "status.projection_invalid",
+      subject: runId
+    })
+    expect(yield* Ref.get(presentedResults)).toBe(0)
+    const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+    expect(records.some(({ _tag }) => _tag === "RunDisposition")).toBe(false)
+    expect(records.some(({ _tag }) => _tag === "ApplicationExitDisposition")).toBe(false)
+    expect(records.some(({ _tag, status }) => _tag === "CurrentStatus" && status._tag === "DeliveryStatusClosed")).toBe(
+      false
+    )
+  })
+)
+
 it.effect("SIGINT and SIGTERM enter the same configured production Exit request boundary", () =>
   Effect.gen(function* () {
     const lines = yield* Ref.make<ReadonlyArray<string>>([])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
     const signals = yield* controlledApplicationExitSignals()
     const requestCount = yield* Ref.make(0)
+    const statusAttachments = yield* Ref.make(0)
     const mayFinish = yield* Deferred.make<void>()
     const requestBoundary: ApplicationExitRequestBoundaryService = {
       requestExit: Ref.update(requestCount, (count) => count + 1).pipe(
@@ -2748,7 +2910,7 @@ it.effect("SIGINT and SIGTERM enter the same configured production Exit request 
     }
     const application = runProductionCli(
       (_input, use) =>
-        use(activeProductionCliObservation(), requestBoundary).pipe(
+        use(closingProductionCliObservation(statusAttachments), requestBoundary).pipe(
           Effect.ensuring(Ref.update(chronology, (current) => [...current, "host-scope-finalized"]))
         ),
       signals.boundary
@@ -2783,6 +2945,13 @@ it.effect("SIGINT and SIGTERM enter the same configured production Exit request 
     expect(records.filter(({ _tag }) => _tag === "ApplicationExitDisposition")).toEqual([
       { _tag: "ApplicationExitDisposition", disposition: { _tag: "Succeeded", requestedStatus: 0 }, runId, version: 1 }
     ])
+    const closedStatuses = records.filter(
+      ({ _tag, status }) => _tag === "CurrentStatus" && status._tag === "DeliveryStatusClosed"
+    )
+    expect(closedStatuses).toHaveLength(1)
+    expect(records.indexOf(closedStatuses[0])).toBeLessThan(
+      records.findIndex(({ _tag }) => _tag === "ApplicationExitDisposition")
+    )
     expect(records.some(({ _tag }) => _tag === "RunDisposition")).toBe(false)
     const finalChronology = yield* Ref.get(chronology)
     expect(finalChronology.indexOf("output:ApplicationExitDisposition")).toBeLessThan(
@@ -2798,9 +2967,10 @@ it.effect("a signal after Run selection interrupts presentation and reports the 
     const statusWritten = yield* Deferred.make<void>()
     const signals = yield* controlledApplicationExitSignals()
     const requestCount = yield* Ref.make(0)
+    const statusAttachments = yield* Ref.make(0)
     const application = runProductionCli(
       (_input, use) =>
-        use(activeProductionCliObservation(), {
+        use(closingProductionCliObservation(statusAttachments), {
           requestExit: Ref.update(requestCount, (count) => count + 1).pipe(
             Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
           )

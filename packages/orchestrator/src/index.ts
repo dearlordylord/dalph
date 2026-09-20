@@ -256,10 +256,7 @@ export {
 } from "./authorities/task-tracker/github/graph-reader.js"
 export { githubTaskIdFor, trackerRevisionFor } from "./authorities/task-tracker/github/task-identity.js"
 export { githubFocusedCompletionRevisionFor } from "./authorities/task-tracker/github/focused-completion-reader.js"
-export {
-  githubTrackerMutationLayer,
-  githubTrackerMutationNodeLayer
-} from "./authorities/task-tracker/github/claim-mutation.js"
+export { GithubClaimOwner } from "./authorities/task-tracker/github/claim-representation.js"
 export {
   githubCompletionClaimBoundaryLayer,
   githubCompletionClaimFingerprintFor,
@@ -657,9 +654,11 @@ export {
   freshWorkflowRunId
 } from "./coordination/run/fresh-run-identity.js"
 export {
+  ProductionRunDiscovery,
   ProductionRunSelection,
   ProductionRunSelectionConflict,
-  selectProductionRun
+  discoverProductionRun,
+  selectDiscoveredProductionRun
 } from "./coordination/run/production-run-selection.js"
 export {
   JournaledRunBootstrap,
@@ -671,6 +670,9 @@ export {
   type RunReactivationControlState,
   type AcceptedRunControlDirection,
   type AcceptedRunControlObserver,
+  AcceptedRunFactPublication,
+  AcceptedRunFactPublicationRecordMissing,
+  type AcceptedRunFactPublication as AcceptedRunFactPublicationValue,
   type AcceptedRunFactPublicationObserver,
   type AcceptedRunReactivationObservers,
   JournaledRunReactivationObserverAlreadyRegistered,

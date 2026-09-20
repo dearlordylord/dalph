@@ -162,7 +162,7 @@ const withFakeLeaseProc = <A, E>(
 const controlledProcessGroupNative = () => {
   let facts:
     | {
-        readonly executable: string
+        readonly command: ReadonlyArray<string>
         readonly pid: number
         readonly processGroupId: number
         readonly startIdentity: string
@@ -173,7 +173,7 @@ const controlledProcessGroupNative = () => {
     if (facts === undefined || !path.startsWith(`/proc/${facts.pid}/`)) {
       return nodeCodexProcessNativeService.readFile(path)
     }
-    if (path.endsWith("/cmdline")) return `${facts.executable}\u0000app-server\u0000`
+    if (path.endsWith("/cmdline")) return `${facts.command.join("\u0000")}\u0000`
     if (path.endsWith("/stat")) {
       if (signaled) {
         const error = Object.assign(new Error("gone"), { code: "ESRCH" })
@@ -255,6 +255,7 @@ process.stdin.on("data", (chunk) => {
     buffer = buffer.slice(index + 1)
     if (line.trim() === "") continue
     const message = JSON.parse(line)
+    if (message.id === undefined) continue
     if (message.method === "initialize") {
       write(message.id, { userAgent: "fixture", codexHome: "/tmp/fixture", platformFamily: "unix", platformOs: "linux" })
     } else if (message.method === "thread/start") {
@@ -1147,6 +1148,7 @@ it.effect("reconciles controlled detached process-group ownership before close",
             const liveLaunch = launch
             const livePid = liveLaunch?.pid
             expect(livePid).toBeGreaterThan(0)
+            if (liveLaunch === undefined) return
             if (livePid === undefined || livePid === null) return
             yield* Effect.addFinalizer(() =>
               Effect.sync(() => {
@@ -1164,7 +1166,7 @@ it.effect("reconciles controlled detached process-group ownership before close",
               : observedIdentity
             const observedGroupId = processGroupId === "same" ? livePid : livePid + 1
             controlledProcessGroup.configure({
-              executable,
+              command: liveLaunch.command,
               pid: livePid,
               startIdentity: startIdentity === "expected" ? startToken : "foreign",
               processGroupId: observedGroupId

@@ -1,13 +1,6 @@
-import { NodeCrypto } from "@effect/platform-node"
 import { Crypto, Effect, Layer, Schema } from "effect"
 import { type TaskId } from "@dalph/contracts"
-import {
-  GithubGraphqlClient,
-  githubGraphqlClientNodeLayer,
-  GithubGraphqlRequest,
-  GithubLabelName,
-  type GithubLabelNodeId
-} from "./graphql-client.js"
+import { GithubGraphqlClient, GithubGraphqlRequest, GithubLabelName, type GithubLabelNodeId } from "./graphql-client.js"
 import { githubTaskClaimLabelDigestFor } from "./claim-label-identity.js"
 import {
   CreateClaimLabelResponse,
@@ -15,6 +8,13 @@ import {
   FindClaimLabelResponse,
   GithubGraphqlErrors
 } from "./claim-label-response.js"
+import {
+  GithubClaimDescriptionParts,
+  githubClaimDescriptionFits,
+  githubClaimDescriptionFor,
+  githubClaimDescriptionSeparator,
+  githubClaimDescriptionVersion
+} from "./claim-representation.js"
 import { decodeGithubTaskId } from "./task-identity.js"
 import {
   ActiveTaskClaim,
@@ -30,15 +30,6 @@ import {
 import type { TaskClaimAcquisition, TaskClaimRelease } from "../claim-mutation.js"
 import { mapGithubMutationFailure } from "./mutation-throttling.js"
 
-const GithubClaimDescriptionFields = Schema.Struct({
-  operationId: ActiveTaskClaim.fields.operationId,
-  owner: ActiveTaskClaim.fields.owner,
-  token: ActiveTaskClaim.fields.token
-})
-
-const githubClaimDescriptionVersion = "1"
-const githubClaimDescriptionSeparator = "|"
-const githubClaimDescriptionMaximumLength = 100
 type GithubClaimRecord =
   | { readonly _tag: "Unclaimed"; readonly observation: UnclaimedTask }
   | { readonly _tag: "Active"; readonly labelId: GithubLabelNodeId; readonly observation: ActiveTaskClaim }
@@ -49,10 +40,8 @@ const decodeCoordinates = (taskId: TaskId) =>
   )
 
 const descriptionFor = (acquisition: TaskClaimAcquisition): Effect.Effect<string, TaskClaimRequestFailure> => {
-  const components = [acquisition.operationId, acquisition.owner, acquisition.token]
-  const description = [githubClaimDescriptionVersion, ...components].join(githubClaimDescriptionSeparator)
-  return components.some((component) => component.includes(githubClaimDescriptionSeparator)) ||
-    description.length > githubClaimDescriptionMaximumLength
+  const description = githubClaimDescriptionFor(acquisition)
+  return !githubClaimDescriptionFits(acquisition)
     ? Effect.fail(
         new TaskClaimRequestFailure({
           acquisition,
@@ -76,8 +65,15 @@ const decodeDescription = (taskId: TaskId, description: string) => {
       new TaskClaimReadFailure({ detail: "GitHub claim label has an unsupported description encoding", taskId })
     )
   }
-  return Schema.decodeUnknownEffect(GithubClaimDescriptionFields)({ operationId, owner, token }).pipe(
-    Effect.mapError((cause) => new TaskClaimReadFailure({ detail: String(cause), taskId }))
+  return Schema.decodeUnknownEffect(GithubClaimDescriptionParts)({ operationId, owner, token }).pipe(
+    Effect.mapError((cause) => new TaskClaimReadFailure({ detail: String(cause), taskId })),
+    Effect.flatMap((parts) =>
+      githubClaimDescriptionFits(parts) && githubClaimDescriptionFor(parts) === description
+        ? Effect.succeed(parts)
+        : Effect.fail(
+            new TaskClaimReadFailure({ detail: "GitHub claim label has an unsupported description encoding", taskId })
+          )
+    )
   )
 }
 
@@ -229,9 +225,4 @@ export const githubTrackerMutationLayer = Layer.effect(
 
     return TrackerMutation.of({ acquireTaskClaim, readTaskClaim, releaseTaskClaim })
   })
-)
-
-export const githubTrackerMutationNodeLayer = githubTrackerMutationLayer.pipe(
-  Layer.provide(githubGraphqlClientNodeLayer),
-  Layer.provide(NodeCrypto.layer)
 )

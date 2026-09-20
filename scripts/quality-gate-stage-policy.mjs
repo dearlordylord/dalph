@@ -42,11 +42,17 @@ export const boundedQualityGateCommand = ({ gate, nodeExecutable, pnpmEntryPoint
   timeoutMilliseconds: gate.timeout
 })
 
+/** The early admitted baseline reuses the exact lint and Lab stages from full preflight. */
+export const baselineQualityGates = () => [
+  { args: ["lint:code", "--census"], name: "format and lint", timeout: 5 * 60 * SECOND },
+  { args: ["check:lab"], name: "Reducer Lab maintained evaluation", timeout: 5 * 60 * SECOND }
+]
+
 /** Structural checks run once before qualification; production artifacts are prepared before source checks. */
 export const preflightQualityGates = (baseSha) => [
   { args: ["check:artifacts"], name: "build and production artifacts", timeout: 5 * 60 * SECOND },
   { args: ["typecheck"], name: "typecheck (including Effect diagnostics)", timeout: 2 * 60 * SECOND },
-  { args: ["lint:code", "--census"], name: "format and lint", timeout: 5 * 60 * SECOND },
+  ...baselineQualityGates(),
   { args: ["check:circular"], name: "dependency cycles", timeout: 60 * SECOND },
   complexityQualityGate(baseSha),
   { args: ["check:duplicates"], name: "duplication", timeout: 60 * SECOND },
@@ -68,6 +74,7 @@ export const fullQualityGateManifest = (baseSha, invocation) => {
     "production-artifacts",
     "typecheck",
     "format-lint",
+    "reducer-lab",
     "dependency-cycles",
     "complexity",
     "duplicates",
@@ -93,7 +100,9 @@ export const fullQualityGateManifest = (baseSha, invocation) => {
         ? ["dist"]
         : gate.args[0] === "check:artifacts"
           ? ["packages/contracts/dist", "packages/orchestrator/dist", "packages/dalph/dist"]
-          : []
+          : gate.args[0] === "check:lab"
+            ? ["prototypes/reducer-lab/dist"]
+            : []
   }))
   const manifest = [
     ...prefix,
@@ -105,14 +114,6 @@ export const fullQualityGateManifest = (baseSha, invocation) => {
       terminationGrace: 15 * SECOND,
       timeout: 19 * 60 * SECOND,
       artifactRoots: []
-    },
-    {
-      id: "reducer-lab",
-      boundary: "qualification",
-      args: ["check:lab"],
-      name: "Reducer Lab maintained evaluation",
-      timeout: 5 * 60 * SECOND,
-      artifactRoots: ["prototypes/reducer-lab/dist"]
     },
     { ...recordedCatalogQualityGate, id: "recorded-catalog", boundary: "qualification", artifactRoots: [] },
     {

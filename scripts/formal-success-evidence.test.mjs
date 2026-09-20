@@ -31,7 +31,7 @@ const seedRecord = (path, value) => {
   writeFileSync(path, `${JSON.stringify(value)}\n`, { mode: 0o600 })
 }
 
-test("shared formal evidence contract owns input observation and success generations", () => {
+void test("shared formal evidence contract owns input observation and success generations", () => {
   assert.equal(formalInputPolicyVersion, formalEvidenceContract.inputPolicyVersion)
   assert.equal(formalSuccessPolicyVersion, formalEvidenceContract.successPolicyVersion)
   assert.notEqual(formalEvidenceContract.inputPolicyVersion, 2)
@@ -231,7 +231,7 @@ const withFixture = (fn) => {
   }
 }
 
-test("records complete formal success only after obligations and terminal evidence; reuses original evidence with enclosing custody open", () =>
+void test("records complete formal success only after obligations and terminal evidence; reuses original evidence with enclosing custody open", () =>
   withFixture((f) => {
     const attempt = beginFormalAttempt(f.options)
     const success = publishFormalSuccess({ attempt, execution: f.execution, observation: f.observation })
@@ -241,7 +241,7 @@ test("records complete formal success only after obligations and terminal eviden
     assert.equal(result.evidencePath, attempt.recordPath)
   }))
 
-test("reuses stopped evidence across same-custody worktrees and rejects unsafe original custody", () =>
+void test("reuses stopped evidence across same-custody worktrees and rejects unsafe original custody", () =>
   withFixture((f) => {
     const attempt = beginFormalAttempt(f.options)
     publishFormalSuccess({ attempt, execution: f.execution, observation: f.observation })
@@ -315,14 +315,14 @@ test("reuses stopped evidence across same-custody worktrees and rejects unsafe o
     }
   }))
 
-test("failed force prevents fallback to older success", () =>
+void test("failed force prevents fallback to older success", () =>
   withFixture((f) => {
     publishFormalSuccess({ attempt: beginFormalAttempt(f.options), execution: f.execution, observation: f.observation })
     beginFormalAttempt(f.options)
     assert.equal(readFormalSuccess(f.options).status, "miss")
   }))
 
-test("publication crash accepts only complete stopped evidence", () =>
+void test("publication crash accepts only complete stopped evidence", () =>
   withFixture((f) => {
     const attempt = beginFormalAttempt(f.options)
     assert.equal(readFormalSuccess(f.options).status, "miss")
@@ -331,7 +331,7 @@ test("publication crash accepts only complete stopped evidence", () =>
     assert.equal(readFormalSuccess(f.options).status, "miss")
   }))
 
-test("reruns when required evidence is malformed truncated old-policy or mismatched; distinguishes optional logs", () =>
+void test("reruns when required evidence is malformed truncated old-policy or mismatched; distinguishes optional logs", () =>
   withFixture((f) => {
     const attempt = beginFormalAttempt(f.options)
     publishFormalSuccess({ attempt, execution: f.execution, observation: f.observation })
@@ -370,7 +370,7 @@ test("reruns when required evidence is malformed truncated old-policy or mismatc
   }))
 
 for (const failure of ["omitted obligation", "unresolved child", "lost observation", "changed verdict"])
-  test(`raw partial checks cannot attest a complete profile: ${failure}`, () =>
+  void test(`raw partial checks cannot attest a complete profile: ${failure}`, () =>
     withFixture((f) => {
       const attempt = beginFormalAttempt(f.options)
       if (failure === "omitted obligation") {
@@ -392,7 +392,7 @@ for (const failure of ["omitted obligation", "unresolved child", "lost observati
       assert.equal(readFormalSuccess(f.options).status, "miss")
     }))
 
-test("failed interrupted and crashed attempts cannot qualify or bypass custody", () =>
+void test("failed interrupted and crashed attempts cannot qualify or bypass custody", () =>
   withFixture((f) => {
     const attempt = beginFormalAttempt(f.options)
     const id = f.report.profileResult.commands[0].obligationId
@@ -407,7 +407,7 @@ test("failed interrupted and crashed attempts cannot qualify or bypass custody",
     assert.equal(readFormalSuccess(f.options).status, "miss")
   }))
 
-test("a stopped server without the planned complete-profile disposition cannot qualify", () =>
+void test("a stopped server without the planned complete-profile disposition cannot qualify", () =>
   withFixture((f) => {
     const attempt = beginFormalAttempt(f.options)
     const path = f.report.serverEvidence.stopPath
@@ -416,7 +416,7 @@ test("a stopped server without the planned complete-profile disposition cannot q
     assert.throws(() => publishFormalSuccess({ attempt, execution: f.execution, observation: f.observation }))
   }))
 
-test("input invalidation after publication prevents reuse and retains original success", () =>
+void test("input invalidation after publication prevents reuse and retains original success", () =>
   withFixture((f) => {
     const attempt = beginFormalAttempt(f.options)
     publishFormalSuccess({ attempt, execution: f.execution, observation: f.observation })
@@ -428,7 +428,7 @@ test("input invalidation after publication prevents reuse and retains original s
     assert.equal(JSON.parse(readFileSync(next.pointerPath, "utf8")).attemptId, next.attemptId)
   }))
 
-test("historical handoff success remains valid after a later failed force attempt", () =>
+void test("historical handoff success remains valid after a later failed force attempt", () =>
   withFixture((f) => {
     const original = beginFormalAttempt(f.options)
     publishFormalSuccess({ attempt: original, execution: f.execution, observation: f.observation })
@@ -445,7 +445,7 @@ test("historical handoff success remains valid after a later failed force attemp
     assert.throws(() => readReferencedFormalSuccess({ recordPath: original.recordPath, worktree: f.location.worktree }))
   }))
 
-test("wrong owned-server output destination cannot attest complete success", () =>
+void test("wrong owned-server output destination cannot attest complete success", () =>
   withFixture((f) => {
     const attempt = beginFormalAttempt(f.options)
     const id = f.report.serverEvidence.obligationId

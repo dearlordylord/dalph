@@ -237,6 +237,7 @@ export interface CodexBackgroundTerminal {
 /** App-server request boundary failures are deliberately richer than generic executor failures. */
 const CodexAppServerOperation = Schema.Literals([
   "initialize",
+  "config/read",
   "thread/start",
   "thread/list",
   "thread/read",
@@ -425,6 +426,8 @@ export interface CodexAppServerService {
   readonly attachTurnCompletedHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
   /** Broadcast owned-activity hints; consumers must reread the exact process/activity census. */
   readonly attachOwnedActivityHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
+  /** Present only when this service can prove Dalph's required effective task policy. */
+  readonly unattendedPolicyAdmission?: Effect.Effect<void, CodexAppServerFailure>
   readonly startThread: (
     cwd: string,
     ownedThreadToken?: CodexThreadOwnershipToken
@@ -1651,7 +1654,7 @@ interface JsonRpcClient {
     params?: unknown
   ) => Effect.Effect<unknown, CodexAppServerFailure, never>
   readonly requestBounded: (
-    operation: "initialize" | "thread/start" | "thread/read" | "turn/start",
+    operation: "initialize" | "config/read" | "thread/start" | "thread/read" | "turn/start",
     method: string,
     params?: unknown
   ) => Effect.Effect<unknown, CodexAppServerFailure, never>
@@ -1664,6 +1667,90 @@ type PendingJsonRpcRequest = {
   readonly deferred: Deferred.Deferred<unknown, CodexAppServerFailure>
   readonly operation: CodexAppServerRequestOperation
 }
+
+/** Protocol terminal state and pending calls share one linearization point. */
+type JsonRpcClientProtocolState = {
+  readonly terminalFailure: Option.Option<CodexAppServerFailure>
+  readonly pending: ReadonlyMap<number, PendingJsonRpcRequest>
+}
+
+type JsonRpcEnvelope =
+  | { readonly _tag: "ServerRequest"; readonly method: string }
+  | { readonly _tag: "Notification"; readonly method: string }
+  | { readonly _tag: "SuccessResponse"; readonly id: number; readonly result: unknown }
+  | { readonly _tag: "ErrorResponse"; readonly id: number; readonly error: JsonObject }
+  | { readonly _tag: "Malformed"; readonly detail: string }
+
+const hasJsonRpcField = (message: JsonObject, field: string): boolean =>
+  Object.prototype.hasOwnProperty.call(message, field)
+
+const isJsonRpcId = (value: unknown): boolean =>
+  value === null || typeof value === "string" || (typeof value === "number" && Number.isFinite(value))
+
+/**
+ * Routes a decoded JSON-RPC object by its wire shape before touching pending
+ * outbound requests. An ID-bearing method is provider work for the client,
+ * not a response to one of Dalph's requests.
+ */
+const classifyJsonRpcEnvelope = (message: JsonObject): JsonRpcEnvelope => {
+  // Codex app-server emits JSON-RPC-shaped messages without the optional
+  // version member; reject an explicit contradictory version but accept the
+  // provider's versionless response/notification envelopes.
+  if (hasJsonRpcField(message, "jsonrpc") && message["jsonrpc"] !== "2.0") {
+    return { _tag: "Malformed", detail: "JSON-RPC envelope version is invalid" }
+  }
+  const hasMethod = hasJsonRpcField(message, "method")
+  const hasId = hasJsonRpcField(message, "id")
+  const hasResult = hasJsonRpcField(message, "result")
+  const hasError = hasJsonRpcField(message, "error")
+  if (hasMethod) {
+    const method = message["method"]
+    if (typeof method !== "string") {
+      return { _tag: "Malformed", detail: "JSON-RPC envelope method is invalid" }
+    }
+    if (hasResult || hasError) {
+      return {
+        _tag: "Malformed",
+        detail: hasId
+          ? "JSON-RPC server request cannot contain result or error"
+          : "JSON-RPC notification cannot contain result or error"
+      }
+    }
+    if (hasId && !isJsonRpcId(message["id"])) {
+      return { _tag: "Malformed", detail: "JSON-RPC server request id is invalid" }
+    }
+    return hasId ? { _tag: "ServerRequest", method } : { _tag: "Notification", method }
+  }
+  if (!hasId) {
+    return { _tag: "Malformed", detail: "JSON-RPC envelope must contain method or id" }
+  }
+  const id = message["id"]
+  if (typeof id !== "number" || !Number.isSafeInteger(id) || id < 1) {
+    return { _tag: "Malformed", detail: "JSON-RPC response id is invalid" }
+  }
+  if (hasResult === hasError) {
+    return { _tag: "Malformed", detail: "JSON-RPC response must contain exactly one result or error" }
+  }
+  const error = message["error"]
+  if (hasError && !isJsonObject(error)) {
+    return { _tag: "Malformed", detail: "JSON-RPC response error is invalid" }
+  }
+  return hasResult
+    ? { _tag: "SuccessResponse", id, result: message["result"] }
+    : isJsonObject(error)
+      ? { _tag: "ErrorResponse", id, error }
+      : { _tag: "Malformed", detail: "JSON-RPC response error is invalid" }
+}
+
+const codexApprovalRequestMethods = new Set([
+  "applyPatchApproval",
+  "execCommandApproval",
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "item/permissions/requestApproval"
+])
+
+const isCodexApprovalRequest = (method: string): boolean => codexApprovalRequestMethods.has(method)
 
 const jsonRpcInvalidRequestCode = -32600
 const jsonRpcResponseDeadline = Duration.seconds(60) // eslint-disable-line no-magic-numbers -- accepted Codex RPC acknowledgement bound
@@ -1690,7 +1777,10 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   const nextId = yield* Ref.make(1)
   const writes = yield* Semaphore.make(1)
   const closed = yield* Ref.make(false)
-  const pending = yield* Ref.make<ReadonlyMap<number, PendingJsonRpcRequest>>(new Map())
+  const protocolState = yield* Ref.make<JsonRpcClientProtocolState>({
+    terminalFailure: Option.none(),
+    pending: new Map()
+  })
   const deadlineClose = yield* Deferred.make<Effect.Effect<void, CodexAppServerFailure>>()
   const sentCount = yield* Ref.make(0)
   const responseCount = yield* Ref.make(0)
@@ -1701,12 +1791,23 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   yield* Effect.addFinalizer(() => PubSub.shutdown(turnCompletedHints))
   yield* Effect.addFinalizer(() => PubSub.shutdown(ownedActivityHints))
   const encoder = new TextEncoder()
+  const failPendingRequests = (requests: ReadonlyArray<PendingJsonRpcRequest>, failure: CodexAppServerFailure) =>
+    Effect.forEach(requests, (request) => Deferred.fail(request.deferred, failure), { discard: true })
   const failPending = (failure: CodexAppServerFailure) =>
     Ref.modify(
-      pending,
-      (current) =>
-        [[...current.values()].map((request) => Deferred.fail(request.deferred, failure)), new Map()] as const
-    ).pipe(Effect.flatMap((effects) => Effect.forEach(effects, (effect) => effect, { discard: true })))
+      protocolState,
+      (current) => [[...current.pending.values()], { ...current, pending: new Map() }] as const
+    ).pipe(Effect.flatMap((requests) => failPendingRequests(requests, failure)))
+  // Protocol corruption disables this client even when no request is waiting;
+  // otherwise an idle malformed line would be forgotten after pending failure.
+  const failProtocol = (failure: CodexAppServerFailure) =>
+    Ref.modify(protocolState, (current) => {
+      const retained = Option.isSome(current.terminalFailure) ? current.terminalFailure.value : failure
+      return [
+        { failure: retained, requests: [...current.pending.values()] },
+        { terminalFailure: Option.some(retained), pending: new Map() }
+      ] as const
+    }).pipe(Effect.flatMap(({ failure: retained, requests }) => failPendingRequests(requests, retained)))
   const reader = handle.stdout.pipe(
     Stream.decodeText(),
     Stream.splitLines,
@@ -1725,43 +1826,55 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
             : Effect.fail(operationFailure("initialize", "Protocol", "JSON-RPC message is not an object"))
         ),
         Effect.flatMap((message) => {
-          const id = message["id"]
-          if (id === undefined) {
-            if (message["method"] === "turn/completed") {
+          const envelope = classifyJsonRpcEnvelope(message)
+          if (envelope._tag === "Malformed") {
+            return failProtocol(operationFailure("initialize", "Protocol", envelope.detail))
+          }
+          if (envelope._tag === "ServerRequest") {
+            if (!isCodexApprovalRequest(envelope.method)) return Effect.void
+            const failure = operationFailure(
+              "turn/start",
+              "Protocol",
+              "unattended Codex task received unexpected approval request " + String(envelope.method)
+            )
+            return failProtocol(failure).pipe(
+              Effect.andThen(PubSub.publish(turnCompletedHints, undefined)),
+              Effect.asVoid
+            )
+          }
+          if (envelope._tag === "Notification") {
+            if (envelope.method === "turn/completed") {
               return PubSub.publish(turnCompletedHints, undefined).pipe(Effect.asVoid)
             }
-            return message["method"] === "item/completed"
+            return envelope.method === "item/completed"
               ? PubSub.publish(ownedActivityHints, undefined).pipe(Effect.asVoid)
               : Effect.void
           }
-          if (typeof id !== "number") {
-            return failPending(operationFailure("initialize", "Protocol", "JSON-RPC response id is invalid"))
-          }
           const result = Ref.updateAndGet(responseCount, (current) => current + 1).pipe(
             Effect.andThen(
-              Ref.modify(pending, (current) => {
-                const request = current.get(id)
+              Ref.modify(protocolState, (current) => {
+                const request = current.pending.get(envelope.id)
                 if (request === undefined) return [Option.none<PendingJsonRpcRequest>(), current] as const
-                const next = new Map([...current].filter(([key]) => key !== id))
-                return [Option.some(request), next] as const
+                const next = new Map([...current.pending].filter(([key]) => key !== envelope.id))
+                return [Option.some(request), { ...current, pending: next }] as const
               })
             )
           )
           return result.pipe(
             Effect.flatMap((maybeDeferred) => {
               if (Option.isNone(maybeDeferred)) return Effect.void
-              if (typeof message["error"] === "object" && message["error"] !== null) {
+              if (envelope._tag === "ErrorResponse") {
                 return Deferred.fail(
                   maybeDeferred.value.deferred,
-                  jsonRpcResponseFailure(maybeDeferred.value.operation, message["error"])
+                  jsonRpcResponseFailure(maybeDeferred.value.operation, envelope.error)
                 )
               }
-              return Deferred.succeed(maybeDeferred.value.deferred, message["result"])
+              return Deferred.succeed(maybeDeferred.value.deferred, envelope.result)
             })
           )
         }),
         Effect.catch((error) =>
-          failPending(
+          failProtocol(
             /* v8 ignore next -- @preserve Reader parsing and protocol validation normalize every failure into CodexAppServerFailure before this catch. */
             error instanceof CodexAppServerFailure ? error : operationFailure("initialize", "Protocol", error)
           )
@@ -1801,14 +1914,29 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   ) {
     const isClosed = yield* Ref.get(closed)
     if (isClosed) return yield* Effect.fail(operationFailure(operation, "Unavailable", "app-server is closed"))
+    const protocol = yield* Ref.get(protocolState)
+    if (Option.isSome(protocol.terminalFailure)) return yield* Effect.fail(protocol.terminalFailure.value)
     const id = yield* Ref.modify(nextId, (current) => [current, current + 1] as const)
     const deferred = yield* Deferred.make<unknown, CodexAppServerFailure>()
-    const removePending = Ref.update(pending, (current) => {
-      return new Map([...current].filter(([key]) => key !== id))
-    })
+    const removePending = Ref.update(protocolState, (current) => ({
+      ...current,
+      pending: new Map([...current.pending].filter(([key]) => key !== id))
+    }))
+    const registerPending = Ref.modify(protocolState, (current) => {
+      if (Option.isSome(current.terminalFailure)) {
+        return [Option.some(current.terminalFailure.value), current] as const
+      }
+      return [
+        Option.none<CodexAppServerFailure>(),
+        {
+          terminalFailure: current.terminalFailure,
+          pending: new Map([...current.pending, [id, { deferred, operation }] as const])
+        }
+      ] as const
+    }).pipe(Effect.flatMap((failure) => (Option.isSome(failure) ? Effect.fail(failure.value) : Effect.void)))
     const pendingResponse = requestBoundary.run(
       operation,
-      Ref.update(pending, (current) => new Map([...current, [id, { deferred, operation }] as const])).pipe(
+      registerPending.pipe(
         Effect.andThen(write({ jsonrpc: "2.0", id, method, ...(params === undefined ? {} : { params }) })),
         Effect.tap(() => Ref.update(sentCount, (current) => current + 1)),
         Effect.andThen(Deferred.await(deferred)),
@@ -1830,7 +1958,7 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
                   method,
                   sentCount: yield* Ref.get(sentCount),
                   responseCount: yield* Ref.get(responseCount),
-                  pendingCount: (yield* Ref.get(pending)).size
+                  pendingCount: (yield* Ref.get(protocolState)).pending.size
                 }
                 const failure = operationFailure(
                   operation,
@@ -1901,6 +2029,25 @@ const CodexInitializeResponse = Schema.Struct({
   platformOs: Schema.Literals(["linux", "macos", "windows"])
 })
 
+/** The effective app-server configuration Dalph requires before production task admission. */
+const CodexUnattendedPolicyConfiguration = Schema.Struct({
+  approval_policy: Schema.Literal("never"),
+  sandbox_mode: Schema.Literal("danger-full-access")
+})
+
+const CodexConfigReadResponse = Schema.Struct({ config: CodexUnattendedPolicyConfiguration })
+
+const normalizeUnattendedPolicyResponse = (value: unknown): CodexAppServerFailure | true => {
+  const decoded = Schema.decodeUnknownResult(CodexConfigReadResponse)(value)
+  return Result.isSuccess(decoded)
+    ? true
+    : operationFailure(
+        "config/read",
+        "Protocol",
+        `Codex app-server cannot prove approval_policy=never and sandbox_mode=danger-full-access: ${String(decoded.failure)}`
+      )
+}
+
 export const normalizeInitializeResponse = (
   value: unknown,
   native: CodexProcessNativeService = nodeCodexProcessNativeService
@@ -1942,14 +2089,22 @@ export interface CodexAppServerLayerConfig {
    * one isolated Codex home and controlled provider environment.
    */
   readonly environment?: Readonly<Record<string, string>>
+  /** Fail initialization unless config/read proves Dalph's required unattended policy. */
+  readonly requireUnattendedPolicy?: boolean
 }
 
 /**
- * Dalph owns the production Codex child boundary. The global YOLO option is
- * explicit in the durable command so an unattended Run cannot pause at a
- * provider approval request or attempt the unavailable container sandbox.
+ * Dalph owns the production Codex child boundary. Process-local config
+ * overrides are explicit in the durable command; production also proves them
+ * through config/read before admitting a Run.
  */
-export const codexAppServerLaunchArguments = ["--dangerously-bypass-approvals-and-sandbox", "app-server"] as const
+export const codexAppServerLaunchArguments = [
+  "-c",
+  'approval_policy="never"',
+  "-c",
+  'sandbox_mode="danger-full-access"',
+  "app-server"
+] as const
 
 const defaultConfig: Required<Pick<CodexAppServerLayerConfig, "clientName" | "clientVersion" | "executable">> &
   Pick<CodexAppServerLayerConfig, "environment"> = {
@@ -1974,7 +2129,8 @@ const unavailableAppServer = (
       new CodexAppServerFailure({
         // Keep a rejected initialize handshake distinguishable from a later
         // request that merely happens to observe the unavailable service.
-        operation: failure.operation === "initialize" ? "initialize" : operation,
+        operation:
+          failure.operation === "initialize" || failure.operation === "config/read" ? failure.operation : operation,
         kind: failure.kind,
         detail: failure.detail,
         ...(failure.rpcSnapshot === undefined ? {} : { rpcSnapshot: failure.rpcSnapshot })
@@ -1984,6 +2140,7 @@ const unavailableAppServer = (
     incarnation,
     attachTurnCompletedHints: Effect.succeed(Stream.empty),
     attachOwnedActivityHints: Effect.succeed(Stream.empty),
+    unattendedPolicyAdmission: fail("config/read"),
     startThread: () => fail("thread/start"),
     readThread: () => fail("thread/read"),
     resumeThread: () => fail("thread/resume"),
@@ -2819,9 +2976,10 @@ export const closeHandleFailure = (error: unknown): CodexAppServerFailure =>
 
 /**
  * Real application-scoped app-server layer. It delegates authentication,
- * provider, model, sandbox, approval, instruction, skill, and MCP selection to
- * the installed Codex CLI's inherited environment and configuration. The
- * exact worktree is supplied per thread and turn.
+ * provider, model, instruction, skill, and MCP selection to the installed
+ * Codex CLI. Dalph pins and, when requested by production admission, proves
+ * the unattended approval and sandbox policy. The exact worktree is supplied
+ * per thread and turn.
  */
 export const codexAppServerLayer = (
   config: CodexAppServerLayerConfig = {},
@@ -2937,14 +3095,21 @@ export const codexAppServerLayer = (
       const normalizedInitialize = normalizeInitializeResponse(initializeResponse, native)
       if (normalizedInitialize !== true) return yield* Effect.fail(normalizedInitialize)
       yield* rpc.notify("initialized")
+      if (selected.requireUnattendedPolicy === true) {
+        const configReadResponse = yield* rpc.requestBounded("config/read", "config/read", { includeLayers: false })
+        const normalizedPolicy = normalizeUnattendedPolicyResponse(configReadResponse)
+        if (normalizedPolicy !== true) return yield* Effect.fail(normalizedPolicy)
+      }
       const startThread = Effect.fn("CodexAppServer.startThread")(function* (
         cwd: string,
         ownedThreadToken?: CodexThreadOwnershipToken
       ) {
         const response = responseObject(
           yield* rpc.requestBounded("thread/start", "thread/start", {
+            approvalPolicy: "never",
             cwd,
             ephemeral: false,
+            sandbox: "danger-full-access",
             ...(ownedThreadToken === undefined ? {} : { metadata: { dalphOwnedThreadToken: ownedThreadToken } })
           }),
           "thread/start"
@@ -3000,8 +3165,10 @@ export const codexAppServerLayer = (
       ) {
         const response = responseObject(
           yield* rpc.requestBounded("turn/start", "turn/start", {
+            approvalPolicy: "never",
             threadId,
             cwd,
+            sandboxPolicy: { type: "dangerFullAccess" },
             input: [
               { type: "text", text: ownedTurnToken === undefined ? text : codexOwnedTurnInput(text, ownedTurnToken) }
             ]
@@ -3061,6 +3228,7 @@ export const codexAppServerLayer = (
         attachOwnedActivityHints: rpc.attachOwnedActivityHints,
         incarnation: liveIncarnation,
         serverPid: childPid,
+        ...(selected.requireUnattendedPolicy === true ? { unattendedPolicyAdmission: Effect.void } : {}),
         startThread,
         listThreads,
         listThreadsComplete: true,

@@ -131,7 +131,7 @@ const fixture = () => {
     cleanup: () => rmSync(runDirectory, { recursive: true, force: true })
   }
 }
-test("complete negative-test stage evidence qualifies without replacing its genuine failed child", () => {
+void test("complete negative-test stage evidence qualifies without replacing its genuine failed child", () => {
   const f = fixture()
   try {
     assert.equal(readQualityEvidence(f).complete, true)
@@ -139,7 +139,7 @@ test("complete negative-test stage evidence qualifies without replacing its genu
     f.cleanup()
   }
 })
-test("not-applicable formal evidence completes the composite only for the exact unaffected classification", () => {
+void test("not-applicable formal evidence completes the composite only for the exact unaffected classification", () => {
   const f = fixture()
   try {
     const classification = {
@@ -257,7 +257,7 @@ for (const [name, mutate, rejects] of [
     true
   ]
 ])
-  test(`composite refuses ${String(name)}`, () => {
+  void test(`composite refuses ${String(name)}`, () => {
     const f = fixture()
     try {
       mutate(f)
@@ -269,7 +269,7 @@ for (const [name, mutate, rejects] of [
   })
 
 for (const kind of ["recorded fresh intent", "explicit resumed invocation"]) {
-  test(`missing optional contract cannot erase ${kind}`, () => {
+  void test(`missing optional contract cannot erase ${kind}`, () => {
     const f = fixture()
     try {
       if (kind === "recorded fresh intent") f.run.requiresQualityComposite = true
@@ -281,7 +281,7 @@ for (const kind of ["recorded fresh intent", "explicit resumed invocation"]) {
     }
   })
 }
-test("genuine normal records without resumable intent retain the legacy evidence contract", () => {
+void test("genuine normal records without resumable intent retain the legacy evidence contract", () => {
   const f = fixture()
   try {
     rmSync(join(f.runDirectory, "resume-contract.json"))

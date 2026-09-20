@@ -14,7 +14,7 @@ const classify = (changedPaths, formalInputPaths) =>
     listFormalInputPaths: () => formalInputPaths
   })
 
-test("an unaffected candidate records formal not applicable and starts no formal workflow", async () => {
+void test("an unaffected candidate records formal not applicable and starts no formal workflow", async () => {
   for (const classification of [classify([], ["specs/model.qnt"]), classify(["docs/note.md"], ["specs/model.qnt"])]) {
     let workflows = 0
     const reports = []
@@ -33,7 +33,7 @@ test("an unaffected candidate records formal not applicable and starts no formal
   }
 })
 
-test("a model or executable conformance adapter requires exactly one formal workflow", async () => {
+void test("a model or executable conformance adapter requires exactly one formal workflow", async () => {
   for (const path of [
     "specs/plannedAttemptExecutor.qnt",
     "packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts"
@@ -56,7 +56,7 @@ test("a model or executable conformance adapter requires exactly one formal work
   }
 })
 
-test("unavailable formal classification fails closed before qualification children", () => {
+void test("unavailable formal classification fails closed before qualification children", () => {
   let children = 0
   const startChild = () => {
     children += 1
@@ -73,7 +73,7 @@ test("unavailable formal classification fails closed before qualification childr
   void startChild
 })
 
-test("resume retains the exact unaffected classification and starts no formal workflow", async () => {
+void test("resume retains the exact unaffected classification and starts no formal workflow", async () => {
   const classification = classify(["packages/dalph/src/index.ts"], ["specs/model.qnt"])
   const invocation = { baseSha, gitHistory: { headSha }, formalClassification: classification }
   assert.equal(validateFormalClassification(classification, invocation), classification)

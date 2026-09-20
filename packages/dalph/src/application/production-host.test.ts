@@ -79,6 +79,7 @@ import {
   type ProductionRepositoryHostBoundary,
   type ProductionRepositoryHostGraph,
   productionRepositoryHostGraph,
+  withDecodedProductionRepositoryHost,
   withProductionRepositoryHost
 } from "./production-host.js"
 
@@ -86,9 +87,12 @@ import {
   isNonRetryableProductionActivationFailure,
   type ProductionWorkflowApplicationExitBoundary
 } from "./production.js"
-import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
-import { ProductionRepositoryHostConfigurationError } from "./production-configuration.js"
-import { CodexAppServer, codexAppServerLaunchArguments } from "./codex-app-server.js"
+import {
+  decodeProductionRepositoryHostConfiguration,
+  type ProductionRepositoryHostConfiguration,
+  ProductionRepositoryHostConfigurationError
+} from "./production-configuration.js"
+import { CodexAppServer, CodexAppServerFailure, codexAppServerLaunchArguments } from "./codex-app-server.js"
 import { CodexServerIncarnation } from "./codex-attempt-store.js"
 import { isolatedCodexProcessNativeService } from "../../test-support/isolated-codex-process-native.js"
 import { completedRunFinalityFixture } from "../../../orchestrator/test/run-finality.js"
@@ -153,6 +157,8 @@ process.stdin.on("data", (chunk) => {
         platformFamily: "unix",
         platformOs: "linux"
       })
+    } else if (message.method === "config/read") {
+      write(message.id, { config: { approval_policy: "never", sandbox_mode: "danger-full-access" } })
     }
   }
 })
@@ -347,6 +353,7 @@ it.effect(
       const storage = memoryJournalStoreLayer
       const foundation = Layer.merge(ownershipLayer, storage)
       const graph = {
+        acquireProvider: () => Effect.succeed({ _tag: "NonCodex" as const }),
         foundation: () => foundation,
         makeApplicationExit: () => makeProductionHostApplicationExitShell(),
         run: (configuration: ProductionRepositoryHostConfiguration, selection: ProductionRunSelection) =>
@@ -384,7 +391,7 @@ it.effect(
               )
             })
           )
-      } satisfies ProductionRepositoryHostGraph<never, never, never, never, never>
+      } satisfies ProductionRepositoryHostGraph<never, never, never, never, never, never>
 
       const selection = yield* withProductionRepositoryHost(validRawConfiguration(), graph, (observation) =>
         Ref.update(events, (current) => [...current, "observation-returned", "github-read"]).pipe(
@@ -409,6 +416,7 @@ it.effect("production host exposes TaskTrackerMutationThrottled unchanged and te
       retry: null
     })
     const graph = {
+      acquireProvider: () => Effect.succeed({ _tag: "NonCodex" as const }),
       foundation: () => Layer.merge(ownershipLayer, memoryJournalStoreLayer),
       makeApplicationExit: () => makeProductionHostApplicationExitShell(),
       run: (
@@ -456,7 +464,7 @@ it.effect("production host exposes TaskTrackerMutationThrottled unchanged and te
       // Keep the failure type at this seam explicit: #257 owns conversion
       // from GitHub's mutation throttle to this provider-neutral error.
       // The host only observes and propagates the already typed result.
-    } satisfies ProductionRepositoryHostGraph<never, never, never, never, TaskTrackerMutationThrottled>
+    } satisfies ProductionRepositoryHostGraph<never, never, never, never, TaskTrackerMutationThrottled, never>
 
     const hostFiber = yield* withProductionRepositoryHost(validRawConfiguration(), graph, () =>
       Deferred.succeed(useEntered, undefined).pipe(Effect.andThen(Effect.never))
@@ -572,6 +580,7 @@ it.effect("next host invocation recovers the same Run and authority-reads before
       const activationFailures = yield* Ref.make<ReadonlyArray<string>>([])
       const app = CodexAppServer.of({
         incarnation: CodexServerIncarnation.make("production-throttle-recovery-incarnation"),
+        unattendedPolicyAdmission: Effect.void,
         attachTurnCompletedHints: Effect.succeed(Stream.empty),
         attachOwnedActivityHints: Effect.succeed(Stream.empty),
         startThread: () => Effect.die("throttle recovery must not start a Codex thread"),
@@ -702,6 +711,7 @@ it.effect("next host invocation recovers the same Run and authority-reads before
       expect(yield* Ref.get(activations)).toBe(2)
       expect(recordsAfterFirst.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
       expect(recordsAfterSecond.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+      // One admitted app-server is retained and closed exactly once per host invocation.
       expect(yield* Ref.get(appClosed)).toBe(2)
     })
   ).pipe(Effect.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, NodeServices.layer, NodeCrypto.layer)))
@@ -717,6 +727,7 @@ it.effect("invalid production host configuration opens no scoped production grap
     )
     const foundation = () => foundationLayer
     const graph = {
+      acquireProvider: () => Effect.succeed({ _tag: "NonCodex" as const }),
       foundation,
       makeApplicationExit: () => makeProductionHostApplicationExitShell(),
       run: () =>
@@ -734,7 +745,7 @@ it.effect("invalid production host configuration opens no scoped production grap
           ),
           Layer.succeed(RunReactivationOwner, RunReactivationOwner.of({ hint: () => Effect.void }))
         )
-    } satisfies ProductionRepositoryHostGraph<never, never, never, never, never>
+    } satisfies ProductionRepositoryHostGraph<never, never, never, never, never, never>
     const failure = yield* withProductionRepositoryHost(
       { ...validRawConfiguration(), taskWorkCapacity: 0 },
       graph,
@@ -744,6 +755,47 @@ it.effect("invalid production host configuration opens no scoped production grap
     expect(failure).toBeInstanceOf(ProductionRepositoryHostConfigurationError)
     expect(yield* Ref.get(opened)).toBe(0)
   }).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect(
+  "Codex policy admission follows safe history discovery and fails before Run allocation or provider work",
+  () =>
+    Effect.gen(function* () {
+      const boundaries = yield* Ref.make<ReadonlyArray<string>>([])
+      const failure = new CodexAppServerFailure({
+        detail: "controlled app-server cannot prove unattended policy",
+        kind: "Protocol",
+        operation: "config/read"
+      })
+      const graph: ProductionRepositoryHostGraph<never, never, never, never, never, CodexAppServerFailure> = {
+        acquireProvider: () =>
+          Ref.update(boundaries, (current) => [...current, "codex.policy.admit"]).pipe(Effect.andThen(failure)),
+        foundation: () =>
+          Layer.mergeAll(
+            ownershipLayer,
+            memoryJournalStoreLayer,
+            Layer.effectDiscard(Ref.update(boundaries, (current) => [...current, "foundation.open"]))
+          ),
+        makeApplicationExit: () => makeProductionHostApplicationExitShell(),
+        run: () =>
+          Layer.effectContext(
+            Ref.update(boundaries, (current) => [...current, "run.open"]).pipe(
+              Effect.andThen(Effect.die("policy rejection must make the Run graph unreachable"))
+            )
+          )
+      }
+
+      const configuration = yield* decodeProductionRepositoryHostConfiguration(validRawConfiguration())
+      const host = withDecodedProductionRepositoryHost(configuration, graph, () => Effect.void)
+      type HostFailure = Effect.Error<typeof host>
+      expectTypeOf<CodexAppServerFailure>().toExtend<HostFailure>()
+      expectTypeOf<unknown>().not.toEqualTypeOf<HostFailure>()
+
+      const exit = yield* Effect.exit(host)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.findErrorOption(exit.cause)).toEqual(Option.some(failure))
+      expect(yield* Ref.get(boundaries)).toEqual(["foundation.open", "codex.policy.admit"])
+    }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
 it.effect("allocated and recovered selections identify the exact Run and never append a second beginning", () =>
@@ -767,6 +819,7 @@ it.effect("allocated and recovered selections identify the exact Run and never a
       })
     ).pipe(Layer.provide(base))
     const graph = {
+      acquireProvider: () => Effect.succeed({ _tag: "NonCodex" as const }),
       foundation: () => foundation,
       makeApplicationExit: () => makeProductionHostApplicationExitShell(),
       run: (configuration: ProductionRepositoryHostConfiguration, selection: ProductionRunSelection) =>
@@ -800,7 +853,7 @@ it.effect("allocated and recovered selections identify the exact Run and never a
             )
           })
         )
-    } satisfies ProductionRepositoryHostGraph<never, never, never, never, never>
+    } satisfies ProductionRepositoryHostGraph<never, never, never, never, never, never>
 
     const selection = yield* withProductionRepositoryHost(validRawConfiguration(), graph, (observation) =>
       Effect.succeed(observation.selection)
@@ -838,6 +891,7 @@ it.effect("cold production host records one beginning before the first GitHub de
       })
       const app = CodexAppServer.of({
         incarnation: CodexServerIncarnation.make("production-host-test-incarnation"),
+        unattendedPolicyAdmission: Effect.void,
         attachTurnCompletedHints: Effect.succeed(Stream.empty),
         attachOwnedActivityHints: Effect.succeed(Stream.empty),
         startThread: () => Effect.die("no task may start in the empty graph fixture"),
@@ -952,6 +1006,7 @@ it.effect("production host connects supplied Exit request and trace observers", 
       })
       const app = CodexAppServer.of({
         incarnation: CodexServerIncarnation.make("production-host-exit-observer-incarnation"),
+        unattendedPolicyAdmission: Effect.void,
         attachTurnCompletedHints: Effect.succeed(Stream.empty),
         attachOwnedActivityHints: Effect.succeed(Stream.empty),
         startThread: () => Effect.die("Exit observer fixture must not start a Codex thread"),
@@ -1297,6 +1352,7 @@ const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) 
   const githubClient = GithubGraphqlClient.of({ execute: () => boundaryFailure("githubGraphqlRequests") })
   const app = CodexAppServer.of({
     incarnation: CodexServerIncarnation.make("production-unsafe-discovery-incarnation"),
+    unattendedPolicyAdmission: Effect.void,
     attachTurnCompletedHints: Effect.succeed(Stream.empty),
     attachOwnedActivityHints: Effect.succeed(Stream.empty),
     startThread: () => boundaryFailure("executorCalls"),
@@ -1381,12 +1437,13 @@ const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) 
       configuration: ProductionRepositoryHostConfiguration,
       selection: ProductionRunSelection,
       onFailure: (failure: unknown) => Effect.Effect<void>,
-      applicationExit: ProductionHostApplicationExitShellService
+      applicationExit: ProductionHostApplicationExitShellService,
+      provider: Parameters<typeof productionGraph.run>[4]
     ) =>
       Layer.unwrap(
         Effect.gen(function* () {
           yield* count("boundaryAcquisitions")
-          return productionGraph.run(configuration, selection, onFailure, applicationExit)
+          return productionGraph.run(configuration, selection, onFailure, applicationExit, provider)
         })
       )
   }
@@ -1446,6 +1503,7 @@ it.effect("terminal Run is not reactivated", () =>
       })
       const app = CodexAppServer.of({
         incarnation: CodexServerIncarnation.make("production-terminal-test-incarnation"),
+        unattendedPolicyAdmission: Effect.void,
         attachTurnCompletedHints: Effect.succeed(Stream.empty),
         attachOwnedActivityHints: Effect.succeed(Stream.empty),
         startThread: () => Effect.die("terminal fixture must not start a task thread"),
@@ -1628,6 +1686,7 @@ it.effect(
         const codexCall = (operation: string) => () => boundaryCall(`codex.${operation}`)
         const app = CodexAppServer.of({
           incarnation: CodexServerIncarnation.make("production-host-ownership-test-incarnation"),
+          unattendedPolicyAdmission: Effect.void,
           attachTurnCompletedHints: Effect.succeed(Stream.empty),
           attachOwnedActivityHints: Effect.succeed(Stream.empty),
           startThread: codexCall("startThread"),
@@ -1715,9 +1774,15 @@ it.effect(
           configuration: ProductionRepositoryHostConfiguration,
           selection: ProductionRunSelection,
           onFailure: (failure: unknown) => Effect.Effect<void>,
-          applicationExit: ProductionHostApplicationExitShellService
-        ) => productionGraph.run(configuration, selection, onFailure, applicationExit)
-        const graph = { foundation, makeApplicationExit: productionGraph.makeApplicationExit, run }
+          applicationExit: ProductionHostApplicationExitShellService,
+          provider: Parameters<typeof productionGraph.run>[4]
+        ) => productionGraph.run(configuration, selection, onFailure, applicationExit, provider)
+        const graph = {
+          acquireProvider: productionGraph.acquireProvider,
+          foundation,
+          makeApplicationExit: productionGraph.makeApplicationExit,
+          run
+        }
         const firstReady = yield* Deferred.make<void>()
         const releaseFirst = yield* Deferred.make<void>()
         const firstSelectionRunId = yield* Deferred.make<RunId>()

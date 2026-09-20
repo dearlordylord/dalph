@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "5a7e35f6dfd83cb26ef2da19de0a257896fd7162a786fcd7fd11170017dbbc7b",
+  "digest": "e2999ee3e09f9b12586391045224075ee3b0a19bf0a9813a7d8f6b85738bc998",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -45,6 +45,7 @@
     "packages/orchestrator/src/authorities/task-tracker/github/claim-label-identity.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/claim-label-response.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/claim-mutation.ts",
+    "packages/orchestrator/src/authorities/task-tracker/github/claim-representation.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/completion-claim.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/completion-task.ts",
     "packages/orchestrator/src/authorities/task-tracker/github/delivery-authority.ts",
@@ -177,6 +178,7 @@
     "packages/orchestrator/src/coordination/reconstruction/run-policy-history.ts",
     "packages/orchestrator/src/coordination/reconstruction/state.ts",
     "packages/orchestrator/src/coordination/reconstruction/target-promotion-history.ts",
+    "packages/orchestrator/src/coordination/run/accepted-run-fact-publication.ts",
     "packages/orchestrator/src/coordination/run/activation-graph-baseline.ts",
     "packages/orchestrator/src/coordination/run/controlled-workflow.ts",
     "packages/orchestrator/src/coordination/run/current-delivery-frame.ts",

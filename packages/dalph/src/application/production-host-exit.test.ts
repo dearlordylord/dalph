@@ -61,6 +61,7 @@ const makeHostGraph = (
   onRun: (applicationExit: ProductionHostApplicationExitShellService) => Effect.Effect<void, never, Scope.Scope>
 ) =>
   ({
+    acquireProvider: () => Effect.succeed({ _tag: "NonCodex" as const }),
     foundation: () => foundation,
     makeApplicationExit: () => makeProductionHostApplicationExitShell(),
     run: (configuration: ProductionRepositoryHostConfiguration, selection, _onFailure, applicationExit) =>
@@ -101,7 +102,7 @@ const makeHostGraph = (
           )
         })
       )
-  }) satisfies ProductionRepositoryHostGraph<never, never, never, never, never>
+  }) satisfies ProductionRepositoryHostGraph<never, never, never, never, never, never>
 
 /**
  * Scenario mapping: Alice's host request returns its typed lifecycle result

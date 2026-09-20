@@ -77,7 +77,7 @@ export class KimiAttemptStoreFailure extends Schema.TaggedError<KimiAttemptStore
   operation: KimiAttemptStoreOperation
 }) {}
 
-export interface KimiAttemptPrivateStoreService {
+interface KimiAttemptPrivateStoreService {
   readonly read: (
     runId: RunId,
     attemptId: AttemptId
@@ -140,7 +140,7 @@ export const memoryKimiAttemptPrivateStoreLayer = (
     })
   )
 
-export interface KimiAttemptPrivateStoreConfig {
+interface KimiAttemptPrivateStoreConfig {
   /** Absolute, normalized directory shared only with other Dalph private state files. */
   readonly stateDirectory: string
 }
@@ -185,9 +185,13 @@ const decodeDocument = (
   )
 
 /** Node-backed state is rewritten through a sibling temporary file atomically. */
-export const nodeKimiAttemptPrivateStoreLayer = (
+export const kimiAttemptPrivateStoreLayer = (
   config: KimiAttemptPrivateStoreConfig
-): Layer.Layer<KimiAttemptPrivateStore, KimiAttemptStoreFailure, FileSystem.FileSystem | Path.Path> =>
+): Layer.Layer<
+  KimiAttemptPrivateStore,
+  KimiAttemptStoreFailure,
+  CodexAttemptStoreNative | FileSystem.FileSystem | Path.Path
+> =>
   Layer.effect(
     KimiAttemptPrivateStore,
     Effect.gen(function* () {
@@ -292,4 +296,10 @@ export const nodeKimiAttemptPrivateStoreLayer = (
           )
       })
     })
-  ).pipe(Layer.provide(nodeCodexAttemptStoreNativeLayer))
+  )
+
+/** Production Kimi private store with the Node descriptor and lock boundary. */
+export const nodeKimiAttemptPrivateStoreLayer = (
+  config: KimiAttemptPrivateStoreConfig
+): Layer.Layer<KimiAttemptPrivateStore, KimiAttemptStoreFailure, FileSystem.FileSystem | Path.Path> =>
+  kimiAttemptPrivateStoreLayer(config).pipe(Layer.provide(nodeCodexAttemptStoreNativeLayer))

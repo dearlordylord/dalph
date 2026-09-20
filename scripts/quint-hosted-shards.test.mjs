@@ -10,7 +10,7 @@ import {
   readQuintHostedShardBinding
 } from "./quint-hosted-shards.mjs"
 
-test("partitions every canonical command exactly once without splitting a family", () => {
+void test("partitions every canonical command exactly once without splitting a family", () => {
   const profile = createQuintEffectiveProfile()
   const shards = assertCompleteQuintHostedPartition(profile)
   assert.deepEqual(
@@ -34,7 +34,7 @@ test("partitions every canonical command exactly once without splitting a family
   }
 })
 
-test("retains the independently reviewed model-family range oracle", () => {
+void test("retains the independently reviewed model-family range oracle", () => {
   assert.deepEqual(quintHostedModelFamilies, [
     { name: "planned-attempt executor", first: 0, last: 15, shard: 0 },
     { name: "application Exit", first: 16, last: 36, shard: 0 },
@@ -53,7 +53,7 @@ const kindPositions = (step) => step.positions
 const positionsUseEvaluator = (profile, positions) =>
   positions.some((position) => ["test", "sampled-run"].includes(profile.commands[position].kind))
 
-test("rejects unsupported shards and incomplete canonical profiles", () => {
+void test("rejects unsupported shards and incomplete canonical profiles", () => {
   const profile = createQuintEffectiveProfile()
   assert.throws(() => createQuintHostedShard(profile, -1), /integer/)
   assert.throws(() => createQuintHostedShard(profile, 2), /integer/)
@@ -62,7 +62,7 @@ test("rejects unsupported shards and incomplete canonical profiles", () => {
   assert.throws(() => assertCompleteQuintHostedPartition(incomplete), /partition/)
 })
 
-test("requires the exact GitHub workflow binding fields", () => {
+void test("requires the exact GitHub workflow binding fields", () => {
   const environment = {
     GITHUB_RUN_ID: "1",
     GITHUB_RUN_ATTEMPT: "2",

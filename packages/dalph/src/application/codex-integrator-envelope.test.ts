@@ -86,6 +86,14 @@ describe("Codex Integrator result envelope", () => {
     expect(prepared).toMatchObject({ _tag: "PreparedCandidate", candidateText: "refs/heads/candidate" })
   })
 
+  it("decodes one large brace-rich terminal string without reparsing suffixes", async () => {
+    const detail = "{".repeat(10_000)
+    await expect(decode(turn(JSON.stringify({ outcome: "NotPrepared", version: 1, detail })))).resolves.toMatchObject({
+      _tag: "NotPrepared",
+      detail
+    })
+  })
+
   it("rejects missing, non-object, unknown, and empty envelope fields", async () => {
     const values = [
       await decode(turn("", [null, { type: "toolResult", text: "not an agent message" }])),
