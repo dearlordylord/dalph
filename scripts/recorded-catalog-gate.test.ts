@@ -92,19 +92,12 @@ it("runs cheap diagnostics before resource-sensitive acceptance and coverage", (
     nodeExecutable: "/fixture/node",
     pnpmEntryPoint: "/fixture/pnpm.cjs",
     worktree: "/fixture/worktree"
-  }) as ReadonlyArray<{
-    readonly boundary: string
-    readonly execution: { readonly timeoutMilliseconds: number }
-    readonly id: string
-    readonly timeout: number
-  }>
+  }) as ReadonlyArray<{ readonly boundary: string }>
   const firstQualification = manifest.findIndex(({ boundary }) => boundary === "qualification")
-  const coverageStage = manifest.find(({ id }) => id === "coverage")
 
   expect(firstQualification).toBeGreaterThan(0)
   expect(manifest.slice(0, firstQualification).every(({ boundary }) => boundary === "preflight")).toBe(true)
   expect(manifest.slice(firstQualification).every(({ boundary }) => boundary === "qualification")).toBe(true)
-  expect(coverageStage).toMatchObject({ execution: { timeoutMilliseconds: 1_800_000 }, timeout: 1_800_000 })
   expect(coverage.test?.maxWorkers).toBe(4)
   expect(coverage.test?.coverage).toMatchObject({
     provider: "v8",

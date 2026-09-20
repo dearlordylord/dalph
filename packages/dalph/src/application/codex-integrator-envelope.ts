@@ -9,6 +9,7 @@ import {
 } from "@dalph/orchestrator"
 
 const lastElementOffset = -1
+const escapeParity = 2
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -26,6 +27,32 @@ const malformedEnvelope = (run: IntegratorRunCorrelation): IntegratorResult =>
 
 const hasEnvelopeShape = (value: Record<string, unknown>): boolean =>
   ["candidate,outcome,version", "detail,outcome,version"].includes(Object.keys(value).sort().join(","))
+
+const quoteIsEscaped = (text: string, index: number): boolean => {
+  let backslashes = 0
+  for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) backslashes += 1
+  return backslashes % escapeParity === 1
+}
+
+/** Finds the one balanced JSON object ending at the message boundary in one reverse scan. */
+const terminalObjectStart = (text: string): number | undefined => {
+  if (!text.endsWith("}")) return undefined
+  let depth = 0
+  let inString = false
+  for (let cursor = text.length - 1; cursor >= 0; cursor -= 1) {
+    const character = text[cursor]
+    if (character === '"' && !quoteIsEscaped(text, cursor)) {
+      inString = !inString
+    } else if (!inString && character === "}") {
+      depth += 1
+    } else if (!inString && character === "{") {
+      depth -= 1
+      if (depth === 0) return cursor
+      if (depth < 0) return undefined
+    }
+  }
+  return undefined
+}
 
 const decodePreparedEnvelope = (value: Record<string, unknown>, run: IntegratorRunCorrelation): IntegratorResult => {
   const candidate = Schema.decodeUnknownOption(IntegratorCandidateText)(value["candidate"])
@@ -53,17 +80,16 @@ const decodeEnvelopeObject = (value: Record<string, unknown>, run: IntegratorRun
  * Accept only a valid JSON object that reaches the end of the message; the
  * envelope decoder still rejects extra keys, wrong versions, and bad fields.
  */
-const parseTerminalEnvelope = (text: string): Record<string, unknown> | undefined => {
+export const parseTerminalEnvelope = (text: string): Record<string, unknown> | undefined => {
   const trimmed = text.trim()
-  for (let start = trimmed.lastIndexOf("{"); start >= 0; start = trimmed.lastIndexOf("{", start - 1)) {
-    try {
-      const parsed: unknown = JSON.parse(trimmed.slice(start))
-      if (isRecord(parsed) && hasEnvelopeShape(parsed)) return parsed
-    } catch {
-      continue
-    }
+  const start = terminalObjectStart(trimmed)
+  if (start === undefined) return undefined
+  try {
+    const parsed: unknown = JSON.parse(trimmed.slice(start))
+    return isRecord(parsed) && hasEnvelopeShape(parsed) ? parsed : undefined
+  } catch {
+    return undefined
   }
-  return undefined
 }
 
 export const exactEnvelope = (

@@ -117,11 +117,7 @@ export const fullQualityGateManifest = (baseSha, invocation) => {
       args: ["test"],
       name: "tests and coverage",
       environmentPolicy: "coverage-base-warning",
-      // The four-worker V8 run emits roughly 250 MB of raw coverage before
-      // aggregation. Keep a finite allowance for the complete suite plus the
-      // final report and policy checks; the former 20-minute boundary stopped
-      // a healthy run after 396 of 439 test files.
-      timeout: 30 * 60 * SECOND,
+      timeout: 20 * 60 * SECOND,
       artifactRoots: ["@coverage"]
     }
   ]
