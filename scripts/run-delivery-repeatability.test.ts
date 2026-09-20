@@ -422,7 +422,7 @@ test("bounds a hung persistent warm close by its total timeout", async () => {
         close: async () => new Promise(() => undefined),
         getRelevantTestSpecifications: async () => [specification],
         init: async () => undefined,
-        runTestSpecifications: async () => passedWarmResult()
+        runTestSpecifications: passedWarmResult
       }),
       iterations: 1,
       totalTimeoutMilliseconds: 20

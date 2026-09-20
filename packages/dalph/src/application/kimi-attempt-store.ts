@@ -77,7 +77,7 @@ export class KimiAttemptStoreFailure extends Schema.TaggedError<KimiAttemptStore
   operation: KimiAttemptStoreOperation
 }) {}
 
-export interface KimiAttemptPrivateStoreService {
+interface KimiAttemptPrivateStoreService {
   readonly read: (
     runId: RunId,
     attemptId: AttemptId
@@ -140,7 +140,7 @@ export const memoryKimiAttemptPrivateStoreLayer = (
     })
   )
 
-export interface KimiAttemptPrivateStoreConfig {
+interface KimiAttemptPrivateStoreConfig {
   /** Absolute, normalized directory shared only with other Dalph private state files. */
   readonly stateDirectory: string
 }
