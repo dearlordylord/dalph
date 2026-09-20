@@ -1,4 +1,5 @@
 /* eslint-disable import/no-nodejs-modules -- The adapter is the typed boundary to gate-run-identity. */
+/* eslint-disable functional/no-throw-statements -- Invalid untyped/native identity data fails closed at this adapter boundary. */
 import { execFileSync } from "node:child_process"
 
 // The gate identity implementation is repository-owned JavaScript.  Keep its
