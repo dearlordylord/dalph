@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "90a63a12a1c324956d7b1424bdcaf88ba4a446b01ebf8ae6e66fee417b1e7378",
+  "digest": "da8c362783bdd607af5a1b1812df1723091991931c93bd4c3801f645008dff6e",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -353,6 +353,7 @@
     "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/report-acceptance.ts",
     "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/responsibility.ts",
     "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/resume-redelivery.ts",
+    "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/suspension-authority.ts",
     "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/suspension-commands.ts",
     "packages/orchestrator/src/workflow/protocols/planned-attempt-worktree-observation/protocol.ts",
     "packages/orchestrator/src/workflow/protocols/run-cancellation/events.ts",
