@@ -51,7 +51,22 @@ import {
   TaskTrackerThrottleTimingEvidence,
   type TrackerTarget
 } from "@dalph/orchestrator"
-import { Config, Duration, Effect, Fiber, Option, Redacted, Ref, Schema, Sink, Stream } from "effect"
+import {
+  Cause,
+  Clock,
+  Config,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Option,
+  Queue,
+  Redacted,
+  Ref,
+  Schema,
+  Semaphore,
+  Stream
+} from "effect"
 import { decodeCliTarget } from "./cli.js"
 import {
   decodeProductionRepositoryHostConfiguration,
@@ -366,34 +381,50 @@ export const currentDeliveryStatusRecord = (status: CurrentDeliveryStatus): Prod
 
 /** Passive output is rate-limited independently from workflow and authority calls. */
 const productionCliPublicationWindow = Duration.seconds(1)
-const productionCliPublicationRate = {
-  cost: () => 1,
-  units: 1,
-  duration: productionCliPublicationWindow,
-  strategy: "enforce"
-} as const
-
 const sameTraceCursor = (left: TraceCursor, right: TraceCursor): boolean =>
   left.runId === right.runId && left.position === right.position
 
-const rateLimitedAfterFirst = <A, E, R>(changes: Stream.Stream<A, E, R>): Stream.Stream<A, E, R> =>
-  Stream.scoped(
-    Stream.unwrap(
-      changes.pipe(
-        Stream.peel(Sink.head<A>()),
-        Effect.map(([first, rest]) =>
-          Option.match(first, {
-            onNone: () => Stream.empty,
-            onSome: (initial) =>
-              Stream.concat(
-                Stream.make(initial),
-                rest.pipe(Stream.rechunk(1), Stream.throttle(productionCliPublicationRate))
-              )
-          })
-        )
+/**
+ * Keeps only the newest pending passive value. The attached current value is
+ * published before this worker starts, so the first later publication waits
+ * one window; after an idle window a newly arriving value is immediately
+ * eligible. Duplicate values do not consume a publication window.
+ */
+const runCoalescedLatest = <A, E, R, EOutput, ROutput>(
+  changes: Stream.Stream<A, E, R>,
+  publish: (value: A) => Effect.Effect<boolean, EOutput, ROutput>,
+  firstPublicationEligible = false
+): Effect.Effect<void, E | EOutput, R | ROutput> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const pending = yield* Queue.sliding<A>(1)
+      const produce = changes.pipe(
+        Stream.runForEach((value) => Queue.offer(pending, value)),
+        Effect.andThen(Effect.never)
       )
-    )
+      const windowMillis = Duration.toMillis(productionCliPublicationWindow)
+      const nextEligibleAt = yield* Ref.make(
+        (yield* Clock.currentTimeMillis) + (firstPublicationEligible ? 0 : windowMillis)
+      )
+      const publishNext = Effect.gen(function* () {
+        const firstPending = yield* Queue.take(pending)
+        const waitMillis = Math.max(0, (yield* Ref.get(nextEligibleAt)) - (yield* Clock.currentTimeMillis))
+        yield* Effect.sleep(Duration.millis(waitMillis))
+        const newestPending = yield* Queue.poll(pending)
+        const published = yield* publish(Option.getOrElse(newestPending, () => firstPending))
+        if (published) yield* Ref.set(nextEligibleAt, (yield* Clock.currentTimeMillis) + windowMillis)
+      })
+      const consume = Effect.forever(publishNext)
+      return yield* Effect.raceFirst(produce, consume)
+    })
   )
+
+export type ProductionCliApplicationExitObservation<EOutput> = {
+  readonly awaitRequest: Effect.Effect<void>
+  readonly awaitResult: Effect.Effect<ApplicationExitResult>
+} & {
+  readonly presentResult: (result: ApplicationExitResult) => Effect.Effect<void, EOutput | ProductionCliLifecycleError>
+}
 
 /**
  * Writes the already-established Run first, attaches the passive status source
@@ -403,8 +434,12 @@ const rateLimitedAfterFirst = <A, E, R>(changes: Stream.Stream<A, E, R>): Stream
 export const presentSelectedProductionRun = <EOutput>(
   observation: ProductionCliHostObservation,
   writeLine: (line: string) => Effect.Effect<void, EOutput>,
-  onSelected: Effect.Effect<void> = Effect.void
-): Effect.Effect<void, EOutput | TraceReaderError | JournalStoreError | ProductionCliStatusError> =>
+  onSelected: Effect.Effect<void> = Effect.void,
+  applicationExit?: ProductionCliApplicationExitObservation<EOutput>
+): Effect.Effect<
+  void,
+  EOutput | TraceReaderError | JournalStoreError | ProductionCliLifecycleError | ProductionCliStatusError
+> =>
   Effect.scoped(
     Effect.gen(function* () {
       yield* writeLine(encodeProductionCliRecord(selectedRecord(observation.selection)))
@@ -416,37 +451,43 @@ export const presentSelectedProductionRun = <EOutput>(
       )
       const attachedStatus = yield* status.attach.pipe(Effect.mapError(currentStatusProjectionFailure))
       const publishedStatusLine = yield* Ref.make<string | undefined>(undefined)
-      const writeStatus = (current: CurrentDeliveryStatus) => {
-        const line = encodeProductionCliRecord(currentDeliveryStatusRecord(current))
-        return Ref.get(publishedStatusLine).pipe(
-          Effect.flatMap((published) =>
-            published === line ? Effect.void : writeLine(line).pipe(Effect.andThen(Ref.set(publishedStatusLine, line)))
-          )
+      const publicationGate = yield* Semaphore.make(1)
+      const ordinaryPublicationOpen = yield* Ref.make(true)
+      const writeStatus = (current: CurrentDeliveryStatus, terminal = false) =>
+        publicationGate.withPermit(
+          Effect.gen(function* () {
+            if (!terminal && !(yield* Ref.get(ordinaryPublicationOpen))) return false
+            const line = encodeProductionCliRecord(currentDeliveryStatusRecord(current))
+            if ((yield* Ref.get(publishedStatusLine)) === line) return false
+            yield* writeLine(line)
+            yield* Ref.set(publishedStatusLine, line)
+            return true
+          })
         )
-      }
       yield* writeStatus(attachedStatus.current)
 
-      const presentStatusChanges = rateLimitedAfterFirst(
-        attachedStatus.changes.pipe(Stream.mapError(currentStatusProjectionFailure))
-      ).pipe(Stream.runForEach(writeStatus))
+      const latestObservedStatus = yield* Ref.make<Option.Option<CurrentDeliveryStatus>>(Option.none())
+      const presentStatusChanges = runCoalescedLatest(
+        attachedStatus.changes.pipe(
+          Stream.mapError(currentStatusProjectionFailure),
+          Stream.tap((current) => Ref.set(latestObservedStatus, Option.some(current)))
+        ),
+        writeStatus
+      )
       const publishedHistoryCursor = yield* Ref.make<TraceCursor | undefined>(undefined)
-      const writeHistory = (cursor: TraceCursor) =>
-        Ref.get(publishedHistoryCursor).pipe(
-          Effect.flatMap((published) =>
-            published !== undefined && sameTraceCursor(published, cursor)
-              ? Effect.void
-              : observation.traceReader
-                  .readAt(cursor)
-                  .pipe(
-                    Effect.flatMap((snapshot) =>
-                      writeLine(encodeProductionCliRecord(historicalRecord(snapshot))).pipe(
-                        Effect.tap(() => Ref.set(publishedHistoryCursor, cursor))
-                      )
-                    )
-                  )
-          )
+      const writeHistory = (cursor: TraceCursor, terminal = false) =>
+        publicationGate.withPermit(
+          Effect.gen(function* () {
+            if (!terminal && !(yield* Ref.get(ordinaryPublicationOpen))) return false
+            const published = yield* Ref.get(publishedHistoryCursor)
+            if (published !== undefined && sameTraceCursor(published, cursor)) return false
+            const snapshot = yield* observation.traceReader.readAt(cursor)
+            yield* writeLine(encodeProductionCliRecord(historicalRecord(snapshot)))
+            yield* Ref.set(publishedHistoryCursor, cursor)
+            return true
+          })
         )
-      const presentHistory = rateLimitedAfterFirst(
+      const presentHistory = runCoalescedLatest(
         observation.acceptedHistory.changes.pipe(
           Stream.takeUntilEffect((cursor) =>
             observation.runTermination.poll.pipe(
@@ -457,29 +498,71 @@ export const presentSelectedProductionRun = <EOutput>(
               )
             )
           )
-        )
-      ).pipe(Stream.runForEach(writeHistory))
+        ),
+        writeHistory,
+        true
+      )
       const presenters = yield* Effect.all([presentStatusChanges, presentHistory], {
         concurrency: "unbounded",
         discard: true
       }).pipe(Effect.forkScoped)
+      yield* Effect.yieldNow
+      const stopOrdinaryPresenters = Effect.gen(function* () {
+        yield* publicationGate.withPermit(Ref.set(ordinaryPublicationOpen, false))
+        yield* Fiber.interrupt(presenters)
+        const stopped = yield* Fiber.await(presenters)
+        if (Exit.isFailure(stopped) && !Cause.hasInterruptsOnly(stopped.cause)) {
+          return yield* Effect.failCause(stopped.cause)
+        }
+      })
       const presenterFailure = Fiber.join(presenters).pipe(Effect.andThen(Effect.never))
-      const { disposition } = yield* Effect.raceFirst(observation.runTermination.await, presenterFailure)
-      const presenterDrained = yield* Effect.raceFirst(
-        Fiber.join(presenters).pipe(Effect.as(true)),
-        Effect.sleep("10 millis").pipe(Effect.as(false))
+      const ordinaryCompletion = Effect.raceFirst(
+        observation.runTermination.await.pipe(
+          Effect.map(({ disposition, terminatedAt }) => ({ _tag: "RunTerminated" as const, disposition, terminatedAt }))
+        ),
+        presenterFailure
       )
-      if (!presenterDrained) yield* Fiber.interrupt(presenters).pipe(Effect.ignore)
+      const completion = yield* applicationExit === undefined
+        ? ordinaryCompletion
+        : Effect.raceFirst(
+            applicationExit.awaitRequest.pipe(Effect.as({ _tag: "ApplicationExitRequested" as const })),
+            ordinaryCompletion
+          )
+
+      if (completion._tag === "ApplicationExitRequested") {
+        if (applicationExit === undefined) return yield* Effect.die("application Exit observation is unavailable")
+        yield* stopOrdinaryPresenters
+        const result = yield* applicationExit.awaitResult
+        if (result._tag !== "Succeeded") return yield* applicationExit.presentResult(result)
+        const synchronizedStatus = yield* status.get.pipe(Effect.mapError(currentStatusProjectionFailure))
+        if (synchronizedStatus._tag !== "DeliveryStatusClosed") {
+          return yield* new ProductionCliStatusError({
+            code: "status.projection_invalid",
+            detail: "application Exit completed without an authoritative closed current status",
+            subject: observation.selection.runId
+          })
+        }
+        yield* writeStatus(synchronizedStatus, true)
+        return yield* applicationExit.presentResult(result)
+      }
+
+      yield* stopOrdinaryPresenters
+      yield* Option.match(yield* Ref.get(latestObservedStatus), {
+        onNone: () => Effect.void,
+        onSome: (current) => writeStatus(current, true).pipe(Effect.asVoid)
+      })
       const synchronizedStatus = yield* status.get.pipe(Effect.mapError(currentStatusProjectionFailure))
       const synchronizedStatusLine = encodeProductionCliRecord(currentDeliveryStatusRecord(synchronizedStatus))
       if (
         synchronizedStatus._tag === "DeliveryStatusClosed" &&
         (yield* Ref.get(publishedStatusLine)) !== synchronizedStatusLine
       ) {
-        yield* writeStatus(synchronizedStatus)
+        yield* writeStatus(synchronizedStatus, true)
       }
-      yield* writeHistory(yield* observation.acceptedHistory.get)
-      yield* writeLine(encodeProductionCliRecord(runDispositionRecord(observation.selection.runId, disposition)))
+      yield* writeHistory(yield* observation.acceptedHistory.get, true)
+      yield* publicationGate.withPermit(
+        writeLine(encodeProductionCliRecord(runDispositionRecord(observation.selection.runId, completion.disposition)))
+      )
     })
   )
 
