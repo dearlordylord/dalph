@@ -1,7 +1,7 @@
 /* eslint-disable import/no-nodejs-modules, max-lines -- Host composition and its chronological acceptance seam stay together. */
 import { NodeCrypto, NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { RunId } from "@dalph/contracts"
+import { AttemptId, RunId, WorktreeLocator } from "@dalph/contracts"
 import { DatabaseSync } from "node:sqlite"
 import nodeProcess from "node:process"
 import {
@@ -97,7 +97,15 @@ import {
   ProductionRepositoryHostConfigurationError
 } from "./production-configuration.js"
 import { CodexAppServer, CodexAppServerFailure, codexAppServerLaunchArguments } from "./codex-app-server.js"
-import { CodexServerIncarnation } from "./codex-attempt-store.js"
+import {
+  CodexAttemptRecord,
+  CodexAttemptStore,
+  CodexOwnedTurnToken,
+  CodexServerIncarnation,
+  CodexThreadId,
+  CodexTurnId,
+  nodeCodexAttemptStoreLayer
+} from "./codex-attempt-store.js"
 import { isolatedCodexProcessNativeService } from "../../test-support/isolated-codex-process-native.js"
 import { completedRunFinalityFixture } from "../../../orchestrator/test/run-finality.js"
 import { GithubGraphqlThrottled } from "../../../orchestrator/src/authorities/task-tracker/github/graphql-client.js"
@@ -157,7 +165,7 @@ process.stdin.on("data", (chunk) => {
     if (message.method === "initialize") {
       write(message.id, {
         userAgent: "fixture-codex/production-host",
-        codexHome: process.env.CODEX_HOME,
+        codexHome: process.env.CODEX_HOME ?? "/tmp/fixture-codex-home",
         platformFamily: "unix",
         platformOs: "linux"
       })
@@ -195,6 +203,64 @@ const makeTemporaryProductionInput = Effect.gen(function* () {
 const ownershipLayer = Layer.succeed(
   CoordinatorOwnership,
   CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+)
+
+it.effect("production provider cleanup preserves safe suspension across close and restart", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const input = yield* makeTemporaryProductionInput
+      const executable = `${input.repository}/fixture-codex`
+      yield* fs.writeFileString(executable, fakeProductionCodex)
+      yield* fs.chmod(executable, 0o755)
+      const configuration = yield* decodeProductionRepositoryHostConfiguration({
+        ...input,
+        codexExecutable: executable
+      })
+      const fields = {
+        attemptId: AttemptId.make("retained-attempt"),
+        correlationAttemptId: AttemptId.make("retained-attempt"),
+        correlationRunId: RunId.make("retained-run"),
+        currentToken: CodexOwnedTurnToken.make("retained-token"),
+        observedTurnId: CodexTurnId.make("retained-turn"),
+        priorObservedTurnId: null,
+        threadId: CodexThreadId.make("retained-thread"),
+        worktree: WorktreeLocator.make(input.repository)
+      }
+      const running = CodexAttemptRecord.cases.Running.make(fields)
+      const suspended = CodexAttemptRecord.cases.SafelySuspended.make(fields)
+      const diskStore = nodeCodexAttemptStoreLayer({ stateDirectory: input.codexExecutorPrivateStateDirectory })
+      yield* Effect.scoped(
+        Effect.flatMap(CodexAttemptStore, (store) => store.writeAttempt(running)).pipe(Effect.provide(diskStore))
+      )
+      const graph = productionRepositoryHostGraph({ codexProcessNative: isolatedCodexProcessNativeService })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const shell = yield* graph.makeApplicationExit()
+          const provider = yield* graph.acquireProvider(configuration, shell)
+          if (provider._tag !== "CodexAppServer") return yield* Effect.die("expected Codex provider")
+          const store = provider.attemptStore
+          expect(yield* store.readAttempt(fields.correlationRunId, fields.correlationAttemptId)).toEqual(
+            Option.some(running)
+          )
+          expect(Option.isSome(yield* store.readServerLaunch())).toBe(true)
+          // The executor receives this exact service from the retained provider.
+          yield* store.writeAttempt(suspended)
+          yield* provider.appServer.close
+          yield* provider.appServer.close
+        })
+      )
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          expect(yield* store.readAttempt(fields.correlationRunId, fields.correlationAttemptId)).toEqual(
+            Option.some(suspended)
+          )
+          expect(yield* store.readServerLaunch()).toEqual(Option.none())
+        }).pipe(Effect.provide(diskStore))
+      )
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
 )
 
 it("production host adapter surface cannot replace workflow mutation capabilities", () => {

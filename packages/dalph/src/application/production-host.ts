@@ -76,7 +76,7 @@ import {
   ExecutorProviderConfigReference,
   resolveExecutorProfileLocator
 } from "./executor-profile.js"
-import { nodeCodexAttemptStoreLayer } from "./codex-attempt-store.js"
+import { CodexAttemptStore, type CodexAttemptStoreService, nodeCodexAttemptStoreLayer } from "./codex-attempt-store.js"
 import { nodeCodexProcessNativeService, type CodexProcessNativeService } from "./codex-process-native.js"
 import { nodeCodexPlannedAttemptExecutorLayer } from "./codex-planned-attempt-executor.js"
 import { nodeKimiAcpClientLayer } from "./kimi-acp.js"
@@ -127,7 +127,11 @@ type ProductionHostFoundation = CoordinatorOwnership | JournalStore | RunLifecyc
 
 /** Provider resources acquired once and retained until the enclosing host scope closes. */
 type ProductionHostProviderAdmission =
-  | { readonly _tag: "CodexAppServer"; readonly appServer: CodexAppServerService }
+  | {
+      readonly _tag: "CodexAppServer"
+      readonly appServer: CodexAppServerService
+      readonly attemptStore: CodexAttemptStoreService
+    }
   | { readonly _tag: "NonCodex" }
 
 /** Construction-time taps for the one host shell; they cannot replace its authority or identity. */
@@ -338,7 +342,7 @@ const guardedCodexAppServerLayer = <E, R>(
 
 const defaultCodexAppServerLayer = (
   configuration: ProductionRepositoryHostConfiguration,
-  attemptStore: ReturnType<typeof nodeCodexAttemptStoreLayer>,
+  attemptStore: Layer.Layer<CodexAttemptStore>,
   native: CodexProcessNativeService = nodeCodexProcessNativeService,
   requestBoundary: CodexAppServerRequestBoundary
 ) => {
@@ -535,9 +539,13 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
       const selectedProfile = yield* selectedProductionExecutorProfile(configuration)
       if (selectedProfile.adapter !== "codex-app-server") return { _tag: "NonCodex" as const }
       const selectedConfiguration = { ...configuration, codexExecutable: selectedProfile.executable }
-      const attemptStoreLayer = nodeCodexAttemptStoreLayer({
-        stateDirectory: configuration.codexExecutorPrivateStateDirectory
-      }).pipe(Layer.provide(NodeServices.layer))
+      const storeContext = yield* Layer.build(
+        nodeCodexAttemptStoreLayer({ stateDirectory: configuration.codexExecutorPrivateStateDirectory }).pipe(
+          Layer.provide(NodeServices.layer)
+        )
+      )
+      const attemptStore = Context.get(storeContext, CodexAttemptStore)
+      const attemptStoreLayer = Layer.succeed(CodexAttemptStore, attemptStore)
       const codexProcessNative = adapters.codexProcessNative ?? nodeCodexProcessNativeService
       const requestBoundary = yield* makeRequestCircuit<CodexAppServerRequestOperation, CodexAppServerFailure>({
         onOpen: (operation) =>
@@ -571,7 +579,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         )
       }
       yield* app.unattendedPolicyAdmission
-      return { _tag: "CodexAppServer" as const, appServer: app }
+      return { _tag: "CodexAppServer" as const, appServer: app, attemptStore }
     }),
   makeApplicationExit: () =>
     makeHostApplicationExitShell({
@@ -630,9 +638,14 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           nodeEvidenceStoreLayer(configuration.evidenceStoreRoot).pipe(Layer.provide(NodeServices.layer)),
           adapters.boundaryObserver
         )
-        const attemptStoreLayer = nodeCodexAttemptStoreLayer({
-          stateDirectory: configuration.codexExecutorPrivateStateDirectory
-        }).pipe(Layer.provide(NodeServices.layer))
+        // The app-server finalizer and executor must mutate one snapshot owner.
+        // Reopening this file here would let launch cleanup overwrite newer attempt evidence.
+        const attemptStoreLayer =
+          provider._tag === "CodexAppServer"
+            ? Layer.succeed(CodexAttemptStore, provider.attemptStore)
+            : nodeCodexAttemptStoreLayer({ stateDirectory: configuration.codexExecutorPrivateStateDirectory }).pipe(
+                Layer.provide(NodeServices.layer)
+              )
         const codexProcessNative = adapters.codexProcessNative ?? nodeCodexProcessNativeService
         if (selectedProfile.adapter === "codex-app-server" && provider._tag !== "CodexAppServer") {
           return yield* Effect.fail(
