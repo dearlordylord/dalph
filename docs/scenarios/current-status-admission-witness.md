@@ -416,10 +416,10 @@ the absence of Closed remains visible.
 | Scenario or forbidden result | Acceptance test |
 | --- | --- |
 | Recovered Run and first current status are published immediately | `production-cli.test.ts`: `publishes the first recovered status immediately and the newest silent passive update after one second` |
-| A burst retains the newest pending value after silence, emits no FIFO replay, and keeps one subsequent publication per second | `production-cli.test.ts`: `coalesces a rapid passive burst to its newest value without FIFO replay`; `rate-limits a rapid passive status source before it reaches stdout` |
-| Application Exit stops ordinary intake and publishes actual Closed exactly once before its exit disposition | `production-cli.test.ts`: `application Exit publishes one authoritative Closed status before ApplicationExitDisposition and never RunDisposition` |
-| Failure to prove closure emits no synthetic Closed and preserves the typed exit failure | `production-cli.test.ts`: `preserves the typed application Exit failure when authoritative closure cannot be proved` |
-| Recovery waits race child exit, retain one Run, and do not repeat beginning or outside mutation | `production-public-recovery.integration.test.ts`: `unfinished SQLite public restart reports the same recovered Run and no second beginning`; `recovery child exit settles the public wait without a second mutation` |
+| A burst retains the newest pending value after silence, emits no FIFO replay, and keeps one subsequent publication per second | `production-cli.test.ts`: `publishes the first recovered status immediately and the newest silent passive update after one second`; `rate-limits a rapid passive status source before it reaches stdout`; `publishes a passive status immediately when it arrives after an idle window` |
+| Application Exit stops ordinary intake and publishes actual Closed exactly once before its exit disposition | `production-cli.test.ts`: `SIGINT and SIGTERM enter the same configured production Exit request boundary` |
+| Failure to prove closure emits no synthetic Closed and preserves the typed exit failure | `production-cli.test.ts`: `successful application Exit without authoritative Closed fails without a synthetic terminal record`; `public conclusive Exit failure renders a stable lifecycle code and exits one` |
+| Recovery waits retain one Run and do not repeat beginning or outside mutation | `production-public-recovery.integration.test.ts`: `unfinished SQLite public restart reports the same recovered Run and no second beginning`; `application Exit during recovered Git cleanup closes the attached public status without claiming Run completion` |
 
 The status presenter has no applicable tracker/Git/executor mutation retry,
 backoff, or durable publication append: it only reads already-established

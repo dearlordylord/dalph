@@ -2862,6 +2862,37 @@ const closingProductionCliObservation = (attachments: Ref.Ref<number>) => ({
   )
 })
 
+it.effect("successful application Exit without authoritative Closed fails without a synthetic terminal record", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const presentedResults = yield* Ref.make(0)
+
+    const failure = yield* presentSelectedProductionRun(
+      activeProductionCliObservation(),
+      (line) => Ref.update(lines, (current) => [...current, line]),
+      Effect.void,
+      {
+        awaitRequest: Effect.void,
+        awaitResult: Effect.succeed(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 })),
+        presentResult: () => Ref.update(presentedResults, (count) => count + 1)
+      }
+    ).pipe(Effect.flip)
+
+    expect(failure).toMatchObject({
+      _tag: "ProductionCliStatusError",
+      code: "status.projection_invalid",
+      subject: runId
+    })
+    expect(yield* Ref.get(presentedResults)).toBe(0)
+    const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+    expect(records.some(({ _tag }) => _tag === "RunDisposition")).toBe(false)
+    expect(records.some(({ _tag }) => _tag === "ApplicationExitDisposition")).toBe(false)
+    expect(records.some(({ _tag, status }) => _tag === "CurrentStatus" && status._tag === "DeliveryStatusClosed")).toBe(
+      false
+    )
+  })
+)
+
 it.effect("SIGINT and SIGTERM enter the same configured production Exit request boundary", () =>
   Effect.gen(function* () {
     const lines = yield* Ref.make<ReadonlyArray<string>>([])
