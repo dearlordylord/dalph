@@ -7,6 +7,7 @@ import type { KimiAttemptPrivatePhase } from "./kimi-attempt-store.js"
 import {
   KimiAttemptPrivateRecord,
   KimiAttemptPrivateStore,
+  memoryKimiAttemptPrivateStoreLayer,
   nodeKimiAttemptPrivateStoreLayer
 } from "./kimi-attempt-store.js"
 import { KimiAcpSessionId } from "./kimi-acp.js"
@@ -71,6 +72,82 @@ it.effect("fails closed when Kimi private state is malformed", () =>
       if (Exit.isFailure(result)) expect(result.cause).toBeDefined()
     }).pipe(Effect.provide(NodeServices.layer))
   )
+)
+
+it.effect("fails closed on duplicate attempt associations and aliased Kimi sessions", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const attemptDuplicateRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "dalph-kimi-private-store-duplicate-attempt-"
+      })
+      const sessionAliasRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "dalph-kimi-private-store-session-alias-"
+      })
+      const second = KimiAttemptPrivateRecord.make({
+        ...record,
+        attemptId: AttemptId.make("attempt:kimi-private-store:second")
+      })
+      const readResult = (root: string, records: ReadonlyArray<KimiAttemptPrivateRecord>) =>
+        Effect.gen(function* () {
+          const filename = path.join(root, "kimi-executor-private-state.json")
+          yield* fileSystem.writeFileString(filename, JSON.stringify({ records }), { mode: 0o600 })
+          yield* fileSystem.chmod(filename, 0o600)
+          return yield* Effect.gen(function* () {
+            const store = yield* KimiAttemptPrivateStore
+            return yield* store.read(runId, attemptId)
+          }).pipe(Effect.provide(layerAt(root)), Effect.exit)
+        })
+      const duplicateAttempt = yield* readResult(attemptDuplicateRoot, [record, record])
+      const aliasedSession = yield* readResult(sessionAliasRoot, [record, second])
+      expect(Exit.isFailure(duplicateAttempt)).toBe(true)
+      expect(Exit.isFailure(aliasedSession)).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("rejects unsafe Kimi state directories before filesystem access", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const relative = yield* Effect.gen(function* () {
+        yield* KimiAttemptPrivateStore
+        return true
+      }).pipe(Effect.provide(layerAt("relative/private")), Effect.exit)
+      const traversal = yield* Effect.gen(function* () {
+        yield* KimiAttemptPrivateStore
+        return true
+      }).pipe(Effect.provide(layerAt("/tmp/../private")), Effect.exit)
+      expect(Exit.isFailure(relative)).toBe(true)
+      expect(Exit.isFailure(traversal)).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("fails closed when the configured Kimi state path is a regular file", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-kimi-private-store-file-path-" })
+      const regularPath = path.join(root, "not-a-directory")
+      yield* fileSystem.writeFileString(regularPath, "not a directory", { mode: 0o600 })
+      const result = yield* Effect.gen(function* () {
+        yield* KimiAttemptPrivateStore
+        return true
+      }).pipe(Effect.provide(layerAt(regularPath)), Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("reports absent memory associations and writes without an observation callback", () =>
+  Effect.gen(function* () {
+    const store = yield* KimiAttemptPrivateStore
+    expect(yield* store.read(runId, AttemptId.make("attempt:kimi-private-store:missing"))).toEqual(Option.none())
+    yield* store.write(record)
+    expect(yield* store.read(runId, attemptId)).toEqual(Option.some(record))
+  }).pipe(Effect.provide(memoryKimiAttemptPrivateStoreLayer()))
 )
 
 it.effect("fails closed when another process owns the Kimi private-store lease", () =>
