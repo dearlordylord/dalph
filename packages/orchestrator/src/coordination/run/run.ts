@@ -64,7 +64,7 @@ import type {
   PassivePlannedAttemptProjectionPublication
 } from "./passive-planned-attempt-observer.js"
 import type { AcceptedRunFactPublication } from "./accepted-run-fact-publication.js"
-export { AcceptedRunFactPublication } from "./accepted-run-fact-publication.js"
+export { AcceptedRunFactPublication, AcceptedRunFactPublicationRecordMissing } from "./accepted-run-fact-publication.js"
 
 export type JournaledRunProcessServices =
   | DeliveryRuntimeResourceCapabilityPair

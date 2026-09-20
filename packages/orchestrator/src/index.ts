@@ -671,6 +671,7 @@ export {
   type AcceptedRunControlDirection,
   type AcceptedRunControlObserver,
   AcceptedRunFactPublication,
+  AcceptedRunFactPublicationRecordMissing,
   type AcceptedRunFactPublication as AcceptedRunFactPublicationValue,
   type AcceptedRunFactPublicationObserver,
   type AcceptedRunReactivationObservers,
