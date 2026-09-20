@@ -29,5 +29,13 @@ importedVi["unmock"]("module")
 jest["mock"]("module")
 fastCheck.property(() => true)
 throw new Error("expected failure")
+const asyncThrow = async () => {
+  throw new Error("expected async failure")
+}
 
-void [EffectNamespace, RenamedSchema, importedVi, renamedMock, renamedSpyOn, firstAssertion, secondAssertion, wrapped, child]
+void [EffectNamespace, RenamedSchema, importedVi, renamedMock, renamedSpyOn, firstAssertion, secondAssertion, wrapped, child, asyncThrow]
+const mutable = { items: [1], value: 1 }
+delete mutable.value
+mutable.items[0]++
+const mutateParameter = (items: Array<number>) => items.push(2)
+void mutateParameter

@@ -885,6 +885,7 @@ const collectCompletedCleanupReceipt = Effect.fn("ProductionLiveQualification.co
       cleanupAdapter
     )
     // eslint-disable-next-line functional/immutable-data -- Retention reporting must retain the last observed partial cleanup receipt if a later boundary fails.
+    // oxlint-disable-next-line no-param-reassign -- This output cell retains the last observed partial cleanup receipt.
     cleanupState.github = githubCleanup
     const localCleanup = yield* cleanupProductionLiveFixture(fixture.localManifest, {
       invocationId: manifest.invocationId,
@@ -892,6 +893,7 @@ const collectCompletedCleanupReceipt = Effect.fn("ProductionLiveQualification.co
       selectedRunsCompleted: Effect.succeed(selectedRunsCompleted)
     })
     // eslint-disable-next-line functional/immutable-data -- Retention reporting must retain the last observed partial cleanup receipt if evidence publication fails.
+    // oxlint-disable-next-line no-param-reassign -- This output cell retains the last observed partial cleanup receipt.
     cleanupState.local = localCleanup
     if (githubCleanup.retained.length > 0 || localCleanup._tag !== "Removed" || localCleanup.retained.length > 0)
       return yield* Effect.fail(qualificationFailed("Cleanup"))

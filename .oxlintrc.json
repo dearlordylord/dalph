@@ -122,7 +122,12 @@
     {
       "files": ["src/**/*.{ts,tsx}", "packages/*/src/**/*.{ts,tsx}"],
       "rules": {
-        "dalph/no-throw-statement": "error"
+        "dalph/no-member-delete-or-update": [
+          "error",
+          { "mutatorMethods": ["copyWithin", "fill", "reverse", "splice"] }
+        ],
+        "dalph/no-throw-statement": "error",
+        "no-param-reassign": ["error", { "props": true }]
       }
     },
     {
@@ -177,10 +182,12 @@
       "files": ["**/*.{test,spec}.{ts,tsx}"],
       "rules": {
         "dalph/no-double-type-assertion": "error",
+        "dalph/no-member-delete-or-update": "off",
         "dalph/no-throw-statement": "off",
         "dalph/no-type-assertion": "off",
         "max-lines": "off",
         "no-magic-numbers": "off",
+        "no-param-reassign": "off",
         "typescript/no-non-null-assertion": "warn",
         "typescript/no-unnecessary-type-assertion": "off"
       }

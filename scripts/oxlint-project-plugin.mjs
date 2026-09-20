@@ -169,6 +169,50 @@ const noThrowStatement = {
   })
 }
 
+const noMemberDeleteOrUpdate = {
+  meta: {
+    schema: [
+      {
+        type: "object",
+        properties: { mutatorMethods: { type: "array", items: { type: "string" }, uniqueItems: true } },
+        required: ["mutatorMethods"],
+        additionalProperties: false
+      }
+    ]
+  },
+  create: (context) => {
+    const mutatorMethods = new Set(context.options?.[0]?.mutatorMethods ?? [])
+    const reportMemberMutation = (node) => {
+      if (node.type === "MemberExpression") {
+        report(context, node, "Do not mutate an existing object. Construct a new value instead.")
+      }
+    }
+    const isParameter = (identifier) => {
+      for (let scope = context.sourceCode.getScope(identifier); scope !== null; scope = scope.upper) {
+        const variable = scope.set.get(identifier.name)
+        if (variable !== undefined) return variable.defs.some(({ type }) => type === "Parameter")
+      }
+      return false
+    }
+    return {
+      CallExpression: (node) => {
+        if (
+          node.callee.type === "MemberExpression" &&
+          node.callee.object.type === "Identifier" &&
+          mutatorMethods.has(memberName(node.callee)) &&
+          isParameter(node.callee.object)
+        ) {
+          report(context, node, "Do not call a configured mutator on a function parameter.")
+        }
+      },
+      UnaryExpression: (node) => {
+        if (node.operator === "delete") reportMemberMutation(node.argument)
+      },
+      UpdateExpression: (node) => reportMemberMutation(node.argument)
+    }
+  }
+}
+
 const noTypeAssertion = {
   create: (context) => ({
     TSAsExpression: (node) => {
@@ -339,6 +383,7 @@ export default {
     "no-clock-read": noClockRead,
     "no-double-type-assertion": noDoubleTypeAssertion,
     "no-module-mocks": noModuleMocks,
+    "no-member-delete-or-update": noMemberDeleteOrUpdate,
     "no-restricted-import-path": noRestrictedImportPath,
     "no-throw-statement": noThrowStatement,
     "no-type-assertion": noTypeAssertion,

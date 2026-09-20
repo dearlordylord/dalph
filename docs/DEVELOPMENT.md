@@ -95,8 +95,8 @@ or projection evidence fails before qualification. A separate repeated
 `check:quint` is unnecessary. Use focused model/adapter checks during development;
 reserve `pnpm check:quint --force` for fresh reproduction or timing.
 
-Compatibility lint and the project-wide Effect pass build the entire program;
-use repository commands, not per-file substitutes.
+The unused-file/export graph and the project-wide Effect pass build the entire
+program; use repository commands, not per-file substitutes.
 
 ## Domain language
 
@@ -130,8 +130,9 @@ All commands below use `pnpm`. Script definitions live in
 | `typecheck` | Strict TypeScript-Go plus Effect errors/warnings; suggestions remain nonfatal. |
 | `typecheck:effect` | Optional standalone Effect diagnostics; errors/warnings fail, JSON output. |
 | `typecheck:effect:changed` | Effect pass over files changed against `DALPH_DIAGNOSTICS_BASE`, or the explicitly reported moving `origin/master` fallback; falls back to the project pass above twelve changed files. |
-| `lint:code` | Type-aware Oxlint, compatibility ESLint, dprint; warnings fail. File-scoped runs check the compatibility graph only with `--compatibility`. |
-| `lint:changed` | Oxlint, compatibility ESLint, and dprint over files changed against `DALPH_DIAGNOSTICS_BASE`, or the explicitly reported moving `origin/master` fallback; compatibility ESLint receives only the changed TypeScript files. |
+| `lint:code` | Type-aware Oxlint and dprint over repository files, then the Knip unused-export graph check; warnings fail. |
+| `lint:changed` | Oxlint and dprint over files changed against `DALPH_DIAGNOSTICS_BASE`, or the explicitly reported moving `origin/master` fallback. It does not run the repository graph check. |
+| `check:unused-exports` | Run Knip's repository graph analysis for unused files and value exports. Exact current exceptions are finite and stale exceptions fail. |
 | `check:preflight --candidate=<base sha>` | Pre-freeze census: report typecheck (including Effect), lint/format, maintained Reducer Lab, cycle, complexity, duplication, CI classifier, secrets and artifact failures. Runs no coverage, catalog or MBT suites. |
 | `check:fast` | Development-loop tier: `typecheck`, `lint:changed`. A planned task attempt sets `DALPH_DIAGNOSTICS_BASE` to its exact Base SHA. |
 | `check:baseline` | Early task-attempt baseline: run the clone-wide lint census, then the maintained Reducer Lab evaluation. Use after focused edits settle and before expensive formal or delivery-repeatability work; this does not change `check:fast`. |
@@ -157,16 +158,27 @@ All commands below use `pnpm`. Script definitions live in
 | `check:ci` | Hosted gate; MBT remains excluded pending #363. |
 
 When a developer changes a TypeScript or TSX file, `check:fast` passes only the
-changed TypeScript/TSX files—and no unrelated source file—to compatibility
-ESLint, so rules such as `functional/immutable-data` fail during the edit loop.
-This is an accepted trade-off: hosted and frozen-candidate verification run
-whole-project compatibility ESLint, so a whole-program or graph-only
-compatibility finding can surface at candidate qualification rather than during
-the edit loop. This scope applies to compatibility ESLint only;
+changed files—and no unrelated source file—to Oxlint and dprint. Oxlint rejects
+parameter-property reassignment and direct `delete` or member-update syntax.
+The retired compatibility ESLint rules no longer provide type-aware alias
+analysis, declaration-shape preferences, or tacit-style preferences. Repository
+verification runs `check:unused-exports`, so a graph-only finding can surface at
+candidate qualification rather than during the edit loop.
 `typecheck:effect:changed` remains an optional JSON diagnostic command and retains its
-documented fallback to the whole-project pass when more than twelve files
-change. When the changed set has no compatible TypeScript/TSX file, the
-compatibility process is not started.
+documented fallback to the whole-project pass when more than twelve files change.
+
+The compatibility-rule disposition is explicit:
+
+- `functional/prefer-tacit`, `functional/no-mixed-types`, and
+  `functional/type-declaration-immutability` are retired.
+- `functional/no-throw-statements` is retired, including its test-only behavior;
+  `dalph/no-throw-statement` continues to reject production throws.
+- `functional/immutable-data` is replaced by `no-param-reassign` plus the bounded
+  `dalph/no-member-delete-or-update` syntax rule. Type-aware alias detection is
+  retired. The configured parameter mutators are `copyWithin`, `fill`, `reverse`,
+  and `splice`.
+- `import-x/no-unused-modules` is replaced by `check:unused-exports` outside the
+  changed-file loop.
 
 For a planned task attempt, pin the immutable Base SHA already supplied by the
 attempt context:
@@ -1232,7 +1244,7 @@ CI installs with `--frozen-lockfile`; pnpm enforces strict peers, allowlisted
 lifecycle scripts (`onlyBuiltDependencies`), and a 24-hour release delay unless
 explicitly excepted. Install gitleaks before committing. The pre-commit hook
 formats and lints staged code and scans staged secrets. `pnpm check:fast`
-includes the workspace typecheck; repository verification runs the compatibility
+includes the workspace typecheck; repository verification runs the unused-export
 graph and cycle check for the frozen candidate.
 
 Only exact diffs containing allowlisted documentation paths use the single
@@ -1255,14 +1267,13 @@ quality policy. Explain threshold reductions and exclusions; generated-code
 exclusions must not hide authored logic.
 
 - TypeScript-Go (`@typescript/native`) is patched by `@effect/tsgo` during
-  install. Oxlint owns overlapping lint rules; `eslint.compat.config.mjs` owns
-  the remaining functional and whole-project unused-export rules.
-- `eslint-functional-suppressions.json` is a finite file/rule/count baseline,
-  not permission for new findings, test throws, or unused exports. Public
-  package entry points are the blanket export exceptions. Review policy and
-  run focused fixture tests before changing it. After removals, use ESLint
-  `--prune-suppressions` with the explicit discovered file list and inspect the
-  diff; changed files do not automatically deserve new exceptions.
+  install. Oxlint owns source lint rules. Knip owns the repository value-export
+  graph check.
+- `scripts/unused-export-exceptions.json` names exact file and symbol pairs;
+  `scripts/unused-file-exceptions.json` names exact files. New graph findings
+  and stale exceptions fail. Public package entry points use Knip's entry-point
+  semantics and do not need blanket exceptions. Review the policy and run its
+  focused tests before changing either exception set.
 - `oxlint-complexity-suppressions.json` counts violations per file, not per
   function/value. A new or increased entry records a concrete `justification`
   for keeping the function cohesive after independent decisions have been

@@ -3,29 +3,14 @@ import { Effect, Schema } from "effect"
 import { access, copyFile, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises"
 import { relative, join } from "node:path"
 import { describe, expect } from "vitest"
-// @ts-expect-error The discovery implementation is an executable JavaScript module.
-import { discoverQualityFiles } from "./quality-file-discovery.mjs"
-// @ts-expect-error The lint policy is shared with the executable JavaScript runner.
-import { selectCompatibilityFiles } from "./quality-lint-policy.mjs"
 // @ts-expect-error The bounded command implementation is an executable JavaScript module.
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 
 const repositoryRoot = process.cwd()
 const qualityLintRunner = join(repositoryRoot, "scripts", "run-quality-lint.mjs")
-const compatibilityLintExecutable = join(
-  repositoryRoot,
-  "node_modules",
-  ".bin",
-  process.platform === "win32" ? "eslint.cmd" : "eslint"
-)
 const qualityFixtureRoot = join(repositoryRoot, "test", "fixtures", "quality-lint")
 
 const CommandResult = Schema.Struct({ exitCode: Schema.Finite, output: Schema.String, outputLineCount: Schema.Int })
-const EslintResult = Schema.Struct({
-  filePath: Schema.String,
-  messages: Schema.Array(Schema.Struct({ ruleId: Schema.NullOr(Schema.String) }))
-})
-const EslintResultsFromJson = Schema.fromJsonString(Schema.Array(EslintResult))
 
 class QualityLintCommandError extends Schema.TaggedError<QualityLintCommandError>()("QualityLintCommandError", {
   cause: Schema.Unknown
@@ -106,14 +91,9 @@ const withFixtures = <Result>(use: (fixture: LintFixture) => Effect.Effect<Resul
           await mkdir(join(fixtureDirectory, "scripts"))
           await mkdir(join(fixtureDirectory, "test"))
           const preparation = await Promise.allSettled([
-            ...[
-              ".oxlintrc.json",
-              "eslint.compat.config.mjs",
-              "eslint-functional-suppressions.json",
-              "dprint.json",
-              "tsconfig.base.json",
-              "tsconfig.lint.json"
-            ].map((name) => copyFile(join(repositoryRoot, name), join(fixtureDirectory, name))),
+            ...[".oxlintrc.json", "dprint.json", "tsconfig.base.json", "tsconfig.lint.json"].map((name) =>
+              copyFile(join(repositoryRoot, name), join(fixtureDirectory, name))
+            ),
             symlink(join(repositoryRoot, "node_modules"), join(fixtureDirectory, "node_modules"), "dir"),
             symlink(
               join(repositoryRoot, "scripts", "oxlint-project-plugin.mjs"),
@@ -230,13 +210,6 @@ describe.sequential("quality lint integration", () => {
           )
           expect(dependencyTarget).toBe(join(repositoryRoot, "node_modules"))
           expect(pluginTarget).toBe(join(repositoryRoot, "scripts", "oxlint-project-plugin.mjs"))
-          const fixturePolicy = yield* Effect.tryPromise(() =>
-            readFile(join(directory, "eslint.compat.config.mjs"), "utf8")
-          )
-          const repositoryPolicy = yield* Effect.tryPromise(() =>
-            readFile(join(repositoryRoot, "eslint.compat.config.mjs"), "utf8")
-          )
-          expect(fixturePolicy).toBe(repositoryPolicy)
           return directory
         })
       )
@@ -324,7 +297,7 @@ describe.sequential("quality lint integration", () => {
           expect(pinned.output).toContain('"source":"explicit"')
           expect(pinned.output).toContain('"changedPaths":["packages/dalph/src/functional.ts","scripts/fixture.ts"]')
           expect(pinned.output).toContain('"selectedPaths":["packages/dalph/src/functional.ts","scripts/fixture.ts"]')
-          expect(pinned.output).toContain("functional/immutable-data")
+          expect(pinned.output).toContain("no-param-reassign")
 
           const { DALPH_DIAGNOSTICS_BASE: _inheritedBase, ...movingEnvironment } = process.env
           const moving = yield* run({
@@ -342,14 +315,14 @@ describe.sequential("quality lint integration", () => {
           expect(moving.output).toContain('"source":"moving-default"')
           expect(moving.output).toContain('"changedPaths":["scripts/fixture.ts"]')
           expect(moving.output).toContain('"selectedPaths":["scripts/fixture.ts"]')
-          expect(moving.output).not.toContain("functional/immutable-data")
+          expect(moving.output).not.toContain("no-param-reassign")
         })
       ),
     30_000
   )
 
   it.effect(
-    "changed lint checks one changed compatibility file without linting an unrelated file",
+    "changed lint checks one changed native file without linting an unrelated file",
     () =>
       withFixtures((fixture) =>
         Effect.gen(function* () {
@@ -367,13 +340,14 @@ describe.sequential("quality lint integration", () => {
             environment: { ...process.env, DALPH_DIAGNOSTICS_BASE: "HEAD" },
             fixture,
             executable: process.execPath,
-            name: "Changed compatibility lint integration subprocess",
+            name: "Changed native lint integration subprocess",
             timeoutMilliseconds: 20_000
           })
           expect(result.exitCode).toBe(1)
-          expect(result.output).toContain(changedFile)
-          expect(result.output).not.toContain(unrelatedFile)
-          expect(result.output).toContain("functional/immutable-data")
+          expect(result.output).toContain(relativeToFixture(fixture.directory, changedFile))
+          expect(result.output).not.toContain(relativeToFixture(fixture.directory, unrelatedFile))
+          expect(result.output).toContain("no-param-reassign")
+          expect(result.output).toContain("dalph(no-member-delete-or-update)")
         })
       ),
     30_000
@@ -391,7 +365,7 @@ describe.sequential("quality lint integration", () => {
             environment: { ...process.env, DALPH_DIAGNOSTICS_BASE: "HEAD" },
             fixture,
             executable: process.execPath,
-            name: "Empty changed compatibility lint integration subprocess",
+            name: "Empty changed native lint integration subprocess",
             timeoutMilliseconds: 20_000
           })
           expect(result.exitCode).toBe(0)
@@ -429,163 +403,8 @@ describe.sequential("quality lint integration", () => {
           'Changed-file diagnostics cannot resolve comparison base "refs/heads/missing-planned-base"'
         )
         expect(result.output).not.toContain("Dalph changed-file selection")
-        expect(result.output).not.toContain("functional/immutable-data")
+        expect(result.output).not.toContain("no-param-reassign")
       })
     )
   )
-
-  it.effect(
-    "compatibility lint restores immutable-data and whole-project unused-export checks",
-    () =>
-      withFixtures((fixture) =>
-        Effect.gen(function* () {
-          const fixtureDirectory = fixture.directory
-          const functionalFile = yield* copyFixture(fixtureDirectory, "functional")
-          const unconsumedFile = yield* copyFixture(fixtureDirectory, "unconsumed")
-          const functionalPath = relativeToFixture(fixtureDirectory, functionalFile)
-          const unconsumedPath = relativeToFixture(fixtureDirectory, unconsumedFile)
-          const publicEntryPath = "packages/dalph/src/index.ts"
-          const consumedPath = "packages/dalph/src/consumed.ts"
-          yield* Effect.tryPromise(async () => {
-            await mkdir(join(fixtureDirectory, "packages", "consumer", "src"), { recursive: true })
-            await writeFile(join(fixtureDirectory, publicEntryPath), "export const publicFixture = 1\n")
-            await writeFile(join(fixtureDirectory, consumedPath), "export const consumedFixture = 1\n")
-            await writeFile(
-              join(fixtureDirectory, "packages", "consumer", "src", "use.ts"),
-              'import { consumedFixture } from "../../dalph/src/consumed.js"\nexport const usageFixture = consumedFixture\n'
-            )
-          })
-          const result = yield* run({
-            arguments_: [
-              "--config",
-              "eslint.compat.config.mjs",
-              "--max-warnings",
-              "0",
-              "--suppressions-location",
-              "eslint-functional-suppressions.json",
-              "--no-error-on-unmatched-pattern",
-              "--format",
-              "json",
-              functionalPath,
-              unconsumedPath,
-              consumedPath,
-              publicEntryPath
-            ],
-            fixture,
-            executable: compatibilityLintExecutable,
-            name: "Compatibility lint integration subprocess",
-            timeoutMilliseconds: 20_000
-          })
-          const lintResults = yield* Schema.decodeUnknownEffect(EslintResultsFromJson)(result.output)
-
-          expect(result.exitCode).toBe(1)
-          expect(result.outputLineCount).toBeLessThan(10)
-          expect(lintResults).toHaveLength(4)
-          expect(lintResults).toContainEqual({
-            filePath: functionalFile,
-            messages: expect.arrayContaining([{ ruleId: "functional/immutable-data" }])
-          })
-          expect(lintResults).toContainEqual({
-            filePath: unconsumedFile,
-            messages: expect.arrayContaining([{ ruleId: "import-x/no-unused-modules" }])
-          })
-          expect(lintResults).toContainEqual({ filePath: join(fixtureDirectory, consumedPath), messages: [] })
-          expect(lintResults).toContainEqual({ filePath: join(fixtureDirectory, publicEntryPath), messages: [] })
-        })
-      ),
-    30_000
-  )
-
-  it.effect(
-    "staged lint keeps the selected compatibility files without the whole graph",
-    () =>
-      withFixtures((fixture) =>
-        Effect.gen(function* () {
-          const fixtureDirectory = fixture.directory
-          const functionalFile = yield* copyFixture(fixtureDirectory, "functional")
-          const selectedFiles = yield* Effect.tryPromise(() =>
-            discoverQualityFiles({
-              explicitFiles: [relativeToFixture(fixtureDirectory, functionalFile)],
-              rootDirectory: fixtureDirectory
-            })
-          )
-          const allFiles = yield* Effect.tryPromise(() => discoverQualityFiles({ rootDirectory: fixtureDirectory }))
-          const { compatibilityFiles, selectedCompatibilityFiles } = selectCompatibilityFiles({
-            allFiles,
-            scoped: true,
-            selectedFiles
-          })
-
-          expect(selectedCompatibilityFiles).toEqual([relativeToFixture(fixtureDirectory, functionalFile)])
-          expect(compatibilityFiles).toEqual([])
-        })
-      ),
-    30_000
-  )
-})
-
-describe("compatibility lint policy", () => {
-  const allFiles = ["packages/dalph/src/index.ts", "packages/dalph/src/run.ts", "scripts/run.mjs"]
-
-  it("keeps the whole compatibility graph for a repository run", () => {
-    const { compatibilityFiles } = selectCompatibilityFiles({ allFiles, selectedFiles: allFiles })
-
-    expect(compatibilityFiles).toEqual(["packages/dalph/src/index.ts", "packages/dalph/src/run.ts"])
-  })
-
-  it("skips the compatibility pass for an explicit or staged scoped run", () => {
-    const { compatibilityFiles, selectedCompatibilityFiles } = selectCompatibilityFiles({
-      allFiles,
-      scoped: true,
-      selectedFiles: ["packages/dalph/src/run.ts"]
-    })
-
-    expect(compatibilityFiles).toEqual([])
-    expect(selectedCompatibilityFiles).toEqual(["packages/dalph/src/run.ts"])
-  })
-
-  it("runs compatibility rules only over changed compatible files", () => {
-    const { compatibilityFiles, selectedCompatibilityFiles } = selectCompatibilityFiles({
-      allFiles,
-      changed: true,
-      scoped: true,
-      selectedFiles: ["packages/dalph/src/run.ts"]
-    })
-
-    expect(compatibilityFiles).toEqual(["packages/dalph/src/run.ts"])
-    expect(selectedCompatibilityFiles).toEqual(["packages/dalph/src/run.ts"])
-  })
-
-  it("does not start compatibility lint for an empty changed selection", () => {
-    const { compatibilityFiles, selectedCompatibilityFiles } = selectCompatibilityFiles({
-      allFiles,
-      changed: true,
-      scoped: true,
-      selectedFiles: []
-    })
-
-    expect(compatibilityFiles).toEqual([])
-    expect(selectedCompatibilityFiles).toEqual([])
-  })
-
-  it("runs the compatibility pass for a scoped run that asks for it", () => {
-    const { compatibilityFiles } = selectCompatibilityFiles({
-      allFiles,
-      compatibility: true,
-      scoped: true,
-      selectedFiles: ["packages/dalph/src/run.ts"]
-    })
-
-    expect(compatibilityFiles).toEqual(["packages/dalph/src/run.ts"])
-  })
-
-  it("skips the compatibility pass when a repository run declines it", () => {
-    const { compatibilityFiles } = selectCompatibilityFiles({
-      allFiles,
-      selectedFiles: allFiles,
-      withoutCompatibility: true
-    })
-
-    expect(compatibilityFiles).toEqual([])
-  })
 })

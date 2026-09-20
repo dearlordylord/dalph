@@ -71,11 +71,15 @@ const runFixture = (fixtureName: string, extraArguments: ReadonlyArray<string> =
                 "no-clock-read",
                 "no-double-type-assertion",
                 "no-module-mocks",
+                "no-member-delete-or-update",
                 "no-throw-statement",
                 "no-type-assertion",
                 "property-test-placement",
                 "require-canonical-effect-import"
-              ].map((rule) => [`dalph/${rule}`, "error"])
+              ].map((rule) => [
+                `dalph/${rule}`,
+                rule === "no-member-delete-or-update" ? ["error", { mutatorMethods: ["push"] }] : "error"
+              ])
             )
           })
         )
@@ -118,6 +122,7 @@ it.effect(
         "no-clock-read",
         "no-double-type-assertion",
         "no-module-mocks",
+        "no-member-delete-or-update",
         "no-throw-statement",
         "no-type-assertion",
         "property-test-placement",
