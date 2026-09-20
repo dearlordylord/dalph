@@ -45,7 +45,7 @@ const explain = (coverage, baselineCoverage) =>
     changedLines: new Map([[production, new Set([2])]])
   })
 
-test("maintainer sees actual uncovered locations, line counts and unchanged independent floors", () => {
+void test("maintainer sees actual uncovered locations, line counts and unchanged independent floors", () => {
   const result = explain({ [production]: file(production), [evaluation]: file(evaluation, true) })
   assert.equal(result.brackets.production.total.statements.total, 2)
   assert.equal(result.brackets.production.total.statements.covered, 1)
@@ -66,7 +66,7 @@ test("maintainer sees actual uncovered locations, line counts and unchanged inde
   assert.equal(result.denominatorComparison.status, "unavailable")
 })
 
-test("supplied baseline reports actual denominator difference without inferring newly executable behavior", () => {
+void test("supplied baseline reports actual denominator difference without inferring newly executable behavior", () => {
   const baseline = file(production, true)
   delete baseline.statementMap["1"]
   delete baseline.s["1"]
@@ -97,21 +97,21 @@ for (const mutation of [
     value.l = { 2: -1 }
   }
 ]) {
-  test(`maintainer receives incomplete artifact failure for ${mutation.toString()}`, () => {
+  void test(`maintainer receives incomplete artifact failure for ${mutation.toString()}`, () => {
     const value = file(production)
     mutation(value)
     assert.throws(() => explain({ [production]: value }))
   })
 }
 
-test("missing changed coverage entry is explicit and cannot look covered", () => {
+void test("missing changed coverage entry is explicit and cannot look covered", () => {
   const result = explain({ [evaluation]: file(evaluation, true) })
   assert.equal(result.incomplete[0].path, production)
   assert.equal(result.changed.production.coveredLines, 0)
   assert.equal(result.changed.production.uncoveredLines[0].reason, "coverage entry missing")
 })
 
-test("outside-worktree paths and duplicate path aliases cannot become current source evidence", () => {
+void test("outside-worktree paths and duplicate path aliases cannot become current source evidence", () => {
   assert.throws(
     () => validateCoverageArtifact({ wrong: file("/other/packages/dalph/src/work.ts") }, "/repo"),
     /outside/u
@@ -140,7 +140,7 @@ const fixture = () => {
   return { root, baseSha, put, git }
 }
 
-test("actual raw-artifact CLI explains source changes without ever launching pnpm or a test runner", () => {
+void test("actual raw-artifact CLI explains source changes without ever launching pnpm or a test runner", () => {
   const f = fixture()
   const trap = join(f.root, "trap")
   const counter = join(f.root, "test-launches")
@@ -165,7 +165,7 @@ test("actual raw-artifact CLI explains source changes without ever launching pnp
   assert.equal(existsSync(counter), false)
 })
 
-test("untracked source receives exact changed-line evidence and unusual paths remain visible", () => {
+void test("untracked source receives exact changed-line evidence and unusual paths remain visible", () => {
   const f = fixture()
   const path = "packages/dalph/src/new-source.ts"
   f.put(path, "export const newSource = 1\n")
@@ -182,7 +182,7 @@ test("untracked source receives exact changed-line evidence and unusual paths re
   )
 })
 
-test("invalid base, malformed JSON and absent artifact are diagnosed without model or test execution", () => {
+void test("invalid base, malformed JSON and absent artifact are diagnosed without model or test execution", () => {
   const f = fixture()
   assert.throws(() => coverageExplanationFromFiles({ baseSha: "HEAD", cwd: f.root }), /exact/u)
   assert.throws(
@@ -193,7 +193,7 @@ test("invalid base, malformed JSON and absent artifact are diagnosed without mod
   assert.throws(() => coverageExplanationFromFiles({ baseSha: f.baseSha, cwd: f.root }), SyntaxError)
 })
 
-test("an unchanged current source missing from the artifact is explicitly incomplete", () => {
+void test("an unchanged current source missing from the artifact is explicitly incomplete", () => {
   const f = fixture()
   const extra = "packages/dalph/src/unchanged.ts"
   f.put(extra, "export const value = 1\n")
@@ -203,13 +203,13 @@ test("an unchanged current source missing from the artifact is explicitly incomp
   assert.ok(result.incomplete.some((entry) => entry.path === extra))
 })
 
-test("incomplete optional line keys cannot hide an uncovered executable line", () => {
+void test("incomplete optional line keys cannot hide an uncovered executable line", () => {
   const value = file(production)
   value.l = { 1: 1 }
   assert.throws(() => explain({ [production]: value }), /executable statement-start lines/u)
 })
 
-test("Git presentation settings cannot erase changed-line attribution", () => {
+void test("Git presentation settings cannot erase changed-line attribution", () => {
   const f = fixture()
   f.git("config", "diff.noprefix", "true")
   f.git("config", "color.ui", "always")
@@ -218,13 +218,13 @@ test("Git presentation settings cannot erase changed-line attribution", () => {
   assert.equal(result.changed.production.executableLines, 1)
 })
 
-test("complete optional line keys cannot contradict uncovered statement-start hits", () => {
+void test("complete optional line keys cannot contradict uncovered statement-start hits", () => {
   const value = file(production)
   value.l = { 1: 1, 2: 1 }
   assert.throws(() => explain({ [production]: value }), /disagree/u)
 })
 
-test("valid complete optional line evidence preserves the uncovered line", () => {
+void test("valid complete optional line evidence preserves the uncovered line", () => {
   const value = file(production)
   value.l = { 1: 1, 2: 0 }
   const result = explain({ [production]: value })
@@ -233,7 +233,7 @@ test("valid complete optional line evidence preserves the uncovered line", () =>
   assert.ok(result.uncovered.some((entry) => entry.metric === "lines" && entry.line === 2))
 })
 
-test("Istanbul implicit-else arm with no range is counted and reported without fabricating its location", () => {
+void test("Istanbul implicit-else arm with no range is counted and reported without fabricating its location", () => {
   const value = file(production)
   value.branchMap["0"].type = "if"
   value.branchMap["0"].locations[1] = { start: {}, end: {} }
@@ -247,7 +247,7 @@ test("Istanbul implicit-else arm with no range is counted and reported without f
   assert.equal(result.brackets.production.total.branches.covered, 1)
 })
 
-test("negative branch counts from a historical V8 report are rejected as invalid evidence", () => {
+void test("negative branch counts from a historical V8 report are rejected as invalid evidence", () => {
   const value = file(production)
   value.b["0"][1] = -363
   assert.throws(() => explain({ [production]: value }), /branch locations\/counts/u)
@@ -284,7 +284,7 @@ const provenance = () => {
   }
 }
 
-test("completed failed coverage stage can establish artifact freshness without inventing gate qualification", () => {
+void test("completed failed coverage stage can establish artifact freshness without inventing gate qualification", () => {
   const result = coverageArtifactFreshness(provenance())
   assert.equal(result.status, "fresh")
   assert.equal(result.stageOutcome, "failed")
@@ -370,7 +370,7 @@ for (const [name, mutation, status] of [
     "unproven"
   ]
 ]) {
-  test(`${String(name)} cannot establish artifact freshness`, () => {
+  void test(`${String(name)} cannot establish artifact freshness`, () => {
     const input = provenance()
     mutation(input)
     assert.equal(coverageArtifactFreshness(input).status, status)
@@ -407,7 +407,7 @@ const capturedFixture = (exit = 1, missingSource = false) => {
   return { ...f, runId, runDirectory: join(runs, runId) }
 }
 
-test("actual captured failed-stage artifact is fresh diagnostic evidence without a test rerun", () => {
+void test("actual captured failed-stage artifact is fresh diagnostic evidence without a test rerun", () => {
   const f = capturedFixture()
   const result = coverageExplanationFromFiles({ baseSha: f.baseSha, runId: f.runId, cwd: f.root })
   assert.equal(result.freshness.status, "fresh", JSON.stringify(result.freshness))
@@ -415,7 +415,7 @@ test("actual captured failed-stage artifact is fresh diagnostic evidence without
   assert.ok(result.thresholdFailures.some((failure) => failure.includes("95%")))
 })
 
-test("actual missing or wrong-version receipt cannot make captured artifact fresh", () => {
+void test("actual missing or wrong-version receipt cannot make captured artifact fresh", () => {
   const f = capturedFixture()
   const receiptDirectory = join(f.runDirectory, "receipts")
   const receiptPath = join(receiptDirectory, readdirSync(receiptDirectory)[0])
@@ -432,7 +432,7 @@ test("actual missing or wrong-version receipt cannot make captured artifact fres
   )
 })
 
-test("actual source or artifact edits invalidate captured artifact freshness", () => {
+void test("actual source or artifact edits invalidate captured artifact freshness", () => {
   const f = capturedFixture()
   f.put(production, "export const edited = 1\n")
   assert.equal(
@@ -450,14 +450,14 @@ test("actual source or artifact edits invalidate captured artifact freshness", (
   )
 })
 
-test("captured but incomplete coverage cannot be reported fresh", () => {
+void test("captured but incomplete coverage cannot be reported fresh", () => {
   const f = capturedFixture(1, true)
   const result = coverageExplanationFromFiles({ baseSha: f.baseSha, runId: f.runId, cwd: f.root })
   assert.equal(result.freshness.status, "unproven")
   assert.ok(result.incomplete.some((entry) => entry.path.endsWith("not-in-report.ts")))
 })
 
-test("actual provenance CLI diagnoses a failed coverage stage with zero pnpm or test-runner launches", () => {
+void test("actual provenance CLI diagnoses a failed coverage stage with zero pnpm or test-runner launches", () => {
   const f = capturedFixture()
   const trap = join(f.root, ".scratch", "trap")
   const counter = join(trap, "launches")
@@ -482,7 +482,7 @@ test("actual provenance CLI diagnoses a failed coverage stage with zero pnpm or 
   assert.equal(existsSync(counter), false)
 })
 
-test("relative coverage aliases cannot inflate report denominators", () => {
+void test("relative coverage aliases cannot inflate report denominators", () => {
   const alias = "packages/dalph/src/./work.ts"
   assert.throws(
     () => validateCoverageArtifact({ original: file(production), alias: file(alias) }, "/repo"),
@@ -490,7 +490,7 @@ test("relative coverage aliases cannot inflate report denominators", () => {
   )
 })
 
-test("relative coverage traversal is resolved before repository containment", () => {
+void test("relative coverage traversal is resolved before repository containment", () => {
   assert.throws(
     () => validateCoverageArtifact({ traversal: file("packages/../../outside.ts") }, "/repo"),
     /outside the repository/u
@@ -564,7 +564,7 @@ await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,resu
   }
 }
 
-test("actual resumed copied coverage is fresh through explicit original provenance without an invented execution", () => {
+void test("actual resumed copied coverage is fresh through explicit original provenance without an invented execution", () => {
   const f = resumedCoverageFixture()
   const result = coverageExplanationFromFiles({ baseSha: f.baseSha, runId: f.runId, cwd: f.root })
   assert.equal(result.freshness.status, "fresh", JSON.stringify(result.freshness))
@@ -583,7 +583,7 @@ test("actual resumed copied coverage is fresh through explicit original provenan
   assert.deepEqual(readFileSync(f.counter, "utf8").trim().split("\n"), ["coverage", "late", "late"])
 })
 
-test("missing original receipt, changed original artifact and corrupt composite refuse reused coverage freshness", () => {
+void test("missing original receipt, changed original artifact and corrupt composite refuse reused coverage freshness", () => {
   const f = resumedCoverageFixture()
   const input = { baseSha: f.baseSha, runId: f.runId, cwd: f.root }
   const originalStage = JSON.parse(readFileSync(join(f.originalDirectory, "quality-stages", "0.json"), "utf8"))

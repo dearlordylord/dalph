@@ -234,7 +234,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { force: true, recursive: true })
 })
 
-test("blocks formal qualification unless exact candidate CI is completed and successful", async () => {
+void test("blocks formal qualification unless exact candidate CI is completed and successful", async () => {
   const environment = {
     DALPH_CANDIDATE_SHA: candidateSha,
     GITHUB_REPOSITORY: "dearlordylord/dalph",
@@ -257,7 +257,7 @@ test("blocks formal qualification unless exact candidate CI is completed and suc
   }
 })
 
-test("blocks formal qualification when the exact candidate has no CI workflow run", async () => {
+void test("blocks formal qualification when the exact candidate has no CI workflow run", async () => {
   await assert.rejects(
     requireSuccessfulCandidateCi({
       environment: {
@@ -271,7 +271,7 @@ test("blocks formal qualification when the exact candidate has no CI workflow ru
   )
 })
 
-test("permits formal qualification after exact candidate CI completed successfully", async () => {
+void test("permits formal qualification after exact candidate CI completed successfully", async () => {
   const requests = []
   const result = await requireSuccessfulCandidateCi({
     environment: {
@@ -296,7 +296,7 @@ test("permits formal qualification after exact candidate CI completed successful
   assert.equal(requests[0].options.headers.Authorization, "Bearer actions-read-token")
 })
 
-test("rejects missing live opt-in before observing or launching anything", async () => {
+void test("rejects missing live opt-in before observing or launching anything", async () => {
   const f = await fixture()
   let observed = 0
   let launched = 0
@@ -319,7 +319,7 @@ test("rejects missing live opt-in before observing or launching anything", async
   assert.equal(launched, 0)
 })
 
-test("rejects a candidate HEAD mismatch before the live child launch", async () => {
+void test("rejects a candidate HEAD mismatch before the live child launch", async () => {
   const f = await fixture()
   let launched = 0
 
@@ -337,7 +337,7 @@ test("rejects a candidate HEAD mismatch before the live child launch", async () 
   assert.equal(launched, 0)
 })
 
-test("rejects a missing derived Codex entry before the live child launch", async () => {
+void test("rejects a missing derived Codex entry before the live child launch", async () => {
   const f = await fixture()
   await rm(join(f.root, "node_modules", "@openai", "codex", "bin", "codex.js"))
   let launched = 0
@@ -355,7 +355,7 @@ test("rejects a missing derived Codex entry before the live child launch", async
   assert.equal(launched, 0)
 })
 
-test("launches the built controller exactly once with one manifest locator and only the GitHub secret", async () => {
+void test("launches the built controller exactly once with one manifest locator and only the GitHub secret", async () => {
   const f = await fixture()
   const requests = []
   const result = await runProductionLiveQualification({
@@ -395,7 +395,7 @@ test("launches the built controller exactly once with one manifest locator and o
   assert.equal(JSON.stringify(manifest).includes("must-be-generated-by-controller"), false)
 })
 
-test("the exact written manifest decodes with the built runtime schema without secrets", async (t) => {
+void test("the exact written manifest decodes with the built runtime schema without secrets", async (t) => {
   const f = await fixture()
   const environment = environmentFor(f)
   await runProductionLiveQualification({
@@ -419,7 +419,7 @@ test("the exact written manifest decodes with the built runtime schema without s
   }
 })
 
-test("does not retry after a live child failure and does not expose secret bytes in its error", async () => {
+void test("does not retry after a live child failure and does not expose secret bytes in its error", async () => {
   const f = await fixture()
   const requests = []
   await assert.rejects(
@@ -443,7 +443,7 @@ test("does not retry after a live child failure and does not expose secret bytes
   assert.equal(requests.length, 1)
 })
 
-test("hosted cancellation diagnostics retain progress without locators, payloads, prompts, or credentials", async () => {
+void test("hosted cancellation diagnostics retain progress without locators, payloads, prompts, or credentials", async () => {
   const f = await fixture()
   const container = join(f.root, "dalph-live-fixture")
   const journal = join(container, "journal.sqlite")
@@ -519,7 +519,7 @@ test("hosted cancellation diagnostics retain progress without locators, payloads
   }
 })
 
-test("hosted diagnostics reject an alphanumeric event kind outside the public Journal vocabulary", async () => {
+void test("hosted diagnostics reject an alphanumeric event kind outside the public Journal vocabulary", async () => {
   const f = await fixture()
   const container = join(f.root, "dalph-live-fixture")
   const journal = join(container, "journal.sqlite")
@@ -564,7 +564,7 @@ test("hosted diagnostics reject an alphanumeric event kind outside the public Jo
   assert.equal((await readFile(f.output.diagnostics, "utf8")).includes("PrivateProviderResponse"), false)
 })
 
-test("hosted diagnostics distinguish a missing checkpoint and do not misreport successful qualification", async () => {
+void test("hosted diagnostics distinguish a missing checkpoint and do not misreport successful qualification", async () => {
   const f = await fixture()
   const environment = diagnosticsEnvironmentFor(f)
   const missing = await captureProductionLiveQualificationDiagnostics({ environment })
@@ -600,7 +600,7 @@ test("hosted diagnostics distinguish a missing checkpoint and do not misreport s
   await assert.rejects(readFile(f.output.diagnostics), /ENOENT/u)
 })
 
-test("fails closed for a malformed reviewed base or non-absolute manifest locator", async () => {
+void test("fails closed for a malformed reviewed base or non-absolute manifest locator", async () => {
   const f = await fixture()
   for (const overrides of [
     { DALPH_COVERAGE_BASE_SHA: "not-a-sha" },
@@ -625,7 +625,7 @@ test("fails closed for a malformed reviewed base or non-absolute manifest locato
   }
 })
 
-test("resolves four unique numeric shard job IDs and retains truthful per-shard timing", async () => {
+void test("resolves four unique numeric shard job IDs and retains truthful per-shard timing", async () => {
   const f = await fixture()
   const environment = { ...environmentFor(f), GITHUB_TOKEN: "github-secret" }
   const apiPayload = {
@@ -710,7 +710,7 @@ test("resolves four unique numeric shard job IDs and retains truthful per-shard 
   })
 })
 
-test("fails closed for duplicate or nonnumeric formal Actions job identities", async () => {
+void test("fails closed for duplicate or nonnumeric formal Actions job identities", async () => {
   const f = await fixture()
   const environment = { ...environmentFor(f), GITHUB_TOKEN: "github-secret" }
   for (const jobs of [
@@ -727,7 +727,7 @@ test("fails closed for duplicate or nonnumeric formal Actions job identities", a
   }
 })
 
-test("fails closed when a formal report is moved between physical profile artifacts", async () => {
+void test("fails closed when a formal report is moved between physical profile artifacts", async () => {
   const f = await fixture()
   const environment = { ...environmentFor(f), GITHUB_TOKEN: "github-secret" }
   const dedicated = await readFile(f.formal.dedicated[0].report, "utf8")
@@ -743,7 +743,7 @@ test("fails closed when a formal report is moved between physical profile artifa
   )
 })
 
-test("rejects an Actions-reported formal job duration at the 16-minute cutoff", async () => {
+void test("rejects an Actions-reported formal job duration at the 16-minute cutoff", async () => {
   const f = await fixture()
   const environment = { ...environmentFor(f), GITHUB_TOKEN: "github-secret" }
   await assert.rejects(
@@ -755,7 +755,7 @@ test("rejects an Actions-reported formal job duration at the 16-minute cutoff", 
   )
 })
 
-test("rejects an absolute formal report path from uploaded provenance", async () => {
+void test("rejects an absolute formal report path from uploaded provenance", async () => {
   const f = await fixture()
   const environment = { ...environmentFor(f), GITHUB_TOKEN: "github-secret" }
   const metadata = JSON.parse(await readFile(f.formal.dedicated[0].metadata, "utf8"))
@@ -772,7 +772,7 @@ test("rejects an absolute formal report path from uploaded provenance", async ()
   )
 })
 
-test("rejects the v-prefixed process.version metadata emitted by the failed hosted run", async () => {
+void test("rejects the v-prefixed process.version metadata emitted by the failed hosted run", async () => {
   const f = await fixture()
   const environment = { ...environmentFor(f), GITHUB_TOKEN: "github-secret" }
   const metadata = JSON.parse(await readFile(f.formal.dedicated[0].metadata, "utf8"))
@@ -786,7 +786,7 @@ test("rejects the v-prefixed process.version metadata emitted by the failed host
   )
 })
 
-test("rejects mislabeled or non-constraining formal profile conditions", async () => {
+void test("rejects mislabeled or non-constraining formal profile conditions", async () => {
   for (const mutate of [
     (metadata) => ({ ...metadata, profile: "dedicated" }),
     (metadata) => ({

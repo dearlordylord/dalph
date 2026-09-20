@@ -40,7 +40,7 @@ const scan = (f, stage) =>
     acceptedExitCodes: [0, 1]
   })
 
-test("candidate secret history uses exact canonical HEAD while broad inventories retain defaults", () => {
+void test("candidate secret history uses exact canonical HEAD while broad inventories retain defaults", () => {
   const headSha = "a".repeat(40)
   assert.deepEqual(secretStage("b".repeat(40), headSha).args, [
     "check:secrets",
@@ -66,7 +66,7 @@ test("candidate secret history uses exact canonical HEAD while broad inventories
     assert.throws(() => secretStage("b".repeat(40), invalid), /canonical HEAD SHA/u)
 })
 
-test("actual candidate scan still detects a removed ancestor sentinel", async () => {
+void test("actual candidate scan still detects a removed ancestor sentinel", async () => {
   const f = fixture()
   try {
     writeFileSync(join(f.root, "source.txt"), "DALPH_TEST_SENTINEL_0123456789\n")
@@ -82,7 +82,7 @@ test("actual candidate scan still detects a removed ancestor sentinel", async ()
   }
 })
 
-test("actual candidate scan omits unrelated branch history while default scan still detects it", async () => {
+void test("actual candidate scan omits unrelated branch history while default scan still detects it", async () => {
   const f = fixture()
   try {
     f.git("checkout", "-qb", "unrelated")

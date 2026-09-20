@@ -15,7 +15,7 @@ const formalJob = workflow.slice(workflow.indexOf("  formal:\n"), workflow.index
 
 const jobEnvironment = (job) => job.slice(job.indexOf("    env:\n"), job.indexOf("    steps:\n"))
 
-test("production live qualification is a protected manually dispatched workflow", () => {
+void test("production live qualification is a protected manually dispatched workflow", () => {
   assert.match(workflow, /^name: Production live qualification$/mu)
   assert.match(workflow, /^  workflow_dispatch:$/mu)
   assert.doesNotMatch(workflow, /^  (?:pull_request|push):/mu)
@@ -25,7 +25,7 @@ test("production live qualification is a protected manually dispatched workflow"
   assert.doesNotMatch(workflow, /issues:\s*(?:write|read)/u)
 })
 
-test("dispatch inputs and worker toolchain are exact and immutable", () => {
+void test("dispatch inputs and worker toolchain are exact and immutable", () => {
   for (const input of ["candidate_sha", "reviewed_base_sha", "repository"]) {
     assert.match(workflow, new RegExp(`^      ${input}:$`, "mu"))
   }
@@ -54,7 +54,7 @@ test("dispatch inputs and worker toolchain are exact and immutable", () => {
   }
 })
 
-test("job environments do not read runner context before GitHub assigns a runner", () => {
+void test("job environments do not read runner context before GitHub assigns a runner", () => {
   const qualifyJob = workflow.slice(workflow.indexOf("  qualify:\n"))
   const qualificationPaths = qualifyJob.slice(
     qualifyJob.indexOf("      - name: Prepare live qualification paths\n"),
@@ -78,7 +78,7 @@ test("job environments do not read runner context before GitHub assigns a runner
   assert.match(qualificationPaths, /\}\s*>> "\$GITHUB_ENV"/u)
 })
 
-test("four physical shard jobs capture dedicated and stressed evidence before one live job", () => {
+void test("four physical shard jobs capture dedicated and stressed evidence before one live job", () => {
   const preflightJob = workflow.slice(workflow.indexOf("  preflight:\n"), workflow.indexOf("  formal:\n"))
   assert.match(preflightJob, /Require successful CI for exact candidate/u)
   assert.match(preflightJob, /--require-successful-ci/u)
@@ -119,7 +119,7 @@ test("four physical shard jobs capture dedicated and stressed evidence before on
   )
 })
 
-test("successful shard jobs supply complete timestamps after their final uploads", () => {
+void test("successful shard jobs supply complete timestamps after their final uploads", () => {
   assert.equal((workflow.match(/timeout-minutes: 16/gu) ?? []).length, 1)
   assert.doesNotMatch(formalJob, /completeJobSeconds|completed-ms/u)
   assert.equal((workflow.match(/report: "report\.json"/gu) ?? []).length, 1)
@@ -128,7 +128,7 @@ test("successful shard jobs supply complete timestamps after their final uploads
   assert.match(qualificationResolver, /completeJobSeconds: \(completed - started\) \/ 1000/u)
 })
 
-test("production live workflow exposes only the GitHub secret to the protected qualification", () => {
+void test("production live workflow exposes only the GitHub secret to the protected qualification", () => {
   assert.equal((workflow.match(/secrets\.DALPH_LIVE_GITHUB_TOKEN/gu) ?? []).length, 1)
   assert.equal((workflow.match(/secrets\.DALPH_LIVE_CODEX_PROVIDER_CREDENTIAL/gu) ?? []).length, 0)
   assert.match(workflow, /Run one protected live qualification[\s\S]*?DALPH_LIVE_GITHUB_TOKEN/u)
