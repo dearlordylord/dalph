@@ -1148,6 +1148,7 @@ it.effect("reconciles controlled detached process-group ownership before close",
             const liveLaunch = launch
             const livePid = liveLaunch?.pid
             expect(livePid).toBeGreaterThan(0)
+            if (liveLaunch === undefined) return
             if (livePid === undefined || livePid === null) return
             yield* Effect.addFinalizer(() =>
               Effect.sync(() => {
