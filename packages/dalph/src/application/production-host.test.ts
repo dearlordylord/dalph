@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite"
 import nodeProcess from "node:process"
 import {
   ApplicationExitShell,
+  AllocatedWorkflowRunId,
   type ProductionHostApplicationExitShellService,
   ClaimOwner,
   ClaimToken,
@@ -38,7 +39,7 @@ import {
   TaskTrackerMutationThrottled,
   taskTrackerFactsObservedEvent,
   taskTrackerReadIntent,
-  type ProductionRunSelection,
+  ProductionRunSelection,
   RunReactivationOwner,
   TaskWorkCapacity,
   TraceCursor,
@@ -398,6 +399,30 @@ it("production host graph exposes only explicit non-retryable activation failure
     : never
   expectTypeOf<ActivationFailure>().toEqualTypeOf<TaskTrackerMutationThrottled | ProductionCancellationBlocked>()
 })
+
+it.effect("rejects a retained non-Codex provider before building a Codex Run", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const graph = productionRepositoryHostGraph()
+      const configuration = yield* decodeProductionRepositoryHostConfiguration(validRawConfiguration())
+      const applicationExit = yield* graph.makeApplicationExit()
+      const selection = ProductionRunSelection.cases.Allocated.make({
+        runId: AllocatedWorkflowRunId.make(RunId.make("codex-provider-mismatch"))
+      })
+      const failure = yield* Layer.build(
+        graph.run(configuration, selection, () => Effect.void, applicationExit, { _tag: "NonCodex" })
+      ).pipe(Effect.provide(Layer.merge(ownershipLayer, memoryJournalStoreLayer)), Effect.flip)
+
+      expect(failure).toEqual(
+        new CodexAppServerFailure({
+          detail: "Codex Run did not retain its admitted app-server instance",
+          kind: "Protocol",
+          operation: "config/read"
+        })
+      )
+    })
+  )
+)
 
 it("uses one canonical fatal classifier for throttles and recoverable failures", () => {
   const throttle = new TaskTrackerMutationThrottled({
