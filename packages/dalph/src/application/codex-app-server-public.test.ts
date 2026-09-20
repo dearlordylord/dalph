@@ -255,6 +255,7 @@ process.stdin.on("data", (chunk) => {
     buffer = buffer.slice(index + 1)
     if (line.trim() === "") continue
     const message = JSON.parse(line)
+    if (message.id === undefined) continue
     if (message.method === "initialize") {
       write(message.id, { userAgent: "fixture", codexHome: "/tmp/fixture", platformFamily: "unix", platformOs: "linux" })
     } else if (message.method === "thread/start") {
