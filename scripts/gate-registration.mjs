@@ -1,9 +1,11 @@
 import { join } from "node:path"
 import { readdirSync } from "node:fs"
 import {
+  canonicalUuidPattern,
   wallClockTimestamp,
   atomicRecord,
   custodyVersion,
+  digest,
   inheritedCustody,
   newIdentity,
   readRecord,
@@ -119,6 +121,96 @@ export const validateObligation = (obligation, runId) => {
     throw new Error("Invalid custody obligation variant")
   return obligation
 }
+const stableValue = (value) => {
+  if (Array.isArray(value)) return value.map(stableValue)
+  if (value !== null && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, stableValue(item)])
+    )
+  return value
+}
+const stableJson = (value) => JSON.stringify(stableValue(value))
+const validatePreviousBootObligation = (obligation, runId, fileName) => {
+  if (!canonicalUuidPattern.test(obligation.obligationId ?? ""))
+    throw new Error(`Invalid previous-boot obligation identity: ${fileName}`)
+  if (obligation.parentId !== "root" && !canonicalUuidPattern.test(obligation.parentId ?? ""))
+    throw new Error(`Invalid previous-boot obligation parent: ${obligation.obligationId}`)
+  validateObligation(obligation, runId)
+  if (!["no-child", "observed"].includes(obligation.state))
+    throw new Error(`Previous-boot inventory contains an unobserved obligation: ${obligation.obligationId}`)
+  return obligation
+}
+const closeAndDigestPreviousBootInventoryUnderLock = ({ closeOpen = true, runDirectory, runId }) => {
+  const path = registrationPath(runDirectory)
+  const registration = readRecord(path)
+  const registrationKeys = Object.keys(registration).sort((left, right) => left.localeCompare(right))
+  if (JSON.stringify(registrationKeys) !== JSON.stringify(["obligations", "runId", "state", "version"]))
+    throw new Error("Invalid previous-boot registration shape")
+  if (
+    registration.runId !== runId ||
+    !["open", "closed"].includes(registration.state) ||
+    !Array.isArray(registration.obligations) ||
+    registration.obligations.some((id) => !canonicalUuidPattern.test(id)) ||
+    new Set(registration.obligations).size !== registration.obligations.length
+  )
+    throw new Error("Invalid previous-boot registration inventory")
+  const directory = readdirSync(join(runDirectory, "obligations"))
+  const canonicalDirectory = [...directory].sort((left, right) => left.localeCompare(right))
+  const canonicalList = registration.obligations
+    .map((id) => `${id}.json`)
+    .sort((left, right) => left.localeCompare(right))
+  if (
+    canonicalDirectory.some((name) => !name.endsWith(".json") || !canonicalUuidPattern.test(name.slice(0, -5))) ||
+    JSON.stringify(canonicalDirectory) !== JSON.stringify(canonicalList)
+  )
+    throw new Error("Previous-boot obligation directory does not match registration")
+  const obligations = canonicalList.map((name) => {
+    const obligation = validatePreviousBootObligation(readRecord(join(runDirectory, "obligations", name)), runId, name)
+    if (obligation.obligationId !== name.slice(0, -5))
+      throw new Error(`Previous-boot obligation filename does not match its record: ${name}`)
+    return obligation
+  })
+  const parentById = new Map(obligations.map(({ obligationId, parentId }) => [obligationId, parentId]))
+  for (const obligation of obligations) {
+    const seen = new Set()
+    let current = obligation.obligationId
+    while (current !== "root") {
+      if (seen.has(current)) throw new Error(`Previous-boot obligation parent cycle: ${obligation.obligationId}`)
+      seen.add(current)
+      const parent = parentById.get(current)
+      if (parent === undefined)
+        throw new Error(`Previous-boot obligation parent is not registered: ${obligation.obligationId}`)
+      current = parent
+    }
+  }
+  const inventory = {
+    version: custodyVersion,
+    runId,
+    registration: {
+      state: "closed",
+      obligations: [...registration.obligations].sort((left, right) => left.localeCompare(right))
+    },
+    obligations: obligations.sort((left, right) => left.obligationId.localeCompare(right.obligationId))
+  }
+  if (closeOpen && registration.state === "open") atomicRecord(path, { ...registration, state: "closed" })
+  return {
+    count: inventory.obligations.length,
+    digest: digest(stableJson(inventory)),
+    wasOpen: registration.state === "open",
+    registration: inventory.registration,
+    obligations: inventory.obligations
+  }
+}
+/** Read and, when necessary, close a complete previous-boot inventory under its registration lock. */
+export const closeAndDigestPreviousBootInventory = ({ closeOpen = true, runDirectory, runId }) =>
+  withFileLock(registrationLockPath(runDirectory), () => {
+    const { count, digest } = closeAndDigestPreviousBootInventoryUnderLock({ closeOpen, runDirectory, runId })
+    return { count, digest }
+  })
+/** The previous-boot reconciler holds registrationLockPath before calling this variant. */
+export const closeAndDigestPreviousBootInventoryLocked = closeAndDigestPreviousBootInventoryUnderLock
 const proveObligationStopped = (obligation) => {
   if (obligation.state === "no-child") return
   if (obligation.state !== "observed")

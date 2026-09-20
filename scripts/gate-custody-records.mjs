@@ -21,6 +21,7 @@ export const epochMilliseconds = () => performance.timeOrigin + performance.now(
 export const wallClockTimestamp = () => new Date(epochMilliseconds()).toISOString()
 export const custodyVersion = 1
 export const custodyEnvironmentNames = ["DALPH_GATE_RUN_DIRECTORY", "DALPH_GATE_RUN_ID", "DALPH_GATE_OBLIGATION"]
+export const canonicalUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u
 export const digest = (value) => createHash("sha256").update(value).digest("hex")
 export const newIdentity = () => randomUUID()
 export const localHostIdentity = () => ({
@@ -51,7 +52,10 @@ export const atomicRecord = (path, value) => {
   }
 }
 export const readRecord = (path) => {
-  const value = JSON.parse(readFileSync(path, "utf8"))
+  return readRecordBytes(readFileSync(path), path)
+}
+export const readRecordBytes = (bytes, path = "record") => {
+  const value = JSON.parse(bytes.toString("utf8"))
   if (value === null || typeof value !== "object" || Array.isArray(value) || value.version !== custodyVersion)
     throw new Error(`Invalid custody record: ${path}`)
   return value
@@ -128,15 +132,13 @@ export const repositoryLocation = (cwd = process.cwd()) => {
     worktreeLock: join(custodyRoot, `worktree-${worktreeKey}.lock`)
   }
 }
-export const validateRun = (runDirectory, expectedRunId) => {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(expectedRunId ?? ""))
-    throw new Error("Invalid gate run ID")
+const validateRunStructure = (runDirectory, expectedRunId) => {
+  if (!canonicalUuidPattern.test(expectedRunId ?? "")) throw new Error("Invalid gate run ID")
   const run = readRecord(join(runDirectory, "run.json"))
   if (
     typeof run.runId !== "string" ||
     run.runId !== expectedRunId ||
-    resolve(runDirectory) !== join(run.custodyRoot, "runs", run.runId) ||
-    !sameHost(run.host)
+    resolve(runDirectory) !== join(run.custodyRoot, "runs", run.runId)
   )
     throw new Error("Gate run identity or local host does not match")
   if (
@@ -156,6 +158,33 @@ export const validateRun = (runDirectory, expectedRunId) => {
     run.reportDirectory !== join(run.worktree, ".scratch", "quality-gates", run.runId)
   )
     throw new Error("Gate run worktree or lock association does not match")
+  return { run, location }
+}
+export const validateRun = (runDirectory, expectedRunId) => {
+  const { run } = validateRunStructure(runDirectory, expectedRunId)
+  if (!sameHost(run.host)) throw new Error("Gate run identity or local host does not match")
+  return run
+}
+const validHostIdentity = (host) =>
+  host !== null &&
+  typeof host === "object" &&
+  !Array.isArray(host) &&
+  JSON.stringify(Object.keys(host).sort((left, right) => left.localeCompare(right))) ===
+    JSON.stringify(["bootId", "hostname"]) &&
+  typeof host.hostname === "string" &&
+  canonicalUuidPattern.test(host.bootId ?? "")
+export const validatePreviousBootRun = ({ expectedRunId, previousBootId, runDirectory }) => {
+  if (!canonicalUuidPattern.test(previousBootId ?? "")) throw new Error("Invalid previous-boot ID")
+  const { run } = validateRunStructure(runDirectory, expectedRunId)
+  const current = localHostIdentity()
+  if (
+    !validHostIdentity(run.host) ||
+    !validHostIdentity(current) ||
+    run.host.hostname !== current.hostname ||
+    run.host.bootId !== previousBootId ||
+    run.host.bootId === current.bootId
+  )
+    throw new Error("Gate run previous-boot identity does not match")
   return run
 }
 export const registrationLockPath = (runDirectory) => join(runDirectory, "registration.lock")

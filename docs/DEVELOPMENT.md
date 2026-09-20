@@ -151,7 +151,7 @@ All commands below use `pnpm`. Script definitions live in
 | `check:quint` | Obtains the complete required formal profile through guarded local execution or applicable recorded success. It reports which occurred and names the original evidence. `--force` requests fresh execution under the same guards. |
 | `check:secrets` | Scan Git history with gitleaks. |
 | `gate:status <run-id>` | Read durable command results, unresolved custody and per-run logs/report paths without the previous terminal. Missing or malformed receipts cannot prove success. |
-| `gate:reconcile <run-id>` | Close registration and prove every recorded writer group absent before clearing exact worktree/slot fences. Missing exits stay unproven. |
+| `gate:reconcile <run-id> [--previous-boot=<recorded boot UUID>]` | Ordinary form closes registration and proves every recorded writer group absent before clearing exact worktree/slot fences. The explicit previous-boot form accepts only a structurally complete no-child/observed inventory from the supplied recorded boot, durably records `UNPROVEN` stopped custody, and clears exact fences without probing or signalling old process groups. |
 | `check:all --candidate=<base sha> --resume=<run-id>` | Reuse a contiguous proven full-gate prefix in the same worktree on identical monitored inputs; failed/unproven stage and remaining suffix execute normally. |
 | `check:all` | Complete qualification when required by [choosing checks](#choosing-checks), for a frozen candidate. It reports all ordinary preflight failures together, then starts no formal or application qualification when any preflight check failed. An interruption, unproven surviving process, or runner defect stops the census immediately. The command classifies formal relevance against the declared candidate Base, runs or reuses the complete formal workflow once when affected, records not applicable without formal processes when unaffected, runs the maintained non-browser Lab before application checks, and runs those application checks; automatic MBT is excluded pending #363. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
 | `check:ci` | Hosted gate; MBT remains excluded pending #363. |
@@ -240,12 +240,32 @@ unlink lock files or manually remove fences.
 
 If a runner dies or cannot prove a writer group absent, the incomplete-run fence
 refuses another writer even after the kernel lock closes. Run `gate:status <run-id>`
-to inspect evidence, then `gate:reconcile <run-id>` after writers stop. Reconciliation
-takes worktree, exact slot, then registration locks; closes registration; checks the
-complete spawn inventory; and clears fences only after every observed group is
-positively absent. Old nested launches are refused after closure. An unobserved
-spawn intent, corrupt inventory, or live/unprovable group stays fenced. Group absence
-never supplies a missing exit code. There is no age/PID shortcut or force-clear.
+to inspect evidence, then ordinary `gate:reconcile <run-id>` after writers stop.
+Reconciliation takes worktree, exact slot, then registration locks; closes
+registration; checks the complete spawn inventory; and clears fences only after
+every observed group is positively absent. Old nested launches are refused after
+closure. An unobserved spawn intent, corrupt inventory, or live/unprovable group
+stays fenced. Group absence never supplies a missing exit code. There is no age/PID
+shortcut or force-clear.
+
+After a host reboot, a maintainer may use
+`gate:reconcile <run-id> --previous-boot=<recorded boot UUID>` only when the
+recorded run names the exact current worktree/common directory, custody root,
+report directory, slot, locks and fences, and its hostname matches while its
+recorded boot differs from the current boot. This separate path accepts open or
+closed registration, closes an open registration, and requires an exact canonical
+obligations directory containing only structurally valid `no-child` or `observed`
+records. It never probes or signals old process groups and never invents absence,
+receipt, terminal, or qualification evidence. It captures raw fence and inventory
+digests, atomically publishes `previous-boot-ended.json` with `stopped`/`UNPROVEN`
+custody, then clears the exact slot fence before the worktree fence. A retry
+validates the complete durable proof and clears only matching fences; the proof
+writer must retain the recorded hostname and use a boot distinct from the old
+boot, while a later retry may use any newer boot on that hostname. Its
+`recordedAt` value is checked for canonical timestamp shape only, so clock
+rollback does not invalidate durable custody. A corrupt, foreign, newer, or
+incomplete proof remains fenced. Historical status remains ordinary current-boot
+status and has no previous-boot mode.
 
 This cooperative boundary protects admitted heavy commands and shared build/report
 writers on local Linux with Git, bash, flock, and atomic local-filesystem publication.
