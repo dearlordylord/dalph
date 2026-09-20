@@ -5,6 +5,12 @@
       "justification": "classifyJsonRpcEnvelope keeps one fail-closed JSON-RPC wire-shape boundary: version, method/request, notification, response ID, and result/error validation must be classified together before pending-request routing. Splitting these clauses would separate one protocol classification rather than an independent policy decision."
     }
   },
+  "packages/dalph/src/application/codex-integrator-envelope.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "terminalObjectStart performs one reverse, string-aware scan for the balanced JSON object ending at the message boundary. Its quote, brace-depth, completion, and malformed-input branches are the states of that single linear parser; splitting them would obscure the invariant that prevents repeated suffix parsing."
+    }
+  },
   "packages/dalph/src/application/kimi-acp.ts": {
     "complexity": {
       "count": 4,
