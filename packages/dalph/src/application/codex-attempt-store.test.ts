@@ -60,6 +60,16 @@ const associated = CodexAttemptRecord.cases.AssociatedPreTurn.make({
   threadId: CodexThreadId.make("private-thread-58"),
   worktree: attempt.worktree
 })
+const suspensionStopIntended = CodexAttemptRecord.cases.SuspensionStopIntended.make({
+  attemptId: attempt.attemptId,
+  correlationAttemptId: attempt.attemptId,
+  correlationRunId: attempt.runId,
+  currentToken: CodexOwnedTurnToken.make("private-stop-intent-token-58"),
+  observedTurnId: CodexTurnId.make("private-stop-intent-turn-58"),
+  priorObservedTurnId: null,
+  threadId: CodexThreadId.make("private-stop-intent-thread-58"),
+  worktree: attempt.worktree
+})
 const launch = CodexServerLaunchRecord.make({
   command: ["codex", "app-server"],
   incarnation: CodexServerIncarnation.make("private-incarnation-58"),
@@ -112,6 +122,32 @@ it.effect("survives an application restart with the exact private association an
           expect(Option.isSome(readLaunch) && readLaunch.value).toEqual(launch)
         }).pipe(Effect.provide(nodeLayer(storePath)))
       )
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("survives an application restart with an unresolved suspension stop intent", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-suspension-stop-intent-store-" })
+      const storePath = path.join(root, "executor-private-state.json")
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          yield* store.writeAttempt(suspensionStopIntended)
+        }).pipe(Effect.provide(nodeLayer(storePath)))
+      )
+
+      const recovered = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          return yield* store.readAttempt(attempt.runId, attempt.attemptId)
+        }).pipe(Effect.provide(nodeLayer(storePath)))
+      )
+      expect(Option.isSome(recovered) && recovered.value).toEqual(suspensionStopIntended)
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )

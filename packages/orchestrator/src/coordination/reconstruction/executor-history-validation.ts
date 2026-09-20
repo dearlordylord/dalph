@@ -24,12 +24,12 @@ import {
 import { evaluatePlannedAttemptResumeRedeliveryProof } from "../../workflow/protocols/planned-attempt-continuation/resume-redelivery-authorization.js"
 import {
   currentUnconsumedAcceptedSafeEvidence,
-  latestPlannedAttemptExecutorEvidence,
   latestUnsettledPlannedAttemptExecutorCommand
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import { defaultPlannedAttemptExecutorSuspensionLimit } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { appliedTerminalChoiceFor } from "../../workflow/protocols/attempt-choice/terminal-choice-authority.js"
 import { plannedAttemptExecutorLifecycleTransitionError } from "../../workflow/protocols/planned-attempt-executor-work/report-acceptance.js"
+import { plannedAttemptExecutorSuspensionIsAuthorized } from "../../workflow/protocols/planned-attempt-executor-work/suspension-authority.js"
 import { acceptedFreshAttemptLineage } from "../admission/fresh-attempt-lineage.js"
 import {
   type FoldIndexes,
@@ -189,10 +189,7 @@ const validateExecutorSuspendAuthority = (
 ): void => {
   if (event.command !== "Suspend") return
   const priorRecords = historyBefore(records, record.position)
-  const latestEvidence = latestPlannedAttemptExecutorEvidence(priorRecords, event.plannedAttempt)
-  if (latestEvidence?.source._tag === "AcceptedReport" && latestEvidence.report._tag === "ExecutorWorkExecuting") {
-    return
-  }
+  if (plannedAttemptExecutorSuspensionIsAuthorized(priorRecords, event.plannedAttempt)) return
   semanticIssue(
     issues,
     runId,

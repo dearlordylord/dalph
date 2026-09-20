@@ -465,7 +465,8 @@ const onMessage = (message) => {
   if (
     (mode === "initialize-unanswered" && message.method === "initialize") ||
     (mode === "thread-start-unanswered" && message.method === "thread/start") ||
-    (mode === "thread-resume-unanswered" && message.method === "thread/resume")
+    (mode === "thread-resume-unanswered" && message.method === "thread/resume") ||
+    (mode === "background-list-unanswered" && message.method === "thread/backgroundTerminals/list")
   ) {
     fs.writeFileSync(process.argv[1] + ".received", message.method)
     return
@@ -639,7 +640,7 @@ const withFixture = <A>(
   )
 
 const unansweredFixture = (
-  mode: "initialize-unanswered" | "thread-start-unanswered" | "thread-resume-unanswered",
+  mode: "initialize-unanswered" | "thread-start-unanswered" | "thread-resume-unanswered" | "background-list-unanswered",
   action: (app: CodexAppServerService) => Effect.Effect<unknown, CodexAppServerFailure>
 ) =>
   Effect.scoped(
@@ -666,6 +667,35 @@ const unansweredFixture = (
       const exit = yield* Fiber.join(result)
       expect(yield* fileSystem.readFileString(`${executable}.closed`)).toBe("closed\n")
       return exit
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+
+const passiveUnansweredFixture = (
+  mode: "thread-resume-unanswered" | "background-list-unanswered",
+  action: (app: CodexAppServerService) => Effect.Effect<unknown, CodexAppServerFailure>
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: `dalph-protocol-${mode}-` })
+      const executable = path.join(root, mode)
+      yield* fileSystem.writeFileString(executable, protocolFixture)
+      yield* fileSystem.chmod(executable, 0o755)
+      const layer = codexAppServerNodeLayer({ executable }, isolatedCodexProcessNativeService).pipe(
+        Layer.provide(memoryCodexAttemptStoreLayer())
+      )
+      return yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        const result = yield* Effect.exit(action(app)).pipe(Effect.forkChild)
+        yield* awaitFile(fileSystem, `${executable}.received`)
+        yield* TestClock.adjust("60 seconds")
+        const exit = yield* Fiber.join(result)
+        expect(yield* fileSystem.exists(`${executable}.closed`)).toBe(false)
+        yield* app.close
+        expect(yield* fileSystem.readFileString(`${executable}.closed`)).toBe("closed\n")
+        return exit
+      }).pipe(Effect.provide(layer), Effect.provide(NodeServices.layer))
     }).pipe(Effect.provide(NodeServices.layer))
   )
 
@@ -1201,9 +1231,9 @@ it.effect("bounds an unanswered thread start without fabricating a task turn and
   })
 )
 
-it.effect("bounds an unanswered retained-thread resume and closes its exact owned child once", () =>
+it.effect("bounds an unanswered passive retained-thread resume without stopping its owned child", () =>
   Effect.gen(function* () {
-    const exit = yield* unansweredFixture("thread-resume-unanswered", (app) =>
+    const exit = yield* passiveUnansweredFixture("thread-resume-unanswered", (app) =>
       Effect.gen(function* () {
         const thread = yield* app.startThread("/fixture/worktree")
         return yield* app.resumeThread(thread.id, "/fixture/worktree")
@@ -1214,8 +1244,35 @@ it.effect("bounds an unanswered retained-thread resume and closes its exact owne
       const failure = Cause.findErrorOption(exit.cause)
       if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
         expect(failure.value).toMatchObject({
-          kind: "Unavailable",
+          kind: "ResponseDeadline",
           rpcSnapshot: { requestId: 3, method: "thread/resume", sentCount: 3, responseCount: 2, pendingCount: 0 }
+        })
+      }
+    }
+  })
+)
+
+it.effect("bounds an unanswered passive background terminal census without stopping its owned child", () =>
+  Effect.gen(function* () {
+    const exit = yield* passiveUnansweredFixture("background-list-unanswered", (app) =>
+      Effect.gen(function* () {
+        const thread = yield* app.startThread("/fixture/worktree")
+        return yield* app.listBackgroundTerminals(thread.id)
+      })
+    )
+    expectAppFailure(exit, "thread/backgroundTerminals/list")
+    if (Exit.isFailure(exit)) {
+      const failure = Cause.findErrorOption(exit.cause)
+      if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+        expect(failure.value).toMatchObject({
+          kind: "ResponseDeadline",
+          rpcSnapshot: {
+            requestId: 3,
+            method: "thread/backgroundTerminals/list",
+            sentCount: 3,
+            responseCount: 2,
+            pendingCount: 0
+          }
         })
       }
     }
