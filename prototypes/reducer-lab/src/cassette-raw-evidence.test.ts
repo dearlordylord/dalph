@@ -61,6 +61,7 @@ assert.deepEqual(
   [
     "activationOrdinals",
     "cassette",
+    "diagnostics",
     "deliveryFrames",
     "history",
     "observationCaptures",
