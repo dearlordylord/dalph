@@ -386,6 +386,68 @@ it.effect("an unchanged retained wait retracts only its publication-owned traili
   )
 )
 
+it.effect.each(["ProviderNotification", "TrackerNotification", "OperatorWake", "ConfiguredTimer"] as const)(
+  "$0 starts at most one bounded activation after a retained wait",
+  (source) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const shell = yield* makeTestExitShell
+        const firstStarted = yield* Deferred.make<void>()
+        const releaseFirst = yield* Deferred.make<void>()
+        const secondStarted = yield* Deferred.make<void>()
+        const idleHandoffs = yield* Queue.unbounded<void>()
+        const publicationObserver =
+          yield* Deferred.make<(publication: AcceptedRunFactPublicationValue) => Effect.Effect<void>>()
+        const activations = yield* Ref.make(0)
+        const activate = Ref.updateAndGet(activations, (current) => current + 1).pipe(
+          Effect.tap((count) =>
+            count === 1
+              ? Deferred.succeed(firstStarted, undefined).pipe(Effect.andThen(Deferred.await(releaseFirst)))
+              : Deferred.succeed(secondStarted, undefined)
+          ),
+          Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+        )
+        yield* provideOwner(
+          shell.shell,
+          {
+            runId: RunId.make(`test-run-retained-wait-${source}`),
+            activationInterval: "1 hour",
+            failureCooldown: "1 second",
+            readControl: Effect.succeed("RunUnpaused" as const),
+            activate: () => activate,
+            activateActiveWorkAuthorityRefresh: () => activate,
+            isTerminationFailure: () => false,
+            installAcceptedRunReactivationObservers: ({ acceptedFactPublication }) =>
+              Deferred.succeed(publicationObserver, acceptedFactPublication),
+            onActivationHandoffIdle: () => Queue.offer(idleHandoffs, undefined).pipe(Effect.asVoid),
+            onFailure: () => Effect.void
+          },
+          (owner) =>
+            Effect.gen(function* () {
+              yield* Deferred.await(firstStarted)
+              const publish = yield* Deferred.await(publicationObserver)
+              yield* publish(AcceptedRunFactPublication.RetainedWait())
+              if (source === "ProviderNotification") {
+                yield* publish(AcceptedRunFactPublication.WorkflowProgress())
+              }
+              yield* Deferred.succeed(releaseFirst, undefined)
+              yield* Queue.take(idleHandoffs)
+
+              if (source === "ConfiguredTimer") {
+                yield* TestClock.adjust("1 hour")
+              } else if (source !== "ProviderNotification") {
+                yield* owner.hint(RunReactivationHint[source]())
+              }
+
+              yield* Deferred.await(secondStarted)
+              yield* Queue.take(idleHandoffs)
+              expect(yield* Ref.get(activations)).toBe(2)
+            })
+        )
+      })
+    )
+)
+
 it.effect("runs one queued active refresh after admission-stalled delivery yields", () =>
   Effect.scoped(
     Effect.gen(function* () {

@@ -100,6 +100,8 @@ export interface ProductionRunReactivationOptions {
   readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
   /** Optional process-local activation-finalization observation for diagnostics. */
   readonly onActivationFinalizationStart?: (kind: "Ordinary" | "ActiveWorkAuthorityRefresh") => Effect.Effect<void>
+  /** Optional process-local idle-handoff observation for diagnostics. */
+  readonly onActivationHandoffIdle?: () => Effect.Effect<void>
   /** Optional host-owned current-first tracker notification adapter; values remain hints. */
   readonly trackerNotificationSource?: CurrentSignal<unknown>
   /** Required observation of every typed tracker/Git/journal failure; no activation failure is swallowed. */
@@ -346,6 +348,9 @@ export const productionRunReactivationLayer = <EInitial, RInitial>(
     ...(options.onActivationFinalizationStart === undefined
       ? {}
       : { onActivationFinalizationStart: options.onActivationFinalizationStart }),
+    ...(options.onActivationHandoffIdle === undefined
+      ? {}
+      : { onActivationHandoffIdle: options.onActivationHandoffIdle }),
     ...(options.onTimerStateChange === undefined ? {} : { onTimerStateChange: options.onTimerStateChange }),
     ...(options.trackerNotificationSource === undefined
       ? {}

@@ -312,7 +312,16 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
         publication: AcceptedRunFactPublication
       ) {
         if (publication._tag === "WorkflowProgress") {
-          yield* offerHint(RunReactivationHint.AcceptedFactPublication())
+          const arrivalPhase = yield* Ref.get(activationPhase)
+          yield* commandGate.withPermit(
+            Effect.gen(function* () {
+              const retainedGeneration = yield* Ref.get(retainedWaitGeneration)
+              if (Option.isSome(retainedGeneration) && retainedGeneration.value === arrivalPhase.generation) {
+                yield* Ref.set(retainedWaitGeneration, Option.none())
+              }
+              yield* offerHintInsideGate(RunReactivationHint.AcceptedFactPublication(), arrivalPhase)
+            })
+          )
           return
         }
         const arrivalPhase = yield* Ref.get(activationPhase)

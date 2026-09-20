@@ -108,6 +108,7 @@ import {
   Deferred,
   Duration,
   Effect,
+  Exit,
   FileSystem,
   Layer,
   Path,
@@ -1619,7 +1620,9 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
               )
             )
             const startupActivation = yield* Deferred.make<void>()
-            const ordinaryActivationSettled = yield* Queue.unbounded<void>()
+            const ordinaryActivationSettled = yield* Queue.unbounded<Exit.Exit<unknown, unknown>>()
+            const ordinaryActivationFinalizationStarted = yield* Deferred.make<void>()
+            const activationHandedOffIdle = yield* Deferred.make<void>()
             const acceptedActivation = yield* Deferred.make<void>()
             const activeActivation = yield* Deferred.make<"Success" | "Failure">()
             const activeDecisions = yield* Ref.make<ReadonlyArray<RunFinalityDecision>>([])
@@ -1657,7 +1660,10 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                               _tag: "PassiveLifecycleObservation"
                             })
                             .pipe(Effect.orDie)
-                          yield* publication.publish(attempt, projection).pipe(Effect.orDie)
+                          yield* publication.publish(attempt, projection).pipe(
+                            Effect.catchTag("PlannedAttemptExecutorStateUnreadable", () => Effect.void),
+                            Effect.orDie
+                          )
                           return {
                             acceptedAt: null,
                             decision: RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
@@ -1676,7 +1682,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                   ? options.actualOrdinaryStartup === true
                     ? recordActivation.pipe(
                         Effect.andThen(ordinaryActivation),
-                        Effect.ensuring(Queue.offer(ordinaryActivationSettled, undefined))
+                        Effect.onExit((exit) => Queue.offer(ordinaryActivationSettled, exit).pipe(Effect.asVoid))
                       )
                     : recordActivation.pipe(
                         Effect.andThen(
@@ -1785,6 +1791,11 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                   source === "Timer" ? Duration.seconds(1) : Duration.hours(1)
                 ),
                 failureCooldown: ProductionRunReactivationInterval.make(Duration.seconds(1)),
+                onActivationFinalizationStart: (kind) =>
+                  kind === "Ordinary"
+                    ? Deferred.succeed(ordinaryActivationFinalizationStarted, undefined).pipe(Effect.asVoid)
+                    : Effect.void,
+                onActivationHandoffIdle: () => Deferred.succeed(activationHandedOffIdle, undefined).pipe(Effect.asVoid),
                 onFailure: () => Effect.void
               }
             ).pipe(
@@ -1822,9 +1833,15 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             )
             yield* Effect.gen(function* () {
               const owner = yield* RunReactivationOwner
+              const awaitOrdinaryActivation = Effect.gen(function* () {
+                const exit = yield* Queue.take(ordinaryActivationSettled)
+                if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause)
+              })
               yield* Effect.yieldNow
               if (options.actualOrdinaryStartup === true) {
-                yield* Queue.take(ordinaryActivationSettled)
+                yield* awaitOrdinaryActivation
+                yield* Deferred.await(ordinaryActivationFinalizationStarted)
+                yield* Deferred.await(activationHandedOffIdle)
               } else {
                 yield* Deferred.await(startupActivation)
               }
@@ -1840,7 +1857,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 )
                 if (options.stableStartupWake === "OperatorWake") {
                   yield* owner.hint(RunReactivationHint.OperatorWake())
-                  yield* Queue.take(ordinaryActivationSettled)
+                  yield* awaitOrdinaryActivation
                 }
               } else if (source === "AcceptedFactPublication") {
                 const observers = yield* Ref.get(registeredObservers)
