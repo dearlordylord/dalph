@@ -1,4 +1,6 @@
 import { expect, it } from "vitest"
+// @ts-expect-error The quality-gate policy is an executable JavaScript module.
+import { preflightQualityGates } from "./quality-gate-stage-policy.mjs"
 import {
   qualityGateFixturePairTestTimeoutMilliseconds,
   qualityGateFixtureTestTimeoutMilliseconds,
@@ -15,6 +17,7 @@ const structuralCommands = [
   "check:duplicates",
   "test:coverage:explanation",
   "test:gate-custody",
+  "test:gate-previous-boot-reconcile",
   "test:gate-resume",
   "test:preflight",
   "test:ci-change-classification",
@@ -22,6 +25,14 @@ const structuralCommands = [
   "check:secrets",
   "test:capability-registration"
 ]
+
+it("keeps the split custody controls inside their original bounded deadline", () => {
+  expect(
+    preflightQualityGates("fixture-base").find(
+      ({ args }: { readonly args: ReadonlyArray<string> }) => args[0] === "test:gate-custody"
+    )
+  ).toMatchObject({ timeout: 60_000 })
+})
 
 it(
   "reports multiple independent structural failures before any expensive qualification",

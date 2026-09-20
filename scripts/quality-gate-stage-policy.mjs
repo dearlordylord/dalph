@@ -15,6 +15,17 @@ export const capabilityRegistrationQualityGate = Object.freeze({
   timeout: 60 * SECOND
 })
 
+// This built-binary proof executes application behavior in child processes, so
+// V8 cannot attribute its source coverage to the parent Vitest worker. Running
+// it once outside the instrumented pool also keeps process recovery isolated
+// from unrelated four-worker coverage contention.
+const publicRecoveryQualityGate = Object.freeze({
+  args: Object.freeze(["test:public-recovery"]),
+  name: "public process recovery",
+  terminationGrace: 15 * SECOND,
+  timeout: 2 * 60 * SECOND
+})
+
 /** The complexity policy compares its registry with the exact full-gate base. */
 export const complexityQualityGate = (baseSha) =>
   Object.freeze({
@@ -58,6 +69,7 @@ export const preflightQualityGates = (baseSha) => [
   { args: ["check:duplicates"], name: "duplication", timeout: 60 * SECOND },
   { args: ["test:coverage:explanation"], name: "coverage explanation controls", timeout: 60 * SECOND },
   { args: ["test:gate-custody"], name: "gate custody controls", timeout: 60 * SECOND },
+  { args: ["test:gate-previous-boot-reconcile"], name: "previous-boot gate reconciliation", timeout: 60 * SECOND },
   { args: ["test:gate-resume"], name: "gate resume controls", timeout: 60 * SECOND },
   { args: ["test:preflight"], name: "preflight controls", timeout: 60 * SECOND },
   { args: ["test:ci-change-classification"], name: "CI change classification", timeout: 60 * SECOND },
@@ -80,6 +92,7 @@ export const fullQualityGateManifest = (baseSha, invocation) => {
     "duplicates",
     "coverage-explanation-controls",
     "custody-controls",
+    "previous-boot-reconciliation-controls",
     "resume-controls",
     "preflight-controls",
     "ci-classification",
@@ -116,6 +129,7 @@ export const fullQualityGateManifest = (baseSha, invocation) => {
       artifactRoots: []
     },
     { ...recordedCatalogQualityGate, id: "recorded-catalog", boundary: "qualification", artifactRoots: [] },
+    { ...publicRecoveryQualityGate, id: "public-recovery", boundary: "qualification", artifactRoots: [] },
     {
       id: "coverage",
       boundary: "qualification",
