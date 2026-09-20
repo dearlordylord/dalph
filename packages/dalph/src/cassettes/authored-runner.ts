@@ -2266,7 +2266,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       const coordinatorOwnershipLayer = Layer.succeed(CoordinatorOwnership, coordinatorOwnership)
       const latestRuntimeActivationOrdinal = yield* Ref.make(0)
       const latestJournalContext = yield* Ref.make<
-        // eslint-disable-next-line typescript/no-redundant-type-constituents -- Compatibility lint cannot resolve this Context tag through the workspace barrel.
+        // oxlint-disable-next-line typescript/no-redundant-type-constituents -- Compatibility lint cannot resolve this Context tag through the workspace barrel.
         Option.Option<Context.Context<AcceptedJournalReader | InRunJournal>>
       >(Option.none())
       const survivingExecutorReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
@@ -2308,7 +2308,7 @@ const runAuthoredScenarioCassetteWith = (request: {
             yield* Ref.set(activeDeliveryActivation, activationOrdinal)
             yield* Ref.set(
               latestJournalContext,
-              // eslint-disable-next-line typescript/no-redundant-type-constituents -- Compatibility lint cannot resolve this Context tag through the workspace barrel.
+              // oxlint-disable-next-line typescript/no-redundant-type-constituents -- Compatibility lint cannot resolve this Context tag through the workspace barrel.
               Option.some(yield* Effect.context<AcceptedJournalReader | InRunJournal>())
             )
             const context = yield* Layer.build(activationLayer)
@@ -3543,7 +3543,7 @@ export const useAuthoredScenarioCassette = <A, E, R>(
 ): Effect.Effect<
   A,
   AuthoredScenarioCassetteRunFailure | E,
-  // eslint-disable-next-line typescript/no-redundant-type-constituents -- Compatibility lint cannot resolve this Context tag through the workspace barrel.
+  // oxlint-disable-next-line typescript/no-redundant-type-constituents -- Compatibility lint cannot resolve this Context tag through the workspace barrel.
   Crypto.Crypto | Exclude<R, AcceptedJournalReader | InRunJournal>
 > =>
   Effect.scoped(
