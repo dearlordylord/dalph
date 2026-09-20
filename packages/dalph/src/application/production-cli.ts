@@ -73,12 +73,15 @@ import {
   type ProductionRepositoryHostConfiguration
 } from "./production-configuration.js"
 import { ProductionCliCurrentDeliveryStatus, publicDeliveryStatusOf } from "./production-cli-status-schema.js"
+import { ProductionCancellationRunNotFound } from "./production-host.js"
+import { ProductionCancellationBlocked } from "./production.js"
 
 export const productionCliWireVersion = 1 as const // eslint-disable-line no-magic-numbers
 
 export class ProductionCliUsageError extends Schema.TaggedError<ProductionCliUsageError>()("ProductionCliUsageError", {
   code: Schema.Literal("usage.invalid"),
-  detail: Schema.NonEmptyString
+  detail: Schema.NonEmptyString,
+  subject: Schema.Literals(["dalph run", "dalph cancel"])
 }) {}
 
 export class ProductionCliConfigurationError extends Schema.TaggedError<ProductionCliConfigurationError>()(
@@ -95,6 +98,7 @@ export class ProductionCliStartupError extends Schema.TaggedError<ProductionCliS
       "startup.ownership_lost",
       "startup.ownership_unavailable",
       "startup.recovery_blocked",
+      "startup.run_not_found",
       "startup.run_selection_conflict"
     ]),
     detail: Schema.NonEmptyString,
@@ -139,6 +143,12 @@ export class ProductionCliDeliveryError extends Schema.TaggedError<ProductionCli
     detail: Schema.Literal("the task tracker throttled a production delivery mutation"),
     subject: ProductionCliDeliveryFailureSubject
   }
+) {}
+
+/** Safe public form of the exact cancellation precondition that remained unsettled. */
+export class ProductionCliCancellationError extends Schema.TaggedError<ProductionCliCancellationError>()(
+  "ProductionCliCancellationError",
+  { code: Schema.Literal("cancellation.blocked"), detail: Schema.NonEmptyString, subject: RunId }
 ) {}
 
 const productionCliStatusFailureCodes = [
@@ -197,7 +207,14 @@ export interface RawRunInvocation {
   readonly target: string
 }
 
-const usageFailure = (detail: string) => new ProductionCliUsageError({ code: "usage.invalid", detail })
+export interface RawCancelInvocation {
+  readonly config: string | undefined
+  readonly production: boolean
+  readonly target: string
+}
+
+const usageFailure = (detail: string, subject: "dalph run" | "dalph cancel" = "dalph run") =>
+  new ProductionCliUsageError({ code: "usage.invalid", detail, subject })
 
 export const decodeProductionConfigurationLocator = Effect.fn("ProductionCli.decodeConfigurationLocator")(
   (input: string) =>
@@ -228,6 +245,30 @@ export const decodeRunInvocation = Effect.fn("ProductionCli.decodeRunInvocation"
   if (input.config === undefined) return yield* usageFailure("--production requires --config <absolute-json-path>")
   const configuration = yield* decodeProductionConfigurationLocator(input.config)
   return { _tag: "Production", configuration, target } as const
+})
+
+/** Alice selects the offline production cancellation adapter before any live authority is acquired. */
+export const decodeCancelInvocation = Effect.fn("ProductionCli.decodeCancelInvocation")(function* (
+  input: RawCancelInvocation
+) {
+  if (!input.production) return yield* usageFailure("cancel requires --production", "dalph cancel")
+  const target = yield* decodeCliTarget(input.target).pipe(
+    Effect.mapError(() => usageFailure("cancel requires github:OWNER/REPOSITORY#ISSUE", "dalph cancel"))
+  )
+  if (typeof target === "string")
+    return yield* usageFailure("cancel requires github:OWNER/REPOSITORY#ISSUE", "dalph cancel")
+  if (input.config === undefined)
+    return yield* usageFailure("cancel requires --config <absolute-json-path>", "dalph cancel")
+  return {
+    _tag: "CancelProduction" as const,
+    configuration: yield* decodeProductionConfigurationLocator(input.config).pipe(
+      Effect.mapError(
+        (failure) =>
+          new ProductionCliUsageError({ code: failure.code, detail: failure.detail, subject: "dalph cancel" })
+      )
+    ),
+    target
+  }
 })
 
 const UnknownConfigurationDocument = Schema.Record(Schema.String, Schema.Unknown)
@@ -315,6 +356,7 @@ const ProductionCliNonFailureRecord = Schema.TaggedUnion({
 const ProductionCliOrdinaryFailureRecord = Schema.TaggedStruct("Failure", {
   code: Schema.Literals([
     "configuration.invalid",
+    "cancellation.blocked",
     ...productionCliJournalFailureCodes,
     ...productionCliLifecycleFailureCodes,
     "startup.ownership_conflict",
@@ -322,6 +364,7 @@ const ProductionCliOrdinaryFailureRecord = Schema.TaggedStruct("Failure", {
     "startup.ownership_lost",
     "startup.ownership_unavailable",
     "startup.recovery_blocked",
+    "startup.run_not_found",
     "startup.run_selection_conflict",
     "output.write_failed",
     ...productionCliStatusFailureCodes,
@@ -644,11 +687,12 @@ export const productionCliFailureRecord = (failure: ProductionCliKnownFailure): 
         _tag: "Failure",
         code: failure.code,
         detail: failure.detail,
-        subject: failure._tag === "ProductionCliUsageError" ? "dalph run" : failure.subject,
+        subject: failure.subject,
         version: productionCliWireVersion
       }
 
 export type ProductionCliKnownFailure =
+  | ProductionCliCancellationError
   | ProductionCliConfigurationError
   | ProductionCliDeliveryError
   | ProductionCliJournalError
@@ -671,7 +715,9 @@ type ProductionCliBoundaryFailure =
   | TraceOutputError
   | ProductionCliStatusError
   | ProductionCliUsageError
+  | ProductionCancellationBlocked
   | ProductionRunSelectionConflict
+  | ProductionCancellationRunNotFound
   | StartupRecoveryBlocked
   | TraceReaderError
 
@@ -707,7 +753,9 @@ const ProductionCliBoundaryFailure = exactProductionCliBoundaryFailure(
     ProductionCliOutputError,
     ProductionCliStatusError,
     ProductionCliUsageError,
+    ProductionCancellationBlocked,
     ProductionRunSelectionConflict,
+    ProductionCancellationRunNotFound,
     StartupRecoveryBlocked,
     TraceCausalPredecessorContradiction,
     TraceCausalPredecessorMissing,
@@ -761,6 +809,12 @@ const mapProductionCliBoundaryFailure = (failure: ProductionCliBoundaryFailure):
     case "ProductionCliStatusError":
     case "ProductionCliUsageError":
       return failure
+    case "ProductionCancellationBlocked":
+      return new ProductionCliCancellationError({
+        code: "cancellation.blocked",
+        detail: `cancellation could not prove ${failure.blocker}`,
+        subject: failure.runId
+      })
     case "TraceOutput.TraceOutputError":
       return new ProductionCliOutputError({
         code: "output.write_failed",
@@ -805,6 +859,12 @@ const mapProductionCliBoundaryFailure = (failure: ProductionCliBoundaryFailure):
       return new ProductionCliStartupError({
         code: "startup.run_selection_conflict",
         detail: "the production Journal does not identify one safe Run",
+        subject: "production repository"
+      })
+    case "ProductionCancellationRunNotFound":
+      return new ProductionCliStartupError({
+        code: "startup.run_not_found",
+        detail: "the production Journal has no unfinished Run for this target",
         subject: "production repository"
       })
     case "JournalDataCorruption":

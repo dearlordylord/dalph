@@ -316,7 +316,7 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     requestId: AttemptChoiceRequestId,
     subject: AttemptChoiceSubject
   },
-  CancelledAttemptImplementationResponsibilityRelinquished: {
+  CancelledAttemptImplementationAbandoned: {
     authorizedClaim: ActiveTaskClaim,
     cancellationAppliedAt: JournalPosition,
     ...initiatedByCoordinator,

@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Run entry points remain together so every composition shares one Journal activation boundary. */
 import { type PlannedAttemptExecutor, RunId } from "@dalph/contracts"
 import { Context, Effect, Schema, type Stream } from "effect"
 import { RunActivationGraphBaseline } from "./activation-graph-baseline.js"
@@ -442,6 +443,32 @@ export const runWorkflow = <EInitial, RInitial>(
     true,
     opportunity
   )
+
+/**
+ * Applies Operator cancellation inside the established runtime before the
+ * ordinary delivery algebra can select work, then drives only the resulting
+ * cancellation responsibilities and finality.
+ */
+export const runCancellationWorkflow = <EInitial, RInitial>(
+  target: TrackerTarget,
+  initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
+  runId: AllocatedWorkflowRunId
+) =>
+  Effect.gen(function* () {
+    const bootstrap = yield* JournaledRunBootstrap
+    const opportunity = RunActivationOpportunity.OrdinaryRunEntry()
+    return yield* bootstrap.activate(
+      target,
+      initialControlPolicySource,
+      runId,
+      bootstrap.operatorControl
+        .applyRunCancellation({ runId })
+        .pipe(
+          Effect.andThen(runJournaledDelivery(runId, target, liveDeliveryActionExecutorFactory, true, opportunity))
+        ),
+      opportunity
+    )
+  })
 
 /** Establishes one exact Run and captures its currently Running responsibilities for an active refresh. */
 export const runWorkflowWithActiveWorkAuthorityRefresh = <EInitial, RInitial>(

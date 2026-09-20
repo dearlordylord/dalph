@@ -19,7 +19,7 @@ import { integrationResponsibilityEquivalence } from "../../workflow/protocols/i
 import { claimReadMatchesTarget, exactWorkflowRunTargetForRun } from "../../workflow-journal/run-target.js"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import {
-  cancelledAttemptImplementationResponsibilityRelinquishedRecordKey,
+  cancelledAttemptImplementationAbandonedRecordKey,
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
@@ -37,10 +37,7 @@ import {
   type JournalHistorySource
 } from "../../workflow-journal/record-evidence.js"
 
-type RelinquishedEvent = Extract<
-  WorkflowJournalEvent,
-  { readonly _tag: "CancelledAttemptImplementationResponsibilityRelinquished" }
->
+type AbandonedEvent = Extract<WorkflowJournalEvent, { readonly _tag: "CancelledAttemptImplementationAbandoned" }>
 type NoReleaseEvent = CancelledAttemptClaimNoReleaseObservedEvent
 type CancellationAppliedRecord = Omit<JournalRecord, "event"> & {
   readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "RunCancellationApplied" }>
@@ -71,26 +68,23 @@ const exactCancellation = (
     return candidate?.event._tag === "RunCancellationApplied" ? { ...candidate, event: candidate.event } : undefined
   })()
 
-const matchingRelinquishment = (
+const matchingAbandonment = (
   records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   cancellationAppliedAt: JournalPosition,
   beforePosition: JournalPosition
-): (JournalRecord & { readonly event: RelinquishedEvent }) | undefined =>
+): (JournalRecord & { readonly event: AbandonedEvent }) | undefined =>
   (() => {
     const source = priorRecords(records, beforePosition)
     const candidate = isJournalRecordEvidence(source)
-      ? journalRecordByKey(
-          source,
-          cancelledAttemptImplementationResponsibilityRelinquishedRecordKey(plannedAttempt.attemptId)
-        )
+      ? journalRecordByKey(source, cancelledAttemptImplementationAbandonedRecordKey(plannedAttempt.attemptId))
       : source.findLast(
           (record) =>
-            record.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+            record.event._tag === "CancelledAttemptImplementationAbandoned" &&
             record.event.cancellationAppliedAt === cancellationAppliedAt &&
             plannedTaskAttemptEquivalence(record.event.plannedAttempt, plannedAttempt)
         )
-    return candidate?.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+    return candidate?.event._tag === "CancelledAttemptImplementationAbandoned" &&
       candidate.event.cancellationAppliedAt === cancellationAppliedAt &&
       plannedTaskAttemptEquivalence(candidate.event.plannedAttempt, plannedAttempt)
       ? { ...candidate, event: candidate.event }
@@ -98,7 +92,7 @@ const matchingRelinquishment = (
   })()
 
 const proofEvidenceFor = (
-  proof: RelinquishedEvent["proof"],
+  proof: AbandonedEvent["proof"],
   plannedAttempt: PlannedTaskAttempt,
   records: JournalHistorySource
 ): PlannedAttemptExecutorEvidence | undefined =>
@@ -128,7 +122,7 @@ const proofEvidenceFor = (
   })()
 
 const proofMatchesEvidence = (
-  proof: RelinquishedEvent["proof"],
+  proof: AbandonedEvent["proof"],
   plannedAttempt: PlannedTaskAttempt,
   records: JournalHistorySource
 ): boolean => {
@@ -208,7 +202,7 @@ const claimObservationRecordFor = (
 
 const claimObservationIsExact = (
   record: ClaimObservationRecord | undefined,
-  expectedClaim: RelinquishedEvent["authorizedClaim"]
+  expectedClaim: AbandonedEvent["authorizedClaim"]
 ): boolean =>
   record?.event.observation._tag === "FocusedTaskClaimFacts" &&
   record.event.observation.observation._tag === "ActiveTaskClaim" &&
@@ -265,27 +259,27 @@ const claimReadIntentFor = (
   return intent.event.operation
 }
 
-const cancellationRelinquishmentForRelease = (
+const cancellationAbandonmentForRelease = (
   records: JournalHistorySource,
   authority: Extract<
     CancelledAttemptTaskClaimReleaseOperation["authority"],
     { readonly _tag: "CancelledAttemptClaimReleaseAuthority" }
   >,
   beforePosition: JournalPosition
-): (JournalRecord & { readonly event: RelinquishedEvent }) | undefined =>
+): (JournalRecord & { readonly event: AbandonedEvent }) | undefined =>
   (() => {
     const candidate = isJournalRecordEvidence(records)
-      ? journalRecordByPosition(records, authority.implementationRelinquishedAt)
+      ? journalRecordByPosition(records, authority.implementationAbandonedAt)
       : records.find(
           (record) =>
-            record.position === authority.implementationRelinquishedAt &&
+            record.position === authority.implementationAbandonedAt &&
             record.position < beforePosition &&
-            record.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+            record.event._tag === "CancelledAttemptImplementationAbandoned" &&
             record.event.cancellationAppliedAt === authority.cancellationAppliedAt
         )
     return candidate !== undefined &&
       candidate.position < beforePosition &&
-      candidate.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+      candidate.event._tag === "CancelledAttemptImplementationAbandoned" &&
       candidate.event.cancellationAppliedAt === authority.cancellationAppliedAt
       ? { ...candidate, event: candidate.event }
       : undefined
@@ -293,8 +287,8 @@ const cancellationRelinquishmentForRelease = (
 
 const priorCancellationClaimDisposition = (
   records: JournalHistorySource,
-  relinquishedAt: JournalPosition,
-  claim: RelinquishedEvent["authorizedClaim"],
+  abandonedAt: JournalPosition,
+  claim: AbandonedEvent["authorizedClaim"],
   beforePosition: JournalPosition
 ): JournalRecord | undefined =>
   (() => {
@@ -304,7 +298,7 @@ const priorCancellationClaimDisposition = (
       : bounded
     return candidates.find(
       (candidate) =>
-        candidate.position > relinquishedAt &&
+        candidate.position > abandonedAt &&
         ((candidate.event._tag === "CancelledAttemptClaimNoReleaseObserved" &&
           isExactTaskClaim(candidate.event.expectedClaim, claim)) ||
           (candidate.event._tag === "TaskClaimReleased" && isExactTaskClaim(candidate.event.release.claim, claim)))
@@ -313,8 +307,8 @@ const priorCancellationClaimDisposition = (
 
 const priorCancellationReleaseIntent = (
   records: JournalHistorySource,
-  relinquishedAt: JournalPosition,
-  claim: RelinquishedEvent["authorizedClaim"],
+  abandonedAt: JournalPosition,
+  claim: AbandonedEvent["authorizedClaim"],
   beforePosition: JournalPosition
 ): JournalRecord | undefined =>
   (() => {
@@ -324,7 +318,7 @@ const priorCancellationReleaseIntent = (
       : bounded
     return candidates.find(
       (candidate) =>
-        candidate.position > relinquishedAt &&
+        candidate.position > abandonedAt &&
         candidate.event._tag === "TaskClaimReleaseIntended" &&
         candidate.event.operation.authority._tag === "CancelledAttemptClaimReleaseAuthority" &&
         isExactTaskClaim(candidate.event.operation.release.claim, claim)
@@ -334,7 +328,7 @@ const priorCancellationReleaseIntent = (
 const claimBelongsToCancelledAttempt = (
   records: JournalHistorySource,
   runId: RunId,
-  claim: RelinquishedEvent["authorizedClaim"],
+  claim: AbandonedEvent["authorizedClaim"],
   beforePosition: JournalPosition
 ): boolean => {
   const bounded = priorRecords(records, beforePosition)
@@ -485,8 +479,8 @@ const validateNoForwardWorkAfterCancellation = (
   }
 }
 
-const validateRelinquishmentFoundations = (
-  event: RelinquishedEvent,
+const validateAbandonmentFoundations = (
+  event: AbandonedEvent,
   position: JournalPosition,
   runId: RunId,
   records: JournalHistorySource,
@@ -495,21 +489,21 @@ const validateRelinquishmentFoundations = (
 ): CancellationAppliedRecord | undefined => {
   const cancellation = exactCancellation(records, event.cancellationAppliedAt)
   if (cancellation === undefined || cancellation.position >= position) {
-    onInvalid("cancelled-attempt relinquishment requires its exact prior RunCancellationApplied position")
+    onInvalid("cancelled-attempt abandonment requires its exact prior RunCancellationApplied position")
   } else if (cancellation.runId !== runId) {
-    onInvalid("cancelled-attempt relinquishment names a cancellation from another Run")
+    onInvalid("cancelled-attempt abandonment names a cancellation from another Run")
   }
   if (event.plannedAttempt.runId !== runId) {
-    onInvalid("cancelled-attempt relinquishment planned attempt binds another Run")
+    onInvalid("cancelled-attempt abandonment planned attempt binds another Run")
   }
   if (recordedTaskAttemptPlanFor(prior, event.plannedAttempt) === undefined) {
-    onInvalid("cancelled-attempt relinquishment requires its exact prior planned attempt")
+    onInvalid("cancelled-attempt abandonment requires its exact prior planned attempt")
   }
   return cancellation
 }
 
-const validateRelinquishmentResponsibility = (
-  event: RelinquishedEvent,
+const validateAbandonmentResponsibility = (
+  event: AbandonedEvent,
   cancellation: CancellationAppliedRecord | undefined,
   prior: JournalHistorySource,
   onInvalid: (detail: string) => void
@@ -527,12 +521,12 @@ const validateRelinquishmentResponsibility = (
       ? began
       : undefined
   if (matchingBegan === undefined || (cancellation !== undefined && matchingBegan.position >= cancellation.position)) {
-    onInvalid("cancelled-attempt relinquishment requires prior executor-work responsibility")
+    onInvalid("cancelled-attempt abandonment requires prior executor-work responsibility")
   }
 }
 
-const validateRelinquishmentNotReplaced = (
-  event: RelinquishedEvent,
+const validateAbandonmentNotReplaced = (
+  event: AbandonedEvent,
   prior: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): void => {
@@ -547,35 +541,32 @@ const validateRelinquishmentNotReplaced = (
     replacement?.event._tag === "PlannedAttemptReplaced" &&
     plannedTaskAttemptEquivalence(replacement.event.subject.plannedAttempt, event.plannedAttempt)
   ) {
-    onInvalid("cancelled-attempt relinquishment cannot follow replacement of the exact planned attempt")
+    onInvalid("cancelled-attempt abandonment cannot follow replacement of the exact planned attempt")
   }
 }
 
-const validateRelinquishmentNotRepeated = (
-  event: RelinquishedEvent,
+const validateAbandonmentNotRepeated = (
+  event: AbandonedEvent,
   prior: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): void => {
-  const relinquished = isJournalRecordEvidence(prior)
-    ? journalRecordByKey(
-        prior,
-        cancelledAttemptImplementationResponsibilityRelinquishedRecordKey(event.plannedAttempt.attemptId)
-      )
+  const abandoned = isJournalRecordEvidence(prior)
+    ? journalRecordByKey(prior, cancelledAttemptImplementationAbandonedRecordKey(event.plannedAttempt.attemptId))
     : prior.find(
         (candidate) =>
-          candidate.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+          candidate.event._tag === "CancelledAttemptImplementationAbandoned" &&
           plannedTaskAttemptEquivalence(candidate.event.plannedAttempt, event.plannedAttempt)
       )
   if (
-    relinquished?.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
-    plannedTaskAttemptEquivalence(relinquished.event.plannedAttempt, event.plannedAttempt)
+    abandoned?.event._tag === "CancelledAttemptImplementationAbandoned" &&
+    plannedTaskAttemptEquivalence(abandoned.event.plannedAttempt, event.plannedAttempt)
   ) {
-    onInvalid("cancelled-attempt implementation responsibility is already relinquished")
+    onInvalid("cancelled-attempt implementation responsibility is already abandoned")
   }
 }
 
-const validateRelinquishmentClaim = (
-  event: RelinquishedEvent,
+const validateAbandonmentClaim = (
+  event: AbandonedEvent,
   cancellation: CancellationAppliedRecord | undefined,
   records: JournalHistorySource,
   prior: JournalHistorySource,
@@ -584,36 +575,36 @@ const validateRelinquishmentClaim = (
   const recordsThroughCancellation = cancellation === undefined ? prior : recordsThrough(records, cancellation.position)
   const authorized = authorizedClaimForAttempt(recordsThroughCancellation, event.plannedAttempt)?.claim
   if (authorized === undefined || !isExactTaskClaim(authorized, event.authorizedClaim)) {
-    onInvalid("cancelled-attempt relinquishment requires the exact authorized claim")
+    onInvalid("cancelled-attempt abandonment requires the exact authorized claim")
   }
 }
 
-const validateRelinquishmentProof = (
-  event: RelinquishedEvent,
+const validateAbandonmentProof = (
+  event: AbandonedEvent,
   cancellation: CancellationAppliedRecord | undefined,
   prior: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): void => {
   if (cancellation === undefined || !proofMatchesEvidence(event.proof, event.plannedAttempt, prior)) {
-    onInvalid("cancelled-attempt relinquishment requires current safe or terminal executor evidence")
+    onInvalid("cancelled-attempt abandonment requires current safe or terminal executor evidence")
   }
 }
 
-const validateRelinquishment = (
+const validateAbandonment = (
   record: JournalRecord,
   runId: RunId,
   records: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): void => {
-  if (record.event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished") return
+  if (record.event._tag !== "CancelledAttemptImplementationAbandoned") return
   const event = record.event
   const prior = priorRecords(records, record.position)
-  const cancellation = validateRelinquishmentFoundations(event, record.position, runId, records, prior, onInvalid)
-  validateRelinquishmentResponsibility(event, cancellation, prior, onInvalid)
-  validateRelinquishmentNotReplaced(event, prior, onInvalid)
-  validateRelinquishmentNotRepeated(event, prior, onInvalid)
-  validateRelinquishmentClaim(event, cancellation, records, prior, onInvalid)
-  validateRelinquishmentProof(event, cancellation, prior, onInvalid)
+  const cancellation = validateAbandonmentFoundations(event, record.position, runId, records, prior, onInvalid)
+  validateAbandonmentResponsibility(event, cancellation, prior, onInvalid)
+  validateAbandonmentNotReplaced(event, prior, onInvalid)
+  validateAbandonmentNotRepeated(event, prior, onInvalid)
+  validateAbandonmentClaim(event, cancellation, records, prior, onInvalid)
+  validateAbandonmentProof(event, cancellation, prior, onInvalid)
 }
 
 const validateNoReleaseFoundations = (
@@ -622,17 +613,17 @@ const validateNoReleaseFoundations = (
   runId: RunId,
   prior: JournalHistorySource,
   onInvalid: (detail: string) => void
-): (JournalRecord & { readonly event: RelinquishedEvent }) | undefined => {
+): (JournalRecord & { readonly event: AbandonedEvent }) | undefined => {
   if (event.plannedAttempt.runId !== runId) onInvalid("cancelled-attempt no-release binds another Run")
-  const relinquished = matchingRelinquishment(prior, event.plannedAttempt, event.cancellationAppliedAt, position)
-  if (relinquished === undefined) {
-    onInvalid("cancelled-attempt no-release requires its exact prior implementation relinquishment")
+  const abandoned = matchingAbandonment(prior, event.plannedAttempt, event.cancellationAppliedAt, position)
+  if (abandoned === undefined) {
+    onInvalid("cancelled-attempt no-release requires its exact prior implementation abandonment")
     return undefined
   }
-  if (!isExactTaskClaim(relinquished.event.authorizedClaim, event.expectedClaim)) {
+  if (!isExactTaskClaim(abandoned.event.authorizedClaim, event.expectedClaim)) {
     onInvalid("cancelled-attempt no-release contradicts its authorized claim")
   }
-  return relinquished
+  return abandoned
 }
 
 const noReleaseObservationMatchesEvent = (
@@ -649,14 +640,14 @@ const noReleaseObservationIsValid = (
   prior: JournalHistorySource,
   event: NoReleaseEvent,
   position: JournalPosition,
-  relinquished: JournalRecord & { readonly event: RelinquishedEvent }
+  abandoned: JournalRecord & { readonly event: AbandonedEvent }
 ): boolean => {
   const immutableRunTarget = exactWorkflowRunTargetForRun(prior, event.plannedAttempt.runId)
   const observation = claimObservationRecordFor(
     prior,
     event.observationOperationId,
     event.plannedAttempt.taskId,
-    relinquished.position,
+    abandoned.position,
     position,
     immutableRunTarget
   )
@@ -667,12 +658,12 @@ const noReleaseObservationIsValid = (
           prior,
           event.observationOperationId,
           event.plannedAttempt.taskId,
-          relinquished.position,
+          abandoned.position,
           observation.position,
           immutableRunTarget
         )
   if (observation === undefined || readIntent === undefined) return false
-  if (!readIntent.predecessorOperationIds.includes(relinquished.event.authorizedClaim.operationId)) return false
+  if (!readIntent.predecessorOperationIds.includes(abandoned.event.authorizedClaim.operationId)) return false
   if (!taskTrackerObservationMatchesRead(observation.event.observation, readIntent)) return false
   if (!claimObservationIsAbsentOrForeign(observation, event.expectedClaim)) return false
   if (observation.event.observation._tag !== "FocusedTaskClaimFacts") return false
@@ -683,10 +674,10 @@ const validateNoReleaseObservation = (
   prior: JournalHistorySource,
   event: NoReleaseEvent,
   position: JournalPosition,
-  relinquished: JournalRecord & { readonly event: RelinquishedEvent },
+  abandoned: JournalRecord & { readonly event: AbandonedEvent },
   onInvalid: (detail: string) => void
 ): void => {
-  if (!noReleaseObservationIsValid(prior, event, position, relinquished)) {
+  if (!noReleaseObservationIsValid(prior, event, position, abandoned)) {
     onInvalid("cancelled-attempt no-release requires an exact absent or foreign focused claim observation")
   }
 }
@@ -695,12 +686,12 @@ const validateNoReleaseDisposition = (
   prior: JournalHistorySource,
   event: NoReleaseEvent,
   position: JournalPosition,
-  relinquished: JournalRecord & { readonly event: RelinquishedEvent },
+  abandoned: JournalRecord & { readonly event: AbandonedEvent },
   onInvalid: (detail: string) => void
 ): void => {
   if (
-    priorCancellationClaimDisposition(prior, relinquished.position, event.expectedClaim, position) !== undefined ||
-    priorCancellationReleaseIntent(prior, relinquished.position, event.expectedClaim, position) !== undefined
+    priorCancellationClaimDisposition(prior, abandoned.position, event.expectedClaim, position) !== undefined ||
+    priorCancellationReleaseIntent(prior, abandoned.position, event.expectedClaim, position) !== undefined
   ) {
     onInvalid("cancelled-attempt claim disposition is already terminal")
   }
@@ -715,10 +706,10 @@ const validateNoRelease = (
   if (record.event._tag !== "CancelledAttemptClaimNoReleaseObserved") return
   const event = record.event
   const prior = priorRecords(records, record.position)
-  const relinquished = validateNoReleaseFoundations(event, record.position, runId, prior, onInvalid)
-  if (relinquished === undefined) return
-  validateNoReleaseObservation(prior, event, record.position, relinquished, onInvalid)
-  validateNoReleaseDisposition(prior, event, record.position, relinquished, onInvalid)
+  const abandoned = validateNoReleaseFoundations(event, record.position, runId, prior, onInvalid)
+  if (abandoned === undefined) return
+  validateNoReleaseObservation(prior, event, record.position, abandoned, onInvalid)
+  validateNoReleaseDisposition(prior, event, record.position, abandoned, onInvalid)
 }
 
 const validateNonCancellationReleaseAuthority = (
@@ -732,17 +723,17 @@ const validateNonCancellationReleaseAuthority = (
   const candidates = isJournalRecordEvidence(prior)
     ? Array.from(journalRecordsForTask(prior, operation.release.claim.taskId))
     : prior
-  const relinquished = candidates.findLast(
+  const abandoned = candidates.findLast(
     (candidate) =>
-      candidate.event._tag === "CancelledAttemptImplementationResponsibilityRelinquished" &&
+      candidate.event._tag === "CancelledAttemptImplementationAbandoned" &&
       isExactTaskClaim(candidate.event.authorizedClaim, operation.release.claim)
   )
-  if (relinquished !== undefined || claimBelongsToCancelledAttempt(records, runId, operation.release.claim, position)) {
+  if (abandoned !== undefined || claimBelongsToCancelledAttempt(records, runId, operation.release.claim, position)) {
     onInvalid("cancelled-attempt claim release requires CancelledAttemptClaimReleaseAuthority")
   }
 }
 
-const cancellationReleaseRelinquishmentFor = (
+const cancellationReleaseAbandonmentFor = (
   operation: ReleaseIntentEvent["operation"],
   authority: Extract<
     ReleaseIntentEvent["operation"]["authority"],
@@ -752,20 +743,20 @@ const cancellationReleaseRelinquishmentFor = (
   position: JournalPosition,
   prior: JournalHistorySource,
   onInvalid: (detail: string) => void
-): (JournalRecord & { readonly event: RelinquishedEvent }) | undefined => {
+): (JournalRecord & { readonly event: AbandonedEvent }) | undefined => {
   const cancellation = exactCancellation(prior, authority.cancellationAppliedAt)
   if (cancellation === undefined || cancellation.runId !== runId) {
     onInvalid("cancelled-attempt claim release requires its exact prior RunCancellationApplied")
   }
-  const relinquished = cancellationRelinquishmentForRelease(prior, authority, position)
-  if (relinquished === undefined) {
-    onInvalid("cancelled-attempt claim release requires its exact prior implementation relinquishment")
+  const abandoned = cancellationAbandonmentForRelease(prior, authority, position)
+  if (abandoned === undefined) {
+    onInvalid("cancelled-attempt claim release requires its exact prior implementation abandonment")
     return undefined
   }
-  if (!isExactTaskClaim(operation.release.claim, relinquished.event.authorizedClaim)) {
+  if (!isExactTaskClaim(operation.release.claim, abandoned.event.authorizedClaim)) {
     onInvalid("cancelled-attempt claim release contradicts its authorized claim")
   }
-  return relinquished
+  return abandoned
 }
 
 const cancellationReleaseObservationIsValid = (
@@ -775,14 +766,14 @@ const cancellationReleaseObservationIsValid = (
     { readonly _tag: "CancelledAttemptClaimReleaseAuthority" }
   >,
   position: JournalPosition,
-  relinquished: JournalRecord & { readonly event: RelinquishedEvent }
+  abandoned: JournalRecord & { readonly event: AbandonedEvent }
 ): boolean => {
-  const immutableRunTarget = exactWorkflowRunTargetForRun(prior, relinquished.event.plannedAttempt.runId)
+  const immutableRunTarget = exactWorkflowRunTargetForRun(prior, abandoned.event.plannedAttempt.runId)
   const observation = claimObservationRecordFor(
     prior,
     authority.observationOperationId,
-    relinquished.event.plannedAttempt.taskId,
-    relinquished.position,
+    abandoned.event.plannedAttempt.taskId,
+    abandoned.position,
     position,
     immutableRunTarget
   )
@@ -790,15 +781,15 @@ const cancellationReleaseObservationIsValid = (
   const readIntent = claimReadIntentFor(
     prior,
     authority.observationOperationId,
-    relinquished.event.plannedAttempt.taskId,
-    relinquished.position,
+    abandoned.event.plannedAttempt.taskId,
+    abandoned.position,
     position,
     immutableRunTarget
   )
   if (readIntent === undefined) return false
-  if (!readIntent.predecessorOperationIds.includes(relinquished.event.authorizedClaim.operationId)) return false
+  if (!readIntent.predecessorOperationIds.includes(abandoned.event.authorizedClaim.operationId)) return false
   if (!taskTrackerObservationMatchesRead(observation.event.observation, readIntent)) return false
-  return claimObservationIsExact(observation, relinquished.event.authorizedClaim)
+  return claimObservationIsExact(observation, abandoned.event.authorizedClaim)
 }
 
 const validateCancellationReleaseObservation = (
@@ -808,10 +799,10 @@ const validateCancellationReleaseObservation = (
     { readonly _tag: "CancelledAttemptClaimReleaseAuthority" }
   >,
   position: JournalPosition,
-  relinquished: JournalRecord & { readonly event: RelinquishedEvent },
+  abandoned: JournalRecord & { readonly event: AbandonedEvent },
   onInvalid: (detail: string) => void
 ): void => {
-  if (!cancellationReleaseObservationIsValid(prior, authority, position, relinquished)) {
+  if (!cancellationReleaseObservationIsValid(prior, authority, position, abandoned)) {
     onInvalid("cancelled-attempt claim release requires a fresh exact focused claim observation")
   }
 }
@@ -820,12 +811,12 @@ const validateCancellationReleaseDisposition = (
   prior: JournalHistorySource,
   operation: ReleaseIntentEvent["operation"],
   position: JournalPosition,
-  relinquished: JournalRecord & { readonly event: RelinquishedEvent },
+  abandoned: JournalRecord & { readonly event: AbandonedEvent },
   onInvalid: (detail: string) => void
 ): void => {
   if (
-    priorCancellationClaimDisposition(prior, relinquished.position, operation.release.claim, position) !== undefined ||
-    priorCancellationReleaseIntent(prior, relinquished.position, operation.release.claim, position) !== undefined
+    priorCancellationClaimDisposition(prior, abandoned.position, operation.release.claim, position) !== undefined ||
+    priorCancellationReleaseIntent(prior, abandoned.position, operation.release.claim, position) !== undefined
   ) {
     onInvalid("cancelled-attempt claim disposition is already terminal")
   }
@@ -845,19 +836,12 @@ const validateCancellationReleaseIntent = (
     validateNonCancellationReleaseAuthority(operation, runId, records, record.position, prior, onInvalid)
     return
   }
-  const relinquished = cancellationReleaseRelinquishmentFor(
-    operation,
-    authority,
-    runId,
-    record.position,
-    prior,
-    onInvalid
-  )
-  if (relinquished === undefined) {
+  const abandoned = cancellationReleaseAbandonmentFor(operation, authority, runId, record.position, prior, onInvalid)
+  if (abandoned === undefined) {
     return
   }
-  validateCancellationReleaseObservation(prior, authority, record.position, relinquished, onInvalid)
-  validateCancellationReleaseDisposition(prior, operation, record.position, relinquished, onInvalid)
+  validateCancellationReleaseObservation(prior, authority, record.position, abandoned, onInvalid)
+  validateCancellationReleaseDisposition(prior, operation, record.position, abandoned, onInvalid)
 }
 
 /** The exact cancellation release intent is the last matching raw record, unlike ordinary release diagnostics. */
@@ -890,14 +874,13 @@ const validateCancellationReleaseOutcome = (
     onInvalid("cancelled-attempt claim release outcome contradicts its exact intent")
   }
   const authority = intent.event.operation.authority
-  const relinquished = cancellationRelinquishmentForRelease(prior, authority, record.position)
-  if (relinquished === undefined) {
-    onInvalid("cancelled-attempt claim release outcome requires its exact prior relinquishment")
+  const abandoned = cancellationAbandonmentForRelease(prior, authority, record.position)
+  if (abandoned === undefined) {
+    onInvalid("cancelled-attempt claim release outcome requires its exact prior abandonment")
     return
   }
   if (
-    priorCancellationClaimDisposition(prior, relinquished.position, released.release.claim, record.position) !==
-    undefined
+    priorCancellationClaimDisposition(prior, abandoned.position, released.release.claim, record.position) !== undefined
   ) {
     onInvalid("cancelled-attempt claim disposition is already terminal")
   }
@@ -911,7 +894,7 @@ export const validateCancelledAttemptHistory = (
   onInvalid: (detail: string) => void
 ): void => {
   validateNoForwardWorkAfterCancellation(record, runId, records, onInvalid)
-  validateRelinquishment(record, runId, records, onInvalid)
+  validateAbandonment(record, runId, records, onInvalid)
   validateNoRelease(record, runId, records, onInvalid)
   validateCancellationReleaseIntent(record, runId, records, onInvalid)
   validateCancellationReleaseOutcome(record, runId, records, onInvalid)

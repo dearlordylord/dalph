@@ -80,7 +80,7 @@ it.effect("requires a cancelled-attempt claim release to name its focused claim 
     const observationOperationId = OperationId.make("operation-test-cancelled-claim-read")
     const cancelledAuthority = TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.make({
       cancellationAppliedAt: JournalPosition.make(3),
-      implementationRelinquishedAt: JournalPosition.make(4),
+      implementationAbandonedAt: JournalPosition.make(4),
       observationOperationId
     })
 

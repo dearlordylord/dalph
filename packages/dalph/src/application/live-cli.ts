@@ -13,6 +13,7 @@ import { Argument, Command, Flag } from "effect/unstable/cli"
 import { executeDryRun } from "./cli.js"
 import {
   decodeRunInvocation,
+  decodeCancelInvocation,
   loadProductionConfiguration,
   knownProductionCliFailure,
   presentApplicationExitResult,
@@ -51,7 +52,8 @@ export type ProductionCliHostRunner<E, R> = (
   ) => Effect.Effect<
     void,
     ProductionCliLifecycleError | ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError
-  >
+  >,
+  operation?: "Run" | "Cancel"
 ) => Effect.Effect<
   void,
   E | ProductionCliLifecycleError | ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError,
@@ -71,6 +73,46 @@ export const makeProductionCli = <EHost, RHost>(
   runProductionHost: ProductionCliHostRunner<EHost, RHost>,
   signals: ApplicationExitSignalBoundary = nodeApplicationExitSignalBoundary
 ) => {
+  const cancel = Command.make(
+    "cancel",
+    {
+      config: Flag.optional(Flag.string("config")),
+      production: Flag.boolean("production"),
+      target: Argument.string("target")
+    },
+    ({ config, production, target }) =>
+      Effect.gen(function* () {
+        const output = yield* TraceOutput
+        const invocation = yield* decodeCancelInvocation({ config: Option.getOrUndefined(config), production, target })
+        const fileSystem = yield* FileSystem.FileSystem
+        const loaded = yield* loadProductionConfiguration(invocation.configuration, invocation.target, (locator) =>
+          fileSystem.readFileString(locator)
+        )
+        yield* runProductionHost(
+          loaded,
+          (observation) => presentSelectedProductionRun(observation, output.writeLine),
+          "Cancel"
+        ).pipe(Effect.mapError(mapProductionOutputFailure))
+      }).pipe(
+        Effect.tapError((failure) => {
+          if (failure instanceof ProductionCliOutputError) return Effect.void
+          const known = knownProductionCliFailure(failure)
+          return known === undefined
+            ? Effect.void
+            : TraceOutput.pipe(
+                Effect.flatMap((output) =>
+                  output
+                    .writeLine(encodeProductionCliRecord(productionCliFailureRecord(known)))
+                    .pipe(Effect.mapError(mapProductionOutputFailure))
+                )
+              )
+        })
+      )
+  ).pipe(
+    Command.withDescription(
+      "Cancel one exact unfinished production Run, settle its executor work and task claim, and preserve its evidence."
+    )
+  )
   const run = Command.make(
     "run",
     {
@@ -108,32 +150,35 @@ export const makeProductionCli = <EHost, RHost>(
           const loaded = yield* loadProductionConfiguration(invocation.configuration, invocation.target, (locator) =>
             fileSystem.readFileString(locator)
           )
-          yield* runProductionHost(loaded, (observation, applicationExitRequestBoundary) =>
-            Deferred.succeed(selectedRunId, observation.selection.runId).pipe(
-              Effect.andThen(
-                Effect.scoped(
-                  Effect.gen(function* () {
-                    const selected = yield* Deferred.make<void>()
-                    const signalAdapter = yield* installApplicationExitSignalAdapter(
-                      applicationExitRequestBoundary,
-                      signals,
-                      ["SIGINT", "SIGTERM"]
-                    )
-                    yield* presentSelectedProductionRun(
-                      observation,
-                      output.writeLine,
-                      Deferred.succeed(selected, undefined),
-                      {
-                        awaitRequest: signalAdapter.awaitRequest,
-                        awaitResult: signalAdapter.awaitResult,
-                        presentResult: (result) =>
-                          presentApplicationExitResult(observation.selection.runId, result, output.writeLine)
-                      }
-                    )
-                  })
+          yield* runProductionHost(
+            loaded,
+            (observation, applicationExitRequestBoundary) =>
+              Deferred.succeed(selectedRunId, observation.selection.runId).pipe(
+                Effect.andThen(
+                  Effect.scoped(
+                    Effect.gen(function* () {
+                      const selected = yield* Deferred.make<void>()
+                      const signalAdapter = yield* installApplicationExitSignalAdapter(
+                        applicationExitRequestBoundary,
+                        signals,
+                        ["SIGINT", "SIGTERM"]
+                      )
+                      yield* presentSelectedProductionRun(
+                        observation,
+                        output.writeLine,
+                        Deferred.succeed(selected, undefined),
+                        {
+                          awaitRequest: signalAdapter.awaitRequest,
+                          awaitResult: signalAdapter.awaitResult,
+                          presentResult: (result) =>
+                            presentApplicationExitResult(observation.selection.runId, result, output.writeLine)
+                        }
+                      )
+                    })
+                  )
                 )
-              )
-            )
+              ),
+            "Run"
           ).pipe(Effect.mapError(mapProductionOutputFailure))
         }).pipe(
           Effect.tapError((failure) => {
@@ -163,7 +208,7 @@ export const makeProductionCli = <EHost, RHost>(
       "Run Dalph explicitly in dry or production mode. Production requires GITHUB_TOKEN and uses the installed Codex CLI's existing authentication and configuration; it may change GitHub, Git, executor, and Journal state."
     )
   )
-  return Command.make("dalph").pipe(Command.withSubcommands([run]))
+  return Command.make("dalph").pipe(Command.withSubcommands([run, cancel]))
 }
 
 export const runProductionCli = <EHost, RHost>(
@@ -186,10 +231,14 @@ export const makeProductionCliHostRunner =
     ) => Effect.Effect<
       void,
       ProductionCliLifecycleError | ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError
-    >
+    >,
+    operation: "Run" | "Cancel" = "Run"
   ) =>
-    withDecodedProductionRepositoryHost(input, productionRepositoryHostGraph(adapters), (observation) =>
-      use(productionCliHostObservationOf(observation), observation.applicationExitRequestBoundary)
+    withDecodedProductionRepositoryHost(
+      input,
+      productionRepositoryHostGraph(adapters),
+      (observation) => use(productionCliHostObservationOf(observation), observation.applicationExitRequestBoundary),
+      operation
     )
 
 /** Removes host lifecycle authority before the shipped presentation callback receives its observation. */

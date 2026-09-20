@@ -26,7 +26,7 @@ import { journalEvidenceFrom, type JournalHistorySource } from "../../workflow-j
 import {
   cancelledAttemptClaimNoReleaseRecordKey,
   stoppedAttemptClaimNoReleaseRecordKey,
-  cancelledAttemptImplementationResponsibilityRelinquishedRecordKey,
+  cancelledAttemptImplementationAbandonedRecordKey,
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorCommandProjectionObservedRecordKey,
@@ -45,7 +45,7 @@ import { JournalStore } from "../../workflow-journal/store.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { memoryJournalTestLayer } from "../../workflow-journal/adapters/memory-store.js"
 import { OperationId } from "../../workflow/identity.js"
-import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
+import { JournalEventKind, workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent
@@ -90,7 +90,7 @@ import {
 } from "../../workflow/task-tracker-facts/observation.js"
 import {
   CancelledAttemptClaimNoReleaseObservedEvent,
-  CancelledAttemptImplementationResponsibilityRelinquishedEvent,
+  CancelledAttemptImplementationAbandonedEvent,
   RunCancellationAppliedEvent
 } from "../../workflow/protocols/run-cancellation/events.js"
 import {
@@ -226,7 +226,7 @@ const laterCommandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
 const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
 const laterReportOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
 const cancellationAppliedAt = JournalPosition.make(18)
-const relinquishedAt = JournalPosition.make(19)
+const abandonedAt = JournalPosition.make(19)
 const readOperation = makeTaskClaimObservationOperation(
   OperationId.make("cancelled-history-test-claim-read"),
   target,
@@ -380,7 +380,7 @@ const rows: ReadonlyArray<Pick<JournalRecord, "event" | "key">> = [
     key: runCancellationAppliedRecordKey
   },
   {
-    event: CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
+    event: CancelledAttemptImplementationAbandonedEvent.make({
       authorizedClaim: exactClaim,
       cancellationAppliedAt,
       initiatedBy: { _tag: "DalphCoordinator" },
@@ -389,7 +389,7 @@ const rows: ReadonlyArray<Pick<JournalRecord, "event" | "key">> = [
       proof: { _tag: "AcceptedReport", reportOrdinal: laterReportOrdinal },
       version: workflowJournalEventVersion
     }),
-    key: cancelledAttemptImplementationResponsibilityRelinquishedRecordKey(plannedAttempt.attemptId)
+    key: cancelledAttemptImplementationAbandonedRecordKey(plannedAttempt.attemptId)
   }
 ]
 
@@ -428,7 +428,7 @@ const releaseObservation = taskTrackerFactsObservedEvent(
 )
 const cancellationReleaseAuthority = TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.make({
   cancellationAppliedAt,
-  implementationRelinquishedAt: relinquishedAt,
+  implementationAbandonedAt: abandonedAt,
   observationOperationId: releaseReadOperation.operationId
 })
 const cancellationReleaseOperation = makeTaskClaimReleaseOperation({
@@ -475,37 +475,37 @@ it("accepts the complete cancellation settlement prefix through history reductio
 })
 
 it("rejects missing or mismatched cancellation provenance", () => {
-  const relinquishment = baseRecords.at(-1)
-  if (relinquishment?.event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished") {
-    return expect.fail("test fixture lacks relinquishment")
+  const abandonment = baseRecords.at(-1)
+  if (abandonment?.event._tag !== "CancelledAttemptImplementationAbandoned") {
+    return expect.fail("test fixture lacks abandonment")
   }
   const missingCancellation: JournalRecord = {
-    ...relinquishment,
-    event: CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
-      ...relinquishment.event,
+    ...abandonment,
+    event: CancelledAttemptImplementationAbandonedEvent.make({
+      ...abandonment.event,
       cancellationAppliedAt: JournalPosition.make(99)
     })
   }
   expect(historyDetailsFor([...baseRecords.slice(0, -1), missingCancellation])).toContain(
-    "cancelled-attempt relinquishment requires its exact prior RunCancellationApplied position"
+    "cancelled-attempt abandonment requires its exact prior RunCancellationApplied position"
   )
 
   const wrongCancellation: JournalRecord = {
-    ...relinquishment,
-    event: CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
-      ...relinquishment.event,
+    ...abandonment,
+    event: CancelledAttemptImplementationAbandonedEvent.make({
+      ...abandonment.event,
       cancellationAppliedAt: JournalPosition.make(1)
     })
   }
   expect(historyDetailsFor([...baseRecords.slice(0, -1), wrongCancellation])).toContain(
-    "cancelled-attempt relinquishment requires its exact prior RunCancellationApplied position"
+    "cancelled-attempt abandonment requires its exact prior RunCancellationApplied position"
   )
 })
 
-it("rejects cancellation relinquishment after replacement of the exact attempt", () => {
-  const relinquishment = baseRecords.at(-1)
-  if (relinquishment?.event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished") {
-    return expect.fail("test fixture lacks relinquishment")
+it("rejects cancellation abandonment after replacement of the exact attempt", () => {
+  const abandonment = baseRecords.at(-1)
+  if (abandonment?.event._tag !== "CancelledAttemptImplementationAbandoned") {
+    return expect.fail("test fixture lacks abandonment")
   }
   const replacement: JournalRecord = {
     event: replacementEvent,
@@ -514,29 +514,26 @@ it("rejects cancellation relinquishment after replacement of the exact attempt",
     runId
   }
   expect(
-    invalidDetailsFor(relinquishment, [...baseRecords.slice(0, -2), replacement, ...baseRecords.slice(-2)])
-  ).toContain("cancelled-attempt relinquishment cannot follow replacement of the exact planned attempt")
+    invalidDetailsFor(abandonment, [...baseRecords.slice(0, -2), replacement, ...baseRecords.slice(-2)])
+  ).toContain("cancelled-attempt abandonment cannot follow replacement of the exact planned attempt")
 })
 
 it("rejects missing, nonlatest, and superseded cancellation proof", () => {
-  const relinquishment = baseRecords.at(-1)
-  if (relinquishment?.event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished") {
-    return expect.fail("test fixture lacks relinquishment")
+  const abandonment = baseRecords.at(-1)
+  if (abandonment?.event._tag !== "CancelledAttemptImplementationAbandoned") {
+    return expect.fail("test fixture lacks abandonment")
   }
-  const relinquishmentEvent = relinquishment.event
-  const invalidProof = (proof: typeof relinquishmentEvent.proof): ReadonlyArray<string> =>
+  const abandonmentEvent = abandonment.event
+  const invalidProof = (proof: typeof abandonmentEvent.proof): ReadonlyArray<string> =>
     historyDetailsFor([
       ...baseRecords.slice(0, -1),
-      {
-        ...relinquishment,
-        event: CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({ ...relinquishmentEvent, proof })
-      }
+      { ...abandonment, event: CancelledAttemptImplementationAbandonedEvent.make({ ...abandonmentEvent, proof }) }
     ])
   expect(
     invalidProof({ _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(3) })
-  ).toContain("cancelled-attempt relinquishment requires current safe or terminal executor evidence")
+  ).toContain("cancelled-attempt abandonment requires current safe or terminal executor evidence")
   expect(invalidProof({ _tag: "AcceptedReport", reportOrdinal })).toContain(
-    "cancelled-attempt relinquishment requires current safe or terminal executor evidence"
+    "cancelled-attempt abandonment requires current safe or terminal executor evidence"
   )
 
   const supersedingCommand: JournalRecord = {
@@ -560,100 +557,94 @@ it("rejects missing, nonlatest, and superseded cancellation proof", () => {
     supersedingCommand,
     ...baseRecords.slice(17).map((record) => ({ ...record, position: JournalPosition.make(record.position + 1) }))
   ]
-  const shiftedRelinquishment = supersededRecords.at(-1)
-  if (shiftedRelinquishment?.event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished") {
-    return expect.fail("test fixture lacks shifted relinquishment")
+  const shiftedAbandonment = supersededRecords.at(-1)
+  if (shiftedAbandonment?.event._tag !== "CancelledAttemptImplementationAbandoned") {
+    return expect.fail("test fixture lacks shifted abandonment")
   }
   const shiftedCancellation = supersededRecords.find(({ event }) => event._tag === "RunCancellationApplied")
   if (shiftedCancellation === undefined) return expect.fail("test fixture lacks shifted cancellation")
-  const shiftedEvent = CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
-    ...shiftedRelinquishment.event,
+  const shiftedEvent = CancelledAttemptImplementationAbandonedEvent.make({
+    ...shiftedAbandonment.event,
     cancellationAppliedAt: shiftedCancellation.position
   })
   expect(
-    historyDetailsFor([...supersededRecords.slice(0, -1), { ...shiftedRelinquishment, event: shiftedEvent }])
-  ).toContain("cancelled-attempt relinquishment requires current safe or terminal executor evidence")
+    historyDetailsFor([...supersededRecords.slice(0, -1), { ...shiftedAbandonment, event: shiftedEvent }])
+  ).toContain("cancelled-attempt abandonment requires current safe or terminal executor evidence")
 })
 
-it("rejects a relinquishment with the wrong authorized claim or a duplicate relinquishment", () => {
-  const relinquishment = baseRecords.at(-1)
-  if (relinquishment?.event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished") {
-    return expect.fail("test fixture lacks relinquishment")
+it("rejects a abandonment with the wrong authorized claim or a duplicate abandonment", () => {
+  const abandonment = baseRecords.at(-1)
+  if (abandonment?.event._tag !== "CancelledAttemptImplementationAbandoned") {
+    return expect.fail("test fixture lacks abandonment")
   }
   const foreignClaim = ActiveTaskClaim.make({
     ...exactClaim,
     operationId: OperationId.make("cancelled-history-foreign-claim")
   })
   const wrongClaim: JournalRecord = {
-    ...relinquishment,
-    event: CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
-      ...relinquishment.event,
-      authorizedClaim: foreignClaim
-    })
+    ...abandonment,
+    event: CancelledAttemptImplementationAbandonedEvent.make({ ...abandonment.event, authorizedClaim: foreignClaim })
   }
   expect(historyDetailsFor([...baseRecords.slice(0, -1), wrongClaim])).toContain(
-    "cancelled-attempt relinquishment requires the exact authorized claim"
+    "cancelled-attempt abandonment requires the exact authorized claim"
   )
 
   const duplicate: JournalRecord = {
-    ...relinquishment,
-    key: JournalRecordKey.make("cancelled-history-duplicate-relinquishment"),
+    ...abandonment,
+    key: JournalRecordKey.make("cancelled-history-duplicate-abandonment"),
     position: postBaseSettlementPosition
   }
   expect(historyDetailsFor([...baseRecords, duplicate])).toContain(
-    "cancelled-attempt implementation responsibility is already relinquished"
+    "cancelled-attempt implementation responsibility is already abandoned"
   )
 })
 
 it("rejects each independent cancellation settlement foundation mismatch", () => {
-  const relinquishment = baseRecords.at(-1)
+  const abandonment = baseRecords.at(-1)
   const cancellation = baseRecords.find(({ event }) => event._tag === "RunCancellationApplied")
   if (
-    relinquishment?.event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished" ||
+    abandonment?.event._tag !== "CancelledAttemptImplementationAbandoned" ||
     cancellation?.event._tag !== "RunCancellationApplied"
   ) {
     return expect.fail("test fixture lacks cancellation settlement")
   }
   const foreignRunId = RunId.make("cancelled-history-foreign-run")
   const foreignAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, runId: foreignRunId })
-  const withRelinquishment = (
-    event: typeof relinquishment.event,
+  const withAbandonment = (
+    event: typeof abandonment.event,
     records: ReadonlyArray<JournalRecord> = baseRecords.slice(0, -1)
-  ) => invalidDetailsFor({ ...relinquishment, event }, [...records, { ...relinquishment, event }])
+  ) => invalidDetailsFor({ ...abandonment, event }, [...records, { ...abandonment, event }])
 
   expect(
-    withRelinquishment(relinquishment.event, [...baseRecords.slice(0, 17), { ...cancellation, runId: foreignRunId }])
-  ).toContain("cancelled-attempt relinquishment names a cancellation from another Run")
+    withAbandonment(abandonment.event, [...baseRecords.slice(0, 17), { ...cancellation, runId: foreignRunId }])
+  ).toContain("cancelled-attempt abandonment names a cancellation from another Run")
   expect(
-    withRelinquishment(
-      CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
-        ...relinquishment.event,
-        plannedAttempt: foreignAttempt
-      })
+    withAbandonment(
+      CancelledAttemptImplementationAbandonedEvent.make({ ...abandonment.event, plannedAttempt: foreignAttempt })
     )
-  ).toContain("cancelled-attempt relinquishment planned attempt binds another Run")
+  ).toContain("cancelled-attempt abandonment planned attempt binds another Run")
   expect(
-    withRelinquishment(
-      relinquishment.event,
+    withAbandonment(
+      abandonment.event,
       baseRecords.filter((_, index) => index !== 7 && index !== 18)
     )
-  ).toContain("cancelled-attempt relinquishment requires its exact prior planned attempt")
+  ).toContain("cancelled-attempt abandonment requires its exact prior planned attempt")
   expect(
-    withRelinquishment(
-      relinquishment.event,
+    withAbandonment(
+      abandonment.event,
       baseRecords.filter((_, index) => index !== 10 && index !== 16)
     )
-  ).toContain("cancelled-attempt relinquishment requires prior executor-work responsibility")
+  ).toContain("cancelled-attempt abandonment requires prior executor-work responsibility")
   const priorResponsibility = baseRecords[10]
   expect(priorResponsibility).toBeDefined()
   if (priorResponsibility === undefined) return
   const lateResponsibility = { ...priorResponsibility, position: cancellation.position }
   expect(
-    withRelinquishment(relinquishment.event, [
+    withAbandonment(abandonment.event, [
       ...baseRecords.filter((_, index) => index !== 10 && index !== 16),
       lateResponsibility
     ])
-  ).toContain("cancelled-attempt relinquishment requires prior executor-work responsibility")
+  ).toContain("cancelled-attempt abandonment requires prior executor-work responsibility")
 
   const readIntentRecord: JournalRecord = {
     event: taskTrackerReadIntent(readOperation),
@@ -683,7 +674,7 @@ it("rejects each independent cancellation settlement foundation mismatch", () =>
     )
   ).toContain("cancelled-attempt no-release binds another Run")
   expect(invalidDetailsFor(noReleaseRecord, [readIntentRecord, observationRecord, noReleaseRecord])).toContain(
-    "cancelled-attempt no-release requires its exact prior implementation relinquishment"
+    "cancelled-attempt no-release requires its exact prior implementation abandonment"
   )
   const foreignClaim = ActiveTaskClaim.make({
     ...exactClaim,
@@ -719,14 +710,14 @@ it("rejects each independent cancellation settlement foundation mismatch", () =>
   expect(invalidDetailsFor(missingCancellationIntent, [...baseRecords, missingCancellationIntent])).toContain(
     "cancelled-attempt claim release requires its exact prior RunCancellationApplied"
   )
-  const missingRelinquishmentIntent = releaseIntentFor(
+  const missingAbandonmentIntent = releaseIntentFor(
     TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.make({
       ...cancellationReleaseAuthority,
-      implementationRelinquishedAt: JournalPosition.make(99)
+      implementationAbandonedAt: JournalPosition.make(99)
     })
   )
-  expect(invalidDetailsFor(missingRelinquishmentIntent, [...baseRecords, missingRelinquishmentIntent])).toContain(
-    "cancelled-attempt claim release requires its exact prior implementation relinquishment"
+  expect(invalidDetailsFor(missingAbandonmentIntent, [...baseRecords, missingAbandonmentIntent])).toContain(
+    "cancelled-attempt claim release requires its exact prior implementation abandonment"
   )
   const contradictoryReleaseOperation = makeTaskClaimReleaseOperation({
     authority: cancellationReleaseAuthority,
@@ -749,7 +740,7 @@ it("rejects each independent cancellation settlement foundation mismatch", () =>
 
 it("accepts a safe executor proof observed before cancellation", () => {
   const record = baseRecords.at(-1)
-  if (record === undefined) return expect.fail("test fixture lacks relinquishment")
+  if (record === undefined) return expect.fail("test fixture lacks abandonment")
   expect(invalidDetailsFor(record, baseRecords)).toEqual([])
 })
 
@@ -786,23 +777,23 @@ it("rejects command and state observations as accepted-report proof provenance",
     }),
     key: plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, stateObservationOrdinal)
   }
-  const relinquishment = baseRecords.at(-1)
-  if (relinquishment?.event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished") {
-    return expect.fail("test fixture lacks relinquishment")
+  const abandonment = baseRecords.at(-1)
+  if (abandonment?.event._tag !== "CancelledAttemptImplementationAbandoned") {
+    return expect.fail("test fixture lacks abandonment")
   }
-  const projectionRelinquishmentEvent = relinquishment.event
+  const projectionAbandonmentEvent = abandonment.event
   const cancellationRow = rows[17]
-  const relinquishmentRow = rows[18]
+  const abandonmentRow = rows[18]
   if (
     cancellationRow === undefined ||
-    relinquishmentRow === undefined ||
+    abandonmentRow === undefined ||
     cancellationRow.event._tag !== "RunCancellationApplied" ||
-    relinquishmentRow.event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished"
+    abandonmentRow.event._tag !== "CancelledAttemptImplementationAbandoned"
   ) {
     return expect.fail("test fixture lacks cancellation settlement rows")
   }
   const rowsFor = (
-    proof: typeof projectionRelinquishmentEvent.proof,
+    proof: typeof projectionAbandonmentEvent.proof,
     evidenceRecord: Pick<JournalRecord, "event" | "key">
   ): ReadonlyArray<JournalRecord> =>
     recordsFrom([
@@ -810,23 +801,23 @@ it("rejects command and state observations as accepted-report proof provenance",
       evidenceRecord,
       cancellationRow,
       {
-        ...relinquishmentRow,
-        event: CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
-          ...projectionRelinquishmentEvent,
+        ...abandonmentRow,
+        event: CancelledAttemptImplementationAbandonedEvent.make({
+          ...projectionAbandonmentEvent,
           cancellationAppliedAt: JournalPosition.make(19),
           proof
         })
       }
     ])
   const projectionRecords = rowsFor({ _tag: "AcceptedReport", reportOrdinal }, projectionRecord)
-  const projectionRelinquishment = projectionRecords.at(-1)
-  if (projectionRelinquishment === undefined) return expect.fail("projection fixture lacks relinquishment")
-  expect(invalidDetailsFor(projectionRelinquishment, projectionRecords)).not.toEqual([])
+  const projectionAbandonment = projectionRecords.at(-1)
+  if (projectionAbandonment === undefined) return expect.fail("projection fixture lacks abandonment")
+  expect(invalidDetailsFor(projectionAbandonment, projectionRecords)).not.toEqual([])
 
   const stateRecords = rowsFor({ _tag: "AcceptedReport", reportOrdinal }, stateRecord)
-  const stateRelinquishment = stateRecords.at(-1)
-  if (stateRelinquishment === undefined) return expect.fail("state fixture lacks relinquishment")
-  expect(invalidDetailsFor(stateRelinquishment, stateRecords)).not.toEqual([])
+  const stateAbandonment = stateRecords.at(-1)
+  if (stateAbandonment === undefined) return expect.fail("state fixture lacks abandonment")
+  expect(invalidDetailsFor(stateAbandonment, stateRecords)).not.toEqual([])
 })
 
 it("requires no-release event observation to equal the focused tracker observation", () => {
@@ -900,14 +891,10 @@ it("requires no-release event observation to equal the focused tracker observati
     ])
   ).toEqual([])
 
-  const readWithoutRelinquishmentPredecessor = makeTaskClaimObservationOperation(
-    readOperation.operationId,
-    target,
-    taskId
-  )
+  const readWithoutAbandonmentPredecessor = makeTaskClaimObservationOperation(readOperation.operationId, target, taskId)
   const missingPredecessorIntent: JournalRecord = {
     ...readIntentRecord,
-    event: taskTrackerReadIntent(readWithoutRelinquishmentPredecessor)
+    event: taskTrackerReadIntent(readWithoutAbandonmentPredecessor)
   }
   expect(
     invalidDetailsFor(validRecord, [...baseRecords, missingPredecessorIntent, observationRecord, validRecord])
@@ -1139,10 +1126,17 @@ it("allows only pre-cancellation claim and integration outcomes after the cutoff
 
 it.effect("round-trips cancellation settlement events through the journal codec", () =>
   Effect.gen(function* () {
-    expect(yield* decodeJournalEvent(encodeJournalEvent(baseRecords.at(-1)?.event ?? noRelease))).toEqual(
-      baseRecords.at(-1)?.event ?? noRelease
-    )
+    const abandonment = baseRecords.at(-1)?.event ?? noRelease
+    expect(yield* decodeJournalEvent(encodeJournalEvent(abandonment))).toEqual(abandonment)
     expect(yield* decodeJournalEvent(encodeJournalEvent(noRelease))).toEqual(noRelease)
+
+    const encodedAbandonment = encodeJournalEvent(abandonment)
+    expect(
+      yield* decodeJournalEvent({
+        ...encodedAbandonment,
+        kind: JournalEventKind.make("CancelledAttemptImplementationResponsibilityRelinquished")
+      })
+    ).toEqual(abandonment)
   })
 )
 
@@ -1171,7 +1165,7 @@ it("accepts the cancellation-specific release authority schema", () => {
   )
 })
 
-it("requires cancellation authority for a release after relinquishment and validates its outcome", () => {
+it("requires cancellation authority for a release after abandonment and validates its outcome", () => {
   const readIntentRecord: JournalRecord = {
     event: taskTrackerReadIntent(releaseReadOperation),
     key: intentRecordKey(releaseReadOperation.operationId),
@@ -1216,8 +1210,8 @@ it("requires cancellation authority for a release after relinquishment and valid
   expect(invalidDetailsFor(ordinaryIntentRecord, [...baseRecords.slice(0, -1), ordinaryIntentRecord])).toContain(
     "cancelled-attempt claim release requires CancelledAttemptClaimReleaseAuthority"
   )
-  const cancellationBeforeRelinquishment = baseRecords.at(-2)
-  if (cancellationBeforeRelinquishment === undefined) return expect.fail("test fixture lacks cancellation")
+  const cancellationBeforeAbandonment = baseRecords.at(-2)
+  if (cancellationBeforeAbandonment === undefined) return expect.fail("test fixture lacks cancellation")
   expect(
     invalidDetailsFor(ordinaryIntentRecord, [
       ...baseRecords.slice(0, -2),
@@ -1227,7 +1221,7 @@ it("requires cancellation authority for a release after relinquishment and valid
         position: JournalPosition.make(9),
         runId
       },
-      cancellationBeforeRelinquishment,
+      cancellationBeforeAbandonment,
       ordinaryIntentRecord
     ])
   ).toContain("cancelled-attempt claim release requires CancelledAttemptClaimReleaseAuthority")
@@ -1359,7 +1353,7 @@ it("requires cancellation authority for a release after relinquishment and valid
   )
   expect(
     invalidDetailsFor(outcomeRecord, [readIntentRecord, observationRecord, intentRecord, outcomeRecord])
-  ).toContain("cancelled-attempt claim release outcome requires its exact prior relinquishment")
+  ).toContain("cancelled-attempt claim release outcome requires its exact prior abandonment")
   const duplicateOutcomeRecord: JournalRecord = { ...outcomeRecord, position: postBaseLatePosition }
   expect(invalidDetailsFor(duplicateOutcomeRecord, [...prefix, outcomeRecord, duplicateOutcomeRecord])).toContain(
     "cancelled-attempt claim disposition is already terminal"
@@ -1379,7 +1373,7 @@ it("settles only target-matching claim dispositions for each release authority",
   })
   const responsibilityFor = (
     operation: typeof WorkflowOperation.cases.ReleaseTaskClaim.Type,
-    beganAt = relinquishedAt
+    beganAt = abandonedAt
   ): TaskClaimReleaseResponsibility =>
     WorkflowResponsibilityEntry.cases.TaskClaimReleaseResponsibility.make({ beganAt, operation, taskId })
 
@@ -1552,7 +1546,7 @@ it("settles only target-matching claim dispositions for each release authority",
   ).toBe(true)
 })
 
-it("does not let a terminal report and pre-cancellation claim release bypass cancellation relinquishment", () => {
+it("does not let a terminal report and pre-cancellation claim release bypass cancellation abandonment", () => {
   const suspensionResponseRow = rows[15]
   const terminalReportRow = rows[16]
   const cancellationRow = rows[17]

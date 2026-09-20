@@ -143,8 +143,8 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly requestId: AttemptChoiceRequestId
     readonly subject: AttemptChoiceSubject
   }
-  /** Records executor quiescence as cancellation relinquishment for one exact planned attempt. */
-  RelinquishCancelledAttemptImplementation: {
+  /** Records executor quiescence as cancellation abandonment for one exact planned attempt. */
+  AbandonCancelledAttemptImplementation: {
     readonly plannedAttempt: PlannedTaskAttempt
     readonly proof: AttemptQuiescenceProof
   }
@@ -289,7 +289,7 @@ const runnableFrontierTransitionTags = [
   "ObserveAttemptStoppageExecutor",
   "ObserveResponsibleTaskClaim",
   "ObserveStoppedAttemptClaim",
-  "RelinquishCancelledAttemptImplementation",
+  "AbandonCancelledAttemptImplementation",
   "ObserveCancelledAttemptClaim",
   "RecordCancelledAttemptClaimNoRelease",
   "ReleaseCancelledAttemptClaim",
@@ -406,7 +406,7 @@ const transitionTrackerGraphRequirements = {
   ReconcileTaskWorktree: "AcceptedHistorySufficient",
   RecordStoppedAttemptClaimNoRelease: "AcceptedHistorySufficient",
   RecordCancelledAttemptClaimNoRelease: "AcceptedHistorySufficient",
-  RelinquishCancelledAttemptImplementation: "AcceptedHistorySufficient",
+  AbandonCancelledAttemptImplementation: "AcceptedHistorySufficient",
   ReleaseExternallyCompletedTaskClaim: "CurrentTrackerGraphRequired",
   ReleaseCancelledAttemptClaim: "AcceptedHistorySufficient",
   ReleaseStoppedAttemptClaim: "AcceptedHistorySufficient",
@@ -776,8 +776,8 @@ const executorDecisionFor = (
       StoppedAttemptClaimNoReleaseRequired: (fields) => ({
         transition: RunnableFrontierTransition.RecordStoppedAttemptClaimNoRelease(fields)
       }),
-      CancelledAttemptRelinquishmentRequired: ({ plannedAttempt, proof }) => ({
-        transition: RunnableFrontierTransition.RelinquishCancelledAttemptImplementation({ plannedAttempt, proof })
+      CancelledAttemptAbandonmentRequired: ({ plannedAttempt, proof }) => ({
+        transition: RunnableFrontierTransition.AbandonCancelledAttemptImplementation({ plannedAttempt, proof })
       }),
       CancelledAttemptClaimNoReleaseRequired: ({ observationOperationId, plannedAttempt }) => ({
         transition: RunnableFrontierTransition.RecordCancelledAttemptClaimNoRelease({
@@ -964,7 +964,7 @@ const executorDecisionFor = (
           wakeCondition: "TaskTrackerFactsObserved"
         })
       }),
-      // A relinquished executor responsibility has no further frontier action;
+      // A abandoned executor responsibility has no further frontier action;
       // its accepted terminal disposition remains available to passive status.
       Relinquished: () => ({}),
       Ready: ({ acceptedProgress }) => ({

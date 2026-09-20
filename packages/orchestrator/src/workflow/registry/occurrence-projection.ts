@@ -69,7 +69,7 @@ const {
   AttemptStoppageIntended,
   BranchCleanupOccurred,
   CancelledAttemptClaimNoReleaseObserved,
-  CancelledAttemptImplementationResponsibilityRelinquished,
+  CancelledAttemptImplementationAbandoned,
   HistoricalWorkflowOccurrence,
   IntegrationClaimDeletionOccurred,
   IntegrationClaimReplacementOccurred,
@@ -842,7 +842,7 @@ const nonProjectedJournalEventKinds = {
   IntegratorCandidateCleanupContradicted: true,
   IntegratorCandidateCleanupSettled: true,
   RunCancellationApplied: true,
-  CancelledAttemptImplementationResponsibilityRelinquished: true,
+  CancelledAttemptImplementationAbandoned: true,
   CancelledAttemptClaimNoReleaseObserved: true
 } satisfies Record<NonProjectedJournalEvent["_tag"], true>
 
@@ -960,14 +960,14 @@ type ControlCancellationJournalEvent = Extract<
   {
     readonly _tag:
       | "RunCancellationApplied"
-      | "CancelledAttemptImplementationResponsibilityRelinquished"
+      | "CancelledAttemptImplementationAbandoned"
       | "CancelledAttemptClaimNoReleaseObserved"
   }
 >
 
 const controlCancellationEventKinds = {
   CancelledAttemptClaimNoReleaseObserved: true,
-  CancelledAttemptImplementationResponsibilityRelinquished: true,
+  CancelledAttemptImplementationAbandoned: true,
   RunCancellationApplied: true
 } satisfies Record<ControlCancellationJournalEvent["_tag"], true>
 
@@ -2072,8 +2072,8 @@ const controlCancellationOccurrenceFor = (record: JournalRecord): WorkflowOccurr
         recordedAt: record.position,
         runId: record.runId
       })
-    case "CancelledAttemptImplementationResponsibilityRelinquished":
-      return CancelledAttemptImplementationResponsibilityRelinquished.make({
+    case "CancelledAttemptImplementationAbandoned":
+      return CancelledAttemptImplementationAbandoned.make({
         authorizedClaim: event.authorizedClaim,
         cancellationAppliedAt: event.cancellationAppliedAt,
         initiatedBy: event.initiatedBy,

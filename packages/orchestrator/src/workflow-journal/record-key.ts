@@ -169,9 +169,10 @@ export const integratorCandidateCleanupSettledRecordKey = (operationId: Operatio
 export const runCancellationAppliedRecordKey = JournalRecordKey.make("run:cancellation:applied")
 
 /** Stable key for one exact cancelled-attempt executor responsibility settlement. */
-export const cancelledAttemptImplementationResponsibilityRelinquishedRecordKey = (
-  attemptId: AttemptId
-): JournalRecordKey => JournalRecordKey.make(`cancelled-attempt:${attemptId}:implementation-relinquished`)
+export const cancelledAttemptImplementationAbandonedRecordKey = (attemptId: AttemptId): JournalRecordKey =>
+  // The persisted key predates the sharper "abandoned" domain name. Its bytes
+  // remain immutable so retained v14 histories reconstruct without migration.
+  JournalRecordKey.make(`cancelled-attempt:${attemptId}:implementation-relinquished`)
 
 /** Stable key for one exact cancelled-attempt claim no-release observation. */
 export const cancelledAttemptClaimNoReleaseRecordKey = (attemptId: AttemptId): JournalRecordKey =>

@@ -1,4 +1,10 @@
 {
+  "packages/dalph/bin/production-public-recovery-codex-fixture.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "respond is one deterministic JSON-RPC fixture dispatcher whose branches model the complete retained Codex thread lifecycle across start, read, resume, turn, interrupt, and census requests. Splitting the dispatcher would fragment one protocol transcript without separating production policy."
+    }
+  },
   "packages/dalph/src/application/codex-app-server.ts": {
     "complexity": {
       "count": 1,

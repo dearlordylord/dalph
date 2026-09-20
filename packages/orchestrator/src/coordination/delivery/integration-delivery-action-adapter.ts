@@ -71,7 +71,7 @@ type IntegrationTransition = Exclude<
     readonly _tag:
       | "AdvanceAttemptRestart"
       | "AdvanceAttemptStoppage"
-      | "RelinquishCancelledAttemptImplementation"
+      | "AbandonCancelledAttemptImplementation"
       | "ObservePlannedAttemptExecutorWork"
       | "ResumePlannedAttemptExecutorWorkAfterCurrentFacts"
       | "ReconcilePlannedAttemptExecutorWork"

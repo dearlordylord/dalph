@@ -62,7 +62,7 @@ import {
 import {
   BranchCleanupOccurred,
   CancelledAttemptClaimNoReleaseObserved,
-  CancelledAttemptImplementationResponsibilityRelinquished,
+  CancelledAttemptImplementationAbandoned,
   IntegratorCandidateCleanupOccurred,
   RunCancellationApplied,
   WorktreeCleanupOccurred
@@ -70,7 +70,7 @@ import {
 export {
   BranchCleanupOccurred,
   CancelledAttemptClaimNoReleaseObserved,
-  CancelledAttemptImplementationResponsibilityRelinquished,
+  CancelledAttemptImplementationAbandoned,
   IntegratorCandidateCleanupOccurred,
   RunCancellationApplied,
   WorktreeCleanupOccurred
@@ -426,7 +426,7 @@ export const HistoricalWorkflowOccurrence = Schema.Union([
   AttemptStoppageIntended,
   BranchCleanupOccurred,
   CancelledAttemptClaimNoReleaseObserved,
-  CancelledAttemptImplementationResponsibilityRelinquished,
+  CancelledAttemptImplementationAbandoned,
   IntegrationClaimDeletionOccurred,
   IntegrationClaimReplacementOccurred,
   IntegrationFinalitySettledOccurred,

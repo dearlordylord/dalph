@@ -116,7 +116,7 @@ const responsibilityStatusMeaningByTag = {
   AttemptStoppageRequired: "NoEntry",
   AttemptStoppageExecutorObservationRequired: "NoEntry",
   AttemptStoppageWait: "UnavailableEvidence",
-  CancelledAttemptRelinquishmentRequired: "NoEntry",
+  CancelledAttemptAbandonmentRequired: "NoEntry",
   CancelledAttemptClaimNoReleaseRequired: "NoEntry",
   CancelledAttemptClaimObservationRequired: "NoEntry",
   CancelledAttemptClaimReleaseRequired: "NoEntry",

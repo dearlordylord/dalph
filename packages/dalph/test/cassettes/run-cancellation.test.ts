@@ -212,9 +212,7 @@ it.effect("cancels a running exact attempt through suspension, claim release, an
     const eventTags = run.records.map(({ event }) => event._tag)
     expect(eventTags.filter((tag) => tag === "RunCancellationApplied")).toHaveLength(1)
     expect(eventTags.filter((tag) => tag === "PlannedAttemptExecutorWorkReported")).toHaveLength(2)
-    expect(eventTags.filter((tag) => tag === "CancelledAttemptImplementationResponsibilityRelinquished")).toHaveLength(
-      1
-    )
+    expect(eventTags.filter((tag) => tag === "CancelledAttemptImplementationAbandoned")).toHaveLength(1)
     expect(eventTags.filter((tag) => tag === "TaskClaimReleaseIntended")).toHaveLength(1)
     expect(eventTags.filter((tag) => tag === "TaskClaimReleased")).toHaveLength(1)
     expect(eventTags.filter((tag) => tag === "TaskWorktreeReady")).toHaveLength(1)
@@ -247,9 +245,7 @@ it.effect("cancels a running exact attempt without releasing a foreign claim", (
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(runningAttemptRunCancellationForeignClaimAuthoredCassette)
     const eventTags = run.records.map(({ event }) => event._tag)
-    expect(eventTags.filter((tag) => tag === "CancelledAttemptImplementationResponsibilityRelinquished")).toHaveLength(
-      1
-    )
+    expect(eventTags.filter((tag) => tag === "CancelledAttemptImplementationAbandoned")).toHaveLength(1)
     expect(eventTags.filter((tag) => tag === "CancelledAttemptClaimNoReleaseObserved")).toHaveLength(1)
     expect(eventTags).not.toContain("TaskClaimReleaseIntended")
     expect(eventTags).not.toContain("TaskClaimReleased")

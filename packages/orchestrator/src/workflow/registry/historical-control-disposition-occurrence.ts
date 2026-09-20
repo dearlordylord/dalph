@@ -18,22 +18,18 @@ export const RunCancellationApplied = Schema.TaggedStruct("RunCancellationApplie
 })
 export type RunCancellationApplied = typeof RunCancellationApplied.Type
 
-/** Cancellation relinquished one executor responsibility after an explicit quiescence proof. */
-export const CancelledAttemptImplementationResponsibilityRelinquished = Schema.TaggedStruct(
-  "CancelledAttemptImplementationResponsibilityRelinquished",
-  {
-    authorizedClaim: ActiveTaskClaim,
-    cancellationAppliedAt: JournalPosition,
-    initiatedBy: WorkflowActor.cases.DalphCoordinator,
-    occurrenceClassification: Schema.Literal("InitiatedAction"),
-    plannedAttempt: PlannedTaskAttempt,
-    proof: AttemptQuiescenceProof,
-    recordedAt: JournalPosition,
-    runId: RunId
-  }
-)
-export type CancelledAttemptImplementationResponsibilityRelinquished =
-  typeof CancelledAttemptImplementationResponsibilityRelinquished.Type
+/** Cancellation abandoned one executor responsibility after an explicit quiescence proof. */
+export const CancelledAttemptImplementationAbandoned = Schema.TaggedStruct("CancelledAttemptImplementationAbandoned", {
+  authorizedClaim: ActiveTaskClaim,
+  cancellationAppliedAt: JournalPosition,
+  initiatedBy: WorkflowActor.cases.DalphCoordinator,
+  occurrenceClassification: Schema.Literal("InitiatedAction"),
+  plannedAttempt: PlannedTaskAttempt,
+  proof: AttemptQuiescenceProof,
+  recordedAt: JournalPosition,
+  runId: RunId
+})
+export type CancelledAttemptImplementationAbandoned = typeof CancelledAttemptImplementationAbandoned.Type
 
 /** Cancellation observed a non-owned claim without releasing it. */
 export const CancelledAttemptClaimNoReleaseObserved = Schema.TaggedStruct("CancelledAttemptClaimNoReleaseObserved", {

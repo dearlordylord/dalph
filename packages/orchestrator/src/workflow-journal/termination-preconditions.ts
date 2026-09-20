@@ -256,12 +256,12 @@ const taskClaimAcquisitionSettled = (
 const cancellationForAttempt = (records: ReadonlyArray<JournalRecord>, plannedAttempt: PlannedTaskAttempt) =>
   records.find(({ event, runId }) => runId === plannedAttempt.runId && event._tag === "RunCancellationApplied")
 
-const hasCancellationRelinquishment = (
+const hasCancellationAbandonment = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt
 ): boolean =>
   records.some(({ event, runId }) => {
-    if (runId !== plannedAttempt.runId || event._tag !== "CancelledAttemptImplementationResponsibilityRelinquished") {
+    if (runId !== plannedAttempt.runId || event._tag !== "CancelledAttemptImplementationAbandoned") {
       return false
     }
     return plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
@@ -349,14 +349,14 @@ const executorReportSettled = (
   immutableRunTarget: ReturnType<typeof exactWorkflowRunTargetFor>
 ): boolean => {
   const cancellationApplied = cancellationForAttempt(records, plannedAttempt)
-  const cancellationRelinquished = hasCancellationRelinquishment(records, plannedAttempt)
+  const cancellationAbandoned = hasCancellationAbandonment(records, plannedAttempt)
   const integrationSettled = hasIntegrationSettlement(records, plannedAttempt)
   const terminalAt = latestTerminalExecutorReportPosition(records, plannedAttempt)
   if (cancellationApplied !== undefined) {
-    return cancellationRelinquished || integrationSettled
+    return cancellationAbandoned || integrationSettled
   }
   return (
-    cancellationRelinquished ||
+    cancellationAbandoned ||
     terminalAt !== undefined ||
     abandonedAttemptSettled(records, plannedAttempt, immutableRunTarget)
   )

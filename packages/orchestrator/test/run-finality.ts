@@ -10,6 +10,8 @@ import {
   taskTrackerFactsObservedEvent
 } from "../src/workflow/task-tracker-facts/observation.js"
 import { JournalPosition } from "../src/workflow-journal/identity.js"
+import { RunCancellationAppliedEvent } from "../src/workflow/protocols/run-cancellation/events.js"
+import { workflowJournalEventVersion } from "../src/workflow/kernel/event.js"
 
 /** One schema-valid completed graph read and the exact evidence derived from it. */
 export const completedRunFinalityFixture = (input: {
@@ -32,6 +34,44 @@ export const completedRunFinalityFixture = (input: {
   return {
     evidence: makeRunFinalityEvidence({
       observedAt,
+      operationId: operation.operationId,
+      readShape: operation.readShape,
+      rootTaskId: TaskId.make("root"),
+      runId: input.runId,
+      snapshot,
+      target: input.target
+    }),
+    intent: taskTrackerReadIntent(operation),
+    observation: taskTrackerFactsObservedEvent(
+      operation.operationId,
+      makeCompleteTaskTrackerFactsObserved(operation, snapshot)
+    ),
+    operation
+  }
+}
+
+/** One schema-valid cancelled graph read and the exact evidence derived from it. */
+export const cancelledRunFinalityFixture = (input: { readonly runId: RunId; readonly target: TrackerTarget }) => {
+  // eslint-disable-next-line no-magic-numbers -- The fixture chronology places cancellation finality at its fourth record.
+  const cancellationObservationPosition = JournalPosition.make(4)
+  const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make(`cancelled-finality:${input.runId}`),
+    input.target
+  )
+  const snapshot = validSnapshot({
+    revision: `cancelled-finality:${input.runId}`,
+    rootTaskId: "root",
+    tasks: [{ id: "root", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+  })
+  return {
+    cancellation: RunCancellationAppliedEvent.make({
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      version: workflowJournalEventVersion
+    }),
+    evidence: makeRunFinalityEvidence({
+      observedAt: cancellationObservationPosition,
       operationId: operation.operationId,
       readShape: operation.readShape,
       rootTaskId: TaskId.make("root"),

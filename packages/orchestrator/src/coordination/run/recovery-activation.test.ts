@@ -123,7 +123,7 @@ import {
 } from "../../workflow/protocols/attempt-choice/events.js"
 import {
   CancelledAttemptClaimNoReleaseObservedEvent,
-  CancelledAttemptImplementationResponsibilityRelinquishedEvent,
+  CancelledAttemptImplementationAbandonedEvent,
   RunCancellationAppliedEvent
 } from "../../workflow/protocols/run-cancellation/events.js"
 import type { PlannedAttemptWorktreeObservation } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
@@ -3048,7 +3048,7 @@ effectIt.effect("uses durable Run cancellation as the existing settlement select
   })
 )
 
-it("derives cancellation relinquishment, exact claim release, and typed no-release settlement", () => {
+it("derives cancellation abandonment, exact claim release, and typed no-release settlement", () => {
   const cancellationPosition = JournalPosition.make(6)
   const cancellation = coverageRecord(
     Number(cancellationPosition),
@@ -3068,7 +3068,7 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
     coverageRunState([...coveragePlanRecords(), preCancellationSafeReport, cancellation], [coverageResponsibility])
   )
   expect(preCancellationSafeFacts).toMatchObject({
-    disposition: { _tag: "CancelledAttemptRelinquishmentRequired", proof: { _tag: "AcceptedReport", reportOrdinal: 5 } }
+    disposition: { _tag: "CancelledAttemptAbandonmentRequired", proof: { _tag: "AcceptedReport", reportOrdinal: 5 } }
   })
   const safeReport = executorReport(
     7,
@@ -3094,24 +3094,24 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
         [coverageResponsibility]
       )
     )[0]
-  ).not.toMatchObject({ disposition: { _tag: "CancelledAttemptRelinquishmentRequired" } })
+  ).not.toMatchObject({ disposition: { _tag: "CancelledAttemptAbandonmentRequired" } })
   const state = coverageRunState([...coveragePlanRecords(), cancellation, safeReport], [coverageResponsibility])
-  const [relinquishmentFacts] = deriveJournalResponsibilityFacts(state)
-  expect(relinquishmentFacts).toMatchObject({
+  const [abandonmentFacts] = deriveJournalResponsibilityFacts(state)
+  expect(abandonmentFacts).toMatchObject({
     disposition: {
-      _tag: "CancelledAttemptRelinquishmentRequired",
+      _tag: "CancelledAttemptAbandonmentRequired",
       plannedAttempt: coverageAttempt,
       proof: { _tag: "AcceptedReport", reportOrdinal: 7 }
     }
   })
-  if (relinquishmentFacts?._tag !== "PlannedAttemptExecutorFreshFacts") return
+  if (abandonmentFacts?._tag !== "PlannedAttemptExecutorFreshFacts") return
   const frontier = deriveRunnableFrontier({
     freshEligibleTasks: [],
     responsibility: { entries: [coverageResponsibility] },
-    responsibilityFacts: [relinquishmentFacts]
+    responsibilityFacts: [abandonmentFacts]
   })
   expect(frontier.transitions).toEqual([
-    RunnableFrontierTransition.RelinquishCancelledAttemptImplementation({
+    RunnableFrontierTransition.AbandonCancelledAttemptImplementation({
       plannedAttempt: coverageAttempt,
       proof: { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(7) }
     })
@@ -3134,11 +3134,11 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
         [coverageResponsibility]
       )
     )[0]
-  ).not.toMatchObject({ disposition: { _tag: "CancelledAttemptRelinquishmentRequired" } })
+  ).not.toMatchObject({ disposition: { _tag: "CancelledAttemptAbandonmentRequired" } })
 
-  const relinquished = coverageRecord(
+  const abandoned = coverageRecord(
     8,
-    CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
+    CancelledAttemptImplementationAbandonedEvent.make({
       authorizedClaim: coverageClaim,
       cancellationAppliedAt: cancellationPosition,
       initiatedBy: { _tag: "DalphCoordinator" },
@@ -3183,7 +3183,7 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
       coverageRecord(5, coverageGraphEvent),
       cancellation,
       safeReport,
-      relinquished,
+      abandoned,
       coverageRecord(9, taskTrackerReadIntent(unrelatedClaimRead)),
       unrelatedClaimObservation
     ],
@@ -3192,7 +3192,7 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
   const [unrelatedObservationFacts] = deriveJournalResponsibilityFacts(unrelatedObservationState)
   expect(unrelatedObservationFacts).toMatchObject({ disposition: { _tag: "CancelledAttemptClaimObservationRequired" } })
   const [missingTargetFacts] = deriveJournalResponsibilityFacts(
-    coverageRunState([...coveragePlanRecords(), cancellation, safeReport, relinquished], [coverageResponsibility])
+    coverageRunState([...coveragePlanRecords(), cancellation, safeReport, abandoned], [coverageResponsibility])
   )
   expect(missingTargetFacts).toMatchObject({ disposition: { _tag: "CancelledAttemptClaimPlanningWait" } })
   const unreadableObservation = coverageRecord(
@@ -3205,7 +3205,7 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
         ...coveragePlanRecords(),
         cancellation,
         safeReport,
-        relinquished,
+        abandoned,
         coverageRecord(9, taskTrackerReadIntent(claimRead)),
         unreadableObservation
       ],
@@ -3227,7 +3227,7 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
           ...coveragePlanRecords(),
           cancellation,
           safeReport,
-          relinquished,
+          abandoned,
           coverageRecord(9, taskTrackerReadIntent(mismatchedRead)),
           exactObservation
         ],
@@ -3244,7 +3244,7 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
         ...coveragePlanRecords(),
         cancellation,
         safeReport,
-        relinquished,
+        abandoned,
         coverageRecord(9, taskTrackerReadIntent(claimRead)),
         exactObservation
       ],
@@ -3259,7 +3259,7 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
         authority: {
           _tag: "CancelledAttemptClaimReleaseAuthority",
           cancellationAppliedAt: cancellationPosition,
-          implementationRelinquishedAt: JournalPosition.make(8),
+          implementationAbandonedAt: JournalPosition.make(8),
           observationOperationId: claimRead.operationId
         },
         release: { claim: coverageClaim }
@@ -3273,7 +3273,7 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
           ...coveragePlanRecords(),
           cancellation,
           safeReport,
-          relinquished,
+          abandoned,
           coverageRecord(9, taskTrackerReadIntent(claimRead)),
           exactObservation,
           coverageRecord(11, coverageGraphEvent)
@@ -3317,7 +3317,7 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
           ...coveragePlanRecords(),
           cancellation,
           safeReport,
-          relinquished,
+          abandoned,
           coverageRecord(9, taskTrackerReadIntent(claimRead)),
           exactObservation,
           releaseIntent,
@@ -3343,7 +3343,7 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
           ...coveragePlanRecords(),
           cancellation,
           safeReport,
-          relinquished,
+          abandoned,
           coverageRecord(9, taskTrackerReadIntent(claimRead)),
           exactObservation,
           releaseIntent,
@@ -3403,7 +3403,7 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
         ...coveragePlanRecords(),
         cancellation,
         safeReport,
-        relinquished,
+        abandoned,
         coverageRecord(9, taskTrackerReadIntent(claimRead)),
         foreignObservation
       ],
@@ -3450,7 +3450,7 @@ it("derives cancellation relinquishment, exact claim release, and typed no-relea
         ...coveragePlanRecords(),
         cancellation,
         safeReport,
-        relinquished,
+        abandoned,
         coverageRecord(9, taskTrackerReadIntent(claimRead)),
         foreignObservation,
         noRelease
@@ -5005,7 +5005,7 @@ it("scopes recovery responsibility to the immutable Run target", () => {
         _tag === "ReleaseExternallyCompletedTaskClaim" ||
         _tag === "ReleaseCancelledAttemptClaim" ||
         _tag === "ReleaseStoppedAttemptClaim" ||
-        _tag === "RelinquishCancelledAttemptImplementation"
+        _tag === "AbandonCancelledAttemptImplementation"
     )
   ).toBe(false)
 })
@@ -5083,9 +5083,9 @@ it("does not release a cancelled claim from a foreign-target observation", () =>
     })
   )
   const safeReport = executorReport(17, safe, 2)
-  const relinquished = coverageRecord(
+  const abandoned = coverageRecord(
     19,
-    CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
+    CancelledAttemptImplementationAbandonedEvent.make({
       authorizedClaim: coverageClaim,
       cancellationAppliedAt: cancellation.position,
       initiatedBy: { _tag: "DalphCoordinator" },
@@ -5122,7 +5122,7 @@ it("does not release a cancelled claim from a foreign-target observation", () =>
     suspendResponse,
     safeReport,
     cancellation,
-    relinquished,
+    abandoned,
     foreignIntent,
     foreignObservation
   ])
@@ -5176,7 +5176,7 @@ it("does not release a cancelled claim from a foreign-target observation", () =>
     suspendResponse,
     safeReport,
     cancellation,
-    relinquished,
+    abandoned,
     foreignIntent,
     foreignObservation,
     foreignNoRelease
@@ -6131,7 +6131,7 @@ it("hands a pre-cancellation integration responsibility to integration settlemen
   expect(
     frontier.transitions.some(
       ({ _tag }) =>
-        _tag === "RelinquishCancelledAttemptImplementation" ||
+        _tag === "AbandonCancelledAttemptImplementation" ||
         _tag === "ReleaseCancelledAttemptClaim" ||
         _tag === "RecordCancelledAttemptClaimNoRelease"
     )

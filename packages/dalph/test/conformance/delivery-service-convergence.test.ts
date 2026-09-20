@@ -150,9 +150,9 @@ it("one idempotent Run entry installs the delivery service contracts", () => {
   // Ordinary delivery, active refresh, and accepted-lifecycle fallback may
   // enter distinct phases, but all paths use the same runtime operation.
   expect(deliveryCompositionBoundaryIssues(stabilizationSource)).toEqual([])
-  // Ordinary and active-refresh bootstrap paths both use this one shared
-  // journaled composition; neither path creates a second delivery program.
-  expect(runSource.match(/\brunJournaledDelivery\(/g)).toHaveLength(2)
+  // Ordinary, cancellation, and active-refresh bootstrap paths all use this
+  // one shared journaled composition; none creates a second delivery program.
+  expect(runSource.match(/\brunJournaledDelivery\(/g)).toHaveLength(3)
   expect(runSource).toContain("bootstrap.activate")
   expect(runSource).not.toContain("bootstrap.fresh")
   expect(runSource).not.toContain("bootstrap.recovered")
