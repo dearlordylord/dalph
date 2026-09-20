@@ -432,6 +432,26 @@ const onMessage = (message) => {
     process.stdout.write(JSON.stringify({ jsonrpc: "1.0", id: message.id, result: {} }) + "\n")
     return
   }
+  if (mode.startsWith("malformed-envelope-") && requestNumber === 1) {
+    const envelope =
+      mode === "malformed-envelope-method"
+        ? { jsonrpc: "2.0", method: 1 }
+        : mode === "malformed-envelope-notification-result"
+          ? { jsonrpc: "2.0", method: "fixture/notice", result: {} }
+          : mode === "malformed-envelope-server-result"
+            ? { jsonrpc: "2.0", id: message.id, method: "fixture/request", result: {} }
+            : mode === "malformed-envelope-server-id"
+              ? { jsonrpc: "2.0", id: {}, method: "fixture/request" }
+              : mode === "malformed-envelope-response-id"
+                ? { jsonrpc: "2.0", id: 0, result: {} }
+                : mode === "malformed-envelope-response-both"
+                  ? { jsonrpc: "2.0", id: message.id, result: {}, error: {} }
+                  : mode === "malformed-envelope-response-neither"
+                    ? { jsonrpc: "2.0", id: message.id }
+                    : { jsonrpc: "2.0", id: message.id, error: "invalid" }
+    process.stdout.write(JSON.stringify(envelope) + "\n")
+    return
+  }
   if (mode === "idle-malformed-before-next-request") {
     fs.appendFileSync(process.argv[1] + ".requests", message.method + "\n")
   }
@@ -1230,18 +1250,33 @@ it.effect("does not let an ID-bearing server request settle a colliding outbound
 )
 
 it.effect("fails malformed JSON-RPC envelopes through the typed protocol boundary", () =>
-  withFixture("malformed-envelope", (app) =>
-    Effect.gen(function* () {
-      const result = yield* Effect.exit(app.startThread("/fixture/worktree"))
-      expectAppFailure(result, "initialize")
-      if (Exit.isFailure(result)) {
-        const failure = Cause.findErrorOption(result.cause)
-        if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
-          expect(failure.value).toMatchObject({ kind: "Protocol" })
-          expect(failure.value.detail).toContain("must contain method or id")
-        }
-      }
-    })
+  Effect.forEach(
+    [
+      ["malformed-envelope", "must contain method or id"],
+      ["malformed-envelope-method", "method is invalid"],
+      ["malformed-envelope-notification-result", "notification cannot contain result or error"],
+      ["malformed-envelope-server-result", "server request cannot contain result or error"],
+      ["malformed-envelope-server-id", "server request id is invalid"],
+      ["malformed-envelope-response-id", "response id is invalid"],
+      ["malformed-envelope-response-both", "response must contain exactly one result or error"],
+      ["malformed-envelope-response-neither", "response must contain exactly one result or error"],
+      ["malformed-envelope-response-error", "response error is invalid"]
+    ] as const,
+    ([mode, detail]) =>
+      withFixture(mode, (app) =>
+        Effect.gen(function* () {
+          const result = yield* Effect.exit(app.startThread("/fixture/worktree"))
+          expectAppFailure(result, "initialize")
+          if (Exit.isFailure(result)) {
+            const failure = Cause.findErrorOption(result.cause)
+            if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+              expect(failure.value).toMatchObject({ kind: "Protocol" })
+              expect(failure.value.detail).toContain(detail)
+            }
+          }
+        })
+      ),
+    { concurrency: 1 }
   )
 )
 
