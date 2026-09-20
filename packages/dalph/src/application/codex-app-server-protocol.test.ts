@@ -2,12 +2,13 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import type { PlatformError } from "effect"
-import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { expect, expectTypeOf } from "vitest"
 import {
   CodexAppServer,
   CodexAppServerFailure,
+  type CodexAppServerRequestBoundary,
   type CodexAppServerService,
   type CodexThreadListSummary,
   type CodexThreadSnapshot,
@@ -422,6 +423,13 @@ const onMessage = (message) => {
   if (mode === "idle-malformed-before-next-request") {
     fs.appendFileSync(process.argv[1] + ".requests", message.method + "\n")
   }
+  if (mode === "malformed-during-admission" || mode === "malformed-after-pending") {
+    fs.appendFileSync(process.argv[1] + ".requests", message.method + "\n")
+  }
+  if (mode === "malformed-after-pending" && message.method === "thread/read") {
+    fs.writeFileSync(process.argv[1] + ".pending", "pending")
+    return
+  }
   if (
     (mode === "initialize-unanswered" && message.method === "initialize") ||
     (mode === "thread-start-unanswered" && message.method === "thread/start")
@@ -517,6 +525,16 @@ process.stdin.on("data", (chunk) => {
     if (line.trim() !== "") onMessage(JSON.parse(line))
   }
 })
+if (mode === "malformed-during-admission" || mode === "malformed-after-pending") {
+  const malformedTrigger = process.argv[1] + ".malformed"
+  const malformedSent = process.argv[1] + ".malformed-sent"
+  const poll = setInterval(() => {
+    if (!fs.existsSync(malformedTrigger)) return
+    clearInterval(poll)
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0" }) + "\n")
+    fs.writeFileSync(malformedSent, "sent")
+  }, 1)
+}
 process.on("SIGTERM", () => {
   fs.appendFileSync(process.argv[1] + ".closed", "closed\n")
   process.exit(0)
@@ -557,7 +575,11 @@ const expectAppFailure = (exit: Exit.Exit<unknown, unknown>, operation: string):
 const withFixture = <A>(
   mode: string,
   action: (app: CodexAppServerService, root: string) => Effect.Effect<A, unknown, FileSystem.FileSystem | Path.Path>,
-  config: { readonly environment?: Readonly<Record<string, string>>; readonly requireUnattendedPolicy?: boolean } = {}
+  config: {
+    readonly environment?: Readonly<Record<string, string>>
+    readonly requireUnattendedPolicy?: boolean
+    readonly requestBoundary?: CodexAppServerRequestBoundary
+  } = {}
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -567,9 +589,12 @@ const withFixture = <A>(
       const executable = path.join(root, mode)
       yield* fileSystem.writeFileString(executable, protocolFixture)
       yield* fileSystem.chmod(executable, 0o755)
-      const layer = codexAppServerNodeLayer({ ...config, executable }, isolatedCodexProcessNativeService).pipe(
-        Layer.provide(memoryCodexAttemptStoreLayer())
-      )
+      const { requestBoundary, ...serverConfig } = config
+      const layer = codexAppServerNodeLayer(
+        { ...serverConfig, executable },
+        isolatedCodexProcessNativeService,
+        requestBoundary
+      ).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
       return yield* Effect.gen(function* () {
         const app = yield* CodexAppServer
         return yield* action(app, root).pipe(Effect.ensuring(app.close.pipe(Effect.orDie)))
@@ -1230,6 +1255,74 @@ it.effect("keeps an idle malformed JSON-RPC failure sticky before the next reque
         )
       })
     )
+  )
+)
+
+it.effect("rejects an admitted request when malformed protocol state wins before registration", () =>
+  Effect.gen(function* () {
+    const admissionEntered = yield* Deferred.make<void>()
+    const admissionRelease = yield* Deferred.make<void>()
+    const requestBoundary: CodexAppServerRequestBoundary = {
+      run: (operation, request) =>
+        operation === "thread/read"
+          ? Deferred.succeed(admissionEntered, undefined).pipe(
+              Effect.andThen(Deferred.await(admissionRelease)),
+              Effect.andThen(request)
+            )
+          : request
+    }
+    return yield* withFixture(
+      "malformed-during-admission",
+      (app, root) =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const thread = yield* app.startThread("/fixture/worktree")
+          const request = yield* Effect.exit(app.readThread(thread.id)).pipe(Effect.forkChild)
+          yield* Deferred.await(admissionEntered)
+          const executable = path.join(root, "malformed-during-admission")
+          yield* fileSystem.writeFileString(`${executable}.malformed`, "malformed")
+          yield* awaitFile(fileSystem, `${executable}.malformed-sent`)
+          yield* Deferred.succeed(admissionRelease, undefined)
+          const result = yield* Fiber.join(request)
+          expectAppFailure(result, "thread/read")
+          if (Exit.isFailure(result)) {
+            const failure = Cause.findErrorOption(result.cause)
+            if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+              expect(failure.value.kind).toBe("Protocol")
+              expect(failure.value.detail).toContain("must contain method or id")
+            }
+          }
+          expect(yield* fileSystem.readFileString(`${executable}.requests`)).toBe("initialize\nthread/start\n")
+        }),
+      { requestBoundary }
+    )
+  })
+)
+
+it.effect("fails an already registered request once and refuses a later request", () =>
+  withFixture("malformed-after-pending", (app, root) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const thread = yield* app.startThread("/fixture/worktree")
+      const request = yield* Effect.exit(app.readThread(thread.id)).pipe(Effect.forkChild)
+      const executable = path.join(root, "malformed-after-pending")
+      yield* awaitFile(fileSystem, `${executable}.pending`)
+      yield* fileSystem.writeFileString(`${executable}.malformed`, "malformed")
+      yield* awaitFile(fileSystem, `${executable}.malformed-sent`)
+      const firstResult = yield* Fiber.join(request)
+      expectAppFailure(firstResult, "thread/read")
+      if (Exit.isFailure(firstResult)) {
+        const failure = Cause.findErrorOption(firstResult.cause)
+        if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+          expect(failure.value.kind).toBe("Protocol")
+        }
+      }
+      const laterResult = yield* Effect.exit(app.readThread(thread.id))
+      expectAppFailure(laterResult, "initialize")
+      expect(yield* fileSystem.readFileString(`${executable}.requests`)).toBe("initialize\nthread/start\nthread/read\n")
+    })
   )
 )
 

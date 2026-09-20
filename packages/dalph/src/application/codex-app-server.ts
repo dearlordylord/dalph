@@ -1668,6 +1668,12 @@ type PendingJsonRpcRequest = {
   readonly operation: CodexAppServerRequestOperation
 }
 
+/** Protocol terminal state and pending calls share one linearization point. */
+type JsonRpcClientProtocolState = {
+  readonly terminalFailure: Option.Option<CodexAppServerFailure>
+  readonly pending: ReadonlyMap<number, PendingJsonRpcRequest>
+}
+
 type JsonRpcEnvelope =
   | { readonly _tag: "ServerRequest"; readonly method: string }
   | { readonly _tag: "Notification"; readonly method: string }
@@ -1768,11 +1774,13 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   const nextId = yield* Ref.make(1)
   const writes = yield* Semaphore.make(1)
   const closed = yield* Ref.make(false)
-  const pending = yield* Ref.make<ReadonlyMap<number, PendingJsonRpcRequest>>(new Map())
+  const protocolState = yield* Ref.make<JsonRpcClientProtocolState>({
+    terminalFailure: Option.none(),
+    pending: new Map()
+  })
   const deadlineClose = yield* Deferred.make<Effect.Effect<void, CodexAppServerFailure>>()
   const sentCount = yield* Ref.make(0)
   const responseCount = yield* Ref.make(0)
-  const terminalProtocolFailure = yield* Ref.make<Option.Option<CodexAppServerFailure>>(Option.none())
   // Provider notifications are wake hints only; one pending wake is enough
   // because every consumer rereads the provider-owned state.
   const turnCompletedHints = yield* PubSub.sliding<void>(1)
@@ -1780,16 +1788,23 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   yield* Effect.addFinalizer(() => PubSub.shutdown(turnCompletedHints))
   yield* Effect.addFinalizer(() => PubSub.shutdown(ownedActivityHints))
   const encoder = new TextEncoder()
+  const failPendingRequests = (requests: ReadonlyArray<PendingJsonRpcRequest>, failure: CodexAppServerFailure) =>
+    Effect.forEach(requests, (request) => Deferred.fail(request.deferred, failure), { discard: true })
   const failPending = (failure: CodexAppServerFailure) =>
     Ref.modify(
-      pending,
-      (current) =>
-        [[...current.values()].map((request) => Deferred.fail(request.deferred, failure)), new Map()] as const
-    ).pipe(Effect.flatMap((effects) => Effect.forEach(effects, (effect) => effect, { discard: true })))
+      protocolState,
+      (current) => [[...current.pending.values()], { ...current, pending: new Map() }] as const
+    ).pipe(Effect.flatMap((requests) => failPendingRequests(requests, failure)))
   // Protocol corruption disables this client even when no request is waiting;
-  // otherwise an idle malformed line would be forgotten after failPending.
+  // otherwise an idle malformed line would be forgotten after pending failure.
   const failProtocol = (failure: CodexAppServerFailure) =>
-    Ref.set(terminalProtocolFailure, Option.some(failure)).pipe(Effect.andThen(failPending(failure)))
+    Ref.modify(protocolState, (current) => {
+      const retained = Option.isSome(current.terminalFailure) ? current.terminalFailure.value : failure
+      return [
+        { failure: retained, requests: [...current.pending.values()] },
+        { terminalFailure: Option.some(retained), pending: new Map() }
+      ] as const
+    }).pipe(Effect.flatMap(({ failure: retained, requests }) => failPendingRequests(requests, retained)))
   const reader = handle.stdout.pipe(
     Stream.decodeText(),
     Stream.splitLines,
@@ -1819,8 +1834,7 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
               "Protocol",
               "unattended Codex task received unexpected approval request " + String(envelope.method)
             )
-            return Ref.set(terminalProtocolFailure, Option.some(failure)).pipe(
-              Effect.andThen(failPending(failure)),
+            return failProtocol(failure).pipe(
               Effect.andThen(PubSub.publish(turnCompletedHints, undefined)),
               Effect.asVoid
             )
@@ -1835,11 +1849,11 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
           }
           const result = Ref.updateAndGet(responseCount, (current) => current + 1).pipe(
             Effect.andThen(
-              Ref.modify(pending, (current) => {
-                const request = current.get(envelope.id)
+              Ref.modify(protocolState, (current) => {
+                const request = current.pending.get(envelope.id)
                 if (request === undefined) return [Option.none<PendingJsonRpcRequest>(), current] as const
-                const next = new Map([...current].filter(([key]) => key !== envelope.id))
-                return [Option.some(request), next] as const
+                const next = new Map([...current.pending].filter(([key]) => key !== envelope.id))
+                return [Option.some(request), { ...current, pending: next }] as const
               })
             )
           )
@@ -1897,16 +1911,29 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   ) {
     const isClosed = yield* Ref.get(closed)
     if (isClosed) return yield* Effect.fail(operationFailure(operation, "Unavailable", "app-server is closed"))
-    const terminalFailure = yield* Ref.get(terminalProtocolFailure)
-    if (Option.isSome(terminalFailure)) return yield* Effect.fail(terminalFailure.value)
+    const protocol = yield* Ref.get(protocolState)
+    if (Option.isSome(protocol.terminalFailure)) return yield* Effect.fail(protocol.terminalFailure.value)
     const id = yield* Ref.modify(nextId, (current) => [current, current + 1] as const)
     const deferred = yield* Deferred.make<unknown, CodexAppServerFailure>()
-    const removePending = Ref.update(pending, (current) => {
-      return new Map([...current].filter(([key]) => key !== id))
-    })
+    const removePending = Ref.update(protocolState, (current) => ({
+      ...current,
+      pending: new Map([...current.pending].filter(([key]) => key !== id))
+    }))
+    const registerPending = Ref.modify(protocolState, (current) => {
+      if (Option.isSome(current.terminalFailure)) {
+        return [Option.some(current.terminalFailure.value), current] as const
+      }
+      return [
+        Option.none<CodexAppServerFailure>(),
+        {
+          terminalFailure: current.terminalFailure,
+          pending: new Map([...current.pending, [id, { deferred, operation }] as const])
+        }
+      ] as const
+    }).pipe(Effect.flatMap((failure) => (Option.isSome(failure) ? Effect.fail(failure.value) : Effect.void)))
     const pendingResponse = requestBoundary.run(
       operation,
-      Ref.update(pending, (current) => new Map([...current, [id, { deferred, operation }] as const])).pipe(
+      registerPending.pipe(
         Effect.andThen(write({ jsonrpc: "2.0", id, method, ...(params === undefined ? {} : { params }) })),
         Effect.tap(() => Ref.update(sentCount, (current) => current + 1)),
         Effect.andThen(Deferred.await(deferred)),
@@ -1928,7 +1955,7 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
                   method,
                   sentCount: yield* Ref.get(sentCount),
                   responseCount: yield* Ref.get(responseCount),
-                  pendingCount: (yield* Ref.get(pending)).size
+                  pendingCount: (yield* Ref.get(protocolState)).pending.size
                 }
                 const failure = operationFailure(
                   operation,
