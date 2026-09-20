@@ -254,6 +254,7 @@ type CodexAppServerOperation = typeof CodexAppServerOperation.Type
 
 const CodexAppServerFailureKind = Schema.Literals([
   "Unavailable",
+  "ResponseDeadline",
   "CircuitOpen",
   "NotFound",
   "Protocol",
@@ -1654,7 +1655,14 @@ interface JsonRpcClient {
     params?: unknown
   ) => Effect.Effect<unknown, CodexAppServerFailure, never>
   readonly requestBounded: (
-    operation: "initialize" | "config/read" | "thread/start" | "thread/read" | "thread/resume" | "turn/start",
+    operation:
+      | "initialize"
+      | "config/read"
+      | "thread/start"
+      | "thread/read"
+      | "thread/resume"
+      | "turn/start"
+      | "thread/backgroundTerminals/list",
     method: string,
     params?: unknown
   ) => Effect.Effect<unknown, CodexAppServerFailure, never>
@@ -1960,17 +1968,21 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
                   responseCount: yield* Ref.get(responseCount),
                   pendingCount: (yield* Ref.get(protocolState)).pending.size
                 }
-                const failure = operationFailure(
-                  operation,
-                  "Unavailable",
-                  `JSON-RPC response deadline exceeded (requestId=${snapshot.requestId}, method=${snapshot.method}, sentCount=${snapshot.sentCount}, responseCount=${snapshot.responseCount}, pendingCount=${snapshot.pendingCount})`,
-                  snapshot
-                )
-                if (operation !== "turn/start") {
+                const detail = `JSON-RPC response deadline exceeded (requestId=${snapshot.requestId}, method=${snapshot.method}, sentCount=${snapshot.sentCount}, responseCount=${snapshot.responseCount}, pendingCount=${snapshot.pendingCount})`
+                const passiveResponseDeadline =
+                  operation === "thread/read" ||
+                  operation === "thread/resume" ||
+                  operation === "thread/backgroundTerminals/list"
+                if (operation !== "turn/start" && !passiveResponseDeadline) {
                   const close = yield* Deferred.await(deadlineClose)
                   yield* close
                 }
-                return yield* failure
+                return yield* new CodexAppServerFailure({
+                  detail,
+                  kind: passiveResponseDeadline ? "ResponseDeadline" : "Unavailable",
+                  operation,
+                  rpcSnapshot: snapshot
+                })
               })
           })
         )
@@ -3197,7 +3209,7 @@ export const codexAppServerLayer = (
         threadId: CodexThreadId
       ) {
         const response = responseObject(
-          yield* rpc.request("thread/backgroundTerminals/list", "thread/backgroundTerminals/list", { threadId }),
+          yield* rpc.requestBounded("thread/backgroundTerminals/list", "thread/backgroundTerminals/list", { threadId }),
           "thread/backgroundTerminals/list"
         )
         if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)

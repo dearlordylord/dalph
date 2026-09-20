@@ -11,6 +11,12 @@
       "justification": "classifyJsonRpcEnvelope keeps one fail-closed JSON-RPC wire-shape boundary: version, method/request, notification, response ID, and result/error validation must be classified together before pending-request routing. Splitting these clauses would separate one protocol classification rather than an independent policy decision."
     }
   },
+  "packages/dalph/src/application/codex-planned-attempt-executor.ts": {
+    "complexity": {
+      "count": 5,
+      "justification": "The planned-attempt executor keeps one fail-closed lifecycle boundary across durable Codex records, passive projections, command authority, and exact close/retry outcomes; these branches preserve chronology and ownership together rather than represent independent policy decisions."
+    }
+  },
   "packages/dalph/src/application/codex-integrator-envelope.ts": {
     "complexity": {
       "count": 1,
@@ -269,6 +275,12 @@
   "packages/orchestrator/src/workflow/protocols/planned-attempt-continuation/tracker-read-freshness.ts": {
     "complexity": {
       "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/suspension-authority.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "plannedAttemptExecutorSuspensionIsAuthorized retains one chronological authority proof across the accepted Executing report, exact passive observation, cancellation, and position ordering; these clauses jointly define the fail-closed suspension boundary rather than separate workflow choices."
     }
   }
 }

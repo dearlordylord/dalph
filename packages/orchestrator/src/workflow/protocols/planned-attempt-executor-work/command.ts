@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The journal-first command boundary keeps authority, reconciliation, and delivery adjacent for auditability. */
 import {
   type PlannedTaskAttempt,
   PlannedAttemptExecutor,
@@ -36,7 +37,6 @@ import {
 } from "./events.js"
 import {
   currentUnconsumedAcceptedSafeEvidence,
-  latestPlannedAttemptExecutorEvidence,
   latestUnsettledPlannedAttemptExecutorCommand,
   plannedAttemptExecutorEvidence,
   plannedAttemptExecutorRequestFor
@@ -63,6 +63,7 @@ import {
 } from "./report-acceptance.js"
 import { beginPlannedAttemptExecutorResponsibility } from "./responsibility.js"
 import { appliedTerminalChoiceFor } from "../attempt-choice/terminal-choice-authority.js"
+import { plannedAttemptExecutorSuspensionIsAuthorized } from "./suspension-authority.js"
 
 const lastElementOffset = -1
 
@@ -266,9 +267,7 @@ const suspendCommandAuthorityError = (
   correlation: PlannedAttemptExecutorCorrelation
 ): PlannedAttemptExecutorSuspensionNotAuthorized | undefined => {
   if (command !== "Suspend") return undefined
-  const latestExecutorEvidence = latestPlannedAttemptExecutorEvidence(records, plannedAttempt)
-  return latestExecutorEvidence?.source._tag !== "AcceptedReport" ||
-    latestExecutorEvidence.report._tag !== "ExecutorWorkExecuting"
+  return !plannedAttemptExecutorSuspensionIsAuthorized(records, plannedAttempt)
     ? new PlannedAttemptExecutorSuspensionNotAuthorized({ correlation })
     : undefined
 }

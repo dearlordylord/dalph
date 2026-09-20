@@ -183,6 +183,7 @@ const CodexBeginAssociation = Data.taggedEnum<CodexBeginAssociation>()
 type CodexIntentRecord = Extract<CodexAttemptRecord, { readonly _tag: "TurnIntentRecorded" }>
 type CodexObservedRecord = Extract<CodexAttemptRecord, { readonly _tag: "TurnObserved" }>
 type CodexRunningRecord = Extract<CodexAttemptRecord, { readonly _tag: "Running" }>
+type CodexSuspensionStopIntentRecord = Extract<CodexAttemptRecord, { readonly _tag: "SuspensionStopIntended" }>
 type CodexSafelySuspendedRecord = Extract<CodexAttemptRecord, { readonly _tag: "SafelySuspended" }>
 type CodexTerminalRecord = Extract<CodexAttemptRecord, { readonly _tag: "Terminal" }>
 type CodexThreadBackedRecord = Exclude<CodexAttemptRecord, CodexEmptyRecord>
@@ -263,9 +264,24 @@ const runningRecordFor = (
 
 const safelySuspendedRecordFor = (
   attempt: Pick<PlannedTaskAttempt, "attemptId" | "runId" | "worktree">,
-  record: CodexObservedRecord | CodexRunningRecord | CodexSafelySuspendedRecord
+  record: CodexObservedRecord | CodexRunningRecord | CodexSuspensionStopIntentRecord | CodexSafelySuspendedRecord
 ): CodexSafelySuspendedRecord =>
   CodexAttemptRecord.cases.SafelySuspended.make({
+    attemptId: attempt.attemptId,
+    correlationAttemptId: attempt.attemptId,
+    correlationRunId: attempt.runId,
+    currentToken: record.currentToken,
+    observedTurnId: record.observedTurnId,
+    priorObservedTurnId: record.priorObservedTurnId,
+    threadId: record.threadId,
+    worktree: attempt.worktree
+  })
+
+const suspensionStopIntendedRecordFor = (
+  attempt: Pick<PlannedTaskAttempt, "attemptId" | "runId" | "worktree">,
+  record: CodexObservedRecord | CodexRunningRecord | CodexSafelySuspendedRecord
+): CodexSuspensionStopIntentRecord =>
+  CodexAttemptRecord.cases.SuspensionStopIntended.make({
     attemptId: attempt.attemptId,
     correlationAttemptId: attempt.attemptId,
     correlationRunId: attempt.runId,
@@ -304,7 +320,15 @@ type TurnLookup =
 
 type OwnedTurnRecord = Extract<
   CodexAttemptRecord,
-  { readonly _tag: "TurnIntentRecorded" | "TurnObserved" | "Running" | "SafelySuspended" | "Terminal" }
+  {
+    readonly _tag:
+      | "TurnIntentRecorded"
+      | "TurnObserved"
+      | "Running"
+      | "SuspensionStopIntended"
+      | "SafelySuspended"
+      | "Terminal"
+  }
 >
 
 const hasOwnedTurnRecord = (record: CodexAttemptRecord): record is OwnedTurnRecord =>
@@ -319,7 +343,7 @@ const isAcceptedTerminalRecord = (record: CodexTerminalRecord): record is CodexA
 const isPersistableOwnedRecord = (
   record: CodexAttemptRecord
 ): record is CodexObservedRecord | CodexRunningRecord | CodexSafelySuspendedRecord =>
-  record._tag !== "TurnIntentRecorded" && record._tag !== "Terminal"
+  record._tag === "TurnObserved" || record._tag === "Running" || record._tag === "SafelySuspended"
 
 export const ownedRecordPersistenceDisposition = (
   tag: CodexAttemptRecord["_tag"]
@@ -331,6 +355,7 @@ export const ownedRecordPersistenceDisposition = (
     case "Running":
     case "SafelySuspended":
       return "Persistable"
+    case "SuspensionStopIntended":
     case "EmptyPreTurn":
     case "AssociatedPreTurn":
     case "Terminal":
@@ -992,6 +1017,7 @@ const makeCodexPlannedAttemptExecutorContext = (
     ) {
       /* v8 ignore next -- @preserve Reconciliation is called only after allocation or a durable thread-backed record read. */
       if (record._tag === "EmptyPreTurn") return yield* Effect.fail(new CodexThreadMismatch({}))
+      if (record._tag === "SuspensionStopIntended") return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
       const thread = yield* app.resumeThread(record.threadId, attempt.worktree)
       yield* enforceThreadIdentity(attempt, correlation, record.threadId, thread)
       if (record._tag === "AssociatedPreTurn") {
@@ -1715,7 +1741,31 @@ const makeCodexPlannedAttemptExecutorContext = (
     const suspend = Effect.fn("CodexPlannedAttemptExecutor.suspend")(function* (attempt: PlannedTaskAttempt) {
       const correlation = plannedAttemptExecutorCorrelation(attempt)
       const record = yield* readSuspensionRecord(correlation)
-      const current = yield* reconcile(attempt, correlation, record)
+      const finishIntendedContainmentStop = Effect.fn("CodexPlannedAttemptExecutor.finishIntendedContainmentStop")(
+        function* (intent: CodexSuspensionStopIntentRecord) {
+          yield* app.close
+          yield* save(safelySuspendedRecordFor(attempt, intent))
+          return suspended(correlation)
+        }
+      )
+      if (record._tag === "SuspensionStopIntended") return yield* finishIntendedContainmentStop(record)
+      const reconciliation = yield* reconcile(attempt, correlation, record).pipe(Effect.result)
+      if (Result.isFailure(reconciliation)) {
+        const failure = reconciliation.failure
+        const retainedThreadResumeDeadline =
+          failure instanceof CodexAppServerFailure &&
+          failure.kind === "ResponseDeadline" &&
+          failure.operation === "thread/resume"
+        if (!retainedThreadResumeDeadline) return yield* failure
+        if (!isPersistableOwnedRecord(record)) return yield* new CodexTurnBoundaryUnknown({})
+        // The workflow has already recorded its Suspend intent before entering
+        // this command. Only this intent-authorized path may turn an unanswered
+        // passive-capable provider read into an exact containment stop.
+        const stopIntent = suspensionStopIntendedRecordFor(attempt, record)
+        yield* save(stopIntent)
+        return yield* finishIntendedContainmentStop(stopIntent)
+      }
+      const current = reconciliation.success
       if (current._tag === "Terminal") return yield* terminalOrRunning(attempt, correlation, record, current)
       if (current._tag === "Idle") return yield* suspendIdle(attempt, correlation, record, current)
       if (current._tag === "Unresolved") return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
@@ -1830,7 +1880,9 @@ const makeCodexPlannedAttemptExecutorContext = (
     ): PlannedAttemptExecutorProjectionType => {
       if (error instanceof ForeignAttemptRecord) return foreign(correlation, error.observed)
       if (error instanceof CodexAppServerFailure) {
-        if (error.kind === "Unavailable" || error.kind === "CircuitOpen") return unavailable(correlation)
+        if (error.kind === "Unavailable" || error.kind === "ResponseDeadline" || error.kind === "CircuitOpen") {
+          return unavailable(correlation)
+        }
         if (error.kind === "CorrelationContradiction" && error.operation === "initialize") {
           return initializationContradiction(correlation, error.detail)
         }
@@ -1998,6 +2050,7 @@ const makeCodexPlannedAttemptExecutorContext = (
         /* v8 ignore next -- @preserve replacementRecordMatchesRequest rejects EmptyPreTurn before replacementOwnedRecordIdentity is called. */
         case "EmptyPreTurn":
         case "TurnIntentRecorded":
+        case "SuspensionStopIntended":
           return undefined
       }
     }

@@ -252,6 +252,7 @@ const makeHarness = (
     readonly missingEmptyThread?: boolean
     readonly freshThreadIds?: boolean
     readonly failAssociatedWriteOnce?: boolean
+    readonly failSafelySuspendedWriteOnce?: boolean
     readonly manualBeforeFirstTurn?: boolean
     readonly manualAfterFirstTurn?: boolean
     readonly reorderTurnsOnResume?: boolean
@@ -315,6 +316,7 @@ const makeHarness = (
   let backgroundTerminationFailure = false
   let keepTurnRunningOnInterruptCount = options.keepTurnRunningOnInterruptCount ?? 0
   let associatedWriteFailure = false
+  let safelySuspendedWriteFailure = false
   const replacementLedgers = new Map<string, CodexPurgedWorkUnitReplacementLedger>()
   let replacementIntentFailure = false
   let replacementTurnIntentFailure = false
@@ -493,6 +495,19 @@ const makeHarness = (
         associatedWriteFailure = true
         return Effect.fail(
           new CodexAttemptStoreFailure({ detail: "controlled association write lost", operation: "writeAttempt" })
+        )
+      }
+      if (
+        record._tag === "SafelySuspended" &&
+        options.failSafelySuspendedWriteOnce === true &&
+        !safelySuspendedWriteFailure
+      ) {
+        safelySuspendedWriteFailure = true
+        return Effect.fail(
+          new CodexAttemptStoreFailure({
+            detail: "controlled process loss before safe suspension persistence",
+            operation: "writeAttempt"
+          })
         )
       }
       return Effect.sync(() => {
@@ -1979,6 +1994,96 @@ it.effect("terminates a reported background activity before reporting safe suspe
     expect(suspended).toEqual(PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }))
     expect(harness.backgroundTerminationCount()).toBe(1)
     expect(harness.descendantTerminationCount()).toBe(0)
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("stops exact containment after a retained-thread deadline before reporting safe suspension", () => {
+  const harness = makeHarness()
+  const deadline = new CodexAppServerFailure({
+    detail: "controlled retained-thread response deadline",
+    kind: "ResponseDeadline",
+    operation: "thread/resume"
+  })
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request, { _tag: "InitialDelivery" })
+    harness.setResumeFailure(deadline)
+
+    const passive = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+    expect(passive._tag).toBe("TemporarilyUnavailable")
+    expect(harness.closeCount()).toBe(0)
+    expect(harness.currentRecord()?._tag).toBe("Running")
+
+    const suspended = yield* executor.requestSuspension(attempt)
+    expect(suspended).toEqual(PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }))
+    expect(harness.closeCount()).toBe(1)
+    expect(harness.currentRecord()?._tag).toBe("SafelySuspended")
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("retains stop intent after close failure and retries without resuming", () => {
+  const harness = makeHarness()
+  const deadline = new CodexAppServerFailure({
+    detail: "controlled retained-thread response deadline",
+    kind: "ResponseDeadline",
+    operation: "thread/resume"
+  })
+  let closeAttempts = 0
+  const app: CodexAppServerService = {
+    ...harness.app,
+    close: Effect.suspend(() => {
+      closeAttempts += 1
+      return closeAttempts === 1
+        ? Effect.fail(
+            new CodexAppServerFailure({
+              detail: "exact containment remained live",
+              kind: "Ownership",
+              operation: "close"
+            })
+          )
+        : harness.app.close
+    })
+  }
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request, { _tag: "InitialDelivery" })
+    harness.setResumeFailure(deadline)
+    const result = yield* executor.requestSuspension(attempt).pipe(Effect.exit)
+    expect(result._tag).toBe("Failure")
+    expect(harness.currentRecord()?._tag).toBe("SuspensionStopIntended")
+    const resumeCountBeforeRetry = harness.resumeCwds.length
+
+    const retried = yield* executor.requestSuspension(attempt)
+    expect(retried).toEqual(PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }))
+    expect(harness.resumeCwds).toHaveLength(resumeCountBeforeRetry)
+    expect(closeAttempts).toBe(2)
+    expect(harness.currentRecord()?._tag).toBe("SafelySuspended")
+  }).pipe(Effect.provide(layerFor({ ...harness, app })))
+})
+
+it.effect("retries exact close without resuming after close completes before safe suspension is persisted", () => {
+  const harness = makeHarness({ failSafelySuspendedWriteOnce: true })
+  const deadline = new CodexAppServerFailure({
+    detail: "controlled retained-thread response deadline",
+    kind: "ResponseDeadline",
+    operation: "thread/resume"
+  })
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request, { _tag: "InitialDelivery" })
+    harness.setResumeFailure(deadline)
+
+    const first = yield* executor.requestSuspension(attempt).pipe(Effect.exit)
+    expect(first._tag).toBe("Failure")
+    expect(harness.currentRecord()?._tag).toBe("SuspensionStopIntended")
+    expect(harness.closeCount()).toBe(1)
+    const resumeCountBeforeRetry = harness.resumeCwds.length
+
+    const retried = yield* executor.requestSuspension(attempt)
+    expect(retried).toEqual(PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }))
+    expect(harness.resumeCwds).toHaveLength(resumeCountBeforeRetry)
+    expect(harness.closeCount()).toBe(2)
+    expect(harness.currentRecord()?._tag).toBe("SafelySuspended")
   }).pipe(Effect.provide(layerFor(harness)))
 })
 

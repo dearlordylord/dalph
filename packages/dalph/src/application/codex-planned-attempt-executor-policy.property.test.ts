@@ -157,11 +157,12 @@ it("normalizes text, status, and command failures at their pure boundaries", () 
         "TurnIntentRecorded",
         "TurnObserved",
         "Running",
+        "SuspensionStopIntended",
         "SafelySuspended",
         "Terminal"
       ] as const
     ).map(ownedRecordPersistenceDisposition)
-  ).toEqual(["Reject", "Reject", "Intent", "Persistable", "Persistable", "Persistable", "Reject"])
+  ).toEqual(["Reject", "Reject", "Intent", "Persistable", "Persistable", "Reject", "Persistable", "Reject"])
 })
 
 it("requires one exact commit and the exact response correlation", () => {

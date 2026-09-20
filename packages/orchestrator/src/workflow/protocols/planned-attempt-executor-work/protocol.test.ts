@@ -39,6 +39,7 @@ import {
   plannedAttemptExecutorStateObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
+  runCancellationAppliedRecordKey,
   attemptPlanRecordKey,
   intentRecordKey,
   outcomeRecordKey
@@ -118,6 +119,7 @@ import {
   makeCompleteTaskTrackerFactsObserved,
   makeFocusedTaskWorkSpecificationFactsObserved
 } from "../../task-tracker-facts/observation.js"
+import { RunCancellationAppliedEvent } from "../run-cancellation/events.js"
 
 const currentSpecification = makeTaskWorkSpecification({
   body: "Complete task A.",
@@ -1899,6 +1901,217 @@ it.effect("settles an unchanged suspension response without appending another wo
       2
     )
     expect(records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toHaveLength(1)
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(protocolJournalLayer()))
+)
+
+it.effect(
+  "records cancellation suspension intent before contacting the executor after executing state becomes unreadable",
+  () =>
+    Effect.gen(function* () {
+      yield* appendTaskWorkSpecification()
+      const journal = yield* InRunJournal
+      const intentWasVisibleAtSuspensionBoundary = yield* Ref.make(false)
+      const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+      const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+      const executor = PlannedAttemptExecutor.of({
+        observe: () => Effect.succeed(PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation })),
+        requestSuspension: () =>
+          Effect.gen(function* () {
+            const records = yield* journal.read(plannedAttempt.runId).pipe(Effect.orDie)
+            const latest = records.at(-1)?.event
+            yield* Ref.set(
+              intentWasVisibleAtSuspensionBoundary,
+              latest?._tag === "PlannedAttemptExecutorCommandIntended" && latest.command === "Suspend"
+            )
+            return safe
+          }),
+        begin: () => Effect.succeed(executing),
+        resume: () => Effect.die("unused resume")
+      })
+
+      yield* beginPlannedAttemptExecutorWork(plannedAttempt).pipe(
+        Effect.provideService(PlannedAttemptExecutor, executor)
+      )
+      expect(
+        yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+          Effect.provideService(PlannedAttemptExecutor, executor),
+          Effect.flip
+        )
+      ).toMatchObject({ _tag: "PlannedAttemptExecutorStateUnreadable" })
+      yield* journal.append(
+        plannedAttempt.runId,
+        runCancellationAppliedRecordKey,
+        RunCancellationAppliedEvent.make({
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          version: workflowJournalEventVersion
+        })
+      )
+
+      expect(
+        yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+          Effect.provideService(PlannedAttemptExecutor, executor)
+        )
+      ).toEqual(safe)
+      expect(yield* Ref.get(intentWasVisibleAtSuspensionBoundary)).toBe(true)
+
+      const records = yield* journal.read(plannedAttempt.runId)
+      const relevantChronology = records.flatMap(({ event }) => {
+        if (event._tag === "PlannedAttemptExecutorWorkReported") return [event.report._tag]
+        if (event._tag === "PlannedAttemptExecutorStateObserved") return [event.observation._tag]
+        if (event._tag === "RunCancellationApplied") return [event._tag]
+        if (event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend") {
+          return ["SuspendIntended"]
+        }
+        return []
+      })
+      expect(relevantChronology).toEqual([
+        "ExecutorWorkExecuting",
+        "ExecutorStateUnreadable",
+        "RunCancellationApplied",
+        "SuspendIntended",
+        "ExecutorWorkSafelySuspended"
+      ])
+    }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(protocolJournalLayer()))
+)
+
+it.effect(
+  "records suspension intent and closes the executor after cancellation survives a passive response deadline",
+  () =>
+    Effect.gen(function* () {
+      yield* appendTaskWorkSpecification()
+      const journal = yield* InRunJournal
+      const closeCalls = yield* Ref.make(0)
+      const intentWasVisibleAtClose = yield* Ref.make(false)
+      const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+      const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+      const executor = PlannedAttemptExecutor.of({
+        observe: () =>
+          Effect.succeed(PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({ correlation })),
+        requestSuspension: () =>
+          Effect.gen(function* () {
+            const records = yield* journal.read(plannedAttempt.runId).pipe(Effect.orDie)
+            const latest = records.at(-1)?.event
+            yield* Ref.set(
+              intentWasVisibleAtClose,
+              latest?._tag === "PlannedAttemptExecutorCommandIntended" && latest.command === "Suspend"
+            )
+            yield* Ref.update(closeCalls, (count) => count + 1)
+            return safe
+          }),
+        begin: () => Effect.succeed(executing),
+        resume: () => Effect.die("unused resume")
+      })
+
+      yield* beginPlannedAttemptExecutorWork(plannedAttempt).pipe(
+        Effect.provideService(PlannedAttemptExecutor, executor)
+      )
+      yield* journal.append(
+        plannedAttempt.runId,
+        runCancellationAppliedRecordKey,
+        RunCancellationAppliedEvent.make({
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          version: workflowJournalEventVersion
+        })
+      )
+      expect(
+        yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+          Effect.provideService(PlannedAttemptExecutor, executor),
+          Effect.flip
+        )
+      ).toMatchObject({ _tag: "PlannedAttemptExecutorStateTemporarilyUnavailable" })
+
+      expect(
+        yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+          Effect.provideService(PlannedAttemptExecutor, executor)
+        )
+      ).toEqual(safe)
+      expect(yield* Ref.get(intentWasVisibleAtClose)).toBe(true)
+      expect(yield* Ref.get(closeCalls)).toBe(1)
+    }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(protocolJournalLayer()))
+)
+
+it.effect("keeps ordinary suspension unauthorized after executing state becomes unreadable", () =>
+  Effect.gen(function* () {
+    yield* appendTaskWorkSpecification()
+    const suspensionCalls = yield* Ref.make(0)
+    const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+    const executor = PlannedAttemptExecutor.of({
+      observe: () => Effect.succeed(PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation })),
+      requestSuspension: () => Ref.update(suspensionCalls, (count) => count + 1).pipe(Effect.as(executing)),
+      begin: () => Effect.succeed(executing),
+      resume: () => Effect.die("unused resume")
+    })
+
+    yield* beginPlannedAttemptExecutorWork(plannedAttempt).pipe(Effect.provideService(PlannedAttemptExecutor, executor))
+    yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+      Effect.provideService(PlannedAttemptExecutor, executor),
+      Effect.flip
+    )
+    expect(
+      yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+        Effect.provideService(PlannedAttemptExecutor, executor),
+        Effect.flip
+      )
+    ).toMatchObject({ _tag: "PlannedAttemptExecutorSuspensionNotAuthorized" })
+
+    const records = yield* (yield* InRunJournal).read(plannedAttempt.runId)
+    expect(yield* Ref.get(suspensionCalls)).toBe(0)
+    expect(
+      records.filter(
+        ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
+      )
+    ).toHaveLength(0)
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(protocolJournalLayer()))
+)
+
+it.effect("keeps cancellation suspension unauthorized after a contradictory executor projection", () =>
+  Effect.gen(function* () {
+    yield* appendTaskWorkSpecification()
+    const journal = yield* InRunJournal
+    const suspensionCalls = yield* Ref.make(0)
+    const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+    const foreignExecuting = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+      correlation: { attemptId: AttemptId.make("foreign-cancellation-attempt"), runId: plannedAttempt.runId }
+    })
+    const executor = PlannedAttemptExecutor.of({
+      observe: () => Effect.succeed(contradictoryProjection(foreignExecuting)),
+      requestSuspension: () => Ref.update(suspensionCalls, (count) => count + 1).pipe(Effect.as(executing)),
+      begin: () => Effect.succeed(executing),
+      resume: () => Effect.die("unused resume")
+    })
+
+    yield* beginPlannedAttemptExecutorWork(plannedAttempt).pipe(Effect.provideService(PlannedAttemptExecutor, executor))
+    expect(
+      yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+        Effect.provideService(PlannedAttemptExecutor, executor),
+        Effect.flip
+      )
+    ).toMatchObject({ _tag: "PlannedAttemptExecutorCorrelationMismatch" })
+    yield* journal.append(
+      plannedAttempt.runId,
+      runCancellationAppliedRecordKey,
+      RunCancellationAppliedEvent.make({
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    )
+
+    expect(
+      yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+        Effect.provideService(PlannedAttemptExecutor, executor),
+        Effect.flip
+      )
+    ).toMatchObject({ _tag: "PlannedAttemptExecutorSuspensionNotAuthorized" })
+    const records = yield* journal.read(plannedAttempt.runId)
+    expect(yield* Ref.get(suspensionCalls)).toBe(0)
+    expect(
+      records.filter(
+        ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
+      )
+    ).toHaveLength(0)
   }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(protocolJournalLayer()))
 )
 

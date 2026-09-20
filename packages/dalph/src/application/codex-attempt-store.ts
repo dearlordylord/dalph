@@ -486,6 +486,17 @@ export const CodexAttemptRecord = Schema.TaggedUnion({
     threadId: CodexThreadId,
     worktree: WorktreeLocator
   },
+  /** Suspend is durably authorized to close exact containment, but safe suspension is not yet proved. */
+  SuspensionStopIntended: {
+    attemptId: AttemptId,
+    correlationAttemptId: AttemptId,
+    correlationRunId: RunId,
+    currentToken: CodexOwnedTurnToken,
+    observedTurnId: CodexTurnId,
+    priorObservedTurnId: Schema.NullOr(CodexTurnId),
+    threadId: CodexThreadId,
+    worktree: WorktreeLocator
+  },
   /** The exact owned turn and every owned activity are quiescent. */
   SafelySuspended: {
     attemptId: AttemptId,

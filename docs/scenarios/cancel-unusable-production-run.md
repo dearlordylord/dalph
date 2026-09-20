@@ -37,9 +37,11 @@ allocates no Run, starts no Integrator, and starts no replacement attempt.
 
 Dalph records Operator `RunCancellationApplied` before asking the executor to
 stop. The executor reconciles the exact retained containment for P, including
-the app server and tool descendants. It records stop intent before termination
-and accepts only evidence that every owned writer stopped and cannot resume;
-PID absence or reuse alone is insufficient.
+the app server and tool descendants. If a passive retained-thread request
+expires, it durably records `SuspensionStopIntended` with the exact thread and
+owned-turn identity before closing containment. It accepts only evidence that
+every owned writer stopped and cannot resume; PID absence or reuse alone is
+insufficient.
 
 After conclusive stop evidence, Dalph records
 `CancelledAttemptImplementationAbandoned`. This permanent cancellation
@@ -75,16 +77,19 @@ reconciles an uncertain prior read or release outcome before another effect.
 Every uncertain effect records intent before the effect and observation after
 it. A crash after cancellation, stop intent, stop proof, abandonment, focused
 claim-read intent, release intent, or release outcome reconstructs R and
-continues without duplicate work. Missing or ambiguous Run selection, invalid
-configuration, or coordinator-lock contention fails before cancellation or
-provider acquisition.
+continues without duplicate work. A retry from `SuspensionStopIntended` does
+not resume the retained thread: it retries the exact idempotent containment
+close and records safe suspension only after close succeeds. A failed close
+retains the intent for another explicit retry. Missing or ambiguous Run
+selection, invalid configuration, or coordinator-lock contention fails before
+cancellation or provider acquisition.
 
 ## Acceptance-test mapping
 
 - Public command and entry: `accepts cancellation only for one production GitHub target and absolute configuration`, `routes cancel through the production host cancellation operation`, and `production cancellation fails before provider acquisition when no unfinished Run exists`.
 - Exact selection and redelivery: `redelivers the exact cancelled production Run after its terminal history is retired`, `selects the sole exact unfinished production Run without allocating a replacement`, and `names every unfinished Run when production discovery is unsafe`.
-- Cancellation ordering and settlement: `lets durable Run cancellation override an unreadable executor projection`, `executes cancellation settlement through suspension, abandonment, reread, and exact release`, and the run-cancellation cassette `cancellation-alpha-renaming` scenario.
-- Stop containment: `bounds an unanswered retained-thread resume and closes its exact owned child once`, `terminates a reported background activity before reporting safe suspension`, `does not report safe suspension while a process-group descendant survives`, and `keeps suspension unresolved for contradictory, active, surviving, and failed activity cleanup`.
+- Cancellation ordering and settlement: `lets durable Run cancellation override an unreadable executor projection`, `records cancellation suspension intent before contacting the executor after executing state becomes unreadable`, `records suspension intent and closes the executor after cancellation survives a passive response deadline`, `keeps ordinary suspension unauthorized after executing state becomes unreadable`, `keeps cancellation suspension unauthorized after a contradictory executor projection`, `executes cancellation settlement through suspension, abandonment, reread, and exact release`, and the run-cancellation cassette `cancellation-alpha-renaming` scenario.
+- Stop containment: `bounds an unanswered passive retained-thread resume without stopping its owned child`, `bounds an unanswered passive background terminal census without stopping its owned child`, `stops exact containment after a retained-thread deadline before reporting safe suspension`, `retries exact close without resuming after close completes before safe suspension is persisted`, `retains stop intent after close failure and retries without resuming`, `survives an application restart with an unresolved suspension stop intent`, `production provider cleanup preserves safe suspension across close and restart`, `terminates a reported background activity before reporting safe suspension`, `does not report safe suspension while a process-group descendant survives`, and `keeps suspension unresolved for contradictory, active, surviving, and failed activity cleanup`.
 - Abandonment validity and redelivery: `rejects cancellation abandonment after replacement of the exact attempt`, `rejects a abandonment with the wrong authorized claim or a duplicate abandonment`, and `does not let a terminal report and pre-cancellation claim release bypass cancellation abandonment`.
 - Claim safety and crash prefixes: `executes cancellation no-release only for a fresh foreign claim observation`, `retries Alice's exact stopped-claim release after reconciliation keeps the claim current`, and the cancellation-prefix cases in `cancelled-attempt-history.test.ts` and `run-cancellation.cassette.test.ts`.
 - Public blocker: `maps a cancellation proof blocker without retaining private executor diagnostics` and `uses one canonical fatal classifier for throttles and recoverable failures`.
