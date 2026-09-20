@@ -168,7 +168,7 @@ describe("hosted formal-model contract", () => {
       (stage: { args: ReadonlyArray<string> }) => stage.args[0]
     )
     const manifest = fullQualityGateManifest("fixture-base")
-    const reducerLab = manifest.find((stage) => stage.id === "reducer-lab")
+    const reducerLab = manifest.find((stage: { readonly id: string }) => stage.id === "reducer-lab")
     expect(structuralCommands).not.toContain("test:mbt")
     expect(stageCommands).not.toContain("test:mbt")
     expect(stageCommands).not.toContain("check:quint")
