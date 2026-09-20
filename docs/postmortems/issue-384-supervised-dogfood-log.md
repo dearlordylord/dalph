@@ -414,3 +414,45 @@ disposition that provides equivalent proof. The new evidence also shows that
 an accepted provider turn can remain live while a self-matching tool loop
 performs unbounded writes; provider-response liveness alone does not bound that
 effect.
+
+### Issue #390 cancellation implementation and retained-run result
+
+On 2026-09-20, issue #390's production cancellation implementation passed its
+frozen full gate and was published to hosted `master` as
+`fb91ec236454034190c6ceb8bb43b55e1f193b1e`. The gate run was
+`1af7dee7-f92b-48f4-bb5c-18867d3c886c`; it passed 4,269 tests with 41 skipped,
+the required coverage thresholds, repeatability, formal checks, and baseline
+comparison.
+
+The supervisor then invoked the shipped command against the retained canary:
+
+```text
+dalph cancel github:dearlordylord/dalph#384 --production --config /tmp/dalph-384-review-canary.RuqT7G/production.json
+```
+
+The first invocation lacked provider authentication and failed before starting
+cancellation, with exit status 78 and no Journal mutation. A second invocation
+received the existing authenticated GitHub token through its process
+environment. It selected the exact unfinished Run and durably appended
+`RunCancellationApplied` at Journal position 349. Focused tracker observation
+then occupied positions 350--353.
+
+Cancellation stopped fail-closed with the public typed failure
+`cancellation.blocked`: it could not prove `UnsettledResponsibility` had ended.
+The retained executor-private record still describes the exact planned attempt
+as `Running`, while the prior Journal observations at positions 17--19 record
+`ExecutorWorkExecuting` followed by `ExecutorStateUnreadable`. No conclusive
+execution-substrate observation proves that the executor-owned containment has
+no live writer and cannot resume. The supervisor did not retry because the
+accepted unavailable-proof scenario says redelivery must not weaken that proof
+requirement.
+
+Accordingly, no `CancelledAttemptImplementationAbandoned` or
+`WorkflowRunTerminated` event was appended. The exact claim was not released,
+the task-work position and responsibility remain retained, and the dirty
+worktree, transcript, private executor state, and evidence remain preserved
+under `/tmp/dalph-384-review-canary.RuqT7G`. Issue #390 therefore has a shipped
+implementation but is not operationally closed. The next discriminating action
+is to determine why recovery cannot read or conclusively reconcile the retained
+executor containment, then rerun the same cancellation command only after that
+proof path is available. A fresh #384 attempt remains blocked.
