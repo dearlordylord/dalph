@@ -170,7 +170,7 @@ export const createFormalProgressLifecycle = ({
       if (ended || !transportOpen) return
       send({ type: "heartbeat", backendProgress: "unknown", heartbeatAt: clock() })
     }, heartbeatMilliseconds)
-    timer.unref?.()
+    timer.unref()
   }
 
   return {

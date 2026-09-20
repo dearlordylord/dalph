@@ -9,7 +9,7 @@ import {
   renderFormalProgressEvent
 } from "./formal-progress-events.mjs"
 
-test("the opt-in writer emits NDJSON and makes a closed fd non-fatal", () => {
+void test("the opt-in writer emits NDJSON and makes a closed fd non-fatal", () => {
   const writes = []
   const writer = createFormalProgressWriter({ fd: 3, write: (_fd, value) => writes.push(value) })
   assert.equal(writer.emit({ version: formalProgressEventVersion, type: "start", name: "fixture" }), true)
@@ -24,7 +24,7 @@ test("the opt-in writer emits NDJSON and makes a closed fd non-fatal", () => {
   assert.equal(closed.emit({ version: 1, type: "heartbeat" }), false)
 })
 
-test("the reader handles split records and leaves malformed transport outside the outcome", () => {
+void test("the reader handles split records and leaves malformed transport outside the outcome", () => {
   const events = []
   const diagnostics = []
   const reader = createFormalProgressReader({
@@ -41,7 +41,7 @@ test("the reader handles split records and leaves malformed transport outside th
   assert.equal(diagnostics.length, 1)
 })
 
-test("lifecycle identity is semantic while timing, output observation and terminal facts are runner-owned", () => {
+void test("lifecycle identity is semantic while timing, output observation and terminal facts are runner-owned", () => {
   const events = []
   let elapsed = 0
   let wall = 0
@@ -75,7 +75,7 @@ test("lifecycle identity is semantic while timing, output observation and termin
   assert.equal(formalProgressHeartbeatMilliseconds, 15_000)
 })
 
-test("quiet lifecycle emits a heartbeat with unknown backend progress", async () => {
+void test("quiet lifecycle emits a heartbeat with unknown backend progress", async () => {
   const events = []
   const lifecycle = createFormalProgressLifecycle({
     emit: (event) => events.push(event),
@@ -88,7 +88,7 @@ test("quiet lifecycle emits a heartbeat with unknown backend progress", async ()
   assert.ok(events.some((event) => event.type === "heartbeat" && event.backendProgress === "unknown"))
 })
 
-test("the rendered quiet heartbeat includes the complete live-only checkpoint", async () => {
+void test("the rendered quiet heartbeat includes the complete live-only checkpoint", async () => {
   const events = []
   const lifecycle = createFormalProgressLifecycle({
     emit: (event) => events.push(event),
@@ -137,7 +137,7 @@ test("the rendered quiet heartbeat includes the complete live-only checkpoint", 
   assert.match(renderFormalProgressEvent(heartbeat), /backend progress unknown/u)
 })
 
-test("a closed progress transport is non-fatal and leaves no active heartbeat", async () => {
+void test("a closed progress transport is non-fatal and leaves no active heartbeat", async () => {
   const events = []
   const lifecycle = createFormalProgressLifecycle({
     emit: (event) => {
@@ -158,7 +158,7 @@ test("a closed progress transport is non-fatal and leaves no active heartbeat", 
   lifecycle.close()
 })
 
-test("closing an incomplete reader never fabricates a parent-loss terminal", () => {
+void test("closing an incomplete reader never fabricates a parent-loss terminal", () => {
   const events = []
   const reader = createFormalProgressReader({ onEvent: (event) => events.push(event) })
   reader.push('{"version":1,"type":"start","position":4}\n{"version":1,"type":"heartbeat"}\n')

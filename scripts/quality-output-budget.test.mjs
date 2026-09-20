@@ -6,14 +6,14 @@ import {
   presentCapturedFailureOutput
 } from "./quality-output-budget.mjs"
 
-test("counts noisy successful output without a qualification ceiling", () => {
+void test("counts noisy successful output without a qualification ceiling", () => {
   assert.equal(
     addSuccessfulOutputLines({ currentOutputLines: 550, stageName: "fixture", stageOutputLines: 1000 }),
     1550
   )
 })
 
-test("rejects malformed output evidence rather than excessive output", () => {
+void test("rejects malformed output evidence rather than excessive output", () => {
   for (const stageOutputLines of [-1, NaN, Infinity, 0.5, Number.MAX_SAFE_INTEGER])
     assert.throws(
       () => addSuccessfulOutputLines({ currentOutputLines: 1, stageName: "fixture", stageOutputLines }),
@@ -33,7 +33,7 @@ const fixture = (limits = {}) => {
   return { presenter, chunks, reports, destination: { write: (bytes) => chunks.push(Buffer.from(bytes)) } }
 }
 
-test("forwards ordinary output unchanged across chunk boundaries", () => {
+void test("forwards ordinary output unchanged across chunk boundaries", () => {
   const f = fixture()
   f.presenter.write(Buffer.from("first\nsec"), f.destination)
   f.presenter.write(Buffer.from("ond\n"), f.destination)
@@ -42,7 +42,7 @@ test("forwards ordinary output unchanged across chunk boundaries", () => {
   assert.deepEqual(f.reports, [])
 })
 
-test("bounds noisy output and gives one complete-log pointer without changing success", () => {
+void test("bounds noisy output and gives one complete-log pointer without changing success", () => {
   const f = fixture({ maximumLines: 2 })
   for (const chunk of ["one\n", "two\nthree\n", "four\n"]) f.presenter.write(Buffer.from(chunk), f.destination)
   f.presenter.finish({ failed: false })
@@ -51,7 +51,7 @@ test("bounds noisy output and gives one complete-log pointer without changing su
   assert.match(f.reports[0], /console output truncated; complete log: \/retained\/child.log/)
 })
 
-test("bounds newline-free output and retains a bounded failure tail", () => {
+void test("bounds newline-free output and retains a bounded failure tail", () => {
   const f = fixture({ maximumBytes: 4, tailBytes: 5 })
   f.presenter.write(Buffer.from("0123456789"), f.destination)
   f.presenter.write(Buffer.from("FAIL"), f.destination)
@@ -62,7 +62,7 @@ test("bounds newline-free output and retains a bounded failure tail", () => {
   assert.match(f.reports.at(-1), /Complete log: \/retained\/child.log/)
 })
 
-test("failure tail includes the bounded prefix immediately before slight overflow", () => {
+void test("failure tail includes the bounded prefix immediately before slight overflow", () => {
   const f = fixture({ maximumBytes: 4, tailBytes: 5 })
   f.presenter.write(Buffer.from("0123"), f.destination)
   f.presenter.write(Buffer.from("45"), f.destination)
@@ -70,7 +70,7 @@ test("failure tail includes the bounded prefix immediately before slight overflo
   assert.equal(f.reports[2], "12345")
 })
 
-test("failure tail rolls through large overflow and ends at the final observed bytes", () => {
+void test("failure tail rolls through large overflow and ends at the final observed bytes", () => {
   const f = fixture({ maximumBytes: 4, tailBytes: 5 })
   f.presenter.write(Buffer.from("0123"), f.destination)
   f.presenter.write(Buffer.from(`${"x".repeat(10000)}FINAL`), f.destination)
@@ -78,7 +78,7 @@ test("failure tail rolls through large overflow and ends at the final observed b
   assert.equal(f.reports[2], "FINAL")
 })
 
-test("presents captured failure output once through the same budget", () => {
+void test("presents captured failure output once through the same budget", () => {
   const reports = []
   presentCapturedFailureOutput({
     name: "formal profile",
