@@ -484,3 +484,47 @@ seconds, despite its exact app-server process being absent after the caller's
 bounded stop. No further cancellation retry is authorized until that shutdown
 path is characterized and made finite. Issue #390 remains open, and starting a
 fresh #384 attempt remains blocked by the retained claim and responsibility.
+
+### Issue #390 retained-run closure
+
+On 2026-09-20, the completed implementation was verified on hosted `master`.
+The final runtime change is `63b21235d`; the accompanying metadata and test
+changes include `772c713cb`, `6bdc09684` (shared production Codex private-state
+ownership), `162f31f5b` (scenario mapping), and `f3d36a5e3` (provider-mismatch
+coverage), which is the current `HEAD` of hosted `master`. The final frozen
+gate, `ae46bcad-11e8-425d-80d8-b636f4f9ac47`, passed 4,278 tests with 41
+skipped, changed-production coverage 131/131, and repeatability 20/20. An
+earlier passing gate, `84d06882...`, exposed the live retained-state anomaly
+that required the authenticated production retry below.
+
+Using the original retained `CODEX_HOME`, the authenticated cancellation
+completed in 4.4 seconds. Its Journal suffix recorded Suspend intent at
+position 358, the safe response at 360, the safe report at 361,
+`CancelledAttemptImplementationAbandoned` at 362, `TaskClaimReleaseIntended`
+at 365, `TaskClaimReleased` at 369, and `WorkflowRunTerminated` with
+`Cancelled` at 372; positions 363--371 contain the focused reads and
+observations between those effects. The claim label was independently absent
+(issue #384 has only `ready-for-agent`), no retained Codex process remained,
+and the retained worktree content digest stayed
+`892e0cde24ec23d4595b6bab4265b4facde5377a3a40f555644193b096af0654`.
+
+An exact cancellation redelivery completed in 1.5 seconds, returned
+`Cancelled`, and left the Journal at position 372, proving settled idempotent
+redelivery. The private append log briefly recorded `SafelySuspended`, then
+stale provider cleanup wrote `Running` with `serverLaunch` null; the terminal
+Journal remained authoritative. The cause was independent private-state store
+instances, fixed by `6bdc09684`; its regression coverage proves that future
+runs persist `SafelySuspended` with a cleared launch record.
+
+Three review cycles reached the configured maximum and were autoaccepted with
+these residual notes: the restart test originally proved only store round-trip
+rather than exact cross-scope executor reconstruction (the later shared-store
+regression materially strengthens production restart/close coverage but does
+not resolve that exact unresolved-stop reconstruction); an older contradiction
+followed by a later transient can still be erased by the latest-only
+authority predicate; and a bounded passive background-terminal census
+`ResponseDeadline` is not covered by the special stop-intent catch, which
+covers the retained resume path only.
+
+Issue #390's retained-run closure is complete. Issue #384 remains open; its
+candidate is unmodified and unpublished.
