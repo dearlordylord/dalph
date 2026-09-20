@@ -4,6 +4,76 @@
 module acceptedResultIntegrationNegativeTest {
   import acceptedResultIntegration.* from "./acceptedResultIntegration"
 
+  action acceptWithoutDestinationAdmission: bool = {
+    val result = state.results.get(1)
+    all {
+      state.destinationAdmission != DestinationAdmitted,
+      result.phase == NoAcceptedResult,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: AcceptedResult,
+          acceptedEvidencePreserved: true,
+        }),
+      },
+    }
+  }
+
+  action promoteWithoutPublicationProof: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == CandidateReady,
+      result.candidateQualificationProven,
+      not(result.targetHeld),
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: PromotionPremise,
+        }),
+      },
+    }
+  }
+
+  action forgePublicationProofFromProcessSuccess: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == CandidateReady,
+      result.candidateQualificationProven,
+      not(result.targetHeld),
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: PublicationProved,
+          publicationResultRecorded: true,
+          publicationProofRecorded: true,
+          publicationProofBasis: PushApplied,
+          publicationObservation: PublicationApplied,
+          publicationProcessSuccessObserved: true,
+          publicationCandidate: result.submittedCandidate,
+        }),
+      },
+    }
+  }
+
+  action mintFourthPublicationAttempt: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == PublicationIntent,
+      result.publicationIntentRecorded,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          publicationAttemptCount: PROMOTION_ATTEMPT_LIMIT + 1,
+          publicationLastAttempt: PROMOTION_ATTEMPT_LIMIT + 1,
+        }),
+      },
+    }
+  }
+
   action discardOrdinaryAcceptedResponsibility: bool = {
     val result = state.results.get(1)
     all {
@@ -655,6 +725,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run releaseBeforeQuarantineViolatesDurableBoundaryTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -667,6 +738,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run retryWithoutChoiceViolatesNoAutomaticRetryTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -683,6 +755,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run fullRerunCannotErasePriorRetryAuthorizationTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -701,6 +774,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run q2CannotAuthorizeASecondRetryTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -718,6 +792,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run changedHeadQ2CannotAuthorizeRetryTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -734,6 +809,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run conflictingDirectionCannotReplaceFirstChoiceTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -748,6 +824,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run retryCannotUseChangedHeadTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -763,6 +840,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run successorCannotBeAllocatedTwiceTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -782,6 +860,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run retryRecoveryCannotEraseAuthorizingQuarantineTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -798,6 +877,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run ordinaryAcceptedCannotLoseItsOneResponsibilityTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(discardOrdinaryAcceptedResponsibility)
@@ -806,6 +886,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run rejectedCandidateCannotAdvanceLaterSameTargetQueueTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(acceptResult(2))
       .then(queueAcceptedResult(1))
@@ -824,6 +905,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run staleTargetCannotAuthorizePromotionReacquisitionTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -842,6 +924,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run independentResponseLossCannotEraseHeldTargetProofTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -858,6 +941,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run retryNotPreparedCannotKeepRejectedRunOneCandidateTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -880,6 +964,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run freshQuarantineCannotCarryPriorDirectionConflictTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -898,6 +983,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run unreportedCandidateCannotAuthorizePromotionTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -909,6 +995,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run processSuccessWithoutIntegratorResultCannotAuthorizePromotionTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -924,6 +1011,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run resourceHeadWithoutIntegratorResultCannotAuthorizePromotionTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -939,6 +1027,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run legacyVerificationWithoutIntegratorResultCannotAuthorizePromotionTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -954,6 +1043,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run equivalentContentWithoutIntegratorResultCannotAuthorizePromotionTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -970,6 +1060,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run resourceHeadCannotAuthorizePromotionTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -984,6 +1075,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run processSuccessCannotAuthorizePromotionTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -998,6 +1090,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run legacyVerificationCannotAuthorizePromotionTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -1012,6 +1105,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run wrongParentCandidateCannotAuthorizePromotionTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -1026,6 +1120,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run crashedIntegratorCannotAllocateSuccessorTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -1041,6 +1136,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run integratorResourceCannotSubstituteCommitTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -1051,6 +1147,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run promotionPremiseCannotAdvanceLaterSameTargetQueueTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(acceptResult(2))
       .then(queueAcceptedResult(1))
@@ -1062,6 +1159,11 @@ module acceptedResultIntegrationNegativeTest {
       .then(recordCandidateGitReadIntent(1))
       .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(recordPublicationAttemptIntent(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
       .then(startLaterQueueAfterPromotionPremise)
       .expect(not(logicalIntegrationResponsibilityBlocksLaterQueue))
@@ -1069,6 +1171,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run fourthPromotionAttemptViolatesBoundTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -1078,6 +1181,11 @@ module acceptedResultIntegrationNegativeTest {
       .then(recordCandidateGitReadIntent(1))
       .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(recordPublicationAttemptIntent(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
       .then(recordPromotionIntent(1))
       .then(observePromotionExactExpectedHead(1))
@@ -1095,6 +1203,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run deferredPromotionCannotReacquireWithoutAuthorityTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -1104,6 +1213,11 @@ module acceptedResultIntegrationNegativeTest {
       .then(recordCandidateGitReadIntent(1))
       .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(recordPublicationAttemptIntent(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
       .then(recordPromotionIntent(1))
       .then(observePromotionExactExpectedHead(1))
@@ -1119,6 +1233,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run deferredPromotionCannotRetryWithoutAuthorityTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -1128,6 +1243,11 @@ module acceptedResultIntegrationNegativeTest {
       .then(recordCandidateGitReadIntent(1))
       .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(recordPublicationAttemptIntent(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
       .then(recordPromotionIntent(1))
       .then(observePromotionExactExpectedHead(1))
@@ -1143,6 +1263,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run unreadablePromotionCannotReacquireWithoutAuthorityTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -1152,6 +1273,11 @@ module acceptedResultIntegrationNegativeTest {
       .then(recordCandidateGitReadIntent(1))
       .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(recordPublicationAttemptIntent(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
       .then(recordPromotionIntent(1))
       .then(observePromotionExactExpectedHead(1))
@@ -1167,6 +1293,7 @@ module acceptedResultIntegrationNegativeTest {
 
   run unreadablePromotionCannotRetryWithoutAuthorityTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -1176,6 +1303,11 @@ module acceptedResultIntegrationNegativeTest {
       .then(recordCandidateGitReadIntent(1))
       .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(recordPublicationAttemptIntent(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
       .then(recordPromotionIntent(1))
       .then(observePromotionExactExpectedHead(1))
@@ -1187,5 +1319,61 @@ module acceptedResultIntegrationNegativeTest {
       .then(observePromotionGitUnreadable(1))
       .then(retryDeferredPromotionWithoutAuthority)
       .expect(not(unreadablePromotionStaysPending))
+  }
+
+  run acceptedWorkCannotBypassDestinationAdmissionTest = {
+    init
+      .then(acceptWithoutDestinationAdmission)
+      .expect(not(destinationAdmissionPrecedesTaskWork))
+  }
+
+  run localPromotionCannotBypassPublicationProofTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(promoteWithoutPublicationProof)
+      .expect(not(promotionRequiresPublicationProof))
+  }
+
+  run processSuccessCannotForgeRemotePublicationProofTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(forgePublicationProofFromProcessSuccess)
+      .expect(not(publicationProofRequiresPerRefSuccess))
+  }
+
+  run fourthPublicationAttemptViolatesBoundTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(mintFourthPublicationAttempt)
+      .expect(not(publicationAttemptsAreBounded))
   }
 }
