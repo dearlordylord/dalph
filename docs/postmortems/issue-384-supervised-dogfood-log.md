@@ -537,9 +537,9 @@ candidate is unmodified and unpublished.
 The latest user instruction supersedes the historical self-dogfood mechanism for
 the next #384 attempt. The work starts from the exact fresh worktree
 `/workspace/typescript/dalph-worktrees/issue-384-fresh` at planned Base
-`1f8cf021e129cb2590dcc9c4906ab44a3d806098`, with the user as the direct
-orchestrator. Mechanical work is delegated to the Luna max sub-agent; difficult
-implementation work is delegated to the Sol medium sub-agent; blocker analysis
+`1f8cf021e129cb2590dcc9c4906ab44a3d806098`, with the assistant as the
+user-directed orchestrator. Mechanical work is delegated to the Luna max
+sub-agent; difficult implementation work is delegated to the Sol medium sub-agent; blocker analysis
 is delegated to the Astra medium sub-agent. A reviewer may run at most three
 rounds; after the third round, unresolved non-blocking notes are recorded and
 the review is auto-accepted with those residual notes.
@@ -558,3 +558,52 @@ historical evidence, but it must not overwrite, resume, publish, or silently
 repair them. This section records the execution method and boundaries only;
 the current documentation prerequisite makes no claim that the #384 runtime,
 models, focused tests, full gate, or disposable S1 dogfood have passed.
+
+### Development checkpoint, 2026-09-20 23:36 UTC
+
+The fresh worktree has committed the governing premises, Git boundary
+characterization, destination types, integration/finality models, and formal
+profile obligations. Runtime work remains unqualified. No hosted publication or
+issue closure has occurred.
+
+The disposable S1 public CLI run reached `RemotePublicationIntended` after
+destination admission, task execution, and integration. Its remaining push,
+local promotion, tracker completion, cleanup, and later dependant release are
+unproven. Repeated fixture failures exposed root-task-only assumptions in the
+controlled provider's graph, status, proposal, and history validators. The
+changed experiment audits those shared assumptions before one complete-story
+rerun. Focused controls cover empty pre-graph history, root-only and root-plus-
+dependant graphs, and foreign/duplicate identities; logs are retained at
+`/tmp/public-s1-guard-audit.log` and
+`/tmp/public-s1-history-pregraph-audit.log`. The audit completed by its 23:35 UTC
+stop time. The next public run supplies unique evidence of actual production
+CLI ordering across Git, SQLite, and the controlled tracker; prefix unit tests
+cannot substitute for it.
+
+S3 still needs distinct safe-fast-forward versus competing-head observations.
+S5 still needs the complete intent/effect/append restart matrix and local
+catchup. S4/S6/S7/S8 still need durable retained outcomes, finite bounds,
+Pause/Exit custody, and proof-versus-finality permission tests. Passing model,
+registry, adapter, or cassette tests does not close these missing seams.
+
+The earlier MBT invocation timed out without proving the requested two suites.
+The next experiment invokes Vitest with the two explicit paths directly and
+checks suite selection before interpreting failures. Its timeout is not a
+conformance pass. The later recorded process group was proved absent; the
+earliest handle lacked its original process identity and remains unproven
+qualification evidence. Full qualification and scoped review have not begun.
+
+At 23:41 UTC the one public rerun had stopped after publication intent, before
+any numbered push intent. The adapter had tested only whether remote H
+contained candidate M, then misclassified the ordinary H-ancestor-of-M case as
+competing work. The distinguishing repair tests ancestry in both directions;
+only a proven remote ancestor authorizes an ordinary push. No additional public
+rerun is justified until that focused repair passes.
+
+The exact two-path conformance invocation reached a new model action,
+`observeRemotePublicationContradiction`, absent from the runtime driver. Its
+90-second bound expired and its recorded process group was proved absent;
+the result is a missing-conformance finding, not a pass. Runtime and driver
+owners are implementing the missing supported actions. A design clarification
+is pending for the source of an optional later contradiction observation;
+neither finality nor restart may manufacture a mandatory post-proof remote read.
