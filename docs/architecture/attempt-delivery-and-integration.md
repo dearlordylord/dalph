@@ -1,9 +1,17 @@
 # Attempt Delivery and Integration
 
-This page groups the protocols that begin after a task is eligible and claimed:
-immutable attempt planning, exact worktree reconciliation, planned-attempt
-executor work, accepted-result admission, one outer Integrator session, and
-exact-head promotion.
+This page groups the protocols that begin around task delivery: pre-claim
+remote-destination admission, immutable attempt planning, exact worktree
+reconciliation, planned-attempt executor work, accepted-result admission, one
+outer Integrator session, direct remote publication, and exact-head promotion.
+
+Direct publication is the first remote-delivery slice. Its protected order is
+remote proof, local promotion, tracker completion, and then the later complete
+graph observation that can release dependants. The initial slice has finite
+observation, push, session, and candidate-intent bounds. Automatic competing
+head successors and local catch-up belong to #385, user-authorized additional
+batches to #386, and retained-delivery resumption to #387; those extensions
+must preserve this order and the exact identities below.
 
 ## Immutable planned attempt
 
@@ -131,6 +139,37 @@ See
 and the
 [`acceptedResultIntegration` Quint model](../../specs/acceptedResultIntegration.qnt).
 
+## Remote publication destination admission
+
+The production host validates the complete direct-publication destination before
+it claims a task, creates a task worktree, starts an executor, or opens an
+Integrator session. It resolves exactly one credential-free repository endpoint
+and one fully qualified existing branch ref, and proves that the local
+integration target maps to that remote branch without a duplicate mapping. A
+non-branch ref, ambiguous or missing endpoint, missing initial branch, changed
+restart destination, or unfinished history without a pinned destination is a
+typed admission failure with no task mutation or provider contact. Raw
+credentials and provider diagnostics are never journal or status facts.
+
+The destination is part of the initial `WorkflowRunBegan` fact and is carried
+by the exact integration responsibility. Restart therefore either reuses that
+same endpoint/ref or retains a typed destination constraint; it cannot infer a
+new target or append a retargeting option after the Run has begun. One local
+target owns each configured remote branch for process-local serialization, while
+remote writers remain outside Dalph's ownership authority.
+
+The initial remote observation is read-only, names the pinned endpoint/ref, and
+obtains enough ancestry to qualify the current head. It has a 30-second bound.
+An observed missing or unreadable target, insufficient ancestry, incompatible
+history, authentication/policy denial, throttle, or unsafe local state retains
+the exact responsibility with a typed safe detail. An ambiguous result is
+separate from a conclusive denial. No automatic denied or throttled retry is
+allowed; #387 owns the later retained-delivery request.
+
+See [direct remote publication](../scenarios/direct-remote-publication.md) and
+[D28a–D28e](../DELIVERY-INVARIANTS.md#integration-and-promotion) for the
+chronology, bounds, and deferred issue boundaries.
+
 ## Integrator session and candidate
 
 After current target-lineage evidence permits integration, Dalph records one
@@ -147,6 +186,12 @@ process exit. A conclusive unsuccessful Integrator result or invalid reported
 candidate enters quarantine under #68. Dalph restart instead returns an
 unfinished session to the Integrator automatically.
 
+The Integrator may not publish or promote the candidate itself. After Git
+qualifies M, the direct-publication protocol records an exact intent and sends
+one ordinary non-force explicit refspec to the pinned remote destination. The
+candidate's task, session, fixed H, accepted C, endpoint, branch, and M remain
+correlated across the boundary.
+
 See [issue #222](https://github.com/dearlordylord/dalph/issues/222), [issue
 #68](https://github.com/dearlordylord/dalph/issues/68), and ADR 0014. The
 historical #57 candidate-agent and #59 target-verification scenarios record the
@@ -155,13 +200,15 @@ the outer Integrator, explicit result, and Git-qualification boundary.
 
 ## Exact-head promotion
 
-After a current tracker observation still permits progress, Dalph records one
-deterministic promotion intent, then reads Git again. Only exact H authorizes a
-numbered attempt before Dalph asks Git to atomically replace H with exact
-candidate M. The request carries M's exact prepared-candidate correlation and
-the evidence required by the corrected Integrator contract. Git's atomic
-success or a later Git ancestry read—not equivalent content and not the intent
-alone—establishes promotion.
+After the remote-publication protocol records conclusive proof that exact M is
+published, and a current tracker observation still permits progress, Dalph
+records one deterministic local-promotion intent, then reads Git again. Only
+exact H authorizes a numbered attempt before Dalph asks Git to atomically
+replace H with exact candidate M. The request carries M's exact
+prepared-candidate correlation and the evidence required by the corrected
+Integrator contract. Git's atomic success or a later Git ancestry read—not
+equivalent content, remote publication alone, or the intent alone—establishes
+local promotion.
 
 A stale compare-and-set result preserves M and selects candidate reconciliation;
 there is no force-update, reset, or parent rewrite. After an ambiguous result,
@@ -176,6 +223,43 @@ Every active boundary call owns only its exact process-local repository/ref
 position and releases it when the action settles. The durable started
 integration responsibility remains the same-target FIFO blocker for later
 tracker completion and settlement, while work for another target can proceed.
+
+## Publication, recovery, and finality order
+
+The remote push uses the pinned endpoint and fully qualified branch with an
+explicit refspec and no force, lease, mirror, tag, secondary-ref, or submodule
+side effect. Before the push, Dalph acknowledges an intent naming exact M and a
+monotonic candidate-publication ordinal. The receiving server's correlated
+per-ref update or up-to-date result is the normal proof. If a safe reconciliation
+read proves that the same remote branch contains M, that ancestry proof is also
+publication proof. Exit code, dry-run output, equal content, upload progress,
+and a cached remote-tracking ref are not proof.
+
+The durable publication proof remains usable after restart, Pause, Exit, and a
+lost tracker-completion response. Dalph does not re-read or re-push solely
+because one of those lifecycle events occurred. A lost or ambiguous push
+response remains unresolved until the owned sender is proven stopped and the
+same safe push or a remote read settles it. A known later contrary remote head
+is a new current constraint; it does not delete the historical proof or license
+completion against current tracker facts.
+
+The initial batch allows at most three Integrator sessions and three publication
+intents for one candidate. The intent consumes its ordinal even if the process
+dies before the send. A push has a 120-second bound, including no implicit
+extension of the application Exit drain. When a bound is exhausted or a typed
+denial is conclusive, Dalph retains the responsibility and releases its
+process-local position. It starts no fourth action without the later issue-owned
+authorization. #385 owns competing-head successors and catch-up, #386 owns
+additional-batch grants, and #387 owns retained-delivery resumption.
+
+Tracker completion is a separate boundary after publication proof and exact
+local promotion. It requires fresh task, claim, revision, dependency, and
+cleanup premises; a push acknowledgement or focused success cannot substitute
+for it. A later complete graph observation, not the completion mutation, is the
+authority that releases dependants. During the existing application Exit
+cutoff, no new publication, reconciliation, successor, completion, or durable
+cleanup action may begin; one already-admitted Git boundary may finish only
+inside the fixed D50–D52 drain.
 
 See
 [the reported candidate reaching promotion](../scenarios/migrate-promotion-and-finality.md#the-reported-and-git-qualified-candidate-reaches-promotion)

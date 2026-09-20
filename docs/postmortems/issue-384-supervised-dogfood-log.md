@@ -328,14 +328,16 @@ boundary can remain coarse while the executor owns this internal convergence.
   before runtime behavior, then integrated the new durable events through the
   journal, cassette, renaming, and occurrence-projection contracts.
 
-## Run disposition
+## Historical self-dogfood disposition
 
 The retained candidate is evidence from the autonomous attempt. The supervisor
 will not repair it into the #384 solution because doing so would bypass the
 dogfood objective: Dalph's executor must be able to discover and close the
 specification gaps itself. A later #384 attempt should start only after the
 operational failures and the missing autonomous review-and-repair capability
-have an accepted path.
+have an accepted path. This disposition describes that historical self-dogfood
+mechanism; it does not govern the current user-directed orchestrator attempt
+recorded below.
 
 The demonstrated operational failures are tracked in
 [issue #390](https://github.com/dearlordylord/dalph/issues/390). General bounded
@@ -529,3 +531,30 @@ covers the retained resume path only.
 
 Issue #390's retained-run closure is complete. Issue #384 remains open; its
 candidate is unmodified and unpublished.
+
+## Current user-directed orchestrator method
+
+The latest user instruction supersedes the historical self-dogfood mechanism for
+the next #384 attempt. The work starts from the exact fresh worktree
+`/workspace/typescript/dalph-worktrees/issue-384-fresh` at planned Base
+`1f8cf021e129cb2590dcc9c4906ab44a3d806098`, with the user as the direct
+orchestrator. Mechanical work is delegated to the Luna max sub-agent; difficult
+implementation work is delegated to the Sol medium sub-agent; blocker analysis
+is delegated to the Astra medium sub-agent. A reviewer may run at most three
+rounds; after the third round, unresolved non-blocking notes are recorded and
+the review is auto-accepted with those residual notes.
+
+This execution method coordinates the accepted #384 implementation and its
+issue-owned follow-ups. It is not hosted issue #388 qualification, and it does
+not turn a controlled fixture or a prior local run into hosted acceptance
+evidence. The #384 direct-publication scenario remains the authority for
+publication order, exact proof, destination admission, bounds, waits, Exit, and
+finality; #385, #386, and #387 retain their successor, grant, and resume scopes.
+
+Every failed candidate, retained Run, worktree, journal, provider transcript,
+and raw evidence remains preserved at its existing locator. The orchestrator
+must use a fresh exact Base/worktree and may inspect those candidates as
+historical evidence, but it must not overwrite, resume, publish, or silently
+repair them. This section records the execution method and boundaries only;
+the current documentation prerequisite makes no claim that the #384 runtime,
+models, focused tests, full gate, or disposable S1 dogfood have passed.

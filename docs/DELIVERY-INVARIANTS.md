@@ -229,7 +229,7 @@ an ambiguous request; neither authorizes mutation or absence.
 **D24 No inferred completion across boundaries.** Success at one boundary never
 implies success at another. An executor terminal report is not tracker
 completion, claim removal is not completion, and terminal-without-success is not
-successful completion. D28 owns the Git-side form of this.
+successful completion. D28 and D28c own the Git-side form of this.
 → `integrationFinality` states fresh tracker success before cleanup.
 
 **D25 Dalph never invents an actor.** An initiated action names its actor. A
@@ -277,7 +277,83 @@ commit or prove its lineage.
 → `exactGitParentsQualifyReportedCandidateTest`,
 `unreportedCandidateCannotAuthorizePromotionTest`, and
 `legacyVerificationCannotAuthorizePromotionTest`. `integrationFinality`
-consumes only the exact promotion proof.
+consumes only the exact publication-and-promotion proof described by D28b–D28c.
+
+**D28a The remote publication destination is admitted before task work.** For
+direct publication, the production host validates one credential-free remote
+endpoint and one fully qualified existing branch before it claims the task,
+creates its worktree, or contacts the executor. The destination is pinned in
+the initial `WorkflowRunBegan` fact and carried by the integration
+responsibility; it is not a later caller option or a cached tracking ref. An
+ambiguous endpoint, non-branch ref, missing initial branch, changed restart
+destination, missing destination for unfinished history, or duplicate local
+target mapping fails closed before a task mutation or provider session. One
+local target owns each configured remote branch; local exclusion does not claim
+to exclude outside remote writers.
+→ The direct-publication scenario's `admits one pinned destination before
+claim` seam and `preserves an unfinished history with no pinned destination`
+negative control. Issue #384 owns the initial admission; automatic competing
+head recovery, batch grants, and retained-delivery resumption remain owned by
+#385, #386, and #387.
+
+**D28b Remote publication proof is exact and per-ref.** Before an ordinary
+non-force push, Dalph records an intent naming the exact Run, responsibility,
+candidate M, endpoint, fully qualified branch, explicit refspec, and consumed
+ordinal. Only the receiving server's correlated per-ref success for that exact
+update or up-to-date result, or ancestry evidence from that same endpoint that
+the branch contains M, proves publication. Process exit, upload progress,
+dry-run output, equal contents, a cached remote-tracking ref, or an
+uncorrelated status does not. Force flags, leases, leading `+`, mirror,
+implicit tags, secondary refs, and submodule pushes are forbidden.
+→ The direct-publication scenario's `records exact per-ref proof without a
+post-push read` seam and its equal-content, dry-run, foreign-commit, and
+extra-ref negative controls.
+
+**D28c Publication precedes local promotion and tracker finality.** Dalph may
+request the local exact-head compare-and-set only after D28b proves publication
+of the exact M; the resulting local mutation and its observation must then
+establish promotion. It may request tracker completion only after that proof,
+exact local promotion, and the current task, claim, revision, dependency, and
+cleanup premises are freshly established. A later complete graph observation,
+rather than remote publication or focused task success, releases dependants. A
+known contrary remote observation is a current delivery constraint; it does not
+erase the historical proof or authorize completion through another boundary.
+→ The direct-publication scenario's `publishes M before local promotion and
+task completion` seam and the finality seam `keeps remote proof distinct from
+tracker completion`.
+
+**D28d Conclusive publication proof is retained; ambiguity is reconciled.** A
+durably recorded D28b proof survives restart, Pause, Exit, and completion
+retry. Those lifecycle events alone do not authorize another remote read,
+push, Integrator session, or task execution. An intent with no conclusive
+outcome remains ambiguous: after owned senders are proved stopped, recovery
+reconciles with the same safe push or a remote read before another mutation,
+and never infers non-application from a timeout or lost response. A later
+contrary observation is retained as a separate current constraint while the
+original proof remains immutable. The safe outcome vocabulary is typed
+(`Ambiguous`, `TargetMissingOrUnreadable`, `InsufficientAncestry`,
+`IncompatibleHistory`, `AuthenticationOrPolicyDenied`, `Throttled`, and
+`UnsafeLocalState`); provider credentials and raw diagnostics never become
+journal or status authority.
+→ The direct-publication scenario's `recovers every remote delivery boundary`
+seam and its conclusive-proof, uncertain-proof, contradiction, and stopped-
+sender negative controls.
+
+**D28e Initial publication bounds retain precise waits.** The initial #384
+batch permits at most three Integrator sessions and three publication intents
+for one candidate; an intent consumes its ordinal before the send, including
+when the process dies before contact. A remote observation, including required
+ancestry, has a 30-second bound and a push has a 120-second bound. Exhaustion,
+denial, throttling, missing ancestry, or unsafe local state retains the exact
+responsibility and releases process-local ownership without starting an
+ungranted fourth action or deleting work. A graceful Exit cutoff forbids fresh
+publication, reconciliation, successor, completion, and cleanup actions; an
+already-admitted boundary may finish only inside the existing D50–D52 drain.
+Issue #385 owns automatic competing-head successors and catch-up; #386 owns
+user-authorized new batches; #387 owns the retained-delivery resume request.
+→ The direct-publication scenario's finite-bound and precise-retained-wait
+seams; the later issues extend these rules without changing the initial
+publication order.
 
 ## Process and durability
 

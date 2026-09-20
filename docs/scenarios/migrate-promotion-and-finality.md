@@ -8,6 +8,19 @@ replaces the obsolete target-verification premise in issues #60, #61, #76,
 and #141. Their exact compare-and-set, reconciliation, tracker-completion,
 claim-cleanup, and dependant-release behavior remains in force.
 
+## Governing behavior for direct publication
+
+The accepted [direct remote publication scenario](direct-remote-publication.md)
+refines this local promotion chronology for a direct-publication responsibility.
+It preserves the exact Integrator/Git qualification and compare-and-set rules,
+and inserts one required boundary: the pinned remote endpoint must durably prove
+publication of exact M before Dalph requests the local `H -> M` mutation. This
+scenario then preserves the exact local promotion proof for tracker finality;
+promotion, tracker completion, and later dependant release remain separate
+boundaries. The initial order, proof, bounds, waits, Exit behavior, and finality
+premises belong to #384. Competing-head successors/catch-up, additional-batch
+grants, and retained-delivery resumption remain #385, #386, and #387.
+
 ## The reported and Git-qualified candidate reaches promotion
 
 ### Starting situation
@@ -20,7 +33,11 @@ fixed target ref at head H and accepted result C. The Integrator explicitly
 reported candidate M, and Git subsequently proved that M is a commit whose
 complete ordered direct parents are exactly `[H, C]`. A fresh complete tracker
 observation reports exact active claim K and no unfinished prerequisite for A.
-There is no promotion, completion-claim, task-completion, or cleanup intent.
+For a direct-publication responsibility, the Journal also contains the exact
+remote publication proof for M at its pinned endpoint and branch. Without that
+proof, Dalph retains the candidate and records the publication wait rather than
+requesting local promotion. There is no promotion, completion-claim,
+task-completion, or cleanup intent.
 
 The relevant systems are Dalph, the injected Integrator, Git, the task tracker,
 the evidence store, and Dalph's Journal. The Integrator owns its private review,
@@ -34,11 +51,15 @@ the ordered workflow history.
 1. Ordinary delivery selects A's integration responsibility when its per-target
    queue position is first and the exact target's process-local position is
    available. S's recorded Integrator result identifies M for promotion.
-2. Dalph derives one promotion request P from the accepted-result evidence,
-   S's exact Integrator result, Git's qualification of M against fixed H and C,
-   and the target. If that Integrator result contains evidence references,
-   Dalph rereads and schema-validates those immutable envelopes; it does not
-   invent an evidence requirement that the Integrator contract did not return.
+2. For a direct-publication responsibility, Dalph first verifies the exact
+   remote publication proof and its endpoint/branch/candidate correlation. A
+   missing, ambiguous, or contrary proof retains the responsibility and sends no
+   local compare-and-set. Once proof is conclusive, Dalph derives one promotion
+   request P from the accepted-result evidence, S's exact Integrator result,
+   Git's qualification of M against fixed H and C, and the target. If that
+   Integrator result contains evidence references, Dalph rereads and
+   schema-validates those immutable envelopes; it does not invent an evidence
+   requirement that the Integrator contract did not return.
 3. Dalph records P's intent and numbered attempt intent before crossing the Git
    mutation boundary.
 4. Dalph freshly reads the target and M's ancestry. Only exact current H permits
@@ -69,14 +90,16 @@ the ordered workflow history.
 10. A distinct later complete tracker-graph observation reports A successful
    before any dependant is released.
 
-The maintainer sees the same successful delivery outcome: exact M is promoted,
-A is confirmed successful, and dependants become eligible only after the later
-complete graph read. Dalph must not promote from process success, candidate
-resource HEAD, equivalent content, an unreported commit, a legacy
-target-verification event or manifest, or evidence bytes without the matching
-Integrator result and Git proof. It must not expose Integrator-private stages,
-force the ref, infer tracker success from an acknowledgement, or release a
-dependant from the focused task read.
+The maintainer sees the same successful delivery outcome: exact M is first
+proved on the pinned remote and then promoted locally, A is confirmed
+successful, and dependants become eligible only after the later complete graph
+read. Dalph must not promote from process success, candidate resource HEAD,
+equivalent content, an unreported commit, a legacy target-verification event or
+manifest, evidence bytes without the matching Integrator result and Git proof,
+or local promotion without the exact remote publication proof required by
+D28b–D28c. It must not expose Integrator-private stages, force the ref, infer
+tracker success from an acknowledgement, or release a dependant from the
+focused task read.
 
 ### Crash and repeated activation
 
@@ -98,6 +121,7 @@ candidate, session, claim, or request.
 - `packages/orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.test.ts::completes exact A only after current authorization and durable request intents`
 - `packages/orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.test.ts::rereads accepted-result and Integrator-returned evidence before task completion`
 - `packages/orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.test.ts::malformed, missing, and foreign accepted-result evidence stop before tracker completion mutation`
+- #384 seam: `packages/orchestrator/src/workflow/protocols/direct-publication/protocol.test.ts::local promotion cannot start before exact remote publication proof`
 - `packages/orchestrator/src/workflow/protocols/integration-finality/protocol.test.ts::deletes only the exact completion claim after actual fresh success and settles once`
 - `packages/dalph/test/cassettes/scenario.test.ts::Dalph confirms A before a later graph read releases B`
 - `packages/orchestrator/src/coordination/delivery/delivery.test.ts::keeps B out of actual proposals after settlement until focused A success precedes the releasing graph`
