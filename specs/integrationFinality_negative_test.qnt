@@ -314,6 +314,52 @@ module integrationFinalityNegativeTest {
     },
   }
 
+  action deriveCompletionClaimFromLocalPromotionOnly: bool = all {
+    state.promoted.phase == PromotedProof,
+    state.promoted.proofPresent,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: ReplacementIntentPending,
+        proof: {
+          ...state.promoted.proof,
+          publication: {
+            ...state.promoted.proof.publication,
+            present: false,
+            basis: NoPublicationProof,
+          },
+        },
+        completionClaimDerived: true,
+      },
+    },
+  }
+
+  action completeAfterPublicationContradiction: bool = all {
+    state.promoted.phase == BlockedAfterPublicationContradiction,
+    state.promoted.publicationContradictionObserved,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: CompletionIntentRecorded,
+        completionIntentRecorded: true,
+      },
+    },
+  }
+
+  action clearPublicationContradictionWithoutObservation: bool = all {
+    state.promoted.phase == BlockedAfterPublicationContradiction,
+    state.promoted.publicationContradictionObserved,
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: PromotedProof,
+      },
+    },
+  }
+
   run forgedProofIsDetectedTest = {
     init
       .then(deriveCompletionClaim)
@@ -568,5 +614,25 @@ module integrationFinalityNegativeTest {
       .then(requestCompleteTask)
       .then(makeFourthCompleteTaskRequest)
       .expect(not(completionRequestsAreBounded))
+  }
+
+  run localPromotionOnlyCannotDeriveCompletionClaimTest = {
+    init
+      .then(deriveCompletionClaimFromLocalPromotionOnly)
+      .expect(not(completionClaimRequiresRemotePublicationProof))
+  }
+
+  run contradictionCannotAuthorizeCompletionTest = {
+    init
+      .then(observeRemotePublicationContradiction)
+      .then(completeAfterPublicationContradiction)
+      .expect(not(publicationContradictionBlocksUnsentFinality))
+  }
+
+  run contradictionCannotBeClearedWithoutFreshObservationTest = {
+    init
+      .then(observeRemotePublicationContradiction)
+      .then(clearPublicationContradictionWithoutObservation)
+      .expect(not(publicationProofRetainedAcrossContradiction))
   }
 }
