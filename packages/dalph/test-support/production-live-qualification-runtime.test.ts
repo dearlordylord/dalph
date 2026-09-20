@@ -345,6 +345,7 @@ describe("#307 production live qualification runtime", () => {
         )
         const fs = yield* FileSystem.FileSystem
         expect(fixture.configuration.plannedAttemptBaseSha).toBe(fixture.initialTargetCommit)
+        expect(fixture.configuration.claimOwner).toBe("dalph:q:9d733827aa1df60e")
         expect(fixture.localManifest.resources).toHaveLength(11)
         expect(fixture.codexHome).not.toBe(fixture.configuration.codexExecutorPrivateStateDirectory)
         const config = yield* fs.readFileString(`${fixture.codexHome}/config.toml`)

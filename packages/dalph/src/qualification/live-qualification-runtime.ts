@@ -5,6 +5,7 @@ import nodeProcess from "node:process"
 import { GitCommitSha, GitRepositoryLocator } from "@dalph/contracts"
 import {
   GitCommand,
+  GithubClaimOwner,
   GithubGraphqlClient,
   defaultGithubGraphqlEndpoint,
   GithubIssueTarget,
@@ -80,6 +81,22 @@ import {
   type ProductionLiveResponsesObservation,
   type ProductionLiveResponsesObservationTag
 } from "./live-responses-endpoint.js"
+
+const claimOwnerDigestBytes = 8
+const hexadecimalRadix = 16
+const hexadecimalByteWidth = 2
+
+/** Keeps one live invocation distinct inside GitHub's bounded claim-description owner field. */
+const liveQualificationClaimOwner = Effect.fn("ProductionLiveQualification.claimOwner")(function* (
+  invocationId: LiveQualificationInvocationId
+) {
+  const crypto = yield* Crypto.Crypto
+  const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(invocationId))
+  const suffix = Array.from(digest.slice(0, claimOwnerDigestBytes), (byte) =>
+    byte.toString(hexadecimalRadix).padStart(hexadecimalByteWidth, "0")
+  ).join("")
+  return yield* Schema.decodeUnknownEffect(GithubClaimOwner)(`dalph:q:${suffix}`)
+})
 
 const canonicalAbsolute = (subject: string) =>
   Schema.NonEmptyString.check(
@@ -308,7 +325,7 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
     integrationRef: "refs/heads/master",
     plannedAttemptBaseSha: initialTargetCommit,
     plannedAttemptExecutor: "codex:live-qualification",
-    claimOwner: `dalph:live-qualification:${manifest.invocationId}`,
+    claimOwner: yield* liveQualificationClaimOwner(manifest.invocationId),
     taskWorkCapacity: 1,
     journalDatabase,
     evidenceStoreRoot,
