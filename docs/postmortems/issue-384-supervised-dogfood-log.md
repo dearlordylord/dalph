@@ -494,8 +494,9 @@ ownership), `162f31f5b` (scenario mapping), and `f3d36a5e3` (provider-mismatch
 coverage), which is the current `HEAD` of hosted `master`. The final frozen
 gate, `ae46bcad-11e8-425d-80d8-b636f4f9ac47`, passed 4,278 tests with 41
 skipped, changed-production coverage 131/131, and repeatability 20/20. An
-earlier passing gate, `84d06882...`, exposed the live retained-state anomaly
-that required the authenticated production retry below.
+earlier passing gate, `84d06882-2adf-454f-ba76-f2bbd91d108d`, qualified the
+runtime used for the authenticated production retry below; that retry exposed
+the live retained-state anomaly repaired afterward.
 
 Using the original retained `CODEX_HOME`, the authenticated cancellation
 completed in 4.4 seconds. Its Journal suffix recorded Suspend intent at
