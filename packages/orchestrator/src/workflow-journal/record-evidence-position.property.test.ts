@@ -67,6 +67,25 @@ it("preserves actual positions in sparse diagnostic evidence and every earlier w
   )
 })
 
+it("reads records after an ordinal position through the indexed offset", () => {
+  const fixture = integrationFinalityFixture
+  const records = [1, 2].map((position) => {
+    const event = PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+      plannedAttempt: { ...fixture.plannedAttempt, attemptId: AttemptId.make(`ordinal-attempt-${position}`) },
+      version: workflowJournalEventVersion
+    })
+    return {
+      event,
+      key: describeJournalEvent(event).expectedKey,
+      position: JournalPosition.make(position),
+      runId: fixture.runId
+    }
+  })
+  const evidence = journalEvidenceFrom(records)
+
+  expect(Array.from(journalRecordsAfter(evidence, JournalPosition.make(1)))).toEqual([records[1]])
+})
+
 it("exposes a graph observation at position seven when it is the only decoded record", () => {
   const fixture = integrationFinalityFixture
   const position = JournalPosition.make(7)
