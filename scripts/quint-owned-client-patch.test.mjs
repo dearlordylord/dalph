@@ -117,14 +117,14 @@ const load = ({
   return { api: module.exports, counts, launches }
 }
 
-test("owned endpoint mismatch refuses reflection spawn and download", async () => {
+void test("owned endpoint mismatch refuses reflection spawn and download", async () => {
   const f = load()
   const result = await f.api.connect({ hostname: "127.0.0.1", port: 8822 }, "0.56.1", 0)
   assert.equal(result.isLeft(), true)
   assert.deepEqual(f.counts, { spawned: 0, downloaded: 0, closed: 0, reflected: 0, mutated: 0 })
 })
 
-test("owned endpoint connection failure cannot launch a replacement server", async () => {
+void test("owned endpoint connection failure cannot launch a replacement server", async () => {
   const f = load()
   const result = await f.api.connect({ hostname: "127.0.0.1", port: 40000 }, "0.56.1", 0)
   assert.equal(result.isLeft(), true)
@@ -134,7 +134,7 @@ test("owned endpoint connection failure cannot launch a replacement server", asy
   assert.equal(f.counts.downloaded, 0)
 })
 
-test("owned readiness uses one reflection call closes its client and never checks or starts tools", async () => {
+void test("owned readiness uses one reflection call closes its client and never checks or starts tools", async () => {
   const f = load()
   assert.equal(typeof f.api.ownedServerReadiness, "function")
   const result = await f.api.ownedServerReadiness({ hostname: "127.0.0.1", port: 40000 })
@@ -145,7 +145,7 @@ test("owned readiness uses one reflection call closes its client and never check
   assert.equal(f.counts.downloaded, 0)
 })
 
-test("owned verification refuses missing prepared Apalache without filesystem mutation or download", async () => {
+void test("owned verification refuses missing prepared Apalache without filesystem mutation or download", async () => {
   const f = load({ artifacts: false })
   const result = await f.api.fetchApalache("0.56.1", 0)
   assert.equal(result.isLeft(), true)
@@ -153,20 +153,20 @@ test("owned verification refuses missing prepared Apalache without filesystem mu
   assert.equal(f.counts.mutated, 0)
 })
 
-test("owned verification refuses missing prepared Rust evaluator without downloading", async () => {
+void test("owned verification refuses missing prepared Rust evaluator without downloading", async () => {
   const f = load({ file: "rust/binaryManager.js", artifacts: false })
   await assert.rejects(f.api.getRustEvaluatorPath(), /prepared Rust evaluator; downloading is disabled/u)
   assert.equal(f.counts.downloaded, 0)
   assert.equal(f.counts.mutated, 0)
 })
 
-test("prepared Rust evaluator remains usable under owned marker", async () => {
+void test("prepared Rust evaluator remains usable under owned marker", async () => {
   const f = load({ file: "rust/binaryManager.js" })
   assert.match(await f.api.getRustEvaluatorPath(), /quint_evaluator/u)
   assert.equal(f.counts.downloaded, 0)
 })
 
-test("negative control detects the original automatic replacement launch", async () => {
+void test("negative control detects the original automatic replacement launch", async () => {
   const f = load({ original: true })
   await assert.rejects(
     f.api.connect({ hostname: "127.0.0.1", port: 40000 }, "0.56.1", 0),
@@ -175,7 +175,7 @@ test("negative control detects the original automatic replacement launch", async
   assert.equal(f.counts.spawned, 1)
 })
 
-test("successful owned readiness closes reflection client without constructing a checking client", async () => {
+void test("successful owned readiness closes reflection client without constructing a checking client", async () => {
   const f = load({ ready: true })
   const result = await f.api.ownedServerReadiness({ hostname: "127.0.0.1", port: 40000 })
   assert.equal(result.isRight(), true)
@@ -185,7 +185,7 @@ test("successful owned readiness closes reflection client without constructing a
   assert.equal(f.counts.downloaded, 0)
 })
 
-test("owned TLC uses identified Java rather than PATH and enforces observed user.home", async () => {
+void test("owned TLC uses identified Java rather than PATH and enforces observed user.home", async () => {
   const f = load({ file: "tlc.js" })
   const result = await f.api.verify({ moduleName: "fixture", tlaCode: "fixture" }, "0.56.1", {}, 0)
   assert.equal(result.isRight(), true)
@@ -194,7 +194,7 @@ test("owned TLC uses identified Java rather than PATH and enforces observed user
   assert.equal(f.launches[0].args[0], "-Duser.home=/identified/home")
 })
 
-test("owned TLC refuses missing or relative Java identity before output or checker launch", async () => {
+void test("owned TLC refuses missing or relative Java identity before output or checker launch", async () => {
   for (const java of [
     { javaExecutable: null },
     { javaUserHome: null },
@@ -210,7 +210,7 @@ test("owned TLC refuses missing or relative Java identity before output or check
   }
 })
 
-test("hosted TLC keeps its existing Java PATH route without local transport metadata", async () => {
+void test("hosted TLC keeps its existing Java PATH route without local transport metadata", async () => {
   const f = load({ file: "tlc.js", owned: false })
   const result = await f.api.verify({ moduleName: "fixture", tlaCode: "fixture" }, "0.56.1", {}, 0)
   assert.equal(result.isRight(), true)

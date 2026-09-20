@@ -8,7 +8,7 @@ import {
   type TraceReaderError,
   TraceOutput
 } from "@dalph/orchestrator"
-import { Deferred, Effect, Fiber, FileSystem, Layer, Option } from "effect"
+import { Deferred, Effect, FileSystem, Layer, Option } from "effect"
 import { Argument, Command, Flag } from "effect/unstable/cli"
 import { executeDryRun } from "./cli.js"
 import {
@@ -119,37 +119,17 @@ export const makeProductionCli = <EHost, RHost>(
                       signals,
                       ["SIGINT", "SIGTERM"]
                     )
-                    const presentRun = yield* presentSelectedProductionRun(
+                    yield* presentSelectedProductionRun(
                       observation,
                       output.writeLine,
-                      Deferred.succeed(selected, undefined)
-                    ).pipe(Effect.forkScoped)
-                    const firstCompletion = yield* Effect.raceFirst(
-                      Fiber.await(presentRun).pipe(
-                        Effect.map((exit) => ({ _tag: "RunPresentationCompleted" as const, exit }))
-                      ),
-                      signalAdapter.awaitRequest.pipe(Effect.as({ _tag: "ExitRequested" as const }))
-                    )
-                    if (firstCompletion._tag === "RunPresentationCompleted") {
-                      return yield* firstCompletion.exit
-                    }
-                    if (!(yield* Deferred.isDone(selected))) {
-                      const selection = yield* Effect.raceFirst(
-                        Deferred.await(selected).pipe(Effect.as({ _tag: "Selected" as const })),
-                        Fiber.await(presentRun).pipe(
-                          Effect.map((exit) => ({ _tag: "RunPresentationCompleted" as const, exit }))
-                        )
-                      )
-                      if (selection._tag === "RunPresentationCompleted" && selection.exit._tag === "Failure") {
-                        return yield* Effect.failCause(selection.exit.cause)
+                      Deferred.succeed(selected, undefined),
+                      {
+                        awaitRequest: signalAdapter.awaitRequest,
+                        awaitResult: signalAdapter.awaitResult,
+                        presentResult: (result) =>
+                          presentApplicationExitResult(observation.selection.runId, result, output.writeLine)
                       }
-                    }
-                    const presenterFailureDuringExit = Fiber.await(presentRun).pipe(
-                      Effect.flatMap((exit) => (exit._tag === "Failure" ? Effect.failCause(exit.cause) : Effect.never))
                     )
-                    const result = yield* Effect.raceFirst(signalAdapter.awaitResult, presenterFailureDuringExit)
-                    yield* Fiber.interrupt(presentRun)
-                    yield* presentApplicationExitResult(observation.selection.runId, result, output.writeLine)
                   })
                 )
               )

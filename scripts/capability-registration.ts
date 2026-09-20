@@ -1233,6 +1233,16 @@ export const capabilityRegistrationInventory = {
       "packages/dalph/src/application/kimi-planned-attempt-executor.ts"
     ),
     support(
+      "nodeKimiAttemptPrivateStoreLayer",
+      "Kimi private-attempt state support beneath the selectable Kimi planned-attempt executor",
+      "packages/dalph/src/application/kimi-attempt-store.ts"
+    ),
+    support(
+      "nodeKimiIntegratorLayer",
+      "provider-selected Kimi Integrator support behind the registered outer Integrator boundary",
+      "packages/dalph/src/application/kimi-integrator-provider.ts"
+    ),
+    support(
       "attemptChoiceControlLayer",
       "operator-control protocol support",
       "packages/orchestrator/src/workflow/protocols/attempt-choice/control.ts"

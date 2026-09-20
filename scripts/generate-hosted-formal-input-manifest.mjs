@@ -395,7 +395,7 @@ export const deriveHostedFormalInputManifest = async (worktree = repositoryRoot)
 export const expectedHostedFormalInputManifestText = async (worktree = repositoryRoot) =>
   serializeHostedFormalInputManifest(await deriveHostedFormalInputManifest(worktree))
 
-const invokedDirectly = process.argv[1] !== undefined && pathToFileURL(process.argv[1]).href === import.meta.url
+const invokedDirectly = pathToFileURL(process.argv[1] ?? "").href === import.meta.url
 if (invokedDirectly) {
   const expected = await expectedHostedFormalInputManifestText()
   const manifest = join(repositoryRoot, hostedFormalInputManifestPath)

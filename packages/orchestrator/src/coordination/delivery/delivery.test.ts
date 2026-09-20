@@ -113,6 +113,7 @@ const makeDeliveryRelationsLayer = (
         reflectionProposals: [],
         runtimeFacts: {
           acceptedAt: null,
+          acceptedFactPublication: null,
           cancellationApplied: false,
           pauseCoverage: {
             _tag: "PauseCoverageGraphNotEstablished",

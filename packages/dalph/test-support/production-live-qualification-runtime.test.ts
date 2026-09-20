@@ -4,16 +4,93 @@ import { readFile } from "node:fs/promises"
 import nodePath from "node:path"
 import nodeProcess from "node:process"
 import * as nodeTimers from "node:timers"
-import { Effect, Exit, FileSystem, Layer, Redacted } from "effect"
+import { Effect, Exit, FileSystem, Layer, Option, Redacted } from "effect"
 import { NodeCrypto, NodeServices } from "@effect/platform-node"
-import { GitCommand, GithubGraphqlClient, nodeGitCommandLayer } from "@dalph/orchestrator"
-import { GitRepositoryLocator } from "@dalph/contracts"
+import {
+  AcceptedResult,
+  AttemptId,
+  EvidenceDigest,
+  EvidenceReference,
+  GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
+  PlannedAttemptExecutorReport,
+  PlannedTaskAttempt,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  TaskRevision,
+  WorktreeLocator
+} from "@dalph/contracts"
+import {
+  ActiveTaskClaim,
+  ClaimOwner,
+  ClaimToken,
+  CompletionClaimDeletedEvent,
+  CompletionTaskClaim,
+  CompletionTaskAcknowledgedEvent,
+  CompletionTaskCandidateAncestryObservedEvent,
+  CompletionTaskRequestOrdinal,
+  completionOriginalTaskClaimReleaseFor,
+  completionTaskRequestFor,
+  describeJournalEvent,
+  FixtureTarget,
+  FocusedCompletedTaskObservation,
+  GitCommand,
+  GithubGraphqlClient,
+  InitialControlPolicy,
+  IntegrationStartedEvent,
+  JournalPosition,
+  makeRunFinalityEvidence,
+  makeTaskAttemptPlanOperation,
+  makeTargetLineageObservationOperation,
+  makeWorkflowRunBeganRecord,
+  nodeGitCommandLayer,
+  OperationId,
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptWorktreeObservedEvent,
+  PlannedWorktreeReady,
+  RunFinalityReadShape,
+  TargetLineageObservedEvent,
+  TargetLineageObservation,
+  TargetPromotionAttemptOrdinal,
+  TargetPromotionObservedSuccessEvent,
+  targetPromotionCorrelationFor,
+  TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimReleasedEvent,
+  TaskDagSnapshot,
+  TaskWorkCapacity,
+  TrackerRevision,
+  TrackerSnapshot,
+  TrackerTask,
+  workflowJournalEventVersion,
+  type JournalRecord,
+  type WorkflowJournalEvent
+} from "@dalph/orchestrator"
+import { ProductionLiveFixtureCleanup } from "../src/qualification/live-fixture-cleanup.js"
+import {
+  IntegratorCandidateResourceLocator,
+  IntegratorCandidateText,
+  IntegratorRunCandidateGitObservedEvent,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
+  IntegratorRunQualifiedCandidate,
+  IntegratorRunResultRecordedEvent,
+  IntegratorSessionCorrelation,
+  IntegratorSessionId
+} from "../../orchestrator/src/workflow/protocols/integrator/events.js"
+import { makeWorkflowRunTerminatedRecord } from "../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import { describe, expect, it } from "vitest"
 import { launchExecutableMatches } from "../src/application/codex-app-server.js"
 import {
   createProductionLiveLocalFixture,
   decodeProductionLiveQualificationManifest,
   decodeProductionLiveQualificationRetentionReport,
+  deriveProductionLiveQualificationEvidenceObservations,
   generateProductionLiveControlledProviderCredential,
   productionLiveQualificationBoundaryObservations,
   productionLiveQualificationChronologyIsExact,
@@ -23,6 +100,11 @@ import {
   writeProductionLiveQualificationFailureRetentionReport
 } from "../src/qualification/live-qualification-runtime.js"
 import { ProductionLiveResponsesEndpointLocator } from "../src/qualification/live-responses-endpoint.js"
+import {
+  ProductionLiveQualificationProcessId,
+  type ProductionLiveQualificationCompletion
+} from "../src/qualification/live-qualification-controller.js"
+import type { ProductionLiveResponsesObservation } from "../src/qualification/live-responses-endpoint.js"
 import { githubGraphqlTestClient } from "../../orchestrator/src/authorities/task-tracker/github/graphql-client.test-fixture.js"
 
 const layer = nodeGitCommandLayer.pipe(Layer.provideMerge(NodeServices.layer), Layer.merge(NodeCrypto.layer))
@@ -155,7 +237,356 @@ const input = {
   }
 }
 
+const completedEvidenceObservationFixture = () => {
+  const runId = RunId.make("live-derivation-run")
+  const taskId = TaskId.make("live-derivation-task")
+  const target = FixtureTarget.make("live-derivation-target")
+  const baseSha = GitCommitSha.make("1".repeat(40))
+  const acceptedCommit = GitCommitSha.make("2".repeat(40))
+  const candidateCommit = GitCommitSha.make("3".repeat(40))
+  const taskRevision = TaskRevision.make("live-derivation-revision")
+  const plannedAttempt = PlannedTaskAttempt.make({
+    attemptId: AttemptId.make("live-derivation-attempt"),
+    baseSha,
+    branch: TaskBranchRef.make("refs/heads/live-derivation"),
+    executor: TaskExecutorLocator.make("executor:live-derivation"),
+    runId,
+    taskId,
+    taskRevision,
+    worktree: WorktreeLocator.make("/tmp/live-derivation-worktree")
+  })
+  const acceptedResult = AcceptedResult.make({
+    commit: acceptedCommit,
+    evidenceManifest: EvidenceReference.make({ digest: EvidenceDigest.make("4".repeat(64)), byteLength: 1 })
+  })
+  const integrationTarget = IntegrationTarget.make({
+    repository: GitRepositoryLocator.make("/tmp/live-derivation-repository"),
+    ref: IntegrationTargetRef.make("refs/heads/master")
+  })
+  const activeClaim = ActiveTaskClaim.make({
+    operationId: OperationId.make("live-derivation-claim-operation"),
+    owner: ClaimOwner.make("live-derivation-owner"),
+    taskId,
+    token: ClaimToken.make("live-derivation-token")
+  })
+  const session = IntegratorSessionCorrelation.make({
+    acceptedResult,
+    candidateResource: IntegratorCandidateResourceLocator.make("/tmp/live-derivation-candidate"),
+    expectedTargetHead: baseSha,
+    integrationTarget,
+    plannedAttempt,
+    queuedAt: JournalPosition.make(5),
+    sessionId: IntegratorSessionId.make("live-derivation-session"),
+    startedAt: JournalPosition.make(6),
+    targetLineageObservedAt: JournalPosition.make(7)
+  })
+  const integratorRun = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
+  const candidateText = IntegratorCandidateText.make(candidateCommit)
+  const candidate = IntegratorRunQualifiedCandidate.make({
+    candidateCommit,
+    candidateText,
+    directParents: [baseSha, acceptedCommit],
+    qualifiedAt: JournalPosition.make(10),
+    run: integratorRun
+  })
+  const promotion = targetPromotionCorrelationFor(candidate)
+  const completionClaim = CompletionTaskClaim.make({
+    originalClaim: activeClaim,
+    plannedAttempt,
+    promotionCorrelation: promotion
+  })
+  const completionRequest = completionTaskRequestFor(completionClaim)
+  const planOperation = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make("live-derivation-plan-operation"),
+    plannedAttempt,
+    predecessorOperationIds: [activeClaim.operationId]
+  })
+  const lineageOperation = makeTargetLineageObservationOperation({
+    integrationTarget,
+    operationId: OperationId.make("live-derivation-lineage-operation"),
+    plannedAttempt,
+    predecessorOperationIds: [planOperation.operationId]
+  })
+  const executorReport = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+    correlation: { attemptId: plannedAttempt.attemptId, runId },
+    result: { _tag: "Accepted", acceptedResult }
+  })
+  const completionObservation = FocusedCompletedTaskObservation.make({
+    claim: completionRequest.claim,
+    lifecycle: "CompletedSuccessfully",
+    observedAt: JournalPosition.make(18),
+    operationId: OperationId.make("live-derivation-completion-observation"),
+    taskId,
+    taskRevision,
+    trackerRevision: TrackerRevision.make("live-derivation-tracker-revision"),
+    target
+  })
+  const projection = TaskDagSnapshot.project(
+    TrackerSnapshot.make({
+      revision: TrackerRevision.make("live-derivation-finality-revision"),
+      rootTaskId: taskId,
+      tasks: [
+        TrackerTask.make({
+          id: taskId,
+          lifecycle: { _tag: "CompletedSuccessfully" },
+          parentTaskId: null,
+          prerequisiteIds: []
+        })
+      ]
+    })
+  )
+  if (projection._tag === "Invalid") return expect.fail("live derivation fixture graph must be valid")
+  const readShape = RunFinalityReadShape.make({ explicitlyCoveredTaskIds: [taskId] })
+  const finality = makeRunFinalityEvidence({
+    operationId: OperationId.make("live-derivation-finality-operation"),
+    readShape,
+    rootTaskId: taskId,
+    runId,
+    snapshot: projection.snapshot,
+    target,
+    observedAt: JournalPosition.make(20)
+  })
+  const record = (position: number, event: WorkflowJournalEvent): JournalRecord => ({
+    event,
+    key: describeJournalEvent(event).expectedKey,
+    position: JournalPosition.make(position),
+    runId
+  })
+  const journal = [
+    makeWorkflowRunBeganRecord(
+      runId,
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    ),
+    record(2, TaskClaimAcquiredEvent.make({ claim: activeClaim, version: workflowJournalEventVersion })),
+    record(3, TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })),
+    record(
+      4,
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+        report: executorReport,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      5,
+      IntegrationStartedEvent.make({
+        acceptedResult,
+        integrationTarget,
+        plannedAttempt,
+        responsibilityBeganAt: JournalPosition.make(5),
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      6,
+      PlannedAttemptWorktreeObservedEvent.make({
+        observation: PlannedWorktreeReady.make({
+          baseSha,
+          branch: plannedAttempt.branch,
+          headSha: acceptedCommit,
+          worktree: plannedAttempt.worktree
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: OperationId.make("live-derivation-worktree-observation"),
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      7,
+      TargetLineageObservedEvent.make({
+        observation: TargetLineageObservation.make({
+          plannedBaseIsAncestorOfTargetHead: true,
+          plannedBaseSha: baseSha,
+          targetHeadSha: baseSha
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: lineageOperation.operationId,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      8,
+      IntegratorRunResultRecordedEvent.make({
+        result: { _tag: "PreparedCandidate", candidateText, correlation: integratorRun },
+        run: integratorRun,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      9,
+      IntegratorRunCandidateGitObservedEvent.make({
+        candidateText,
+        observation: {
+          _tag: "Commit",
+          candidateText,
+          commit: candidateCommit,
+          directParents: [baseSha, acceptedCommit]
+        },
+        run: integratorRun,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      10,
+      TargetPromotionObservedSuccessEvent.make({
+        basis: { _tag: "AfterAttempt", attemptOrdinal: TargetPromotionAttemptOrdinal.make(1) },
+        correlation: promotion,
+        observation: { _tag: "CompareAndSetApplied", candidateAncestry: "Current", targetHeadSha: candidateCommit },
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      11,
+      CompletionTaskCandidateAncestryObservedEvent.make({
+        attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
+        observation: { _tag: "CandidateCurrent", currentHeadSha: candidateCommit },
+        operationId: OperationId.make("live-derivation-candidate-observation"),
+        request: completionRequest,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      12,
+      CompletionTaskAcknowledgedEvent.make({
+        acknowledgement: { operationId: completionRequest.operationId, taskId },
+        attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
+        request: completionRequest,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      13,
+      TaskClaimReleasedEvent.make({
+        release: completionOriginalTaskClaimReleaseFor(completionRequest.claim),
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      14,
+      CompletionClaimDeletedEvent.make({
+        claim: completionRequest.claim,
+        operationId: OperationId.make("live-derivation-claim-deletion"),
+        successObservation: completionObservation,
+        version: workflowJournalEventVersion
+      })
+    ),
+    makeWorkflowRunTerminatedRecord(runId, JournalPosition.make(15), "Completed", finality)
+  ]
+  const completion: ProductionLiveQualificationCompletion = {
+    facts: {
+      applicationServerCount: 1,
+      github: {
+        claim: "Unclaimed",
+        lifecycle: "CompletedSuccessfully",
+        responses: {
+          counts: { executor: 2, integrator: 2, total: 4 },
+          orderedTags: ["ExecutorRequest", "ExecutorGitReadHead", "IntegratorRequest", "IntegratorGitReadHead"]
+        }
+      },
+      integrationTargetCount: 1,
+      journal,
+      targetHead: candidateCommit,
+      taskWorktreeCount: 1
+    },
+    processId: ProductionLiveQualificationProcessId.make(307),
+    processStatus: 0,
+    records: [
+      { _tag: "RunSelected", runId, selection: "Allocated", version: 1 },
+      { _tag: "RunDisposition", disposition: "Completed", runId, version: 1 }
+    ],
+    runId
+  }
+  const responses: ProductionLiveResponsesObservation = {
+    counts: { executor: 2, integrator: 2, total: 4 },
+    orderedTags: ["ExecutorRequest", "ExecutorGitReadHead", "IntegratorRequest", "IntegratorGitReadHead"]
+  }
+  return { completion, responses, shippedGithub: ["ResolveIssue"] as const }
+}
+
 describe("#307 production live qualification runtime", () => {
+  it("derives exact completed evidence observations and rejects one-fact mutations", () => {
+    const fixture = completedEvidenceObservationFixture()
+    const canonical = deriveProductionLiveQualificationEvidenceObservations(
+      fixture.completion,
+      fixture.shippedGithub,
+      fixture.responses
+    )
+    expect(Option.isSome(canonical)).toBe(true)
+    if (Option.isSome(canonical)) {
+      expect(canonical.value.selectedRunsCompleted).toBe(true)
+      expect(canonical.value.occurrences).toHaveLength(10)
+      expect(canonical.value.orderedBoundaryTags.responses).toEqual(fixture.responses.orderedTags)
+    }
+
+    const withoutAcceptedResult = {
+      ...fixture.completion,
+      facts: {
+        ...fixture.completion.facts,
+        journal: fixture.completion.facts.journal.filter(
+          ({ event }) => event._tag !== "PlannedAttemptExecutorWorkReported"
+        )
+      }
+    }
+    const withoutPromotion = {
+      ...fixture.completion,
+      facts: {
+        ...fixture.completion.facts,
+        journal: fixture.completion.facts.journal.filter(({ event }) => event._tag !== "TargetPromotionObservedSuccess")
+      }
+    }
+    const invalidGithubCompletion = {
+      ...fixture.completion,
+      facts: {
+        ...fixture.completion.facts,
+        github: { lifecycle: "CompletedSuccessfully", claim: "Claimed", responses: fixture.completion.facts.github }
+      }
+    }
+    const withApplicationExitDisposition = {
+      ...fixture.completion,
+      records: [
+        ...fixture.completion.records,
+        {
+          _tag: "ApplicationExitDisposition" as const,
+          disposition: { _tag: "Succeeded" as const, requestedStatus: 0 as const },
+          runId: fixture.completion.runId,
+          version: 1 as const
+        }
+      ]
+    }
+    const withoutGitObservations = {
+      ...fixture.completion,
+      facts: {
+        ...fixture.completion.facts,
+        journal: fixture.completion.facts.journal.filter(
+          ({ event }) =>
+            event._tag !== "PlannedAttemptWorktreeObserved" &&
+            event._tag !== "TargetLineageObserved" &&
+            event._tag !== "IntegratorRunCandidateGitObserved" &&
+            event._tag !== "CompletionTaskCandidateAncestryObserved"
+        )
+      }
+    }
+
+    for (const changed of [
+      withoutAcceptedResult,
+      withoutPromotion,
+      invalidGithubCompletion,
+      withApplicationExitDisposition,
+      withoutGitObservations
+    ]) {
+      expect(
+        Option.isNone(
+          deriveProductionLiveQualificationEvidenceObservations(changed, fixture.shippedGithub, fixture.responses)
+        )
+      ).toBe(true)
+    }
+    expect(
+      Option.isNone(deriveProductionLiveQualificationEvidenceObservations(fixture.completion, [], fixture.responses))
+    ).toBe(true)
+  })
+
   it("runtime retains build measurement and child progress through its real checkpoint writer", async () => {
     const client = githubGraphqlTestClient((request) =>
       Effect.succeed({
@@ -257,6 +688,14 @@ describe("#307 production live qualification runtime", () => {
     await expect(
       Effect.runPromise(decodeProductionLiveQualificationManifest({ ...input, githubToken: "must-not-be-here" }))
     ).rejects.toBeDefined()
+    await expect(
+      Effect.runPromise(decodeProductionLiveQualificationManifest({ ...input, codexExecutable: "relative/codex" }))
+    ).rejects.toBeDefined()
+    await expect(
+      Effect.runPromise(
+        decodeProductionLiveQualificationManifest({ ...input, sourceRepository: "relative/repository" })
+      )
+    ).rejects.toBeDefined()
   })
 
   it("rejects the outer controller as the shipped child and requires a distinct outside-Q retention report", async () => {
@@ -345,6 +784,7 @@ describe("#307 production live qualification runtime", () => {
         )
         const fs = yield* FileSystem.FileSystem
         expect(fixture.configuration.plannedAttemptBaseSha).toBe(fixture.initialTargetCommit)
+        expect(fixture.configuration.claimOwner).toBe("dalph:q:9d733827aa1df60e")
         expect(fixture.localManifest.resources).toHaveLength(11)
         expect(fixture.codexHome).not.toBe(fixture.configuration.codexExecutorPrivateStateDirectory)
         const config = yield* fs.readFileString(`${fixture.codexHome}/config.toml`)
@@ -596,6 +1036,24 @@ describe("#307 production live qualification runtime", () => {
           expect(report.local.every(({ disposition }) => disposition === "Retained")).toBe(true)
           expect(report.local.map(({ locator }) => locator)).toContain(fixture.localManifest.container.locator)
           expect(yield* fs.exists(fixture.configuration.repository)).toBe(true)
+          yield* writeProductionLiveQualificationFailureRetentionReport({
+            manifest,
+            phase: "Cleanup",
+            githubFixture: undefined,
+            forwarder: undefined,
+            localFixture: fixture,
+            localContainer: undefined,
+            cleanupState: {
+              local: ProductionLiveFixtureCleanup.cases.Removed.make({
+                removed: fixture.localManifest.resources,
+                retained: []
+              })
+            }
+          })
+          const removedReport = yield* decodeProductionLiveQualificationRetentionReport(
+            JSON.parse(yield* fs.readFileString(manifest.retentionReport))
+          )
+          expect(removedReport.local.every(({ disposition }) => disposition === "Removed")).toBe(true)
           yield* fs.remove(fixture.localManifest.container.locator, { recursive: true })
         })
       ).pipe(Effect.provide(layer))

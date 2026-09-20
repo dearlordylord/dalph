@@ -163,6 +163,7 @@ const bundle = (
     reflectionProposals: [],
     runtimeFacts: {
       acceptedAt,
+      acceptedFactPublication: { _tag: "WorkflowProgress" },
       cancellationApplied: false,
       pauseCoverage: {
         _tag: "PauseCoverageGraphNotEstablished",

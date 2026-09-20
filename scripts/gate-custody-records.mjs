@@ -75,7 +75,7 @@ export const openFileLock = (path, nonblocking = false) => {
   })
   if (result.error !== undefined || (result.status !== 0 && !(nonblocking && result.status === 1))) {
     closeSync(descriptor)
-    throw new Error(`Cannot acquire flock ${path}: ${result.error?.message ?? result.stderr?.toString()}`)
+    throw new Error(`Cannot acquire flock ${path}: ${result.error?.message ?? result.stderr.toString()}`)
   }
   if (result.status === 1) {
     closeSync(descriptor)

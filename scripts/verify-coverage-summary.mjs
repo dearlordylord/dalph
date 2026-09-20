@@ -89,7 +89,7 @@ export const coverageBracketThresholdFailures = (coverage) =>
     )
   )
 
-const isMain = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href
+const isMain = import.meta.url === pathToFileURL(process.argv[1] ?? "").href
 
 if (isMain) {
   const summaryPath = process.argv[2] ?? `${process.env.DALPH_COVERAGE_DIRECTORY ?? "coverage"}/coverage-summary.json`

@@ -50,7 +50,7 @@ const exactlyOne = <Tag extends JournalRecord["event"]["_tag"]>(
   )
   expect(matches).toHaveLength(1)
   const match = matches[0]
-  if (match === undefined) throw new Error(`missing ${tag}`)
+  if (match === undefined) return expect.fail(`missing ${tag}`)
   return match
 }
 

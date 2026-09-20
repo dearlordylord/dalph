@@ -36,7 +36,7 @@ function totals(output) {
   return output.split("\n").filter((line) => /ℹ (tests|suites|pass|fail|cancelled|skipped|todo) \d+$/.test(line))
 }
 
-test("omits routine passing names while preserving native totals and test stdout/stderr", () => {
+void test("omits routine passing names while preserving native totals and test stdout/stderr", () => {
   const body = `describe("passing suite", () => {
     for (let index = 0; index < 30; index++) test("routine pass " + index, () => assert.equal(2 + 2, 4))
     test("output pass", (context) => {
@@ -56,7 +56,7 @@ test("omits routine passing names while preserving native totals and test stdout
   assert.ok(native.output.split("\n").length - compact.output.split("\n").length >= 31)
 })
 
-test("retains skipped and todo names, reasons and native counts", () => {
+void test("retains skipped and todo names, reasons and native counts", () => {
   const body = `test("skipped fixture", { skip: "unavailable fixture boundary" }, () => { throw Error("must not run") })
     test("passing todo fixture", { todo: "passing todo reason" }, () => {})
     test("todo fixture", { todo: "planned fixture boundary" }, () => assert.fail("todo assertion detail"))`
@@ -80,7 +80,7 @@ test("retains skipped and todo names, reasons and native counts", () => {
   assert.match(compact.output, /ℹ todo 2/)
 })
 
-test("keeps genuine assertion failures, nested context, locations and the native failing-test appendix", () => {
+void test("keeps genuine assertion failures, nested context, locations and the native failing-test appendix", () => {
   const body = `describe("failed suite", () => {
     test("successful sibling", () => {})
     test("failed fixture", () => assert.equal("observed boundary", "required boundary", "boundary mismatch"))
@@ -105,7 +105,7 @@ test("keeps genuine assertion failures, nested context, locations and the native
   assert.doesNotMatch(compact.output, /successful sibling/)
 })
 
-test("retains cancellation diagnostics and a genuine nonzero process exit", () => {
+void test("retains cancellation diagnostics and a genuine nonzero process exit", () => {
   const body = `const controller = new AbortController()
   test("cancelled fixture", { signal: controller.signal }, () => {
     controller.abort(new Error("fixture cancellation boundary"))

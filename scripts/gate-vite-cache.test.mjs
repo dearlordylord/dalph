@@ -11,7 +11,7 @@ import { runBoundedCommand } from "./run-bounded-command.mjs"
 
 const require = createRequire(import.meta.url)
 
-test("fresh and resumed setup discards only exact Vite caches at root and workspace packages", () => {
+void test("fresh and resumed setup discards only exact Vite caches at root and workspace packages", () => {
   const root = mkdtempSync(join(tmpdir(), "dalph-vite-reset-"))
   try {
     for (const packagePath of ["", "packages/example", "prototypes/example"]) {
@@ -40,7 +40,7 @@ test("fresh and resumed setup discards only exact Vite caches at root and worksp
   }
 })
 
-test("Vite config-cache aliases fail closed before deleting outside the worktree", () => {
+void test("Vite config-cache aliases fail closed before deleting outside the worktree", () => {
   const root = mkdtempSync(join(tmpdir(), "dalph-vite-alias-"))
   try {
     mkdirSync(join(root, "node_modules"))
@@ -55,7 +55,7 @@ test("Vite config-cache aliases fail closed before deleting outside the worktree
   }
 })
 
-test("installed Vitest creates a fresh config bundle under the real guard while authored config editrestore invalidates", async () => {
+void test("installed Vitest creates a fresh config bundle under the real guard while authored config editrestore invalidates", async () => {
   const root = mkdtempSync(join(tmpdir(), "dalph-vite-guard-"))
   let guard
   try {

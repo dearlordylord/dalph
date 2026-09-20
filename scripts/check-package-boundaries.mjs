@@ -359,6 +359,6 @@ export const checkPackageBoundaries = async () => {
   if (violations.length > 0) throw new Error(`Source boundary violations:\n${violations.join("\n")}`)
 }
 
-if (process.argv[1] !== undefined && pathToFileURL(process.argv[1]).href === import.meta.url) {
+if (pathToFileURL(process.argv[1] ?? "").href === import.meta.url) {
   await checkPackageBoundaries()
 }

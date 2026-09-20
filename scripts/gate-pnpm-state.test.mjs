@@ -78,7 +78,7 @@ const nested = (f) =>
     forwardOutput: false
   })
 
-test("actual nested pnpm refreshes script-edited workspace state; fresh preparation leaves later verifier calls unchanged under guard", async () => {
+void test("actual nested pnpm refreshes script-edited workspace state; fresh preparation leaves later verifier calls unchanged under guard", async () => {
   const f = fixture()
   let guard
   try {
@@ -121,7 +121,7 @@ test("actual nested pnpm refreshes script-edited workspace state; fresh preparat
   }
 })
 
-test("fresh pnpm preparation rejects dependency mismatch without installing or rewriting consumed state", async () => {
+void test("fresh pnpm preparation rejects dependency mismatch without installing or rewriting consumed state", async () => {
   const f = fixture()
   try {
     const state = readFileSync(f.state, "utf8")
@@ -140,7 +140,7 @@ test("fresh pnpm preparation rejects dependency mismatch without installing or r
   }
 })
 
-test("actual admitted resume does not refresh altered pnpm workspace-state input", () => {
+void test("actual admitted resume does not refresh altered pnpm workspace-state input", () => {
   const f = fixture()
   try {
     const git = (...args) => execFileSync("git", args, { cwd: f.root, encoding: "utf8" }).trim()

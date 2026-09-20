@@ -8,7 +8,7 @@ import { test } from "node:test"
 
 const runner = fileURLToPath(new URL("./run-quality-lint.mjs", import.meta.url))
 
-test("lint census preserves all three tool failures while ordinary lint stops at the first", async () => {
+void test("lint census preserves all three tool failures while ordinary lint stops at the first", async () => {
   const directory = await mkdtemp(join(tmpdir(), "dalph-lint-census-"))
   try {
     const bin = join(directory, "node_modules", ".bin")
@@ -43,7 +43,7 @@ test("lint census preserves all three tool failures while ordinary lint stops at
   }
 })
 
-test("admitted lint disables dprint incremental reuse while ordinary edit-loop lint retains its command", async () => {
+void test("admitted lint disables dprint incremental reuse while ordinary edit-loop lint retains its command", async () => {
   const directory = await mkdtemp(join(tmpdir(), "dalph-lint-incremental-"))
   try {
     const bin = join(directory, "node_modules", ".bin")

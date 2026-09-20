@@ -150,7 +150,7 @@ const dispatch = ({
   }
 }
 
-test("full quality entry gives its identity and real child one stabilized PATH", () => {
+void test("full quality entry gives its identity and real child one stabilized PATH", () => {
   const { calls, result } = dispatch({ arguments: ["--local-handoff", `--candidate=${base}`], argvZeroTool: false })
   assert.equal(result.status, 0, result.stderr)
   assert.equal(calls.length, 1)
@@ -159,7 +159,7 @@ test("full quality entry gives its identity and real child one stabilized PATH",
   assert.equal(calls[0].childPath, calls[0].effectivePath)
 })
 
-test("full quality entry refuses a shim-supplied nested Java before any child boundary", () => {
+void test("full quality entry refuses a shim-supplied nested Java before any child boundary", () => {
   const { calls, result } = dispatch({ arguments: ["--local-handoff", `--candidate=${base}`], argvZeroTool: "java" })
   assert.equal(result.status, 1)
   assert.match(result.stderr, /declared tool resolution changes: java/u)
@@ -173,7 +173,7 @@ test("full quality entry refuses a shim-supplied nested Java before any child bo
  * These are test-only environment controls; Dalph's production tool inventory
  * and Java launch behavior remain unchanged.
  */
-test("full quality entry accepts an unrelated PATH Java shim when JAVA_HOME pins Java", () => {
+void test("full quality entry accepts an unrelated PATH Java shim when JAVA_HOME pins Java", () => {
   const { calls, result } = dispatch({
     arguments: ["--local-handoff", `--candidate=${base}`],
     argvZeroTool: "java",
@@ -185,7 +185,7 @@ test("full quality entry accepts an unrelated PATH Java shim when JAVA_HOME pins
   assert.equal(calls[0].childPath, calls[0].effectivePath)
 })
 
-test("quality admission wrapper stabilizes PATH before its custody child", () => {
+void test("quality admission wrapper stabilizes PATH before its custody child", () => {
   const { calls, custodyRuns, result } = dispatch({
     arguments: ["--local-handoff", "--candidate=HEAD^"],
     argvZeroTool: false,
@@ -199,7 +199,7 @@ test("quality admission wrapper stabilizes PATH before its custody child", () =>
 })
 
 for (const tool of ["java", "node", "pnpm"]) {
-  test(`quality admission wrapper refuses shim-supplied ${tool} before custody or executor launch`, () => {
+  void test(`quality admission wrapper refuses shim-supplied ${tool} before custody or executor launch`, () => {
     const { calls, custodyRuns, result } = dispatch({
       arguments: ["--local-handoff", "--candidate=HEAD^"],
       argvZeroTool: tool,
@@ -212,7 +212,7 @@ for (const tool of ["java", "node", "pnpm"]) {
   })
 }
 
-test("quality purposes reject omitted duplicate conflicting and unsupported bypass arguments", () => {
+void test("quality purposes reject omitted duplicate conflicting and unsupported bypass arguments", () => {
   for (const args of [
     [],
     ["--local-handoff", "--local-handoff"],
@@ -225,7 +225,7 @@ test("quality purposes reject omitted duplicate conflicting and unsupported bypa
     assert.throws(() => parseQualityCommandArguments(args))
 })
 
-test("quality parser retains candidate base and resume identity for local handoff", () => {
+void test("quality parser retains candidate base and resume identity for local handoff", () => {
   assert.deepEqual(parseQualityCommandArguments(["--local-handoff", `--candidate=${base}`, `--resume=${resume}`]), {
     purpose: "local-handoff",
     candidateArgument: `--candidate=${base}`,
@@ -233,7 +233,7 @@ test("quality parser retains candidate base and resume identity for local handof
   })
 })
 
-test("local handoff dispatch cannot be changed by CI or lifecycle metadata", () => {
+void test("local handoff dispatch cannot be changed by CI or lifecycle metadata", () => {
   for (const environment of [
     {},
     { CI: "true" },
@@ -250,7 +250,7 @@ test("local handoff dispatch cannot be changed by CI or lifecycle metadata", () 
   }
 })
 
-test("resumed local handoff retains candidate base and invokes required integration boundary", () => {
+void test("resumed local handoff retains candidate base and invokes required integration boundary", () => {
   const { calls, result } = dispatch({
     arguments: ["--local-handoff", `--candidate=${base}`, `--resume=${resume}`],
     environment: { CI: "true", npm_lifecycle_event: "check:ci:quality" }
@@ -262,7 +262,7 @@ test("resumed local handoff retains candidate base and invokes required integrat
   assert.ok(!calls[0].options.logicalInvocation.commandArguments.some((argument) => argument.startsWith("--resume=")))
 })
 
-test("required local formal failure propagates through the actual quality command", () => {
+void test("required local formal failure propagates through the actual quality command", () => {
   const { calls, result } = dispatch({ arguments: ["--local-handoff", `--candidate=${base}`], failLocal: true })
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /required formal verification failed/u)
@@ -270,7 +270,7 @@ test("required local formal failure propagates through the actual quality comman
   assert.equal(calls[0].boundary, "local-handoff")
 })
 
-test("unavailable local formal classification fails before the resumable quality boundary", () => {
+void test("unavailable local formal classification fails before the resumable quality boundary", () => {
   const { calls, result } = dispatch({
     arguments: ["--local-handoff", `--candidate=${base}`],
     classificationFailure: true
@@ -280,7 +280,7 @@ test("unavailable local formal classification fails before the resumable quality
   assert.deepEqual(calls, [])
 })
 
-test("hosted quality dispatch excludes local formal integration and MBT regardless lifecycle", () => {
+void test("hosted quality dispatch excludes local formal integration and MBT regardless lifecycle", () => {
   const { calls, result } = dispatch({
     arguments: ["--hosted-quality"],
     environment: { CI: "true", DALPH_COVERAGE_BASE_SHA: base, npm_lifecycle_event: "check:all" }
@@ -295,7 +295,7 @@ test("hosted quality dispatch excludes local formal integration and MBT regardle
   assert.ok(!commands.includes("check:ci:formal"))
 })
 
-test("local commands without inherited admission refuse dispatch despite CI metadata", () => {
+void test("local commands without inherited admission refuse dispatch despite CI metadata", () => {
   const { calls, result } = dispatch({
     admitted: false,
     arguments: ["--local-handoff", `--candidate=${base}`],
@@ -306,14 +306,14 @@ test("local commands without inherited admission refuse dispatch despite CI meta
   assert.deepEqual(calls, [])
 })
 
-test("unacknowledged local full gate retains the frozen candidate refusal", () => {
+void test("unacknowledged local full gate retains the frozen candidate refusal", () => {
   const { calls, result } = dispatch({ arguments: ["--local-handoff"] })
   assert.equal(result.status, 2)
   assert.match(result.stderr, /runs once per frozen candidate/u)
   assert.deepEqual(calls, [])
 })
 
-test("local public omission flag is rejected before any dispatch", () => {
+void test("local public omission flag is rejected before any dispatch", () => {
   const { calls, result } = dispatch({
     arguments: ["--local-handoff", `--candidate=${base}`, "--without-quint"],
     environment: { CI: "true" }
@@ -323,7 +323,7 @@ test("local public omission flag is rejected before any dispatch", () => {
   assert.deepEqual(calls, [])
 })
 
-test("candidate base equal to HEAD cannot be accepted by route metadata", () => {
+void test("candidate base equal to HEAD cannot be accepted by route metadata", () => {
   const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim()
   const { calls, result } = dispatch({
     arguments: ["--local-handoff", `--candidate=${head}`],
@@ -334,7 +334,7 @@ test("candidate base equal to HEAD cannot be accepted by route metadata", () => 
   assert.deepEqual(calls, [])
 })
 
-test("full gate acknowledgement retains local integration when candidate uses hosted base", () => {
+void test("full gate acknowledgement retains local integration when candidate uses hosted base", () => {
   const { calls, result } = dispatch({
     arguments: ["--local-handoff"],
     environment: { DALPH_FULL_GATE: "1", DALPH_COVERAGE_BASE_SHA: base, npm_lifecycle_event: "check:ci:quality" }

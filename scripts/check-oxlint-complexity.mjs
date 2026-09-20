@@ -107,6 +107,6 @@ export const checkOxlintComplexity = () => {
   }
 }
 
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
   checkOxlintComplexity()
 }

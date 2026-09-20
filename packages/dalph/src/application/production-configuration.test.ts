@@ -104,6 +104,31 @@ describe("production repository host configuration", () => {
   })
 
   it.each([
+    ["a separator", "dalph|production"],
+    ["an owner over the GitHub budget", "x".repeat(25)]
+  ] as const)("rejects claimOwner with %s during configuration admission", async (_reason, claimOwner) => {
+    const effects = await Effect.runPromise(Ref.make<ReadonlyArray<string>>([]))
+    const result = await Effect.runPromise(
+      withProductionRepositoryHostConfiguration({ ...validRawConfiguration(), claimOwner }, () =>
+        Effect.gen(function* () {
+          yield* Ref.update(effects, (current) => [...current, "Run allocation"])
+          yield* Ref.update(effects, (current) => [...current, "Journal intent"])
+          yield* Ref.update(effects, (current) => [...current, "tracker mutation"])
+          yield* Ref.update(effects, (current) => [...current, "executor work"])
+        })
+      ).pipe(Effect.flip)
+    )
+
+    expect(result._tag).toBe("ProductionRepositoryHostConfigurationError")
+    expect(result.field).toBe("claimOwner")
+    expect(result.detail).toContain("claimOwner")
+    expect(result.detail).toContain("24")
+    expect(result.detail).toContain("100-character")
+    expect(result.detail).not.toContain(credentialNeedle)
+    expect(await Effect.runPromise(Ref.get(effects))).toEqual([])
+  })
+
+  it.each([
     ["missing credential", {}],
     ["undefined credential", { githubToken: undefined }],
     ["malformed capacity", { taskWorkCapacity: 0 }],

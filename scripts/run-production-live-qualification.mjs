@@ -954,7 +954,7 @@ const main = async () => {
   await runProductionLiveQualification()
 }
 
-if (nodeProcess.argv[1] !== undefined && fileURLToPath(import.meta.url) === nodeProcess.argv[1]) {
+if (fileURLToPath(import.meta.url) === (nodeProcess.argv[1] ?? "")) {
   main().catch((error) => {
     nodeProcess.stderr.write(`Production live qualification failed: ${error.message}\n`)
     nodeProcess.exitCode = 1

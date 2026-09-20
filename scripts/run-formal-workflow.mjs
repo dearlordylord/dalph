@@ -250,7 +250,7 @@ export const runFormalWorkflow = async ({ force = false, report = console.log, r
   }
 }
 
-if (process.argv[1] !== undefined && pathToFileURL(process.argv[1]).href === import.meta.url) {
+if (pathToFileURL(process.argv[1] ?? "").href === import.meta.url) {
   try {
     await runFormalWorkflow(parseFormalArguments(process.argv.slice(2)))
   } catch (error) {

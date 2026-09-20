@@ -179,6 +179,26 @@ const shouldReturnInitialProof = (quiescence: DeliveryRuntimeQuiescence): boolea
   return false
 }
 
+const acceptedFreshClaimRejectionAt = (
+  records: JournalHistorySource,
+  runId: RunId,
+  acceptedAt: JournalPosition
+): boolean => {
+  const rejected = Array.from(journalRecordsOfKind(records, "TaskClaimAcquisitionRejected")).find(
+    ({ event, position, runId: recordRunId }) =>
+      recordRunId === runId && position === acceptedAt && event._tag === "TaskClaimAcquisitionRejected"
+  )
+  if (rejected?.event._tag !== "TaskClaimAcquisitionRejected") return false
+  const rejectedOperationId = rejected.event.operationId
+  return Array.from(journalRecordsOfKind(records, "TaskClaimAcquisitionIntended")).some(
+    ({ event, runId: recordRunId }) =>
+      recordRunId === runId &&
+      event._tag === "TaskClaimAcquisitionIntended" &&
+      event.operation.acquisition.operationId === rejectedOperationId &&
+      event.operation.authority._tag === "TaskSelectionAuthority"
+  )
+}
+
 const journaledPredecessorOperationIds = (
   journal: AcceptedJournalReaderService,
   runId: DeliveryRuntimeQuiescence["current"]["runId"],
@@ -236,6 +256,9 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
       const reconstructedRunId = firstQuiescence.current.runId
       let journalRecords: JournalHistorySource = emptyJournalEvidence()
       if (reconstructedRunId !== undefined) journalRecords = yield* journal.readAccepted(reconstructedRunId)
+      if (acceptedFreshClaimRejectionAt(journalRecords, expectedRunId, firstQuiescence.acceptedAt)) {
+        return proofOf(target, firstQuiescence)
+      }
       if (
         opportunity._tag === "ActiveWorkAuthorityRefresh" &&
         currentGraph.observation.cause._tag !== "ExecutingWorkAuthorityCheck"

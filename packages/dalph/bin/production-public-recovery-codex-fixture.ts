@@ -32,6 +32,9 @@ const respond = (message: unknown) => {
         userAgent: "dalph-public-recovery-qualification"
       })
       return
+    case "config/read":
+      write(request.id, { config: { approval_policy: "never", sandbox_mode: "danger-full-access" } })
+      return
     case "thread/list":
     case "thread/backgroundTerminals/list":
       write(request.id, { data: [] })

@@ -2,12 +2,13 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import type { PlatformError } from "effect"
-import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { expect, expectTypeOf } from "vitest"
 import {
   CodexAppServer,
   CodexAppServerFailure,
+  type CodexAppServerRequestBoundary,
   type CodexAppServerService,
   type CodexThreadListSummary,
   type CodexThreadSnapshot,
@@ -44,6 +45,7 @@ const validTurn = {
   ]
 }
 const write = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n")
+const writeVersionless = (id, result) => process.stdout.write(JSON.stringify({ id, result }) + "\n")
 const writeError = (id) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: "fixture failure" } }) + "\n")
 const responseFor = (method, params = {}) => {
   if (mode === "turn-start-unanswered-then-read" && method === "thread/read") {
@@ -56,10 +58,31 @@ const responseFor = (method, params = {}) => {
     }
   }
   if (mode === "non-openai-provider-credential" && method === "initialize") {
-    const argumentsAreExact = process.argv.slice(2).join("\n") === "app-server"
+    const argumentsAreExact = process.argv.slice(2).join("\n") === '-c\napproval_policy="never"\n-c\nsandbox_mode="danger-full-access"\napp-server'
     return process.env.DALPH_LIVE_CONTROLLED_PROVIDER_CREDENTIAL === "fixture-provider-key" && argumentsAreExact
       ? { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "unix", platformOs: "linux" }
       : { userAgent: "", codexHome: "", platformFamily: "unix", platformOs: "linux" }
+  }
+  if (mode === "unattended-policy" && method === "initialize") {
+    const argumentsAreExact = process.argv.slice(2).join("\n") === '-c\napproval_policy="never"\n-c\nsandbox_mode="danger-full-access"\napp-server'
+    return argumentsAreExact
+      ? { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "unix", platformOs: "linux" }
+      : { userAgent: "", codexHome: "", platformFamily: "unix", platformOs: "linux" }
+  }
+  if (method === "config/read") {
+    return mode === "unsupported-unattended-policy"
+      ? { config: { approval_policy: "on-request", sandbox_mode: "workspace-write" } }
+      : { config: { approval_policy: "never", sandbox_mode: "danger-full-access" } }
+  }
+  if (mode === "unattended-policy" && method === "thread/start") {
+    return params.approvalPolicy === "never" && params.sandbox === "danger-full-access"
+      ? { thread: validThread }
+      : { thread: null }
+  }
+  if (mode === "unattended-policy" && method === "turn/start") {
+    return params.approvalPolicy === "never" && params.sandboxPolicy?.type === "dangerFullAccess"
+      ? { turn: validTurn }
+      : { turn: null }
   }
   if (mode === "initialize-rpc-error" && method === "initialize") return { error: true }
   if (mode === "initialize-family-contradiction" && method === "initialize") {
@@ -398,6 +421,47 @@ const onMessage = (message) => {
   if (message.method === "initialized") return
   requestNumber += 1
   if (message.method === "thread/read") threadReadNumber += 1
+  if (mode === "versionless-envelope" && (message.method === "initialize" || message.method === "thread/start")) {
+    writeVersionless(message.id, responseFor(message.method, message.params))
+    if (message.method === "thread/start") {
+      process.stdout.write(JSON.stringify({ method: "turn/completed", params: { opaque: true } }) + "\n")
+    }
+    return
+  }
+  if (mode === "invalid-jsonrpc-version" && requestNumber === 1) {
+    process.stdout.write(JSON.stringify({ jsonrpc: "1.0", id: message.id, result: {} }) + "\n")
+    return
+  }
+  if (mode.startsWith("malformed-envelope-") && requestNumber === 1) {
+    const envelope =
+      mode === "malformed-envelope-method"
+        ? { jsonrpc: "2.0", method: 1 }
+        : mode === "malformed-envelope-notification-result"
+          ? { jsonrpc: "2.0", method: "fixture/notice", result: {} }
+          : mode === "malformed-envelope-server-result"
+            ? { jsonrpc: "2.0", id: message.id, method: "fixture/request", result: {} }
+            : mode === "malformed-envelope-server-id"
+              ? { jsonrpc: "2.0", id: {}, method: "fixture/request" }
+              : mode === "malformed-envelope-response-id"
+                ? { jsonrpc: "2.0", id: 0, result: {} }
+                : mode === "malformed-envelope-response-both"
+                  ? { jsonrpc: "2.0", id: message.id, result: {}, error: {} }
+                  : mode === "malformed-envelope-response-neither"
+                    ? { jsonrpc: "2.0", id: message.id }
+                    : { jsonrpc: "2.0", id: message.id, error: "invalid" }
+    process.stdout.write(JSON.stringify(envelope) + "\n")
+    return
+  }
+  if (mode === "idle-malformed-before-next-request") {
+    fs.appendFileSync(process.argv[1] + ".requests", message.method + "\n")
+  }
+  if (mode === "malformed-during-admission" || mode === "malformed-after-pending") {
+    fs.appendFileSync(process.argv[1] + ".requests", message.method + "\n")
+  }
+  if (mode === "malformed-after-pending" && message.method === "thread/read") {
+    fs.writeFileSync(process.argv[1] + ".pending", "pending")
+    return
+  }
   if (
     (mode === "initialize-unanswered" && message.method === "initialize") ||
     (mode === "thread-start-unanswered" && message.method === "thread/start")
@@ -415,6 +479,20 @@ const onMessage = (message) => {
   if (mode === "blank-line" && requestNumber === 1) process.stdout.write("\n")
   if (mode === "non-number-response-id" && requestNumber === 1) {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: "bad", result: {} }) + "\n")
+    return
+  }
+  if (mode === "server-request-id-collision" && requestNumber === 1) {
+    process.stdout.write(
+      JSON.stringify({ jsonrpc: "2.0", id: message.id, method: "server/request", params: { opaque: true } }) + "\n"
+    )
+  }
+  if (mode === "malformed-envelope" && requestNumber === 1) {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0" }) + "\n")
+  }
+  if (mode === "idle-malformed-before-next-request" && message.method === "thread/start") {
+    write(message.id, responseFor(message.method, message.params))
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0" }) + "\n")
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed" }) + "\n")
     return
   }
   if (mode === "unknown-response-id" && requestNumber === 1) {
@@ -443,6 +521,16 @@ const onMessage = (message) => {
   if (mode === "turn-completed-burst" && message.method === "thread/read" && threadReadNumber === 2) {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { terminal: true } }) + "\n")
   }
+  if (mode === "unexpected-approval-request" && message.method === "turn/start") {
+    write(message.id, responseFor(message.method, message.params))
+    process.stdout.write(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 99,
+      method: "item/commandExecution/requestApproval",
+      params: { reason: "must never be requested" }
+    }) + "\n")
+    return
+  }
   if (mode === "non-object-message" && requestNumber === 1) {
     process.stdout.write(JSON.stringify("not-an-object") + "\n")
     return
@@ -469,6 +557,19 @@ process.stdin.on("data", (chunk) => {
     if (line.trim() !== "") onMessage(JSON.parse(line))
   }
 })
+if (mode === "malformed-during-admission" || mode === "malformed-after-pending") {
+  const malformedTrigger = process.argv[1] + ".malformed"
+  const malformedSent = process.argv[1] + ".malformed-sent"
+  const poll = setInterval(() => {
+    if (!fs.existsSync(malformedTrigger)) return
+    clearInterval(poll)
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0" }) + "\n")
+    if (mode === "malformed-during-admission") {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed" }) + "\n")
+    }
+    fs.writeFileSync(malformedSent, "sent")
+  }, 1)
+}
 process.on("SIGTERM", () => {
   fs.appendFileSync(process.argv[1] + ".closed", "closed\n")
   process.exit(0)
@@ -509,7 +610,11 @@ const expectAppFailure = (exit: Exit.Exit<unknown, unknown>, operation: string):
 const withFixture = <A>(
   mode: string,
   action: (app: CodexAppServerService, root: string) => Effect.Effect<A, unknown, FileSystem.FileSystem | Path.Path>,
-  config: { readonly environment?: Readonly<Record<string, string>> } = {}
+  config: {
+    readonly environment?: Readonly<Record<string, string>>
+    readonly requireUnattendedPolicy?: boolean
+    readonly requestBoundary?: CodexAppServerRequestBoundary
+  } = {}
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -519,9 +624,12 @@ const withFixture = <A>(
       const executable = path.join(root, mode)
       yield* fileSystem.writeFileString(executable, protocolFixture)
       yield* fileSystem.chmod(executable, 0o755)
-      const layer = codexAppServerNodeLayer({ ...config, executable }, isolatedCodexProcessNativeService).pipe(
-        Layer.provide(memoryCodexAttemptStoreLayer())
-      )
+      const { requestBoundary, ...serverConfig } = config
+      const layer = codexAppServerNodeLayer(
+        { ...serverConfig, executable },
+        isolatedCodexProcessNativeService,
+        requestBoundary
+      ).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
       return yield* Effect.gen(function* () {
         const app = yield* CodexAppServer
         return yield* action(app, root).pipe(Effect.ensuring(app.close.pipe(Effect.orDie)))
@@ -985,6 +1093,7 @@ it.effect("classifies transport protocol errors without fabricating a thread", (
     [
       ["rpc-error", "thread/start"],
       ["malformed-json", "thread/start"],
+      ["invalid-jsonrpc-version", "initialize"],
       ["non-number-response-id", "initialize"],
       ["initialize-family-contradiction", "initialize"],
       ["non-object-message", "initialize"]
@@ -996,6 +1105,60 @@ it.effect("classifies transport protocol errors without fabricating a thread", (
           expectAppFailure(result, operation)
         })
       )
+  )
+)
+
+it.effect("pins and proves all-yes unattended policy for every task thread and turn", () =>
+  withFixture(
+    "unattended-policy",
+    (app) =>
+      Effect.gen(function* () {
+        const thread = yield* app.startThread("/fixture/worktree")
+        const turn = yield* app.startTurn(thread.id, "/fixture/worktree", "work")
+        expect(turn.id).toBe("protocol-turn")
+      }),
+    { requireUnattendedPolicy: true }
+  )
+)
+
+it.effect("fails policy admission before creating a task thread when effective policy is unsupported", () =>
+  withFixture(
+    "unsupported-unattended-policy",
+    (app) =>
+      Effect.gen(function* () {
+        const exit = yield* Effect.exit(app.startThread("/fixture/worktree"))
+        expectAppFailure(exit, "config/read")
+        if (Exit.isFailure(exit)) {
+          const failure = Cause.findErrorOption(exit.cause)
+          if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+            expect(failure.value.kind).toBe("Protocol")
+          }
+        }
+      }),
+    { requireUnattendedPolicy: true }
+  )
+)
+
+it.effect("turns an unexpected approval request into a sticky provider-protocol failure", () =>
+  withFixture("unexpected-approval-request", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hints = yield* app.attachTurnCompletedHints
+        const approvalObserved = yield* hints.pipe(Stream.runHead, Effect.forkChild)
+        const thread = yield* app.startThread("/fixture/worktree")
+        yield* app.startTurn(thread.id, "/fixture/worktree", "work")
+        expect(yield* Fiber.join(approvalObserved)).toEqual(Option.some(undefined))
+        const exit = yield* Effect.exit(app.readThread(thread.id))
+        expectAppFailure(exit, "turn/start")
+        if (Exit.isFailure(exit)) {
+          const failure = Cause.findErrorOption(exit.cause)
+          if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+            expect(failure.value).toMatchObject({ kind: "Protocol", operation: "turn/start" })
+            expect(failure.value.detail).toContain("unexpected approval request")
+          }
+        }
+      })
+    )
   )
 )
 
@@ -1077,6 +1240,148 @@ it.effect("bounds an unanswered turn start and permits one bounded exact-thread 
   )
 )
 
+it.effect("does not let an ID-bearing server request settle a colliding outbound request", () =>
+  withFixture("server-request-id-collision", (app) =>
+    Effect.map(app.startThread("/fixture/worktree"), (thread) => {
+      expect(thread.id).toBe("protocol-thread")
+      return thread.status
+    })
+  )
+)
+
+it.effect("fails malformed JSON-RPC envelopes through the typed protocol boundary", () =>
+  Effect.forEach(
+    [
+      ["malformed-envelope", "must contain method or id"],
+      ["malformed-envelope-method", "method is invalid"],
+      ["malformed-envelope-notification-result", "notification cannot contain result or error"],
+      ["malformed-envelope-server-result", "server request cannot contain result or error"],
+      ["malformed-envelope-server-id", "server request id is invalid"],
+      ["malformed-envelope-response-id", "response id is invalid"],
+      ["malformed-envelope-response-both", "response must contain exactly one result or error"],
+      ["malformed-envelope-response-neither", "response must contain exactly one result or error"],
+      ["malformed-envelope-response-error", "response error is invalid"]
+    ] as const,
+    ([mode, detail]) =>
+      withFixture(mode, (app) =>
+        Effect.gen(function* () {
+          const result = yield* Effect.exit(app.startThread("/fixture/worktree"))
+          expectAppFailure(result, "initialize")
+          if (Exit.isFailure(result)) {
+            const failure = Cause.findErrorOption(result.cause)
+            if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+              expect(failure.value).toMatchObject({ kind: "Protocol" })
+              expect(failure.value.detail).toContain(detail)
+            }
+          }
+        })
+      ),
+    { concurrency: 1 }
+  )
+)
+
+it.effect("keeps an idle malformed JSON-RPC failure sticky before the next request", () =>
+  withFixture("idle-malformed-before-next-request", (app, root) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const hints = yield* app.attachTurnCompletedHints
+        const malformedObserved = yield* hints.pipe(Stream.runHead, Effect.forkChild)
+        const thread = yield* app.startThread("/fixture/worktree")
+        expect(thread.id).toBe("protocol-thread")
+        expect(yield* Fiber.join(malformedObserved)).toEqual(Option.some(undefined))
+
+        const result = yield* Effect.exit(app.readThread(thread.id))
+        expectAppFailure(result, "initialize")
+        if (Exit.isFailure(result)) {
+          const failure = Cause.findErrorOption(result.cause)
+          if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+            expect(failure.value).toMatchObject({ kind: "Protocol", operation: "initialize" })
+            expect(failure.value.detail).toContain("must contain method or id")
+          }
+        }
+        expect(yield* fileSystem.readFileString(path.join(root, "idle-malformed-before-next-request.requests"))).toBe(
+          "initialize\nthread/start\n"
+        )
+      })
+    )
+  )
+)
+
+it.effect("rejects an admitted request when malformed protocol state wins before registration", () =>
+  Effect.gen(function* () {
+    const admissionEntered = yield* Deferred.make<void>()
+    const admissionRelease = yield* Deferred.make<void>()
+    const requestBoundary: CodexAppServerRequestBoundary = {
+      run: (operation, request) =>
+        operation === "thread/read"
+          ? Deferred.succeed(admissionEntered, undefined).pipe(
+              Effect.andThen(Deferred.await(admissionRelease)),
+              Effect.andThen(request)
+            )
+          : request
+    }
+    return yield* withFixture(
+      "malformed-during-admission",
+      (app, root) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const fileSystem = yield* FileSystem.FileSystem
+            const path = yield* Path.Path
+            const hints = yield* app.attachTurnCompletedHints
+            const malformedObserved = yield* hints.pipe(Stream.runHead, Effect.forkChild)
+            const thread = yield* app.startThread("/fixture/worktree")
+            const request = yield* Effect.exit(app.readThread(thread.id)).pipe(Effect.forkChild)
+            yield* Deferred.await(admissionEntered)
+            const executable = path.join(root, "malformed-during-admission")
+            yield* fileSystem.writeFileString(`${executable}.malformed`, "malformed")
+            yield* awaitFile(fileSystem, `${executable}.malformed-sent`)
+            expect(yield* Fiber.join(malformedObserved)).toEqual(Option.some(undefined))
+            yield* Deferred.succeed(admissionRelease, undefined)
+            const result = yield* Fiber.join(request)
+            expectAppFailure(result, "thread/read")
+            if (Exit.isFailure(result)) {
+              const failure = Cause.findErrorOption(result.cause)
+              if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+                expect(failure.value.kind).toBe("Protocol")
+                expect(failure.value.detail).toContain("must contain method or id")
+              }
+            }
+            expect(yield* fileSystem.readFileString(`${executable}.requests`)).toBe("initialize\nthread/start\n")
+          })
+        ),
+      { requestBoundary }
+    )
+  })
+)
+
+it.effect("fails an already registered request once and refuses a later request", () =>
+  withFixture("malformed-after-pending", (app, root) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const thread = yield* app.startThread("/fixture/worktree")
+      const request = yield* Effect.exit(app.readThread(thread.id)).pipe(Effect.forkChild)
+      const executable = path.join(root, "malformed-after-pending")
+      yield* awaitFile(fileSystem, `${executable}.pending`)
+      yield* fileSystem.writeFileString(`${executable}.malformed`, "malformed")
+      yield* awaitFile(fileSystem, `${executable}.malformed-sent`)
+      const firstResult = yield* Fiber.join(request)
+      expectAppFailure(firstResult, "thread/read")
+      if (Exit.isFailure(firstResult)) {
+        const failure = Cause.findErrorOption(firstResult.cause)
+        if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+          expect(failure.value.kind).toBe("Protocol")
+        }
+      }
+      const laterResult = yield* Effect.exit(app.readThread(thread.id))
+      expectAppFailure(laterResult, "initialize")
+      expect(yield* fileSystem.readFileString(`${executable}.requests`)).toBe("initialize\nthread/start\nthread/read\n")
+    })
+  )
+)
+
 it.effect("ignores a response for an unknown request id before matching the real response", () =>
   withFixture("unknown-response-id", (app) =>
     Effect.map(app.startThread("/fixture/worktree"), (thread) => {
@@ -1092,13 +1397,27 @@ it.effect("keeps diagnostic stderr, blank lines, and notifications outside proto
   )
 )
 
-it.effect("forwards only the qualified turn/completed method as a non-authoritative lifecycle hint", () =>
+it.effect("keeps existing ID-less completion notifications as wake hints only", () =>
   withFixture("turn-completed-hint", (app) =>
     Effect.scoped(
       Effect.gen(function* () {
         const hints = yield* app.attachTurnCompletedHints
         const received = yield* hints.pipe(Stream.runHead, Effect.forkChild)
         yield* app.startThread("/fixture/worktree")
+        expect(yield* Fiber.join(received)).toEqual(Option.some(undefined))
+      })
+    )
+  )
+)
+
+it.effect("accepts Codex versionless JSON-RPC-shaped responses and notifications", () =>
+  withFixture("versionless-envelope", (app) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hints = yield* app.attachTurnCompletedHints
+        const received = yield* hints.pipe(Stream.runHead, Effect.forkChild)
+        const thread = yield* app.startThread("/fixture/worktree")
+        expect(thread.id).toBe("protocol-thread")
         expect(yield* Fiber.join(received)).toEqual(Option.some(undefined))
       })
     )

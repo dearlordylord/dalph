@@ -81,7 +81,7 @@ const fixture = () => {
   })
 }
 
-test("accepts two out-of-order reports only as one exact 105-command profile", () => {
+void test("accepts two out-of-order reports only as one exact 105-command profile", () => {
   const envelopes = fixture().reverse()
   const aggregate = aggregateHostedFormalShards({ binding, envelopes })
   assert.equal(aggregate.version, 1)
@@ -103,7 +103,7 @@ test("accepts two out-of-order reports only as one exact 105-command profile", (
   assert.equal(JSON.stringify(aggregate).includes("witnessed in"), false)
 })
 
-test("fails closed on missing duplicate mixed and altered shard evidence", () => {
+void test("fails closed on missing duplicate mixed and altered shard evidence", () => {
   const mutations = [
     (reports) => reports.pop(),
     (reports) => {

@@ -31,7 +31,7 @@ afterEach(() => {
   for (const root of temporaryRoots.splice(0)) rmSync(root, { force: true, recursive: true })
 })
 
-test("admits only explicit documentation locations", () => {
+void test("admits only explicit documentation locations", () => {
   for (const path of [
     "README.md",
     "docs/DEVELOPMENT.md",
@@ -59,13 +59,13 @@ test("admits only explicit documentation locations", () => {
   }
 })
 
-test("requires a non-empty set containing only documentation paths", () => {
+void test("requires a non-empty set containing only documentation paths", () => {
   assert.equal(classifyChangedPaths([]), false)
   assert.equal(classifyChangedPaths(["docs/CONTEXT.md", "README.md"]), true)
   assert.equal(classifyChangedPaths(["docs/CONTEXT.md", "packages/orchestrator/src/index.ts"]), false)
 })
 
-test("selects the exact event comparison base and fails closed for unsupported events", () => {
+void test("selects the exact event comparison base and fails closed for unsupported events", () => {
   assert.equal(
     resolveComparisonBase({ eventName: "pull_request", pullRequestBaseSha: "base", pushBeforeSha: "before" }),
     "base"
@@ -81,7 +81,7 @@ test("selects the exact event comparison base and fails closed for unsupported e
   )
 })
 
-test("fails closed when Git cannot enumerate the exact change", () => {
+void test("fails closed when Git cannot enumerate the exact change", () => {
   const failures = []
   const plan = planCiChange(
     { eventName: "pull_request", headSha, pullRequestBaseSha: baseSha },
@@ -97,7 +97,7 @@ test("fails closed when Git cannot enumerate the exact change", () => {
   assert.deepEqual(failures, ["unreadable comparison"])
 })
 
-test("one exact classifier accepts an unchanged candidate and rejects unavailable identities", () => {
+void test("one exact classifier accepts an unchanged candidate and rejects unavailable identities", () => {
   assert.deepEqual(
     classifyFormalChangeBetween({
       baseSha,
@@ -124,7 +124,7 @@ test("one exact classifier accepts an unchanged candidate and rejects unavailabl
   )
 })
 
-test("fails closed for missing identities, unsupported events, empty diffs, and unavailable projections", () => {
+void test("fails closed for missing identities, unsupported events, empty diffs, and unavailable projections", () => {
   const paths = () => ["packages/dalph/src/index.ts"]
   const formal = () => ["specs/selected.qnt"]
   for (const input of [
@@ -149,7 +149,7 @@ test("fails closed for missing identities, unsupported events, empty diffs, and 
   )
 })
 
-test("rejects malformed hosted formal projections instead of hiding missing inputs", () => {
+void test("rejects malformed hosted formal projections instead of hiding missing inputs", () => {
   for (const text of [
     "not-json",
     JSON.stringify({ version: 1, digest: "wrong", paths: ["specs/model.qnt"] }),
@@ -159,7 +159,7 @@ test("rejects malformed hosted formal projections instead of hiding missing inpu
     assert.throws(() => parseHostedFormalInputManifest(text))
 })
 
-test("requires formal verification for model, helper, command, workflow, and toolchain inputs only", () => {
+void test("requires formal verification for model, helper, command, workflow, and toolchain inputs only", () => {
   const manifest = parseHostedFormalInputManifest(readFileSync(hostedFormalInputManifestPath, "utf8"))
   for (const path of [
     "specs/plannedAttemptExecutor.qnt",
@@ -196,7 +196,7 @@ test("requires formal verification for model, helper, command, workflow, and too
     assert.deepEqual(classifyFormalChangedPaths([path], manifest.paths), [], path)
 })
 
-test("marks an adapter helper and governed source affected while leaving the non-model resolution control unaffected", () => {
+void test("marks an adapter helper and governed source affected while leaving the non-model resolution control unaffected", () => {
   const manifest = parseHostedFormalInputManifest(readFileSync(hostedFormalInputManifestPath, "utf8"))
   for (const path of [
     "packages/dalph/test/conformance/planned-attempt-executor-resume-fixture.ts",
@@ -212,7 +212,7 @@ test("marks an adapter helper and governed source affected while leaving the non
   )
 })
 
-test("classifies exact affected and unaffected plans with visible path evidence", () => {
+void test("classifies exact affected and unaffected plans with visible path evidence", () => {
   const affected = planCiChange(
     { eventName: "pull_request", headSha, pullRequestBaseSha: baseSha },
     () => ["packages/dalph/src/index.ts", "specs/plannedAttemptExecutor.qnt"],
@@ -237,7 +237,7 @@ test("classifies exact affected and unaffected plans with visible path evidence"
   assert.deepEqual(unaffected.formalClassification.affectedPaths, [])
 })
 
-test("reads NUL-delimited Git paths and rejects executable changes and renames", () => {
+void test("reads NUL-delimited Git paths and rejects executable changes and renames", () => {
   const root = mkdtempSync(join(tmpdir(), "dalph-docs-ci-"))
   temporaryRoots.push(root)
   execFileSync("git", ["init", "-q", "-b", "master"], { cwd: root })

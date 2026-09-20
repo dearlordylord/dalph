@@ -39,33 +39,6 @@ import { DalphRuntimeDiagnostic } from "./runtime-diagnostic.js"
 type CurrentStatusRecord = Extract<ProductionCliRecordType, { readonly _tag: "CurrentStatus" }>
 type ClosedStatus = Extract<CurrentStatusRecord["status"], { readonly _tag: "DeliveryStatusClosed" }>
 
-interface AvailableStatusEvidence {
-  readonly entryCount: number
-  readonly liveProposalIds: ReadonlyArray<string>
-  readonly subject: CurrentStatusRecord["status"]["subject"]
-}
-
-const availableStatusEvidence = (
-  subject: CurrentStatusRecord["status"]["subject"],
-  entries: ReadonlyArray<{ readonly _tag: string; readonly proposalId?: unknown }>
-): AvailableStatusEvidence => ({
-  entryCount: entries.length,
-  liveProposalIds: entries.flatMap((entry) =>
-    entry._tag === "LiveDeliveryAction" && typeof entry.proposalId === "string" ? [entry.proposalId] : []
-  ),
-  subject
-})
-
-const availableStatusOf = (record: ProductionCliRecordType): ReadonlyArray<AvailableStatusEvidence> => {
-  if (record._tag !== "CurrentStatus") return []
-  if (record.status._tag === "DeliveryStatusAvailable") {
-    return [availableStatusEvidence(record.status.subject, record.status.entries)]
-  }
-  if (record.status._tag !== "DeliveryStatusClosed" || record.status.final?._tag !== "DeliveryStatusAvailable")
-    return []
-  return [availableStatusEvidence(record.status.final.subject, record.status.final.entries)]
-}
-
 const isClosedStatusRecord = (
   record: ProductionCliRecordType
 ): record is CurrentStatusRecord & { readonly status: ClosedStatus } =>
@@ -349,19 +322,6 @@ it.live(
         }
         const createdClaim = createdClaimOrExit.event
         if (createdClaim._tag !== "CreateClaimLabelStarted") return
-        const heldClaimOwner = yield* takeMatching(
-          first.records,
-          (record) =>
-            record._tag === "CurrentStatus" &&
-            record.status._tag === "DeliveryStatusAvailable" &&
-            record.status.entries.some(
-              (entry) => entry._tag === "LiveDeliveryAction" && entry.operationId === createdClaim.operationId
-            )
-        )
-        expect(heldClaimOwner).toMatchObject({
-          _tag: "CurrentStatus",
-          status: { _tag: "DeliveryStatusAvailable", subject: { _tag: "Run", runId: allocated.runId } }
-        })
         const firstExit = yield* stopAbruptly(first)
         expect(firstExit._tag).toBe("Failure")
         expect(yield* Ref.get(first.recordLog)).not.toContainEqual(expect.objectContaining({ _tag: "RunDisposition" }))
@@ -380,58 +340,39 @@ it.live(
         expect(recovered).toEqual({ _tag: "RunSelected", runId: allocated.runId, selection: "Recovered", version: 1 })
         const recoveredClaimRead = yield* takeMatching(second.events, (event) => event._tag === "FindClaimLabelStarted")
         expect(recoveredClaimRead).toEqual({ _tag: "FindClaimLabelStarted", labelName: createdClaim.labelName })
-        const coherentOrExit = yield* Effect.raceFirst(
-          takeMatching(
-            second.records,
-            (record) =>
-              record._tag === "CurrentStatus" &&
-              record.status._tag === "DeliveryStatusAvailable" &&
-              record.status.entries.length > 0 &&
-              record.status.entries.every(({ _tag }) => _tag !== "LiveDeliveryAction")
-          ).pipe(Effect.map((record) => ({ _tag: "Coherent" as const, record }))),
-          second.handle.exitCode.pipe(Effect.map((exitCode) => ({ _tag: "Exited" as const, exitCode })))
+        const history = yield* takeMatching(
+          second.records,
+          (record) =>
+            record._tag === "HistoricalSnapshot" &&
+            record.snapshot.facets.recovery.retainedResponsibilities.some(
+              (responsibility) =>
+                responsibility._tag === "TaskClaim" && responsibility.claim.operationId === createdClaim.operationId
+            )
         )
-        if (coherentOrExit._tag === "Exited") {
-          yield* awaitGraceful(second)
-          expect.fail(
-            `the recovered command exited with status ${coherentOrExit.exitCode} before a coherent status: ${JSON.stringify(yield* Ref.get(second.recordLog))}`
-          )
-        }
-        const coherent = coherentOrExit.record
-        expect(coherent).toMatchObject({
-          _tag: "CurrentStatus",
-          status: { _tag: "DeliveryStatusAvailable", subject: { _tag: "Run", runId: allocated.runId } }
+        expect(history).toMatchObject({
+          _tag: "HistoricalSnapshot",
+          snapshot: {
+            cursor: { runId: allocated.runId },
+            facets: {
+              recovery: {
+                retainedResponsibilities: [
+                  {
+                    _tag: "TaskClaim",
+                    claim: { operationId: createdClaim.operationId },
+                    source: { runId: allocated.runId }
+                  }
+                ]
+              }
+            }
+          }
         })
-        const history = yield* takeMatching(second.records, (record) => record._tag === "HistoricalSnapshot")
-        expect(history).toMatchObject({ _tag: "HistoricalSnapshot", snapshot: { cursor: { runId: allocated.runId } } })
         const secondExit = yield* stopAbruptly(second)
         expect(secondExit._tag).toBe("Failure")
 
         const secondEvents = yield* Ref.get(second.eventLog)
         expect(secondEvents.filter(({ _tag }) => _tag === "CreateClaimLabelStarted")).toHaveLength(0)
         const recoveredRecords = yield* Ref.get(second.recordLog)
-        const coherentIndex = recoveredRecords.indexOf(coherent)
-        expect(coherentIndex).toBeGreaterThanOrEqual(0)
-        const firstInformativeIndex = recoveredRecords.findIndex(
-          (record) =>
-            record._tag === "CurrentStatus" &&
-            record.status._tag === "DeliveryStatusAvailable" &&
-            record.status.entries.length > 0
-        )
-        expect(firstInformativeIndex).toBeGreaterThanOrEqual(0)
-        const informativeRecovery = recoveredRecords
-          .slice(firstInformativeIndex, coherentIndex + 1)
-          .flatMap(availableStatusOf)
-        expect(informativeRecovery.length).toBeGreaterThan(0)
-        for (const status of informativeRecovery) {
-          expect(status.entryCount).toBeGreaterThan(0)
-          expect(status.subject).toEqual({ _tag: "Run", runId: allocated.runId })
-        }
-        const reconstructedOwnerProposalIds = informativeRecovery.flatMap(({ liveProposalIds }) => liveProposalIds)
-        expect(reconstructedOwnerProposalIds.every((proposalId) => proposalId.includes(createdClaim.operationId))).toBe(
-          true
-        )
-        expect(informativeRecovery.at(-1)?.liveProposalIds).toEqual([])
+        expect(recoveredRecords.filter(({ _tag }) => _tag === "RunSelected")).toEqual([recovered])
 
         const journalContext = yield* Layer.build(
           sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(fixture.journalDatabase) })

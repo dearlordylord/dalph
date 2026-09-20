@@ -63,6 +63,8 @@ import type {
   PassivePlannedAttemptObserver,
   PassivePlannedAttemptProjectionPublication
 } from "./passive-planned-attempt-observer.js"
+import type { AcceptedRunFactPublication } from "./accepted-run-fact-publication.js"
+export { AcceptedRunFactPublication, AcceptedRunFactPublicationRecordMissing } from "./accepted-run-fact-publication.js"
 
 export type JournaledRunProcessServices =
   | DeliveryRuntimeResourceCapabilityPair
@@ -84,8 +86,8 @@ export type AcceptedRunControlDirection = "Pause" | "Unpause"
 /** A process-local observer for an already accepted Run-level control fact. */
 export type AcceptedRunControlObserver = (direction: AcceptedRunControlDirection) => Effect.Effect<void>
 
-/** A process-local observer for one accepted Journal publication that can prompt a fresh current check. */
-export type AcceptedRunFactPublicationObserver = () => Effect.Effect<void>
+/** A process-local observer for one accepted Journal publication. */
+export type AcceptedRunFactPublicationObserver = (publication: AcceptedRunFactPublication) => Effect.Effect<void>
 
 /** The two process-local callbacks installed atomically for one exact Run owner. */
 export interface AcceptedRunReactivationObservers {

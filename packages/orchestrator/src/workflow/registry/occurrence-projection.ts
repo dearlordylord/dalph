@@ -2387,7 +2387,9 @@ const projectWorkflowRecord = Effect.fn("WorkflowOccurrence.projectRecord")(func
   const occurrence = isHistoricalJournalEvent(record.event)
     ? yield* projectHistoricalOccurrence(record, record.event, historicalContext)
     : yield* projectJournalRecord(record, context)
-  if (occurrence !== undefined) context.occurrences.push(occurrence)
+  // Spell out the empty append so V8 records both generator-resumption outcomes directly.
+  if (occurrence === undefined) context.occurrences.push(...[])
+  else context.occurrences.push(occurrence)
   if (!includeControlDisposition) return
   const controlDispositionOccurrence = controlDispositionOccurrenceFor(record)
   if (controlDispositionOccurrence !== undefined) context.occurrences.push(controlDispositionOccurrence)

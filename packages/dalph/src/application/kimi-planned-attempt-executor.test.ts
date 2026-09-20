@@ -5,6 +5,7 @@ import {
   EvidenceReference,
   GitCommitSha,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   PlannedAttemptExecutorResult,
@@ -20,17 +21,22 @@ import {
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
 import { EvidenceStore, GitCommand, type GitCommandService } from "@dalph/orchestrator"
-import { Crypto, Effect, Layer } from "effect"
+import { Crypto, Effect, Layer, Stream } from "effect"
 import { expect } from "vitest"
 import {
   KimiAcpCapabilities,
+  KimiAcpFailure,
   KimiAcpSessionId,
   KimiAcpSessionObservation,
   controlledKimiAcpClientLayer
 } from "./kimi-acp.js"
 import type { KimiAcpClientService as KimiAcpClientServiceType } from "./kimi-acp.js"
 import { kimiPlannedAttemptExecutorLayer } from "./kimi-planned-attempt-executor.js"
-import { memoryKimiAttemptPrivateStoreLayer, type KimiAttemptPrivateRecord } from "./kimi-attempt-store.js"
+import {
+  KimiAttemptPrivateRecord,
+  memoryKimiAttemptPrivateStoreLayer,
+  type KimiAttemptPrivatePhase
+} from "./kimi-attempt-store.js"
 import { plannedAttemptExecutorContract } from "../../../orchestrator/test/contracts/planned-attempt-executor-contract.js"
 
 const sessionId = KimiAcpSessionId.make("kimi-session-1")
@@ -100,22 +106,25 @@ const makeService = () => {
     complete: (message: string) => {
       status = "terminal"
       lastMessage = message
+    },
+    setStatus: (next: KimiAcpSessionObservation["status"]) => {
+      status = next
     }
   }
 }
 
-const makeRequest = () => {
+const makeRequest = (label = "kimi") => {
   const specification = makeTaskWorkSpecification({
     body: "Implement Kimi boundary",
-    taskId: TaskId.make("kimi-task"),
+    taskId: TaskId.make(`${label}-task`),
     title: "Kimi task"
   })
   const attempt = PlannedTaskAttempt.make({
-    attemptId: AttemptId.make("attempt:kimi:0"),
+    attemptId: AttemptId.make(`attempt:${label}:0`),
     baseSha: GitCommitSha.make("1".repeat(40)),
     branch: TaskBranchRef.make("refs/heads/dalph/kimi"),
     executor: TaskExecutorLocator.make("executor:kimi/for-coding"),
-    runId: RunId.make("run:kimi"),
+    runId: RunId.make(`run:${label}`),
     taskId: specification.taskId,
     taskRevision: specification.fingerprint,
     worktree: WorktreeLocator.make(cwd)
@@ -126,6 +135,24 @@ const makeRequest = () => {
     request: PlannedAttemptExecutorRequest.make({ plannedAttempt: attempt, specification })
   }
 }
+
+const makePrivateRecord = (
+  attempt: ReturnType<typeof makeRequest>["attempt"],
+  phase: KimiAttemptPrivatePhase,
+  sessionClosed = false,
+  terminal?: PlannedAttemptExecutorResult
+): KimiAttemptPrivateRecord =>
+  KimiAttemptPrivateRecord.make({
+    attemptId: attempt.attemptId,
+    baseSha: attempt.baseSha,
+    executor: attempt.executor,
+    phase,
+    runId: attempt.runId,
+    sessionId,
+    worktree: attempt.worktree,
+    sessionClosed,
+    ...(terminal === undefined ? {} : { terminal })
+  })
 
 const testLayer = (service: KimiAcpClientServiceType) =>
   kimiPlannedAttemptExecutorLayer.pipe(Layer.provide(controlledKimiAcpClientLayer(service)))
@@ -144,7 +171,16 @@ const testLayerWithPrivateStore = (
 const acceptedDigest = EvidenceDigest.make("00".repeat(32))
 const mismatchedDigest = EvidenceDigest.make("ff".repeat(32))
 
-const makeAcceptanceBoundaries = (head: GitCommitSha, evidenceDigest: EvidenceDigest) => {
+const makeAcceptanceBoundaries = (
+  head: GitCommitSha,
+  evidenceDigest: EvidenceDigest,
+  gitResult: { readonly exitCode: number; readonly stderr: string; readonly stdout: string } = {
+    exitCode: 0,
+    stderr: "",
+    stdout: `${head}\n`
+  },
+  rereadBytes?: Uint8Array
+) => {
   let evidenceBytes = new Uint8Array()
   let evidencePutCalls = 0
   let evidenceReadCalls = 0
@@ -170,7 +206,7 @@ const makeAcceptanceBoundaries = (head: GitCommitSha, evidenceDigest: EvidenceDi
     read: () =>
       Effect.sync(() => {
         evidenceReadCalls += 1
-        return evidenceBytes.slice()
+        return (rereadBytes ?? evidenceBytes).slice()
       })
   })
   const gitCalls: Array<ReadonlyArray<string>> = []
@@ -179,7 +215,7 @@ const makeAcceptanceBoundaries = (head: GitCommitSha, evidenceDigest: EvidenceDi
     runInWorktree: (_worktree, args) =>
       Effect.sync(() => {
         gitCalls.push([...args])
-        return { exitCode: 0, stderr: "", stdout: `${head}\n` }
+        return gitResult
       }),
     runBytesInWorktree: () => Effect.succeed({ exitCode: 0, stderr: "", stdout: new Uint8Array() })
   }
@@ -270,6 +306,28 @@ it.effect("cancels and resumes the same ACP session through the generic command 
   }).pipe(Effect.provide(testLayer(controlled.service)))
 })
 
+it.effect("reconciles a failed resume boundary back to safe suspension", () => {
+  const controlled = makeService()
+  const resumeFailure: KimiAcpClientServiceType = {
+    ...controlled.service,
+    resumeSession: () =>
+      Effect.fail(new KimiAcpFailure({ detail: "Kimi resume failed", kind: "Provider", operation: "session/resume" }))
+  }
+  const { correlation, request } = makeRequest("resume-failure")
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request, { _tag: "InitialDelivery" })
+    yield* executor.requestSuspension(request.plannedAttempt)
+    const error = yield* executor.resume(request).pipe(Effect.flip)
+    expect(error).toMatchObject({ command: "Resume", correlation, detail: "Kimi resume failed" })
+    expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toEqual(
+      PlannedAttemptExecutorProjection.cases.Exact.make({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+      })
+    )
+  }).pipe(Effect.provide(testLayer(resumeFailure)))
+})
+
 it.effect("reconnects a persisted executing session after restart without sending another prompt", () => {
   const controlled = makeService()
   const { attempt, correlation, request } = makeRequest()
@@ -295,6 +353,318 @@ it.effect("reconnects a persisted executing session after restart without sendin
     expect(controlled.calls.slice(beforeRestartCalls)).toEqual([`session/load:${sessionId}:${cwd}`])
     expect(attempt.executor).toBe("executor:kimi/for-coding")
   })
+})
+
+it.effect("replays a retained session-created record before crossing the prompt boundary", () => {
+  const controlled = makeService()
+  const { correlation, request } = makeRequest("retained-session")
+  const retained = makePrivateRecord(request.plannedAttempt, "SessionCreated")
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    expect(yield* executor.begin(request, { _tag: "InitialDelivery" })).toEqual(
+      PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+    )
+    expect(controlled.calls).toEqual([
+      `session/load:${sessionId}:${cwd}`,
+      `prompt:${sessionId}:Implement Kimi boundary`
+    ])
+  }).pipe(Effect.provide(testLayerWithPrivateStore(controlled.service, [retained])))
+})
+
+it.effect("reports an unavailable retained provider session as a typed begin failure", () => {
+  const controlled = makeService()
+  controlled.setStatus("unavailable")
+  const { correlation, request } = makeRequest("unavailable-session")
+  const retained = makePrivateRecord(request.plannedAttempt, "Unavailable")
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    const error = yield* executor.begin(request, { _tag: "InitialDelivery" }).pipe(Effect.flip)
+    expect(error).toMatchObject({ command: "Begin", correlation, detail: "TemporarilyUnavailable" })
+    expect(controlled.calls).toEqual([])
+  }).pipe(Effect.provide(testLayerWithPrivateStore(controlled.service, [retained])))
+})
+
+it.effect("projects a retained session-created record as unreadable when no prompt crossed ACP", () => {
+  const controlled = makeService()
+  const { correlation, request } = makeRequest("unprompted-session")
+  const retained = makePrivateRecord(request.plannedAttempt, "SessionCreated")
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toEqual(
+      PlannedAttemptExecutorProjection.cases.Unreadable.make({
+        correlation,
+        detail: "Kimi session has no recorded prompt"
+      })
+    )
+    expect(controlled.calls).toEqual([`session/load:${sessionId}:${cwd}`])
+  }).pipe(Effect.provide(testLayerWithPrivateStore(controlled.service, [retained])))
+})
+
+it.effect("returns the retained executing projection when Begin is redelivered", () => {
+  const controlled = makeService()
+  const { correlation, request } = makeRequest("executing-redelivery")
+  const retained = makePrivateRecord(request.plannedAttempt, "Executing")
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    expect(yield* executor.begin(request, { _tag: "InitialDelivery" })).toEqual(
+      PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+    )
+    expect(controlled.calls).toEqual([`session/load:${sessionId}:${cwd}`])
+  }).pipe(Effect.provide(testLayerWithPrivateStore(controlled.service, [retained])))
+})
+
+it.effect("reconstructs a suspended Kimi session without sending a prompt", () => {
+  const controlled = makeService()
+  const { correlation, request } = makeRequest("suspended-restart")
+  const retained = makePrivateRecord(request.plannedAttempt, "Suspended")
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toEqual(
+      PlannedAttemptExecutorProjection.cases.Exact.make({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+      })
+    )
+    expect(controlled.calls).toEqual([`session/load:${sessionId}:${cwd}`])
+  }).pipe(Effect.provide(testLayerWithPrivateStore(controlled.service, [retained])))
+})
+
+it.effect("completes a sealed terminal record with no retained result without reopening its session", () => {
+  const controlled = makeService()
+  controlled.setStatus("terminal")
+  const { correlation, request } = makeRequest("sealed-without-result")
+  const retained = makePrivateRecord(request.plannedAttempt, "Terminal", true)
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toEqual(
+      PlannedAttemptExecutorProjection.cases.Exact.make({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+          correlation,
+          result: PlannedAttemptExecutorResult.cases.Completed.make({})
+        })
+      })
+    )
+    expect(controlled.calls).toEqual([])
+  }).pipe(Effect.provide(testLayerWithPrivateStore(controlled.service, [retained])))
+})
+
+it.effect("completes a terminal provider observation with no message at the planned base", () => {
+  const controlled = makeService()
+  const { correlation, request } = makeRequest("terminal-without-message")
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request, { _tag: "InitialDelivery" })
+    controlled.setStatus("terminal")
+    expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toEqual(
+      PlannedAttemptExecutorProjection.cases.Exact.make({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+          correlation,
+          result: PlannedAttemptExecutorResult.cases.Completed.make({})
+        })
+      })
+    )
+  }).pipe(Effect.provide(testLayer(controlled.service)))
+})
+
+it.effect("rejects retained state bound to another worktree before loading the Kimi session", () => {
+  const controlled = makeService()
+  const { correlation, request } = makeRequest("mismatched-session")
+  const retained = KimiAttemptPrivateRecord.make({
+    ...makePrivateRecord(request.plannedAttempt, "Executing"),
+    worktree: WorktreeLocator.make("/worktrees/another-attempt")
+  })
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    const error = yield* executor.begin(request, { _tag: "InitialDelivery" }).pipe(Effect.flip)
+    expect(error).toMatchObject({
+      command: "Begin",
+      correlation,
+      detail: "Kimi private session is bound to a different attempt"
+    })
+    expect(controlled.calls).toEqual([])
+  }).pipe(Effect.provide(testLayerWithPrivateStore(controlled.service, [retained])))
+})
+
+it.effect("reports no state and maps unknown and provider-failed command boundaries", () => {
+  const controlled = makeService()
+  const { attempt, correlation, request } = makeRequest("unknown-session")
+  const initializeFailure: KimiAcpClientServiceType = {
+    ...controlled.service,
+    initialize: () =>
+      Effect.fail(
+        new KimiAcpFailure({ detail: "Kimi executable is unavailable", kind: "Unavailable", operation: "initialize" })
+      )
+  }
+  return Effect.gen(function* () {
+    yield* Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toEqual(
+        PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+      )
+      const suspensionError = yield* executor.requestSuspension(attempt).pipe(Effect.flip)
+      expect(suspensionError).toMatchObject({ command: "Suspend", correlation, detail: "Kimi session is unknown" })
+      const resumeError = yield* executor.resume(request).pipe(Effect.flip)
+      expect(resumeError).toMatchObject({ command: "Resume", correlation, detail: "Kimi session is unknown" })
+    }).pipe(Effect.provide(testLayer(controlled.service)))
+
+    yield* Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      const beginError = yield* executor.begin(request, { _tag: "InitialDelivery" }).pipe(Effect.flip)
+      expect(beginError).toMatchObject({ command: "Begin", correlation, detail: "Kimi executable is unavailable" })
+    }).pipe(Effect.provide(testLayer(initializeFailure)))
+  })
+})
+
+it.effect("ignores malformed terminal commit markers and retains the completed result", () => {
+  const markers: ReadonlyArray<{
+    readonly label: string
+    readonly message: (correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>) => string
+  }> = [
+    { label: "syntax", message: () => "not-json" },
+    { label: "non-record", message: () => "null" },
+    { label: "missing-correlation", message: () => JSON.stringify({ commit: "a".repeat(40) }) },
+    {
+      label: "foreign-correlation",
+      message: () =>
+        JSON.stringify({
+          correlation: { runId: "run:foreign", attemptId: "attempt:foreign:0" },
+          commit: "a".repeat(40)
+        })
+    },
+    { label: "invalid-commit", message: (correlation) => JSON.stringify({ correlation, commit: "not-a-commit" }) }
+  ]
+  return Effect.gen(function* () {
+    yield* Effect.forEach(
+      markers,
+      ({ label, message }) => {
+        const controlled = makeService()
+        const { attempt, correlation, request } = makeRequest(`marker-${label}`)
+        const boundaries = makeAcceptanceBoundaries(attempt.baseSha, acceptedDigest)
+        return Effect.gen(function* () {
+          const executor = yield* PlannedAttemptExecutor
+          yield* executor.begin(request, { _tag: "InitialDelivery" })
+          controlled.complete(message(correlation))
+          expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toEqual(
+            PlannedAttemptExecutorProjection.cases.Exact.make({
+              report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+                correlation,
+                result: PlannedAttemptExecutorResult.cases.Completed.make({})
+              })
+            })
+          )
+          expect(boundaries.evidencePutCalls()).toBe(0)
+        }).pipe(Effect.provide(acceptanceTestLayer(controlled.service, boundaries)))
+      },
+      { discard: true }
+    )
+  })
+})
+
+it.effect("fails closed when Git cannot prove the terminal head or reread evidence bytes", () => {
+  const gitResults: ReadonlyArray<{
+    readonly label: string
+    readonly result: { readonly exitCode: number; readonly stderr: string; readonly stdout: string }
+  }> = [
+    { label: "exit", result: { exitCode: 1, stderr: "missing HEAD", stdout: "" } },
+    { label: "malformed", result: { exitCode: 0, stderr: "", stdout: "not-a-commit\n" } }
+  ]
+  return Effect.gen(function* () {
+    yield* Effect.forEach(
+      gitResults,
+      ({ label, result }) => {
+        const controlled = makeService()
+        const { attempt, correlation, request } = makeRequest(`git-${label}`)
+        const boundaries = makeAcceptanceBoundaries(attempt.baseSha, acceptedDigest, result)
+        return Effect.gen(function* () {
+          const executor = yield* PlannedAttemptExecutor
+          yield* executor.begin(request, { _tag: "InitialDelivery" })
+          controlled.complete("Kimi finished without a provider commit")
+          expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toEqual(
+            PlannedAttemptExecutorProjection.cases.Exact.make({
+              report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+                correlation,
+                result: PlannedAttemptExecutorResult.cases.Failed.make({})
+              })
+            })
+          )
+          expect(boundaries.evidencePutCalls()).toBe(0)
+        }).pipe(Effect.provide(acceptanceTestLayer(controlled.service, boundaries)))
+      },
+      { discard: true }
+    )
+
+    const controlled = makeService()
+    const { attempt, correlation, request } = makeRequest("evidence-bytes")
+    const boundaries = makeAcceptanceBoundaries(
+      GitCommitSha.make("a".repeat(40)),
+      acceptedDigest,
+      undefined,
+      new TextEncoder().encode("changed evidence")
+    )
+    yield* Effect.gen(function* () {
+      const executor = yield* PlannedAttemptExecutor
+      yield* executor.begin(request, { _tag: "InitialDelivery" })
+      controlled.complete(terminalMessage(correlation, GitCommitSha.make("a".repeat(40))))
+      expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toMatchObject({
+        _tag: "Unreadable",
+        detail: "Kimi accepted-result evidence could not be verified"
+      })
+      expect(boundaries.evidencePutCalls()).toBe(1)
+      expect(attempt.worktree).toBe(cwd)
+    }).pipe(Effect.provide(acceptanceTestLayer(controlled.service, boundaries)))
+  })
+})
+
+it.effect("maps a terminal close failure to an unreadable passive projection", () => {
+  const controlled = makeService()
+  const closeFailure: KimiAcpClientServiceType = {
+    ...controlled.service,
+    closeSession: () =>
+      Effect.fail(
+        new KimiAcpFailure({ detail: "Kimi session close failed", kind: "Provider", operation: "session/close" })
+      )
+  }
+  const { correlation, request } = makeRequest("close-failure")
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request, { _tag: "InitialDelivery" })
+    controlled.complete("Kimi finished without a provider commit")
+    expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toEqual(
+      PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation, detail: "Kimi session close failed" })
+    )
+  }).pipe(Effect.provide(testLayer(closeFailure)))
+})
+
+it.effect("attaches current-first lifecycle observations and publishes one terminal change", () => {
+  const controlled = makeService()
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const { correlation, request } = makeRequest("lifecycle")
+      const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+      const empty = yield* lifecycle.attach(correlation)
+      expect(empty.current).toEqual(PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }))
+      expect(yield* Stream.runCollect(empty.changes)).toEqual([])
+      yield* empty.close
+
+      const executor = yield* PlannedAttemptExecutor
+      yield* executor.begin(request, { _tag: "InitialDelivery" })
+      const attachment = yield* lifecycle.attach(correlation)
+      expect(attachment.current).toEqual(
+        PlannedAttemptExecutorProjection.cases.Exact.make({
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+        })
+      )
+      controlled.complete("Kimi finished without a provider commit")
+      expect(yield* Stream.runCollect(attachment.changes)).toEqual([
+        PlannedAttemptExecutorProjection.cases.Exact.make({
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+            correlation,
+            result: PlannedAttemptExecutorResult.cases.Completed.make({})
+          })
+        })
+      ])
+      yield* attachment.close
+    }).pipe(Effect.provide(testLayer(controlled.service)))
+  )
 })
 
 it.effect("reports Accepted only after the terminal commit matches HEAD and reread evidence digest", () => {

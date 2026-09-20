@@ -362,7 +362,7 @@ sys.exit(code)
   return { child, completion, output: () => ({ stdout, stderr }) }
 }
 
-test("standalone formal entry stabilizes PATH before its guarded workflow child", async () => {
+void test("standalone formal entry stabilizes PATH before its guarded workflow child", async () => {
   const f = fixture()
   try {
     const home = join(f.root, "codex-home")
@@ -384,7 +384,7 @@ test("standalone formal entry stabilizes PATH before its guarded workflow child"
   }
 })
 
-test(
+void test(
   "standalone formal entry gives actual formal identity and checker child one stabilized PATH",
   { timeout: 90000 },
   async () => {
@@ -406,7 +406,7 @@ test(
   }
 )
 
-test("standalone formal entry refuses a shim-supplied Java before launching its workflow child", async () => {
+void test("standalone formal entry refuses a shim-supplied Java before launching its workflow child", async () => {
   const f = fixture()
   try {
     const home = join(f.root, "codex-home")
@@ -478,7 +478,7 @@ const waitForStdout = async (process_, expected) => {
   })
 }
 
-test(
+void test(
   "records complete formal success only after obligations and terminal evidence then reuses the original without launches",
   { timeout: 120000 },
   async () => {
@@ -514,7 +514,7 @@ test(
   }
 )
 
-test(
+void test(
   "unrelated test-only repair reuses complete formal success with zero checker or server launches",
   { timeout: 120000 },
   async () => {
@@ -544,7 +544,7 @@ test(
   }
 )
 
-test(
+void test(
   "waits then rereads without duplicate formal launches and nested inherited admission does not deadlock",
   { timeout: 120000 },
   async () => {
@@ -578,7 +578,7 @@ test(
   }
 )
 
-test(
+void test(
   "failed force prevents fallback to older success and retry runs every obligation",
   { timeout: 120000 },
   async () => {
@@ -609,7 +609,7 @@ test(
   }
 )
 
-test(
+void test(
   "noisy formal failure keeps inner lifecycle visible beside one bounded outer diagnostic",
   { timeout: 120000 },
   async () => {
@@ -650,7 +650,7 @@ test(
   }
 )
 
-test(
+void test(
   "unresolved worktree custody refuses the actual formal dispatch before any preparation or checker",
   { timeout: 15000 },
   async () => {
@@ -668,7 +668,7 @@ test(
   }
 )
 
-test(
+void test(
   "corrupted required evidence launches the whole profile while a missing optional console log preserves reuse",
   { timeout: 120000 },
   async () => {
@@ -706,7 +706,7 @@ test(
   }
 )
 
-test(
+void test(
   "an equivalent worktree reuses stopped evidence while changed formal input launches its own complete profile",
   { timeout: 120000 },
   async () => {
@@ -833,7 +833,7 @@ const killFixturePublication = (f, barrier) => {
   return { run, runDirectory }
 }
 
-test(
+void test(
   "publication crashes before during and after durable rename accept only complete stopped evidence after reconciliation",
   { timeout: 300000 },
   async () => {
@@ -914,7 +914,7 @@ test(
 // S4/S8/S12/S14: the real quality workflow acquires genuine controlled formal
 // receipts after preflight, always crosses that boundary on resume, and retains
 // mandatory verdict bytes independently of exact optional diagnostic logs.
-test("quality handoff retains formal evidence through application checks, warm execution and full-prefix resume", async () => {
+void test("quality handoff retains formal evidence through application checks, warm execution and full-prefix resume", async () => {
   const f = fixture()
   try {
     f.put(
@@ -1014,25 +1014,29 @@ runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.
 
 // S1/#362 omission: actual installed execution adapter leaves exactly one
 // command without a process/receipt. Complete canonical profile stays105.
-test("an omitted actual checker obligation cannot publish complete formal success", { timeout: 90000 }, async () => {
-  const f = fixture({ omitObligation: true })
-  try {
-    const result = await launch(f).completion
-    assert.equal(result.code, 1, result.stdout + result.stderr)
-    assert.match(result.stderr, /Missing or duplicate formal checker receipt/u)
-    assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 104)
-    assert.equal(f.events().filter((event) => event === "omitted-checker-obligation").length, 1)
-    assert.equal(f.events().filter((event) => event === "server-start").length, 1)
-    assert.equal(f.events().filter((event) => event === "server-stopped").length, 1)
-    assert.equal(f.saved().pointer.state, "started")
-    assert.equal(f.saved().success.state, "started")
-  } finally {
-    f.cleanup()
+void test(
+  "an omitted actual checker obligation cannot publish complete formal success",
+  { timeout: 90000 },
+  async () => {
+    const f = fixture({ omitObligation: true })
+    try {
+      const result = await launch(f).completion
+      assert.equal(result.code, 1, result.stdout + result.stderr)
+      assert.match(result.stderr, /Missing or duplicate formal checker receipt/u)
+      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 104)
+      assert.equal(f.events().filter((event) => event === "omitted-checker-obligation").length, 1)
+      assert.equal(f.events().filter((event) => event === "server-start").length, 1)
+      assert.equal(f.events().filter((event) => event === "server-stopped").length, 1)
+      assert.equal(f.saved().pointer.state, "started")
+      assert.equal(f.saved().success.state, "started")
+    } finally {
+      f.cleanup()
+    }
   }
-})
+)
 
 // S5: unchanged advertised package version cannot hide changed installed bytes.
-test(
+void test(
   "same-version installed checker bytes invalidate actual reuse and run every obligation",
   { timeout: 120000 },
   async () => {
@@ -1069,7 +1073,7 @@ test(
 
 // S7: pause is the existing native observer control, not a simulated dirty
 // verdict. The real kernel queue is overflowed without changing sysctl policy.
-test("native observer overflow refuses actual warm and fresh qualification", { timeout: 120000 }, async () => {
+void test("native observer overflow refuses actual warm and fresh qualification", { timeout: 120000 }, async () => {
   const f = fixture({ realObservation: true })
   try {
     const fresh = await launch(f).completion
@@ -1097,7 +1101,7 @@ test("native observer overflow refuses actual warm and fresh qualification", { t
 
 // S12: production quality retains the real formal observer for declared tool
 // roots outside candidate source. Test both stage-time and final-drain races.
-test(
+void test(
   "external tool edit and revert after formal completion rejects actual quality handoff",
   { timeout: 120000 },
   async () => {

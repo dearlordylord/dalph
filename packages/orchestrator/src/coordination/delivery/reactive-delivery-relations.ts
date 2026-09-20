@@ -51,6 +51,7 @@ import {
   type TrackerGraphActionProposal
 } from "./relations.js"
 import type { JournalService } from "./journal.js"
+import { acceptedRunFactPublicationFromPrefix } from "../run/accepted-run-fact-publication.js"
 
 type TransitionWithPlannedAttempt = RunnableFrontierTransition & { readonly plannedAttempt: PlannedTaskAttempt }
 
@@ -294,6 +295,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       runId,
       safeContinuationRevalidations
     })
+    const acceptedFactPublication = yield* acceptedRunFactPublicationFromPrefix(journal.position, journal.prefix)
     return {
       actionInputs: {
         freshTaskCandidateFrontier: freshTaskCandidates,
@@ -302,6 +304,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
         reflectionProposals: [],
         runtimeFacts: {
           acceptedAt: journal.position,
+          acceptedFactPublication,
           runId,
           pauseCoverage: pauseCoverageFactsOf(journal),
           quiescence: runIsPaused

@@ -53,7 +53,7 @@ const fixture = () => {
   return { root, outer, git, environment, invocation, guard }
 }
 
-test("unchanged complete inputs produce identical identity and drained final guard proof", async () => {
+void test("unchanged complete inputs produce identical identity and drained final guard proof", async () => {
   const f = fixture()
   const guard = await f.guard()
   try {
@@ -91,7 +91,7 @@ for (const [name, mutate] of [
     }
   ]
 ]) {
-  test(`${String(name)} invalidates the observer despite unchanged HEAD`, async () => {
+  void test(`${String(name)} invalidates the observer despite unchanged HEAD`, async () => {
     const f = fixture()
     const guard = await f.guard()
     try {
@@ -104,7 +104,7 @@ for (const [name, mutate] of [
   })
 }
 
-test("effective environment remains behavioral input and per-run transport does not", async () => {
+void test("effective environment remains behavioral input and per-run transport does not", async () => {
   const f = fixture()
   const guard = await f.guard()
   try {
@@ -117,7 +117,7 @@ test("effective environment remains behavioral input and per-run transport does 
   }
 })
 
-test("an unrelated branch section can be added while the candidate config watch remains live", async () => {
+void test("an unrelated branch section can be added while the candidate config watch remains live", async () => {
   const f = fixture()
   const guard = await f.guard()
   try {
@@ -129,7 +129,7 @@ test("an unrelated branch section can be added while the candidate config watch 
   }
 })
 
-test("a branch whose name extends the current branch remains unrelated configuration", async () => {
+void test("a branch whose name extends the current branch remains unrelated configuration", async () => {
   const f = fixture()
   assert.equal(f.git("branch", "--show-current"), "master")
   const guard = await f.guard()
@@ -142,7 +142,7 @@ test("a branch whose name extends the current branch remains unrelated configura
   }
 })
 
-test("the exact current branch section remains candidate-relevant configuration", async () => {
+void test("the exact current branch section remains candidate-relevant configuration", async () => {
   const f = fixture()
   assert.equal(f.git("branch", "--show-current"), "master")
   const guard = await f.guard()
@@ -155,7 +155,7 @@ test("the exact current branch section remains candidate-relevant configuration"
   }
 })
 
-test("a subsection-less branch setting remains repository-wide candidate configuration", async () => {
+void test("a subsection-less branch setting remains repository-wide candidate configuration", async () => {
   const f = fixture()
   const guard = await f.guard()
   try {
@@ -167,7 +167,7 @@ test("a subsection-less branch setting remains repository-wide candidate configu
   }
 })
 
-test("a candidate-relevant config replacement fails after an unrelated replacement re-arms the watch", async () => {
+void test("a candidate-relevant config replacement fails after an unrelated replacement re-arms the watch", async () => {
   const f = fixture()
   const guard = await f.guard()
   try {
@@ -181,7 +181,7 @@ test("a candidate-relevant config replacement fails after an unrelated replaceme
   }
 })
 
-test("split parent replacement and obsolete file removal events re-arm before the later removal", async () => {
+void test("split parent replacement and obsolete file removal events re-arm before the later removal", async () => {
   const f = fixture()
   const config = join(f.root, ".git", "config")
   const splitMarker = join(f.outer, "split-observer-events")
@@ -242,7 +242,7 @@ runpy.run_path(sys.argv[1], run_name="__main__")
   }
 })
 
-test("split config inode events wait for replacement evidence until validation", () => {
+void test("split config inode events wait for replacement evidence until validation", () => {
   const f = fixture()
   const script = fileURLToPath(new URL("./gate-input-observer.py", import.meta.url))
   // Execute the actual event processor with deterministic read boundaries.
@@ -331,7 +331,7 @@ finally:
     )
 })
 
-test("a shared config edit restored before validation is ignored", async () => {
+void test("a shared config edit restored before validation is ignored", async () => {
   const f = fixture()
   const originalFileMode = f.git("config", "--local", "--get", "core.filemode")
   const guard = await f.guard()
@@ -345,7 +345,7 @@ test("a shared config edit restored before validation is ignored", async () => {
   }
 })
 
-test("resolved external workspace target and symlink replacement are observed", async () => {
+void test("resolved external workspace target and symlink replacement are observed", async () => {
   const f = fixture()
   const external = join(f.outer, "external")
   mkdirSync(external)
@@ -362,7 +362,7 @@ test("resolved external workspace target and symlink replacement are observed", 
   }
 })
 
-test("input inode detects writes through a hardlink outside the watched tree", async () => {
+void test("input inode detects writes through a hardlink outside the watched tree", async () => {
   const f = fixture()
   const alias = join(f.outer, "alias")
   linkSync(join(f.root, "source.ts"), alias)
@@ -376,7 +376,7 @@ test("input inode detects writes through a hardlink outside the watched tree", a
   }
 })
 
-test("generated outputs are excluded until protected as credited artifact inputs", async () => {
+void test("generated outputs are excluded until protected as credited artifact inputs", async () => {
   const f = fixture()
   const artifact = join(f.root, ".scratch", "dist")
   mkdirSync(artifact, { recursive: true })
@@ -394,7 +394,7 @@ test("generated outputs are excluded until protected as credited artifact inputs
   }
 })
 
-test("metadata churn on an excluded ancestor of a protected artifact remains reusable", async () => {
+void test("metadata churn on an excluded ancestor of a protected artifact remains reusable", async () => {
   const f = fixture()
   const scratch = join(f.root, ".scratch")
   const artifact = join(scratch, "dist")
@@ -412,7 +412,7 @@ test("metadata churn on an excluded ancestor of a protected artifact remains reu
   }
 })
 
-test("observer process death fails closed and cleanup alone never establishes success", async () => {
+void test("observer process death fails closed and cleanup alone never establishes success", async () => {
   const f = fixture()
   const observer = await startInputObserver({ roots: [f.root], excludedRoots: [join(f.root, ".git")] })
   try {
@@ -423,7 +423,7 @@ test("observer process death fails closed and cleanup alone never establishes su
   }
 })
 
-test("actual local inotify queue overflow fails closed without sysctl changes", async () => {
+void test("actual local inotify queue overflow fails closed without sysctl changes", async () => {
   const f = fixture()
   const observed = join(f.outer, "overflow")
   mkdirSync(observed)
@@ -444,7 +444,7 @@ test("actual local inotify queue overflow fails closed without sysctl changes", 
   }
 })
 
-test("workspace symlink replacement invalidates reuse even when resolved bytes match", async () => {
+void test("workspace symlink replacement invalidates reuse even when resolved bytes match", async () => {
   const f = fixture()
   const first = join(f.outer, "first")
   const second = join(f.outer, "second")
@@ -464,7 +464,7 @@ test("workspace symlink replacement invalidates reuse even when resolved bytes m
   }
 })
 
-test("tool bytes and mode are immutable even without a lockfile change", async () => {
+void test("tool bytes and mode are immutable even without a lockfile change", async () => {
   const f = fixture()
   const tool = join(f.outer, "tool")
   writeFileSync(tool, "#!/bin/sh\nexit 0\n", { mode: 0o755 })
@@ -478,7 +478,7 @@ test("tool bytes and mode are immutable even without a lockfile change", async (
   }
 })
 
-test("unresolved semantic index stages and unsupported module configuration refuse guard startup", async () => {
+void test("unresolved semantic index stages and unsupported module configuration refuse guard startup", async () => {
   const f = fixture()
   f.environment.NODE_OPTIONS = "--require=/outside/module.js"
   await assert.rejects(f.guard(), /[Uu]nsupported/u)
@@ -491,7 +491,7 @@ test("unresolved semantic index stages and unsupported module configuration refu
   await assert.rejects(f.guard(), /conflicts/u)
 })
 
-test("missing executable and broken external links cannot establish complete input identity", async () => {
+void test("missing executable and broken external links cannot establish complete input identity", async () => {
   const f = fixture()
   f.invocation.toolExecutables.push(join(f.outer, "missing"))
   await assert.rejects(f.guard(), /unavailable/u)
@@ -500,7 +500,7 @@ test("missing executable and broken external links cannot establish complete inp
   await assert.rejects(f.guard())
 })
 
-test("closed guard cannot credit another stage or final evidence", async () => {
+void test("closed guard cannot credit another stage or final evidence", async () => {
   const f = fixture()
   const guard = await f.guard()
   await guard.close()
@@ -508,7 +508,7 @@ test("closed guard cannot credit another stage or final evidence", async () => {
   await assert.rejects(guard.finish(), /closed/u)
 })
 
-test("earlier PATH candidate creation cannot shadow an inventoried stage tool", async () => {
+void test("earlier PATH candidate creation cannot shadow an inventoried stage tool", async () => {
   const f = fixture()
   const earlier = join(f.outer, "earlier")
   mkdirSync(earlier)
@@ -522,7 +522,7 @@ test("earlier PATH candidate creation cannot shadow an inventoried stage tool", 
   }
 })
 
-test("stabilizes an unused Codex argv-zero PATH entry before guarded input observation", async () => {
+void test("stabilizes an unused Codex argv-zero PATH entry before guarded input observation", async () => {
   const f = fixture()
   const arg0 = join(f.outer, ".codex", "tmp", "arg0")
   const shim = join(arg0, "codex-arg0Ab12Cd")
@@ -554,7 +554,7 @@ test("stabilizes an unused Codex argv-zero PATH entry before guarded input obser
   }
 })
 
-test("refuses to remove a Codex argv-zero PATH entry that supplies a declared tool", () => {
+void test("refuses to remove a Codex argv-zero PATH entry that supplies a declared tool", () => {
   const f = fixture()
   const shim = join(f.outer, ".codex", "tmp", "arg0", "codex-arg0Ef34Gh")
   mkdirSync(shim, { recursive: true })
@@ -569,7 +569,7 @@ test("refuses to remove a Codex argv-zero PATH entry that supplies a declared to
   )
 })
 
-test("Mise-style strict ancestor metadata churn preserves executable resolution evidence", async () => {
+void test("Mise-style strict ancestor metadata churn preserves executable resolution evidence", async () => {
   const f = fixture()
   const miseRoot = join(f.outer, ".local", "share", "mise")
   const selected = join(miseRoot, "installs", "fixture-tool", "1.0.0", "bin")
@@ -588,7 +588,7 @@ test("Mise-style strict ancestor metadata churn preserves executable resolution 
   }
 })
 
-test("lasting strict ancestor metadata that breaks tool resolution fails final comparison", async () => {
+void test("lasting strict ancestor metadata that breaks tool resolution fails final comparison", async () => {
   const f = fixture()
   const miseRoot = join(f.outer, ".local", "share", "mise")
   const selected = join(miseRoot, "installs", "fixture-tool", "1.0.0", "bin")
@@ -607,7 +607,7 @@ test("lasting strict ancestor metadata that breaks tool resolution fails final c
   }
 })
 
-test("Mise-style executable path-component rename and restore invalidates resolution evidence", async () => {
+void test("Mise-style executable path-component rename and restore invalidates resolution evidence", async () => {
   const f = fixture()
   const install = join(f.outer, ".local", "share", "mise", "installs", "fixture-tool", "1.0.0")
   const selected = join(install, "bin")
@@ -626,7 +626,7 @@ test("Mise-style executable path-component rename and restore invalidates resolu
   }
 })
 
-test("selected external tool edit and restore remains an observed input mutation", async () => {
+void test("selected external tool edit and restore remains an observed input mutation", async () => {
   const f = fixture()
   const bin = join(f.outer, "tools", "bin")
   mkdirSync(bin, { recursive: true })
@@ -643,7 +643,7 @@ test("selected external tool edit and restore remains an observed input mutation
   }
 })
 
-test("creation of a missing intermediate PATH directory invalidates absent candidate evidence", async () => {
+void test("creation of a missing intermediate PATH directory invalidates absent candidate evidence", async () => {
   const f = fixture()
   const parent = join(f.outer, "missing-path")
   f.environment.PATH = `${join(parent, "bin")}:${f.environment.PATH}`
@@ -656,7 +656,7 @@ test("creation of a missing intermediate PATH directory invalidates absent candi
   }
 })
 
-test("protecting a strict ancestor promotes its metadata to observed artifact input", async () => {
+void test("protecting a strict ancestor promotes its metadata to observed artifact input", async () => {
   const f = fixture()
   const ancestor = join(f.outer, "artifact-parent")
   const tool = join(ancestor, "bin", "fixture-tool")
@@ -673,7 +673,7 @@ test("protecting a strict ancestor promotes its metadata to observed artifact in
   }
 })
 
-test("pnpm entrypoint identity includes implementation modules outside its bin directory", async () => {
+void test("pnpm entrypoint identity includes implementation modules outside its bin directory", async () => {
   const f = fixture()
   const packageRoot = join(f.outer, "pnpm-package")
   mkdirSync(join(packageRoot, "bin"), { recursive: true })
@@ -693,7 +693,7 @@ test("pnpm entrypoint identity includes implementation modules outside its bin d
   }
 })
 
-test("real dprint cache bytes are inputs and queue-wait timestamps are bookkeeping", async () => {
+void test("real dprint cache bytes are inputs and queue-wait timestamps are bookkeeping", async () => {
   const f = fixture()
   const cache = join(f.outer, "dprint-cache")
   mkdirSync(cache)
@@ -711,7 +711,7 @@ test("real dprint cache bytes are inputs and queue-wait timestamps are bookkeepi
   }
 })
 
-test("truncated observer transport and setup failure cannot establish readiness", async () => {
+void test("truncated observer transport and setup failure cannot establish readiness", async () => {
   const f = fixture()
   const fake = join(f.outer, "fake-python")
   writeFileSync(fake, "#!/bin/sh\nprintf '{'\n", { mode: 0o755 })
@@ -738,14 +738,14 @@ for (const options of [
   "--max-old-space-size=8192 -r /outside/preload.cjs",
   "--max-old-space-size=8192 --unknown-future-option"
 ]) {
-  test(`file-loading or unknown NODE_OPTIONS ${options} refuses input guard`, async () => {
+  void test(`file-loading or unknown NODE_OPTIONS ${options} refuses input guard`, async () => {
     const f = fixture()
     f.environment.NODE_OPTIONS = options
     await assert.rejects(f.guard(), /Unsupported NODE_OPTIONS/u)
   })
 }
 
-test("only harness memory/warning NODE_OPTIONS syntax is accepted and digested", async () => {
+void test("only harness memory/warning NODE_OPTIONS syntax is accepted and digested", async () => {
   const f = fixture()
   f.environment.NODE_OPTIONS = "--max-old-space-size=8192 --disable-warning=ExperimentalWarning"
   const guard = await f.guard()
@@ -757,7 +757,7 @@ test("only harness memory/warning NODE_OPTIONS syntax is accepted and digested",
   }
 })
 
-test("excluded ancestor rename replacement restore cannot hide a protected artifact mutation", async () => {
+void test("excluded ancestor rename replacement restore cannot hide a protected artifact mutation", async () => {
   const f = fixture()
   const scratch = join(f.root, ".scratch")
   const artifact = join(scratch, "dist")
@@ -780,7 +780,7 @@ test("excluded ancestor rename replacement restore cannot hide a protected artif
   }
 })
 
-test("nested excluded ancestor replacement cannot hide credited artifact changes", async () => {
+void test("nested excluded ancestor replacement cannot hide credited artifact changes", async () => {
   const f = fixture()
   const ancestor = join(f.root, ".scratch", "nested")
   const artifact = join(ancestor, "run", "dist")
@@ -801,7 +801,7 @@ test("nested excluded ancestor replacement cannot hide credited artifact changes
   }
 })
 
-test("linked-worktree Git locator is protected despite admin output exclusions", async () => {
+void test("linked-worktree Git locator is protected despite admin output exclusions", async () => {
   const f = fixture()
   const linked = join(f.outer, "linked")
   f.git("worktree", "add", "-q", "-b", "linked", linked)
@@ -831,7 +831,7 @@ const disabledDprintFixture = () => {
   return f
 }
 
-test("disabled dprint contract ignores exact incremental and lock bookkeeping", async () => {
+void test("disabled dprint contract ignores exact incremental and lock bookkeeping", async () => {
   const f = disabledDprintFixture()
   const guard = await f.guard()
   try {
@@ -849,7 +849,7 @@ test("disabled dprint contract ignores exact incremental and lock bookkeeping", 
 })
 
 for (const path of ["plugins/plugin.cwasm", "plugins/plugin.json", "unknown/result"]) {
-  test(`disabled dprint contract still observes ${path}`, async () => {
+  void test(`disabled dprint contract still observes ${path}`, async () => {
     const f = disabledDprintFixture()
     const target = join(f.environment.DPRINT_CACHE_DIR, path)
     mkdirSync(join(target, ".."), { recursive: true })
@@ -866,7 +866,7 @@ for (const path of ["plugins/plugin.cwasm", "plugins/plugin.json", "unknown/resu
 }
 
 for (const marker of ["environment", "contract"]) {
-  test(`dprint disabled ${marker} marker alone refuses observation`, async () => {
+  void test(`dprint disabled ${marker} marker alone refuses observation`, async () => {
     const f = disabledDprintFixture()
     if (marker === "environment") delete f.invocation.dprintIncremental
     else delete f.environment.DALPH_DPRINT_INCREMENTAL
@@ -874,7 +874,7 @@ for (const marker of ["environment", "contract"]) {
   })
 }
 
-test("default dprint contract observes incremental cache writes", async () => {
+void test("default dprint contract observes incremental cache writes", async () => {
   const f = disabledDprintFixture()
   delete f.environment.DALPH_DPRINT_INCREMENTAL
   delete f.invocation.dprintIncremental
@@ -887,7 +887,7 @@ test("default dprint contract observes incremental cache writes", async () => {
   }
 })
 
-test("installed dprint check with disabled incremental cache preserves real guard and observes cached plugin mutation", async () => {
+void test("installed dprint check with disabled incremental cache preserves real guard and observes cached plugin mutation", async () => {
   const f = disabledDprintFixture()
   const installed = fileURLToPath(
     new URL("../node_modules/.pnpm/dprint@0.55.2/node_modules/dprint/dprint", import.meta.url)
@@ -929,7 +929,7 @@ test("installed dprint check with disabled incremental cache preserves real guar
   }
 })
 
-test("disabled dprint default HOME cache excludes only its nested bookkeeping directories", async () => {
+void test("disabled dprint default HOME cache excludes only its nested bookkeeping directories", async () => {
   const f = disabledDprintFixture()
   delete f.environment.DPRINT_CACHE_DIR
   const cache = join(f.outer, ".cache", "dprint", "cache")
@@ -945,7 +945,7 @@ test("disabled dprint default HOME cache excludes only its nested bookkeeping di
   }
 })
 
-test("disabled dprint contract still observes cache root replacement", async () => {
+void test("disabled dprint contract still observes cache root replacement", async () => {
   const f = disabledDprintFixture()
   const cache = f.environment.DPRINT_CACHE_DIR
   const guard = await f.guard()
@@ -970,7 +970,7 @@ const candidateGitFixture = () => {
   return f
 }
 
-test("bound candidate history allows real unrelated loose branch and lock writes", async () => {
+void test("bound candidate history allows real unrelated loose branch and lock writes", async () => {
   const f = candidateGitFixture()
   const sibling = f.git("commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "unrelated")
   const guard = await f.guard()
@@ -986,7 +986,7 @@ test("bound candidate history allows real unrelated loose branch and lock writes
 })
 
 for (const authority of ["selected ref", "index", "HEAD"]) {
-  test(`bound candidate history refuses transient ${authority} writes`, async () => {
+  void test(`bound candidate history refuses transient ${authority} writes`, async () => {
     const f = candidateGitFixture()
     const reference = f.git("symbolic-ref", "HEAD")
     const path = join(
@@ -1014,7 +1014,7 @@ for (const authority of ["selected ref", "index", "HEAD"]) {
 }
 
 for (const authority of ["selected ref lock", "index lock"]) {
-  test(`bound candidate history allows transient ${authority} coordination`, async () => {
+  void test(`bound candidate history allows transient ${authority} coordination`, async () => {
     const f = candidateGitFixture()
     const reference = f.git("symbolic-ref", "HEAD")
     const path = join(f.root, ".git", authority === "selected ref lock" ? `${reference}.lock` : "index.lock")
@@ -1031,7 +1031,7 @@ for (const authority of ["selected ref lock", "index lock"]) {
 }
 
 for (const authority of ["HEAD lock"]) {
-  test(`bound candidate history refuses transient ${authority} writes`, async () => {
+  void test(`bound candidate history refuses transient ${authority} writes`, async () => {
     const f = candidateGitFixture()
     const path = join(f.root, ".git", authority === "HEAD lock" ? "HEAD.lock" : "packed-refs.lock")
     const guard = await f.guard()
@@ -1045,7 +1045,7 @@ for (const authority of ["HEAD lock"]) {
   })
 }
 
-test("bound candidate history allows transient packed-refs lock coordination", async () => {
+void test("bound candidate history allows transient packed-refs lock coordination", async () => {
   const f = candidateGitFixture()
   const path = join(f.root, ".git", "packed-refs.lock")
   const guard = await f.guard()
@@ -1059,7 +1059,7 @@ test("bound candidate history allows transient packed-refs lock coordination", a
   }
 })
 
-test("a transient index lock cannot hide a real candidate index mutation", async () => {
+void test("a transient index lock cannot hide a real candidate index mutation", async () => {
   const f = candidateGitFixture()
   const index = join(f.root, ".git", "index")
   const original = readFileSync(index)
@@ -1076,7 +1076,7 @@ test("a transient index lock cannot hide a real candidate index mutation", async
   }
 })
 
-test("a persistent index lock fails the final authoritative snapshot", async () => {
+void test("a persistent index lock fails the final authoritative snapshot", async () => {
   const f = candidateGitFixture()
   const lock = join(f.root, ".git", "index.lock")
   const guard = await f.guard()
@@ -1090,7 +1090,7 @@ test("a persistent index lock fails the final authoritative snapshot", async () 
   }
 })
 
-test("bound candidate history observes intermediate symbolic HEAD chain", async () => {
+void test("bound candidate history observes intermediate symbolic HEAD chain", async () => {
   const f = candidateGitFixture()
   const terminal = f.git("symbolic-ref", "HEAD")
   f.git("symbolic-ref", "refs/heads/alias", terminal)
@@ -1107,7 +1107,7 @@ test("bound candidate history observes intermediate symbolic HEAD chain", async 
   }
 })
 
-test("bound candidate history observes selected ref ancestor replacement and restore", async () => {
+void test("bound candidate history observes selected ref ancestor replacement and restore", async () => {
   const f = candidateGitFixture()
   const directory = join(f.root, ".git", "refs", "heads")
   const moved = join(f.outer, "old-heads")
@@ -1125,7 +1125,7 @@ test("bound candidate history observes selected ref ancestor replacement and res
 })
 
 for (const mismatch of ["missing environment", "missing contract", "wrong HEAD", "broad command", "wrong execution"]) {
-  test(`candidate history refuses ${mismatch}`, async () => {
+  void test(`candidate history refuses ${mismatch}`, async () => {
     const f = candidateGitFixture()
     if (mismatch === "missing environment") delete f.environment.DALPH_GATE_GIT_HISTORY
     if (mismatch === "missing contract") delete f.invocation.gitHistory
@@ -1145,7 +1145,7 @@ for (const authority of [
   "packed-refs",
   "refs/replace/replacement"
 ]) {
-  test(`candidate history observes ${authority} edit and restore`, async () => {
+  void test(`candidate history observes ${authority} edit and restore`, async () => {
     const f = candidateGitFixture()
     const externalExcludes = authority === "external excludes ending in .lock"
     const path = externalExcludes ? join(f.outer, "ignored.lock") : join(f.root, ".git", authority)
@@ -1163,7 +1163,7 @@ for (const authority of [
   })
 }
 
-test("default Git history still observes unrelated refs", async () => {
+void test("default Git history still observes unrelated refs", async () => {
   const f = fixture()
   const guard = await f.guard()
   try {
@@ -1189,7 +1189,7 @@ for (const redirect of [
   "GIT_CONFIG_COUNT",
   "GIT_ATTR_SOURCE"
 ]) {
-  test(`candidate history refuses unsupported ${redirect}`, async () => {
+  void test(`candidate history refuses unsupported ${redirect}`, async () => {
     const f = candidateGitFixture()
     // These unsupported authority redirects must refuse before any stage starts.
     f.environment[redirect] = redirect === "GIT_CONFIG_COUNT" ? "0" : "/outside/authority"
@@ -1197,13 +1197,13 @@ for (const redirect of [
   })
 }
 
-test("candidate history refuses external object alternates", async () => {
+void test("candidate history refuses external object alternates", async () => {
   const f = candidateGitFixture()
   writeFileSync(join(f.root, ".git", "objects", "info", "alternates"), "/outside/objects\n")
   await assert.rejects(f.guard(), /Unsupported Git object indirection/u)
 })
 
-test("candidate history rejects a persistent configuration retargeting of external ignores", async () => {
+void test("candidate history rejects a persistent configuration retargeting of external ignores", async () => {
   const f = candidateGitFixture()
   const guard = await f.guard()
   try {
@@ -1214,7 +1214,7 @@ test("candidate history rejects a persistent configuration retargeting of extern
   }
 })
 
-test("candidate history observes resolved external attributes", async () => {
+void test("candidate history observes resolved external attributes", async () => {
   const f = candidateGitFixture()
   const path = join(f.outer, "attributes")
   writeFileSync(path, "")
@@ -1229,7 +1229,7 @@ test("candidate history observes resolved external attributes", async () => {
   }
 })
 
-test("candidate history refuses external object-directory link", async () => {
+void test("candidate history refuses external object-directory link", async () => {
   const f = candidateGitFixture()
   const objects = join(f.root, ".git", "objects")
   const target = join(f.outer, "external-objects")
@@ -1245,7 +1245,7 @@ test("candidate history refuses external object-directory link", async () => {
   }
 })
 
-test("candidate history refuses authored selected ref ancestor symlink", async () => {
+void test("candidate history refuses authored selected ref ancestor symlink", async () => {
   const f = candidateGitFixture()
   const refs = join(f.root, ".git", "refs")
   const external = join(f.outer, "external-refs")
@@ -1262,7 +1262,7 @@ test("candidate history refuses authored selected ref ancestor symlink", async (
   }
 })
 
-test("read-only status under guarded optional-lock policy leaves stale index metadata untouched while required index mutation still locks", async () => {
+void test("read-only status under guarded optional-lock policy leaves stale index metadata untouched while required index mutation still locks", async () => {
   const f = fixture()
   f.environment.GIT_OPTIONAL_LOCKS = "0"
   const observedGit = (...args) =>

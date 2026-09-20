@@ -1,7 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
 
-const [packageDirectory] = process.argv.slice(2)
+const packageDirectory = process.argv.slice(2).at(0)
 if (packageDirectory === undefined) {
   throw new Error("usage: rewrite-declaration-import-extensions.mjs <package-directory>")
 }

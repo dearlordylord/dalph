@@ -50,8 +50,11 @@ import {
   IntegratorRunQualifiedCandidate,
   integratorCorrelationFor,
   JournalPosition,
+  makeCompleteTaskTrackerFactsObserved,
   makeCompletionTaskFactsObservationOperation,
   makeDeliveryReflection,
+  makeFocusedTaskClaimFactsObserved,
+  makeFocusedTaskClaimFactsUnreadable,
   makeFocusedTaskWorkSpecificationFactsObserved,
   makeTaskWorkSpecificationObservationOperation,
   makeTraceReader,
@@ -88,10 +91,13 @@ import {
   currentSignalOf,
   ProductionRunSelection,
   TaskTrackerMutationThrottled,
+  TaskTrackerFactsReadFailed,
+  UnclaimedTask,
   UnqueuedAcceptedResult,
   WorkflowJournalEvent,
   WorkflowOperation,
   type DeliveryActionProposal,
+  type TaskTrackerFactsObservation,
   type DeliveryRuntimeObservationState,
   type JournalRecord,
   type TicketDeliveryEvidence,
@@ -107,8 +113,12 @@ import {
   qualificationPlannedAttemptFor,
   type QualificationContext
 } from "./production-hermetic-qualification-attempt-source.js"
+import {
+  validateCompletionFacts,
+  validateGraph,
+  validateTrackerFacts
+} from "./production-hermetic-qualification-fixture-source.js"
 import { validateProposal } from "./production-hermetic-qualification-proposal-source.js"
-import { validateCompletionFacts } from "./production-hermetic-qualification-fixture-source.js"
 import { Cause, Effect, Option, Result, Schema } from "effect"
 import { describe, expect, it } from "vitest"
 import { decodeProductionRepositoryHostConfiguration } from "./production-configuration.js"
@@ -1389,6 +1399,73 @@ describe("qualification original source boundary", () => {
     }
   })
 
+  it("reconstructs proposal identity and order while checking live-operation identity sources", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const originalContext = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const { context, routes } = routeFixtures(originalContext)
+    const route = routes.find(
+      (candidate) => candidate._tag === "RecoveredNewActionRoute" && candidate.action._tag === "ReadTrackerGraph"
+    )
+    if (route === undefined) return expect.fail("proposal fixture must contain a recovered graph read")
+    const proposal = proposalForRoute(route, context)
+    if (proposal.route._tag !== "RecoveredNewActionRoute")
+      return expect.fail("proposal fixture must retain the recovered graph read route")
+    if (proposal.actionIdentity._tag !== "FreshOperationIdRequired")
+      return expect.fail("recovered graph read must require one fresh operation identity")
+    const expectedId = deliveryProposalIdOf(context.runId, proposal.route)
+    expect(proposal.id).toBe(expectedId)
+    expect(proposal.order).toEqual({ _tag: "TrackerGraphOrder", acceptedAt: JournalPosition.make(5) })
+    await Effect.runPromise(validateProposal(proposal, context))
+
+    const preserved: DeliveryActionProposal = {
+      _tag: "DeliveryActionProposal",
+      admission: proposal.admission,
+      id: proposal.id,
+      order: proposal.order,
+      owner: proposal.owner,
+      route: proposal.route,
+      actionIdentity: {
+        _tag: "FreshOperationIdRequired" as const,
+        source: { _tag: "Preserve" as const, operationId: OperationId.make("01990a72-38c0-7000-8000-000000000013") }
+      },
+      waitsForLiveOperationId: OperationId.make("01990a72-38c0-7000-8000-000000000014")
+    }
+    await Effect.runPromise(validateProposal(preserved, context))
+    expect(preserved.id).toBe(deliveryProposalIdOf(context.runId, preserved.route))
+
+    const externallyReleased: DeliveryActionProposal = {
+      _tag: "DeliveryActionProposal",
+      admission: proposal.admission,
+      id: proposal.id,
+      order: proposal.order,
+      owner: proposal.owner,
+      route: proposal.route,
+      waitsForLiveOperationId: proposal.waitsForLiveOperationId,
+      actionIdentity: {
+        _tag: "FreshOperationIdRequired" as const,
+        source: {
+          _tag: "ExternalSuccessReleaseClaim" as const,
+          claimOperationId: OperationId.make("01990a72-38c0-7000-8000-000000000015")
+        }
+      }
+    }
+    await Effect.runPromise(validateProposal(externallyReleased, context))
+
+    const counterfeit: DeliveryActionProposal = {
+      _tag: "DeliveryActionProposal",
+      admission: preserved.admission,
+      id: preserved.id,
+      order: preserved.order,
+      owner: preserved.owner,
+      route: proposal.route,
+      actionIdentity: preserved.actionIdentity,
+      waitsForLiveOperationId: OperationId.make("private-proposal-operation")
+    }
+    const rejected = await Effect.runPromise(validateProposal(counterfeit, context).pipe(Effect.flip))
+    expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
+    expect(rejected).not.toHaveProperty("registration")
+  })
+
   it("validates continuation read sources before registering status and rejects substituted source atoms", async () => {
     const { configuration, manifest, runId } = await Effect.runPromise(fixture)
     const originalContext = await Effect.runPromise(contextFor(manifest, configuration, runId))
@@ -1498,6 +1575,123 @@ describe("qualification original source boundary", () => {
           break
       }
     }
+  })
+
+  it("accepts real tracker-facts variants and rejects one-field fixture counterfeits", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const originalContext = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const { context, routes } = routeFixtures(originalContext)
+    const graphRoute = routes.find(
+      (route) => route._tag === "RecoveredNewActionRoute" && route.action._tag === "ReadTrackerGraph"
+    )
+    const specificationRoute = routes.find(
+      (route) => route._tag === "RecoveredNewActionRoute" && route.action._tag === "ReadTaskWorkSpecification"
+    )
+    const claimRoute = routes.find(
+      (route) => route._tag === "RecoveredNewActionRoute" && route.action._tag === "ReadTaskClaim"
+    )
+    if (graphRoute?._tag !== "RecoveredNewActionRoute" || graphRoute.action._tag !== "ReadTrackerGraph")
+      return expect.fail("fixture must contain the original graph read")
+    if (
+      specificationRoute?._tag !== "RecoveredNewActionRoute" ||
+      specificationRoute.action._tag !== "ReadTaskWorkSpecification"
+    )
+      return expect.fail("fixture must contain the original specification read")
+    if (claimRoute?._tag !== "RecoveredNewActionRoute" || claimRoute.action._tag !== "ReadTaskClaim")
+      return expect.fail("fixture must contain the original claim read")
+
+    const completedTask = TrackerTask.make({
+      id: context.taskId,
+      lifecycle: { _tag: "CompletedSuccessfully" },
+      parentTaskId: null,
+      prerequisiteIds: []
+    })
+    const completedGraph = TaskDagSnapshot.project(
+      TrackerSnapshot.make({ revision: trackerRevisionFor([completedTask]), tasks: [completedTask] })
+    )
+    if (completedGraph._tag === "Invalid") return expect.fail("completed graph fixture must project")
+    const graphOperation = WorkflowOperation.cases.ReadTrackerGraph.make({
+      ...graphRoute.action.operation,
+      operationId: OperationId.make("01990a72-38c0-7000-8000-000000000010")
+    })
+    const specificationOperation = WorkflowOperation.cases.ReadTaskWorkSpecification.make({
+      ...specificationRoute.action.operation,
+      operationId: OperationId.make("01990a72-38c0-7000-8000-000000000011")
+    })
+    const claimOperation = WorkflowOperation.cases.ReadTaskClaim.make({
+      ...claimRoute.action.operation,
+      operationId: OperationId.make("01990a72-38c0-7000-8000-000000000012")
+    })
+    const completeFacts = makeCompleteTaskTrackerFactsObserved(graphOperation, completedGraph.snapshot)
+    const specificationFacts = makeFocusedTaskWorkSpecificationFactsObserved(
+      specificationOperation,
+      context.specification
+    )
+    const activeClaimFacts = makeFocusedTaskClaimFactsObserved(
+      claimOperation,
+      completionFixture(context).claim.originalClaim
+    )
+    const unclaimedFacts = makeFocusedTaskClaimFactsObserved(
+      claimOperation,
+      UnclaimedTask.make({ taskId: context.taskId })
+    )
+    const unreadableFacts = makeFocusedTaskClaimFactsUnreadable(claimOperation)
+    const readFailure = TaskTrackerFactsReadFailed.make({
+      completeness: "Unreadable",
+      failure: { _tag: "TrackerReadError", detail: "controlled read failure" },
+      operationId: graphOperation.operationId,
+      target: context.configuration.target
+    })
+    const validFacts: ReadonlyArray<TaskTrackerFactsObservation> = [
+      completeFacts,
+      specificationFacts,
+      activeClaimFacts,
+      unclaimedFacts
+    ]
+    for (const facts of validFacts) {
+      await Effect.runPromise(validateTrackerFacts(facts, context))
+    }
+    const foreignTarget = await Effect.runPromise(
+      Schema.decodeUnknownEffect(TrackerTarget)({
+        _tag: "GithubIssue",
+        owner: "foreign",
+        repository: "controlled",
+        issueNumber: 1
+      })
+    )
+    for (const facts of validFacts) {
+      const rejected = await Effect.runPromise(
+        validateTrackerFacts({ ...facts, target: foreignTarget }, context).pipe(Effect.flip)
+      )
+      expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
+    }
+    for (const facts of [unreadableFacts, readFailure] as const) {
+      const rejected = await Effect.runPromise(validateTrackerFacts(facts, context).pipe(Effect.flip))
+      expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
+    }
+
+    const graph = completedGraph.snapshot.toWire()
+    await Effect.runPromise(validateGraph(graph, context))
+    const wrongRevision = await Effect.runPromise(
+      validateGraph(
+        {
+          ...graph,
+          revision: trackerRevisionFor([TrackerTask.make({ ...completedTask, lifecycle: { _tag: "Open" } })])
+        },
+        context
+      ).pipe(Effect.flip)
+    )
+    expect(wrongRevision._tag).toBe("HermeticQualificationSourceRejected")
+    const extraTask = TrackerTask.make({
+      id: TaskId.make("extra-task"),
+      lifecycle: { _tag: "Open" },
+      parentTaskId: null,
+      prerequisiteIds: []
+    })
+    const wrongCardinality = await Effect.runPromise(
+      validateGraph({ ...graph, tasks: [...graph.tasks, extraTask] }, context).pipe(Effect.flip)
+    )
+    expect(wrongCardinality._tag).toBe("HermeticQualificationSourceRejected")
   })
 
   it("checks the original ordinary history view and rejects a valid private specification before digest registration", async () => {

@@ -270,7 +270,7 @@ export const runQuintEffectiveProfile = async ({
 }
 
 // Importing this module constructs no child process and executes no checker.
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   if (process.env.npm_execpath === undefined) throw new Error("Run this model gate through pnpm")
   assertQuintHostedDeadlineContract(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"))
   await runQuintEffectiveProfile()

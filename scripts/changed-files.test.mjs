@@ -26,7 +26,7 @@ const createFixture = () => {
   return { root, write, baseSha: git(root, "rev-parse", "HEAD") }
 }
 
-test("completeFormalChangedPaths includes committed, staged, working, and NUL-safe untracked paths", () => {
+void test("completeFormalChangedPaths includes committed, staged, working, and NUL-safe untracked paths", () => {
   const fixture = createFixture()
   try {
     fixture.write("README.md", "committed\n")
@@ -51,7 +51,7 @@ test("completeFormalChangedPaths includes committed, staged, working, and NUL-sa
   }
 })
 
-test("completeFormalChangedPaths retains deletion and both sides of a rename", () => {
+void test("completeFormalChangedPaths retains deletion and both sides of a rename", () => {
   const fixture = createFixture()
   try {
     git(fixture.root, "mv", "packages/dalph/src/runtime.ts", "packages/dalph/src/renamed-runtime.ts")
@@ -69,7 +69,7 @@ test("completeFormalChangedPaths retains deletion and both sides of a rename", (
   }
 })
 
-test("changedRepositoryFileSelection keeps an older pinned base after the moving reference advances", () => {
+void test("changedRepositoryFileSelection keeps an older pinned base after the moving reference advances", () => {
   const fixture = createFixture()
   try {
     fixture.write("packages/dalph/src/prerequisite.ts", "prerequisite\n")

@@ -151,7 +151,7 @@ export const planCiChange = (
   }
 }
 
-const invokedDirectly = process.argv[1] !== undefined && pathToFileURL(process.argv[1]).href === import.meta.url
+const invokedDirectly = pathToFileURL(process.argv[1] ?? "").href === import.meta.url
 
 if (invokedDirectly) {
   const plan = planCiChange(

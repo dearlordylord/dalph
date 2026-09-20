@@ -62,6 +62,12 @@ Choose checks by affected behavior, not by commit or handoff alone:
 - **Runtime/model behavior changes:** use focused acceptance tests and `pnpm check:fast`
   during development; run the full gate before integration. Model or conformance
   changes also require adequacy review and a negative control.
+- **Early task-attempt baseline:** after focused checks settle for an attempt, run
+  `pnpm check:baseline` before expensive formal or delivery-repeatability work. It
+  runs the clone-wide lint census followed by the maintained Reducer Lab evaluation;
+  the complete command takes exact-worktree admission, and it does not expand
+  `check:fast` or replace the frozen-candidate gate. This is qualification tooling
+  only and changes no Dalph runtime behavior.
 - **Shared qualification changes:** run the full gate before integration when
   changing shared build/dependency configuration, gate orchestration, or validity of
   qualification evidence. Uncertain impact requires investigation, not exemption.
@@ -126,8 +132,9 @@ All commands below use `pnpm`. Script definitions live in
 | `typecheck:effect:changed` | Effect pass over files changed against `DALPH_DIAGNOSTICS_BASE`, or the explicitly reported moving `origin/master` fallback; falls back to the project pass above twelve changed files. |
 | `lint:code` | Type-aware Oxlint, compatibility ESLint, dprint; warnings fail. File-scoped runs check the compatibility graph only with `--compatibility`. |
 | `lint:changed` | Oxlint, compatibility ESLint, and dprint over files changed against `DALPH_DIAGNOSTICS_BASE`, or the explicitly reported moving `origin/master` fallback; compatibility ESLint receives only the changed TypeScript files. |
-| `check:preflight --candidate=<base sha>` | Pre-freeze structural census: report typecheck (including Effect), lint/format, cycle, complexity, duplication, CI classifier, secrets and artifact failures. Runs no coverage, catalog, Lab or MBT suites. |
+| `check:preflight --candidate=<base sha>` | Pre-freeze census: report typecheck (including Effect), lint/format, maintained Reducer Lab, cycle, complexity, duplication, CI classifier, secrets and artifact failures. Runs no coverage, catalog or MBT suites. |
 | `check:fast` | Development-loop tier: `typecheck`, `lint:changed`. A planned task attempt sets `DALPH_DIAGNOSTICS_BASE` to its exact Base SHA. |
+| `check:baseline` | Early task-attempt baseline: run the clone-wide lint census, then the maintained Reducer Lab evaluation. Use after focused edits settle and before expensive formal or delivery-repeatability work; this does not change `check:fast`. |
 | `check:circular` | Reject runtime dependency cycles. |
 | `check:complexity` | Reject increased per-file counts of production functions above complexity eight. |
 | `check:duplicates` | Enforce the configured duplication budget. |
@@ -146,7 +153,7 @@ All commands below use `pnpm`. Script definitions live in
 | `gate:status <run-id>` | Read durable command results, unresolved custody and per-run logs/report paths without the previous terminal. Missing or malformed receipts cannot prove success. |
 | `gate:reconcile <run-id>` | Close registration and prove every recorded writer group absent before clearing exact worktree/slot fences. Missing exits stay unproven. |
 | `check:all --candidate=<base sha> --resume=<run-id>` | Reuse a contiguous proven full-gate prefix in the same worktree on identical monitored inputs; failed/unproven stage and remaining suffix execute normally. |
-| `check:all` | Complete qualification when required by [choosing checks](#choosing-checks), for a frozen candidate. It reports all ordinary preflight failures together, then starts no formal or application qualification when any preflight check failed. An interruption, unproven surviving process, or runner defect stops the census immediately. The command classifies formal relevance against the declared candidate Base, runs or reuses the complete formal workflow once when affected, records not applicable without formal processes when unaffected, and runs application checks including non-browser Lab; automatic MBT is excluded pending #363. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
+| `check:all` | Complete qualification when required by [choosing checks](#choosing-checks), for a frozen candidate. It reports all ordinary preflight failures together, then starts no formal or application qualification when any preflight check failed. An interruption, unproven surviving process, or runner defect stops the census immediately. The command classifies formal relevance against the declared candidate Base, runs or reuses the complete formal workflow once when affected, records not applicable without formal processes when unaffected, runs the maintained non-browser Lab before application checks, and runs those application checks; automatic MBT is excluded pending #363. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
 | `check:ci` | Hosted gate; MBT remains excluded pending #363. |
 
 When a developer changes a TypeScript or TSX file, `check:fast` passes only the
@@ -202,8 +209,9 @@ classification evidence as not applicable.
 
 ### Heavy-gate admission
 
-`check:all`, `check:ci:quality`, `test`, `check:quint`, and standalone
-`check:preflight` take the exact worktree lock before one of two clone-wide slots.
+`check:all`, `check:ci:quality`, `test`, `check:quint`, `check:baseline`, and
+standalone `check:preflight` take the exact worktree lock before one of two
+clone-wide slots.
 A second writer in that worktree waits without consuming a spare slot; another
 worktree can use it. Nested admitted commands validate the active run and register
 beneath it rather than acquiring again. `DALPH_GATE_SLOT` alone grants no admission.
@@ -425,7 +433,10 @@ final no-checker applicability validation before handoff success. An unaffected
 candidate records its exact classification and starts no formal process. It starts application
 qualification only when its prerequisites pass.
 Standalone preflight is evidence for repairs before freezing; the final full
-gate repeats the census on its frozen candidate. Use `check:fast` during edits.
+gate repeats the census on its frozen candidate. The shared census includes the
+maintained Reducer Lab immediately after the clone-wide lint census, so a Lab
+failure prevents formal and application qualification. Use `check:fast` during
+edits, then `check:baseline` for an early task-attempt baseline before freezing.
 
 In a fresh worktree run:
 
@@ -1059,9 +1070,11 @@ unchanged four-worker V8 policy.
   `origin/master`, then `HEAD^`. It includes staged/unstaged tracked changes and
   untracked production source; non-executable/test/docs/tooling paths are
   excluded. Istanbul statement spans determine changed executable lines.
-- Successful stages share the stdout/stderr budget in `run-quality-gate.mjs`.
-  Failed stages retain complete diagnostics and their exit status. Reduce
-  reporter noise before raising the budget.
+- Successful stages retain exact per-stage stdout/stderr counts in evidence; they
+  do not share a qualification success ceiling. Each admitted child forwards at
+  most 550 lines or 64 KiB to the console when its complete log is retained;
+  failed stages retain complete diagnostics and their exit status. Reduce
+  reporter noise before changing the per-child presentation bound.
 
 For a branch review, set the coverage base explicitly:
 

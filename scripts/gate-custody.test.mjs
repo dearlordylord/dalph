@@ -111,7 +111,7 @@ const runs = (root) => {
   }
 }
 
-test("same-worktree writers never overlap; nested bounded commands have registered obligations and logs", async () => {
+void test("same-worktree writers never overlap; nested bounded commands have registered obligations and logs", async () => {
   const f = fixture()
   try {
     const ready = join(f.root, ".scratch", "ready")
@@ -149,7 +149,7 @@ test("same-worktree writers never overlap; nested bounded commands have register
 })
 
 for (const exitCode of [0, 7])
-  test(`noisy admitted child preserves its complete log and exit ${exitCode}`, async () => {
+  void test(`noisy admitted child preserves its complete log and exit ${exitCode}`, async () => {
     const f = fixture()
     try {
       const expected = "line\n".repeat(700) + "FINAL_DIAGNOSTIC\n"
@@ -172,7 +172,7 @@ for (const exitCode of [0, 7])
   })
 
 for (const mode of ["create", "append"])
-  test(`retained-log ${mode} failure is visible and cannot qualify an admitted child`, async () => {
+  void test(`retained-log ${mode} failure is visible and cannot qualify an admitted child`, async () => {
     const f = fixture()
     try {
       const progressPath = join(f.root, ".scratch", `retained-log-${mode}-progress.jsonl`)
@@ -255,7 +255,7 @@ for (const mode of ["create", "append"])
     }
   })
 
-test("retained-log append failure preserves a nonaccepted child exit and custody absence", async () => {
+void test("retained-log append failure preserves a nonaccepted child exit and custody absence", async () => {
   const f = fixture()
   try {
     const progressPath = join(f.root, ".scratch", "retained-log-append-exit-progress.jsonl")
@@ -297,7 +297,7 @@ test("retained-log append failure preserves a nonaccepted child exit and custody
   }
 })
 
-test("observed stopped custody reconciles without inventing a missing exit; delayed old-run registration refuses", async () => {
+void test("observed stopped custody reconciles without inventing a missing exit; delayed old-run registration refuses", async () => {
   const f = fixture()
   try {
     const a = start(f.root, [process.execPath, "-e", "process.stdout.write('durable log')"])
@@ -339,7 +339,7 @@ test("observed stopped custody reconciles without inventing a missing exit; dela
   }
 })
 
-test("unobserved intent and corrupt inventory remain fenced", async () => {
+void test("unobserved intent and corrupt inventory remain fenced", async () => {
   const f = fixture()
   try {
     assert.equal((await start(f.root, [process.execPath, "-e", ""]).done).code, 0)
@@ -363,7 +363,7 @@ for (const [name, value] of [
   ["DALPH_RUN_REAL_CODEX_QUALIFICATION", "1"],
   ["DALPH_QUALIFICATION_ENV_CAPTURE", "/tmp/unconfined-capture"]
 ]) {
-  test(`rejects ambient ${name} before any admitted writer launch`, async () => {
+  void test(`rejects ambient ${name} before any admitted writer launch`, async () => {
     const f = fixture()
     try {
       const result = await start(f.root, [process.execPath, "-e", "throw Error('must not launch')"], { [name]: value })
@@ -426,7 +426,7 @@ sys.exit(code)
   }
 }
 
-test("killed custody owner retains both fences until observed surviving writer stops; reconciliation then permits progress", async () => {
+void test("killed custody owner retains both fences until observed surviving writer stops; reconciliation then permits progress", async () => {
   const f = fixture()
   let harness
   try {
@@ -462,7 +462,7 @@ test("killed custody owner retains both fences until observed surviving writer s
   }
 })
 
-test("another worktree runs while a same-worktree waiter consumes no spare clone slot", async () => {
+void test("another worktree runs while a same-worktree waiter consumes no spare clone slot", async () => {
   const f = fixture()
   try {
     const other = join(f.root, ".scratch", "other-worktree")
@@ -493,7 +493,7 @@ test("another worktree runs while a same-worktree waiter consumes no spare clone
   }
 })
 
-test("spawn intent is durable before the spawn boundary; an unobserved boundary cannot be reconciled", async () => {
+void test("spawn intent is durable before the spawn boundary; an unobserved boundary cannot be reconciled", async () => {
   const f = fixture()
   try {
     assert.equal((await start(f.root, [process.execPath, "-e", ""]).done).code, 0)
@@ -538,7 +538,7 @@ test("spawn intent is durable before the spawn boundary; an unobserved boundary 
   }
 })
 
-test("definite no-child spawn failure releases custody but records a failing genuine outcome", async () => {
+void test("definite no-child spawn failure releases custody but records a failing genuine outcome", async () => {
   const f = fixture()
   try {
     const a = await start(f.root, [join(f.root, "missing-executable")]).done
@@ -554,7 +554,7 @@ test("definite no-child spawn failure releases custody but records a failing gen
   }
 })
 
-test("launch failure publishes one launch-failed lifecycle terminal without success evidence", async () => {
+void test("launch failure publishes one launch-failed lifecycle terminal without success evidence", async () => {
   const f = fixture()
   try {
     const progressPath = join(f.root, ".scratch", "launch-failure-progress.jsonl")
@@ -586,7 +586,7 @@ test("launch failure publishes one launch-failed lifecycle terminal without succ
   }
 })
 
-test("OS-signal interruption emits the genuine interrupted terminal and preserves custody evidence", async () => {
+void test("OS-signal interruption emits the genuine interrupted terminal and preserves custody evidence", async () => {
   const f = fixture()
   try {
     const ready = join(f.root, ".scratch", "progress-interrupt-ready")
@@ -629,7 +629,7 @@ test("OS-signal interruption emits the genuine interrupted terminal and preserve
   }
 })
 
-test("malformed, wrong-version, wrong-input and invented successful receipts are never successful evidence", async () => {
+void test("malformed, wrong-version, wrong-input and invented successful receipts are never successful evidence", async () => {
   const f = fixture()
   try {
     assert.equal(
@@ -666,7 +666,7 @@ for (const [name, value] of [
   ["DALPH_RUN_REAL_CODEX_QUALIFICATION", "1"],
   ["DALPH_QUALIFICATION_ENV_CAPTURE", "/tmp/unconfined-capture"]
 ]) {
-  test(`inherited admission rejects ${name} before its requested writer launch`, async () => {
+  void test(`inherited admission rejects ${name} before its requested writer launch`, async () => {
     const f = fixture()
     try {
       const source = `const r=require('child_process').spawnSync(process.execPath,[${JSON.stringify(wrapper)},'--',process.execPath,'-e',"throw Error('must not launch')"],{env:{...process.env,${name}:${JSON.stringify(value)}},encoding:'utf8'}); if(r.status!==1||!r.stderr.includes('outside supported gate custody'))process.exit(23);process.stdout.write('refused inherited launch')`
@@ -681,7 +681,7 @@ for (const [name, value] of [
 }
 
 for (const signal of ["SIGTERM", "SIGINT"]) {
-  test(`proven ${signal} termination permits a fresh run and retains genuine signal outcome`, async () => {
+  void test(`proven ${signal} termination permits a fresh run and retains genuine signal outcome`, async () => {
     const f = fixture()
     try {
       const ready = join(f.root, ".scratch", `signal-${signal}`)
@@ -711,7 +711,7 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
   })
 }
 
-test("direct exit 0 with a surviving group keeps worktree and clone capacity fenced until proven reconciliation", async () => {
+void test("direct exit 0 with a surviving group keeps worktree and clone capacity fenced until proven reconciliation", async () => {
   const f = fixture()
   let harness
   try {
@@ -760,7 +760,7 @@ test("direct exit 0 with a surviving group keeps worktree and clone capacity fen
   }
 })
 
-test("a killed nested bounded runner cannot abandon its detached writer custody", async () => {
+void test("a killed nested bounded runner cannot abandon its detached writer custody", async () => {
   const f = fixture()
   let harness
   try {
@@ -806,7 +806,7 @@ test("a killed nested bounded runner cannot abandon its detached writer custody"
   }
 })
 
-test("parent loss leaves only live progress, keeps exact custody fences, and emits no synthetic terminal", async () => {
+void test("parent loss leaves only live progress, keeps exact custody fences, and emits no synthetic terminal", async () => {
   const f = fixture()
   let harness
   try {
@@ -880,7 +880,7 @@ test("parent loss leaves only live progress, keeps exact custody fences, and emi
   }
 })
 
-test("admitted closed reporting transport stops heartbeat without fabricating a terminal", async () => {
+void test("admitted closed reporting transport stops heartbeat without fabricating a terminal", async () => {
   const f = fixture()
   try {
     const transportPath = join(f.root, ".scratch", "closed-reporting-transport.jsonl")
@@ -991,7 +991,7 @@ test("admitted closed reporting transport stops heartbeat without fabricating a 
   }
 })
 
-test("a bare inherited slot ordinal cannot bypass fresh admission", async () => {
+void test("a bare inherited slot ordinal cannot bypass fresh admission", async () => {
   const f = fixture()
   try {
     assert.equal((await start(f.root, [process.execPath, "-e", ""], { DALPH_GATE_SLOT: "1" }).done).code, 0)
@@ -1002,7 +1002,7 @@ test("a bare inherited slot ordinal cannot bypass fresh admission", async () => 
   }
 })
 
-test("finished failed coverage runs retain distinct captured report evidence and the exact base/source association", async () => {
+void test("finished failed coverage runs retain distinct captured report evidence and the exact base/source association", async () => {
   const f = fixture()
   try {
     const script = join(f.root, ".scratch", "coverage-fixture.mjs")
@@ -1030,7 +1030,7 @@ test("finished failed coverage runs retain distinct captured report evidence and
   }
 })
 
-test("changed source cannot be reported as a qualified original input even when the command exits zero", async () => {
+void test("changed source cannot be reported as a qualified original input even when the command exits zero", async () => {
   const f = fixture()
   try {
     const source = `require('fs').appendFileSync('.gitignore','changed-input\\n')`
@@ -1045,7 +1045,7 @@ test("changed source cannot be reported as a qualified original input even when 
   }
 })
 
-test("missing or changed logs cannot prove qualification, and incompatible terminal/registration evidence is refused", async () => {
+void test("missing or changed logs cannot prove qualification, and incompatible terminal/registration evidence is refused", async () => {
   const f = fixture()
   try {
     assert.equal((await start(f.root, [process.execPath, "-e", "process.stdout.write('original log')"]).done).code, 0)
@@ -1074,7 +1074,7 @@ test("missing or changed logs cannot prove qualification, and incompatible termi
   }
 })
 
-test("coverage verifiers consume the admitted run's report directory without starting Vitest", async () => {
+void test("coverage verifiers consume the admitted run's report directory without starting Vitest", async () => {
   const f = fixture()
   try {
     const summaryVerifier = fileURLToPath(new URL("./verify-coverage-summary.mjs", import.meta.url))
@@ -1096,7 +1096,7 @@ test("coverage verifiers consume the admitted run's report directory without sta
   }
 })
 
-test("killing the outer launcher does not release a healthy writer's exact worktree ownership", async () => {
+void test("killing the outer launcher does not release a healthy writer's exact worktree ownership", async () => {
   const f = fixture()
   try {
     const ready = join(f.root, ".scratch", "launcher-ready")
@@ -1130,7 +1130,7 @@ test("killing the outer launcher does not release a healthy writer's exact workt
   }
 })
 
-test("a real crash inside the unobserved spawn boundary remains fenced even when its owner group is absent", async () => {
+void test("a real crash inside the unobserved spawn boundary remains fenced even when its owner group is absent", async () => {
   const f = fixture()
   try {
     const registrationModule = fileURLToPath(new URL("./gate-registration.mjs", import.meta.url))
@@ -1148,7 +1148,7 @@ test("a real crash inside the unobserved spawn boundary remains fenced even when
   }
 })
 
-test("a delayed admitted bootstrap cannot spawn after reconciliation closed its registration", async () => {
+void test("a delayed admitted bootstrap cannot spawn after reconciliation closed its registration", async () => {
   const f = fixture()
   try {
     assert.equal((await start(f.root, [process.execPath, "-e", ""]).done).code, 0)
@@ -1179,7 +1179,7 @@ test("a delayed admitted bootstrap cannot spawn after reconciliation closed its 
   }
 })
 
-test("failed input fingerprinting launches no writer and stopped custody can be reconciled independently", async () => {
+void test("failed input fingerprinting launches no writer and stopped custody can be reconciled independently", async () => {
   const f = fixture()
   try {
     const result = await start(f.root, [process.execPath, "-e", "throw Error('must not launch')"], {
@@ -1199,7 +1199,7 @@ test("failed input fingerprinting launches no writer and stopped custody can be 
   }
 })
 
-test("an explicit replacement child environment cannot omit the admitted owner's custody", async () => {
+void test("an explicit replacement child environment cannot omit the admitted owner's custody", async () => {
   const f = fixture()
   try {
     const script = join(f.root, ".scratch", "explicit-environment.mjs")
@@ -1215,7 +1215,7 @@ test("an explicit replacement child environment cannot omit the admitted owner's
   }
 })
 
-test("missing ambient custody records cannot silently drop registration when the child environment omits them", async () => {
+void test("missing ambient custody records cannot silently drop registration when the child environment omits them", async () => {
   const f = fixture()
   try {
     const script = join(f.root, ".scratch", "missing-owner.mjs")
@@ -1231,7 +1231,7 @@ test("missing ambient custody records cannot silently drop registration when the
   }
 })
 
-test("the private fresh runner refuses direct invocation without the acquiring shell's exact lock", () => {
+void test("the private fresh runner refuses direct invocation without the acquiring shell's exact lock", () => {
   const f = fixture()
   try {
     const runner = fileURLToPath(new URL("./run-admitted-gate.mjs", import.meta.url))
@@ -1249,7 +1249,7 @@ test("the private fresh runner refuses direct invocation without the acquiring s
 })
 
 for (const mode of ["census", "formal-copy"]) {
-  test(`${mode} observer death preserves registered detached writer custody before any next launch`, async () => {
+  void test(`${mode} observer death preserves registered detached writer custody before any next launch`, async () => {
     const f = fixture()
     let harness
     const copy = join(f.root, ".scratch", "formal-negative-copy")
@@ -1360,7 +1360,7 @@ for (const mode of ["census", "formal-copy"]) {
   })
 }
 
-test("an admitted negative test qualifies its successful verdict while retaining genuine nested failures", async () => {
+void test("an admitted negative test qualifies its successful verdict while retaining genuine nested failures", async () => {
   const f = fixture()
   try {
     const script = join(f.root, ".scratch", "expected-failure.mjs")
@@ -1421,7 +1421,7 @@ test("an admitted negative test qualifies its successful verdict while retaining
   }
 })
 
-test("an admitted bounded result explicitly identifies its genuine registered obligation", async () => {
+void test("an admitted bounded result explicitly identifies its genuine registered obligation", async () => {
   const f = fixture()
   try {
     const script = join(f.root, ".scratch", "explicit-result.mjs")
@@ -1445,7 +1445,7 @@ test("an admitted bounded result explicitly identifies its genuine registered ob
 })
 
 for (const mode of ["publish", "owner-death"]) {
-  test(
+  void test(
     mode === "publish"
       ? "an early child waits for observed parent publication before launching its own writer"
       : "parent death before publication refuses the early child and retains both fences",

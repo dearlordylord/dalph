@@ -116,7 +116,9 @@ const bundle = (graph: DeliveryRelationInputBundle["publication"]["graph"]): Del
     proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
     reflectionProposals: [],
     runtimeFacts: {
-      acceptedAt: graph._tag === "GraphEstablished" ? graph.observation.recordedAt : null,
+      ...(graph._tag === "GraphEstablished"
+        ? { acceptedAt: graph.observation.recordedAt, acceptedFactPublication: { _tag: "WorkflowProgress" as const } }
+        : { acceptedAt: null, acceptedFactPublication: null }),
       cancellationApplied: false,
       pauseCoverage: {
         _tag: "PauseCoverageGraphNotEstablished",
@@ -197,7 +199,11 @@ it.effect("emits every accepted stable publication after repeated current planni
           actionInputs: {
             ...current.actionInputs,
             reflectionProposals: index === 1 ? [reflectionProposal] : [],
-            runtimeFacts: { ...current.actionInputs.runtimeFacts, acceptedAt }
+            runtimeFacts: {
+              ...current.actionInputs.runtimeFacts,
+              acceptedAt,
+              acceptedFactPublication: { _tag: "WorkflowProgress" }
+            }
           }
         }
       })
@@ -261,7 +267,12 @@ it.effect("emits one coherent same-position planning successor before a later ac
         ...initialBundle,
         actionInputs: {
           ...initialBundle.actionInputs,
-          runtimeFacts: { ...initialBundle.actionInputs.runtimeFacts, acceptedAt, runId }
+          runtimeFacts: {
+            ...initialBundle.actionInputs.runtimeFacts,
+            acceptedAt,
+            acceptedFactPublication: { _tag: "WorkflowProgress" },
+            runId
+          }
         }
       })
       const coherent = yield* SubscriptionRef.make(at(position80))
@@ -337,7 +348,12 @@ it.effect("a replacement runtime assembly immediately exposes the current same-p
       ...initialBundle,
       actionInputs: {
         ...initialBundle.actionInputs,
-        runtimeFacts: { ...initialBundle.actionInputs.runtimeFacts, acceptedAt: position80, runId }
+        runtimeFacts: {
+          ...initialBundle.actionInputs.runtimeFacts,
+          acceptedAt: position80,
+          acceptedFactPublication: { _tag: "WorkflowProgress" },
+          runId
+        }
       }
     }
     const coherent = yield* SubscriptionRef.make(atPosition80)

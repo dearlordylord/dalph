@@ -36,7 +36,7 @@ import {
   JournalDatabaseLocator,
   InRunJournal
 } from "@dalph/orchestrator"
-import { Cause, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Logger, Option, Schema } from "effect"
 import {
   CodexAppServer,
   codexAppServerNodeLayer,
@@ -403,7 +403,7 @@ if (rawConfiguration.action === undefined) {
   nodeProcess.stderr.write(`${usage}\n`)
   nodeProcess.exitCode = 64
 } else {
-  void Effect.runPromiseExit(configurationProgram)
+  void Effect.runPromiseExit(configurationProgram.pipe(Effect.provideService(Logger.LogToStderr, true)))
     .then((exit) => {
       if (Exit.isSuccess(exit)) return
       const detail = detailOf(Cause.squash(exit.cause)) || Cause.pretty(exit.cause)

@@ -98,7 +98,7 @@ const fixture = () => {
   return { root, outer, toolchain, environment, profile, guard, identity }
 }
 
-test("formal executable lookup continues from a missing PATH entry to the later executable", async () => {
+void test("formal executable lookup continues from a missing PATH entry to the later executable", async () => {
   const root = mkdtempSync(join(tmpdir(), "dalph-formal-path-"))
   cleanups.push(() => rmSync(root, { force: true, recursive: true }))
   const missing = join(root, "missing")
@@ -113,7 +113,7 @@ test("formal executable lookup continues from a missing PATH entry to the later 
   )
 })
 
-test("checked-in hosted formal inputs exactly match the authoritative JavaScript and Quint closure", async () => {
+void test("checked-in hosted formal inputs exactly match the authoritative JavaScript and Quint closure", async () => {
   const manifest = JSON.parse(readFileSync(hostedFormalInputManifestPath, "utf8"))
   for (const path of [
     "package.json",
@@ -143,7 +143,7 @@ test("checked-in hosted formal inputs exactly match the authoritative JavaScript
   )
 })
 
-test("hosted command discovery includes new Node entries and rejects unsupported formal job inputs", () => {
+void test("hosted command discovery includes new Node entries and rejects unsupported formal job inputs", () => {
   const packageJson = JSON.parse(readFileSync("package.json", "utf8"))
   const workflow = readFileSync(".github/workflows/ci.yml", "utf8")
   const withFormalStep = workflow.replace(
@@ -374,7 +374,7 @@ test("hosted command discovery includes new Node entries and rejects unsupported
   )
 })
 
-test("explicit source discovery uses the same parser-backed model and helper closure", async () => {
+void test("explicit source discovery uses the same parser-backed model and helper closure", async () => {
   const f = fixture()
   writeFileSync(join(f.root, "scripts/hosted-entry.mjs"), 'import "./hosted-helper.mjs"\n')
   writeFileSync(join(f.root, "scripts/hosted-helper.mjs"), "export const hosted = true\n")
@@ -386,7 +386,7 @@ test("explicit source discovery uses the same parser-backed model and helper clo
   assert.deepEqual(paths, ["scripts/hosted-entry.mjs", "scripts/hosted-helper.mjs", "specs/model.qnt"])
 })
 
-test("retains formal reuse across unrelated edits without binding HEAD index or base", async () => {
+void test("retains formal reuse across unrelated edits without binding HEAD index or base", async () => {
   const f = fixture(),
     original = await f.identity()
   for (const file of ["source/app.ts", ".git/HEAD", ".git/index"]) writeFileSync(join(f.root, file), "unrelated\n")
@@ -403,7 +403,7 @@ test("retains formal reuse across unrelated edits without binding HEAD index or 
   assert.equal("index" in original, false)
 })
 
-test("builds one applicability identity for equivalent inputs and checkout tools in relocated worktrees", async () => {
+void test("builds one applicability identity for equivalent inputs and checkout tools in relocated worktrees", async () => {
   const first = fixture()
   const launcherPath = (worktree) =>
     join(worktree, "node_modules", ".pnpm", "fixture@1.0.0", "node_modules", "fixture", "node_modules", ".bin", "tool")
@@ -528,7 +528,7 @@ fi
   assert.notEqual(changed.identity.applicabilityDigest, original.applicabilityDigest)
 })
 
-test("discovers direct and transitive JavaScript helpers without including their siblings", async () => {
+void test("discovers direct and transitive JavaScript helpers without including their siblings", async () => {
   const f = fixture()
   writeFileSync(join(f.root, "scripts/run-formal-gate.mjs"), 'import "./direct.mjs"\nimport "./required.cjs"\n')
   writeFileSync(
@@ -556,7 +556,7 @@ test("discovers direct and transitive JavaScript helpers without including their
   assert.equal((await f.identity()).inputDigest, changed.inputDigest)
 })
 
-test("tracks the spawned admission entry and its transitive helpers", async () => {
+void test("tracks the spawned admission entry and its transitive helpers", async () => {
   const f = fixture()
   const original = await f.identity()
   writeFileSync(join(f.root, "scripts/run-admitted-gate.mjs"), 'import "./gate-run-identity.mjs"\n')
@@ -568,7 +568,7 @@ test("tracks the spawned admission entry and its transitive helpers", async () =
   assert.notEqual((await f.identity()).inputDigest, entry.inputDigest)
 })
 
-test("resolves a symlink-imported module's children from the real importer", async () => {
+void test("resolves a symlink-imported module's children from the real importer", async () => {
   const f = fixture()
   mkdirSync(join(f.root, "scripts/alias"))
   mkdirSync(join(f.root, "scripts/real"))
@@ -592,7 +592,7 @@ test("resolves a symlink-imported module's children from the real importer", asy
   assert.notEqual((await f.identity()).inputDigest, original.inputDigest)
 })
 
-test("uses distinct exact ESM and Node CommonJS resolution rules", async () => {
+void test("uses distinct exact ESM and Node CommonJS resolution rules", async () => {
   const f = fixture()
   writeFileSync(join(f.root, "scripts/run-formal-gate.mjs"), 'import "./selector.cjs"\n')
   writeFileSync(join(f.root, "scripts/selector.cjs"), 'require("./helper"); require.resolve("./data")\n')
@@ -627,7 +627,7 @@ test("uses distinct exact ESM and Node CommonJS resolution rules", async () => {
   await assert.rejects(f.guard(), /Unsupported repository native CommonJS input/u)
 })
 
-test("fails closed when extensionless CommonJS selection would lose a lexical symlink", async () => {
+void test("fails closed when extensionless CommonJS selection would lose a lexical symlink", async () => {
   const f = fixture()
   writeFileSync(join(f.root, "scripts/run-formal-gate.mjs"), 'import "./selector.cjs"\n')
   writeFileSync(join(f.root, "scripts/selector.cjs"), 'require("./helper")\n')
@@ -636,7 +636,7 @@ test("fails closed when extensionless CommonJS selection would lose a lexical sy
   await assert.rejects(f.guard(), /Unsupported repository extensionless CommonJS symlink resolution/u)
 })
 
-test("fails closed when CommonJS selection starts through a symlinked directory", async () => {
+void test("fails closed when CommonJS selection starts through a symlinked directory", async () => {
   const f = fixture()
   writeFileSync(join(f.root, "scripts/run-formal-gate.mjs"), 'import "./selector.cjs"\n')
   writeFileSync(join(f.root, "scripts/selector.cjs"), 'require("./linked-package")\n')
@@ -646,7 +646,7 @@ test("fails closed when CommonJS selection starts through a symlinked directory"
   await assert.rejects(f.guard(), /Unsupported repository CommonJS symlinked directory import/u)
 })
 
-test("discovers selected, negative-control, and recursively imported Quint inputs only", async () => {
+void test("discovers selected, negative-control, and recursively imported Quint inputs only", async () => {
   const f = fixture()
   writeFileSync(join(f.root, "specs/model.qnt"), 'module fixture { import helper.* from "./helper" }\n')
   writeFileSync(join(f.root, "specs/helper.qnt"), "module helper {}\n")
@@ -663,7 +663,7 @@ test("discovers selected, negative-control, and recursively imported Quint input
   assert.equal((await f.identity()).inputDigest, selected.inputDigest)
 })
 
-test("retained exact observation ignores unrelated script mutation but rejects imported dependency disappearance", async () => {
+void test("retained exact observation ignores unrelated script mutation but rejects imported dependency disappearance", async () => {
   const f = fixture()
   writeFileSync(join(f.root, "scripts/run-formal-gate.mjs"), 'import "./helper.mjs"\n')
   writeFileSync(join(f.root, "scripts/helper.mjs"), "export const helper = true\n")
@@ -677,7 +677,7 @@ test("retained exact observation ignores unrelated script mutation but rejects i
   await assert.rejects(g.finish(), /dirty|error|missing/u)
 })
 
-test("rejects non-literal repository dependency discovery", async () => {
+void test("rejects non-literal repository dependency discovery", async () => {
   const f = fixture()
   writeFileSync(
     join(f.root, "scripts/run-formal-gate.mjs"),
@@ -686,7 +686,7 @@ test("rejects non-literal repository dependency discovery", async () => {
   await assert.rejects(f.guard(), /Unsupported non-literal dynamic import/u)
 })
 
-test("reruns after selected content, mode, or newly imported target changes", async () => {
+void test("reruns after selected content, mode, or newly imported target changes", async () => {
   const f = fixture(),
     original = await f.identity()
   writeFileSync(join(f.root, "scripts/run-formal-gate.mjs"), "export const changed = true\n")
@@ -700,7 +700,7 @@ test("reruns after selected content, mode, or newly imported target changes", as
   assert.notEqual((await f.identity()).inputDigest, mode.inputDigest)
 })
 
-test("invalidates changed effective tools environment profile or policy", async () => {
+void test("invalidates changed effective tools environment profile or policy", async () => {
   const f = fixture(),
     original = await f.identity()
   writeFileSync(join(f.root, "tools/runtime.so"), "same version different bytes\n")
@@ -744,7 +744,7 @@ for (const [phase, change] of [
     }
   ]
 ])
-  test(`rejects edit and revert at qualification: ${String(phase)}`, async () => {
+  void test(`rejects edit and revert at qualification: ${String(phase)}`, async () => {
     const f = fixture(),
       guard = await f.guard()
     change(f)
@@ -752,7 +752,7 @@ for (const [phase, change] of [
     await assert.rejects(guard.finish(), /dirty|error/u)
   })
 
-test("refuses unidentifiable current inputs: undeclared target and cycle", async () => {
+void test("refuses unidentifiable current inputs: undeclared target and cycle", async () => {
   const f = fixture()
   writeFileSync(join(f.outer, "external.qnt"), "module external {}\n")
   symlinkSync(join(f.outer, "external.qnt"), join(f.root, "specs/external.qnt"))
@@ -765,7 +765,7 @@ test("refuses unidentifiable current inputs: undeclared target and cycle", async
   await assert.rejects(f.guard(), /levels of symbolic links|loop|ELOOP/u)
 })
 
-test("shared dependencies are visited without admitting a filesystem cycle", async () => {
+void test("shared dependencies are visited without admitting a filesystem cycle", async () => {
   const f = fixture()
   symlinkSync("runtime.so", join(f.root, "tools/one"))
   symlinkSync("runtime.so", join(f.root, "tools/two"))
@@ -773,7 +773,7 @@ test("shared dependencies are visited without admitting a filesystem cycle", asy
   assert.equal(identity.toolManifest.filter((entry) => entry.type === "file").length, 1)
 })
 
-test("unsupported prerequisites never yield verified success", async () => {
+void test("unsupported prerequisites never yield verified success", async () => {
   const f = fixture()
   await assert.rejects(f.guard({ toolchain: { ...f.toolchain, platform: "unsupported" } }), /Unsupported/u)
   await assert.rejects(f.guard({ setupTimeoutMilliseconds: Infinity }), /finite/u)
@@ -782,7 +782,7 @@ test("unsupported prerequisites never yield verified success", async () => {
   await assert.rejects(f.guard(), /missing required/u)
 })
 
-test("sanitizes ambient and lifecycle values and rejects loading overrides", () => {
+void test("sanitizes ambient and lifecycle values and rejects loading overrides", () => {
   const env = createFormalEnvironment({
     PATH: "/bin",
     npm_execpath: "/pnpm.cjs",
@@ -801,7 +801,7 @@ test("sanitizes ambient and lifecycle values and rejects loading overrides", () 
     assert.throws(() => createFormalEnvironment(value), /Unsupported/u)
 })
 
-test("fails closed on lost observation and supports bounded abort", async () => {
+void test("fails closed on lost observation and supports bounded abort", async () => {
   const f = fixture(),
     controller = new AbortController()
   const observer = await startInputObserver({
@@ -820,7 +820,7 @@ test("fails closed on lost observation and supports bounded abort", async () => 
   await assert.rejects(g.finish(), /dirty|error/u)
 })
 
-test("watch removal reports the exact lost input path and refuses qualification", async () => {
+void test("watch removal reports the exact lost input path and refuses qualification", async () => {
   const f = fixture()
   const path = join(f.root, "tools/runtime.so")
   const observer = await startInputObserver({ roots: [path] })
@@ -836,14 +836,14 @@ test("watch removal reports the exact lost input path and refuses qualification"
   }
 })
 
-test("rejects a Quint import outside the conservative formal boundary", async () => {
+void test("rejects a Quint import outside the conservative formal boundary", async () => {
   const f = fixture()
   writeFileSync(join(f.outer, "external.qnt"), "module external {}\n")
   writeFileSync(join(f.root, "specs/model.qnt"), 'module fixture { import external.* from "../../external" }\n')
   await assert.rejects(f.guard(), /Quint import leaves the worktree/u)
 })
 
-test("unreadable current inputs refuse qualification without a hash fallback", async () => {
+void test("unreadable current inputs refuse qualification without a hash fallback", async () => {
   const f = fixture()
   chmodSync(join(f.root, "tools/runtime.so"), 0o000)
   await assert.rejects(f.guard(), /EACCES|permission|Errno 13/u)
@@ -855,13 +855,13 @@ for (const [name, source] of [
   ["escaped quoted source", String.raw`module fixture { import helper.* from "../../external\\helper" }`],
   ["module instance source", 'module fixture { import helper(N = 1) as H\n from "../../external/helper" }']
 ])
-  test(`parser rejects external imports: ${name}`, async () => {
+  void test(`parser rejects external imports: ${name}`, async () => {
     const f = fixture()
     writeFileSync(join(f.root, "specs/model.qnt"), source)
     await assert.rejects(f.guard(), /Quint import leaves the worktree/u)
   })
 
-test("parser respects comments and quoted strings without manufacturing source imports", async () => {
+void test("parser respects comments and quoted strings without manufacturing source imports", async () => {
   const f = fixture()
   writeFileSync(
     join(f.root, "specs/model.qnt"),
@@ -877,7 +877,7 @@ test("parser respects comments and quoted strings without manufacturing source i
   assert.equal((await g.finish()).unchanged, true)
 })
 
-test("parser validates an observed multiline local import using checker locator semantics", async () => {
+void test("parser validates an observed multiline local import using checker locator semantics", async () => {
   const f = fixture()
   writeFileSync(join(f.root, "specs/helper.qnt"), "module helper {}\n")
   writeFileSync(
@@ -889,7 +889,7 @@ test("parser validates an observed multiline local import using checker locator 
 })
 
 for (const location of ["worktree", "ancestor", "JVM user.home"])
-  test(`refuses implicit Apalache configuration at ${location}`, async () => {
+  void test(`refuses implicit Apalache configuration at ${location}`, async () => {
     const f = fixture()
     const path =
       location === "worktree"
@@ -902,7 +902,7 @@ for (const location of ["worktree", "ancestor", "JVM user.home"])
     await assert.rejects(f.guard(), /Unsupported existing Apalache configuration/u)
   })
 
-test("observes absence of implicit Apalache configurations and rejects ordinary create revert", async () => {
+void test("observes absence of implicit Apalache configurations and rejects ordinary create revert", async () => {
   const f = fixture(),
     g = await f.guard()
   const path = join(f.root, ".apalache.cfg")
@@ -915,7 +915,7 @@ test("observes absence of implicit Apalache configurations and rejects ordinary 
   await assert.rejects(g.finish(), /dirty|error/u)
 })
 
-test("JVM configuration paths bind actual identified home instead of caller HOME", async () => {
+void test("JVM configuration paths bind actual identified home instead of caller HOME", async () => {
   const f = fixture()
   mkdirSync(join(f.environment.HOME, ".tlaplus"), { recursive: true })
   writeFileSync(join(f.environment.HOME, ".tlaplus/apalache.cfg"), "unrelated caller HOME configuration")
@@ -930,7 +930,7 @@ test("JVM configuration paths bind actual identified home instead of caller HOME
   await assert.rejects(g.finish(), /dirty|error/u)
 })
 
-test("rejects edit and revert before initial hashing returns any formal identity", async () => {
+void test("rejects edit and revert before initial hashing returns any formal identity", async () => {
   const f = fixture()
   let observed = false
   let returnedIdentity = false
@@ -961,7 +961,7 @@ test("rejects edit and revert before initial hashing returns any formal identity
   assert.equal(readFileSync(join(f.root, "specs/model.qnt"), "utf8"), "module fixture {}\n")
 })
 
-test("uses the existing supported custody host identity without a machine-id prerequisite", async () => {
+void test("uses the existing supported custody host identity without a machine-id prerequisite", async () => {
   const f = fixture(),
     g = await f.guard()
   assert.deepEqual(g.identity.host, localHostIdentity())
@@ -973,36 +973,40 @@ test("uses the existing supported custody host identity without a machine-id pre
   assert.deepEqual(g.identity.host, localHostIdentity())
 })
 
-test("pinned lexer source pairs contain every pinned parser import and instance source", { timeout: 10_000 }, () => {
-  const require = createRequire(import.meta.url)
-  const { parsePhase1fromText } = require("@informalsystems/quint/dist/src/parsing/quintParserFrontend.js")
-  const { newIdGenerator } = require("@informalsystems/quint/dist/src/idGenerator.js")
-  for (const text of [
-    'module fixture { import helper.*\n from "../external//helper" }',
-    String.raw`module fixture { import helper.* from "../external\\helper" }`,
-    'module fixture { import helper(N = 1) as H\n from /* source comment */ "./helper" }',
-    'module fixture { import helper.* from "./first" import helper as H from "./second" }',
-    'module fixture { // import helper.* from "./hidden"\n val text = "from // ordinary string" val from = "ordinary" }'
-  ]) {
-    const parsed = parsePhase1fromText(newIdGenerator(), text, "differential-fixture")
-    assert.deepEqual(parsed.errors, [])
-    const expected = parsed.modules.flatMap((module) =>
-      module.declarations
-        .filter((declaration) => declaration.kind === "import" || declaration.kind === "instance")
-        .map((declaration) => declaration.fromSource)
-        .filter(Boolean)
-    )
-    const observed = quintImportSources(text, "differential-fixture")
-    for (const source of expected) assert.equal(observed.includes(source), true)
-    assert.deepEqual(observed, expected)
+void test(
+  "pinned lexer source pairs contain every pinned parser import and instance source",
+  { timeout: 10_000 },
+  () => {
+    const require = createRequire(import.meta.url)
+    const { parsePhase1fromText } = require("@informalsystems/quint/dist/src/parsing/quintParserFrontend.js")
+    const { newIdGenerator } = require("@informalsystems/quint/dist/src/idGenerator.js")
+    for (const text of [
+      'module fixture { import helper.*\n from "../external//helper" }',
+      String.raw`module fixture { import helper.* from "../external\\helper" }`,
+      'module fixture { import helper(N = 1) as H\n from /* source comment */ "./helper" }',
+      'module fixture { import helper.* from "./first" import helper as H from "./second" }',
+      'module fixture { // import helper.* from "./hidden"\n val text = "from // ordinary string" val from = "ordinary" }'
+    ]) {
+      const parsed = parsePhase1fromText(newIdGenerator(), text, "differential-fixture")
+      assert.deepEqual(parsed.errors, [])
+      const expected = parsed.modules.flatMap((module) =>
+        module.declarations
+          .filter((declaration) => declaration.kind === "import" || declaration.kind === "instance")
+          .map((declaration) => declaration.fromSource)
+          .filter(Boolean)
+      )
+      const observed = quintImportSources(text, "differential-fixture")
+      for (const source of expected) assert.equal(observed.includes(source), true)
+      assert.deepEqual(observed, expected)
+    }
   }
-})
+)
 
-test("pinned lexer errors cannot silently omit an unidentified source", () => {
+void test("pinned lexer errors cannot silently omit an unidentified source", () => {
   assert.throws(() => quintImportSources("module fixture { val text = @ }", "invalid-fixture"), /lexical input/u)
 })
 
-test(
+void test(
   "final handoff validation cancels an observer drain within its caller's remaining allowance",
   { timeout: 2_000 },
   async () => {
