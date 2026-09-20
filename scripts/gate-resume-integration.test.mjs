@@ -107,7 +107,7 @@ const runs = (root) => {
     )
     .map((runId) => readRunEvidence({ runId, runDirectory: join(location.custodyRoot, "runs", runId) }))
 }
-test("an unaffected candidate resumes proven stages with not-applicable formal evidence and no formal workflow", () => {
+void test("an unaffected candidate resumes proven stages with not-applicable formal evidence and no formal workflow", () => {
   const f = fixture()
   let completed = false
   try {
@@ -206,7 +206,7 @@ return runBoundedCommand({executable:process.execPath,args:['--input-type=module
   }
 })
 
-test("admitted census failure reruns later successful checks instead of treating them as prefix islands", () => {
+void test("admitted census failure reruns later successful checks instead of treating them as prefix islands", () => {
   const f = fixture()
   try {
     const counter = join(f.root, ".scratch", "census-counter")
@@ -236,7 +236,7 @@ const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,pro
   }
 })
 
-test("admitted check:all reports lint and complexity failures together before qualification", () => {
+void test("admitted check:all reports lint and complexity failures together before qualification", () => {
   const f = fixture()
   try {
     const formalSentinel = join(f.root, ".scratch", "unexpected-formal-launch")
@@ -283,7 +283,7 @@ const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,pro
   }
 })
 
-test("resumed suffix consumes the original successful output budget", () => {
+void test("resumed suffix consumes the original successful output budget", () => {
   const f = fixture()
   try {
     const release = join(f.root, ".scratch", "budget-release")
@@ -313,7 +313,7 @@ const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,pro
   }
 })
 
-test("a real edit-and-restore during a designated stage forbids later launches and composite qualification", () => {
+void test("a real edit-and-restore during a designated stage forbids later launches and composite qualification", () => {
   const f = fixture()
   try {
     const next = join(f.root, ".scratch", "forbidden-next")
@@ -340,7 +340,7 @@ const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,pro
   }
 })
 
-test("an enclosing negative test proves later cleanup while preserving the child's failed absence observation and reuse", () => {
+void test("an enclosing negative test proves later cleanup while preserving the child's failed absence observation and reuse", () => {
   const f = fixture()
   try {
     const script = join(f.root, ".scratch", "cleanup-negative.mjs")
@@ -376,7 +376,7 @@ const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,pro
   }
 })
 
-test("a fresh build protects its produced artifacts against consumer edit-and-restore before the next launch", () => {
+void test("a fresh build protects its produced artifacts against consumer edit-and-restore before the next launch", () => {
   const f = fixture()
   try {
     const next = join(f.root, ".scratch", "artifact-forbidden-next")
@@ -405,7 +405,7 @@ const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,pro
   }
 })
 
-test("fresh platform setup precedes observation, ready diagnostics do not mutate, and resume preserves changed mode", () => {
+void test("fresh platform setup precedes observation, ready diagnostics do not mutate, and resume preserves changed mode", () => {
   const f = fixture()
   try {
     const helper = new URL("./effect-tsgo-platform-binary.mjs", import.meta.url).href

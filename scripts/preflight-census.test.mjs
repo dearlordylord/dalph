@@ -4,7 +4,7 @@ import { runPreflightCensus } from "./preflight-census.mjs"
 
 const stage = (name) => ({ name, args: [name] })
 
-test("reports independent failures together", async () => {
+void test("reports independent failures together", async () => {
   const invocations = []
   const diagnostics = []
   const result = await runPreflightCensus({
@@ -24,7 +24,7 @@ test("reports independent failures together", async () => {
   assert.ok(diagnostics.some((line) => line.includes("3 failed stages")))
 })
 
-test("preserves successful command order and output accounting", async () => {
+void test("preserves successful command order and output accounting", async () => {
   const invocations = []
   const result = await runPreflightCensus({
     gates: [stage("artifacts"), stage("capability")],
@@ -40,7 +40,7 @@ test("preserves successful command order and output accounting", async () => {
 })
 
 for (const outcome of ["interrupted", "cancelled", "failed"]) {
-  test(`stops launching after ${outcome} instead of treating unsafe termination as an ordinary finding`, async () => {
+  void test(`stops launching after ${outcome} instead of treating unsafe termination as an ordinary finding`, async () => {
     const invocations = []
     const failure = Object.assign(new Error(outcome), { quintCommandResult: outcome })
     await assert.rejects(
@@ -59,7 +59,7 @@ for (const outcome of ["interrupted", "cancelled", "failed"]) {
 }
 
 for (const outcome of ["launch-failed", "timed-out"]) {
-  test(`continues independent checks after ${outcome} with no surviving process group`, async () => {
+  void test(`continues independent checks after ${outcome} with no surviving process group`, async () => {
     const invocations = []
     const result = await runPreflightCensus({
       gates: [stage("first"), stage("second")],

@@ -53,7 +53,7 @@ const inputs = () => {
     }
   }
 }
-test("late failure reuses only the contiguous proven prefix and charges original console output", () => {
+void test("late failure reuses only the contiguous proven prefix and charges original console output", () => {
   const result = selectResumePrefix(inputs())
   assert.equal(result.status, "selected")
   assert.deepEqual(
@@ -63,7 +63,7 @@ test("late failure reuses only the contiguous proven prefix and charges original
   assert.equal(result.successfulOutputLines, 12)
   assert.equal(result.prefix[0].runId, "original")
 })
-test("earlier census failure never turns later successes into reusable islands", () => {
+void test("earlier census failure never turns later successes into reusable islands", () => {
   const args = inputs()
   args.priorEvidence.resume.stages[0].outcome = "failed"
   assert.deepEqual(selectResumePrefix(args).prefix, [])
@@ -175,7 +175,7 @@ for (const [name, mutate] of [
     }
   ]
 ])
-  test(`refuses ${String(name)} before any prefix is credited`, () => {
+  void test(`refuses ${String(name)} before any prefix is credited`, () => {
     const args = inputs()
     mutate(args)
     assert.equal(selectResumePrefix(args).status, "refused")
