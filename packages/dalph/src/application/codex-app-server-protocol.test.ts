@@ -465,6 +465,7 @@ const onMessage = (message) => {
   if (
     (mode === "initialize-unanswered" && message.method === "initialize") ||
     (mode === "thread-start-unanswered" && message.method === "thread/start") ||
+    (mode === "thread-read-unanswered" && message.method === "thread/read") ||
     (mode === "thread-resume-unanswered" && message.method === "thread/resume") ||
     (mode === "background-list-unanswered" && message.method === "thread/backgroundTerminals/list")
   ) {
@@ -640,7 +641,12 @@ const withFixture = <A>(
   )
 
 const unansweredFixture = (
-  mode: "initialize-unanswered" | "thread-start-unanswered" | "thread-resume-unanswered" | "background-list-unanswered",
+  mode:
+    | "initialize-unanswered"
+    | "thread-start-unanswered"
+    | "thread-read-unanswered"
+    | "thread-resume-unanswered"
+    | "background-list-unanswered",
   action: (app: CodexAppServerService) => Effect.Effect<unknown, CodexAppServerFailure>
 ) =>
   Effect.scoped(
@@ -671,7 +677,7 @@ const unansweredFixture = (
   )
 
 const passiveUnansweredFixture = (
-  mode: "thread-resume-unanswered" | "background-list-unanswered",
+  mode: "thread-read-unanswered" | "thread-resume-unanswered" | "background-list-unanswered",
   action: (app: CodexAppServerService) => Effect.Effect<unknown, CodexAppServerFailure>
 ) =>
   Effect.scoped(
@@ -1246,6 +1252,27 @@ it.effect("bounds an unanswered passive retained-thread resume without stopping 
         expect(failure.value).toMatchObject({
           kind: "ResponseDeadline",
           rpcSnapshot: { requestId: 3, method: "thread/resume", sentCount: 3, responseCount: 2, pendingCount: 0 }
+        })
+      }
+    }
+  })
+)
+
+it.effect("bounds an unanswered passive retained-thread read without stopping its owned child", () =>
+  Effect.gen(function* () {
+    const exit = yield* passiveUnansweredFixture("thread-read-unanswered", (app) =>
+      Effect.gen(function* () {
+        const thread = yield* app.startThread("/fixture/worktree")
+        return yield* app.readThread(thread.id)
+      })
+    )
+    expectAppFailure(exit, "thread/read")
+    if (Exit.isFailure(exit)) {
+      const failure = Cause.findErrorOption(exit.cause)
+      if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+        expect(failure.value).toMatchObject({
+          kind: "ResponseDeadline",
+          rpcSnapshot: { requestId: 3, method: "thread/read", sentCount: 3, responseCount: 2, pendingCount: 0 }
         })
       }
     }
