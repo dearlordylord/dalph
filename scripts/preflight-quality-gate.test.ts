@@ -9,6 +9,7 @@ const structuralCommands = [
   "check:artifacts",
   "typecheck",
   "lint:code",
+  "check:lab",
   "check:circular",
   "check:complexity",
   "check:duplicates",
@@ -67,6 +68,26 @@ it(
     expect(invocations).toEqual(structuralCommands)
     expect(result.exitCode).toBe(1)
     expect(result.output).toContain("Preflight failed: pnpm test:formal:controls")
+    expect(invocations).not.toContain("test")
+    expect(invocations).not.toContain("check:quint")
+  },
+  qualityGateFixtureTestTimeoutMilliseconds
+)
+
+it(
+  "fails before formal evidence and qualification when the maintained Lab fails",
+  async () => {
+    const { invocations, result } = await runQualityGateFixture({
+      fixtureName: "reducer-lab-failure",
+      failureCommand: "check:lab"
+    })
+
+    expect(invocations).toEqual(structuralCommands)
+    expect(result.exitCode).toBe(1)
+    expect(result.output).toContain("Preflight failed: pnpm check:lab")
+    expect(result.output).toContain("qualification stages did not start")
+    expect(invocations).not.toContain("test:delivery-repeatability")
+    expect(invocations).not.toContain("test:recorded-catalog")
     expect(invocations).not.toContain("test")
     expect(invocations).not.toContain("check:quint")
   },

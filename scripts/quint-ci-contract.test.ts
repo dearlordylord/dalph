@@ -167,9 +167,22 @@ describe("hosted formal-model contract", () => {
     const structuralCommands = preflightQualityGates("fixture-base").map(
       (stage: { args: ReadonlyArray<string> }) => stage.args[0]
     )
+    const manifest = fullQualityGateManifest("fixture-base")
+    const reducerLab = manifest.find((stage) => stage.id === "reducer-lab")
     expect(structuralCommands).not.toContain("test:mbt")
     expect(stageCommands).not.toContain("test:mbt")
     expect(stageCommands).not.toContain("check:quint")
+    expect(structuralCommands.indexOf("check:lab")).toBe(structuralCommands.indexOf("lint:code") + 1)
+    expect(reducerLab).toMatchObject({
+      args: ["check:lab"],
+      artifactRoots: ["prototypes/reducer-lab/dist"],
+      boundary: "preflight"
+    })
+    expect(stageCommands.slice(structuralCommands.length)).toEqual([
+      "test:delivery-repeatability",
+      "test:recorded-catalog",
+      "test"
+    ])
     expect(packageJson.scripts["check:ci:quality"]).not.toContain("test:mbt")
   })
 

@@ -236,7 +236,7 @@ const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,pro
   }
 })
 
-void test("admitted check:all reports lint and complexity failures together before qualification", () => {
+void test("admitted check:all reports lint, Lab, and complexity failures before qualification", () => {
   const f = fixture()
   try {
     const formalSentinel = join(f.root, ".scratch", "unexpected-formal-launch")
@@ -245,29 +245,35 @@ void test("admitted check:all reports lint and complexity failures together befo
       `import {writeFileSync} from 'node:fs';export const runFormalWorkflow=async()=>{writeFileSync(${JSON.stringify(formalSentinel)},'launched');throw new Error('formal verification unexpectedly launched')}`
     )
     const script = join(f.root, ".scratch", "collected-preflight.mjs")
-    const sources = ["process.exit(23)", "process.exit(24)", "process.exitCode=99"]
+    const sources = ["process.exit(23)", "process.exit(25)", "process.exit(24)", "process.exitCode=99"]
     writeFileSync(
       script,
       `import {executeResumableQualityGate} from ${JSON.stringify(new URL(`file://${join(f.root, "scripts", "gate-quality-run.mjs")}`).href)};import {runBoundedCommand} from ${JSON.stringify(bounded)};
-const sources=${JSON.stringify(sources)};const manifest=sources.map((source,ordinal)=>({id:['format-lint','complexity','coverage'][ordinal],name:['format and lint','cyclomatic complexity','tests and coverage'][ordinal],boundary:ordinal<2?'preflight':'qualification',args:[ordinal===0?'lint:code':ordinal===1?'check:complexity':'test:coverage'],timeout:10000,artifactRoots:[],execution:{executable:process.execPath,args:['-e',source],cwd:process.cwd(),name:['format and lint','cyclomatic complexity','tests and coverage'][ordinal],timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
+const sources=${JSON.stringify(sources)};const manifest=sources.map((source,ordinal)=>({id:['format-lint','reducer-lab','complexity','coverage'][ordinal],name:['format and lint','Reducer Lab maintained evaluation','cyclomatic complexity','tests and coverage'][ordinal],boundary:ordinal<3?'preflight':'qualification',args:[ordinal===0?'lint:code':ordinal===1?'check:lab':ordinal===2?'check:complexity':'test:coverage'],timeout:10000,artifactRoots:[],execution:{executable:process.execPath,args:['-e',source],cwd:process.cwd(),name:['format and lint','Reducer Lab maintained evaluation','cyclomatic complexity','tests and coverage'][ordinal],timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000}}));
 const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1]],baseSha:${JSON.stringify(f.git("rev-parse", "HEAD^"))},stageManifest:manifest,toolExecutables:[]};logicalInvocation.formalClassification={version:1,status:'affected',baseSha:logicalInvocation.baseSha,headSha:undefined,changedPaths:['controlled-formal-input'],affectedPaths:['controlled-formal-input']};await executeResumableQualityGate({stageManifest:manifest,logicalInvocation,runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',sources[manifest.indexOf(stage)]],name:stage.name,timeoutMilliseconds:10000})});`
     )
     const failed = launch(f.root, script)
     assert.equal(failed.status, 1, failed.stderr)
     assert.match(failed.stderr, /Preflight failed: pnpm lint:code/u)
+    assert.match(failed.stderr, /Preflight failed: pnpm check:lab/u)
     assert.match(failed.stderr, /Preflight failed: pnpm check:complexity/u)
-    assert.match(failed.stderr, /Preflight failed: 2 failed stages/u)
+    assert.match(failed.stderr, /Preflight failed: 3 failed stages/u)
     assert.match(failed.stderr, /qualification stages did not start/u)
     const evidence = runs(f.root)[0]
     assert.deepEqual(
       evidence.resume.stages.map((stage) => [stage.stageId, stage.outcome]),
       [
         ["format-lint", "failed"],
+        ["reducer-lab", "failed"],
         ["complexity", "failed"],
         ["coverage", "UNPROVEN"]
       ]
     )
     assert.equal(evidence.stages.find((stage) => stage.command.name === "format and lint")?.exitCode, 23)
+    assert.equal(
+      evidence.stages.find((stage) => stage.command.name === "Reducer Lab maintained evaluation")?.exitCode,
+      25
+    )
     assert.equal(evidence.stages.find((stage) => stage.command.name === "cyclomatic complexity")?.exitCode, 24)
     assert.equal(
       evidence.stages.some((stage) => stage.command.name === "tests and coverage"),
