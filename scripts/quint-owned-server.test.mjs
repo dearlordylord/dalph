@@ -115,7 +115,7 @@ if(mode!=='success'&&!mode.startsWith('output-route')&&!error)throw Error('failu
   return { root, result, receipts, runDirectory, cleanup: () => rmSync(root, { recursive: true, force: true }) }
 }
 
-test("replaces caller authored owned-server transport metadata", () => {
+void test("replaces caller authored owned-server transport metadata", () => {
   assert.deepEqual(
     ownedQuintServerEnvironment(
       {
@@ -136,7 +136,7 @@ test("replaces caller authored owned-server transport metadata", () => {
   )
 })
 
-test("uses and terminates only the identified owned server", () => {
+void test("uses and terminates only the identified owned server", () => {
   const f = fixture("success")
   try {
     assert.equal(f.result.checks, 1)
@@ -159,7 +159,7 @@ test("uses and terminates only the identified owned server", () => {
   }
 })
 
-test("refuses another process endpoint without checking or stopping the ambient listener", () => {
+void test("refuses another process endpoint without checking or stopping the ambient listener", () => {
   const f = fixture("ownership-failure")
   try {
     // The colliding child can exit while ownership is being observed. Losing
@@ -175,7 +175,7 @@ test("refuses another process endpoint without checking or stopping the ambient 
   }
 })
 
-test("failed owned-server readiness stops its child and launches no profile", () => {
+void test("failed owned-server readiness stops its child and launches no profile", () => {
   const f = fixture("readiness-failure")
   try {
     assert.match(f.result.error, /fixture reflection refused/u)
@@ -187,7 +187,7 @@ test("failed owned-server readiness stops its child and launches no profile", ()
   }
 })
 
-test("unexpected owned-server exit cancels active checking and cannot qualify", () => {
+void test("unexpected owned-server exit cancels active checking and cannot qualify", () => {
   const f = fixture("early-death")
   try {
     assert.match(f.result.error, /stopped before planned shutdown/u)
@@ -201,7 +201,7 @@ test("unexpected owned-server exit cancels active checking and cannot qualify", 
   }
 })
 
-test("owned-server shutdown absence failure refuses success", () => {
+void test("owned-server shutdown absence failure refuses success", () => {
   const f = fixture("shutdown-failure")
   try {
     assert.match(f.result.error, /still has a listener/u)
@@ -213,7 +213,7 @@ test("owned-server shutdown absence failure refuses success", () => {
   }
 })
 
-test("missing inherited admission refuses owned-server launch", () => {
+void test("missing inherited admission refuses owned-server launch", () => {
   // The test suite itself can run inside admitted preflight custody. This
   // separate child removes that custody without changing other tests' context.
   const result = spawnSync(
@@ -234,7 +234,7 @@ assert.equal(calls,0);
   assert.equal(result.status, 0, result.stdout + result.stderr)
 })
 
-test("unsupported owned-server prerequisites refuse launch before custody registration", () => {
+void test("unsupported owned-server prerequisites refuse launch before custody registration", () => {
   const f = fixture("prerequisite-failure")
   try {
     assert.match(f.result.error, /missing patched owned-server readiness/u)
@@ -246,7 +246,7 @@ test("unsupported owned-server prerequisites refuse launch before custody regist
   }
 })
 
-test("server readiness consumes finite execution allowance and cannot qualify on timeout", () => {
+void test("server readiness consumes finite execution allowance and cannot qualify on timeout", () => {
   const f = fixture("readiness-timeout")
   try {
     assert.match(f.result.error, /stopped before planned shutdown.*exceeded/u)
@@ -262,7 +262,7 @@ test("server readiness consumes finite execution allowance and cannot qualify on
   }
 })
 
-test("interruption during checking stops the owned server without planned success", () => {
+void test("interruption during checking stops the owned server without planned success", () => {
   const f = fixture("interruption")
   try {
     assert.match(f.result.error, /interrupted/u)
@@ -279,7 +279,7 @@ test("interruption during checking stops the owned server without planned succes
   }
 })
 
-test("missing Java user.home refuses server launch", () => {
+void test("missing Java user.home refuses server launch", () => {
   const f = fixture("missing-java-home")
   try {
     assert.match(f.result.error, /identified absolute Java executable and user.home/u)
@@ -290,7 +290,7 @@ test("missing Java user.home refuses server launch", () => {
   }
 })
 
-test("Java arguments with another user.home refuse server launch", () => {
+void test("Java arguments with another user.home refuse server launch", () => {
   const f = fixture("wrong-java-home")
   try {
     assert.match(f.result.error, /arguments do not enforce the identified user.home/u)
@@ -303,7 +303,7 @@ test("Java arguments with another user.home refuse server launch", () => {
 
 // Fresh output must respect the same candidate observer that surrounds handoff.
 // Only the native socket child replaces Java; custody and observation are real.
-test("fresh owned server output stays in its admitted helper directory without changing candidate inputs", () => {
+void test("fresh owned server output stays in its admitted helper directory without changing candidate inputs", () => {
   const f = fixture("output-route")
   try {
     assert.equal(f.result.cwd, f.root)
@@ -328,7 +328,7 @@ test("fresh owned server output stays in its admitted helper directory without c
   }
 })
 
-test("dropping only the owned server output argument makes native candidate observation refuse fresh qualification", () => {
+void test("dropping only the owned server output argument makes native candidate observation refuse fresh qualification", () => {
   const f = fixture("output-route-old")
   try {
     assert.equal(f.result.result.serverEvidence.receipt.groupAbsent, true)

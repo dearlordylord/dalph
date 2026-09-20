@@ -47,7 +47,7 @@ const controls = (profile, launches) => ({
   write: () => {}
 })
 
-test("hosted and local imports launch no checker", async () => {
+void test("hosted and local imports launch no checker", async () => {
   const result = await promisify(execFile)(process.execPath, [
     "--input-type=module",
     "-e",
@@ -57,7 +57,7 @@ test("hosted and local imports launch no checker", async () => {
   assert.equal(result.stderr, "")
 })
 
-test("materializes the independent complete 105 obligations before any launch", () => {
+void test("materializes the independent complete 105 obligations before any launch", () => {
   const profile = createQuintEffectiveProfile()
   assertQuintEffectiveProfile(profile)
   const commandContract = profile.commands.map(({ args, kind, name, position, verdict }) => ({
@@ -134,7 +134,7 @@ test("materializes the independent complete 105 obligations before any launch", 
   }
 })
 
-test("profile omission substitution argument verdict scheduling and policy changes refuse checker launches", async () => {
+void test("profile omission substitution argument verdict scheduling and policy changes refuse checker launches", async () => {
   const mutations = [
     (p) => p.commands.pop(),
     (p) => {
@@ -171,7 +171,7 @@ test("profile omission substitution argument verdict scheduling and policy chang
   }
 })
 
-test("records every actual command custody ID and required verdict output with owned routing", async () => {
+void test("records every actual command custody ID and required verdict output with owned routing", async () => {
   const profile = createQuintEffectiveProfile()
   const launches = []
   const environment = { QUINT_HOME: "/identified/quint", PATH: "/identified/bin" }
@@ -209,7 +209,7 @@ test("records every actual command custody ID and required verdict output with o
   }
 })
 
-test("cost-priority admission changes hosted order without changing guarded-local order", async () => {
+void test("cost-priority admission changes hosted order without changing guarded-local order", async () => {
   const hostedProfile = createQuintEffectiveProfile()
   const hostedLaunches = []
   await runQuintEffectiveProfile(controls(hostedProfile, hostedLaunches))
@@ -227,7 +227,7 @@ test("cost-priority admission changes hosted order without changing guarded-loca
   )
 })
 
-test("a hosted shard executes only its whole-family canonical positions", async () => {
+void test("a hosted shard executes only its whole-family canonical positions", async () => {
   for (const hostedShard of [0, 1]) {
     const profile = createQuintEffectiveProfile()
     const expected = createQuintHostedShard(profile, hostedShard)
@@ -246,7 +246,7 @@ test("a hosted shard executes only its whole-family canonical positions", async 
   }
 })
 
-test("a bare successful exit cannot replace required witness and temporal verdict output", async () => {
+void test("a bare successful exit cannot replace required witness and temporal verdict output", async () => {
   for (const failedPosition of [3, 5, 6, 68]) {
     const profile = createQuintEffectiveProfile()
     const launches = []
@@ -270,7 +270,7 @@ test("a bare successful exit cannot replace required witness and temporal verdic
   }
 })
 
-test("expired shared server deadline refuses checker launch without resetting the budget", async () => {
+void test("expired shared server deadline refuses checker launch without resetting the budget", async () => {
   const profile = createQuintEffectiveProfile()
   const launches = []
   await assert.rejects(
@@ -286,7 +286,7 @@ test("expired shared server deadline refuses checker launch without resetting th
   assert.equal(launches.length, 0)
 })
 
-test("owned server cancellation reaches every checker instead of allowing the remaining profile", async () => {
+void test("owned server cancellation reaches every checker instead of allowing the remaining profile", async () => {
   const profile = createQuintEffectiveProfile()
   const launches = []
   const controller = new AbortController()
@@ -308,7 +308,7 @@ test("owned server cancellation reaches every checker instead of allowing the re
   assert.equal(launches.length, 1)
 })
 
-test("a supplied but invalid shared deadline never falls back to a fresh local budget", async () => {
+void test("a supplied but invalid shared deadline never falls back to a fresh local budget", async () => {
   const profile = createQuintEffectiveProfile()
   for (const remaining of [undefined, NaN, Infinity, -1]) {
     const launches = []
@@ -320,7 +320,7 @@ test("a supplied but invalid shared deadline never falls back to a fresh local b
   }
 })
 
-test("a failing family checker cancels its running sibling before any later obligation starts", async () => {
+void test("a failing family checker cancels its running sibling before any later obligation starts", async () => {
   const profile = createQuintEffectiveProfile()
   const launches = []
   const normalRun = controlledRun(profile, launches)
@@ -359,7 +359,7 @@ test("a failing family checker cancels its running sibling before any later obli
   assert.ok(launches.every(({ position }) => position < 4))
 })
 
-test("compact mode retains distinct failure diagnostics from every failed or cancelled family sibling", async () => {
+void test("compact mode retains distinct failure diagnostics from every failed or cancelled family sibling", async () => {
   const profile = createQuintEffectiveProfile()
   const launches = []
   const output = []
@@ -400,7 +400,7 @@ test("compact mode retains distinct failure diagnostics from every failed or can
   assert.equal(diagnostics.split("SIBLING_CANCELLATION_DIAGNOSTIC").length - 1, 1)
 })
 
-test("guarded local execution preserves all hosted obligations and spends the shared local deadline", async () => {
+void test("guarded local execution preserves all hosted obligations and spends the shared local deadline", async () => {
   const hosted = createQuintEffectiveProfile()
   const profile = createQuintEffectiveProfile({ purpose: "local-guarded" })
   assertQuintEffectiveProfile(profile, { purpose: "local-guarded" })
@@ -431,7 +431,7 @@ test("guarded local execution preserves all hosted obligations and spends the sh
   )
 })
 
-test("hosted and guarded local execution reject each other's profile and arbitrary local policy before launch", async () => {
+void test("hosted and guarded local execution reject each other's profile and arbitrary local policy before launch", async () => {
   const hosted = createQuintEffectiveProfile()
   const local = createQuintEffectiveProfile({ purpose: "local-guarded" })
   const weakened = structuredClone(local)

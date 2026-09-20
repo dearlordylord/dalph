@@ -74,7 +74,7 @@ const fixture = async () => {
   }
 }
 
-test("retained formal observation permits unrelated application work and final full fingerprint without checker launch", async () => {
+void test("retained formal observation permits unrelated application work and final full fingerprint without checker launch", async () => {
   const f = await fixture()
   try {
     writeFileSync(join(f.root, "source/app.ts"), "application changed\n")
@@ -91,7 +91,7 @@ test("retained formal observation permits unrelated application work and final f
   }
 })
 
-test("continuous external tool edit and revert after formal stage rejects final handoff", async () => {
+void test("continuous external tool edit and revert after formal stage rejects final handoff", async () => {
   const f = await fixture()
   try {
     writeFileSync(f.runtime, "changed\n")
@@ -102,7 +102,7 @@ test("continuous external tool edit and revert after formal stage rejects final 
   }
 })
 
-test("fully resumed application prefix still rejects missing current formal applicability without launching checkers", async () => {
+void test("fully resumed application prefix still rejects missing current formal applicability without launching checkers", async () => {
   const f = await fixture()
   try {
     f.invalidateLatest()
@@ -112,7 +112,7 @@ test("fully resumed application prefix still rejects missing current formal appl
   }
 })
 
-test("control phases consume the remaining allowance and reject expiration without restarting a deadline", () => {
+void test("control phases consume the remaining allowance and reject expiration without restarting a deadline", () => {
   let elapsed = 0
   const remaining = createFormalControlDeadline({ allowanceMilliseconds: 100, now: () => elapsed })
   assert.equal(remaining("setup", 60), 60)
@@ -123,7 +123,7 @@ test("control phases consume the remaining allowance and reject expiration witho
   assert.throws(() => createFormalControlDeadline({ allowanceMilliseconds: Infinity }), /finite positive/u)
 })
 
-test("external tool edit and revert during the final candidate drain rejects the last formal drain", async () => {
+void test("external tool edit and revert during the final candidate drain rejects the last formal drain", async () => {
   const f = await fixture()
   try {
     await f.lifecycle.finalizeApplicability()
@@ -135,7 +135,7 @@ test("external tool edit and revert during the final candidate drain rejects the
   }
 })
 
-test("local acquisition retains phase caps inside one finite extended execution allowance", () => {
+void test("local acquisition retains phase caps inside one finite extended execution allowance", () => {
   assert.equal(formalGatePolicy.outerMilliseconds, 2100000)
   assert.equal(formalGatePolicy.executionEnvelopeMilliseconds, 1857000)
   assert.equal(formalGatePolicy.preparationMilliseconds, 60000)
