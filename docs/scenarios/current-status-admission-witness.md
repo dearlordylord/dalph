@@ -342,3 +342,87 @@ adds no recovery request or automatic qualification rerun.
   tests own the comparison rule but do not substitute for that final
   composition. Remaining #339 acceptance scenarios and native blocking edges
   are unchanged.
+
+## Alice sees the newest passive status and truthful closure during recovery
+
+Status: accepted narrow publication repair for issue #391. This scenario
+preserves the current-first public Run presenter and the separate history,
+Run-disposition, and application-Exit records. It changes only how the
+process-local presenter coalesces passive values and proves closure; it adds no
+workflow transition, durable status fact, or outside mutation.
+
+### Starting facts and trigger
+
+Alice invokes the production command. Dalph opens the existing Journal, recovers
+one unfinished Run R, and gives the public presenter the exact selected Run,
+its current-status source, its accepted-history source, and the child
+termination observation. The presenter has no private executor transcript and
+does not own tracker, Git, claim, cleanup, or Journal mutation authority.
+
+The recovered public source first has a coherent current status S0. While R is
+still active, the execution substrate and accepted workflow facts produce a
+burst of passive statuses S1, S2, and S3. The source may become silent after
+S3. Later, Alice or the host receives an application Exit request while the
+child or recovery observation is still in flight. These are observations at
+the public boundary, not requests to start another workflow action.
+
+### Ordered presenter calls and visible result
+
+1. The presenter writes `RunSelected` for R and immediately writes the first
+   attached current status S0. It does not wait for the passive pacing window
+   before showing the recovered Run.
+2. During the one-second passive publication window, the presenter accepts
+   passive updates but retains only the newest pending value. For the burst
+   above it does not replay S1 or S2 in FIFO order, and it does not drop S3
+   merely because the source becomes quiet.
+3. After the window expires, the presenter serially writes S3 even if no newer
+   value arrives. It emits at most one subsequent passive publication per
+   second, and terminal publication cannot overtake or duplicate that pending
+   value.
+4. When application Exit is requested, the presenter stops ordinary passive
+   intake. The recovery wait races the child-exit observation where that child
+   can settle the wait. Dalph rereads the authoritative termination state. If
+   that reread proves that R is actually Closed, the presenter writes exactly
+   one `DeliveryStatusClosed` containing that actual final status before the
+   host writes `ApplicationExitDisposition`.
+5. Application Exit does not create `RunDisposition`, synthesize Closed from a
+   timeout or an absent row, append a second beginning, or repeat a tracker,
+   Git, executor, claim, cleanup, or Journal mutation. A failure to prove the
+   authoritative closure writes no synthetic Closed and preserves the typed
+   application-Exit/lifecycle failure.
+
+### Crash, retry, and forbidden result
+
+If the process crashes before S0, while S1--S3 are pending, or after the
+authoritative reread but before output completion, the in-memory coalescing
+buffer and presenter fibers disappear. A new process performs ordinary Run
+discovery and the existing recovery reconciliation; it does not replay a lost
+passive value, reconstruct a prior buffer, append a second beginning, or retry
+an outside mutation that the presenter never owned. An ambiguous outside
+effect remains governed by its existing intent-before-effect and
+reconcile-before-retry protocol; passive publication itself crosses no such
+mutation boundary.
+
+Alice therefore sees the recovered Run immediately, the newest passive status
+after one bounded window, and the actual Closed status once before a successful
+application Exit result. She must not see a dropped latest value, FIFO replay,
+synthesized Closed, `RunDisposition` during application Exit, duplicate
+`DeliveryStatusClosed`, duplicate beginning or mutation, or a hidden typed
+failure. If closure cannot be proved, the typed failure remains visible and
+the absence of Closed remains visible.
+
+### Scenario-to-test mapping
+
+| Scenario or forbidden result | Acceptance test |
+| --- | --- |
+| Recovered Run and first current status are published immediately | `production-cli.test.ts`: `publishes the first recovered status immediately and the newest silent passive update after one second` |
+| A burst retains the newest pending value after silence, emits no FIFO replay, and keeps one subsequent publication per second | `production-cli.test.ts`: `coalesces a rapid passive burst to its newest value without FIFO replay`; `rate-limits a rapid passive status source before it reaches stdout` |
+| Application Exit stops ordinary intake and publishes actual Closed exactly once before its exit disposition | `production-cli.test.ts`: `application Exit publishes one authoritative Closed status before ApplicationExitDisposition and never RunDisposition` |
+| Failure to prove closure emits no synthetic Closed and preserves the typed exit failure | `production-cli.test.ts`: `preserves the typed application Exit failure when authoritative closure cannot be proved` |
+| Recovery waits race child exit, retain one Run, and do not repeat beginning or outside mutation | `production-public-recovery.integration.test.ts`: `unfinished SQLite public restart reports the same recovered Run and no second beginning`; `recovery child exit settles the public wait without a second mutation` |
+
+The status presenter has no applicable tracker/Git/executor mutation retry,
+backoff, or durable publication append: it only reads already-established
+signals and writes stdout. Crash points therefore apply to in-memory pending
+values and process ownership, while provider ambiguity, cleanup, and journal
+recovery remain owned by their existing scenarios and tests.
