@@ -2374,6 +2374,7 @@ it.effect(
         readonly terminatedAt: TraceCursor
       }>()
       const observationState = projectedStatusFixture()
+      if (observationState._tag !== "Ready") return expect.fail("the projected fixture must be ready")
       const newestState: DeliveryRuntimeObservationState = { _tag: "Closed", final: observationState }
       const changes = yield* Queue.unbounded<DeliveryRuntimeObservationState>()
       const consumed = yield* Queue.unbounded<DeliveryRuntimeObservationState["_tag"]>()
