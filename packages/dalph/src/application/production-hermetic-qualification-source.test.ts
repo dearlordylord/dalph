@@ -1408,13 +1408,22 @@ describe("qualification original source boundary", () => {
     )
     if (route === undefined) return expect.fail("proposal fixture must contain a recovered graph read")
     const proposal = proposalForRoute(route, context)
+    if (proposal.route._tag !== "RecoveredNewActionRoute")
+      return expect.fail("proposal fixture must retain the recovered graph read route")
+    if (proposal.actionIdentity._tag !== "FreshOperationIdRequired")
+      return expect.fail("recovered graph read must require one fresh operation identity")
     const expectedId = deliveryProposalIdOf(context.runId, proposal.route)
     expect(proposal.id).toBe(expectedId)
     expect(proposal.order).toEqual({ _tag: "TrackerGraphOrder", acceptedAt: JournalPosition.make(5) })
     await Effect.runPromise(validateProposal(proposal, context))
 
-    const preserved = {
-      ...proposal,
+    const preserved: DeliveryActionProposal = {
+      _tag: "DeliveryActionProposal",
+      admission: proposal.admission,
+      id: proposal.id,
+      order: proposal.order,
+      owner: proposal.owner,
+      route: proposal.route,
       actionIdentity: {
         _tag: "FreshOperationIdRequired" as const,
         source: { _tag: "Preserve" as const, operationId: OperationId.make("01990a72-38c0-7000-8000-000000000013") }
@@ -1424,8 +1433,14 @@ describe("qualification original source boundary", () => {
     await Effect.runPromise(validateProposal(preserved, context))
     expect(preserved.id).toBe(deliveryProposalIdOf(context.runId, preserved.route))
 
-    const externallyReleased = {
-      ...proposal,
+    const externallyReleased: DeliveryActionProposal = {
+      _tag: "DeliveryActionProposal",
+      admission: proposal.admission,
+      id: proposal.id,
+      order: proposal.order,
+      owner: proposal.owner,
+      route: proposal.route,
+      waitsForLiveOperationId: proposal.waitsForLiveOperationId,
       actionIdentity: {
         _tag: "FreshOperationIdRequired" as const,
         source: {
@@ -1436,7 +1451,16 @@ describe("qualification original source boundary", () => {
     }
     await Effect.runPromise(validateProposal(externallyReleased, context))
 
-    const counterfeit = { ...preserved, waitsForLiveOperationId: OperationId.make("private-proposal-operation") }
+    const counterfeit: DeliveryActionProposal = {
+      _tag: "DeliveryActionProposal",
+      admission: preserved.admission,
+      id: preserved.id,
+      order: preserved.order,
+      owner: preserved.owner,
+      route: proposal.route,
+      actionIdentity: preserved.actionIdentity,
+      waitsForLiveOperationId: OperationId.make("private-proposal-operation")
+    }
     const rejected = await Effect.runPromise(validateProposal(counterfeit, context).pipe(Effect.flip))
     expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
     expect(rejected).not.toHaveProperty("registration")
