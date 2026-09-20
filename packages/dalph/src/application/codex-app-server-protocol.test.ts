@@ -544,6 +544,9 @@ if (mode === "malformed-during-admission" || mode === "malformed-after-pending")
     if (!fs.existsSync(malformedTrigger)) return
     clearInterval(poll)
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0" }) + "\n")
+    if (mode === "malformed-during-admission") {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed" }) + "\n")
+    }
     fs.writeFileSync(malformedSent, "sent")
   }, 1)
 }
@@ -1287,27 +1290,32 @@ it.effect("rejects an admitted request when malformed protocol state wins before
     return yield* withFixture(
       "malformed-during-admission",
       (app, root) =>
-        Effect.gen(function* () {
-          const fileSystem = yield* FileSystem.FileSystem
-          const path = yield* Path.Path
-          const thread = yield* app.startThread("/fixture/worktree")
-          const request = yield* Effect.exit(app.readThread(thread.id)).pipe(Effect.forkChild)
-          yield* Deferred.await(admissionEntered)
-          const executable = path.join(root, "malformed-during-admission")
-          yield* fileSystem.writeFileString(`${executable}.malformed`, "malformed")
-          yield* awaitFile(fileSystem, `${executable}.malformed-sent`)
-          yield* Deferred.succeed(admissionRelease, undefined)
-          const result = yield* Fiber.join(request)
-          expectAppFailure(result, "thread/read")
-          if (Exit.isFailure(result)) {
-            const failure = Cause.findErrorOption(result.cause)
-            if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
-              expect(failure.value.kind).toBe("Protocol")
-              expect(failure.value.detail).toContain("must contain method or id")
+        Effect.scoped(
+          Effect.gen(function* () {
+            const fileSystem = yield* FileSystem.FileSystem
+            const path = yield* Path.Path
+            const hints = yield* app.attachTurnCompletedHints
+            const malformedObserved = yield* hints.pipe(Stream.runHead, Effect.forkChild)
+            const thread = yield* app.startThread("/fixture/worktree")
+            const request = yield* Effect.exit(app.readThread(thread.id)).pipe(Effect.forkChild)
+            yield* Deferred.await(admissionEntered)
+            const executable = path.join(root, "malformed-during-admission")
+            yield* fileSystem.writeFileString(`${executable}.malformed`, "malformed")
+            yield* awaitFile(fileSystem, `${executable}.malformed-sent`)
+            expect(yield* Fiber.join(malformedObserved)).toEqual(Option.some(undefined))
+            yield* Deferred.succeed(admissionRelease, undefined)
+            const result = yield* Fiber.join(request)
+            expectAppFailure(result, "thread/read")
+            if (Exit.isFailure(result)) {
+              const failure = Cause.findErrorOption(result.cause)
+              if (Option.isSome(failure) && failure.value instanceof CodexAppServerFailure) {
+                expect(failure.value.kind).toBe("Protocol")
+                expect(failure.value.detail).toContain("must contain method or id")
+              }
             }
-          }
-          expect(yield* fileSystem.readFileString(`${executable}.requests`)).toBe("initialize\nthread/start\n")
-        }),
+            expect(yield* fileSystem.readFileString(`${executable}.requests`)).toBe("initialize\nthread/start\n")
+          })
+        ),
       { requestBoundary }
     )
   })
