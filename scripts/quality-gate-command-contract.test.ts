@@ -27,7 +27,7 @@ it(
   "quality gate has no optmem or submodule: runs declared commands with existing scripts",
   async () => {
     const scripts = readPackageScripts()
-    expect(scripts["check:baseline"]).toBe("pnpm lint:code --census && pnpm check:lab")
+    expect(scripts["check:baseline"]).toBe("node scripts/with-gate-slot.mjs -- node scripts/run-baseline.mjs")
     expect(scripts["check:fast"]).toBe("pnpm typecheck && pnpm lint:changed")
     const { invocations, result } = await runQualityGateFixture({ fixtureName: "command-contract" })
 

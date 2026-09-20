@@ -32,7 +32,7 @@
     "test:gate-resume": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/gate-resume-policy.test.mjs scripts/gate-quality-evidence.test.mjs scripts/local-formal-relevance.test.mjs scripts/gate-resume-integration.test.mjs scripts/gate-resume-inputs.test.mjs scripts/gate-vite-cache.test.mjs scripts/gate-pnpm-state.test.mjs scripts/compact-node-test-reporter.test.mjs",
     "check:preflight": "node scripts/with-gate-slot.mjs -- node scripts/run-preflight.mjs",
     "check:fast": "pnpm typecheck && pnpm lint:changed",
-    "check:baseline": "pnpm lint:code --census && pnpm check:lab",
+    "check:baseline": "node scripts/with-gate-slot.mjs -- node scripts/run-baseline.mjs",
     "check:duplicates": "jscpd .",
     "test:capability-registration": "DALPH_RUN_QUALIFICATION_TESTS=1 vitest run scripts/capability-registration.test.ts",
     "test:delivery-repeatability": "DALPH_RUN_DELIVERY_REPEATABILITY=1 vitest run packages/dalph/test/cassettes/delivery-repeatability.test.ts -t '^repeats the complete delivery checkpoint table twenty times with identical observed order$'",

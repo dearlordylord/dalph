@@ -65,8 +65,9 @@ Choose checks by affected behavior, not by commit or handoff alone:
 - **Early task-attempt baseline:** after focused checks settle for an attempt, run
   `pnpm check:baseline` before expensive formal or delivery-repeatability work. It
   runs the clone-wide lint census followed by the maintained Reducer Lab evaluation;
-  it does not expand `check:fast` or replace the frozen-candidate gate. This is
-  qualification tooling only and changes no Dalph runtime behavior.
+  the complete command takes exact-worktree admission, and it does not expand
+  `check:fast` or replace the frozen-candidate gate. This is qualification tooling
+  only and changes no Dalph runtime behavior.
 - **Shared qualification changes:** run the full gate before integration when
   changing shared build/dependency configuration, gate orchestration, or validity of
   qualification evidence. Uncertain impact requires investigation, not exemption.
@@ -208,8 +209,9 @@ classification evidence as not applicable.
 
 ### Heavy-gate admission
 
-`check:all`, `check:ci:quality`, `test`, `check:quint`, and standalone
-`check:preflight` take the exact worktree lock before one of two clone-wide slots.
+`check:all`, `check:ci:quality`, `test`, `check:quint`, `check:baseline`, and
+standalone `check:preflight` take the exact worktree lock before one of two
+clone-wide slots.
 A second writer in that worktree waits without consuming a spare slot; another
 worktree can use it. Nested admitted commands validate the active run and register
 beneath it rather than acquiring again. `DALPH_GATE_SLOT` alone grants no admission.

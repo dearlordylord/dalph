@@ -58,10 +58,11 @@ questions. Reuse guidance already read unless it changed or scope changed.
   close [scoped reviews](docs/CODE_REVIEW.md#review-closure) before handoff.
 - Target repositories' application-specific typecheck, model-checking, and MBT
   gates are not Dalph implementation gates.
-- `check:all`, `check:ci:quality`, `test:coverage`, `check:quint`, and standalone
-  `check:preflight` take the exact worktree lock before a clone-wide admission
-  slot. Nested commands validate their active custody record; a slot environment
-  value alone does not grant admission. Incomplete runs retain durable fences;
+- `check:all`, `check:ci:quality`, `test:coverage`, `check:quint`, `check:baseline`,
+  and standalone `check:preflight` take the exact worktree lock before a
+  clone-wide admission slot. Nested commands validate their active custody
+  record; a slot environment value alone does not grant admission. Incomplete
+  runs retain durable fences;
   inspect with `pnpm gate:status <run-id>` and explicitly prove stopped writers
   with `pnpm gate:reconcile <run-id>`. Missing exits remain unproven. Run the
   command to wait for ownership; never poll another agent's gate. See the local

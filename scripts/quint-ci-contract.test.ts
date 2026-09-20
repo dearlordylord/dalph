@@ -13,7 +13,7 @@ import {
 // @ts-expect-error The production quality-gate helper is an executable JavaScript module.
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 // @ts-expect-error The production stage inventory is an executable JavaScript module.
-import { fullQualityGateManifest, preflightQualityGates } from "./quality-gate-stage-policy.mjs"
+import { baselineQualityGates, fullQualityGateManifest, preflightQualityGates } from "./quality-gate-stage-policy.mjs"
 
 const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
   engines: { node: string }
@@ -167,6 +167,10 @@ describe("hosted formal-model contract", () => {
     const structuralCommands = preflightQualityGates("fixture-base").map(
       (stage: { args: ReadonlyArray<string> }) => stage.args[0]
     )
+    expect(baselineQualityGates().map((stage: { args: ReadonlyArray<string> }) => stage.args)).toEqual([
+      ["lint:code", "--census"],
+      ["check:lab"]
+    ])
     const manifest = fullQualityGateManifest("fixture-base")
     const reducerLab = manifest.find((stage: { readonly id: string }) => stage.id === "reducer-lab")
     expect(structuralCommands).not.toContain("test:mbt")
