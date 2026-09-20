@@ -456,3 +456,31 @@ implementation but is not operationally closed. The next discriminating action
 is to determine why recovery cannot read or conclusively reconcile the retained
 executor containment, then rerun the same cancellation command only after that
 proof path is available. A fresh #384 attempt remains blocked.
+
+The retained evidence then exposed two narrower implementation gaps. Commit
+`da59b40e0cf9f88b08024073f6c3fa844386be09` lets durable Run cancellation
+select the exact suspension boundary after the earlier passive
+`ExecutorStateUnreadable`; full gate
+`988f4e17-852e-4dc5-a990-bbe2912c667d` passed 4,269 tests with 41 skipped.
+Commit `86ca4b57b50989064207d1f7478716dcee1bed96` bounds an unanswered retained
+Codex `thread/resume` request and closes its exact owned app-server; full gate
+`53b3e3da-7c56-451c-8acc-db796508db35` passed 4,270 tests with 41 skipped.
+Both commits were published to hosted `master`.
+
+The first repaired invocation proved that the recovered frontier proposes
+`SuspendPlannedAttemptExecutorWork` for the exact attempt. The proposal was
+consumed, but the real retained Codex provider did not return before the
+120-second outer bound. After the bounded-resume repair, reconciled invocations
+with 100-second and 180-second outer bounds also failed to return. Each stopped
+invocation left Journal position 357 as the last record: no executor command
+intent, abandonment, claim release, or termination crossed the Journal
+boundary. Each exact app-server PID was proved absent afterward. The rollout,
+run transcript, and six dirty worktree files remained unchanged; only the
+private app-server launch evidence advanced.
+
+The remaining blocker is below cancellation selection: the real retained
+provider's resume/deadline-close path does not return a typed result within 180
+seconds, despite its exact app-server process being absent after the caller's
+bounded stop. No further cancellation retry is authorized until that shutdown
+path is characterized and made finite. Issue #390 remains open, and starting a
+fresh #384 attempt remains blocked by the retained claim and responsibility.
