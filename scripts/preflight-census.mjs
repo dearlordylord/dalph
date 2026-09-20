@@ -1,12 +1,7 @@
-import { addSuccessfulOutputLines, successfulOutputLineLimit } from "./quality-output-budget.mjs"
+import { addSuccessfulOutputLines } from "./quality-output-budget.mjs"
 
 /** Report independent structural failures together before qualification can start. */
-export const runPreflightCensus = async ({
-  gates,
-  maximumOutputLines = successfulOutputLineLimit,
-  report = console.error,
-  runStage
-}) => {
+export const runPreflightCensus = async ({ gates, report = console.error, runStage }) => {
   const outcomes = new Map()
   let successfulOutputLines = 0
   for (const gate of gates) {
@@ -14,7 +9,6 @@ export const runPreflightCensus = async ({
       const result = await runStage(gate)
       successfulOutputLines = addSuccessfulOutputLines({
         currentOutputLines: successfulOutputLines,
-        maximumOutputLines,
         stageName: gate.name,
         stageOutputLines: result.outputLineCount
       })

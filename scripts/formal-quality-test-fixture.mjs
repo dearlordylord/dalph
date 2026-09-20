@@ -40,6 +40,7 @@ export const copyQualityRuntimeFixture = (worktree) => {
     "preflight-census.mjs",
     "quality-gate-stage-policy.mjs",
     "quality-output-budget.mjs",
+    "formal-progress-events.mjs",
     "quint-effective-profile.mjs",
     "quint-gate-command-contract.mjs",
     "quint-gate-command-manifest.mjs",

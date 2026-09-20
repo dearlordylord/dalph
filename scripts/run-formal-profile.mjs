@@ -5,6 +5,7 @@ import { runQuintEffectiveProfile } from "./check-quint-models.mjs"
 import { withOwnedQuintServer } from "./quint-owned-server.mjs"
 import { performance } from "node:perf_hooks"
 import { join } from "node:path"
+import { createFormalProgressWriter } from "./formal-progress-events.mjs"
 
 const context = inheritedCustody()
 if (context === undefined) throw new Error("Formal execution requires inherited admission")
@@ -30,8 +31,9 @@ const report = await withOwnedQuintServer({
   javaArguments: request.toolchain.javaArguments,
   environment: process.env,
   remainingExecutionMilliseconds,
-  runProfile: ({ environment, serverEndpoint, signal }) =>
-    runQuintEffectiveProfile({
+  runProfile: ({ environment, serverEndpoint, signal }) => {
+    const progress = createFormalProgressWriter()
+    return runQuintEffectiveProfile({
       purpose: "local-guarded",
       profile: request.profile,
       environment,
@@ -40,7 +42,9 @@ const report = await withOwnedQuintServer({
       evaluatorPath: request.toolchain.evaluatorPath,
       remainingExecutionMilliseconds,
       compact: true,
+      progress,
       write: (text) => process.stdout.write(text)
-    })
+    }).finally(() => progress.close())
+  }
 })
 atomicRecord(request.reportPath, { version: 1, ...report })

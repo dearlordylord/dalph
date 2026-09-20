@@ -6,6 +6,7 @@ import { test } from "node:test"
 
 import { createQuintEffectiveProfile, assertQuintEffectiveProfile } from "./quint-effective-profile.mjs"
 import { runQuintEffectiveProfile } from "./check-quint-models.mjs"
+import { createFormalProgressLifecycle } from "./formal-progress-events.mjs"
 import { quintGateExpectedCommandCounts } from "./quint-gate-command-contract.mjs"
 import { createQuintHostedShard } from "./quint-hosted-shards.mjs"
 
@@ -69,7 +70,7 @@ test("materializes the independent complete 105 obligations before any launch", 
   }))
   assert.equal(
     createHash("sha256").update(JSON.stringify(commandContract)).digest("hex"),
-    "3eb9085f1b7b4b5bf9930600064408e0dca8bb7474da83a0517ece19d97aa804"
+    "d20ea6e5d51d529deedca645a70443dae17532481c21ba589169d9e4313ae638"
   )
   const counts = Object.fromEntries(
     ["typecheck", "test", "sampled-run", "verify"].map((kind) => [
@@ -207,6 +208,129 @@ test("records every actual command custody ID and required verdict output with o
     assert.equal(launch.captureOutput, true)
     assert.equal(launch.forwardOutput, false)
   }
+})
+
+test("compact and noncompact profiles retain lifecycle while applying their raw-output policy", async () => {
+  for (const compact of [true, false]) {
+    const profile = createQuintEffectiveProfile()
+    const events = []
+    const writes = []
+    const report = await runQuintEffectiveProfile({
+      ...controls(profile, []),
+      compact,
+      progress: (event) => events.push(event),
+      write: (text) => writes.push(text),
+      runCommand: async (options) => {
+        const lifecycle = createFormalProgressLifecycle({
+          emit: options.progress.emit,
+          identity: options.progress.identity,
+          deadline: "2026-09-20T00:01:00.000Z",
+          heartbeatMilliseconds: 0
+        })
+        options.progress.onLifecycle(lifecycle)
+        const command = profile.commands.find(({ name }) => name === options.name)
+        return {
+          exitCode: command.verdict.acceptedExitCodes[0],
+          output: capturedOutput(command),
+          gateObligationId: `custody-${command.position}`
+        }
+      }
+    })
+    assert.equal(report.commands.length, 105)
+    assert.equal(events.filter(({ type }) => type === "start").length, 105)
+    assert.equal(events.filter(({ type }) => type === "terminal").length, 105)
+    if (compact) {
+      assert.doesNotMatch(writes.join(""), /== .* ==/u)
+      assert.doesNotMatch(writes.join(""), /was witnessed in/u)
+    } else {
+      assert.match(writes.join(""), /== planned-attempt executor model typecheck ==/u)
+      assert.match(writes.join(""), /was witnessed in/u)
+    }
+  }
+})
+
+test("compact profile keeps live lifecycle in actual completion order after verdict validation", async () => {
+  const profile = createQuintEffectiveProfile()
+  const events = []
+  const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
+  const report = await runQuintEffectiveProfile({
+    ...controls(profile, []),
+    compact: true,
+    progress: (event) => events.push(event),
+    runCommand: async (options) => {
+      const lifecycle = createFormalProgressLifecycle({
+        emit: options.progress.emit,
+        identity: options.progress.identity,
+        deadline: "2026-09-20T00:01:00.000Z",
+        heartbeatMilliseconds: 0
+      })
+      options.progress.onLifecycle(lifecycle)
+      const command = profile.commands.find(({ name }) => name === options.name)
+      if (command.position === 2) await delay(20)
+      return {
+        exitCode: command.verdict.acceptedExitCodes[0],
+        output: capturedOutput(command),
+        gateObligationId: `custody-${command.position}`
+      }
+    }
+  })
+
+  assert.equal(report.commands.length, 105)
+  assert.equal(events.length, 210)
+  assert.deepEqual(
+    events.slice(0, 6).map(({ position, type }) => [type, position]),
+    [
+      ["start", 0],
+      ["terminal", 0],
+      ["start", 1],
+      ["terminal", 1],
+      ["start", 3],
+      ["start", 2]
+    ]
+  )
+  const firstFamilyTerminals = events
+    .filter(({ position, type }) => type === "terminal" && position <= 3)
+    .map(({ position }) => position)
+  assert.deepEqual(firstFamilyTerminals, [0, 1, 3, 2])
+  assert.ok(events.every((event) => event.type === "start" || event.type === "terminal"))
+  for (const event of events.filter(({ type }) => type === "terminal")) {
+    assert.equal(event.outcome, `exit:${profile.commands[event.position].verdict.acceptedExitCodes[0]}`)
+  }
+  assert.deepEqual(
+    report.commands.map(({ position }) => position),
+    Array.from({ length: 105 }, (_, position) => position)
+  )
+})
+
+test("verdict failure emits one invalid terminal after the bounded child outcome", async () => {
+  const profile = createQuintEffectiveProfile()
+  const events = []
+  await assert.rejects(
+    runQuintEffectiveProfile({
+      ...controls(profile, []),
+      compact: true,
+      progress: (event) => events.push(event),
+      runCommand: async (options) => {
+        const command = profile.commands.find(({ name }) => name === options.name)
+        const lifecycle = createFormalProgressLifecycle({
+          emit: options.progress.emit,
+          identity: options.progress.identity,
+          deadline: "2026-09-20T00:01:00.000Z",
+          heartbeatMilliseconds: 0
+        })
+        options.progress.onLifecycle(lifecycle)
+        return {
+          exitCode: command.verdict.acceptedExitCodes[0],
+          output: command.position === 3 ? "" : capturedOutput(command),
+          gateObligationId: `custody-${command.position}`
+        }
+      }
+    }),
+    /missing witness output/u
+  )
+  const failed = events.filter(({ position, type }) => position === 3 && type === "terminal")
+  assert.equal(failed.length, 1)
+  assert.equal(failed[0].outcome, "invalid")
 })
 
 test("cost-priority admission changes hosted order without changing guarded-local order", async () => {
@@ -363,6 +487,7 @@ test("compact mode retains distinct failure diagnostics from every failed or can
   const profile = createQuintEffectiveProfile()
   const launches = []
   const output = []
+  const events = []
   const normalRun = controlledRun(profile, launches)
   let siblingStarted
   const started = new Promise((resolve) => {
@@ -372,8 +497,16 @@ test("compact mode retains distinct failure diagnostics from every failed or can
     runQuintEffectiveProfile({
       ...controls(profile, launches),
       compact: true,
+      progress: (event) => events.push(event),
       write: (text) => output.push(text),
       runCommand: async (options) => {
+        const lifecycle = createFormalProgressLifecycle({
+          emit: options.progress.emit,
+          identity: options.progress.identity,
+          deadline: "2026-09-20T00:01:00.000Z",
+          heartbeatMilliseconds: 0
+        })
+        options.progress.onLifecycle(lifecycle)
         if (options.name === profile.commands[2].name) {
           await started
           throw Object.assign(new Error("negative failed"), { output: "NEGATIVE_FAILURE_DIAGNOSTIC\n" })
@@ -398,6 +531,16 @@ test("compact mode retains distinct failure diagnostics from every failed or can
   const diagnostics = output.join("")
   assert.equal(diagnostics.split("NEGATIVE_FAILURE_DIAGNOSTIC").length - 1, 1)
   assert.equal(diagnostics.split("SIBLING_CANCELLATION_DIAGNOSTIC").length - 1, 1)
+  assert.deepEqual(
+    events
+      .filter(({ position, type }) => type === "terminal" && position >= 2)
+      .map(({ outcome, position }) => [position, outcome]),
+    [
+      [2, "failed"],
+      [3, "failed"]
+    ]
+  )
+  assert.ok(events.filter(({ type }) => type === "start").every(({ position }) => position < 4))
 })
 
 test("guarded local execution preserves all hosted obligations and spends the shared local deadline", async () => {

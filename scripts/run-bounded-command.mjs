@@ -7,12 +7,23 @@ import { proveStageDescendantsStopped, publishAbsence, publishNoChild, registerS
 import { spawn, spawnSync } from "node:child_process"
 import { performance } from "node:perf_hooks"
 import { clearTimeout, setTimeout } from "node:timers"
+import {
+  createFormalProgressLifecycle,
+  createFormalProgressReader,
+  formalProgressHeartbeatMilliseconds
+} from "./formal-progress-events.mjs"
+import { createConsoleOutputPresenter } from "./quality-output-budget.mjs"
 
 const defaultTerminationGraceMilliseconds = 5000
 const defaultProcessGroupAbsenceTimeoutMilliseconds = 2000
 const processGroupObservationIntervalMilliseconds = 25
 
 const commandError = (message, quintCommandResult) => Object.assign(new Error(message), { quintCommandResult })
+
+const retainedLogFailure = (name, phase, error) =>
+  Object.assign(commandError(`${name} retained log ${phase} failed: ${error.message}`, "logging-failed"), {
+    loggingFailure: { phase, message: error.message }
+  })
 
 const terminate = (child, signal) => {
   if (child.pid === undefined) return
@@ -50,7 +61,11 @@ export const runBoundedCommand = ({
   executable,
   forwardOutput = true,
   name,
+  onProgress,
   processGroupAbsenceTimeoutMilliseconds = defaultProcessGroupAbsenceTimeoutMilliseconds,
+  progress,
+  progressHeartbeatMilliseconds = formalProgressHeartbeatMilliseconds,
+  progressTransport,
   relayParentSignals = false,
   signal,
   terminationGraceMilliseconds = defaultTerminationGraceMilliseconds,
@@ -61,6 +76,25 @@ export const runBoundedCommand = ({
       reject(commandError(`${name} cancelled`, "cancelled"))
       return
     }
+
+    const progressSpec = typeof progress === "function" ? { emit: progress } : progress
+    if (
+      progressSpec !== undefined &&
+      (progressSpec === null || typeof progressSpec !== "object" || typeof progressSpec.emit !== "function")
+    )
+      throw new Error("Bounded command progress requires an event emitter")
+    const transportSpec =
+      typeof progressTransport === "function"
+        ? { onEvent: progressTransport }
+        : progressTransport === true
+          ? { onEvent: typeof onProgress === "function" ? onProgress : () => {} }
+          : progressTransport
+    if (
+      transportSpec !== undefined &&
+      (transportSpec === null || typeof transportSpec !== "object" || typeof transportSpec.onEvent !== "function")
+    )
+      throw new Error("Bounded command progress transport requires an event callback")
+    const hasProgressTransport = transportSpec !== undefined
 
     // Install signal ownership before the spawn/observation publication gap can expose a live child.
     const signalListeners = new Map()
@@ -97,7 +131,7 @@ export const runBoundedCommand = ({
             cwd,
             detached: process.platform !== "win32",
             env: childEnvironment,
-            stdio: ["inherit", "pipe", "pipe"]
+            stdio: ["inherit", "pipe", "pipe", hasProgressTransport ? "pipe" : "ignore"]
           })
       })
     } catch (error) {
@@ -115,11 +149,39 @@ export const runBoundedCommand = ({
         mkdirSync(join(obligation.context.run.reportDirectory, "logs"), { recursive: true })
         writeFileSync(logPath, "", { flag: "wx" })
       } catch (error) {
-        loggingError = error
+        loggingError = retainedLogFailure(name, "create", error)
       }
     }
     let actualExit
     let absenceProven = false
+    const progressReader =
+      hasProgressTransport && child.stdio?.[3] !== undefined
+        ? createFormalProgressReader({ onEvent: transportSpec.onEvent, onError: transportSpec.onError })
+        : undefined
+    child.stdio?.[3]?.on("data", (chunk) => progressReader?.push(chunk))
+    child.stdio?.[3]?.on("error", () => progressReader?.close())
+    const progressStartedAt = wallClockTimestamp()
+    const progressStartedEpochMilliseconds = performance.now()
+    const progressDeadline = Number.isFinite(timeoutMilliseconds)
+      ? new Date(Date.parse(progressStartedAt) + timeoutMilliseconds).toISOString()
+      : progressStartedAt
+    const progressLifecycle =
+      progressSpec === undefined
+        ? undefined
+        : createFormalProgressLifecycle({
+            emit: progressSpec.emit,
+            identity: progressSpec.identity,
+            startedAt: progressStartedAt,
+            startedEpochMilliseconds: progressStartedEpochMilliseconds,
+            deadline: progressDeadline,
+            logPath,
+            heartbeatMilliseconds: progressHeartbeatMilliseconds
+          })
+    try {
+      progressSpec?.onLifecycle?.(progressLifecycle)
+    } catch {
+      progressLifecycle?.close()
+    }
     const publishTerminal = (result, error) => {
       if (obligation === undefined) return
       try {
@@ -161,6 +223,8 @@ export const runBoundedCommand = ({
     const stdoutLineCounter = { endsWithLineBreak: true, lineBreaks: 0, wasWritten: false }
     const stderrLineCounter = { endsWithLineBreak: true, lineBreaks: 0, wasWritten: false }
     const outputChunks = []
+    const presenter =
+      forwardOutput && logPath !== undefined ? createConsoleOutputPresenter({ name, logPath }) : undefined
     let absenceTimer
     let closed = false
     let escalationTimer
@@ -178,6 +242,8 @@ export const runBoundedCommand = ({
       if (!captureOutput) return error
       error.output = Buffer.concat(outputChunks).toString("utf8")
       error.outputLineCount = outputLineCount()
+      if (loggingError === undefined && logPath !== undefined) error.logPath = logPath
+      if (loggingError !== undefined) error.loggingFailure = loggingError.loggingFailure
       return error
     }
 
@@ -187,6 +253,7 @@ export const runBoundedCommand = ({
       clearTimeout(absenceTimer)
       signal?.removeEventListener("abort", cancel)
       for (const [parentSignal, listener] of signalListeners) process.removeListener(parentSignal, listener)
+      progressReader?.close()
     }
 
     const settle = (settler, value) => {
@@ -203,9 +270,21 @@ export const runBoundedCommand = ({
         }
       }
       if (obligation !== undefined && value !== undefined) value.gateObligationId = obligation.intent.obligationId
+      if (loggingError !== undefined && value instanceof Error) value.loggingFailure = loggingError.loggingFailure
       settled = true
-      cleanup()
       publishTerminal(settler === resolve ? value : undefined, settler === reject ? value : undefined)
+      presenter?.finish({
+        failed: settler === reject,
+        logAvailable: loggingError === undefined,
+        logFailure: loggingError?.message
+      })
+      if (progressLifecycle !== undefined && progressSpec?.terminal !== false) {
+        const outcome =
+          (settler === reject ? value?.quintCommandResult : undefined) ??
+          (settler === resolve ? `exit:${value?.exitCode}` : "failed")
+        progressLifecycle.terminal({ outcome, exitCode: actualExit?.code ?? null, signal: actualExit?.signal ?? null })
+      }
+      cleanup()
       settler(value)
     }
 
@@ -290,16 +369,20 @@ export const runBoundedCommand = ({
         try {
           appendFileSync(logPath, output)
         } catch (error) {
-          loggingError = error
+          loggingError = retainedLogFailure(name, "append", error)
         }
       }
       if (captureOutput) outputChunks.push(output)
       lineCounter.wasWritten = true
       lineCounter.endsWithLineBreak = output.at(-1) === 10
+      progressLifecycle?.observeOutput()
       for (const byte of output) {
         if (byte === 10) lineCounter.lineBreaks += 1
       }
-      if (forwardOutput) destination.write(output)
+      if (forwardOutput) {
+        if (presenter === undefined) destination.write(output)
+        else presenter.write(output, destination)
+      }
     }
 
     child.stdout.on("data", (output) => {
@@ -387,6 +470,12 @@ export const runBoundedCommand = ({
               )
             )
           )
+        } else if (loggingError !== undefined) {
+          const failure = commandError(loggingError.message, "logging-failed")
+          failure.loggingFailure = loggingError.loggingFailure
+          failure.exitCode = code
+          failure.signal = childSignal
+          settle(reject, attachCapturedOutput(failure))
         } else {
           settle(
             resolve,

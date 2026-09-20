@@ -28,7 +28,7 @@ const inputs = () => {
         version: 1,
         identity,
         manifest: stageManifest,
-        maximumSuccessfulOutputLines: 550,
+        outputPresentationPolicy: "retained-logs-bounded-console-v1",
         guard: {
           version: 1,
           observerVersion: 1,
@@ -53,7 +53,7 @@ const inputs = () => {
     }
   }
 }
-test("late failure reuses only the contiguous proven prefix and charges original console output", () => {
+test("late failure reuses only the contiguous proven prefix and retains original output counts", () => {
   const result = selectResumePrefix(inputs())
   assert.equal(result.status, "selected")
   assert.deepEqual(
@@ -169,9 +169,9 @@ for (const [name, mutate] of [
     }
   ],
   [
-    "reused output exceeds budget",
+    "negative reused output count",
     (a) => {
-      a.priorEvidence.resume.stages[0].outputLineCount = 551
+      a.priorEvidence.resume.stages[0].outputLineCount = -1
     }
   ]
 ])

@@ -1,7 +1,17 @@
 import { performance } from "node:perf_hooks"
 import assert from "node:assert/strict"
 import { spawn, spawnSync } from "node:child_process"
-import { chmodSync, cpSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { setTimeout } from "node:timers/promises"
@@ -133,6 +143,155 @@ test("same-worktree writers never overlap; nested bounded commands have register
     assert.equal(first.stages.length, 2)
     assert.ok(first.stages.every((stage) => stage.groupAbsent && stage.exitCode === 0))
     assert.ok(first.stages.every((stage) => typeof readFileSync(stage.logPath, "utf8") === "string"))
+  } finally {
+    f.cleanup()
+  }
+})
+
+for (const exitCode of [0, 7])
+  test(`noisy admitted child preserves its complete log and exit ${exitCode}`, async () => {
+    const f = fixture()
+    try {
+      const expected = "line\n".repeat(700) + "FINAL_DIAGNOSTIC\n"
+      const childSource = `process.stdout.write(${JSON.stringify(expected)}); process.exitCode=${exitCode}`
+      const source = `import {runBoundedCommand} from ${JSON.stringify(new URL(`file://${bounded}`).href)}; try { await runBoundedCommand({executable:process.execPath,args:['-e',${JSON.stringify(childSource)}],name:'noisy retained child',timeoutMilliseconds:5000}) } catch(error) { console.error(error.message); process.exitCode=${exitCode} }`
+      const result = await start(f.root, [process.execPath, "--input-type=module", "-e", source]).done
+      assert.equal(result.code, exitCode, result.output)
+      assert.match(result.output, /console output truncated; complete log:/)
+      const evidence = runs(f.root).map(readRunEvidence)[0]
+      const receipt = evidence.stages.find((stage) => stage.command.name === "noisy retained child")
+      assert.equal(receipt.exitCode, exitCode)
+      assert.equal(receipt.outputLineCount, 701)
+      assert.equal(receipt.groupAbsent, true)
+      assert.equal(readFileSync(receipt.logPath, "utf8"), expected)
+      if (exitCode === 0) assert.doesNotMatch(result.output, /FINAL_DIAGNOSTIC/)
+      else assert.match(result.output, /FINAL_DIAGNOSTIC/)
+    } finally {
+      f.cleanup()
+    }
+  })
+
+for (const mode of ["create", "append"])
+  test(`retained-log ${mode} failure is visible and cannot qualify an admitted child`, async () => {
+    const f = fixture()
+    try {
+      const progressPath = join(f.root, ".scratch", `retained-log-${mode}-progress.jsonl`)
+      const script = join(f.root, ".scratch", `retained-log-${mode}.mjs`)
+      const boundedUrl = new URL(`file://${bounded}`).href
+      const expected = `line\n`.repeat(700) + `RETAINED_LOG_${mode.toUpperCase()}_TAIL\n`
+      const childSource =
+        mode === "create"
+          ? `process.stdout.write(${JSON.stringify(expected)})`
+          : `const fs=require('fs');const path=require('path');const run=JSON.parse(fs.readFileSync(path.join(process.env.DALPH_GATE_RUN_DIRECTORY,'run.json'),'utf8'));const log=path.join(run.reportDirectory,'logs',process.env.DALPH_GATE_OBLIGATION+'.log');fs.rmSync(log,{recursive:true,force:true});fs.mkdirSync(log);process.stdout.write(${JSON.stringify(expected)})`
+      const source = `
+        import {appendFileSync,existsSync,mkdirSync,readFileSync,renameSync,rmSync,writeFileSync} from 'node:fs'
+        import {join} from 'node:path'
+        import {runBoundedCommand} from ${JSON.stringify(boundedUrl)}
+        const runDirectory=process.env.DALPH_GATE_RUN_DIRECTORY
+        const run=JSON.parse(readFileSync(join(runDirectory,'run.json'),'utf8'))
+        const logs=join(run.reportDirectory,'logs')
+        const backup=logs+'.retained-log-${mode}-backup-'+process.pid
+        const events=[]
+        let failure
+        if (${JSON.stringify(mode)} === 'create') { renameSync(logs,backup); writeFileSync(logs,'blocked') }
+        try {
+          await runBoundedCommand({
+            executable:process.execPath,
+            args:['-e',${JSON.stringify(childSource)}],
+            captureOutput:true,
+            forwardOutput:true,
+            name:'retained log ${mode} failure',
+            progress:{emit:event=>events.push(event),identity:{position:0,kind:'test',name:'retained log ${mode} failure'}},
+            timeoutMilliseconds:5000
+          })
+          process.exitCode=42
+        } catch(error) {
+          failure=error
+          process.stderr.write(error.message+'\\n')
+          process.exitCode=23
+        } finally {
+          if (${JSON.stringify(mode)} === 'create') { rmSync(logs,{recursive:true,force:true}); renameSync(backup,logs) }
+          else {
+            const registration=JSON.parse(readFileSync(join(runDirectory,'registration.json'),'utf8'))
+            const nested=registration.obligations.map(id=>JSON.parse(readFileSync(join(runDirectory,'obligations',id+'.json'),'utf8'))).find(item=>item.command.name==='retained log ${mode} failure')
+            if (nested) { const nestedLog=join(run.reportDirectory,'logs',nested.obligationId+'.log'); rmSync(nestedLog,{recursive:true,force:true}); writeFileSync(nestedLog,'') }
+          }
+          appendFileSync(${JSON.stringify(progressPath)},events.map(event=>JSON.stringify(event)).join('\\n')+'\\n')
+        }
+        if (failure===undefined) process.exitCode=42
+      `
+      writeFileSync(script, source)
+      const result = await start(f.root, [process.execPath, script]).done
+      assert.equal(result.code, 23, result.output)
+      assert.match(result.output, /retained log (?:create|append) failed/u)
+      assert.match(result.output, /complete log unavailable/u)
+      assert.match(result.output, /failed; final retained output/u)
+      assert.match(result.output, new RegExp(`RETAINED_LOG_${mode.toUpperCase()}_TAIL`, "u"))
+      const progress = readFileSync(progressPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+      assert.deepEqual(
+        progress.map((event) => event.type),
+        ["start", "terminal"]
+      )
+      assert.equal(progress.at(-1).outcome, "logging-failed")
+      const entry = runs(f.root)[0]
+      const evidence = readRunEvidence(entry)
+      assert.equal(evidence.qualification, "UNPROVEN")
+      const registration = readRecord(join(entry.runDirectory, "registration.json"))
+      const nested = registration.obligations
+        .map((id) => readRecord(join(entry.runDirectory, "obligations", `${id}.json`)))
+        .find((item) => item.command.name === `retained log ${mode} failure`)
+      assert.ok(nested)
+      assert.equal(existsSync(join(entry.runDirectory, "receipts", `${nested.obligationId}.json`)), false)
+      assert.equal(
+        readRecord(join(entry.runDirectory, "absence", `${nested.obligationId}.json`)).processGroup,
+        nested.processGroup
+      )
+      assert.equal(evidence.stages.find((stage) => stage.obligationId === nested.obligationId).outcome, "UNPROVEN")
+    } finally {
+      f.cleanup()
+    }
+  })
+
+test("retained-log append failure preserves a nonaccepted child exit and custody absence", async () => {
+  const f = fixture()
+  try {
+    const progressPath = join(f.root, ".scratch", "retained-log-append-exit-progress.jsonl")
+    const script = join(f.root, ".scratch", "retained-log-append-exit.mjs")
+    const childSource = `const fs=require('fs');const path=require('path');const run=JSON.parse(fs.readFileSync(path.join(process.env.DALPH_GATE_RUN_DIRECTORY,'run.json'),'utf8'));const log=path.join(run.reportDirectory,'logs',process.env.DALPH_GATE_OBLIGATION+'.log');fs.rmSync(log,{recursive:true,force:true});fs.mkdirSync(log);process.stderr.write('append failure child\\n');process.exitCode=7`
+    writeFileSync(
+      script,
+      `import {appendFileSync,readFileSync,rmSync,writeFileSync} from 'node:fs';import {join} from 'node:path';import {runBoundedCommand} from ${JSON.stringify(new URL(`file://${bounded}`).href)};const runDirectory=process.env.DALPH_GATE_RUN_DIRECTORY;const events=[];let failure;try{await runBoundedCommand({executable:process.execPath,args:['-e',${JSON.stringify(childSource)}],captureOutput:true,forwardOutput:true,name:'retained log append exit failure',progress:{emit:event=>events.push(event),identity:{position:0,kind:'test',name:'retained log append exit failure'}},timeoutMilliseconds:5000})}catch(error){failure=error;process.stderr.write(JSON.stringify({result:error.quintCommandResult,loggingFailure:error.loggingFailure})+'\\n');process.exitCode=23}finally{const registration=JSON.parse(readFileSync(join(runDirectory,'registration.json'),'utf8'));const nested=registration.obligations.map(id=>JSON.parse(readFileSync(join(runDirectory,'obligations',id+'.json'),'utf8'))).find(item=>item.command.name==='retained log append exit failure');if(nested){const run=JSON.parse(readFileSync(join(runDirectory,'run.json'),'utf8'));const nestedLog=join(run.reportDirectory,'logs',nested.obligationId+'.log');rmSync(nestedLog,{recursive:true,force:true});writeFileSync(nestedLog,'')}appendFileSync(${JSON.stringify(progressPath)},events.map(event=>JSON.stringify(event)).join('\\n')+'\\n')}if(failure===undefined)process.exitCode=42`
+    )
+    const result = await start(f.root, [process.execPath, script]).done
+    assert.equal(result.code, 23, result.output)
+    assert.match(result.output, /"result":"exit:7"/u)
+    assert.match(result.output, /"phase":"append"/u)
+    const events = readFileSync(progressPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line))
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["start", "terminal"]
+    )
+    assert.equal(events.at(-1).outcome, "exit:7")
+    const entry = runs(f.root)[0]
+    const evidence = readRunEvidence(entry)
+    assert.equal(evidence.qualification, "UNPROVEN")
+    const registration = readRecord(join(entry.runDirectory, "registration.json"))
+    const nested = registration.obligations
+      .map((id) => readRecord(join(entry.runDirectory, "obligations", `${id}.json`)))
+      .find((item) => item.command.name === "retained log append exit failure")
+    assert.ok(nested)
+    assert.equal(existsSync(join(entry.runDirectory, "receipts", `${nested.obligationId}.json`)), false)
+    assert.equal(
+      readRecord(join(entry.runDirectory, "absence", `${nested.obligationId}.json`)).processGroup,
+      nested.processGroup
+    )
+    assert.equal(evidence.stages.find((stage) => stage.obligationId === nested.obligationId).outcome, "UNPROVEN")
   } finally {
     f.cleanup()
   }
@@ -395,6 +554,81 @@ test("definite no-child spawn failure releases custody but records a failing gen
   }
 })
 
+test("launch failure publishes one launch-failed lifecycle terminal without success evidence", async () => {
+  const f = fixture()
+  try {
+    const progressPath = join(f.root, ".scratch", "launch-failure-progress.jsonl")
+    const script = join(f.root, ".scratch", "launch-failure-progress.mjs")
+    writeFileSync(
+      script,
+      `import {appendFileSync} from 'node:fs';import {runBoundedCommand} from ${JSON.stringify(new URL(`file://${bounded}`).href)};const events=[];try{await runBoundedCommand({executable:${JSON.stringify(join(f.root, "missing-progress-executable"))},args:[],name:'progress launch failure',progress:{emit:event=>events.push(event),identity:{position:0,kind:'test',name:'progress launch failure'}},timeoutMilliseconds:2000})}catch(error){process.stderr.write(error.message+'\\n');process.exitCode=23}finally{appendFileSync(${JSON.stringify(progressPath)},events.map(event=>JSON.stringify(event)).join('\\n')+'\\n')}`
+    )
+    const result = await start(f.root, [process.execPath, script]).done
+    assert.equal(result.code, 23, result.output)
+    const events = readFileSync(progressPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line))
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["start", "terminal"]
+    )
+    assert.equal(events.at(-1).outcome, "launch-failed")
+    const entry = runs(f.root)[0]
+    const evidence = readRunEvidence(entry)
+    assert.equal(evidence.qualification, "UNPROVEN")
+    const nested = evidence.stages.find((stage) => stage.command.name === "progress launch failure")
+    assert.equal(nested.outcome, "launch-failed")
+    assert.equal(nested.exitCode, null)
+    assert.equal(nested.groupAbsent, true)
+  } finally {
+    f.cleanup()
+  }
+})
+
+test("OS-signal interruption emits the genuine interrupted terminal and preserves custody evidence", async () => {
+  const f = fixture()
+  try {
+    const ready = join(f.root, ".scratch", "progress-interrupt-ready")
+    const progressPath = join(f.root, ".scratch", "progress-interrupt.jsonl")
+    const script = join(f.root, ".scratch", "progress-interrupt.mjs")
+    const childSource = `const fs=require('fs');fs.writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{},1000)`
+    writeFileSync(
+      script,
+      `import {appendFileSync} from 'node:fs';import {runBoundedCommand} from ${JSON.stringify(new URL(`file://${bounded}`).href)};const events=[];try{await runBoundedCommand({executable:process.execPath,args:['-e',${JSON.stringify(childSource)}],name:'progress signal interruption',relayParentSignals:true,progress:{emit:event=>events.push(event),identity:{position:0,kind:'test',name:'progress signal interruption'}},terminationGraceMilliseconds:100,timeoutMilliseconds:5000})}catch(error){process.stderr.write(error.message+'\\n')}finally{appendFileSync(${JSON.stringify(progressPath)},events.map(event=>JSON.stringify(event)).join('\\n')+'\\n')}`
+    )
+    const running = start(f.root, [process.execPath, script])
+    await until(() => {
+      try {
+        return readFileSync(ready, "utf8") === "ready"
+      } catch {
+        return false
+      }
+    })
+    running.child.kill("SIGTERM")
+    await running.done
+    const events = readFileSync(progressPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line))
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["start", "terminal"]
+    )
+    assert.equal(events.at(-1).outcome, "interrupted")
+    assert.notEqual(events.at(-1).outcome, "exit:0")
+    const evidence = readRunEvidence(runs(f.root)[0])
+    const stage = evidence.stages.find((item) => item.command.name === "progress signal interruption")
+    assert.equal(stage.outcome, "interrupted")
+    assert.equal(stage.signal, "SIGTERM")
+    assert.equal(stage.groupAbsent, true)
+    assert.equal(evidence.custody, "stopped")
+    assert.equal((await start(f.root, [process.execPath, "-e", ""]).done).code, 0)
+  } finally {
+    f.cleanup()
+  }
+})
+
 test("malformed, wrong-version, wrong-input and invented successful receipts are never successful evidence", async () => {
   const f = fixture()
   try {
@@ -568,6 +802,191 @@ test("a killed nested bounded runner cannot abandon its detached writer custody"
       writeFileSync(join(f.root, ".scratch", "nested-crash-release"), "release")
       await harness.done
     }
+    f.cleanup()
+  }
+})
+
+test("parent loss leaves only live progress, keeps exact custody fences, and emits no synthetic terminal", async () => {
+  const f = fixture()
+  let harness
+  try {
+    const ready = join(f.root, ".scratch", "progress-parent-loss-ready")
+    const release = join(f.root, ".scratch", "progress-parent-loss-release")
+    const progressPath = join(f.root, ".scratch", "progress-parent-loss.jsonl")
+    const childSource = `const fs=require('fs');fs.writeFileSync(${JSON.stringify(ready)},'ready');const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(t);process.exit(0)}},10)`
+    const source = `import {appendFileSync} from 'node:fs';import {runBoundedCommand} from ${JSON.stringify(new URL(`file://${bounded}`).href)};await runBoundedCommand({executable:process.execPath,args:['-e',${JSON.stringify(childSource)}],name:'parent loss progress child',progress:{emit:event=>appendFileSync(${JSON.stringify(progressPath)},JSON.stringify(event)+'\\n'),identity:{position:1,kind:'verify',name:'parent loss progress child'}},progressHeartbeatMilliseconds:20,timeoutMilliseconds:10000})`
+    const script = join(f.root, ".scratch", "progress-parent-loss.mjs")
+    writeFileSync(script, source)
+    harness = startReaped(f.root, [process.execPath, script])
+    await until(() => {
+      try {
+        return readFileSync(ready, "utf8") === "ready"
+      } catch {
+        return false
+      }
+    })
+    await until(() => {
+      try {
+        return readFileSync(progressPath, "utf8").includes('"type":"heartbeat"')
+      } catch {
+        return false
+      }
+    })
+    const entry = runs(f.root)[0]
+    const registrationPath = join(entry.runDirectory, "registration.json")
+    const obligations = () =>
+      readRecord(registrationPath).obligations.map((id) =>
+        readRecord(join(entry.runDirectory, "obligations", `${id}.json`))
+      )
+    const nested = () => obligations().find((obligation) => obligation.command.name === "parent loss progress child")
+    await until(() => nested()?.state === "observed")
+    const nestedObligation = nested()
+    assert.ok(nestedObligation)
+    const parent = obligations().find((obligation) => obligation.parentId === "root")
+    assert.ok(parent)
+    process.kill(parent.processGroup, "SIGKILL")
+    await until(() => readRecord(registrationPath).state === "closed")
+    const progressBeforeRelease = readFileSync(progressPath, "utf8")
+    assert.match(progressBeforeRelease, /"type":"start"/u)
+    assert.match(progressBeforeRelease, /"type":"heartbeat"/u)
+    assert.doesNotMatch(progressBeforeRelease, /"type":"terminal"/u)
+    assert.equal(existsSync(join(entry.runDirectory, "receipts", `${nestedObligation.obligationId}.json`)), false)
+    const run = readRecord(join(entry.runDirectory, "run.json"))
+    assert.equal(existsSync(run.worktreeFence), true)
+    assert.equal(existsSync(run.slotFence), true)
+    assert.throws(() => reconcileGateRun(entry), /not proven absent/u)
+    writeFileSync(release, "release")
+    await harness.done
+    assert.equal(readFileSync(progressPath, "utf8"), progressBeforeRelease)
+    assert.deepEqual(reconcileGateRun(entry), { runId: entry.runId, custody: "stopped", qualification: "UNPROVEN" })
+    assert.equal(existsSync(run.worktreeFence), false)
+    assert.equal(existsSync(run.slotFence), false)
+    assert.equal(
+      readRecord(join(entry.runDirectory, "absence", `${nestedObligation.obligationId}.json`)).processGroup,
+      nestedObligation.processGroup
+    )
+    const evidence = readRunEvidence(entry)
+    assert.equal(evidence.qualification, "UNPROVEN")
+    assert.equal(
+      evidence.stages.find((stage) => stage.obligationId === nestedObligation.obligationId).outcome,
+      "UNPROVEN"
+    )
+  } finally {
+    if (harness !== undefined) {
+      writeFileSync(join(f.root, ".scratch", "progress-parent-loss-release"), "release")
+      await harness.done
+    }
+    f.cleanup()
+  }
+})
+
+test("admitted closed reporting transport stops heartbeat without fabricating a terminal", async () => {
+  const f = fixture()
+  try {
+    const transportPath = join(f.root, ".scratch", "closed-reporting-transport.jsonl")
+    const lifecyclePath = join(f.root, ".scratch", "closed-reporting-lifecycle.jsonl")
+    const resultPath = join(f.root, ".scratch", "closed-reporting-result.json")
+    const summaryPath = join(f.root, ".scratch", "closed-reporting-summary.json")
+    const faultPath = join(f.root, ".scratch", "closed-reporting-fault.txt")
+    const childSource = `
+      const fs = require('node:fs')
+      fs.writeSync(3, JSON.stringify({version:1,type:'start',position:12,kind:'verify',name:'closed reporting child'})+'\\n')
+      fs.writeSync(3, '{"version":1,"type":"terminal","outcome":"exit:99"')
+      fs.closeSync(3)
+      setTimeout(() => process.exit(0), 150)
+    `
+    const source = `
+      import {appendFileSync,readFileSync,writeFileSync} from 'node:fs'
+      import {setTimeout} from 'node:timers/promises'
+      import {runBoundedCommand} from ${JSON.stringify(new URL(`file://${bounded}`).href)}
+      const append = (path, event) => appendFileSync(path, JSON.stringify(event)+'\\n')
+      process.on('unhandledRejection', error => { writeFileSync(${JSON.stringify(faultPath)}, 'unhandled:'+String(error)); process.exitCode=91 })
+      process.on('uncaughtException', error => { writeFileSync(${JSON.stringify(faultPath)}, 'uncaught:'+String(error)); process.exitCode=92 })
+      let result
+      try {
+        result = await runBoundedCommand({
+          executable:process.execPath,
+          args:['-e',${JSON.stringify(childSource)}],
+          name:'closed reporting transport child',
+          progress:{emit:event=>append(${JSON.stringify(lifecyclePath)},event),identity:{position:12,kind:'verify',name:'closed reporting child'}},
+          progressHeartbeatMilliseconds:20,
+          progressTransport:{onEvent:event=>append(${JSON.stringify(transportPath)},event)},
+          timeoutMilliseconds:2000
+        })
+        writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({exitCode:result.exitCode,outputLineCount:result.outputLineCount}))
+      } catch(error) {
+        writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({error:error.message,result:error.quintCommandResult}))
+        process.exitCode=23
+      }
+      const before = readFileSync(${JSON.stringify(lifecyclePath)}, 'utf8')
+      await setTimeout(80)
+      const after = readFileSync(${JSON.stringify(lifecyclePath)}, 'utf8')
+      writeFileSync(${JSON.stringify(summaryPath)}, JSON.stringify({before,after,transport:readFileSync(${JSON.stringify(transportPath)},'utf8')}))
+    `
+    const script = join(f.root, ".scratch", "closed-reporting-transport.mjs")
+    writeFileSync(script, source)
+    const result = await start(f.root, [process.execPath, script]).done
+    assert.equal(result.code, 0, result.output)
+    assert.equal(existsSync(faultPath), false, result.output)
+
+    const commandResult = JSON.parse(readFileSync(resultPath, "utf8"))
+    assert.deepEqual(commandResult, { exitCode: 0, outputLineCount: 0 })
+    const summary = JSON.parse(readFileSync(summaryPath, "utf8"))
+    const lifecycleBefore = summary.before
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line))
+    const lifecycleAfter = summary.after
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line))
+    const transport = summary.transport
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line))
+    assert.ok(lifecycleBefore.some((event) => event.type === "heartbeat"))
+    assert.deepEqual(lifecycleBefore, lifecycleAfter)
+    assert.deepEqual(
+      lifecycleAfter.filter((event) => event.type === "terminal").map((event) => event.outcome),
+      ["exit:0"]
+    )
+    // The child closes fd3 after a complete start and an incomplete terminal frame, then remains alive.
+    // The real reader therefore has a parent-loss/EOF boundary before the genuine child exit; cleanup
+    // discards the incomplete frame and never invents a terminal for the closed reporting transport.
+    assert.deepEqual(
+      transport.map((event) => event.type),
+      ["start"]
+    )
+
+    const entry = runs(f.root)[0]
+    const evidence = readRunEvidence(entry)
+    assert.equal(evidence.registration, "closed")
+    assert.equal(evidence.custody, "stopped")
+    assert.equal(evidence.qualification, "passed")
+    const registration = readRecord(join(entry.runDirectory, "registration.json"))
+    const nested = registration.obligations
+      .map((id) => readRecord(join(entry.runDirectory, "obligations", `${id}.json`)))
+      .find((obligation) => obligation.command.name === "closed reporting transport child")
+    assert.ok(nested)
+    const receipt = readRecord(join(entry.runDirectory, "receipts", `${nested.obligationId}.json`))
+    assert.deepEqual(
+      {
+        outcome: receipt.outcome,
+        exitCode: receipt.exitCode,
+        signal: receipt.signal,
+        groupAbsent: receipt.groupAbsent
+      },
+      { outcome: "passed", exitCode: 0, signal: null, groupAbsent: true }
+    )
+    const absence = readRecord(join(entry.runDirectory, "absence", `${nested.obligationId}.json`))
+    assert.deepEqual(
+      { state: absence.state, processGroup: absence.processGroup },
+      { state: "observed", processGroup: nested.processGroup }
+    )
+    const run = readRecord(join(entry.runDirectory, "run.json"))
+    assert.equal(existsSync(run.worktreeFence), false)
+    assert.equal(existsSync(run.slotFence), false)
+  } finally {
     f.cleanup()
   }
 })

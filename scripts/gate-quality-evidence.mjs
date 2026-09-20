@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { digest, readRecord } from "./gate-custody-records.mjs"
 import { inputGuardProven } from "./gate-resume-policy.mjs"
 import { captureResumeArtifacts } from "./gate-resume-artifacts.mjs"
-import { addSuccessfulOutputLines, successfulOutputLineLimit } from "./quality-output-budget.mjs"
+import { addSuccessfulOutputLines, outputPresentationPolicy } from "./quality-output-budget.mjs"
 import { readReferencedFormalSuccess } from "./formal-success-evidence.mjs"
 import { formalEvidenceContract } from "./formal-evidence-contract.mjs"
 
@@ -44,7 +44,7 @@ export const readQualityEvidence = ({
   if (
     contract.runId !== runId ||
     !Array.isArray(contract.manifest) ||
-    contract.maximumSuccessfulOutputLines !== successfulOutputLineLimit ||
+    contract.outputPresentationPolicy !== outputPresentationPolicy ||
     contract.logicalInvocation?.mode !== "check:all" ||
     contract.logicalInvocation.baseSha !== baseSha ||
     !same(contract.logicalInvocation.stageManifest, contract.manifest) ||
@@ -166,7 +166,6 @@ export const readQualityEvidence = ({
     if (stage.outcome === "passed")
       outputLines = addSuccessfulOutputLines({
         currentOutputLines: outputLines,
-        maximumOutputLines: successfulOutputLineLimit,
         stageName: stage.stageId,
         stageOutputLines: stage.outputLineCount
       })
@@ -176,7 +175,6 @@ export const readQualityEvidence = ({
   }
   outputLines = addSuccessfulOutputLines({
     currentOutputLines: outputLines,
-    maximumOutputLines: successfulOutputLineLimit,
     stageName: "formal verification",
     stageOutputLines: formalOutputLineCount
   })
@@ -271,7 +269,7 @@ export const readQualityEvidence = ({
     guard,
     manifest: contract.manifest,
     logicalInvocation: contract.logicalInvocation,
-    maximumSuccessfulOutputLines: successfulOutputLineLimit,
+    outputPresentationPolicy,
     stages: effectiveStages,
     composite,
     formal,

@@ -10,6 +10,159 @@ import { expect, test } from "vitest"
 // @ts-expect-error The production quality-gate helper is an executable JavaScript module.
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 
+test("bounded command lifecycle reports observed bytes and a real terminal outcome", async () => {
+  const events: Array<Record<string, unknown>> = []
+  const result = await runBoundedCommand({
+    args: ["-e", "process.stdout.write('observed\\n'); setTimeout(() => {}, 45)"],
+    executable: process.execPath,
+    forwardOutput: false,
+    name: "lifecycle fixture",
+    progress: {
+      emit: (event: Record<string, unknown>) => events.push(event),
+      identity: { position: 4, kind: "sampled-run", name: "semantic fixture" }
+    },
+    progressHeartbeatMilliseconds: 10,
+    timeoutMilliseconds: 2000
+  })
+
+  expect(result.exitCode).toBe(0)
+  expect(events[0]).toMatchObject({ type: "start", position: 4, name: "semantic fixture" })
+  expect(events.some((event) => event["type"] === "heartbeat" && event["backendProgress"] === "unknown")).toBe(true)
+  expect(events.at(-1)).toMatchObject({ type: "terminal", outcome: "exit:0", exitCode: 0 })
+  expect(events.at(-1)?.["lastObservedOutputAt"]).toEqual(expect.any(String))
+})
+
+test("formal progress crosses the opt-in fd3 transport independently of raw output", async () => {
+  const events: Array<Record<string, unknown>> = []
+  const progressModule = pathToFileURL(join(process.cwd(), "scripts", "formal-progress-events.mjs")).href
+  const source = `
+    const { createFormalProgressWriter } = await import(${JSON.stringify(progressModule)})
+    const writer = createFormalProgressWriter()
+    writer.emit({ version: 1, type: "start", position: 2, kind: "verify", name: "fd3 fixture" })
+    process.stdout.write("raw output ".repeat(10000) + "\\n")
+    writer.emit({ version: 1, type: "terminal", position: 2, kind: "verify", name: "fd3 fixture", outcome: "exit:0" })
+  `
+  const result = await runBoundedCommand({
+    args: ["--input-type=module", "-e", source],
+    executable: process.execPath,
+    forwardOutput: false,
+    name: "fd3 parent fixture",
+    progressTransport: { onEvent: (event: Record<string, unknown>) => events.push(event) },
+    timeoutMilliseconds: 2000
+  })
+
+  expect(result).toMatchObject({ exitCode: 0, outputLineCount: 1 })
+  expect(events.map((event) => event["type"])).toEqual(["start", "terminal"])
+  expect(events[0]).toMatchObject({ name: "fd3 fixture", position: 2 })
+})
+
+test("a child that closes fd3 does not receive a synthetic lifecycle terminal", async () => {
+  const events: Array<Record<string, unknown>> = []
+  const source = `
+    const fs = require("node:fs")
+    fs.writeSync(3, JSON.stringify({ version: 1, type: "start", position: 3, kind: "verify", name: "closed fd3" }) + "\\n")
+    fs.closeSync(3)
+    process.stdout.write("child completed without terminal\\n")
+  `
+  const result = await runBoundedCommand({
+    args: ["-e", source],
+    executable: process.execPath,
+    forwardOutput: false,
+    name: "closed fd3 fixture",
+    progressTransport: { onEvent: (event: Record<string, unknown>) => events.push(event) },
+    timeoutMilliseconds: 2000
+  })
+
+  expect(result).toMatchObject({ exitCode: 0, outputLineCount: 1 })
+  expect(events.map((event) => event["type"])).toEqual(["start"])
+  expect(events.some((event) => event["type"] === "terminal")).toBe(false)
+})
+
+test("formal progress reports a bounded child failure once without changing the failure", async () => {
+  const events: Array<Record<string, unknown>> = []
+  await expect(
+    runBoundedCommand({
+      args: ["-e", "process.stderr.write('failure detail\\n'); process.exit(23)"],
+      captureOutput: true,
+      executable: process.execPath,
+      forwardOutput: false,
+      name: "progress failure fixture",
+      progress: {
+        emit: (event: Record<string, unknown>) => events.push(event),
+        identity: { position: 6, kind: "test", name: "progress failure" }
+      },
+      timeoutMilliseconds: 2000
+    })
+  ).rejects.toMatchObject({ output: "failure detail\n", quintCommandResult: "exit:23" })
+  expect(events.map((event) => event["type"])).toEqual(["start", "terminal"])
+  expect(events.at(-1)).toMatchObject({ type: "terminal", outcome: "exit:23", exitCode: 23 })
+})
+
+test("formal progress reports timeout and cancellation without fabricating a pass", async () => {
+  const timeoutEvents: Array<Record<string, unknown>> = []
+  await expect(
+    runBoundedCommand({
+      args: ["-e", "setInterval(() => {}, 1000)"],
+      executable: process.execPath,
+      forwardOutput: false,
+      name: "progress timeout fixture",
+      progress: {
+        emit: (event: Record<string, unknown>) => timeoutEvents.push(event),
+        identity: { position: 7, kind: "verify", name: "progress timeout" }
+      },
+      progressHeartbeatMilliseconds: 10,
+      terminationGraceMilliseconds: 50,
+      timeoutMilliseconds: 40
+    })
+  ).rejects.toMatchObject({ quintCommandResult: "timed-out" })
+  expect(timeoutEvents.at(-1)).toMatchObject({ type: "terminal", outcome: "timed-out" })
+
+  const controller = new AbortController()
+  const cancellationEvents: Array<Record<string, unknown>> = []
+  const command = runBoundedCommand({
+    args: ["-e", "setInterval(() => {}, 1000)"],
+    executable: process.execPath,
+    forwardOutput: false,
+    name: "progress cancellation fixture",
+    progress: {
+      emit: (event: Record<string, unknown>) => cancellationEvents.push(event),
+      identity: { position: 8, kind: "verify", name: "progress cancellation" }
+    },
+    signal: controller.signal,
+    terminationGraceMilliseconds: 50,
+    timeoutMilliseconds: 2000
+  })
+  setTimeout(() => controller.abort(), 30)
+  await expect(command).rejects.toMatchObject({ quintCommandResult: "cancelled" })
+  expect(cancellationEvents.at(-1)).toMatchObject({ type: "terminal", outcome: "cancelled" })
+})
+
+test("a reporting transport failure is non-fatal and cannot orphan progress work", async () => {
+  const diagnostics: Array<unknown> = []
+  const progressModule = pathToFileURL(join(process.cwd(), "scripts", "formal-progress-events.mjs")).href
+  const source = `
+    const { createFormalProgressWriter } = await import(${JSON.stringify(progressModule)})
+    const writer = createFormalProgressWriter()
+    writer.emit({ version: 1, type: "start", position: 10, kind: "test", name: "closed parent" })
+    writer.emit({ version: 1, type: "terminal", position: 10, kind: "test", name: "closed parent", outcome: "exit:0" })
+  `
+  const result = await runBoundedCommand({
+    args: ["--input-type=module", "-e", source],
+    executable: process.execPath,
+    forwardOutput: false,
+    name: "closed parent transport fixture",
+    progressTransport: {
+      onEvent: () => {
+        throw new Error("parent report closed")
+      },
+      onError: (error: unknown) => diagnostics.push(error)
+    },
+    timeoutMilliseconds: 2000
+  })
+  expect(result.exitCode).toBe(0)
+  expect(diagnostics.length).toBeGreaterThan(0)
+})
+
 const processExists = (pid: number) => {
   try {
     process.kill(pid, 0)

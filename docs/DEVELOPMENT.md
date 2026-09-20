@@ -363,8 +363,31 @@ for secrets, including removed ancestor content; it binds that SHA in the actual
 scanner command and input identity. Standalone, preflight and hosted secret scans
 retain the default all-ref history. Unrelated loose branch updates do not change
 the locally selected candidate; selected refs and history controls remain observed.
-Original output counts consume the same shared `successfulOutputLineLimit` of
-550 lines as new stages.
+Original and new output counts remain exact evidence, without a success ceiling.
+An admitted child forwards at most 550 lines or 64 KiB to the console, then prints
+its complete log path. Its receipt and log retain all output; truncation never
+changes its exit verdict. A failed truncated child also shows its last 8 KiB.
+Commands without retained logs remain untruncated. Presentation is per child,
+not a shared qualification budget, so a verbose prefix cannot exhaust a suffix's
+allowance. Quiet-command progress reporting is separate from child output.
+
+The guarded formal profile opts into a dedicated fd3 NDJSON channel from its
+bounded checker children through `run-formal-profile.mjs` to
+`run-formal-workflow.mjs`. Lifecycle lines identify the semantic command,
+elapsed time, absolute deadline, and retained log; a quiet command receives one
+heartbeat after at most 15 seconds. The heartbeat says that backend progress is
+unknown. Last-observed stdout/stderr bytes are activity evidence only, never
+backend progress, and are not echoed one line per chunk. Compact mode retains
+these lifecycle lines while suppressing successful raw checker output and
+timing detail. The channel is live-only and non-evidentiary: reuse starts no
+transport, a lost parent leaves any already-emitted start/heartbeat without a
+synthetic terminal, and receipts, custody, formal reports, and evidence remain
+authoritative.
+
+This is repository-tooling behavior only; no Dalph command, provider boundary,
+journal fact, retry or runtime cleanup changes. Output-policy tests prove bounded
+presentation and malformed-count rejection; the resume integration test proves
+that a reused prefix plus a noisy suffix qualifies with exact original counts.
 
 A composite receipt links original prefix stages and newly executed suffix stages;
 it never invents execution receipts for skipped commands. Verified reused coverage

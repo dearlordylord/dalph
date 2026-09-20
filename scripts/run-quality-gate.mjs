@@ -4,7 +4,7 @@ import { executeResumableQualityGate } from "./gate-quality-run.mjs"
 import { inheritedCustody } from "./gate-custody-records.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { parseQualityCommandArguments } from "./quality-command-policy.mjs"
-import { addSuccessfulOutputLines, successfulOutputLineLimit } from "./quality-output-budget.mjs"
+import { addSuccessfulOutputLines, outputPresentationPolicy } from "./quality-output-budget.mjs"
 import {
   boundedQualityGateCommand,
   preflightQualityGates,
@@ -15,7 +15,6 @@ import { runPreflightCensus } from "./preflight-census.mjs"
 import { resolveQualityGateBase } from "./resolve-quality-gate-base.mjs"
 import { qualityVerificationExecutables, stabilizeVerificationEnvironment } from "./stabilize-verification-path.mjs"
 
-const maximumSuccessfulOutputLines = successfulOutputLineLimit
 // Admitted structural checks always inspect formatter inputs without incremental result reuse.
 process.env.DALPH_DPRINT_INCREMENTAL = "disabled"
 
@@ -104,7 +103,7 @@ if (resumable) {
       .filter((argument) => !argument.startsWith("--resume="))
       .map((argument) => (argument.startsWith("--candidate=") ? `--candidate=${qualityBaseSha}` : argument)),
     stageManifest,
-    maximumSuccessfulOutputLines,
+    outputPresentationPolicy,
     toolExecutables: [
       "git",
       "bash",
@@ -115,7 +114,7 @@ if (resumable) {
   }
   const result = await executeResumableQualityGate({ stageManifest, logicalInvocation, resumeRunId, pnpmEntryPoint })
   console.log(
-    `Quality gate emitted ${result.successfulOutputLines}/${maximumSuccessfulOutputLines} successful output lines.`
+    `Quality gate emitted ${result.successfulOutputLines} successful output lines (full counts; console presentation is bounded per command).`
   )
 } else {
   const preflight = await runPreflightCensus({
@@ -135,11 +134,12 @@ if (resumable) {
     )
     successfulOutputLines = addSuccessfulOutputLines({
       currentOutputLines: successfulOutputLines,
-      maximumOutputLines: maximumSuccessfulOutputLines,
       stageName: gate.name,
       stageOutputLines: result.outputLineCount
     })
   }
 
-  console.log(`Quality gate emitted ${successfulOutputLines}/${maximumSuccessfulOutputLines} successful output lines.`)
+  console.log(
+    `Quality gate emitted ${successfulOutputLines} successful output lines (full counts; console presentation is bounded per command).`
+  )
 }

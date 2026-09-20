@@ -1,5 +1,10 @@
 ## Working rules
 
+- On branch `work/gate-feedback-localization`, resume from
+  [the tracker plan](https://github.com/dearlordylord/dalph/issues/393) before changing gate
+  tooling or continuing its research. This branch-specific pointer can be removed
+  when the workstream is integrated or deliberately retired.
+
 - Use pnpm, never npm. Work on `master` unless the task requires an isolated
   branch or worktree.
 - Start explanations with the concrete actor, action, and boundary; introduce

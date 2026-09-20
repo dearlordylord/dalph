@@ -283,7 +283,7 @@ const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,pro
   }
 })
 
-test("resumed suffix consumes the original successful output budget", () => {
+test("resumed suffix preserves original counts without a successful output ceiling", () => {
   const f = fixture()
   try {
     const release = join(f.root, ".scratch", "budget-release")
@@ -303,11 +303,10 @@ const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,pro
     assert.equal(prior.resume.stages[0].outputLineCount, 300)
     writeFileSync(release, "release")
     const resumed = launch(f.root, script, prior.runId)
-    assert.equal(resumed.status, 1)
-    assert.ok(resumed.stderr.includes("successful output exceeded 550"))
+    assert.equal(resumed.status, 0, resumed.stderr)
     const evidence = runs(f.root).find((run) => run.runId !== prior.runId)
-    assert.equal(evidence.qualification, "UNPROVEN")
-    assert.equal(evidence.resume.composite.successfulOutputLines, 301)
+    assert.equal(evidence.qualification, "passed")
+    assert.equal(evidence.resume.composite.successfulOutputLines, 552)
   } finally {
     f.cleanup()
   }

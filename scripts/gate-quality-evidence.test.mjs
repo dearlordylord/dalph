@@ -43,7 +43,7 @@ const fixture = () => {
     runId,
     manifest: [stage],
     logicalInvocation,
-    maximumSuccessfulOutputLines: 550,
+    outputPresentationPolicy: "retained-logs-bounded-console-v1",
     identityReceiptDigest: digest(JSON.stringify(identity))
   })
   atomicRecord(join(runDirectory, "resume-inputs.json"), { version: 1, identity })
@@ -155,7 +155,7 @@ test("not-applicable formal evidence completes the composite only for the exact 
     const contract = {
       ...f.composite,
       manifest: f.composite.manifest,
-      maximumSuccessfulOutputLines: 550,
+      outputPresentationPolicy: "retained-logs-bounded-console-v1",
       identityReceiptDigest: digest(
         JSON.stringify({
           version: 2,

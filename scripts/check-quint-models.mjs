@@ -43,6 +43,7 @@ export const runQuintEffectiveProfile = async ({
   evaluatorPath,
   remainingExecutionMilliseconds,
   signal,
+  progress,
   write = (report) => process.stdout.write(report),
   compact = false,
   runCommand = runBoundedCommand,
@@ -124,7 +125,9 @@ export const runQuintEffectiveProfile = async ({
           serverEndpoint !== undefined && command.kind === "verify"
             ? [...command.args, "--server-endpoint", serverEndpoint]
             : [...command.args]
-        const result = await runCommand({
+        let lifecycle
+        let result
+        const runOptions = {
           ...command.options,
           args: [quintEntryPoint, ...args],
           environment,
@@ -137,20 +140,31 @@ export const runQuintEffectiveProfile = async ({
           processGroupAbsenceTimeoutMilliseconds: quintGateProcessGroupAbsenceTimeoutMilliseconds,
           terminationGraceMilliseconds: quintGateTerminationGraceMilliseconds,
           timeoutMilliseconds: timeoutFor(command.name)
-        })
-        const evidence = {
-          position: command.position,
-          name: command.name,
-          kind: command.kind,
-          executable: process.execPath,
-          args,
-          obligationId: result.gateObligationId,
-          exitCode: result.exitCode,
-          output: result.output,
-          verdict: command.verdict
         }
-        commands[command.position] = evidence
         try {
+          if (progress !== undefined) {
+            runOptions.progress = {
+              emit: typeof progress === "function" ? progress : progress.emit,
+              identity: { position: command.position, kind: command.kind, name: command.name },
+              terminal: false,
+              onLifecycle: (value) => {
+                lifecycle = value
+              }
+            }
+          }
+          result = await runCommand(runOptions)
+          const evidence = {
+            position: command.position,
+            name: command.name,
+            kind: command.kind,
+            executable: process.execPath,
+            args,
+            obligationId: result.gateObligationId,
+            exitCode: result.exitCode,
+            output: result.output,
+            verdict: command.verdict
+          }
+          commands[command.position] = evidence
           if (!command.verdict.acceptedExitCodes.includes(result.exitCode)) {
             throw new Error(`${command.name} returned unsupported exit ${result.exitCode}`)
           }
@@ -160,9 +174,16 @@ export const runQuintEffectiveProfile = async ({
           if (command.verdict.temporal === "violation") assertViolatedTemporalVerdict(result, property)
           if (command.verdict.artifactPreparedAfter) await assertArtifactPrepared(environment?.QUINT_HOME)
         } catch (error) {
-          if (error instanceof Error) Object.assign(error, { output: result.output })
+          if (error instanceof Error && typeof result?.output === "string")
+            Object.assign(error, { output: result.output })
+          lifecycle?.terminal({
+            outcome: error?.quintCommandResult ?? (result === undefined ? "failed" : "invalid"),
+            exitCode: result?.exitCode ?? error?.exitCode ?? null,
+            signal: error?.signal ?? null
+          })
           throw error
         }
+        lifecycle?.terminal({ outcome: `exit:${result.exitCode}`, exitCode: result.exitCode })
         return result
       }
     })

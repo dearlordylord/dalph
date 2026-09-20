@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "5a7e35f6dfd83cb26ef2da19de0a257896fd7162a786fcd7fd11170017dbbc7b",
+  "digest": "8efb4d84ecc568b6fc536b6e84ba78ed5d428403860dd6d5c94f86db487a118d",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -408,6 +408,7 @@
     "scripts/coverage-policy.mjs",
     "scripts/formal-evidence-contract.mjs",
     "scripts/formal-input-policy.mjs",
+    "scripts/formal-progress-events.mjs",
     "scripts/formal-success-evidence.mjs",
     "scripts/gate-custody-records.mjs",
     "scripts/gate-input-observer.mjs",

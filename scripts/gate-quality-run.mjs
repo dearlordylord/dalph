@@ -6,7 +6,7 @@ import { captureResumeArtifacts } from "./gate-resume-artifacts.mjs"
 import { selectResumePrefix } from "./gate-resume-policy.mjs"
 import { readRunEvidence } from "./gate-run-evidence.mjs"
 import { qualitySubtreeProven } from "./gate-quality-evidence.mjs"
-import { addSuccessfulOutputLines, successfulOutputLineLimit } from "./quality-output-budget.mjs"
+import { addSuccessfulOutputLines, outputPresentationPolicy } from "./quality-output-budget.mjs"
 import { runFormalWorkflow } from "./run-formal-workflow.mjs"
 import { runPreflightCensus } from "./preflight-census.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
@@ -126,7 +126,7 @@ export const executeResumableQualityGate = async ({
     runId: run.runId,
     logicalInvocation,
     manifest: stageManifest,
-    maximumSuccessfulOutputLines: successfulOutputLineLimit,
+    outputPresentationPolicy,
     disposableCacheRoots,
     identityReceiptDigest: digest(JSON.stringify(identity))
   }
@@ -177,7 +177,6 @@ export const executeResumableQualityGate = async ({
       for (const stage of prefix) {
         successfulOutputLines = addSuccessfulOutputLines({
           currentOutputLines: successfulOutputLines,
-          maximumOutputLines: successfulOutputLineLimit,
           stageName: stage.stageId,
           stageOutputLines: stage.outputLineCount
         })
@@ -234,7 +233,6 @@ export const executeResumableQualityGate = async ({
         await guard.assertUnchanged()
         successfulOutputLines = addSuccessfulOutputLines({
           currentOutputLines: successfulOutputLines,
-          maximumOutputLines: successfulOutputLineLimit,
           stageName: stage.id,
           stageOutputLines: result.outputLineCount
         })
@@ -279,7 +277,6 @@ export const executeResumableQualityGate = async ({
         formalOutputLineCount += lines
         successfulOutputLines = addSuccessfulOutputLines({
           currentOutputLines: successfulOutputLines,
-          maximumOutputLines: successfulOutputLineLimit,
           stageName: "formal verification",
           stageOutputLines: lines
         })

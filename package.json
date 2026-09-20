@@ -29,7 +29,7 @@
     "gate:status": "node scripts/gate-run-status.mjs",
     "gate:reconcile": "node scripts/reconcile-gate-run.mjs",
     "test:gate-custody": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/gate-custody.test.mjs",
-    "test:gate-resume": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/gate-resume-policy.test.mjs scripts/gate-quality-evidence.test.mjs scripts/local-formal-relevance.test.mjs scripts/gate-resume-integration.test.mjs scripts/gate-resume-inputs.test.mjs scripts/gate-vite-cache.test.mjs scripts/gate-pnpm-state.test.mjs scripts/compact-node-test-reporter.test.mjs",
+    "test:gate-resume": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/gate-resume-policy.test.mjs scripts/gate-quality-evidence.test.mjs scripts/local-formal-relevance.test.mjs scripts/gate-resume-integration.test.mjs scripts/gate-resume-inputs.test.mjs scripts/gate-vite-cache.test.mjs scripts/gate-pnpm-state.test.mjs scripts/compact-node-test-reporter.test.mjs scripts/quality-output-budget.test.mjs",
     "check:preflight": "node scripts/with-gate-slot.mjs -- node scripts/run-preflight.mjs",
     "check:fast": "pnpm typecheck && pnpm lint:changed",
     "check:duplicates": "jscpd .",
@@ -58,7 +58,7 @@
     "check:ci:formal:shard": "node scripts/with-gate-slot.mjs -- node scripts/run-hosted-formal-shard.mjs",
     "check:ci": "pnpm check:ci:quality && pnpm check:ci:formal",
     "check:all": "node scripts/with-gate-slot.mjs -- node scripts/run-quality-gate.mjs --local-handoff",
-    "test:formal:controls": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/formal-input-policy.test.mjs scripts/formal-success-evidence.test.mjs scripts/quint-effective-profile.test.mjs scripts/quint-owned-server.test.mjs scripts/quint-owned-client-patch.test.mjs scripts/quality-command-routing.test.mjs scripts/run-formal-workflow.test.mjs",
+    "test:formal:controls": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/formal-input-policy.test.mjs scripts/formal-success-evidence.test.mjs scripts/formal-progress-events.test.mjs scripts/quint-effective-profile.test.mjs scripts/quint-owned-server.test.mjs scripts/quint-owned-client-patch.test.mjs scripts/quality-command-routing.test.mjs scripts/run-formal-workflow.test.mjs",
     "test:formal:integration": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/formal-gate.integration.test.mjs"
   },
   "lint-staged": {

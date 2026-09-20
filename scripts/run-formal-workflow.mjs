@@ -11,8 +11,10 @@ import {
   readFormalSuccess
 } from "./formal-success-evidence.mjs"
 import { createQuintEffectiveProfile } from "./quint-effective-profile.mjs"
-import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { formalGatePolicy } from "./formal-gate-policy.mjs"
+import { renderFormalProgressEvent } from "./formal-progress-events.mjs"
+import { presentCapturedFailureOutput } from "./quality-output-budget.mjs"
+import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { formalVerificationExecutables, stabilizeVerificationEnvironment } from "./stabilize-verification-path.mjs"
 
 export const parseFormalArguments = (args) => {
@@ -187,6 +189,7 @@ export const runFormalWorkflow = async ({ force = false, report = console.log, r
       relayParentSignals: true,
       captureOutput: true,
       forwardOutput: false,
+      progressTransport: { onEvent: (event) => report(renderFormalProgressEvent(event)), onError: () => {} },
       timeoutMilliseconds: profileTimeoutMilliseconds,
       terminationGraceMilliseconds: 5_000,
       processGroupAbsenceTimeoutMilliseconds: 2_000
@@ -219,7 +222,20 @@ export const runFormalWorkflow = async ({ force = false, report = console.log, r
     report(`Formal: complete profile passed; success recorded. Evidence: ${attempt.recordPath}`)
     return finishResult({ status: "executed", success, evidencePath: attempt.recordPath }, lookup)
   } catch (error) {
-    if (typeof error.output === "string" && error.output.length > 0) process.stderr.write(error.output)
+    try {
+      presentCapturedFailureOutput({
+        logPath: error.logPath,
+        logAvailable: error.loggingFailure === undefined && error.logPath !== undefined,
+        logFailure:
+          error.loggingFailure === undefined
+            ? undefined
+            : `${error.loggingFailure.phase}: ${error.loggingFailure.message}`,
+        name: "complete identified formal profile",
+        output: error.output
+      })
+    } catch {
+      // Failure presentation must never replace the bounded command outcome.
+    }
     throw error
   } finally {
     if (!ownership.transferred) {

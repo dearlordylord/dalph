@@ -61,7 +61,6 @@ export const selectResumePrefix = ({ currentArtifacts, currentIdentity, priorEvi
     try {
       successfulOutputLines = addSuccessfulOutputLines({
         currentOutputLines: successfulOutputLines,
-        maximumOutputLines: resume.maximumSuccessfulOutputLines,
         stageName: stage.id,
         stageOutputLines: result.outputLineCount
       })

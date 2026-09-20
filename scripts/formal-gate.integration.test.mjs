@@ -108,7 +108,12 @@ if(!pointers.some(pointer=>pointer.state==='started'))throw Error('checker launc
 fs.appendFileSync(path.join(root,'.scratch','events'),'checker '+args[0]+' '+args[1]+'\\n')
 try{fs.writeFileSync(path.join(root,'.scratch','checker-path'),process.env.PATH,{flag:'wx'})}catch(error){if(error.code!=='EEXIST')throw error}
 const execute=()=>{
- if(configuration.fail){console.error('controlled checker failure');process.exit(23)}
+ if(configuration.fail){
+  if(configuration.noise){for(let i=0;i<700;i++)console.error('controlled noisy checker line '+i);console.error('FORMAL_NOISY_FAILURE_TAIL')}
+  else console.error('controlled checker failure')
+  process.exitCode=23
+  return
+ }
  if(args[0]==='run'){
  const start=args.indexOf('--witnesses')+1;let end=start;while(end<args.length&&!args[end].startsWith('--'))end++
  for(const witness of args.slice(start,end))console.log(witness+' was witnessed in 1 trace(s) out of 1 explored (100.00%)')
@@ -253,7 +258,7 @@ const fixture = ({ omitObligation = false, publicationCrashes = false, realObser
   put(".quint/apalache-dist-0.56.1/apalache/lib/apalache.jar", "controlled prepared jar")
   put("formal-input", "accepted formal fixture")
   put(".scratch/events", "")
-  put(".scratch/control.json", JSON.stringify({ fail: false, hold: false }))
+  put(".scratch/control.json", JSON.stringify({ fail: false, hold: false, noise: false }))
   git("add", ".")
   git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "base")
   const base = git("rev-parse", "HEAD")
@@ -273,7 +278,8 @@ const fixture = ({ omitObligation = false, publicationCrashes = false, realObser
       .trim()
       .split("\n")
       .filter(Boolean)
-  const controls = (settings) => put(".scratch/control.json", JSON.stringify({ fail: false, hold: false, ...settings }))
+  const controls = (settings) =>
+    put(".scratch/control.json", JSON.stringify({ fail: false, hold: false, noise: false, ...settings }))
   const saved = (excludedAttemptId) => {
     const pointer = readdirSync(join(location.custodyRoot, "formal"))
       .filter((file) => file.endsWith(".json"))
@@ -455,6 +461,22 @@ const waitForStderr = async (process_, expected) => {
     })
   })
 }
+const waitForStdout = async (process_, expected) => {
+  if (expected.test(process_.output().stdout)) return
+  await new Promise((resolve, reject) => {
+    const observe = () => {
+      if (expected.test(process_.output().stdout)) {
+        process_.child.stdout.off("data", observe)
+        resolve()
+      }
+    }
+    process_.child.stdout.on("data", observe)
+    process_.completion.then(() => {
+      process_.child.stdout.off("data", observe)
+      reject(new Error(`Process stopped before ${String(expected)}`))
+    })
+  })
+}
 
 test(
   "records complete formal success only after obligations and terminal evidence then reuses the original without launches",
@@ -531,14 +553,23 @@ test(
       f.controls({ hold: true })
       const first = launch(f)
       await waitForFile(join(f.root, ".scratch", "checker-ready"), first)
+      await waitForStdout(first, /Formal: start planned-attempt executor model typecheck/u)
+      assert.match(first.output().stdout, /Formal: start planned-attempt executor model typecheck/u)
+      assert.match(first.output().stdout, /deadline=.*; log=.*\.log/u)
+      assert.doesNotMatch(first.output().stdout, /Formal: complete planned-attempt executor model typecheck \[0\]/u)
       const second = launch(f, { nested: true })
       await waitForStderr(second, "waiting for worktree writer")
       assert.equal(f.events().filter((event) => event === "server-start").length, 1)
       f.put(".scratch/release", "release")
       const [firstResult, secondResult] = await Promise.all([first.completion, second.completion])
       assert.equal(firstResult.code, 0, firstResult.stderr)
+      assert.match(
+        firstResult.stdout,
+        /Formal: complete planned-attempt executor model typecheck \[0\]; outcome=exit:0/u
+      )
       assert.equal(secondResult.code, 0, secondResult.stderr)
       assert.match(secondResult.stdout, /zero checkers or servers started/)
+      assert.doesNotMatch(secondResult.stdout, /Formal: start/u)
       assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 105)
       assert.equal(f.events().filter((event) => event === "server-start").length, 1)
     } finally {
@@ -572,6 +603,47 @@ test(
       assert.match(retry.stdout, /running complete profile/)
       assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, afterFailure + 105)
       assert.notEqual(f.saved().pointer.attemptId, original.pointer.attemptId)
+    } finally {
+      f.cleanup()
+    }
+  }
+)
+
+test(
+  "noisy formal failure keeps inner lifecycle visible beside one bounded outer diagnostic",
+  { timeout: 120000 },
+  async () => {
+    const f = fixture()
+    try {
+      f.controls({ fail: true, noise: true })
+      f.put(
+        "scripts/direct-formal-workflow.mjs",
+        `import {runFormalWorkflow} from './run-formal-workflow.mjs';try{await runFormalWorkflow({force:${true}})}catch(error){console.error('Formal: failed — '+error.message);process.exitCode=1}`
+      )
+      const result = await launch(f, { force: true, gateFile: "direct-formal-workflow.mjs" }).completion
+      assert.equal(result.code, 1, result.stderr)
+      assert.match(result.stdout, /Formal: start planned-attempt executor model typecheck/u)
+      assert.match(result.stdout, /Formal: complete planned-attempt executor model typecheck \[0\]; outcome=exit:23/u)
+      assert.match(result.stderr, /console output truncated; complete log:/u)
+      assert.match(result.stderr, /Complete log: .*\.log/u)
+      const completeLogs = [...result.stderr.matchAll(/Complete log: (.+\.log)/gu)].map((match) => match[1])
+      assert.ok(completeLogs.some((logPath) => readFileSync(logPath, "utf8").includes("FORMAL_NOISY_FAILURE_TAIL")))
+      assert.doesNotMatch(result.stdout, /controlled noisy checker line/u)
+      const runDirectories = readdirSync(join(f.location.custodyRoot, "runs")).map((runId) => ({
+        runId,
+        runDirectory: join(f.location.custodyRoot, "runs", runId)
+      }))
+      assert.equal(runDirectories.length, 1)
+      const evidence = readRunEvidence(runDirectories[0])
+      assert.equal(evidence.qualification, "UNPROVEN")
+      assert.ok(evidence.stages.some((stage) => stage.outcome === "exit:23"))
+      assert.equal(
+        readdirSync(join(f.location.custodyRoot, "formal"))
+          .filter((file) => file.endsWith(".json"))
+          .map((file) => readRecord(join(f.location.custodyRoot, "formal", file)))
+          .every((pointer) => pointer.state !== "passed"),
+        true
+      )
     } finally {
       f.cleanup()
     }
