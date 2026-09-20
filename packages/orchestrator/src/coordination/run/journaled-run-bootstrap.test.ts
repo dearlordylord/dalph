@@ -146,6 +146,10 @@ import { makeRunFinalityEvidence, runTerminationDispositionOf } from "../frontie
 import { AllocatedWorkflowRunId, freshWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
 import { JournaledRunBootstrap, type AcceptedRunReactivationObservers } from "./run.js"
+import {
+  acceptedRunFactPublicationFromPrefix,
+  AcceptedRunFactPublicationRecordMissing
+} from "./accepted-run-fact-publication.js"
 import { JournaledRunObservationSource, journaledRunBootstrapLayer } from "./journaled-run-bootstrap.js"
 import {
   PassivePlannedAttemptObserver,
@@ -166,6 +170,7 @@ import {
 } from "../application-exit/application-shell.js"
 import { RunReactivationHint, RunReactivationOwner, runReactivationOwnerLayer } from "./run-reactivation-owner.js"
 import { ApplicationExitDiagnostic, ApplicationExitResult } from "../application-exit/lifecycle-decision.js"
+import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { controlDirectionApplicationLayer } from "../../workflow/protocols/control-direction-application/protocol.js"
 import { attemptChoiceControlLayer } from "../../workflow/protocols/attempt-choice/control.js"
@@ -202,6 +207,20 @@ import {
 } from "../../workflow-journal/maintenance.js"
 
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+
+it.effect("classifies from one accepted prefix and rejects a contradictory publication position", () =>
+  Effect.gen(function* () {
+    const target = FixtureTarget.make("journaled-bootstrap-prefix-classification")
+    const runId = RunId.make("journaled-bootstrap-prefix-classification")
+    const prefix = [makeWorkflowRunBeganRecord(runId, target, initialPolicy)]
+
+    expect(yield* acceptedRunFactPublicationFromPrefix(JournalPosition.make(1), prefix)).toEqual({
+      _tag: "WorkflowProgress"
+    })
+    const contradiction = yield* Effect.flip(acceptedRunFactPublicationFromPrefix(JournalPosition.make(2), prefix))
+    expect(contradiction).toEqual(new AcceptedRunFactPublicationRecordMissing({ acceptedAt: JournalPosition.make(2) }))
+  })
+)
 const runtimePolicy = RunControlPolicy.make({
   revision: initialRunPolicyRevision,
   taskExecutionCapacity: initialPolicy.taskExecutionCapacity
@@ -377,6 +396,7 @@ const unpausedRuntimeEvaluation = (runId: RunId) =>
               reflectionProposals: [],
               runtimeFacts: {
                 acceptedAt: null,
+                acceptedFactPublication: null,
                 cancellationApplied: false,
                 pauseCoverage: {
                   _tag: "PauseCoverageGraphNotEstablished",
@@ -405,7 +425,9 @@ const publicationBundle = (runId: RunId, acceptedAt: JournalPosition | null = nu
     proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
     reflectionProposals: [],
     runtimeFacts: {
-      acceptedAt,
+      ...(acceptedAt === null
+        ? { acceptedAt, acceptedFactPublication: null }
+        : { acceptedAt, acceptedFactPublication: { _tag: "WorkflowProgress" } }),
       cancellationApplied: false,
       pauseCoverage: {
         _tag: "PauseCoverageGraphNotEstablished",

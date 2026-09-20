@@ -1,5 +1,5 @@
 import { type PlannedAttemptExecutor, RunId } from "@dalph/contracts"
-import { Context, Data, Effect, Schema, type Stream } from "effect"
+import { Context, Effect, Schema, type Stream } from "effect"
 import { RunActivationGraphBaseline } from "./activation-graph-baseline.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { InitialControlPolicy } from "../../control/policy.js"
@@ -63,6 +63,8 @@ import type {
   PassivePlannedAttemptObserver,
   PassivePlannedAttemptProjectionPublication
 } from "./passive-planned-attempt-observer.js"
+import type { AcceptedRunFactPublication } from "./accepted-run-fact-publication.js"
+export { AcceptedRunFactPublication } from "./accepted-run-fact-publication.js"
 
 export type JournaledRunProcessServices =
   | DeliveryRuntimeResourceCapabilityPair
@@ -83,18 +85,6 @@ export type AcceptedRunControlDirection = "Pause" | "Unpause"
 
 /** A process-local observer for an already accepted Run-level control fact. */
 export type AcceptedRunControlObserver = (direction: AcceptedRunControlDirection) => Effect.Effect<void>
-
-/**
- * Distinguishes accepted progress from a durable observation that leaves the
- * Run at the same retained wait. A retained wait cancels only publication-owned
- * reactivation; it never consumes an outside wake.
- */
-export type AcceptedRunFactPublication = Data.TaggedEnum<{
-  WorkflowProgress: Record<never, never>
-  RetainedWait: Record<never, never>
-}>
-
-export const AcceptedRunFactPublication = Data.taggedEnum<AcceptedRunFactPublication>()
 
 /** A process-local observer for one accepted Journal publication. */
 export type AcceptedRunFactPublicationObserver = (publication: AcceptedRunFactPublication) => Effect.Effect<void>

@@ -93,6 +93,7 @@ const baseEvaluation = Effect.gen(function* () {
             reflectionProposals: [],
             runtimeFacts: {
               acceptedAt: null,
+              acceptedFactPublication: null,
               cancellationApplied: false,
               pauseCoverage: {
                 _tag: "PauseCoverageGraphNotEstablished",

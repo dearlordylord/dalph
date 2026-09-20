@@ -145,21 +145,6 @@ export const JournaledRunEstablished = Schema.Struct({
 })
 export type JournaledRunEstablished = typeof JournaledRunEstablished.Type
 
-/**
- * These accepted observations preserve an existing wait. Their own delivery
- * publication cannot be used as evidence that the outside world changed.
- */
-const acceptedPublicationForRecord = (record: JournalRecord) => {
-  const event = record.event
-  const retainedExecutorWait =
-    (event._tag === "PlannedAttemptExecutorStateObserved" ||
-      event._tag === "PlannedAttemptExecutorCommandProjectionObserved") &&
-    event.observation._tag === "ExecutorStateUnreadable"
-  return retainedExecutorWait || event._tag === "TaskClaimAcquisitionRejected"
-    ? AcceptedRunFactPublication.RetainedWait()
-    : AcceptedRunFactPublication.WorkflowProgress()
-}
-
 /** The exact acknowledged terminal occurrence that closes one selected Run. */
 export const JournaledRunTermination = Schema.Struct({
   disposition: RunTerminationDisposition,
@@ -681,22 +666,17 @@ export const journaledRunBootstrapLayer = (
                 observe: (bundle) =>
                   Effect.gen(function* () {
                     yield* ambientPublicationObserver.observe(bundle)
-                    const acceptedAt = bundle.actionInputs.runtimeFacts.acceptedAt
+                    const runtimeFacts = bundle.actionInputs.runtimeFacts
+                    const acceptedAt = runtimeFacts.acceptedAt
                     if (acceptedAt === null) return
+                    const publicationClassification = runtimeFacts.acceptedFactPublication
                     const advanced = yield* Ref.modify(acceptedPublicationWatermark, (current) =>
                       current !== null && acceptedAt <= current ? [false, current] : [true, acceptedAt]
                     )
                     if (!advanced) return
-                    const records = yield* processJournal.journal.read(runId).pipe(Effect.orDie)
-                    const record = records.find(({ position }) => position === acceptedAt)
                     yield* Option.match(reactivationObservers, {
                       onNone: () => Effect.void,
-                      onSome: ({ acceptedFactPublication }) =>
-                        acceptedFactPublication(
-                          record === undefined
-                            ? AcceptedRunFactPublication.WorkflowProgress()
-                            : acceptedPublicationForRecord(record)
-                        )
+                      onSome: ({ acceptedFactPublication }) => acceptedFactPublication(publicationClassification)
                     })
                   })
               })

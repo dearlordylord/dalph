@@ -393,6 +393,7 @@ const baseEvaluation = Effect.gen(function* () {
             reflectionProposals: [],
             runtimeFacts: {
               acceptedAt: JournalPosition.make(1),
+              acceptedFactPublication: { _tag: "WorkflowProgress" },
               cancellationApplied: false,
               pauseCoverage: {
                 _tag: "PauseCoverageGraphNotEstablished",
@@ -2493,6 +2494,7 @@ it.effect("keeps A as an unreadable Git wait while independent B executes its pr
         reflectionProposals: [],
         runtimeFacts: {
           acceptedAt: JournalPosition.make(1),
+          acceptedFactPublication: { _tag: "WorkflowProgress" },
           cancellationApplied: false,
           pauseCoverage: {
             _tag: "PauseCoverageGraphNotEstablished",
@@ -2553,7 +2555,11 @@ it.effect("keeps A as an unreadable Git wait while independent B executes its pr
               ...current,
               actionInputs: {
                 ...current.actionInputs,
-                runtimeFacts: { ...current.actionInputs.runtimeFacts, acceptedAt: JournalPosition.make(2) }
+                runtimeFacts: {
+                  ...current.actionInputs.runtimeFacts,
+                  acceptedAt: JournalPosition.make(2),
+                  acceptedFactPublication: { _tag: "WorkflowProgress" as const }
+                }
               }
             }))
           ),
@@ -5195,6 +5201,7 @@ it.effect(
             reflectionProposals: [],
             runtimeFacts: {
               acceptedAt,
+              acceptedFactPublication: { _tag: "WorkflowProgress" },
               cancellationApplied: false,
               pauseCoverage: {
                 _tag: "PauseCoverageGraphEstablished",
@@ -5257,7 +5264,11 @@ it.effect(
                       ...current,
                       actionInputs: {
                         ...current.actionInputs,
-                        runtimeFacts: { ...current.actionInputs.runtimeFacts, acceptedAt: claimReadObserved.position }
+                        runtimeFacts: {
+                          ...current.actionInputs.runtimeFacts,
+                          acceptedAt: claimReadObserved.position,
+                          acceptedFactPublication: { _tag: "WorkflowProgress" as const }
+                        }
                       }
                     }))
                     return { _tag: "ActionCompleted", proposalId: action.id } satisfies DeliveryActionResult

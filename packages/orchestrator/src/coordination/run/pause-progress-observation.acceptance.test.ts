@@ -448,6 +448,7 @@ const bundle = ({ acceptedAt, evidence, graph, paused, proposals = [], runId, ta
       reflectionProposals: [],
       runtimeFacts: {
         acceptedAt,
+        acceptedFactPublication: { _tag: "WorkflowProgress" },
         cancellationApplied: false,
         pauseCoverage: {
           _tag: "PauseCoverageGraphEstablished" as const,

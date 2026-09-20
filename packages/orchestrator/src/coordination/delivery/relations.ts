@@ -41,6 +41,7 @@ import {
 } from "../frontier/run-finality.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { ActiveRefreshRuntimeBoundary } from "../run/recovery-activation.js"
+import type { AcceptedRunFactPublication } from "../run/accepted-run-fact-publication.js"
 import type {
   DeliveryActionProposal,
   DeliveryProposalContributions,
@@ -542,8 +543,7 @@ export type PauseCoverageFacts =
   | { readonly _tag: "PauseCoverageGraphNotEstablished"; readonly applied: ReconstructedPauseState }
 
 /** Runtime facts are descriptive inputs; the runtime never reconstructs them from route tags. */
-export interface DeliveryRuntimeFacts {
-  readonly acceptedAt: JournalPosition | null
+interface DeliveryRuntimeFactsBase {
   readonly pauseCoverage: PauseCoverageFacts
   readonly quiescence: DeliveryQuiescenceDisposition
   readonly taskWork: DeliveryTaskWorkAdmissionBasis
@@ -553,6 +553,13 @@ export interface DeliveryRuntimeFacts {
   readonly activeRefreshBoundary?: ActiveRefreshRuntimeBoundary
   readonly runId?: RunId
 }
+
+/** A coherent publication either has no accepted Journal fact or carries its same-prefix classification. */
+export type DeliveryRuntimeFacts = DeliveryRuntimeFactsBase &
+  (
+    | { readonly acceptedAt: null; readonly acceptedFactPublication: null }
+    | { readonly acceptedAt: JournalPosition; readonly acceptedFactPublication: AcceptedRunFactPublication }
+  )
 
 /** Current descriptive inputs published together for one delivery revision. */
 export interface DeliveryGraphPublication {
