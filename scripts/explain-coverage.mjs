@@ -422,7 +422,7 @@ export const coverageExplanationFromFiles = ({
   return explanation
 }
 
-const invokedDirectly = process.argv[1] !== undefined && pathToFileURL(process.argv[1]).href === import.meta.url
+const invokedDirectly = pathToFileURL(process.argv[1] ?? "").href === import.meta.url
 if (invokedDirectly) {
   try {
     const options = new Map(

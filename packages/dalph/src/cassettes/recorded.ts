@@ -1659,10 +1659,10 @@ export const verifyRecordedCassetteRoundTrip = (
         nextSourceMeanings.length === sourceMeaningCount + 1 &&
         nextActualMeanings.length === actualMeaningCount + 1 &&
         priorWorkflowHistoryEquivalent !== undefined
-        ? semanticJson(nextSourceMeanings[sourceMeaningCount]) ===
-            semanticJson(nextActualMeanings[actualMeaningCount]) && priorWorkflowHistoryEquivalent
-        : semanticJson(nextSourceMeanings ?? semanticWorkflowHistory(expected)) ===
-          semanticJson(nextActualMeanings ?? semanticWorkflowHistory(actual))
+          ? semanticJson(nextSourceMeanings[sourceMeaningCount]) ===
+              semanticJson(nextActualMeanings[actualMeaningCount]) && priorWorkflowHistoryEquivalent
+          : semanticJson(nextSourceMeanings ?? semanticWorkflowHistory(expected)) ===
+            semanticJson(nextActualMeanings ?? semanticWorkflowHistory(actual))
       workflowHistoryEquivalentSoFar = equivalent
       return equivalent
     })

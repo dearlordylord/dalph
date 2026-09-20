@@ -79,6 +79,6 @@ export const bootstrapWorktree = async ({
   await validateWorkspaceBinLaunchers(repositoryRoot)
 }
 
-if (process.argv[1] !== undefined && pathToFileURL(process.argv[1]).href === import.meta.url) {
+if (pathToFileURL(process.argv[1] ?? "").href === import.meta.url) {
   await bootstrapWorktree()
 }

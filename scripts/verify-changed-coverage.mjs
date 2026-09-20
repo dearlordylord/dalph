@@ -241,6 +241,6 @@ const main = async () => {
   process.stdout.write(`${lines.join("; ")}; base ${baseSha}\n`)
 }
 
-if (process.argv[1] !== undefined && pathToFileURL(process.argv[1]).href === import.meta.url) {
+if (pathToFileURL(process.argv[1] ?? "").href === import.meta.url) {
   await main()
 }
