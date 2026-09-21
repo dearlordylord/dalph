@@ -379,7 +379,10 @@ conditional on creating a resource. Relative links/headings, whitespace, and
 test mappings are checked for the documentation handoff. A disposable local
 Git characterization confirmed exact repeat/up-to-date, rejection without
 overwriting a descendant, ordinary safe fast-forward, and missing-branch
-creation; it performed no hosted mutation. The controlled implementation and
-model/conformance evidence are recorded, while the exact final candidate still
-requires a frozen full gate and the fresh supervised disposable S1 journey.
-No GitHub issue closure is claimed.
+creation; it performed no hosted mutation. The exact candidate passed the
+frozen full gate in run
+`24e9c9ee-1302-4b57-a1dd-0b533332148d` against Base
+`309a94e87ab7898e45cc81cc5240e64ae5b4092a` at HEAD
+`a29737d9b00612d407d6b7eb5c7de10fdb2bb29a`. The fresh supervised disposable
+S1 journey remains the sole unproven acceptance boundary. No GitHub issue
+closure is claimed.

@@ -955,3 +955,22 @@ app-server completion handoff (or repairs that boundary) with a fresh bounded
 run. Do not close either disposable issue, delete either repository, or claim
 S1 acceptance until a run records M, independent remote-head acknowledgement,
 local promotion, tracker closure, and exact cleanup.
+
+### Exact-head full gate passed, 2026-09-21 21:27–21:59 UTC
+
+The exact candidate `a29737d9b00612d407d6b7eb5c7de10fdb2bb29a` passed the
+admitted `pnpm check:all --candidate=309a94e87ab7898e45cc81cc5240e64ae5b4092a`
+run `24e9c9ee-1302-4b57-a1dd-0b533332148d`. The Base is
+`309a94e87ab7898e45cc81cc5240e64ae5b4092a`; registration closed, custody
+stopped, the source input was unchanged, and qualification passed with 506
+obligations. The run passed 408 test files (4 skipped) and 4,414 tests (41
+skipped). Overall coverage was 96.41% statements, 94.81% branches, 95.19%
+functions, and 97.06% lines; changed production and maintained-evaluation
+coverage were both 100%. The 20/20 repeatability checks produced digest
+`6df6b575...`.
+
+This records the frozen full gate as proven for the exact candidate. It does
+not change the S1 result: the fresh supervised disposable journey remains the
+sole unproven acceptance boundary. The no-extra-remote-read decision remains
+in force, and the two preserved S1 attempts remain open evidence rather than
+grounds for closing Issue #384.
