@@ -1,4 +1,5 @@
 import { addSuccessfulOutputLines } from "./quality-output-budget.mjs"
+import { isOrdinaryQualityCommandResult } from "./quality-gate-failure-policy.mjs"
 
 /** Report independent structural failures together before qualification can start. */
 export const runPreflightCensus = async ({ gates, report = console.error, runStage }) => {
@@ -16,7 +17,7 @@ export const runPreflightCensus = async ({ gates, report = console.error, runSta
     } catch (error) {
       // Ordinary exits and proven termination leave independent checks actionable.
       // Cancellation, an unproven surviving process group, or a runner defect must stop launches.
-      if (!/^(?:exit:\d+|launch-failed|timed-out)$/u.test(error.quintCommandResult ?? "")) throw error
+      if (!isOrdinaryQualityCommandResult(error)) throw error
       outcomes.set(gate.name, { status: "failed", detail: error.message })
       report(`Preflight failed: pnpm ${gate.args.join(" ")}: ${error.message}`)
     }

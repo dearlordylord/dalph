@@ -10,9 +10,15 @@ import { addSuccessfulOutputLines, outputPresentationPolicy } from "./quality-ou
 import { runFormalWorkflow } from "./run-formal-workflow.mjs"
 import { runPreflightCensus } from "./preflight-census.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
-import { boundedQualityGateCommand, qualityGateTestEnvironment } from "./quality-gate-stage-policy.mjs"
+import { isOrdinaryQualityCommandResult } from "./quality-gate-failure-policy.mjs"
+import { qualificationAggregateError, runQualificationStages } from "./quality-gate-qualification-scheduler.mjs"
+import {
+  boundedQualityGateCommand,
+  localQualificationConcurrency,
+  qualityGateTestEnvironment
+} from "./quality-gate-stage-policy.mjs"
 
-/** Vite/Vitest results, transforms and newly bundled config modules are disposable, never credited stages. */
+/** Vite/Vitest results, transforms, persistent module cache, and newly bundled config modules are disposable, never credited stages. */
 export const resetQualityCaches = (worktree) => {
   const packageRoots = [worktree]
   for (const directory of ["packages", "prototypes"]) {
@@ -23,15 +29,27 @@ export const resetQualityCaches = (worktree) => {
         if (lstatSync(path).isDirectory()) packageRoots.push(path)
       }
   }
-  const roots = packageRoots.flatMap((root) =>
-    [".vite", ".vite-temp"].map((cache) => join(root, "node_modules", cache))
-  )
+  const roots = packageRoots
+    .flatMap((root) => [".vite", ".vite-temp"].map((cache) => join(root, "node_modules", cache)))
+    .concat(join(worktree, "node_modules", ".cache"), join(worktree, "node_modules", ".experimental-vitest-cache"))
   for (const root of roots) {
     if (existsSync(root) && !lstatSync(root).isDirectory())
       throw new Error(`Unsupported disposable Vite cache: ${root}`)
     rmSync(root, { recursive: true, force: true })
   }
   return roots
+}
+
+const validateQualificationArtifacts = ({ evidence, result, stage }) => {
+  const coverage = evidence.stages.find((receipt) => receipt.obligationId === result.gateObligationId)?.coverage
+  for (const obligation of stage.artifactObligations ?? []) {
+    if (obligation.type !== "coverage") continue
+    const artifact = coverage?.[obligation.id.slice("coverage-".length)]
+    if (artifact === undefined)
+      throw Object.assign(new Error(`Qualification artifact is incomplete: ${obligation.id}`), {
+        quintCommandResult: "artifact-incomplete"
+      })
+  }
 }
 
 /** Validate pnpm's consumed workspace state before observing fresh inputs; never install dependencies. */
@@ -91,7 +109,15 @@ export const executeResumableQualityGate = async ({
   if (context === undefined) throw new Error("Resumable quality stages require admitted gate custody")
   const { run, runDirectory } = context
   const formalClassification = validateFormalClassification(logicalInvocation.formalClassification, logicalInvocation)
-  logicalInvocation = { ...logicalInvocation, dprintIncremental: "disabled" }
+  logicalInvocation = {
+    ...logicalInvocation,
+    dprintIncremental: "disabled",
+    qualificationConcurrency: logicalInvocation.qualificationConcurrency ?? localQualificationConcurrency
+  }
+  if (logicalInvocation.qualificationConcurrency !== localQualificationConcurrency)
+    throw new Error(
+      `Local qualification concurrency policy mismatch: expected ${localQualificationConcurrency}, received ${logicalInvocation.qualificationConcurrency}`
+    )
   process.env.DALPH_DPRINT_INCREMENTAL = "disabled"
   // Read-only Git observations must not refresh the watched index; required Git locks remain enabled.
   process.env.GIT_OPTIONAL_LOCKS = "0"
@@ -104,6 +130,7 @@ export const executeResumableQualityGate = async ({
   const disposableCacheRoots = resetQualityCaches(run.worktree)
   const generatedOutputRoots = [
     ".scratch",
+    "node_modules/.cache",
     "coverage",
     "dist",
     "packages/contracts/dist",
@@ -196,7 +223,7 @@ export const executeResumableQualityGate = async ({
         report(`Reused quality stage ${stage.stageId} from ${stage.runId}`)
       }
     }
-    const executeStage = async (stage) => {
+    const executeStage = async (stage, signal) => {
       await guard.assertUnchanged()
       const ordinal = stageManifest.indexOf(stage)
       const path = join(runDirectory, "quality-stages", `${ordinal}.json`)
@@ -212,10 +239,11 @@ export const executeResumableQualityGate = async ({
         result = await (
           runStage ??
           ((selectedGate) =>
-            runBoundedCommand(
-              boundedQualityGateCommand({ gate: selectedGate, nodeExecutable: process.execPath, pnpmEntryPoint })
-            ))
-        )(gate)
+            runBoundedCommand({
+              ...boundedQualityGateCommand({ gate: selectedGate, nodeExecutable: process.execPath, pnpmEntryPoint }),
+              signal
+            }))
+        )(gate, signal)
         await guard.assertUnchanged()
         const evidence = readRunEvidence({ runDirectory, runId: run.runId })
         if (
@@ -226,6 +254,7 @@ export const executeResumableQualityGate = async ({
           throw new Error("Quality stage command differs from its bounded manifest")
         if (!qualitySubtreeProven(evidence.stages, result.gateObligationId))
           throw new Error("Quality stage has incomplete terminal subtree")
+        validateQualificationArtifacts({ evidence, result, stage })
         const completedRoots = stage.artifactRoots.map((root) =>
           root === "@coverage" ? join(run.reportDirectory, "coverage") : resolve(run.worktree, root)
         )
@@ -247,11 +276,17 @@ export const executeResumableQualityGate = async ({
             coverageDirectory: join(run.reportDirectory, "coverage")
           })
         })
-        return { ...result, outputLineCount: 0 }
+        return { ...result, outputLineCount: 0, stageEvidencePath: path }
       } catch (error) {
+        if (error instanceof Error) {
+          error.stageEvidencePath = path
+          error.stageId = stage.id
+        }
+        const qualificationStatus = isOrdinaryQualityCommandResult(error) ? "failed" : "unproven"
         atomicRecord(path, {
           ...started,
           outcome: "failed",
+          qualificationStatus,
           obligationId: result?.gateObligationId ?? error.gateObligationId,
           outputLineCount: result?.outputLineCount ?? 0,
           artifacts: captureResumeArtifacts({
@@ -291,7 +326,30 @@ export const executeResumableQualityGate = async ({
       retainedFormal = selectedFormal.retained
       if (selectedFormal.disposition !== undefined)
         formal = { ...selectedFormal.disposition, outputLineCount: formalOutputLineCount }
-      for (const stage of suffix.filter((stage) => stage.boundary === "qualification")) await executeStage(stage)
+      const qualificationStages = suffix.filter((stage) => stage.boundary === "qualification")
+      const qualification = await runQualificationStages({
+        concurrency: logicalInvocation.qualificationConcurrency,
+        report,
+        run: executeStage,
+        stages: qualificationStages
+      })
+      for (const [ordinal, outcome] of qualification.outcomes.entries()) {
+        const stage = qualificationStages[ordinal]
+        const stageOrdinal = stageManifest.indexOf(stage)
+        const evidencePath = outcome.error?.stageEvidencePath ?? outcome.value?.stageEvidencePath
+        entries[stageOrdinal] = {
+          kind: outcome.status === "not-run" ? "qualification-not-run" : "executed",
+          qualificationStatus: outcome.status,
+          ...(evidencePath === undefined ? {} : { evidencePath })
+        }
+      }
+      if (!qualification.succeeded) {
+        throw qualificationAggregateError({
+          outcomes: qualification.outcomes,
+          safetyError: qualification.safetyError,
+          stages: qualificationStages
+        })
+      }
     } catch (error) {
       failure = error
     }

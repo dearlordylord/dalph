@@ -72,6 +72,16 @@ Choose checks by affected behavior, not by commit or handoff alone:
   changing shared build/dependency configuration, gate orchestration, or validity of
   qualification evidence. Uncertain impact requires investigation, not exemption.
 
+The local qualification suffix is governed by the checked-in stage algebra and a
+fixed `localQualificationConcurrency = 1`; it is never derived from host cores or
+RAM. Each stage settles its bounded child and proves cleanup before the permit is
+released. Ordinary exit, timeout, and launch-failure results are retained and
+reported in manifest order so independent siblings continue; custody, evidence,
+identity, cancellation, and runner-integrity losses stop admission fail-closed,
+with active work marked unproven and queued work marked not-run. Resume credit is
+still limited to the same-candidate contiguous proven prefix. This scheduler is
+qualification tooling only and does not change Dalph runtime behavior.
+
 Accepted task requirements still apply. Handoffs name the affected scenarios,
 checks run or unrun, and why broader checks add no relevant coverage. Unused-code
 removal needs consumer evidence and affected type/build checks; changed behavior
@@ -101,6 +111,18 @@ recorded catalog; [coverage was 198.112 seconds](https://github.com/dearlordylor
 Their 389.043-second sum is a reference for independent work, not a current
 hosted baseline or a promised parallel saving; compare complete hosted attempts
 with their queue, install, and upload costs.
+
+The local resumable suffix uses the same checked-in stage algebra but a separate
+fixed `localQualificationConcurrency` cap. The measured local cap is one because
+coverage overlap was not proven memory-safe; it is never derived from available
+cores. Proved ordinary exits and timeouts continue through the suffix and appear
+in one canonical manifest-order aggregate. A timeout releases its permit only
+after the bounded child and process-group custody settle. Missing or mismatched
+identity/evidence, an observer or custody loss, and runner defects stop queued
+launches fail-closed. Formal applicability remains outside the credited
+contiguous resume prefix, and a repaired candidate receives no prior-candidate
+qualification credit. This is qualification tooling only and changes no Dalph
+runtime behavior.
 
 Hosted CI keeps its documentation-only quality classification. Its separate
 formal classification compares the exact event base-to-head paths with the
@@ -418,11 +440,12 @@ or unproven stage even if later census checks passed. A passed negative test may
 retain required failing children; its entire terminal subtree must remain valid.
 Package/Lab `dist` trees and consumed TypeScript build information require complete
 membership/mode/content proof and remain watched while credited. Missing or altered
-artifacts refuse reuse. Vite/Vitest `.vite` result/transform caches and `.vite-temp` newly bundled config
-modules at root and
-workspace package `node_modules` are discarded before observation on both fresh
-and resumed runs, then excluded as disposable outputs. They never receive stage
-credit. Admitted full/preflight lint passes dprint `--incremental=false`; its
+artifacts refuse reuse. Vite/Vitest `.vite` result/transform caches,
+`.experimental-vitest-cache` persistent transformed modules, and `.vite-temp`
+newly bundled config modules at root and workspace package `node_modules` are
+discarded before observation on both fresh and resumed runs, then excluded as
+disposable outputs. They never receive stage credit. Admitted full/preflight
+lint passes dprint `--incremental=false`; its
 explicit invocation and environment contract permit only incremental result and
 lock bookkeeping to be excluded. Formatter plugin code and metadata remain inputs.
 Normal edit-loop formatting keeps its incremental behavior. Other tool cache state
@@ -511,8 +534,13 @@ before `check:artifacts`. Because pnpm cannot create a workspace bin launcher
 whose generated target is absent during that first install, the bootstrap then
 runs a second frozen install with lifecycle scripts disabled and verifies every
 declared launcher under `node_modules/.bin`. It stops at the first failure.
-Install lifecycle scripts are not the artifact correctness boundary: pnpm can
-deliberately [disable them](https://pnpm.io/10.x/cli/install#--ignore-scripts).
+After launcher validation, it runs the bounded `prewarm:vitest` command. That
+command transforms and parses the ordinary Vitest module graph without
+executing tests, and writes only the disposable
+`node_modules/.experimental-vitest-cache` cache. A prewarm failure or timeout
+fails bootstrap; it is not a successful-but-cold setup. Install lifecycle
+scripts are not the artifact correctness boundary: pnpm can deliberately
+[disable them](https://pnpm.io/10.x/cli/install#--ignore-scripts).
 
 Run the real bootstrap integration as
 `pnpm test scripts/bootstrap-worktree.test.ts`. That package-script boundary

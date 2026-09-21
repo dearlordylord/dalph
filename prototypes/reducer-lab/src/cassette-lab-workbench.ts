@@ -61,6 +61,7 @@ import {
   updateTraceCursorSelection
 } from "./trace-cursor-selection.ts"
 import { foldRepeatedTraceItems } from "./trace-history-navigation.ts"
+import { deliveryTaskProgressLabels, traceTaskProgress } from "./trace-task-progress.ts"
 
 type CassetteRow = (typeof maintainedCassetteRows)[number]
 type AuthoredRow = CassetteRow & {
@@ -271,6 +272,7 @@ const frameProjection = (
             facts.delivery === undefined ? null : deliveryGraphEncoding.retainedStanding.className
           ].filter((value) => value !== null),
           labels: [
+            ...deliveryTaskProgressLabels(frame, id),
             `Frontier: ${facts.frontierFact?.standing === "Eligible" ? "eligible" : facts.frontier}`,
             `Desired ticket: ${facts.ticket}`,
             `Held: ${facts.held === "none" ? "no" : "yes"}`,
@@ -279,7 +281,7 @@ const frameProjection = (
           tone: dominantTaskTone(frame, id, integrationTaskIds, constraintTaskIds)
         },
         id,
-        lifecycle
+        lifecycle: `Graph snapshot: ${lifecycle}`
       }
     })
   }
@@ -1057,7 +1059,7 @@ export const renderProductionTraceHistory = (
         fingerprint: `trace:${history.cursor.runId}:${history.cursor.position}:${history.graph.snapshot.revision}`,
         key: `trace:${history.cursor.runId}:${history.cursor.position}`,
         status: `Production graph at journal position ${history.cursor.position}`,
-        tasks: history.graph.snapshot.tasks.map(({ id, lifecycle }) => ({ id, lifecycle: lifecycle._tag }))
+        tasks: traceTaskProgress(history)
       }
 
   const renderSelected = (): void => {
@@ -2098,7 +2100,7 @@ export const renderCassetteDeliveryWorkbench = (
   historicalTraceHost.dataset.role = "trace-history-host"
   const deliveryTimelineHost = document.createElement("div")
   deliveryTimelineHost.dataset.role = "delivery-timeline-host"
-  content.append(historicalTraceHost, deliveryTimelineHost)
+  content.append(deliveryTimelineHost, historicalTraceHost)
   const renderContents = (): void => {
     const moments = observationMomentsFrom(currentState)
     const preparedTrace = productionPreparedTraceFrom(currentState)

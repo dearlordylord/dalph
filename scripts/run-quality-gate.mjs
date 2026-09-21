@@ -7,6 +7,7 @@ import { parseQualityCommandArguments } from "./quality-command-policy.mjs"
 import { addSuccessfulOutputLines, outputPresentationPolicy } from "./quality-output-budget.mjs"
 import {
   boundedQualityGateCommand,
+  localQualificationConcurrency,
   preflightQualityGates,
   qualityGateTestEnvironment,
   fullQualityGateManifest
@@ -99,6 +100,7 @@ if (resumable) {
       : { gitHistory: { mode: "candidate-ancestry", headSha: candidateHeadSha } }),
     baseSha: qualityBaseSha,
     formalClassification,
+    qualificationConcurrency: localQualificationConcurrency,
     commandArguments: context.run.commandArguments
       .filter((argument) => !argument.startsWith("--resume="))
       .map((argument) => (argument.startsWith("--candidate=") ? `--candidate=${qualityBaseSha}` : argument)),

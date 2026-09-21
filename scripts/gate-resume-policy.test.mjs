@@ -68,6 +68,19 @@ void test("earlier census failure never turns later successes into reusable isla
   args.priorEvidence.resume.stages[0].outcome = "failed"
   assert.deepEqual(selectResumePrefix(args).prefix, [])
 })
+void test("out-of-order completion preserves canonical contiguous-prefix credit", () => {
+  const args = inputs()
+  args.priorEvidence.resume.stages[0].outcome = "passed"
+  args.priorEvidence.resume.stages[1].outcome = "passed"
+  args.priorEvidence.resume.stages[2].outcome = "failed"
+  args.priorEvidence.resume.stages[0].completionOrdinal = 2
+  args.priorEvidence.resume.stages[1].completionOrdinal = 3
+  args.priorEvidence.resume.stages[2].completionOrdinal = 1
+  assert.deepEqual(
+    selectResumePrefix(args).prefix.map((stage) => stage.stageId),
+    ["types", "tests"]
+  )
+})
 for (const [name, mutate] of [
   [
     "old schema",

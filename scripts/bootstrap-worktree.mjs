@@ -77,6 +77,14 @@ export const bootstrapWorktree = async ({
     timeoutMilliseconds: 5 * 60 * SECOND
   })
   await validateWorkspaceBinLaunchers(repositoryRoot)
+  await runCommand({
+    args: [pnpmEntryPoint, "--silent", "prewarm:vitest"],
+    cwd: repositoryRoot,
+    executable: process.execPath,
+    name: "Vitest module-cache prewarm",
+    relayParentSignals: true,
+    timeoutMilliseconds: 5 * 60 * SECOND
+  })
 }
 
 if (pathToFileURL(process.argv[1] ?? "").href === import.meta.url) {

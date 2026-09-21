@@ -9,6 +9,11 @@ const DEFAULT_TERMINATION_GRACE = 5 * SECOND
  */
 export const qualityGatePolicyIdentity = Object.freeze({ id: "dalph-quality-stage-algebra", revision: 3, version: 1 })
 
+// Local Vitest-backed obligations are admitted under the highest fixed cap
+// proven safe by the pairwise memory campaign recorded for issue #336.  This
+// is a checked-in policy, never a function of host cores or available RAM.
+export const localQualificationConcurrency = 1
+
 /**
  * A clean hosted runner reconstructs production artifacts after installing the
  * frozen dependency graph.  The suffix stages must use this exact bounded

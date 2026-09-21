@@ -38,6 +38,8 @@ export const copyQualityRuntimeFixture = (worktree) => {
     "gate-run-artifacts.mjs",
     "gate-run-evidence.mjs",
     "preflight-census.mjs",
+    "quality-gate-failure-policy.mjs",
+    "quality-gate-qualification-scheduler.mjs",
     "quality-gate-stage-policy.mjs",
     "quality-output-budget.mjs",
     "formal-progress-events.mjs",

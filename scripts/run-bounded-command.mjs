@@ -13,6 +13,7 @@ import {
   formalProgressHeartbeatMilliseconds
 } from "./formal-progress-events.mjs"
 import { createConsoleOutputPresenter } from "./quality-output-budget.mjs"
+import { isOrdinaryQualityCommandResult } from "./quality-gate-failure-policy.mjs"
 
 const defaultTerminationGraceMilliseconds = 5000
 const defaultProcessGroupAbsenceTimeoutMilliseconds = 2000
@@ -262,10 +263,7 @@ export const runBoundedCommand = ({
 
     const settle = (settler, value) => {
       if (settled) return
-      if (
-        absenceProven &&
-        (settler === resolve || /^(?:exit:\d+|launch-failed|timed-out)$/u.test(value?.quintCommandResult ?? ""))
-      ) {
+      if (absenceProven && (settler === resolve || isOrdinaryQualityCommandResult(value))) {
         try {
           proveStageDescendantsStopped(obligation)
         } catch (error) {

@@ -349,7 +349,13 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
   selectionLabel.append(cassetteSearch)
   controls.append(cassetteOptions, cassetteSearchStatus)
 
-  const runAllButton = appendTextElement(controls, "button", `Run all ${rows.length} cassettes`)
+  const runActions = document.createElement("div")
+  runActions.className = "catalog-run-actions"
+  controls.append(runActions)
+  const runSelectedButton = appendTextElement(runActions, "button", "Run selected cassette")
+  runSelectedButton.type = "button"
+  runSelectedButton.dataset.role = "run-selected-cassette"
+  const runAllButton = appendTextElement(runActions, "button", `Run all ${rows.length} cassettes`, "run-all-action")
   runAllButton.type = "button"
   runAllButton.title = "Runs every maintained cassette"
   const retryProblemsButton = appendTextElement(controls, "button", "Retry problem cassettes", "secondary-action")
@@ -427,6 +433,10 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
 
   renderSelected = (): void => {
     const row = selectedKey === undefined ? undefined : rowByKey.get(selectedKey)
+    runSelectedButton.disabled = busy || row === undefined
+    runSelectedButton.textContent = row === undefined || (states.get(row.catalogKey)?._tag ?? "NotRun") === "NotRun"
+      ? "Run selected cassette"
+      : "Rerun selected cassette"
     if (row === undefined) {
       selectedSurface = undefined
       sharedSurface.replaceChildren()
@@ -739,6 +749,10 @@ export const mountCassetteLab = (input: CassetteLabBrowserInput): void => {
 
   cassetteSearch.addEventListener("input", applyCassetteSearch)
   cassetteSearch.addEventListener("change", applyCassetteSearch)
+  runSelectedButton.addEventListener("click", () => {
+    if (busy || selectedKey === undefined) return
+    void runKeys([selectedKey], true).then(() => root.dispatchEvent(new Event(singleCassetteSettledEvent)))
+  })
   runAllButton.addEventListener("click", () => {
     void runKeys(rows.map(({ catalogKey }) => catalogKey), false).then(() =>
       root.dispatchEvent(new Event(everyCassetteSettledEvent))
