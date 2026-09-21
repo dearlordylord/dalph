@@ -755,12 +755,7 @@ describe("#307 production live qualification runtime", () => {
         "IntegratorRequest",
         "IntegratorGitReadHead"
       ],
-      controllerFinal: [
-        "GitReadTargetHead",
-        "GitReadPublicationHead",
-        "TaskTrackerReadGraph",
-        "TaskTrackerReadClaim"
-      ],
+      controllerFinal: ["GitReadTargetHead", "GitReadPublicationHead", "TaskTrackerReadGraph", "TaskTrackerReadClaim"],
       process: ["Spawn", "Exit"]
     })
     expect(productionLiveQualificationOperationCounts(["Read", "Read"], ["RunSelected"], boundaries)).toEqual(

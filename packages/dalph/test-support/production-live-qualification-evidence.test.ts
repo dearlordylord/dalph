@@ -220,12 +220,7 @@ const validInput = Effect.fn("LiveEvidenceTest.validInput")(function* () {
         "IntegratorRequest",
         "IntegratorGitReadHead"
       ],
-      controllerFinal: [
-        "GitReadTargetHead",
-        "GitReadPublicationHead",
-        "TaskTrackerReadGraph",
-        "TaskTrackerReadClaim"
-      ],
+      controllerFinal: ["GitReadTargetHead", "GitReadPublicationHead", "TaskTrackerReadGraph", "TaskTrackerReadClaim"],
       process: ["Spawn", "Exit"]
     },
     operationCounts: [

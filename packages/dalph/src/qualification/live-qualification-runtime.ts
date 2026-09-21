@@ -1221,10 +1221,10 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
                 fixture.configuration.integrationRef
               ])
               if (headResult.exitCode !== 0) return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
-              const remotePublicationHeadResult = yield* git.run(
-                fixture.publicationRepository,
-                ["rev-parse", fixture.configuration.remotePublicationTarget.branch]
-              )
+              const remotePublicationHeadResult = yield* git.run(fixture.publicationRepository, [
+                "rev-parse",
+                fixture.configuration.remotePublicationTarget.branch
+              ])
               if (remotePublicationHeadResult.exitCode !== 0)
                 return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
               const graph = yield* trackerReader.read(target)
