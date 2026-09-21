@@ -762,10 +762,41 @@ chronology mismatch. Per the stop condition, no further position repair, full
 gate, or hosted dogfood is authorized from this follow-up; the capstone remains
 blocked pending a separately scoped repair.
 
-### Scoped follow-up result, 2026-09-21 00:56 EDT
+### Scoped follow-up completion, 2026-09-21 04:56 UTC / 00:56 EDT
 
 A new completion worktree was created from Base `c64c3b899ca59eba8043d86a57ef93d23ef190c3` and used a fresh bounded repair method. The repair traced the cleanup activation boundary instead of moving absolute positions blindly. It supplied the provider-owned evidence and typed absent observations for candidate sessions A–G, then recorded the ordinary reactivation transcript after F cleanup: a second `ReadTaskClaim(G)`, a second G5 graph read, and G integration with the observed correlation tuple `queuedAt=582`, `startedAt=583`, `targetLineageObservedAt=602`. The support helper and replay comparison now derive from those facts. No production source or publication/no-extra-read rule changed.
 
 The repair is committed as `2bd92dd43` (`test: repair maintained capstone cleanup chronology`). The complete maintained capstone file passes all three tests, including fresh replay and predecessor cleanup assertions. The focused direct-publication S1 test passes after building the required package artifacts, and the production S7 Pause/Exit test passes.
 
 The first `check:fast` attempt reached typecheck and reported unrelated Base errors in `packages/dalph/test-support/*` and checkpoint fixtures. The separate changed-file lint pass also reports pre-existing clone-wide errors in `codex-integrator-cleanup.ts`; no repaired cassette file is named as an error. The required baseline/full-gate and hosted dogfood evidence remain outstanding and must run only after the current candidate is frozen and the documented gate admission rules are satisfied.
+
+### Frozen candidate gate and review result, 2026-09-21 05:06 UTC
+
+The frozen candidate is Base `c64c3b899ca59eba8043d86a57ef93d23ef190c3` through
+HEAD `8735157f9` before the final review repair. Baseline run
+`f209bc80-6a67-469d-9700-292f1d0c0fb2` closed with custody stopped and
+qualification `UNPROVEN`: clone-wide lint reported three unused direct-publication
+exports, and Reducer Lab reported two stale four-argument call sites. The
+unused exports were removed in the follow-up repair; the Lab and other baseline
+failures remain repository-wide work.
+
+Full gate run `35d8cfba-9668-41f2-8719-a08279029432` ran from
+`2026-09-21T04:58:47Z` through `2026-09-21T05:05:00Z`, then closed with custody
+`stopped` and qualification `UNPROVEN`. Build, package boundaries, artifact
+resolution, duplication, secret scan, and several control stages passed. The
+candidate still has typecheck errors in existing test-support/checkpoint
+declarations, formal-input mismatch, cyclomatic-suppression drift, the known
+Reducer Lab errors, and timed-out gate-control/capability stages. No writer
+remained after closure; the durable gate record is retained as evidence rather
+than treated as a qualification.
+
+The first scoped review round ran against the same Base. Standards findings
+closed here are the invalid S3/S6 scenario test names, the stale capstone status,
+and the three unused internal exports. The remaining acceptance evidence is the
+real disposable S1 journey after controlled S2 owned by #385. The spec review
+also found that a retained publication could be offered as a fresh frontier
+action; `qualifiedIntegratorProgressTransitionsFor` now stops that action and a
+controlled frontier assertion covers the retained boundary. The journal intent
+still does not carry a separately encoded refspec field required by D28b; that
+schema change is outside this bounded cassette/frontier repair and remains an
+explicit follow-up blocker. The accepted no-extra-remote-read rule is unchanged.
