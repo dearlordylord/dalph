@@ -714,9 +714,9 @@ fresh artifacts containing both repairs; its outcome is not yet claimed.
 
 ### Scoped follow-up record: authored capstone chronology
 
-**Status:** proposed and documented locally; no external issue or follow-up has
-been opened. The current #384 candidate remains blocked until this record is
-either completed in a new attempt or explicitly superseded by a maintainer.
+**Status:** completed by the bounded repair recorded below; no external issue or
+follow-up was opened. The earlier attempt's stop condition remains historical;
+the completion worktree and commit below supersede its blocked cassette state.
 
 **Owner and scope:** the #384 orchestrator owns the maintained authored cassette
 and its support helpers in `packages/dalph/src/cassettes/`. The follow-up may
@@ -761,3 +761,11 @@ This is a later cleanup-evidence obstruction, distinct from the former G
 chronology mismatch. Per the stop condition, no further position repair, full
 gate, or hosted dogfood is authorized from this follow-up; the capstone remains
 blocked pending a separately scoped repair.
+
+### Scoped follow-up result, 2026-09-21 00:56 EDT
+
+A new completion worktree was created from Base `c64c3b899ca59eba8043d86a57ef93d23ef190c3` and used a fresh bounded repair method. The repair traced the cleanup activation boundary instead of moving absolute positions blindly. It supplied the provider-owned evidence and typed absent observations for candidate sessions A–G, then recorded the ordinary reactivation transcript after F cleanup: a second `ReadTaskClaim(G)`, a second G5 graph read, and G integration with the observed correlation tuple `queuedAt=582`, `startedAt=583`, `targetLineageObservedAt=602`. The support helper and replay comparison now derive from those facts. No production source or publication/no-extra-read rule changed.
+
+The repair is committed as `2bd92dd43` (`test: repair maintained capstone cleanup chronology`). The complete maintained capstone file passes all three tests, including fresh replay and predecessor cleanup assertions. The focused direct-publication S1 test passes after building the required package artifacts, and the production S7 Pause/Exit test passes.
+
+The first `check:fast` attempt reached typecheck and reported unrelated Base errors in `packages/dalph/test-support/*` and checkpoint fixtures. The separate changed-file lint pass also reports pre-existing clone-wide errors in `codex-integrator-cleanup.ts`; no repaired cassette file is named as an error. The required baseline/full-gate and hosted dogfood evidence remain outstanding and must run only after the current candidate is frozen and the documented gate admission rules are satisfied.
