@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { spawn, spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 
@@ -14,7 +14,7 @@ import {
   hostedQualityStageIds,
   selectedHostedQualityStage
 } from "./hosted-quality-evidence.mjs"
-import { renderHostedQualityRow } from "./aggregate-hosted-quality-stages.mjs"
+import { parseHostedQualityAggregateArguments, renderHostedQualityRow } from "./aggregate-hosted-quality-stages.mjs"
 import {
   deliveryRepeatabilityDefaultIterations,
   deliveryRepeatabilityExpectedAcceptedOrderDigest,
@@ -45,7 +45,7 @@ const fixture = () => {
         ? Array.from(
             { length: deliveryRepeatabilityDefaultIterations },
             (_value, index) =>
-              `delivery repeatability iteration ${index + 1}/${deliveryRepeatabilityDefaultIterations} PASS ` +
+              `delivery repeatability fresh iteration ${index + 1}/${deliveryRepeatabilityDefaultIterations} PASS ` +
               `elapsedMs=1 occurrenceCount=${deliveryRepeatabilityExpectedOccurrenceCount} ` +
               `acceptedOrderDigest=${deliveryRepeatabilityExpectedAcceptedOrderDigest} candidateSha=${candidateSha}`
           ).join("\n") +
@@ -321,6 +321,24 @@ void test("renders a malformed row command without throwing", () => {
   )
 })
 
+void test("resolves every aggregate CLI report without leaking Array.map callback arguments", () => {
+  const { reports, values } = parseHostedQualityAggregateArguments([
+    "--base",
+    baseSha,
+    "--candidate",
+    candidateSha,
+    "--run-id",
+    binding.runId,
+    "--run-attempt",
+    binding.runAttempt,
+    "--",
+    "first/envelope.json",
+    "second/envelope.json"
+  ])
+  assert.deepEqual(reports, [resolve("first/envelope.json"), resolve("second/envelope.json")])
+  assert.equal(values.get("--candidate"), candidateSha)
+})
+
 void test("accepts terminal timeout as diagnostic evidence but never as qualification success", () => {
   const f = fixture()
   try {
@@ -347,9 +365,9 @@ void test("requires twenty ordered delivery digests and accepts zero or one prod
       ),
     (f) =>
       f.rewriteLog(0, (log) =>
-        log.replace("delivery repeatability iteration 1/20", "delivery repeatability iteration 2/20")
+        log.replace("delivery repeatability fresh iteration 1/20", "delivery repeatability fresh iteration 2/20")
       ),
-    (f) => f.rewriteLog(0, (log) => `${log}delivery repeatability iteration malformed\n`)
+    (f) => f.rewriteLog(0, (log) => `${log}delivery repeatability fresh iteration malformed\n`)
   ]
   const [zeroSummary, duplicateSummary, reordered, malformed] = cases
   const valid = fixture()

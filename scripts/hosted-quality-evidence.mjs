@@ -144,7 +144,7 @@ const portableArtifact = ({ outputDirectory, source, target }) => {
 }
 
 const deliveryIterationPattern =
-  /^delivery repeatability iteration (\d+)\/(\d+) PASS elapsedMs=\S+ occurrenceCount=(\d+) acceptedOrderDigest=([0-9a-f]{64}) candidateSha=([0-9a-f]{40})$/u
+  /^delivery repeatability fresh iteration (\d+)\/(\d+) PASS elapsedMs=\S+ occurrenceCount=(\d+) acceptedOrderDigest=([0-9a-f]{64}) candidateSha=([0-9a-f]{40})$/u
 const deliverySummaryPattern =
   /^delivery repeatability complete mode=fresh .* occurrenceCount=(\d+) acceptedOrderDigest=([0-9a-f]{64}) candidateSha=([0-9a-f]{40})$/u
 
@@ -153,7 +153,7 @@ const deliveryEvidence = (log, outcome, candidateSha) => {
   const iterations = []
   const summaries = []
   for (const line of log.split(/\r?\n/u)) {
-    if (/^delivery repeatability iteration\b/u.test(line)) {
+    if (/^delivery repeatability fresh iteration\b/u.test(line)) {
       const match = line.match(deliveryIterationPattern)
       if (match === null) {
         if (outcome === "passed")
