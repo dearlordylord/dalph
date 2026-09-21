@@ -573,7 +573,8 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
     sharedApplicationExit,
     maintenanceObservation,
     undefined,
-    remotePublicationTargetForTest
+    remotePublicationTargetForTest,
+    false
   ).pipe(Layer.provide(dependencies))
   const context = yield* Layer.build(application)
   const bootstrap = Context.get(context, JournaledRunBootstrap)

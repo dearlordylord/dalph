@@ -1,4 +1,7 @@
-import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
+import {
+  remotePublicationGitLayerForProductionTest,
+  remotePublicationTargetForTest
+} from "../../../orchestrator/test/support/direct-publication.js"
 import { makeAcceptedIntegrationHistory } from "../../../orchestrator/test/support/accepted-integration-history.js"
 import { makePromotedIntegrationHistory } from "../../../orchestrator/test/support/promoted-integration-history.js"
 // @effect-diagnostics multipleEffectProvide:off
@@ -353,7 +356,10 @@ const runFreshGithubInstructionVertical = (scenario: string, focusedBody: unknow
       controlledTrackerMutationLayer,
       controlledSynchronousPlannedAttemptExecutorLayer(executorLayer),
       unavailableIntegratorCandidateProviderAuthority,
-      { remotePublicationTarget: remotePublicationTargetForTest }
+      {
+        remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
+        remotePublicationTarget: remotePublicationTargetForTest
+      }
     ).pipe(
       Layer.provide(githubTrackerGraphReaderLayer.pipe(Layer.provide(githubClientLayer))),
       Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
@@ -717,8 +723,15 @@ const makePublicRunFixture = (projectionPlan: PublicExecutorProjectionPlan, opti
         completeExecutorLayer,
         integratorCandidateProviderAuthority,
         acceptedResultEvidenceStore === undefined
-          ? { remotePublicationTarget: remotePublicationTargetForTest }
-          : { acceptedResultEvidenceStore, remotePublicationTarget: remotePublicationTargetForTest }
+          ? {
+              remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
+              remotePublicationTarget: remotePublicationTargetForTest
+            }
+          : {
+              acceptedResultEvidenceStore,
+              remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
+              remotePublicationTarget: remotePublicationTargetForTest
+            }
       ).pipe(
         Layer.provide(
           Layer.succeed(
@@ -2478,7 +2491,10 @@ it.effect(absentHistoryApplicationScenario, () =>
         controlledTrackerMutationLayer,
         productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority,
-        { remotePublicationTarget: remotePublicationTargetForTest }
+        {
+          remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
+          remotePublicationTarget: remotePublicationTargetForTest
+        }
       ).pipe(
         Layer.provide(trackerReaderLayer),
         Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
@@ -2610,7 +2626,10 @@ it.effect("ticket delivery checks the tracker after a lost claim response and re
         trackerLayer,
         productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority,
-        { remotePublicationTarget: remotePublicationTargetForTest }
+        {
+          remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
+          remotePublicationTarget: remotePublicationTargetForTest
+        }
       ).pipe(
         Layer.provide(
           Layer.succeed(
@@ -2827,7 +2846,10 @@ it.effect("ticket delivery reads Git after ambiguous worktree creation and prese
         trackerLayer,
         productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority,
-        { remotePublicationTarget: remotePublicationTargetForTest }
+        {
+          remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
+          remotePublicationTarget: remotePublicationTargetForTest
+        }
       ).pipe(
         Layer.provide(
           Layer.succeed(
@@ -2930,7 +2952,10 @@ it.effect("records an Operator capacity change through the production compositio
         controlledTrackerMutationLayer,
         productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority,
-        { remotePublicationTarget: remotePublicationTargetForTest }
+        {
+          remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
+          remotePublicationTarget: remotePublicationTargetForTest
+        }
       ).pipe(
         Layer.provide(trackerReaderLayer),
         Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
@@ -3143,6 +3168,7 @@ it.effect("retains remote delivery across Pause and Exit", () =>
           productionControlledFakePlannedAttemptExecutorLayer,
           unavailableIntegratorCandidateProviderAuthority,
           {
+            remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
             remotePublicationTarget: remotePublicationTargetForTest,
             workflowCleanupObserver: (boundary) => Ref.update(cleanupCalls, (calls) => [...calls, boundary]),
             workflowGitCommandObserver: (boundary) => Ref.update(gitCalls, (calls) => [...calls, boundary])
@@ -3271,7 +3297,10 @@ it.effect("terminates once only after G2 proves the target complete and responsi
         controlledTrackerMutationLayer,
         productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority,
-        { remotePublicationTarget: remotePublicationTargetForTest }
+        {
+          remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
+          remotePublicationTarget: remotePublicationTargetForTest
+        }
       ).pipe(
         Layer.provide(trackerReaderLayer),
         Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
@@ -3361,7 +3390,10 @@ it.effect("rejects re-entry after fresh tracker facts conclusively block the Run
         controlledTrackerMutationLayer,
         productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority,
-        { remotePublicationTarget: remotePublicationTargetForTest }
+        {
+          remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
+          remotePublicationTarget: remotePublicationTargetForTest
+        }
       ).pipe(
         Layer.provide(trackerReaderLayer),
         Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
@@ -3632,7 +3664,10 @@ it.effect("publishes a changed terminal observation before continuing", () =>
         trackerLayer,
         controlledSynchronousPlannedAttemptExecutorLayer(terminalExecutorLayer),
         unavailableIntegratorCandidateProviderAuthority,
-        { remotePublicationTarget: remotePublicationTargetForTest }
+        {
+          remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
+          remotePublicationTarget: remotePublicationTargetForTest
+        }
       ).pipe(
         Layer.provide(
           Layer.succeed(
@@ -3764,7 +3799,10 @@ it.effect("blocks Run establishment before activation when preserved history has
         controlledTrackerMutationLayer,
         productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority,
-        { remotePublicationTarget: remotePublicationTargetForTest }
+        {
+          remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
+          remotePublicationTarget: remotePublicationTargetForTest
+        }
       ).pipe(
         Layer.provide(
           Layer.succeed(
@@ -3840,7 +3878,10 @@ it.effect(
           controlledTrackerMutationLayer,
           productionControlledFakePlannedAttemptExecutorLayer,
           unavailableIntegratorCandidateProviderAuthority,
-          { remotePublicationTarget: remotePublicationTargetForTest }
+          {
+            remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
+            remotePublicationTarget: remotePublicationTargetForTest
+          }
         ).pipe(
           Layer.provide(
             Layer.succeed(
@@ -3902,7 +3943,10 @@ it.effect("blocks a new Run when another Run crashed immediately after recording
         controlledTrackerMutationLayer,
         productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority,
-        { remotePublicationTarget: remotePublicationTargetForTest }
+        {
+          remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
+          remotePublicationTarget: remotePublicationTargetForTest
+        }
       ).pipe(
         Layer.provide(
           Layer.succeed(
@@ -3985,7 +4029,10 @@ it.effect("establishes a Run when another Run's responsibility is completed", ()
         controlledTrackerMutationLayer,
         productionControlledFakePlannedAttemptExecutorLayer,
         unavailableIntegratorCandidateProviderAuthority,
-        { remotePublicationTarget: remotePublicationTargetForTest }
+        {
+          remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
+          remotePublicationTarget: remotePublicationTargetForTest
+        }
       ).pipe(
         Layer.provide(
           Layer.succeed(

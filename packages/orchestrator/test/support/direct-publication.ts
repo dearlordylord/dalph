@@ -44,6 +44,9 @@ export const remotePublicationGitLayerForTest = Layer.succeed(
   })
 )
 
+/** Service layer alias for production-boundary tests that replace the live direct-publication authority. */
+export const remotePublicationGitLayerForProductionTest = remotePublicationGitLayerForTest
+
 /** Deterministic already-aligned baseline authority for runtime tests unrelated to baseline divergence. */
 export const remoteBaselineGitLayerForTest = Layer.succeed(
   RemoteBaselineGit,

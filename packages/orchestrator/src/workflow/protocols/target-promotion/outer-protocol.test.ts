@@ -28,6 +28,7 @@ import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
+import { describeJournalEvent } from "../../registry/event-descriptor.js"
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
@@ -53,17 +54,20 @@ import {
   deriveTargetPromotionState,
   deriveTargetPromotionStateFor,
   runTargetPromotion as runAcceptedTargetPromotion,
-  TargetPromotionCorrelationContradiction,
   TargetPromotionResultContradiction
 } from "./protocol.js"
 import { targetPromotionContract } from "../../../../test/contracts/target-promotion-contract.js"
 import { makeTargetPromotionEngine } from "./protocol-engine.js"
 import {
+  RemotePublicationAttemptIntendedEvent,
   PublishedIntegratorRunQualifiedCandidate,
   RemotePublicationAttemptOrdinal,
+  RemotePublicationIntendedEvent,
   RemotePublicationProofBasis,
   RemotePublicationSucceededEvent,
-  remotePublicationCorrelationFor
+  remotePublicationCorrelationEquals,
+  remotePublicationCorrelationFor,
+  remotePublicationRefspecFor
 } from "../direct-publication/events.js"
 const {
   authorizeTargetPromotionProgress,
@@ -131,6 +135,61 @@ const publication = RemotePublicationSucceededEvent.make({
 })
 const publishedCandidate = PublishedIntegratorRunQualifiedCandidate.make({ candidate: qualifiedCandidate, publication })
 
+const publicationRecordsFor = (
+  candidate: IntegratorRunQualifiedCandidate,
+  records: ReadonlyArray<JournalRecord>
+): ReadonlyArray<JournalRecord> => {
+  const correlation = remotePublicationCorrelationFor(candidate, remotePublicationTargetForTest)
+  const attemptOrdinal = RemotePublicationAttemptOrdinal.make(1)
+  const events = [
+    RemotePublicationIntendedEvent.make({
+      correlation,
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      version: workflowJournalEventVersion
+    }),
+    RemotePublicationAttemptIntendedEvent.make({
+      attemptOrdinal,
+      correlation,
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      refspec: remotePublicationRefspecFor(candidate.candidateCommit, correlation.target.branch),
+      version: workflowJournalEventVersion
+    }),
+    RemotePublicationSucceededEvent.make({
+      correlation,
+      occurrenceClassification: "NonActionOccurrence",
+      proof: RemotePublicationProofBasis.cases.ReconciledCandidateCurrent.make({
+        attemptOrdinal,
+        remoteHead: candidate.candidateCommit
+      }),
+      version: workflowJournalEventVersion
+    })
+  ] as const
+  return events.map((event, offset) => ({
+    event,
+    key: describeJournalEvent(event).expectedKey,
+    position: JournalPosition.make(records.length + offset + 1),
+    runId
+  }))
+}
+
+const seedPublicationRecords = (
+  candidate: IntegratorRunQualifiedCandidate,
+  records: Ref.Ref<ReadonlyArray<JournalRecord>>
+) =>
+  Ref.update(records, (current) => {
+    const expected = remotePublicationCorrelationFor(candidate, remotePublicationTargetForTest)
+    const alreadyPresent = current.some(
+      ({ event }) =>
+        event._tag === "RemotePublicationSucceeded" && remotePublicationCorrelationEquals(event.correlation, expected)
+    )
+    return alreadyPresent ? current : [...publicationRecordsFor(candidate, current), ...current]
+  })
+
+const targetPromotionEventTags = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<string> =>
+  records.filter(({ event }) => !event._tag.startsWith("RemotePublication")).map(({ event }) => event._tag)
+
 const request = targetPromotionCorrelationFor(qualifiedCandidate)
 
 const journalLayer = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
@@ -168,8 +227,12 @@ const run = (service: TargetPromotionGitService, records: Ref.Ref<ReadonlyArray<
   runFor(publishedCandidate, service, records)
 
 const reconcile = (service: TargetPromotionGitService, records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
-  reconcileTargetPromotionAttempt(publishedCandidate).pipe(
-    Effect.provide(Layer.mergeAll(journalLayer(records), gitLayer(service.compareAndSet, service.read)))
+  seedPublicationRecords(publishedCandidate.candidate, records).pipe(
+    Effect.andThen(
+      reconcileTargetPromotionAttempt(publishedCandidate).pipe(
+        Effect.provide(Layer.mergeAll(journalLayer(records), gitLayer(service.compareAndSet, service.read)))
+      )
+    )
   )
 
 const runFor = (
@@ -177,8 +240,12 @@ const runFor = (
   service: TargetPromotionGitService,
   records: Ref.Ref<ReadonlyArray<JournalRecord>>
 ) =>
-  runTargetPromotion(candidate).pipe(
-    Effect.provide(Layer.mergeAll(journalLayer(records), gitLayer(service.compareAndSet, service.read)))
+  seedPublicationRecords(candidate.candidate, records).pipe(
+    Effect.andThen(
+      runTargetPromotion(candidate).pipe(
+        Effect.provide(Layer.mergeAll(journalLayer(records), gitLayer(service.compareAndSet, service.read)))
+      )
+    )
   )
 
 it.effect("rejects an unqualified intent during the live Journal append before contacting Git", () =>
@@ -225,7 +292,7 @@ it.effect("rejects an unqualified intent during the live Journal append before c
       Effect.flip
     )
     expect(failure).toMatchObject({ _tag: "JournalHistoryInvalid" })
-    expect(yield* Ref.get(calls)).toEqual(["read:accepted", "append:TargetPromotionIntended"])
+    expect(yield* Ref.get(calls)).toEqual(["read:accepted", "read:accepted", "append:TargetPromotionIntended"])
     expect(materializations).toBe(0)
   }).pipe(
     Effect.provide(
@@ -236,7 +303,15 @@ it.effect("rejects an unqualified intent during the live Journal append before c
             FixtureTarget.make("promotion-wrapper"),
             InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
             remotePublicationTargetForTest
-          )
+          ),
+          ...publicationRecordsFor(qualifiedCandidate, [
+            makeWorkflowRunBeganRecord(
+              runId,
+              FixtureTarget.make("promotion-wrapper"),
+              InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+              remotePublicationTargetForTest
+            )
+          ])
         ],
         runId,
         target: FixtureTarget.make("promotion-wrapper")
@@ -270,7 +345,7 @@ it.effect("promotes exact M once and records its Integrator correlation and ance
     expect(state.correlation.requestId).toBe(`target-promotion:session:outer-promotion:2:${candidateCommit}`)
     expect("verificationManifest" in state.correlation).toBe(false)
     expect(yield* Ref.get(requests)).toEqual([targetPromotionGitRequestFor(request)])
-    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
+    expect(targetPromotionEventTags(yield* Ref.get(records))).toEqual([
       "TargetPromotionIntended",
       "TargetPromotionAttemptIntended",
       "TargetPromotionObservedSuccess"
@@ -364,7 +439,7 @@ it.effect("records a stale promotion when the first complete read has moved beyo
     )
 
     expect(state._tag).toBe("PromotionStale")
-    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
+    expect(targetPromotionEventTags(yield* Ref.get(records))).toEqual([
       "TargetPromotionIntended",
       "TargetPromotionStale"
     ])
@@ -393,7 +468,7 @@ it.effect("rejects contradictory complete Git read classifications", () =>
       )
 
       expect(failure).toBeInstanceOf(TargetPromotionResultContradiction)
-      expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual(["TargetPromotionIntended"])
+      expect(targetPromotionEventTags(yield* Ref.get(records))).toEqual(["TargetPromotionIntended"])
     }
   })
 )
@@ -418,7 +493,7 @@ it.effect("fails visibly when the first reconciliation read is unavailable", () 
     )
 
     expect(observed).toBe(failure)
-    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual(["TargetPromotionIntended"])
+    expect(targetPromotionEventTags(yield* Ref.get(records))).toEqual(["TargetPromotionIntended"])
   })
 )
 
@@ -555,7 +630,7 @@ it.effect("records read-only retry authority before ordinary delivery sends atte
     expect(yield* reconcile(service, records)).toEqual(deferred)
     expect((yield* run(service, records))._tag).toBe("PromotionSucceeded")
     expect(yield* Ref.get(calls)).toEqual(["read", "compare-and-set", "read", "compare-and-set"])
-    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
+    expect(targetPromotionEventTags(yield* Ref.get(records))).toEqual([
       "TargetPromotionIntended",
       "TargetPromotionAttemptIntended",
       "TargetPromotionReconciliationDeferred",
@@ -620,7 +695,7 @@ it.effect("records a read-only Git failure and rereads Git before ordinary attem
     expect(yield* reconcile(service, records)).toEqual(deferred)
     expect((yield* run(service, records))._tag).toBe("PromotionSucceeded")
     expect(yield* Ref.get(calls)).toEqual(["read", "compare-and-set", "read", "read", "compare-and-set"])
-    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
+    expect(targetPromotionEventTags(yield* Ref.get(records))).toEqual([
       "TargetPromotionIntended",
       "TargetPromotionAttemptIntended",
       "TargetPromotionReconciliationDeferred",
@@ -650,7 +725,7 @@ it.effect("read-only reconciliation cannot turn an unattempted intent into Git a
     expect(yield* Effect.flip(run(service, records))).toBe(readFailure)
     expect(yield* Effect.flip(reconcile(service, records))).toBeInstanceOf(TargetPromotionResultContradiction)
     expect(yield* Ref.get(calls)).toEqual(["read"])
-    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual(["TargetPromotionIntended"])
+    expect(targetPromotionEventTags(yield* Ref.get(records))).toEqual(["TargetPromotionIntended"])
   })
 )
 
@@ -695,7 +770,7 @@ it.effect("records one exact promotion intent and denies read-only progress befo
       durableBasis: "PendingInitial",
       previousAttemptOrdinal: undefined
     })
-    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual(["TargetPromotionIntended"])
+    expect(targetPromotionEventTags(yield* Ref.get(records))).toEqual(["TargetPromotionIntended"])
   })
 )
 
@@ -729,7 +804,7 @@ it.effect("rejects copied and consumed read permission before another Git read",
     const consumedPermission = yield* observeTargetPromotionRead(authorization).pipe(Effect.provide(layer), Effect.flip)
     expect(consumedPermission).toBeInstanceOf(TargetPromotionResultContradiction)
     expect(yield* Ref.get(reads)).toBe(1)
-    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual(["TargetPromotionIntended"])
+    expect(targetPromotionEventTags(yield* Ref.get(records))).toEqual(["TargetPromotionIntended"])
   })
 )
 
@@ -816,7 +891,7 @@ it.effect("rejects copied reused and stale promotion capabilities before their n
       )
     ).toMatchObject({ _tag: "PromotionSucceeded" })
     expect(yield* Ref.get(calls)).toEqual(["read", "read", "compare-and-set"])
-    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
+    expect(targetPromotionEventTags(yield* Ref.get(records))).toEqual([
       "TargetPromotionIntended",
       "TargetPromotionAttemptIntended",
       "TargetPromotionObservedSuccess"
@@ -1153,7 +1228,7 @@ it.effect("rejects recovery for a foreign exact promotion correlation sharing th
           records
         )
       )
-      expect(failure, label).toBeInstanceOf(TargetPromotionCorrelationContradiction)
+      expect(failure, label).toBeInstanceOf(TargetPromotionResultContradiction)
     }
     expect(yield* Ref.get(calls)).toEqual(["read", "compare-and-set"])
   })

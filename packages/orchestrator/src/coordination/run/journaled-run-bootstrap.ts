@@ -338,7 +338,9 @@ export const journaledRunBootstrapLayer = (
   applicationExit: ApplicationExitShellService,
   maintenanceObservation: JournalMaintenanceObservationService,
   operatorControlGraphReadBoundary: OperatorControlGraphReadBoundary | undefined,
-  remotePublicationTarget: RemotePublicationTarget
+  remotePublicationTarget: RemotePublicationTarget,
+  /** Low-level bootstrap fixtures may disable the production admission record while isolating another protocol. */
+  admitRemotePublication = true
 ) =>
   Layer.effectContext(
     Effect.gen(function* () {
@@ -706,7 +708,10 @@ export const journaledRunBootstrapLayer = (
                   remotePublicationTarget
                 )
               // A mismatch must still fail locally; only the fresh remote read is behind the lifecycle/proof cut.
-              if (!destinationPinMatches || (!applicationExitCutoffClosed && !runPaused && !publicationAlreadyProved)) {
+              if (
+                admitRemotePublication &&
+                (!destinationPinMatches || (!applicationExitCutoffClosed && !runPaused && !publicationAlreadyProved))
+              ) {
                 yield* admitRemotePublicationTarget(runId, remotePublicationTarget).pipe(
                   Effect.provide(context),
                   Effect.provideService(RemotePublicationGit, Context.get(context, RemotePublicationGit))

@@ -61,6 +61,8 @@ import {
   nodeGitRemoteBaselineLayer,
   type CompletionClaimBoundaryService,
   type CompletionTaskBoundaryService,
+  type RemotePublicationGit,
+  type RemoteBaselineGit,
   gitDispositionCleanupBoundaryLayer,
   IntegratorCandidateProviderAuthority,
   type IntegratorCandidateProviderAuthorityService,
@@ -181,6 +183,10 @@ export interface ProductionWorkflowRuntimeBoundaries {
   readonly targetPromotion?: TargetPromotionRuntimeInput
   /** Credential-free endpoint and fully-qualified branch pinned into the first Run record. */
   readonly remotePublicationTarget: RemotePublicationTarget
+  /** Controlled direct-publication Git authority for hermetic production-boundary tests. */
+  readonly remotePublicationGitLayer?: Layer.Layer<RemotePublicationGit>
+  /** Controlled remote-baseline authority for hermetic production-boundary tests. */
+  readonly remoteBaselineGitLayer?: Layer.Layer<RemoteBaselineGit>
   readonly integrationFinality?: CompletionClaimBoundaryService
   readonly completionTask?: CompletionTaskBoundaryService
   readonly acceptedResultEvidenceStore?: EvidenceStoreService
@@ -548,6 +554,12 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           taskClaimReacquisitionControlLayer,
           taskWorkCapacityControlLayer
         )
+        const directPublicationGitLayer =
+          runtimeBoundaries.remotePublicationGitLayer ??
+          nodeGitDirectPublicationLayer(workingRepository).pipe(Layer.provide(workflowGitCommandLayer))
+        const remoteBaselineGitLayer =
+          runtimeBoundaries.remoteBaselineGitLayer ??
+          nodeGitRemoteBaselineLayer.pipe(Layer.provide(workflowGitCommandLayer))
         return validatedRunActivationLayer(
           activeRunId,
           integrationTarget,
@@ -560,10 +572,8 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           opportunity,
           onReconstructed
         ).pipe(
-          Layer.provideMerge(
-            nodeGitDirectPublicationLayer(workingRepository).pipe(Layer.provide(workflowGitCommandLayer))
-          ),
-          Layer.provide(nodeGitRemoteBaselineLayer.pipe(Layer.provide(workflowGitCommandLayer))),
+          Layer.provideMerge(directPublicationGitLayer),
+          Layer.provide(remoteBaselineGitLayer),
           Layer.provide(integratorLayer),
           Layer.provide(interpreterLayer),
           Layer.provide(gitIntegratorCandidateLayer),
@@ -593,6 +603,9 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
   ).pipe(
     Layer.provide(nonJournaledRuntimeInputs),
     Layer.provide(ownershipLayer),
-    Layer.provide(nodeGitRemoteBaselineLayer.pipe(Layer.provide(workflowGitCommandLayer)))
+    Layer.provide(
+      runtimeBoundaries.remoteBaselineGitLayer ??
+        nodeGitRemoteBaselineLayer.pipe(Layer.provide(workflowGitCommandLayer))
+    )
   )
 }

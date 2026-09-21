@@ -59,7 +59,6 @@ import {
   TrackerMutation,
   TrackerRevision,
   UnclaimedTask,
-  unavailableIntegratorCandidateProviderAuthority,
   WorkflowTrace,
   completionTaskClaimEquals,
   type completionTaskRequestFor,
@@ -72,8 +71,17 @@ import { ConfigProvider, Deferred, Effect, Exit, FileSystem, Fiber, Layer, Optio
 import { expect } from "vitest"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
-import { acceptedManifestBytes, runInGitDirectory, runInWorktree } from "./hermetic-support.js"
-import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
+import {
+  acceptedManifestBytes,
+  hermeticCandidateProviderAuthority,
+  remoteBaselineGitLayerForCurrentHead,
+  runInGitDirectory,
+  runInWorktree
+} from "./hermetic-support.js"
+import {
+  remotePublicationGitLayerForProductionTest,
+  remotePublicationTargetForTest
+} from "../../../orchestrator/test/support/direct-publication.js"
 
 type TrackerClaim = ActiveTaskClaim | UnclaimedTask
 const maxActivationPasses = 64
@@ -391,12 +399,14 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
         integrationTarget,
         Layer.succeed(TrackerMutation, trackerMutation),
         controlledSynchronousPlannedAttemptExecutorLayer(Layer.succeed(PlannedAttemptExecutor, executor)),
-        unavailableIntegratorCandidateProviderAuthority,
+        hermeticCandidateProviderAuthority,
         {
           acceptedResultEvidenceStore: evidenceStore,
           completionTask,
           integrationFinality: completionClaim,
           integrator,
+          remoteBaselineGitLayer: remoteBaselineGitLayerForCurrentHead(git),
+          remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
           remotePublicationTarget: remotePublicationTargetForTest,
           targetPromotion: {
             git: {
@@ -544,6 +554,7 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       const promotionSuccessRecords = records.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")
       const runBeginningRecords = records.filter(({ event }) => event._tag === "WorkflowRunBegan")
       const runTerminationRecords = records.filter(({ event }) => event._tag === "WorkflowRunTerminated")
+      const cleanupExpected = !crashAfterPromotion
 
       expect(targetParents).toEqual([baseSha, decodedEvidence.commit])
       expect(promotedResult).toMatchObject({ exitCode: 0, stdout: "implemented by hermetic child\n" })
@@ -580,16 +591,18 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       expect(runTerminationRecords[0]?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Completed" })
       expect(records.at(-1)?.event).toEqual(runTerminationRecords[0]?.event)
       expect(records.some(({ event }) => event._tag === "IntegrationFinalitySettled")).toBe(true)
-      expect(records.some(({ event }) => event._tag === "WorktreeCleanupAuthorized")).toBe(false)
-      expect(records.some(({ event }) => event._tag === "WorktreeCleanupSettled")).toBe(false)
-      expect(records.some(({ event }) => event._tag === "BranchCleanupAuthorized")).toBe(false)
-      expect(records.some(({ event }) => event._tag === "BranchCleanupSettled")).toBe(false)
+      expect(records.some(({ event }) => event._tag === "WorktreeCleanupAuthorized")).toBe(cleanupExpected)
+      expect(records.some(({ event }) => event._tag === "WorktreeCleanupSettled")).toBe(cleanupExpected)
+      expect(records.some(({ event }) => event._tag === "BranchCleanupAuthorized")).toBe(cleanupExpected)
+      expect(records.some(({ event }) => event._tag === "BranchCleanupSettled")).toBe(cleanupExpected)
       expect(yield* fileSystem.exists(journalFilename)).toBe(true)
       expect(yield* fileSystem.exists(evidenceDirectory)).toBe(true)
       expect(yield* fileSystem.exists(repository)).toBe(true)
       expect(yield* fileSystem.exists(bareRemote)).toBe(true)
-      expect(yield* fileSystem.exists(worktree)).toBe(true)
-      expect((yield* git.runInWorktree(repository, ["show-ref", "--verify", plannedAttempt.branch])).exitCode).toBe(0)
+      expect(yield* fileSystem.exists(worktree)).toBe(!cleanupExpected)
+      const plannedBranchStatus = yield* git.runInWorktree(repository, ["show-ref", "--verify", plannedAttempt.branch])
+      if (cleanupExpected) expect(plannedBranchStatus.exitCode).not.toBe(0)
+      else expect(plannedBranchStatus.exitCode).toBe(0)
       expect((yield* git.runInWorktree(repository, ["show-ref", "--verify", "refs/heads/unrelated"])).exitCode).toBe(0)
       expect((yield* git.run(bareRemote, ["show-ref", "--verify", "refs/dalph/transfer-A"])).exitCode).not.toBe(0)
       expect(yield* Option.getOrThrow(yield* Ref.get(childHandle)).isRunning).toBe(false)

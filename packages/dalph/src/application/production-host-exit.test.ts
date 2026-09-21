@@ -38,6 +38,7 @@ const validRawConfiguration = () => ({
   integrationRef: "refs/heads/master",
   plannedAttemptBaseSha: "a".repeat(40),
   plannedAttemptExecutor: "codex:production",
+  remotePublicationTarget: { branch: "refs/heads/main", endpoint: "ssh://git@example.invalid/repository.git" },
   claimOwner: "dalph:production",
   taskWorkCapacity: 2,
   journalDatabase: "/var/lib/dalph/journal.sqlite",

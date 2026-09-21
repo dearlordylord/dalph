@@ -135,6 +135,14 @@ import {
   targetPromotionCorrelationFor
 } from "../workflow/protocols/target-promotion/events.js"
 import {
+  RemotePublicationAttemptIntendedEvent,
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationIntendedEvent,
+  RemotePublicationSucceededEvent,
+  remotePublicationCorrelationFor,
+  remotePublicationRefspecFor
+} from "../workflow/protocols/direct-publication/events.js"
+import {
   IntegrationProviderRunActivityAbsentEvent,
   IntegrationQuarantineBasis,
   IntegrationQuarantineDirectionAppliedEvent,
@@ -586,6 +594,10 @@ const historicalLookupRecords = (): ReadonlyArray<JournalRecord> => {
     run
   })
   const promotionCorrelation = targetPromotionCorrelationFor(qualifiedCandidate)
+  const publicationCorrelation = remotePublicationCorrelationFor(
+    promotionCorrelation.qualifiedCandidate,
+    remotePublicationTargetForTest
+  )
   const candidateObservation = IntegratorGitObservation.cases.Commit.make({
     candidateText,
     commit: qualifiedCandidate.candidateCommit,
@@ -697,15 +709,51 @@ const historicalLookupRecords = (): ReadonlyArray<JournalRecord> => {
     ),
     record(
       16,
-      TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+      RemotePublicationIntendedEvent.make({
+        correlation: publicationCorrelation,
+        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
     ),
-    record(17, TaskClaimAcquiredEvent.make({ claim: fixture.activeClaim, version: workflowJournalEventVersion })),
+    record(
+      17,
+      RemotePublicationAttemptIntendedEvent.make({
+        attemptOrdinal: RemotePublicationAttemptOrdinal.make(1),
+        correlation: publicationCorrelation,
+        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        refspec: remotePublicationRefspecFor(
+          publicationCorrelation.qualifiedCandidate.candidateCommit,
+          publicationCorrelation.target.branch
+        ),
+        version: workflowJournalEventVersion
+      })
+    ),
     record(
       18,
-      TaskAttemptPlannedEvent.make({ operation: fixture.planOperation, version: workflowJournalEventVersion })
+      RemotePublicationSucceededEvent.make({
+        correlation: publicationCorrelation,
+        occurrenceClassification: "NonActionOccurrence",
+        proof: {
+          _tag: "PushUpToDate",
+          attemptOrdinal: RemotePublicationAttemptOrdinal.make(1),
+          remoteHead: publicationCorrelation.qualifiedCandidate.candidateCommit
+        },
+        version: workflowJournalEventVersion
+      })
     ),
     record(
       19,
+      TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+    ),
+    record(20, TaskClaimAcquiredEvent.make({ claim: fixture.activeClaim, version: workflowJournalEventVersion })),
+    record(
+      21,
+      TaskAttemptPlannedEvent.make({ operation: fixture.planOperation, version: workflowJournalEventVersion })
+    ),
+    record(
+      22,
       CompletionClaimReplacementIntendedEvent.make({
         claim,
         operationId: OperationId.make("trace-reader-replacement"),
@@ -713,7 +761,7 @@ const historicalLookupRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      20,
+      23,
       CompletionClaimReplacementAttemptIntendedEvent.make({
         attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
         claim,
@@ -722,17 +770,17 @@ const historicalLookupRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      21,
+      24,
       CompletionClaimReplacedEvent.make({
         claim,
         operationId: OperationId.make("trace-reader-replacement"),
         version: workflowJournalEventVersion
       })
     ),
-    record(22, taskTrackerReadIntent(authorizationOperation)),
-    record(23, taskTrackerFactsObservedEvent(authorizationOperation.operationId, authorizationObservation)),
+    record(25, taskTrackerReadIntent(authorizationOperation)),
+    record(26, taskTrackerFactsObservedEvent(authorizationOperation.operationId, authorizationObservation)),
     record(
-      24,
+      27,
       CompletionTaskCandidateAncestryReadIntendedEvent.make({
         attemptOrdinal: ordinal,
         operationId: ancestryOperationId,
@@ -741,7 +789,7 @@ const historicalLookupRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      25,
+      28,
       CompletionTaskCandidateAncestryObservedEvent.make({
         attemptOrdinal: ordinal,
         observation: { _tag: "CandidateCurrent", currentHeadSha: qualifiedCandidate.candidateCommit },
@@ -750,9 +798,9 @@ const historicalLookupRecords = (): ReadonlyArray<JournalRecord> => {
         version: workflowJournalEventVersion
       })
     ),
-    record(26, CompletionTaskIntendedEvent.make({ request, version: workflowJournalEventVersion })),
+    record(29, CompletionTaskIntendedEvent.make({ request, version: workflowJournalEventVersion })),
     record(
-      27,
+      30,
       CompletionTaskAttemptIntendedEvent.make({
         attemptOrdinal: ordinal,
         focusedFactsOperationId: authorizationOperation.operationId,
@@ -762,13 +810,13 @@ const historicalLookupRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      28,
+      31,
       CompletionTaskResponseLostEvent.make({ attemptOrdinal: ordinal, request, version: workflowJournalEventVersion })
     ),
-    record(29, taskTrackerReadIntent(confirmationOperation)),
-    record(30, taskTrackerFactsObservedEvent(confirmationOperation.operationId, confirmationObservation)),
+    record(32, taskTrackerReadIntent(confirmationOperation)),
+    record(33, taskTrackerFactsObservedEvent(confirmationOperation.operationId, confirmationObservation)),
     record(
-      31,
+      34,
       CompletionTaskRequestLookupIntendedEvent.make({
         attemptOrdinal: ordinal,
         operationId: lookupOperationId,
@@ -777,7 +825,7 @@ const historicalLookupRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      32,
+      35,
       CompletionTaskRequestLookupObservedEvent.make({
         attemptOrdinal: ordinal,
         lookup: CompletionTaskRequestLookup.cases.NotApplied.make({ request }),
@@ -806,7 +854,7 @@ it.effect("indexes completion lookup and candidate ancestry roles in the public 
   Effect.gen(function* () {
     const records = historicalLookupRecords()
     const view = yield* readerFromRecords(records).readAt(
-      TraceCursor.make({ position: JournalPosition.make(32), runId: integrationFinalityFixture.runId })
+      TraceCursor.make({ position: JournalPosition.make(35), runId: integrationFinalityFixture.runId })
     )
     const lookup = view.items.find(({ occurrence }) => occurrence._tag === "IntegrationFocusedCompletionOccurred")
     expect(lookup?.operationIds.length).toBeGreaterThan(0)
@@ -878,12 +926,12 @@ it.effect("rejects a tracker read when its operation ID already identifies the c
       {
         event: collidingIntent,
         key: describeJournalEvent(collidingIntent).expectedKey,
-        position: JournalPosition.make(33),
+        position: JournalPosition.make(36),
         runId: integrationFinalityFixture.runId
       }
     ]
     const failure = yield* readerFromRecords(malformed)
-      .readAt(TraceCursor.make({ position: JournalPosition.make(33), runId: integrationFinalityFixture.runId }))
+      .readAt(TraceCursor.make({ position: JournalPosition.make(36), runId: integrationFinalityFixture.runId }))
       .pipe(Effect.flip)
     expect(failure).toMatchObject({
       _tag: "TraceCausalPredecessorContradiction",

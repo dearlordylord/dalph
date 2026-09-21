@@ -603,6 +603,7 @@ const absentIntegratorProgressTransitionsFor = (
   responsibility: StartedIntegrationResponsibility,
   held: boolean
 ): ReadonlyArray<RunnableFrontierTransitionType> => {
+  if (runtimeFacts.remotePublicationConfigured !== true) return []
   const began = Array.from(journalRecordsOfKind(workflowHistorySource(runState), "WorkflowRunBegan"))[0]
   if (began?.event._tag !== "WorkflowRunBegan") return []
   const correlation = remoteBaselineCorrelationFor(

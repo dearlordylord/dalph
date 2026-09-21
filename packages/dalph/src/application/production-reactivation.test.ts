@@ -1,4 +1,7 @@
-import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
+import {
+  remotePublicationGitLayerForProductionTest,
+  remotePublicationTargetForTest
+} from "../../../orchestrator/test/support/direct-publication.js"
 import { NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
@@ -1591,6 +1594,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             const observeApplicationExit = source === "TrackerNotification"
             const runtimeBoundaries = {
               ...(journalStoreLayer === undefined ? {} : { journalStoreLayer }),
+              remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
               remotePublicationTarget: remotePublicationTargetForTest,
               applicationExit: observeApplicationExit
                 ? {
@@ -2092,13 +2096,13 @@ it.effect(
       })
 
       expect(result.activationKinds).toEqual(["OrdinaryRunEntry", "OrdinaryRunEntry"])
-      expect(result.stableJournalRecordsBeforeWake).toHaveLength(233)
+      expect(result.stableJournalRecordsBeforeWake).toHaveLength(235)
       expect(result.stableJournalRecordsBeforeWake?.[231]).toMatchObject({
         position: 232,
         event: { _tag: "PlannedAttemptExecutorWorkReported", report: { _tag: "ExecutorWorkExecuting" } }
       })
-      expect(result.stableJournalRecordsBeforeWake?.[232]).toMatchObject({
-        position: 233,
+      expect(result.stableJournalRecordsBeforeWake?.[234]).toMatchObject({
+        position: 235,
         event: { _tag: "PlannedAttemptExecutorStateObserved", observation: { _tag: "ExecutorStateUnreadable" } }
       })
       expect(result.executorEntries).toEqual([
@@ -2109,9 +2113,9 @@ it.effect(
         { command: "observe", taskId: "A" },
         { command: "observe", taskId: "A" }
       ])
-      expect(result.journalRecords).toHaveLength(234)
-      expect(result.journalRecords[233]).toMatchObject({
-        position: 234,
+      expect(result.journalRecords).toHaveLength(236)
+      expect(result.journalRecords[235]).toMatchObject({
+        position: 236,
         event: { _tag: "PlannedAttemptExecutorStateObserved", observation: { _tag: "ExecutorStateUnreadable" } }
       })
       expect(result.trackerCalls).toEqual([])
@@ -2202,6 +2206,7 @@ it.effect(
           unavailableIntegratorCandidateProviderAuthority,
           {
             journalStoreLayer: Layer.succeedContext(journalContext),
+            remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
             remotePublicationTarget: remotePublicationTargetForTest
           }
         ).pipe(

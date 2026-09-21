@@ -63,7 +63,6 @@ import {
   TrackerMutation,
   TrackerRevision,
   UnclaimedTask,
-  unavailableIntegratorCandidateProviderAuthority,
   WorkflowTrace,
   completionTaskClaimEquals,
   type completionTaskRequestFor,
@@ -90,8 +89,17 @@ import {
 import { expect } from "vitest"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
-import { acceptedManifestBytes, runInGitDirectory, runInWorktree } from "./hermetic-support.js"
-import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
+import {
+  acceptedManifestBytes,
+  hermeticCandidateProviderAuthority,
+  remoteBaselineGitLayerForCurrentHead,
+  runInGitDirectory,
+  runInWorktree
+} from "./hermetic-support.js"
+import {
+  remotePublicationGitLayerForProductionTest,
+  remotePublicationTargetForTest
+} from "../../../orchestrator/test/support/direct-publication.js"
 
 type TaskKey = "A" | "B" | "D"
 type TrackerClaim = ActiveTaskClaim | UnclaimedTask
@@ -667,12 +675,14 @@ it.effect(
           integrationTarget,
           Layer.succeed(TrackerMutation, trackerMutation),
           controlledSynchronousPlannedAttemptExecutorLayer(Layer.succeed(PlannedAttemptExecutor, executor)),
-          unavailableIntegratorCandidateProviderAuthority,
+          hermeticCandidateProviderAuthority,
           {
             acceptedResultEvidenceStore: evidenceStore,
             completionTask,
             integrationFinality: completionClaim,
             integrator,
+            remoteBaselineGitLayer: remoteBaselineGitLayerForCurrentHead(git),
+            remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
             remotePublicationTarget: remotePublicationTargetForTest,
             targetPromotion: {
               git: {
@@ -1024,10 +1034,10 @@ it.effect(
         expect(terminationRecords).toHaveLength(1)
         expect(terminationRecords[0]?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Completed" })
         expect(records.at(-1)?.event).toEqual(terminationRecords[0]?.event)
-        expect(eventTags.some((tag) => tag === "WorktreeCleanupAuthorized")).toBe(false)
-        expect(eventTags.some((tag) => tag === "WorktreeCleanupSettled")).toBe(false)
-        expect(eventTags.some((tag) => tag === "BranchCleanupAuthorized")).toBe(false)
-        expect(eventTags.some((tag) => tag === "BranchCleanupSettled")).toBe(false)
+        expect(eventTags.some((tag) => tag === "WorktreeCleanupAuthorized")).toBe(true)
+        expect(eventTags.some((tag) => tag === "WorktreeCleanupSettled")).toBe(true)
+        expect(eventTags.some((tag) => tag === "BranchCleanupAuthorized")).toBe(true)
+        expect(eventTags.some((tag) => tag === "BranchCleanupSettled")).toBe(true)
         expect(graphRecords.length).toBeGreaterThanOrEqual(2)
         expect(
           (yield* Ref.get(graphSnapshots)).some(
@@ -1136,11 +1146,10 @@ it.effect(
           expect(decoded.correlation.runId).toBe(runId)
           const taskWorktree = taskValue(worktrees, task)
           const plannedAttempt = taskValue(plannedAttempts, task)
-          expect(yield* fileSystem.exists(taskWorktree)).toBe(true)
-          expect(yield* fileSystem.readFileString(`${taskWorktree}/RESULT-${task}.md`)).toBe(`implemented ${task}\n`)
-          expect((yield* git.runInWorktree(repository, ["show-ref", "--verify", plannedAttempt.branch])).exitCode).toBe(
-            0
-          )
+          expect(yield* fileSystem.exists(taskWorktree)).toBe(false)
+          expect(
+            (yield* git.runInWorktree(repository, ["show-ref", "--verify", plannedAttempt.branch])).exitCode
+          ).not.toBe(0)
           expect(
             (yield* git.run(bareRemote, ["show-ref", "--verify", `refs/dalph/transfer-${task}`])).exitCode
           ).not.toBe(0)
