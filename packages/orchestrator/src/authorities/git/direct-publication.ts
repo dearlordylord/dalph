@@ -252,7 +252,7 @@ export const nodeGitDirectPublicationLayer = (configuredRepository?: GitReposito
             "--recurse-submodules=no",
             "--",
             request.target.endpoint,
-            `${request.candidateCommit}:${request.target.branch}`
+            request.refspec
           ],
           deadline,
           { requestId: request.requestId, attemptOrdinal }

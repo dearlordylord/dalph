@@ -31,7 +31,8 @@ import {
   RemotePublicationGit,
   RemotePublicationGitObservation,
   RemotePublicationGitRequest,
-  RemotePublicationRequestId
+  RemotePublicationRequestId,
+  remotePublicationRefspecFor
 } from "../../workflow/protocols/direct-publication/events.js"
 
 interface GitResult {
@@ -149,12 +150,15 @@ const commit = async (fixture: Fixture, contents: string, message: string): Prom
   return GitCommitSha.make(sha)
 }
 
-const requestFor = (candidateCommit: GitCommitSha, endpoint: string, branch = "refs/heads/main") =>
-  RemotePublicationGitRequest.make({
+const requestFor = (candidateCommit: GitCommitSha, endpoint: string, branch = "refs/heads/main") => {
+  const target = { branch: RemotePublicationBranchRef.make(branch), endpoint: RemotePublicationEndpoint.make(endpoint) }
+  return RemotePublicationGitRequest.make({
     candidateCommit,
+    refspec: remotePublicationRefspecFor(candidateCommit, target.branch),
     requestId: RemotePublicationRequestId.make("direct-publication-adapter-test"),
-    target: { branch: RemotePublicationBranchRef.make(branch), endpoint: RemotePublicationEndpoint.make(endpoint) }
+    target
   })
+}
 
 const runWithAdapter = <A, E>(
   source: string,
@@ -219,6 +223,17 @@ const boundedScriptLayer = (
   }
   return Layer.succeed(GitCommand, service)
 }
+
+it("rejects a Git request whose refspec does not derive from its candidate and branch", () => {
+  const candidate = GitCommitSha.make("a".repeat(40))
+  const request = requestFor(candidate, "/tmp/direct-publication-remote.git")
+  expect(() =>
+    RemotePublicationGitRequest.make({
+      ...request,
+      refspec: remotePublicationRefspecFor(candidate, RemotePublicationBranchRef.make("refs/heads/other"))
+    })
+  ).toThrow()
+})
 
 const observe = (request: RemotePublicationGitRequest) =>
   Effect.gen(function* () {

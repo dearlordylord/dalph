@@ -96,7 +96,8 @@ import {
   RemotePublicationAttemptOrdinal,
   RemotePublicationIntendedEvent,
   RemotePublicationSucceededEvent,
-  remotePublicationCorrelationFor
+  remotePublicationCorrelationFor,
+  remotePublicationRefspecFor
 } from "../direct-publication/events.js"
 
 const replacementOperationId = OperationId.make("history-replacement-operation")
@@ -294,6 +295,10 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
         correlation: publicationCorrelation,
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
+        refspec: remotePublicationRefspecFor(
+          publicationCorrelation.qualifiedCandidate.candidateCommit,
+          publicationCorrelation.target.branch
+        ),
         version: workflowJournalEventVersion
       })
     ),
@@ -780,6 +785,10 @@ it("accepts a completion claim authorized by the exact post-plan reacquisition",
         correlation: publicationCorrelation,
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
+        refspec: remotePublicationRefspecFor(
+          publicationCorrelation.qualifiedCandidate.candidateCommit,
+          publicationCorrelation.target.branch
+        ),
         version: workflowJournalEventVersion
       })
     ),

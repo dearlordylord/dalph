@@ -92,6 +92,7 @@ import {
   RemotePublicationProofBasis,
   RemotePublicationSucceededEvent,
   remotePublicationCorrelationFor,
+  remotePublicationRefspecFor,
   remoteBaselineCorrelationFor,
   QueuedIntegrationResponsibility,
   RunControlPolicy,
@@ -913,6 +914,10 @@ const lookupHistory = (context: QualificationContext, detail: string, acknowledg
       attemptOrdinal: RemotePublicationAttemptOrdinal.make(1),
       initiatedBy: { _tag: "DalphCoordinator" },
       occurrenceClassification: "InitiatedAction",
+      refspec: remotePublicationRefspecFor(
+        candidate.candidateCommit,
+        context.configuration.remotePublicationTarget.branch
+      ),
       version: workflowJournalEventVersion
     }),
     RemotePublicationSucceededEvent.make({

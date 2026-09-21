@@ -99,6 +99,7 @@ import {
   remotePublicationAdmissionIdFor,
   targetPromotionRequestIdForCandidate,
   type RemotePublicationAttemptOrdinal,
+  type RemotePublicationRefspec,
   type RemotePublicationCorrelation,
   remotePublicationCorrelationFor,
   type RemotePublicationProofBasis,
@@ -176,6 +177,7 @@ type PreservedCassetteBrand =
   | PlannedAttemptExecutorStateObservationOrdinal
   | IntegrationTargetRef
   | RemotePublicationAttemptOrdinal
+  | RemotePublicationRefspec
   | RemotePublicationBranchRef
   | RemotePublicationEndpoint
   | JournalPosition
@@ -1799,7 +1801,8 @@ const renameRecordedCassetteEntry = (
           attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
           correlation: renameRemotePublicationCorrelation(entry.correlation, maps),
           initiatedBy: preserveCassetteValue(entry.initiatedBy),
-          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          refspec: preserveCassetteValue(entry.refspec)
         }),
       RemotePublicationSucceeded: (entry) =>
         completeFields<typeof entry>({

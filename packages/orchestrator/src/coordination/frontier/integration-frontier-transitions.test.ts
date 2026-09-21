@@ -108,7 +108,8 @@ import {
   RemotePublicationRetainedCause,
   RemotePublicationRetainedEvent,
   RemotePublicationSucceededEvent,
-  remotePublicationCorrelationFor
+  remotePublicationCorrelationFor,
+  remotePublicationRefspecFor
 } from "../../workflow/protocols/direct-publication/events.js"
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
@@ -1039,6 +1040,10 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
         correlation: publicationCorrelation,
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
+        refspec: remotePublicationRefspecFor(
+          publicationCorrelation.qualifiedCandidate.candidateCommit,
+          publicationCorrelation.target.branch
+        ),
         version: workflowJournalEventVersion
       }),
       remotePublicationAttemptIntendedRecordKey(publicationCorrelation.requestId, publicationAttemptOrdinal)
@@ -1118,6 +1123,10 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
         correlation: publicationCorrelation,
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
+        refspec: remotePublicationRefspecFor(
+          publicationCorrelation.qualifiedCandidate.candidateCommit,
+          publicationCorrelation.target.branch
+        ),
         version: workflowJournalEventVersion
       }),
       remotePublicationAttemptIntendedRecordKey(publicationCorrelation.requestId, publicationAttemptOrdinal)

@@ -15,7 +15,8 @@ import {
   RemotePublicationProofBasis,
   RemotePublicationPushFailure,
   RemotePublicationPushResult,
-  remotePublicationCorrelationFor
+  remotePublicationCorrelationFor,
+  remotePublicationRefspecFor
 } from "./events.js"
 import { makeRemotePublicationEngine } from "./protocol-engine.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -41,6 +42,7 @@ const pendingPublicationRecords = (attemptOrdinal: RemotePublicationAttemptOrdin
       correlation,
       initiatedBy: { _tag: "DalphCoordinator" },
       occurrenceClassification: "InitiatedAction",
+      refspec: remotePublicationRefspecFor(correlation.qualifiedCandidate.candidateCommit, correlation.target.branch),
       version: workflowJournalEventVersion
     }),
     key: "remote-publication-attempt:test:1" as JournalRecord["key"],
@@ -97,11 +99,16 @@ it.effect("publishes when the pinned remote head is an ancestor of M", () =>
       .pipe(Effect.provide(journalLayer(records)), Effect.provideService(RemotePublicationGit, git))
     expect(result._tag).toBe("PublicationSucceeded")
     expect(yield* Ref.get(pushes)).toBe(1)
-    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
+    const appendedRecords = yield* Ref.get(records)
+    expect(appendedRecords.map(({ event }) => event._tag)).toEqual([
       "RemotePublicationIntended",
       "RemotePublicationAttemptIntended",
       "RemotePublicationSucceeded"
     ])
+    const attemptIntent = appendedRecords.find(({ event }) => event._tag === "RemotePublicationAttemptIntended")
+    expect(attemptIntent?.event).toMatchObject({
+      refspec: remotePublicationRefspecFor(candidate.candidateCommit, remotePublicationTargetForTest.branch)
+    })
   })
 )
 

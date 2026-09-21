@@ -4,6 +4,7 @@ import {
   RemotePublicationEndpoint,
   RemotePublicationTarget
 } from "@dalph/contracts"
+import { Schema } from "effect"
 import { expect, it } from "vitest"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
@@ -15,7 +16,8 @@ import {
   RemotePublicationRetainedCause,
   RemotePublicationRetainedEvent,
   RemotePublicationSucceededEvent,
-  remotePublicationCorrelationFor
+  remotePublicationCorrelationFor,
+  remotePublicationRefspecFor
 } from "./events.js"
 import { deriveRemotePublicationState } from "./state.js"
 
@@ -35,6 +37,7 @@ const attempt = RemotePublicationAttemptIntendedEvent.make({
   correlation,
   initiatedBy: { _tag: "DalphCoordinator" },
   occurrenceClassification: "InitiatedAction",
+  refspec: remotePublicationRefspecFor(correlation.qualifiedCandidate.candidateCommit, correlation.target.branch),
   version: workflowJournalEventVersion
 })
 
@@ -55,6 +58,18 @@ it("derives exact publication proof only after its numbered intent", () => {
       })
     ])
   ).toEqual({ _tag: "PublicationSucceeded", correlation, proof })
+})
+
+it("rejects a numbered intent whose explicit refspec does not name the exact candidate and branch", () => {
+  expect(() =>
+    Schema.decodeUnknownSync(RemotePublicationAttemptIntendedEvent)({
+      ...attempt,
+      refspec: remotePublicationRefspecFor(
+        correlation.qualifiedCandidate.candidateCommit,
+        RemotePublicationBranchRef.make("refs/heads/other")
+      )
+    })
+  ).toThrow()
 })
 
 it("rejects a publication proof with no exact earlier numbered intent", () => {
@@ -84,6 +99,7 @@ it("rejects noncontiguous publication attempt ordinals", () => {
         correlation,
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
+        refspec: remotePublicationRefspecFor(correlation.qualifiedCandidate.candidateCommit, correlation.target.branch),
         version: workflowJournalEventVersion
       })
     ])

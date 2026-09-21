@@ -20,6 +20,7 @@ import {
   type RemotePublicationRetainedCause,
   type RemotePublicationProofBasis,
   RemotePublicationSucceededEvent,
+  remotePublicationRefspecFor,
   remotePublicationCorrelationEquals,
   remotePublicationRunIdOf
 } from "./events.js"
@@ -118,6 +119,7 @@ export const appendRemotePublicationAttemptIntent = Effect.fn("RemotePublication
       correlation,
       initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
       occurrenceClassification: "InitiatedAction",
+      refspec: remotePublicationRefspecFor(correlation.qualifiedCandidate.candidateCommit, correlation.target.branch),
       version: workflowJournalEventVersion
     })
   )

@@ -111,7 +111,8 @@ import {
   RemotePublicationAttemptOrdinal,
   RemotePublicationIntendedEvent,
   RemotePublicationSucceededEvent,
-  remotePublicationCorrelationFor
+  remotePublicationCorrelationFor,
+  remotePublicationRefspecFor
 } from "../../../orchestrator/src/workflow/protocols/direct-publication/events.js"
 import {
   IntegratorRunCandidateGitObservedEvent,
@@ -515,6 +516,10 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
         correlation: publicationCorrelation,
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
+        refspec: remotePublicationRefspecFor(
+          publicationCorrelation.qualifiedCandidate.candidateCommit,
+          publicationCorrelation.target.branch
+        ),
         version: workflowJournalEventVersion
       })
     ),

@@ -32,7 +32,8 @@ import {
   RemotePublicationAttemptOrdinal,
   RemotePublicationIntendedEvent,
   RemotePublicationSucceededEvent,
-  remotePublicationCorrelationFor
+  remotePublicationCorrelationFor,
+  remotePublicationRefspecFor
 } from "../../src/workflow/protocols/direct-publication/events.js"
 import {
   TargetPromotionAttemptIntendedEvent,
@@ -145,6 +146,10 @@ export const makePromotedIntegrationHistory = (input: {
       correlation: publicationCorrelation,
       initiatedBy: { _tag: "DalphCoordinator" },
       occurrenceClassification: "InitiatedAction",
+      refspec: remotePublicationRefspecFor(
+        publicationCorrelation.qualifiedCandidate.candidateCommit,
+        publicationCorrelation.target.branch
+      ),
       version
     })
   )

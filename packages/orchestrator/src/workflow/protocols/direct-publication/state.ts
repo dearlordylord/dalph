@@ -7,7 +7,8 @@ import {
   RemotePublicationProofBasis,
   RemotePublicationRetainedCause,
   remotePublicationAttemptLimit,
-  remotePublicationCorrelationEquals
+  remotePublicationCorrelationEquals,
+  remotePublicationRefspecFor
 } from "./events.js"
 
 export const RemotePublicationState = Schema.TaggedUnion({
@@ -63,6 +64,21 @@ export const deriveRemotePublicationState = (
   const attempts = events.flatMap((event) =>
     event._tag === "RemotePublicationAttemptIntended" ? [event.attemptOrdinal] : []
   )
+  if (
+    events.some(
+      (event) =>
+        event._tag === "RemotePublicationAttemptIntended" &&
+        event.refspec !==
+          remotePublicationRefspecFor(
+            event.correlation.qualifiedCandidate.candidateCommit,
+            event.correlation.target.branch
+          )
+    )
+  ) {
+    return RemotePublicationState.cases.PublicationContradiction.make({
+      detail: "publication attempt intent refspec must derive from the exact candidate and pinned branch"
+    })
+  }
   const attemptIssue = contiguousAttemptsIssue(attempts)
   if (attemptIssue !== undefined) {
     return RemotePublicationState.cases.PublicationContradiction.make({ detail: attemptIssue })

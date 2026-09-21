@@ -319,7 +319,8 @@ const recordRemotePublicationEntry = (event: RemotePublicationEvent): RecordedRe
       attemptOrdinal: value.attemptOrdinal,
       correlation: value.correlation,
       initiatedBy: value.initiatedBy,
-      occurrenceClassification: value.occurrenceClassification
+      occurrenceClassification: value.occurrenceClassification,
+      refspec: value.refspec
     }),
     RemotePublicationSucceeded: (value): RecordedRemotePublicationEntry => ({
       _tag: "RemotePublicationSucceeded",
@@ -1402,6 +1403,7 @@ const eventForRemotePublicationEntry = (entry: RecordedRemotePublicationEntry): 
         correlation: value.correlation,
         initiatedBy: value.initiatedBy,
         occurrenceClassification: value.occurrenceClassification,
+        refspec: value.refspec,
         version: workflowJournalEventVersion
       }),
     RemotePublicationSucceeded: (value) =>

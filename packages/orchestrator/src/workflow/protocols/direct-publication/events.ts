@@ -1,4 +1,4 @@
-import { GitCommitSha, RemotePublicationTarget, RunId } from "@dalph/contracts"
+import { GitCommitSha, RemotePublicationTarget, RunId, type RemotePublicationBranchRef } from "@dalph/contracts"
 import { Context, type Effect, Schema } from "effect"
 import type { CoordinatorOwnershipError } from "../../../authorities/coordinator-ownership/ownership.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -8,6 +8,15 @@ import { WorkflowActor } from "../../registry/actor.js"
 /** Stable identity for publication of one exact Integrator-qualified candidate. */
 export const RemotePublicationRequestId = Schema.NonEmptyString.pipe(Schema.brand("RemotePublicationRequestId"))
 export type RemotePublicationRequestId = typeof RemotePublicationRequestId.Type
+
+/** Exact ordinary non-force push refspec derived from the candidate and pinned branch. */
+export const RemotePublicationRefspec = Schema.NonEmptyString.pipe(Schema.brand("RemotePublicationRefspec"))
+export type RemotePublicationRefspec = typeof RemotePublicationRefspec.Type
+
+export const remotePublicationRefspecFor = (
+  candidateCommit: GitCommitSha,
+  branch: RemotePublicationBranchRef
+): RemotePublicationRefspec => RemotePublicationRefspec.make(`${candidateCommit}:${branch}`)
 
 /** Positive ordinal consumed by one exact candidate publication intent. */
 export const RemotePublicationAttemptOrdinal = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
@@ -97,9 +106,16 @@ export const remotePublicationCorrelationFor = (
 /** The exact mutation request sent to the provider-neutral Git boundary. */
 export const RemotePublicationGitRequest = Schema.Struct({
   candidateCommit: GitCommitSha,
+  refspec: RemotePublicationRefspec,
   requestId: RemotePublicationRequestId,
   target: RemotePublicationTarget
-})
+}).check(
+  Schema.makeFilter((request) =>
+    request.refspec === remotePublicationRefspecFor(request.candidateCommit, request.target.branch)
+      ? undefined
+      : "publication refspec must derive from the exact candidate and pinned branch"
+  )
+)
 export type RemotePublicationGitRequest = typeof RemotePublicationGitRequest.Type
 
 export const remotePublicationGitRequestFor = (
@@ -107,6 +123,7 @@ export const remotePublicationGitRequestFor = (
 ): RemotePublicationGitRequest =>
   RemotePublicationGitRequest.make({
     candidateCommit: correlation.qualifiedCandidate.candidateCommit,
+    refspec: remotePublicationRefspecFor(correlation.qualifiedCandidate.candidateCommit, correlation.target.branch),
     requestId: correlation.requestId,
     target: correlation.target
   })
@@ -204,8 +221,16 @@ export const RemotePublicationAttemptIntendedEvent = Schema.TaggedStruct("Remote
   correlation: RemotePublicationCorrelation,
   initiatedBy: WorkflowActor.cases.DalphCoordinator,
   occurrenceClassification: Schema.Literal("InitiatedAction"),
+  refspec: RemotePublicationRefspec,
   version: Schema.Literal(workflowJournalEventVersion)
-})
+}).check(
+  Schema.makeFilter((event) =>
+    event.refspec ===
+    remotePublicationRefspecFor(event.correlation.qualifiedCandidate.candidateCommit, event.correlation.target.branch)
+      ? undefined
+      : "publication refspec must derive from the exact candidate and pinned branch"
+  )
+)
 export type RemotePublicationAttemptIntendedEvent = typeof RemotePublicationAttemptIntendedEvent.Type
 
 export const RemotePublicationProofBasis = Schema.TaggedUnion({

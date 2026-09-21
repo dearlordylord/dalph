@@ -99,6 +99,7 @@ import {
   RemotePublicationAdmissionObservation,
   RemotePublicationAttemptOrdinal,
   RemotePublicationCorrelation,
+  RemotePublicationRefspec,
   RemotePublicationProofBasis,
   RemotePublicationRetainedCause,
   RemoteBaselineCorrelation,
@@ -387,7 +388,8 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     attemptOrdinal: RemotePublicationAttemptOrdinal,
     correlation: RemotePublicationCorrelation,
     initiatedBy: WorkflowActor.cases.DalphCoordinator,
-    occurrenceClassification: Schema.Literal("InitiatedAction")
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    refspec: RemotePublicationRefspec
   },
   RemotePublicationSucceeded: {
     correlation: RemotePublicationCorrelation,
