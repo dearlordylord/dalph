@@ -4680,14 +4680,14 @@ const fiveTaskDiamondIntegrationPositions = {
 const doubleDiamondIntegrationPositions = {
   A: defaultDiamondIntegrationPositions,
   B: { queuedAt: 104, startedAt: 110, targetLineageObservedAt: 113 },
-  C: { queuedAt: 107, startedAt: 151, targetLineageObservedAt: 153 },
+  C: { queuedAt: 102, startedAt: 151, targetLineageObservedAt: 153 },
   D: { queuedAt: 204, startedAt: 205, targetLineageObservedAt: 207 },
   E: { queuedAt: 258, startedAt: 261, targetLineageObservedAt: 276 },
   F: { queuedAt: 346, startedAt: 348, targetLineageObservedAt: 358 },
   G: { queuedAt: 551, startedAt: 552, targetLineageObservedAt: 554 },
   H: { queuedAt: 460, startedAt: 462, targetLineageObservedAt: 464 },
-  I: { queuedAt: 461, startedAt: 496, targetLineageObservedAt: 498 },
-  X: { queuedAt: 347, startedAt: 390, targetLineageObservedAt: 392 }
+  I: { queuedAt: 456, startedAt: 496, targetLineageObservedAt: 498 },
+  X: { queuedAt: 342, startedAt: 390, targetLineageObservedAt: 392 }
 } as const satisfies Record<DoubleDiamondTaskId, DoubleDiamondIntegrationPositions>
 
 const integrationPositionsForDiamondTask = (

@@ -3323,7 +3323,7 @@ await scenario("shows continuation authorization prefixes and retained Run/attem
     "The Lab must show structured Run/attempt identity without inventing invocation identities"
   )
   assert(
-    authorization.textContent?.includes("ExecutorReportObserved at journal 41") === true,
+    authorization.textContent?.includes("ExecutorReportObserved at journal 43") === true,
     "The Lab must distinguish an observed executor report from a command intent"
   )
   assert(
