@@ -101,7 +101,7 @@ it("runs cheap diagnostics before resource-sensitive acceptance and coverage", (
   expect(firstQualification).toBeGreaterThan(0)
   expect(manifest.slice(0, firstQualification).every(({ boundary }) => boundary === "preflight")).toBe(true)
   expect(manifest.slice(firstQualification).every(({ boundary }) => boundary === "qualification")).toBe(true)
-  expect(coverage.test?.maxWorkers).toBe(4)
+  expect(coverage.test?.maxWorkers).toBe(2)
   expect(coverage.test?.coverage).toMatchObject({
     provider: "v8",
     thresholds: { branches: 75, functions: 75, lines: 75, statements: 75 }
