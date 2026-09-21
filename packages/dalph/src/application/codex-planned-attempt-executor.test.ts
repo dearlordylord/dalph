@@ -274,6 +274,7 @@ const makeHarness = (
     readonly lifecycleHintCount?: number
     readonly lifecycleHints?: CodexAppServerService["attachTurnCompletedHints"]
     readonly activityHints?: CodexAppServerService["attachOwnedActivityHints"]
+    readonly beforeTurnStart?: () => Effect.Effect<void>
     readonly beforeAttemptRead?: () => Effect.Effect<void>
     readonly afterActivityCensus?: () => Effect.Effect<void>
   } = {}
@@ -388,6 +389,7 @@ const makeHarness = (
     },
     startTurn: (threadIdValue, cwd, text, ownedTurnToken) =>
       Effect.gen(function* () {
+        yield* options.beforeTurnStart?.() ?? Effect.void
         if (threadIdValue !== threadId) return yield* Effect.fail(unavailable("turn/start"))
         turnCwds.push(cwd)
         turnTexts.push(text)
@@ -1293,6 +1295,46 @@ it.effect("current-first attachment cannot miss a terminal change between projec
       })
       expect(harness.turnCount()).toBe(1)
       yield* attachment.attached.close
+    })
+  )
+)
+
+it.effect("serializes the initial lifecycle projection with an in-flight Begin", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const turnStartEntered = yield* Deferred.make<void>()
+      const releaseTurnStart = yield* Deferred.make<void>()
+      const attachmentCompleted = yield* Deferred.make<void>()
+      const harness = makeHarness({
+        beforeTurnStart: () =>
+          Deferred.succeed(turnStartEntered, undefined).pipe(Effect.andThen(Deferred.await(releaseTurnStart)))
+      })
+
+      const attachment = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        const beginning = yield* executor.begin(request, { _tag: "InitialDelivery" }).pipe(Effect.forkChild)
+        yield* Deferred.await(turnStartEntered)
+
+        const attaching = yield* lifecycle.attach(correlation).pipe(
+          Effect.tap(() => Deferred.succeed(attachmentCompleted, undefined)),
+          Effect.forkChild
+        )
+        yield* Effect.yieldNow
+        const attachmentBeforeBeginSettles = yield* Deferred.poll(attachmentCompleted)
+        expect(Option.isNone(attachmentBeforeBeginSettles)).toBe(true)
+
+        yield* Deferred.succeed(releaseTurnStart, undefined)
+        yield* Fiber.join(beginning)
+        return yield* Fiber.join(attaching)
+      }).pipe(Effect.provide(layerFor(harness)))
+
+      expect(attachment.current).toMatchObject({
+        _tag: "Exact",
+        report: { _tag: "ExecutorWorkExecuting", correlation }
+      })
+      expect(harness.currentRecord()?._tag).toBe("Running")
+      yield* attachment.close
     })
   )
 )
