@@ -75,6 +75,30 @@ const { absent: eCleanupAbsentObservation, revision: eCleanupRevision } = cleanu
   candidateCommit("D"),
   ePositions
 )
+const { absent: fCleanupAbsentObservation, revision: fCleanupRevision } = cleanupFor(
+  "F",
+  candidateCommit("E"),
+  fPositions
+)
+const { absent: gCleanupAbsentObservation, revision: gCleanupRevision } = cleanupFor(
+  "G",
+  candidateCommit("F"),
+  gPositions
+)
+const candidateCleanupEvidenceRevisions = {
+  A: predecessorCleanupRevision,
+  B: bCleanupRevision,
+  C: cCleanupRevision,
+  D: dCleanupRevision,
+  E: eCleanupRevision,
+  F: fCleanupRevision,
+  G: gCleanupRevision
+} as const
+const candidateCleanupEvidenceRevisionsFor = (taskIds: ReadonlyArray<keyof typeof candidateCleanupEvidenceRevisions>) =>
+  taskIds.map((taskId) => candidateCleanupEvidenceRevisions[taskId])
+const candidateCleanupEvidenceTaskIdsBeforeG = ["A", "B", "C", "D", "E"] as const
+const candidateCleanupEvidenceTaskIdsAfterF = ["A", "B", "C", "D", "E", "F"] as const
+const candidateCleanupEvidenceTaskIdsAfterG = ["A", "B", "C", "D", "E", "F", "G"] as const
 
 /** Alice's single five-to-seven task Run; all boundary results are interpreted by the ordinary authored runner. */
 export const deliveryStoryCapstoneAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
@@ -290,15 +314,20 @@ export const deliveryStoryCapstoneAuthoredCassette = Schema.decodeUnknownSync(Au
         ...(readsGraphBeforeClaim ? readGraph(graphs.G5) : []),
         select({ _tag: "ReadTaskClaim", taskId }),
         { _tag: "TaskClaimCurrentReadReturned", taskId },
+        ...(taskId === "G" ? candidateCleanupEvidenceRevisionsFor(candidateCleanupEvidenceTaskIdsAfterF) : []),
+        ...(taskId === "G" ? [fCleanupAbsentObservation] : []),
         ...readGraph(graphs.G5),
-        ...integration,
-        ...(taskId === "E"
-          ? [predecessorCleanupRevision, bCleanupRevision, cCleanupRevision, dCleanupRevision, eCleanupRevision]
+        ...(taskId === "G"
+          ? [select({ _tag: "ReadTaskClaim", taskId }), { _tag: "TaskClaimCurrentReadReturned", taskId }]
           : []),
+        ...(taskId === "G" ? readGraph(graphs.G5) : []),
+        ...integration,
+        ...(taskId === "E" ? candidateCleanupEvidenceRevisionsFor(candidateCleanupEvidenceTaskIdsBeforeG) : []),
         ...(taskId === "E" ? [dCleanupAbsentObservation, eCleanupAbsentObservation] : [])
       ]
     }),
-    predecessorCleanupRevision,
+    ...candidateCleanupEvidenceRevisionsFor(candidateCleanupEvidenceTaskIdsAfterG),
+    gCleanupAbsentObservation,
     ...readGraph(graphs.Gfinal),
     ...readGraph(graphs.Gfinal),
     { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMayTerminate" } },

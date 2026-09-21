@@ -27,7 +27,9 @@ const derivedIdentityFields = new Set([
   // Canonical OperationId fields: continuation/replacement witnesses, registry
   // events, cleanup/finality protocols, status, causal presentation and inventories.
   "acceptedOperationIds",
+  "admissionId",
   "actionOperationId",
+  "baselineId",
   "claimObservationOperationId",
   "completedReadOperationIds",
   "currentGraphOperationId",
@@ -68,6 +70,7 @@ const derivedIdentityFields = new Set([
   "waitsForLiveOperationId",
   "sessionId",
   "candidateResource",
+  "causalPredecessors",
   "requestId",
   "token",
   "key"

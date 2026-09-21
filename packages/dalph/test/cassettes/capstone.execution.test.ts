@@ -30,8 +30,9 @@ it.effect(
           ? [{ storyPosition: capture.storyPosition, occurrence: capture.occurrence }]
           : []
       )
-      // 403 authored source occurrences minus one unsupported selection leaves 402 executed story items.
-      expect(deliveryStoryCapstoneAuthoredCassette.story).toHaveLength(402)
+      // The maintained chronology includes the cleanup reactivation reads and
+      // evidence observations that occur after the terminal G claim.
+      expect(deliveryStoryCapstoneAuthoredCassette.story).toHaveLength(423)
       expect(occurrences).toEqual(
         deliveryStoryCapstoneAuthoredCassette.story.map((occurrence, index) => ({
           storyPosition: index + 1,

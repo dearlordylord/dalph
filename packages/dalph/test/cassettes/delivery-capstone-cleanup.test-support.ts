@@ -173,11 +173,13 @@ export const assertDeliveryCapstoneFinalityCorrelations = (run: AuthoredScenario
   }
 }
 
-/** Alice's FullRerun permits only predecessor disposal; absence below is recorded provider evidence, not a filesystem claim. */
+/** Alice's FullRerun predecessor disposal remains independently verified among the derived candidate responsibilities. */
 export const assertDeliveryCapstonePredecessorCleanup = (run: AuthoredScenarioCassetteRun): void => {
   const fixed = oneRecord(run, "IntegratorSuccessorSessionFixed")
   const { directionAppliedAt, predecessor, quarantineAt, successor } = fixed.event
-  const authorized = oneRecord(run, "IntegratorCandidateCleanupAuthorized")
+  const predecessorAuthorization = (event: { readonly authorization: object }) =>
+    "locator" in event.authorization && event.authorization.locator === predecessor.candidateResource
+  const authorized = oneRecord(run, "IntegratorCandidateCleanupAuthorized", predecessorAuthorization)
   const authorization = authorized.event.authorization
   expect(authorization).toMatchObject({
     disposition: { _tag: "Superseded", directionAppliedAt, dispositionAt: quarantineAt, predecessor, successor },
@@ -195,11 +197,15 @@ export const assertDeliveryCapstonePredecessorCleanup = (run: AuthoredScenarioCa
     fingerprint: { direction: "FullRerun", sessionId: predecessor.sessionId }
   })
 
-  const intended = oneRecord(run, "IntegratorCandidateCleanupMutationIntended")
-  const lost = oneRecord(run, "IntegratorCandidateCleanupMutationResultRecorded")
-  const absent = oneRecord(run, "IntegratorCandidateCleanupAbsenceConfirmed")
-  const settled = oneRecord(run, "IntegratorCandidateCleanupSettled")
-  const present = oneRecord(run, "IntegratorCandidateCleanupObserved", (event) => event.observation._tag === "Present")
+  const intended = oneRecord(run, "IntegratorCandidateCleanupMutationIntended", predecessorAuthorization)
+  const lost = oneRecord(run, "IntegratorCandidateCleanupMutationResultRecorded", predecessorAuthorization)
+  const absent = oneRecord(run, "IntegratorCandidateCleanupAbsenceConfirmed", predecessorAuthorization)
+  const settled = oneRecord(run, "IntegratorCandidateCleanupSettled", predecessorAuthorization)
+  const present = oneRecord(
+    run,
+    "IntegratorCandidateCleanupObserved",
+    (event) => predecessorAuthorization(event) && event.observation._tag === "Present"
+  )
   expect(present.event.authorization).toEqual(authorization)
   expect(present.event.observation).toEqual({
     _tag: "Present",
@@ -262,7 +268,10 @@ export const assertDeliveryCapstonePredecessorCleanup = (run: AuthoredScenarioCa
     sessionId: resolveDeclaredAuthoredIdentity(removed.result.sessionId, run.runId)
   }).toEqual(lost.event.result)
   for (const item of occurrences) {
-    if (item._tag === "IntegratorCandidateCleanupEvidenceRevisionReturned") {
+    if (
+      item._tag === "IntegratorCandidateCleanupEvidenceRevisionReturned" &&
+      item.subject.locator === predecessor.candidateResource
+    ) {
       const predecessorWithActualIdentity = normalizeDeclaredIntegratorSession(item.subject.predecessor, run.runId)
       expect({
         ...item.subject,
@@ -288,7 +297,11 @@ export const assertDeliveryCapstonePredecessorCleanup = (run: AuthoredScenarioCa
   expect(authorization.locator).not.toBe(successor.candidateResource)
   expect(authorization.owner.sessionId).not.toBe(successor.sessionId)
   for (const record of run.records) {
-    if ("authorization" in record.event && record.event._tag.startsWith("IntegratorCandidateCleanup"))
+    if (
+      "authorization" in record.event &&
+      record.event._tag.startsWith("IntegratorCandidateCleanup") &&
+      predecessorAuthorization(record.event)
+    )
       expect(record.event.authorization).toEqual(authorization)
   }
   const terminal = oneRecord(run, "WorkflowRunTerminated")
