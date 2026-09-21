@@ -31,6 +31,8 @@ import {
   integratorSessionFixedRecordKey,
   integratorSuccessorSessionFixedRecordKey,
   outcomeRecordKey,
+  remoteBaselineObservedRecordKey,
+  remoteBaselineReadIntendedRecordKey,
   remotePublicationAttemptIntendedRecordKey,
   remotePublicationIntendedRecordKey,
   remotePublicationRetainedRecordKey,
@@ -86,6 +88,7 @@ import {
 } from "../../workflow/protocols/integrator/session.js"
 import {
   deriveCurrentIntegratorState,
+  integratorResponsibilityFactsFor,
   integratorRunQualifiedCandidateFromState
 } from "../../workflow/protocols/integrator/state.js"
 import {
@@ -103,6 +106,12 @@ import { RunnableFrontierTransition } from "./frontier.js"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
 import type { CurrentTaskClaimAuthority } from "./task-claim-authority.js"
 import { IntegrationResponsibilityIdentity } from "../../workflow/protocols/integration-admission/responsibility.js"
+import {
+  RemoteBaselineObservedEvent,
+  RemoteBaselineObservation,
+  RemoteBaselineReadIntendedEvent,
+  remoteBaselineCorrelationFor
+} from "../../workflow/protocols/direct-publication/baseline-events.js"
 import {
   RemotePublicationAttemptIntendedEvent,
   RemotePublicationAttemptOrdinal,
@@ -167,29 +176,77 @@ const record = (position: number, event: JournalRecord["event"], key: string): J
   runId
 })
 
-const firstStartedResponsibilityRecords = () => [
+const workflowRunBegan = (position = 1): JournalRecord =>
   record(
-    1,
+    position,
+    WorkflowRunBeganEvent.make({
+      initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      remotePublicationTarget: remotePublicationTargetForTest,
+      target: FixtureTarget.make("integration-frontier-retry-target"),
+      version: workflowJournalEventVersion
+    }),
+    `run:began:${position}`
+  )
+
+const firstStartedResponsibilityRecords = (responsibilityValue = responsibility) => [
+  record(
+    Number(responsibilityValue.queuedAt),
     IntegrationResponsibilityBeganEvent.make({
-      acceptedResult: responsibility.acceptedResult,
-      integrationTarget: responsibility.integrationTarget,
-      plannedAttempt: responsibility.plannedAttempt,
+      acceptedResult: responsibilityValue.acceptedResult,
+      integrationTarget: responsibilityValue.integrationTarget,
+      plannedAttempt: responsibilityValue.plannedAttempt,
       version: workflowJournalEventVersion
     }),
     "integration-frontier:restored:first:responsibility"
   ),
   record(
-    2,
+    Number(responsibilityValue.startedAt),
     IntegrationStartedEvent.make({
-      acceptedResult: responsibility.acceptedResult,
-      integrationTarget: responsibility.integrationTarget,
-      plannedAttempt: responsibility.plannedAttempt,
-      responsibilityBeganAt: responsibility.queuedAt,
+      acceptedResult: responsibilityValue.acceptedResult,
+      integrationTarget: responsibilityValue.integrationTarget,
+      plannedAttempt: responsibilityValue.plannedAttempt,
+      responsibilityBeganAt: responsibilityValue.queuedAt,
       version: workflowJournalEventVersion
     }),
     "integration-frontier:restored:first:started"
   )
 ]
+
+const remoteBaselineReadyRecords = (
+  readPosition: number,
+  responsibilityValue: StartedIntegrationResponsibility
+): ReadonlyArray<JournalRecord> => {
+  const correlation = remoteBaselineCorrelationFor(
+    runId,
+    integratorResponsibilityFactsFor(responsibilityValue),
+    responsibilityValue.integrationTarget,
+    remotePublicationTargetForTest
+  )
+  return [
+    record(
+      readPosition,
+      RemoteBaselineReadIntendedEvent.make({
+        correlation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      }),
+      remoteBaselineReadIntendedRecordKey(correlation.baselineId).toString()
+    ),
+    record(
+      readPosition + 1,
+      RemoteBaselineObservedEvent.make({
+        correlation,
+        observation: RemoteBaselineObservation.cases.Aligned.make({ localHead: fixedHead, remoteHead: fixedHead }),
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      }),
+      remoteBaselineObservedRecordKey(correlation.baselineId).toString()
+    )
+  ]
+}
 
 const unfinishedFirstSessionHistory = () => {
   const initialLineage = lineage(fixedHead)
@@ -434,7 +491,10 @@ const retryHistory = (evidence: RetryEvidence, freshHead?: GitCommitSha) => {
   }
 }
 
-const transitionsFor = (scenario: ReturnType<typeof retryHistory>) =>
+const transitionsFor = (
+  scenario: ReturnType<typeof retryHistory>,
+  runtimeOverrides: Partial<Parameters<typeof deriveStartedIntegrationFrontier>[1]> = {}
+) =>
   deriveStartedIntegrationFrontier(
     scenario.runState,
     {
@@ -445,7 +505,8 @@ const transitionsFor = (scenario: ReturnType<typeof retryHistory>) =>
       targetLineageByAttemptId: new Map([[attemptId, scenario.currentLineage]]),
       targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
       targetPromotionConfigured: true,
-      taskClaimAuthorityByAttemptId: new Map([[attemptId, exactClaimAuthority]])
+      taskClaimAuthorityByAttemptId: new Map([[attemptId, exactClaimAuthority]]),
+      ...runtimeOverrides
     },
     [responsibility]
   ).transitions()
@@ -489,10 +550,17 @@ it("releases the target before an initial Integrator run when fresh lineage is i
     plannedBaseSha: baseSha,
     targetHeadSha: fixedHead
   })
-  const fresh = lineageRecords(4, incompatibleLineage, "incompatible-initial-lineage")
-  const records = [...firstStartedResponsibilityRecords(), fresh.intent, fresh.observation]
+  const baseline = remoteBaselineReadyRecords(5, responsibility)
+  const fresh = lineageRecords(8, incompatibleLineage, "incompatible-initial-lineage")
+  const records = [
+    workflowRunBegan(),
+    ...firstStartedResponsibilityRecords(),
+    ...baseline,
+    fresh.intent,
+    fresh.observation
+  ]
   const runState: ReconstructedRunState = {
-    appliedThrough: JournalPosition.make(4),
+    appliedThrough: JournalPosition.make(8),
     controlPolicy: Option.none(),
     graphKnowledge: { taskTrackerFacts: [] },
     pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
@@ -670,6 +738,7 @@ it("records CandidateRejected quarantine from the exact run result and candidate
     correlation: scenario.run
   })
   const records = [
+    workflowRunBegan(),
     ...scenario.records,
     record(
       7,
@@ -872,6 +941,7 @@ it("resumes the same unfinished Retry run after process disappearance", () => {
   const scenario = retryHistory("ConclusiveResult", fixedHead)
   const runTwo = integratorRunCorrelationForSession(scenario.session, IntegratorRunOrdinal.make(2))
   const records = [
+    workflowRunBegan(),
     ...scenario.records,
     record(
       12,
@@ -907,7 +977,9 @@ it("promotes the Git-qualified candidate from the successful Retry run", () => {
     commit: preparedCandidateCommit,
     directParents: [fixedHead, acceptedCommit]
   })
+  const runBegan = workflowRunBegan()
   const records = [
+    runBegan,
     ...scenario.records,
     record(
       12,
@@ -956,15 +1028,16 @@ it("promotes the Git-qualified candidate from the successful Retry run", () => {
     }
   }
 
-  expect(transitionsFor(qualified)).toEqual([
+  expect(transitionsFor(qualified, { remotePublicationConfigured: true })).toEqual([
     expect.objectContaining({
-      _tag: "RunTargetPromotion",
+      _tag: "RunRemotePublication",
       candidate: expect.objectContaining({
         candidateCommit: preparedCandidateCommit,
         candidateText: preparedCandidateText,
         run: runTwo
       }),
-      responsibility
+      responsibility,
+      target: remotePublicationTargetForTest
     })
   ])
 })
@@ -1024,7 +1097,9 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
     }),
     version: workflowJournalEventVersion
   })
+  const runBegan = workflowRunBegan()
   const records = [
+    runBegan,
     ...qualifiedRecords,
     record(
       10,
@@ -1083,22 +1158,10 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
     remotePublicationConfigured: true,
     targetPromotionConfigured: true
   }
-  const runBegan = record(
-    10,
-    WorkflowRunBeganEvent.make({
-      initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
-      initiatedBy: { _tag: "DalphCoordinator" },
-      occurrenceClassification: "InitiatedAction",
-      remotePublicationTarget: remotePublicationTargetForTest,
-      target: FixtureTarget.make("integration-frontier-retry-target"),
-      version: workflowJournalEventVersion
-    }),
-    "run:began"
-  )
   const qualifiedRunState = {
     ...scenario.runState,
     appliedThrough: JournalPosition.make(10),
-    workflowHistory: { evidence: journalEvidenceFrom([...qualifiedRecords, runBegan]) }
+    workflowHistory: { evidence: journalEvidenceFrom([runBegan, ...qualifiedRecords]) }
   }
   const retained = RemotePublicationRetainedEvent.make({
     correlation: publicationCorrelation,
@@ -1107,8 +1170,8 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
     version: workflowJournalEventVersion
   })
   const retainedRecords = [
-    ...qualifiedRecords,
     runBegan,
+    ...qualifiedRecords,
     record(
       11,
       RemotePublicationIntendedEvent.make({
