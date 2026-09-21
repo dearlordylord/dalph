@@ -578,6 +578,7 @@ it("releases the target before an initial Integrator run when fresh lineage is i
         currentTrackerTaskIds: new Set([taskId]),
         heldResponsibilities: [identity(responsibility.queuedAt)],
         integrationTarget: Option.some(target),
+        remotePublicationConfigured: true,
         targetLineageByAttemptId: new Map([[attemptId, incompatibleLineage]]),
         targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
         taskClaimAuthorityByAttemptId: new Map([[attemptId, { _tag: "Exact" as const }]])

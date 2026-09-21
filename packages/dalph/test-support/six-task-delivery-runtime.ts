@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- The controlled six-task runtime keeps its shared journal and delivery fixtures co-located. */
 import {
   AcceptedResultEvidenceManifest,
   type AttemptId,
@@ -37,6 +38,7 @@ import {
   journaledWorkflowInterpreterLayer,
   JournalStore,
   journalStoreCapabilities,
+  LocalTargetCatchUpResult,
   makeApplicationExitShell,
   makeLiveDeliveryActionExecutor,
   memoryEvidenceStoreLayer,
@@ -61,6 +63,8 @@ import {
   type DeliveryRelationInputBundle,
   type JournaledRuntimeLayerInput,
   OperationIdAllocator,
+  RemoteBaselineGit,
+  RemoteBaselineObservation,
   TaskClaimAcquisitionPlanner,
   type IntegratorRunCorrelation,
   DeliveryRuntimeObservationObserver
@@ -68,7 +72,6 @@ import {
 import { Context, Deferred, Effect, Layer, Queue, Ref, Stream, type Crypto, type Scope } from "effect"
 import { makeSixTaskGitAndEvidence } from "./six-task-finality-boundaries.js"
 import {
-  remoteBaselineGitLayerForTest,
   remotePublicationGitLayerForTest,
   remotePublicationTargetForTest
 } from "../../orchestrator/test/support/direct-publication.js"
@@ -114,6 +117,21 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
   const { evidence, evidenceReads, head, promotionGit, promotionReads, promotions } = yield* makeSixTaskGitAndEvidence(
     Context.get(shared, EvidenceStore),
     baseSha
+  )
+  const remoteBaselineGitLayer = Layer.succeed(
+    RemoteBaselineGit,
+    RemoteBaselineGit.of({
+      catchUp: (_correlation, _expectedLocalHead, remoteHead) =>
+        Effect.succeed(LocalTargetCatchUpResult.cases.AlreadyCurrent.make({ currentHead: remoteHead })),
+      observe: () =>
+        Ref.get(head).pipe(
+          Effect.map((currentHead) =>
+            RemoteBaselineObservation.cases.Aligned.make({ localHead: currentHead, remoteHead: currentHead })
+          )
+        ),
+      reconcileCatchUp: (_correlation, _expectedLocalHead, remoteHead) =>
+        Effect.succeed(LocalTargetCatchUpResult.cases.AlreadyCurrent.make({ currentHead: remoteHead }))
+    })
   )
   const settlementControl = yield* control.makeFinality(Context.get(shared, TrackerMutation))
   if (control.initialize !== undefined) yield* control.initialize({ journal, evidence })
@@ -266,7 +284,7 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
           false,
           opportunity
         ).pipe(
-          Layer.provide(remoteBaselineGitLayerForTest),
+          Layer.provide(remoteBaselineGitLayer),
           Layer.provideMerge(remotePublicationGitLayerForTest),
           Layer.provide(
             Layer.mergeAll(

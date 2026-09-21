@@ -1731,8 +1731,8 @@ const runAuthoredScenarioCassetteWith = (request: {
           memoryJournalStoreLayer,
           controlledTrackerMutationLayerFrom(cassette.startingFacts.taskClaims),
           gitTargetLineageTestLayer(
-            cassette.startingFacts.targetLineageObservations?.[0] ??
-              cassette.startingFacts.targetLineageObservation ??
+            cassette.startingFacts.targetLineageObservation ??
+              cassette.startingFacts.targetLineageObservations?.[0] ??
               TargetLineageObservation.make({
                 plannedBaseIsAncestorOfTargetHead: true,
                 plannedBaseSha: command.baseSha,
