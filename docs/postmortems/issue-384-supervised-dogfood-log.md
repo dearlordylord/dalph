@@ -780,6 +780,10 @@ exports, and Reducer Lab reported two stale four-argument call sites. The
 unused exports were removed in the follow-up repair; the Lab and other baseline
 failures remain repository-wide work.
 
+The final review commits are `a6b23eda7` and `fa80e1a0e`; they were made after
+that frozen run, so no fresh full-gate qualification is claimed for the final
+HEAD.
+
 Full gate run `35d8cfba-9668-41f2-8719-a08279029432` ran from
 `2026-09-21T04:58:47Z` through `2026-09-21T05:05:00Z`, then closed with custody
 `stopped` and qualification `UNPROVEN`. Build, package boundaries, artifact
