@@ -20,6 +20,24 @@ const parse = (args) => {
   return { values, reports: args.slice(separator + 1).map(resolve) }
 }
 
+export const renderHostedQualityRow = (row) => {
+  const artifacts = Array.isArray(row?.artifacts) ? row.artifacts.join(",") || "none" : "none"
+  const command = row?.command
+  const commandText =
+    command !== null &&
+    typeof command === "object" &&
+    typeof command.executable === "string" &&
+    Array.isArray(command.args) &&
+    command.args.every((argument) => typeof argument === "string")
+      ? `; command=${command.executable} ${command.args.join(" ")}`
+      : ""
+  const failures = Array.isArray(row?.failures) ? row.failures.join(" | ") : ""
+  return (
+    `Node ${String(row?.nodeVersion)} ${String(row?.stageId)}: ${String(row?.outcome)}; artifacts=${artifacts}` +
+    `${commandText}${failures.length === 0 ? "" : `; failures=${failures}`}`
+  )
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const { reports, values } = parse(process.argv.slice(2))
   const binding = assertHostedQualityEnvironmentBinding({
@@ -30,13 +48,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   })
   assertHostedQualityPlanEnvironment({ binding })
   const result = aggregateHostedQualityStages({ binding, reports })
-  for (const row of result.rows) {
-    process.stdout.write(
-      `Node ${row.nodeVersion} ${row.stageId}: ${row.outcome}; artifacts=${row.artifacts.join(",") || "none"}` +
-        `${row.command === undefined ? "" : `; command=${row.command.executable} ${row.command.args.join(" ")}`}` +
-        `${row.failures.length === 0 ? "" : `; failures=${row.failures.join(" | ")}`}\n`
-    )
-  }
+  for (const row of result.rows) process.stdout.write(`${renderHostedQualityRow(row)}\n`)
   process.stdout.write(
     `Hosted quality timing: firstActionableFailureMs=${result.metrics.firstActionableFailureMilliseconds ?? "none"} ` +
       `makespanMs=${result.metrics.makespanMilliseconds ?? "unavailable"}\n`

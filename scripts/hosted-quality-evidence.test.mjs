@@ -14,6 +14,7 @@ import {
   hostedQualityStageIds,
   selectedHostedQualityStage
 } from "./hosted-quality-evidence.mjs"
+import { renderHostedQualityRow } from "./aggregate-hosted-quality-stages.mjs"
 import {
   deliveryRepeatabilityDefaultIterations,
   deliveryRepeatabilityExpectedAcceptedOrderDigest,
@@ -234,6 +235,90 @@ void test("keeps malformed structured artifact entries unproven while reporting 
       f.cleanup()
     }
   }
+})
+
+void test("keeps directory artifact entries unproven without aborting the other rows", () => {
+  for (const [index, path] of [
+    [1, "."],
+    [2, "coverage"]
+  ]) {
+    const f = fixture()
+    try {
+      f.rewrite(index, (envelope) => {
+        envelope.artifacts[0] = { path, bytes: 0, sha256: "0".repeat(64) }
+      })
+      assert.doesNotThrow(() => aggregateHostedQualityStages({ binding, reports: f.reports }))
+      const result = aggregateHostedQualityStages({ binding, reports: f.reports })
+      assert.equal(result.succeeded, false)
+      assert.equal(result.rows.length, 3)
+      assert.deepEqual(
+        result.rows.map(({ outcome }) => outcome),
+        [0, 1, 2].map((row) => (row === index ? "UNPROVEN" : "passed"))
+      )
+      assert.ok(result.rows[index].failures.some((failure) => failure.includes("regular file")))
+      assert.ok(
+        result.rows.filter(({ outcome }) => outcome === "passed").every(({ artifacts }) => artifacts.length > 0)
+      )
+    } finally {
+      f.cleanup()
+    }
+  }
+})
+
+void test("revalidates every delivery digest candidate against the hosted binding", () => {
+  const f = fixture()
+  try {
+    const otherCandidate = "d".repeat(40)
+    f.rewriteLog(0, (log) => log.replaceAll(`candidateSha=${candidateSha}`, `candidateSha=${otherCandidate}`))
+    const result = aggregateHostedQualityStages({ binding, reports: f.reports })
+    assert.equal(result.succeeded, false)
+    assert.deepEqual(
+      result.rows.map(({ outcome }) => outcome),
+      ["UNPROVEN", "passed", "passed"]
+    )
+    assert.ok(result.failures.some((failure) => failure.startsWith("delivery-repeatability:")))
+  } finally {
+    f.cleanup()
+  }
+})
+
+void test("uses the checked-in command when a sealed stage contract is malformed", () => {
+  const f = fixture()
+  try {
+    f.rewrite(1, (envelope) => {
+      envelope.stageContract.command = { executable: { malformed: true }, args: { malformed: true } }
+    })
+    const result = aggregateHostedQualityStages({ binding, reports: f.reports })
+    assert.equal(result.succeeded, false)
+    assert.equal(result.rows.length, 3)
+    assert.equal(result.rows[1].outcome, "UNPROVEN")
+    assert.deepEqual(
+      result.rows[1].command,
+      plan.stages.find((cell) => cell.nodeVersion === nodeVersion && cell.stageId === "recorded-catalog")?.command
+    )
+  } finally {
+    f.cleanup()
+  }
+})
+
+void test("renders a malformed row command without throwing", () => {
+  assert.doesNotThrow(() =>
+    renderHostedQualityRow({
+      nodeVersion,
+      stageId: "recorded-catalog",
+      outcome: "UNPROVEN",
+      artifacts: [],
+      command: {
+        executable: null,
+        args: {
+          join: () => {
+            throw new Error("must not run")
+          }
+        }
+      },
+      failures: ["malformed stage command"]
+    })
+  )
 })
 
 void test("accepts terminal timeout as diagnostic evidence but never as qualification success", () => {

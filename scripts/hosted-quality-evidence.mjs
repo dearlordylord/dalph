@@ -1,14 +1,5 @@
 import { spawnSync } from "node:child_process"
-import {
-  copyFileSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  realpathSync,
-  writeFileSync
-} from "node:fs"
+import { copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 
 import { digest, readRecord, repositoryLocation } from "./gate-custody-records.mjs"
@@ -153,11 +144,12 @@ const portableArtifact = ({ outputDirectory, source, target }) => {
 }
 
 const deliveryIterationPattern =
-  /^delivery repeatability iteration (\d+)\/(\d+) PASS elapsedMs=\S+ occurrenceCount=(\d+) acceptedOrderDigest=([0-9a-f]{64}) candidateSha=[0-9a-f]{40}$/u
+  /^delivery repeatability iteration (\d+)\/(\d+) PASS elapsedMs=\S+ occurrenceCount=(\d+) acceptedOrderDigest=([0-9a-f]{64}) candidateSha=([0-9a-f]{40})$/u
 const deliverySummaryPattern =
-  /^delivery repeatability complete mode=fresh .* occurrenceCount=(\d+) acceptedOrderDigest=([0-9a-f]{64}) candidateSha=[0-9a-f]{40}$/u
+  /^delivery repeatability complete mode=fresh .* occurrenceCount=(\d+) acceptedOrderDigest=([0-9a-f]{64}) candidateSha=([0-9a-f]{40})$/u
 
-const deliveryEvidence = (log, outcome) => {
+const deliveryEvidence = (log, outcome, candidateSha) => {
+  canonicalSha(candidateSha, "Hosted quality delivery candidate")
   const iterations = []
   const summaries = []
   for (const line of log.split(/\r?\n/u)) {
@@ -179,6 +171,8 @@ const deliveryEvidence = (log, outcome) => {
       summaries.push(match)
     }
   }
+  const candidateMismatch =
+    iterations.some((match) => match[5] !== candidateSha) || summaries.some((match) => match[3] !== candidateSha)
   const result = {
     expectedIterations: deliveryRepeatabilityDefaultIterations,
     completedIterations: iterations.length,
@@ -186,6 +180,8 @@ const deliveryEvidence = (log, outcome) => {
     occurrenceCount: deliveryRepeatabilityExpectedOccurrenceCount,
     acceptedOrderDigest: deliveryRepeatabilityExpectedAcceptedOrderDigest
   }
+  if (candidateMismatch)
+    throw new Error("Delivery repeatability digest candidate differs from the hosted quality binding")
   if (
     outcome === "passed" &&
     (iterations.length !== deliveryRepeatabilityDefaultIterations ||
@@ -302,7 +298,7 @@ export const exportHostedQualityStageEvidence = ({
     },
     timing: { cellStartedAt: cellStart, startedAt: stage.startedAt, finishedAt: stage.finishedAt },
     artifacts,
-    ...(stageId === "delivery-repeatability" ? { delivery: deliveryEvidence(log, outcome) } : {})
+    ...(stageId === "delivery-repeatability" ? { delivery: deliveryEvidence(log, outcome, binding.candidateSha) } : {})
   }
   const envelope = { ...payload, envelopeSha256: digest(JSON.stringify(payload)) }
   writeFileSync(join(outputDirectory, "envelope.json"), `${JSON.stringify(envelope, undefined, 2)}\n`, { flag: "wx" })
@@ -321,12 +317,19 @@ const artifactFailure = (envelope, root, artifact) => {
     !/^[0-9a-f]{64}$/u.test(artifact.sha256 ?? "")
   )
     return "malformed portable artifact identity"
-  const path = resolve(root, artifact.path)
-  if (relative(resolve(root), path).startsWith("..") || !existsSync(path)) return `missing artifact ${artifact.path}`
-  const bytes = readFileSync(path)
-  if (bytes.length !== artifact.bytes || digest(bytes) !== artifact.sha256)
-    return `artifact digest mismatch for ${artifact.path}`
-  return undefined
+  try {
+    const path = resolve(root, artifact.path)
+    if (relative(resolve(root), path).startsWith("..")) return `artifact escapes report root ${artifact.path}`
+    const status = lstatSync(path)
+    if (!status.isFile()) return `artifact is not a regular file ${artifact.path}`
+    const bytes = readFileSync(path)
+    if (bytes.length !== artifact.bytes || digest(bytes) !== artifact.sha256)
+      return `artifact digest mismatch for ${artifact.path}`
+    return undefined
+  } catch (error) {
+    if (error?.code === "ENOENT") return `missing artifact ${artifact.path}`
+    return `unable to read artifact ${artifact.path}: ${error.message}`
+  }
 }
 
 const validateEnvelope = ({ binding, envelope, plan, reportRoot }) => {
@@ -468,7 +471,11 @@ const validateEnvelope = ({ binding, envelope, plan, reportRoot }) => {
     )
       failures.push("passing delivery evidence lacks the exact delivery digest")
     try {
-      const observedDelivery = deliveryEvidence(readFileSync(join(reportRoot, "stage.log"), "utf8"), "passed")
+      const observedDelivery = deliveryEvidence(
+        readFileSync(join(reportRoot, "stage.log"), "utf8"),
+        "passed",
+        binding.candidateSha
+      )
       if (!same(delivery, observedDelivery)) failures.push("delivery digest differs from the retained log")
     } catch (error) {
       failures.push(error.message)
@@ -534,6 +541,7 @@ export const aggregateHostedQualityStages = ({ binding, reports }) => {
     byCell.set(cell, { envelope, report, validation })
   }
   const rows = plan.expectedCells.map(({ nodeVersion, stageId }) => {
+    const expectedCell = plan.stages.find((cell) => cell.nodeVersion === nodeVersion && cell.stageId === stageId)
     const report = byCell.get(`${nodeVersion}:${stageId}`)
     if (report === undefined) {
       failures.push(`Node ${nodeVersion} ${stageId}: missing expected stage evidence`)
@@ -542,7 +550,7 @@ export const aggregateHostedQualityStages = ({ binding, reports }) => {
         stageId,
         outcome: "UNPROVEN",
         artifacts: [],
-        command: undefined,
+        command: expectedCell?.command,
         failures: ["missing expected stage evidence"]
       }
     }
@@ -555,7 +563,7 @@ export const aggregateHostedQualityStages = ({ binding, reports }) => {
             .filter((artifact) => typeof artifact?.path === "string")
             .map(({ path }) => join(dirname(report.report), path))
         : [],
-      command: report.envelope.stageContract?.command,
+      command: expectedCell?.command,
       failures: report.validation
     }
   })

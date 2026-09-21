@@ -179,7 +179,8 @@ describe("hosted formal-model contract", () => {
 
     expect(suffixJob).toContain("needs: [change-plan, quality-preflight]")
     expect(suffixJob).toContain("needs.quality-preflight.result == 'success'")
-    expect(suffixJob).toContain("timeout-minutes: 30")
+    expect(suffixJob).toContain("timeout-minutes: 35")
+    expect(suffixJob).toContain("five for artifact preparation")
     expect(suffixJob).toContain("fail-fast: false")
     expect(suffixJob).toContain("max-parallel: 3")
     expect(suffixJob).toContain("include: ${{ fromJSON(needs.change-plan.outputs.quality-stages) }}")

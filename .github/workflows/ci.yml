@@ -130,9 +130,10 @@ jobs:
     needs: [change-plan, quality-preflight]
     if: needs.change-plan.outputs.docs-only != 'true' && needs.quality-preflight.result == 'success'
     runs-on: ubuntu-latest
-    # Five minutes for the declared frozen install, twenty minutes for the
-    # longest stage, plus bounded setup/export reserve.
-    timeout-minutes: 30
+    # Five minutes for install, five for artifact preparation, twenty for
+    # coverage, five seconds for termination grace, two for process absence,
+    # and setup/export/upload reserve.
+    timeout-minutes: 35
     env:
       DALPH_HOSTED_QUALITY_CANDIDATE_SHA: ${{ needs.change-plan.outputs.head-sha }}
       DALPH_HOSTED_QUALITY_BASE_SHA: ${{ needs.change-plan.outputs.base-sha }}
