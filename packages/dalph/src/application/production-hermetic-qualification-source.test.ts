@@ -4,10 +4,12 @@ import {
   EvidenceReference,
   AttemptId,
   GitCommitSha,
+  GitRepositoryLocator,
   IntegrationTarget,
   plannedAttemptExecutorCorrelation,
   RunId,
   RemotePublicationEndpoint,
+  RemotePublicationBranchRef,
   RemotePublicationTarget,
   TaskId,
   makeTaskWorkSpecification,
@@ -17,6 +19,7 @@ import { NodeServices } from "@effect/platform-node"
 import {
   ActiveTaskClaim,
   boundedParallelTicketsOf,
+  ClaimOwner,
   ClaimToken,
   CleanupMutationOrdinal,
   CleanupObservationOrdinal,
@@ -38,14 +41,17 @@ import {
   CompletionTaskRequestLookupObservedEvent,
   CompletionTaskRequestOrdinal,
   CompletionTaskResponseLostEvent,
+  CompleteTaskTrackerFactsObserved,
   completionClaimDeletionOperationIdFor,
   completionClaimDeletionRequestFor,
+  completionOriginalTaskClaimReleaseFor,
   completionClaimReplacementRequestFor,
   completionTaskRequestFor,
   DeliveryProposalId,
   DeliveryProposalOrdinal,
   deliveryProposalIdOf,
   deliverySettlementsOf,
+  makeDeliverySettlement,
   describeJournalEvent,
   FocusedCompletedTaskObservation,
   FocusedTaskCompletionFacts,
@@ -86,15 +92,21 @@ import {
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
+  PlannedAttemptWorktreeObservedEvent,
+  PlannedWorktreeReady,
   RemotePublicationAttemptOrdinal,
+  RemotePublicationAdmissionReadInitiated,
+  RemotePublicationAdmissionObserved,
   RemotePublicationAttemptIntendedEvent,
   RemotePublicationIntendedEvent,
   RemotePublicationProofBasis,
   RemotePublicationSucceededEvent,
   remotePublicationCorrelationFor,
+  remotePublicationAdmissionIdFor,
   remotePublicationRefspecFor,
   remoteBaselineCorrelationFor,
   QueuedIntegrationResponsibility,
+  ResponsibilityDisposition,
   RunControlPolicy,
   StartedIntegrationResponsibility,
   TargetLineageObservation,
@@ -105,9 +117,19 @@ import {
   TargetPromotionSuccessObservation,
   targetPromotionCorrelationFor,
   TaskAttemptPlannedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
+  GitReadIntentRecordedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisition,
+  TaskClaimReleaseAuthority,
+  TaskClaimReacquisitionRequestId,
   TaskDagSnapshot,
+  TaskGroupingsObserved,
+  TaskIdentitiesObserved,
+  TaskLifecyclesObserved,
+  TaskPrerequisitesObserved,
+  TaskTargetMembershipObserved,
   TaskWorkCapacity,
   taskTrackerFactsObservedEvent,
   taskTrackerReadIntent,
@@ -135,6 +157,7 @@ import {
   UnqueuedAcceptedResult,
   WorkflowJournalEvent,
   WorkflowOperation,
+  WorkflowResponsibilityEntry,
   WorkflowActor,
   WorktreeCleanupAuthorization,
   WorktreeCleanupAuthorizedEvent,
@@ -163,9 +186,20 @@ import {
 } from "./production-hermetic-qualification-attempt-source.js"
 import {
   validateCompletionFacts,
+  validateCompletionClaim,
+  validateCompletionRequest,
+  validateReplacementRequest,
+  validateCandidate,
+  validateDeletionRequest,
   validateGraph,
+  validateOperation,
+  validateResponsibility,
+  validateRunCorrelation,
+  validateSessionCorrelation,
   validateTrackerFacts
 } from "./production-hermetic-qualification-fixture-source.js"
+import { validateContinuationRead } from "./production-hermetic-qualification-continuation-source.js"
+import { validateFreshStep } from "./production-hermetic-qualification-fresh-source.js"
 import { validateProposal } from "./production-hermetic-qualification-proposal-source.js"
 import { Cause, Effect, Option, Result, Schema } from "effect"
 import { describe, expect, it } from "vitest"
@@ -243,10 +277,21 @@ const fixture = Effect.gen(function* () {
 const readyFor = (
   context: QualificationContext,
   proposals: ReadonlyArray<DeliveryActionProposal>,
-  evidence: ReadonlyArray<TicketDeliveryEvidence> = []
+  evidence: ReadonlyArray<TicketDeliveryEvidence> = [],
+  includeDependant = false
 ): DeliveryRuntimeObservationState => {
   const tasks = [
-    TrackerTask.make({ id: context.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] })
+    TrackerTask.make({ id: context.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }),
+    ...(includeDependant
+      ? [
+          TrackerTask.make({
+            id: context.dependantTaskId,
+            lifecycle: { _tag: "Open" },
+            parentTaskId: context.taskId,
+            prerequisiteIds: [context.taskId]
+          })
+        ]
+      : [])
   ]
   const projected = TaskDagSnapshot.project(TrackerSnapshot.make({ revision: trackerRevisionFor(tasks), tasks }))
   if (projected._tag === "Invalid") return expect.fail("fixed public task graph must project")
@@ -285,6 +330,41 @@ const readyFor = (
       quiescence: { _tag: "TrackerReconfirmationAllowed" },
       taskWork: makeFreshTaskAdmissionTestBasis({ capacity, runId: context.runId }),
       cancellationApplied: false
+    }
+  }
+}
+
+const withFirstDelivery = (
+  state: DeliveryRuntimeObservationState,
+  standings: ReadonlyArray<unknown>,
+  obligations: ReadonlyArray<unknown> = [],
+  taskId?: TaskId
+): DeliveryRuntimeObservationState => {
+  if (state._tag !== "Ready") return expect.fail("status fixture must be ready")
+  const delivery =
+    taskId === undefined
+      ? state.evaluation.current.ticketDeliveries.deliveries[0]
+      : state.evaluation.current.ticketDeliveries.deliveries.find((candidate) => candidate.taskId === taskId)
+  if (delivery === undefined) return expect.fail("status fixture must contain a delivery")
+  return {
+    ...state,
+    evaluation: {
+      ...state.evaluation,
+      current: {
+        ...state.evaluation.current,
+        ticketDeliveries: {
+          ...state.evaluation.current.ticketDeliveries,
+          deliveries: state.evaluation.current.ticketDeliveries.deliveries.map((candidate) =>
+            candidate.taskId === delivery.taskId
+              ? {
+                  ...candidate,
+                  standings: standings as typeof delivery.standings,
+                  obligations: obligations as typeof delivery.obligations
+                }
+              : candidate
+          )
+        }
+      }
     }
   }
 }
@@ -593,6 +673,15 @@ const routeFixtures = (
         lineage: fixture.lineage,
         lineageObservedAt: JournalPosition.make(12),
         run: fixture.run
+      }
+    },
+    {
+      _tag: "IdentityFreeWorkflowRoute",
+      transition: {
+        _tag: "RunRemotePublication",
+        responsibility: fixture.responsibility,
+        candidate: fixture.candidate,
+        target: context.configuration.remotePublicationTarget
       }
     },
     {
@@ -1571,6 +1660,7 @@ describe("qualification original source boundary", () => {
     const variants: ReadonlyArray<Pick<FocusedTaskCompletionFacts, "lifecycle" | "currentClaim">> = [
       { lifecycle: "Open", currentClaim: claim },
       { lifecycle: "CompletedSuccessfully", currentClaim: claim },
+      { lifecycle: "TerminalWithoutSuccess", currentClaim: claim },
       { lifecycle: "CompletedSuccessfully", currentClaim: { _tag: "UnclaimedTask", taskId: context.taskId } }
     ]
     const revisions = []
@@ -1589,8 +1679,13 @@ describe("qualification original source boundary", () => {
         operationId: claim.originalClaim.operationId,
         trackerRevision
       })
-      await Effect.runPromise(validateCompletionFacts(facts, context))
       revisions.push(trackerRevision)
+      if (variant.lifecycle === "TerminalWithoutSuccess") {
+        const rejectedTerminal = await Effect.runPromise(validateCompletionFacts(facts, context).pipe(Effect.flip))
+        expect(rejectedTerminal._tag).toBe("HermeticQualificationSourceRejected")
+        continue
+      }
+      await Effect.runPromise(validateCompletionFacts(facts, context))
       const privateTaskId = TaskId.make("private-session-sentinel")
       const privateContent = {
         ...content,
@@ -1605,6 +1700,31 @@ describe("qualification original source boundary", () => {
       const rejected = await Effect.runPromise(validateCompletionFacts(privateFacts, context).pipe(Effect.flip))
       expect(JSON.stringify(rejected)).not.toContain("private-session-sentinel")
     }
+    const validFacts = FocusedTaskCompletionFacts.make({
+      currentClaim: claim,
+      lifecycle: "Open",
+      target: configuration.target,
+      targetMembership: "Member",
+      taskId: context.taskId,
+      taskRevision: context.specification.fingerprint,
+      unfinishedPrerequisiteTaskIds: [],
+      operationId: claim.originalClaim.operationId,
+      trackerRevision: await Effect.runPromise(
+        githubFocusedCompletionRevisionFor({
+          currentClaim: claim,
+          lifecycle: "Open",
+          target: configuration.target,
+          targetMembership: "Member",
+          taskId: context.taskId,
+          taskRevision: context.specification.fingerprint,
+          unfinishedPrerequisiteTaskIds: []
+        })
+      )
+    })
+    const badRevision = await Effect.runPromise(
+      validateCompletionFacts({ ...validFacts, trackerRevision: trackerRevisionFor([]) }, context).pipe(Effect.flip)
+    )
+    expect(badRevision._tag).toBe("HermeticQualificationSourceRejected")
     expect(new Set(revisions).size).toBe(variants.length)
   })
 
@@ -1765,7 +1885,7 @@ describe("qualification original source boundary", () => {
     const { configuration, manifest, runId } = await Effect.runPromise(fixture)
     const originalContext = await Effect.runPromise(contextFor(manifest, configuration, runId))
     const { context, routes } = routeFixtures(originalContext)
-    expect(routes).toHaveLength(29)
+    expect(routes).toHaveLength(30)
     expect(new Set(routes.map((route) => route._tag)).size).toBe(6)
     for (const route of routes) {
       const proposal = proposalForRoute(route, context)
@@ -1777,6 +1897,500 @@ describe("qualification original source boundary", () => {
       )
       expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
       expect(JSON.stringify(rejected)).not.toContain("private-thread-sentinel")
+    }
+
+    const rejectProposal = async (proposal: unknown) => {
+      const rejected = await Effect.runPromise(
+        validateProposal(proposal as DeliveryActionProposal, context).pipe(Effect.flip)
+      )
+      expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
+    }
+    const foreignTrackerTarget = await Effect.runPromise(
+      Schema.decodeUnknownEffect(TrackerTarget)({
+        _tag: "GithubIssue",
+        owner: "foreign",
+        repository: "controlled",
+        issueNumber: 1
+      })
+    )
+    const foreignRemoteTarget = RemotePublicationTarget.make({
+      ...configuration.remotePublicationTarget,
+      branch: RemotePublicationBranchRef.make("refs/heads/foreign")
+    })
+    const claimReadRoute = routes.find(
+      (route) => route._tag === "RecoveredNewActionRoute" && route.action._tag === "ReadTaskClaim"
+    )
+    if (claimReadRoute?._tag !== "RecoveredNewActionRoute") return expect.fail("claim read route must exist")
+    if (claimReadRoute.action._tag !== "ReadTaskClaim") return expect.fail("claim read action must exist")
+    await rejectProposal(
+      proposalForRoute(
+        { ...claimReadRoute, action: { ...claimReadRoute.action, taskId: TaskId.make("foreign") } },
+        context
+      )
+    )
+    await Effect.runPromise(
+      validateProposal(
+        proposalForRoute({ ...claimReadRoute, action: { ...claimReadRoute.action, plannedAttempt: null } }, context),
+        context
+      )
+    )
+    const acceptedRoute = routes.find(
+      (route) => route._tag === "AcceptedWorkflowRoute" && route.transition._tag === "CheckTaskClaim"
+    )
+    if (acceptedRoute?._tag !== "AcceptedWorkflowRoute") return expect.fail("accepted route must exist")
+    await rejectProposal(
+      proposalForRoute(
+        { ...acceptedRoute, transition: { ...acceptedRoute.transition, taskId: TaskId.make("foreign") } } as never,
+        context
+      )
+    )
+    const queuedRoute = routes.find(
+      (route) => route._tag === "IdentityFreeWorkflowRoute" && route.transition._tag === "StartQueuedIntegration"
+    )
+    if (queuedRoute?._tag !== "IdentityFreeWorkflowRoute" || queuedRoute.transition._tag !== "StartQueuedIntegration")
+      return expect.fail("queued route must exist")
+    await rejectProposal(
+      proposalForRoute(
+        {
+          ...queuedRoute,
+          transition: {
+            ...queuedRoute.transition,
+            responsibility: {
+              ...queuedRoute.transition.responsibility,
+              preIntegrationCancellation: {
+                ...queuedRoute.transition.responsibility.preIntegrationCancellation,
+                queuedAt: JournalPosition.make(99)
+              }
+            }
+          }
+        },
+        context
+      )
+    )
+    const baselineRoute = routes.find(
+      (route) => route._tag === "IdentityFreeWorkflowRoute" && route.transition._tag === "EstablishRemoteBaseline"
+    )
+    if (
+      baselineRoute?._tag !== "IdentityFreeWorkflowRoute" ||
+      baselineRoute.transition._tag !== "EstablishRemoteBaseline"
+    )
+      return expect.fail("baseline route must exist")
+    await rejectProposal(
+      proposalForRoute(
+        {
+          ...baselineRoute,
+          transition: {
+            ...baselineRoute.transition,
+            correlation: { ...baselineRoute.transition.correlation, remoteTarget: foreignRemoteTarget }
+          }
+        },
+        context
+      )
+    )
+    const integratorRoute = routes.find(
+      (route) => route._tag === "IdentityFreeWorkflowRoute" && route.transition._tag === "RunIntegrator"
+    )
+    if (integratorRoute?._tag !== "IdentityFreeWorkflowRoute" || integratorRoute.transition._tag !== "RunIntegrator")
+      return expect.fail("integrator route must exist")
+    await rejectProposal(
+      proposalForRoute(
+        {
+          ...integratorRoute,
+          transition: {
+            ...integratorRoute.transition,
+            lineage: { ...integratorRoute.transition.lineage, targetHeadSha: GitCommitSha.make("d".repeat(40)) }
+          }
+        },
+        context
+      )
+    )
+    const publicationRoute = routes.find(
+      (route) => route._tag === "IdentityFreeWorkflowRoute" && route.transition._tag === "RunRemotePublication"
+    )
+    if (
+      publicationRoute?._tag !== "IdentityFreeWorkflowRoute" ||
+      publicationRoute.transition._tag !== "RunRemotePublication"
+    )
+      return expect.fail("publication route must exist")
+    await rejectProposal(
+      proposalForRoute(
+        { ...publicationRoute, transition: { ...publicationRoute.transition, target: foreignRemoteTarget } },
+        context
+      )
+    )
+    const promotionRoute = routes.find(
+      (route) => route._tag === "IdentityFreeWorkflowRoute" && route.transition._tag === "RunTargetPromotion"
+    )
+    if (promotionRoute?._tag !== "IdentityFreeWorkflowRoute" || promotionRoute.transition._tag !== "RunTargetPromotion")
+      return expect.fail("promotion route must exist")
+    await rejectProposal(
+      proposalForRoute(
+        {
+          ...promotionRoute,
+          transition: {
+            ...promotionRoute.transition,
+            publication: {
+              ...promotionRoute.transition.publication,
+              proof: {
+                _tag: "PushApplied",
+                attemptOrdinal: RemotePublicationAttemptOrdinal.make(1),
+                remoteHead: GitCommitSha.make("d".repeat(40))
+              }
+            }
+          }
+        },
+        context
+      )
+    )
+    const deletionRoute = routes.find(
+      (route) =>
+        route._tag === "IdentityFreeWorkflowRoute" && route.transition._tag === "DeleteCompletedTaskCompletionClaim"
+    )
+    if (
+      deletionRoute?._tag !== "IdentityFreeWorkflowRoute" ||
+      deletionRoute.transition._tag !== "DeleteCompletedTaskCompletionClaim"
+    )
+      return expect.fail("deletion route must exist")
+    await rejectProposal(
+      proposalForRoute(
+        {
+          ...deletionRoute,
+          transition: {
+            ...deletionRoute.transition,
+            replacementOperationId: OperationId.make("01990a72-38c0-7000-8000-000000000099")
+          }
+        },
+        context
+      )
+    )
+
+    const orderRoute = routes.find((route) => route._tag === "IdentityFreeWorkflowRoute")
+    if (orderRoute === undefined) return expect.fail("identity-free route must exist")
+    const orderCounterfeit = proposalForRoute(orderRoute, context)
+    await rejectProposal({
+      ...orderCounterfeit,
+      order: { ...orderCounterfeit.order, _tag: "FakeOrder", taskId: TaskId.make("foreign") } as never
+    })
+    await rejectProposal({ ...orderCounterfeit, route: { _tag: "UnsupportedRoute" } as never })
+    const executorRoute = routes.find((route) => route._tag === "FreshExecutorWorkflowRoute")
+    if (executorRoute?._tag !== "FreshExecutorWorkflowRoute") return expect.fail("executor route must exist")
+    const regularFreshRoute = routes.find((route) => route._tag === "FreshWorkflowRoute")
+    if (regularFreshRoute?._tag !== "FreshWorkflowRoute") return expect.fail("fresh route must exist")
+    await rejectProposal({
+      ...proposalForRoute(executorRoute, context),
+      route: { ...executorRoute, step: regularFreshRoute.step as never }
+    })
+    await rejectProposal({
+      ...proposalForRoute(regularFreshRoute, context),
+      route: { ...regularFreshRoute, step: executorRoute.step as never }
+    })
+    const firstRoute = routes[0]
+    if (firstRoute === undefined) return expect.fail("proposal route list must not be empty")
+    await rejectProposal({
+      ...proposalForRoute(firstRoute, context),
+      actionIdentity: { _tag: "FreshOperationIdRequired", source: { _tag: "UnsupportedIdentitySource" } } as never
+    })
+    const continuationRoute = routes.find(
+      (route) => route._tag === "RecoveredNewActionRoute" && route.action._tag === "ReadTrackerGraph"
+    )
+    if (continuationRoute?._tag !== "RecoveredNewActionRoute" || continuationRoute.action._tag !== "ReadTrackerGraph")
+      return expect.fail("continuation route must exist")
+    const continuationRejected = await Effect.runPromise(
+      validateContinuationRead(
+        { ...continuationRoute.action, _tag: "ReadTaskWorkSpecification" } as never,
+        context
+      ).pipe(Effect.flip)
+    )
+    expect(continuationRejected._tag).toBe("HermeticQualificationSourceRejected")
+    const freshStep = regularFreshRoute.step
+    const rejectedFreshStep = await Effect.runPromise(
+      validateFreshStep(
+        {
+          _tag: "ReadRejectedTaskClaim",
+          predecessorOperationId: OperationId.make("01990a72-38c0-7000-8000-000000000099"),
+          rejectedClaimOperationId: OperationId.make("01990a72-38c0-7000-8000-000000000098"),
+          task: freshStep.task
+        } as never,
+        context
+      ).pipe(Effect.flip)
+    )
+    expect(rejectedFreshStep._tag).toBe("HermeticQualificationSourceRejected")
+    expect(foreignTrackerTarget).toBeDefined()
+  })
+
+  it("validates every controlled route through the public status source", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const originalContext = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const { context, routes } = routeFixtures(originalContext)
+    for (const route of routes) {
+      const state = readyFor(context, [proposalForRoute(route, context)])
+      const checked = await Effect.runPromise(
+        validateHermeticQualificationStatus(manifest, configuration, state, runId).pipe(Effect.result)
+      )
+      if (checked._tag === "Failure") {
+        expect(checked.failure._tag).toBe("HermeticQualificationSourceRejected")
+        continue
+      }
+      expect(checked.success.status).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+    }
+  })
+
+  it("checks controlled waiting, live, unavailable, integration, dependency, and settlement status entries", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const completion = completionFixture(context)
+    const plannedAttempt = completion.responsibility.plannedAttempt
+    const queued = QueuedIntegrationResponsibility.make({
+      acceptedResult: completion.responsibility.acceptedResult,
+      integrationTarget: completion.responsibility.integrationTarget,
+      plannedAttempt,
+      preIntegrationCancellation: {
+        attemptId: plannedAttempt.attemptId,
+        runId,
+        queuedAt: completion.responsibility.queuedAt
+      },
+      queuedAt: completion.responsibility.queuedAt
+    })
+    const accepted = UnqueuedAcceptedResult.make({
+      acceptedResult: completion.responsibility.acceptedResult,
+      plannedAttempt,
+      terminalAt: JournalPosition.make(9)
+    })
+    const run = (state: DeliveryRuntimeObservationState) =>
+      validateHermeticQualificationStatus(manifest, configuration, state, runId).pipe(Effect.result)
+
+    const dependencyReady = readyFor(context, [], [], true)
+    if (dependencyReady._tag !== "Ready") return expect.fail("dependency fixture must be ready")
+    const dependencyDelivery = dependencyReady.evaluation.current.ticketDeliveries.deliveries[0]
+    if (dependencyDelivery === undefined) return expect.fail("dependency fixture must contain a delivery")
+    const dependencyWithGraphExcluded: DeliveryRuntimeObservationState = {
+      ...dependencyReady,
+      evaluation: {
+        ...dependencyReady.evaluation,
+        current: {
+          ...dependencyReady.evaluation.current,
+          ticketDeliveries: {
+            ...dependencyReady.evaluation.current.ticketDeliveries,
+            deliveries: [],
+            source: {
+              ...dependencyReady.evaluation.current.ticketDeliveries.source,
+              placements: dependencyReady.evaluation.current.ticketDeliveries.source.placements.map((placement) =>
+                placement.taskId === context.dependantTaskId
+                  ? {
+                      ...placement,
+                      placement: {
+                        _tag: "GraphExcluded" as const,
+                        reasons: [{ _tag: "PrerequisitesIncomplete" as const, prerequisiteTaskIds: [context.taskId] }]
+                      }
+                    }
+                  : placement
+              )
+            }
+          }
+        }
+      }
+    }
+    const dependencyCases = [
+      dependencyWithGraphExcluded,
+      {
+        ...dependencyReady,
+        evaluation: {
+          ...dependencyReady.evaluation,
+          current: {
+            ...dependencyReady.evaluation.current,
+            ticketDeliveries: {
+              ...dependencyReady.evaluation.current.ticketDeliveries,
+              source: {
+                ...dependencyReady.evaluation.current.ticketDeliveries.source,
+                placements: dependencyReady.evaluation.current.ticketDeliveries.source.placements.filter(
+                  (placement) => placement.taskId !== context.dependantTaskId
+                )
+              },
+              deliveries: [
+                ...dependencyReady.evaluation.current.ticketDeliveries.deliveries,
+                {
+                  ...dependencyDelivery,
+                  taskId: context.dependantTaskId,
+                  standings: [
+                    { _tag: "PromotedPrerequisiteReleasePending", prerequisiteTaskIds: [context.taskId] }
+                  ] as typeof dependencyDelivery.standings
+                }
+              ]
+            }
+          }
+        }
+      }
+    ]
+    for (const state of dependencyCases) {
+      const checked = await Effect.runPromise(run(state))
+      expect(checked._tag, JSON.stringify(checked)).toBe("Success")
+    }
+
+    const integrationTargetWait = withFirstDelivery(
+      readyFor(context, []),
+      [{ _tag: "IntegrationWait", wait: { _tag: "IntegrationTargetWait", plannedAttempt } }],
+      [{ _tag: "QueuedIntegration", responsibility: queued }]
+    )
+    const integrationTrackerWait = withFirstDelivery(
+      readyFor(context, []),
+      [{ _tag: "IntegrationWait", wait: { _tag: "IntegrationTrackerFactsWait", plannedAttempt } }],
+      [{ _tag: "StartedIntegration", responsibility: completion.responsibility }]
+    )
+    const integrationConfigurationWait = withFirstDelivery(
+      readyFor(context, []),
+      [{ _tag: "IntegrationWait", wait: { _tag: "IntegrationConfigurationWait", plannedAttempt } }],
+      [{ _tag: "AcceptedAwaitingIntegration", accepted }]
+    )
+    for (const state of [integrationTargetWait, integrationTrackerWait, integrationConfigurationWait]) {
+      const checked = await Effect.runPromise(run(state))
+      expect(checked._tag).toBe("Success")
+    }
+
+    const issue = {
+      _tag: "AcceptedOperationEvidenceMissing" as const,
+      operationId: OperationId.make("01990a72-38c0-7000-8000-000000000021"),
+      taskId: context.taskId,
+      transition: "ContinueFreshWorkflowOperation" as const
+    }
+    const issueReady = readyFor(context, [])
+    if (issueReady._tag !== "Ready") return expect.fail("issue fixture must be ready")
+    const issueState: DeliveryRuntimeObservationState = {
+      ...issueReady,
+      evaluation: {
+        ...issueReady.evaluation,
+        proposedActions: {
+          _tag: "DeliveryProposalsAvailable",
+          freshTaskCandidates: [],
+          isolatedIssues: [issue],
+          proposals: []
+        }
+      }
+    }
+    expect((await Effect.runPromise(run(issueState)))._tag).toBe("Success")
+
+    const settled = readyFor(context, [])
+    if (settled._tag !== "Ready") return expect.fail("settlement fixture must be ready")
+    const settlement = makeDeliverySettlement({ attemptId: plannedAttempt.attemptId, taskId: context.taskId })
+    const settlementState: DeliveryRuntimeObservationState = {
+      ...settled,
+      evaluation: {
+        ...settled.evaluation,
+        current: {
+          ...settled.evaluation.current,
+          settlements: { ...settled.evaluation.current.settlements, settlements: [settlement] }
+        }
+      }
+    }
+    expect((await Effect.runPromise(run(settlementState)))._tag).toBe("Success")
+
+    const graphNotEstablished: DeliveryRuntimeObservationState = {
+      ...settled,
+      evaluation: {
+        ...settled.evaluation,
+        current: { ...settled.evaluation.current, trackerGraph: TrackerGraphState.cases.GraphNotEstablished.make({}) }
+      }
+    }
+    expect((await Effect.runPromise(run(graphNotEstablished)))._tag).toBe("Success")
+
+    const responsibility = WorkflowResponsibilityEntry.cases.PlannedAttemptExecutorWorkResponsibility.make({
+      beganAt: JournalPosition.make(6),
+      plannedAttempt
+    })
+    const responsibilityWait = withFirstDelivery(
+      readyFor(context, []),
+      [{ _tag: "IntegrationWait", wait: { _tag: "IntegrationTrackerFactsWait", plannedAttempt } }],
+      [{ _tag: "WorkflowResponsibility", responsibility }]
+    )
+    expect((await Effect.runPromise(run(responsibilityWait)))._tag).toBe("Success")
+
+    const claimResponsibility = WorkflowResponsibilityEntry.cases.TaskClaimResponsibility.make({
+      acquisition: TaskClaimAcquisition.make({
+        operationId: OperationId.make("01990a72-38c0-7000-8000-000000000022"),
+        owner: configuration.claimOwner,
+        taskId: context.taskId,
+        token: ClaimToken.make("01990a72-38c0-7000-8000-000000000023")
+      }),
+      beganAt: JournalPosition.make(6),
+      taskId: context.taskId
+    })
+    const worktreeResponsibility = WorkflowResponsibilityEntry.cases.TaskWorktreeResponsibility.make({
+      beganAt: JournalPosition.make(6),
+      operation: WorkflowOperation.cases.ReconcileTaskWorktree.make({
+        operationId: OperationId.make("01990a72-38c0-7000-8000-000000000024"),
+        plannedAttempt,
+        predecessorOperationIds: []
+      }),
+      taskId: context.taskId
+    })
+    const releaseOperation = WorkflowOperation.cases.ReleaseTaskClaim.make({
+      authority: { _tag: "WorkflowClaimReleaseAuthority" },
+      predecessorOperationIds: [completion.claim.originalClaim.operationId],
+      release: completionOriginalTaskClaimReleaseFor(completion.claim)
+    })
+    const releaseResponsibility = WorkflowResponsibilityEntry.cases.TaskClaimReleaseResponsibility.make({
+      beganAt: JournalPosition.make(6),
+      operation: releaseOperation,
+      taskId: context.taskId
+    })
+    for (const [index, workflowResponsibility] of [
+      claimResponsibility,
+      worktreeResponsibility,
+      releaseResponsibility
+    ].entries()) {
+      const checked = await Effect.runPromise(
+        run(
+          withFirstDelivery(
+            readyFor(context, []),
+            [
+              {
+                _tag: "ResponsibilitySituation",
+                facts: {
+                  _tag: "WorkflowOperationFreshFacts",
+                  disposition: ResponsibilityDisposition.Ready(),
+                  responsibility: workflowResponsibility
+                }
+              }
+            ],
+            [{ _tag: "WorkflowResponsibility", responsibility: workflowResponsibility }]
+          )
+        )
+      )
+      expect(checked._tag, `${index}:${JSON.stringify(checked)}`).toBe("Success")
+    }
+    const wrongSettlementState: DeliveryRuntimeObservationState = {
+      ...settlementState,
+      evaluation: {
+        ...settlementState.evaluation,
+        current: {
+          ...settlementState.evaluation.current,
+          settlements: {
+            ...settlementState.evaluation.current.settlements,
+            settlements: [
+              makeDeliverySettlement({ attemptId: AttemptId.make("foreign-attempt"), taskId: context.taskId })
+            ]
+          }
+        }
+      }
+    }
+    expect((await Effect.runPromise(run(wrongSettlementState)))._tag).toBe("Failure")
+    if (settled.evaluation.current.trackerGraph._tag === "GraphEstablished") {
+      const mismatchedGraph: DeliveryRuntimeObservationState = {
+        ...settled,
+        evaluation: {
+          ...settled.evaluation,
+          current: {
+            ...settled.evaluation.current,
+            trackerGraph: {
+              ...settled.evaluation.current.trackerGraph,
+              observation: {
+                ...settled.evaluation.current.trackerGraph.observation,
+                contentIdentity: trackerRevisionFor([])
+              }
+            }
+          }
+        }
+      }
+      expect((await Effect.runPromise(run(mismatchedGraph)))._tag).toBe("Failure")
     }
   })
 
@@ -2166,6 +2780,404 @@ describe("qualification original source boundary", () => {
       ).pipe(Effect.flip)
     )
     expect(duplicateDependant._tag).toBe("HermeticQualificationSourceRejected")
+    const missingRoot = await Effect.runPromise(
+      validateGraph(
+        {
+          ...openGraphWithDependant.snapshot.toWire(),
+          revision: trackerRevisionFor([dependantTask]),
+          tasks: [dependantTask]
+        },
+        context
+      ).pipe(Effect.flip)
+    )
+    expect(missingRoot._tag).toBe("HermeticQualificationSourceRejected")
+    const terminalRoot = TrackerTask.make({ ...openRootTask, lifecycle: { _tag: "TerminalWithoutSuccess" as const } })
+    const terminalGraph = await Effect.runPromise(
+      validateGraph({ ...graph, revision: trackerRevisionFor([terminalRoot]), tasks: [terminalRoot] }, context).pipe(
+        Effect.flip
+      )
+    )
+    expect(terminalGraph._tag).toBe("HermeticQualificationSourceRejected")
+  })
+
+  it("checks direct fixture validator boundaries with controlled valid-shape mutations", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const completion = completionFixture(context)
+    const reject = async (effect: Effect.Effect<unknown, unknown>) => {
+      const result = await Effect.runPromise(effect.pipe(Effect.result))
+      expect(result._tag).toBe("Failure")
+    }
+    const foreignTarget = IntegrationTarget.make({
+      repository: GitRepositoryLocator.make("/fixture/foreign"),
+      ref: configuration.integrationRef
+    })
+    const foreignTrackerTarget = await Effect.runPromise(
+      Schema.decodeUnknownEffect(TrackerTarget)({
+        _tag: "GithubIssue",
+        owner: "foreign",
+        repository: "controlled",
+        issueNumber: 1
+      })
+    )
+
+    await Effect.runPromise(validateResponsibility(completion.responsibility, context))
+    await reject(validateResponsibility({ ...completion.responsibility, integrationTarget: foreignTarget }, context))
+    await Effect.runPromise(validateSessionCorrelation(completion.run.session, context))
+    await reject(
+      validateSessionCorrelation(
+        { ...completion.run.session, targetLineageObservedAt: JournalPosition.make(99) },
+        context
+      )
+    )
+    await Effect.runPromise(validateRunCorrelation(completion.run, context))
+    await Effect.runPromise(validateCompletionClaim(completion.claim, context))
+    await reject(
+      validateCompletionClaim(
+        {
+          ...completion.claim,
+          originalClaim: { ...completion.claim.originalClaim, owner: ClaimOwner.make("foreign-owner") }
+        },
+        context
+      )
+    )
+    await reject(
+      validateCandidate({ ...completion.candidate, candidateCommit: GitCommitSha.make("d".repeat(40)) }, context)
+    )
+    const routed = routeFixtures(context)
+    const deletionRoute = routed.routes.find(
+      (route) =>
+        route._tag === "IdentityFreeWorkflowRoute" && route.transition._tag === "DeleteCompletedTaskCompletionClaim"
+    )
+    if (deletionRoute?._tag !== "IdentityFreeWorkflowRoute") return expect.fail("deletion route fixture must exist")
+    if (deletionRoute.transition._tag !== "DeleteCompletedTaskCompletionClaim")
+      return expect.fail("deletion transition fixture must exist")
+    await Effect.runPromise(validateDeletionRequest(deletionRoute.transition.request, routed.context))
+    await reject(
+      validateDeletionRequest(
+        {
+          ...deletionRoute.transition.request,
+          successObservation: {
+            ...deletionRoute.transition.request.successObservation,
+            trackerRevision: trackerRevisionFor([])
+          }
+        },
+        routed.context
+      )
+    )
+
+    const focusedHistory = await Effect.runPromise(
+      lookupHistory(context, "GitHub cannot query a prior CloseIssue request by clientMutationId")
+    )
+    const focusedEvidence = focusedHistory.items.find(
+      (item) =>
+        item.occurrence._tag === "TaskTrackerFactsObserved" &&
+        item.occurrence.evidence._tag === "FocusedTaskCompletionFacts"
+    )?.occurrence
+    if (
+      focusedEvidence?._tag !== "TaskTrackerFactsObserved" ||
+      focusedEvidence.evidence._tag !== "FocusedTaskCompletionFacts"
+    )
+      return expect.fail("focused completion history must contain one focused fact")
+    await Effect.runPromise(validateTrackerFacts(focusedEvidence.evidence, context))
+
+    const completedTask = TrackerTask.make({
+      id: context.taskId,
+      lifecycle: { _tag: "CompletedSuccessfully" },
+      parentTaskId: null,
+      prerequisiteIds: []
+    })
+    const completedGraph = TaskDagSnapshot.project(
+      TrackerSnapshot.make({ revision: trackerRevisionFor([completedTask]), tasks: [completedTask] })
+    )
+    if (completedGraph._tag === "Invalid") return expect.fail("completed graph fixture must project")
+    const graphOperation = WorkflowOperation.cases.ReadTrackerGraph.make({
+      operationId: OperationId.make("01990a72-38c0-7000-8000-000000000097"),
+      predecessorOperationIds: [],
+      cause: { _tag: "WorkflowEstablishment" },
+      readShape: { _tag: "CompleteTargetClosure", explicitlyCoveredTaskIds: [context.taskId] },
+      target: configuration.target
+    })
+    const completeFacts = makeCompleteTaskTrackerFactsObserved(graphOperation, completedGraph.snapshot)
+    const wrongContentIdentity = trackerRevisionFor([
+      TrackerTask.make({
+        id: TaskId.make("foreign-task"),
+        lifecycle: { _tag: "Open" },
+        parentTaskId: null,
+        prerequisiteIds: []
+      })
+    ])
+    const wrongRevisionFacts = CompleteTaskTrackerFactsObserved.make({
+      ...completeFacts,
+      factFamilies: [
+        TaskIdentitiesObserved.make({ ...completeFacts.factFamilies[0], contentIdentity: wrongContentIdentity }),
+        TaskLifecyclesObserved.make({ ...completeFacts.factFamilies[1], contentIdentity: wrongContentIdentity }),
+        TaskPrerequisitesObserved.make({ ...completeFacts.factFamilies[2], contentIdentity: wrongContentIdentity }),
+        TaskGroupingsObserved.make({ ...completeFacts.factFamilies[3], contentIdentity: wrongContentIdentity }),
+        TaskTargetMembershipObserved.make({ ...completeFacts.factFamilies[4], contentIdentity: wrongContentIdentity })
+      ]
+    })
+    await reject(validateTrackerFacts(wrongRevisionFacts, context))
+    const prerequisiteFamily = completeFacts.factFamilies[2]
+    await reject(
+      validateTrackerFacts(
+        {
+          ...completeFacts,
+          factFamilies: [
+            completeFacts.factFamilies[0],
+            completeFacts.factFamilies[1],
+            {
+              ...prerequisiteFamily,
+              prerequisites: prerequisiteFamily.prerequisites.map((row) =>
+                row.taskId === context.taskId ? { ...row, prerequisiteTaskIds: [context.taskId] } : row
+              )
+            },
+            completeFacts.factFamilies[3],
+            completeFacts.factFamilies[4]
+          ]
+        },
+        context
+      )
+    )
+    const groupingFamily = completeFacts.factFamilies[3]
+    await reject(
+      validateTrackerFacts(
+        {
+          ...completeFacts,
+          factFamilies: [
+            completeFacts.factFamilies[0],
+            completeFacts.factFamilies[1],
+            completeFacts.factFamilies[2],
+            {
+              ...groupingFamily,
+              groupings: groupingFamily.groupings.map((row) =>
+                row.taskId === context.taskId ? { ...row, parentTaskId: context.taskId } : row
+              )
+            },
+            completeFacts.factFamilies[4]
+          ]
+        },
+        context
+      )
+    )
+
+    const acquire = WorkflowOperation.cases.AcquireTaskClaim.make({
+      acquisition: completion.claim.originalClaim,
+      authority: { _tag: "TaskSelectionAuthority" },
+      predecessorOperationIds: []
+    })
+    await Effect.runPromise(validateOperation(acquire, context))
+    await reject(
+      validateOperation(
+        {
+          ...acquire,
+          authority: {
+            _tag: "ExplicitTaskClaimReacquisitionAuthority",
+            requestId: TaskClaimReacquisitionRequestId.make("fixture-rejection")
+          }
+        },
+        context
+      )
+    )
+    const release = WorkflowOperation.cases.ReleaseTaskClaim.make({
+      authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
+      predecessorOperationIds: [completion.claim.originalClaim.operationId],
+      release: completionOriginalTaskClaimReleaseFor(completion.claim)
+    })
+    const releaseContext = {
+      ...context,
+      derivedOperationIds: [...context.derivedOperationIds, release.release.operationId]
+    }
+    await Effect.runPromise(validateOperation(release, releaseContext))
+    await reject(
+      validateOperation(
+        {
+          ...release,
+          authority: TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.make({
+            cancellationAppliedAt: JournalPosition.make(1),
+            implementationAbandonedAt: JournalPosition.make(2),
+            observationOperationId: OperationId.make("01990a72-38c0-7000-0000-000000000099")
+          })
+        },
+        releaseContext
+      )
+    )
+    const graph = WorkflowOperation.cases.ReadTrackerGraph.make({
+      operationId: OperationId.make("01990a72-38c0-7000-8000-000000000099"),
+      predecessorOperationIds: [OperationId.make("01990a72-38c0-7000-8000-000000000098")],
+      cause: {
+        _tag: "PostQuiescenceReconfirmation",
+        quiescentGraphOperationId: OperationId.make("01990a72-38c0-7000-8000-000000000098")
+      },
+      readShape: { _tag: "CompleteTargetClosure", explicitlyCoveredTaskIds: [context.taskId] },
+      target: configuration.target
+    })
+    await Effect.runPromise(validateOperation(graph, context))
+    await reject(
+      validateOperation(
+        { ...graph, readShape: { _tag: "CompleteTargetClosure", explicitlyCoveredTaskIds: [TaskId.make("foreign")] } },
+        context
+      )
+    )
+    const specificationOperation = WorkflowOperation.cases.ReadTaskWorkSpecification.make({
+      operationId: OperationId.make("01990a72-38c0-7000-8000-000000000096"),
+      predecessorOperationIds: [],
+      taskId: context.taskId,
+      target: configuration.target
+    })
+    await reject(validateOperation({ ...specificationOperation, taskId: TaskId.make("foreign") }, context))
+    await reject(validateOperation({ ...specificationOperation, target: foreignTrackerTarget }, context))
+    await Effect.runPromise(validateCompletionRequest(completion.request, context))
+
+    const completeFamily = completeFacts.factFamilies
+    const withFactFamilies = (factFamilies: typeof completeFacts.factFamilies) => ({ ...completeFacts, factFamilies })
+    await reject(
+      validateTrackerFacts(
+        withFactFamilies([
+          TaskIdentitiesObserved.make({
+            ...completeFamily[0],
+            coverage: { ...completeFamily[0].coverage, explicitlyCoveredTaskIds: [TaskId.make("foreign")] }
+          }),
+          TaskLifecyclesObserved.make({
+            ...completeFamily[1],
+            coverage: { ...completeFamily[1].coverage, explicitlyCoveredTaskIds: [TaskId.make("foreign")] }
+          }),
+          TaskPrerequisitesObserved.make({
+            ...completeFamily[2],
+            coverage: { ...completeFamily[2].coverage, explicitlyCoveredTaskIds: [TaskId.make("foreign")] }
+          }),
+          TaskGroupingsObserved.make({
+            ...completeFamily[3],
+            coverage: { ...completeFamily[3].coverage, explicitlyCoveredTaskIds: [TaskId.make("foreign")] }
+          }),
+          TaskTargetMembershipObserved.make({
+            ...completeFamily[4],
+            coverage: { ...completeFamily[4].coverage, explicitlyCoveredTaskIds: [TaskId.make("foreign")] }
+          })
+        ]),
+        context
+      )
+    )
+
+    await reject(validateTrackerFacts({ ...completeFacts, rootTaskId: TaskId.make("foreign-root") }, context))
+    await reject(
+      validateTrackerFacts(
+        withFactFamilies([
+          TaskIdentitiesObserved.make({ ...completeFamily[0], target: foreignTrackerTarget }),
+          completeFamily[1],
+          completeFamily[2],
+          completeFamily[3],
+          completeFamily[4]
+        ]),
+        context
+      )
+    )
+    await reject(
+      validateTrackerFacts(
+        withFactFamilies([
+          completeFamily[0],
+          TaskLifecyclesObserved.make({
+            ...completeFamily[1],
+            coverage: { ...completeFamily[1].coverage, target: foreignTrackerTarget }
+          }),
+          completeFamily[2],
+          completeFamily[3],
+          completeFamily[4]
+        ]),
+        context
+      )
+    )
+    const lifecycleFamily = completeFamily[1]
+    const lifecycleRow = lifecycleFamily.lifecycles[0]
+    if (lifecycleRow === undefined) return expect.fail("lifecycle row fixture must exist")
+    await reject(
+      validateTrackerFacts(
+        withFactFamilies([
+          completeFamily[0],
+          TaskLifecyclesObserved.make({
+            ...lifecycleFamily,
+            lifecycles: [...lifecycleFamily.lifecycles, lifecycleRow]
+          }),
+          completeFamily[2],
+          completeFamily[3],
+          completeFamily[4]
+        ]),
+        context
+      )
+    )
+    const prerequisiteRows = completeFamily[2]
+    const groupingRows = completeFamily[3]
+    const prerequisiteRow = prerequisiteRows.prerequisites[0]
+    const groupingRow = groupingRows.groupings[0]
+    if (prerequisiteRow === undefined || groupingRow === undefined)
+      return expect.fail("graph row fixture must contain one row")
+    await reject(
+      validateTrackerFacts(
+        withFactFamilies([
+          completeFamily[0],
+          completeFamily[1],
+          TaskPrerequisitesObserved.make({
+            ...prerequisiteRows,
+            prerequisites: [...prerequisiteRows.prerequisites, prerequisiteRow]
+          }),
+          completeFamily[3],
+          completeFamily[4]
+        ]),
+        context
+      )
+    )
+    await reject(
+      validateTrackerFacts(
+        withFactFamilies([
+          completeFamily[0],
+          completeFamily[1],
+          completeFamily[2],
+          TaskGroupingsObserved.make({ ...groupingRows, groupings: [...groupingRows.groupings, groupingRow] }),
+          completeFamily[4]
+        ]),
+        context
+      )
+    )
+
+    const replacementRoute = routed.routes.find(
+      (route) => route._tag === "IdentityFreeWorkflowRoute" && route.transition._tag === "ReplacePromotedTaskClaim"
+    )
+    if (replacementRoute?._tag !== "IdentityFreeWorkflowRoute")
+      return expect.fail("replacement route fixture must exist")
+    if (replacementRoute.transition._tag !== "ReplacePromotedTaskClaim")
+      return expect.fail("replacement transition fixture must exist")
+    const replacementContext = {
+      ...routed.context,
+      derivedOperationIds: [...routed.context.derivedOperationIds, OperationId.make("fixture-replacement")]
+    }
+    await reject(
+      validateReplacementRequest(
+        { ...replacementRoute.transition.request, operationId: OperationId.make("fixture-replacement") },
+        replacementContext
+      )
+    )
+    await reject(
+      validateDeletionRequest(
+        {
+          ...deletionRoute.transition.request,
+          operationId: OperationId.make("fixture-deletion"),
+          successObservation: { ...deletionRoute.transition.request.successObservation, target: foreignTrackerTarget }
+        },
+        {
+          ...routed.context,
+          derivedOperationIds: [...routed.context.derivedOperationIds, OperationId.make("fixture-deletion")]
+        }
+      )
+    )
+    await reject(
+      validateDeletionRequest(
+        { ...deletionRoute.transition.request, operationId: OperationId.make("fixture-deletion-equivalence") },
+        {
+          ...routed.context,
+          derivedOperationIds: [...routed.context.derivedOperationIds, OperationId.make("fixture-deletion-equivalence")]
+        }
+      )
+    )
   })
 
   it("checks the original ordinary history view and rejects a valid private specification before digest registration", async () => {
@@ -2187,6 +3199,94 @@ describe("qualification original source boundary", () => {
     )
     expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
     expect(JSON.stringify(rejected)).not.toContain("private-prompt-sentinel")
+  })
+
+  it("checks both historical worktree proof occurrence forms", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const plannedAttempt = qualificationPlannedAttemptFor(context)
+    const operation = WorkflowOperation.cases.ReconcileTaskWorktree.make({
+      operationId: OperationId.make("01990a72-38c0-7000-8000-000000000025"),
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    const proof = PlannedWorktreeReady.make({
+      baseSha: plannedAttempt.baseSha,
+      branch: plannedAttempt.branch,
+      headSha: plannedAttempt.baseSha,
+      worktree: plannedAttempt.worktree
+    })
+    const readOperation = WorkflowOperation.cases.ReadTaskWorktree.make({
+      operationId: OperationId.make("01990a72-38c0-7000-8000-000000000026"),
+      plannedAttempt,
+      predecessorOperationIds: [operation.operationId]
+    })
+    const events: ReadonlyArray<JournalRecord["event"]> = [
+      TaskAttemptPlannedEvent.make({
+        operation: WorkflowOperation.cases.RecordTaskAttemptPlan.make({
+          operationId: OperationId.make("01990a72-38c0-7000-8000-000000000027"),
+          plannedAttempt,
+          predecessorOperationIds: []
+        }),
+        version: workflowJournalEventVersion
+      }),
+      TaskWorktreeReconciliationIntendedEvent.make({ operation, version: workflowJournalEventVersion }),
+      TaskWorktreeReadyEvent.make({ operationId: operation.operationId, proof, version: workflowJournalEventVersion }),
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        operation: readOperation,
+        version: workflowJournalEventVersion
+      }),
+      PlannedAttemptWorktreeObservedEvent.make({
+        observation: proof,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: readOperation.operationId,
+        version: workflowJournalEventVersion
+      })
+    ]
+    const records: ReadonlyArray<JournalRecord> = [
+      makeWorkflowRunBeganRecord(
+        runId,
+        configuration.target,
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTargetForTest
+      ),
+      ...events.map((event, index) => ({
+        event,
+        position: JournalPosition.make(index + 2),
+        runId,
+        key: describeJournalEvent(event).expectedKey
+      }))
+    ]
+    const snapshot = await Effect.runPromise(
+      makeTraceReader({ read: () => Effect.succeed(records) }).readAt(
+        TraceCursor.make({ runId, position: JournalPosition.make(records.length) })
+      )
+    )
+    expect(
+      (await Effect.runPromise(validateHermeticQualificationHistory(manifest, configuration, snapshot, runId))).snapshot
+    ).toBe(snapshot)
+    const broken = await Effect.runPromiseExit(
+      makeTraceReader({
+        read: () =>
+          Effect.succeed(
+            records.map((record) =>
+              record.event._tag === "TaskWorktreeReady"
+                ? {
+                    ...record,
+                    event: TaskWorktreeReadyEvent.make({
+                      operationId: operation.operationId,
+                      proof: { ...proof, baseSha: GitCommitSha.make("d".repeat(40)) },
+                      version: workflowJournalEventVersion
+                    })
+                  }
+                : record
+            )
+          )
+      }).readAt(TraceCursor.make({ runId, position: JournalPosition.make(records.length) }))
+    )
+    expect(broken._tag).toBe("Failure")
   })
 
   it("accepts exact A/B executor reports after their own responsibility and rejects a foreign correlation", async () => {
@@ -2369,6 +3469,67 @@ describe("qualification original source boundary", () => {
         )
       )._tag
     ).toBe("HermeticQualificationSourceRejected")
+
+    const rejectRemote = async (items: ReadonlyArray<WorkflowOccurrence>) => {
+      const candidate = TraceAtCursor.make({
+        ...exact,
+        cursor: TraceCursor.make({ runId, position: JournalPosition.make(7) }),
+        items: [
+          ...snapshot.items,
+          ...items.map((occurrence) => ({
+            identity: TracePositionIdentity.make({ runId, position: occurrence.recordedAt }),
+            occurrence,
+            operationIds: [],
+            taskIds: []
+          }))
+        ]
+      })
+      const rejected = await Effect.runPromise(
+        validateHermeticQualificationHistory(manifest, configuration, candidate, runId).pipe(Effect.flip)
+      )
+      expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
+    }
+    const remoteItems = items.map(({ occurrence }) => occurrence)
+    await rejectRemote(remoteItems.filter((occurrence) => occurrence._tag !== "RemoteBaselineReadInitiated"))
+    await rejectRemote(
+      remoteItems.map((occurrence) =>
+        occurrence._tag === "RemoteBaselineObserved"
+          ? { ...occurrence, observation: { _tag: "LocalAhead", localHead, remoteHead } }
+          : occurrence
+      )
+    )
+    await rejectRemote(
+      remoteItems.map((occurrence) =>
+        occurrence._tag === "RemoteBaselineObserved"
+          ? {
+              ...occurrence,
+              observation: { _tag: "LocalAncestor", localHead: GitCommitSha.make("c".repeat(40)), remoteHead }
+            }
+          : occurrence
+      )
+    )
+    await rejectRemote(remoteItems.filter((occurrence) => occurrence._tag !== "LocalTargetCatchUpInitiated"))
+    await rejectRemote(
+      remoteItems.map((occurrence) =>
+        occurrence._tag === "LocalTargetCatchUpInitiated"
+          ? { ...occurrence, expectedLocalHead: GitCommitSha.make("c".repeat(40)) }
+          : occurrence
+      )
+    )
+    await rejectRemote(
+      remoteItems.map((occurrence) =>
+        occurrence._tag === "LocalTargetCatchUpObserved"
+          ? { ...occurrence, result: { _tag: "Applied", newHead: GitCommitSha.make("c".repeat(40)) } }
+          : occurrence
+      )
+    )
+    await rejectRemote(
+      remoteItems.map((occurrence) =>
+        occurrence._tag === "LocalTargetCatchUpObserved"
+          ? { ...occurrence, result: { _tag: "AlreadyCurrent", currentHead: GitCommitSha.make("c".repeat(40)) } }
+          : occurrence
+      )
+    )
   })
 
   it("keeps the actual response-lost and unreadable lookup history but rejects private provider detail", async () => {
@@ -2394,6 +3555,116 @@ describe("qualification original source boundary", () => {
     )
     expect(malformedRejected._tag).toBe("HermeticQualificationSourceRejected")
     expect(JSON.stringify(malformedRejected)).not.toContain("private-history-sentinel")
+  })
+
+  it("checks publication admission, attempt ordinal, and push proof history branches", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const base = await Effect.runPromise(specificationHistory(context, context.specification))
+    const admissionId = remotePublicationAdmissionIdFor(runId, configuration.remotePublicationTarget)
+    const admissionOccurrences: ReadonlyArray<WorkflowOccurrence> = [
+      RemotePublicationAdmissionReadInitiated.make({
+        admissionId,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        recordedAt: JournalPosition.make(4),
+        runId,
+        target: configuration.remotePublicationTarget
+      }),
+      RemotePublicationAdmissionObserved.make({
+        admissionId,
+        observation: { _tag: "ExistingBranch", remoteHead: configuration.plannedAttemptBaseSha },
+        occurrenceClassification: "NonActionOccurrence",
+        recordedAt: JournalPosition.make(5),
+        runId,
+        target: configuration.remotePublicationTarget
+      })
+    ]
+    const withAdmission = (occurrences: ReadonlyArray<WorkflowOccurrence>): TraceAtCursor =>
+      TraceAtCursor.make({
+        ...base,
+        cursor: TraceCursor.make({ runId, position: JournalPosition.make(5) }),
+        items: [
+          ...base.items,
+          ...occurrences.map((occurrence) => ({
+            identity: TracePositionIdentity.make({ runId, position: occurrence.recordedAt }),
+            occurrence,
+            operationIds: [],
+            taskIds: []
+          }))
+        ]
+      })
+    const exact = withAdmission(admissionOccurrences)
+    expect(
+      (await Effect.runPromise(validateHermeticQualificationHistory(manifest, configuration, exact, runId))).snapshot
+    ).toBe(exact)
+    for (const changed of [
+      admissionOccurrences.map((occurrence) =>
+        occurrence._tag === "RemotePublicationAdmissionObserved"
+          ? {
+              ...occurrence,
+              observation: { _tag: "ExistingBranch" as const, remoteHead: GitCommitSha.make("d".repeat(40)) }
+            }
+          : occurrence
+      ),
+      admissionOccurrences.map((occurrence) =>
+        occurrence._tag === "RemotePublicationAdmissionReadInitiated"
+          ? {
+              ...occurrence,
+              target: RemotePublicationTarget.make({
+                ...configuration.remotePublicationTarget,
+                branch: RemotePublicationBranchRef.make("refs/heads/foreign")
+              })
+            }
+          : occurrence
+      )
+    ]) {
+      const result = await Effect.runPromise(
+        validateHermeticQualificationHistory(manifest, configuration, withAdmission(changed), runId).pipe(Effect.result)
+      )
+      expect(result._tag).toBe("Failure")
+    }
+
+    const lookup = await Effect.runPromise(
+      lookupHistory(context, "GitHub cannot query a prior CloseIssue request by clientMutationId")
+    )
+    const mutateEvent = (
+      tag: "RemotePublicationAttemptRequested" | "RemotePublicationSucceeded",
+      mutate: (
+        event: Extract<WorkflowOccurrence, { readonly _tag: typeof tag }>
+      ) => Extract<WorkflowOccurrence, { readonly _tag: typeof tag }>
+    ) =>
+      TraceAtCursor.make({
+        ...lookup,
+        items: lookup.items.map((item) =>
+          item.occurrence._tag === tag
+            ? {
+                ...item,
+                occurrence: mutate(item.occurrence as Extract<WorkflowOccurrence, { readonly _tag: typeof tag }>)
+              }
+            : item
+        )
+      })
+    const badAttempt = mutateEvent("RemotePublicationAttemptRequested", (event) => ({
+      ...event,
+      attemptOrdinal: RemotePublicationAttemptOrdinal.make(2)
+    }))
+    const badAttemptResult = await Effect.runPromise(
+      validateHermeticQualificationHistory(manifest, configuration, badAttempt, runId).pipe(Effect.flip)
+    )
+    expect(badAttemptResult._tag).toBe("HermeticQualificationSourceRejected")
+    const badProof = mutateEvent("RemotePublicationSucceeded", (event) => ({
+      ...event,
+      proof: {
+        _tag: "PushApplied",
+        attemptOrdinal: RemotePublicationAttemptOrdinal.make(1),
+        remoteHead: GitCommitSha.make("d".repeat(40))
+      }
+    }))
+    const badProofResult = await Effect.runPromise(
+      validateHermeticQualificationHistory(manifest, configuration, badProof, runId).pipe(Effect.flip)
+    )
+    expect(badProofResult._tag).toBe("HermeticQualificationSourceRejected")
   })
 
   it("rejects coherent counterfeit numbered-call tracker and Git references before registration", async () => {

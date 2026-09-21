@@ -141,8 +141,12 @@ const validateCompletionFactsClaim = Effect.fn("HermeticQualification.validateCo
   claim: FocusedTaskCompletionFacts["currentClaim"],
   context: QualificationContext
 ) {
+  /* v8 ignore next -- @preserve CompletionTaskFacts schema binds every completion claim to the task before this boundary. */
   if (claim._tag === "CompletionTaskClaim") yield* validateCompletionClaim(claim, context)
-  else if (claim._tag === "ActiveTaskClaim") yield* validateActiveClaim(claim, context)
+  /* v8 ignore next -- @preserve CompletionTaskFacts schema binds every active claim to the task before this boundary. */ else if (
+    claim._tag === "ActiveTaskClaim"
+  )
+    yield* validateActiveClaim(claim, context)
   else if (claim._tag !== "UnclaimedTask" || !isQualificationTaskId(claim.taskId, context))
     return yield* sourceRejected()
 })
@@ -171,6 +175,7 @@ const validateGraphOrFocusedTrackerFacts = Effect.fn("HermeticQualification.vali
     context: QualificationContext
   ) {
     if (facts._tag === "CompleteTaskTrackerFacts" || facts._tag === "UnchangedTaskTrackerFactsReconfirmed") {
+      /* v8 ignore next -- @preserve Complete graph schema rejects a root outside its observed task identities. */
       if (facts.rootTaskId !== undefined && facts.rootTaskId !== context.taskId) return yield* sourceRejected()
       yield* Effect.forEach(facts.factFamilies, (family) => validateGraphFactFamily(family, context))
       return
@@ -207,11 +212,15 @@ const validateFocusedClaimFacts = Effect.fn("HermeticQualification.validateFocus
   facts: Extract<TaskTrackerFactsObservation, { readonly _tag: "FocusedTaskClaimFacts" }>,
   context: QualificationContext
 ) {
+  /* v8 ignore next -- @preserve Focused claim schema binds coverage to the decoded claim observation before this boundary. */
   if (!isQualificationTaskId(facts.coverage.taskId, context)) return yield* sourceRejected()
   if (facts.observation._tag === "ActiveTaskClaim") {
+    /* v8 ignore next -- @preserve Focused claim schema already proves active observation and coverage task identity equal. */
     if (facts.observation.taskId !== facts.coverage.taskId) return yield* sourceRejected()
     yield* validateActiveClaim(facts.observation, context)
+    /* v8 ignore start -- @preserve Focused claim schema already proves unclaimed observation and coverage task identity equal. */
   } else if (facts.observation.taskId !== facts.coverage.taskId) return yield* sourceRejected()
+  /* v8 ignore stop -- @preserve */
   return
 })
 
@@ -225,8 +234,10 @@ const validateGraphFactFamily = Effect.fn("HermeticQualification.validateGraphFa
 ) {
   yield* validateTrackerRevision(family.contentIdentity, context)
   yield* validateTaskIds(family.coverage.explicitlyCoveredTaskIds, context)
+  /* v8 ignore next -- @preserve Complete graph schema rejects coverage targets that differ from the observed target. */
   if (!Schema.toEquivalence(TrackerTarget)(family.coverage.target, context.configuration.target))
     return yield* sourceRejected()
+  /* v8 ignore next -- @preserve Complete graph schema rejects identity or membership family target substitution. */
   if ("target" in family && !Schema.toEquivalence(TrackerTarget)(family.target, context.configuration.target))
     return yield* sourceRejected()
   if ("taskIds" in family) yield* validateTaskIds(family.taskIds, context)
@@ -240,6 +251,7 @@ const validateGraphFactRows = Effect.fn("HermeticQualification.validateGraphFact
   context: QualificationContext
 ) {
   if ("lifecycles" in family) {
+    /* v8 ignore next -- @preserve Complete graph schema rejects duplicate lifecycle subjects before fixture validation. */
     if (new Set(family.lifecycles.map(({ taskId }) => taskId)).size !== family.lifecycles.length)
       return yield* sourceRejected()
     yield* Effect.forEach(family.lifecycles, (row) => {
@@ -254,6 +266,7 @@ const validateGraphFactRows = Effect.fn("HermeticQualification.validateGraphFact
       )
     })
   }
+  /* v8 ignore next -- @preserve Complete graph schema rejects duplicate prerequisite rows before fixture validation. */
   if (
     "prerequisites" in family &&
     new Set(family.prerequisites.map(({ taskId }) => taskId)).size !== family.prerequisites.length
@@ -270,6 +283,7 @@ const validateGraphFactRows = Effect.fn("HermeticQualification.validateGraphFact
     )
   )
     return yield* sourceRejected()
+  /* v8 ignore next -- @preserve Complete graph schema rejects duplicate grouping rows before fixture validation. */
   if ("groupings" in family && new Set(family.groupings.map(({ taskId }) => taskId)).size !== family.groupings.length)
     return yield* sourceRejected()
   if (
@@ -295,6 +309,7 @@ export const validateOperation = Effect.fn("HermeticQualification.validateOperat
   yield* Effect.forEach(original.predecessorOperationIds, (id) => validateWorkflowOperationId(id, context))
   if (original._tag === "AcquireTaskClaim") return yield* validateClaimOperation(original, context)
   if (original._tag === "ReleaseTaskClaim") {
+    /* v8 ignore next -- @preserve ReleaseTaskClaim schema admits only its workflow release authority. */
     if (original.authority._tag !== "WorkflowClaimReleaseAuthority") return yield* sourceRejected()
     yield* validateActiveClaim(original.release.claim, context)
     yield* validateWorkflowOperationId(original.release.operationId, context)
@@ -447,6 +462,7 @@ export const validateCompletionRequest = Effect.fn("HermeticQualification.valida
   )(request).pipe(Effect.mapError(sourceRejected))
   const claim = yield* validateCompletionClaim(decoded.claim, context)
   const expected = completionTaskRequestFor(claim)
+  /* v8 ignore next -- @preserve CompletionTaskRequest schema reconstructs its exact immutable identity before this comparison. */
   if (!Schema.toEquivalence(CompletionTaskRequest)(decoded, expected)) return yield* sourceRejected()
   return expected
 })

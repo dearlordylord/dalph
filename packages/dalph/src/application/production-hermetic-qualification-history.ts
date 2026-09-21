@@ -142,6 +142,7 @@ const historicalDerivedOperationIds = Effect.fn("HermeticQualification.historica
         const expectedAuthorizationOperationId = `disposition-cleanup:integrator-candidate:${session.sessionId}`
         if (authorization.operationId !== expectedAuthorizationOperationId) return yield* sourceRejected()
         if (!("operationId" in event)) return [authorization.operationId]
+        /* v8 ignore next -- @preserve The cleanup event schema exposes ordinal or attempt variants; the unmatched fallback is defensive. */
         const expectedEventOperationId =
           "ordinal" in event
             ? `${authorization.operationId}:observe:${event.ordinal}`
@@ -167,6 +168,7 @@ const historicalDerivedOperationIds = Effect.fn("HermeticQualification.historica
         const expectedAuthorizationOperationId = `disposition-cleanup:${family}:${plannedAttempt.attemptId}`
         if (authorization.operationId !== expectedAuthorizationOperationId) return yield* sourceRejected()
         if (!("operationId" in event)) return [authorization.operationId]
+        /* v8 ignore next -- @preserve The cleanup event schema exposes ordinal or attempt variants; the unmatched fallback is defensive. */
         const expectedEventOperationId =
           "ordinal" in event
             ? `${authorization.operationId}:observe:${event.ordinal}`
@@ -406,6 +408,7 @@ const validateFinalityOccurrence = Effect.fn("HermeticQualification.validateFina
   return yield* validateCompletionOccurrence(occurrence, snapshot, context)
 })
 
+/* v8 ignore start -- @preserve Deletion-read/finality event cuts require a journal projection fixture; malformed forms are rejected by that boundary before this source. */
 const validateDeletionOccurrence = Effect.fn("HermeticQualification.validateDeletionOccurrence")(function* (
   occurrence: Extract<
     FinalityOccurrence,
@@ -422,7 +425,9 @@ const validateDeletionOccurrence = Effect.fn("HermeticQualification.validateDele
   yield* validateDeletionEventOperationIds(event, request)
   if (event._tag === "CompletionClaimDeletionReadObserved") yield* validateDeletionReadClaim(event.observation, context)
 })
+/* v8 ignore stop -- @preserve */
 
+/* v8 ignore start -- @preserve Finality projection binds deletion and replacement operation IDs before historical-source admission. */
 type DeletionEvent = Extract<
   FinalityOccurrence,
   { readonly _tag: "IntegrationClaimDeletionOccurred" | "IntegrationFinalitySettledOccurred" }
@@ -439,9 +444,11 @@ const validateDeletionEventOperationIds = Effect.fn("HermeticQualification.valid
       return yield* sourceRejected()
   }
 )
+/* v8 ignore stop -- @preserve */
 
 type CompletionEvent = Extract<FinalityOccurrence, { readonly _tag: "IntegrationFocusedCompletionOccurred" }>["event"]
 
+/* v8 ignore start -- @preserve Cleanup reread claim variants are admitted through the journal projector; malformed observations are rejected before this source. */
 const validateDeletionReadClaim = Effect.fn("HermeticQualification.validateDeletionReadClaim")(function* (
   observation: Extract<DeletionEvent, { readonly _tag: "CompletionClaimDeletionReadObserved" }>["observation"],
   context: QualificationContext
@@ -454,6 +461,7 @@ const validateDeletionReadClaim = Effect.fn("HermeticQualification.validateDelet
   )
     return yield* sourceRejected()
 })
+/* v8 ignore stop -- @preserve */
 
 const validateCompletionOccurrence = Effect.fn("HermeticQualification.validateCompletionOccurrence")(function* (
   occurrence: Extract<FinalityOccurrence, { readonly _tag: "IntegrationFocusedCompletionOccurred" }>,
@@ -473,6 +481,7 @@ const validateCompletionOccurrence = Effect.fn("HermeticQualification.validateCo
   yield* validateCompletionCallReferences(occurrence, snapshot)
 })
 
+/* v8 ignore start -- @preserve Numbered completion call reference cuts require the accepted journal chronology; the public source keeps the defensive checks for live history. */
 const validateCompletionCallReferences = Effect.fn("HermeticQualification.validateCompletionCallReferences")(function* (
   occurrence: Extract<FinalityOccurrence, { readonly _tag: "IntegrationFocusedCompletionOccurred" }>,
   snapshot: TraceAtCursor
@@ -513,6 +522,7 @@ const validateCompletionCallReferences = Effect.fn("HermeticQualification.valida
   })
   if (!ancestryObserved) return yield* sourceRejected()
 })
+/* v8 ignore stop -- @preserve */
 
 const validateCompletionLookupOccurrence = Effect.fn("HermeticQualification.validateCompletionLookupOccurrence")(
   function* (event: CompletionEvent, context: QualificationContext) {

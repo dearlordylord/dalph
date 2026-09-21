@@ -256,6 +256,23 @@ const push = (request: RemotePublicationGitRequest) =>
   })
 
 describe("direct publication Git authority", () => {
+  it("fails closed when no repository is configured for admission, observation, or push", async () => {
+    const candidate = GitCommitSha.make("a".repeat(40))
+    const request = requestFor(candidate, "/tmp/direct-publication-remote.git")
+    const commandLayer = boundedScriptLayer([], [], [])
+    const layer = nodeGitDirectPublicationLayer().pipe(Layer.provide(commandLayer), Layer.provide(TestClock.layer()))
+    const admission = await Effect.runPromise(admit(request.target).pipe(Effect.provide(layer))).catch(
+      (error: unknown) => error
+    )
+    const observed = await Effect.runPromise(observe(request).pipe(Effect.provide(layer))).catch(
+      (error: unknown) => error
+    )
+    const pushed = await Effect.runPromise(push(request).pipe(Effect.provide(layer))).catch((error: unknown) => error)
+    expect(admission).toMatchObject({ _tag: "RemotePublicationObservationFailure", reason: "TargetUnreadable" })
+    expect(observed).toMatchObject({ _tag: "RemotePublicationObservationFailure", reason: "TargetUnreadable" })
+    expect(pushed).toMatchObject({ _tag: "RemotePublicationPushFailure", reason: "TransportUnavailable" })
+  })
+
   it("observes exact current, both safe fast-forward directions, compatible competition, unrelated history, and a missing branch", async () =>
     withFixture(async (fixture) => {
       const base = await commit(fixture, "base\n", "base")
@@ -353,6 +370,45 @@ describe("direct publication Git authority", () => {
     ).catch((error: unknown) => error)
     expect(failure).toMatchObject({ _tag: "RemotePublicationObservationFailure", reason: "AncestryUnavailable" })
     expect(calls.at(-1)).toEqual(["merge-base", candidate, remoteHead])
+  })
+
+  it("keeps fetch and remote-to-candidate failures typed as ancestry unavailable", async () => {
+    const candidate = GitCommitSha.make("a".repeat(40))
+    const remoteHead = GitCommitSha.make("b".repeat(40))
+    const target = requestFor(candidate, "/tmp/direct-publication-remote.git")
+    const runScript = async (responses: ReadonlyArray<GitCommandResult>) => {
+      const calls: Array<ReadonlyArray<string>> = []
+      const failure = await Effect.runPromise(
+        observe(target).pipe(
+          Effect.provide(nodeGitDirectPublicationLayer(GitRepositoryLocator.make("/tmp/repository.git"))),
+          Effect.provide(boundedScriptLayer(responses, [], calls)),
+          Effect.provide(TestClock.layer())
+        )
+      ).catch((error: unknown) => error)
+      return { calls, failure }
+    }
+    const fetched = await runScript([
+      { exitCode: 1, stderr: "", stdout: "" },
+      { exitCode: 0, stderr: "", stdout: `${remoteHead}\t${target.target.branch}` },
+      { exitCode: 1, stderr: "", stdout: "" },
+      { exitCode: 128, stderr: "fetch failed", stdout: "" }
+    ])
+    expect(fetched.failure).toMatchObject({
+      _tag: "RemotePublicationObservationFailure",
+      reason: "AncestryUnavailable"
+    })
+    const remoteToCandidate = await runScript([
+      { exitCode: 1, stderr: "", stdout: "" },
+      { exitCode: 0, stderr: "", stdout: `${remoteHead}\t${target.target.branch}` },
+      { exitCode: 1, stderr: "", stdout: "" },
+      { exitCode: 0, stderr: "", stdout: "" },
+      { exitCode: 1, stderr: "", stdout: "" },
+      { exitCode: 2, stderr: "merge-base failed", stdout: "" }
+    ])
+    expect(remoteToCandidate.failure).toMatchObject({
+      _tag: "RemotePublicationObservationFailure",
+      reason: "AncestryUnavailable"
+    })
   })
 
   it("pushes the exact candidate, recognizes up-to-date, and rejects stale non-fast-forward updates", async () =>
@@ -485,6 +541,35 @@ describe("direct publication Git authority", () => {
       ).rejects.toMatchObject({ reason: "EndpointMappingChanged" })
     }))
 
+  it("fails closed when the Git command layer cannot reserve or reconcile sender custody", async () => {
+    const unavailable = () => Effect.fail(new GitCommandInvocationFailure({ detail: "unused" }))
+    const commandLayer = Layer.succeed(GitCommand, {
+      run: unavailable,
+      runInWorktree: unavailable,
+      runBytesInWorktree: unavailable
+    })
+    const repository = GitRepositoryLocator.make("/tmp/repository.git")
+    const request = requestFor(GitCommitSha.make("a".repeat(40)), "/tmp/direct-publication-remote.git")
+    const layer = nodeGitDirectPublicationLayer(repository).pipe(
+      Layer.provide(commandLayer),
+      Layer.provide(TestClock.layer())
+    )
+    const reserved = await Effect.runPromise(
+      Effect.gen(function* () {
+        const git = yield* RemotePublicationGit
+        return yield* git.prepareSenderCustody(request, RemotePublicationAttemptOrdinal.make(1))
+      }).pipe(Effect.provide(layer))
+    ).catch((error: unknown) => error)
+    const reconciled = await Effect.runPromise(
+      Effect.gen(function* () {
+        const git = yield* RemotePublicationGit
+        return yield* git.reconcileSenderCustody(request, RemotePublicationAttemptOrdinal.make(1))
+      }).pipe(Effect.provide(layer))
+    ).catch((error: unknown) => error)
+    expect(reserved).toMatchObject({ _tag: "RemotePublicationPushFailure", reason: "SenderStopUnproven" })
+    expect(reconciled).toMatchObject({ _tag: "RemotePublicationPushFailure", reason: "SenderStopUnproven" })
+  })
+
   it("uses one decreasing observation budget across config, advertisement, and ancestry preparation", async () => {
     const candidate = GitCommitSha.make("a".repeat(40))
     const remoteHead = GitCommitSha.make("b".repeat(40))
@@ -522,7 +607,7 @@ describe("direct publication Git authority", () => {
     expect((commandResult as GitCommandResult).stdout).toContain("git version")
   })
 
-  it("reports the response deadline after proving the timed-out sender stopped", async () => {
+  it("reports a bounded timeout outcome after proving or failing closed on sender stop", async () => {
     const custody = await makeCustodyScript(
       "dalph-git-custody-stopped-",
       ['cat /proc/$$/stat > "$1"', "exec sleep 30"].join("\n")
@@ -543,7 +628,9 @@ describe("direct publication Git authority", () => {
       ).catch((error: unknown) => error)
       sender = fixtureProcessIdentity(await readFile(custody.pidFile, "utf8"))
       expect(Number.isSafeInteger(sender.pid) && sender.pid > 0 && sender.startTime.length > 0).toBe(true)
-      expect(failure).toMatchObject({ _tag: "GitCommandResponseDeadline" })
+      expect(["GitCommandResponseDeadline", "GitCommandSenderStopUnproven"]).toContain(
+        (failure as { readonly _tag?: string })._tag
+      )
       expect(await processIsAlive(sender)).toBe(false)
     } finally {
       await stopProcess(sender)

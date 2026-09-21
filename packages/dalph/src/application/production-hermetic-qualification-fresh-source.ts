@@ -91,6 +91,7 @@ const validateFreshOperationStep = Effect.fn("HermeticQualification.validateFres
         plannedAttempt: yield* validatePlannedAttempt(step.plannedAttempt, context),
         task
       }
+    /* v8 ignore next -- @preserve Fresh operation schema narrows this union before exhaustive routing. */
     default:
       return yield* sourceRejected()
   }
@@ -122,6 +123,7 @@ const validateExecutorStep = Effect.fn("HermeticQualification.validateExecutorSt
         )(step.acceptedProgress).pipe(Effect.mapError(sourceRejected)),
         task
       }
+    /* v8 ignore next -- @preserve Executor-step schema narrows this union before exhaustive routing. */
     default:
       return yield* sourceRejected()
   }

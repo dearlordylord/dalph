@@ -25,6 +25,22 @@ const subject = GitCommandCustodySubject.make({
 const stat = (pid: number, start: string) =>
   `${pid} (sender) S 1 ${pid} ${Array.from({ length: 16 }, () => "0").join(" ")} ${start}`
 
+const prepareSpawnedRecord = async (directory: string, native: CodexProcessNativeService) => {
+  const token = await Effect.runPromise(
+    Effect.flatMap(GitSenderCustody, (custody) =>
+      custody.reserve(subject).pipe(Effect.andThen(custody.begin(subject)))
+    ).pipe(Effect.provide(fileGitSenderCustodyLayer(directory, native)))
+  )
+  const custodyDirectory = join(directory, "dalph", "git-senders")
+  const [entry] = await readdir(custodyDirectory)
+  if (entry === undefined) throw new Error("sender custody record missing")
+  const path = join(custodyDirectory, entry)
+  await writeFile(
+    path,
+    JSON.stringify({ subject, token, identity: { pid: 23, startIdentity: "other" }, phase: "Spawned" })
+  )
+}
+
 it("decodes and round-trips only exact publication custody identities", () => {
   const encoded = Schema.encodeUnknownSync(GitCommandCustodySubject)(subject)
   expect(Schema.decodeUnknownSync(GitCommandCustodySubject)(encoded)).toEqual(subject)
@@ -181,5 +197,87 @@ it("reopens a durable unsent reservation after numbered intent commits without i
     expect(inspections).toBe(0)
   } finally {
     await rm(directory, { recursive: true, force: true })
+  }
+})
+
+it("fails closed for unavailable and ambiguous process census evidence", async () => {
+  const scenarios: ReadonlyArray<{
+    readonly name: string
+    readonly native: (base: CodexProcessNativeService) => CodexProcessNativeService
+    readonly succeeds?: boolean
+  }> = [
+    { name: "non-linux host", native: (base) => ({ ...base, platform: "darwin" }) },
+    { name: "missing owner uid", native: (base) => ({ ...base, readFile: async () => "Name:\tself\n" }) },
+    {
+      name: "missing child uid",
+      native: (base) => ({
+        ...base,
+        readFile: async (path) => (path === "/proc/self/status" ? "Uid:\t1000\t1000\t1000\t1000\n" : "Name:\tchild\n"),
+        readdir: async () => ["22"]
+      })
+    },
+    {
+      name: "malformed child stat",
+      native: (base) => ({
+        ...base,
+        readFile: async (path) => (path.endsWith("/status") ? "Uid:\t1000\t1000\t1000\t1000\n" : "malformed"),
+        readdir: async () => ["22"]
+      })
+    },
+    {
+      name: "zombie child",
+      native: (base) => ({
+        ...base,
+        readFile: async (path) => {
+          if (path.endsWith("/status")) return "Uid:\t1000\t1000\t1000\t1000\n"
+          if (path.endsWith("/stat")) return stat(22, "222").replace(" S ", " Z ")
+          return ""
+        },
+        readdir: async () => ["22"]
+      }),
+      succeeds: true
+    },
+    {
+      name: "unowned child",
+      native: (base) => ({
+        ...base,
+        readFile: async (path) =>
+          path === "/proc/self/status" || path.endsWith("/status")
+            ? `Uid:\t${path === "/proc/self/status" ? "1000" : "2000"}\t1000\t1000\t1000\n`
+            : stat(22, "222"),
+        readdir: async () => ["22"]
+      }),
+      succeeds: true
+    },
+    {
+      name: "disappeared child",
+      native: (base) => ({
+        ...base,
+        readFile: async (path) => {
+          if (path === "/proc/self/status") return "Uid:\t1000\t1000\t1000\t1000\n"
+          if (path.endsWith("/status")) return "Uid:\t1000\t1000\t1000\t1000\n"
+          const error = Object.assign(new Error("gone"), { code: "ENOENT" })
+          throw error
+        },
+        readdir: async () => ["22"]
+      }),
+      succeeds: true
+    }
+  ]
+  for (const scenario of scenarios) {
+    const directory = await mkdtemp(join(tmpdir(), `dalph-sender-census-${scenario.name.replaceAll(" ", "-")}-`))
+    try {
+      const native = scenario.native(nodeCodexProcessNativeService)
+      await prepareSpawnedRecord(directory, native)
+      const result = await Effect.runPromise(
+        Effect.flatMap(GitSenderCustody, (custody) => custody.reconcile(subject)).pipe(
+          Effect.provide(fileGitSenderCustodyLayer(directory, native))
+        )
+      ).catch((error: unknown) => error)
+      if (scenario.succeeds === true) expect(result).toBeUndefined()
+      else expect(result).toMatchObject({ _tag: "GitSenderCustodyFailure" })
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   }
 })

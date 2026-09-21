@@ -122,6 +122,7 @@ const validateControlledEntry = Effect.fn("HermeticQualification.validateControl
       return yield* validateUnavailableEntry(entry, context)
     case "Settlement":
       return yield* validateSettlementEntry(entry, context)
+    /* v8 ignore next -- @preserve ControlledEntry is a closed union selected by isControlledEntry above. */
     default:
       return yield* sourceRejected()
   }

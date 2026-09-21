@@ -73,6 +73,7 @@ const validateRecoveredAction = Effect.fn("HermeticQualification.validateRecover
     }
     case "ReadTaskClaim":
       return yield* validateRecoveredTaskClaimRead(action, context)
+    /* v8 ignore next -- @preserve Recovered-action schema narrows this union before exhaustive routing. */
     default:
       return yield* sourceRejected()
   }
@@ -123,6 +124,7 @@ const validateAcceptedTransition = Effect.fn("HermeticQualification.validateAcce
       if (!isQualificationTaskId(transition.taskId, context)) return yield* sourceRejected()
       yield* validateWorkflowOperationId(transition.operationId, context)
       return { _tag: transition._tag, operationId: transition.operationId, taskId: transition.taskId }
+    /* v8 ignore next -- @preserve Accepted-transition schema narrows this union before exhaustive routing. */
     default:
       return yield* sourceRejected()
   }
@@ -191,6 +193,7 @@ const validateQueuedIntegrationTransition = Effect.fn("HermeticQualification.val
           _tag: transition._tag,
           responsibility: yield* validateResponsibility(transition.responsibility, context)
         }
+      /* v8 ignore next -- @preserve Queued-transition schema narrows this union before exhaustive routing. */
       default:
         return yield* sourceRejected()
     }
@@ -290,6 +293,7 @@ const validateIntegrationRunTransition = Effect.fn("HermeticQualification.valida
         responsibility: yield* validateResponsibility(transition.responsibility, context)
       }
     }
+    /* v8 ignore next -- @preserve Integration-run schema narrows this union before exhaustive routing. */
     default:
       return yield* sourceRejected()
   }
@@ -367,6 +371,7 @@ const validateCompletionRequestTransition = Effect.fn("HermeticQualification.val
           responsibility: yield* validateResponsibility(transition.responsibility, context)
         }
       }
+      /* v8 ignore next -- @preserve Completion-transition schema narrows this union before exhaustive routing. */
       default:
         return yield* sourceRejected()
     }

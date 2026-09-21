@@ -273,7 +273,216 @@ const catchUpLocal = (directory: string, base: string, head: string, reconcile =
 
 const targetRef = "refs/heads/catch-up"
 
+const observeRemote = (responses: ReadonlyArray<GitCommandResult>) => {
+  const session = integrationFinalityFixture.qualifiedCandidate.run.session
+  const localTarget = IntegrationTarget.make({
+    ...session.integrationTarget,
+    repository: GitRepositoryLocator.make("/tmp/dalph-baseline-observe.git"),
+    ref: IntegrationTargetRef.make(targetRef)
+  })
+  const correlation = remoteBaselineCorrelationFor(
+    session.plannedAttempt.runId,
+    { ...integratorResponsibilityFactsFromCorrelation(session), integrationTarget: localTarget },
+    localTarget,
+    remotePublicationTargetForTest
+  )
+  let index = 0
+  const run = (
+    _repository: string,
+    _args: ReadonlyArray<string>
+  ): Effect.Effect<GitCommandResult, GitCommandInvocationFailure> => {
+    const response = responses[index]
+    index += 1
+    return response === undefined
+      ? Effect.fail(new GitCommandInvocationFailure({ detail: "fixture response exhausted" }))
+      : Effect.succeed(response)
+  }
+  const commands = Layer.succeed(GitCommand, {
+    run,
+    runInWorktree: run,
+    runBytesInWorktree: (repository, args) =>
+      run(repository, args).pipe(Effect.map((value) => ({ ...value, stdout: new TextEncoder().encode(value.stdout) }))),
+    runBoundedInRepository: run
+  })
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const git = yield* RemoteBaselineGit
+      return yield* git.observe(correlation)
+    }).pipe(Effect.provide(nodeGitRemoteBaselineLayer), Effect.provide(commands), Effect.result)
+  )
+}
+
+const observationResponses = (localHead: string, remoteHead: string, ancestry: ReadonlyArray<number> = []) => [
+  { exitCode: 1, stderr: "", stdout: "" },
+  { exitCode: 0, stderr: "", stdout: `${remoteHead}\trefs/heads/main\n` },
+  { exitCode: 0, stderr: "", stdout: "" },
+  { exitCode: 0, stderr: "", stdout: `${localHead}\n` },
+  ...ancestry.map((exitCode) => ({ exitCode, stderr: "", stdout: "" }))
+]
+
+const catchUpResponses = (responses: ReadonlyArray<GitCommandResult>, reconcile = false) => {
+  const session = integrationFinalityFixture.qualifiedCandidate.run.session
+  const localTarget = IntegrationTarget.make({
+    ...session.integrationTarget,
+    repository: GitRepositoryLocator.make("/tmp/dalph-baseline-catch-up.git"),
+    ref: IntegrationTargetRef.make(targetRef)
+  })
+  const correlation = remoteBaselineCorrelationFor(
+    session.plannedAttempt.runId,
+    { ...integratorResponsibilityFactsFromCorrelation(session), integrationTarget: localTarget },
+    localTarget,
+    remotePublicationTargetForTest
+  )
+  let index = 0
+  const run = (
+    _repository: string,
+    _args: ReadonlyArray<string>
+  ): Effect.Effect<GitCommandResult, GitCommandInvocationFailure> => {
+    const response = responses[index]
+    index += 1
+    return response === undefined
+      ? Effect.fail(new GitCommandInvocationFailure({ detail: "fixture response exhausted" }))
+      : Effect.succeed(response)
+  }
+  const commands = Layer.succeed(GitCommand, {
+    run,
+    runInWorktree: run,
+    runBytesInWorktree: (repository, args) =>
+      run(repository, args).pipe(Effect.map((value) => ({ ...value, stdout: new TextEncoder().encode(value.stdout) }))),
+    runBoundedInRepository: run
+  })
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const git = yield* RemoteBaselineGit
+      return yield* (reconcile ? git.reconcileCatchUp : git.catchUp)(
+        correlation,
+        GitCommitSha.make("1".repeat(40)),
+        GitCommitSha.make("2".repeat(40))
+      )
+    }).pipe(Effect.provide(nodeGitRemoteBaselineLayer), Effect.provide(commands), Effect.result)
+  )
+}
+
 describe("initial local catch-up real Git custody", () => {
+  it("classifies missing, aligned, ancestor, ahead, and diverged remote baselines", async () => {
+    const local = "1".repeat(40)
+    const remote = "2".repeat(40)
+    const common = "3".repeat(40)
+    await expect(
+      observeRemote([
+        { exitCode: 1, stderr: "", stdout: "" },
+        { exitCode: 2, stderr: "", stdout: "" }
+      ])
+    ).resolves.toMatchObject({ _tag: "Success", success: { _tag: "RemoteMissing" } })
+    await expect(observeRemote(observationResponses(local, local))).resolves.toMatchObject({
+      _tag: "Success",
+      success: { _tag: "Aligned" }
+    })
+    await expect(observeRemote(observationResponses(local, remote, [0]))).resolves.toMatchObject({
+      _tag: "Success",
+      success: { _tag: "LocalAncestor" }
+    })
+    await expect(observeRemote(observationResponses(local, remote, [1, 0]))).resolves.toMatchObject({
+      _tag: "Success",
+      success: { _tag: "LocalAhead" }
+    })
+    await expect(
+      observeRemote(
+        observationResponses(local, remote, [1, 1, 0]).map((value, index) =>
+          index === 6 ? { ...value, stdout: `${common}\n` } : value
+        )
+      )
+    ).resolves.toMatchObject({ _tag: "Success", success: { _tag: "Diverged" } })
+  })
+
+  it("retains typed failures for fetch, ancestry, and malformed baseline evidence", async () => {
+    const local = "1".repeat(40)
+    const remote = "2".repeat(40)
+    await expect(
+      observeRemote([
+        { exitCode: 1, stderr: "", stdout: "" },
+        { exitCode: 0, stderr: "", stdout: `${remote}\trefs/heads/main\n` },
+        { exitCode: 1, stderr: "", stdout: "" }
+      ])
+    ).resolves.toMatchObject({ _tag: "Failure", failure: { reason: "TargetUnreadable" } })
+    await expect(observeRemote(observationResponses(local, remote, [2]))).resolves.toMatchObject({
+      _tag: "Failure",
+      failure: { reason: "AncestryUnavailable" }
+    })
+    await expect(
+      observeRemote([
+        { exitCode: 1, stderr: "", stdout: "" },
+        { exitCode: 0, stderr: "", stdout: `${remote}\trefs/heads/main\n` },
+        { exitCode: 0, stderr: "", stdout: "" },
+        { exitCode: 0, stderr: "", stdout: `${local}\n` },
+        { exitCode: 1, stderr: "", stdout: "" },
+        { exitCode: 1, stderr: "", stdout: "" },
+        { exitCode: 1, stderr: "", stdout: "" }
+      ])
+    ).resolves.toMatchObject({ _tag: "Failure", failure: { reason: "AncestryUnavailable" } })
+    await expect(observeRemote([{ exitCode: 2, stderr: "config failed", stdout: "" }])).resolves.toMatchObject({
+      _tag: "Failure",
+      failure: { reason: "EndpointMappingChanged" }
+    })
+    await expect(
+      observeRemote([
+        { exitCode: 1, stderr: "", stdout: "" },
+        { exitCode: 0, stderr: "", stdout: "not-a-head\trefs/heads/main\n" }
+      ])
+    ).resolves.toMatchObject({ _tag: "Failure", failure: { reason: "TargetUnreadable" } })
+  })
+
+  it("reconciles concurrent catch-up outcomes and rejects unsafe local target custody", async () => {
+    const remote = "2".repeat(40)
+    await expect(
+      catchUpResponses([
+        { exitCode: 1, stderr: "", stdout: "" },
+        { exitCode: 0, stderr: "", stdout: "worktree /x\0bare\0\0" },
+        { exitCode: 0, stderr: "", stdout: "" },
+        { exitCode: 1, stderr: "", stdout: "" },
+        { exitCode: 0, stderr: "", stdout: `${remote}\n` }
+      ])
+    ).resolves.toMatchObject({ _tag: "Success", success: { _tag: "AlreadyCurrent", currentHead: remote } })
+    await expect(
+      catchUpResponses([
+        { exitCode: 1, stderr: "", stdout: "" },
+        { exitCode: 0, stderr: "", stdout: "worktree /x\0bare\0\0" },
+        { exitCode: 0, stderr: "", stdout: "" },
+        { exitCode: 1, stderr: "", stdout: "" },
+        { exitCode: 0, stderr: "", stdout: `${"3".repeat(40)}\n` }
+      ])
+    ).resolves.toMatchObject({ _tag: "Success", success: { _tag: "Rejected" } })
+    for (const responses of [
+      [{ exitCode: 0, stderr: "", stdout: "" }],
+      [
+        { exitCode: 1, stderr: "", stdout: "" },
+        { exitCode: 1, stderr: "", stdout: "" }
+      ],
+      [
+        { exitCode: 1, stderr: "", stdout: "" },
+        { exitCode: 0, stderr: "", stdout: "x\0\0" }
+      ],
+      [
+        { exitCode: 1, stderr: "", stdout: "" },
+        { exitCode: 0, stderr: "", stdout: "worktree /x\0worktree /x\0\0" }
+      ],
+      [
+        { exitCode: 1, stderr: "", stdout: "" },
+        { exitCode: 0, stderr: "", stdout: "worktree /x\0branch refs/heads/catch-up\0\0" }
+      ],
+      [
+        { exitCode: 1, stderr: "", stdout: "" },
+        { exitCode: 0, stderr: "", stdout: "\0\0" },
+        { exitCode: 1, stderr: "", stdout: "" }
+      ]
+    ] as const)
+      await expect(catchUpResponses(responses)).resolves.toMatchObject({ _tag: "Failure" })
+    await expect(catchUpResponses([{ exitCode: 0, stderr: "", stdout: `${remote}\n` }], true)).resolves.toMatchObject({
+      _tag: "Success",
+      success: { _tag: "AlreadyCurrent" }
+    })
+  })
+
   it("characterizes update-ref accepting an occupied dirty branch without updating its index", async () =>
     withFixture(async (fixture) => {
       const base = await commit(fixture, "base\n", "base")

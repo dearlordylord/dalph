@@ -15,6 +15,7 @@ import { JournalStore } from "../../../workflow-journal/store.js"
 import {
   LocalTargetCatchUpResult,
   RemoteBaselineGit,
+  RemoteBaselineFailure,
   RemoteBaselineObservation,
   type RemoteBaselineGitService,
   remoteBaselineCorrelationFor
@@ -126,14 +127,16 @@ const runProcess = Effect.fn("RemoteBaselineRecovery.runProcess")(function* (
 const makeGit = Effect.fn("RemoteBaselineRecovery.makeGit")(function* (
   currentLocalHead: Ref.Ref<GitCommitSha>,
   options?: {
-    readonly observation?: "aligned" | "ancestor" | "diverged"
-    readonly catchUp?: "applied" | "lost-applied" | "lost-unapplied"
+    readonly observation?: "aligned" | "ancestor" | "diverged" | "unavailable"
+    readonly catchUp?: "applied" | "lost-applied" | "lost-unapplied" | "unavailable"
+    readonly reconcile?: "unavailable" | "deadline"
   }
 ) {
   const calls = yield* Ref.make(emptyCalls())
   const update = (f: (current: Calls) => Calls) => Ref.update(calls, f)
   const observation = options?.observation ?? "ancestor"
   const catchUp = options?.catchUp ?? "applied"
+  const reconcile = options?.reconcile
   const git = RemoteBaselineGit.of({
     observe: () =>
       update((current) => ({
@@ -142,13 +145,15 @@ const makeGit = Effect.fn("RemoteBaselineRecovery.makeGit")(function* (
         timeline: [...current.timeline, "observe"]
       })).pipe(
         Effect.andThen(
-          Effect.succeed<RemoteBaselineObservation>(
-            observation === "aligned"
-              ? RemoteBaselineObservation.cases.Aligned.make({ localHead, remoteHead: localHead })
-              : observation === "diverged"
-                ? RemoteBaselineObservation.cases.Diverged.make({ localHead, remoteHead })
-                : RemoteBaselineObservation.cases.LocalAncestor.make({ localHead, remoteHead })
-          )
+          observation === "unavailable"
+            ? Effect.fail(new RemoteBaselineFailure({ reason: "TargetUnreadable" }))
+            : Effect.succeed<RemoteBaselineObservation>(
+                observation === "aligned"
+                  ? RemoteBaselineObservation.cases.Aligned.make({ localHead, remoteHead: localHead })
+                  : observation === "diverged"
+                    ? RemoteBaselineObservation.cases.Diverged.make({ localHead, remoteHead })
+                    : RemoteBaselineObservation.cases.LocalAncestor.make({ localHead, remoteHead })
+              )
         )
       ),
     catchUp: (_correlation, expectedLocalHead, observedRemoteHead) =>
@@ -163,6 +168,7 @@ const makeGit = Effect.fn("RemoteBaselineRecovery.makeGit")(function* (
             if (current !== expectedLocalHead) {
               return LocalTargetCatchUpResult.cases.Rejected.make({ observedHead: current })
             }
+            if (catchUp === "unavailable") return yield* new RemoteBaselineFailure({ reason: "TargetUnreadable" })
             if (catchUp === "lost-unapplied") return yield* Effect.die("process lost before catch-up applied")
             yield* Ref.set(currentLocalHead, observedRemoteHead)
             if (catchUp === "lost-applied") return yield* Effect.die("process lost after catch-up applied")
@@ -177,17 +183,21 @@ const makeGit = Effect.fn("RemoteBaselineRecovery.makeGit")(function* (
         timeline: [...current.timeline, "reconcile-catch-up"]
       })).pipe(
         Effect.andThen(
-          Effect.gen(function* () {
-            const current = yield* Ref.get(currentLocalHead)
-            if (current === observedRemoteHead) {
-              return LocalTargetCatchUpResult.cases.AlreadyCurrent.make({ currentHead: current })
-            }
-            if (current !== expectedLocalHead) {
-              return LocalTargetCatchUpResult.cases.Rejected.make({ observedHead: current })
-            }
-            yield* Ref.set(currentLocalHead, observedRemoteHead)
-            return LocalTargetCatchUpResult.cases.Applied.make({ newHead: observedRemoteHead })
-          })
+          reconcile === "deadline"
+            ? Effect.fail(new RemoteBaselineFailure({ reason: "ResponseDeadline" }))
+            : reconcile === "unavailable"
+              ? Effect.fail(new RemoteBaselineFailure({ reason: "TargetUnreadable" }))
+              : Effect.gen(function* () {
+                  const current = yield* Ref.get(currentLocalHead)
+                  if (current === observedRemoteHead) {
+                    return LocalTargetCatchUpResult.cases.AlreadyCurrent.make({ currentHead: current })
+                  }
+                  if (current !== expectedLocalHead) {
+                    return LocalTargetCatchUpResult.cases.Rejected.make({ observedHead: current })
+                  }
+                  yield* Ref.set(currentLocalHead, observedRemoteHead)
+                  return LocalTargetCatchUpResult.cases.Applied.make({ newHead: observedRemoteHead })
+                })
         )
       )
   })
@@ -343,6 +353,26 @@ const exerciseRecoveryCuts = Effect.fn("RemoteBaselineRecovery.exerciseCuts")(fu
       const recovery = yield* makeGit(local)
       expect((yield* open((store) => runProcess(store, recovery.git)))._tag).toBe("Retained")
       yield* assertNoRemoteEffects(recovery.calls)
+    })
+  )
+
+  yield* fresh((open) =>
+    Effect.gen(function* () {
+      const local = yield* Ref.make(localHead)
+      const unavailable = yield* makeGit(local, { observation: "unavailable" })
+      expect((yield* open((store) => runProcess(store, unavailable.git)))._tag).toBe("Retained")
+    })
+  )
+
+  yield* fresh((open) =>
+    Effect.gen(function* () {
+      const local = yield* Ref.make(localHead)
+      const first = yield* makeGit(local, { catchUp: "unavailable" })
+      expect((yield* open((store) => runProcess(store, first.git)))._tag).toBe("CatchUpPending")
+      const recovery = yield* makeGit(local, { reconcile: "deadline" })
+      expect((yield* open((store) => runProcess(store, recovery.git)))._tag).toBe("CatchUpPending")
+      const retained = yield* makeGit(local, { reconcile: "unavailable" })
+      expect((yield* open((store) => runProcess(store, retained.git)))._tag).toBe("Retained")
     })
   )
 })

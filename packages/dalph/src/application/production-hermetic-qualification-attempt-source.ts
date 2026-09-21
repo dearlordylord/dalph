@@ -158,6 +158,7 @@ export const sourceRejectedWithTag = (transitionTag: HermeticQualificationDiagno
 /** Adds only a closed workflow tag when a lower-level source check has not already identified one. */
 export const sourceRejectedAt = (transitionTag: string) => (rejection: HermeticQualificationSourceRejected) => {
   const safeTag = rejection.transitionTag ?? diagnosticTag(transitionTag)
+  /* v8 ignore next -- @preserve Every public transition diagnostic carries a closed tag; this is a foreign-error fallback. */
   return safeTag === undefined ? rejection : sourceRejectedWithTag(safeTag)
 }
 const workflowOperationUuidVersion = 7

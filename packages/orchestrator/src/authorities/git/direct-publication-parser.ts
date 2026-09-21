@@ -32,6 +32,7 @@ export const parseAdvertisedHead = (
     return Effect.fail(new RemotePublicationObservationFailure({ reason: "TargetUnreadable", target }))
   }
   const line = lines[0]
+  /* v8 ignore next -- @preserve Filtering non-empty lines makes an absent first line unreachable. */
   if (line === undefined) {
     return Effect.fail(new RemotePublicationObservationFailure({ reason: "TargetUnreadable", target }))
   }
