@@ -59,8 +59,8 @@
   },
   "packages/dalph/src/cassettes/recorded.ts": {
     "complexity": {
-      "count": 1,
-      "justification": "verifyRecordedCassetteRoundTrip maintains one occurrence-by-occurrence comparison of source and reconstructed recorded histories, including cold-prefix recovery and semantic projections. Its branches preserve that single chronology and are not independent cassette policies."
+      "count": 2,
+      "justification": "verifyRecordedCassetteRoundTrip keeps source and reconstructed cassette histories aligned occurrence by occurrence through cold-prefix recovery and semantic projections, while lyricForOtherRecordedEntry preserves one exhaustive event-family presentation dispatch. Their branches belong to these chronology and classification boundaries rather than independent cassette policies."
     }
   },
   "packages/dalph/src/qualification/live-qualification-evidence.ts": {
@@ -169,8 +169,8 @@
   },
   "packages/orchestrator/src/workflow-journal/record-evidence.ts": {
     "complexity": {
-      "count": 2,
-      "justification": "After separating correlation families, exact predecessor lookup, and immutable bucket publication, integratorSessionIdsOf keeps one bounded inventory of the five session locations named by an occurrence, including predecessor/successor membership and deduplication. promotionRequestId keeps the ordered choice among four existing promotion-identity paths; fragmenting their presence checks would obscure precedence rather than separate an independent decision."
+      "count": 3,
+      "justification": "attemptIdsOf and integratorSessionIdsOf retain every supported identity location for one journal occurrence, while promotionRequestId selects the ordered direct-publication exclusion and legacy promotion-correlation paths before immutable indexing. The branches implement one evidence-indexing boundary and must stay together to preserve precedence."
     }
   },
   "packages/orchestrator/src/workflow/claim-authority-history.ts": {
@@ -210,7 +210,8 @@
   },
   "packages/orchestrator/src/workflow/protocols/disposition-cleanup/provenance.ts": {
     "complexity": {
-      "count": 6
+      "count": 8,
+      "justification": "Cleanup provenance validation keeps exact durable witness chronology across settlement identity, replacement/restart/claim/read witnesses, worktree and branch observations, candidate cleanup, and settled-worktree checks. These predicates jointly fail closed on one disposition proof; splitting them would separate related witness clauses without reducing policy complexity."
     }
   },
   "packages/orchestrator/src/workflow/protocols/disposition-cleanup/worktree.ts": {
@@ -281,6 +282,132 @@
     "complexity": {
       "count": 1,
       "justification": "plannedAttemptExecutorSuspensionIsAuthorized retains one chronological authority proof across the accepted Executing report, exact passive observation, cancellation, and position ordering; these clauses jointly define the fail-closed suspension boundary rather than separate workflow choices."
+    }
+  },
+  "packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.ts": {
+    "complexity": {
+      "count": 3,
+      "justification": "explanationAfterPrerequisitesFor, absentIntegratorProgressTransitionsFor, and qualifiedIntegratorProgressTransitionsFor enumerate ordered frontier explanations and Integrator actions across prerequisite, retained, and qualified boundaries. Their branches encode one causal frontier decision table, including the retained-publication guard, rather than separate policies."
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/direct-publication/admission.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "admitRemotePublicationTarget validates one direct-publication admission from endpoint mapping and target identity through baseline and branch proof before issuing the request. Its branches are the fail-closed remote-target boundary."
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/direct-publication/state.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "deriveRemotePublicationState reconstructs one direct-publication state from ordered intended, admission, observation, push, retained, and success facts, rejecting duplicate, stale, or mismatched chronology. Its branches jointly define the protocol reducer."
+    }
+  },
+  "packages/orchestrator/src/workflow/registry/occurrence-projection.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "projectHistoricalOccurrence maps each registered journal event family to its historical occurrence while preserving exact occurrence identity, correlation, and the closed unknown fallback. Its branches form one exhaustive registry projection boundary."
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/integration-delivery-action-adapter.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "executeAdvancedIntegrationAction sequences one advanced integration action through journaled proposal, finality, publication, cleanup, and error outcomes. Its alternatives are one lifecycle boundary that preserves durable ordering."
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/direct-publication/baseline-protocol-engine.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "establishRemoteBaseline runs one baseline-establishment chronology from local and remote reads through ancestry classification, intent/outcome recording, and compare-and-set catch-up. Its branches preserve one durable baseline boundary."
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/direct-publication/protocol-engine.ts": {
+    "complexity": {
+      "count": 2,
+      "justification": "observationResult maps one remote-publication read and ancestry observation into the typed result while preserving target, candidate, and failure distinctions; runRemotePublication sequences one publication attempt from admission through push outcome and durable retained/success evidence. Their branches form one direct-publication protocol boundary."
+    }
+  },
+  "packages/contracts/src/git-locator.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "hasInvalidRemotePublicationEndpointShape validates one remote-publication target endpoint, branch, and ref shape, rejecting unsafe or ambiguous locator combinations before authority execution. All clauses belong to that single schema boundary."
+    }
+  },
+  "packages/orchestrator/src/authorities/git/remote-baseline.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "observe performs one remote-baseline read with pinned endpoint resolution, bounded ls-remote, and typed target and ancestry failure mapping. Its branches preserve the single baseline-observation contract."
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/direct-publication/baseline-state.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "deriveRemoteBaselineState reconstructs one baseline protocol state from ordered intent, observation, and catch-up events, enforcing correlation, target, local-head, and outcome consistency. All branches are one fail-closed reducer."
+    }
+  },
+  "packages/orchestrator/src/authorities/git/direct-publication-command.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "parseRewriteRules parses one Git configuration rewrite chain, selecting the exact endpoint mapping while rejecting malformed, cyclic, or ambiguous rewrites. Its branches jointly enforce one pinned-endpoint boundary."
+    }
+  },
+  "packages/dalph/src/application/git-sender-custody.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "census enumerates one sender-custody process set by Linux identity, UID, token, process state, and absent-process handling. These branches jointly prove exact local child ownership before cleanup."
+    }
+  },
+  "packages/dalph/src/application/production-hermetic-qualification-history.ts": {
+    "complexity": {
+      "count": 5,
+      "justification": "historicalDerivedOperationIds, validateHistoricalCorrelation, validateRemoteBaselineOccurrence, validateHistoricalResult, and validateOccurrence validate one authored historical transition against exact operation IDs, correlation, baseline and publication results, and typed transition families. Their branches preserve fail-closed evidence binding across one qualification-history boundary."
+    }
+  },
+  "packages/dalph/src/application/production-hermetic-qualification-status-source.ts": {
+    "complexity": {
+      "count": 2,
+      "justification": "validateControlledEntry and validateDependencyWaitEntry validate controlled qualification status entries against typed lifecycle, dependency, and evidence facts. Their alternatives keep one status-source acceptance boundary."
+    }
+  },
+  "packages/dalph/src/application/production-hermetic-qualification-fixture-source.ts": {
+    "complexity": {
+      "count": 2,
+      "justification": "validateTask and validateGraphFactRows validate one hermetic qualification fixture task identity and graph rows, including required fields and dependency relationships. Their branches jointly reject malformed fixture facts before execution."
+    }
+  },
+  "packages/dalph/src/cassettes/target-promotion-protocol-cassette.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "preparedPromotion builds one target-promotion cassette chronology from graph and specification reads through claim, integration, stale/quarantine, and cleanup evidence. Its branches keep the declared fixture scenario coherent."
+    }
+  },
+  "packages/orchestrator/src/authorities/git/direct-publication.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "observe drives one remote-publication observation over pinned endpoint resolution, candidate and remote ancestry, bounded fetch, and typed failures. Its branches jointly implement the provider-neutral publication authority."
+    }
+  },
+  "packages/dalph/src/application/production-hermetic-qualification-proposal-source.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "validateIntegrationRunTransition validates one accepted integration transition family, deriving exact responsibility and correlation for Integrator, baseline, publication, promotion, and quarantine. Its branches collectively enforce one hermetic qualification transition boundary."
+    }
+  },
+  "packages/orchestrator/src/authorities/git/command.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "runBoundedCommand owns one bounded Git child lifecycle from sender custody and process spawn through output deadlines, interruption, termination proof, and cleanup. Its branches jointly preserve fail-closed process custody."
+    }
+  },
+  "packages/orchestrator/src/authorities/git/direct-publication-parser.ts": {
+    "complexity": {
+      "count": 3,
+      "justification": "parseAdvertisedHead, classifyAncestry, and parsePushResult parse one direct-publication Git transcript, preserving exact branch/ref/SHA shape, ancestry classification, push status, throttle and authentication semantics, and typed rejection. Their dependent branches form one parser boundary."
+    }
+  },
+  "packages/dalph/src/cassettes/delivery-story-capstone.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "deliveryStoryCapstoneAuthoredCassette constructs one maintained 22-beat delivery chronology across graph reads, claims, integration, publication, cleanup, and finality. Its branches preserve the scenario declaration and evidence order."
     }
   }
 }
