@@ -852,3 +852,27 @@ The fresh admitted preflight with the same candidate base
 input, qualification `passed`, and zero failed stages. The required fresh full
 gate and the supervised disposable hosted S1 remain outstanding. The
 no-extra-remote-read rule and runtime implementation are unchanged.
+
+### Second full-gate formal finding and repair, 2026-09-21 07:03–07:16 UTC
+
+A fresh local full gate ran as `20dd9742-c51e-4a93-8375-433fbff6df95` against
+candidate `e92a8edcfba6986eadec4d9f7b835ac49ee88644`. Preflight and the earlier
+formal profiles passed, including the accepted-result sampled model. The
+integration-finality sampled model then found seed `0x2b45d`: after a claim was
+derived and made current, the allowed later contradiction set
+`publicationContradictionObserved`, which made
+`completionClaimRequiresRemotePublicationProof` fail solely because that
+invariant also required the flag to remain false. The accepted chronology
+explicitly permits that later evidence and requires it to block unsent finality
+rather than erase the historical proof or claim. The retained failure log is
+`.scratch/quality-gates/20dd9742-c51e-4a93-8375-433fbff6df95/logs/07762ead-15b4-4c98-98e3-ed296851bbcf.log`; custody stopped and the gate remained `UNPROVEN`.
+
+Commit `4219088d4` (`fix: retain publication proof after contradiction`) removes
+only that overstrict invariant conjunct. The separate
+`publicationContradictionBlocksUnsentFinality` invariant continues to forbid
+completion intent, evidence, or requests after the contradiction. Seed `0x2b45d`
+now passes 10,000/10,000 traces; integration-finality deterministic and
+negative tests pass 30/30 and 23/23, and formal controls pass 133/133. The
+workspace-state child log in the failed full-gate record is empty and belongs
+to an expected negative nested resume-control fixture; the parent control stage
+passed. No runtime or no-extra-remote-read behavior changed.
