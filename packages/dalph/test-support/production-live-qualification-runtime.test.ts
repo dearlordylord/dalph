@@ -490,6 +490,7 @@ const completedEvidenceObservationFixture = () => {
       integrationTargetCount: 1,
       journal,
       targetHead: candidateCommit,
+      remotePublicationHead: candidateCommit,
       taskWorktreeCount: 1
     },
     processId: ProductionLiveQualificationProcessId.make(307),
@@ -754,7 +755,12 @@ describe("#307 production live qualification runtime", () => {
         "IntegratorRequest",
         "IntegratorGitReadHead"
       ],
-      controllerFinal: ["GitReadTargetHead", "TaskTrackerReadGraph", "TaskTrackerReadClaim"],
+      controllerFinal: [
+        "GitReadTargetHead",
+        "GitReadPublicationHead",
+        "TaskTrackerReadGraph",
+        "TaskTrackerReadClaim"
+      ],
       process: ["Spawn", "Exit"]
     })
     expect(productionLiveQualificationOperationCounts(["Read", "Read"], ["RunSelected"], boundaries)).toEqual(
@@ -766,6 +772,7 @@ describe("#307 production live qualification runtime", () => {
         { tag: "Responses.ExecutorGitReadHead", count: 1 },
         { tag: "Responses.IntegratorGitReadHead", count: 1 },
         { tag: "ControllerFinal.GitReadTargetHead", count: 1 },
+        { tag: "ControllerFinal.GitReadPublicationHead", count: 1 },
         { tag: "ControllerFinal.TaskTrackerReadGraph", count: 1 },
         { tag: "ControllerFinal.TaskTrackerReadClaim", count: 1 }
       ])
@@ -787,7 +794,16 @@ describe("#307 production live qualification runtime", () => {
         const fs = yield* FileSystem.FileSystem
         expect(fixture.configuration.plannedAttemptBaseSha).toBe(fixture.initialTargetCommit)
         expect(fixture.configuration.claimOwner).toBe("dalph:q:9d733827aa1df60e")
-        expect(fixture.localManifest.resources).toHaveLength(11)
+        expect(fixture.localManifest.resources).toHaveLength(12)
+        expect(fixture.publicationRepository).not.toBe(fixture.configuration.repository)
+        expect(fixture.configuration.remotePublicationTarget).toEqual({
+          branch: "refs/heads/master",
+          endpoint: fixture.publicationRepository
+        })
+        expect(JSON.parse(yield* fs.readFileString(fixture.configurationPath)).remotePublicationTarget).toEqual({
+          branch: "refs/heads/master",
+          endpoint: fixture.publicationRepository
+        })
         expect(fixture.codexHome).not.toBe(fixture.configuration.codexExecutorPrivateStateDirectory)
         const config = yield* fs.readFileString(`${fixture.codexHome}/config.toml`)
         expect(config).toContain('base_url = "http://127.0.0.1:4307/v1"')

@@ -126,6 +126,8 @@ export interface ProductionLiveQualificationFinalFacts {
   readonly journal: ReadonlyArray<JournalRecord>
   readonly github: unknown
   readonly targetHead: GitCommitSha
+  /** Independent read from the configured publication repository after the child exits. */
+  readonly remotePublicationHead: GitCommitSha
 }
 
 export type ProductionLiveQualificationStage =

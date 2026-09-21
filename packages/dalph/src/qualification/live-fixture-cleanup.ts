@@ -54,6 +54,7 @@ const OriginalRegularFileIdentity = ProductionLiveLocalIdentity.check(
 /** Each variant names one exact Q leaf; no variant grants authority over a parent or matching prefix. */
 export const ProductionLiveLocalResource = Schema.TaggedUnion({
   Repository: localResourceFields,
+  PublicationRepository: localResourceFields,
   JournalDatabase: localResourceFields,
   EvidenceRoot: localResourceFields,
   AttemptWorktreeRoot: localResourceFields,

@@ -180,7 +180,8 @@ const validInput = Effect.fn("LiveEvidenceTest.validInput")(function* () {
       integration: { sessionId, runOrdinal },
       promotionRequestId,
       initialTargetCommit: h,
-      finalTargetCommit: m
+      finalTargetCommit: m,
+      remotePublicationHead: m
     },
     journal: {
       positions: [JournalPosition.make(1), JournalPosition.make(2)],
@@ -219,7 +220,12 @@ const validInput = Effect.fn("LiveEvidenceTest.validInput")(function* () {
         "IntegratorRequest",
         "IntegratorGitReadHead"
       ],
-      controllerFinal: ["GitReadTargetHead", "TaskTrackerReadGraph", "TaskTrackerReadClaim"],
+      controllerFinal: [
+        "GitReadTargetHead",
+        "GitReadPublicationHead",
+        "TaskTrackerReadGraph",
+        "TaskTrackerReadClaim"
+      ],
       process: ["Spawn", "Exit"]
     },
     operationCounts: [
@@ -238,6 +244,7 @@ const validInput = Effect.fn("LiveEvidenceTest.validInput")(function* () {
       { tag: "Responses.IntegratorRequest", count: 2 },
       { tag: "Responses.IntegratorGitReadHead", count: 1 },
       { tag: "ControllerFinal.GitReadTargetHead", count: 1 },
+      { tag: "ControllerFinal.GitReadPublicationHead", count: 1 },
       { tag: "ControllerFinal.TaskTrackerReadGraph", count: 1 },
       { tag: "ControllerFinal.TaskTrackerReadClaim", count: 1 },
       { tag: "Process.Spawn", count: 1 },
@@ -442,7 +449,8 @@ it.effect("Alice's exact H C M T and branded integration and promotion identitie
     for (const delivery of [
       { ...input.delivery, candidateParents: [c, h] },
       { ...input.delivery, initialTargetCommit: sha("8") },
-      { ...input.delivery, finalTargetCommit: sha("8") }
+      { ...input.delivery, finalTargetCommit: sha("8") },
+      { ...input.delivery, remotePublicationHead: sha("8") }
     ]) {
       expect(yield* makeProductionLiveQualificationEvidence({ ...input, delivery }).pipe(Effect.flip)).toEqual(
         qualificationFailed("EvidenceValidation")
