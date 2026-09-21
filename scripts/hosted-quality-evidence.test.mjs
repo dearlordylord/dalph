@@ -45,7 +45,7 @@ const fixture = () => {
         ? Array.from(
             { length: deliveryRepeatabilityDefaultIterations },
             (_value, index) =>
-              `delivery repeatability iteration ${index + 1}/${deliveryRepeatabilityDefaultIterations} PASS ` +
+              `delivery repeatability fresh iteration ${index + 1}/${deliveryRepeatabilityDefaultIterations} PASS ` +
               `elapsedMs=1 occurrenceCount=${deliveryRepeatabilityExpectedOccurrenceCount} ` +
               `acceptedOrderDigest=${deliveryRepeatabilityExpectedAcceptedOrderDigest} candidateSha=${candidateSha}`
           ).join("\n") +
@@ -347,9 +347,9 @@ void test("requires twenty ordered delivery digests and accepts zero or one prod
       ),
     (f) =>
       f.rewriteLog(0, (log) =>
-        log.replace("delivery repeatability iteration 1/20", "delivery repeatability iteration 2/20")
+        log.replace("delivery repeatability fresh iteration 1/20", "delivery repeatability fresh iteration 2/20")
       ),
-    (f) => f.rewriteLog(0, (log) => `${log}delivery repeatability iteration malformed\n`)
+    (f) => f.rewriteLog(0, (log) => `${log}delivery repeatability fresh iteration malformed\n`)
   ]
   const [zeroSummary, duplicateSummary, reordered, malformed] = cases
   const valid = fixture()
