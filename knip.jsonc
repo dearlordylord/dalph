@@ -1,0 +1,18 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    "packages/dalph": {
+      "entry": [
+        // Spawned by packages/dalph/src/application/node-main.integration.test.ts.
+        "bin/node-main-signal-fixture.ts",
+        // Spawned by the production hermetic qualification integration and cleanup tests.
+        "bin/production-hermetic-qualification.ts",
+        // Spawned by packages/dalph/src/application/production-public-recovery.integration.test.ts.
+        "bin/production-public-recovery-codex-fixture.ts",
+        "bin/production-public-recovery-git-fixture.ts",
+        // Spawned by packages/dalph/src/application/production-host.test.ts.
+        "bin/production-restart-host-fixture.ts"
+      ]
+    }
+  }
+}
