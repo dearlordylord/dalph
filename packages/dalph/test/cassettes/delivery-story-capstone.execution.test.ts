@@ -945,12 +945,12 @@ it.effect(
         const paidG2BeforeFinality = checkpoint === "IntegrationQuarantined"
         expect(run.activationOrdinals).toEqual(paidG2BeforeFinality ? [1, 2, 3, 4] : [1, 2, 3])
         const expectedReadPositions = {
-          TargetPromotionAttemptIntended: [39, 47, 82],
-          TargetPromotionStale: [40, 46, 81],
-          IntegrationQuarantined: [41, 46, 81, 83],
-          IntegrationQuarantineDirectionApplied: [42, 46, 81],
-          TargetLineageObserved: [44, 48, 83],
-          IntegratorSuccessorSessionFixed: [45, 49, 83]
+          TargetPromotionAttemptIntended: [46, 54, 92],
+          TargetPromotionStale: [47, 53, 91],
+          IntegrationQuarantined: [48, 53, 91, 93],
+          IntegrationQuarantineDirectionApplied: [49, 53, 91],
+          TargetLineageObserved: [51, 55, 93],
+          IntegratorSuccessorSessionFixed: [52, 56, 93]
         } as const
         const graphReads = new Map<JournalPosition, { activationOrdinal: number; cause: string }>()
         for (const capture of run.observationCaptures) {
@@ -978,12 +978,12 @@ it.effect(
               ]
         )
         const expectedSuccessorPositions = {
-          TargetPromotionAttemptIntended: [44, 45, 49, 50],
-          TargetPromotionStale: [43, 44, 48, 49],
-          IntegrationQuarantined: [39, 44, 48, 49],
-          IntegrationQuarantineDirectionApplied: [39, 40, 48, 49],
-          TargetLineageObserved: [39, 40, 50, 51],
-          IntegratorSuccessorSessionFixed: [39, 40, 42, 43]
+          TargetPromotionAttemptIntended: [51, 52, 56, 57],
+          TargetPromotionStale: [50, 51, 55, 56],
+          IntegrationQuarantined: [46, 51, 55, 56],
+          IntegrationQuarantineDirectionApplied: [46, 47, 55, 56],
+          TargetLineageObserved: [46, 47, 57, 58],
+          IntegratorSuccessorSessionFixed: [46, 47, 49, 50]
         } as const
         const successor = eventRecords(run, "IntegratorSuccessorSessionFixed")[0]
         expect(successor).toBeDefined()
@@ -1001,10 +1001,10 @@ it.effect(
         expect(predecessorPromotionIntents.map(({ event, position }) => [position, event.attemptOrdinal])).toEqual(
           checkpoint === "TargetPromotionAttemptIntended"
             ? [
-                [37, 1],
-                [42, 2]
+                [44, 1],
+                [49, 2]
               ]
-            : [[37, 1]]
+            : [[44, 1]]
         )
         expect(resumedOccurrences.slice(0, 4).map(({ _tag }) => _tag)).toEqual([
           "DalphSelects",
@@ -3749,14 +3749,14 @@ it.effect(
     Effect.gen(function* () {
       const run = yield* runControlledDeliveryCassette(controlledDeliveryCassetteCatalog.controlledDs01ThroughDs13)
       expect(run.cassette).toMatchObject({
-        acceptedOrderDigest: "6df6b575b41d4ea07d3ac083725cd54b0ddf29fb925936dfd7f1c85a5d90b5c8",
+        acceptedOrderDigest: "be5765449e7304e0a71c23a9d3ec24b4ea881a9bef125bfdb369f3d687485197",
         acceptedSourceSha: "1e6b3f44bacc3cae6945823abc3d3f92e2a7a48d",
-        occurrenceCount: 1_010,
+        occurrenceCount: 1_015,
         readinessProfile: "R0ThroughR11",
         schemaVersion: 1,
         stop: "DS13Checkpoint"
       })
-      expect(run.consumption).toEqual({ _tag: "AcceptedOccurrenceOrderConsumed", occurrenceCount: 1_010 })
+      expect(run.consumption).toEqual({ _tag: "AcceptedOccurrenceOrderConsumed", occurrenceCount: 1_015 })
       const { ds09, ds10, ds11, ds12, ds13 } = run.characterization
       const { ds01, ds02, ds03, ds04, ds05, ds06, ds07 } = ds09.beforeLoss
       const ds01Publication = ds01.snapshot.publications.find(
@@ -4028,19 +4028,19 @@ it.effect(
       const run = yield* runControlledDeliveryCassette(controlledDeliveryCassetteCatalog.controlledDs01ThroughDs13)
       const actual = run.characterization.occurrenceEvidence.observedOccurrences
       expect(run.cassette).toMatchObject({
-        acceptedOrderDigest: "6df6b575b41d4ea07d3ac083725cd54b0ddf29fb925936dfd7f1c85a5d90b5c8",
+        acceptedOrderDigest: "be5765449e7304e0a71c23a9d3ec24b4ea881a9bef125bfdb369f3d687485197",
         acceptedSourceSha: "1e6b3f44bacc3cae6945823abc3d3f92e2a7a48d",
-        occurrenceCount: 1_010,
+        occurrenceCount: 1_015,
         readinessProfile: "R0ThroughR11",
         schemaVersion: 1,
         stop: "DS13Checkpoint"
       })
-      expect(run.consumption).toEqual({ _tag: "AcceptedOccurrenceOrderConsumed", occurrenceCount: 1_010 })
+      expect(run.consumption).toEqual({ _tag: "AcceptedOccurrenceOrderConsumed", occurrenceCount: 1_015 })
 
       const missing = consumeControlledAcceptedOccurrenceOrder(run.cassette.occurrences, actual.slice(0, -1))
       expect(missing._tag).toBe("OccurrenceOrderMismatch")
       if (missing._tag === "OccurrenceOrderMismatch") {
-        expect(missing.mismatch).toMatchObject({ _tag: "UnconsumedExpectedOccurrence", position: 1_010 })
+        expect(missing.mismatch).toMatchObject({ _tag: "UnconsumedExpectedOccurrence", position: 1_015 })
       }
 
       const finalOccurrence = actual.at(-1)
@@ -4051,7 +4051,7 @@ it.effect(
       ])
       expect(unexpected._tag).toBe("OccurrenceOrderMismatch")
       if (unexpected._tag === "OccurrenceOrderMismatch") {
-        expect(unexpected.mismatch).toMatchObject({ _tag: "UnexpectedOccurrence", position: 1_011 })
+        expect(unexpected.mismatch).toMatchObject({ _tag: "UnexpectedOccurrence", position: 1_016 })
       }
 
       const substituted = actual.map((occurrence, index) =>
