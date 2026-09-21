@@ -7,7 +7,7 @@ const DEFAULT_TERMINATION_GRACE = 5 * SECOND
  * hosted post-preflight jobs.  The candidate and reviewed Base are inputs to a
  * plan; this identity names the stage policy that interpreted those inputs.
  */
-export const qualityGatePolicyIdentity = Object.freeze({ id: "dalph-quality-stage-algebra", revision: 2, version: 1 })
+export const qualityGatePolicyIdentity = Object.freeze({ id: "dalph-quality-stage-algebra", revision: 3, version: 1 })
 
 /**
  * A clean hosted runner reconstructs production artifacts after installing the
@@ -53,10 +53,16 @@ export const recordedCatalogQualityGate = Object.freeze({
   timeout: 7 * 60 * SECOND
 })
 
+// Issue #401's 90-sample contention campaign observed 30/30 timeouts at the
+// 60-second bound under saturation and 8/30 under moderate load. Keep the
+// larger deadline finite so custody and fail-closed timeout behavior remain
+// unchanged while allowing the measured source audit headroom to complete.
+const CAPABILITY_REGISTRATION_TIMEOUT = 120 * SECOND
+
 export const capabilityRegistrationQualityGate = Object.freeze({
   args: Object.freeze(["test:capability-registration"]),
   name: "capability registration",
-  timeout: 60 * SECOND
+  timeout: CAPABILITY_REGISTRATION_TIMEOUT
 })
 
 /** The complexity policy compares its registry with the exact full-gate base. */
