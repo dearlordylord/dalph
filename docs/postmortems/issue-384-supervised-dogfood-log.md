@@ -711,3 +711,37 @@ test. Both regression tests pass. Evidence is retained in
 `/tmp/issue384-public-mapping-0107.log` and
 `/tmp/issue384-public-retained-cause-0109.log`. The next bounded public run uses
 fresh artifacts containing both repairs; its outcome is not yet claimed.
+
+### Scoped follow-up record: authored capstone chronology
+
+**Status:** proposed and documented locally; no external issue or follow-up has
+been opened. The current #384 candidate remains blocked until this record is
+either completed in a new attempt or explicitly superseded by a maintainer.
+
+**Owner and scope:** the #384 orchestrator owns the maintained authored cassette
+and its support helpers in `packages/dalph/src/cassettes/`. The follow-up may
+change that cassette, its support builder, and the focused capstone execution
+test. It may not change publication order, tracker/Git authorities, the
+no-extra-remote-read rule, or the production CLI to make the cassette pass.
+
+**Starting evidence:** the candidate at merge commit `e9e1667fc8bf3f81f3f48e9ff7ac08b59733d266`
+passes `check:fast`, the controlled public S1, and the production S7 cutoff
+test. The capstone reaches the F phase after the structural chronology repair.
+At the G boundary after terminal G, runtime selects `ReadTaskClaim(G)` while
+the cassette expects `ReadTrackerGraph`. The earlier F correlation was corrected
+from `464/465/473` to `536/537/543`; the G tuple was not accepted as evidence
+because the preceding operation order is still wrong.
+
+**Next experiment:** construct one structural G-phase transcript from the
+runtime's observed order (`terminal G -> claim G -> graph G -> integration`),
+derive its correlation positions from that transcript, and run the focused
+capstone execution test once in a fresh exact-Base worktree. Do not repair
+successive absolute positions after a new mismatch; a second mismatch records a
+new obstruction and stops the attempt.
+
+**Acceptance and stop condition:** the focused capstone test must pass, the
+support file must remain under the repository's 420-line limit, and the
+maintained catalog/Lab entry must still render the same accepted story. If that
+single structural experiment fails, preserve its log and open a narrower
+follow-up or report the capstone blocked again; do not run baseline/full gates
+or hosted dogfood against an unproven cassette.

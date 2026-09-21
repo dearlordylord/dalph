@@ -2,7 +2,7 @@
 
 Issue: [Specify final remote publication before task completion](https://github.com/dearlordylord/dalph/issues/383).
 
-**Status: accepted by the maintainer on 2026-09-19; implementation in progress, acceptance unproven.**
+**Status: accepted by the maintainer on 2026-09-19; implementation in progress, acceptance unproven.** The current candidate is blocked by the documented [authored capstone chronology follow-up](../postmortems/issue-384-supervised-dogfood-log.md#scoped-follow-up-record-authored-capstone-chronology); no external follow-up issue has been opened yet.
 Alice selected direct publication, remote-first order, ordinary non-force push,
 and automatic integration recovery with user-authorized continuation after
 exhaustion. This document consolidates those decisions and their acceptance tests.
