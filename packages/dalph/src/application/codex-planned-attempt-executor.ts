@@ -2730,6 +2730,7 @@ const makeCodexPlannedAttemptExecutorContext = (
           const attachmentScope = yield* Scope.make()
           yield* Effect.addFinalizer((exit) => Scope.close(attachmentScope, exit))
           const projectionGate = yield* Semaphore.make(1)
+          const attemptGate = yield* gateFor(correlation)
           const heldTerminalActivity = yield* Deferred.make<void>()
           const closed = yield* Deferred.make<void>()
           const turnHints = yield* app.attachTurnCompletedHints.pipe(
@@ -2740,7 +2741,7 @@ const makeCodexPlannedAttemptExecutorContext = (
           )
           const hints = Stream.merge(turnHints, activityHints)
           const readLifecycle = projectionGate
-            .withPermit(projectLifecycle(correlation))
+            .withPermit(attemptGate.withPermit(projectLifecycle(correlation)))
             .pipe(
               Effect.tap((outcome) =>
                 outcome.heldTerminalActivity ? Deferred.succeed(heldTerminalActivity, undefined) : Effect.void
