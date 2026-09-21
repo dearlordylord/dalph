@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { spawn, spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 
@@ -14,7 +14,7 @@ import {
   hostedQualityStageIds,
   selectedHostedQualityStage
 } from "./hosted-quality-evidence.mjs"
-import { renderHostedQualityRow } from "./aggregate-hosted-quality-stages.mjs"
+import { parseHostedQualityAggregateArguments, renderHostedQualityRow } from "./aggregate-hosted-quality-stages.mjs"
 import {
   deliveryRepeatabilityDefaultIterations,
   deliveryRepeatabilityExpectedAcceptedOrderDigest,
@@ -319,6 +319,24 @@ void test("renders a malformed row command without throwing", () => {
       failures: ["malformed stage command"]
     })
   )
+})
+
+void test("resolves every aggregate CLI report without leaking Array.map callback arguments", () => {
+  const { reports, values } = parseHostedQualityAggregateArguments([
+    "--base",
+    baseSha,
+    "--candidate",
+    candidateSha,
+    "--run-id",
+    binding.runId,
+    "--run-attempt",
+    binding.runAttempt,
+    "--",
+    "first/envelope.json",
+    "second/envelope.json"
+  ])
+  assert.deepEqual(reports, [resolve("first/envelope.json"), resolve("second/envelope.json")])
+  assert.equal(values.get("--candidate"), candidateSha)
 })
 
 void test("accepts terminal timeout as diagnostic evidence but never as qualification success", () => {

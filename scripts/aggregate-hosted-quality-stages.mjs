@@ -7,7 +7,7 @@ import {
   assertHostedQualityPlanEnvironment
 } from "./hosted-quality-evidence.mjs"
 
-const parse = (args) => {
+export const parseHostedQualityAggregateArguments = (args) => {
   const separator = args.indexOf("--")
   if (separator === -1 || args.slice(0, separator).length !== 8)
     throw new Error(
@@ -17,7 +17,7 @@ const parse = (args) => {
   for (let index = 0; index < separator; index += 2) values.set(args[index], args[index + 1])
   if (["--base", "--candidate", "--run-id", "--run-attempt"].some((name) => !values.has(name)))
     throw new Error("Hosted quality aggregate binding is incomplete")
-  return { values, reports: args.slice(separator + 1).map(resolve) }
+  return { values, reports: args.slice(separator + 1).map((report) => resolve(report)) }
 }
 
 export const renderHostedQualityRow = (row) => {
@@ -39,7 +39,7 @@ export const renderHostedQualityRow = (row) => {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  const { reports, values } = parse(process.argv.slice(2))
+  const { reports, values } = parseHostedQualityAggregateArguments(process.argv.slice(2))
   const binding = assertHostedQualityEnvironmentBinding({
     baseSha: values.get("--base"),
     candidateSha: values.get("--candidate"),
