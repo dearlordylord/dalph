@@ -11,7 +11,11 @@ import { runFormalWorkflow } from "./run-formal-workflow.mjs"
 import { runPreflightCensus } from "./preflight-census.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { qualificationAggregateError, runQualificationStages } from "./quality-gate-qualification-scheduler.mjs"
-import { boundedQualityGateCommand, qualityGateTestEnvironment } from "./quality-gate-stage-policy.mjs"
+import {
+  boundedQualityGateCommand,
+  localQualificationConcurrency,
+  qualityGateTestEnvironment
+} from "./quality-gate-stage-policy.mjs"
 
 /** Vite/Vitest results, transforms and newly bundled config modules are disposable, never credited stages. */
 export const resetQualityCaches = (worktree) => {
@@ -92,7 +96,11 @@ export const executeResumableQualityGate = async ({
   if (context === undefined) throw new Error("Resumable quality stages require admitted gate custody")
   const { run, runDirectory } = context
   const formalClassification = validateFormalClassification(logicalInvocation.formalClassification, logicalInvocation)
-  logicalInvocation = { ...logicalInvocation, dprintIncremental: "disabled" }
+  logicalInvocation = {
+    ...logicalInvocation,
+    dprintIncremental: "disabled",
+    qualificationConcurrency: logicalInvocation.qualificationConcurrency ?? localQualificationConcurrency
+  }
   process.env.DALPH_DPRINT_INCREMENTAL = "disabled"
   // Read-only Git observations must not refresh the watched index; required Git locks remain enabled.
   process.env.GIT_OPTIONAL_LOCKS = "0"

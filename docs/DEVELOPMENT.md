@@ -102,6 +102,18 @@ Their 389.043-second sum is a reference for independent work, not a current
 hosted baseline or a promised parallel saving; compare complete hosted attempts
 with their queue, install, and upload costs.
 
+The local resumable suffix uses the same checked-in stage algebra but a separate
+fixed `localQualificationConcurrency` cap. The measured local cap is one because
+coverage overlap was not proven memory-safe; it is never derived from available
+cores. Proved ordinary exits and timeouts continue through the suffix and appear
+in one canonical manifest-order aggregate. A timeout releases its permit only
+after the bounded child and process-group custody settle. Missing or mismatched
+identity/evidence, an observer or custody loss, and runner defects stop queued
+launches fail-closed. Formal applicability remains outside the credited
+contiguous resume prefix, and a repaired candidate receives no prior-candidate
+qualification credit. This is qualification tooling only and changes no Dalph
+runtime behavior.
+
 Hosted CI keeps its documentation-only quality classification. Its separate
 formal classification compares the exact event base-to-head paths with the
 generated hosted-formal input projection. That projection follows executable
