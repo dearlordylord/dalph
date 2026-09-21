@@ -1366,6 +1366,21 @@ export const capabilityRegistrationInventory = {
       "packages/orchestrator/src/authorities/git/command.ts"
     ),
     support(
+      "fileGitSenderCustodyLayer",
+      "file-backed Git sender ownership beneath the production Git command boundary",
+      "packages/dalph/src/application/git-sender-custody.ts"
+    ),
+    support(
+      "nodeGitDirectPublicationLayer",
+      "direct-publication Git authority beneath the production run activation boundary",
+      "packages/orchestrator/src/authorities/git/direct-publication.ts"
+    ),
+    support(
+      "nodeGitRemoteBaselineLayer",
+      "remote-baseline Git authority beneath the production run activation boundary",
+      "packages/orchestrator/src/authorities/git/remote-baseline.ts"
+    ),
+    support(
       "productionWorkflowGitCommandLayer",
       "ordinary target-locator translation and optional observation beneath registered Git boundaries",
       "packages/dalph/src/application/production.ts"
