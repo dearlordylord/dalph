@@ -832,3 +832,23 @@ The repaired registry is `da262ca85` (`fix: align complexity suppression registr
 ### Full-gate formal failure, 2026-09-21 06:33–06:47 UTC
 
 The frozen local full gate `pnpm check:all --candidate=e92a8edcfba6986eadec4d9f7b835ac49ee88644` ran as `1fbb31ac-0154-4e79-aa9f-e6ed3164f3fa`. Preflight passed and formal execution started. The identified profile stopped at accepted-result integration sampled model with `QNT404`: the obligation registry requested `publicationRetryReadyReached`, but the current model no longer defines that phase or witness after commit `7c6c1d7a2`, which deliberately transitions publication retry through `PublicationReconciliation`. The retained child log is `.scratch/quality-gates/1fbb31ac-0154-4e79-aa9f-e6ed3164f3fa/logs/3b4bd516-ec47-41ca-815a-48163abba4f8.log`; the complete profile log is `7c62450b-799f-4134-8cf6-6ec8c16d266b.log`. Custody stopped and the gate exited with `UNPROVEN`; no runtime or no-extra-read behavior was changed in response.
+
+### Formal repair and fresh preflight, 2026-09-21 06:56–07:02 UTC
+
+The stale accepted-result witness and its pinned contract hash were aligned in
+`daa8afde0` (`fix: align accepted-result formal obligations`). The resulting
+sample then exposed a real model invariant counterexample: target reacquisition
+could set `targetHeld` while the phase remained `PublicationResponseLost`, even
+though that phase is the boundary that must first reconcile the lost response.
+The model now excludes that phase from `targetReacquisitionPhase` in
+`f62e8c826` (`fix: restrict target reacquisition phases`). The exact seed-270
+sample explored 10,000/10,000 traces successfully; formal controls passed
+133/133.
+
+The fresh admitted preflight with the same candidate base
+`e92a8edcfba6986eadec4d9f7b835ac49ee88644` ran as
+`cb6d0ce4-b9e5-4fbd-8ccd-dbb113468a6f` from `2026-09-21T06:56:37Z` through
+`2026-09-21T07:01:46Z`. It closed with custody stopped, unchanged source
+input, qualification `passed`, and zero failed stages. The required fresh full
+gate and the supervised disposable hosted S1 remain outstanding. The
+no-extra-remote-read rule and runtime implementation are unchanged.
