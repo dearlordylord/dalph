@@ -5,7 +5,12 @@ import nodeProcess from "node:process"
 import { Cause, Context, Duration, Effect, Exit, Layer, Option, Schema, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 
-import { GitSenderCustody, gitSenderTokenEnvironment, type GitCommandCustodySubject } from "./sender-custody.js"
+import {
+  GitSenderCustody,
+  GitSenderProcessId,
+  gitSenderTokenEnvironment,
+  type GitCommandCustodySubject
+} from "./sender-custody.js"
 
 export const GitCommandResult = Schema.Struct({ exitCode: Schema.Int, stderr: Schema.String, stdout: Schema.String })
 export type GitCommandResult = typeof GitCommandResult.Type
@@ -292,8 +297,11 @@ export const nodeGitCommandLayer = Layer.effect(
               })
             )
             if (subject !== undefined && persistent !== undefined && token !== undefined) {
+              const senderPid = yield* Schema.decodeUnknownEffect(GitSenderProcessId)(Number(handle.pid)).pipe(
+                Effect.mapError(() => new GitCommandSenderStopUnproven())
+              )
               yield* persistent
-                .spawned(subject, token, Number(handle.pid))
+                .spawned(subject, token, senderPid)
                 .pipe(Effect.mapError(() => new GitCommandSenderStopUnproven()))
             }
             const custody = yield* captureProcessCustody(Number(handle.pid))

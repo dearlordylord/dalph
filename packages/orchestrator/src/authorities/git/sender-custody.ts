@@ -1,12 +1,20 @@
 import type { Effect } from "effect"
 import { Context, Schema } from "effect"
+import {
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationRequestId
+} from "../../workflow/protocols/direct-publication/events.js"
 
 /** Exact workflow push intent whose local sender is owned by the execution substrate. */
 export const GitCommandCustodySubject = Schema.Struct({
-  requestId: Schema.NonEmptyString,
-  attemptOrdinal: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))
+  requestId: RemotePublicationRequestId,
+  attemptOrdinal: RemotePublicationAttemptOrdinal
 })
 export type GitCommandCustodySubject = typeof GitCommandCustodySubject.Type
+
+/** Positive operating-system process identity for the exact local Git sender. */
+export const GitSenderProcessId = Schema.Int.check(Schema.isGreaterThan(0)).pipe(Schema.brand("GitSenderProcessId"))
+export type GitSenderProcessId = typeof GitSenderProcessId.Type
 
 /** Pre-spawn execution token inherited by the Git sender and its helper processes. */
 export const GitSenderToken = Schema.NonEmptyString.pipe(Schema.brand("GitSenderToken"))
@@ -28,7 +36,7 @@ export class GitSenderCustody extends Context.Service<
     readonly spawned: (
       subject: GitCommandCustodySubject,
       token: GitSenderToken,
-      pid: number
+      pid: GitSenderProcessId
     ) => Effect.Effect<void, GitSenderCustodyFailure>
     readonly reconcile: (subject: GitCommandCustodySubject) => Effect.Effect<void, GitSenderCustodyFailure>
   }

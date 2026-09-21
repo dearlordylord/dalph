@@ -8,14 +8,24 @@ import nodeProcess from "node:process"
 import { setTimeout as wait } from "node:timers/promises"
 import { setTimeout as schedule, clearTimeout as cancel } from "node:timers"
 import { NodeServices } from "@effect/platform-node"
-import { GitCommand, GitSenderCustody, nodeGitCommandLayer } from "@dalph/orchestrator"
+import {
+  GitCommand,
+  GitCommandCustodySubject,
+  GitSenderCustody,
+  nodeGitCommandLayer,
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationRequestId
+} from "@dalph/orchestrator"
 import { Effect } from "effect"
 import { expect, it } from "vitest"
 import { fileGitSenderCustodyLayer } from "./git-sender-custody.js"
 import { parseLinuxProcessStat, type LinuxProcessStat } from "./codex-app-server.js"
 
 const fixture = new URL("../../dist/bin/git-sender-custody-host-fixture.js", import.meta.url).pathname
-const subject = { requestId: "real-host-sigkill-publication", attemptOrdinal: 1 }
+const subject = GitCommandCustodySubject.make({
+  requestId: RemotePublicationRequestId.make("real-host-sigkill-publication"),
+  attemptOrdinal: RemotePublicationAttemptOrdinal.make(1)
+})
 const startupLimitMillis = 5000
 const exitPollMillis = 25
 const exitPollLimit = 80

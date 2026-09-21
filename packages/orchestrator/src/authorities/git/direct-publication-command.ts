@@ -1,5 +1,5 @@
 import { GitRepositoryLocator, RemotePublicationEndpoint, type RemotePublicationTarget } from "@dalph/contracts"
-import { Duration, Effect, Option, Schema } from "effect"
+import { Clock, Duration, Effect, Option, Schema } from "effect"
 import type { GitCommandCustodySubject } from "./sender-custody.js"
 import {
   GitCommandInterrupted,
@@ -38,20 +38,30 @@ export class EndpointMappingUnstable extends Schema.TaggedError<EndpointMappingU
 
 export type EndpointResolutionFailure = EndpointMappingUnstable | GitCommandBoundedFailure
 
-export type RemoteOperationDeadline = number
+/**
+ * Absolute nanosecond position on the process-local monotonic clock by which
+ * one remote Git operation and all of its boundary calls must settle.
+ *
+ * The arbitrary clock origin makes this value process-local and unsuitable
+ * for persistence or comparison with wall-clock timestamps.
+ */
+export const RemoteOperationDeadline = Schema.BigInt.check(Schema.isGreaterThanOrEqualToBigInt(0n)).pipe(
+  Schema.brand("RemoteOperationDeadline")
+)
+export type RemoteOperationDeadline = typeof RemoteOperationDeadline.Type
 
 export const operationDeadline = (budget: Duration.Input): Effect.Effect<RemoteOperationDeadline> =>
-  Effect.clockWith((clock) => clock.currentTimeMillis).pipe(
-    Effect.map((startedAt) => startedAt + Duration.toMillis(budget))
+  Clock.monotonicTimeNanos.pipe(
+    Effect.map((startedAt) => RemoteOperationDeadline.make(startedAt + Duration.toNanosUnsafe(budget)))
   )
 
 const remainingOperationTimeout = (
   deadline: RemoteOperationDeadline
 ): Effect.Effect<Duration.Duration, GitCommandResponseDeadline> =>
-  Effect.clockWith((clock) => clock.currentTimeMillis).pipe(
+  Clock.monotonicTimeNanos.pipe(
     Effect.flatMap((now) => {
       const remaining = deadline - now
-      return remaining <= 0 ? Effect.fail(new GitCommandResponseDeadline()) : Effect.succeed(Duration.millis(remaining))
+      return remaining <= 0n ? Effect.fail(new GitCommandResponseDeadline()) : Effect.succeed(Duration.nanos(remaining))
     })
   )
 

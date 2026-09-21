@@ -2231,6 +2231,7 @@ describe("qualification original source boundary", () => {
       const diagnostic = JSON.parse(encodeRuntimeDiagnostic(projectRuntimeCause(Cause.die(rejected), [])))
       expect(diagnostic.reasons[0].error).toMatchObject({
         errorTag: "HermeticQualificationSourceRejected",
+        operation: transitionTag,
         safeMessage: `${transitionTag} failed`
       })
       expect(JSON.stringify(diagnostic)).not.toContain("private-cleanup")

@@ -1,4 +1,7 @@
 import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
+import { makeAcceptedIntegrationHistory } from "../../../orchestrator/test/support/accepted-integration-history.js"
+import { makePromotedIntegrationHistory } from "../../../orchestrator/test/support/promoted-integration-history.js"
+import { materializeJournalRecords } from "../../../orchestrator/src/workflow-journal/record-sequence.js"
 // @effect-diagnostics multipleEffectProvide:off
 import {
   AttemptId,
@@ -33,6 +36,8 @@ import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
   type GithubGraphqlRequest,
+  AcceptedJournalReader,
+  ApplicationExitShell,
   ActiveTaskClaim,
   AllocatedWorkflowRunId,
   attemptPlanRecordKey,
@@ -71,6 +76,7 @@ import {
   IntegratorCandidateResourceLocator,
   IntegratorSessionCorrelation,
   IntegratorSessionId,
+  IntegratorCandidateText,
   IntegratorBoundaryUnavailable,
   makeFocusedTaskClaimFactsObserved,
   makeTargetLineageObservationOperation,
@@ -2988,6 +2994,230 @@ it.effect("records an Operator capacity change through the production compositio
           .filter(({ event }) => event._tag === "ControlDirectionApplied")
           .map(({ event }) => (event._tag === "ControlDirectionApplied" ? event.direction : undefined))
       ).toEqual(["Pause", "Unpause"])
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("retains remote delivery across Pause and Exit", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      for (const cutoff of ["Pause", "Exit"] as const) {
+        const fileSystem = yield* FileSystem.FileSystem
+        const directory = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: `dalph-production-retained-publication-${cutoff.toLowerCase()}-`
+        })
+        const git = yield* GitCommand
+        yield* git.runInWorktree(directory, ["init"])
+        yield* git.runInWorktree(directory, ["config", "user.email", "dalph@example.invalid"])
+        yield* git.runInWorktree(directory, ["config", "user.name", "Dalph Test"])
+        yield* fileSystem.writeFileString(`${directory}/README.md`, "retained remote publication\n")
+        yield* git.runInWorktree(directory, ["add", "README.md"])
+        yield* git.runInWorktree(directory, ["commit", "-m", "initial"])
+        yield* git.runInWorktree(directory, ["branch", "-M", "master"])
+        const baseSha = GitCommitSha.make((yield* git.runInWorktree(directory, ["rev-parse", "HEAD"])).stdout.trim())
+        const worktree = WorktreeLocator.make(`${directory}/worktree`)
+        const branch = TaskBranchRef.make(`refs/heads/dalph/retained-publication-${cutoff.toLowerCase()}`)
+        yield* git.runInWorktree(directory, [
+          "worktree",
+          "add",
+          "-b",
+          branch.slice("refs/heads/".length),
+          worktree,
+          baseSha
+        ])
+        yield* fileSystem.writeFileString(`${worktree}/accepted.txt`, "accepted result\n")
+        yield* git.runInWorktree(worktree, ["add", "accepted.txt"])
+        yield* git.runInWorktree(worktree, ["commit", "-m", "accepted task result"])
+        const acceptedCommit = GitCommitSha.make(
+          (yield* git.runInWorktree(worktree, ["rev-parse", "HEAD"])).stdout.trim()
+        )
+        const candidateCommit = GitCommitSha.make(
+          (yield* git.runInWorktree(directory, [
+            "commit-tree",
+            `${acceptedCommit}^{tree}`,
+            "-p",
+            baseSha,
+            "-p",
+            acceptedCommit,
+            "-m",
+            "integrated candidate"
+          ])).stdout.trim()
+        )
+
+        const taskId = TaskId.make(`retained-publication-${cutoff.toLowerCase()}`)
+        const target = FixtureTarget.make(`retained-publication-${cutoff.toLowerCase()}-target`)
+        const runId = RunId.make(`retained-publication-${cutoff.toLowerCase()}-run`)
+        const specification = makeTaskWorkSpecification({
+          body: "Publish the accepted result.",
+          taskId,
+          title: "Publish"
+        })
+        const attempt = PlannedTaskAttempt.make({
+          attemptId: AttemptId.make(`retained-publication-${cutoff.toLowerCase()}-attempt`),
+          baseSha,
+          branch,
+          executor: TaskExecutorLocator.make("executor:production-controlled-publication"),
+          runId,
+          taskId,
+          taskRevision: specification.fingerprint,
+          worktree
+        })
+        const claim = ActiveTaskClaim.make({
+          operationId: OperationId.make(`retained-publication-${cutoff.toLowerCase()}-claim`),
+          owner: ClaimOwner.make("dalph"),
+          taskId,
+          token: ClaimToken.make(`retained-publication-${cutoff.toLowerCase()}-token`)
+        })
+        const acceptedResult = AcceptedResult.make({
+          commit: acceptedCommit,
+          evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("c".repeat(64)) })
+        })
+        const integrationTarget = productionIntegrationTarget(`${directory}/.git`)
+        const accepted = makeAcceptedIntegrationHistory({
+          acceptedResult,
+          activeClaim: claim,
+          integrationTarget,
+          plannedAttempt: attempt,
+          runId,
+          targetHeadSha: baseSha,
+          taskSpecification: specification,
+          trackerTarget: target
+        })
+        const published = makePromotedIntegrationHistory({
+          candidateCommit,
+          candidateText: IntegratorCandidateText.make(`candidate:${cutoff.toLowerCase()}`),
+          originalClaim: claim,
+          records: accepted.records,
+          session: IntegratorSessionCorrelation.make({
+            acceptedResult,
+            candidateResource: IntegratorCandidateResourceLocator.make(
+              `candidate:retained-publication-${cutoff.toLowerCase()}`
+            ),
+            expectedTargetHead: baseSha,
+            integrationTarget,
+            plannedAttempt: attempt,
+            queuedAt: accepted.responsibility.queuedAt,
+            sessionId: IntegratorSessionId.make(`session:retained-publication-${cutoff.toLowerCase()}`),
+            startedAt: accepted.responsibility.startedAt,
+            targetLineageObservedAt: accepted.targetLineageObservedAt
+          })
+        })
+        const publicationProofAt = published.promotedRecords.findIndex(
+          ({ event }) => event._tag === "RemotePublicationSucceeded"
+        )
+        if (publicationProofAt < 0) return yield* Effect.die("publication fixture lacks conclusive proof")
+        const publicationRecords = published.promotedRecords.slice(0, publicationProofAt + 1)
+        const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
+        yield* Effect.gen(function* () {
+          const journal = yield* JournalStore
+          const began = publicationRecords[0]
+          if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("publication fixture lacks Run begin")
+          yield* journal.beginRun(runId, target, began.event.initialControlPolicy, began.event.remotePublicationTarget)
+          for (const record of publicationRecords.slice(1)) {
+            yield* journal.append(runId, record.key, record.event)
+          }
+        }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+
+        const projected = projectTrackerSnapshot({
+          revision: `retained-publication-${cutoff.toLowerCase()}-current`,
+          tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+        })
+        if (projected._tag === "Invalid") return yield* Effect.die("publication tracker graph must be valid")
+        const gitCalls = yield* Ref.make<ReadonlyArray<string>>([])
+        const cleanupCalls = yield* Ref.make<ReadonlyArray<string>>([])
+        const trackerLayer = Layer.succeed(
+          TrackerMutation,
+          TrackerMutation.of({
+            acquireTaskClaim: () => Effect.die("cutoff must not acquire a claim"),
+            readTaskClaim: () => Effect.die("cutoff must not reconcile completion"),
+            releaseTaskClaim: () => Effect.die("cutoff must not release a claim")
+          })
+        )
+        const application = productionWorkflowInterpreterLayer(
+          runId,
+          GitCommonDirectoryTarget.make(`${directory}/.git`),
+          GitRepositoryLocator.make(directory),
+          integrationTarget,
+          trackerLayer,
+          productionControlledFakePlannedAttemptExecutorLayer,
+          unavailableIntegratorCandidateProviderAuthority,
+          {
+            remotePublicationTarget: remotePublicationTargetForTest,
+            workflowCleanupObserver: (boundary) => Ref.update(cleanupCalls, (calls) => [...calls, boundary]),
+            workflowGitCommandObserver: (boundary) => Ref.update(gitCalls, (calls) => [...calls, boundary])
+          }
+        ).pipe(
+          Layer.provide(
+            Layer.succeed(
+              TrackerGraphReader,
+              TrackerGraphReader.of({
+                read: () => Effect.succeed(projected.snapshot),
+                readTaskWorkSpecification: () => Effect.succeed(specification)
+              })
+            )
+          ),
+          Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+        )
+        const nextOperation = yield* Ref.make(0)
+        const run = runWorkflow(
+          target,
+          Effect.die("retained history supplies the initial policy"),
+          AllocatedWorkflowRunId.make(runId)
+        ).pipe(
+          Effect.provideService(
+            OperationIdAllocator,
+            OperationIdAllocator.of({
+              allocate: () =>
+                Ref.getAndUpdate(nextOperation, (value) => value + 1).pipe(
+                  Effect.map((value) => OperationId.make(`retained-publication-${cutoff.toLowerCase()}-${value}`))
+                )
+            })
+          ),
+          Effect.provideService(
+            TaskClaimAcquisitionPlanner,
+            TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("cutoff must not plan a claim") })
+          ),
+          Effect.provideService(
+            PlannedTaskAttemptPlanner,
+            PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("cutoff must not plan an attempt") })
+          )
+        )
+        yield* Effect.gen(function* () {
+          const bootstrap = yield* JournaledRunBootstrap
+          const exitShell = yield* ApplicationExitShell
+          const acceptedJournal = yield* AcceptedJournalReader
+          const readRecords = acceptedJournal
+            .readAccepted(runId)
+            .pipe(Effect.map(({ records }) => materializeJournalRecords(records)))
+          if (cutoff === "Pause") {
+            yield* bootstrap.operatorControl.applyControlDirection({
+              direction: "Pause",
+              subject: { _tag: "Run", runId }
+            })
+          } else {
+            expect(yield* exitShell.requestBoundary.requestExit).toMatchObject({ _tag: "Succeeded" })
+          }
+          const before = yield* readRecords
+          const proofBefore = before.find(({ event }) => event._tag === "RemotePublicationSucceeded")
+          expect(proofBefore?.event).toMatchObject({
+            _tag: "RemotePublicationSucceeded",
+            correlation: { qualifiedCandidate: { candidateCommit } }
+          })
+
+          yield* run.pipe(Effect.exit)
+
+          const after = yield* readRecords
+          expect(after).toEqual(before)
+          expect(after.filter(({ event }) => event._tag === "RemotePublicationSucceeded")).toEqual([proofBefore])
+        }).pipe(
+          Effect.provide(application),
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
+        )
+
+        expect(yield* Ref.get(gitCalls), cutoff).toEqual([])
+        expect(yield* Ref.get(cleanupCalls), cutoff).toEqual([])
+        expect(yield* fileSystem.exists(`${directory}/.git/dalph/git-senders`), cutoff).toBe(false)
+      }
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
   )
 )

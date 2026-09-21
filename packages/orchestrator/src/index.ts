@@ -1076,6 +1076,7 @@ export {
   GitCommandCustodySubject,
   GitSenderCustody,
   GitSenderCustodyFailure,
+  GitSenderProcessId,
   GitSenderToken,
   gitSenderTokenEnvironment
 } from "./authorities/git/sender-custody.js"

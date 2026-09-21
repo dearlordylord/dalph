@@ -8,11 +8,12 @@ import {
   GitCommandCustodySubject,
   GitSenderCustody,
   GitSenderCustodyFailure,
+  GitSenderProcessId,
   GitSenderToken,
   gitSenderTokenEnvironment
 } from "@dalph/orchestrator"
 import { Crypto, Effect, Layer, Schema } from "effect"
-import { linuxProcessEffectiveUid, parseLinuxProcessStat } from "./codex-app-server.js"
+import { CodexProcessStartIdentity, linuxProcessEffectiveUid, parseLinuxProcessStat } from "./codex-app-server.js"
 import { nodeCodexProcessNativeService, type CodexProcessNativeService } from "./codex-process-native.js"
 
 const senderFileMode = 0o600
@@ -20,7 +21,8 @@ const senderStopBudgetMillis = 2000
 const senderPollMillis = 25
 const senderStopPollLimit = 80
 
-const SenderIdentity = Schema.Struct({ pid: Schema.Int, startIdentity: Schema.NonEmptyString })
+const SenderIdentity = Schema.Struct({ pid: GitSenderProcessId, startIdentity: CodexProcessStartIdentity })
+type SenderIdentity = typeof SenderIdentity.Type
 const SenderRecord = Schema.Struct({
   subject: GitCommandCustodySubject,
   token: GitSenderToken,
@@ -73,10 +75,10 @@ export const fileGitSenderCustodyLayer = (
     if (native.platform !== "linux") return Promise.reject(new GitSenderCustodyFailure())
     const ownerUid = linuxProcessEffectiveUid(await native.readFile("/proc/self/status"))
     if (ownerUid === undefined) return Promise.reject(new GitSenderCustodyFailure())
-    const members: Array<{ readonly pid: number; readonly startIdentity: string }> = []
+    const members: Array<SenderIdentity> = []
     for (const entry of await native.readdir("/proc")) {
       if (!/^\d+$/u.test(entry)) continue
-      const pid = Number(entry)
+      const pid = await Schema.decodeUnknownPromise(GitSenderProcessId)(Number(entry))
       try {
         const uid = linuxProcessEffectiveUid(await native.readFile(`/proc/${pid}/status`))
         if (uid === undefined) return Promise.reject(new GitSenderCustodyFailure())

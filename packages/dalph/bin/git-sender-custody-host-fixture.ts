@@ -2,14 +2,23 @@
 import nodeProcess from "node:process"
 import { join } from "node:path"
 import { NodeServices } from "@effect/platform-node"
-import { GitCommand, nodeGitCommandLayer } from "@dalph/orchestrator"
+import {
+  GitCommand,
+  GitCommandCustodySubject,
+  nodeGitCommandLayer,
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationRequestId
+} from "@dalph/orchestrator"
 import { Effect, Layer } from "effect"
 import { fileGitSenderCustodyLayer } from "../src/application/git-sender-custody.js"
 
 const directory = nodeProcess.argv[2]
 if (directory === undefined) throw new Error("fixture directory missing")
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
-const subject = { requestId: "real-host-sigkill-publication", attemptOrdinal: 1 }
+const subject = GitCommandCustodySubject.make({
+  requestId: RemotePublicationRequestId.make("real-host-sigkill-publication"),
+  attemptOrdinal: RemotePublicationAttemptOrdinal.make(1)
+})
 const commandLayer = nodeGitCommandLayer.pipe(
   Layer.provide(fileGitSenderCustodyLayer(directory)),
   Layer.provide(NodeServices.layer)

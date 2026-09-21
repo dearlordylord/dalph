@@ -21,6 +21,7 @@ import { expect } from "vitest"
 import { projectRecordedCassette } from "../../src/cassettes/recorded.js"
 import { makeHermeticController } from "../../test-support/production-hermetic-controller.js"
 import { createProductionPublicPublicationFixture } from "../../test-support/production-public-publication-fixture.js"
+import { auditDirectPublicationSuccessToClose } from "../../test-support/direct-publication-git-audit.js"
 import { hermeticGithubClientLayer } from "../../src/application/production-hermetic-provider-bridge.js"
 import { contextFor } from "../../src/application/production-hermetic-qualification-attempt-source.js"
 import {
@@ -376,6 +377,34 @@ it.live(
           candidate.run.session.acceptedResult.commit
         ])
         expect(candidate.run.session.expectedTargetHead).toBe(fixture.baseSha)
+
+        for (const taskId of [trackerAfterChild.graph.rootTaskId, trackerAfterChild.graph.dependantTaskId]) {
+          const gitAudit = auditDirectPublicationSuccessToClose(records, taskId)
+          expect(gitAudit._tag).toBe("Complete")
+          if (gitAudit._tag !== "Complete") return yield* Effect.die(`public S1 lacks Git audit bounds for ${taskId}`)
+          expect(gitAudit.boundaries.filter(({ kind }) => kind === "LocalTargetPromotion")).not.toEqual([])
+          expect(gitAudit.boundaries.filter(({ kind }) => kind === "LocalCandidateAncestryRead")).not.toEqual([])
+          expect(
+            gitAudit.boundaries.filter(({ kind }) => kind === "RemotePublication" || kind === "RemoteRead")
+          ).toEqual([])
+        }
+
+        const rootGitAudit = auditDirectPublicationSuccessToClose(records, trackerAfterChild.graph.rootTaskId)
+        if (rootGitAudit._tag !== "Complete") return yield* Effect.die("public S1 lacks the root Git audit bounds")
+        const prePublicationRemoteRead = records.find(
+          ({ event }) =>
+            event._tag === "RemotePublicationAdmissionReadIntended" || event._tag === "RemoteBaselineReadIntended"
+        )
+        if (prePublicationRemoteRead === undefined)
+          return yield* Effect.die("public S1 lacks its controlled pre-publication remote read")
+        const negativeControl = auditDirectPublicationSuccessToClose(
+          records.toSpliced(rootGitAudit.closeIndex, 0, prePublicationRemoteRead),
+          trackerAfterChild.graph.rootTaskId
+        )
+        expect(negativeControl._tag).toBe("Complete")
+        if (negativeControl._tag !== "Complete")
+          return yield* Effect.die("public S1 negative Git audit lost its bounds")
+        expect(negativeControl.boundaries.filter(({ kind }) => kind === "RemoteRead")).not.toEqual([])
 
         const remoteHead = yield* git.run(fixture.remoteRepository, ["rev-parse", fixture.remoteRef])
         const localHead = yield* git.runInWorktree(fixture.repository, ["rev-parse", fixture.remoteRef])

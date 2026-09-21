@@ -1,5 +1,12 @@
 import { GitRepositoryLocator } from "@dalph/contracts"
-import { GitCommand, GitCommonDirectoryTarget, nodeGitCommandLayer } from "@dalph/orchestrator"
+import {
+  GitCommand,
+  GitCommandCustodySubject,
+  GitCommonDirectoryTarget,
+  nodeGitCommandLayer,
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationRequestId
+} from "@dalph/orchestrator"
 import { expect, it } from "@effect/vitest"
 import { Context, Effect, FileSystem, Layer } from "effect"
 import { NodeServices } from "@effect/platform-node"
@@ -51,7 +58,12 @@ it.effect("builds publication custody even when a general Git service was alread
       )
       const git = Context.get(context, GitCommand)
       if (git.prepareSenderCustody === undefined) return yield* Effect.die("publication custody is missing")
-      yield* git.prepareSenderCustody({ requestId: "memoized-publication", attemptOrdinal: 1 })
+      yield* git.prepareSenderCustody(
+        GitCommandCustodySubject.make({
+          requestId: RemotePublicationRequestId.make("memoized-publication"),
+          attemptOrdinal: RemotePublicationAttemptOrdinal.make(1)
+        })
+      )
       const records = yield* fs.readDirectory(`${directory}/dalph/git-senders`)
       expect(records).toHaveLength(1)
     })

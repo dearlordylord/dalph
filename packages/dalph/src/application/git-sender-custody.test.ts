@@ -1,17 +1,77 @@
 /* eslint-disable import/no-nodejs-modules -- fixture owns a disposable execution-substrate directory. */
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { GitCommand, GitSenderCustody, gitSenderTokenEnvironment, nodeGitCommandLayer } from "@dalph/orchestrator"
-import { Effect } from "effect"
+import {
+  GitCommand,
+  GitCommandCustodySubject,
+  GitSenderCustody,
+  GitSenderProcessId,
+  gitSenderTokenEnvironment,
+  nodeGitCommandLayer,
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationRequestId
+} from "@dalph/orchestrator"
+import { Effect, Schema } from "effect"
 import { NodeServices } from "@effect/platform-node"
 import { expect, it } from "vitest"
 import { fileGitSenderCustodyLayer } from "./git-sender-custody.js"
 import { nodeCodexProcessNativeService, type CodexProcessNativeService } from "./codex-process-native.js"
 
-const subject = { requestId: "publication:retained-request", attemptOrdinal: 1 }
+const subject = GitCommandCustodySubject.make({
+  requestId: RemotePublicationRequestId.make("publication:retained-request"),
+  attemptOrdinal: RemotePublicationAttemptOrdinal.make(1)
+})
 const stat = (pid: number, start: string) =>
   `${pid} (sender) S 1 ${pid} ${Array.from({ length: 16 }, () => "0").join(" ")} ${start}`
+
+it("decodes and round-trips only exact publication custody identities", () => {
+  const encoded = Schema.encodeUnknownSync(GitCommandCustodySubject)(subject)
+  expect(Schema.decodeUnknownSync(GitCommandCustodySubject)(encoded)).toEqual(subject)
+  expect(() => Schema.decodeUnknownSync(GitCommandCustodySubject)({ ...encoded, requestId: "" })).toThrow()
+  expect(() => Schema.decodeUnknownSync(GitCommandCustodySubject)({ ...encoded, attemptOrdinal: 0 })).toThrow()
+  expect(() => Schema.decodeUnknownSync(GitCommandCustodySubject)({ ...encoded, attemptOrdinal: 1.5 })).toThrow()
+})
+
+it("accepts only positive integer Git sender process identities", () => {
+  expect(Schema.decodeUnknownSync(GitSenderProcessId)(37)).toBe(37)
+  expect(() => Schema.decodeUnknownSync(GitSenderProcessId)(0)).toThrow()
+  expect(() => Schema.decodeUnknownSync(GitSenderProcessId)(-1)).toThrow()
+  expect(() => Schema.decodeUnknownSync(GitSenderProcessId)(1.5)).toThrow()
+})
+
+it("fails closed when durable process custody has an invalid PID or start identity", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "dalph-sender-invalid-identity-"))
+  try {
+    await Effect.runPromise(
+      Effect.flatMap(GitSenderCustody, (custody) => custody.reserve(subject)).pipe(
+        Effect.provide(fileGitSenderCustodyLayer(directory))
+      )
+    )
+    const custodyDirectory = join(directory, "dalph", "git-senders")
+    const [entry] = await readdir(custodyDirectory)
+    if (entry === undefined) throw new Error("sender custody record missing")
+    const path = join(custodyDirectory, entry)
+    const reserved: unknown = JSON.parse(await readFile(path, "utf8"))
+    if (typeof reserved !== "object" || reserved === null || Array.isArray(reserved)) {
+      throw new Error("sender custody record is not an object")
+    }
+    for (const identity of [
+      { pid: 0, startIdentity: "linux:123" },
+      { pid: 37, startIdentity: "" }
+    ]) {
+      await writeFile(path, JSON.stringify({ ...reserved, identity, phase: "Spawned" }))
+      const failure = await Effect.runPromise(
+        Effect.flatMap(GitSenderCustody, (custody) => custody.reconcile(subject)).pipe(
+          Effect.provide(fileGitSenderCustodyLayer(directory))
+        )
+      ).catch((error: unknown) => error)
+      expect(failure).toMatchObject({ _tag: "GitSenderCustodyFailure" })
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
 
 it("replacement host stops a token-owned escaped sender before releasing custody", async () => {
   const directory = await mkdtemp(join(tmpdir(), "dalph-sender-restart-"))

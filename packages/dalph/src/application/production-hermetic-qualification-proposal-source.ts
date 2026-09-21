@@ -21,8 +21,8 @@ import { RemotePublicationTarget } from "@dalph/contracts"
 import { Effect, Schema } from "effect"
 
 import {
-  HermeticQualificationSourceRejected,
   sourceRejected,
+  sourceRejectedWithTag,
   strictSource,
   isQualificationTaskId,
   validateOperationId,
@@ -325,7 +325,7 @@ const validateCompletionTransition = Effect.fn("HermeticQualification.validateCo
     transition._tag === "DeleteCompletedTaskCompletionClaim"
   )
     return yield* validateCompletionRequestTransition(transition, context)
-  return yield* new HermeticQualificationSourceRejected({ transitionTag: transition._tag })
+  return yield* sourceRejectedWithTag(transition._tag)
 })
 
 const validateCompletionRequestTransition = Effect.fn("HermeticQualification.validateCompletionRequestTransition")(
