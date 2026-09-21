@@ -974,3 +974,29 @@ not change the S1 result: the fresh supervised disposable journey remains the
 sole unproven acceptance boundary. The no-extra-remote-read decision remains
 in force, and the two preserved S1 attempts remain open evidence rather than
 grounds for closing Issue #384.
+
+### Provider lifecycle attach/Begin repair, 2026-09-21 22:13–22:15 UTC
+
+The first supervised S1 failure left the Codex executor responsibility in
+`Running` after Codex had returned its completed turn. Inspection of the
+initial handoff found an attach/Begin race: a passive lifecycle attachment
+could run its initial projection while the same attempt's `Begin` command was
+still in flight. That projection could therefore settle before the durable
+Begin path had established the current executor record.
+
+Commit `eee7243f0034b3587992b0da275b5b139dfe3af7`
+(`fix(codex): serialize lifecycle attachment with commands`) adds a
+per-attempt semaphore to the lifecycle projection and shares it with
+`Begin`, `Suspend`, `Resume`, and replacement commands. The candidate contains
+the repair through merge `8051f891eddeb8bb404e21647672447096a1d80c`. Its
+regression test
+`serializes the initial lifecycle projection with an in-flight Begin` holds
+`turn/start`, starts `Begin` and `attach` concurrently, and asserts attachment
+has not settled before `Begin` releases. The focused command was:
+
+`pnpm exec vitest run packages/dalph/src/application/codex-planned-attempt-executor.test.ts -t 'serializes the initial lifecycle projection with an in-flight Begin'`
+
+It passed with 1 test passed and 178 skipped (179 total) in 2.33 seconds.
+This is a provider-local lifecycle repair; it adds no CLI operation and no
+remote read after publication. The fresh supervised disposable S1 remains
+pending and cannot be claimed from this regression test.

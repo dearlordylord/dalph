@@ -343,6 +343,19 @@ D invariants and extended models, not solely by replaying a successful cassette.
 | **S1–S8: chronology and forbidden paths.** | `packages/dalph/test/cassettes/direct-remote-publication.test.ts::publishes M before local promotion and task completion, then releases its dependant from a later complete graph`, `packages/dalph/test/scenarios/production.test.ts::retains remote delivery across Pause and Exit`, and `packages/dalph/test/cassettes/capstone.execution.test.ts::maintained deliveryInvariantStoryCapstone executes all 22 beats in one exact Run` cover the maintained publication, lifecycle, cleanup, and finality transcripts. Conformance owners must retain negative controls for wrong candidate/destination, missing proof, unsafe mutation, duplicate successor/grant, reset budgets, early termination, and dependant release before the later complete graph. |
 | **S1: one real disposable dogfood task.** | Built production CLI with a named Kimi or Codex profile. The run log must capture exact source/Base/C/M, task/Run/attempt, endpoint/ref, remote acknowledgement and independent hosted-head evidence, local promotion, GitHub confirmation, exact cleanup and termination. No controlled fixture, local-only success, hosted #388 qualification, or provider smoke prompt substitutes. |
 
+The provider lifecycle handoff repair is recorded in `eee7243f0`
+(`fix(codex): serialize lifecycle attachment with commands`), merged into the
+candidate by `8051f891e`. The observed initial attach/Begin race allowed a
+passive lifecycle attachment to project the attempt while that attempt's
+`Begin` was still in flight. The repair gives the lifecycle projection and
+executor commands one per-attempt gate. Its regression test
+`serializes the initial lifecycle projection with an in-flight Begin` holds
+`turn/start`, starts `Begin` and `attach` concurrently, and proves attachment
+cannot settle until `Begin` releases; the focused command passed with 1 test
+passed and 178 skipped. This repair changes provider-local sequencing only;
+the no-extra-remote-read decision is unchanged. The fresh supervised
+disposable S1 journey remains pending.
+
 ## Implementation and acceptance boundary
 
 The maintainer accepted this amended chronology on 2026-09-19. Before runtime
