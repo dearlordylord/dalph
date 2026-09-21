@@ -34,13 +34,27 @@ Focused controls passed:
 - `pnpm lint:changed`: passed
 
 On 2026-09-21 in this worktree, a cache-reset prewarm transformed 399 ordinary
-test files and warmed 1,026 local modules in 6.237 s. A representative
-`trace-reader.test.ts` run passed 23 tests in 2.875 s cold and 1.557 s after
-prewarm (Vitest reported 1.42 s versus 0.125 s transform time). Debug output
-confirmed persistent reads for both the test file and its source graph. The
-local host did not demonstrate repayment of the full prewarm cost from this
-single focused file; this is evidence that the boundary is correct, not a
-claim of a universal wall-clock gain.
+test files and warmed 1,026 local modules in 6.589 s. A representative
+`trace-reader.test.ts` run passed 23 tests in 3.563 s cold and 1.447 s after
+prewarm (a 2.116 s saving, below the prewarm cost). Debug output confirmed
+persistent reads for both the test file and its source graph. This is evidence
+that the boundary is correct, not a claim of a universal wall-clock gain.
+
+The documented repeated-delivery workload was then measured from the same
+cache-reset boundary: twenty fresh iterations took 49.955 s cold and 44.324 s
+after prewarm. The warm run saved 5.631 s, which is 0.958 s less than the
+6.589 s bootstrap cost. Every iteration passed with occurrence count 1,010 and
+the same accepted-order digest
+(`6df6b575b41d4ea07d3ac083725cd54b0ddf29fb925936dfd7f1c85a5d90b5c8`). The
+controlled workload therefore does not repay prewarm on this host; no net
+performance win is claimed.
+
+The exact candidate gate also passed on this revision: run
+`cd14fe9a-cfdb-4583-a1bb-ae8da59e4ab0`, candidate `ffe71e482`, base
+`69bd8693`, with 506 obligations complete, formal evidence passed, delivery
+repeatability and recorded-catalog qualification passed, and coverage reporting
+392 passed test files (4 skipped) and 4,279 passed tests (41 skipped). The gate
+finished with exit 0 and stopped custody proved.
 
 The coverage-enabled full `pnpm test` control was stopped at its 90 s safety
 boundary after unrelated existing `production-host.test.ts` assertion
@@ -51,8 +65,10 @@ claiming a repository-wide speedup.
 
 ## Closure boundary
 
-The implementation and safety controls are complete locally. Do not mark the
-GitHub checkbox as a measured performance win until a clean exact worktree
-passes the full candidate gate and records a fresh-worktree cold-versus-warm
-comparison. The remaining action is qualification/publication, not another
-runtime design change.
+The implementation, safety controls, exact-candidate qualification, and
+cold-versus-warm publication are complete. Item 5 can be marked complete as a
+tooling-boundary change, with the measured result recorded as neutral/slightly
+negative net wall time on this host. The performance claim remains open: any
+future speedup work must change the documented workload or prewarm boundary
+and collect a new controlled comparison; it does not justify a Dalph runtime
+change.
