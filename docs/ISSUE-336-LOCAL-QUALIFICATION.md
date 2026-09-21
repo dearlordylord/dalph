@@ -68,9 +68,17 @@ were retained during the attempt under `/tmp/dalph-item336-memory-results-*` and
 
 Affected checks completed for this tooling change were the scheduler unit tests,
 the gate-resume policy and integration tests, the full `test:gate-resume` tier
-(187 tests), typecheck, changed-file lint, and dprint formatting. The full frozen
-candidate gate and repository-wide `pnpm test` remain required before integration;
-they are unrun at this evidence checkpoint because they are the shared
-qualification and final regression gates, not additional coverage of the local
-scheduler scenarios. The scoped review also requires those gates after the final
-repair commit.
+(187 tests), typecheck, changed-file lint, dprint formatting, and formal controls
+(133 tests). The frozen candidate gate for Base
+`309a94e87ab7898e45cc81cc5240e64ae5b4092a` completed on candidate
+`7e3a69aafdf1fa4baff906b5fa43ec3e7c534d28` through the supported resume
+`873fe28a-3b46-434c-9560-682f7ddd4ca8`: custody stopped, terminal exit 0,
+qualification passed. Its first clean attempt
+`cd32e6d7-2536-4e46-9d79-911316441d73` retained one ordinary coverage-suite
+failure; the exact single test passed in isolation, so the failed suffix was
+rerun only through that same-run resume boundary. The final repository
+`pnpm test` run `2eb57f18-edfd-4f76-87fc-1298847eee92` also stopped with exit 0:
+392 files passed (4 skipped), 4,277 tests passed (41 skipped), coverage 96.47%
+statements / 94.79% branches, and changed-line coverage 100%. Broader checks add
+no new local-scheduler scenario coverage; they were run because gate orchestration
+and the formal-input projection are shared qualification infrastructure.
