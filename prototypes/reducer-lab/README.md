@@ -91,3 +91,11 @@ pnpm check:lab:browser
 
 The accepted chronology and scenario-to-test mapping are in
 `docs/scenarios/reducer-lab-maintained-cassette-catalog.md`.
+
+The journal-cursor graph labels the last complete tracker observation as
+**Graph snapshot**. Node annotations separately show Git-confirmed integration
+and newer focused tracker completion reads, with their journal positions. A
+differing snapshot is marked as awaiting refresh. Rewinding removes later
+evidence. These are historical observations, not a claim about current remote
+publication. This Lab-only presentation changes no Dalph workflow, tracker
+mutation, scheduling decision, or dependant-release rule.

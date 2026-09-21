@@ -83,6 +83,18 @@ button.secondary-action {
   background: #40534b;
 }
 
+.catalog-run-actions {
+  display: flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+button.run-all-action {
+  background: #a34310;
+  margin-inline-start: auto;
+}
+
 button.danger-action {
   background: #8f2525;
 }

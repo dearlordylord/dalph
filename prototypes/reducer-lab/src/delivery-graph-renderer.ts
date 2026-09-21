@@ -101,6 +101,8 @@ const graphElements = (
       selectedTaskId === task.id ? deliveryGraphEncoding.selectedTask.className : undefined,
       highlighted.size === 0 ? undefined : highlighted.has(task.id) ? "selection-related" : "selection-muted",
       `palette-${palette}`,
+      task.display?.labels?.some((label) => label.startsWith("Git:") || label.startsWith("Tracker:"))
+        ? "display-observed-progress" : undefined,
       task.display?.tone === undefined ? undefined : `tone-${task.display.tone}`,
       ...(task.display?.classes ?? []).map(safeClassToken)
     ].filter((value): value is string => value !== undefined).join(" "),
@@ -228,6 +230,10 @@ const cytoscapeStyle: cytoscape.StylesheetStyle[] = [
       "text-wrap": "wrap",
       width: 204
     }
+  },
+  {
+    selector: "node.display-observed-progress",
+    style: { height: 190 }
   },
   {
     selector: "node[missing = 'true']",
