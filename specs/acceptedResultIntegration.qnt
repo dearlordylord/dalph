@@ -529,7 +529,6 @@ module acceptedResultIntegration {
       SuccessorInFlight,
       SuccessorResponseLost,
       PromotionPremise,
-      PublicationResponseLost,
       PublicationReadPending,
     ).contains(phase)
 
