@@ -213,5 +213,5 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
   return { runRemotePublication }
 }
 
-export const RemotePublicationEngine = makeRemotePublicationEngine(readAcceptedRemotePublicationEvidence)
+const RemotePublicationEngine = makeRemotePublicationEngine(readAcceptedRemotePublicationEvidence)
 export const runRemotePublication = RemotePublicationEngine.runRemotePublication

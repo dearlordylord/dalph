@@ -33,12 +33,14 @@ import {
   outcomeRecordKey,
   remotePublicationAttemptIntendedRecordKey,
   remotePublicationIntendedRecordKey,
+  remotePublicationRetainedRecordKey,
   remotePublicationSucceededRecordKey,
   targetPromotionAttemptIntentRecordKey,
   targetPromotionIntentRecordKey
 } from "../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../workflow/registry/event.js"
+import { WorkflowRunBeganEvent } from "../../workflow/registry/event.js"
 import { makeTargetLineageObservationOperation } from "../../workflow/registry/operation.js"
 import { OperationId } from "../../workflow/identity.js"
 import {
@@ -103,10 +105,15 @@ import {
   RemotePublicationAttemptOrdinal,
   RemotePublicationIntendedEvent,
   RemotePublicationProofBasis,
+  RemotePublicationRetainedCause,
+  RemotePublicationRetainedEvent,
   RemotePublicationSucceededEvent,
   remotePublicationCorrelationFor
 } from "../../workflow/protocols/direct-publication/events.js"
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
+import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import { InitialControlPolicy } from "../../control/policy.js"
+import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
 
 const sha = (value: string): GitCommitSha => GitCommitSha.make(value.repeat(40))
 
@@ -1065,8 +1072,79 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
     integrationTarget: Option.some(target),
     targetLineageByAttemptId: new Map([[attemptId, lineage(preparedCandidateCommit)]]),
     targetLineageRefreshRequiredAttemptIds: new Set([attemptId]),
+    remotePublicationConfigured: true,
     targetPromotionConfigured: true
   }
+  const runBegan = record(
+    10,
+    WorkflowRunBeganEvent.make({
+      initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      remotePublicationTarget: remotePublicationTargetForTest,
+      target: FixtureTarget.make("integration-frontier-retry-target"),
+      version: workflowJournalEventVersion
+    }),
+    "run:began"
+  )
+  const qualifiedRunState = {
+    ...scenario.runState,
+    appliedThrough: JournalPosition.make(10),
+    workflowHistory: { evidence: journalEvidenceFrom([...qualifiedRecords, runBegan]) }
+  }
+  const retained = RemotePublicationRetainedEvent.make({
+    correlation: publicationCorrelation,
+    cause: RemotePublicationRetainedCause.cases.AttemptsExhausted.make({}),
+    occurrenceClassification: "NonActionOccurrence",
+    version: workflowJournalEventVersion
+  })
+  const retainedRecords = [
+    ...qualifiedRecords,
+    runBegan,
+    record(
+      11,
+      RemotePublicationIntendedEvent.make({
+        correlation: publicationCorrelation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      }),
+      remotePublicationIntendedRecordKey(publicationCorrelation.requestId)
+    ),
+    record(
+      12,
+      RemotePublicationAttemptIntendedEvent.make({
+        attemptOrdinal: publicationAttemptOrdinal,
+        correlation: publicationCorrelation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      }),
+      remotePublicationAttemptIntendedRecordKey(publicationCorrelation.requestId, publicationAttemptOrdinal)
+    ),
+    record(13, retained, remotePublicationRetainedRecordKey(publicationCorrelation.requestId))
+  ]
+  const publicationRuntimeFacts = {
+    ...runtimeFacts,
+    targetLineageByAttemptId: new Map([[attemptId, lineage(fixedHead)]]),
+    targetLineageRefreshRequiredAttemptIds: new Set(),
+    currentTrackerTaskIds: new Set([taskId]),
+    taskClaimAuthorityByAttemptId: new Map([[attemptId, { _tag: "Exact" as const }]])
+  }
+  expect(
+    deriveStartedIntegrationFrontier({ ...qualifiedRunState }, publicationRuntimeFacts, [responsibility]).transitions()
+  ).toEqual([expect.objectContaining({ _tag: "RunRemotePublication", responsibility })])
+  expect(
+    deriveStartedIntegrationFrontier(
+      {
+        ...scenario.runState,
+        appliedThrough: JournalPosition.make(13),
+        workflowHistory: { evidence: journalEvidenceFrom(retainedRecords) }
+      },
+      { ...publicationRuntimeFacts },
+      [responsibility]
+    ).transitions()
+  ).toEqual([])
   expect(
     deriveStartedIntegrationFrontier(
       runState,

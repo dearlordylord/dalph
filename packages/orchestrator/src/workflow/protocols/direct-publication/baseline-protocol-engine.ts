@@ -28,7 +28,7 @@ const retainedCatchUpFor = (failure: RemoteBaselineFailure) =>
   LocalTargetCatchUpResult.cases.Unavailable.make({ reason: failure.reason })
 
 /** Records one baseline Git boundary per activation; the frontier admits the next step under a fresh owner. */
-export const makeRemoteBaselineEngine = <E, R>(readEvidence: CurrentRemoteBaselineEvidence<E, R>) => {
+const makeRemoteBaselineEngine = <E, R>(readEvidence: CurrentRemoteBaselineEvidence<E, R>) => {
   const establishRemoteBaseline = Effect.fn("RemoteBaseline.establish")(function* (
     correlation: RemoteBaselineCorrelation,
     execution?: InterruptibleWorkflowBoundaryExecution
@@ -117,5 +117,5 @@ export const makeRemoteBaselineEngine = <E, R>(readEvidence: CurrentRemoteBaseli
   return { establishRemoteBaseline }
 }
 
-export const RemoteBaselineEngine = makeRemoteBaselineEngine(readAcceptedRemoteBaselineEvidence)
+const RemoteBaselineEngine = makeRemoteBaselineEngine(readAcceptedRemoteBaselineEvidence)
 export const establishRemoteBaseline = RemoteBaselineEngine.establishRemoteBaseline

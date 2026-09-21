@@ -685,7 +685,12 @@ const qualifiedIntegratorProgressTransitionsFor = (
       ? [RunnableFrontierTransition.RunTargetPromotion({ candidate, publication: succeeded, responsibility })]
       : []
   }
-  if (publication._tag === "PublicationContradiction" || runtimeFacts.remotePublicationConfigured !== true) return []
+  if (
+    publication._tag === "PublicationRetained" ||
+    publication._tag === "PublicationContradiction" ||
+    runtimeFacts.remotePublicationConfigured !== true
+  )
+    return []
   return [
     RunnableFrontierTransition.RunRemotePublication({
       candidate,
