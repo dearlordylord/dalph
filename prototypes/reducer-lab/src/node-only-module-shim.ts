@@ -22,6 +22,8 @@ export const randomUUID = (): string => globalThis.crypto.randomUUID()
 export const createHash = unavailable
 export const execFile = unavailable
 export const promisify = (_function: unknown) => unavailable
+export const readdir = unavailable
+export const readFile = unavailable
 export const setTimeout = globalThis.setTimeout.bind(globalThis)
 
 export const Buffer = {

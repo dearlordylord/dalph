@@ -56,6 +56,9 @@ import {
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
@@ -144,6 +147,11 @@ const scenario = async (name: string, body: () => void | Promise<void>): Promise
   console.log(`✓ ${name}`)
 }
 
+const remotePublicationTarget = RemotePublicationTarget.make({
+  branch: RemotePublicationBranchRef.make("refs/heads/main"),
+  endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/repository.git")
+})
+
 const makeLargeProductionTrace = () =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -162,7 +170,8 @@ const makeLargeProductionTrace = () =>
       yield* journal.beginRun(
         runId,
         target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(4) })
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(4) }),
+        remotePublicationTarget
       )
       let predecessorOperationIds: ReadonlyArray<OperationId> = []
       for (let index = 0; index < 59; index += 1) {

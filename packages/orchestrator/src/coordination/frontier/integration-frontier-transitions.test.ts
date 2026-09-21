@@ -616,7 +616,7 @@ it("waits for an explicitly applied claim reacquisition when integration claim e
     heldResponsibilities: [identity(responsibility.queuedAt)],
     integrationTarget: Option.some(target),
     targetLineageByAttemptId: new Map([[attemptId, scenario.initialLineage]]),
-    targetLineageRefreshRequiredAttemptIds: new Set(),
+    targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
     targetPromotionConfigured: true,
     taskClaimAuthorityByAttemptId: new Map([[attemptId, { _tag: "Missing" as const }]])
   })
