@@ -10,6 +10,7 @@ import { addSuccessfulOutputLines, outputPresentationPolicy } from "./quality-ou
 import { runFormalWorkflow } from "./run-formal-workflow.mjs"
 import { runPreflightCensus } from "./preflight-census.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
+import { qualificationAggregateError, runQualificationStages } from "./quality-gate-qualification-scheduler.mjs"
 import { boundedQualityGateCommand, qualityGateTestEnvironment } from "./quality-gate-stage-policy.mjs"
 
 /** Vite/Vitest results, transforms and newly bundled config modules are disposable, never credited stages. */
@@ -196,7 +197,7 @@ export const executeResumableQualityGate = async ({
         report(`Reused quality stage ${stage.stageId} from ${stage.runId}`)
       }
     }
-    const executeStage = async (stage) => {
+    const executeStage = async (stage, signal) => {
       await guard.assertUnchanged()
       const ordinal = stageManifest.indexOf(stage)
       const path = join(runDirectory, "quality-stages", `${ordinal}.json`)
@@ -212,10 +213,11 @@ export const executeResumableQualityGate = async ({
         result = await (
           runStage ??
           ((selectedGate) =>
-            runBoundedCommand(
-              boundedQualityGateCommand({ gate: selectedGate, nodeExecutable: process.execPath, pnpmEntryPoint })
-            ))
-        )(gate)
+            runBoundedCommand({
+              ...boundedQualityGateCommand({ gate: selectedGate, nodeExecutable: process.execPath, pnpmEntryPoint }),
+              signal
+            }))
+        )(gate, signal)
         await guard.assertUnchanged()
         const evidence = readRunEvidence({ runDirectory, runId: run.runId })
         if (
@@ -249,6 +251,10 @@ export const executeResumableQualityGate = async ({
         })
         return { ...result, outputLineCount: 0 }
       } catch (error) {
+        if (error instanceof Error) {
+          error.stageEvidencePath = path
+          error.stageId = stage.id
+        }
         atomicRecord(path, {
           ...started,
           outcome: "failed",
@@ -291,7 +297,15 @@ export const executeResumableQualityGate = async ({
       retainedFormal = selectedFormal.retained
       if (selectedFormal.disposition !== undefined)
         formal = { ...selectedFormal.disposition, outputLineCount: formalOutputLineCount }
-      for (const stage of suffix.filter((stage) => stage.boundary === "qualification")) await executeStage(stage)
+      const qualificationStages = suffix.filter((stage) => stage.boundary === "qualification")
+      const qualification = await runQualificationStages({ report, run: executeStage, stages: qualificationStages })
+      if (!qualification.succeeded) {
+        throw qualificationAggregateError({
+          outcomes: qualification.outcomes,
+          safetyError: qualification.safetyError,
+          stages: qualificationStages
+        })
+      }
     } catch (error) {
       failure = error
     }
