@@ -912,3 +912,46 @@ application/coverage batch passed: 408 test files passed (4 skipped), 4,412
 tests passed (41 skipped), and changed production and maintained-evaluation
 coverage were both 100%. The fresh supervised disposable hosted S1 remains a
 separate required acceptance step.
+
+### User-authorized fresh S1 attempts, 2026-09-21 20:04–20:23 UTC
+
+The supervisor used the logged-in GitHub account and an isolated Codex home as
+requested. Each target was a new private disposable GitHub repository with one
+open issue, a separate local clone, a pinned Base, disjoint Dalph state paths,
+and a credential-free HTTPS publication target. The candidate source was
+`3820a62a3a2233a21030d7314cbbc297a0aaeab6`; the run-specific task Base and
+candidate commit facts are retained below.
+
+The first target was
+`dearlordylord/dalph-issue-384-s1-20260921#1` with task Base
+`b024aafbb9feb63d147c6ee528041991bae98fc6`. The workspace-pinned Codex CLI
+(`0.149.0`) ran with isolated `gpt-5.6-luna` and `max` reasoning. Run
+`r1.eyJmcmVzaG5lc3MiOiIwMWEwYzU5My1mMmE1LTc4NjktYmU5Ni02ZTliNDEyZWJmY2EiLCJ0YXJnZXQiOnsiX3RhZyI6IkdpdGh1Yklzc3VlIiwiaXNzdWVOdW1iZXIiOjEsIm93bmVyIjoiZGVhcmxvcmR5bG9yZCIsInJlcG9zaXRvcnkiOiJkYWxwaC1pc3N1ZS0zODQtczEtMjAyNjA5MjEifX0` selected the issue and acquired the task. Codex created and committed
+`WALKTHROUGH.md` as `55122aba4ed71fde38107912bba4868c16e56a52`, returning the
+required correlation JSON. Dalph then kept the executor responsibility in
+`Running`; no integrated commit M was produced. The first invocation ended
+with `ApplicationExitDisposition: Failed` and
+`lifecycle.exit_failed`. An identical next invocation selected the same Run as
+`Recovered` and reached the same nonterminal executor state before the
+supervisor stopped it. The raw captures and private state remain under
+`/tmp/dalph-384-s1-KOhLLM`.
+
+Independent checks after both stops showed the GitHub issue still `OPEN`, no
+labels, and the remote `refs/heads/main` still at the Base SHA. Therefore there
+was no remote acknowledgement, no published M, no local promotion, and no task
+closure to claim. The observed failure is a real app-server lifecycle handoff
+after a valid Codex completion, not evidence for adding a post-publication
+remote read.
+
+To distinguish the provider version, a second fresh target
+`dearlordylord/dalph-issue-384-s1-codex155-20260921#1` used the logged-in global
+Codex CLI `0.155.1`, again isolated to Luna/max. Its task Base was
+`7dbddfda286c351b42d17f5c896b7ba94cef9812`; Run
+`r1.eyJmcmVzaG5lc3MiOiIwMWEwYzVhMC01ODEzLTdhZmYtYmViYy1kZDIxYmM4NjRjNWUiLCJ0YXJnZXQiOnsiX3RhZyI6IkdpdGh1Yklzc3VlIiwiaXNzdWVOdW1iZXIiOjEsIm93bmVyIjoiZGVhcmxvcmR5bG9yZCIsInJlcG9zaXRvcnkiOiJkYWxwaC1pc3N1ZS0zODQtczEtY29kZXgxNTUtMjAyNjA5MjEifX0` was allocated, but the model emitted only its initial plan and made no tool call or worktree change. The supervisor stopped it with a successful graceful Exit; its issue and remote remained unchanged. Its evidence is under `/tmp/dalph-384-s1-codex155-wOX97u`.
+
+These are preserved qualification failures, not acceptance evidence. The next
+scoped action is a provider-lifecycle follow-up that proves the pinned
+app-server completion handoff (or repairs that boundary) with a fresh bounded
+run. Do not close either disposable issue, delete either repository, or claim
+S1 acceptance until a run records M, independent remote-head acknowledgement,
+local promotion, tracker closure, and exact cleanup.
