@@ -202,6 +202,24 @@ describe("hosted formal-model contract", () => {
     expect(suffixJob).toMatch(
       /- name: Install dependencies\n\s+timeout-minutes: 5\n\s+run: pnpm install --frozen-lockfile/u
     )
+    expect(suffixJob).toMatch(
+      /- name: Prepare production artifacts\n\s+timeout-minutes: 5\n\s+run: pnpm check:artifacts/u
+    )
+    expect(suffixJob.indexOf("pnpm install --frozen-lockfile")).toBeLessThan(suffixJob.indexOf("pnpm check:artifacts"))
+    expect(suffixJob.indexOf("pnpm check:artifacts")).toBeLessThan(suffixJob.indexOf("pnpm check:ci:quality:stage \\"))
+    const qualityGateCleanRunnerPreparation = fullQualityGateManifest("0".repeat(40)).find(
+      ({ boundary }: { boundary: string }) => boundary === "qualification"
+    )?.cleanRunnerPreparation
+    expect(qualityGateCleanRunnerPreparation).toMatchObject({
+      id: "frozen-install-and-artifact-preparation",
+      preflightRerun: false,
+      timeoutMilliseconds: 600_000
+    })
+    expect(qualityGateCleanRunnerPreparation.commands).toEqual([
+      { args: ["install", "--frozen-lockfile"], id: "frozen-install", timeoutMilliseconds: 300_000 },
+      { args: ["check:artifacts"], id: "artifact-preparation", timeoutMilliseconds: 300_000 }
+    ])
+    expect(suffixJob).not.toContain("pnpm check:preflight")
     expect(suffixJob.indexOf("pnpm check:ci:quality:stage \\")).toBeLessThan(
       suffixJob.indexOf("Upload hosted quality stage evidence")
     )

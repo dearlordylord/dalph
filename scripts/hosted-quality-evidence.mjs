@@ -438,8 +438,8 @@ const validateEnvelope = ({ binding, envelope, plan, reportRoot }) => {
   if (!Array.isArray(envelope?.artifacts) || envelope.artifacts.length === 0)
     failures.push("artifact inventory is absent")
   else {
-    if (new Set(envelope.artifacts.map(({ path }) => path)).size !== envelope.artifacts.length)
-      failures.push("duplicate portable artifact path")
+    const artifactPaths = envelope.artifacts.map((artifact) => artifact?.path)
+    if (new Set(artifactPaths).size !== envelope.artifacts.length) failures.push("duplicate portable artifact path")
     for (const artifact of envelope.artifacts) {
       if (!same(Object.keys(artifact ?? {}).sort(), ["bytes", "path", "sha256"]))
         failures.push("malformed portable artifact fields")

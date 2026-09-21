@@ -81,11 +81,14 @@ For a hosted comprehensive qualification handoff, the Integrator first runs the
 focused checks that own the repaired boundary and then `pnpm check:baseline` on
 the candidate attempt before requesting final qualification. Hosted CI runs its
 generated structural preflight before the generated delivery-repeatability,
-recorded-catalog, and coverage suffix cells. Those cells use bounded fail-slow
-concurrency, so one ordinary failure does not cancel independent cells. The
-quality aggregate reports every expected cell, including rows that are missing
-or unproven, and the separate formal aggregate remains independent of the
-quality suffix.
+recorded-catalog, and coverage suffix cells. Each clean suffix runner installs
+the frozen dependency graph and then runs the bounded `pnpm check:artifacts`
+preparation declared by the shared stage algebra, so package `dist` trees exist
+before coverage or another suffix stage consumes them. This preparation does not
+rerun the structural preflight. Those cells use bounded fail-slow concurrency,
+so one ordinary failure does not cancel independent cells. The quality aggregate
+reports every expected cell, including rows that are missing or unproven, and
+the separate formal aggregate remains independent of the quality suffix.
 
 When the hosted quality aggregate reports more than one independent defect,
 repair every reported defect before submitting the repaired candidate C2. The

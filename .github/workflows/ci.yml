@@ -175,6 +175,13 @@ jobs:
         timeout-minutes: 5
         run: pnpm install --frozen-lockfile
 
+      # The checked-in stage algebra requires clean runners to reconstruct the
+      # production dist trees used by coverage and other package consumers.
+      # This is bounded preparation, not a second structural preflight.
+      - name: Prepare production artifacts
+        timeout-minutes: 5
+        run: pnpm check:artifacts
+
       # The stage command emits its ordinary pass/fail envelope and exits zero
       # after an ordinary stage verdict. Export/ownership failures remain
       # nonzero so the aggregate reports that cell as unproven.

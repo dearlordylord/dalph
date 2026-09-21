@@ -214,6 +214,28 @@ void test("rejects missing, duplicate, malformed, changed-candidate, and mixed-t
   }
 })
 
+void test("keeps malformed structured artifact entries unproven while reporting every row", () => {
+  for (const malformed of [null, "not-an-artifact"]) {
+    const f = fixture()
+    try {
+      f.rewrite(1, (envelope) => {
+        envelope.artifacts[0] = malformed
+      })
+      const result = aggregateHostedQualityStages({ binding, reports: f.reports })
+      assert.equal(result.succeeded, false)
+      assert.deepEqual(
+        result.rows.map(({ outcome }) => outcome),
+        ["passed", "UNPROVEN", "passed"]
+      )
+      assert.equal(result.rows.length, 3)
+      assert.ok(result.rows[1].failures.some((failure) => failure.includes("malformed portable artifact")))
+      assert.ok(result.failures.some((failure) => failure.startsWith("recorded-catalog:")))
+    } finally {
+      f.cleanup()
+    }
+  }
+})
+
 void test("accepts terminal timeout as diagnostic evidence but never as qualification success", () => {
   const f = fixture()
   try {

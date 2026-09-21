@@ -33,11 +33,13 @@ void test("the shared manifest names the three independent suffix obligations on
   )
   assert.deepEqual(qualityGateCleanRunnerPreparation, {
     artifactTransfer: "none",
-    command: ["install", "--frozen-lockfile"],
-    id: "frozen-install",
+    commands: [
+      { args: ["install", "--frozen-lockfile"], id: "frozen-install", timeoutMilliseconds: 300_000 },
+      { args: ["check:artifacts"], id: "artifact-preparation", timeoutMilliseconds: 300_000 }
+    ],
+    id: "frozen-install-and-artifact-preparation",
     preflightRerun: false,
-    rebuild: "none",
-    timeout: 300_000
+    timeoutMilliseconds: 600_000
   })
 })
 
@@ -58,6 +60,13 @@ void test("generates one exact candidate/Base/policy plan entry for every Node a
   assert.equal(plan.policyDigest, qualityGateStagePlanPolicyDigest)
   assert.match(plan.configurationDigest, /^[0-9a-f]{64}$/u)
   assert.equal(plan.configDigest, plan.configurationDigest)
+  assert.deepEqual(plan.cleanRunnerPreparation, qualityGateCleanRunnerPreparation)
+  assert.ok(
+    plan.stages.every(
+      ({ cleanRunnerPreparation }) =>
+        JSON.stringify(cleanRunnerPreparation) === JSON.stringify(qualityGateCleanRunnerPreparation)
+    )
+  )
   assert.deepEqual(
     plan.stages.map(({ nodeVersion, stageId }) => `${nodeVersion}:${stageId}`),
     [

@@ -7,16 +7,30 @@ const DEFAULT_TERMINATION_GRACE = 5 * SECOND
  * hosted post-preflight jobs.  The candidate and reviewed Base are inputs to a
  * plan; this identity names the stage policy that interpreted those inputs.
  */
-export const qualityGatePolicyIdentity = Object.freeze({ id: "dalph-quality-stage-algebra", revision: 1, version: 1 })
+export const qualityGatePolicyIdentity = Object.freeze({ id: "dalph-quality-stage-algebra", revision: 2, version: 1 })
 
-/** A clean hosted runner only needs the dependency graph; suffix stages consume source aliases. */
+/**
+ * A clean hosted runner reconstructs production artifacts after installing the
+ * frozen dependency graph.  The suffix stages must use this exact bounded
+ * preparation sequence; they do not rerun the structural preflight.
+ */
 export const qualityGateCleanRunnerPreparation = Object.freeze({
   artifactTransfer: "none",
-  command: Object.freeze(["install", "--frozen-lockfile"]),
-  id: "frozen-install",
+  commands: Object.freeze([
+    Object.freeze({
+      args: Object.freeze(["install", "--frozen-lockfile"]),
+      id: "frozen-install",
+      timeoutMilliseconds: 5 * 60 * SECOND
+    }),
+    Object.freeze({
+      args: Object.freeze(["check:artifacts"]),
+      id: "artifact-preparation",
+      timeoutMilliseconds: 5 * 60 * SECOND
+    })
+  ]),
+  id: "frozen-install-and-artifact-preparation",
   preflightRerun: false,
-  rebuild: "none",
-  timeout: 5 * 60 * SECOND
+  timeoutMilliseconds: 10 * 60 * SECOND
 })
 
 const deliveryDigestArtifactObligation = Object.freeze({
