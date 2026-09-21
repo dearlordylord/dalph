@@ -31,6 +31,7 @@ import {
   JournaledRunObservationSource,
   JournalStore,
   RunLifecycleJournal,
+  type RemoteBaselineGit,
   type RemotePublicationGit,
   TargetPromotionGit,
   type TaskTrackerMutationThrottled,
@@ -214,6 +215,8 @@ export interface ProductionRepositoryHostAdapters<ECodex = never, EGithub = neve
   readonly applicationExitTraceObserver?: ProductionApplicationExitTraceObserver
   /** Optional direct observation of workflow disposition cleanup calls. */
   readonly workflowCleanupObserver?: ProductionWorkflowCleanupObserver
+  /** Controlled direct-publication Git authority for hermetic host qualification. */
+  readonly remoteBaselineGitLayer?: Layer.Layer<RemoteBaselineGit>
   /** Controlled direct-publication Git authority for hermetic host qualification. */
   readonly remotePublicationGitLayer?: Layer.Layer<RemotePublicationGit>
   /** Optional observation of the process-local timer lifecycle. */
@@ -834,6 +837,9 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
             integrationFinality: completionClaim,
             integrator,
             remotePublicationTarget: configuration.remotePublicationTarget,
+            ...(adapters.remoteBaselineGitLayer === undefined
+              ? {}
+              : { remoteBaselineGitLayer: adapters.remoteBaselineGitLayer }),
             ...(adapters.remotePublicationGitLayer === undefined
               ? {}
               : { remotePublicationGitLayer: adapters.remotePublicationGitLayer }),

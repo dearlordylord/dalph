@@ -109,6 +109,7 @@ import {
 } from "./codex-attempt-store.js"
 import { isolatedCodexProcessNativeService } from "../../test-support/isolated-codex-process-native.js"
 import {
+  remoteBaselineGitLayerForTest,
   remotePublicationGitLayerForProductionTest,
   remotePublicationTargetForTest
 } from "../../../orchestrator/test/support/direct-publication.js"
@@ -126,7 +127,11 @@ import {
 const productionRepositoryHostTestGraph = <ECodex = never, EGithub = never, ETrace = never>(
   adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace> = {}
 ) =>
-  productionRepositoryHostGraph({ ...adapters, remotePublicationGitLayer: remotePublicationGitLayerForProductionTest })
+  productionRepositoryHostGraph({
+    ...adapters,
+    remoteBaselineGitLayer: remoteBaselineGitLayerForTest,
+    remotePublicationGitLayer: remotePublicationGitLayerForProductionTest
+  })
 
 const unterminatedRun = { await: Effect.never, poll: Effect.succeed(Option.none()) }
 
