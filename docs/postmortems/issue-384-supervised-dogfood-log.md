@@ -893,3 +893,22 @@ The local implementation and no-extra-remote-read rule are unchanged. The
 fresh supervised disposable hosted S1 remains unrun, and this candidate must
 not be called fully qualified until the exhaustive formal stage completes in a
 separately bounded performance follow-up.
+
+### Completion candidate gate and chronology repair, 2026-09-21 15:06–15:17 UTC
+
+The completion worktree repaired the maintained S1 assertion so its completed
+tracker graph is selected only after `IntegrationFinalitySettled`; the previous
+test selected an earlier completed graph under parallel coverage load. The
+repair is `9afc7f83c` (`test: assert later completion graph chronology`). It
+changes only the controlled chronology assertion and does not change runtime
+behavior or add a remote read.
+
+The fresh admitted full gate
+`pnpm check:all --candidate=e92a8edcfba6986eadec4d9f7b835ac49ee88644` ran as
+`794f5e35-0255-4880-b313-4a0892698a87`. It completed with custody stopped,
+source input unchanged, qualification `passed`, and 396 obligations complete.
+Preflight, formal reuse, 20/20 repeatability iterations, and the full
+application/coverage batch passed: 408 test files passed (4 skipped), 4,412
+tests passed (41 skipped), and changed production and maintained-evaluation
+coverage were both 100%. The fresh supervised disposable hosted S1 remains a
+separate required acceptance step.

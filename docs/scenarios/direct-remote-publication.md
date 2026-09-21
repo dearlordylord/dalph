@@ -2,7 +2,7 @@
 
 Issue: [Specify final remote publication before task completion](https://github.com/dearlordylord/dalph/issues/383).
 
-**Status: accepted by the maintainer on 2026-09-19; the maintained capstone chronology repair and controlled S1/S7 checks are complete, but acceptance remains unproven.** The frozen full gate is `UNPROVEN` on repository-wide baseline and candidate controls. Issue #390's retained-run closure is complete; a fresh supervised disposable S1 dogfood remains required and must not repair the retained failed candidate.
+**Status: accepted by the maintainer on 2026-09-19; the maintained capstone chronology repair, controlled S1/S7 checks, and frozen local full gate are complete, but acceptance remains unproven until the fresh supervised disposable S1 dogfood.** Issue #390's retained-run closure is complete; the supervised S1 must be a fresh disposable run and must not repair the retained failed candidate.
 Alice selected direct publication, remote-first order, ordinary non-force push,
 and automatic integration recovery with user-authorized continuation after
 exhaustion. This document consolidates those decisions and their acceptance tests.
