@@ -180,6 +180,14 @@ arrives after subscription but before the current read completes cannot be
 lost; the current-first attachment either reads the newer projection or keeps
 the buffered wake for the next read.
 
+Codex may acknowledge `turn/start` before its first `thread/resume` census
+exposes the owned turn. If the durable attempt record is already `Running`,
+the initial lifecycle attachment keeps the exact Executing projection alive
+for the existing provider completion hint. That hint performs the ordinary
+exact reread and may publish the terminal report. This is a one-time
+initial-attachment handoff; later contradictory or unreadable projections stay
+inert and fail closed without a timer or tight passive retry.
+
 `NoReport`, `TemporarilyUnavailable`, `Unreadable`, and
 `CorrelationContradiction` are four distinct unresolved observations. The
 serialized planned-attempt protocol records the exact evidence, retains the
@@ -214,6 +222,7 @@ here instead of maintaining parallel narrative names.
 | Processes share one app-server incarnation but only A carries A's exact Codex thread identity; a foreign or missing thread id cannot keep A Executing | `attributes escaped activity to the exact Codex thread and rejects foreign or missing thread ids` | `packages/dalph/src/application/codex-app-server-public.test.ts` |
 | A suspension census signals A's exact descendants and never B's | `suspension census for one Codex thread never signals another thread` | `packages/dalph/src/application/codex-app-server-public.test.ts` |
 | A notification arrives after subscription and before the consumer awaits | `current-first attachment cannot miss a terminal change between projection and await` | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
+| Codex turn/start succeeds before the first thread census exposes the owned turn; the durable Running record keeps the initial attachment until the existing completion hint | `keeps the initial lifecycle attachment through a delayed owned-turn census` | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
 | The generic workflow owner is rebuilt from the shared Journal and retains one executing attempt without another Begin | `restart reprojects the exact executing attempt once then reattaches without Begin` | `packages/dalph/test/scenarios/production.test.ts` |
 | A rebuilt Codex adapter uses the durable exact attempt-thread association, reads Executing, and later observes Terminal without another turn | `rebuilds Codex lifecycle attachment from durable association across scoped restart` | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
 | Process 1 retains causally proved Safe; the rebuilt Codex adapter reads that exact Safe projection without another suspension or turn command | `rebuilds a causally proved Safe Codex projection from durable association across scoped restart` | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |

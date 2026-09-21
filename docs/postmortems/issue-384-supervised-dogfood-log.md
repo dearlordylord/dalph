@@ -1000,3 +1000,20 @@ It passed with 1 test passed and 178 skipped (179 total) in 2.33 seconds.
 This is a provider-local lifecycle repair; it adds no CLI operation and no
 remote read after publication. The fresh supervised disposable S1 remains
 pending and cannot be claimed from this regression test.
+
+### Initial Codex census handoff repair, 2026-09-21 23:54 UTC
+
+The rebuilt public S1 reproduced a second provider-local boundary: Codex had
+completed the owned turn and committed `WALKTHROUGH.md`, but the first
+passive lifecycle projection saw a durable `Running` record before
+`thread/resume` exposed the owned turn. Dalph converted that initial
+`CodexTurnBoundaryUnknown` into an `Unreadable` projection and detached the
+observer, so the existing completion hint could not trigger the exact reread.
+
+The candidate now keeps the initial lifecycle attachment at exact
+`ExecutorWorkExecuting` only when the durable record is the same attempt's
+`Running` record. The existing provider hint then performs the normal exact
+reread; later contradictory or unreadable projections retain the
+fail-closed behavior and do not schedule a passive retry. The controlled
+regression is `keeps the initial lifecycle attachment through a delayed
+owned-turn census`. No command, CLI, or post-publication remote read changed.

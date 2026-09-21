@@ -997,9 +997,20 @@ const makeCodexPlannedAttemptExecutorContext = (
     const reconcileOwnedTurn = (
       thread: CodexThreadSnapshot,
       record: OwnedTurnRecord
-    ): Effect.Effect<ThreadReconciliation, CodexThreadMismatch | CodexTurnBoundaryUnknown | ForeignAttemptRecord> => {
+    ): Effect.Effect<
+      ThreadReconciliation,
+      CodexThreadMismatch | CodexTurnBoundaryUnknown | CodexTurnCensusPending | ForeignAttemptRecord
+    > => {
       const lookup = ownedTurnForRecord(thread, record)
-      if (lookup._tag === "Contradiction") return Effect.fail(new CodexTurnBoundaryUnknown({}))
+      if (lookup._tag === "Contradiction") {
+        // A just-started Codex turn can be absent from the first thread
+        // census even though Begin persisted Running. Keep that transient
+        // boundary distinct from a nonempty contradictory census.
+        if (record._tag === "Running" && thread.turns.length === 0) {
+          return Effect.fail(new CodexTurnCensusPending({}))
+        }
+        return Effect.fail(new CodexTurnBoundaryUnknown({}))
+      }
       if (lookup._tag === "Foreign") return Effect.fail(new ForeignAttemptRecord({ observed: lookup.observed }))
       if (lookup._tag === "Missing") {
         return Effect.succeed({ _tag: "Unresolved" as const, thread, turn: undefined })
@@ -1932,13 +1943,34 @@ const makeCodexPlannedAttemptExecutorContext = (
     })
 
     const projectLifecycle = Effect.fn("CodexPlannedAttemptExecutor.projectLifecycle")(function* (
-      correlation: PlannedAttemptExecutorCorrelation
+      correlation: PlannedAttemptExecutorCorrelation,
+      allowInitialRunningRecovery = false
     ) {
       return yield* projectStoredRecord(correlation, { _tag: "PassiveLifecycleObservation" }).pipe(
         Effect.catch((error: unknown) =>
-          logProjectionFailure(correlation, { _tag: "PassiveLifecycleObservation" }, error).pipe(
-            Effect.andThen(Effect.succeed(projectionOutcome(projectFailure(correlation, error))))
-          )
+          Effect.gen(function* () {
+            // Codex can acknowledge turn/start before thread/resume exposes
+            // the owned turn in its first census. A durable Running record
+            // proves that Dalph already crossed the boundary; keep the
+            // lifecycle attachment alive for the existing provider hint so a
+            // later exact census can settle it. This recovery is limited to
+            // the first attachment read. Subsequent contradictory reads stay
+            // unreadable and therefore fail closed.
+            if (allowInitialRunningRecovery && error instanceof CodexTurnCensusPending) {
+              const stored = yield* store.readAttempt(correlation.runId, correlation.attemptId).pipe(Effect.result)
+              if (
+                Result.isSuccess(stored) &&
+                Option.isSome(stored.success) &&
+                stored.success.value._tag === "Running" &&
+                stored.success.value.correlationRunId === correlation.runId &&
+                stored.success.value.correlationAttemptId === correlation.attemptId
+              ) {
+                return projectionOutcome(exact(running(correlation)))
+              }
+            }
+            yield* logProjectionFailure(correlation, { _tag: "PassiveLifecycleObservation" }, error)
+            return projectionOutcome(projectFailure(correlation, error))
+          })
         )
       )
     })
@@ -2740,20 +2772,21 @@ const makeCodexPlannedAttemptExecutorContext = (
             Effect.provideService(Scope.Scope, attachmentScope)
           )
           const hints = Stream.merge(turnHints, activityHints)
-          const readLifecycle = projectionGate
-            .withPermit(attemptGate.withPermit(projectLifecycle(correlation)))
-            .pipe(
-              Effect.tap((outcome) =>
-                outcome.heldTerminalActivity ? Deferred.succeed(heldTerminalActivity, undefined) : Effect.void
+          const readLifecycle = (initial: boolean) =>
+            projectionGate
+              .withPermit(attemptGate.withPermit(projectLifecycle(correlation, initial)))
+              .pipe(
+                Effect.tap((outcome) =>
+                  outcome.heldTerminalActivity ? Deferred.succeed(heldTerminalActivity, undefined) : Effect.void
+                )
               )
-            )
-          const current = yield* readLifecycle
+          const current = yield* readLifecycle(true)
           const heldActivityCadence = Stream.fromEffect(Deferred.await(heldTerminalActivity)).pipe(
             Stream.flatMap(() => Stream.fromSchedule(Schedule.spaced(ownedActivityObservationInterval))),
-            Stream.mapEffect(() => readLifecycle),
+            Stream.mapEffect(() => readLifecycle(false)),
             Stream.takeUntil((candidate) => !candidate.heldTerminalActivity)
           )
-          const notificationCandidates = hints.pipe(Stream.mapEffect(() => readLifecycle))
+          const notificationCandidates = hints.pipe(Stream.mapEffect(() => readLifecycle(false)))
           const changes = Stream.merge(notificationCandidates, heldActivityCadence).pipe(
             Stream.map((candidate) => candidate.projection),
             Stream.filter((candidate) => !samePlannedAttemptExecutorProjection(candidate, current.projection)),
@@ -2796,6 +2829,8 @@ class ForeignAttemptRecord extends Schema.TaggedError<ForeignAttemptRecord>()("F
 class CodexThreadMismatch extends Schema.TaggedError<CodexThreadMismatch>()("CodexThreadMismatch", {}) {}
 
 class CodexTurnBoundaryUnknown extends Schema.TaggedError<CodexTurnBoundaryUnknown>()("CodexTurnBoundaryUnknown", {}) {}
+
+class CodexTurnCensusPending extends Schema.TaggedError<CodexTurnCensusPending>()("CodexTurnCensusPending", {}) {}
 
 class CodexActivityCensusUnknown extends Schema.TaggedError<CodexActivityCensusUnknown>()(
   "CodexActivityCensusUnknown",

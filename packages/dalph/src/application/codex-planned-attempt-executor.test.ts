@@ -1299,6 +1299,70 @@ it.effect("current-first attachment cannot miss a terminal change between projec
   )
 )
 
+it.effect("keeps the initial lifecycle attachment through a delayed owned-turn census", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const providerHints = yield* PubSub.unbounded<void>()
+      const harness = makeHarness({
+        lifecycleHints: PubSub.subscribe(providerHints).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const))
+            )
+          )
+        )
+      })
+
+      const result = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        const visibleAfterBegin = harness.currentThread()
+        // Model Codex's first thread/resume census lagging behind the
+        // successful turn/start response. The durable record remains Running.
+        harness.setThread({ ...visibleAfterBegin, status: "active", turns: [] })
+
+        const attachment = yield* lifecycle.attach(correlation)
+        expect(attachment.current).toMatchObject({
+          _tag: "Exact",
+          report: { _tag: "ExecutorWorkExecuting", correlation }
+        })
+
+        harness.complete(finalResponse(head))
+        yield* PubSub.publish(providerHints, undefined)
+        const changed = yield* Stream.runHead(attachment.changes)
+        return { attachment, changed }
+      }).pipe(Effect.provide(layerFor(harness)))
+
+      expect(result.changed).toMatchObject({
+        _tag: "Some",
+        value: { _tag: "Exact", report: { _tag: "ExecutorWorkTerminal", correlation, result: { _tag: "Accepted" } } }
+      })
+      yield* result.attachment.close
+    })
+  )
+)
+
+it.effect("keeps an initial nonempty lifecycle contradiction unreadable", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = makeHarness()
+      const projection = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        harness.duplicateOwnedTurn()
+        const attachment = yield* lifecycle.attach(correlation)
+        const current = attachment.current
+        yield* attachment.close
+        return current
+      }).pipe(Effect.provide(layerFor(harness)))
+
+      expect(projection).toMatchObject({ _tag: "Unreadable", correlation })
+    })
+  )
+)
+
 it.effect("serializes the initial lifecycle projection with an in-flight Begin", () =>
   Effect.scoped(
     Effect.gen(function* () {
