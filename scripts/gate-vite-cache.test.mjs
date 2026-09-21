@@ -26,7 +26,7 @@ void test("fresh and resumed setup discards only exact Vite caches at root and w
     const unrelated = join(root, "node_modules", ".other-temp")
     mkdirSync(unrelated)
     const roots = resetQualityCaches(root)
-    assert.equal(roots.length, 6)
+    assert.equal(roots.length, 7)
     for (const path of roots) assert.equal(existsSync(path), false)
     assert.equal(readFileSync(source, "utf8"), "authored config")
     assert.equal(existsSync(unrelated), true)

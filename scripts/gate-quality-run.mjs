@@ -29,9 +29,9 @@ export const resetQualityCaches = (worktree) => {
         if (lstatSync(path).isDirectory()) packageRoots.push(path)
       }
   }
-  const roots = packageRoots.flatMap((root) =>
-    [".vite", ".vite-temp"].map((cache) => join(root, "node_modules", cache))
-  )
+  const roots = packageRoots
+    .flatMap((root) => [".vite", ".vite-temp"].map((cache) => join(root, "node_modules", cache)))
+    .concat(join(worktree, "node_modules", ".cache"))
   for (const root of roots) {
     if (existsSync(root) && !lstatSync(root).isDirectory())
       throw new Error(`Unsupported disposable Vite cache: ${root}`)
@@ -130,6 +130,7 @@ export const executeResumableQualityGate = async ({
   const disposableCacheRoots = resetQualityCaches(run.worktree)
   const generatedOutputRoots = [
     ".scratch",
+    "node_modules/.cache",
     "coverage",
     "dist",
     "packages/contracts/dist",
