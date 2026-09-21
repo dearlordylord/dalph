@@ -1,7 +1,6 @@
 import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 import { makeAcceptedIntegrationHistory } from "../../../orchestrator/test/support/accepted-integration-history.js"
 import { makePromotedIntegrationHistory } from "../../../orchestrator/test/support/promoted-integration-history.js"
-import { materializeJournalRecords } from "../../../orchestrator/src/workflow-journal/record-sequence.js"
 // @effect-diagnostics multipleEffectProvide:off
 import {
   AttemptId,
@@ -36,7 +35,6 @@ import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
   type GithubGraphqlRequest,
-  AcceptedJournalReader,
   ApplicationExitShell,
   ActiveTaskClaim,
   AllocatedWorkflowRunId,
@@ -3114,6 +3112,9 @@ it.effect("retains remote delivery across Pause and Exit", () =>
           if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("publication fixture lacks Run begin")
           yield* journal.beginRun(runId, target, began.event.initialControlPolicy, began.event.remotePublicationTarget)
           for (const record of publicationRecords.slice(1)) {
+            if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+              return yield* Effect.die("publication fixture contains an invalid Run lifecycle suffix")
+            }
             yield* journal.append(runId, record.key, record.event)
           }
         }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
@@ -3185,10 +3186,6 @@ it.effect("retains remote delivery across Pause and Exit", () =>
         yield* Effect.gen(function* () {
           const bootstrap = yield* JournaledRunBootstrap
           const exitShell = yield* ApplicationExitShell
-          const acceptedJournal = yield* AcceptedJournalReader
-          const readRecords = acceptedJournal
-            .readAccepted(runId)
-            .pipe(Effect.map(({ records }) => materializeJournalRecords(records)))
           if (cutoff === "Pause") {
             yield* bootstrap.operatorControl.applyControlDirection({
               direction: "Pause",
@@ -3197,23 +3194,33 @@ it.effect("retains remote delivery across Pause and Exit", () =>
           } else {
             expect(yield* exitShell.requestBoundary.requestExit).toMatchObject({ _tag: "Succeeded" })
           }
-          const before = yield* readRecords
-          const proofBefore = before.find(({ event }) => event._tag === "RemotePublicationSucceeded")
-          expect(proofBefore?.event).toMatchObject({
-            _tag: "RemotePublicationSucceeded",
-            correlation: { qualifiedCandidate: { candidateCommit } }
-          })
-
           yield* run.pipe(Effect.exit)
-
-          const after = yield* readRecords
-          expect(after).toEqual(before)
-          expect(after.filter(({ event }) => event._tag === "RemotePublicationSucceeded")).toEqual([proofBefore])
         }).pipe(
           Effect.provide(application),
           Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
         )
 
+        const after = yield* Effect.gen(function* () {
+          return yield* (yield* JournalStore).read(runId)
+        }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+        const proofAfter = after.filter(({ event }) => event._tag === "RemotePublicationSucceeded")
+        expect(proofAfter).toHaveLength(1)
+        expect(proofAfter[0]?.event).toMatchObject({
+          _tag: "RemotePublicationSucceeded",
+          correlation: { qualifiedCandidate: { candidateCommit } }
+        })
+        if (cutoff === "Pause") {
+          expect(after.slice(0, publicationRecords.length)).toEqual(publicationRecords)
+          expect(after.slice(publicationRecords.length).map(({ event }) => event)).toEqual([
+            expect.objectContaining({
+              _tag: "ControlDirectionApplied",
+              direction: "Pause",
+              subject: { _tag: "Run", runId }
+            })
+          ])
+        } else {
+          expect(after).toEqual(publicationRecords)
+        }
         expect(yield* Ref.get(gitCalls), cutoff).toEqual([])
         expect(yield* Ref.get(cleanupCalls), cutoff).toEqual([])
         expect(yield* fileSystem.exists(`${directory}/.git/dalph/git-senders`), cutoff).toBe(false)

@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Run bootstrap keeps activation and its serialized operator controls in one ownership boundary. */
-import { plannedAttemptExecutorCorrelation, type RemotePublicationTarget, RunId } from "@dalph/contracts"
+import { plannedAttemptExecutorCorrelation, RemotePublicationTarget, RunId } from "@dalph/contracts"
 import { RunActivationGraphBaseline } from "./activation-graph-baseline.js"
 import {
   Context,
@@ -694,10 +694,24 @@ export const journaledRunBootstrapLayer = (
                 Layer.provideMerge(Layer.succeed(RunActivationGraphBaseline, initialState.position))
               )
               const context = yield* Layer.build(runtime)
-              yield* admitRemotePublicationTarget(runId, remotePublicationTarget).pipe(
-                Effect.provide(context),
-                Effect.provideService(RemotePublicationGit, Context.get(context, RemotePublicationGit))
-              )
+              const applicationExitCutoffClosed = (yield* admission.snapshot).cutoffClosed
+              const runPaused = initialState.reconstructed.pause.run._tag === "RunPaused"
+              const publicationAlreadyProved =
+                firstJournalRecordOfKind(initialState.prefix, "RemotePublicationSucceeded") !== undefined
+              const began = firstJournalRecordOfKind(initialState.prefix, "WorkflowRunBegan")
+              const destinationPinMatches =
+                began?.event._tag === "WorkflowRunBegan" &&
+                Schema.toEquivalence(RemotePublicationTarget)(
+                  began.event.remotePublicationTarget,
+                  remotePublicationTarget
+                )
+              // A mismatch must still fail locally; only the fresh remote read is behind the lifecycle/proof cut.
+              if (!destinationPinMatches || (!applicationExitCutoffClosed && !runPaused && !publicationAlreadyProved)) {
+                yield* admitRemotePublicationTarget(runId, remotePublicationTarget).pipe(
+                  Effect.provide(context),
+                  Effect.provideService(RemotePublicationGit, Context.get(context, RemotePublicationGit))
+                )
+              }
               const journal = processJournal.journal
               yield* applicationExit.registerExecutorDrain({
                 suspendExecutingExecutorWork: suspendExecutingExecutorWorkForApplicationExit().pipe(
