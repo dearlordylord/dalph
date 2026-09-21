@@ -148,6 +148,31 @@ void test("same-worktree writers never overlap; nested bounded commands have reg
   }
 })
 
+void test("records a supplied relayed-signal grace without changing the default command shape", async () => {
+  const f = fixture()
+  try {
+    const script = join(f.root, ".scratch", "relay-grace-shape.mjs")
+    writeFileSync(
+      script,
+      `import {runBoundedCommand} from ${JSON.stringify(new URL(`file://${bounded}`).href)};const command={args:['-e','process.exit(0)'],executable:process.execPath,relayParentSignals:true,timeoutMilliseconds:2000};await runBoundedCommand({...command,name:'default relay grace shape'});await runBoundedCommand({...command,name:'supplied relay grace shape',relayedSignalGraceMilliseconds:4000});`
+    )
+    const result = await start(f.root, [process.execPath, script]).done
+    assert.equal(result.code, 0, result.output)
+    const entry = runs(f.root)[0]
+    const obligations = readRecord(join(entry.runDirectory, "registration.json")).obligations.map((id) =>
+      readRecord(join(entry.runDirectory, "obligations", `${id}.json`))
+    )
+    const defaultCommand = obligations.find((record) => record.command.name === "default relay grace shape")
+    const suppliedCommand = obligations.find((record) => record.command.name === "supplied relay grace shape")
+    assert.ok(defaultCommand)
+    assert.ok(suppliedCommand)
+    assert.equal(Object.hasOwn(defaultCommand.command, "relayedSignalGraceMilliseconds"), false)
+    assert.equal(suppliedCommand.command.relayedSignalGraceMilliseconds, 4000)
+  } finally {
+    f.cleanup()
+  }
+})
+
 for (const exitCode of [0, 7])
   void test(`noisy admitted child preserves its complete log and exit ${exitCode}`, async () => {
     const f = fixture()

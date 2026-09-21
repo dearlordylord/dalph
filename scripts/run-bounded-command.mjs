@@ -66,6 +66,7 @@ export const runBoundedCommand = ({
   progress,
   progressHeartbeatMilliseconds = formalProgressHeartbeatMilliseconds,
   progressTransport,
+  relayedSignalGraceMilliseconds,
   relayParentSignals = false,
   signal,
   terminationGraceMilliseconds = defaultTerminationGraceMilliseconds,
@@ -113,18 +114,21 @@ export const runBoundedCommand = ({
       }
     let registered
     try {
+      const command = {
+        executable,
+        args,
+        cwd: resolvePath(cwd ?? process.cwd()),
+        name,
+        timeoutMilliseconds,
+        acceptedExitCodes,
+        relayParentSignals,
+        terminationGraceMilliseconds,
+        processGroupAbsenceTimeoutMilliseconds
+      }
+      if (relayedSignalGraceMilliseconds !== undefined)
+        command.relayedSignalGraceMilliseconds = relayedSignalGraceMilliseconds
       registered = registerSpawn({
-        command: {
-          executable,
-          args,
-          cwd: resolvePath(cwd ?? process.cwd()),
-          name,
-          timeoutMilliseconds,
-          acceptedExitCodes,
-          relayParentSignals,
-          terminationGraceMilliseconds,
-          processGroupAbsenceTimeoutMilliseconds
-        },
+        command,
         environment: environment ?? process.env,
         spawnChild: (childEnvironment) =>
           spawn(executable, args, {
@@ -358,7 +362,9 @@ export const runBoundedCommand = ({
       }
       if (finishTerminatedGroupIfAbsent()) return
       const grace =
-        relayedSignal === undefined ? terminationGraceMilliseconds : Math.min(1000, terminationGraceMilliseconds)
+        relayedSignal === undefined
+          ? terminationGraceMilliseconds
+          : (relayedSignalGraceMilliseconds ?? Math.min(1000, terminationGraceMilliseconds))
       escalationTimer = setTimeout(forceTermination, grace)
     }
 

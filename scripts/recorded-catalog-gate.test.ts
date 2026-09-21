@@ -78,6 +78,9 @@ it("coverage excludes the monolithic proof while retaining its thresholds and ot
     "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts"
   ])
   expect(coverage.test?.exclude).toContain(recordedCatalogTest)
+  expect(coverage.test?.exclude).toContain(
+    "packages/dalph/src/application/production-public-recovery.integration.test.ts"
+  )
   expect(coverage.test?.exclude).toContain("packages/**/*.mbt.test.ts")
   expect(coverage.test?.exclude?.filter((pattern) => pattern === recordedCatalogTest)).toHaveLength(1)
   expect(coverage.test?.exclude).not.toContain("packages/dalph/test/cassettes/recorded-catalog.test.ts")

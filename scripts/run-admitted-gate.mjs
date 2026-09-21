@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync } from "node:fs"
 import { join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { setTimeout } from "node:timers/promises"
 import {
   epochMilliseconds,
@@ -75,6 +76,10 @@ for (;;) {
 const runId = newIdentity()
 const runDirectory = join(location.custodyRoot, "runs", runId)
 const reportDirectory = join(location.worktree, ".scratch", "quality-gates", runId)
+const isOwnedHostedQualityStage =
+  resolve(commandArguments[1] ?? "") === fileURLToPath(new URL("./run-hosted-quality-stage.mjs", import.meta.url)) &&
+  commandArguments.includes("--execute") &&
+  commandArguments[commandArguments.indexOf("--execute") + 1] === "owned"
 const run = {
   version: custodyVersion,
   ...location,
@@ -127,6 +132,7 @@ try {
       executable: commandArguments[0],
       name: "admitted gate command",
       relayParentSignals: true,
+      ...(isOwnedHostedQualityStage ? { relayedSignalGraceMilliseconds: 4_000 } : {}),
       timeoutMilliseconds: 24 * 60 * 60 * 1000
     })
     commandExit = result.exitCode

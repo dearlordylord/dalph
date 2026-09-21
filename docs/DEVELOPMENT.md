@@ -76,6 +76,32 @@ Accepted task requirements still apply. Handoffs name the affected scenarios,
 checks run or unrun, and why broader checks add no relevant coverage. Unused-code
 removal needs consumer evidence and affected type/build checks; changed behavior
 follows the runtime rule.
+
+For a hosted comprehensive qualification handoff, the Integrator first runs the
+focused checks that own the repaired boundary and then `pnpm check:baseline` on
+the candidate attempt before requesting final qualification. Hosted CI runs its
+generated structural preflight before the generated delivery-repeatability,
+recorded-catalog, and coverage suffix cells. Each clean suffix runner installs
+the frozen dependency graph and then runs the bounded `pnpm check:artifacts`
+preparation declared by the shared stage algebra, so package `dist` trees exist
+before coverage or another suffix stage consumes them. This preparation does not
+rerun the structural preflight. Those cells use bounded fail-slow concurrency,
+so one ordinary failure does not cancel independent cells. The quality aggregate
+reports every expected cell, including rows that are missing or unproven, and
+the separate formal aggregate remains independent of the quality suffix.
+
+When the hosted quality aggregate reports more than one independent defect,
+repair every reported defect before submitting the repaired candidate C2. The
+earlier C evidence remains diagnostic evidence for C and cannot qualify C2.
+
+The aggregate reports setup-inclusive time to first actionable failure and
+total makespan. Historical [same-candidate serial observations](https://github.com/dearlordylord/dalph/issues/396#issuecomment-5750976052)
+were 117.940 seconds for delivery repeatability and 72.991 seconds for the
+recorded catalog; [coverage was 198.112 seconds](https://github.com/dearlordylord/dalph/issues/396#issuecomment-5750857362).
+Their 389.043-second sum is a reference for independent work, not a current
+hosted baseline or a promised parallel saving; compare complete hosted attempts
+with their queue, install, and upload costs.
+
 Hosted CI keeps its documentation-only quality classification. Its separate
 formal classification compares the exact event base-to-head paths with the
 generated hosted-formal input projection. That projection follows executable
@@ -134,6 +160,9 @@ All commands below use `pnpm`. Script definitions live in
 | `lint:changed` | Oxlint and dprint over files changed against `DALPH_DIAGNOSTICS_BASE`, or the explicitly reported moving `origin/master` fallback. It does not run the repository graph check. |
 | `check:unused-exports` | Run Knip's repository graph analysis for unused files and value exports. Exact current exceptions are finite and stale exceptions fail. |
 | `check:preflight --candidate=<base sha>` | Pre-freeze census: report typecheck (including Effect), lint/format, maintained Reducer Lab, cycle, complexity, duplication, CI classifier, secrets and artifact failures. Runs no coverage, catalog or MBT suites. |
+| `check:ci:quality:preflight --candidate=<base sha>` | Hosted preflight entry point. It runs the same admitted structural census for one declared Node cell before any hosted qualification stage starts. |
+| `check:ci:quality:stage --stage <id> --base <sha> --candidate <sha> --node-version <semver> --run-id <id> --run-attempt <n> --output <dir>` | Run one generated hosted suffix cell. The stage command retains an envelope and portable evidence after an ordinary stage failure; the aggregate owns the required quality verdict. |
+| `check:ci:quality:aggregate --base <sha> --candidate <sha> --run-id <id> --run-attempt <n> -- <envelope...>` | Validate every expected generated Node-by-stage result for one hosted attempt, report pass/fail/unproven rows, and fail closed on missing, malformed, mismatched, or unproven evidence. |
 | `check:fast` | Development-loop tier: `typecheck`, `lint:changed`. A planned task attempt sets `DALPH_DIAGNOSTICS_BASE` to its exact Base SHA. |
 | `check:baseline` | Early task-attempt baseline: run the clone-wide lint census, then the maintained Reducer Lab evaluation. Use after focused edits settle and before expensive formal or delivery-repeatability work; this does not change `check:fast`. |
 | `check:circular` | Reject runtime dependency cycles. |
@@ -989,7 +1018,10 @@ pnpm exec vitest run \
 ```
 
 That controlled fixture proves the recovery sequence; it is not #261 live
-qualification evidence. In the disposable live repository, report
+qualification evidence or a per-merge admission gate. It remains an explicit
+diagnostic because its process-containment observation is not reliable on the
+hosted runner, and its child-process execution cannot contribute parent-worker
+V8 coverage. In the disposable live repository, report
 `Recovered` only after the next command actually emits it.
 
 Graceful Exit is different from abrupt death. After `Succeeded`, admitted work

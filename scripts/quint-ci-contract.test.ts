@@ -139,8 +139,8 @@ describe("hosted formal-model contract", () => {
       /- name: Refuse missing formal classification\n\s+if: needs\.change-plan\.result == 'success' && needs\.change-plan\.outputs\.formal-required != 'true' && needs\.change-plan\.outputs\.formal-required != 'false'/u
     )
     expect(aggregateJob).not.toContain("pnpm install")
-    expect(jobs.get("quality")?.join("\n")).toContain("\n    runs-on: ubuntu-latest")
-    expect(jobs.get("quality")?.join("\n")).not.toContain("pnpm check:quint")
+    expect(jobs.get("quality-preflight")?.join("\n")).toContain("\n    runs-on: ubuntu-latest")
+    expect(jobs.get("quality-preflight")?.join("\n")).not.toContain("pnpm check:quint")
     expect(formalGate).toContain("Use the admitted pnpm check:quint entry point")
     expect(formalGate).toContain("run-formal-workflow.mjs")
     expect(formalGate).toContain("formalGatePolicy.outerMilliseconds")
@@ -155,6 +155,101 @@ describe("hosted formal-model contract", () => {
     expect(quintGate).toContain("const timeoutFor = (name) =>")
     expect(quintGate).toContain("remainingExecutionMilliseconds(name)")
     expect(quintGate).toContain("timeoutMilliseconds: timeoutFor(command.name)")
+  })
+
+  it("runs the generated post-preflight suffix fail-slow and aggregates every cell", () => {
+    expect(packageJson.scripts["check:ci:quality:preflight"]).toBe("pnpm check:preflight")
+    expect(packageJson.scripts["check:ci:quality:stage"]).toBe("node scripts/run-hosted-quality-stage.mjs")
+    expect(packageJson.scripts["check:ci:quality:aggregate"]).toBe("node scripts/aggregate-hosted-quality-stages.mjs")
+
+    const jobs = parseWorkflowJobs(ciWorkflow)
+    const changePlanJob = jobs.get("change-plan")?.join("\n") ?? ""
+    const preflightJob = jobs.get("quality-preflight")?.join("\n") ?? ""
+    const suffixJob = jobs.get("quality-suffix")?.join("\n") ?? ""
+    const aggregateJob = jobs.get("quality-aggregate")?.join("\n") ?? ""
+
+    expect(changePlanJob).toContain("quality-stages: ${{ steps.quality_plan.outputs.expected-cells }}")
+    expect(changePlanJob).toContain("node scripts/quality-gate-stage-plan.mjs")
+    expect(changePlanJob).toContain('--github-output "$GITHUB_OUTPUT"')
+    expect(changePlanJob).not.toMatch(/delivery-repeatability|recorded-catalog|coverage/u)
+
+    expect(preflightJob).toContain("needs: change-plan")
+    expect(preflightJob).toContain("pnpm check:ci:quality:preflight --candidate=")
+    expect(preflightJob).toContain("fromJSON(needs.change-plan.outputs.versions)")
+
+    expect(suffixJob).toContain("needs: [change-plan, quality-preflight]")
+    expect(suffixJob).toContain("needs.quality-preflight.result == 'success'")
+    expect(suffixJob).toContain("timeout-minutes: 35")
+    expect(suffixJob).toContain("five for artifact preparation")
+    expect(suffixJob).toContain("fail-fast: false")
+    expect(suffixJob).toContain("max-parallel: 3")
+    expect(suffixJob).toContain("include: ${{ fromJSON(needs.change-plan.outputs.quality-stages) }}")
+    expect(suffixJob).toContain("Record hosted suffix cell start")
+    expect(suffixJob).toContain("DALPH_HOSTED_QUALITY_CELL_STARTED_AT=")
+    expect(suffixJob).toContain("pnpm check:ci:quality:stage \\")
+    for (const argument of [
+      "--stage",
+      "--base",
+      "--candidate",
+      "--node-version",
+      "--run-id",
+      "--run-attempt",
+      "--output"
+    ])
+      expect(suffixJob).toContain(argument)
+    expect(suffixJob).not.toContain("pnpm check:preflight")
+    expect(suffixJob).not.toContain("test:mbt")
+    expect(suffixJob).not.toContain("test:public-recovery")
+    expect(suffixJob).toMatch(
+      /- name: Install dependencies\n\s+timeout-minutes: 5\n\s+run: pnpm install --frozen-lockfile/u
+    )
+    expect(suffixJob).toMatch(
+      /- name: Prepare production artifacts\n\s+timeout-minutes: 5\n\s+run: pnpm check:artifacts/u
+    )
+    expect(suffixJob.indexOf("pnpm install --frozen-lockfile")).toBeLessThan(suffixJob.indexOf("pnpm check:artifacts"))
+    expect(suffixJob.indexOf("pnpm check:artifacts")).toBeLessThan(suffixJob.indexOf("pnpm check:ci:quality:stage \\"))
+    const qualityGateCleanRunnerPreparation = fullQualityGateManifest("0".repeat(40)).find(
+      ({ boundary }: { boundary: string }) => boundary === "qualification"
+    )?.cleanRunnerPreparation
+    expect(qualityGateCleanRunnerPreparation).toMatchObject({
+      id: "frozen-install-and-artifact-preparation",
+      preflightRerun: false,
+      timeoutMilliseconds: 600_000
+    })
+    expect(qualityGateCleanRunnerPreparation.commands).toEqual([
+      { args: ["install", "--frozen-lockfile"], id: "frozen-install", timeoutMilliseconds: 300_000 },
+      { args: ["check:artifacts"], id: "artifact-preparation", timeoutMilliseconds: 300_000 }
+    ])
+    expect(suffixJob).not.toContain("pnpm check:preflight")
+    expect(suffixJob.indexOf("pnpm check:ci:quality:stage \\")).toBeLessThan(
+      suffixJob.indexOf("Upload hosted quality stage evidence")
+    )
+    expect(suffixJob).toMatch(/- name: Upload hosted quality stage evidence[\s\S]*?if: always\(\)/u)
+
+    expect(aggregateJob).toContain("needs: [change-plan, docs-quality, quality-preflight, quality-suffix]")
+    expect(aggregateJob).toContain("\n    if: always()")
+    expect(aggregateJob).toContain("Download hosted quality stage evidence")
+    expect(aggregateJob).not.toContain("merge-multiple: true")
+    expect(aggregateJob).toContain("find hosted-quality/stages -type f -name envelope.json")
+    expect(aggregateJob).toContain("pnpm check:ci:quality:aggregate \\")
+    for (const argument of ["--base", "--candidate", "--run-id", "--run-attempt"])
+      expect(aggregateJob).toContain(argument)
+    expect(aggregateJob).not.toContain("formal-models")
+    expect(aggregateJob).not.toContain("test:mbt")
+    expect(aggregateJob).not.toContain("test:public-recovery")
+    expect(aggregateJob).toContain("id: hosted_quality_evidence")
+    expect(aggregateJob).toContain("steps.hosted_quality_evidence.outputs.artifact-url")
+    expect(aggregateJob).toContain("Hosted quality evidence: %s")
+
+    const formalJob = jobs.get("formal-models")?.join("\n") ?? ""
+    expect(formalJob).toContain("needs: change-plan")
+    expect(formalJob).not.toContain("quality-preflight")
+    expect(formalJob).not.toContain("quality-suffix")
+    expect(
+      fullQualityGateManifest("0".repeat(40))
+        .filter(({ boundary }: { boundary: string }) => boundary === "qualification")
+        .map(({ id }: { id: string }) => id)
+    ).toEqual(["delivery-repeatability", "recorded-catalog", "coverage"])
   })
 
   it("preserves required application checks alongside automatic local formal handoff", () => {
