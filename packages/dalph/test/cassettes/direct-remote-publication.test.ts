@@ -424,7 +424,8 @@ it.live(
           expect(tags.indexOf(cleanupTag)).toBeGreaterThan(closeIndex)
         expect(tags.at(-1)).toBe("WorkflowRunTerminated")
 
-        const laterCompletedGraphIndex = cassette.entries.findIndex((entry) => {
+        const laterCompletedGraphIndex = cassette.entries.findIndex((entry, index) => {
+          if (index <= completionIndex) return false
           if (
             entry._tag !== "TaskTrackerFactsObserved" ||
             (entry.evidence._tag !== "CompleteTaskTrackerFacts" &&
