@@ -21,11 +21,10 @@ const recordedCatalogCoverageTestPattern = "packages/dalph/test/cassettes/record
 const ordinaryTestTimeoutMilliseconds = 10_000
 const coverageTestTimeoutMilliseconds = 30_000
 const ordinaryWorkerCount = 4
-// V8 instrumentation and project-audit tests compete for CPU and memory. Four
+// V8 instrumentation and process-custody tests compete for CPU and memory. Two
 // workers keep individual 30-second test budgets meaningful on the supported
-// local/hosted runners now that the maintained-catalog proof runs once outside
-// coverage.
-const coverageWorkerCount = 4
+// local/hosted runners without starving bounded Git process reconciliation.
+const coverageWorkerCount = 2
 const runDeliveryRepeatability = processEnvironment["DALPH_RUN_DELIVERY_REPEATABILITY"] === "1"
 const runQualificationTests = processEnvironment["DALPH_RUN_QUALIFICATION_TESTS"] === "1"
 const ordinaryTestIncludes = [
