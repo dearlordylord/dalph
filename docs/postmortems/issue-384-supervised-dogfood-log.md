@@ -800,7 +800,15 @@ and the three unused internal exports. The remaining acceptance evidence is the
 real disposable S1 journey after controlled S2 owned by #385. The spec review
 also found that a retained publication could be offered as a fresh frontier
 action; `qualifiedIntegratorProgressTransitionsFor` now stops that action and a
-controlled frontier assertion covers the retained boundary. The journal intent
-still does not carry a separately encoded refspec field required by D28b; that
-schema change is outside this bounded cassette/frontier repair and remains an
-explicit follow-up blocker. The accepted no-extra-remote-read rule is unchanged.
+controlled frontier assertion covers the retained boundary. At that frozen
+point, the journal intent still did not carry the separately encoded refspec
+required by D28b; the current candidate closes that gap as recorded below. The
+accepted no-extra-remote-read rule is unchanged.
+
+### Current candidate repair and bounded verification, 2026-09-21 05:40 UTC
+
+The D28b evidence gap is now closed in commit `4abc4f52c` (`fix: persist exact direct publication refspec`). The numbered `RemotePublicationAttemptIntendedEvent` carries a branded refspec derived from the exact qualified candidate and pinned branch; state reconstruction, codec, restart, and Git request boundaries validate and consume that same value. The repair changed no remote read after successful publication and added no CLI operation. Focused validation reported 31 direct Git/publication tests, 51 codec/restart/finality tests, and 27 hermetic-qualification tests passing; both affected package builds and package typechecks passed.
+
+The Reducer Lab fixture refresh is committed as `072c1a5d4` (`test: refresh reducer lab remote-target fixtures`). Its typecheck passes. The bounded `pnpm check:lab` run stopped at the recorded 90-second wall bound after smoke reached the maintained catalog and failed on the authored `deliveryInvariantStory` interaction mismatch; the preserved log is `/tmp/check-lab-issue384.log`. No full gate was started from that red fixture run, and lingering child processes were stopped at the wall boundary.
+
+The current candidate's focused final check passed: the maintained 22-beat capstone execution and the direct-publication S1 order test both passed in `/tmp/issue384-focused-final.log`. The repository-wide full gate remains `UNPROVEN`, and the required disposable hosted S1 still follows controlled S2 owned by #385. The no-extra-remote-read decision remains in force.
