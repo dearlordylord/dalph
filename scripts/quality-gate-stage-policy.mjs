@@ -1,4 +1,34 @@
 const SECOND = 1_000
+const DEFAULT_PROCESS_GROUP_ABSENCE_TIMEOUT = 2 * SECOND
+const DEFAULT_TERMINATION_GRACE = 5 * SECOND
+
+/**
+ * The checked-in stage algebra is shared by the local resumable gate and the
+ * hosted post-preflight jobs.  The candidate and reviewed Base are inputs to a
+ * plan; this identity names the stage policy that interpreted those inputs.
+ */
+export const qualityGatePolicyIdentity = Object.freeze({ id: "dalph-quality-stage-algebra", revision: 1, version: 1 })
+
+/** A clean hosted runner only needs the dependency graph; suffix stages consume source aliases. */
+export const qualityGateCleanRunnerPreparation = Object.freeze({
+  artifactTransfer: "none",
+  command: Object.freeze(["install", "--frozen-lockfile"]),
+  id: "frozen-install",
+  preflightRerun: false,
+  rebuild: "none",
+  timeout: 5 * 60 * SECOND
+})
+
+const deliveryDigestArtifactObligation = Object.freeze({
+  id: "delivery-digest",
+  required: true,
+  type: "delivery-repeatability-digest"
+})
+
+const coverageArtifactObligations = Object.freeze([
+  Object.freeze({ id: "coverage-final", path: "coverage/coverage-final.json", required: true, type: "coverage" }),
+  Object.freeze({ id: "coverage-summary", path: "coverage/coverage-summary.json", required: true, type: "coverage" })
+])
 
 // The unchanged all-catalog proof measured 348.688s wall time without V8
 // instrumentation. Seven minutes leaves 71.312s (20.5%) for runner variance
@@ -67,6 +97,51 @@ export const preflightQualityGates = (baseSha) => [
   capabilityRegistrationQualityGate
 ]
 
+/**
+ * The only independent post-preflight obligations.  Keep this inventory here
+ * so local ordered/resume execution and hosted stage planning cannot drift.
+ */
+export const qualificationQualityGates = () => [
+  {
+    artifactObligations: Object.freeze([deliveryDigestArtifactObligation]),
+    artifactRoots: Object.freeze([]),
+    args: Object.freeze(["test:delivery-repeatability"]),
+    boundary: "qualification",
+    cleanRunnerPreparation: qualityGateCleanRunnerPreparation,
+    id: "delivery-repeatability",
+    name: "delivery repeatability",
+    terminationGrace: 15 * SECOND,
+    timeout: 19 * 60 * SECOND
+  },
+  {
+    artifactObligations: Object.freeze([]),
+    artifactRoots: Object.freeze([]),
+    args: recordedCatalogQualityGate.args,
+    boundary: "qualification",
+    cleanRunnerPreparation: qualityGateCleanRunnerPreparation,
+    id: "recorded-catalog",
+    name: recordedCatalogQualityGate.name,
+    processGroupAbsenceTimeout: DEFAULT_PROCESS_GROUP_ABSENCE_TIMEOUT,
+    terminationGrace: DEFAULT_TERMINATION_GRACE,
+    timeout: recordedCatalogQualityGate.timeout
+  },
+  {
+    artifactObligations: coverageArtifactObligations,
+    artifactRoots: Object.freeze(["@coverage"]),
+    args: Object.freeze(["test"]),
+    boundary: "qualification",
+    cleanRunnerPreparation: qualityGateCleanRunnerPreparation,
+    environmentPolicy: "coverage-base-warning",
+    id: "coverage",
+    name: "tests and coverage",
+    processGroupAbsenceTimeout: DEFAULT_PROCESS_GROUP_ABSENCE_TIMEOUT,
+    terminationGrace: DEFAULT_TERMINATION_GRACE,
+    timeout: 20 * 60 * SECOND
+  }
+]
+
+export const qualityGateQualificationStageIds = Object.freeze(qualificationQualityGates().map(({ id }) => id))
+
 /** One stable ordered inventory binds resumable quality verdicts to bounded commands and outputs. */
 export const fullQualityGateManifest = (baseSha, invocation) => {
   if (invocation?.candidateHeadSha !== undefined && !/^[0-9a-f]{40}$/u.test(invocation.candidateHeadSha))
@@ -106,28 +181,7 @@ export const fullQualityGateManifest = (baseSha, invocation) => {
             ? ["prototypes/reducer-lab/dist"]
             : []
   }))
-  const manifest = [
-    ...prefix,
-    {
-      id: "delivery-repeatability",
-      boundary: "qualification",
-      args: ["test:delivery-repeatability"],
-      name: "delivery repeatability",
-      terminationGrace: 15 * SECOND,
-      timeout: 19 * 60 * SECOND,
-      artifactRoots: []
-    },
-    { ...recordedCatalogQualityGate, id: "recorded-catalog", boundary: "qualification", artifactRoots: [] },
-    {
-      id: "coverage",
-      boundary: "qualification",
-      args: ["test"],
-      name: "tests and coverage",
-      environmentPolicy: "coverage-base-warning",
-      timeout: 20 * 60 * SECOND,
-      artifactRoots: ["@coverage"]
-    }
-  ]
+  const manifest = [...prefix, ...qualificationQualityGates()]
   return invocation === undefined
     ? manifest
     : manifest.map((stage) => ({
