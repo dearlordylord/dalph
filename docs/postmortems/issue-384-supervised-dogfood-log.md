@@ -876,3 +876,20 @@ negative tests pass 30/30 and 23/23, and formal controls pass 133/133. The
 workspace-state child log in the failed full-gate record is empty and belongs
 to an expected negative nested resume-control fixture; the parent control stage
 passed. No runtime or no-extra-remote-read behavior changed.
+
+### Full-gate exhaustive timeout, 2026-09-21 07:44–08:19 UTC
+
+A fresh full gate `bcf5c847-c176-45b8-a049-b89638b96290` reran preflight and
+all earlier formal families successfully. The repaired integration-finality
+sampled model passed, including seed `0x2b45d`; the exhaustive TLC stage then
+ran CPU-active until the formal profile deadline at `2026-09-21T08:18:50Z`
+without reporting a violation or completing. Its durable stage is
+`.scratch/quality-gates/bcf5c847-c176-45b8-a049-b89638b96290/logs/17914da1-d48c-4b6d-b92d-86ae69c3ad8e.log`.
+The owned Apalache server and TLC process groups were proven absent; custody is
+stopped and qualification is `UNPROVEN`.
+
+This is a formal qualification timeout, not a new invariant counterexample.
+The local implementation and no-extra-remote-read rule are unchanged. The
+fresh supervised disposable hosted S1 remains unrun, and this candidate must
+not be called fully qualified until the exhaustive formal stage completes in a
+separately bounded performance follow-up.
