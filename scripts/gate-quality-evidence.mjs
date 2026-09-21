@@ -121,6 +121,19 @@ export const readQualityEvidence = ({
       }
       return { ...original, runId: entry.runId }
     }
+    if (entry?.kind === "qualification-not-run") {
+      if (executedSuffix || existsSync(join(stageDirectory, `${ordinal}.json`)))
+        throw new Error("Invalid noncontiguous qualification-not-run stage")
+      executedSuffix = true
+      return {
+        stageId: stage.id,
+        ordinal,
+        contract: stage,
+        outcome: "UNPROVEN",
+        qualificationStatus: "not-run",
+        evidencePath: entry.evidencePath
+      }
+    }
     if (entry !== undefined) executedSuffix = true
     if (entry !== undefined && !["executed", "pending"].includes(entry.kind))
       throw new Error("Invalid composite stage kind")
@@ -159,7 +172,12 @@ export const readQualityEvidence = ({
         ))
     )
       throw new Error("Incomplete designated artifact inventory")
-    return { ...record, subtreeProven }
+    return {
+      ...record,
+      subtreeProven,
+      qualificationStatus: record.qualificationStatus ?? entry?.qualificationStatus,
+      evidencePath: entry?.evidencePath
+    }
   })
   let outputLines = 0
   for (const stage of effectiveStages)

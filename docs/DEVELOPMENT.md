@@ -72,6 +72,16 @@ Choose checks by affected behavior, not by commit or handoff alone:
   changing shared build/dependency configuration, gate orchestration, or validity of
   qualification evidence. Uncertain impact requires investigation, not exemption.
 
+The local qualification suffix is governed by the checked-in stage algebra and a
+fixed `localQualificationConcurrency = 1`; it is never derived from host cores or
+RAM. Each stage settles its bounded child and proves cleanup before the permit is
+released. Ordinary exit, timeout, and launch-failure results are retained and
+reported in manifest order so independent siblings continue; custody, evidence,
+identity, cancellation, and runner-integrity losses stop admission fail-closed,
+with active work marked unproven and queued work marked not-run. Resume credit is
+still limited to the same-candidate contiguous proven prefix. This scheduler is
+qualification tooling only and does not change Dalph runtime behavior.
+
 Accepted task requirements still apply. Handoffs name the affected scenarios,
 checks run or unrun, and why broader checks add no relevant coverage. Unused-code
 removal needs consumer evidence and affected type/build checks; changed behavior

@@ -10,6 +10,7 @@ import { addSuccessfulOutputLines, outputPresentationPolicy } from "./quality-ou
 import { runFormalWorkflow } from "./run-formal-workflow.mjs"
 import { runPreflightCensus } from "./preflight-census.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
+import { isOrdinaryQualityCommandResult } from "./quality-gate-failure-policy.mjs"
 import { qualificationAggregateError, runQualificationStages } from "./quality-gate-qualification-scheduler.mjs"
 import {
   boundedQualityGateCommand,
@@ -37,6 +38,18 @@ export const resetQualityCaches = (worktree) => {
     rmSync(root, { recursive: true, force: true })
   }
   return roots
+}
+
+const validateQualificationArtifacts = ({ evidence, result, stage }) => {
+  const coverage = evidence.stages.find((receipt) => receipt.obligationId === result.gateObligationId)?.coverage
+  for (const obligation of stage.artifactObligations ?? []) {
+    if (obligation.type !== "coverage") continue
+    const artifact = coverage?.[obligation.id.slice("coverage-".length)]
+    if (artifact === undefined)
+      throw Object.assign(new Error(`Qualification artifact is incomplete: ${obligation.id}`), {
+        quintCommandResult: "artifact-incomplete"
+      })
+  }
 }
 
 /** Validate pnpm's consumed workspace state before observing fresh inputs; never install dependencies. */
@@ -101,6 +114,10 @@ export const executeResumableQualityGate = async ({
     dprintIncremental: "disabled",
     qualificationConcurrency: logicalInvocation.qualificationConcurrency ?? localQualificationConcurrency
   }
+  if (logicalInvocation.qualificationConcurrency !== localQualificationConcurrency)
+    throw new Error(
+      `Local qualification concurrency policy mismatch: expected ${localQualificationConcurrency}, received ${logicalInvocation.qualificationConcurrency}`
+    )
   process.env.DALPH_DPRINT_INCREMENTAL = "disabled"
   // Read-only Git observations must not refresh the watched index; required Git locks remain enabled.
   process.env.GIT_OPTIONAL_LOCKS = "0"
@@ -236,6 +253,7 @@ export const executeResumableQualityGate = async ({
           throw new Error("Quality stage command differs from its bounded manifest")
         if (!qualitySubtreeProven(evidence.stages, result.gateObligationId))
           throw new Error("Quality stage has incomplete terminal subtree")
+        validateQualificationArtifacts({ evidence, result, stage })
         const completedRoots = stage.artifactRoots.map((root) =>
           root === "@coverage" ? join(run.reportDirectory, "coverage") : resolve(run.worktree, root)
         )
@@ -257,15 +275,17 @@ export const executeResumableQualityGate = async ({
             coverageDirectory: join(run.reportDirectory, "coverage")
           })
         })
-        return { ...result, outputLineCount: 0 }
+        return { ...result, outputLineCount: 0, stageEvidencePath: path }
       } catch (error) {
         if (error instanceof Error) {
           error.stageEvidencePath = path
           error.stageId = stage.id
         }
+        const qualificationStatus = isOrdinaryQualityCommandResult(error) ? "failed" : "unproven"
         atomicRecord(path, {
           ...started,
           outcome: "failed",
+          qualificationStatus,
           obligationId: result?.gateObligationId ?? error.gateObligationId,
           outputLineCount: result?.outputLineCount ?? 0,
           artifacts: captureResumeArtifacts({
@@ -306,7 +326,22 @@ export const executeResumableQualityGate = async ({
       if (selectedFormal.disposition !== undefined)
         formal = { ...selectedFormal.disposition, outputLineCount: formalOutputLineCount }
       const qualificationStages = suffix.filter((stage) => stage.boundary === "qualification")
-      const qualification = await runQualificationStages({ report, run: executeStage, stages: qualificationStages })
+      const qualification = await runQualificationStages({
+        concurrency: logicalInvocation.qualificationConcurrency,
+        report,
+        run: executeStage,
+        stages: qualificationStages
+      })
+      for (const [ordinal, outcome] of qualification.outcomes.entries()) {
+        const stage = qualificationStages[ordinal]
+        const stageOrdinal = stageManifest.indexOf(stage)
+        const evidencePath = outcome.error?.stageEvidencePath ?? outcome.value?.stageEvidencePath
+        entries[stageOrdinal] = {
+          kind: outcome.status === "not-run" ? "qualification-not-run" : "executed",
+          qualificationStatus: outcome.status,
+          ...(evidencePath === undefined ? {} : { evidencePath })
+        }
+      }
       if (!qualification.succeeded) {
         throw qualificationAggregateError({
           outcomes: qualification.outcomes,

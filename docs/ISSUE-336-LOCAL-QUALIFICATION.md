@@ -11,10 +11,10 @@ runtime-visible result. The accepted behavior remains the LQ01–LQ06 section of
 
 | Accepted scenario | Implemented outcome | Passing evidence |
 | --- | --- | --- |
-| LQ01 — every qualification obligation passes | The local suffix admits each manifest obligation once, under the fixed cap, and succeeds only when all rows pass. | `scripts/quality-gate-qualification-scheduler.test.mjs`: `LQ01 all passing obligations respect the fixed cap and retain one canonical candidate inventory`; `scripts/gate-resume-integration.test.mjs`: `an unaffected candidate resumes proven stages with not-applicable formal evidence and no formal workflow` |
+| LQ01 — every qualification obligation passes | The local suffix admits each manifest obligation once, under the fixed cap, validates required coverage artifacts before recording pass, and succeeds only when all rows pass. | `scripts/quality-gate-qualification-scheduler.test.mjs`: `LQ01 all passing obligations respect the fixed cap and retain one canonical candidate inventory`; `scripts/gate-resume-integration.test.mjs`: `an unaffected candidate resumes proven stages with not-applicable formal evidence and no formal workflow` |
 | LQ02 — one candidate has multiple ordinary failures | Proved ordinary exits and timeouts are retained as failed rows; safe siblings still run; the aggregate is rendered in manifest order. | `scripts/quality-gate-qualification-scheduler.test.mjs`: `LQ02 two ordinary failures and one pass produce one canonical fail-slow inventory`; `scripts/gate-resume-integration.test.mjs`: `local qualification collects every ordinary suffix failure in canonical manifest order` |
 | LQ03 — a stage times out and cleanup is proved | The scheduler waits for the stage operation to settle before admitting the next row; a proved timeout remains failed and is never converted to pass. | `scripts/quality-gate-qualification-scheduler.test.mjs`: `LQ03 a proved timeout settles before its permit is released and preserves the timeout failure` |
-| LQ04 — evidence, identity, prerequisite, or custody becomes unsafe | A non-ordinary runner/custody failure stops admission, cancels the active operation, and leaves unproven and not-run rows explicit. | `scripts/quality-gate-qualification-scheduler.test.mjs`: `LQ04 a safety failure stops queued launches and records unproven work separately` |
+| LQ04 — evidence, identity, prerequisite, or custody becomes unsafe | A non-ordinary runner/custody or artifact-integrity failure stops admission, cancels the active operation, and leaves unproven and not-run rows explicit in the composite and stage evidence. | `scripts/quality-gate-qualification-scheduler.test.mjs`: `LQ04 a safety failure stops queued launches and records unproven work separately` |
 | LQ05 — interruption or runner death | A handled interruption stops admission and drains the active operation; queued rows remain not-run. Existing custody/status/reconciliation tests retain the abrupt-death boundary. | `scripts/quality-gate-qualification-scheduler.test.mjs`: `LQ05 interruption drains launched siblings and leaves queued obligations not run`; existing `scripts/gate-custody.test.mjs`, `scripts/gate-previous-boot-reconcile.test.mjs`, and `scripts/gate-run-status.test.mjs` |
 | LQ06 — same-candidate resume and repaired candidate | Resume still selects only the canonical contiguous proven prefix; completion order cannot create reusable islands or cross-candidate credit. | `scripts/gate-resume-policy.test.mjs`: `out-of-order completion preserves canonical contiguous-prefix credit`, plus the retained prefix/refusal cases in that file |
 
@@ -39,6 +39,19 @@ detached process trees; the reported peak is the maximum sampled sum. Each pair
 had a 300-second bound, retained its child logs, and was stopped/reconciled at
 the bound or on custody loss.
 
+The planned Base SHA for the campaign was
+`309a94e87ab7898e45cc81cc5240e64ae5b4092a`; the measured candidate was
+`7881959662b3d603aa7dd0888f9720c1f21cb002` in the exact worktree
+`/tmp/dalph-item336-local`. The first campaign was time-boxed from
+2026-09-21 09:53:13 to 10:08:13 -04:00. The clean candidate rerun was planned
+from 10:04 to 10:19; the repaired observer rerun from 10:10 to 10:16; and the
+final catalog-plus-coverage attempt from 10:12 to 10:18. When the observer hit a
+`/proc` race, the next discriminating action was to repair the process-tree
+observer and rerun only the bounded pairing. When the worktree custody fence
+`8eb9872c-1ecf-459f-a217-88daebba56c0` refused a coverage child, the exact run
+was reconciled as stopped/UNPROVEN; no throttled or ambiguous mutation was
+retried.
+
 | Pair | Result | Peak sampled RSS | Evidence disposition |
 | --- | --- | ---: | --- |
 | `test:delivery-repeatability` + `test:recorded-catalog` | both passed | 2,758,979,584 bytes | complete pair proof |
@@ -52,3 +65,12 @@ no-overlap fallback; it still runs every independent ordinary sibling and
 reports all failures together. The measurement logs and pairwise command plan
 were retained during the attempt under `/tmp/dalph-item336-memory-results-*` and
 `/tmp/dalph-item336-memory-plan.txt`.
+
+Affected checks completed for this tooling change were the scheduler unit tests,
+the gate-resume policy and integration tests, the full `test:gate-resume` tier
+(187 tests), typecheck, changed-file lint, and dprint formatting. The full frozen
+candidate gate and repository-wide `pnpm test` remain required before integration;
+they are unrun at this evidence checkpoint because they are the shared
+qualification and final regression gates, not additional coverage of the local
+scheduler scenarios. The scoped review also requires those gates after the final
+repair commit.

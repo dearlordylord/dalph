@@ -10,12 +10,33 @@
  */
 
 import { localQualificationConcurrency } from "./quality-gate-stage-policy.mjs"
+import { isOrdinaryQualityCommandResult } from "./quality-gate-failure-policy.mjs"
 
 export { localQualificationConcurrency }
 
-const ordinaryFailure = /^(?:exit:\d+|launch-failed|timed-out)$/u
+export const isOrdinaryQualificationFailure = isOrdinaryQualityCommandResult
 
-export const isOrdinaryQualificationFailure = (error) => ordinaryFailure.test(error?.quintCommandResult ?? "")
+/** @typedef {"not-run" | "running" | "passed" | "failed" | "unproven"} QualificationOutcomeStatus */
+/** @typedef {number & {readonly __brand: "QualificationOrdinal"}} QualificationOrdinal */
+/** @typedef {{ordinal: QualificationOrdinal, stageId: string, status: "not-run"} | {ordinal: QualificationOrdinal, stageId: string, status: "running"} | {ordinal: QualificationOrdinal, stageId: string, status: "passed", value: unknown} | {ordinal: QualificationOrdinal, stageId: string, status: "failed" | "unproven", error: Error}} QualificationOutcome */
+
+/** @returns {QualificationOrdinal} */
+const asQualificationOrdinal = (value) => value
+
+/** @returns {QualificationOutcome} */
+const notRunOutcome = (ordinal, stageId) => ({ ordinal, stageId, status: "not-run" })
+
+/** @returns {QualificationOutcome} */
+const runningOutcome = (ordinal, stageId) => ({ ordinal, stageId, status: "running" })
+
+/** @returns {QualificationOutcome} */
+const passedOutcome = (ordinal, stageId, value) => ({ ordinal, stageId, status: "passed", value })
+
+/** @returns {QualificationOutcome} */
+const failedOutcome = (ordinal, stageId, error) => ({ ordinal, stageId, status: "failed", error })
+
+/** @returns {QualificationOutcome} */
+const unprovenOutcome = (ordinal, stageId, error) => ({ ordinal, stageId, status: "unproven", error })
 
 const stageLabel = (stage, ordinal) => stage?.id ?? stage?.name ?? `qualification-${ordinal}`
 
@@ -24,6 +45,7 @@ const asError = (value) => (value instanceof Error ? value : new Error(String(va
 const interruptionError = (reason) => {
   const error = asError(reason ?? new Error("local qualification interrupted"))
   if (error.quintCommandResult === undefined) error.quintCommandResult = "interrupted"
+  error.qualificationStatus = "unproven"
   return error
 }
 
@@ -44,7 +66,11 @@ export const runQualificationStages = async ({
   if (!Number.isInteger(concurrency) || concurrency < 1)
     throw new Error(`Local qualification concurrency must be a positive integer; received ${concurrency}`)
 
-  const outcomes = stages.map((stage, ordinal) => ({ ordinal, stageId: stageLabel(stage, ordinal), status: "not-run" }))
+  /** @type {QualificationOutcome[]} */
+  const outcomes = stages.map((stage, ordinal) => {
+    const qualifiedOrdinal = asQualificationOrdinal(ordinal)
+    return notRunOutcome(qualifiedOrdinal, stageLabel(stage, ordinal))
+  })
   if (stages.length === 0) return { outcomes, safetyError: undefined, succeeded: true }
 
   const controller = new AbortController()
@@ -65,22 +91,27 @@ export const runQualificationStages = async ({
 
   const execute = async (ordinal) => {
     const stage = stages[ordinal]
-    outcomes[ordinal] = { ...outcomes[ordinal], status: "running" }
+    const qualifiedOrdinal = asQualificationOrdinal(ordinal)
+    const stageId = stageLabel(stage, ordinal)
+    outcomes[ordinal] = runningOutcome(qualifiedOrdinal, stageId)
     try {
       const value = await run(stage, controller.signal)
       if (schedulerState.safetyError !== undefined || controller.signal.aborted) {
         const error = schedulerState.safetyError ?? interruptionError()
-        outcomes[ordinal] = { ...outcomes[ordinal], status: "unproven", error }
+        error.qualificationStatus = "unproven"
+        outcomes[ordinal] = unprovenOutcome(qualifiedOrdinal, stageId, error)
         return
       }
-      outcomes[ordinal] = { ...outcomes[ordinal], status: "passed", value }
+      outcomes[ordinal] = passedOutcome(qualifiedOrdinal, stageId, value)
     } catch (thrown) {
       const error = asError(thrown)
       if (isOrdinaryQualificationFailure(error) && schedulerState.safetyError === undefined) {
-        outcomes[ordinal] = { ...outcomes[ordinal], status: "failed", error }
+        error.qualificationStatus = "failed"
+        outcomes[ordinal] = failedOutcome(qualifiedOrdinal, stageId, error)
         return
       }
-      outcomes[ordinal] = { ...outcomes[ordinal], status: "unproven", error }
+      error.qualificationStatus = "unproven"
+      outcomes[ordinal] = unprovenOutcome(qualifiedOrdinal, stageId, error)
       stopForSafety(error)
     }
   }
@@ -112,8 +143,8 @@ export const runQualificationStages = async ({
 export const qualificationAggregateError = ({ outcomes, safetyError, stages }) => {
   const rows = outcomes.map((outcome, ordinal) => {
     const stage = stages[ordinal]
-    const evidence =
-      outcome.error?.stageEvidencePath === undefined ? "" : `; evidence=${outcome.error.stageEvidencePath}`
+    const evidencePath = outcome.error?.stageEvidencePath ?? outcome.value?.stageEvidencePath
+    const evidence = evidencePath === undefined ? "" : `; evidence=${evidencePath}`
     const detail = `${outcome.error?.message ?? outcome.status}${evidence}`
     return `${stageLabel(stage, ordinal)}=${outcome.status}: ${detail}`
   })
