@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 import { RunId } from "@dalph/contracts"
 import { Effect } from "effect"
 import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
@@ -18,7 +19,8 @@ export const capacitiesThrough = (capacities: ReadonlyArray<number>): ReadonlyAr
   makeWorkflowRunBeganRecord(
     runId,
     FixtureTarget.make("prepared-trace-target"),
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    remotePublicationTargetForTest
   ),
   ...capacities.map((capacity, index) => {
     const event = TaskWorkCapacityChangedEvent.make({
@@ -49,7 +51,8 @@ export const coldReaderFor = (records: ReadonlyArray<JournalRecord>) =>
       ...makeWorkflowRunBeganRecord(
         runId,
         FixtureTarget.make("cold-oracle-unvisited-tail"),
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTargetForTest
       ),
       position: JournalPosition.make(records.length + deliberatelyGappedTailDistance)
     }

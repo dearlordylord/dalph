@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import {
   AttemptId,
@@ -144,7 +145,7 @@ const recordsFrom = (rows: ReadonlyArray<EventRow>): ReadonlyArray<JournalRecord
   rows.map((row, index) => ({ ...row, position: JournalPosition.make(index + 1), runId }))
 
 const baseRows: ReadonlyArray<EventRow> = [
-  makeWorkflowRunBeganRecord(runId, target, policy),
+  makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest),
   { event: taskTrackerReadIntent(graphOperation), key: intentRecordKey(graphOperation.operationId) },
   {
     event: taskTrackerFactsObservedEvent(

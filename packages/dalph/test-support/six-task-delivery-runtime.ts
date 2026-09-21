@@ -67,6 +67,11 @@ import {
 } from "@dalph/orchestrator"
 import { Context, Deferred, Effect, Layer, Queue, Ref, Stream, type Crypto, type Scope } from "effect"
 import { makeSixTaskGitAndEvidence } from "./six-task-finality-boundaries.js"
+import {
+  remoteBaselineGitLayerForTest,
+  remotePublicationGitLayerForTest,
+  remotePublicationTargetForTest
+} from "../../orchestrator/test/support/direct-publication.js"
 
 import type { makeSixTaskDeliveryFacts } from "./six-task-delivery-facts.js"
 import { makeSixTaskIntegratorGit } from "./six-task-integrator-git.js"
@@ -105,17 +110,7 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
     )
   )
   const journal = Context.get(shared, JournalStore)
-  const {
-    appendAttempts,
-    controlledJournal,
-    cut,
-    cutReached,
-    processEndRequests,
-    runtimeEntries,
-    runtimeObservationQueue,
-    runtimeObservations,
-    terminationAttempts
-  } = yield* makeSixTaskRuntimeObservation(journal, control)
+  const runtimeObservation = yield* makeSixTaskRuntimeObservation(journal, control)
   const { evidence, evidenceReads, head, promotionGit, promotionReads, promotions } = yield* makeSixTaskGitAndEvidence(
     Context.get(shared, EvidenceStore),
     baseSha
@@ -257,7 +252,7 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
       const failure = yield* Deferred.make<unknown>()
       const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (effect) => effect })
       const shell = yield* makeApplicationExitShell(ownership, {
-        requestEnd: () => Ref.update(processEndRequests, (count) => count + 1)
+        requestEnd: () => Ref.update(runtimeObservation.processEndRequests, (count) => count + 1)
       })
       const runtime = ({ opportunity }: JournaledRuntimeLayerInput) =>
         validatedRunActivationLayer(
@@ -271,6 +266,8 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
           false,
           opportunity
         ).pipe(
+          Layer.provide(remoteBaselineGitLayerForTest),
+          Layer.provideMerge(remotePublicationGitLayerForTest),
           Layer.provide(
             Layer.mergeAll(
               integratorLayer,
@@ -279,19 +276,26 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
               sharedPlanning,
               journaledWorkflowInterpreterLayer(runId, interpreter),
               Layer.succeed(WorkflowTrace, { emit: () => Effect.void }),
-              Layer.effectDiscard(Ref.update(runtimeEntries, (count) => count + 1))
+              Layer.effectDiscard(Ref.update(runtimeObservation.runtimeEntries, (count) => count + 1))
             )
           )
         )
-      const application = journaledRunBootstrapLayer(runId, runtime, shell, noopJournalMaintenanceObservation).pipe(
-        Layer.provide(journalStoreCapabilities(Layer.succeed(JournalStore, controlledJournal))),
+      const application = journaledRunBootstrapLayer(
+        runId,
+        runtime,
+        shell,
+        noopJournalMaintenanceObservation,
+        undefined,
+        remotePublicationTargetForTest
+      ).pipe(
+        Layer.provide(journalStoreCapabilities(Layer.succeed(JournalStore, runtimeObservation.controlledJournal))),
         Layer.provide(Layer.succeed(CoordinatorOwnership, ownership)),
         Layer.provide(executorLayer),
         Layer.provide(
           Layer.succeed(DeliveryRuntimeObservationObserver, {
             observe: (observation) =>
-              Ref.update(runtimeObservations, (all) => [...all, observation]).pipe(
-                Effect.andThen(Queue.offer(runtimeObservationQueue, observation)),
+              Ref.update(runtimeObservation.runtimeObservations, (all) => [...all, observation]).pipe(
+                Effect.andThen(Queue.offer(runtimeObservation.runtimeObservationQueue, observation)),
                 Effect.andThen(control.observeRuntime?.(observation) ?? Effect.void),
                 Effect.asVoid
               )
@@ -388,15 +392,8 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
       yield* publish("B", projection)
     })
   return {
+    ...runtimeObservation,
     activate,
-    runtimeEntries,
-    terminationAttempts,
-    runtimeObservations,
-    runtimeObservationQueue,
-    appendAttempts,
-    processEndRequests,
-    cut,
-    cutReached,
     commands,
     integrationEntered,
     integrations,

@@ -5,6 +5,7 @@ module acceptedResultIntegrationTest {
   // and starts only after recovery rereads tracker and Git target facts.
   run journalOrderSurvivesRestartTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(acceptResult(2))
       .then(queueAcceptedResult(1))
@@ -24,6 +25,7 @@ module acceptedResultIntegrationTest {
 
   run ordinaryAcceptedConsumesCancellationAndStartsOneResponsibilityTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .expect(and {
@@ -47,6 +49,7 @@ module acceptedResultIntegrationTest {
   // converted into an ordinary fresh Integrator session.
   run changedTargetHeadStopsBeforeNewSessionTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(observeChangedTargetHead(1))
@@ -61,6 +64,7 @@ module acceptedResultIntegrationTest {
 
   run incompatibleTargetLineageStopsBeforeIntegratorTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(observeIncompatibleTargetLineage(1))
@@ -75,6 +79,7 @@ module acceptedResultIntegrationTest {
 
   run changedHeadAfterSessionCannotStartSuccessorTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -93,6 +98,7 @@ module acceptedResultIntegrationTest {
   // Integrator stages are not represented as separate Dalph phases.
   run outerIntegratorReportsOneExplicitCandidateTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -124,6 +130,7 @@ module acceptedResultIntegrationTest {
 
   run outerIntegratorNotPreparedIsConclusiveTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -153,6 +160,7 @@ module acceptedResultIntegrationTest {
   // Integrator invocation and cannot manufacture a successor S.
   run unfinishedIntegratorRestoresSameSessionTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -185,6 +193,7 @@ module acceptedResultIntegrationTest {
   // substitute current Git target facts; S remains bound to its durable H.
   run unfinishedIntegratorReacquiresWithoutTargetRereadTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -208,6 +217,7 @@ module acceptedResultIntegrationTest {
   // recovery reads.
   run independentResponseLossPreservesHeldTargetProofTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -234,6 +244,7 @@ module acceptedResultIntegrationTest {
   // only the Git read is resumed.
   run reportedCandidateRestoresWithoutIntegratorRerunTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -256,6 +267,7 @@ module acceptedResultIntegrationTest {
 
   run exactGitParentsQualifyReportedCandidateTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -282,6 +294,7 @@ module acceptedResultIntegrationTest {
 
   run missingCandidateIsRejectedWithoutPromotionTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -303,6 +316,7 @@ module acceptedResultIntegrationTest {
 
   run nonCommitCandidateIsRejectedWithoutPromotionTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -323,6 +337,7 @@ module acceptedResultIntegrationTest {
 
   run wrongParentCandidateIsRejectedWithoutPromotionTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -346,6 +361,7 @@ module acceptedResultIntegrationTest {
 
   run ambiguousCandidateGitReadReconcilesSameCandidateTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -375,6 +391,7 @@ module acceptedResultIntegrationTest {
   // verification manifest or process/resource shortcut is present.
   run exactCandidatePromotesWithDirectCompareAndSetTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -384,6 +401,11 @@ module acceptedResultIntegrationTest {
       .then(recordCandidateGitReadIntent(1))
       .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
       .then(recordPromotionIntent(1))
       .then(observePromotionExactExpectedHead(1))
@@ -405,6 +427,7 @@ module acceptedResultIntegrationTest {
 
   run changedHeadMakesPromotionStaleAndPreservesCandidateTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -414,6 +437,11 @@ module acceptedResultIntegrationTest {
       .then(recordCandidateGitReadIntent(1))
       .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
       .then(recordPromotionIntent(1))
       .then(observePromotionOtherHead(1))
@@ -429,6 +457,7 @@ module acceptedResultIntegrationTest {
 
   run ambiguousPromotionRequiresFreshGitBeforeRetryTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -438,6 +467,11 @@ module acceptedResultIntegrationTest {
       .then(recordCandidateGitReadIntent(1))
       .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
       .then(recordPromotionIntent(1))
       .then(observePromotionExactExpectedHead(1))
@@ -464,6 +498,7 @@ module acceptedResultIntegrationTest {
 
   run unreadablePromotionReadRemainsPendingUntilFreshFactsTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -473,6 +508,11 @@ module acceptedResultIntegrationTest {
       .then(recordCandidateGitReadIntent(1))
       .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
       .then(recordPromotionIntent(1))
       .then(observePromotionGitUnreadable(1))
@@ -495,6 +535,7 @@ module acceptedResultIntegrationTest {
 
   run authorityFreeExpectedHeadWaitsDurablyForRetryAuthorityTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -504,6 +545,11 @@ module acceptedResultIntegrationTest {
       .then(recordCandidateGitReadIntent(1))
       .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
       .then(recordPromotionIntent(1))
       .then(observePromotionExactExpectedHead(1))
@@ -537,6 +583,7 @@ module acceptedResultIntegrationTest {
 
   run authorityFreeUnreadableWaitsDurablyForFreshFactsTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -546,6 +593,11 @@ module acceptedResultIntegrationTest {
       .then(recordCandidateGitReadIntent(1))
       .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
       .then(recordPromotionIntent(1))
       .then(observePromotionExactExpectedHead(1))
@@ -573,6 +625,7 @@ module acceptedResultIntegrationTest {
 
   run authorityFreeChangedHeadStillRecordsStaleTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -582,6 +635,11 @@ module acceptedResultIntegrationTest {
       .then(recordCandidateGitReadIntent(1))
       .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
       .then(recordPromotionIntent(1))
       .then(observePromotionExactExpectedHead(1))
@@ -599,6 +657,7 @@ module acceptedResultIntegrationTest {
 
   run promotionExhaustionPreservesQualifiedCandidateTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -608,6 +667,11 @@ module acceptedResultIntegrationTest {
       .then(recordCandidateGitReadIntent(1))
       .then(readCandidateGit(1))
       .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
       .then(recordPromotionIntent(1))
       .then(observePromotionExactExpectedHead(1))
@@ -649,6 +713,7 @@ module acceptedResultIntegrationTest {
   // target. The same target remains FIFO-blocked while target 2 progresses.
   run conclusiveFailureQuarantinesBeforeReleaseAndKeepsUnrelatedWorkRunnableTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(acceptResult(2))
       .then(assignResultTwoIndependentTarget)
@@ -684,6 +749,7 @@ module acceptedResultIntegrationTest {
   // the new outer run twice; the explicit start reuses S and its original H.
   run retryRedeliveryStartsOneRunInTheSameSessionTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -748,6 +814,7 @@ module acceptedResultIntegrationTest {
   // direction cannot erase the exact Retry direction that authorized run two.
   run fullRerunAfterRetryPreservesExplicitRetryAuthorizationTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -774,6 +841,7 @@ module acceptedResultIntegrationTest {
   // remains Journal history but cannot leak into run two's projection.
   run retryNotPreparedClearsRejectedRunOneCandidateProjectionTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -805,6 +873,7 @@ module acceptedResultIntegrationTest {
   // count another Integrator invocation.
   run retryRecoveryPreservesQuarantineAndExactRunTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -845,6 +914,7 @@ module acceptedResultIntegrationTest {
   // quarantine occurrence and leaves the operator a Full-rerun choice.
   run retryAtChangedHeadCreatesFreshQuarantineWithoutIntegratorCallTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -873,6 +943,7 @@ module acceptedResultIntegrationTest {
   // later Full rerun; a second Retry choice must remain blocked.
   run changedHeadQuarantineCannotSelectRetryTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -897,6 +968,7 @@ module acceptedResultIntegrationTest {
   // restart, preserves S/resource/queue position, and fixes one S2.
   run fullRerunPreservesPredecessorAndRestartsOneSuccessorTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(startIntegration(1))
@@ -939,6 +1011,7 @@ module acceptedResultIntegrationTest {
 
   run unrelatedResultKeepsIndependentAdmissionFactsTest = {
     init
+      .then(admitDestination)
       .then(acceptResult(1))
       .then(acceptResult(2))
       .then(assignResultTwoIndependentTarget)
@@ -950,5 +1023,310 @@ module acceptedResultIntegrationTest {
         queuePositionsAreUnique,
         acceptedEvidenceIsNeverDiscarded,
       })
+  }
+
+  run destinationAdmissionPinsEndpointAndRefBeforeWorkTest = {
+    init
+      .expect(and {
+        state.destinationAdmission == DestinationUnvalidated,
+        not(destinationAdmissionReached),
+      })
+      .then(admitDestination)
+      .expect(and {
+        destinationAdmissionReached,
+        destinationAdmissionPrecedesTaskWork,
+        destinationIdentityIsPinned,
+        state.destinationEndpoint == DESTINATION_ENDPOINT,
+        state.destinationBranch == DESTINATION_BRANCH,
+      })
+      .then(acceptResult(1))
+      .expect(destinationAdmissionPrecedesTaskWork)
+  }
+
+  run publicationProofMustPrecedeLocalPromotionTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationApplied(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationProved,
+        state.results.get(1).publicationProofRecorded,
+        state.results.get(1).publicationProofBasis == PushApplied,
+        state.results.get(1).publicationObservation == PublicationApplied,
+        state.results.get(1).publicationEndpoint == DESTINATION_ENDPOINT,
+        state.results.get(1).publicationBranch == DESTINATION_BRANCH,
+        publicationProofRequiresPerRefSuccess,
+        publicationIntentPrecedesProviderCall,
+        publicationAttemptsAreBounded,
+      })
+      .then(offerPromotionPremise(1))
+      .expect(and {
+        state.results.get(1).phase == PromotionPremise,
+        promotionRequiresPublicationProof,
+      })
+  }
+
+  run initialPublicationCurrentReadRecordsAttemptBeforeProofTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationCandidateCurrent(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationProved,
+        state.results.get(1).publicationAttemptCount == 1,
+        state.results.get(1).publicationLastAttempt == 1,
+        state.results.get(1).publicationProofBasis == ReconciledCandidateCurrent,
+        state.results.get(1).publicationObservation == PublicationRemoteCandidateCurrent,
+        state.results.get(1).publicationProofRecorded,
+        not(state.results.get(1).targetHeld),
+      })
+  }
+
+  run initialPublicationAncestorReadRecordsAttemptBeforeProofTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationCandidateAncestor(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationProved,
+        state.results.get(1).publicationAttemptCount == 1,
+        state.results.get(1).publicationLastAttempt == 1,
+        state.results.get(1).publicationProofBasis == ReconciledCandidateAncestor,
+        state.results.get(1).publicationObservation == PublicationRemoteCandidateAncestor,
+        state.results.get(1).publicationProofRecorded,
+        not(state.results.get(1).targetHeld),
+      })
+  }
+
+  run publicationNonFastForwardAppendsNextIntentAfterReconciliationTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationNonFastForward(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationReconciliation,
+        state.results.get(1).publicationAttemptCount == 1,
+        state.results.get(1).publicationObservation == PublicationRemoteNonFastForward,
+        not(state.results.get(1).publicationFinalReadRequired),
+        state.results.get(1).targetHeld,
+        not(state.results.get(1).publicationProofRecorded),
+      })
+      .then(observePublicationRemoteAncestorOfCandidate(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationAttemptIntended,
+        state.results.get(1).publicationAttemptCount == 2,
+        state.results.get(1).publicationLastAttempt == 2,
+        state.results.get(1).publicationObservation == PublicationRemoteAncestorOfCandidate,
+        not(state.results.get(1).publicationResultRecorded),
+      })
+  }
+
+  run thirdPublicationNonFastForwardFinalReadCanProveCandidateTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationNonFastForward(1))
+      .then(observePublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationNonFastForward(1))
+      .then(observePublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationNonFastForward(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationReconciliation,
+        state.results.get(1).publicationAttemptCount == PROMOTION_ATTEMPT_LIMIT,
+        state.results.get(1).publicationFinalReadRequired,
+        publicationFinalReconciliationIsReadOnlyAndBounded,
+      })
+      .then(observeReconciledPublicationCandidateCurrent(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationProved,
+        state.results.get(1).publicationAttemptCount == PROMOTION_ATTEMPT_LIMIT,
+        state.results.get(1).publicationProofBasis == ReconciledCandidateCurrent,
+        state.results.get(1).publicationObservation == PublicationRemoteCandidateCurrent,
+        not(state.results.get(1).targetHeld),
+      })
+  }
+
+  run thirdPublicationNonFastForwardFinalReadExhaustsWithoutFourthIntentTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationNonFastForward(1))
+      .then(observePublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationNonFastForward(1))
+      .then(observePublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationNonFastForward(1))
+      .then(observePublicationNonConvergence(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationNonConvergence,
+        state.results.get(1).publicationAttemptCount == PROMOTION_ATTEMPT_LIMIT,
+        state.results.get(1).publicationObservation == PublicationRemoteNonConvergence,
+        not(state.results.get(1).publicationProofRecorded),
+        not(state.results.get(1).targetHeld),
+        publicationWaitRetainsResponsibility,
+      })
+  }
+
+  run incompatiblePublicationReadRetainsWithoutPushTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observePublicationIncompatible(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationIncompatible,
+        state.results.get(1).publicationObservation == PublicationRemoteIncompatible,
+        state.results.get(1).publicationAttemptCount == 0,
+        not(state.results.get(1).publicationOrdinaryRefspecRequested),
+        publicationWaitRetainsResponsibility,
+      })
+  }
+
+  run ambiguousPublicationReconcilesToRetainedAncestorProofTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(losePublicationResponse(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationResponseLost,
+        state.results.get(1).publicationResponseAmbiguous,
+        not(state.results.get(1).publicationProofRecorded),
+      })
+      .then(recoverCoordinator)
+      .then(observeTrackerFacts)
+      .then(observeTargetFacts(1))
+      .then(reconcilePublication(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationReconciliation,
+        state.results.get(1).targetHeld,
+      })
+      .then(observeReconciledPublicationCandidateAncestor(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationProved,
+        state.results.get(1).publicationProofBasis == ReconciledCandidateAncestor,
+        state.results.get(1).publicationObservation == PublicationRemoteCandidateAncestor,
+        state.results.get(1).publicationProofRecorded,
+        publicationProofIsRetainedAcrossRecovery,
+      })
+  }
+
+  run deniedPublicationRetainsTypedWaitWithoutRetryTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationDenied(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationDenied,
+        state.results.get(1).publicationObservation == PublicationRemoteDenied,
+        state.results.get(1).publicationResultRecorded,
+        not(state.results.get(1).publicationProofRecorded),
+        not(state.results.get(1).targetHeld),
+        publicationWaitRetainsResponsibility,
+      })
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1).fail())
   }
 }

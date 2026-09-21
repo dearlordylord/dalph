@@ -1,4 +1,11 @@
-import { GitCommitSha, plannedAttemptExecutorCorrelation } from "@dalph/contracts"
+/* eslint-disable max-lines -- Qualification checks keep the exact historical-source allowlist auditable in one module. */
+
+import {
+  GitCommitSha,
+  PlannedTaskAttempt,
+  plannedAttemptExecutorCorrelation,
+  RemotePublicationTarget
+} from "@dalph/contracts"
 import {
   completionClaimDeletionRequestFor,
   completionClaimReplacementRequestFor,
@@ -7,14 +14,23 @@ import {
   completionTaskCandidateAncestryReadOperationIdFor,
   type CompletionTaskClaim,
   FocusedTaskCompletionFactsObserved,
+  integratorCandidateCleanupSessionOf,
   IntegratorSessionCorrelation,
+  RemoteBaselineCorrelation,
+  remoteBaselineCorrelationFor,
+  StartedIntegrationResponsibility,
+  RemotePublicationCorrelation,
+  remotePublicationAdmissionIdFor,
   TargetPromotionCorrelation,
+  TrackerTarget,
   TraceAtCursor,
   type WorkflowOccurrence
 } from "@dalph/orchestrator"
 import { Effect, Schema } from "effect"
 import {
   sourceRejected,
+  sourceRejectedAt,
+  isQualificationTaskId,
   validateActiveClaim,
   strictSource,
   validateOperationId,
@@ -33,6 +49,7 @@ import {
   validateGraph,
   validateOperation,
   validateRunCorrelation,
+  validateResponsibility,
   validateSessionCorrelation,
   validateTrackerFacts
 } from "./production-hermetic-qualification-fixture-source.js"
@@ -57,6 +74,15 @@ const controlledOccurrenceTag = Schema.Literals([
   "IntegratorRunResultRecorded",
   "IntegratorCandidateQualificationInitiated",
   "IntegratorCandidateQualificationObserved",
+  "RemotePublicationAdmissionReadInitiated",
+  "RemotePublicationAdmissionObserved",
+  "RemoteBaselineReadInitiated",
+  "RemoteBaselineObserved",
+  "LocalTargetCatchUpInitiated",
+  "LocalTargetCatchUpObserved",
+  "RemotePublicationRequested",
+  "RemotePublicationAttemptRequested",
+  "RemotePublicationSucceeded",
   "TargetPromotionRequested",
   "TargetPromotionAttemptRequested",
   "TargetPromotionSucceeded",
@@ -67,7 +93,10 @@ const controlledOccurrenceTag = Schema.Literals([
   "IntegrationClaimReplacementOccurred",
   "IntegrationClaimDeletionOccurred",
   "IntegrationFinalitySettledOccurred",
-  "IntegrationFocusedCompletionOccurred"
+  "IntegrationFocusedCompletionOccurred",
+  "WorktreeCleanupOccurred",
+  "BranchCleanupOccurred",
+  "IntegratorCandidateCleanupOccurred"
 ])
 
 type FinalityOccurrence = Extract<
@@ -88,6 +117,9 @@ const finalityClaim = (occurrence: FinalityOccurrence): CompletionTaskClaim => {
   return event.authorization.claim
 }
 
+const occurrenceDiagnosticTag = (occurrence: WorkflowOccurrence): string =>
+  "event" in occurrence ? occurrence.event._tag : occurrence._tag
+
 const historicalDerivedOperationIds = Effect.fn("HermeticQualification.historicalDerivedOperationIds")(function* (
   snapshot: TraceAtCursor,
   context: QualificationContext
@@ -103,6 +135,47 @@ const historicalDerivedOperationIds = Effect.fn("HermeticQualification.historica
         yield* validateCompletionRequest(facts.request, context)
         return [facts.operationId]
       }
+      if (occurrence._tag === "IntegratorCandidateCleanupOccurred") {
+        const event = occurrence.event
+        const authorization = event.authorization
+        const session = integratorCandidateCleanupSessionOf(authorization.disposition)
+        const expectedAuthorizationOperationId = `disposition-cleanup:integrator-candidate:${session.sessionId}`
+        if (authorization.operationId !== expectedAuthorizationOperationId) return yield* sourceRejected()
+        if (!("operationId" in event)) return [authorization.operationId]
+        const expectedEventOperationId =
+          "ordinal" in event
+            ? `${authorization.operationId}:observe:${event.ordinal}`
+            : "attempt" in event
+              ? `${authorization.operationId}:mutation:${event.attempt}`
+              : snapshot.items.some(
+                    (candidate) =>
+                      candidate.occurrence._tag === "IntegratorCandidateCleanupOccurred" &&
+                      candidate.occurrence.event._tag === "IntegratorCandidateCleanupObserved" &&
+                      candidate.occurrence.event.authorization.operationId === authorization.operationId &&
+                      candidate.occurrence.event.operationId === event.operationId
+                  )
+                ? event.operationId
+                : undefined
+        if (event.operationId !== expectedEventOperationId) return yield* sourceRejected()
+        return [authorization.operationId, event.operationId]
+      }
+      if (occurrence._tag === "WorktreeCleanupOccurred" || occurrence._tag === "BranchCleanupOccurred") {
+        const event = occurrence.event
+        const authorization = event.authorization
+        const plannedAttempt = authorization.disposition.plannedAttempt
+        const family = occurrence._tag === "WorktreeCleanupOccurred" ? "worktree" : "branch"
+        const expectedAuthorizationOperationId = `disposition-cleanup:${family}:${plannedAttempt.attemptId}`
+        if (authorization.operationId !== expectedAuthorizationOperationId) return yield* sourceRejected()
+        if (!("operationId" in event)) return [authorization.operationId]
+        const expectedEventOperationId =
+          "ordinal" in event
+            ? `${authorization.operationId}:observe:${event.ordinal}`
+            : "attempt" in event
+              ? `${authorization.operationId}:mutation:${event.attempt}`
+              : undefined
+        if (event.operationId !== expectedEventOperationId) return yield* sourceRejected()
+        return [authorization.operationId, event.operationId]
+      }
       if (
         occurrence._tag !== "IntegrationClaimReplacementOccurred" &&
         occurrence._tag !== "IntegrationClaimDeletionOccurred" &&
@@ -112,7 +185,7 @@ const historicalDerivedOperationIds = Effect.fn("HermeticQualification.historica
         return []
       const claim = yield* validateCompletionClaim(finalityClaim(occurrence), context)
       return [completionOriginalTaskClaimReleaseFor(claim).operationId]
-    })
+    }).pipe(Effect.mapError(sourceRejectedAt(occurrenceDiagnosticTag(item.occurrence))))
   ).pipe(Effect.map((ids) => ids.flat()))
 })
 
@@ -125,7 +198,11 @@ const validateWorktreeProof = Effect.fn("HermeticQualification.validateWorktreeP
   const plan =
     occurrence._tag === "TaskWorktreeReady"
       ? occurrence.operation.plannedAttempt
-      : qualificationPlannedAttemptFor(context)
+      : [
+          qualificationPlannedAttemptFor(context),
+          qualificationPlannedAttemptFor(context, context.dependantTaskId)
+        ].find((candidate) => candidate.worktree === proof.worktree && candidate.branch === proof.branch)
+  if (plan === undefined) return yield* sourceRejected()
   yield* validatePlannedAttempt(plan, context)
   if (proof.worktree !== plan.worktree || proof.branch !== plan.branch || proof.baseSha !== plan.baseSha)
     return yield* sourceRejected()
@@ -147,6 +224,21 @@ const validateHistoricalCorrelation = Effect.fn("HermeticQualification.validateH
     yield* validateCandidate(occurrence.correlation.qualifiedCandidate, context)
     return
   }
+  if (Schema.is(RemotePublicationCorrelation)(occurrence.correlation)) {
+    yield* validateCandidate(occurrence.correlation.qualifiedCandidate, context)
+    if (
+      !Schema.toEquivalence(RemotePublicationTarget)(
+        occurrence.correlation.target,
+        context.configuration.remotePublicationTarget
+      )
+    )
+      return yield* sourceRejected()
+    return
+  }
+  if (Schema.is(RemoteBaselineCorrelation)(occurrence.correlation)) {
+    yield* validateRemoteBaselineCorrelation(occurrence.correlation, context)
+    return
+  }
   if (Schema.is(IntegratorSessionCorrelation)(occurrence.correlation)) {
     yield* validateSessionCorrelation(occurrence.correlation, context)
     return
@@ -154,8 +246,85 @@ const validateHistoricalCorrelation = Effect.fn("HermeticQualification.validateH
   return yield* sourceRejected()
 })
 
+const validateRemoteBaselineCorrelation = Effect.fn("HermeticQualification.validateRemoteBaselineCorrelation")(
+  function* (correlation: RemoteBaselineCorrelation, context: QualificationContext) {
+    const responsibility = yield* validateResponsibility(
+      StartedIntegrationResponsibility.make(correlation.responsibility),
+      context
+    )
+    const localTarget = yield* validateTarget(correlation.localTarget, context)
+    if (
+      correlation.runId !== context.runId ||
+      !Schema.toEquivalence(RemotePublicationTarget)(
+        correlation.remoteTarget,
+        context.configuration.remotePublicationTarget
+      )
+    )
+      return yield* sourceRejected()
+    const expected = remoteBaselineCorrelationFor(
+      context.runId,
+      {
+        acceptedResult: responsibility.acceptedResult,
+        integrationTarget: responsibility.integrationTarget,
+        plannedAttempt: responsibility.plannedAttempt,
+        queuedAt: responsibility.queuedAt,
+        startedAt: responsibility.startedAt
+      },
+      localTarget,
+      correlation.remoteTarget
+    )
+    if (!Schema.toEquivalence(RemoteBaselineCorrelation)(correlation, expected)) return yield* sourceRejected()
+  }
+)
+
+const validateRemoteBaselineOccurrence = Effect.fn("HermeticQualification.validateRemoteBaselineOccurrence")(function* (
+  occurrence: WorkflowOccurrence,
+  snapshot: TraceAtCursor
+) {
+  if (
+    occurrence._tag !== "RemoteBaselineReadInitiated" &&
+    occurrence._tag !== "RemoteBaselineObserved" &&
+    occurrence._tag !== "LocalTargetCatchUpInitiated" &&
+    occurrence._tag !== "LocalTargetCatchUpObserved"
+  )
+    return
+  const sameCorrelation = (candidate: WorkflowOccurrence) =>
+    "correlation" in candidate &&
+    Schema.is(RemoteBaselineCorrelation)(candidate.correlation) &&
+    Schema.toEquivalence(RemoteBaselineCorrelation)(candidate.correlation, occurrence.correlation)
+  if (occurrence._tag === "RemoteBaselineReadInitiated") return
+  const prior = snapshot.items.filter(
+    (item) => item.occurrence.recordedAt < occurrence.recordedAt && sameCorrelation(item.occurrence)
+  )
+  if (!prior.some(({ occurrence: candidate }) => candidate._tag === "RemoteBaselineReadInitiated"))
+    return yield* sourceRejected()
+  if (occurrence._tag === "RemoteBaselineObserved") return
+  const baseline = prior.findLast(({ occurrence: candidate }) => candidate._tag === "RemoteBaselineObserved")
+  if (
+    baseline?.occurrence._tag !== "RemoteBaselineObserved" ||
+    baseline.occurrence.observation._tag !== "LocalAncestor" ||
+    baseline.occurrence.observation.localHead !== occurrence.expectedLocalHead ||
+    baseline.occurrence.observation.remoteHead !== occurrence.remoteHead
+  )
+    return yield* sourceRejected()
+  if (occurrence._tag === "LocalTargetCatchUpInitiated") return
+  const intent = prior.findLast(({ occurrence: candidate }) => candidate._tag === "LocalTargetCatchUpInitiated")
+  if (
+    intent?.occurrence._tag !== "LocalTargetCatchUpInitiated" ||
+    intent.occurrence.expectedLocalHead !== occurrence.expectedLocalHead ||
+    intent.occurrence.remoteHead !== occurrence.remoteHead
+  )
+    return yield* sourceRejected()
+  if (
+    (occurrence.result._tag === "Applied" && occurrence.result.newHead !== occurrence.remoteHead) ||
+    (occurrence.result._tag === "AlreadyCurrent" && occurrence.result.currentHead !== occurrence.remoteHead)
+  )
+    return yield* sourceRejected()
+})
+
 const validateHistoricalResult = Effect.fn("HermeticQualification.validateHistoricalResult")(function* (
   occurrence: WorkflowOccurrence,
+  snapshot: TraceAtCursor,
   context: QualificationContext
 ) {
   if (occurrence._tag === "IntegratorRunResultRecorded") {
@@ -169,13 +338,52 @@ const validateHistoricalResult = Effect.fn("HermeticQualification.validateHistor
   if (occurrence._tag === "IntegrationQuarantined" && occurrence.basis._tag !== "PromotionStale")
     return yield* sourceRejected()
   if (occurrence._tag === "PlannedAttemptExecutorWorkReported") {
-    const expected = plannedAttemptExecutorCorrelation(qualificationPlannedAttemptFor(context))
+    const plans = [
+      qualificationPlannedAttemptFor(context),
+      qualificationPlannedAttemptFor(context, context.dependantTaskId)
+    ]
+    const plan = plans.find((candidate) => {
+      const correlation = plannedAttemptExecutorCorrelation(candidate)
+      return (
+        occurrence.report.correlation.runId === correlation.runId &&
+        occurrence.report.correlation.attemptId === correlation.attemptId
+      )
+    })
+    if (plan === undefined) return yield* sourceRejected()
+    const began = snapshot.items.some(
+      (item) =>
+        item.occurrence.recordedAt < occurrence.recordedAt &&
+        item.occurrence._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+        Schema.toEquivalence(PlannedTaskAttempt)(item.occurrence.plannedAttempt, plan)
+    )
+    if (!began) return yield* sourceRejected()
+  }
+  if (
+    occurrence._tag === "RemotePublicationAdmissionReadInitiated" ||
+    occurrence._tag === "RemotePublicationAdmissionObserved"
+  ) {
     if (
-      occurrence.report.correlation.runId !== expected.runId ||
-      occurrence.report.correlation.attemptId !== expected.attemptId
+      occurrence.admissionId !==
+        remotePublicationAdmissionIdFor(context.runId, context.configuration.remotePublicationTarget) ||
+      !Schema.toEquivalence(RemotePublicationTarget)(occurrence.target, context.configuration.remotePublicationTarget)
+    )
+      return yield* sourceRejected()
+    if (
+      occurrence._tag === "RemotePublicationAdmissionObserved" &&
+      (occurrence.observation._tag !== "ExistingBranch" ||
+        occurrence.observation.remoteHead !== context.configuration.plannedAttemptBaseSha)
     )
       return yield* sourceRejected()
   }
+  if (occurrence._tag === "RemotePublicationAttemptRequested" && occurrence.attemptOrdinal !== 1)
+    return yield* sourceRejected()
+  if (
+    occurrence._tag === "RemotePublicationSucceeded" &&
+    (occurrence.proof._tag !== "PushApplied" ||
+      occurrence.proof.attemptOrdinal !== 1 ||
+      occurrence.proof.remoteHead !== occurrence.correlation.qualifiedCandidate.candidateCommit)
+  )
+    return yield* sourceRejected()
 })
 
 const validateFinalityOccurrence = Effect.fn("HermeticQualification.validateFinalityOccurrence")(function* (
@@ -242,7 +450,7 @@ const validateDeletionReadClaim = Effect.fn("HermeticQualification.validateDelet
   else if (observation._tag === "ActiveTaskClaim") yield* validateActiveClaim(observation, context)
   else if (
     (observation._tag !== "UnclaimedTask" && observation._tag !== "CompletionClaimMarkerAbsent") ||
-    observation.taskId !== context.taskId
+    !isQualificationTaskId(observation.taskId, context)
   )
     return yield* sourceRejected()
 })
@@ -363,12 +571,28 @@ const validateOccurrence = Effect.fn("HermeticQualification.validateOccurrence")
   if (!("runId" in occurrence) || occurrence.runId !== context.runId) return yield* sourceRejected()
   yield* validateHistoricalActionAttribution(occurrence, context)
   yield* validateOccurrenceWorkflowAtoms(occurrence, context)
-  if (occurrence._tag === "TaskTrackerFactsObserved") yield* validateTrackerFacts(occurrence.evidence, context)
+  if (occurrence._tag === "TaskTrackerFactsObserved") {
+    const evidence = occurrence.evidence
+    if (
+      evidence._tag === "TaskTrackerFactsReadFailed" &&
+      evidence.failure._tag === "TrackerAdapterReadError" &&
+      evidence.failure.reason._tag === "CircuitOpen"
+    ) {
+      yield* validateOperationId(evidence.operationId)
+      if (!Schema.toEquivalence(TrackerTarget)(evidence.target, context.configuration.target))
+        return yield* sourceRejected()
+    } else yield* validateTrackerFacts(evidence, context)
+  }
   if (occurrence._tag === "TaskWorktreeReady" || occurrence._tag === "PlannedAttemptWorktreeObserved")
     yield* validateWorktreeProof(occurrence, context)
   yield* validateHistoricalCorrelation(occurrence, context)
-  yield* validateHistoricalResult(occurrence, context)
+  yield* validateHistoricalResult(occurrence, snapshot, context)
+  yield* validateRemoteBaselineOccurrence(occurrence, snapshot)
   yield* validateOccurrenceFinality(occurrence, snapshot, context)
+  if (occurrence._tag === "IntegratorCandidateCleanupOccurred")
+    yield* validateCandidateCleanupOccurrence(occurrence, context)
+  if (occurrence._tag === "WorktreeCleanupOccurred" || occurrence._tag === "BranchCleanupOccurred")
+    yield* validatePlannedAttempt(occurrence.event.authorization.disposition.plannedAttempt, context)
 })
 
 const validateOccurrenceWorkflowAtoms = Effect.fn("HermeticQualification.validateOccurrenceWorkflowAtoms")(function* (
@@ -399,6 +623,18 @@ const validateOccurrenceFinality = Effect.fn("HermeticQualification.validateOccu
     yield* validateFinalityOccurrence(occurrence, snapshot, context)
 })
 
+const validateCandidateCleanupOccurrence = Effect.fn("HermeticQualification.validateCandidateCleanupOccurrence")(
+  function* (
+    occurrence: Extract<WorkflowOccurrence, { readonly _tag: "IntegratorCandidateCleanupOccurred" }>,
+    context: QualificationContext
+  ) {
+    const disposition = occurrence.event.authorization.disposition
+    yield* validateSessionCorrelation(integratorCandidateCleanupSessionOf(disposition), context)
+    if (disposition._tag === "Superseded") yield* validateSessionCorrelation(disposition.successor, context)
+    else yield* validateCandidate(disposition.qualifiedCandidate, context)
+  }
+)
+
 const validateHistoricalActionAttribution = Effect.fn("HermeticQualification.validateHistoricalActionAttribution")(
   function* (occurrence: WorkflowOccurrence, context: QualificationContext) {
     if ("originatingActionOperationId" in occurrence)
@@ -421,7 +657,11 @@ export const validateHermeticQualificationHistoricalSource: (
     TraceAtCursor,
     strictSource
   )(snapshot).pipe(Effect.mapError(sourceRejected))
-  if (original.cursor.runId !== context.runId || original.derivedTaskOrder.taskIds.some((id) => id !== context.taskId))
+  if (
+    original.cursor.runId !== context.runId ||
+    (original.derivedTaskOrder.taskIds.length > 0 && !original.derivedTaskOrder.taskIds.includes(context.taskId)) ||
+    original.derivedTaskOrder.taskIds.some((id) => id !== context.taskId && id !== context.dependantTaskId)
+  )
     return yield* sourceRejected()
   if (original.graph !== null) {
     yield* validateGraph(original.graph.snapshot, context)
@@ -432,7 +672,9 @@ export const validateHermeticQualificationHistoricalSource: (
   )
   const derivedOperationIds = yield* historicalDerivedOperationIds(original, context)
   yield* Effect.forEach(original.items, (item) =>
-    validateOccurrence(item.occurrence, original, { ...context, derivedOperationIds })
+    validateOccurrence(item.occurrence, original, { ...context, derivedOperationIds }).pipe(
+      Effect.mapError(sourceRejectedAt(occurrenceDiagnosticTag(item.occurrence)))
+    )
   )
   return snapshot
 })

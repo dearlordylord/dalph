@@ -1,4 +1,10 @@
-import type { PlannedTaskAttempt, TaskWorkSpecification } from "@dalph/contracts"
+import {
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
+  type PlannedTaskAttempt,
+  type TaskWorkSpecification
+} from "@dalph/contracts"
 import {
   ActiveTaskClaim,
   ClaimOwner,
@@ -39,6 +45,11 @@ import {
   type JournalDatabaseLocator
 } from "@dalph/orchestrator"
 import { Effect, Layer, Option } from "effect"
+
+const qualificationRemotePublicationTarget = RemotePublicationTarget.make({
+  branch: RemotePublicationBranchRef.make("refs/heads/qualification"),
+  endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/qualification.git")
+})
 
 const seedQualificationPlannedAttempt = Effect.fn("QualificationJournal.seedPlannedAttempt")(function* (options: {
   readonly attempt: PlannedTaskAttempt
@@ -95,7 +106,8 @@ const seedQualificationPlannedAttempt = Effect.fn("QualificationJournal.seedPlan
   yield* journal.beginRun(
     options.attempt.runId,
     target,
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    qualificationRemotePublicationTarget
   )
   yield* journal.append(
     options.attempt.runId,

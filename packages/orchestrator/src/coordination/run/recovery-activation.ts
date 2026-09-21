@@ -107,6 +107,9 @@ import {
   recordedTaskAttemptPlans
 } from "../../workflow/protocols/task-attempt-planning/journal-evidence.js"
 import { activeWorkAuthorityRefreshSubjectsContain, RunActivationOpportunity } from "./run-activation-opportunity.js"
+import { remoteBaselineCorrelationFor } from "../../workflow/protocols/direct-publication/baseline-events.js"
+import { deriveRemoteBaselineState } from "../../workflow/protocols/direct-publication/baseline-state.js"
+import { remoteBaselineEventsFor } from "../../workflow/protocols/direct-publication/baseline-transition-journal.js"
 
 import {
   makeTaskClaimReleaseOperation,
@@ -3810,6 +3813,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
   integrationTarget: Option.Option<IntegrationTarget>,
   activationBaselinePosition: Option.Option<JournalPosition>,
   targetPromotionConfigured: boolean,
+  remotePublicationConfigured: boolean,
   integrationFinalityConfigured: boolean,
   completionTaskConfigured: boolean,
   opportunity: RunActivationOpportunity,
@@ -4113,6 +4117,31 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
       : []
   })
   const integrationResponsibilities = deriveIntegrationAdmission(journalHistoryOf(runState)).responsibilities
+  const runBeginning = Array.from(journalRecordsOfKind(journalHistoryOf(runState), "WorkflowRunBegan"))[0]
+  const completedRemoteBaselinePositionFor = (
+    responsibility: StartedIntegrationResponsibility
+  ): JournalPosition | undefined => {
+    if (runBeginning?.event._tag !== "WorkflowRunBegan") return undefined
+    const correlation = remoteBaselineCorrelationFor(
+      responsibility.plannedAttempt.runId,
+      integratorResponsibilityFactsFor(responsibility),
+      responsibility.integrationTarget,
+      runBeginning.event.remotePublicationTarget
+    )
+    const baseline = deriveRemoteBaselineState(remoteBaselineEventsFor(journalHistoryOf(runState), correlation))
+    if (baseline._tag !== "Ready") return undefined
+    return [
+      ...journalRecordsOfKind(journalHistoryOf(runState), "RemoteBaselineObserved"),
+      ...journalRecordsOfKind(journalHistoryOf(runState), "LocalTargetCatchUpObserved")
+    ]
+      .filter(
+        ({ event }) =>
+          (event._tag === "RemoteBaselineObserved" || event._tag === "LocalTargetCatchUpObserved") &&
+          event.correlation.baselineId === correlation.baselineId
+      )
+      .sort((left, right) => Number(left.position) - Number(right.position))
+      .at(finalRecordOffset)?.position
+  }
   const exactIntegrationResourceSnapshot = currentIntegrationResources ?? (yield* integrationResources.snapshot)
   const integrationResourceSnapshot = exactIntegrationResourceSnapshot
   const directionLineageByAttemptId = new Map(
@@ -4200,6 +4229,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     targetLineageByAttemptId,
     targetLineageRefreshRequiredAttemptIds,
     targetPromotionConfigured,
+    remotePublicationConfigured,
     activeClaimByAttemptId,
     integrationFinalityConfigured,
     completionTaskConfigured,
@@ -4250,8 +4280,21 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           )
         const targetLineageReadIsRequired =
           quarantineDirection === undefined
-            ? !targetLineageByAttemptId.has(responsibility.plannedAttempt.attemptId) ||
-              targetLineageRefreshRequiredAttemptIds.has(responsibility.plannedAttempt.attemptId)
+            ? (() => {
+                const baselineCompletedAt = completedRemoteBaselinePositionFor(responsibility)
+                const lineageObservedAt = lastMatchingRecord(
+                  journalRecordsOfKind(journalHistoryOf(runState), "TargetLineageObserved"),
+                  ({ event }) =>
+                    event._tag === "TargetLineageObserved" &&
+                    plannedTaskAttemptEquivalence(event.plannedAttempt, responsibility.plannedAttempt)
+                )?.position
+                return (
+                  !targetLineageByAttemptId.has(responsibility.plannedAttempt.attemptId) ||
+                  targetLineageRefreshRequiredAttemptIds.has(responsibility.plannedAttempt.attemptId) ||
+                  (baselineCompletedAt !== undefined &&
+                    (lineageObservedAt === undefined || lineageObservedAt <= baselineCompletedAt))
+                )
+              })()
             : !directionLineageWasObserved
         const lineageReadIsReady =
           !integrationTargetResourceSnapshotIncludes(
@@ -4264,6 +4307,11 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           !integration.transitions.some(
             (transition) =>
               transition._tag === "RunIntegrator" && transition.responsibility.queuedAt === responsibility.queuedAt
+          ) &&
+          !integration.transitions.some(
+            (transition) =>
+              transition._tag === "EstablishRemoteBaseline" &&
+              transition.responsibility.queuedAt === responsibility.queuedAt
           ) &&
           !integration.transitions.some(
             (transition) =>
@@ -4585,6 +4633,7 @@ export const diagnoseColdRunRecoveryProjection = Effect.fn("RunRecoveryProjectio
     false,
     false,
     false,
+    false,
     RunActivationOpportunity.OrdinaryRunEntry()
   )
   return recoveryProjectionSnapshot(projection)
@@ -4611,6 +4660,7 @@ const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAut
   integrationTarget: Option.Option<IntegrationTarget>,
   integrationResourcesOverride: IntegrationTargetResourceController | undefined,
   targetPromotionConfigured: boolean,
+  remotePublicationConfigured: boolean,
   integrationFinalityConfigured: boolean,
   completionTaskConfigured: boolean,
   opportunity: RunActivationOpportunity
@@ -4651,6 +4701,7 @@ const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAut
       integrationTarget,
       activationBaselinePosition,
       targetPromotionConfigured,
+      remotePublicationConfigured,
       integrationFinalityConfigured,
       completionTaskConfigured,
       opportunity,
@@ -4701,13 +4752,15 @@ export const makeRunRecoveryProjection = (
   targetPromotion?: TargetPromotionRuntimeInput,
   integrationFinalityConfigured = false,
   completionTaskConfigured = false,
-  opportunity: RunActivationOpportunity = RunActivationOpportunity.OrdinaryRunEntry()
+  opportunity: RunActivationOpportunity = RunActivationOpportunity.OrdinaryRunEntry(),
+  remotePublicationConfigured = false
 ) =>
   makeRunRecoveryProjectionEffect(
     runId,
     Option.fromUndefinedOr(configuredIntegrationTarget),
     integrationResources,
     targetPromotion !== undefined,
+    remotePublicationConfigured,
     integrationFinalityConfigured,
     completionTaskConfigured,
     opportunity

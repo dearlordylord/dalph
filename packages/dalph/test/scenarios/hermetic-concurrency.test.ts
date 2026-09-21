@@ -91,6 +91,7 @@ import { expect } from "vitest"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
 import { acceptedManifestBytes, runInGitDirectory, runInWorktree } from "./hermetic-support.js"
+import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 
 type TaskKey = "A" | "B" | "D"
 type TrackerClaim = ActiveTaskClaim | UnclaimedTask
@@ -672,6 +673,7 @@ it.effect(
             completionTask,
             integrationFinality: completionClaim,
             integrator,
+            remotePublicationTarget: remotePublicationTargetForTest,
             targetPromotion: {
               git: {
                 compareAndSet: (request) =>

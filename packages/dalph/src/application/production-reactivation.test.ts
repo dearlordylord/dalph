@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 import { NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
@@ -257,7 +258,12 @@ const seedRetiredTerminal = Effect.fn("ProductionReactivationTest.seedRetiredTer
   runId: RunId,
   target: ReturnType<typeof FixtureTarget.make>
 ) {
-  yield* journal.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: defaultTaskWorkCapacity }))
+  yield* journal.beginRun(
+    runId,
+    target,
+    InitialControlPolicy.make({ taskExecutionCapacity: defaultTaskWorkCapacity }),
+    remotePublicationTargetForTest
+  )
   const fixture = completedRunFinalityFixture({ runId, target })
   yield* journal.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
   yield* journal.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
@@ -357,7 +363,12 @@ const runTerminalProductionOwner = Effect.fn("ProductionReactivationTest.runTerm
   // This raw store assertion covers the lower-level RunId reuse guard; ordinary
   // establishment is covered by the JournaledRunBootstrap cold-history tests.
   const runIdReuse = yield* journal
-    .beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: defaultTaskWorkCapacity }))
+    .beginRun(
+      runId,
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: defaultTaskWorkCapacity }),
+      remotePublicationTargetForTest
+    )
     .pipe(Effect.flip)
   return {
     calls: yield* Ref.get(calls),
@@ -882,7 +893,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
           const storageContext = yield* Layer.build(seedJournalLayer)
           const storage = Context.get(storageContext, JournalStore)
           const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: seedCapacity })
-          yield* storage.beginRun(runId, target, initialPolicy)
+          yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
           const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
           if (initial._tag === "InvalidWorkflowJournalHistory") {
             return yield* Effect.die(`production refresh seed is invalid: ${JSON.stringify(initial.issues)}`)
@@ -1580,6 +1591,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             const observeApplicationExit = source === "TrackerNotification"
             const runtimeBoundaries = {
               ...(journalStoreLayer === undefined ? {} : { journalStoreLayer }),
+              remotePublicationTarget: remotePublicationTargetForTest,
               applicationExit: observeApplicationExit
                 ? {
                     _tag: "ConstructOrdinaryShell" as const,
@@ -2188,7 +2200,10 @@ it.effect(
           Layer.succeed(TrackerMutation, trackerMutation),
           controlledSynchronousPlannedAttemptExecutorLayer(Layer.succeed(PlannedAttemptExecutor, executor)),
           unavailableIntegratorCandidateProviderAuthority,
-          { journalStoreLayer: Layer.succeedContext(journalContext) }
+          {
+            journalStoreLayer: Layer.succeedContext(journalContext),
+            remotePublicationTarget: remotePublicationTargetForTest
+          }
         ).pipe(
           Layer.provide(Layer.succeed(TrackerGraphReader, trackerGraphReader)),
           Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))

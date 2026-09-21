@@ -2,7 +2,7 @@ import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
 import { Cause, Config, Effect, Exit, HashMap, Layer, Option, Ref, Semaphore } from "effect"
 import * as Reactivity from "effect/unstable/reactivity/Reactivity"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
-import type { RunId } from "@dalph/contracts"
+import type { RemotePublicationTarget, RunId } from "@dalph/contracts"
 import { JournalDatabaseLocator, JournalPosition, type JournalRecordKey } from "../identity.js"
 import { encodeJournalEvent, equalJournalEvents } from "../event-codec.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
@@ -156,12 +156,19 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
         const beginRun = Effect.fn("JournalStore.Sqlite.beginRun")(function* (
           runId: RunId,
           target: TrackerTarget,
-          initialControlPolicy: InitialControlPolicy
+          initialControlPolicy: InitialControlPolicy,
+          remotePublicationTarget: RemotePublicationTarget
         ) {
           return yield* serialization.withPermit(
             Effect.gen(function* () {
               const existing = yield* loadRunRecords(runId, "JournalStore.beginRun")
-              const decision = decideWorkflowRunBeginning(existing, runId, target, initialControlPolicy)
+              const decision = decideWorkflowRunBeginning(
+                existing,
+                runId,
+                target,
+                initialControlPolicy,
+                remotePublicationTarget
+              )
               if (decision._tag === "LifecycleTransitionRejected") {
                 return yield* decision.failure
               }

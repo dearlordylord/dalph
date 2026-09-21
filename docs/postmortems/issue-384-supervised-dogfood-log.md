@@ -328,14 +328,16 @@ boundary can remain coarse while the executor owns this internal convergence.
   before runtime behavior, then integrated the new durable events through the
   journal, cassette, renaming, and occurrence-projection contracts.
 
-## Run disposition
+## Historical self-dogfood disposition
 
 The retained candidate is evidence from the autonomous attempt. The supervisor
 will not repair it into the #384 solution because doing so would bypass the
 dogfood objective: Dalph's executor must be able to discover and close the
 specification gaps itself. A later #384 attempt should start only after the
 operational failures and the missing autonomous review-and-repair capability
-have an accepted path.
+have an accepted path. This disposition describes that historical self-dogfood
+mechanism; it does not govern the current user-directed orchestrator attempt
+recorded below.
 
 The demonstrated operational failures are tracked in
 [issue #390](https://github.com/dearlordylord/dalph/issues/390). General bounded
@@ -529,3 +531,217 @@ covers the retained resume path only.
 
 Issue #390's retained-run closure is complete. Issue #384 remains open; its
 candidate is unmodified and unpublished.
+
+## Current user-directed orchestrator method
+
+The latest user instruction supersedes the historical self-dogfood mechanism for
+the next #384 attempt. The work starts from the exact fresh worktree
+`/workspace/typescript/dalph-worktrees/issue-384-fresh` at planned Base
+`1f8cf021e129cb2590dcc9c4906ab44a3d806098`, with the assistant as the
+user-directed orchestrator. Mechanical work is delegated to the Luna max
+sub-agent; difficult implementation work is delegated to the Sol medium sub-agent; blocker analysis
+is delegated to the Astra medium sub-agent. A reviewer may run at most three
+rounds; after the third round, unresolved non-blocking notes are recorded and
+the review is auto-accepted with those residual notes.
+
+This execution method coordinates the accepted #384 implementation and its
+issue-owned follow-ups. It is not hosted issue #388 qualification, and it does
+not turn a controlled fixture or a prior local run into hosted acceptance
+evidence. The #384 direct-publication scenario remains the authority for
+publication order, exact proof, destination admission, bounds, waits, Exit, and
+finality; #385, #386, and #387 retain their successor, grant, and resume scopes.
+
+Every failed candidate, retained Run, worktree, journal, provider transcript,
+and raw evidence remains preserved at its existing locator. The orchestrator
+must use a fresh exact Base/worktree and may inspect those candidates as
+historical evidence, but it must not overwrite, resume, publish, or silently
+repair them. This section records the execution method and boundaries only;
+the current documentation prerequisite makes no claim that the #384 runtime,
+models, focused tests, full gate, or disposable S1 dogfood have passed.
+
+### Development checkpoint, 2026-09-20 23:36 UTC
+
+The fresh worktree has committed the governing premises, Git boundary
+characterization, destination types, integration/finality models, and formal
+profile obligations. Runtime work remains unqualified. No hosted publication or
+issue closure has occurred.
+
+The disposable S1 public CLI run reached `RemotePublicationIntended` after
+destination admission, task execution, and integration. Its remaining push,
+local promotion, tracker completion, cleanup, and later dependant release are
+unproven. Repeated fixture failures exposed root-task-only assumptions in the
+controlled provider's graph, status, proposal, and history validators. The
+changed experiment audits those shared assumptions before one complete-story
+rerun. Focused controls cover empty pre-graph history, root-only and root-plus-
+dependant graphs, and foreign/duplicate identities; logs are retained at
+`/tmp/public-s1-guard-audit.log` and
+`/tmp/public-s1-history-pregraph-audit.log`. The audit completed by its 23:35 UTC
+stop time. The next public run supplies unique evidence of actual production
+CLI ordering across Git, SQLite, and the controlled tracker; prefix unit tests
+cannot substitute for it.
+
+S3 still needs distinct safe-fast-forward versus competing-head observations.
+S5 still needs the complete intent/effect/append restart matrix and local
+catchup. S4/S6/S7/S8 still need durable retained outcomes, finite bounds,
+Pause/Exit custody, and proof-versus-finality permission tests. Passing model,
+registry, adapter, or cassette tests does not close these missing seams.
+
+The earlier MBT invocation timed out without proving the requested two suites.
+The next experiment invokes Vitest with the two explicit paths directly and
+checks suite selection before interpreting failures. Its timeout is not a
+conformance pass. The later recorded process group was proved absent; the
+earliest handle lacked its original process identity and remains unproven
+qualification evidence. Full qualification and scoped review have not begun.
+
+At 23:41 UTC the one public rerun had stopped after publication intent, before
+any numbered push intent. The adapter had tested only whether remote H
+contained candidate M, then misclassified the ordinary H-ancestor-of-M case as
+competing work. The distinguishing repair tests ancestry in both directions;
+only a proven remote ancestor authorizes an ordinary push. No additional public
+rerun is justified until that focused repair passes.
+
+The exact two-path conformance invocation reached a new model action,
+`observeRemotePublicationContradiction`, absent from the runtime driver. Its
+90-second bound expired and its recorded process group was proved absent;
+the result is a missing-conformance finding, not a pass. Runtime and driver
+owners are implementing the missing supported actions. A design clarification
+is pending for the source of an optional later contradiction observation;
+neither finality nor restart may manufacture a mandatory post-proof remote read.
+
+### Development checkpoint, 2026-09-21 00:35 UTC
+
+The publication restart test now exercises seven cuts through the production
+journal and accepted reader in both memory and reopened file-backed SQLite:
+pre-intent loss, committed unsent intent, applied and unapplied lost responses,
+success and retained-outcome commit acknowledgement loss, and unproven prior
+sender custody. The focused test passes. An unsent numbered intent consumes
+its ordinal; recovery proves custody and observes Git before spending the next
+ordinal. SQLite acknowledgement-loss cuts use the post-COMMIT hook. This does
+not yet prove initial catch-up, promotion, or tracker-close recovery.
+
+The sender adapter now reserves durable execution custody before the workflow
+records a numbered push intent. Its real host-kill test awaits fresh built
+artifacts. The real-Git adapter test for branch deletion passes: ordinary exact
+push can recreate the named branch, preserves another branch, and sends no local
+tag. No atomic no-recreation guarantee is claimed.
+
+The next public S1 attempt has a focused passing repair. A/B support had placed
+the full attempt identity in an executor result filename, producing a component
+longer than the filesystem limit. A bounded SHA-256 digest preserves distinct
+A/B files and commits. Two real-Git/projection tests pass; evidence is at
+`/tmp/public-s1-executor-focused.log`. Omitted command records in a public
+historical snapshot were not missing durable records: the projection deliberately
+omits those internal events. The public acceptance run remains unpassed. Its
+next invocation follows a clean sole-owner emit and retains a bounded diagnostic
+before fixture cleanup; no additional timeout-only retry is authorized.
+
+Initial baseline/catch-up events now pass projection and cassette checks. The
+required runtime service wiring and two-store catch-up recovery tests are still
+being completed. Model conformance is being reduced to one supported trace
+before another broad invocation. No full gate, formal review round, hosted
+publication, or issue closure has occurred.
+
+### Development checkpoint, 2026-09-21 00:49 UTC
+
+The baseline recovery test now passes all seven initial catch-up cuts in memory
+and reopened SQLite. The real host-kill test passes against fresh built CLI
+artifacts: an escaped sender survives the disposable host's SIGKILL, replacement
+custody stops it before a real remote read, and exact process/group absence is
+proved. The independent decoder/admission tests reject missing pins and changed
+restart destinations before effects, restore conclusive admission without a
+new read, and recover an intent-only admission. No extra lifecycle read is
+required by these repairs.
+
+The next public S1 invocation exited in 5.29 seconds after
+`RemoteBaselineObserved`, at controlled proposal validation. The child was
+proved absent. The exact proposed transition and baseline observation variant
+were not retained; a guessed transition name is not sufficient repair evidence.
+The next distinguishing experiment preserves those details on every early
+child exit, not only on timeout, then tests the actual rejected transition.
+Evidence: `/tmp/public-s1-canonical-final.log`. Integration, publication,
+promotion, closure, cleanup, and dependant settlement remain unproved by that
+run.
+
+The first `check:fast` stopped at root typechecking. Its console wrapper
+truncated diagnostics; a separately bounded typecheck captured the complete
+output at `/tmp/issue384-typecheck-0044.log`. Package-only checks had excluded
+tests. Required service and publication-premise fixture repairs are distributed
+by file ownership; a complete root check remains required. No full gate or
+formal review has started.
+
+The conformance timeout was isolated to generation cost: quint-connect expanded
+one requested trace to its default 10,000 samples. A 35-step seed-57 replay with
+one sample passed in 9.19 seconds; normal source settings were restored.
+Evidence is `/tmp/issue384-accepted-35-sample1-20260921T004446Z.log` and its
+companion metadata. Directed publication routes also pass. This is bounded
+conformance evidence, not a claim that all deferred or unsupported model actions
+have production implementations.
+
+S7 tests using actual control and delivery admission reproduced a separate
+cutoff defect: Pause or Exit could become effective while a remote read was
+held, yet the same action could start a new push when the read returned. The
+runtime repair must guard that boundary. Tests separately prove that an
+already-produced successful push result can be retained after cutoff without
+authorizing another effect. These are acceptance repairs, not a change to the
+five-second Exit drain.
+
+### Development checkpoint, 2026-09-21 01:11 UTC
+
+The maintainer selected the existing no-extra-read rule. #384 adds no remote
+check between confirmed publication and task closure; detection of a later
+remote rewrite requires a follow-up trigger. This decision is recorded in the
+accepted scenario. It does not authorize closing from missing publication proof
+or ignoring changed tracker permission.
+
+All worker agents stopped on a reported usage limit. The root continues locally;
+no reviewer round or full gate has run. The final S7 phase repair present in the
+worktree passes the six Pause/Exit cases and twelve engine tests, including
+retention of already-produced successful read results. The root typecheck
+passed at `/tmp/issue384-typecheck-0105.log` after repairing test fixture types
+and a diagnostic helper signature regression.
+
+The public CLI diagnostic exposed two production composition defects. Bounded
+Git commands lacked the working-repository-to-common-directory mapping used by
+ordinary commands; the mapping regression test now passes. After that repair,
+S1 reached an aligned baseline, fresh lineage, candidate qualification, and a
+typed `PushCustodyUnproven` retained outcome. A focused shared-memo test proved
+that an earlier general Git layer without sender custody could satisfy the
+publication layer. Giving publication its own layer construction fixes that
+test. Both regression tests pass. Evidence is retained in
+`/tmp/issue384-public-mapping-0107.log` and
+`/tmp/issue384-public-retained-cause-0109.log`. The next bounded public run uses
+fresh artifacts containing both repairs; its outcome is not yet claimed.
+
+### Scoped follow-up record: authored capstone chronology
+
+**Status:** proposed and documented locally; no external issue or follow-up has
+been opened. The current #384 candidate remains blocked until this record is
+either completed in a new attempt or explicitly superseded by a maintainer.
+
+**Owner and scope:** the #384 orchestrator owns the maintained authored cassette
+and its support helpers in `packages/dalph/src/cassettes/`. The follow-up may
+change that cassette, its support builder, and the focused capstone execution
+test. It may not change publication order, tracker/Git authorities, the
+no-extra-remote-read rule, or the production CLI to make the cassette pass.
+
+**Starting evidence:** the candidate at merge commit `e9e1667fc8bf3f81f3f48e9ff7ac08b59733d266`
+passes `check:fast`, the controlled public S1, and the production S7 cutoff
+test. The capstone reaches the F phase after the structural chronology repair.
+At the G boundary after terminal G, runtime selects `ReadTaskClaim(G)` while
+the cassette expects `ReadTrackerGraph`. The earlier F correlation was corrected
+from `464/465/473` to `536/537/543`; the G tuple was not accepted as evidence
+because the preceding operation order is still wrong.
+
+**Next experiment:** construct one structural G-phase transcript from the
+runtime's observed order (`terminal G -> claim G -> graph G -> integration`),
+derive its correlation positions from that transcript, and run the focused
+capstone execution test once in a fresh exact-Base worktree. Do not repair
+successive absolute positions after a new mismatch; a second mismatch records a
+new obstruction and stops the attempt.
+
+**Acceptance and stop condition:** the focused capstone test must pass, the
+support file must remain under the repository's 420-line limit, and the
+maintained catalog/Lab entry must still render the same accepted story. If that
+single structural experiment fails, preserve its log and open a narrower
+follow-up or report the capstone blocked again; do not run baseline/full gates
+or hosted dogfood against an unproven cassette.

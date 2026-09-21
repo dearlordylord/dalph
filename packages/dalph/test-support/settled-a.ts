@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../orchestrator/test/support/direct-publication.js"
 import { AcceptedResultEvidenceManifest, type RunId } from "@dalph/contracts"
 import { Effect, type Crypto } from "effect"
 import {
@@ -87,7 +88,12 @@ export const makeNormalTerminationSettledA = Effect.fn("NormalTermination.makeSe
     for (const record of records) {
       if (record.event._tag === "WorkflowRunBegan")
         yield* input.journal
-          .beginRun(record.runId, record.event.target, record.event.initialControlPolicy)
+          .beginRun(
+            record.runId,
+            record.event.target,
+            record.event.initialControlPolicy,
+            remotePublicationTargetForTest
+          )
           .pipe(Effect.orDie)
       else if (record.event._tag === "WorkflowRunTerminated")
         return yield* Effect.die("settled A prefix must remain nonterminal")

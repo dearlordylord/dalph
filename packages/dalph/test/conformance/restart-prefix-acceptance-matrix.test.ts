@@ -3,6 +3,9 @@ import {
   GitCommitSha,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
   makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { HashSet, Context, Effect, Layer, Ref } from "effect"
@@ -43,10 +46,12 @@ import {
   TargetPromotionAttemptIntendedEvent,
   TargetPromotionAttemptOrdinal,
   TargetPromotionAttemptReason,
+  TargetPromotionCompareAndSetResult,
   TargetPromotionIntendedEvent,
   TargetPromotionGit,
   TargetPromotionGitReadObservation,
   TargetPromotionGitReadFailure,
+  TargetPromotionObservedSuccessEvent,
   TargetPromotionReconciliationDeferredEvent,
   TargetPromotionReconciliationDeferral,
   TargetPromotionRuntime,
@@ -97,6 +102,17 @@ import { taskTrackerReadIntent } from "../../../orchestrator/src/workflow/regist
 import { TaskWorkCapacity } from "../../../orchestrator/src/coordination/admission/capacity.js"
 import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
 import { integrationFinalityFixture } from "../../../orchestrator/src/workflow/protocols/integration-finality/fixtures.js"
+import {
+  remoteBaselineGitLayerForTest,
+  remotePublicationGitLayerForTest
+} from "../../../orchestrator/test/support/direct-publication.js"
+import {
+  RemotePublicationAttemptIntendedEvent,
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationIntendedEvent,
+  RemotePublicationSucceededEvent,
+  remotePublicationCorrelationFor
+} from "../../../orchestrator/src/workflow/protocols/direct-publication/events.js"
 import {
   IntegratorRunCandidateGitObservedEvent,
   IntegratorRunCandidateGitReadIntendedEvent,
@@ -203,6 +219,10 @@ const restartPrefixesFrom = (records: ReadonlyArray<JournalRecord>): RestartPref
 
 const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
   const fixture = integrationFinalityFixture
+  const remotePublicationTarget = RemotePublicationTarget.make({
+    branch: RemotePublicationBranchRef.make("refs/heads/main"),
+    endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/repository.git")
+  })
   const specification = makeTaskWorkSpecification({
     body: "Complete the integration finality task.",
     taskId: fixture.taskId,
@@ -225,6 +245,8 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
     run: integratorRun
   })
   const correlation = targetPromotionCorrelationFor(candidate)
+  const publicationCorrelation = remotePublicationCorrelationFor(candidate, remotePublicationTarget)
+  const publicationAttemptOrdinal = RemotePublicationAttemptOrdinal.make(1)
   const attemptOrdinal = TargetPromotionAttemptOrdinal.make(1)
   const changedHead = GitCommitSha.make("4".repeat(40))
   const lineageOperation = makeTargetLineageObservationOperation({
@@ -286,7 +308,7 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
     correlation: { attemptId: plannedAttempt.attemptId, runId: fixture.runId }
   })
   const stale = record(
-    28,
+    31,
     TargetPromotionStaleEvent.make({
       basis: TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal }),
       correlation,
@@ -306,6 +328,7 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
         initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
+        remotePublicationTarget,
         target: fixture.target,
         version: workflowJournalEventVersion
       })
@@ -476,9 +499,41 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
         version: workflowJournalEventVersion
       })
     ),
-    record(26, TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })),
+    record(
+      26,
+      RemotePublicationIntendedEvent.make({
+        correlation: publicationCorrelation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    ),
     record(
       27,
+      RemotePublicationAttemptIntendedEvent.make({
+        attemptOrdinal: publicationAttemptOrdinal,
+        correlation: publicationCorrelation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      28,
+      RemotePublicationSucceededEvent.make({
+        correlation: publicationCorrelation,
+        occurrenceClassification: "NonActionOccurrence",
+        proof: {
+          _tag: "PushApplied",
+          attemptOrdinal: publicationAttemptOrdinal,
+          remoteHead: candidate.candidateCommit
+        },
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(29, TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })),
+    record(
+      30,
       TargetPromotionAttemptIntendedEvent.make({
         attemptOrdinal,
         correlation,
@@ -488,7 +543,7 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
     ),
     stale,
     record(
-      29,
+      32,
       IntegrationQuarantinedEvent.make({
         basis: quarantineBasis,
         correlation: session,
@@ -775,7 +830,7 @@ const productionRestartProjection = (
         }
       })
     )
-  )
+  ).pipe(Effect.provide(remoteBaselineGitLayerForTest), Effect.provide(remotePublicationGitLayerForTest))
 
 const exactAttemptTransitions = (snapshot: RunRecoveryProjectionSnapshot, attemptId: string) =>
   snapshot.frontier.transitions.filter(
@@ -832,7 +887,11 @@ const storedPromotionStalePrefix = Effect.fn("RestartPrefixAcceptanceMatrix.stor
   const began = makeWorkflowRunBeganRecord(
     runId,
     FixtureTarget.make("promotion-stale-storage-prefix"),
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    RemotePublicationTarget.make({
+      branch: RemotePublicationBranchRef.make("refs/heads/main"),
+      endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/repository.git")
+    })
   )
   const intent = rawRecord(TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion }), 2)
   const attempt = rawRecord(
@@ -1334,7 +1393,9 @@ it.effect(
               const claimResult = yield* executeAcceptedWorkflowAction(began.runId, claimTransition, lease).pipe(
                 Effect.provideService(WorkflowTrace, trace),
                 Effect.provide(runtimeJournalContext),
-                Effect.provideService(WorkflowInterpreter, persistedBoundaryInterpreter)
+                Effect.provideService(WorkflowInterpreter, persistedBoundaryInterpreter),
+                Effect.provide(remoteBaselineGitLayerForTest),
+                Effect.provide(remotePublicationGitLayerForTest)
               )
               expect(claimResult).toEqual(
                 AuthoritativeTaskClaimObserved.make({ observation: integrationFinalityFixture.activeClaim })
@@ -1413,7 +1474,9 @@ it.effect(
               const observeLineage = executeAcceptedWorkflowAction(began.runId, lineageTransition, lease).pipe(
                 Effect.provideService(WorkflowTrace, trace),
                 Effect.provide(runtimeJournalContext),
-                Effect.provideService(WorkflowInterpreter, persistedBoundaryInterpreter)
+                Effect.provideService(WorkflowInterpreter, persistedBoundaryInterpreter),
+                Effect.provide(remoteBaselineGitLayerForTest),
+                Effect.provide(remotePublicationGitLayerForTest)
               ) satisfies Effect.Effect<unknown, unknown, never>
               const observed = yield* observeLineage
               expect(observed).toEqual(AuthoritativeTargetLineageObserved.make({ observation: freshLineage }))
@@ -1505,7 +1568,9 @@ it.effect(
               const action = identityFreeActionFor(began.runId, afterLineageRecords, fixSuccessor)
               const fix = executeIntegrationAction(action, fixSuccessor, lease, workflowTarget).pipe(
                 Effect.provide(runtimeJournalContext),
-                Effect.provideService(WorkflowInterpreter, persistedBoundaryInterpreter)
+                Effect.provideService(WorkflowInterpreter, persistedBoundaryInterpreter),
+                Effect.provide(remoteBaselineGitLayerForTest),
+                Effect.provide(remotePublicationGitLayerForTest)
               ) satisfies Effect.Effect<unknown, unknown, never>
               expect(yield* fix).toMatchObject({ _tag: "ActionCompleted" })
               expect(yield* fix).toMatchObject({ _tag: "ActionCompleted" })
@@ -1663,6 +1728,11 @@ it.effect(
                 ])
               })
               if (reduction._tag === "InvalidWorkflowJournalHistory") expect(reduction.issues, lane).toHaveLength(1)
+              const publication = before.findLast(({ event }) => event._tag === "RemotePublicationSucceeded")
+              if (publication?.event._tag !== "RemotePublicationSucceeded") {
+                return yield* Effect.die("malformed promotion history lacks its preceding publication proof")
+              }
+              const publicationProof: RemotePublicationSucceededEvent = publication.event
               const calls = yield* Ref.make<ReadonlyArray<string>>([])
               const git = TargetPromotionGit.of({
                 compareAndSet: () =>
@@ -1680,7 +1750,7 @@ it.effect(
                     liveJournalTestLayer({ records: before, runId: began.runId, target: trackerTarget })
                   ).pipe(
                     Effect.flatMap((journalContext) =>
-                      runTargetPromotion(candidate).pipe(
+                      runTargetPromotion({ candidate, publication: publicationProof }).pipe(
                         Effect.provide(journalContext),
                         Effect.provideService(TargetPromotionGit, git)
                       )
@@ -1695,6 +1765,153 @@ it.effect(
               expect(yield* Ref.get(calls), lane).toEqual([])
               expect(yield* storage.read(began.runId), lane).toEqual(before)
             })
+          ),
+        { concurrency: 1 }
+      )
+    }),
+  120_000
+)
+
+it.effect(
+  "recovers publication-proved target promotion cuts through memory and reopened SQLite",
+  () =>
+    Effect.gen(function* () {
+      const authored = directPromotionRestartRecords()
+      const began = authored[0]
+      const publication = exactlyOne(
+        authored.filter(({ event }) => event._tag === "RemotePublicationSucceeded"),
+        "publication proof before target promotion recovery"
+      )
+      const intent = exactlyOne(
+        authored.filter(({ event }) => event._tag === "TargetPromotionIntended"),
+        "target-promotion intent"
+      )
+      const attempt = exactlyOne(
+        authored.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended"),
+        "target-promotion attempt intent"
+      )
+      if (
+        began?.event._tag !== "WorkflowRunBegan" ||
+        publication.event._tag !== "RemotePublicationSucceeded" ||
+        intent.event._tag !== "TargetPromotionIntended" ||
+        attempt.event._tag !== "TargetPromotionAttemptIntended"
+      ) {
+        return yield* Effect.die("target-promotion recovery fixture did not narrow its exact chronology")
+      }
+      const runBeginning = began.event
+      const promotionCorrelation = attempt.event.correlation
+      const publicationProof = publication.event
+      const successEvent = TargetPromotionObservedSuccessEvent.make({
+        basis: TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal: attempt.event.attemptOrdinal }),
+        correlation: promotionCorrelation,
+        observation: {
+          _tag: "CompareAndSetApplied",
+          candidateAncestry: "Current",
+          targetHeadSha: promotionCorrelation.qualifiedCandidate.candidateCommit
+        },
+        version: workflowJournalEventVersion
+      })
+      const success: JournalRecord = {
+        event: successEvent,
+        key: describeJournalEvent(successEvent).expectedKey,
+        position: JournalPosition.make(Number(attempt.position) + 1),
+        runId: began.runId
+      }
+      const through = (endpoint: JournalRecord, cut: string): RecoveryPrefix<string> => {
+        const index = authored.indexOf(endpoint)
+        const retained = prefixThrough(authored, cut, endpoint.event._tag, index)
+        return retained ?? expect.fail("missing target-promotion recovery prefix " + cut)
+      }
+      const intentPrefix = through(intent, "PromotionIntentDurable")
+      const attemptPrefix = through(attempt, "PromotionAttemptIntentDurable")
+      const attemptIndex = authored.indexOf(attempt)
+      const successPrefix: RecoveryPrefix<string> = {
+        cut: "PromotionSuccessAcknowledgementLost",
+        endpoint: "TargetPromotionObservedSuccess",
+        records: [began, ...authored.slice(1, attemptIndex + 1), success]
+      }
+      const scenarios = [
+        {
+          calls: ["read", "compare-and-set"],
+          label: "outer intent",
+          observation: TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
+            currentHeadSha: attempt.event.correlation.qualifiedCandidate.run.session.expectedTargetHead
+          }),
+          prefix: intentPrefix
+        },
+        {
+          calls: ["read"],
+          label: "applied response lost",
+          observation: TargetPromotionGitReadObservation.cases.CandidateCurrent.make({
+            currentHeadSha: attempt.event.correlation.qualifiedCandidate.candidateCommit
+          }),
+          prefix: attemptPrefix
+        },
+        {
+          calls: ["read", "compare-and-set"],
+          label: "stopped unapplied sender",
+          observation: TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
+            currentHeadSha: attempt.event.correlation.qualifiedCandidate.run.session.expectedTargetHead
+          }),
+          prefix: attemptPrefix
+        },
+        {
+          calls: [],
+          label: "success append acknowledgement lost",
+          observation: TargetPromotionGitReadObservation.cases.CandidateCurrent.make({
+            currentHeadSha: attempt.event.correlation.qualifiedCandidate.candidateCommit
+          }),
+          prefix: successPrefix
+        }
+      ] as const
+
+      yield* Effect.forEach(
+        scenarios,
+        (scenario) =>
+          Effect.forEach(
+            lanes,
+            (lane) =>
+              withRecoveryPrefixStore(scenario.prefix, lane, (storage) =>
+                Effect.scoped(
+                  Effect.gen(function* () {
+                    const retained = yield* storage.read(began.runId)
+                    const history = reduceWorkflowJournalHistory(began.runId, retained)
+                    if (history._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(history)
+                    const journalContext = yield* Layer.build(
+                      journalLayer(began.runId, runBeginning.target, history, storage)
+                    )
+                    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+                    const git = TargetPromotionGit.of({
+                      compareAndSet: () =>
+                        Ref.update(calls, (current) => [...current, "compare-and-set"]).pipe(
+                          Effect.as(
+                            TargetPromotionCompareAndSetResult.cases.Applied.make({
+                              newHeadSha: promotionCorrelation.qualifiedCandidate.candidateCommit
+                            })
+                          )
+                        ),
+                      read: () =>
+                        Ref.update(calls, (current) => [...current, "read"]).pipe(Effect.as(scenario.observation))
+                    })
+                    const result = yield* runTargetPromotion({
+                      candidate: promotionCorrelation.qualifiedCandidate,
+                      publication: publicationProof
+                    }).pipe(Effect.provide(journalContext), Effect.provideService(TargetPromotionGit, git))
+                    expect(result._tag, scenario.label + " / " + lane).toBe("PromotionSucceeded")
+                    expect(yield* Ref.get(calls), scenario.label + " / " + lane).toEqual(scenario.calls)
+                    const recovered = yield* storage.read(began.runId)
+                    expect(
+                      recovered.filter(({ event }) => event._tag === "RemotePublicationSucceeded"),
+                      scenario.label + " / " + lane
+                    ).toEqual([publication])
+                    expect(
+                      recovered.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess"),
+                      scenario.label + " / " + lane
+                    ).toHaveLength(1)
+                  })
+                )
+              ),
+            { concurrency: 1 }
           ),
         { concurrency: 1 }
       )

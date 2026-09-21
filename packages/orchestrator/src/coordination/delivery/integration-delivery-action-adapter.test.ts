@@ -23,6 +23,8 @@ import type { DeliveryActionProposal, IdentityFreeDeliveryProposal } from "./del
 import { deliveryProposalsOf } from "./delivery-proposal.js"
 import { executeIntegrationAction } from "./integration-delivery-action-adapter.js"
 import { Journal } from "./journal.js"
+import { RemotePublicationGit } from "../../workflow/protocols/direct-publication/events.js"
+import { RemoteBaselineGit } from "../../workflow/protocols/direct-publication/baseline-events.js"
 
 const target = FixtureTarget.make("integration-adapter-finality-target")
 const responsibility = StartedIntegrationResponsibility.make({
@@ -117,6 +119,25 @@ const unusedJournal = Journal.of({
   terminate: () => unexpectedJournalCall("terminate")
 })
 
+const unusedRemotePublicationGit = RemotePublicationGit.of({
+  admit: () => Effect.die("remote publication is outside this adapter test"),
+  observe: () => Effect.die("remote publication is outside this adapter test"),
+  prepareSenderCustody: () => Effect.die("remote publication is outside this adapter test"),
+  push: () => Effect.die("remote publication is outside this adapter test"),
+  reconcileSenderCustody: () => Effect.die("remote publication is outside this adapter test")
+})
+const unusedRemoteBaselineGit = RemoteBaselineGit.of({
+  catchUp: () => Effect.die("remote baseline is outside this adapter test"),
+  observe: () => Effect.die("remote baseline is outside this adapter test"),
+  reconcileCatchUp: () => Effect.die("remote baseline is outside this adapter test")
+})
+
+const provideRemoteGit = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(
+    Effect.provideService(RemotePublicationGit, unusedRemotePublicationGit),
+    Effect.provideService(RemoteBaselineGit, unusedRemoteBaselineGit)
+  )
+
 it.effect("defers blocker-clear ancestry without runtime and completes after the configured Git read", () =>
   Effect.gen(function* () {
     const authorization = PostPromotionBlockerClearAuthorization.make({
@@ -136,7 +157,7 @@ it.effect("defers blocker-clear ancestry without runtime and completes after the
     const journal = appendableJournal(records)
 
     expect(
-      yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+      yield* provideRemoteGit(executeIntegrationAction(action, transition, inertLease, target)).pipe(
         Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
         Effect.provideService(Journal, unusedJournal),
         Effect.provideService(InRunJournal, journal)
@@ -145,7 +166,7 @@ it.effect("defers blocker-clear ancestry without runtime and completes after the
     expect(yield* Ref.get(records)).toEqual([])
 
     expect(
-      yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+      yield* provideRemoteGit(executeIntegrationAction(action, transition, inertLease, target)).pipe(
         Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
         Effect.provideService(Journal, unusedJournal),
         Effect.provideService(TargetPromotionRuntime, promotionRuntime),
@@ -190,7 +211,7 @@ it.effect("translates a changed focused revision into a deferred completion acti
       read: () => Effect.die("changed revision stops before reading evidence")
     })
 
-    const result = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+    const result = yield* provideRemoteGit(executeIntegrationAction(action, transition, inertLease, target)).pipe(
       Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
       Effect.provideService(Journal, unusedJournal),
       Effect.provideService(CompletionTaskBoundary, boundary),

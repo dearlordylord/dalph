@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import { describe, expect, it } from "vitest"
 import { GitCommitSha, RunId, TaskId, makeTaskWorkSpecification } from "@dalph/contracts"
 import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
@@ -90,6 +91,7 @@ const graphRecord = (
 const beginning = (): JournalRecord => ({
   event: WorkflowRunBeganEvent.make({
     initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    remotePublicationTarget: remotePublicationTargetForTest,
     initiatedBy: { _tag: "DalphCoordinator" },
     occurrenceClassification: "InitiatedAction",
     target: fixture.target,

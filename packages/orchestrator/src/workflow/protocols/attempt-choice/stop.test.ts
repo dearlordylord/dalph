@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { appendAcceptedSafeExecutorHistory } from "./live-executor-history.js"
 import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
@@ -144,7 +145,7 @@ const taskId = TaskId.make("attempt-stop-task")
 const target = FixtureTarget.make("attempt-stop-target")
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const testJournalLayer = liveJournalTestLayer({
-  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy)],
+  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
   runId,
   target
 })
@@ -298,7 +299,7 @@ const appendExposedStop = Effect.fn("AttemptStopTest.appendExposed")(function* (
 /** Seeds the exact target-A prefix before a separate published Journal owns later appends. */
 const appendExposedPrefix = Effect.fn("AttemptStopTest.appendExposedPrefix")(function* () {
   const journal = yield* JournalStore
-  yield* journal.beginRun(runId, target, initialPolicy)
+  yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
   yield* journal.append(
     runId,
     intentRecordKey(exactClaim.operationId),

@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import {
   AttemptId,
@@ -121,7 +122,8 @@ const recordsFrom = (rows: ReadonlyArray<EventRow>): ReadonlyArray<JournalRecord
   makeWorkflowRunBeganRecord(
     runId,
     target,
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    remotePublicationTargetForTest
   ),
   ...rows.map((row, index) => ({ ...row, position: JournalPosition.make(index + 2), runId }))
 ]

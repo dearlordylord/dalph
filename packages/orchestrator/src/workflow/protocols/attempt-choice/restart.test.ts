@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { appendAcceptedSafeExecutorHistory } from "./live-executor-history.js"
 import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
@@ -133,7 +134,7 @@ const independentTaskId = TaskId.make("attempt-restart-C")
 const target = FixtureTarget.make("attempt-restart-target")
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const testJournalLayer = liveJournalTestLayer({
-  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy)],
+  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
   runId,
   target
 })

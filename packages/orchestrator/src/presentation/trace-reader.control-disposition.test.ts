@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
@@ -227,6 +228,7 @@ const runBeginningFor = (recordRunId: RunId, recordTarget: typeof target): Journ
     1,
     WorkflowRunBeganEvent.make({
       initialControlPolicy: initialPolicy,
+      remotePublicationTarget: remotePublicationTargetForTest,
       initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
       occurrenceClassification: "InitiatedAction",
       target: recordTarget,
@@ -400,7 +402,12 @@ const appendRecords = Effect.fn("TraceReaderControlDispositionTest.appendRecords
   if (beginning === undefined || beginning.event._tag !== "WorkflowRunBegan") {
     return yield* Effect.die("control-disposition fixture must begin with WorkflowRunBegan")
   }
-  yield* journal.beginRun(beginning.runId, beginning.event.target, beginning.event.initialControlPolicy)
+  yield* journal.beginRun(
+    beginning.runId,
+    beginning.event.target,
+    beginning.event.initialControlPolicy,
+    remotePublicationTargetForTest
+  )
   for (const item of records.slice(1)) {
     if (item.event._tag === "WorkflowRunBegan" || item.event._tag === "WorkflowRunTerminated") {
       return yield* Effect.die("control-disposition fixture cannot append a Run lifecycle event")
@@ -835,7 +842,12 @@ it.effect("rejects cleanup contradiction without its ordered observation prefix"
 it.effect("rejects worktree cleanup authorization without its exact disposition provenance", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
-    yield* journal.beginRun(cleanupRunId, FixtureTarget.make("issue-83-missing-cleanup-provenance"), initialPolicy)
+    yield* journal.beginRun(
+      cleanupRunId,
+      FixtureTarget.make("issue-83-missing-cleanup-provenance"),
+      initialPolicy,
+      remotePublicationTargetForTest
+    )
     const authorized = WorktreeCleanupAuthorizedEvent.make({
       authorization: worktreeAuthorization,
       initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),

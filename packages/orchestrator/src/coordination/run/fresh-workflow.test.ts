@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import {
   AttemptId,
@@ -131,7 +132,8 @@ it.effect("continues a valid restarted replacement successor without resurrectin
     yield* journal.beginRun(
       replacementRunId,
       target,
-      RunControlPolicy.make({ revision: initialRunPolicyRevision, taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      RunControlPolicy.make({ revision: initialRunPolicyRevision, taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTargetForTest
     )
     const priorSpecification = makeTaskWorkSpecification({
       body: "cleanup provenance predecessor",

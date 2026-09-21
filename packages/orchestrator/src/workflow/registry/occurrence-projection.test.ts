@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { taskTrackerGraphFactsObserved } from "../../../test/task-tracker-facts.js"
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import { completedRunFinalityFixture } from "../../../test/run-finality.js"
@@ -1326,6 +1327,7 @@ it.effect("reconstructs after process loss without a coordinator-crash journal e
     const began: JournalRecord = {
       event: WorkflowRunBeganEvent.make({
         initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTarget: remotePublicationTargetForTest,
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
         target,
@@ -2121,6 +2123,7 @@ it.effect("projects an atomic replacement occurrence while ignoring lifecycle ro
         1,
         WorkflowRunBeganEvent.make({
           initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+          remotePublicationTarget: remotePublicationTargetForTest,
           initiatedBy: { _tag: "DalphCoordinator" },
           occurrenceClassification: "InitiatedAction",
           target: operation.target,
@@ -2440,6 +2443,7 @@ it.effect("keeps non-occurrence journal events out of the occurrence projection"
         1,
         WorkflowRunBeganEvent.make({
           initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+          remotePublicationTarget: remotePublicationTargetForTest,
           initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
           occurrenceClassification: "InitiatedAction",
           target: operation.target,
@@ -2691,6 +2695,16 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
     PlannedAttemptExecutorWorkResponsibilityBegan: true,
     PlannedAttemptReplaced: true,
     PlannedAttemptWorktreeObserved: true,
+    RemoteBaselineReadInitiated: true,
+    RemoteBaselineObserved: true,
+    LocalTargetCatchUpInitiated: true,
+    LocalTargetCatchUpObserved: true,
+    RemotePublicationAdmissionReadInitiated: true,
+    RemotePublicationAdmissionObserved: true,
+    RemotePublicationAttemptRequested: true,
+    RemotePublicationRequested: true,
+    RemotePublicationRetained: true,
+    RemotePublicationSucceeded: true,
     StoppedAttemptClaimPreserved: true,
     TargetPromotionAttemptRequested: true,
     TargetPromotionNonConvergent: true,
@@ -2713,6 +2727,6 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
   } satisfies Record<WorkflowOccurrence["_tag"], true>
   const actorVariants = { DalphCoordinator: true, Operator: true } satisfies Record<WorkflowActor["_tag"], true>
 
-  expect(Object.keys(occurrenceVariants)).toHaveLength(50)
+  expect(Object.keys(occurrenceVariants)).toHaveLength(60)
   expect(Object.keys(actorVariants)).toHaveLength(2)
 })

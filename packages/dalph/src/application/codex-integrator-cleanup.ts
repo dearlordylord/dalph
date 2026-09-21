@@ -31,6 +31,7 @@ import {
   IntegratorCandidateCleanupEvidenceRevision,
   IntegratorCandidateCleanupObservation,
   IntegratorCandidateProviderAuthority,
+  integratorCandidateCleanupSessionOf,
   type CoordinatorOwnership,
   type IntegratorSessionCorrelation,
   type GitCommandService
@@ -277,8 +278,16 @@ const cleanupProjection = (
   })
 }
 
-const registrationIsForeign = (registration: GitWorktreeRecord, predecessor: IntegratorSessionCorrelation): boolean =>
-  registration.head !== predecessor.expectedTargetHead ||
+const expectedCandidateHead = (authorization: IntegratorCandidateCleanupAuthorization) =>
+  authorization.disposition._tag === "Settled"
+    ? authorization.disposition.qualifiedCandidate.candidateCommit
+    : authorization.disposition.predecessor.expectedTargetHead
+
+const registrationIsForeign = (
+  registration: GitWorktreeRecord,
+  authorization: IntegratorCandidateCleanupAuthorization
+): boolean =>
+  registration.head !== expectedCandidateHead(authorization) ||
   registration.branch !== undefined ||
   !registration.detached ||
   registration.prunable
@@ -297,7 +306,7 @@ const cleanupRegisteredBaseObservation = (
   if (record._tag === "Removed") {
     return cleanupForeign(authorization, predecessor.sessionId, "Transferred", revision)
   }
-  if (registrationIsForeign(registration, predecessor)) {
+  if (registrationIsForeign(registration, authorization)) {
     return cleanupForeign(authorization, predecessor.sessionId, "Transferred", revision)
   }
   return !pathExists
@@ -354,7 +363,7 @@ const cleanupObservationFor = Effect.fn("CodexIntegrator.cleanupObservationFor")
   fileSystem: FileSystem.FileSystem,
   store: CodexIntegratorPrivateStoreService
 ) {
-  const predecessor = authorization.disposition.predecessor
+  const predecessor = integratorCandidateCleanupSessionOf(authorization.disposition)
   const candidatePath = candidateWorktreePathFor(config, predecessor.candidateResource)
   /* v8 ignore next -- @preserve The authorization schema fixes the locator to the predecessor resource and the path brand rejects an empty canonical path. */
   if (candidatePath === "" || authorization.locator !== predecessor.candidateResource) {
@@ -450,7 +459,8 @@ const removalRecordIsForeign = (
   authorization: IntegratorCandidateCleanupAuthorization,
   candidatePath: IntegratorCandidateWorktreePath
 ): boolean =>
-  !sameSession(record.correlation, authorization.disposition.predecessor) || record.candidatePath !== candidatePath
+  !sameSession(record.correlation, integratorCandidateCleanupSessionOf(authorization.disposition)) ||
+  record.candidatePath !== candidatePath
 
 const checkInitialRemovalRecord = (
   authorization: IntegratorCandidateCleanupAuthorization,

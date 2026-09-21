@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
@@ -78,7 +79,11 @@ const provider = Layer.effect(
 )
 const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(
   Layer.provideMerge(
-    liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy)], runId, target })
+    liveJournalTestLayer({
+      records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
+      runId,
+      target
+    })
   )
 )
 
@@ -249,7 +254,8 @@ it.effect("recovers an unfinished exact release intent after throttle and reread
           makeWorkflowRunBeganRecord(
             RunId.make("journaled-throttled-release-recovery"),
             FixtureTarget.make("journaled-throttled-release-target"),
-            initialPolicy
+            initialPolicy,
+            remotePublicationTargetForTest
           )
         ],
         runId: RunId.make("journaled-throttled-release-recovery"),

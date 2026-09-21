@@ -23,6 +23,7 @@ import {
   CleanupMutationOrdinal,
   CleanupObservationOrdinal,
   IntegratorCandidateCleanupAuthorization,
+  integratorCandidateCleanupSessionOf,
   type IntegratorCandidateCleanupEvidenceSubject,
   IntegratorCandidateCleanupEvidenceRevision,
   cleanupMutationRequestLimit,
@@ -459,7 +460,7 @@ const observeFresh = Effect.fn("IntegratorCandidateCleanup.observeFresh")(functi
   records: JournalHistorySource
 ) {
   const boundary = yield* IntegratorCandidateCleanupBoundary
-  const runId = authorization.disposition.predecessor.plannedAttempt.runId
+  const runId = integratorCandidateCleanupSessionOf(authorization.disposition).plannedAttempt.runId
   const unmatched = unmatchedObservationIntent(records, authorization)
   const ordinal =
     unmatched?.event._tag === "IntegratorCandidateCleanupObservationIntended"
@@ -506,7 +507,7 @@ const appendContradiction = Effect.fn("IntegratorCandidateCleanup.appendContradi
   operationId: OperationId,
   detail: string
 ) {
-  const runId = authorization.disposition.predecessor.plannedAttempt.runId
+  const runId = integratorCandidateCleanupSessionOf(authorization.disposition).plannedAttempt.runId
   const key = integratorCandidateCleanupContradictedRecordKey(authorization.operationId)
   // The caller has already rejected an exact contradiction replay, and the
   // history validator rejects a conflicting same-key authorization.  A
@@ -545,7 +546,7 @@ const settleFromAbsence = Effect.fn("IntegratorCandidateCleanup.settleFromAbsenc
       reason: "candidate mutation result was stale relative to the latest absence proof"
     })
   }
-  const runId = authorization.disposition.predecessor.plannedAttempt.runId
+  const runId = integratorCandidateCleanupSessionOf(authorization.disposition).plannedAttempt.runId
   const mutationExists = Array.from(journalRecordsForOperationId(records, authorization.operationId)).some(
     (record) =>
       record.event._tag === "IntegratorCandidateCleanupMutationIntended" &&
@@ -591,7 +592,7 @@ export const runIntegratorCandidateCleanup = Effect.fn("IntegratorCandidateClean
 ) {
   const boundary = yield* IntegratorCandidateCleanupBoundary
   const reader = yield* AcceptedJournalReader
-  const runId = authorization.disposition.predecessor.plannedAttempt.runId
+  const runId = integratorCandidateCleanupSessionOf(authorization.disposition).plannedAttempt.runId
   let records = yield* reader.readAccepted(runId)
   const provenance = validateIntegratorCandidateCleanupProvenance(records, authorization)
   if (provenance._tag === "Invalid") {

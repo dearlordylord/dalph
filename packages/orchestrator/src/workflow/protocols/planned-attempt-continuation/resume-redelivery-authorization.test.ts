@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import {
   AttemptId,
   GitCommitSha,
@@ -123,7 +124,8 @@ const fixture = () => {
     makeWorkflowRunBeganRecord(
       runId,
       target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+      remotePublicationTargetForTest
     )
   ]
   const claimAcquisition = makeTaskClaimAcquisitionOperation({ acquisition: activeClaim, predecessorOperationIds: [] })

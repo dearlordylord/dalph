@@ -11,6 +11,7 @@ import {
 import { CodexServerIncarnation, CodexThreadId, CodexTurnId } from "../src/application/codex-attempt-store.js"
 import {
   hermeticQualificationPublicTaskSpecification,
+  hermeticQualificationDependantTaskSpecification,
   hermeticQualificationTrackerIdentity,
   type BoundaryReached,
   type HermeticInvocationId
@@ -22,6 +23,7 @@ import {
   type DisposableGithubQualificationResource
 } from "../src/qualification/disposable-github-qualification-cleanup.js"
 import { makeHermeticProviderFingerprint } from "./production-hermetic-provider-fingerprint.js"
+import { makeHermeticProviderGraph, makeHermeticProviderGraphHandlers } from "./production-hermetic-provider-graph.js"
 import { makeHermeticProviderResult, providerFailure } from "./production-hermetic-provider-result.js"
 import type { ProductionRepositoryHostConfiguration } from "../src/application/production-configuration.js"
 
@@ -47,7 +49,6 @@ type ProviderCallTag =
   | "QualificationDeleteIssue"
   | "QualificationDeleteLabel"
 type ProviderCounts = ReadonlyArray<{ readonly tag: ProviderCallTag; readonly count: ProviderCallCount }>
-
 const GraphqlBody = Schema.Struct({
   query: Schema.NonEmptyString,
   variables: Schema.Record(Schema.String, Schema.Unknown)
@@ -60,7 +61,6 @@ export class HermeticProviderRequestFailure extends Schema.TaggedError<HermeticP
   "HermeticProviderRequestFailure",
   { detail: Schema.NonEmptyString }
 ) {}
-
 const badRequest = (detail: string) => new HermeticProviderRequestFailure({ detail })
 
 /** Parent-resident outer provider state survives child death; Git, evidence and workflow interpretation remain real. */
@@ -71,7 +71,11 @@ export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")
 ) {
   const produceResult = yield* makeHermeticProviderResult(configuration)
   const fingerprint = yield* makeHermeticProviderFingerprint()
-  const { issueNodeId: issueId, repositoryNodeId: repositoryId } = hermeticQualificationTrackerIdentity
+  const {
+    dependantIssueNodeId: dependantIssueId,
+    issueNodeId: issueId,
+    repositoryNodeId: repositoryId
+  } = hermeticQualificationTrackerIdentity
   const repositoryIdentity = {
     owner: configuration.target.owner,
     name: configuration.target.repository,
@@ -92,11 +96,31 @@ export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")
   const taskSpecification = yield* Ref.make(
     makeTaskWorkSpecification({ ...hermeticQualificationPublicTaskSpecification, taskId })
   )
-  const lifecycle = yield* Ref.make<"Open" | "Completed">("Open")
+  const dependantTaskId = githubTaskIdFor(repositoryId, dependantIssueId)
+  const dependantSpecification = makeTaskWorkSpecification({
+    taskId: dependantTaskId,
+    ...hermeticQualificationDependantTaskSpecification
+  })
+  const [lifecycle, dependantLifecycle] = yield* Effect.all([
+    Ref.make<"Open" | "Completed">("Open"),
+    Ref.make<"Open" | "Completed">("Open")
+  ])
   const completionResponse = yield* Ref.make<"Applied" | "Throttled">("Applied")
   const labels = yield* Ref.make<ReadonlyMap<GithubLabelName, FixtureLabel>>(new Map())
   const threads = yield* Ref.make<ReadonlyMap<CodexThreadId, CodexThreadSnapshot>>(new Map())
   const counts = yield* Ref.make<ProviderCounts>([])
+  const graph = yield* makeHermeticProviderGraph(issueId, dependantIssueId, lifecycle)
+  const graphHandlers = makeHermeticProviderGraphHandlers({
+    graph,
+    rootIssueId: issueId,
+    dependantIssueId,
+    repositoryId,
+    lifecycle,
+    dependantLifecycle,
+    taskSpecification,
+    dependantSpecification,
+    badRequest
+  })
   const count = (tag: ProviderCallTag) =>
     Ref.update(counts, (values) => {
       const current = values.find((value) => value.tag === tag)
@@ -113,7 +137,8 @@ export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")
   const requireNodeIdentity = Effect.fn("HermeticProvider.requireNodeIdentity")(function* (
     request: GithubGraphqlRequest
   ) {
-    if ("issueNodeId" in request && request.issueNodeId !== issueId) return yield* badRequest("foreign issue node")
+    if ("issueNodeId" in request && request.issueNodeId !== issueId && request.issueNodeId !== dependantIssueId)
+      return yield* badRequest("foreign issue node")
     if ("repositoryNodeId" in request && request.repositoryNodeId !== repositoryId)
       return yield* badRequest("foreign repository node")
   })
@@ -141,47 +166,7 @@ export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")
     const data = yield* Match.valueTags(request, {
       ResolveIssue: () => Effect.succeed({ repository: { id: repositoryId, issue: { id: issueId } } }),
       ResolveRepository: () => Effect.succeed({ repository: { id: repositoryId } }),
-      ReadIssue: () =>
-        Ref.get(lifecycle).pipe(
-          Effect.map((state) => ({
-            node: {
-              __typename: "Issue",
-              id: issueId,
-              repository: { id: repositoryId },
-              parent: null,
-              state: state === "Open" ? "OPEN" : "CLOSED",
-              stateReason: state === "Open" ? null : "COMPLETED"
-            }
-          }))
-        ),
-      ReadTaskWorkSpecification: () =>
-        Ref.get(taskSpecification).pipe(
-          Effect.map((specification) => ({
-            node: {
-              __typename: "Issue",
-              id: issueId,
-              repository: { id: repositoryId },
-              title: specification.title,
-              body: specification.body
-            }
-          }))
-        ),
-      ReadBlockedBy: () =>
-        Effect.succeed({
-          node: {
-            __typename: "Issue",
-            id: issueId,
-            blockedBy: { nodes: [], pageInfo: { endCursor: null, hasNextPage: false } }
-          }
-        }),
-      ReadSubIssues: () =>
-        Effect.succeed({
-          node: {
-            __typename: "Issue",
-            id: issueId,
-            subIssues: { nodes: [], pageInfo: { endCursor: null, hasNextPage: false } }
-          }
-        }),
+      ...graphHandlers,
       FindClaimLabel: (find) =>
         Ref.get(labels).pipe(
           Effect.map((values) => ({ node: { id: repositoryId, label: values.get(find.labelName) ?? null } }))
@@ -213,11 +198,13 @@ export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")
         }),
       CloseIssue: (close) =>
         Effect.gen(function* () {
+          if (close.issueNodeId !== issueId && close.issueNodeId !== dependantIssueId)
+            return yield* badRequest("fixture cannot close foreign issue")
           if ((yield* Ref.get(completionResponse)) === "Throttled") {
             yield* observeBoundary({ _tag: "CompletionThrottle", operationId: close.operationId })
             return { _tag: "ThrottledResponse" as const }
           }
-          yield* Ref.set(lifecycle, "Completed")
+          yield* Ref.set(close.issueNodeId === issueId ? lifecycle : dependantLifecycle, "Completed")
           yield* observeBoundary({ _tag: "CompletionResponse", operationId: close.operationId })
           return {
             closeIssue: {
@@ -394,7 +381,13 @@ export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")
         issue: originalIssue,
         issuePresent: yield* Ref.get(issuePresent),
         taskLifecycle: yield* Ref.get(lifecycle),
-        claims: MutableList.toArray(resources)
+        claims: MutableList.toArray(resources),
+        graph: {
+          rootTaskId: taskId,
+          dependantTaskId,
+          dependantLifecycle: yield* Ref.get(dependantLifecycle),
+          completeObservationCount: yield* Ref.get(graph.completeObservationCount)
+        }
       }
     }),
     snapshot: () =>
@@ -403,15 +396,20 @@ export const makeHermeticProviderState = Effect.fn("HermeticProvider.makeState")
         const retainedThreads = [...(yield* Ref.get(threads)).values()]
         return {
           taskLifecycle: yield* Ref.get(lifecycle),
+          dependantTaskLifecycle: yield* Ref.get(dependantLifecycle),
           activeClaimCount: retained.filter((label) => label.name.startsWith("dalph-claim-")).length,
           activeTurnCount: retainedThreads
             .flatMap((thread) => thread.turns)
             .filter((turn) => turn.status !== "completed").length,
           backgroundTerminalCount: 0,
           completionClaimCount: retained.filter((label) => label.name.startsWith("dalph-completion-")).length,
-          operationCounts: yield* Ref.get(counts)
+          operationCounts: yield* Ref.get(counts),
+          graphObservations: MutableList.toArray(graph.observations),
+          completeGraphObservationCount: yield* Ref.get(graph.completeObservationCount),
+          dependantReadyAfterCompleteGraph: (yield* Ref.get(graph.completeObservationCount)) > 0
         }
       }),
-    setCompletionResponse: (mode: "Applied" | "Throttled") => Ref.set(completionResponse, mode)
+    setCompletionResponse: (mode: "Applied" | "Throttled") => Ref.set(completionResponse, mode),
+    graph: { rootIssueId: issueId, dependantIssueId, rootTaskId: taskId, dependantTaskId }
   }
 })

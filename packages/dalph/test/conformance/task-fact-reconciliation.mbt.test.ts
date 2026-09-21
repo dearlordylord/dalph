@@ -18,6 +18,9 @@ import {
   plannedTaskAttemptEquivalence,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
@@ -428,11 +431,16 @@ const continuationProposal = {
 }
 
 const makeTaskFactAcceptedSeed = (): ReadonlyArray<JournalRecord> => {
+  const remotePublicationTarget = RemotePublicationTarget.make({
+    branch: RemotePublicationBranchRef.make("refs/heads/main"),
+    endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/repository.git")
+  })
   let records: ReadonlyArray<JournalRecord> = [
     makeWorkflowRunBeganRecord(
       runId,
       target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTarget
     )
   ]
   const append = (event: JournalRecord["event"]): void => {

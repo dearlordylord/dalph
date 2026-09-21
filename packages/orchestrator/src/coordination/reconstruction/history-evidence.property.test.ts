@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { expect, expectTypeOf, it } from "vitest"
 import fc from "fast-check"
 import { RunId } from "@dalph/contracts"
@@ -29,7 +30,8 @@ it("keeps cold, live, and explicit raw diagnostic reconstruction equivalent with
       const began = makeWorkflowRunBeganRecord(
         runId,
         FixtureTarget.make("evidence-parity"),
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTargetForTest
       )
       const records = [
         began,

@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 /* eslint-disable import/no-nodejs-modules, max-lines -- Host composition and its chronological acceptance seam stay together. */
 import { NodeCrypto, NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
@@ -492,7 +493,8 @@ it.effect(
                   .beginRun(
                     selection.runId,
                     configuration.target,
-                    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+                    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+                    remotePublicationTargetForTest
                   )
                   .pipe(Effect.orDie)
                 yield* Ref.update(events, (current) => [...current, "begin-acknowledged"])
@@ -650,7 +652,8 @@ it.effect("next host invocation recovers the same Run and authority-reads before
           yield* journal.beginRun(
             runId,
             target,
-            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+            remotePublicationTargetForTest
           )
           yield* journal.append(
             runId,
@@ -961,7 +964,8 @@ it.effect("allocated and recovered selections identify the exact Run and never a
           .beginRun(
             existingRunId,
             target,
-            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+            remotePublicationTargetForTest
           )
           .pipe(Effect.orDie)
         return context
@@ -1299,7 +1303,8 @@ const restartHostProcesses = Effect.scoped(
         yield* journal.beginRun(
           seededRunId,
           target,
-          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+          remotePublicationTargetForTest
         )
         yield* journal.append(
           seededRunId,
@@ -1565,7 +1570,7 @@ const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) 
           ...journal,
           append: (runId, key, event) => countJournalMutation(journal.append(runId, key, event)),
           beginRun: (runId, target, initialControlPolicy) =>
-            countJournalMutation(journal.beginRun(runId, target, initialControlPolicy)),
+            countJournalMutation(journal.beginRun(runId, target, initialControlPolicy, remotePublicationTargetForTest)),
           terminateRun: (runId, disposition, journalEvidence) =>
             countJournalMutation(journal.terminateRun(runId, disposition, journalEvidence)),
           retireTerminalRun: (runId) => countJournalMutation(journal.retireTerminalRun(runId))
@@ -1640,7 +1645,8 @@ it.effect("terminal Run is not reactivated", () =>
           yield* journal.beginRun(
             terminalRunId,
             target,
-            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+            remotePublicationTargetForTest
           )
           yield* journal.append(terminalRunId, intentRecordKey(fixture.operation.operationId), fixture.intent)
           yield* journal.append(terminalRunId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
@@ -1711,7 +1717,8 @@ it.effect(
               yield* journal.beginRun(
                 runId,
                 target,
-                InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+                InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+                remotePublicationTargetForTest
               )
             }
           })
@@ -1753,7 +1760,8 @@ it.effect(
             yield* Context.get(context, JournalStore).beginRun(
               runId,
               recordedTarget,
-              InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+              InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+              remotePublicationTargetForTest
             )
           })
         )
@@ -1785,7 +1793,8 @@ it.effect(
             yield* Context.get(context, JournalStore).beginRun(
               runId,
               target,
-              InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+              InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+              remotePublicationTargetForTest
             )
           })
         )
@@ -1885,7 +1894,7 @@ it.effect(
                 }),
                 beginRun: Effect.fn("ProductionHostOwnershipTest.beginRun")(function* (runId, target, policy) {
                   yield* record("journal.begin")
-                  return yield* journal.beginRun(runId, target, policy)
+                  return yield* journal.beginRun(runId, target, policy, remotePublicationTargetForTest)
                 }),
                 append: Effect.fn("ProductionHostOwnershipTest.append")(function* (runId, key, event) {
                   yield* record("journal.append")

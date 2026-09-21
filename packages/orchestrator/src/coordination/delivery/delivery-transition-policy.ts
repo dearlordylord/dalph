@@ -17,6 +17,7 @@ const policy = <const Route extends DeliveryTransitionRoute, const Protocol exte
 /** One closed classification drives proposal identity, admission, and adapter transition types. */
 export const deliveryTransitionPolicy = {
   AcquireStartedIntegrationTarget: policy("IdentityFree", "None"),
+  EstablishRemoteBaseline: policy("IdentityFree", "None"),
   AdvanceAttemptRestart: policy("IdentityFree", "PlannedAttempt"),
   AdvanceAttemptStoppage: policy("IdentityFree", "StopSubject"),
   AbandonCancelledAttemptImplementation: policy("IdentityFree", "PlannedAttempt"),
@@ -36,6 +37,7 @@ export const deliveryTransitionPolicy = {
   RecordProviderRunFailureIntegrationQuarantine: policy("IdentityFree", "None"),
   RecordRetryConclusiveIntegrationQuarantine: policy("IdentityFree", "None"),
   RunIntegrator: policy("IdentityFree", "None"),
+  RunRemotePublication: policy("IdentityFree", "None"),
   RunTargetPromotion: policy("IdentityFree", "None"),
   ReconcileTargetPromotionAttempt: policy("IdentityFree", "None"),
   ObservePromotedCandidateAncestryAfterBlockerClear: policy("IdentityFree", "None"),

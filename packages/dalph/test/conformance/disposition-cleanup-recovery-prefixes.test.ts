@@ -11,6 +11,9 @@ import {
   AttemptId,
   GitCommitSha,
   PlannedTaskAttempt,
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
@@ -81,6 +84,10 @@ import { recoveryPrefixCutLabels, type RecoveryPrefixCutLabel } from "./recovery
 
 const runId = RunId.make("cleanup-recovery-prefix-run")
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+const remotePublicationTarget = RemotePublicationTarget.make({
+  branch: RemotePublicationBranchRef.make("refs/heads/main"),
+  endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/repository.git")
+})
 const baseSha = GitCommitSha.make("1111111111111111111111111111111111111111")
 const attempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("cleanup-recovery-p1"),
@@ -233,7 +240,14 @@ const maintainedSource = Effect.scoped(
     ),
     Effect.provide(
       liveJournalTestLayer({
-        records: [makeWorkflowRunBeganRecord(runId, FixtureTarget.make("cleanup-recovery-target"), initialPolicy)],
+        records: [
+          makeWorkflowRunBeganRecord(
+            runId,
+            FixtureTarget.make("cleanup-recovery-target"),
+            initialPolicy,
+            remotePublicationTarget
+          )
+        ],
         runId,
         target: FixtureTarget.make("cleanup-recovery-target")
       })
@@ -564,7 +578,12 @@ const branchMaintainedSource = Effect.scoped(
     Effect.provide(
       liveJournalTestLayer({
         records: [
-          makeWorkflowRunBeganRecord(runId, FixtureTarget.make("cleanup-branch-recovery-target"), initialPolicy)
+          makeWorkflowRunBeganRecord(
+            runId,
+            FixtureTarget.make("cleanup-branch-recovery-target"),
+            initialPolicy,
+            remotePublicationTarget
+          )
         ],
         runId,
         target: FixtureTarget.make("cleanup-branch-recovery-target")
@@ -602,7 +621,12 @@ const candidateMaintainedSource = Effect.scoped(
     Effect.provide(
       liveJournalTestLayer({
         records: [
-          makeWorkflowRunBeganRecord(runId, FixtureTarget.make("cleanup-candidate-recovery-target"), initialPolicy)
+          makeWorkflowRunBeganRecord(
+            runId,
+            FixtureTarget.make("cleanup-candidate-recovery-target"),
+            initialPolicy,
+            remotePublicationTarget
+          )
         ],
         runId,
         target: FixtureTarget.make("cleanup-candidate-recovery-target")

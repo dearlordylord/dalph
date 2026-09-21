@@ -24,10 +24,13 @@ import {
 import {
   AcceptedResultEvidenceManifest,
   type AttemptId,
-  type GitCommitSha,
+  GitCommitSha,
   type IntegrationTarget,
   PlannedAttemptExecutorReport,
   type PlannedTaskAttempt,
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
   type RunId,
   type TaskId,
   type TaskRevision
@@ -126,7 +129,16 @@ import {
   TrackerAdapterReadError,
   type DeliveryActionExecutorService,
   WorkflowInterpreter,
-  WorkflowTrace
+  WorkflowTrace,
+  RemotePublicationAdmissionObservation,
+  RemotePublicationGit,
+  RemotePublicationGitObservation,
+  RemotePublicationPushResult,
+  LocalTargetCatchUpResult,
+  RemoteBaselineGit,
+  RemoteBaselineFailure,
+  RemoteBaselineObservation,
+  TestGitTargetLineage
 } from "@dalph/orchestrator"
 import {
   assertExactlyOneAuthoredCassetteStoryItemOwner,
@@ -164,6 +176,30 @@ import {
 } from "./authored-observation-playback.js"
 import { authoredCandidateCleanupBoundaryLayer } from "./authored-candidate-cleanup.js"
 import { authoredDeliveryStatusReadOf, AuthoredDeliveryStatusRead } from "./authored-delivery-status.js"
+
+const authoredCassetteRemotePublicationTarget = RemotePublicationTarget.make({
+  branch: RemotePublicationBranchRef.make("refs/heads/main"),
+  endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/repository.git")
+})
+const authoredGitCommitShaHexLength = 40
+
+const authoredCassetteRemotePublicationLayer = Layer.succeed(
+  RemotePublicationGit,
+  RemotePublicationGit.of({
+    admit: () =>
+      Effect.succeed(
+        RemotePublicationAdmissionObservation.cases.ExistingBranch.make({
+          remoteHead: GitCommitSha.make("0".repeat(authoredGitCommitShaHexLength))
+        })
+      ),
+    observe: ({ candidateCommit }) =>
+      Effect.succeed(RemotePublicationGitObservation.cases.CandidateCurrent.make({ remoteHead: candidateCommit })),
+    prepareSenderCustody: () => Effect.void,
+    push: ({ candidateCommit }) =>
+      Effect.succeed(RemotePublicationPushResult.cases.UpToDate.make({ remoteHead: candidateCommit })),
+    reconcileSenderCustody: () => Effect.void
+  })
+)
 
 interface AuthoredScenarioCassetteRunBase {
   readonly activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType>
@@ -946,6 +982,8 @@ const proposalActionLabels = {
   RetryCancelledAttemptClaimRelease: "Retry the exact cancelled-attempt claim release",
   AbandonCancelledAttemptImplementation: "Abandon the cancelled attempt's implementation responsibility",
   RunIntegrator: "Ask the outer Integrator to prepare or resume the exact integration session",
+  EstablishRemoteBaseline: "Read the pinned remote baseline and reconcile the local integration target",
+  RunRemotePublication: "Publish the exact qualified candidate to the Run-pinned remote destination",
   ReconcileTargetPromotionAttempt: "Read Git once to reconcile an ambiguous promotion without retry authority",
   RunTargetPromotion: "Compare and set the integration target to the verified candidate commit",
   BeginPlannedAttemptExecutorWork: "Tell the executor to start the exact planned attempt",
@@ -1705,6 +1743,15 @@ const runAuthoredScenarioCassetteWith = (request: {
         )
       )
       const sharedJournal = Context.get(sharedContext, JournalStore)
+      const testGitTargetLineage = Context.get(sharedContext, TestGitTargetLineage)
+      const setControlledTargetHead = (targetHeadSha: GitCommitSha) =>
+        testGitTargetLineage.setObservation(
+          TargetLineageObservation.make({
+            plannedBaseIsAncestorOfTargetHead: true,
+            plannedBaseSha: command.baseSha,
+            targetHeadSha
+          })
+        )
       const promotionStaleQuarantineDurable = yield* Deferred.make<void>()
       const evidenceStoreContext = yield* Layer.build(memoryEvidenceStoreLayer)
       const evidenceStore = Context.get(evidenceStoreContext, EvidenceStore)
@@ -1742,6 +1789,9 @@ const runAuthoredScenarioCassetteWith = (request: {
       const targetPromotionGit = {
         compareAndSet: (request: Parameters<TargetPromotionGitService["compareAndSet"]>[0]) =>
           cursor.consumeTargetPromotionCompareAndSet(request).pipe(
+            Effect.tap(({ result }) =>
+              result._tag === "Applied" ? setControlledTargetHead(request.candidateCommit) : Effect.void
+            ),
             Effect.map(({ result }) =>
               result._tag === "Applied"
                 ? TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: request.candidateCommit })
@@ -1799,6 +1849,7 @@ const runAuthoredScenarioCassetteWith = (request: {
             return yield* cursor
               .consumeTargetPromotionGitRead(request.integrationTarget.repository, request.candidateCommit)
               .pipe(
+                Effect.tap(({ observation }) => setControlledTargetHead(observation.currentHeadSha)),
                 Effect.map(({ observation }) => TargetPromotionGitReadObservation.make(observation)),
                 Effect.mapError(
                   /* v8 ignore next -- @preserve Authored coordinator runs publish read failure through the runtime relation; the maintained direct protocol cassette owns the typed unreadable chronology. */
@@ -2126,6 +2177,22 @@ const runAuthoredScenarioCassetteWith = (request: {
       })
       const gitWorktreeLayer = Layer.succeed(GitWorktree, authoredGitWorktree)
       const gitTargetLineage = Context.get(sharedContext, GitTargetLineage)
+      const authoredCassetteRemoteBaselineLayer = Layer.succeed(
+        RemoteBaselineGit,
+        RemoteBaselineGit.of({
+          catchUp: (_correlation, _expectedLocalHead, remoteHead) =>
+            Effect.succeed(LocalTargetCatchUpResult.cases.AlreadyCurrent.make({ currentHead: remoteHead })),
+          observe: (correlation) =>
+            gitTargetLineage.read(correlation.responsibility.plannedAttempt.baseSha, correlation.localTarget).pipe(
+              Effect.map(({ targetHeadSha }) =>
+                RemoteBaselineObservation.cases.Aligned.make({ localHead: targetHeadSha, remoteHead: targetHeadSha })
+              ),
+              Effect.mapError(() => new RemoteBaselineFailure({ reason: "TargetUnreadable" }))
+            ),
+          reconcileCatchUp: (_correlation, _expectedLocalHead, remoteHead) =>
+            Effect.succeed(LocalTargetCatchUpResult.cases.AlreadyCurrent.make({ currentHead: remoteHead }))
+        })
+      )
       const authoredTargetLineage = yield* Ref.make(cassette.startingFacts.targetLineageObservations ?? [])
       const authoredCleanupStory = cassette.story.some(
         ({ _tag }) =>
@@ -2301,7 +2368,9 @@ const runAuthoredScenarioCassetteWith = (request: {
           Layer.provide(controlPolicyLayer),
           Layer.provide(executorLayer),
           Layer.provide(Layer.succeed(WorkflowTrace, trace)),
-          Layer.provideMerge(planning)
+          Layer.provide(authoredCassetteRemoteBaselineLayer),
+          Layer.provideMerge(planning),
+          Layer.provideMerge(authoredCassetteRemotePublicationLayer)
         )
         return Layer.effectContext(
           Effect.gen(function* () {
@@ -2345,8 +2414,14 @@ const runAuthoredScenarioCassetteWith = (request: {
           runtimeLayer,
           applicationExit,
           noopJournalMaintenanceObservation,
-          operatorControlGraphReadBoundary
-        ).pipe(Layer.provide(journalLayer), Layer.provide(coordinatorOwnershipLayer), Layer.provide(executorLayer))
+          operatorControlGraphReadBoundary,
+          authoredCassetteRemotePublicationTarget
+        ).pipe(
+          Layer.provide(journalLayer),
+          Layer.provide(coordinatorOwnershipLayer),
+          Layer.provide(executorLayer),
+          Layer.provide(authoredCassetteRemoteBaselineLayer)
+        )
         return { application, applicationExit }
       })
       const openApplicationProcess = Effect.gen(function* () {

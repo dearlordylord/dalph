@@ -21,14 +21,14 @@ const acceptedCommitOffset = 3
 const candidateCommitPatternWidth = 2
 const admissionClaimGraphEnd = 3
 const admissionSpecificationEnd = 5
-const predecessorPositions = { queuedAt: 134, startedAt: 135, targetLineageObservedAt: 137 }
-const cPositions = { queuedAt: 315, startedAt: 318, targetLineageObservedAt: 322 }
-const dPositions = { queuedAt: 371, startedAt: 374, targetLineageObservedAt: 378 }
-const ePositions = { queuedAt: 423, startedAt: 424, targetLineageObservedAt: 428 }
-const fPositions = { queuedAt: 464, startedAt: 465, targetLineageObservedAt: 473 }
-const gPositions = { queuedAt: 509, startedAt: 510, targetLineageObservedAt: 518 }
-const bIntegrationPositions = { queuedAt: 265, startedAt: 268, targetLineageObservedAt: 271 }
-const rerunPositions = { quarantineAt: 146, directionAppliedAt: 147, targetLineageObservedAt: 149 }
+const predecessorPositions = { queuedAt: 136, startedAt: 137, targetLineageObservedAt: 141 }
+const cPositions = { queuedAt: 334, startedAt: 337, targetLineageObservedAt: 343 }
+const dPositions = { queuedAt: 413, startedAt: 416, targetLineageObservedAt: 422 }
+const ePositions = { queuedAt: 470, startedAt: 471, targetLineageObservedAt: 477 }
+const fPositions = { queuedAt: 536, startedAt: 537, targetLineageObservedAt: 543 }
+const gPositions = { queuedAt: 581, startedAt: 582, targetLineageObservedAt: 590 }
+const bIntegrationPositions = { queuedAt: 279, startedAt: 282, targetLineageObservedAt: 287 }
+const rerunPositions = { quarantineAt: 153, directionAppliedAt: 154, targetLineageObservedAt: 156 }
 const initialHead = "1".repeat(shaLength)
 const changedHead = "2".repeat(shaLength)
 const successorCommit = "d".repeat(shaLength)
@@ -273,6 +273,22 @@ const predecessorCleanupRevision = {
   revision: 1,
   subject: { locator: predecessor.candidateResource, predecessor }
 }
+const cleanupFor = (taskId: string, head: string, positions: typeof predecessorPositions) => {
+  const integration = Schema.decodeUnknownSync(IntegratorSessionCorrelation)(
+    session(taskId, head, positions.queuedAt, positions.startedAt, positions.targetLineageObservedAt)
+  )
+  return {
+    revision: {
+      _tag: "IntegratorCandidateCleanupEvidenceRevisionReturned" as const,
+      revision: 1,
+      subject: { locator: integration.candidateResource, predecessor: integration }
+    },
+    absent: {
+      _tag: "IntegratorCandidateCleanupObservationReturned" as const,
+      observation: { _tag: "Absent" as const, locator: integration.candidateResource, revision: 1 }
+    }
+  }
+}
 const predecessorCleanup = [
   predecessorCleanupRevision,
   {
@@ -375,6 +391,7 @@ export {
   integrate,
   bPromotionRequest,
   bIntegrationReleasingE,
+  cleanupFor,
   predecessorCleanupRevision,
   predecessorCleanup,
   rerunA,

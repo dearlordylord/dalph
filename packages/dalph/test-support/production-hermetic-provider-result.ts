@@ -1,8 +1,11 @@
 import { GitCommitSha, PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import { GitCommand } from "@dalph/orchestrator"
-import { Effect, FileSystem, Schema } from "effect"
+import { Crypto, Effect, FileSystem, Schema } from "effect"
 import { CodexAppServerFailure } from "../src/application/codex-app-server.js"
 import type { ProductionRepositoryHostConfiguration } from "../src/application/production-configuration.js"
+
+const digestHexRadix = 16
+const digestHexWidth = 2
 
 export const providerFailure = (
   operation: "thread/start" | "thread/read" | "thread/resume" | "turn/start",
@@ -21,6 +24,7 @@ export const makeHermeticProviderResult = Effect.fn("HermeticProvider.makeResult
 ) {
   const fileSystem = yield* FileSystem.FileSystem
   const git = yield* GitCommand
+  const crypto = yield* Crypto.Crypto
   const runGit = Effect.fn("HermeticProvider.runGit")(function* (cwd: string, args: ReadonlyArray<string>) {
     const result = yield* git.runInWorktree(cwd, args)
     if (result.exitCode !== 0) return yield* providerFailure("turn/start", "controlled Git command failed")
@@ -64,8 +68,12 @@ export const makeHermeticProviderResult = Effect.fn("HermeticProvider.makeResult
     const base = yield* Schema.decodeUnknownEffect(GitCommitSha)(promptFact(text, "base_sha"))
     if (base !== configuration.plannedAttemptBaseSha || (yield* runGit(cwd, ["rev-parse", "HEAD"])) !== base)
       return yield* providerFailure("turn/start", "task head differs from planned Base")
-    yield* fileSystem.writeFileString(`${cwd}/hermetic-result.txt`, "Controlled immutable accepted result.\n")
-    yield* runGit(cwd, ["add", "hermetic-result.txt"])
+    const attemptDigest = yield* crypto.digest("SHA-256", new TextEncoder().encode(correlation.attemptId))
+    const resultFile = `hermetic-result-${Array.from(attemptDigest, (byte) =>
+      byte.toString(digestHexRadix).padStart(digestHexWidth, "0")
+    ).join("")}.txt`
+    yield* fileSystem.writeFileString(`${cwd}/${resultFile}`, "Controlled immutable accepted result.\n")
+    yield* runGit(cwd, ["add", resultFile])
     yield* runGit(cwd, [
       "-c",
       "user.name=Hermetic provider",

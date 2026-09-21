@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 // eslint-disable-next-line import/no-nodejs-modules -- Node-only property tests compare complete replay structures without matcher traversal overhead.
 import { deepStrictEqual } from "node:assert"
 import { taskTrackerGraphFactsObserved } from "../../../test/task-tracker-facts.js"
@@ -66,6 +67,7 @@ const generatedValidHistory = (segments: ReadonlyArray<string>, terminated = fal
     {
       event: WorkflowRunBeganEvent.make({
         initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+        remotePublicationTarget: remotePublicationTargetForTest,
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
         target,

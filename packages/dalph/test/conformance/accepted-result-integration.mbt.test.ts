@@ -26,6 +26,7 @@ import { TaskWorkCapacity } from "../../../orchestrator/src/coordination/admissi
 import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
 import { acceptedResultFixture } from "../../../orchestrator/test/support/evidence.js"
 import { makeExecutingAttemptHistory } from "../../../orchestrator/test/support/executing-attempt-history.js"
+import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 import { TargetLineageObservation } from "../../../orchestrator/src/authorities/git/target-lineage.js"
 import { OperationId } from "../../../orchestrator/src/workflow/identity.js"
 import {
@@ -136,6 +137,18 @@ import {
   type TargetPromotionIntendedAttempt,
   type TargetPromotionReadAuthorization
 } from "../../../orchestrator/src/workflow/protocols/target-promotion/transitions.js"
+import {
+  RemotePublicationAdmissionObservation,
+  RemotePublicationGit,
+  RemotePublicationGitObservation,
+  RemotePublicationObservationFailure,
+  RemotePublicationPushFailure,
+  RemotePublicationPushResult,
+  remotePublicationCorrelationFor
+} from "../../../orchestrator/src/workflow/protocols/direct-publication/events.js"
+import { validateRemotePublicationState } from "../../../orchestrator/src/workflow/protocols/direct-publication/transition-journal.js"
+import { admitRemotePublicationTarget } from "../../../orchestrator/src/workflow/protocols/direct-publication/admission.js"
+import { makeRemotePublicationEngine } from "../../../orchestrator/src/workflow/protocols/direct-publication/protocol-engine.js"
 
 const runId = RunId.make("accepted-result-integration-model-run")
 const target = IntegrationTarget.make({
@@ -147,6 +160,7 @@ const independentTarget = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repositories/accepted-result-integration-independent.git"),
   ref: IntegrationTargetRef.make("refs/heads/master")
 })
+const remotePublicationTarget = remotePublicationTargetForTest
 
 const commitOf = (value: bigint | number): GitCommitSha =>
   GitCommitSha.make(BigInt(value).toString(16).padStart(40, "0"))
@@ -233,6 +247,23 @@ type Phase =
   | "CandidateGitReadPending"
   | "CandidateReady"
   | "CandidateRejected"
+  | "PublicationPremise"
+  | "PublicationIntent"
+  | "PublicationAttemptIntended"
+  | "PublicationInFlight"
+  | "PublicationResponseLost"
+  | "PublicationReconciliation"
+  | "PublicationReadPending"
+  | "PublicationRetryReady"
+  | "PublicationProved"
+  | "PublicationMissing"
+  | "PublicationUnreadable"
+  | "PublicationInsufficient"
+  | "PublicationDenied"
+  | "PublicationThrottled"
+  | "PublicationCompetingHead"
+  | "PublicationIncompatible"
+  | "PublicationNonConvergence"
   | "Quarantined"
   | "PromotionPremise"
   | "PromotionIntent"
@@ -272,6 +303,30 @@ type PromotionGitObservation =
   | "PromotionCandidateAncestor"
   | "PromotionOtherHead"
   | "PromotionUnreadableHead"
+
+type PublicationProofBasis =
+  | "NoPublicationProof"
+  | "PushApplied"
+  | "PushUpToDate"
+  | "ReconciledCandidateCurrent"
+  | "ReconciledCandidateAncestor"
+
+type PublicationObservation =
+  | "NoPublicationObservation"
+  | "PublicationApplied"
+  | "PublicationUpToDate"
+  | "PublicationRemoteCandidateCurrent"
+  | "PublicationRemoteCandidateAncestor"
+  | "PublicationRemoteAncestorOfCandidate"
+  | "PublicationRemoteMissing"
+  | "PublicationRemoteUnreadable"
+  | "PublicationRemoteInsufficient"
+  | "PublicationRemoteIncompatible"
+  | "PublicationRemoteDenied"
+  | "PublicationRemoteThrottled"
+  | "PublicationRemoteCompetingHead"
+  | "PublicationRemoteNonFastForward"
+  | "PublicationRemoteNonConvergence"
 
 type ModelResult = {
   readonly phase: Phase
@@ -326,6 +381,28 @@ type ModelResult = {
   readonly promotionCompareAndSetRequested: boolean
   readonly promotionForceRequested: boolean
   readonly promotionEquivalentContentAccepted: boolean
+  readonly publicationIntentRecorded: boolean
+  readonly publicationAttemptCount: bigint
+  readonly publicationLastAttempt: bigint
+  readonly publicationResponseAmbiguous: boolean
+  readonly publicationFinalReadRequired: boolean
+  readonly publicationResultRecorded: boolean
+  readonly publicationProofRecorded: boolean
+  readonly publicationProofBasis: PublicationProofBasis
+  readonly publicationObservation: PublicationObservation
+  readonly publicationObservedRemoteHead: bigint
+  readonly publicationEndpoint: bigint
+  readonly publicationBranch: bigint
+  readonly publicationRequestId: bigint
+  readonly publicationCandidate: bigint
+  readonly publicationIntegratorSession: bigint
+  readonly publicationExpectedTargetHead: bigint
+  readonly publicationOrdinaryRefspecRequested: boolean
+  readonly publicationForceRequested: boolean
+  readonly publicationDryRunOnly: boolean
+  readonly publicationEqualContentAccepted: boolean
+  readonly publicationProcessSuccessObserved: boolean
+  readonly publicationSenderStopped: boolean
   readonly quarantineRecorded: boolean
   readonly quarantineOccurrenceCount: bigint
   readonly quarantinePosition: bigint
@@ -412,6 +489,28 @@ const initialResult = (id: bigint): ModelResult => ({
   promotionCompareAndSetRequested: false,
   promotionForceRequested: false,
   promotionEquivalentContentAccepted: false,
+  publicationIntentRecorded: false,
+  publicationAttemptCount: 0n,
+  publicationLastAttempt: 0n,
+  publicationResponseAmbiguous: false,
+  publicationFinalReadRequired: false,
+  publicationResultRecorded: false,
+  publicationProofRecorded: false,
+  publicationProofBasis: "NoPublicationProof",
+  publicationObservation: "NoPublicationObservation",
+  publicationObservedRemoteHead: 0n,
+  publicationEndpoint: 0n,
+  publicationBranch: 0n,
+  publicationRequestId: 0n,
+  publicationCandidate: 0n,
+  publicationIntegratorSession: 0n,
+  publicationExpectedTargetHead: 0n,
+  publicationOrdinaryRefspecRequested: false,
+  publicationForceRequested: false,
+  publicationDryRunOnly: false,
+  publicationEqualContentAccepted: false,
+  publicationProcessSuccessObserved: false,
+  publicationSenderStopped: false,
   quarantineRecorded: false,
   quarantineOccurrenceCount: 0n,
   quarantinePosition: 0n,
@@ -490,6 +589,28 @@ const SpecResult = Schema.Struct({
   promotionResponseAmbiguous: Schema.Boolean,
   promotionResultRecorded: Schema.Boolean,
   promotionTargetFactsCurrent: Schema.Boolean,
+  publicationIntentRecorded: Schema.Boolean,
+  publicationAttemptCount: ITFBigInt,
+  publicationLastAttempt: ITFBigInt,
+  publicationResponseAmbiguous: Schema.Boolean,
+  publicationFinalReadRequired: Schema.Boolean,
+  publicationResultRecorded: Schema.Boolean,
+  publicationProofRecorded: Schema.Boolean,
+  publicationProofBasis: Schema.Unknown,
+  publicationObservation: Schema.Unknown,
+  publicationObservedRemoteHead: ITFBigInt,
+  publicationEndpoint: ITFBigInt,
+  publicationBranch: ITFBigInt,
+  publicationRequestId: ITFBigInt,
+  publicationCandidate: ITFBigInt,
+  publicationIntegratorSession: ITFBigInt,
+  publicationExpectedTargetHead: ITFBigInt,
+  publicationOrdinaryRefspecRequested: Schema.Boolean,
+  publicationForceRequested: Schema.Boolean,
+  publicationDryRunOnly: Schema.Boolean,
+  publicationEqualContentAccepted: Schema.Boolean,
+  publicationProcessSuccessObserved: Schema.Boolean,
+  publicationSenderStopped: Schema.Boolean,
   predecessorPreserved: Schema.Boolean,
   quarantineCause: Schema.Unknown,
   quarantineConflictCount: ITFBigInt,
@@ -533,6 +654,11 @@ const SpecResult = Schema.Struct({
 
 const SpecProjection = Schema.Struct({
   state: Schema.Struct({
+    destinationAdmission: Schema.Unknown,
+    destinationAdmissionIntentRecorded: Schema.Boolean,
+    destinationEndpoint: ITFBigInt,
+    destinationBranch: ITFBigInt,
+    destinationCompatibilityProven: Schema.Boolean,
     nextJournalPosition: ITFBigInt,
     recovered: Schema.Boolean,
     restartCount: ITFBigInt,
@@ -852,6 +978,23 @@ const phaseNeedsResult = (phase: Phase): boolean =>
     "CandidateGitReadPending",
     "CandidateReady",
     "CandidateRejected",
+    "PublicationPremise",
+    "PublicationIntent",
+    "PublicationAttemptIntended",
+    "PublicationInFlight",
+    "PublicationResponseLost",
+    "PublicationReconciliation",
+    "PublicationReadPending",
+    "PublicationRetryReady",
+    "PublicationProved",
+    "PublicationMissing",
+    "PublicationUnreadable",
+    "PublicationInsufficient",
+    "PublicationDenied",
+    "PublicationThrottled",
+    "PublicationCompetingHead",
+    "PublicationIncompatible",
+    "PublicationNonConvergence",
     "Quarantined",
     "PromotionPremise",
     "PromotionIntent",
@@ -874,6 +1017,23 @@ const phaseNeedsPreparedResult = (phase: Phase): boolean =>
     "CandidateGitReadPending",
     "CandidateReady",
     "CandidateRejected",
+    "PublicationPremise",
+    "PublicationIntent",
+    "PublicationAttemptIntended",
+    "PublicationInFlight",
+    "PublicationResponseLost",
+    "PublicationReconciliation",
+    "PublicationReadPending",
+    "PublicationRetryReady",
+    "PublicationProved",
+    "PublicationMissing",
+    "PublicationUnreadable",
+    "PublicationInsufficient",
+    "PublicationDenied",
+    "PublicationThrottled",
+    "PublicationCompetingHead",
+    "PublicationIncompatible",
+    "PublicationNonConvergence",
     "PromotionPremise",
     "PromotionIntent",
     "PromotionAttemptIntended",
@@ -1376,6 +1536,7 @@ const makeRuntime = (
 
 const acceptedResultIntegrationDriver = defineDriver(
   {
+    admitDestinationStep: {},
     acceptResultOne: {},
     acceptResultTwo: {},
     assertRetryLineageIgnoresLaterForeignTarget: {},
@@ -1392,6 +1553,23 @@ const acceptedResultIntegrationDriver = defineDriver(
     losePromotionAttemptResponseOne: {},
     loseSuccessorResponseOne: {},
     observeExactCandidateOne: {},
+    observeInitialPublicationCandidateAncestorOne: {},
+    observeInitialPublicationCandidateCurrentOne: {},
+    observeInitialPublicationRemoteAncestorOfCandidateOne: {},
+    observePublicationAppliedOne: {},
+    observePublicationUpToDateOne: {},
+    observeReconciledPublicationCandidateAncestorOne: {},
+    observeReconciledPublicationCandidateCurrentOne: {},
+    observePublicationNonFastForwardOne: {},
+    observePublicationRemoteAncestorOfCandidateOne: {},
+    observePublicationMissingOne: {},
+    observePublicationUnreadableOne: {},
+    observePublicationInsufficientOne: {},
+    observePublicationDeniedOne: {},
+    observePublicationThrottledOne: {},
+    observePublicationCompetingHeadOne: {},
+    observePublicationIncompatibleOne: {},
+    observePublicationNonConvergenceOne: {},
     observeIncompatibleTargetLineageOne: {},
     observeMissingCandidateOne: {},
     observeNonCommitCandidateOne: {},
@@ -1407,11 +1585,13 @@ const acceptedResultIntegrationDriver = defineDriver(
     observeTrackerFactsStep: {},
     observeWrongParentCandidateOne: {},
     offerPromotionPremiseOne: {},
+    offerPublicationPremiseOne: {},
     queueAcceptedResultOne: {},
     queueAcceptedResultTwo: {},
     reacquireIntegrationTargetOne: {},
     recoverCoordinatorStep: {},
     recordCandidateGitReadIntentOne: {},
+    recordPublicationIntentOne: {},
     reportIntegratorCandidateOne31: {},
     reportIntegratorCandidateOne32: {},
     reportIntegratorNotPreparedOne: {},
@@ -1423,11 +1603,14 @@ const acceptedResultIntegrationDriver = defineDriver(
     recordPromotionAttemptIntentOne: {},
     recordPromotionIntentOne: {},
     reconcileCandidateGitOne: {},
+    reconcilePublicationOne: {},
     reconcilePromotionReadOnlyOne: {},
     reconcilePromotionOne: {},
     resumePromotionRetryWithAuthorityOne: {},
     resumeIntegratorOne: {},
     sendPromotionAttemptOne: {},
+    sendPublicationAttemptOne: {},
+    losePublicationResponseOne: {},
     startFullRerunOne: {},
     startIntegrationOne: {},
     startIntegrationTwo: {},
@@ -1444,6 +1627,11 @@ const acceptedResultIntegrationDriver = defineDriver(
     let targetFactsCurrent = true
     let targetHeadProof = 0n
     let targetReacquisitionRequired = false
+    let destinationAdmission = "DestinationUnvalidated"
+    let destinationAdmissionIntentRecorded = false
+    let destinationEndpoint = 0n
+    let destinationBranch = 0n
+    let destinationCompatibilityProven = false
 
     const modelResultFor = (id: bigint): ModelResult => {
       const result = modelResults.get(id)
@@ -1515,6 +1703,181 @@ const acceptedResultIntegrationDriver = defineDriver(
       }
       return integratorRunQualifiedCandidateFromState(state)
     }
+
+    let publicationFiber: Fiber.Fiber<unknown, unknown> | undefined
+    let publicationObserveStarted = Deferred.makeUnsafe<void>()
+    let publicationObserveResponse = Deferred.makeUnsafe<
+      RemotePublicationGitObservation,
+      RemotePublicationObservationFailure
+    >()
+    let publicationReconcileObserveStarted = Deferred.makeUnsafe<void>()
+    let publicationReconcileObserveResponse = Deferred.makeUnsafe<
+      RemotePublicationGitObservation,
+      RemotePublicationObservationFailure
+    >()
+    let publicationActiveObserveResponse:
+      | Deferred.Deferred<RemotePublicationGitObservation, RemotePublicationObservationFailure>
+      | undefined
+    let publicationObserveCalls = 0
+    let publicationPushEntered = Deferred.makeUnsafe<void>()
+    let publicationPushReleased = Deferred.makeUnsafe<void>()
+    let publicationPushStarted = Deferred.makeUnsafe<void>()
+    let publicationPushResponse = Deferred.makeUnsafe<RemotePublicationPushResult, RemotePublicationPushFailure>()
+
+    const startPublicationEngine = Effect.fn("AcceptedResultIntegration.startPublicationEngine")(function* () {
+      if (publicationFiber !== undefined) return yield* Effect.die("publication engine is already active")
+      publicationObserveStarted = Deferred.makeUnsafe()
+      publicationObserveResponse = Deferred.makeUnsafe<
+        RemotePublicationGitObservation,
+        RemotePublicationObservationFailure
+      >()
+      publicationReconcileObserveStarted = Deferred.makeUnsafe()
+      publicationReconcileObserveResponse = Deferred.makeUnsafe<
+        RemotePublicationGitObservation,
+        RemotePublicationObservationFailure
+      >()
+      publicationActiveObserveResponse = undefined
+      publicationObserveCalls = 0
+      publicationPushEntered = Deferred.makeUnsafe()
+      publicationPushReleased = Deferred.makeUnsafe()
+      publicationPushStarted = Deferred.makeUnsafe()
+      publicationPushResponse = Deferred.makeUnsafe()
+      const git = RemotePublicationGit.of({
+        admit: () => Effect.die("candidate publication unexpectedly repeated destination admission"),
+        observe: () =>
+          Effect.gen(function* () {
+            publicationObserveCalls += 1
+            if (publicationObserveCalls === 1) {
+              publicationActiveObserveResponse = publicationObserveResponse
+              yield* Deferred.succeed(publicationObserveStarted, undefined)
+              return yield* Deferred.await(publicationObserveResponse)
+            }
+            publicationActiveObserveResponse = publicationReconcileObserveResponse
+            yield* Deferred.succeed(publicationReconcileObserveStarted, undefined)
+            return yield* Deferred.await(publicationReconcileObserveResponse)
+          }),
+        prepareSenderCustody: () => Effect.void,
+        reconcileSenderCustody: () => Effect.void,
+        push: () =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(publicationPushEntered, undefined)
+            yield* Deferred.await(publicationPushReleased)
+            yield* Deferred.succeed(publicationPushStarted, undefined)
+            return yield* Deferred.await(publicationPushResponse)
+          })
+      })
+      const engine = makeRemotePublicationEngine(() => Effect.sync(runtime.readRecords))
+      publicationFiber = yield* engine
+        .runRemotePublication(promotionCandidateFor(1n), remotePublicationTarget, {
+          runObservation: (phase) => phase,
+          runSender: (phase) => phase
+        })
+        .pipe(
+          runtime.provideJournal,
+          Effect.provideService(RemotePublicationGit, git),
+          Effect.forkDetach({ startImmediately: true })
+        )
+      yield* Deferred.await(publicationObserveStarted)
+    })
+
+    const observePublicationRemoteAncestor = Effect.fn("AcceptedResultIntegration.observePublicationRemoteAncestor")(
+      function* (exhausted: boolean) {
+        const fiber = publicationFiber
+        const response = publicationActiveObserveResponse
+        if (fiber === undefined || response === undefined) {
+          return yield* Effect.die("remote-ancestor observation arrived without an active publication read")
+        }
+        yield* Deferred.succeed(
+          response,
+          RemotePublicationGitObservation.cases.RemoteAncestorOfCandidate.make({ remoteHead: commitOf(11n) })
+        )
+        if (!exhausted) {
+          yield* Deferred.await(publicationPushEntered)
+          return
+        }
+        const outcome = yield* Fiber.await(fiber)
+        publicationFiber = undefined
+        publicationActiveObserveResponse = undefined
+        if (outcome._tag !== "Success") return yield* Effect.die("final publication reconciliation failed")
+      }
+    )
+
+    const sendPublication = Effect.fn("AcceptedResultIntegration.sendPublication")(function* () {
+      yield* Deferred.succeed(publicationPushReleased, undefined)
+      yield* Deferred.await(publicationPushStarted)
+    })
+
+    const finishPublicationPush = Effect.fn("AcceptedResultIntegration.finishPublicationPush")(function* (
+      result: RemotePublicationPushResult
+    ) {
+      const fiber = publicationFiber
+      if (fiber === undefined) return yield* Effect.die("publication result arrived without an active engine")
+      yield* Deferred.succeed(publicationPushResponse, result)
+      const outcome = yield* Fiber.await(fiber)
+      publicationFiber = undefined
+      if (outcome._tag !== "Success") return yield* Effect.die("publication success route failed")
+    })
+
+    const losePublicationPush = Effect.fn("AcceptedResultIntegration.losePublicationPush")(function* () {
+      const fiber = publicationFiber
+      if (fiber === undefined) return yield* Effect.die("publication loss arrived without an active engine")
+      yield* Deferred.fail(
+        publicationPushResponse,
+        new RemotePublicationPushFailure({ reason: "ResponseDeadline", target: remotePublicationTarget })
+      )
+      const outcome = yield* Fiber.await(fiber)
+      publicationFiber = undefined
+      publicationActiveObserveResponse = undefined
+      if (outcome._tag !== "Success") return yield* Effect.die("publication response-loss route failed")
+    })
+
+    const finishPublicationObservation = Effect.fn("AcceptedResultIntegration.finishPublicationObservation")(function* (
+      observation: RemotePublicationGitObservation
+    ) {
+      const fiber = publicationFiber
+      const response = publicationActiveObserveResponse
+      if (fiber === undefined || response === undefined) {
+        return yield* Effect.die("publication observation arrived without an active read")
+      }
+      yield* Deferred.succeed(response, observation)
+      const outcome = yield* Fiber.await(fiber)
+      publicationFiber = undefined
+      publicationActiveObserveResponse = undefined
+      if (outcome._tag !== "Success") return yield* Effect.die("publication observation route failed")
+    })
+
+    const failPublicationObservation = Effect.fn("AcceptedResultIntegration.failPublicationObservation")(function* (
+      reason: "AncestryUnavailable" | "TargetUnreadable"
+    ) {
+      const fiber = publicationFiber
+      const response = publicationActiveObserveResponse
+      if (fiber === undefined || response === undefined) {
+        return yield* Effect.die("publication observation failure arrived without an active read")
+      }
+      yield* Deferred.fail(
+        response,
+        new RemotePublicationObservationFailure({ reason, target: remotePublicationTarget })
+      )
+      const outcome = yield* Fiber.await(fiber)
+      publicationFiber = undefined
+      publicationActiveObserveResponse = undefined
+      if (outcome._tag !== "Success") return yield* Effect.die("publication observation-failure route failed")
+    })
+
+    const finishPublicationNonFastForward = Effect.fn("AcceptedResultIntegration.finishPublicationNonFastForward")(
+      function* () {
+        const fiber = publicationFiber
+        if (fiber === undefined) return yield* Effect.die("publication rejection arrived without an active push")
+        yield* Deferred.succeed(
+          publicationPushResponse,
+          RemotePublicationPushResult.cases.RejectedNonFastForward.make({})
+        )
+        const outcome = yield* Fiber.await(fiber)
+        publicationFiber = undefined
+        if (outcome._tag !== "Success") return yield* Effect.die("publication non-fast-forward route failed")
+        yield* startPublicationEngine()
+      }
+    )
 
     const appendSession = (id: bigint) => {
       const input = makeInput(id, modelResults, runtime.readRecords())
@@ -1811,11 +2174,166 @@ const acceptedResultIntegrationDriver = defineDriver(
       targetFactsCurrent = true
       targetHeadProof = 0n
       targetReacquisitionRequired = false
+      destinationAdmission = "DestinationUnvalidated"
+      destinationAdmissionIntentRecorded = false
+      destinationEndpoint = 0n
+      destinationBranch = 0n
+      destinationCompatibilityProven = false
       yield* runtime.reset()
     })
 
     const modelAccept = (id: bigint): void =>
       updateModelResult(id, (result) => ({ ...result, phase: "AcceptedResult", acceptedEvidencePreserved: true }))
+
+    const modelAdmitDestination = (): void => {
+      destinationAdmission = "DestinationAdmitted"
+      destinationAdmissionIntentRecorded = true
+      destinationEndpoint = 9001n
+      destinationBranch = 9002n
+      destinationCompatibilityProven = true
+    }
+
+    const modelOfferPublicationPremise = (id: bigint): void =>
+      updateModelResult(id, (result) => ({ ...result, phase: "PublicationPremise" }))
+
+    const modelRecordPublicationIntent = (id: bigint): void =>
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "PublicationIntent",
+        targetHeld: true,
+        publicationIntentRecorded: true,
+        publicationEndpoint: destinationEndpoint,
+        publicationBranch: destinationBranch,
+        publicationRequestId: result.integrationSession + result.submittedCandidate,
+        publicationCandidate: result.submittedCandidate,
+        publicationIntegratorSession: result.integrationSession,
+        publicationExpectedTargetHead: result.expectedTargetHead
+      }))
+
+    const modelRecordPublicationAttemptIntent = (id: bigint): void =>
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "PublicationAttemptIntended",
+        publicationAttemptCount: result.publicationAttemptCount + 1n,
+        publicationLastAttempt: result.publicationLastAttempt + 1n,
+        publicationResponseAmbiguous: false,
+        publicationFinalReadRequired: false,
+        publicationResultRecorded: false,
+        publicationProofRecorded: false,
+        publicationProofBasis: "NoPublicationProof",
+        publicationObservation: "NoPublicationObservation",
+        publicationObservedRemoteHead: 0n,
+        publicationOrdinaryRefspecRequested: false,
+        publicationSenderStopped: false
+      }))
+
+    const modelSendPublicationAttempt = (id: bigint): void =>
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "PublicationInFlight",
+        publicationOrdinaryRefspecRequested: true
+      }))
+
+    const modelPublicationProof = (
+      id: bigint,
+      basis: PublicationProofBasis,
+      observation: PublicationObservation,
+      remoteHead: bigint
+    ): void =>
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "PublicationProved",
+        targetHeld: false,
+        publicationResultRecorded: true,
+        publicationProofRecorded: true,
+        publicationProofBasis: basis,
+        publicationObservation: observation,
+        publicationObservedRemoteHead: remoteHead,
+        publicationResponseAmbiguous: false,
+        publicationFinalReadRequired: false,
+        publicationSenderStopped: true
+      }))
+
+    const modelInitialPublicationProof = (
+      id: bigint,
+      basis: "ReconciledCandidateCurrent" | "ReconciledCandidateAncestor",
+      observation: "PublicationRemoteCandidateCurrent" | "PublicationRemoteCandidateAncestor",
+      remoteHead: bigint
+    ): void => {
+      modelRecordPublicationAttemptIntent(id)
+      modelPublicationProof(id, basis, observation, remoteHead)
+    }
+
+    const modelPublicationWait = (id: bigint, phase: Phase, observation: PublicationObservation): void =>
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase,
+        targetHeld: false,
+        publicationFinalReadRequired: false,
+        publicationResultRecorded: true,
+        publicationProofRecorded: false,
+        publicationProofBasis: "NoPublicationProof",
+        publicationObservation: observation,
+        publicationObservedRemoteHead: 0n,
+        publicationResponseAmbiguous: false,
+        publicationSenderStopped: true
+      }))
+
+    const modelPublicationNonFastForward = (id: bigint): void =>
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "PublicationReconciliation",
+        publicationFinalReadRequired: result.publicationAttemptCount === 3n,
+        publicationResultRecorded: true,
+        publicationProofRecorded: false,
+        publicationProofBasis: "NoPublicationProof",
+        publicationObservation: "PublicationRemoteNonFastForward",
+        publicationObservedRemoteHead: 0n,
+        publicationOrdinaryRefspecRequested: false,
+        publicationSenderStopped: true
+      }))
+
+    const modelPublicationRemoteAncestor = (id: bigint): void => {
+      const result = modelResultFor(id)
+      if (result.publicationAttemptCount >= 3n) {
+        modelPublicationWait(id, "PublicationNonConvergence", "PublicationRemoteNonConvergence")
+        return
+      }
+      modelRecordPublicationAttemptIntent(id)
+      updateModelResult(id, (current) => ({
+        ...current,
+        publicationObservation: "PublicationRemoteAncestorOfCandidate"
+      }))
+    }
+
+    const modelLosePublicationResponse = (id: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "PublicationResponseLost",
+        targetHeld: false,
+        publicationResponseAmbiguous: true,
+        publicationFinalReadRequired: false,
+        publicationSenderStopped: true,
+        publicationOrdinaryRefspecRequested: false
+      }))
+      trackerFactsCurrent = false
+      targetFactsCurrent = false
+      targetHeadProof = 0n
+      targetReacquisitionRequired = true
+    }
+
+    const modelReconcilePublication = (id: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "PublicationReconciliation",
+        targetHeld: true,
+        publicationResponseAmbiguous: false,
+        publicationFinalReadRequired: result.publicationAttemptCount >= 3n,
+        publicationObservation: "NoPublicationObservation",
+        publicationObservedRemoteHead: 0n
+      }))
+      targetReacquisitionRequired = false
+    }
 
     const modelQueue = (id: bigint): void => {
       const queuePosition = modelNextJournalPosition
@@ -2365,6 +2883,29 @@ const acceptedResultIntegrationDriver = defineDriver(
       const model = modelResultFor(id)
       if (id === 1n && model.phase.startsWith("Promotion")) runtime.assertPromotionAlignment(model)
       const records = runtime.readRecords()
+      if (id === 1n && model.publicationIntentRecorded) {
+        const publication = Effect.runSync(
+          validateRemotePublicationState(
+            records,
+            remotePublicationCorrelationFor(promotionCandidateFor(id), remotePublicationTarget)
+          ).pipe(Effect.orDie)
+        )
+        if (publication._tag === "PublicationAbsent") {
+          return rejectImpossibleTransition("model publication intent lacks durable runtime intent")
+        }
+        const actualAttemptCount =
+          publication._tag === "PublicationPending"
+            ? BigInt(publication.attemptOrdinals.length)
+            : model.publicationAttemptCount
+        if (actualAttemptCount !== model.publicationAttemptCount) {
+          return rejectImpossibleTransition(
+            `model/runtime publication attempt count mismatch: ${actualAttemptCount}/${model.publicationAttemptCount} at ${model.phase} (${publication._tag})`
+          )
+        }
+        if ((publication._tag === "PublicationSucceeded") !== model.publicationProofRecorded) {
+          return rejectImpossibleTransition("model/runtime publication proof mismatch")
+        }
+      }
       const responsibility = responsibilityFor(id)
       const actual = deriveIntegratorRunState(records, responsibility, currentRunFor(id))
       if (actual._tag === "Contradiction") {
@@ -2548,6 +3089,11 @@ const acceptedResultIntegrationDriver = defineDriver(
     }
 
     const projection = (): {
+      readonly destinationAdmission: string
+      readonly destinationAdmissionIntentRecorded: boolean
+      readonly destinationEndpoint: bigint
+      readonly destinationBranch: bigint
+      readonly destinationCompatibilityProven: boolean
       readonly nextJournalPosition: bigint
       readonly recovered: boolean
       readonly restartCount: bigint
@@ -2557,6 +3103,11 @@ const acceptedResultIntegrationDriver = defineDriver(
       readonly targetReacquisitionRequired: boolean
       readonly results: Map<bigint, ModelResult>
     } => ({
+      destinationAdmission,
+      destinationAdmissionIntentRecorded,
+      destinationEndpoint,
+      destinationBranch,
+      destinationCompatibilityProven,
       nextJournalPosition: modelNextJournalPosition,
       recovered,
       restartCount: modelRestartCount,
@@ -2589,6 +3140,26 @@ const acceptedResultIntegrationDriver = defineDriver(
 
     return {
       init: modelReset,
+      admitDestinationStep: () =>
+        Effect.gen(function* () {
+          const git = RemotePublicationGit.of({
+            admit: () =>
+              Effect.succeed(
+                RemotePublicationAdmissionObservation.cases.ExistingBranch.make({ remoteHead: commitOf(11n) })
+              ),
+            observe: () => Effect.die("destination admission unexpectedly observed a candidate"),
+            prepareSenderCustody: () =>
+              Effect.die("destination admission unexpectedly prepared publication sender custody"),
+            reconcileSenderCustody: () =>
+              Effect.die("destination admission unexpectedly reconciled publication sender custody"),
+            push: () => Effect.die("destination admission unexpectedly pushed a candidate")
+          })
+          yield* admitRemotePublicationTarget(runId, remotePublicationTarget).pipe(
+            runtime.provideJournal,
+            Effect.provideService(RemotePublicationGit, git)
+          )
+          modelAdmitDestination()
+        }),
       acceptResultOne: () =>
         Effect.gen(function* () {
           yield* appendAcceptedResult(1n)
@@ -2692,6 +3263,170 @@ const acceptedResultIntegrationDriver = defineDriver(
           updateModelResult(1n, (result) => ({ ...result, restartChoiceCommittedBeforeTerminal: true }))
         ),
       observeExactCandidateOne: () => observeCandidate(1n, "Exact", "CandidateExactParents"),
+      offerPublicationPremiseOne: () => Effect.sync(() => modelOfferPublicationPremise(1n)),
+      recordPublicationIntentOne: () =>
+        Effect.gen(function* () {
+          yield* startPublicationEngine()
+          modelRecordPublicationIntent(1n)
+        }),
+      observeInitialPublicationCandidateCurrentOne: () =>
+        Effect.gen(function* () {
+          const model = modelResultFor(1n)
+          yield* finishPublicationObservation(
+            RemotePublicationGitObservation.cases.CandidateCurrent.make({
+              remoteHead: commitOf(model.submittedCandidate)
+            })
+          )
+          modelInitialPublicationProof(
+            1n,
+            "ReconciledCandidateCurrent",
+            "PublicationRemoteCandidateCurrent",
+            model.submittedCandidate
+          )
+        }),
+      observeInitialPublicationCandidateAncestorOne: () =>
+        Effect.gen(function* () {
+          const model = modelResultFor(1n)
+          yield* finishPublicationObservation(
+            RemotePublicationGitObservation.cases.CandidateAncestor.make({
+              remoteHead: commitOf(model.expectedTargetHead)
+            })
+          )
+          modelInitialPublicationProof(
+            1n,
+            "ReconciledCandidateAncestor",
+            "PublicationRemoteCandidateAncestor",
+            model.expectedTargetHead
+          )
+        }),
+      observeInitialPublicationRemoteAncestorOfCandidateOne: () =>
+        Effect.gen(function* () {
+          yield* observePublicationRemoteAncestor(false)
+          modelRecordPublicationAttemptIntent(1n)
+          updateModelResult(1n, (result) => ({
+            ...result,
+            publicationObservation: "PublicationRemoteAncestorOfCandidate"
+          }))
+        }),
+      sendPublicationAttemptOne: () =>
+        Effect.gen(function* () {
+          yield* sendPublication()
+          modelSendPublicationAttempt(1n)
+        }),
+      observePublicationAppliedOne: () =>
+        Effect.gen(function* () {
+          const model = modelResultFor(1n)
+          yield* finishPublicationPush(
+            RemotePublicationPushResult.cases.Applied.make({ remoteHead: commitOf(model.submittedCandidate) })
+          )
+          modelPublicationProof(1n, "PushApplied", "PublicationApplied", model.submittedCandidate)
+        }),
+      observePublicationUpToDateOne: () =>
+        Effect.gen(function* () {
+          const model = modelResultFor(1n)
+          yield* finishPublicationPush(
+            RemotePublicationPushResult.cases.UpToDate.make({ remoteHead: commitOf(model.submittedCandidate) })
+          )
+          modelPublicationProof(1n, "PushUpToDate", "PublicationUpToDate", model.submittedCandidate)
+        }),
+      losePublicationResponseOne: () =>
+        Effect.gen(function* () {
+          yield* losePublicationPush()
+          modelLosePublicationResponse(1n)
+        }),
+      reconcilePublicationOne: () =>
+        Effect.gen(function* () {
+          yield* startPublicationEngine()
+          modelReconcilePublication(1n)
+        }),
+      observeReconciledPublicationCandidateCurrentOne: () =>
+        Effect.gen(function* () {
+          const model = modelResultFor(1n)
+          yield* finishPublicationObservation(
+            RemotePublicationGitObservation.cases.CandidateCurrent.make({
+              remoteHead: commitOf(model.submittedCandidate)
+            })
+          )
+          modelPublicationProof(
+            1n,
+            "ReconciledCandidateCurrent",
+            "PublicationRemoteCandidateCurrent",
+            model.submittedCandidate
+          )
+        }),
+      observeReconciledPublicationCandidateAncestorOne: () =>
+        Effect.gen(function* () {
+          const model = modelResultFor(1n)
+          yield* finishPublicationObservation(
+            RemotePublicationGitObservation.cases.CandidateAncestor.make({
+              remoteHead: commitOf(model.expectedTargetHead)
+            })
+          )
+          modelPublicationProof(
+            1n,
+            "ReconciledCandidateAncestor",
+            "PublicationRemoteCandidateAncestor",
+            model.expectedTargetHead
+          )
+        }),
+      observePublicationNonFastForwardOne: () =>
+        Effect.gen(function* () {
+          yield* finishPublicationNonFastForward()
+          modelPublicationNonFastForward(1n)
+        }),
+      observePublicationRemoteAncestorOfCandidateOne: () =>
+        Effect.gen(function* () {
+          const exhausted = modelResultFor(1n).publicationAttemptCount >= 3n
+          yield* observePublicationRemoteAncestor(exhausted)
+          modelPublicationRemoteAncestor(1n)
+        }),
+      observePublicationMissingOne: () =>
+        Effect.gen(function* () {
+          yield* finishPublicationObservation(RemotePublicationGitObservation.cases.TargetMissing.make({}))
+          modelPublicationWait(1n, "PublicationMissing", "PublicationRemoteMissing")
+        }),
+      observePublicationUnreadableOne: () =>
+        Effect.gen(function* () {
+          yield* failPublicationObservation("TargetUnreadable")
+          modelPublicationWait(1n, "PublicationUnreadable", "PublicationRemoteUnreadable")
+        }),
+      observePublicationInsufficientOne: () =>
+        Effect.gen(function* () {
+          yield* failPublicationObservation("AncestryUnavailable")
+          modelPublicationWait(1n, "PublicationInsufficient", "PublicationRemoteInsufficient")
+        }),
+      observePublicationIncompatibleOne: () =>
+        Effect.gen(function* () {
+          yield* finishPublicationObservation(
+            RemotePublicationGitObservation.cases.IncompatibleLineage.make({ remoteHead: commitOf(99n) })
+          )
+          modelPublicationWait(1n, "PublicationIncompatible", "PublicationRemoteIncompatible")
+        }),
+      observePublicationDeniedOne: () =>
+        Effect.gen(function* () {
+          yield* finishPublicationPush(RemotePublicationPushResult.cases.RejectedDefinite.make({ cause: "Policy" }))
+          modelPublicationWait(1n, "PublicationDenied", "PublicationRemoteDenied")
+        }),
+      observePublicationThrottledOne: () =>
+        Effect.gen(function* () {
+          yield* finishPublicationPush(RemotePublicationPushResult.cases.Throttled.make({}))
+          modelPublicationWait(1n, "PublicationThrottled", "PublicationRemoteThrottled")
+        }),
+      observePublicationCompetingHeadOne: () =>
+        Effect.gen(function* () {
+          yield* finishPublicationObservation(
+            RemotePublicationGitObservation.cases.CompatibleCompetingHead.make({
+              mergeBase: commitOf(11n),
+              remoteHead: commitOf(99n)
+            })
+          )
+          modelPublicationWait(1n, "PublicationCompetingHead", "PublicationRemoteCompetingHead")
+        }),
+      observePublicationNonConvergenceOne: () =>
+        Effect.gen(function* () {
+          yield* observePublicationRemoteAncestor(true)
+          modelPublicationWait(1n, "PublicationNonConvergence", "PublicationRemoteNonConvergence")
+        }),
       observeIncompatibleTargetLineageOne: () =>
         Effect.sync(() => updateModelResult(1n, (result) => ({ ...result, lineageCompatible: false }))),
       observeMissingCandidateOne: () => observeCandidate(1n, "Missing", "CandidateMissing"),
@@ -2973,6 +3708,7 @@ const acceptedResultIntegrationDriver = defineDriver(
 
 const promotionReadOnlyReconciliationActions = [
   "init",
+  "admitDestinationStep",
   "acceptResultOne",
   "queueAcceptedResultOne",
   "startIntegrationOne",
@@ -2982,6 +3718,11 @@ const promotionReadOnlyReconciliationActions = [
   "recordCandidateGitReadIntentOne",
   "readCandidateGitOne",
   "observeExactCandidateOne",
+  "offerPublicationPremiseOne",
+  "recordPublicationIntentOne",
+  "observeInitialPublicationRemoteAncestorOfCandidateOne",
+  "sendPublicationAttemptOne",
+  "observePublicationAppliedOne",
   "offerPromotionPremiseOne",
   "recordPromotionIntentOne",
   "observePromotionExactExpectedHeadOne",
@@ -3003,12 +3744,135 @@ it.effect("detects a chooseRetry projection that leaves its exact direction subj
 )
 
 it.effect(
+  "reconciles one lost publication response through the actual remote observation boundary",
+  () =>
+    Effect.gen(function* () {
+      const driver = yield* acceptedResultIntegrationDriver.create()
+      const getState = driver.getState
+      if (getState === undefined) return yield* Effect.die("accepted-result integration driver lacks getState")
+      for (const actionName of [
+        "init",
+        "admitDestinationStep",
+        "acceptResultOne",
+        "queueAcceptedResultOne",
+        "startIntegrationOne",
+        "fixIntegratorSessionOne",
+        "invokeIntegratorOne",
+        "reportIntegratorCandidateOne31",
+        "recordCandidateGitReadIntentOne",
+        "readCandidateGitOne",
+        "observeExactCandidateOne",
+        "offerPublicationPremiseOne",
+        "recordPublicationIntentOne",
+        "observeInitialPublicationRemoteAncestorOfCandidateOne",
+        "sendPublicationAttemptOne",
+        "losePublicationResponseOne",
+        "observeTrackerFactsStep",
+        "observeTargetFactsOne",
+        "reconcilePublicationOne",
+        "observeReconciledPublicationCandidateCurrentOne"
+      ] as const) {
+        const action = driver.actions[actionName]
+        if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
+        yield* action.handler({})
+        yield* getState()
+      }
+      expect((yield* getState()).results.get(1n)).toMatchObject({
+        phase: "PublicationProved",
+        publicationAttemptCount: 1n,
+        publicationProofBasis: "ReconciledCandidateCurrent",
+        publicationProofRecorded: true,
+        publicationResponseAmbiguous: false,
+        targetHeld: false
+      })
+    }),
+  30_000
+)
+
+it.effect(
+  "maps non-fast-forward publication phases through actual read and push boundaries",
+  () =>
+    Effect.gen(function* () {
+      const driver = yield* acceptedResultIntegrationDriver.create()
+      const getState = driver.getState
+      if (getState === undefined) return yield* Effect.die("accepted-result integration driver lacks getState")
+      for (const actionName of [
+        "init",
+        "admitDestinationStep",
+        "acceptResultOne",
+        "queueAcceptedResultOne",
+        "startIntegrationOne",
+        "fixIntegratorSessionOne",
+        "invokeIntegratorOne",
+        "reportIntegratorCandidateOne31",
+        "recordCandidateGitReadIntentOne",
+        "readCandidateGitOne",
+        "observeExactCandidateOne",
+        "offerPublicationPremiseOne",
+        "recordPublicationIntentOne",
+        "observeInitialPublicationRemoteAncestorOfCandidateOne",
+        "sendPublicationAttemptOne",
+        "observePublicationNonFastForwardOne",
+        "observePublicationRemoteAncestorOfCandidateOne",
+        "sendPublicationAttemptOne",
+        "observePublicationDeniedOne"
+      ] as const) {
+        const action = driver.actions[actionName]
+        if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
+        yield* action.handler({})
+        yield* getState()
+      }
+      expect((yield* getState()).results.get(1n)).toMatchObject({
+        phase: "PublicationDenied",
+        publicationAttemptCount: 2n,
+        publicationObservation: "PublicationRemoteDenied",
+        publicationProofRecorded: false,
+        publicationResultRecorded: true,
+        targetHeld: false
+      })
+    }),
+  30_000
+)
+
+it.effect(
+  "replays the seed 57 pre-publication prefix without crossing a Git mutation boundary",
+  () =>
+    Effect.gen(function* () {
+      const driver = yield* acceptedResultIntegrationDriver.create()
+      const getState = driver.getState
+      if (getState === undefined) return yield* Effect.die("accepted-result integration driver lacks getState")
+      const actions = [
+        "init",
+        "admitDestinationStep",
+        ...Array.from({ length: 4 }, () => "recoverCoordinatorStep" as const),
+        "acceptResultOne",
+        "acceptResultTwo",
+        "queueAcceptedResultTwo",
+        "startIntegrationTwo",
+        "fixIntegratorSessionTwo",
+        "queueAcceptedResultOne",
+        ...Array.from({ length: 23 }, () => "observeIncompatibleTargetLineageOne" as const)
+      ] as const
+      for (const actionName of actions) {
+        const action = driver.actions[actionName]
+        if (action === undefined) return yield* Effect.die(`missing seed 57 MBT action ${actionName}`)
+        yield* action.handler({})
+        yield* getState()
+      }
+      expect((yield* getState()).results.get(1n)).toMatchObject({ phase: "Queued", lineageCompatible: false })
+      expect((yield* getState()).results.get(2n)).toMatchObject({ phase: "IntegratorSessionFixed" })
+    }),
+  30_000
+)
+
+it.effect(
   "keeps Retry lineage L when a later foreign-target observation precedes run two",
   () =>
     Effect.gen(function* () {
       const driver = yield* acceptedResultIntegrationDriver.create()
       const actionNames = [
         "init",
+        "admitDestinationStep",
         "acceptResultOne",
         "queueAcceptedResultOne",
         "startIntegrationOne",
@@ -3212,6 +4076,8 @@ quintIt(
                   phase: variantTag(result.phase),
                   integratorOutcome: variantTag(result.integratorOutcome),
                   candidateGitObservation: variantTag(result.candidateGitObservation),
+                  publicationProofBasis: variantTag(result.publicationProofBasis),
+                  publicationObservation: variantTag(result.publicationObservation),
                   promotionGitObservation: variantTag(result.promotionGitObservation),
                   quarantineCause: variantTag(result.quarantineCause),
                   quarantineDirection: variantTag(result.quarantineDirection),
@@ -3225,6 +4091,11 @@ quintIt(
       (spec, implementation) => {
         if (
           spec.nextJournalPosition !== implementation.nextJournalPosition ||
+          variantTag(spec.destinationAdmission) !== implementation.destinationAdmission ||
+          spec.destinationAdmissionIntentRecorded !== implementation.destinationAdmissionIntentRecorded ||
+          spec.destinationEndpoint !== implementation.destinationEndpoint ||
+          spec.destinationBranch !== implementation.destinationBranch ||
+          spec.destinationCompatibilityProven !== implementation.destinationCompatibilityProven ||
           spec.recovered !== implementation.recovered ||
           spec.restartCount !== implementation.restartCount ||
           spec.targetFactsCurrent !== implementation.targetFactsCurrent ||
@@ -3282,6 +4153,28 @@ quintIt(
             expected.promotionResponseAmbiguous === actual.promotionResponseAmbiguous &&
             expected.promotionResultRecorded === actual.promotionResultRecorded &&
             expected.promotionTargetFactsCurrent === actual.promotionTargetFactsCurrent &&
+            expected.publicationIntentRecorded === actual.publicationIntentRecorded &&
+            expected.publicationAttemptCount === actual.publicationAttemptCount &&
+            expected.publicationLastAttempt === actual.publicationLastAttempt &&
+            expected.publicationResponseAmbiguous === actual.publicationResponseAmbiguous &&
+            expected.publicationFinalReadRequired === actual.publicationFinalReadRequired &&
+            expected.publicationResultRecorded === actual.publicationResultRecorded &&
+            expected.publicationProofRecorded === actual.publicationProofRecorded &&
+            expected.publicationProofBasis === actual.publicationProofBasis &&
+            expected.publicationObservation === actual.publicationObservation &&
+            expected.publicationObservedRemoteHead === actual.publicationObservedRemoteHead &&
+            expected.publicationEndpoint === actual.publicationEndpoint &&
+            expected.publicationBranch === actual.publicationBranch &&
+            expected.publicationRequestId === actual.publicationRequestId &&
+            expected.publicationCandidate === actual.publicationCandidate &&
+            expected.publicationIntegratorSession === actual.publicationIntegratorSession &&
+            expected.publicationExpectedTargetHead === actual.publicationExpectedTargetHead &&
+            expected.publicationOrdinaryRefspecRequested === actual.publicationOrdinaryRefspecRequested &&
+            expected.publicationForceRequested === actual.publicationForceRequested &&
+            expected.publicationDryRunOnly === actual.publicationDryRunOnly &&
+            expected.publicationEqualContentAccepted === actual.publicationEqualContentAccepted &&
+            expected.publicationProcessSuccessObserved === actual.publicationProcessSuccessObserved &&
+            expected.publicationSenderStopped === actual.publicationSenderStopped &&
             expected.predecessorPreserved === actual.predecessorPreserved &&
             expected.quarantineCause === actual.quarantineCause &&
             expected.quarantineConflictCount === actual.quarantineConflictCount &&

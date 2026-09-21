@@ -1,5 +1,6 @@
 import { Data, Effect, Schema } from "effect"
 import type { WorkflowOperation } from "../registry/operation.js"
+import type { RemoteBaselineCorrelation } from "../protocols/direct-publication/baseline-events.js"
 import type { OperationId } from "../identity.js"
 import type {
   CompletionClaimDeletionRequest,
@@ -69,6 +70,12 @@ const callIdFor = (
 
 /** Exact acknowledged workflow intent and owning external family for one interruptible local wait. */
 export type InterruptibleWorkflowBoundaryIntent =
+  | {
+      readonly _tag: "RemoteBaseline"
+      readonly family: "Git"
+      readonly correlation: RemoteBaselineCorrelation
+      readonly phase: "Observe" | "CatchUp" | "ReconcileCatchUp"
+    }
   | {
       readonly _tag: "AuthorityRequest"
       readonly family: InterruptibleWorkflowBoundaryFamily

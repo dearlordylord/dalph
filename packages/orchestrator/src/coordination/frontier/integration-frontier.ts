@@ -28,6 +28,7 @@ export interface IntegrationFrontierRuntimeFacts {
   /** Attempts whose current graph authority is newer than their last Git target-lineage observation. */
   readonly targetLineageRefreshRequiredAttemptIds?: ReadonlySet<AttemptId>
   readonly targetPromotionConfigured?: boolean
+  readonly remotePublicationConfigured?: boolean
   readonly taskClaimAuthorityByAttemptId: ReadonlyMap<AttemptId, CurrentTaskClaimAuthority>
   readonly activeClaimByAttemptId?: ReadonlyMap<AttemptId, ActiveTaskClaim>
   readonly integrationFinalityConfigured?: boolean
@@ -42,6 +43,7 @@ const emptyRuntimeFacts: IntegrationFrontierRuntimeFacts = {
   targetLineageByAttemptId: new Map(),
   targetLineageRefreshRequiredAttemptIds: new Set(),
   targetPromotionConfigured: false,
+  remotePublicationConfigured: false,
   taskClaimAuthorityByAttemptId: new Map()
 }
 

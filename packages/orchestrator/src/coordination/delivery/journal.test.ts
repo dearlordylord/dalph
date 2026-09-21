@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { RunId, TaskId, makeTaskWorkSpecification } from "@dalph/contracts"
 import { Cause, Deferred, Effect, Exit, Fiber, Option, Ref, Stream } from "effect"
@@ -70,7 +71,7 @@ const journaledGraphChanges = (journal: JournalInstance) =>
 it.effect("state.get equals the current-first state.changes value", () =>
   Effect.gen(function* () {
     const storage = yield* JournalStore
-    yield* storage.beginRun(runId, target, initialPolicy)
+    yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(runId, target, initial, storage)
@@ -83,7 +84,7 @@ it.effect("state.get equals the current-first state.changes value", () =>
 it.effect("state.get equals the latest publication observed after an accepted append", () =>
   Effect.gen(function* () {
     const storage = yield* JournalStore
-    yield* storage.beginRun(runId, target, initialPolicy)
+    yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(runId, target, initial, storage)
@@ -120,7 +121,7 @@ it.effect("state.get equals the latest publication observed after an accepted ap
 it.effect("publishes GraphNotEstablished first and an accepted complete graph at its journal position", () =>
   Effect.gen(function* () {
     const storage = yield* JournalStore
-    yield* storage.beginRun(runId, target, initialPolicy)
+    yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(runId, target, initial, storage)
@@ -175,7 +176,7 @@ it.effect("does not publish complete graph facts for another tracker target", ()
   Effect.gen(function* () {
     const foreignRunId = RunId.make("journal-foreign-target")
     const storage = yield* JournalStore
-    yield* storage.beginRun(foreignRunId, target, initialPolicy)
+    yield* storage.beginRun(foreignRunId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(foreignRunId, yield* storage.read(foreignRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(foreignRunId, target, initial, storage)
@@ -236,7 +237,7 @@ it.effect("does not pair a target-A graph read with an earlier foreign-target sn
   Effect.gen(function* () {
     const mixedTargetRunId = RunId.make("journal-mixed-target-order")
     const storage = yield* JournalStore
-    yield* storage.beginRun(mixedTargetRunId, target, initialPolicy)
+    yield* storage.beginRun(mixedTargetRunId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(mixedTargetRunId, yield* storage.read(mixedTargetRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(mixedTargetRunId, target, initial, storage)
@@ -293,7 +294,7 @@ it.effect("publishes an equal-content reconfirmation as a later journaled graph 
   Effect.gen(function* () {
     const fixedRunId = RunId.make("journal-equal-reconfirmation")
     const storage = yield* JournalStore
-    yield* storage.beginRun(fixedRunId, target, initialPolicy)
+    yield* storage.beginRun(fixedRunId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(fixedRunId, yield* storage.read(fixedRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(fixedRunId, target, initial, storage)
@@ -372,7 +373,7 @@ it.effect("skips accepted focused facts while retaining the latest graph observa
   Effect.gen(function* () {
     const focusedRunId = RunId.make("journal-focused-before-graph")
     const storage = yield* JournalStore
-    yield* storage.beginRun(focusedRunId, target, initialPolicy)
+    yield* storage.beginRun(focusedRunId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(focusedRunId, yield* storage.read(focusedRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(focusedRunId, target, initial, storage)
@@ -428,7 +429,7 @@ it.effect("rejects empty or different-Run accepted history while raw malformed h
     const emptyFailure = yield* makeJournal(runId, target, empty, storage).pipe(Effect.flip)
     expect(emptyFailure).toMatchObject({ _tag: "JournalInitialHistoryInvalid", reason: "EmptyHistory" })
 
-    yield* storage.beginRun(runId, target, initialPolicy)
+    yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
     const begun = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
     if (begun._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(begun)
     const begunRecords = exportWorkflowHistoryRecords(begun.runState.workflowHistory)
@@ -471,7 +472,7 @@ it.effect("serializes concurrent accepted appends and publishes every position i
   Effect.gen(function* () {
     const concurrentRunId = RunId.make("journal-concurrent")
     const storage = yield* JournalStore
-    yield* storage.beginRun(concurrentRunId, target, initialPolicy)
+    yield* storage.beginRun(concurrentRunId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(concurrentRunId, yield* storage.read(concurrentRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(concurrentRunId, target, initial, storage)
@@ -509,7 +510,7 @@ it.effect("conditionally appends and publishes when the accepted prefix is still
   Effect.gen(function* () {
     const conditionalRunId = RunId.make("journal-conditional-exact")
     const storage = yield* JournalStore
-    yield* storage.beginRun(conditionalRunId, target, initialPolicy)
+    yield* storage.beginRun(conditionalRunId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(conditionalRunId, yield* storage.read(conditionalRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const storageAppends = yield* Ref.make(0)
@@ -551,7 +552,7 @@ it.effect("returns PrefixAdvanced without storing or publishing a conditional ap
   Effect.gen(function* () {
     const advancedRunId = RunId.make("journal-conditional-prefix-advanced")
     const storage = yield* JournalStore
-    yield* storage.beginRun(advancedRunId, target, initialPolicy)
+    yield* storage.beginRun(advancedRunId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(advancedRunId, yield* storage.read(advancedRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const storageAppends = yield* Ref.make(0)
@@ -604,7 +605,7 @@ it.effect("lets an intervening append win before safely declining the conditiona
   Effect.gen(function* () {
     const racingRunId = RunId.make("journal-conditional-race")
     const storage = yield* JournalStore
-    yield* storage.beginRun(racingRunId, target, initialPolicy)
+    yield* storage.beginRun(racingRunId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(racingRunId, yield* storage.read(racingRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const winnerEnteredStorage = yield* Deferred.make<void>()
@@ -679,7 +680,7 @@ it.effect("accepts concurrently completed tracker outcomes in the order they rea
   Effect.gen(function* () {
     const outcomeRunId = RunId.make("journal-outcome-order")
     const storage = yield* JournalStore
-    yield* storage.beginRun(outcomeRunId, target, initialPolicy)
+    yield* storage.beginRun(outcomeRunId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(outcomeRunId, yield* storage.read(outcomeRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(outcomeRunId, target, initial, storage)
@@ -742,7 +743,7 @@ it.effect("never loses the latest journaled graph when subscription and publicat
   Effect.gen(function* () {
     const raceRunId = RunId.make("journal-attachment-race")
     const storage = yield* JournalStore
-    yield* storage.beginRun(raceRunId, target, initialPolicy)
+    yield* storage.beginRun(raceRunId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(raceRunId, yield* storage.read(raceRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(raceRunId, target, initial, storage)
@@ -795,7 +796,7 @@ it.effect("reconstructs an append accepted before the process could publish it",
   Effect.gen(function* () {
     const crashRunId = RunId.make("journal-crash-after-append")
     const storage = yield* JournalStore
-    yield* storage.beginRun(crashRunId, target, initialPolicy)
+    yield* storage.beginRun(crashRunId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(crashRunId, yield* storage.read(crashRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const operation = makeTrackerGraphObservationOperation(
@@ -869,7 +870,7 @@ it.effect("lets multiple graph subscribers observe one accepted read without per
   Effect.gen(function* () {
     const subscriberRunId = RunId.make("journal-multiple-subscribers")
     const storage = yield* JournalStore
-    yield* storage.beginRun(subscriberRunId, target, initialPolicy)
+    yield* storage.beginRun(subscriberRunId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(subscriberRunId, yield* storage.read(subscriberRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const appendCalls = yield* Ref.make(0)
@@ -924,7 +925,7 @@ it.effect("does not republish an idempotent append and rejects a different Run",
   Effect.gen(function* () {
     const fixedRunId = RunId.make("journal-fixed-run")
     const storage = yield* JournalStore
-    yield* storage.beginRun(fixedRunId, target, initialPolicy)
+    yield* storage.beginRun(fixedRunId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(fixedRunId, yield* storage.read(fixedRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(fixedRunId, target, initial, storage)
@@ -964,7 +965,7 @@ it.effect("does not replay queued open values to a subscriber after publication 
   Effect.gen(function* () {
     const slowRunId = RunId.make("journal-slow-subscriber")
     const storage = yield* JournalStore
-    yield* storage.beginRun(slowRunId, target, initialPolicy)
+    yield* storage.beginRun(slowRunId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(slowRunId, yield* storage.read(slowRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(slowRunId, target, initial, storage)
@@ -1029,7 +1030,7 @@ it.effect("fails closed when storage returns different content for an already pu
   Effect.gen(function* () {
     const mismatchRunId = RunId.make("journal-record-mismatch")
     const storage = yield* JournalStore
-    yield* storage.beginRun(mismatchRunId, target, initialPolicy)
+    yield* storage.beginRun(mismatchRunId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(mismatchRunId, yield* storage.read(mismatchRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const appendCalls = yield* Ref.make(0)
@@ -1080,7 +1081,7 @@ it.effect("state.get and changes fail with the same typed error after the prefix
   Effect.gen(function* () {
     const invalidRunId = RunId.make("journal-invalid-prefix")
     const storage = yield* JournalStore
-    yield* storage.beginRun(invalidRunId, target, initialPolicy)
+    yield* storage.beginRun(invalidRunId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(invalidRunId, yield* storage.read(invalidRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(invalidRunId, target, initial, storage)
@@ -1127,7 +1128,7 @@ it.effect("attempts no later storage append after an accepted position contradic
   Effect.gen(function* () {
     const gapRunId = RunId.make("journal-position-gap")
     const storage = yield* JournalStore
-    yield* storage.beginRun(gapRunId, target, initialPolicy)
+    yield* storage.beginRun(gapRunId, target, initialPolicy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(gapRunId, yield* storage.read(gapRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const appendCalls = yield* Ref.make(0)

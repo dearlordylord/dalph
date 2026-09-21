@@ -73,6 +73,9 @@ it.effect(
       })
 
       const authorization = exactlyOne(result.records, "IntegratorCandidateCleanupAuthorized").event.authorization
+      if (authorization.disposition._tag !== "Superseded") {
+        return yield* Effect.die("predecessor cleanup must retain its FullRerun disposition")
+      }
       expect(authorization.disposition.predecessor).toEqual(predecessor)
       expect(authorization.disposition.successor).toEqual(successor)
       expect(authorization.locator).toBe(predecessor.candidateResource)

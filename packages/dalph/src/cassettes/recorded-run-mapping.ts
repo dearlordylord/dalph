@@ -47,6 +47,7 @@ export const recordedRunEntryFor = (event: JournalRunEntry): RecordedRunEntry =>
         initiatedBy: value.initiatedBy,
         initialControlPolicy: value.initialControlPolicy,
         occurrenceClassification: value.occurrenceClassification,
+        remotePublicationTarget: value.remotePublicationTarget,
         target: value.target
       }),
       WorkflowRunTerminated: (value): RecordedRunEntry => ({
@@ -80,6 +81,7 @@ export const eventForRunEntry = (entry: RecordedRunEntry): WorkflowJournalEvent 
           initialControlPolicy: value.initialControlPolicy,
           initiatedBy: value.initiatedBy,
           occurrenceClassification: value.occurrenceClassification,
+          remotePublicationTarget: value.remotePublicationTarget,
           target: value.target,
           version: workflowJournalEventVersion
         }),

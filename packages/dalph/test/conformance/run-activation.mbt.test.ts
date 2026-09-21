@@ -10,6 +10,9 @@ import {
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
@@ -82,6 +85,10 @@ import { RunActivationGraphBaseline } from "../../../orchestrator/src/coordinati
 import { AllocatedWorkflowRunId } from "../../../orchestrator/src/coordination/run/fresh-run-identity.js"
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
+import {
+  remoteBaselineGitLayerForTest,
+  remotePublicationGitLayerForTest
+} from "../../../orchestrator/test/support/direct-publication.js"
 import { JournaledRunBootstrap } from "../../../orchestrator/src/coordination/run/run.js"
 import { validatedRunActivationLayer } from "../../../orchestrator/src/coordination/run/startup-recovery.js"
 import { preservingDispositionCleanupBoundaryLayer } from "../../../orchestrator/src/workflow/protocols/disposition-cleanup/boundaries.js"
@@ -267,6 +274,10 @@ const runId = RunId.make("run-activation-R1")
 const otherRunId = RunId.make("run-activation-R2")
 const target = FixtureTarget.make("run-activation-T1")
 const otherTarget = FixtureTarget.make("run-activation-T2")
+const remotePublicationTarget = RemotePublicationTarget.make({
+  branch: RemotePublicationBranchRef.make("refs/heads/main"),
+  endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/repository.git")
+})
 const taskA = TaskId.make("run-activation-A")
 const taskB = TaskId.make("run-activation-B")
 const taskC = TaskId.make("run-activation-capacity-sentinel")
@@ -578,7 +589,7 @@ const makeRunActivationDriverImplementation = () => {
 
   const begin = (eventRunId: RunId, eventTarget: TrackerTarget, policy: InitialControlPolicy): JournalRecord => {
     const selected = eventRunId === runId ? records : otherRecords
-    const decision = decideWorkflowRunBeginning(selected, eventRunId, eventTarget, policy)
+    const decision = decideWorkflowRunBeginning(selected, eventRunId, eventTarget, policy, remotePublicationTarget)
     if (decision._tag !== "LifecycleTransitionAccepted") {
       expect.fail("Run activation fixture failed to begin")
     }
@@ -840,7 +851,9 @@ const makeRunActivationDriverImplementation = () => {
               })
             ),
             Layer.provide(executorLayer),
-            Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+            Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))),
+            Layer.provide(remoteBaselineGitLayerForTest),
+            Layer.provideMerge(remotePublicationGitLayerForTest)
           )
         }
         const context = yield* Layer.build(
@@ -848,7 +861,9 @@ const makeRunActivationDriverImplementation = () => {
             expectedRunId,
             runtimeLayer,
             yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void }),
-            noopJournalMaintenanceObservation
+            noopJournalMaintenanceObservation,
+            undefined,
+            remotePublicationTarget
           ).pipe(Layer.provide(dependencies), Layer.provide(executorLayer))
         )
         return yield* use(Context.get(context, JournaledRunBootstrap))
@@ -1561,7 +1576,7 @@ const makeRunActivationDriverImplementation = () => {
     selectInvalidHistory: () =>
       Effect.sync(() => {
         records = []
-        const began = decideWorkflowRunBeginning([], runId, target, initialPolicy)
+        const began = decideWorkflowRunBeginning([], runId, target, initialPolicy, remotePublicationTarget)
         if (began._tag !== "LifecycleTransitionAccepted") {
           expect.fail(JSON.stringify(began.failure))
         }

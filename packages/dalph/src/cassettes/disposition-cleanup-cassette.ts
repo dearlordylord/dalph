@@ -12,6 +12,9 @@ import {
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedTaskAttempt,
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
@@ -67,6 +70,11 @@ import {
   TestWorktreeCleanupBoundary,
   worktreeCleanupTestLayer
 } from "@dalph/orchestrator"
+
+const cleanupCassetteRemotePublicationTarget = RemotePublicationTarget.make({
+  branch: RemotePublicationBranchRef.make("refs/heads/main"),
+  endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/repository.git")
+})
 
 const cleanupCassetteP1Worktree = WorktreeLocator.make("/tmp/cleanup-maintained-p1")
 const cleanupCassetteP1Branch = TaskBranchRef.make("refs/heads/task/cleanup-maintained-p1")
@@ -1061,7 +1069,8 @@ export const runDispositionCleanupCassette: (
     yield* journal.beginRun(
       cleanupCassetteRunId,
       FixtureTarget.make("cleanup-maintained-target"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      cleanupCassetteRemotePublicationTarget
     )
     const initial = reduceWorkflowJournalHistory(cleanupCassetteRunId, yield* journal.read(cleanupCassetteRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") {

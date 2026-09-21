@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { RunId } from "@dalph/contracts"
 import { Deferred, Effect, Fiber, Ref } from "effect"
@@ -18,7 +19,12 @@ const runId = RunId.make("journal-terminal-publication")
 const target = FixtureTarget.make("journal-terminal-publication")
 const setup = Effect.gen(function* () {
   const storage = yield* JournalStore
-  yield* storage.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }))
+  yield* storage.beginRun(
+    runId,
+    target,
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    remotePublicationTargetForTest
+  )
   const fixture = completedRunFinalityFixture({ runId, target })
   yield* storage.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
   yield* storage.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)

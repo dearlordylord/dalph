@@ -14,6 +14,8 @@ import type {
   PassivePlannedAttemptProjectionPublication
 } from "../run/passive-planned-attempt-observer.js"
 import type { Journal } from "./journal.js"
+import type { RemotePublicationGit } from "../../workflow/protocols/direct-publication/events.js"
+import type { RemoteBaselineGit } from "../../workflow/protocols/direct-publication/baseline-events.js"
 
 /** Services captured once by the closed executor and interpreted only by route-specific leaves. */
 export type DeliveryActionAdapterEnvironment =
@@ -25,6 +27,8 @@ export type DeliveryActionAdapterEnvironment =
   | PassivePlannedAttemptProjectionPublication
   | PlannedAttemptExecutor
   | PlannedTaskAttemptPlanner
+  | RemoteBaselineGit
+  | RemotePublicationGit
   | TaskClaimAcquisitionPlanner
   | WorkflowInterpreter
   | WorkflowTrace

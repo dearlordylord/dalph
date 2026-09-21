@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
@@ -206,6 +207,7 @@ const withEvent = (record: JournalRecord, event: JournalRecord["event"]): Journa
 
 const runBeginning = WorkflowRunBeganEvent.make({
   initialControlPolicy: initialPolicy,
+  remotePublicationTarget: remotePublicationTargetForTest,
   initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
   occurrenceClassification: "InitiatedAction",
   target: trackerTarget,
@@ -312,6 +314,7 @@ const preservationRecords = (): ReadonlyArray<JournalRecord> => {
       1,
       WorkflowRunBeganEvent.make({
         initialControlPolicy: initialPolicy,
+        remotePublicationTarget: remotePublicationTargetForTest,
         initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
         occurrenceClassification: "InitiatedAction",
         target: trackerTarget,
@@ -530,6 +533,7 @@ const integrationRecords = (): ReadonlyArray<JournalRecord> => {
       1,
       WorkflowRunBeganEvent.make({
         initialControlPolicy: initialPolicy,
+        remotePublicationTarget: remotePublicationTargetForTest,
         initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
         occurrenceClassification: "InitiatedAction",
         target: fixture.target,
@@ -1135,7 +1139,12 @@ const appendRecordsToStore = Effect.fn("TraceReaderHistorical81And82.appendRecor
   if (beginning === undefined || beginning.event._tag !== "WorkflowRunBegan") {
     return yield* Effect.die("historical fixture must begin with WorkflowRunBegan")
   }
-  yield* journal.beginRun(beginning.runId, beginning.event.target, beginning.event.initialControlPolicy)
+  yield* journal.beginRun(
+    beginning.runId,
+    beginning.event.target,
+    beginning.event.initialControlPolicy,
+    remotePublicationTargetForTest
+  )
   for (const item of records.slice(1)) {
     if (item.event._tag === "WorkflowRunBegan" || item.event._tag === "WorkflowRunTerminated") {
       return yield* Effect.die("historical fixture contains an unexpected lifecycle event")

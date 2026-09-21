@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { acceptedResultFixture } from "../../../../test/support/evidence.js"
 import { validSnapshot } from "../../../../test/task-dag.js"
@@ -106,7 +107,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
 const target = FixtureTarget.make("attempt-choice-target")
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const testJournalLayer = liveJournalTestLayer({
-  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy)],
+  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
   runId,
   target
 })

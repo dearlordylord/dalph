@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
 import { expect } from "vitest"
@@ -67,7 +68,8 @@ it.effect("coalesces exact request redelivery and rejects identity reuse for ano
           makeWorkflowRunBeganRecord(
             redeliveryRunId,
             FixtureTarget.make("claim-reacquisition-redelivery-target"),
-            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+            remotePublicationTargetForTest
           )
         ],
         runId: redeliveryRunId,

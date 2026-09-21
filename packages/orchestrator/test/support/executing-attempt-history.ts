@@ -1,4 +1,10 @@
-import { makeTaskWorkSpecification, PlannedAttemptExecutorReport } from "@dalph/contracts"
+import {
+  makeTaskWorkSpecification,
+  PlannedAttemptExecutorReport,
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget
+} from "@dalph/contracts"
 import type { PlannedTaskAttempt, RunId, TaskWorkSpecification } from "@dalph/contracts"
 import { Effect, Option } from "effect"
 import { PlannedWorktreeReady } from "../../src/authorities/git/worktree.js"
@@ -60,6 +66,11 @@ const defaultSpecification = (plannedAttempt: PlannedTaskAttempt): TaskWorkSpeci
     taskId: plannedAttempt.taskId,
     title: `Accepted integration fixture for ${plannedAttempt.taskId}`
   })
+
+const acceptedIntegrationRemotePublicationTarget = RemotePublicationTarget.make({
+  branch: RemotePublicationBranchRef.make("refs/heads/main"),
+  endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/repository.git")
+})
 
 const appendRecord = (runId: RunId, records: ReadonlyArray<JournalRecord>, event: JournalRecord["event"]) => {
   const appended: JournalRecord = {
@@ -138,7 +149,7 @@ export const makeExecutingAttemptHistory = (input: ExecutingAttemptHistoryInput)
   const policy =
     input.initialControlPolicy ?? InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
   let records: ReadonlyArray<JournalRecord> = input.priorRecords ?? [
-    makeWorkflowRunBeganRecord(input.runId, input.trackerTarget, policy)
+    makeWorkflowRunBeganRecord(input.runId, input.trackerTarget, policy, acceptedIntegrationRemotePublicationTarget)
   ]
   const append = (event: JournalRecord["event"]): JournalRecord => {
     const next = appendRecord(input.runId, records, event)

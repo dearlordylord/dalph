@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 /* eslint-disable import/no-nodejs-modules -- Source assertion guards the public console presentation seam. */
 import { it } from "@effect/vitest"
 import {
@@ -263,7 +264,8 @@ it.effect("reads one exact production cursor through TraceReader and writes its 
         yield* journal.beginRun(
           runId,
           target,
-          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+          remotePublicationTargetForTest
         )
         const operation = makeTrackerGraphObservationOperation(
           { _tag: "WorkflowEstablishment" },
@@ -313,7 +315,8 @@ it.effect("retries the same cursor while passive status changes without rewritin
         yield* journal.beginRun(
           runId,
           target,
-          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+          remotePublicationTargetForTest
         )
         yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
         const console = yield* HistoricalTraceConsole

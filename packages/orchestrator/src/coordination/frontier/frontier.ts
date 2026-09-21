@@ -7,8 +7,11 @@ import {
   type TaskRevision,
   type PlannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelation,
-  type PlannedAttemptExecutorReport
+  type PlannedAttemptExecutorReport,
+  type RemotePublicationTarget
 } from "@dalph/contracts"
+import type { RemotePublicationSucceededEvent } from "../../workflow/protocols/direct-publication/events.js"
+import type { RemoteBaselineCorrelation } from "../../workflow/protocols/direct-publication/baseline-events.js"
 import { type OperationId } from "../../workflow/identity.js"
 import {
   type WorkflowResponsibilityEntry,
@@ -203,6 +206,11 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     /** Exact outer occurrence authorized for this delivery, including Retry ordinal two. */
     readonly run: IntegratorRunCorrelation
   }
+  /** Establishes the fresh remote baseline and any authorized local compare-and-set before session fixation. */
+  EstablishRemoteBaseline: {
+    readonly correlation: RemoteBaselineCorrelation
+    readonly responsibility: StartedIntegrationResponsibility
+  }
   /** Records why an authorized Retry cannot reuse its fixed session head; this transition never calls Integrator. */
   RecordChangedHeadRetryQuarantine: {
     readonly request: ChangedHeadRetryQuarantineInput
@@ -233,13 +241,20 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly input: IntegratorSuccessorPreparationInput
     readonly responsibility: StartedIntegrationResponsibility
   }
+  RunRemotePublication: {
+    readonly candidate: IntegratorRunQualifiedCandidate
+    readonly responsibility: StartedIntegrationResponsibility
+    readonly target: RemotePublicationTarget
+  }
   RunTargetPromotion: {
     readonly candidate: IntegratorRunQualifiedCandidate
+    readonly publication: RemotePublicationSucceededEvent
     readonly responsibility: StartedIntegrationResponsibility
   }
   /** Reconciles one ambiguous prior promotion attempt without authority to issue another compare-and-set. */
   ReconcileTargetPromotionAttempt: {
     readonly candidate: IntegratorRunQualifiedCandidate
+    readonly publication: RemotePublicationSucceededEvent
     readonly responsibility: StartedIntegrationResponsibility
   }
   ReplacePromotedTaskClaim: {
@@ -305,6 +320,7 @@ const runnableFrontierTransitionTags = [
   "QueueAcceptedResultIntegrationResponsibility",
   "StartQueuedIntegration",
   "AcquireStartedIntegrationTarget",
+  "EstablishRemoteBaseline",
   "RunIntegrator",
   "RecordChangedHeadRetryQuarantine",
   "RecordPromotionStaleIntegrationQuarantine",
@@ -312,6 +328,7 @@ const runnableFrontierTransitionTags = [
   "RecordProviderRunFailureIntegrationQuarantine",
   "RecordRetryConclusiveIntegrationQuarantine",
   "FixIntegratorSuccessorSession",
+  "RunRemotePublication",
   "RunTargetPromotion",
   "ReconcileTargetPromotionAttempt",
   "ReplacePromotedTaskClaim",
@@ -370,6 +387,7 @@ const transitionTrackerGraphRequirements = {
   AdvanceAttemptRestart: "AcceptedHistorySufficient",
   AdvanceAttemptStoppage: "AcceptedHistorySufficient",
   AcquireStartedIntegrationTarget: "CurrentTrackerGraphRequired",
+  EstablishRemoteBaseline: "CurrentTrackerGraphRequired",
   CheckTaskClaim: "AcceptedHistorySufficient",
   CommitFreshTaskClaimIntent: "CurrentTrackerGraphRequired",
   CommitTaskClaimReacquisitionIntent: "AcceptedHistorySufficient",
@@ -383,6 +401,7 @@ const transitionTrackerGraphRequirements = {
   RecordRetryConclusiveIntegrationQuarantine: "AcceptedHistorySufficient",
   FixIntegratorSuccessorSession: "CurrentTrackerGraphRequired",
   RunIntegrator: "CurrentTrackerGraphRequired",
+  RunRemotePublication: "CurrentTrackerGraphRequired",
   RunTargetPromotion: "CurrentTrackerGraphRequired",
   ReconcileTargetPromotionAttempt: "AcceptedHistorySufficient",
   ReplacePromotedTaskClaim: "CurrentTrackerGraphRequired",

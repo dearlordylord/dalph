@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 import { RunId } from "@dalph/contracts"
 import { expect, it } from "vitest"
 import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
@@ -11,7 +12,8 @@ const records = [
   makeWorkflowRunBeganRecord(
     runId,
     FixtureTarget.make("cold-partition-export-target"),
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    remotePublicationTargetForTest
   )
 ]
 

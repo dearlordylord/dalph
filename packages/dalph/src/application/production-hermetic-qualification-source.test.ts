@@ -1,9 +1,14 @@
+import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 import {
   EvidenceDigest,
   EvidenceReference,
+  AttemptId,
   GitCommitSha,
   IntegrationTarget,
+  plannedAttemptExecutorCorrelation,
   RunId,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
   TaskId,
   makeTaskWorkSpecification,
   type TaskWorkSpecification
@@ -13,7 +18,11 @@ import {
   ActiveTaskClaim,
   boundedParallelTicketsOf,
   ClaimToken,
+  CleanupMutationOrdinal,
+  CleanupObservationOrdinal,
+  CompletionClaimRequestOrdinal,
   CompletionClaimReplacedEvent,
+  CompletionClaimReplacementAttemptIntendedEvent,
   CompletionClaimReplacementIntendedEvent,
   CompletionTaskAttemptIntendedEvent,
   CompletionTaskAuthorizationReadOrdinal,
@@ -29,6 +38,7 @@ import {
   CompletionTaskRequestLookupObservedEvent,
   CompletionTaskRequestOrdinal,
   CompletionTaskResponseLostEvent,
+  completionClaimDeletionOperationIdFor,
   completionClaimDeletionRequestFor,
   completionClaimReplacementRequestFor,
   completionTaskRequestFor,
@@ -44,6 +54,16 @@ import {
   freshWorkflowRunId,
   InitialControlPolicy,
   initialRunPolicyRevision,
+  IntegratorCandidateCleanupAuthorization,
+  IntegratorCandidateCleanupAuthorizedEvent,
+  IntegratorCandidateCleanupOccurred,
+  IntegratorCandidateCleanupEvidenceRevision,
+  IntegratorCandidateCleanupMutationIntendedEvent,
+  IntegratorCandidateCleanupObservation,
+  IntegratorCandidateCleanupObservationIntendedEvent,
+  IntegratorCandidateCleanupObservedEvent,
+  IntegratorCandidateCleanupOwner,
+  IntegratorCandidateCleanupSettledDisposition,
   IntegratorCandidateText,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
@@ -60,7 +80,19 @@ import {
   makeTraceReader,
   makeWorkflowRunBeganRecord,
   OperationId,
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent,
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationAttemptIntendedEvent,
+  RemotePublicationIntendedEvent,
+  RemotePublicationProofBasis,
+  RemotePublicationSucceededEvent,
+  remotePublicationCorrelationFor,
+  remoteBaselineCorrelationFor,
   QueuedIntegrationResponsibility,
   RunControlPolicy,
   StartedIntegrationResponsibility,
@@ -80,7 +112,13 @@ import {
   taskTrackerReadIntent,
   ticketDeliveriesOf,
   TraceAtCursor,
+  TraceCleanupStatus,
   TraceCursor,
+  TraceIntegratorCandidateCleanupProgress,
+  TraceIntegratorCandidateCleanupStep,
+  TracePositionIdentity,
+  TraceWorktreeCleanupProgress,
+  TraceWorktreeCleanupStep,
   TrackerGraphState,
   TrackerSnapshot,
   TrackerTask,
@@ -96,6 +134,13 @@ import {
   UnqueuedAcceptedResult,
   WorkflowJournalEvent,
   WorkflowOperation,
+  WorkflowActor,
+  WorktreeCleanupAuthorization,
+  WorktreeCleanupAuthorizedEvent,
+  WorktreeCleanupEvidenceRevision,
+  WorktreeCleanupOccurred,
+  WorktreeCleanupOwner,
+  PlannedAttemptCleanupDisposition,
   type DeliveryActionProposal,
   type TaskTrackerFactsObservation,
   type DeliveryRuntimeObservationState,
@@ -111,6 +156,8 @@ import {
   contextFor,
   HermeticQualificationSourceRejected,
   qualificationPlannedAttemptFor,
+  validatePlannedAttempt,
+  validateSpecification,
   type QualificationContext
 } from "./production-hermetic-qualification-attempt-source.js"
 import {
@@ -137,6 +184,7 @@ import {
   HermeticExpectedRecordRegistration
 } from "./production-hermetic-provider-bridge.js"
 import { withHermeticQualificationFailureRegistration } from "./production-hermetic-qualification-host.js"
+import { encodeRuntimeDiagnostic, projectRuntimeCause } from "./runtime-diagnostic.js"
 import type { ProductionCliHostRunner } from "./live-cli.js"
 // The fixture observes a real qualification HTTP ACK, never a live provider.
 // eslint-disable-next-line import/no-nodejs-modules
@@ -163,6 +211,7 @@ const fixture = Effect.gen(function* () {
     codexExecutorPrivateStateDirectory: "/fixture/codex-executor-private",
     integratorCandidateWorktreeRoot: "/fixture/candidates",
     integratorPrivateStore: "/fixture/private.json",
+    remotePublicationTarget: remotePublicationTargetForTest,
     activationInterval: "1 minute",
     failureCooldown: "5 seconds",
     codexExecutable: "/bin/codex",
@@ -241,9 +290,10 @@ const readyFor = (
 
 const completionFixture = (
   context: QualificationContext,
-  positions = { queued: 10, started: 11, lineage: 12, qualified: 13 }
+  positions = { queued: 10, started: 11, lineage: 12, qualified: 13 },
+  taskId: QualificationContext["taskId"] = context.taskId
 ) => {
-  const plannedAttempt = qualificationPlannedAttemptFor(context)
+  const plannedAttempt = qualificationPlannedAttemptFor(context, taskId)
   const integrationTarget = IntegrationTarget.make({
     repository: context.configuration.repository,
     ref: context.configuration.integrationRef
@@ -277,7 +327,7 @@ const completionFixture = (
     qualifiedAt: JournalPosition.make(positions.qualified)
   })
   const originalClaim = ActiveTaskClaim.make({
-    taskId: context.taskId,
+    taskId,
     owner: context.configuration.claimOwner,
     operationId: OperationId.make("01990a72-38c0-7000-8000-000000000003"),
     token: ClaimToken.make("01990a72-38c0-7000-8000-000000000004")
@@ -509,6 +559,25 @@ const routeFixtures = (
         integrationTarget: fixture.responsibility.integrationTarget
       }
     },
+    {
+      _tag: "IdentityFreeWorkflowRoute",
+      transition: {
+        _tag: "EstablishRemoteBaseline",
+        correlation: remoteBaselineCorrelationFor(
+          context.runId,
+          {
+            acceptedResult: fixture.responsibility.acceptedResult,
+            integrationTarget: fixture.responsibility.integrationTarget,
+            plannedAttempt: fixture.responsibility.plannedAttempt,
+            queuedAt: fixture.responsibility.queuedAt,
+            startedAt: fixture.responsibility.startedAt
+          },
+          fixture.responsibility.integrationTarget,
+          context.configuration.remotePublicationTarget
+        ),
+        responsibility: fixture.responsibility
+      }
+    },
     { _tag: "IdentityFreeWorkflowRoute", transition: { _tag: "StartQueuedIntegration", responsibility: queued } },
     {
       _tag: "IdentityFreeWorkflowRoute",
@@ -527,7 +596,23 @@ const routeFixtures = (
     },
     {
       _tag: "IdentityFreeWorkflowRoute",
-      transition: { _tag: "RunTargetPromotion", responsibility: fixture.responsibility, candidate: fixture.candidate }
+      transition: {
+        _tag: "RunTargetPromotion",
+        responsibility: fixture.responsibility,
+        candidate: fixture.candidate,
+        publication: RemotePublicationSucceededEvent.make({
+          correlation: remotePublicationCorrelationFor(
+            fixture.candidate,
+            context.configuration.remotePublicationTarget
+          ),
+          occurrenceClassification: "NonActionOccurrence",
+          proof: RemotePublicationProofBasis.cases.PushApplied.make({
+            attemptOrdinal: RemotePublicationAttemptOrdinal.make(1),
+            remoteHead: fixture.candidate.candidateCommit
+          }),
+          version: workflowJournalEventVersion
+        })
+      }
     },
     {
       _tag: "IdentityFreeWorkflowRoute",
@@ -591,13 +676,71 @@ const specificationHistory = (context: QualificationContext, specification: Task
     makeWorkflowRunBeganRecord(
       context.runId,
       context.configuration.target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTargetForTest
     ),
     record(2, event),
     record(3, observed)
   ]
   return makeTraceReader({ read: () => Effect.succeed(records) }).readAt(
     TraceCursor.make({ runId: context.runId, position: JournalPosition.make(3) })
+  )
+}
+
+const executorHistory = (context: QualificationContext, taskId: QualificationContext["taskId"], foreign = false) => {
+  const plannedAttempt = qualificationPlannedAttemptFor(context, taskId)
+  const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+  const report = {
+    _tag: "ExecutorWorkExecuting" as const,
+    correlation: foreign ? { ...correlation, attemptId: AttemptId.make("foreign-attempt") } : correlation
+  }
+  const events = [
+    TaskAttemptPlannedEvent.make({
+      operation: WorkflowOperation.cases.RecordTaskAttemptPlan.make({
+        operationId: OperationId.make("01990a72-38c0-7000-8000-000000000099"),
+        plannedAttempt,
+        predecessorOperationIds: []
+      }),
+      version: workflowJournalEventVersion
+    }),
+    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion }),
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "Begin",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    }),
+    PlannedAttemptExecutorCommandResponseObservedEvent.make({
+      commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt,
+      report,
+      version: workflowJournalEventVersion
+    }),
+    PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+      report,
+      version: workflowJournalEventVersion
+    })
+  ]
+  const records: ReadonlyArray<JournalRecord> = [
+    makeWorkflowRunBeganRecord(
+      context.runId,
+      context.configuration.target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTargetForTest
+    ),
+    ...events.map((event, offset) => ({
+      event,
+      position: JournalPosition.make(offset + 2),
+      runId: context.runId,
+      key: describeJournalEvent(event).expectedKey
+    }))
+  ]
+  return makeTraceReader({ read: () => Effect.succeed(records) }).readAt(
+    TraceCursor.make({ runId: context.runId, position: JournalPosition.make(records.length) })
   )
 }
 
@@ -759,6 +902,28 @@ const lookupHistory = (context: QualificationContext, detail: string, acknowledg
       },
       version: workflowJournalEventVersion
     }),
+    RemotePublicationIntendedEvent.make({
+      correlation: remotePublicationCorrelationFor(candidate, context.configuration.remotePublicationTarget),
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      version: workflowJournalEventVersion
+    }),
+    RemotePublicationAttemptIntendedEvent.make({
+      correlation: remotePublicationCorrelationFor(candidate, context.configuration.remotePublicationTarget),
+      attemptOrdinal: RemotePublicationAttemptOrdinal.make(1),
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      version: workflowJournalEventVersion
+    }),
+    RemotePublicationSucceededEvent.make({
+      correlation: remotePublicationCorrelationFor(candidate, context.configuration.remotePublicationTarget),
+      occurrenceClassification: "NonActionOccurrence",
+      proof: RemotePublicationProofBasis.cases.PushApplied.make({
+        attemptOrdinal: RemotePublicationAttemptOrdinal.make(1),
+        remoteHead: candidate.candidateCommit
+      }),
+      version: workflowJournalEventVersion
+    }),
     TargetPromotionIntendedEvent.make({
       correlation: claim.promotionCorrelation,
       version: workflowJournalEventVersion
@@ -782,6 +947,12 @@ const lookupHistory = (context: QualificationContext, detail: string, acknowledg
       version: workflowJournalEventVersion
     }),
     CompletionClaimReplacementIntendedEvent.make({
+      claim,
+      operationId: completionClaimReplacementRequestFor(claim).operationId,
+      version: workflowJournalEventVersion
+    }),
+    CompletionClaimReplacementAttemptIntendedEvent.make({
+      attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
       claim,
       operationId: completionClaimReplacementRequestFor(claim).operationId,
       version: workflowJournalEventVersion
@@ -846,7 +1017,8 @@ const lookupHistory = (context: QualificationContext, detail: string, acknowledg
     makeWorkflowRunBeganRecord(
       context.runId,
       context.configuration.target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTargetForTest
     ),
     ...selectedEvents.map((event, index) => ({
       event,
@@ -933,6 +1105,180 @@ const coherentCompletionMutation = (
     }
   })
 
+const candidateCleanupHistory = Effect.fn("QualificationTest.candidateCleanupHistory")(function* (
+  context: QualificationContext,
+  overrides: Partial<{ observationOperationId: OperationId; mutationOperationId: OperationId }> = {},
+  through: "ObservationIntent" | "MutationIntent" = "MutationIntent"
+) {
+  const { candidate, claim } = completionFixture(context)
+  const session = candidate.run.session
+  const authorizationOperationId = OperationId.make(`disposition-cleanup:integrator-candidate:${session.sessionId}`)
+  const observationOrdinal = CleanupObservationOrdinal.make(1)
+  const mutationAttempt = CleanupMutationOrdinal.make(1)
+  const observationOperationId =
+    overrides.observationOperationId ?? OperationId.make(`${authorizationOperationId}:observe:${observationOrdinal}`)
+  const mutationOperationId =
+    overrides.mutationOperationId ?? OperationId.make(`${authorizationOperationId}:mutation:${mutationAttempt}`)
+  const settlementOperationId = completionClaimDeletionOperationIdFor(claim)
+  const authorization = IntegratorCandidateCleanupAuthorization.make({
+    causalPredecessors: [settlementOperationId],
+    disposition: IntegratorCandidateCleanupSettledDisposition.make({
+      dispositionAt: JournalPosition.make(30),
+      qualifiedCandidate: candidate,
+      settlementOperationId
+    }),
+    evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
+    locator: session.candidateResource,
+    observationAt: session.targetLineageObservedAt,
+    observationOperationId: OperationId.make("qualification-candidate-lineage"),
+    operationId: authorizationOperationId,
+    owner: IntegratorCandidateCleanupOwner.make({ sessionId: session.sessionId }),
+    writerQuiescent: true
+  })
+  const events = [
+    IntegratorCandidateCleanupAuthorizedEvent.make({
+      authorization,
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      version: workflowJournalEventVersion
+    }),
+    IntegratorCandidateCleanupObservationIntendedEvent.make({
+      authorization,
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      operationId: observationOperationId,
+      ordinal: observationOrdinal,
+      version: workflowJournalEventVersion
+    }),
+    IntegratorCandidateCleanupObservedEvent.make({
+      authorization,
+      observation: IntegratorCandidateCleanupObservation.cases.Present.make({
+        locator: session.candidateResource,
+        revision: authorization.evidenceRevision,
+        sessionId: session.sessionId,
+        writerQuiescent: true
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: observationOperationId,
+      ordinal: observationOrdinal,
+      version: workflowJournalEventVersion
+    }),
+    IntegratorCandidateCleanupMutationIntendedEvent.make({
+      attempt: mutationAttempt,
+      authorization,
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      operationId: mutationOperationId,
+      version: workflowJournalEventVersion
+    })
+  ]
+  const selectedEvents = through === "ObservationIntent" ? events.slice(0, 2) : events
+  const base = yield* specificationHistory(context, context.specification)
+  const start = Number(base.cursor.position)
+  const items = selectedEvents.map((event, index) => {
+    const position = JournalPosition.make(start + index + 1)
+    const occurrence = IntegratorCandidateCleanupOccurred.make({
+      event,
+      occurrenceClassification: "NonActionOccurrence",
+      recordedAt: position,
+      runId: context.runId
+    })
+    return {
+      identity: TracePositionIdentity.make({ position, runId: context.runId }),
+      occurrence,
+      operationIds: "operationId" in event ? [event.operationId] : [authorization.operationId],
+      taskIds: [context.taskId]
+    }
+  })
+  const pendingSource = TracePositionIdentity.make({
+    position: JournalPosition.make(start + selectedEvents.length),
+    runId: context.runId
+  })
+  return TraceAtCursor.make({
+    ...base,
+    cursor: TraceCursor.make({ runId: context.runId, position: JournalPosition.make(start + selectedEvents.length) }),
+    facets: {
+      ...base.facets,
+      controlDisposition: {
+        ...base.facets.controlDisposition,
+        cleanup: [
+          ...base.facets.controlDisposition.cleanup,
+          TraceIntegratorCandidateCleanupProgress.make({
+            authorization,
+            status:
+              through === "ObservationIntent"
+                ? TraceCleanupStatus.cases.ObservationPending.make({ source: pendingSource })
+                : TraceCleanupStatus.cases.MutationPending.make({ source: pendingSource }),
+            steps: items.map(({ identity, occurrence }) =>
+              TraceIntegratorCandidateCleanupStep.make({ event: occurrence.event, source: identity })
+            )
+          })
+        ]
+      }
+    },
+    items: [...base.items, ...items]
+  })
+})
+
+const worktreeCleanupAuthorizationHistory = Effect.fn("QualificationTest.worktreeCleanupAuthorizationHistory")(
+  function* (context: QualificationContext, taskId: QualificationContext["taskId"]) {
+    const { claim, responsibility } = completionFixture(context, undefined, taskId)
+    const plannedAttempt = responsibility.plannedAttempt
+    const settlementOperationId = completionClaimDeletionOperationIdFor(claim)
+    const authorization = WorktreeCleanupAuthorization.make({
+      causalPredecessors: [settlementOperationId],
+      disposition: PlannedAttemptCleanupDisposition.cases.Settled.make({
+        dispositionAt: JournalPosition.make(30),
+        plannedAttempt,
+        settlementOperationId
+      }),
+      evidenceRevision: WorktreeCleanupEvidenceRevision.make(1),
+      expectedHead: responsibility.acceptedResult.commit,
+      locator: plannedAttempt.worktree,
+      observationAt: JournalPosition.make(9),
+      observationOperationId: OperationId.make("01990a72-38c0-7000-8000-000000000098"),
+      operationId: OperationId.make(`disposition-cleanup:worktree:${plannedAttempt.attemptId}`),
+      owner: WorktreeCleanupOwner.make({ attemptId: plannedAttempt.attemptId, branch: plannedAttempt.branch }),
+      writerQuiescent: true
+    })
+    const event = WorktreeCleanupAuthorizedEvent.make({
+      authorization,
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      version: workflowJournalEventVersion
+    })
+    const base = yield* specificationHistory(context, context.specification)
+    const position = JournalPosition.make(31)
+    const identity = TracePositionIdentity.make({ position, runId: context.runId })
+    const occurrence = WorktreeCleanupOccurred.make({
+      event,
+      occurrenceClassification: "NonActionOccurrence",
+      recordedAt: position,
+      runId: context.runId
+    })
+    const item = { identity, occurrence, operationIds: [authorization.operationId], taskIds: [taskId] }
+    return TraceAtCursor.make({
+      ...base,
+      cursor: TraceCursor.make({ runId: context.runId, position }),
+      facets: {
+        ...base.facets,
+        controlDisposition: {
+          ...base.facets.controlDisposition,
+          cleanup: [
+            ...base.facets.controlDisposition.cleanup,
+            TraceWorktreeCleanupProgress.make({
+              authorization,
+              status: TraceCleanupStatus.cases.Authorized.make({ source: identity }),
+              steps: [TraceWorktreeCleanupStep.make({ event, source: identity })]
+            })
+          ]
+        }
+      },
+      items: [...base.items, item]
+    })
+  }
+)
+
 const controlledRegistrationServer = async () => {
   let calls = 0
   let receive: (registration: {
@@ -975,6 +1321,32 @@ const controlledRegistrationServer = async () => {
 }
 
 describe("qualification original source boundary", () => {
+  it("binds both exact fixture tasks while rejecting foreign attempt and specification identities", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const dependantAttempt = qualificationPlannedAttemptFor(context, context.dependantTaskId)
+
+    expect(await Effect.runPromise(validateSpecification(context.dependantSpecification, context))).toEqual(
+      context.dependantSpecification
+    )
+    expect(await Effect.runPromise(validatePlannedAttempt(dependantAttempt, context))).toEqual(dependantAttempt)
+
+    const foreignTaskId = TaskId.make("qualification-foreign-task")
+    const foreignSpecification = makeTaskWorkSpecification({
+      body: context.dependantSpecification.body,
+      taskId: foreignTaskId,
+      title: context.dependantSpecification.title
+    })
+    expect(
+      await Effect.runPromise(validateSpecification(foreignSpecification, context).pipe(Effect.flip))
+    ).toBeInstanceOf(HermeticQualificationSourceRejected)
+    expect(
+      await Effect.runPromise(
+        validatePlannedAttempt({ ...dependantAttempt, taskId: foreignTaskId }, context).pipe(Effect.flip)
+      )
+    ).toBeInstanceOf(HermeticQualificationSourceRejected)
+  })
+
   it("acknowledges an outer host throttle using the original Ready or closed final source before propagation", async () => {
     const { configuration, manifest, runId } = await Effect.runPromise(fixture)
     const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
@@ -1253,7 +1625,10 @@ describe("qualification original source boundary", () => {
         runId
       ).pipe(Effect.flip)
     )
-    expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
+    expect(rejected).toMatchObject({
+      _tag: "HermeticQualificationSourceRejected",
+      transitionTag: "TrackerGraphReadRoute"
+    })
     expect(JSON.stringify(rejected)).not.toContain("private-thread-sentinel")
   })
 
@@ -1385,11 +1760,12 @@ describe("qualification original source boundary", () => {
     const { configuration, manifest, runId } = await Effect.runPromise(fixture)
     const originalContext = await Effect.runPromise(contextFor(manifest, configuration, runId))
     const { context, routes } = routeFixtures(originalContext)
-    expect(routes).toHaveLength(28)
+    expect(routes).toHaveLength(29)
     expect(new Set(routes.map((route) => route._tag)).size).toBe(6)
     for (const route of routes) {
       const proposal = proposalForRoute(route, context)
-      await Effect.runPromise(validateProposal(proposal, context))
+      const checked = await Effect.runPromise(Effect.result(validateProposal(proposal, context)))
+      expect(checked._tag, JSON.stringify(route)).toBe("Success")
       const counterfeitRoute = { ...route, privateSource: "private-thread-sentinel" }
       const rejected = await Effect.runPromise(
         validateProposal(proposalForRoute(counterfeitRoute, context), context).pipe(Effect.flip)
@@ -1397,6 +1773,24 @@ describe("qualification original source boundary", () => {
       expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
       expect(JSON.stringify(rejected)).not.toContain("private-thread-sentinel")
     }
+  })
+
+  it("reports the closed unsupported transition tag without retaining proposal data", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const responsibility = completionFixture(context).responsibility
+    const route = {
+      _tag: "IdentityFreeWorkflowRoute",
+      transition: { _tag: "ReleaseStartedIntegrationTarget", responsibility }
+    } as const
+    const rejected = await Effect.runPromise(
+      validateProposal(proposalForRoute(route, context), context).pipe(Effect.flip)
+    )
+    expect(rejected).toMatchObject({
+      _tag: "HermeticQualificationSourceRejected",
+      transitionTag: "ReleaseStartedIntegrationTarget"
+    })
+    expect(rejected).not.toHaveProperty("responsibility")
   })
 
   it("reconstructs proposal identity and order while checking live-operation identity sources", async () => {
@@ -1610,9 +2004,31 @@ describe("qualification original source boundary", () => {
       TrackerSnapshot.make({ revision: trackerRevisionFor([completedTask]), tasks: [completedTask] })
     )
     if (completedGraph._tag === "Invalid") return expect.fail("completed graph fixture must project")
+    const openRootTask = TrackerTask.make({ ...completedTask, lifecycle: { _tag: "Open" } })
+    const dependantTask = TrackerTask.make({
+      id: context.dependantTaskId,
+      lifecycle: { _tag: "Open" },
+      parentTaskId: context.taskId,
+      prerequisiteIds: [context.taskId]
+    })
+    const openGraphWithDependant = TaskDagSnapshot.project(
+      TrackerSnapshot.make({
+        revision: trackerRevisionFor([openRootTask, dependantTask]),
+        tasks: [openRootTask, dependantTask]
+      })
+    )
+    const completedGraphWithDependant = TaskDagSnapshot.project(
+      TrackerSnapshot.make({
+        revision: trackerRevisionFor([completedTask, dependantTask]),
+        tasks: [completedTask, dependantTask]
+      })
+    )
+    if (openGraphWithDependant._tag === "Invalid" || completedGraphWithDependant._tag === "Invalid")
+      return expect.fail("dependant graph fixtures must project")
     const graphOperation = WorkflowOperation.cases.ReadTrackerGraph.make({
       ...graphRoute.action.operation,
-      operationId: OperationId.make("01990a72-38c0-7000-8000-000000000010")
+      operationId: OperationId.make("01990a72-38c0-7000-8000-000000000010"),
+      predecessorOperationIds: []
     })
     const specificationOperation = WorkflowOperation.cases.ReadTaskWorkSpecification.make({
       ...specificationRoute.action.operation,
@@ -1623,6 +2039,11 @@ describe("qualification original source boundary", () => {
       operationId: OperationId.make("01990a72-38c0-7000-8000-000000000012")
     })
     const completeFacts = makeCompleteTaskTrackerFactsObserved(graphOperation, completedGraph.snapshot)
+    const openDependantFacts = makeCompleteTaskTrackerFactsObserved(graphOperation, openGraphWithDependant.snapshot)
+    const completedDependantFacts = makeCompleteTaskTrackerFactsObserved(
+      graphOperation,
+      completedGraphWithDependant.snapshot
+    )
     const specificationFacts = makeFocusedTaskWorkSpecificationFactsObserved(
       specificationOperation,
       context.specification
@@ -1642,8 +2063,16 @@ describe("qualification original source boundary", () => {
       operationId: graphOperation.operationId,
       target: context.configuration.target
     })
+    const circuitOpen = TaskTrackerFactsReadFailed.make({
+      completeness: "Unreadable",
+      failure: { _tag: "TrackerAdapterReadError", detail: "controlled local circuit", reason: { _tag: "CircuitOpen" } },
+      operationId: graphOperation.operationId,
+      target: context.configuration.target
+    })
     const validFacts: ReadonlyArray<TaskTrackerFactsObservation> = [
       completeFacts,
+      openDependantFacts,
+      completedDependantFacts,
       specificationFacts,
       activeClaimFacts,
       unclaimedFacts
@@ -1651,6 +2080,33 @@ describe("qualification original source boundary", () => {
     for (const facts of validFacts) {
       await Effect.runPromise(validateTrackerFacts(facts, context))
     }
+    const circuitEvents = [
+      taskTrackerReadIntent(graphOperation),
+      taskTrackerFactsObservedEvent(graphOperation.operationId, circuitOpen)
+    ]
+    const circuitRecords: ReadonlyArray<JournalRecord> = [
+      makeWorkflowRunBeganRecord(
+        runId,
+        configuration.target,
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTargetForTest
+      ),
+      ...circuitEvents.map((event, index) => ({
+        event,
+        key: describeJournalEvent(event).expectedKey,
+        position: JournalPosition.make(index + 2),
+        runId
+      }))
+    ]
+    const circuitPrefix = await Effect.runPromise(
+      makeTraceReader({ read: () => Effect.succeed(circuitRecords) }).readAt(
+        TraceCursor.make({ position: JournalPosition.make(3), runId })
+      )
+    )
+    expect(
+      (await Effect.runPromise(validateHermeticQualificationHistory(manifest, configuration, circuitPrefix, runId)))
+        .snapshot
+    ).toBe(circuitPrefix)
     const foreignTarget = await Effect.runPromise(
       Schema.decodeUnknownEffect(TrackerTarget)({
         _tag: "GithubIssue",
@@ -1665,13 +2121,19 @@ describe("qualification original source boundary", () => {
       )
       expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
     }
-    for (const facts of [unreadableFacts, readFailure] as const) {
+    for (const facts of [
+      unreadableFacts,
+      readFailure,
+      { ...circuitOpen, failure: { ...circuitOpen.failure, reason: { _tag: "Throttled" as const } } }
+    ] as const) {
       const rejected = await Effect.runPromise(validateTrackerFacts(facts, context).pipe(Effect.flip))
       expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
     }
 
     const graph = completedGraph.snapshot.toWire()
     await Effect.runPromise(validateGraph(graph, context))
+    await Effect.runPromise(validateGraph(openGraphWithDependant.snapshot.toWire(), context))
+    await Effect.runPromise(validateGraph(completedGraphWithDependant.snapshot.toWire(), context))
     const wrongRevision = await Effect.runPromise(
       validateGraph(
         {
@@ -1692,6 +2154,13 @@ describe("qualification original source boundary", () => {
       validateGraph({ ...graph, tasks: [...graph.tasks, extraTask] }, context).pipe(Effect.flip)
     )
     expect(wrongCardinality._tag).toBe("HermeticQualificationSourceRejected")
+    const duplicateDependant = await Effect.runPromise(
+      validateGraph(
+        { ...openGraphWithDependant.snapshot.toWire(), tasks: [openRootTask, dependantTask, dependantTask] },
+        context
+      ).pipe(Effect.flip)
+    )
+    expect(duplicateDependant._tag).toBe("HermeticQualificationSourceRejected")
   })
 
   it("checks the original ordinary history view and rejects a valid private specification before digest registration", async () => {
@@ -1713,6 +2182,188 @@ describe("qualification original source boundary", () => {
     )
     expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
     expect(JSON.stringify(rejected)).not.toContain("private-prompt-sentinel")
+  })
+
+  it("accepts exact A/B executor reports after their own responsibility and rejects a foreign correlation", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    for (const taskId of [context.taskId, context.dependantTaskId]) {
+      const exact = await Effect.runPromise(executorHistory(context, taskId))
+      expect(
+        (await Effect.runPromise(validateHermeticQualificationHistory(manifest, configuration, exact, runId))).snapshot
+      ).toBe(exact)
+      expect(exact.items.map(({ occurrence }) => occurrence._tag)).toEqual([
+        "TaskAttemptPlanned",
+        "PlannedAttemptExecutorWorkResponsibilityBegan",
+        "PlannedAttemptExecutorWorkReported"
+      ])
+    }
+    const rejected = await Effect.runPromise(executorHistory(context, context.taskId, true).pipe(Effect.flip))
+    expect(rejected._tag).toBe("TraceProjectionInvalid")
+    if (rejected._tag === "TraceProjectionInvalid")
+      expect(rejected.detail).toBe("ExecutorReportWithoutResponsibilityBegan")
+  })
+
+  it("accepts derived candidate cleanup operation IDs and rejects observation or mutation mismatches", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const exact = await Effect.runPromise(candidateCleanupHistory(context))
+    expect(
+      (await Effect.runPromise(validateHermeticQualificationHistory(manifest, configuration, exact, runId))).snapshot
+    ).toBe(exact)
+
+    for (const [mismatch, transitionTag] of [
+      [
+        { observationOperationId: OperationId.make("private-cleanup-observation-sentinel") },
+        "IntegratorCandidateCleanupObservationIntended"
+      ],
+      [
+        { mutationOperationId: OperationId.make("private-cleanup-mutation-sentinel") },
+        "IntegratorCandidateCleanupMutationIntended"
+      ]
+    ] as const) {
+      const unsafe = await Effect.runPromise(candidateCleanupHistory(context, mismatch))
+      const rejected = await Effect.runPromise(
+        validateHermeticQualificationHistory(manifest, configuration, unsafe, runId).pipe(Effect.flip)
+      )
+      expect(rejected).toMatchObject({ _tag: "HermeticQualificationSourceRejected", transitionTag })
+      expect(JSON.stringify(rejected)).not.toContain("private-cleanup")
+      const diagnostic = JSON.parse(encodeRuntimeDiagnostic(projectRuntimeCause(Cause.die(rejected), [])))
+      expect(diagnostic.reasons[0].error).toMatchObject({
+        errorTag: "HermeticQualificationSourceRejected",
+        operation: transitionTag,
+        safeMessage: `${transitionTag} failed`
+      })
+      expect(JSON.stringify(diagnostic)).not.toContain("private-cleanup")
+    }
+  })
+
+  it("accepts exact root and dependant settled-worktree cleanup authorization prefixes", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    for (const taskId of [context.taskId, context.dependantTaskId]) {
+      const prefix = await Effect.runPromise(worktreeCleanupAuthorizationHistory(context, taskId))
+      expect(prefix.items.at(-1)?.occurrence).toMatchObject({
+        _tag: "WorktreeCleanupOccurred",
+        event: { _tag: "WorktreeCleanupAuthorized" },
+        runId
+      })
+      expect(
+        (await Effect.runPromise(validateHermeticQualificationHistory(manifest, configuration, prefix, runId))).snapshot
+      ).toBe(prefix)
+    }
+  })
+
+  it("accepts the first candidate-cleanup observation intent prefix", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const intentOnly = await Effect.runPromise(candidateCleanupHistory(context, {}, "ObservationIntent"))
+    expect(intentOnly.items.at(-1)?.occurrence).toMatchObject({
+      _tag: "IntegratorCandidateCleanupOccurred",
+      event: { _tag: "IntegratorCandidateCleanupObservationIntended" }
+    })
+    expect(
+      (await Effect.runPromise(validateHermeticQualificationHistory(manifest, configuration, intentOnly, runId)))
+        .snapshot
+    ).toBe(intentOnly)
+  })
+
+  it("accepts the exact ordered remote-baseline family and rejects a foreign remote target", async () => {
+    const { configuration, manifest, runId } = await Effect.runPromise(fixture)
+    const context = await Effect.runPromise(contextFor(manifest, configuration, runId))
+    const snapshot = await Effect.runPromise(specificationHistory(context, context.specification))
+    const { responsibility } = completionFixture(context)
+    const facts = {
+      acceptedResult: responsibility.acceptedResult,
+      integrationTarget: responsibility.integrationTarget,
+      plannedAttempt: responsibility.plannedAttempt,
+      queuedAt: responsibility.queuedAt,
+      startedAt: responsibility.startedAt
+    }
+    const correlation = remoteBaselineCorrelationFor(
+      runId,
+      facts,
+      responsibility.integrationTarget,
+      configuration.remotePublicationTarget
+    )
+    const localHead = configuration.plannedAttemptBaseSha
+    const remoteHead = GitCommitSha.make("b".repeat(40))
+    const occurrences: ReadonlyArray<WorkflowOccurrence> = [
+      {
+        _tag: "RemoteBaselineReadInitiated",
+        correlation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        recordedAt: JournalPosition.make(4),
+        runId
+      },
+      {
+        _tag: "RemoteBaselineObserved",
+        correlation,
+        observation: { _tag: "LocalAncestor", localHead, remoteHead },
+        occurrenceClassification: "NonActionOccurrence",
+        recordedAt: JournalPosition.make(5),
+        runId
+      },
+      {
+        _tag: "LocalTargetCatchUpInitiated",
+        correlation,
+        expectedLocalHead: localHead,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        recordedAt: JournalPosition.make(6),
+        remoteHead,
+        runId
+      },
+      {
+        _tag: "LocalTargetCatchUpObserved",
+        correlation,
+        expectedLocalHead: localHead,
+        occurrenceClassification: "NonActionOccurrence",
+        recordedAt: JournalPosition.make(7),
+        remoteHead,
+        result: { _tag: "Applied", newHead: remoteHead },
+        runId
+      }
+    ]
+    const items = occurrences.map((occurrence, index) => ({
+      identity: TracePositionIdentity.make({ runId, position: JournalPosition.make(index + 4) }),
+      occurrence,
+      operationIds: [],
+      taskIds: []
+    }))
+    const exact = TraceAtCursor.make({
+      ...snapshot,
+      cursor: TraceCursor.make({ runId, position: JournalPosition.make(7) }),
+      items: [...snapshot.items, ...items]
+    })
+    expect(
+      (await Effect.runPromise(validateHermeticQualificationHistory(manifest, configuration, exact, runId))).snapshot
+    ).toBe(exact)
+    const foreignCorrelation = remoteBaselineCorrelationFor(
+      runId,
+      facts,
+      responsibility.integrationTarget,
+      RemotePublicationTarget.make({
+        ...configuration.remotePublicationTarget,
+        endpoint: RemotePublicationEndpoint.make("/foreign/publication.git")
+      })
+    )
+    const foreign = TraceAtCursor.make({
+      ...exact,
+      items: exact.items.map((item) =>
+        item.occurrence._tag === "RemoteBaselineReadInitiated"
+          ? { ...item, occurrence: { ...item.occurrence, correlation: foreignCorrelation } }
+          : item
+      )
+    })
+    expect(
+      (
+        await Effect.runPromise(
+          validateHermeticQualificationHistory(manifest, configuration, foreign, runId).pipe(Effect.flip)
+        )
+      )._tag
+    ).toBe("HermeticQualificationSourceRejected")
   })
 
   it("keeps the actual response-lost and unreadable lookup history but rejects private provider detail", async () => {

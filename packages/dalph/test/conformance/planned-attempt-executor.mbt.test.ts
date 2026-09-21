@@ -25,6 +25,9 @@ import {
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
@@ -157,10 +160,15 @@ const plannedAttempt = PlannedTaskAttempt.make({
 })
 const correlation = { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
 const modelTarget = FixtureTarget.make("planned-attempt-executor-model")
+const remotePublicationTarget = RemotePublicationTarget.make({
+  branch: RemotePublicationBranchRef.make("refs/heads/main"),
+  endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/repository.git")
+})
 const modelRunBegan = makeWorkflowRunBeganRecord(
   plannedAttempt.runId,
   modelTarget,
-  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+  remotePublicationTarget
 )
 let executorConformanceScope: Scope.Scope | undefined
 const freshAttemptPrefixAcceptedAt = JournalPosition.make(10)

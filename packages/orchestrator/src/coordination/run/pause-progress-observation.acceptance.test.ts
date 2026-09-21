@@ -1,5 +1,10 @@
 import { RunActivationGraphBaseline } from "./activation-graph-baseline.js"
 import {
+  remoteBaselineGitLayerForTest,
+  remotePublicationGitLayerForTest,
+  remotePublicationTargetForTest
+} from "../../../test/support/direct-publication.js"
+import {
   AttemptId,
   GitCommitSha,
   GitRepositoryLocator,
@@ -517,6 +522,8 @@ const runtimeLayer = (
   reconcileTaskWorktree?: WorkflowInterpreter["Service"]["reconcileTaskWorktree"]
 ) =>
   Layer.mergeAll(
+    remoteBaselineGitLayerForTest,
+    remotePublicationGitLayerForTest,
     Layer.effect(InRunJournal, InRunJournal),
     attemptChoiceControlLayer,
     controlDirectionApplicationLayer,
@@ -588,7 +595,9 @@ const buildBootstrap = Effect.fn("PauseProgressAcceptance.buildBootstrap")(funct
     runId,
     ({ runId }) => runtimeLayer(runId, graph, calls, reconcileTaskWorktree),
     yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void }),
-    noopJournalMaintenanceObservation
+    noopJournalMaintenanceObservation,
+    undefined,
+    remotePublicationTargetForTest
   ).pipe(
     Layer.provide(
       Layer.mergeAll(

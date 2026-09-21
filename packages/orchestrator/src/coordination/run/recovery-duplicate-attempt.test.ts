@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { Effect, Layer, Schema } from "effect"
 import { expect } from "vitest"
@@ -376,7 +377,12 @@ it.effect(
         const journal = yield* JournalStore
         for (const record of invalidRecords) {
           if (record.event._tag === "WorkflowRunBegan") {
-            yield* journal.beginRun(record.runId, record.event.target, record.event.initialControlPolicy)
+            yield* journal.beginRun(
+              record.runId,
+              record.event.target,
+              record.event.initialControlPolicy,
+              remotePublicationTargetForTest
+            )
           } else if (record.event._tag === "WorkflowRunTerminated") {
             yield* journal.terminateRun(record.runId, record.event.disposition, record.event.evidence)
           } else {

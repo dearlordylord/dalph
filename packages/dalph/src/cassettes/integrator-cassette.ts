@@ -95,7 +95,12 @@ const integratorCassetteJournalLayer = (setup: Effect.Success<ReturnType<typeof 
       if (began?.event._tag !== "WorkflowRunBegan") {
         return yield* Effect.die("maintained Integrator cassette accepted setup lacks its Run beginning")
       }
-      yield* storage.beginRun(began.runId, began.event.target, began.event.initialControlPolicy)
+      yield* storage.beginRun(
+        began.runId,
+        began.event.target,
+        began.event.initialControlPolicy,
+        began.event.remotePublicationTarget
+      )
       for (const record of setup.records.slice(1)) {
         if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
           return yield* Effect.die("maintained Integrator cassette setup contains an unexpected lifecycle record")

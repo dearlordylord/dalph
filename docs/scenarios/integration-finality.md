@@ -20,6 +20,18 @@ to Git and tracker facts. Git owns the promoted commit and target ancestry; the
 tracker owns the task lifecycle and claim record; Dalph's journal owns only the
 ordered workflow intents and outcomes described below.
 
+## Governing behavior for direct publication
+
+The accepted [direct remote publication scenario](direct-remote-publication.md)
+refines this finality protocol for one direct-publication responsibility. It
+preserves claim replacement, focused success, exact cleanup, and later graph
+release, while adding remote publication proof as an independent premise before
+local promotion and tracker completion. A conclusive proof is retained across
+restart, Pause, Exit, and completion retry; an ambiguous or contrary current
+observation leaves the responsibility waiting. #384 owns the initial proof,
+order, bounds, waits, Exit, and finality composition. #385, #386, and #387 own
+successors/catch-up, additional batches, and retained-delivery resumption.
+
 ## A promoted task replaces its active claim with an exact completion claim
 
 ### Starting situation
@@ -28,13 +40,17 @@ Run R has task A, attempt T, active claim K, and an unsettled integration
 responsibility. Git's target contains exact candidate M, and the journal has
 the constructed-candidate, sealed passing verification, and promotion proof
 that bind M to A, T, task revision V, expected head H, and the exact target.
-The latest complete tracker observation still reports A open with exact active
-claim K. No completion-claim replacement intent exists.
+For a direct-publication responsibility, the journal also has conclusive remote
+publication proof for exact M at the pinned endpoint and branch. This proof is
+independent of local promotion and tracker state. The latest complete tracker
+observation still reports A open with exact active claim K. No completion-claim
+replacement intent exists.
 
 ### Trigger and chronological behavior
 
-1. Dalph derives one completion claim KC from K and the exact promotion proof.
-   KC carries R, A, T, V, K's identity, and M's promotion correlation.
+1. Dalph derives one completion claim KC from K, the exact remote publication
+   proof, and the exact local promotion proof. KC carries R, A, T, V, K's
+   identity, and M's publication/promotion correlations.
 2. Dalph records the exact `K -> KC` replacement intent and waits for the
    append acknowledgement.
 3. Dalph asks the tracker for A's exact current claim. Only exact K authorizes
@@ -52,10 +68,11 @@ claim K. No completion-claim replacement intent exists.
    releases no dependant itself. The focused observation covers A only and
    cannot release any dependant.
 
-A maintainer sees M remain promoted and KC mark the exact task whose tracker
-completion is pending. Dalph must not reopen A, start another integration
-agent, reconstruct M, overwrite a foreign claim, infer tracker success from
-Git success, or call the issue-#61 complete-task boundary.
+A maintainer sees M remain remotely published and locally promoted, and KC mark
+the exact task whose tracker completion is pending. Dalph must not reopen A,
+start another integration agent, reconstruct M, overwrite a foreign claim,
+infer tracker success from Git or remote success, or call the issue-#61
+complete-task boundary without the independent current tracker premises.
 
 A crash before step 2 leaves no replacement to reconcile. A crash after step 2
 reconstructs the same KC and follows the ambiguous-replacement scenario rather
@@ -66,6 +83,7 @@ than allocating another claim.
 - `replaces the exact active claim with a promotion-bound completion claim`
 - `restart after promotion resumes completion settlement without another integration agent`
 - `completionClaimRequiresExactPromotionProof`
+- #384 seam: `requires exact remote publication proof and local promotion before replacing the active claim`
 - executable integration-finality MBT replacement actions
 
 ## A lost replacement response is reconciled before retry

@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import { GitCommitSha, RunId, makeTaskWorkSpecification } from "@dalph/contracts"
 import { it } from "@effect/vitest"
 import { Context, Effect, Layer, Ref, Schema } from "effect"
@@ -56,6 +57,7 @@ import {
 } from "./promotion-stale-evidence.js"
 import { deriveIntegrationQuarantineState } from "./state.js"
 import { IntegrationQuarantineBasis, IntegrationQuarantinedEvent } from "./events.js"
+import { PublishedIntegratorRunQualifiedCandidate } from "../direct-publication/events.js"
 
 const candidate = integrationFinalityFixture.qualifiedCandidate
 const correlation = targetPromotionCorrelationFor(candidate)
@@ -68,7 +70,12 @@ type StaleKind = "BeforeFirstAttempt" | "DirectRejectionAfterAttempt" | "StaleAf
 
 const appendStaleScenario = Effect.fn("PromotionStaleQuarantineTest.appendScenario")(function* (kind: StaleKind) {
   const journal = yield* JournalStore
-  yield* journal.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }))
+  yield* journal.beginRun(
+    runId,
+    target,
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    remotePublicationTargetForTest
+  )
   yield* journal.append(
     runId,
     targetPromotionIntentRecordKey(correlation.requestId),
@@ -174,11 +181,19 @@ const liveQualifiedScenario = Effect.fn("PromotionStaleQuarantineTest.liveQualif
     records: accepted.records,
     session
   })
-  const seededRecords = records ?? qualified.qualifiedRecords
+  const publication = qualified.promotedRecords.find(({ event }) => event._tag === "RemotePublicationSucceeded")
+  if (publication?.event._tag !== "RemotePublicationSucceeded") {
+    return yield* Effect.die("qualified promotion fixture lacks remote publication proof")
+  }
+  const seededRecords = records ?? qualified.promotedRecords.filter(({ position }) => position <= publication.position)
   const live = yield* Layer.build(liveJournalTestLayer({ records: seededRecords, runId: liveRunId, target }))
   return {
     acceptedJournalReader: Context.get(live, AcceptedJournalReader),
     candidate: qualified.qualifiedCandidate,
+    publishedCandidate: PublishedIntegratorRunQualifiedCandidate.make({
+      candidate: qualified.qualifiedCandidate,
+      publication: publication.event
+    }),
     journal: Context.get(live, InRunJournal),
     records: seededRecords,
     runId: liveRunId
@@ -677,7 +692,7 @@ it.effect("checks Git after losing the compare-and-set response and records at m
         )
     })
 
-    const first = yield* runTargetPromotion(promotionCandidate).pipe(
+    const first = yield* runTargetPromotion(initial.publishedCandidate).pipe(
       Effect.provideService(TargetPromotionGit, git),
       (effect) => provideLive(initial, effect)
     )
@@ -691,7 +706,7 @@ it.effect("checks Git after losing the compare-and-set response and records at m
 
     const recovered = yield* liveQualifiedScenario("lost-response", restartPrefix)
     const recoveredRecords = yield* Effect.gen(function* () {
-      const reconciled = yield* runTargetPromotion(promotionCandidate).pipe(
+      const reconciled = yield* runTargetPromotion(recovered.publishedCandidate).pipe(
         Effect.provideService(TargetPromotionGit, git),
         (effect) => provideLive(recovered, effect)
       )
@@ -773,12 +788,13 @@ it.effect("does not retry or authorize quarantine when restart cannot read Git",
     })
 
     expect(
-      (yield* runTargetPromotion(promotionCandidate).pipe(Effect.provideService(TargetPromotionGit, git), (effect) =>
-        provideLive(scenario, effect)
+      (yield* runTargetPromotion(scenario.publishedCandidate).pipe(
+        Effect.provideService(TargetPromotionGit, git),
+        (effect) => provideLive(scenario, effect)
       ))._tag
     ).toBe("PromotionPending")
     expect(
-      yield* runTargetPromotion(promotionCandidate).pipe(
+      yield* runTargetPromotion(scenario.publishedCandidate).pipe(
         Effect.provideService(TargetPromotionGit, git),
         (effect) => provideLive(scenario, effect),
         Effect.flip

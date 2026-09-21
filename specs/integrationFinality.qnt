@@ -9,6 +9,7 @@ module integrationFinality {
   type Phase =
     | PromotedProof
     | BlockedAfterPromotion
+    | BlockedAfterPublicationContradiction
     | PostPromotionAncestryPending
     | PostPromotionAncestryWait
     | CompletionClaimBlocked
@@ -56,6 +57,36 @@ module integrationFinality {
   type CompletionConflict = NoCompletionConflict | ForeignTask | RevisionConflict | ReopenedTask
   type MutationTarget = NoMutation | OriginalClaimMutation | CompletionClaimMutation | CompleteTaskMutation | ForeignClaimMutation
 
+  // RemotePublicationSucceeded is the durable proof consumed by local
+  // promotion/finality. The basis is one exact per-ref provider outcome;
+  // process success, equal content, or local task closure do not qualify.
+  type PublicationProofBasis =
+    | NoPublicationProof
+    | PushApplied
+    | PushUpToDate
+    | ReconciledCandidateCurrent
+    | ReconciledCandidateAncestor
+
+  // A later read is current constraint data. It never mutates the historical
+  // publication proof, even when it contradicts that proof.
+  type PublicationCurrentObservation =
+    | NoPublicationCurrentObservation
+    | RemotePublicationCandidateCurrent
+    | RemotePublicationCandidateAncestor
+    | RemotePublicationContradiction
+    | RemotePublicationUnreadable
+
+  type RemotePublicationProof = {
+    present: bool,
+    destinationEndpoint: int,
+    destinationBranch: int,
+    requestId: int,
+    candidateCommit: int,
+    integratorSession: int,
+    expectedTargetHead: int,
+    basis: PublicationProofBasis,
+  }
+
   // Git owns this proof. The #141 protocol may consume it but may not
   // reconstruct or weaken the R/T/S/H/C/M and ordered-parent bindings.
   type PromotionProof = {
@@ -72,6 +103,7 @@ module integrationFinality {
     integrationTarget: int,
     acceptedResultEvidence: int,
     integratorReturnedEvidenceRefs: Set[int],
+    publication: RemotePublicationProof,
   }
 
   // This is the one new tracker claim identity derived from the exact active
@@ -103,6 +135,10 @@ module integrationFinality {
     phase: Phase,
     proofPresent: bool,
     proof: PromotionProof,
+    publicationCurrentObservation: PublicationCurrentObservation,
+    publicationContradictionObserved: bool,
+    publicationPauseCount: int,
+    publicationRestartCount: int,
     completionClaimDerived: bool,
     completionClaim: CompletionClaimRecord,
     replacementIntentRecorded: bool,
@@ -185,6 +221,9 @@ module integrationFinality {
   pure val INTEGRATOR_SESSION_A = 601
   pure val INTEGRATION_TARGET_A = 501
   pure val ACCEPTED_RESULT_EVIDENCE_A = 701
+  pure val PUBLICATION_DESTINATION_ENDPOINT_A = 9001
+  pure val PUBLICATION_DESTINATION_BRANCH_A = 9002
+  pure val PUBLICATION_REQUEST_ID_A = 9301
   pure val COMPLETION_REQUEST_A = 801
   pure val TRACKER_COMPLETION_REQUEST_REVISION = 10
   pure val STALE_TRACKER_REVISION = 10
@@ -195,6 +234,23 @@ module integrationFinality {
   pure val COMPLETE_TASK_REQUEST_LIMIT = 3
 
   var state: State
+
+  pure def publicationProofExact(subject: SubjectState): bool = and {
+    subject.proofPresent,
+    subject.proof.publication.present,
+    subject.proof.publication.destinationEndpoint == PUBLICATION_DESTINATION_ENDPOINT_A,
+    subject.proof.publication.destinationBranch == PUBLICATION_DESTINATION_BRANCH_A,
+    subject.proof.publication.requestId == PUBLICATION_REQUEST_ID_A,
+    subject.proof.publication.candidateCommit == CANDIDATE_A,
+    subject.proof.publication.integratorSession == INTEGRATOR_SESSION_A,
+    subject.proof.publication.expectedTargetHead == EXPECTED_HEAD_A,
+    Set(
+      PushApplied,
+      PushUpToDate,
+      ReconciledCandidateCurrent,
+      ReconciledCandidateAncestor,
+    ).contains(subject.proof.publication.basis),
+  }
 
   pure def promotionProofExact(subject: SubjectState): bool = and {
     subject.proofPresent,
@@ -211,6 +267,7 @@ module integrationFinality {
     subject.proof.integrationTarget == INTEGRATION_TARGET_A,
     subject.proof.acceptedResultEvidence == ACCEPTED_RESULT_EVIDENCE_A,
     subject.proof.integratorReturnedEvidenceRefs == Set(),
+    publicationProofExact(subject),
   }
 
   pure def completionClaimExact(subject: SubjectState): bool = and {
@@ -240,6 +297,8 @@ module integrationFinality {
   pure def completionCallPremisesExact(subject: SubjectState): bool = and {
     subject.completionRequestId == COMPLETION_REQUEST_A,
     promotionProofExact(subject),
+    publicationProofExact(subject),
+    not(subject.publicationContradictionObserved),
     completionClaimExact(subject),
     subject.focusedFactsRecorded,
     subject.focusedFactsOpen,
@@ -284,6 +343,11 @@ module integrationFinality {
   // The exact proof and derived claim remain reachable witnesses for the
   // protocol's two identity-binding boundaries.
   val promotedProofReached: bool = state.promoted.phase == PromotedProof
+  val publicationProofReached: bool = publicationProofExact(state.promoted)
+  val publicationContradictionReached: bool =
+    state.promoted.publicationContradictionObserved
+  val publicationPauseReached: bool = state.promoted.publicationPauseCount > 0
+  val publicationRestartReached: bool = state.promoted.publicationRestartCount > 0
   val blockerWaitReached: bool = state.promoted.phase == BlockedAfterPromotion
   val postPromotionAncestryPendingReached: bool = state.promoted.phase == PostPromotionAncestryPending
   val postPromotionAncestryWaitReached: bool = state.promoted.phase == PostPromotionAncestryWait
@@ -356,6 +420,19 @@ module integrationFinality {
       state.promoted.proof.integrationTarget == INTEGRATION_TARGET_A,
       state.promoted.proof.acceptedResultEvidence == ACCEPTED_RESULT_EVIDENCE_A,
       state.promoted.proof.integratorReturnedEvidenceRefs == Set(),
+      state.promoted.proof.publication.present,
+      state.promoted.proof.publication.destinationEndpoint == PUBLICATION_DESTINATION_ENDPOINT_A,
+      state.promoted.proof.publication.destinationBranch == PUBLICATION_DESTINATION_BRANCH_A,
+      state.promoted.proof.publication.requestId == PUBLICATION_REQUEST_ID_A,
+      state.promoted.proof.publication.candidateCommit == CANDIDATE_A,
+      state.promoted.proof.publication.integratorSession == INTEGRATOR_SESSION_A,
+      state.promoted.proof.publication.expectedTargetHead == EXPECTED_HEAD_A,
+      Set(
+        PushApplied,
+        PushUpToDate,
+        ReconciledCandidateCurrent,
+        ReconciledCandidateAncestor,
+      ).contains(state.promoted.proof.publication.basis),
     },
     state.promoted.completionClaimDerived implies and {
       state.promoted.proofPresent,
@@ -372,6 +449,19 @@ module integrationFinality {
       state.promoted.proof.integrationTarget == INTEGRATION_TARGET_A,
       state.promoted.proof.acceptedResultEvidence == ACCEPTED_RESULT_EVIDENCE_A,
       state.promoted.proof.integratorReturnedEvidenceRefs == Set(),
+      state.promoted.proof.publication.present,
+      state.promoted.proof.publication.destinationEndpoint == PUBLICATION_DESTINATION_ENDPOINT_A,
+      state.promoted.proof.publication.destinationBranch == PUBLICATION_DESTINATION_BRANCH_A,
+      state.promoted.proof.publication.requestId == PUBLICATION_REQUEST_ID_A,
+      state.promoted.proof.publication.candidateCommit == CANDIDATE_A,
+      state.promoted.proof.publication.integratorSession == INTEGRATOR_SESSION_A,
+      state.promoted.proof.publication.expectedTargetHead == EXPECTED_HEAD_A,
+      Set(
+        PushApplied,
+        PushUpToDate,
+        ReconciledCandidateCurrent,
+        ReconciledCandidateAncestor,
+      ).contains(state.promoted.proof.publication.basis),
       state.promoted.completionClaim.claimId == COMPLETION_CLAIM_A,
       state.promoted.completionClaim.runId == state.promoted.proof.runId,
       state.promoted.completionClaim.taskId == state.promoted.proof.taskId,
@@ -406,8 +496,9 @@ module integrationFinality {
         state.promoted.proof.candidateFirstParent == EXPECTED_HEAD_A,
         state.promoted.proof.candidateSecondParent == ACCEPTED_RESULT_COMMIT_A,
         state.promoted.proof.integrationTarget == INTEGRATION_TARGET_A,
-        state.promoted.proof.acceptedResultEvidence == ACCEPTED_RESULT_EVIDENCE_A,
-        state.promoted.proof.integratorReturnedEvidenceRefs == Set(),
+      state.promoted.proof.acceptedResultEvidence == ACCEPTED_RESULT_EVIDENCE_A,
+      state.promoted.proof.integratorReturnedEvidenceRefs == Set(),
+      publicationProofExact(state.promoted),
         state.promoted.completionClaim.claimId == COMPLETION_CLAIM_A,
         state.promoted.completionClaim.runId == state.promoted.proof.runId,
         state.promoted.completionClaim.taskId == state.promoted.proof.taskId,
@@ -437,6 +528,30 @@ module integrationFinality {
             state.promoted.completionClaim.integratorReturnedEvidenceRefs == Set(),
           },
       }
+
+  // Completion claim/finality inherits the exact remote publication proof. A
+  // local promotion proof alone cannot authorize tracker completion.
+  val completionClaimRequiresRemotePublicationProof: bool =
+    not(state.promoted.completionClaimDerived) or and {
+      publicationProofExact(state.promoted),
+      not(state.promoted.publicationContradictionObserved),
+    }
+
+  val publicationProofRetainedAcrossContradiction: bool =
+    not(state.promoted.publicationContradictionObserved) or and {
+      state.promoted.proofPresent,
+      publicationProofExact(state.promoted),
+      state.promoted.phase == BlockedAfterPublicationContradiction,
+      state.promoted.publicationCurrentObservation == RemotePublicationContradiction,
+    }
+
+  val publicationContradictionBlocksUnsentFinality: bool =
+    not(state.promoted.publicationContradictionObserved) or and {
+      not(state.promoted.completionIntentRecorded),
+      not(state.promoted.completionEvidenceRecorded),
+      state.promoted.completionRequests == 0,
+      state.promoted.phase == BlockedAfterPublicationContradiction,
+    }
 
   val noLegacyEvidenceAuthorizesFinality: bool =
     not(state.promoted.legacyEvidenceForged) or and {
@@ -656,6 +771,16 @@ module integrationFinality {
           integrationTarget: INTEGRATION_TARGET_A,
           acceptedResultEvidence: ACCEPTED_RESULT_EVIDENCE_A,
           integratorReturnedEvidenceRefs: Set(),
+          publication: {
+            present: true,
+            destinationEndpoint: PUBLICATION_DESTINATION_ENDPOINT_A,
+            destinationBranch: PUBLICATION_DESTINATION_BRANCH_A,
+            requestId: PUBLICATION_REQUEST_ID_A,
+            candidateCommit: CANDIDATE_A,
+            integratorSession: INTEGRATOR_SESSION_A,
+            expectedTargetHead: EXPECTED_HEAD_A,
+            basis: PushApplied,
+          },
         },
         completionClaimDerived: false,
         completionClaim: {
@@ -674,6 +799,10 @@ module integrationFinality {
           acceptedResultEvidence: 0,
           integratorReturnedEvidenceRefs: Set(),
         },
+        publicationCurrentObservation: NoPublicationCurrentObservation,
+        publicationContradictionObserved: false,
+        publicationPauseCount: 0,
+        publicationRestartCount: 0,
         replacementIntentRecorded: false,
         replacementRequests: 0,
         replacementReads: 0,
@@ -745,6 +874,16 @@ module integrationFinality {
           integrationTarget: 0,
           acceptedResultEvidence: 0,
           integratorReturnedEvidenceRefs: Set(),
+          publication: {
+            present: false,
+            destinationEndpoint: 0,
+            destinationBranch: 0,
+            requestId: 0,
+            candidateCommit: 0,
+            integratorSession: 0,
+            expectedTargetHead: 0,
+            basis: NoPublicationProof,
+          },
         },
         completionClaimDerived: false,
         completionClaim: {
@@ -763,6 +902,10 @@ module integrationFinality {
           acceptedResultEvidence: 0,
           integratorReturnedEvidenceRefs: Set(),
         },
+        publicationCurrentObservation: NoPublicationCurrentObservation,
+        publicationContradictionObserved: false,
+        publicationPauseCount: 0,
+        publicationRestartCount: 0,
         replacementIntentRecorded: false,
         replacementRequests: 0,
         replacementReads: 0,
@@ -832,6 +975,49 @@ module integrationFinality {
     },
   }
 
+  // Pause/restart are lifecycle boundaries only. They retain the exact
+  // publication proof and do not reread or republish it.
+  action pauseAfterPublicationProof: bool = all {
+    Set(PromotedProof, BlockedAfterPublicationContradiction).contains(state.promoted.phase),
+    publicationProofExact(state.promoted),
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        publicationPauseCount: state.promoted.publicationPauseCount + 1,
+      },
+    },
+  }
+
+  action restartAfterPublicationProof: bool = all {
+    Set(PromotedProof, BlockedAfterPublicationContradiction).contains(state.promoted.phase),
+    publicationProofExact(state.promoted),
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        publicationRestartCount: state.promoted.publicationRestartCount + 1,
+      },
+    },
+  }
+
+  // A later known remote head that contradicts M is a current constraint. It
+  // blocks unsent completion while retaining the historical proof and claim.
+  action observeRemotePublicationContradiction: bool = all {
+    Set(PromotedProof, CompletionClaimCurrent).contains(state.promoted.phase),
+    publicationProofExact(state.promoted),
+    not(state.promoted.publicationContradictionObserved),
+    state' = {
+      ...state,
+      promoted: {
+        ...state.promoted,
+        phase: BlockedAfterPublicationContradiction,
+        publicationCurrentObservation: RemotePublicationContradiction,
+        publicationContradictionObserved: true,
+      },
+    },
+  }
+
   action observeFreshBlockerClear: bool = all {
     state.promoted.phase == BlockedAfterPromotion or state.promoted.phase == CompletionClaimBlocked,
     state.promoted.blockerPresent,
@@ -856,6 +1042,8 @@ module integrationFinality {
     not(state.promoted.blockerPresent),
     state.promoted.claimState == OriginalClaim,
     promotionProofExact(state.promoted),
+    publicationProofExact(state.promoted),
+    not(state.promoted.publicationContradictionObserved),
     or {
       not(state.promoted.postPromotionBlockerCleared),
       state.promoted.postPromotionAncestry == PostPromotionCandidateCurrent,
@@ -891,6 +1079,8 @@ module integrationFinality {
     state.promoted.phase == ReplacementIntentPending,
     state.promoted.completionClaimDerived,
     completionClaimExact(state.promoted),
+    publicationProofExact(state.promoted),
+    not(state.promoted.publicationContradictionObserved),
     or {
       not(state.promoted.postPromotionBlockerCleared),
       state.promoted.postPromotionAncestry == PostPromotionCandidateCurrent,
@@ -1295,6 +1485,8 @@ module integrationFinality {
     state.promoted.completionConflict == NoCompletionConflict,
     promotionProofExact(state.promoted),
     completionClaimExact(state.promoted),
+    publicationProofExact(state.promoted),
+    not(state.promoted.publicationContradictionObserved),
     state' = {
       ...state,
       promoted: {
@@ -1331,6 +1523,8 @@ module integrationFinality {
     state.promoted.completionRequests < COMPLETE_TASK_REQUEST_LIMIT,
     promotionProofExact(state.promoted),
     completionClaimExact(state.promoted),
+    publicationProofExact(state.promoted),
+    not(state.promoted.publicationContradictionObserved),
     state.promoted.focusedFactsRecorded,
     state.promoted.focusedFactsOpen,
     state.promoted.focusedFactsNoBlocker,
@@ -1718,6 +1912,9 @@ module integrationFinality {
   }
 
   action step: bool = any {
+    pauseAfterPublicationProof,
+    restartAfterPublicationProof,
+    observeRemotePublicationContradiction,
     observePostPromotionBlocker,
     observeFreshBlockerClear,
     observePostPromotionCandidateCurrentAncestry,

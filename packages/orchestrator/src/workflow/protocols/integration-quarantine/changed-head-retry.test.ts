@@ -62,6 +62,8 @@ import {
   IntegrationChangedHeadRetryQuarantineRejected
 } from "./changed-head-retry.js"
 import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
+import { RemotePublicationGit } from "../direct-publication/events.js"
+import { RemoteBaselineGit } from "../direct-publication/baseline-events.js"
 
 const baseSession = integrationFinalityFixture.qualifiedCandidate.run.session
 const target = FixtureTarget.make("changed-head-retry-target")
@@ -79,6 +81,19 @@ type Scenario = {
   readonly runId: RunId
   readonly session: IntegratorSessionCorrelation
 }
+
+const unusedRemotePublicationGit = RemotePublicationGit.of({
+  admit: () => Effect.die("publication is outside changed-head quarantine"),
+  observe: () => Effect.die("publication is outside changed-head quarantine"),
+  prepareSenderCustody: () => Effect.die("publication is outside changed-head quarantine"),
+  push: () => Effect.die("publication is outside changed-head quarantine"),
+  reconcileSenderCustody: () => Effect.die("publication is outside changed-head quarantine")
+})
+const unusedRemoteBaselineGit = RemoteBaselineGit.of({
+  catchUp: () => Effect.die("baseline is outside changed-head quarantine"),
+  observe: () => Effect.die("baseline is outside changed-head quarantine"),
+  reconcileCatchUp: () => Effect.die("baseline is outside changed-head quarantine")
+})
 
 const sessionFor = (
   suffix: string,
@@ -247,7 +262,9 @@ const provideScenario =
     effect.pipe(
       Effect.provideService(Journal, scenario.coordinatedJournal),
       Effect.provideService(InRunJournal, scenario.journal),
-      Effect.provideService(AcceptedJournalReader, scenario.acceptedJournalReader)
+      Effect.provideService(AcceptedJournalReader, scenario.acceptedJournalReader),
+      Effect.provideService(RemotePublicationGit, unusedRemotePublicationGit),
+      Effect.provideService(RemoteBaselineGit, unusedRemoteBaselineGit)
     )
 
 const isIdentityFreeDeliveryProposal = (proposal: DeliveryActionProposal): proposal is IdentityFreeDeliveryProposal =>

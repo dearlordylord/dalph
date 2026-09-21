@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
@@ -116,7 +117,9 @@ it.effect("records a foreign acquisition rejection as terminal and never reconst
       ).pipe(
         Layer.provideMerge(
           liveJournalTestLayer({
-            records: [makeWorkflowRunBeganRecord(foreignRunId, foreignTarget, initialPolicy)],
+            records: [
+              makeWorkflowRunBeganRecord(foreignRunId, foreignTarget, initialPolicy, remotePublicationTargetForTest)
+            ],
             runId: foreignRunId,
             target: foreignTarget
           })
@@ -231,7 +234,8 @@ it.effect("recovers an unfinished exact claim intent after throttle and rereads 
           makeWorkflowRunBeganRecord(
             RunId.make("journaled-throttled-claim-recovery"),
             FixtureTarget.make("journaled-throttled-claim-target"),
-            initialPolicy
+            initialPolicy,
+            remotePublicationTargetForTest
           )
         ],
         runId: RunId.make("journaled-throttled-claim-recovery"),

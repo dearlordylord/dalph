@@ -2,7 +2,13 @@ import { it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import { Effect, Schema } from "effect"
-import { RunId, TaskId } from "@dalph/contracts"
+import {
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
+  RunId,
+  TaskId
+} from "@dalph/contracts"
 import {
   ControlDirectionApplicationOrdinal,
   ControlDirectionAppliedEvent,
@@ -20,6 +26,10 @@ import {
 const runId = RunId.make("control-direction-model-run")
 const taskA = TaskId.make("task-A")
 const taskB = TaskId.make("task-B")
+const remotePublicationTarget = RemotePublicationTarget.make({
+  branch: RemotePublicationBranchRef.make("refs/heads/main"),
+  endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/repository.git")
+})
 
 const SpecProjection = Schema.Struct({
   state: Schema.Struct({
@@ -77,6 +87,7 @@ const beganEvent = WorkflowRunBeganEvent.make({
   initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
   initiatedBy: { _tag: "DalphCoordinator" },
   occurrenceClassification: "InitiatedAction",
+  remotePublicationTarget,
   target: FixtureTarget.make("control-direction-model-target"),
   version: workflowJournalEventVersion
 })

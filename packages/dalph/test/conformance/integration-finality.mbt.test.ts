@@ -1,9 +1,10 @@
-import { it } from "@effect/vitest"
+import { expect, it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import { AcceptedResultEvidenceManifest, TaskId, TaskRevision, makeTaskWorkSpecification } from "@dalph/contracts"
 import {
   CompletionClaimBoundary,
+  ApplyControlDirectionRequest,
   CompletionClaimCleanupReadOrdinal,
   CompletionClaimDeletionReadObservedEvent,
   CompletionClaimMarkerAbsent,
@@ -17,6 +18,8 @@ import {
   CompletionTaskRequestOrdinal,
   CompletionTaskRequestFailure,
   CompletionTaskRequestLookup,
+  ControlDirectionApplication,
+  ControlDirectionSubject,
   FocusedCompletedTaskObservation,
   FocusedTaskCompletionReadRequest,
   FocusedTaskCompletionReadFailure,
@@ -30,6 +33,7 @@ import {
   completionClaimRequestLimit,
   completionTaskRequestLimit,
   completionTaskClaimEquals,
+  controlDirectionApplicationLayer,
   describeJournalEvent,
   deriveIntegrationFinalityStateFor,
   deriveRunFinalityDecision,
@@ -71,6 +75,7 @@ import {
   rereadCompletionEvidence
 } from "../../../orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.js"
 import { integrationFinalityFixture } from "../../../orchestrator/src/workflow/protocols/integration-finality/fixtures.js"
+import { publicationPremiseFor } from "../../../orchestrator/src/workflow/protocols/integration-finality/publication-premise.js"
 import { IntegratorRunQualifiedCandidate } from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
 import {
   TargetPromotionGit,
@@ -173,6 +178,16 @@ type Proof = {
   integrationTarget: bigint
   acceptedResultEvidence: bigint
   integratorReturnedEvidenceRefs: ReadonlySet<bigint>
+  publication: {
+    present: boolean
+    destinationEndpoint: bigint
+    destinationBranch: bigint
+    requestId: bigint
+    candidateCommit: bigint
+    integratorSession: bigint
+    expectedTargetHead: bigint
+    basis: string
+  }
 }
 
 type CompletionClaim = {
@@ -202,6 +217,10 @@ type Subject = {
   phase: Phase
   proofPresent: boolean
   proof: Proof
+  publicationCurrentObservation: string
+  publicationContradictionObserved: boolean
+  publicationPauseCount: bigint
+  publicationRestartCount: bigint
   completionClaimDerived: boolean
   completionClaim: CompletionClaim
   legacyEvidenceForged: boolean
@@ -274,7 +293,17 @@ const proofForA: Proof = {
   candidateSecondParent: ACCEPTED_RESULT_COMMIT_A,
   integrationTarget: INTEGRATION_TARGET_A,
   acceptedResultEvidence: ACCEPTED_RESULT_EVIDENCE_A,
-  integratorReturnedEvidenceRefs: new Set()
+  integratorReturnedEvidenceRefs: new Set(),
+  publication: {
+    present: true,
+    destinationEndpoint: 9001n,
+    destinationBranch: 9002n,
+    requestId: 9301n,
+    candidateCommit: CANDIDATE_A,
+    integratorSession: INTEGRATOR_SESSION_A,
+    expectedTargetHead: EXPECTED_HEAD_A,
+    basis: "PushApplied"
+  }
 }
 
 const emptyCompletionClaim: CompletionClaim = {
@@ -304,6 +333,10 @@ const subjectA = (): Subject => ({
   phase: "PromotedProof",
   proofPresent: true,
   proof: proofForA,
+  publicationCurrentObservation: "NoPublicationCurrentObservation",
+  publicationContradictionObserved: false,
+  publicationPauseCount: 0n,
+  publicationRestartCount: 0n,
   completionClaimDerived: false,
   completionClaim: emptyCompletionClaim,
   legacyEvidenceForged: false,
@@ -375,8 +408,22 @@ const subjectB = (): Subject => ({
     candidateSecondParent: 0n,
     integrationTarget: 0n,
     acceptedResultEvidence: 0n,
-    integratorReturnedEvidenceRefs: new Set()
+    integratorReturnedEvidenceRefs: new Set(),
+    publication: {
+      present: false,
+      destinationEndpoint: 0n,
+      destinationBranch: 0n,
+      requestId: 0n,
+      candidateCommit: 0n,
+      integratorSession: 0n,
+      expectedTargetHead: 0n,
+      basis: "NoPublicationProof"
+    }
   },
+  publicationCurrentObservation: "NoPublicationCurrentObservation",
+  publicationContradictionObserved: false,
+  publicationPauseCount: 0n,
+  publicationRestartCount: 0n,
   completionClaimDerived: false,
   completionClaim: emptyCompletionClaim,
   legacyEvidenceForged: false,
@@ -476,6 +523,10 @@ const SpecSubject = Schema.Struct({
   phase: Schema.Unknown,
   proof: Schema.Unknown,
   proofPresent: Schema.Boolean,
+  publicationCurrentObservation: Schema.Unknown,
+  publicationContradictionObserved: Schema.Boolean,
+  publicationPauseCount: ITFBigInt,
+  publicationRestartCount: ITFBigInt,
   reopenedAfterSuccess: Schema.Boolean,
   reintegrationCount: ITFBigInt,
   replacementIntentRecorded: Schema.Boolean,
@@ -549,7 +600,21 @@ const normalizedProof = (value: unknown): string => {
     "integrationTarget",
     "acceptedResultEvidence"
   ]
-  return `${fields.map((field) => `${field}=${quintInt(Reflect.get(value, field))}`).join(",")},integratorReturnedEvidenceRefs=${quintEvidenceSet(Reflect.get(value, "integratorReturnedEvidenceRefs"))}`
+  const publication = Reflect.get(value, "publication")
+  const normalizedPublication =
+    typeof publication === "object" && publication !== null
+      ? [
+          `present=${String(Reflect.get(publication, "present"))}`,
+          `destinationEndpoint=${quintInt(Reflect.get(publication, "destinationEndpoint"))}`,
+          `destinationBranch=${quintInt(Reflect.get(publication, "destinationBranch"))}`,
+          `requestId=${quintInt(Reflect.get(publication, "requestId"))}`,
+          `candidateCommit=${quintInt(Reflect.get(publication, "candidateCommit"))}`,
+          `integratorSession=${quintInt(Reflect.get(publication, "integratorSession"))}`,
+          `expectedTargetHead=${quintInt(Reflect.get(publication, "expectedTargetHead"))}`,
+          `basis=${variantTag(Reflect.get(publication, "basis"))}`
+        ].join(",")
+      : String(publication)
+  return `${fields.map((field) => `${field}=${quintInt(Reflect.get(value, field))}`).join(",")},integratorReturnedEvidenceRefs=${quintEvidenceSet(Reflect.get(value, "integratorReturnedEvidenceRefs"))},publication={${normalizedPublication}}`
 }
 
 const normalizedCompletionClaim = (value: unknown): string => {
@@ -611,6 +676,10 @@ const normalizedSubject = (subject: Subject | Schema.Schema.Type<typeof SpecSubj
   phase: variantTag(subject.phase),
   proof: normalizedProof(subject.proof),
   proofPresent: subject.proofPresent,
+  publicationCurrentObservation: variantTag(subject.publicationCurrentObservation),
+  publicationContradictionObserved: subject.publicationContradictionObserved,
+  publicationPauseCount: quintInt(subject.publicationPauseCount),
+  publicationRestartCount: quintInt(subject.publicationRestartCount),
   reopenedAfterSuccess: subject.reopenedAfterSuccess,
   reintegrationCount: quintInt(subject.reintegrationCount),
   replacementIntentRecorded: subject.replacementIntentRecorded,
@@ -750,8 +819,7 @@ type CompletionMutationDisposition = "Acknowledged" | "DefinitelyRejected" | "Re
 type CompletionLookupDisposition = "Applied" | "NotApplied" | "Unreadable"
 type CompletionAncestryDisposition = "Current" | "NotAncestor" | "Unreadable"
 
-const acquireJournalRuntime = () => {
-  const records = promotedIntegrationHistory.promotedRecords
+const acquireJournalRuntime = (records: ReadonlyArray<JournalRecord> = promotedIntegrationHistory.promotedRecords) => {
   const managed = ManagedRuntime.make(
     liveJournalTestLayer({
       records,
@@ -1390,6 +1458,47 @@ const makeProductionState = () => {
 
   const readState = () => deriveIntegrationFinalityStateFor(records, productionClaimIdentity)
 
+  const assertPublicationProofRetained = (): void => {
+    if (publicationPremiseFor(records, productionClaimIdentity) !== "Proved") {
+      failTest("lifecycle boundary did not retain the exact publication proof")
+    }
+  }
+
+  const pauseAfterPublicationProof = Effect.fn("IntegrationFinalityConformance.pauseAfterPublicationProof")(
+    function* () {
+      assertPublicationProofRetained()
+      const proofBefore = records.find(({ event }) => event._tag === "RemotePublicationSucceeded")?.event
+      const control = yield* ControlDirectionApplication
+      yield* control.apply(
+        ApplyControlDirectionRequest.make({
+          direction: "Pause",
+          subject: ControlDirectionSubject.cases.Run.make({ runId: productionClaimIdentity.plannedAttempt.runId })
+        })
+      )
+      assertPublicationProofRetained()
+      const proofAfter = records.find(({ event }) => event._tag === "RemotePublicationSucceeded")?.event
+      if (proofBefore === undefined || proofAfter !== proofBefore) {
+        return yield* Effect.die("Pause replaced or removed the exact remote publication proof")
+      }
+    }
+  )
+
+  const restartAfterPublicationProof = Effect.fn("IntegrationFinalityConformance.restartAfterPublicationProof")(
+    function* () {
+      assertPublicationProofRetained()
+      const retainedRecords = records
+      const proofBefore = retainedRecords.find(({ event }) => event._tag === "RemotePublicationSucceeded")?.event
+      yield* journalRuntime.managed.disposeEffect
+      journalRuntime = acquireJournalRuntime(retainedRecords)
+      records = journalRuntime.records
+      assertPublicationProofRetained()
+      const proofAfter = records.find(({ event }) => event._tag === "RemotePublicationSucceeded")?.event
+      if (proofBefore === undefined || proofAfter !== proofBefore) {
+        return yield* Effect.die("restart replaced or removed the exact remote publication proof")
+      }
+    }
+  )
+
   return {
     appendCompleteGraph,
     appendObservedSuccess,
@@ -1405,6 +1514,11 @@ const makeProductionState = () => {
     invokeDeletion,
     invokeCompletion,
     invokeReplacement,
+    pauseAfterPublicationProof: () =>
+      pauseAfterPublicationProof().pipe(
+        Effect.provide(controlDirectionApplicationLayer),
+        Effect.provide(journalContext())
+      ),
     observeCompletionAncestry,
     observeCompletionAncestryResult,
     observeCompletionEvidence,
@@ -1417,6 +1531,7 @@ const makeProductionState = () => {
     recordCompletionAttemptIntentCutPoint,
     crossCompletionBoundaryCutPoint,
     readState,
+    restartAfterPublicationProof,
     reset,
     setCompletionClaimMarkerAbsent: (): void => {
       completionClaimObservation = undefined
@@ -1758,6 +1873,9 @@ const integrationFinalityDriver = defineDriver(
     deriveCompletionClaim: {},
     forgeLegacyEvidenceForFinality: {},
     init: {},
+    observeRemotePublicationContradiction: {},
+    pauseAfterPublicationProof: {},
+    restartAfterPublicationProof: {},
     observeCompletionEvidence: {},
     observeCompleteTaskAcknowledgement: {},
     observeFocusedCompletionFacts: {},
@@ -1824,6 +1942,20 @@ const integrationFinalityDriver = defineDriver(
           current = initialState()
           yield* productionState.reset()
         }),
+      pauseAfterPublicationProof: () =>
+        Effect.gen(function* () {
+          yield* productionState.pauseAfterPublicationProof()
+          updatePromoted((subject) => ({ ...subject, publicationPauseCount: subject.publicationPauseCount + 1n }))
+        }),
+      restartAfterPublicationProof: () =>
+        Effect.gen(function* () {
+          yield* productionState.restartAfterPublicationProof()
+          updatePromoted((subject) => ({ ...subject, publicationRestartCount: subject.publicationRestartCount + 1n }))
+        }),
+      observeRemotePublicationContradiction: () =>
+        Effect.die(
+          "unsupported conformance transition: the optional current-remote contradiction trigger is not accepted"
+        ),
       forgeLegacyEvidenceForFinality: () =>
         Effect.sync(() =>
           updatePromoted((subject) => ({
@@ -2381,6 +2513,30 @@ const integrationFinalityDriver = defineDriver(
   }
 )
 
+it.effect(
+  "retains the exact publication proof through operator pause and journal-store restart",
+  () =>
+    Effect.gen(function* () {
+      const driver = yield* integrationFinalityDriver.create()
+      const getState = driver.getState
+      if (getState === undefined) return yield* Effect.die("integration-finality driver lacks getState")
+      for (const actionName of ["init", "pauseAfterPublicationProof", "restartAfterPublicationProof"] as const) {
+        const action = driver.actions[actionName]
+        if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
+        yield* action.handler({})
+        yield* getState()
+      }
+      expect((yield* getState()).promoted).toMatchObject({
+        phase: "PromotedProof",
+        proofPresent: true,
+        publicationContradictionObserved: false,
+        publicationPauseCount: 1n,
+        publicationRestartCount: 1n
+      })
+    }),
+  30_000
+)
+
 quintIt(
   it.effect,
   "replays promoted-task completion settlement through production claim protocols and Run finality",
@@ -2454,6 +2610,10 @@ quintIt(
         spec.promoted.phase === implementation.promoted.phase &&
         spec.promoted.proof === implementation.promoted.proof &&
         spec.promoted.proofPresent === implementation.promoted.proofPresent &&
+        spec.promoted.publicationCurrentObservation === implementation.promoted.publicationCurrentObservation &&
+        spec.promoted.publicationContradictionObserved === implementation.promoted.publicationContradictionObserved &&
+        spec.promoted.publicationPauseCount === implementation.promoted.publicationPauseCount &&
+        spec.promoted.publicationRestartCount === implementation.promoted.publicationRestartCount &&
         spec.promoted.reopenedAfterSuccess === implementation.promoted.reopenedAfterSuccess &&
         spec.promoted.reintegrationCount === implementation.promoted.reintegrationCount &&
         spec.promoted.replacementIntentRecorded === implementation.promoted.replacementIntentRecorded &&

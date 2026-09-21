@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 import * as fc from "fast-check"
 import { NodeCrypto } from "@effect/platform-node"
 import { it as effectIt } from "@effect/vitest"
@@ -86,7 +87,8 @@ const capacityRecords = (capacities: ReadonlyArray<number>): ReadonlyArray<Journ
     makeWorkflowRunBeganRecord(
       runId,
       FixtureTarget.make("recorded-prefix-target"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTargetForTest
     ),
     ...capacities.map((capacity, index) => {
       const event = TaskWorkCapacityChangedEvent.make({

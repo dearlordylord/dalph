@@ -2,6 +2,7 @@ import type { RunId } from "@dalph/contracts"
 import { HashMap, Match } from "effect"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import { targetPromotionRunIdOf } from "../../workflow/protocols/target-promotion/events.js"
+import { integratorCandidateCleanupSessionOf } from "../../workflow/protocols/disposition-cleanup/disposition.js"
 
 /** Adds one causal fact without mutating the accepted prefix's index. */
 export const setMapValue = <K, V>(map: HashMap.HashMap<K, V>, key: K, value: V): HashMap.HashMap<K, V> =>
@@ -168,10 +169,7 @@ const invalidIntegratorCandidateCleanupRunBinding = (
 ): string | undefined =>
   invalidNestedRunBinding(
     integratorCandidateCleanupBindingLabels[event._tag],
-    [
-      event.authorization.disposition.predecessor.plannedAttempt.runId,
-      event.authorization.disposition.successor.plannedAttempt.runId
-    ],
+    [integratorCandidateCleanupSessionOf(event.authorization.disposition).plannedAttempt.runId],
     runId
   )
 

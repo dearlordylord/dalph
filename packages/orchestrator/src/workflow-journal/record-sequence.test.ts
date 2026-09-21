@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 import { describe, expect, it } from "vitest"
 import { RunId } from "@dalph/contracts"
 import { JournalPosition } from "./identity.js"
@@ -29,7 +30,8 @@ import {
 const initial = makeWorkflowRunBeganRecord(
   RunId.make("retained-prefix"),
   FixtureTarget.make("retained-prefix"),
-  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+  remotePublicationTargetForTest
 )
 
 describe("Alice retains an earlier journal observation", () => {

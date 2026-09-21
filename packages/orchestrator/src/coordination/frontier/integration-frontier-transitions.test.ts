@@ -31,6 +31,9 @@ import {
   integratorSessionFixedRecordKey,
   integratorSuccessorSessionFixedRecordKey,
   outcomeRecordKey,
+  remotePublicationAttemptIntendedRecordKey,
+  remotePublicationIntendedRecordKey,
+  remotePublicationSucceededRecordKey,
   targetPromotionAttemptIntentRecordKey,
   targetPromotionIntentRecordKey
 } from "../../workflow-journal/record-key.js"
@@ -95,6 +98,15 @@ import { RunnableFrontierTransition } from "./frontier.js"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
 import type { CurrentTaskClaimAuthority } from "./task-claim-authority.js"
 import { IntegrationResponsibilityIdentity } from "../../workflow/protocols/integration-admission/responsibility.js"
+import {
+  RemotePublicationAttemptIntendedEvent,
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationIntendedEvent,
+  RemotePublicationProofBasis,
+  RemotePublicationSucceededEvent,
+  remotePublicationCorrelationFor
+} from "../../workflow/protocols/direct-publication/events.js"
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 
 const sha = (value: string): GitCommitSha => GitCommitSha.make(value.repeat(40))
 
@@ -990,15 +1002,48 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
   const candidate = integratorRunQualifiedCandidateFromState(integratorState)
   const correlation = targetPromotionCorrelationFor(candidate)
   const attemptOrdinal = TargetPromotionAttemptOrdinal.make(1)
+  const publicationCorrelation = remotePublicationCorrelationFor(candidate, remotePublicationTargetForTest)
+  const publicationAttemptOrdinal = RemotePublicationAttemptOrdinal.make(1)
+  const publication = RemotePublicationSucceededEvent.make({
+    correlation: publicationCorrelation,
+    occurrenceClassification: "NonActionOccurrence",
+    proof: RemotePublicationProofBasis.cases.ReconciledCandidateCurrent.make({
+      attemptOrdinal: publicationAttemptOrdinal,
+      remoteHead: candidate.candidateCommit
+    }),
+    version: workflowJournalEventVersion
+  })
   const records = [
     ...qualifiedRecords,
     record(
       10,
+      RemotePublicationIntendedEvent.make({
+        correlation: publicationCorrelation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      }),
+      remotePublicationIntendedRecordKey(publicationCorrelation.requestId)
+    ),
+    record(
+      11,
+      RemotePublicationAttemptIntendedEvent.make({
+        attemptOrdinal: publicationAttemptOrdinal,
+        correlation: publicationCorrelation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      }),
+      remotePublicationAttemptIntendedRecordKey(publicationCorrelation.requestId, publicationAttemptOrdinal)
+    ),
+    record(12, publication, remotePublicationSucceededRecordKey(publicationCorrelation.requestId)),
+    record(
+      13,
       TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion }),
       targetPromotionIntentRecordKey(correlation.requestId).toString()
     ),
     record(
-      11,
+      14,
       TargetPromotionAttemptIntendedEvent.make({
         attemptOrdinal,
         correlation,
@@ -1010,7 +1055,7 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
   ]
   const runState = {
     ...scenario.runState,
-    appliedThrough: JournalPosition.make(11),
+    appliedThrough: JournalPosition.make(14),
     workflowHistory: { evidence: journalEvidenceFrom(records) }
   }
 
@@ -1028,7 +1073,7 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
       { ...runtimeFacts, currentTrackerTaskIds: new Set(), taskClaimAuthorityByAttemptId: new Map() },
       [responsibility]
     ).transitions()
-  ).toEqual([RunnableFrontierTransition.ReconcileTargetPromotionAttempt({ candidate, responsibility })])
+  ).toEqual([RunnableFrontierTransition.ReconcileTargetPromotionAttempt({ candidate, publication, responsibility })])
   expect(
     deriveStartedIntegrationFrontier(
       runState,
@@ -1039,16 +1084,16 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
       },
       [responsibility]
     ).transitions()
-  ).toEqual([RunnableFrontierTransition.RunTargetPromotion({ candidate, responsibility })])
+  ).toEqual([RunnableFrontierTransition.RunTargetPromotion({ candidate, publication, responsibility })])
 
   const deferredRunState = {
     ...runState,
-    appliedThrough: JournalPosition.make(12),
+    appliedThrough: JournalPosition.make(15),
     workflowHistory: {
       evidence: journalEvidenceFrom([
         ...records,
         record(
-          12,
+          15,
           TargetPromotionReconciliationDeferredEvent.make({
             afterAttemptOrdinal: attemptOrdinal,
             correlation,
@@ -1091,7 +1136,7 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
       },
       [responsibility]
     ).transitions()
-  ).toEqual([RunnableFrontierTransition.RunTargetPromotion({ candidate, responsibility })])
+  ).toEqual([RunnableFrontierTransition.RunTargetPromotion({ candidate, publication, responsibility })])
 })
 
 it("does not start Retry without a fresh target-lineage observation", () => {

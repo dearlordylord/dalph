@@ -76,11 +76,15 @@ describe("authored candidate cleanup boundary", () => {
         records: upstream
       })
       const cleanup = authoredCandidateCleanupBoundaryLayer(cursor).pipe(Layer.provide(ownership))
+      if (authorization.disposition._tag !== "Superseded") {
+        return yield* Effect.die("DS14-17 fixture candidate cleanup must be FullRerun supersession")
+      }
+      const cleanupRunId = authorization.disposition.predecessor.plannedAttempt.runId
 
       const result = yield* Effect.gen(function* () {
         const first = yield* runIntegratorCandidateCleanup(authorization)
         const second = yield* runIntegratorCandidateCleanup(authorization)
-        const records = yield* (yield* JournalStore).read(authorization.disposition.predecessor.plannedAttempt.runId)
+        const records = yield* (yield* JournalStore).read(cleanupRunId)
         return { first, records, second }
       }).pipe(Effect.provide(Layer.merge(journal, cleanup)))
 
@@ -114,6 +118,9 @@ describe("authored candidate cleanup boundary", () => {
         return yield* Effect.die("DS14-17 fixture is missing its candidate cleanup authorization")
       }
       const authorization = authorizationRecord.event.authorization
+      if (authorization.disposition._tag !== "Superseded") {
+        return yield* Effect.die("DS14-17 fixture candidate cleanup must be FullRerun supersession")
+      }
       const upstream = fixture.records.filter(
         ({ event }) => !isCandidateCleanupEvent(event._tag) && event._tag !== "WorkflowRunTerminated"
       )
@@ -148,14 +155,14 @@ describe("authored candidate cleanup boundary", () => {
       const cleanup = authoredCandidateCleanupBoundaryLayer(cursor, predecessor.plannedAttempt.runId).pipe(
         Layer.provide(ownership)
       )
+      const cleanupRunId = predecessor.plannedAttempt.runId
 
       const records = yield* Effect.gen(function* () {
-        const runId = authorization.disposition.predecessor.plannedAttempt.runId
-        yield* makeDispositionCleanupActivation(runId).pipe(
+        yield* makeDispositionCleanupActivation(cleanupRunId).pipe(
           Effect.flatMap((activation) => activation.run),
           Effect.exit
         )
-        return yield* (yield* JournalStore).read(runId)
+        return yield* (yield* JournalStore).read(cleanupRunId)
       }).pipe(Effect.provide(Layer.merge(journal, cleanup)))
 
       expect(yield* cursor.storyPosition).toBe(1)

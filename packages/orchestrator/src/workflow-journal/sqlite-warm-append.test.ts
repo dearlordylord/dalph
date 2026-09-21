@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { Deferred, Effect, Fiber, Ref } from "effect"
 import { describe, expect } from "vitest"
@@ -54,7 +55,8 @@ describe("SQLite warm append storage checkpoint", () => {
           yield* journal.beginRun(
             runId,
             FixtureTarget.make(`warm-prefix-${prefixSize}-target`),
-            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+            remotePublicationTargetForTest
           )
           for (let index = 1; index <= prefixSize; index++) {
             yield* journal.append(
@@ -189,7 +191,8 @@ describe("SQLite warm append storage checkpoint", () => {
       yield* journal.beginRun(
         runId,
         target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTargetForTest
       )
       yield* journal.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
       yield* journal.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)

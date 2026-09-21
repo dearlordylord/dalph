@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 /* eslint-disable import/no-nodejs-modules, max-lines -- This qualification controls real Node processes over the shipped composition. */
 import nodeProcess from "node:process"
 import { NodeCrypto, NodeServices } from "@effect/platform-node"
@@ -675,7 +676,8 @@ it.live(
             yield* storage.beginRun(
               runId,
               trackerTarget,
-              InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+              InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+              remotePublicationTargetForTest
             )
             const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
             if (initial._tag === "InvalidWorkflowJournalHistory") {

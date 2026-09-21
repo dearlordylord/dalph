@@ -821,6 +821,67 @@ it.effect("restart returns the durable acknowledgement without another tracker c
   })
 )
 
+it.effect("requires exact remote publication proof before a new tracker completion", () =>
+  Effect.gen(function* () {
+    const request = completionTaskRequestFor(fixture.claim)
+    const withoutPublication = defaultHistory.promoted.promotedRecords
+      .filter(
+        ({ event }) =>
+          event._tag !== "RemotePublicationIntended" &&
+          event._tag !== "RemotePublicationAttemptIntended" &&
+          event._tag !== "RemotePublicationSucceeded"
+      )
+      .map((record, index) => ({ ...record, position: JournalPosition.make(index + 1) }))
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(withoutPublication)
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const completionCalls = yield* Ref.make(0)
+    const authorizationCalls = yield* Ref.make(0)
+    const boundary: CompletionTaskBoundaryService = {
+      completeTask: () => Ref.update(completionCalls, (count) => count + 1).pipe(Effect.andThen(Effect.die("blocked"))),
+      readCompletionRequest: () => Effect.die("missing publication has no completion request to reconcile"),
+      readFocusedTaskCompletion: () => Effect.die("missing publication blocks current authorization")
+    }
+
+    const failure = yield* runCompletionTaskProtocol(boundary, request, fixture.target, () =>
+      Ref.update(authorizationCalls, (count) => count + 1).pipe(Effect.andThen(Effect.die("blocked")))
+    ).pipe(Effect.provide(journalLayer(records, chronology)), Effect.flip)
+
+    expect(failure).toBeInstanceOf(CompletionTaskPreconditionConflict)
+    expect(failure).toMatchObject({ reason: "RemotePublicationMissing" })
+    expect(yield* Ref.get(authorizationCalls)).toBe(0)
+    expect(yield* Ref.get(completionCalls)).toBe(0)
+  })
+)
+
+it.effect("rejects malformed publication history before tracker completion without claiming a remote observation", () =>
+  Effect.gen(function* () {
+    const request = completionTaskRequestFor(fixture.claim)
+    const malformedPublication = defaultHistory.promoted.promotedRecords
+      .filter(({ event }) => event._tag !== "RemotePublicationAttemptIntended")
+      .map((record, index) => ({ ...record, position: JournalPosition.make(index + 1) }))
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(malformedPublication)
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const completionCalls = yield* Ref.make(0)
+    const authorizationCalls = yield* Ref.make(0)
+    const boundary: CompletionTaskBoundaryService = {
+      completeTask: () => Ref.update(completionCalls, (count) => count + 1).pipe(Effect.andThen(Effect.die("blocked"))),
+      readCompletionRequest: () => Effect.die("invalid publication history has no completion request to reconcile"),
+      readFocusedTaskCompletion: () => Effect.die("invalid publication history blocks current authorization")
+    }
+
+    const failure = yield* runCompletionTaskProtocol(boundary, request, fixture.target, () =>
+      Ref.update(authorizationCalls, (count) => count + 1).pipe(Effect.andThen(Effect.die("blocked")))
+    ).pipe(Effect.provide(journalLayer(records, chronology)), Effect.flip)
+
+    expect(failure).toBeInstanceOf(CompletionTaskPreconditionConflict)
+    expect(failure).toMatchObject({ reason: "RemotePublicationHistoryInvalid" })
+    expect((yield* Ref.get(records)).some(({ event }) => event._tag === "RemotePublicationSucceeded")).toBe(true)
+    expect(yield* Ref.get(chronology)).toEqual([])
+    expect(yield* Ref.get(authorizationCalls)).toBe(0)
+    expect(yield* Ref.get(completionCalls)).toBe(0)
+  })
+)
+
 it.effect("completion task throttling bypasses Unknown reconciliation and the bounded retry loop", () =>
   Effect.gen(function* () {
     const result = yield* protocolHarness(["Throttled"])

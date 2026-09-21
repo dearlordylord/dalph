@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { RunId, TaskId } from "@dalph/contracts"
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Ref, Scope } from "effect"
@@ -42,7 +43,7 @@ const claim = ActiveTaskClaim.make({
 const release = TaskClaimRelease.make({ claim, operationId: OperationId.make("claim-cleanup-release") })
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const journalLayer = liveJournalTestLayer({
-  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy)],
+  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
   runId,
   target
 })
