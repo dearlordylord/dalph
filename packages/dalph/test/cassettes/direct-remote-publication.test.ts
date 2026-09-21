@@ -49,42 +49,52 @@ const diagnosticString = (value: unknown): string | undefined => (typeof value =
 const diagnosticInteger = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isInteger(value) ? value : undefined
 
+const diagnosticField = (record: DiagnosticRecord | undefined, key: string): unknown => record?.[key]
+
 /** Test-only failure projection: tags, ordinals, and shape flags contain no IDs, secrets, or paths. */
 const compactS1StatusEntry = (entry: unknown) => {
   const record = diagnosticRecord(entry)
-  const order = diagnosticRecord(record?.order)
-  const actionIdentity = diagnosticRecord(record?.actionIdentity)
-  const route = diagnosticRecord(record?.route) ?? diagnosticRecord(diagnosticRecord(record?.proposal)?.route)
-  const step = diagnosticRecord(route?.step) ?? diagnosticRecord(record?.step)
-  const acceptedProgress = diagnosticRecord(step?.acceptedProgress) ?? diagnosticRecord(record?.acceptedProgress)
+  const order = diagnosticRecord(diagnosticField(record, "order"))
+  const actionIdentity = diagnosticRecord(diagnosticField(record, "actionIdentity"))
+  const route =
+    diagnosticRecord(diagnosticField(record, "route")) ??
+    diagnosticRecord(diagnosticField(diagnosticRecord(diagnosticField(record, "proposal")), "route"))
+  const step = diagnosticRecord(diagnosticField(route, "step")) ?? diagnosticRecord(diagnosticField(record, "step"))
+  const acceptedProgress =
+    diagnosticRecord(diagnosticField(step, "acceptedProgress")) ??
+    diagnosticRecord(diagnosticField(record, "acceptedProgress"))
   return {
-    entryTag: diagnosticString(record?._tag),
-    classification: diagnosticString(record?.classification),
-    orderTag: diagnosticString(order?._tag),
-    stepTag: diagnosticString(order?.step) ?? diagnosticString(step?._tag),
-    transitionTag: diagnosticString(order?.transition),
-    actionIdentityTag: diagnosticString(actionIdentity?._tag),
-    acceptedProgressTag: diagnosticString(acceptedProgress?._tag),
-    acceptedAt: diagnosticInteger(acceptedProgress?.acceptedAt),
-    reportOrdinal: diagnosticInteger(acceptedProgress?.ordinal),
-    proposalIdPresent: typeof record?.proposalId === "string",
-    taskIdPresent: typeof record?.taskId === "string" || typeof order?.taskId === "string",
-    waitsForLiveOperationId: typeof record?.waitsForLiveOperationId === "string"
+    entryTag: diagnosticString(diagnosticField(record, "_tag")),
+    classification: diagnosticString(diagnosticField(record, "classification")),
+    orderTag: diagnosticString(diagnosticField(order, "_tag")),
+    stepTag: diagnosticString(diagnosticField(order, "step")) ?? diagnosticString(diagnosticField(step, "_tag")),
+    transitionTag: diagnosticString(diagnosticField(order, "transition")),
+    actionIdentityTag: diagnosticString(diagnosticField(actionIdentity, "_tag")),
+    acceptedProgressTag: diagnosticString(diagnosticField(acceptedProgress, "_tag")),
+    acceptedAt: diagnosticInteger(diagnosticField(acceptedProgress, "acceptedAt")),
+    reportOrdinal: diagnosticInteger(diagnosticField(acceptedProgress, "ordinal")),
+    proposalIdPresent: typeof diagnosticField(record, "proposalId") === "string",
+    taskIdPresent:
+      typeof diagnosticField(record, "taskId") === "string" || typeof diagnosticField(order, "taskId") === "string",
+    waitsForLiveOperationId: typeof diagnosticField(record, "waitsForLiveOperationId") === "string"
   }
 }
 
 /** The public history retains the executor report ordinal that becomes fresh accepted progress. */
 const compactS1HistoricalOccurrence = (occurrence: unknown) => {
   const record = diagnosticRecord(occurrence)
-  const report = diagnosticRecord(record?.report)
-  const reportTag = diagnosticString(report?._tag)
+  const report = diagnosticRecord(diagnosticField(record, "report"))
+  const reportTag = diagnosticString(diagnosticField(report, "_tag"))
   return {
-    occurrenceTag: diagnosticString(record?._tag),
+    occurrenceTag: diagnosticString(diagnosticField(record, "_tag")),
     reportTag,
-    reportOrdinal: diagnosticInteger(record?.ordinal),
+    reportOrdinal: diagnosticInteger(diagnosticField(record, "ordinal")),
     executorContinuationCandidate:
       reportTag === "ExecutorWorkExecuting"
-        ? { acceptedProgressTag: "ExecutorReportAccepted", ordinal: diagnosticInteger(record?.ordinal) }
+        ? {
+            acceptedProgressTag: "ExecutorReportAccepted",
+            ordinal: diagnosticInteger(diagnosticField(record, "ordinal"))
+          }
         : undefined
   }
 }
@@ -93,8 +103,12 @@ const compactS1Diagnostic = (serialized: string): string => {
   try {
     const diagnostic = diagnosticRecord(JSON.parse(serialized))
     return JSON.stringify({
-      status: Array.isArray(diagnostic?.statusEntryProjection) ? diagnostic.statusEntryProjection : [],
-      executorHistory: Array.isArray(diagnostic?.executorHistoryProjection) ? diagnostic.executorHistoryProjection : []
+      status: Array.isArray(diagnosticField(diagnostic, "statusEntryProjection"))
+        ? diagnosticField(diagnostic, "statusEntryProjection")
+        : [],
+      executorHistory: Array.isArray(diagnosticField(diagnostic, "executorHistoryProjection"))
+        ? diagnosticField(diagnostic, "executorHistoryProjection")
+        : []
     })
   } catch {
     return JSON.stringify({ _tag: "Unavailable" })
