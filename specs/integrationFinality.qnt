@@ -232,6 +232,9 @@ module integrationFinality {
   pure val REPLACEMENT_REQUEST_LIMIT = 3
   pure val DELETION_REQUEST_LIMIT = 3
   pure val COMPLETE_TASK_REQUEST_LIMIT = 3
+  // Diagnostic counters saturate after the accepted two-boundary witness.
+  // Lifecycle actions remain enabled; higher repetitions do not create new model state.
+  pure val PUBLICATION_LIFECYCLE_WITNESS_CAP = 2
 
   var state: State
 
@@ -983,7 +986,10 @@ module integrationFinality {
       ...state,
       promoted: {
         ...state.promoted,
-        publicationPauseCount: state.promoted.publicationPauseCount + 1,
+        publicationPauseCount:
+          if (state.promoted.publicationPauseCount < PUBLICATION_LIFECYCLE_WITNESS_CAP)
+            state.promoted.publicationPauseCount + 1
+          else state.promoted.publicationPauseCount,
       },
     },
   }
@@ -995,7 +1001,10 @@ module integrationFinality {
       ...state,
       promoted: {
         ...state.promoted,
-        publicationRestartCount: state.promoted.publicationRestartCount + 1,
+        publicationRestartCount:
+          if (state.promoted.publicationRestartCount < PUBLICATION_LIFECYCLE_WITNESS_CAP)
+            state.promoted.publicationRestartCount + 1
+          else state.promoted.publicationRestartCount,
       },
     },
   }
