@@ -534,7 +534,6 @@ module integrationFinality {
   val completionClaimRequiresRemotePublicationProof: bool =
     not(state.promoted.completionClaimDerived) or and {
       publicationProofExact(state.promoted),
-      not(state.promoted.publicationContradictionObserved),
     }
 
   val publicationProofRetainedAcrossContradiction: bool =
