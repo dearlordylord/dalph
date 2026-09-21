@@ -22,7 +22,7 @@ import {
 const baseSha = "b".repeat(40)
 const candidateSha = "c".repeat(40)
 
-test("the shared manifest names the three independent suffix obligations once", () => {
+void test("the shared manifest names the three independent suffix obligations once", () => {
   const manifestIds = fullQualityGateManifest(baseSha)
     .filter(({ boundary }) => boundary === "qualification")
     .map(({ id }) => id)
@@ -41,7 +41,7 @@ test("the shared manifest names the three independent suffix obligations once", 
   })
 })
 
-test("generates one exact candidate/Base/policy plan entry for every Node and suffix stage", () => {
+void test("generates one exact candidate/Base/policy plan entry for every Node and suffix stage", () => {
   const plan = createQualityGateStagePlan({ baseSha, candidateSha, nodeVersions: ["24.20.0", "25.1.0"] })
 
   assert.deepEqual(plan.expectedStageIds, qualityGateQualificationStageIds)
@@ -98,7 +98,7 @@ test("generates one exact candidate/Base/policy plan entry for every Node and su
   ])
 })
 
-test("allows an explicitly selected known suffix stage while retaining canonical order", () => {
+void test("allows an explicitly selected known suffix stage while retaining canonical order", () => {
   const plan = createQualityGateStagePlan({ baseSha, candidateSha, nodeVersions: ["24.20.0"], stageIds: ["coverage"] })
   assert.deepEqual(plan.expectedStageIds, ["coverage"])
   assert.deepEqual(
@@ -107,7 +107,7 @@ test("allows an explicitly selected known suffix stage while retaining canonical
   )
 })
 
-test("fails closed for unsupported stage, identity, candidate/Base, and Node inputs", () => {
+void test("fails closed for unsupported stage, identity, candidate/Base, and Node inputs", () => {
   const valid = { baseSha, candidateSha, nodeVersions: ["24.20.0"] }
   assert.throws(
     () => createQualityGateStagePlan({ ...valid, stageIds: ["tests"] }),
@@ -123,7 +123,7 @@ test("fails closed for unsupported stage, identity, candidate/Base, and Node inp
   assert.throws(() => createQualityGateStagePlan({ ...valid, nodeVersions: ["24.20.0", "24.20.0"] }), /distinct/u)
 })
 
-test("derives the hosted Node matrix from package engines and writes stable workflow outputs", () => {
+void test("derives the hosted Node matrix from package engines and writes stable workflow outputs", () => {
   const root = mkdtempSync(join(tmpdir(), "dalph-quality-stage-plan-"))
   try {
     const packagePath = join(root, "package.json")
@@ -150,7 +150,7 @@ test("derives the hosted Node matrix from package engines and writes stable work
   }
 })
 
-test("the plan CLI rejects unsupported options before emitting a matrix", () => {
+void test("the plan CLI rejects unsupported options before emitting a matrix", () => {
   const script = fileURLToPath(new URL("./quality-gate-stage-plan.mjs", import.meta.url))
   assert.throws(
     () =>

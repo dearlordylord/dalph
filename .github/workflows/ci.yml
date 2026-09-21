@@ -25,6 +25,7 @@ jobs:
       formal-required: ${{ steps.change.outputs.formal-required }}
       formal-classification: ${{ steps.change.outputs.formal-classification }}
       versions: ${{ steps.versions.outputs.versions }}
+      quality-stages: ${{ steps.quality_plan.outputs.expected-cells }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -52,6 +53,10 @@ jobs:
           DALPH_CI_PUSH_BEFORE_SHA: ${{ github.event.before || '' }}
         run: node scripts/classify-docs-only-change.mjs
 
+      - name: Generate hosted quality suffix matrix from the stage algebra
+        id: quality_plan
+        run: node scripts/quality-gate-stage-plan.mjs --base "${{ steps.change.outputs.base-sha }}" --candidate "${{ steps.change.outputs.head-sha }}" --github-output "$GITHUB_OUTPUT"
+
   docs-quality:
     name: Documentation-only quality gate
     needs: change-plan
@@ -76,20 +81,16 @@ jobs:
           node --test scripts/classify-docs-only-change.test.mjs
           gitleaks git --redact --no-banner --log-opts="$DALPH_DOCS_BASE_SHA..$GITHUB_SHA"
 
-  quality:
-    name: Comprehensive quality gate (Node ${{ matrix.node-version }})
+  quality-preflight:
+    name: Hosted quality preflight (Node ${{ matrix.node-version }})
     needs: change-plan
     if: needs.change-plan.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
-    # The bounded check:ci stages allow 67 minutes in total, before setup.
-    # Let their own watchdogs report a failing stage instead of cancelling
-    # healthy coverage after build, diagnostics, lint, and Lab consume time.
+    # The preflight census runs all independent structural checks before any
+    # qualification cell is admitted.
     timeout-minutes: 80
-    # Pull requests compare with the target branch tip; pushes compare with
-    # the event's previous commit so the changed-line verifier includes the
-    # committed change and any worktree changes produced by the gate.
     env:
-      DALPH_COVERAGE_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+      DALPH_COVERAGE_BASE_SHA: ${{ needs.change-plan.outputs.base-sha }}
       NODE_OPTIONS: --max-old-space-size=8192
 
     strategy:
@@ -121,11 +122,172 @@ jobs:
       - name: Install gitleaks
         run: bash scripts/install-gitleaks.sh
 
-      # MBT is excluded from automatic verification pending #363's
-      # pre-generated-trace replay. The complete formal model gate remains
-      # in the separate matrix below.
-      - name: Run CI quality gate
-        run: pnpm check:ci:quality
+      - name: Run hosted quality preflight
+        run: pnpm check:ci:quality:preflight --candidate="${{ needs.change-plan.outputs.base-sha }}"
+
+  quality-suffix:
+    name: Hosted quality ${{ matrix.stageId }} (Node ${{ matrix.nodeVersion }})
+    needs: [change-plan, quality-preflight]
+    if: needs.change-plan.outputs.docs-only != 'true' && needs.quality-preflight.result == 'success'
+    runs-on: ubuntu-latest
+    # Five minutes for the declared frozen install, twenty minutes for the
+    # longest stage, plus bounded setup/export reserve.
+    timeout-minutes: 30
+    env:
+      DALPH_HOSTED_QUALITY_CANDIDATE_SHA: ${{ needs.change-plan.outputs.head-sha }}
+      DALPH_HOSTED_QUALITY_BASE_SHA: ${{ needs.change-plan.outputs.base-sha }}
+      DALPH_HOSTED_QUALITY_WORKFLOW: ${{ github.workflow }}
+      DALPH_HOSTED_QUALITY_RUN_ID: ${{ github.run_id }}
+      DALPH_HOSTED_QUALITY_RUN_ATTEMPT: ${{ github.run_attempt }}
+      DALPH_HOSTED_QUALITY_NODE_VERSION: ${{ matrix.nodeVersion }}
+      DALPH_HOSTED_QUALITY_STAGE_ID: ${{ matrix.stageId }}
+      DALPH_COVERAGE_BASE_SHA: ${{ needs.change-plan.outputs.base-sha }}
+      NODE_OPTIONS: --max-old-space-size=8192
+
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include: ${{ fromJSON(needs.change-plan.outputs.quality-stages) }}
+
+    steps:
+      - name: Record hosted suffix cell start
+        run: echo "DALPH_HOSTED_QUALITY_CELL_STARTED_AT=$(date -u +'%Y-%m-%dT%H:%M:%S.%3NZ')" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+          version: 10.29.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          cache: pnpm
+          node-version: ${{ matrix.nodeVersion }}
+
+      - name: Install dependencies
+        timeout-minutes: 5
+        run: pnpm install --frozen-lockfile
+
+      # The stage command emits its ordinary pass/fail envelope and exits zero
+      # after an ordinary stage verdict. Export/ownership failures remain
+      # nonzero so the aggregate reports that cell as unproven.
+      - name: Run hosted quality stage
+        run: |
+          mkdir -p "hosted-quality/stages/${{ matrix.nodeVersion }}/${{ matrix.stageId }}"
+          pnpm check:ci:quality:stage \
+            --stage "${{ matrix.stageId }}" \
+            --base "${{ needs.change-plan.outputs.base-sha }}" \
+            --candidate "${{ needs.change-plan.outputs.head-sha }}" \
+            --node-version "${{ matrix.nodeVersion }}" \
+            --run-id "${{ github.run_id }}" \
+            --run-attempt "${{ github.run_attempt }}" \
+            --output "hosted-quality/stages/${{ matrix.nodeVersion }}/${{ matrix.stageId }}"
+
+      # This step must run after an ordinary command failure so the aggregate
+      # can distinguish a failed stage from a missing/unproven stage.
+      - name: Upload hosted quality stage evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hosted-quality-stage-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.nodeVersion }}-${{ matrix.stageId }}
+          path: hosted-quality/stages/${{ matrix.nodeVersion }}/${{ matrix.stageId }}
+          if-no-files-found: error
+          retention-days: 1
+
+  quality-aggregate:
+    name: Hosted quality gate
+    needs: [change-plan, docs-quality, quality-preflight, quality-suffix]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DALPH_HOSTED_QUALITY_CANDIDATE_SHA: ${{ needs.change-plan.outputs.head-sha }}
+      DALPH_HOSTED_QUALITY_BASE_SHA: ${{ needs.change-plan.outputs.base-sha }}
+      DALPH_HOSTED_QUALITY_WORKFLOW: ${{ github.workflow }}
+      DALPH_HOSTED_QUALITY_RUN_ID: ${{ github.run_id }}
+      DALPH_HOSTED_QUALITY_RUN_ATTEMPT: ${{ github.run_attempt }}
+      DALPH_HOSTED_QUALITY_NODE_VERSIONS: ${{ needs.change-plan.outputs.versions }}
+      DALPH_HOSTED_QUALITY_STAGE_PLAN: ${{ needs.change-plan.outputs.quality-stages }}
+      DALPH_COVERAGE_BASE_SHA: ${{ needs.change-plan.outputs.base-sha }}
+
+    steps:
+      - name: Refuse failed change plan
+        if: needs.change-plan.result != 'success'
+        run: |
+          printf 'Hosted quality change plan did not succeed; refusing a successful required check.\n' >&2
+          exit 1
+
+      - name: Report documentation-only quality result
+        if: needs.change-plan.result == 'success' && needs.change-plan.outputs.docs-only == 'true'
+        run: |
+          if [ "${{ needs.docs-quality.result }}" != success ]; then
+            printf 'Documentation-only quality gate did not succeed; refusing a successful aggregate.\n' >&2
+            exit 1
+          fi
+          printf 'Hosted comprehensive quality suffix not applicable for this documentation-only change.\n'
+
+      - name: Checkout
+        if: needs.change-plan.result == 'success' && needs.change-plan.outputs.docs-only != 'true'
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        if: needs.change-plan.result == 'success' && needs.change-plan.outputs.docs-only != 'true'
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+          version: 10.29.3
+
+      - name: Set up Node.js
+        if: needs.change-plan.result == 'success' && needs.change-plan.outputs.docs-only != 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ fromJSON(needs.change-plan.outputs.versions)[0] }}
+
+      - name: Download hosted quality stage evidence
+        if: needs.change-plan.result == 'success' && needs.change-plan.outputs.docs-only != 'true'
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: hosted-quality-stage-${{ github.run_id }}-${{ github.run_attempt }}-*
+          path: hosted-quality/stages
+
+      - name: Aggregate every expected hosted quality result
+        if: needs.change-plan.result == 'success' && needs.change-plan.outputs.docs-only != 'true'
+        run: |
+          mapfile -t reports < <(find hosted-quality/stages -type f -name envelope.json -print 2>/dev/null | sort)
+          pnpm check:ci:quality:aggregate \
+            --base "$DALPH_HOSTED_QUALITY_BASE_SHA" \
+            --candidate "$DALPH_HOSTED_QUALITY_CANDIDATE_SHA" \
+            --run-id "$DALPH_HOSTED_QUALITY_RUN_ID" \
+            --run-attempt "$DALPH_HOSTED_QUALITY_RUN_ATTEMPT" \
+            -- "${reports[@]}"
+
+      - name: Upload hosted quality aggregate evidence
+        id: hosted_quality_evidence
+        if: always() && needs.change-plan.result == 'success' && needs.change-plan.outputs.docs-only != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hosted-quality-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: hosted-quality/stages
+          if-no-files-found: warn
+          retention-days: 1
+
+      - name: Report hosted quality evidence location
+        if: always() && steps.hosted_quality_evidence.outputs.artifact-url != ''
+        env:
+          DALPH_HOSTED_QUALITY_EVIDENCE_URL: ${{ steps.hosted_quality_evidence.outputs.artifact-url }}
+        run: |
+          printf 'Hosted quality evidence: %s\n' "$DALPH_HOSTED_QUALITY_EVIDENCE_URL"
+          printf 'Hosted quality evidence: %s\n' "$DALPH_HOSTED_QUALITY_EVIDENCE_URL" >> "$GITHUB_STEP_SUMMARY"
 
   formal-models:
     name: Formal model shard ${{ matrix.shard }} (Node ${{ matrix.node-version }})

@@ -22,12 +22,11 @@ if (process.env.DALPH_QUALIFICATION_ENV_CAPTURE !== undefined)
     "Ambient qualification environment capture is outside supported gate custody; tests set only disposable fixture paths"
   )
 const entryName = basename(commandArguments[1] ?? "")
-const requiredExecutables =
-  entryName === "run-quality-gate.mjs"
-    ? qualityVerificationExecutables(process.env, commandArguments[0])
-    : entryName === "run-formal-gate.mjs"
-      ? formalVerificationExecutables(process.env, commandArguments[0])
-      : undefined
+const requiredExecutables = ["run-hosted-quality-stage.mjs", "run-quality-gate.mjs"].includes(entryName)
+  ? qualityVerificationExecutables(process.env, commandArguments[0])
+  : entryName === "run-formal-gate.mjs"
+    ? formalVerificationExecutables(process.env, commandArguments[0])
+    : undefined
 const effectiveEnvironment =
   requiredExecutables === undefined
     ? process.env
