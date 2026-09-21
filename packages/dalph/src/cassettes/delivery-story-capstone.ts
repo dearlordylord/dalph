@@ -53,7 +53,7 @@ const finalTaskIds = ["E", "F", "G"] as const
 const finalTaskProfiles = {
   E: { readsGraphBeforeClaim: false, positions: ePositions },
   F: { readsGraphBeforeClaim: true, positions: fPositions },
-  G: { readsGraphBeforeClaim: true, positions: gPositions }
+  G: { readsGraphBeforeClaim: false, positions: gPositions }
 } as const
 const { absent: bCleanupAbsentObservation, revision: bCleanupRevision } = cleanupFor(
   "B",

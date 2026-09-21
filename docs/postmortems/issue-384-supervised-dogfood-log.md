@@ -745,3 +745,19 @@ maintained catalog/Lab entry must still render the same accepted story. If that
 single structural experiment fails, preserve its log and open a narrower
 follow-up or report the capstone blocked again; do not run baseline/full gates
 or hosted dogfood against an unproven cassette.
+
+### Scoped follow-up result, 2026-09-21 04:16 UTC
+
+The fresh structural experiment changed only G's authored phase flag so its
+transcript followed the observed order `terminal -> claim -> graph ->
+integration`; no absolute correlation position was moved. The focused command
+was run once from the fresh worktree with a 60-second wall-clock bound. It
+reached the capstone, then failed after 4.09 seconds with
+`IntegratorCandidateCleanupEvidenceReadFailure` while rereading provider-private
+cleanup evidence at `packages/orchestrator/src/workflow/protocols/disposition-cleanup/loop.ts:498`.
+The result is recorded in `/tmp/issue384-capstone-structural-g-001.log`.
+
+This is a later cleanup-evidence obstruction, distinct from the former G
+chronology mismatch. Per the stop condition, no further position repair, full
+gate, or hosted dogfood is authorized from this follow-up; the capstone remains
+blocked pending a separately scoped repair.
