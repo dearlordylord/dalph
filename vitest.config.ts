@@ -68,6 +68,13 @@ export default defineConfig(({ mode }) => ({
     ],
     include: mode === "mbt" ? [mbtTestPattern] : ordinaryTestIncludes,
     maxWorkers: mode === "coverage" ? coverageWorkerCount : ordinaryWorkerCount,
+    experimental: {
+      // Persist transformed ordinary modules so fresh focused Vitest
+      // processes in a bootstrapped worktree do not repeat cold transforms.
+      // Full-gate setup removes this generated cache before candidate
+      // observation, so it never becomes qualification evidence.
+      fsModuleCache: true
+    },
     ...(mode === "mbt"
       ? {
           // Running the accepted-result model beside the other MBTs can starve

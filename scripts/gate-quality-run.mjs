@@ -18,7 +18,7 @@ import {
   qualityGateTestEnvironment
 } from "./quality-gate-stage-policy.mjs"
 
-/** Vite/Vitest results, transforms and newly bundled config modules are disposable, never credited stages. */
+/** Vite/Vitest results, transforms, persistent module cache, and newly bundled config modules are disposable, never credited stages. */
 export const resetQualityCaches = (worktree) => {
   const packageRoots = [worktree]
   for (const directory of ["packages", "prototypes"]) {
@@ -31,7 +31,7 @@ export const resetQualityCaches = (worktree) => {
   }
   const roots = packageRoots
     .flatMap((root) => [".vite", ".vite-temp"].map((cache) => join(root, "node_modules", cache)))
-    .concat(join(worktree, "node_modules", ".cache"))
+    .concat(join(worktree, "node_modules", ".cache"), join(worktree, "node_modules", ".experimental-vitest-cache"))
   for (const root of roots) {
     if (existsSync(root) && !lstatSync(root).isDirectory())
       throw new Error(`Unsupported disposable Vite cache: ${root}`)

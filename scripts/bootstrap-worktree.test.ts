@@ -54,7 +54,8 @@ it("runs frozen install before artifact preparation", async () => {
     ["submodule", "update", "--init", "--recursive"],
     ["/fake/pnpm.cjs", "--silent", "install", "--frozen-lockfile"],
     ["/fake/pnpm.cjs", "--silent", "check:artifacts"],
-    ["/fake/pnpm.cjs", "--silent", "install", "--frozen-lockfile", "--ignore-scripts"]
+    ["/fake/pnpm.cjs", "--silent", "install", "--frozen-lockfile", "--ignore-scripts"],
+    ["/fake/pnpm.cjs", "--silent", "prewarm:vitest"]
   ])
 })
 
@@ -104,6 +105,46 @@ it("fails when the script-disabled relink does not create a declared workspace b
   ).rejects.toThrow("workspace bin launcher is missing: fixture-tool")
 })
 
+it("fails when the bounded Vitest prewarm fails after launcher validation", async () => {
+  const repositoryRoot = bootstrapFixture()
+  const prewarmFailure = new Error("Vitest prewarm failed")
+  const commands: Array<ReadonlyArray<string>> = []
+
+  await expect(
+    bootstrapWorktree({
+      pnpmEntryPoint: "/fake/pnpm.cjs",
+      repositoryRoot,
+      runCommand: (command: { readonly args: ReadonlyArray<string> }) => {
+        commands.push(command.args)
+        if (command.args.includes("--ignore-scripts")) writeFixtureLauncher(repositoryRoot)
+        if (command.args.includes("prewarm:vitest")) return Promise.reject(prewarmFailure)
+        return Promise.resolve({ outputLineCount: 0 })
+      }
+    })
+  ).rejects.toBe(prewarmFailure)
+  expect(commands.at(-1)).toEqual(["/fake/pnpm.cjs", "--silent", "prewarm:vitest"])
+})
+
+it("fails when the bounded Vitest prewarm times out after launcher validation", async () => {
+  const repositoryRoot = bootstrapFixture()
+  const timeoutFailure = Object.assign(new Error("Vitest prewarm timed out"), { timedOut: true })
+  const commands: Array<ReadonlyArray<string>> = []
+
+  await expect(
+    bootstrapWorktree({
+      pnpmEntryPoint: "/fake/pnpm.cjs",
+      repositoryRoot,
+      runCommand: (command: { readonly args: ReadonlyArray<string> }) => {
+        commands.push(command.args)
+        if (command.args.includes("--ignore-scripts")) writeFixtureLauncher(repositoryRoot)
+        if (command.args.includes("prewarm:vitest")) return Promise.reject(timeoutFailure)
+        return Promise.resolve({ outputLineCount: 0 })
+      }
+    })
+  ).rejects.toBe(timeoutFailure)
+  expect(commands.at(-1)).toEqual(["/fake/pnpm.cjs", "--silent", "prewarm:vitest"])
+})
+
 it("relinks a workspace bin whose generated target was absent during the first frozen install", async () => {
   const repositoryRoot = bootstrapFixture()
   writeFileSync(
@@ -111,7 +152,10 @@ it("relinks a workspace bin whose generated target was absent during the first f
     `${JSON.stringify({
       name: "fixture-root",
       private: true,
-      scripts: { "check:artifacts": "pnpm --filter @fixture/tool build" },
+      scripts: {
+        "check:artifacts": "pnpm --filter @fixture/tool build",
+        "prewarm:vitest": "node -e 'process.exit(0)'"
+      },
       devDependencies: { "@fixture/tool": "workspace:*" }
     })}\n`
   )

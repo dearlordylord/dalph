@@ -440,11 +440,12 @@ or unproven stage even if later census checks passed. A passed negative test may
 retain required failing children; its entire terminal subtree must remain valid.
 Package/Lab `dist` trees and consumed TypeScript build information require complete
 membership/mode/content proof and remain watched while credited. Missing or altered
-artifacts refuse reuse. Vite/Vitest `.vite` result/transform caches and `.vite-temp` newly bundled config
-modules at root and
-workspace package `node_modules` are discarded before observation on both fresh
-and resumed runs, then excluded as disposable outputs. They never receive stage
-credit. Admitted full/preflight lint passes dprint `--incremental=false`; its
+artifacts refuse reuse. Vite/Vitest `.vite` result/transform caches,
+`.experimental-vitest-cache` persistent transformed modules, and `.vite-temp`
+newly bundled config modules at root and workspace package `node_modules` are
+discarded before observation on both fresh and resumed runs, then excluded as
+disposable outputs. They never receive stage credit. Admitted full/preflight
+lint passes dprint `--incremental=false`; its
 explicit invocation and environment contract permit only incremental result and
 lock bookkeeping to be excluded. Formatter plugin code and metadata remain inputs.
 Normal edit-loop formatting keeps its incremental behavior. Other tool cache state
@@ -533,8 +534,13 @@ before `check:artifacts`. Because pnpm cannot create a workspace bin launcher
 whose generated target is absent during that first install, the bootstrap then
 runs a second frozen install with lifecycle scripts disabled and verifies every
 declared launcher under `node_modules/.bin`. It stops at the first failure.
-Install lifecycle scripts are not the artifact correctness boundary: pnpm can
-deliberately [disable them](https://pnpm.io/10.x/cli/install#--ignore-scripts).
+After launcher validation, it runs the bounded `prewarm:vitest` command. That
+command transforms and parses the ordinary Vitest module graph without
+executing tests, and writes only the disposable
+`node_modules/.experimental-vitest-cache` cache. A prewarm failure or timeout
+fails bootstrap; it is not a successful-but-cold setup. Install lifecycle
+scripts are not the artifact correctness boundary: pnpm can deliberately
+[disable them](https://pnpm.io/10.x/cli/install#--ignore-scripts).
 
 Run the real bootstrap integration as
 `pnpm test scripts/bootstrap-worktree.test.ts`. That package-script boundary
