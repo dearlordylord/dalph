@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { PlannedTaskAttempt } from "@dalph/contracts"
+import { PlannedTaskAttempt, RemotePublicationTarget } from "@dalph/contracts"
 import { ControlDirectionAppliedEvent } from "../protocols/control-direction-application/events.js"
 import { TaskClaimReacquisitionDirectedEvent } from "../protocols/task-claim-reacquisition/events.js"
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
@@ -52,6 +52,8 @@ import {
   RunCancellationAppliedEvent
 } from "../protocols/run-cancellation/events.js"
 import { RunFinalityEvidence } from "../../coordination/frontier/run-finality.js"
+import { RemotePublicationJournalEvent } from "../protocols/direct-publication/events.js"
+import { RemoteBaselineJournalEvent } from "../protocols/direct-publication/baseline-events.js"
 
 const ResponsibilityJournalEvent = Schema.Union([
   PlannedAttemptExecutorCommandIntendedEvent,
@@ -65,6 +67,8 @@ const ResponsibilityJournalEvent = Schema.Union([
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent,
   IntegratorJournalEvent,
+  RemotePublicationJournalEvent,
+  RemoteBaselineJournalEvent,
   TargetPromotionJournalEvent,
   IntegrationFinalityJournalEvent,
   IntegrationQuarantineJournalEvent,
@@ -81,6 +85,7 @@ export const WorkflowRunBeganEvent = Schema.TaggedStruct("WorkflowRunBegan", {
   initialControlPolicy: InitialControlPolicy,
   initiatedBy: WorkflowActor.cases.DalphCoordinator,
   occurrenceClassification: Schema.Literal("InitiatedAction"),
+  remotePublicationTarget: RemotePublicationTarget,
   target: TrackerTarget,
   version: Schema.Literal(workflowJournalEventVersion)
 })

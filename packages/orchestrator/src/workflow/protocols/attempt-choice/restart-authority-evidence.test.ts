@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
@@ -36,7 +37,8 @@ const begin = Effect.gen(function* () {
   yield* journal.beginRun(
     runId,
     FixtureTarget.make("restart-authority-evidence-test"),
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    remotePublicationTargetForTest
   )
   yield* appendReplacementProvenance(attempt, successor)
   return journal

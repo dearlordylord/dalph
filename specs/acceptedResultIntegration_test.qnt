@@ -403,7 +403,7 @@ module acceptedResultIntegrationTest {
       .then(observeExactCandidate(1))
       .then(offerPublicationPremise(1))
       .then(recordPublicationIntent(1))
-      .then(recordPublicationAttemptIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
       .then(sendPublicationAttempt(1))
       .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
@@ -439,7 +439,7 @@ module acceptedResultIntegrationTest {
       .then(observeExactCandidate(1))
       .then(offerPublicationPremise(1))
       .then(recordPublicationIntent(1))
-      .then(recordPublicationAttemptIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
       .then(sendPublicationAttempt(1))
       .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
@@ -469,7 +469,7 @@ module acceptedResultIntegrationTest {
       .then(observeExactCandidate(1))
       .then(offerPublicationPremise(1))
       .then(recordPublicationIntent(1))
-      .then(recordPublicationAttemptIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
       .then(sendPublicationAttempt(1))
       .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
@@ -510,7 +510,7 @@ module acceptedResultIntegrationTest {
       .then(observeExactCandidate(1))
       .then(offerPublicationPremise(1))
       .then(recordPublicationIntent(1))
-      .then(recordPublicationAttemptIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
       .then(sendPublicationAttempt(1))
       .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
@@ -547,7 +547,7 @@ module acceptedResultIntegrationTest {
       .then(observeExactCandidate(1))
       .then(offerPublicationPremise(1))
       .then(recordPublicationIntent(1))
-      .then(recordPublicationAttemptIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
       .then(sendPublicationAttempt(1))
       .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
@@ -595,7 +595,7 @@ module acceptedResultIntegrationTest {
       .then(observeExactCandidate(1))
       .then(offerPublicationPremise(1))
       .then(recordPublicationIntent(1))
-      .then(recordPublicationAttemptIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
       .then(sendPublicationAttempt(1))
       .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
@@ -637,7 +637,7 @@ module acceptedResultIntegrationTest {
       .then(observeExactCandidate(1))
       .then(offerPublicationPremise(1))
       .then(recordPublicationIntent(1))
-      .then(recordPublicationAttemptIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
       .then(sendPublicationAttempt(1))
       .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
@@ -669,7 +669,7 @@ module acceptedResultIntegrationTest {
       .then(observeExactCandidate(1))
       .then(offerPublicationPremise(1))
       .then(recordPublicationIntent(1))
-      .then(recordPublicationAttemptIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
       .then(sendPublicationAttempt(1))
       .then(observePublicationApplied(1))
       .then(offerPromotionPremise(1))
@@ -1057,7 +1057,7 @@ module acceptedResultIntegrationTest {
       .then(observeExactCandidate(1))
       .then(offerPublicationPremise(1))
       .then(recordPublicationIntent(1))
-      .then(recordPublicationAttemptIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
       .then(sendPublicationAttempt(1))
       .then(observePublicationApplied(1))
       .expect(and {
@@ -1078,6 +1078,190 @@ module acceptedResultIntegrationTest {
       })
   }
 
+  run initialPublicationCurrentReadRecordsAttemptBeforeProofTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationCandidateCurrent(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationProved,
+        state.results.get(1).publicationAttemptCount == 1,
+        state.results.get(1).publicationLastAttempt == 1,
+        state.results.get(1).publicationProofBasis == ReconciledCandidateCurrent,
+        state.results.get(1).publicationObservation == PublicationRemoteCandidateCurrent,
+        state.results.get(1).publicationProofRecorded,
+        not(state.results.get(1).targetHeld),
+      })
+  }
+
+  run initialPublicationAncestorReadRecordsAttemptBeforeProofTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationCandidateAncestor(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationProved,
+        state.results.get(1).publicationAttemptCount == 1,
+        state.results.get(1).publicationLastAttempt == 1,
+        state.results.get(1).publicationProofBasis == ReconciledCandidateAncestor,
+        state.results.get(1).publicationObservation == PublicationRemoteCandidateAncestor,
+        state.results.get(1).publicationProofRecorded,
+        not(state.results.get(1).targetHeld),
+      })
+  }
+
+  run publicationNonFastForwardAppendsNextIntentAfterReconciliationTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationNonFastForward(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationReconciliation,
+        state.results.get(1).publicationAttemptCount == 1,
+        state.results.get(1).publicationObservation == PublicationRemoteNonFastForward,
+        not(state.results.get(1).publicationFinalReadRequired),
+        state.results.get(1).targetHeld,
+        not(state.results.get(1).publicationProofRecorded),
+      })
+      .then(observePublicationRemoteAncestorOfCandidate(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationAttemptIntended,
+        state.results.get(1).publicationAttemptCount == 2,
+        state.results.get(1).publicationLastAttempt == 2,
+        state.results.get(1).publicationObservation == PublicationRemoteAncestorOfCandidate,
+        not(state.results.get(1).publicationResultRecorded),
+      })
+  }
+
+  run thirdPublicationNonFastForwardFinalReadCanProveCandidateTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationNonFastForward(1))
+      .then(observePublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationNonFastForward(1))
+      .then(observePublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationNonFastForward(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationReconciliation,
+        state.results.get(1).publicationAttemptCount == PROMOTION_ATTEMPT_LIMIT,
+        state.results.get(1).publicationFinalReadRequired,
+        publicationFinalReconciliationIsReadOnlyAndBounded,
+      })
+      .then(observeReconciledPublicationCandidateCurrent(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationProved,
+        state.results.get(1).publicationAttemptCount == PROMOTION_ATTEMPT_LIMIT,
+        state.results.get(1).publicationProofBasis == ReconciledCandidateCurrent,
+        state.results.get(1).publicationObservation == PublicationRemoteCandidateCurrent,
+        not(state.results.get(1).targetHeld),
+      })
+  }
+
+  run thirdPublicationNonFastForwardFinalReadExhaustsWithoutFourthIntentTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationNonFastForward(1))
+      .then(observePublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationNonFastForward(1))
+      .then(observePublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationNonFastForward(1))
+      .then(observePublicationNonConvergence(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationNonConvergence,
+        state.results.get(1).publicationAttemptCount == PROMOTION_ATTEMPT_LIMIT,
+        state.results.get(1).publicationObservation == PublicationRemoteNonConvergence,
+        not(state.results.get(1).publicationProofRecorded),
+        not(state.results.get(1).targetHeld),
+        publicationWaitRetainsResponsibility,
+      })
+  }
+
+  run incompatiblePublicationReadRetainsWithoutPushTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observePublicationIncompatible(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationIncompatible,
+        state.results.get(1).publicationObservation == PublicationRemoteIncompatible,
+        state.results.get(1).publicationAttemptCount == 0,
+        not(state.results.get(1).publicationOrdinaryRefspecRequested),
+        publicationWaitRetainsResponsibility,
+      })
+  }
+
   run ambiguousPublicationReconcilesToRetainedAncestorProofTest = {
     init
       .then(admitDestination)
@@ -1092,7 +1276,7 @@ module acceptedResultIntegrationTest {
       .then(observeExactCandidate(1))
       .then(offerPublicationPremise(1))
       .then(recordPublicationIntent(1))
-      .then(recordPublicationAttemptIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
       .then(sendPublicationAttempt(1))
       .then(losePublicationResponse(1))
       .expect(and {
@@ -1132,7 +1316,7 @@ module acceptedResultIntegrationTest {
       .then(observeExactCandidate(1))
       .then(offerPublicationPremise(1))
       .then(recordPublicationIntent(1))
-      .then(recordPublicationAttemptIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
       .then(sendPublicationAttempt(1))
       .then(observePublicationDenied(1))
       .expect(and {
@@ -1143,6 +1327,6 @@ module acceptedResultIntegrationTest {
         not(state.results.get(1).targetHeld),
         publicationWaitRetainsResponsibility,
       })
-      .then(recordPublicationAttemptIntent(1).fail())
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1).fail())
   }
 }

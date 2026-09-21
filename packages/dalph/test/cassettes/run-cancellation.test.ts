@@ -49,6 +49,11 @@ import {
   runningAttemptRunCancellationAuthoredCassette
 } from "../../src/cassettes/index.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
+import {
+  remotePublicationGitLayerForTest,
+  remoteBaselineGitLayerForTest,
+  remotePublicationTargetForTest
+} from "../../../orchestrator/test/support/direct-publication.js"
 
 const cancellationInitialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const projectedCancellationGraph = TaskDagSnapshot.project(
@@ -136,7 +141,9 @@ const cancellationRuntimeLayer = (runId: RunId) =>
           worktreeOutcomes: []
         })
       })
-    )
+    ),
+    remoteBaselineGitLayerForTest,
+    remotePublicationGitLayerForTest
   )
 
 const buildCancellationBootstrap = Effect.fn("RunCancellationTest.buildBootstrap")(function* (
@@ -155,8 +162,14 @@ const buildCancellationBootstrap = Effect.fn("RunCancellationTest.buildBootstrap
       expectedRunId,
       ({ runId }) => cancellationRuntimeLayer(runId),
       applicationExit,
-      noopJournalMaintenanceObservation
-    ).pipe(Layer.provide(dependencies), Layer.provide(cancellationExecutorLayer))
+      noopJournalMaintenanceObservation,
+      undefined,
+      remotePublicationTargetForTest
+    ).pipe(
+      Layer.provide(dependencies),
+      Layer.provide(cancellationExecutorLayer),
+      Layer.provide(remotePublicationGitLayerForTest)
+    )
   )
   return Context.get(context, JournaledRunBootstrap)
 })
@@ -306,6 +319,8 @@ it.effect("re-enters once after an unacknowledged cancellation termination appen
       const firstRecords = yield* delegate.read(runId)
       expect(firstRecords.map(({ event }) => event._tag)).toEqual([
         "WorkflowRunBegan",
+        "RemotePublicationAdmissionReadIntended",
+        "RemotePublicationAdmissionObserved",
         "RunCancellationApplied",
         "TaskTrackerReadIntentRecorded",
         "TaskTrackerFactsObserved",

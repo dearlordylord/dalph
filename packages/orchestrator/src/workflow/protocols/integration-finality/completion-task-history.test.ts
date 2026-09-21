@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import { expect, it } from "vitest"
 import { RunId, TaskId, TaskRevision } from "@dalph/contracts"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
@@ -367,6 +368,7 @@ it("preserves the raw diagnostic ordering when a focused outcome precedes the fi
     4,
     WorkflowRunBeganEvent.make({
       initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTarget: remotePublicationTargetForTest,
       initiatedBy: { _tag: "DalphCoordinator" },
       occurrenceClassification: "InitiatedAction",
       target: FixtureTarget.make("completion-history-future-foreign-target"),

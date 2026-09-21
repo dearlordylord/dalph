@@ -1,8 +1,10 @@
+import { fileGitSenderCustodyLayer } from "./git-sender-custody.js"
 /* eslint-disable max-lines -- Production workflow assembly keeps its capability topology co-located for auditability. */
 import { NodeServices } from "@effect/platform-node"
 import {
   type GitRepositoryLocator,
   type IntegrationTarget,
+  type RemotePublicationTarget,
   PlannedAttemptExecutor,
   type PlannedAttemptExecutorLifecycleObservation,
   RunId
@@ -55,6 +57,8 @@ import {
   Integrator,
   type IntegratorService,
   type TargetPromotionRuntimeInput,
+  nodeGitDirectPublicationLayer,
+  nodeGitRemoteBaselineLayer,
   type CompletionClaimBoundaryService,
   type CompletionTaskBoundaryService,
   gitDispositionCleanupBoundaryLayer,
@@ -175,6 +179,8 @@ export interface ProductionWorkflowRuntimeBoundaries {
     never
   >
   readonly targetPromotion?: TargetPromotionRuntimeInput
+  /** Credential-free endpoint and fully-qualified branch pinned into the first Run record. */
+  readonly remotePublicationTarget: RemotePublicationTarget
   readonly integrationFinality?: CompletionClaimBoundaryService
   readonly completionTask?: CompletionTaskBoundaryService
   readonly acceptedResultEvidenceStore?: EvidenceStoreService
@@ -215,15 +221,32 @@ export const productionTargetGitCommands = (
   commands: GitCommandService,
   target: GitCommonDirectoryTarget,
   repository: GitRepositoryLocator
-) =>
-  GitCommand.of({ ...commands, run: (locator, args) => commands.run(locator === repository ? target : locator, args) })
+) => {
+  const bounded = commands.runBoundedInRepository
+  return GitCommand.of({
+    ...commands,
+    run: (locator, args) => commands.run(locator === repository ? target : locator, args),
+    ...(bounded === undefined
+      ? {}
+      : {
+          runBoundedInRepository: (locator, args, timeout, subject) =>
+            bounded(locator === repository ? target : locator, args, timeout, subject)
+        })
+  })
+}
 
 export const productionWorkflowGitCommandLayer = (
   target: GitCommonDirectoryTarget,
   workingRepository: GitRepositoryLocator,
   observe: ProductionWorkflowGitCommandObserver | undefined
 ) => {
-  const layer = nodeGitCommandLayer.pipe(Layer.provide(NodeServices.layer))
+  const layer = nodeGitCommandLayer.pipe(
+    Layer.provide(fileGitSenderCustodyLayer(target)),
+    Layer.provide(NodeServices.layer),
+    // This instance owns publication senders; a previously built general Git
+    // instance has no custody authority and must not satisfy this layer.
+    Layer.fresh
+  )
   return Layer.fromBuildMemo((memoMap, scope) =>
     Layer.buildWithMemoMap(layer, memoMap, scope).pipe(
       Effect.map((context) => {
@@ -416,7 +439,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
    * explicit unavailable adapter while candidate cleanup is unsupported).
    */
   integratorCandidateProviderAuthority: IntegratorCandidateProviderAuthorityService,
-  runtimeBoundaries: ProductionWorkflowRuntimeBoundaries = {}
+  runtimeBoundaries: ProductionWorkflowRuntimeBoundaries
 ): ProductionWorkflowLayer<TrackerError, TrackerRequirements> => {
   const {
     acceptedResultEvidenceStore,
@@ -537,6 +560,10 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           opportunity,
           onReconstructed
         ).pipe(
+          Layer.provideMerge(
+            nodeGitDirectPublicationLayer(workingRepository).pipe(Layer.provide(workflowGitCommandLayer))
+          ),
+          Layer.provide(nodeGitRemoteBaselineLayer.pipe(Layer.provide(workflowGitCommandLayer))),
           Layer.provide(integratorLayer),
           Layer.provide(interpreterLayer),
           Layer.provide(gitIntegratorCandidateLayer),
@@ -547,9 +574,14 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
         )
       }
       return Layer.merge(
-        journaledRunBootstrapLayer(runId, runtimeLayer, applicationExit, defaultJournalMaintenanceObservation).pipe(
-          Layer.provide(journalLayer)
-        ),
+        journaledRunBootstrapLayer(
+          runId,
+          runtimeLayer,
+          applicationExit,
+          defaultJournalMaintenanceObservation,
+          undefined,
+          runtimeBoundaries.remotePublicationTarget
+        ).pipe(Layer.provide(journalLayer)),
         Layer.mergeAll(
           Layer.succeed(ApplicationExitRequestBoundary, applicationExit.requestBoundary),
           // Keep the process-wide shell available so Exit can invoke the
@@ -558,5 +590,9 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
         )
       )
     })
-  ).pipe(Layer.provide(nonJournaledRuntimeInputs), Layer.provide(ownershipLayer))
+  ).pipe(
+    Layer.provide(nonJournaledRuntimeInputs),
+    Layer.provide(ownershipLayer),
+    Layer.provide(nodeGitRemoteBaselineLayer.pipe(Layer.provide(workflowGitCommandLayer)))
+  )
 }

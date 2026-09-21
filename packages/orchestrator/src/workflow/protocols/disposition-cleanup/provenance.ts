@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Family-specific provenance and history checks stay co-located for auditability. */
 
-import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
+import { GitCommitSha, plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import { Match, Option, Schema } from "effect"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
@@ -22,6 +22,8 @@ import {
   branchCleanupObservationIntendedRecordKey,
   branchCleanupObservedRecordKey,
   branchCleanupSettledRecordKey,
+  completionClaimDeletedRecordKey,
+  completionClaimReplacedRecordKey,
   integratorCandidateCleanupAuthorizedRecordKey,
   integratorCandidateCleanupAbsenceConfirmedRecordKey,
   integratorCandidateCleanupContradictedRecordKey,
@@ -30,7 +32,13 @@ import {
   integratorCandidateCleanupObservationIntendedRecordKey,
   integratorCandidateCleanupObservedRecordKey,
   integratorCandidateCleanupSettledRecordKey,
+  integrationFinalitySettledRecordKey,
   integrationQuarantineDirectionAppliedRecordKey,
+  integratorRunCandidateGitObservedRecordKey,
+  integratorRunCandidateGitReadIntendedRecordKey,
+  integratorRunResultRecordedRecordKey,
+  integratorRunStartedRecordKey,
+  integratorSessionFixedRecordKey,
   integratorSuccessorSessionFixedRecordKey,
   attemptChoiceAppliedRecordKey,
   attemptImplementationAbandonedRecordKey,
@@ -55,9 +63,15 @@ import {
 } from "../attempt-choice/restart-authority-evidence.js"
 import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import { OperationId } from "../../identity.js"
-import { integratorCorrelationsEqual, validateIntegratorSuccessorSessionFixed } from "../integrator/state.js"
 import {
+  integratorCorrelationsEqual,
+  integratorResponsibilityFactsFromCorrelation,
+  validateIntegratorSuccessorSessionFixed
+} from "../integrator/state.js"
+import {
+  IntegratorRunQualifiedCandidate,
   IntegratorRunCorrelation,
+  integratorRunCorrelationsEqual,
   integratorRetryRunOrdinal,
   integratorSuccessorChronologyIsValid
 } from "../integrator/events.js"
@@ -74,15 +88,17 @@ import { exactTargetLineageRecord } from "../integration-quarantine/canonical-li
 import { taskTrackerObservationMatchesRead } from "../../task-tracker-facts/observation-match.js"
 import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
 import { plannedAttemptWorktreeObservationMatchesPlan } from "../planned-attempt-worktree-observation/protocol.js"
+import { completionSuccessObservationEquals, completionTaskClaimEquals } from "../integration-finality/events.js"
 import {
   branchCleanupAuthorizationEquals,
   cleanupMutationRequestLimit,
   integratorCandidateCleanupAuthorizationEquals,
   plannedAttemptCleanupDispositionEquals,
+  integratorCandidateCleanupSessionOf,
   worktreeCleanupAuthorizationEquals,
   type BranchCleanupAuthorization,
   type IntegratorCandidateCleanupAuthorization,
-  type PlannedAttemptCleanupDisposition,
+  PlannedAttemptCleanupDisposition,
   type WorktreeCleanupAuthorization
 } from "./disposition.js"
 import { validateCleanupHistory, type CleanupHistoryDescriptor } from "./cleanup-history.js"
@@ -536,17 +552,54 @@ const validatePlannedAttemptDisposition = (
     return valid("durable abandonment and quiescence evidence prove the exact disposition")
   }
 
-  /*
-   * There is deliberately no generic planned-attempt terminal-settlement
-   * event.  `TargetLineageObserved`, executor reports, and cleanup settlement
-   * events are observations/results of other protocols; matching an arbitrary
-   * operationId or plannedAttempt would manufacture authority.  Keep this
-   * constructor for decoding old callers, but make it un-authorizable until a
-   * canonical terminal event with a run-bound key and causal witness exists.
-   */
-  return invalid(
-    `planned-attempt Settled disposition ${disposition.settlementOperationId} has no canonical terminal settlement event`
+  const record = recordAt(records, disposition.dispositionAt)
+  if (
+    record?.event._tag !== "IntegrationFinalitySettled" ||
+    record.runId !== disposition.plannedAttempt.runId ||
+    record.key !== integrationFinalitySettledRecordKey(record.event.claim.promotionCorrelation.requestId)
+  ) {
+    return invalid("cleanup requires the exact durable IntegrationFinalitySettled occurrence")
+  }
+  const settlement = record.event
+  const matchingSettlements = recordsOfKind(records, "IntegrationFinalitySettled").filter(
+    (candidate) =>
+      candidate.event._tag === "IntegrationFinalitySettled" &&
+      completionTaskClaimEquals(candidate.event.claim, settlement.claim)
   )
+  const replacements = recordsForOperation(records, settlement.replacementOperationId).filter(
+    (candidate) =>
+      candidate.position < record.position &&
+      candidate.runId === record.runId &&
+      candidate.key === completionClaimReplacedRecordKey(settlement.replacementOperationId) &&
+      candidate.event._tag === "CompletionClaimReplaced" &&
+      candidate.event.operationId === settlement.replacementOperationId &&
+      completionTaskClaimEquals(candidate.event.claim, settlement.claim)
+  )
+  const deletions = recordsForOperation(records, settlement.deletionOperationId).filter(
+    (candidate) =>
+      candidate.position < record.position &&
+      candidate.runId === record.runId &&
+      candidate.key === completionClaimDeletedRecordKey(settlement.deletionOperationId) &&
+      candidate.event._tag === "CompletionClaimDeleted" &&
+      candidate.event.operationId === settlement.deletionOperationId &&
+      completionTaskClaimEquals(candidate.event.claim, settlement.claim) &&
+      completionSuccessObservationEquals(candidate.event.successObservation, settlement.successObservation)
+  )
+  if (
+    matchingSettlements.length !== 1 ||
+    matchingSettlements[0] !== record ||
+    replacements.length !== 1 ||
+    deletions.length !== 1 ||
+    !completionTaskClaimEquals(settlement.claim, settlement.successObservation.claim) ||
+    !plannedTaskAttemptEquivalence(settlement.claim.plannedAttempt, disposition.plannedAttempt) ||
+    settlement.deletionOperationId !== disposition.settlementOperationId
+  ) {
+    return invalid("settlement provenance does not resolve the exact canonical integration finality record")
+  }
+  if (!operationIdsEqual(causalPredecessors, [settlement.deletionOperationId])) {
+    return invalid("cleanup authorization does not bind the exact finality deletion operation")
+  }
+  return valid("durable IntegrationFinalitySettled proves the exact planned-attempt disposition")
 }
 
 const firstCleanupAuthorizationPosition = (
@@ -581,17 +634,25 @@ const validateWorktreeAuthorityObservation = (
     (record): record is JournalRecord => record !== undefined
   )
   const observation = observations.length === 1 ? observations[0] : undefined
+  const proof =
+    observation?.event._tag === "TaskWorktreeReady"
+      ? observation.event.proof
+      : observation?.event._tag === "PlannedAttemptWorktreeObserved" &&
+          observation.event.observation._tag === "PlannedWorktreeReady"
+        ? observation.event.observation
+        : undefined
   if (
-    observation?.event._tag !== "PlannedAttemptWorktreeObserved" ||
+    observation === undefined ||
+    (observation.event._tag !== "TaskWorktreeReady" && observation.event._tag !== "PlannedAttemptWorktreeObserved") ||
     observation.runId !== plannedAttempt.runId ||
     observation.key !== outcomeRecordKey(authorization.observationOperationId) ||
     observation.event.operationId !== authorization.observationOperationId ||
-    !plannedAttemptWorktreeObservationMatchesPlan(observation.event.observation, plannedAttempt) ||
-    observation.event.observation._tag !== "PlannedWorktreeReady" ||
-    observation.event.observation.worktree !== plannedAttempt.worktree ||
-    observation.event.observation.branch !==
+    proof === undefined ||
+    !plannedAttemptWorktreeObservationMatchesPlan(proof, plannedAttempt) ||
+    proof.worktree !== plannedAttempt.worktree ||
+    proof.branch !==
       (family === "worktree" && "branch" in authorization.owner ? authorization.owner.branch : authorization.locator) ||
-    observation.event.observation.headSha !== authorization.expectedHead
+    (authorization.disposition._tag !== "Settled" && proof.headSha !== authorization.expectedHead)
   ) {
     return invalid(`${family} cleanup authorization does not bind an exact preceding planned-worktree observation`)
   }
@@ -600,10 +661,15 @@ const validateWorktreeAuthorityObservation = (
       record.position < observation.position &&
       record.runId === plannedAttempt.runId &&
       record.key === intentRecordKey(authorization.observationOperationId) &&
-      record.event._tag === "GitReadIntentRecorded" &&
-      record.event.operation._tag === "ReadTaskWorktree" &&
-      record.event.operation.operationId === authorization.observationOperationId &&
-      plannedTaskAttemptEquivalence(record.event.operation.plannedAttempt, plannedAttempt)
+      ((observation.event._tag === "TaskWorktreeReady" &&
+        record.event._tag === "TaskWorktreeReconciliationIntended" &&
+        record.event.operation.operationId === authorization.observationOperationId &&
+        plannedTaskAttemptEquivalence(record.event.operation.plannedAttempt, plannedAttempt)) ||
+        (observation.event._tag === "PlannedAttemptWorktreeObserved" &&
+          record.event._tag === "GitReadIntentRecorded" &&
+          record.event.operation._tag === "ReadTaskWorktree" &&
+          record.event.operation.operationId === authorization.observationOperationId &&
+          plannedTaskAttemptEquivalence(record.event.operation.plannedAttempt, plannedAttempt)))
   )
   if (intents.length !== 1) {
     return invalid(`${family} cleanup authorization lacks the exact preceding planned-worktree read intent`)
@@ -642,7 +708,7 @@ const validateCandidateAuthorityObservation = (
   records: JournalHistorySource,
   authorization: IntegratorCandidateCleanupAuthorization
 ): CleanupProvenanceValidation => {
-  const predecessor = authorization.disposition.predecessor
+  const predecessor = integratorCandidateCleanupSessionOf(authorization.disposition)
   const lineage = exactTargetLineageRecord(records, {
     expectedTargetHead: predecessor.expectedTargetHead,
     integrationTarget: predecessor.integrationTarget,
@@ -690,6 +756,22 @@ export const validateWorktreeCleanupProvenance = (
 ): CleanupProvenanceValidation => {
   const observation = validateCleanupAuthorizationObservation(records, authorization)
   if (observation._tag === "Invalid") return observation
+  if (
+    authorization.disposition._tag === "Settled" &&
+    authorization.observationAt >= authorization.disposition.dispositionAt
+  ) {
+    return invalid("settled cleanup requires its exact planned-worktree observation before finality")
+  }
+  if (authorization.disposition._tag === "Settled") {
+    const settlement = recordAt(records, authorization.disposition.dispositionAt)
+    if (
+      settlement?.event._tag !== "IntegrationFinalitySettled" ||
+      authorization.expectedHead !==
+        settlement.event.claim.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult.commit
+    ) {
+      return invalid("settled cleanup expected head does not bind finality's exact accepted result")
+    }
+  }
   if ("worktreeCleanupOperationId" in authorization) {
     if (authorization.causalPredecessors[0] !== authorization.worktreeCleanupOperationId) {
       return invalid("branch cleanup does not bind the exact settled worktree operation")
@@ -711,6 +793,81 @@ export const validateIntegratorCandidateCleanupProvenance = (
   const observation = validateCandidateAuthorityObservation(records, authorization)
   if (observation._tag === "Invalid") return observation
   const disposition = authorization.disposition
+  if (disposition._tag === "Settled") {
+    const session = disposition.qualifiedCandidate.run.session
+    const settlement = validatePlannedAttemptDisposition(
+      records,
+      PlannedAttemptCleanupDisposition.cases.Settled.make({
+        dispositionAt: disposition.dispositionAt,
+        plannedAttempt: session.plannedAttempt,
+        settlementOperationId: disposition.settlementOperationId
+      }),
+      authorization.causalPredecessors
+    )
+    if (settlement._tag === "Invalid") return invalid(settlement.detail)
+    const settlementRecord = recordAt(records, disposition.dispositionAt)
+    if (
+      settlementRecord?.event._tag !== "IntegrationFinalitySettled" ||
+      !Schema.toEquivalence(IntegratorRunQualifiedCandidate)(
+        settlementRecord.event.claim.promotionCorrelation.qualifiedCandidate,
+        disposition.qualifiedCandidate
+      )
+    ) {
+      return invalid("candidate settlement does not bind finality's exact qualified candidate")
+    }
+    const sessionFacts = integratorResponsibilityFactsFromCorrelation(session)
+    const fixedSessions = recordsOfKind(records, "IntegratorSessionFixed").filter(
+      (candidate) =>
+        candidate.position < disposition.qualifiedCandidate.qualifiedAt &&
+        candidate.runId === session.plannedAttempt.runId &&
+        candidate.key === integratorSessionFixedRecordKey(sessionFacts) &&
+        candidate.event._tag === "IntegratorSessionFixed" &&
+        integratorCorrelationsEqual(candidate.event.correlation, session)
+    )
+    const run = disposition.qualifiedCandidate.run
+    const started = journalRecordByKey(records, integratorRunStartedRecordKey(run))
+    const result = journalRecordByKey(records, integratorRunResultRecordedRecordKey(run))
+    const readIntent = journalRecordByKey(
+      records,
+      integratorRunCandidateGitReadIntendedRecordKey(run, disposition.qualifiedCandidate.candidateText)
+    )
+    const observed = recordAt(records, disposition.qualifiedCandidate.qualifiedAt)
+    const candidateObservationIsExact =
+      observed?.event._tag === "IntegratorRunCandidateGitObserved" &&
+      observed.runId === session.plannedAttempt.runId &&
+      observed.key === integratorRunCandidateGitObservedRecordKey(run, disposition.qualifiedCandidate.candidateText) &&
+      observed.event.candidateText === disposition.qualifiedCandidate.candidateText &&
+      integratorRunCorrelationsEqual(observed.event.run, run) &&
+      observed.event.observation._tag === "Commit" &&
+      observed.event.observation.commit === disposition.qualifiedCandidate.candidateCommit &&
+      Schema.toEquivalence(Schema.Array(GitCommitSha))(
+        observed.event.observation.directParents,
+        disposition.qualifiedCandidate.directParents
+      )
+    if (
+      fixedSessions.length !== 1 ||
+      started?.event._tag !== "IntegratorRunStarted" ||
+      started.position >= disposition.qualifiedCandidate.qualifiedAt ||
+      started.runId !== session.plannedAttempt.runId ||
+      !integratorRunCorrelationsEqual(started.event.run, run) ||
+      result?.event._tag !== "IntegratorRunResultRecorded" ||
+      result.position >= disposition.qualifiedCandidate.qualifiedAt ||
+      result.runId !== session.plannedAttempt.runId ||
+      result.event.result._tag !== "PreparedCandidate" ||
+      result.event.result.candidateText !== disposition.qualifiedCandidate.candidateText ||
+      !integratorRunCorrelationsEqual(result.event.run, run) ||
+      !integratorRunCorrelationsEqual(result.event.result.correlation, run) ||
+      readIntent?.event._tag !== "IntegratorRunCandidateGitReadIntended" ||
+      readIntent.position >= disposition.qualifiedCandidate.qualifiedAt ||
+      readIntent.runId !== session.plannedAttempt.runId ||
+      readIntent.event.candidateText !== disposition.qualifiedCandidate.candidateText ||
+      !integratorRunCorrelationsEqual(readIntent.event.run, run) ||
+      !candidateObservationIsExact
+    ) {
+      return invalid("settled candidate cleanup requires the exact fixed session and qualified candidate observation")
+    }
+    return valid("integration finality settled the exact fixed Integrator candidate resource")
+  }
   const direction = recordAt(records, disposition.directionAppliedAt)
   if (
     direction?.event._tag !== "IntegrationQuarantineDirectionApplied" ||
@@ -1289,7 +1446,7 @@ const candidateHistoryDescriptor = (
 ): CleanupHistoryDescriptor<IntegratorCandidateCleanupAuthorization> => ({
   data: {
     operationId: authorization.operationId,
-    runId: authorization.disposition.predecessor.plannedAttempt.runId,
+    runId: integratorCandidateCleanupSessionOf(authorization.disposition).plannedAttempt.runId,
     familyTags: [
       "IntegratorCandidateCleanupAuthorized",
       "IntegratorCandidateCleanupObservationIntended",

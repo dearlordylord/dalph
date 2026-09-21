@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
@@ -64,7 +65,7 @@ const admissionSpecification = makeTaskWorkSpecification({
 })
 const admissionAttempt = { ...fixture.plannedAttempt, taskRevision: admissionSpecification.fingerprint }
 const begunJournalLayer = liveJournalTestLayer({
-  records: [makeWorkflowRunBeganRecord(fixture.runId, trackerTarget, initialPolicy)],
+  records: [makeWorkflowRunBeganRecord(fixture.runId, trackerTarget, initialPolicy, remotePublicationTargetForTest)],
   runId: fixture.runId,
   target: trackerTarget
 })

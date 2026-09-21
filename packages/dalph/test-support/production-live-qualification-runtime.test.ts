@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../orchestrator/test/support/direct-publication.js"
 /* eslint-disable import/no-nodejs-modules -- This qualification test executes and observes the real Node process boundary. */
 import { spawn } from "node:child_process"
 import { readFile } from "node:fs/promises"
@@ -356,7 +357,8 @@ const completedEvidenceObservationFixture = () => {
     makeWorkflowRunBeganRecord(
       runId,
       target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTargetForTest
     ),
     record(2, TaskClaimAcquiredEvent.make({ claim: activeClaim, version: workflowJournalEventVersion })),
     record(3, TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })),

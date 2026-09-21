@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import {
   AttemptId,
@@ -95,7 +96,8 @@ const capacityJournalLayer = (runId: RunId, target: ReturnType<typeof FixtureTar
       makeWorkflowRunBeganRecord(
         runId,
         target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(capacity) })
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(capacity) }),
+        remotePublicationTargetForTest
       )
     ],
     runId,
@@ -113,7 +115,8 @@ it.effect("rejects an invalid journal prefix instead of deriving a capacity", ()
     yield* journal.beginRun(
       runId,
       target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+      remotePublicationTargetForTest
     )
     const records = yield* journal.read(runId)
     const began = Option.getOrThrow(Option.fromUndefinedOr(records[0]))

@@ -61,6 +61,8 @@ import { RunActivationOpportunity } from "./run-activation-opportunity.js"
 import { firstJournalRecordOfKind } from "../../workflow-journal/record-evidence.js"
 import { journalRecordAt } from "../../workflow-journal/record-sequence.js"
 import { Journal } from "../delivery/journal.js"
+import { RemotePublicationGit } from "../../workflow/protocols/direct-publication/events.js"
+import { RemoteBaselineGit } from "../../workflow/protocols/direct-publication/baseline-events.js"
 
 export const StartupRecoveryIssue = Schema.Union([
   DuplicateUnfinishedTaskAttemptIssue,
@@ -234,6 +236,8 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
   const ambient = yield* Effect.context<never>()
   const integrator = Context.getOption(ambient, Integrator)
   const integratorGit = Context.getOption(ambient, IntegratorGit)
+  const remotePublication = Context.getOption(ambient, RemotePublicationGit)
+  const remoteBaseline = yield* RemoteBaselineGit
   const ambientRuntimeCapabilities = Context.getOption(ambient, DeliveryRuntimeResourceCapabilityPair)
   /* v8 ignore start -- @preserve Production bootstrap always supplies the process-owned capability pair; the fallback only keeps isolated validated-activation adapters self-contained, while the pair factory and close behavior have focused tests. */
   const runtimeCapabilityOwnership = Option.isSome(ambientRuntimeCapabilities)
@@ -254,7 +258,8 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
     targetPromotion,
     integrationFinality !== undefined,
     completionTask !== undefined,
-    opportunity
+    opportunity,
+    Option.isSome(remotePublication)
   )
   if (onReconstructed !== undefined) {
     yield* onReconstructed({ recovery, taskWorkCapacity: taskWorkCapacityControl })
@@ -279,7 +284,8 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
     Context.add(TaskClaimReacquisitionControl, taskClaimReacquisitionControl),
     Context.add(WorkflowTrace, trace),
     Context.add(CoordinatorOwnership, ownership),
-    Context.add(DispositionCleanupActivation, DispositionCleanupActivation.of(cleanup))
+    Context.add(DispositionCleanupActivation, DispositionCleanupActivation.of(cleanup)),
+    Context.add(RemoteBaselineGit, remoteBaseline)
   )
   const optionalContext = Context.empty().pipe(
     Context.add(DeliveryRuntimeResources, runtimeResources),
@@ -291,6 +297,7 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
       TargetPromotionRuntime,
       Option.fromUndefinedOr(targetPromotion).pipe(Option.map(TargetPromotionRuntime.of))
     ),
+    Context.addOrOmit(RemotePublicationGit, remotePublication),
     Context.addOrOmit(
       CompletionClaimBoundary,
       Option.fromUndefinedOr(integrationFinality).pipe(Option.map(CompletionClaimBoundary.of))

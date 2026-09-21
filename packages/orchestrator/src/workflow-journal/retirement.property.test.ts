@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 import * as fc from "fast-check"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
@@ -82,7 +83,7 @@ const terminalHistoryFor = (runId: RunId) => {
   const fixture = completedRunFinalityFixture({ runId, target })
   return Effect.gen(function* () {
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target, initialPolicy)
+    yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
     yield* journal.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
     yield* journal.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
     yield* journal.terminateRun(runId, "Completed", fixture.evidence)
@@ -127,7 +128,7 @@ it("never treats a valid nonterminal prefix as eligible for retirement", async (
           Effect.gen(function* () {
             const journal = yield* JournalStore
             const target = FixtureTarget.make(`retirement-nonterminal-target-${suffix}`)
-            yield* journal.beginRun(runId, target, initialPolicy)
+            yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
             const fixture = completedRunFinalityFixture({ runId, target })
             if (prefixLength >= 2) {
               yield* journal.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
@@ -292,7 +293,8 @@ it("preserves generated schema-v1 Run-begin rows and leaves Cold empty through m
         makeWorkflowRunBeganRecord(
           RunId.make(`migration-property-run-${index}`),
           FixtureTarget.make(`migration-property-target-${index}`),
-          initialPolicy
+          initialPolicy,
+          remotePublicationTargetForTest
         )
       )
       await Effect.runPromise(

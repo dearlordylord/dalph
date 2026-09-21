@@ -1,10 +1,22 @@
 /* eslint-disable import/no-nodejs-modules -- this test owns a disposable real-Git fixture. */
 
 import { execFile as nodeExecFile } from "node:child_process"
-import { access, mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises"
+import { access, mkdtemp, mkdir, realpath, readFile, rm, writeFile } from "node:fs/promises"
 import nodePath from "node:path"
 import nodeProcess from "node:process"
 import { describe, expect, it } from "vitest"
+
+import { GitCommitSha, GitRepositoryLocator, IntegrationTarget, IntegrationTargetRef } from "@dalph/contracts"
+import { Effect, Layer } from "effect"
+import { GitCommand, GitCommandInvocationFailure } from "./command.js"
+import { nodeGitRemoteBaselineLayer } from "./remote-baseline.js"
+import {
+  RemoteBaselineGit,
+  remoteBaselineCorrelationFor
+} from "../../workflow/protocols/direct-publication/baseline-events.js"
+import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
+import { integratorResponsibilityFactsFromCorrelation } from "../../workflow/protocols/integrator/state.js"
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 
 interface GitCommandResult {
   readonly exitCode: number
@@ -214,5 +226,135 @@ describe("direct-publication real-Git characterization", () => {
       )
       expect(current.exitCode).toBe(0)
       expect(current.stdout.trim()).toBe(`${head}\trefs/heads/main`)
+    }))
+})
+
+const catchUpLocal = (directory: string, base: string, head: string, reconcile = false, malformed = false) => {
+  const session = integrationFinalityFixture.qualifiedCandidate.run.session
+  const localTarget = IntegrationTarget.make({
+    ...session.integrationTarget,
+    repository: GitRepositoryLocator.make(directory),
+    ref: IntegrationTargetRef.make("refs/heads/catch-up")
+  })
+  const correlation = remoteBaselineCorrelationFor(
+    session.plannedAttempt.runId,
+    { ...integratorResponsibilityFactsFromCorrelation(session), integrationTarget: localTarget },
+    localTarget,
+    remotePublicationTargetForTest
+  )
+  const run = (repository: string, args: ReadonlyArray<string>) =>
+    Effect.tryPromise({
+      try: () => runGit(repository, ...args),
+      catch: () => new GitCommandInvocationFailure({ detail: "fixture Git failed" })
+    })
+  const commands = Layer.succeed(GitCommand, {
+    run,
+    runInWorktree: run,
+    runBytesInWorktree: (repository, args) =>
+      run(repository, args).pipe(
+        Effect.map((result) => ({ ...result, stdout: new TextEncoder().encode(result.stdout) }))
+      ),
+    runBoundedInRepository: (repository, args) =>
+      malformed && args[0] === "worktree"
+        ? Effect.succeed({ exitCode: 0, stdout: "unreadable", stderr: "" })
+        : run(repository, args)
+  })
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const git = yield* RemoteBaselineGit
+      return yield* (reconcile ? git.reconcileCatchUp : git.catchUp)(
+        correlation,
+        GitCommitSha.make(base),
+        GitCommitSha.make(head)
+      )
+    }).pipe(Effect.provide(nodeGitRemoteBaselineLayer), Effect.provide(commands), Effect.result)
+  )
+}
+
+const targetRef = "refs/heads/catch-up"
+
+describe("initial local catch-up real Git custody", () => {
+  it("characterizes update-ref accepting an occupied dirty branch without updating its index", async () =>
+    withFixture(async (fixture) => {
+      const base = await commit(fixture, "base\n", "base")
+      const head = await commit(fixture, "head\n", "head")
+      await successfulGit(fixture.source, "checkout", "--detach", base)
+      await successfulGit(fixture.source, "branch", "occupied", base)
+      await successfulGit(fixture.source, "checkout", "occupied")
+      await writeFile(nodePath.join(fixture.source, "file"), "foreign work\n")
+      await successfulGit(fixture.source, "update-ref", "refs/heads/occupied", head, base)
+      expect(await successfulGit(fixture.source, "rev-parse", "HEAD")).toBe(head)
+      expect(await successfulGit(fixture.source, "show", ":file")).toBe("base")
+      expect(await readFile(nodePath.join(fixture.source, "file"), "utf8")).toBe("foreign work\n")
+      expect(await successfulGit(fixture.source, "status", "--porcelain")).toBe("MM file")
+    }))
+
+  it("refuses a backward catch-up before mutation", async () =>
+    withFixture(async (fixture) => {
+      const base = await commit(fixture, "base\n", "base")
+      const head = await commit(fixture, "head\n", "head")
+      await successfulGit(fixture.source, "update-ref", targetRef, head)
+      expect(await catchUpLocal(fixture.source, head, base)).toMatchObject({
+        _tag: "Failure",
+        failure: { reason: "AncestryUnavailable" }
+      })
+      expect(await successfulGit(fixture.source, "rev-parse", targetRef)).toBe(head)
+    }))
+
+  it("fast-forwards an unoccupied target and reconciles the applied intent without another mutation", async () =>
+    withFixture(async (fixture) => {
+      const base = await commit(fixture, "base\n", "base")
+      const head = await commit(fixture, "head\n", "head")
+      await successfulGit(fixture.source, "update-ref", targetRef, base)
+      expect(await catchUpLocal(fixture.source, base, head)).toMatchObject({
+        _tag: "Success",
+        success: { _tag: "Applied", newHead: head }
+      })
+      expect(await catchUpLocal(fixture.source, base, head, true)).toMatchObject({
+        _tag: "Success",
+        success: { _tag: "AlreadyCurrent", currentHead: head }
+      })
+      expect(await successfulGit(fixture.source, "rev-parse", targetRef)).toBe(head)
+    }))
+
+  it.each([false, true])("rejects a checked-out target without changing its index or files (dirty=%s)", async (dirty) =>
+    withFixture(async (fixture) => {
+      const base = await commit(fixture, "base\n", "base")
+      const head = await commit(fixture, "head\n", "head")
+      await successfulGit(fixture.source, "update-ref", targetRef, base)
+      const occupied = nodePath.join(fixture.root, "occupied")
+      await successfulGit(fixture.source, "worktree", "add", occupied, targetRef.slice("refs/heads/".length))
+      if (dirty) await writeFile(nodePath.join(occupied, "file"), "foreign work\n")
+      const before = await successfulGit(occupied, "status", "--porcelain")
+      expect(await catchUpLocal(fixture.source, base, head)).toMatchObject({
+        _tag: "Failure",
+        failure: { reason: "TargetUnreadable" }
+      })
+      expect(await catchUpLocal(fixture.source, base, head, true)).toMatchObject({
+        _tag: "Failure",
+        failure: { reason: "TargetUnreadable" }
+      })
+      expect(await successfulGit(fixture.source, "rev-parse", targetRef)).toBe(base)
+      expect(await successfulGit(occupied, "status", "--porcelain")).toBe(before)
+      expect(await readFile(nodePath.join(occupied, "file"), "utf8")).toBe(dirty ? "foreign work\n" : "base\n")
+    })
+  )
+
+  it("rejects ambiguous worktree inventory and symbolic target ownership before mutation", async () =>
+    withFixture(async (fixture) => {
+      const base = await commit(fixture, "base\n", "base")
+      const head = await commit(fixture, "head\n", "head")
+      await successfulGit(fixture.source, "update-ref", targetRef, base)
+      expect(await catchUpLocal(fixture.source, base, head, false, true)).toMatchObject({
+        _tag: "Failure",
+        failure: { reason: "TargetUnreadable" }
+      })
+      expect(await successfulGit(fixture.source, "rev-parse", targetRef)).toBe(base)
+      await successfulGit(fixture.source, "symbolic-ref", targetRef, "refs/heads/main")
+      expect(await catchUpLocal(fixture.source, head, base)).toMatchObject({
+        _tag: "Failure",
+        failure: { reason: "TargetUnreadable" }
+      })
+      expect(await successfulGit(fixture.source, "rev-parse", "HEAD")).toBe(head)
     }))
 })

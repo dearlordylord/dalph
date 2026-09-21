@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { RunId, TaskId, makeTaskWorkSpecification } from "@dalph/contracts"
 import { Effect } from "effect"
@@ -44,7 +45,7 @@ it.effect("keeps the immutable run target graph in the public delivery frame", (
     const foreignTarget = FixtureTarget.make("current-delivery-frame-target-B")
     const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     const storage = yield* JournalStore
-    yield* storage.beginRun(runId, target, policy)
+    yield* storage.beginRun(runId, target, policy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(runId, target, initial, storage)
@@ -128,7 +129,7 @@ it.effect("keeps claim acquisition closed after a focused current graph read fai
     const taskId = TaskId.make("B")
     const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     const storage = yield* JournalStore
-    yield* storage.beginRun(runId, target, policy)
+    yield* storage.beginRun(runId, target, policy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(runId, target, initial, storage)
@@ -199,7 +200,7 @@ it.effect("uses every returned task from a complete target closure, not only its
     const returnedTaskId = TaskId.make("B")
     const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     const storage = yield* JournalStore
-    yield* storage.beginRun(runId, target, policy)
+    yield* storage.beginRun(runId, target, policy, remotePublicationTargetForTest)
     const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(runId, target, initial, storage)

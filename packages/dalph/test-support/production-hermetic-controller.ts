@@ -347,6 +347,7 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
     recordBindings.forget(child.registrationScope, child.handle)
   return {
     invocationId: fixture.manifest.invocationId,
+    endpoint,
     startChild,
     awaitBoundary,
     releaseBoundary: () => Deferred.succeed(release, undefined).pipe(Effect.asVoid),

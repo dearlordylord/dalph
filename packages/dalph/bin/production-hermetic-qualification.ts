@@ -44,6 +44,10 @@ const application = Effect.gen(function* () {
     makeProductionCliHostRunner({
       codexProcessNative: isolatedCodexProcessNativeService,
       githubClient: (configuration) => hermeticGithubClientLayer(endpoint, configuration),
+      // The controlled two-task qualification crosses the tracker transport more than
+      // the ordinary single-target production budget. This qualification-only margin
+      // does not add a Git remote read or change the production default of 120.
+      githubRequestCircuitMaxRequests: 140,
       codexAppServer: () =>
         hermeticCodexAppServerLayer(endpoint, CodexServerIncarnation.make("hermetic-provider-incarnation")),
       targetPromotionCompareAndSetObserver: hermeticPromotionCompareAndSetObserver(endpoint)

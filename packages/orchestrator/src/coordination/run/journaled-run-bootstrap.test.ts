@@ -1,3 +1,8 @@
+import {
+  remoteBaselineGitLayerForTest,
+  remotePublicationGitLayerForTest,
+  remotePublicationTargetForTest
+} from "../../../test/support/direct-publication.js"
 import { RunActivationGraphBaseline } from "./activation-graph-baseline.js"
 import {
   AttemptId,
@@ -212,7 +217,7 @@ it.effect("classifies from one accepted prefix and rejects a contradictory publi
   Effect.gen(function* () {
     const target = FixtureTarget.make("journaled-bootstrap-prefix-classification")
     const runId = RunId.make("journaled-bootstrap-prefix-classification")
-    const prefix = [makeWorkflowRunBeganRecord(runId, target, initialPolicy)]
+    const prefix = [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)]
 
     expect(yield* acceptedRunFactPublicationFromPrefix(JournalPosition.make(1), prefix)).toEqual({
       _tag: "WorkflowProgress"
@@ -523,7 +528,9 @@ const runtimeLayer = (
         responsibilities: { branch: [], candidate: [], worktree: [] },
         run: Effect.die("cleanup activation is not used by this bootstrap fixture")
       })
-    )
+    ),
+    remotePublicationGitLayerForTest,
+    remoteBaselineGitLayerForTest
   )
 
 const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
@@ -564,7 +571,9 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
         relationObserverCapture
       ),
     sharedApplicationExit,
-    maintenanceObservation
+    maintenanceObservation,
+    undefined,
+    remotePublicationTargetForTest
   ).pipe(Layer.provide(dependencies))
   const context = yield* Layer.build(application)
   const bootstrap = Context.get(context, JournaledRunBootstrap)
@@ -939,7 +948,7 @@ it.effect("selects an active subject only from a current accepted Executing life
         const runId = yield* freshWorkflowRunId(target)
         const journalContext = yield* Layer.build(memoryJournalStoreLayer)
         const storage = Context.get(journalContext, JournalStore)
-        yield* storage.beginRun(runId, target, initialPolicy)
+        yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
 
         const plannedAttempt = captureTestAttempt(runId, lifecycleCase.suffix, lifecycleCase.suffix)
         yield* appendExecutorHistory(
@@ -1001,7 +1010,7 @@ it.effect("captures only unfinished Running responsibilities at the active refre
       const runId = yield* freshWorkflowRunId(target)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const storage = Context.get(journalContext, JournalStore)
-      yield* storage.beginRun(runId, target, initialPolicy)
+      yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
 
       const runningA = captureTestAttempt(runId, "running-a", "a")
       const runningB = captureTestAttempt(runId, "running-b", "b")
@@ -1075,7 +1084,7 @@ it.effect("lets an admitted active refresh record its read outcome before Exit r
               )
             : delegate.append(requestedRunId, key, event)
       })
-      yield* storage.beginRun(runId, target, initialPolicy)
+      yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
       const running = captureTestAttempt(runId, "active-refresh-exit", "active-refresh-exit")
       yield* appendExecutorHistory(storage, runId, running, "Running")
 
@@ -1651,7 +1660,7 @@ it.effect("reopens an unfinished Run normally after an authored Exit death cut",
       const runId = yield* freshWorkflowRunId(target)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const storage = Context.get(journalContext, JournalStore)
-      yield* storage.beginRun(runId, target, initialPolicy)
+      yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
 
       const restarted = yield* buildBootstrap(
         runId,
@@ -1909,7 +1918,7 @@ it.effect("retries an unacknowledged Run beginning through the same entry withou
         ...delegate,
         beginRun: (requestedRunId, requestedTarget, policy) =>
           delegate
-            .beginRun(requestedRunId, requestedTarget, policy)
+            .beginRun(requestedRunId, requestedTarget, policy, remotePublicationTargetForTest)
             .pipe(
               Effect.andThen(
                 Effect.fail(
@@ -1960,7 +1969,9 @@ it.effect("retries a pre-commit Run beginning failure without entering activatio
         beginRun: (requestedRunId, requestedTarget, policy) =>
           Ref.getAndUpdate(beginAttempts, (count) => count + 1).pipe(
             Effect.flatMap((attempt) =>
-              attempt === 0 ? Effect.fail(preCommitFailure) : delegate.beginRun(requestedRunId, requestedTarget, policy)
+              attempt === 0
+                ? Effect.fail(preCommitFailure)
+                : delegate.beginRun(requestedRunId, requestedTarget, policy, remotePublicationTargetForTest)
             )
           ),
         scanHot: () => Ref.update(scans, (count) => count + 1).pipe(Effect.andThen(delegate.scanHot()))
@@ -2088,7 +2099,7 @@ it.effect("imports one existing accepted history directly from startup inspectio
       const runId = yield* freshWorkflowRunId(target)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const delegate = Context.get(journalContext, JournalStore)
-      yield* delegate.beginRun(runId, target, initialPolicy)
+      yield* delegate.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
       const scans = yield* Ref.make(0)
       const storage = JournalStore.of({
         ...delegate,
@@ -2144,7 +2155,7 @@ it.effect("rejects an established Run whose target differs before activation", (
       const runId = yield* freshWorkflowRunId(recordedTarget)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const storage = Context.get(journalContext, JournalStore)
-      yield* storage.beginRun(runId, recordedTarget, initialPolicy)
+      yield* storage.beginRun(runId, recordedTarget, initialPolicy, remotePublicationTargetForTest)
       const bootstrap = yield* buildBootstrap(runId, storage)
       const runtimeEntered = yield* Ref.make(false)
 
@@ -2176,8 +2187,8 @@ it.effect("names every unfinished Run and activates none when startup discovery 
       const requestedRunId = yield* freshWorkflowRunId(requestedTarget)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const storage = Context.get(journalContext, JournalStore)
-      yield* storage.beginRun(firstRunId, firstTarget, initialPolicy)
-      yield* storage.beginRun(secondRunId, secondTarget, initialPolicy)
+      yield* storage.beginRun(firstRunId, firstTarget, initialPolicy, remotePublicationTargetForTest)
+      yield* storage.beginRun(secondRunId, secondTarget, initialPolicy, remotePublicationTargetForTest)
       const bootstrap = yield* buildBootstrap(requestedRunId, storage)
       const runtimeEntered = yield* Ref.make(false)
 
@@ -2395,7 +2406,7 @@ it.effect("blocks runtime construction when the startup-inspected journal prefix
       const runId = yield* freshWorkflowRunId(target)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const delegate = Context.get(journalContext, JournalStore)
-      yield* delegate.beginRun(runId, target, initialPolicy)
+      yield* delegate.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
       const storage = JournalStore.of({
         ...delegate,
         scanHot: () =>
@@ -2522,7 +2533,7 @@ it.effect("keeps the Journal-backed quarantine direction route available after d
       const runId = AllocatedWorkflowRunId.make(integrationFinalityFixture.runId)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const storage = Context.get(journalContext, JournalStore)
-      yield* storage.beginRun(runId, target, initialPolicy)
+      yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
       const bootstrap = yield* buildBootstrap(runId, storage)
 
       const fixtureRun = integrationFinalityFixture.qualifiedCandidate.run
@@ -2860,7 +2871,7 @@ it.effect(
         const runId = yield* freshWorkflowRunId(target)
         const journalContext = yield* Layer.build(memoryJournalStoreLayer)
         const storage = Context.get(journalContext, JournalStore)
-        yield* storage.beginRun(runId, target, initialPolicy)
+        yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
         const bootstrap = yield* buildBootstrap(runId, storage)
         const firstActive = yield* Deferred.make<void>()
         const appendFirst = yield* Deferred.make<void>()
@@ -3428,7 +3439,7 @@ it.effect("applies inactive Run directions but does not newly authorize cancella
       expect(
         yield* bootstrap.readRunReactivationControl(target, RunId.make("different-reactivation-run")).pipe(Effect.flip)
       ).toMatchObject({ _tag: "JournaledRunIdentityMismatch" })
-      yield* storage.beginRun(runId, target, initialPolicy)
+      yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
       expect(
         yield* bootstrap
           .readRunReactivationControl(FixtureTarget.make("different-reactivation-target"), runId)
@@ -3825,7 +3836,8 @@ it.effect("observes live terminal executor change once and releases the exact po
       yield* storage.beginRun(
         runId,
         target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTargetForTest
       )
       const claim = ActiveTaskClaim.make({
         operationId: OperationId.make("journaled-bootstrap-passive-terminal-claim"),
@@ -4058,7 +4070,8 @@ it.effect("observes safe suspension only after exact suspend intent and releases
       yield* storage.beginRun(
         runId,
         target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+        remotePublicationTargetForTest
       )
       const claim = ActiveTaskClaim.make({
         operationId: OperationId.make("journaled-bootstrap-passive-safe-claim"),
@@ -4290,7 +4303,8 @@ it.effect("bootstrap composition can reconstruct and manually attach the exact e
       yield* storage.beginRun(
         runId,
         target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTargetForTest
       )
       const plannedAttempt = captureTestAttempt(runId, "restart-executing", "restart-executing")
       yield* appendExecutorHistory(storage, runId, plannedAttempt, "Running")
@@ -4383,7 +4397,8 @@ it.effect("recovers process death before terminal publication by reprojecting an
       yield* storage.beginRun(
         runId,
         target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTargetForTest
       )
       const plannedAttempt = captureTestAttempt(runId, "restart-terminal", "restart-terminal")
       yield* appendExecutorHistory(storage, runId, plannedAttempt, "Running")
@@ -4516,7 +4531,8 @@ it.effect("retains responsibility and position for absent unavailable unreadable
         yield* storage.beginRun(
           runId,
           target,
-          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+          remotePublicationTargetForTest
         )
         const plannedAttempt = captureTestAttempt(runId, `failure-${index}`, `failure-${index}`)
         yield* appendExecutorHistory(storage, runId, plannedAttempt, "Running")
@@ -4608,7 +4624,7 @@ it.effect(
         const runId = yield* freshWorkflowRunId(target)
         const journalContext = yield* Layer.build(memoryJournalStoreLayer)
         const storage = Context.get(journalContext, JournalStore)
-        yield* storage.beginRun(runId, target, initialPolicy)
+        yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
         const plannedAttempt = captureTestAttempt(runId, "passive-publication", "passive-publication")
         yield* appendExecutorHistory(storage, runId, plannedAttempt, "Running")
         const trackerReads = yield* Ref.make(0)

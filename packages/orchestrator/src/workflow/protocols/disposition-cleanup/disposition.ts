@@ -5,6 +5,7 @@ import { OperationId } from "../../identity.js"
 import { AttemptChoiceRequestId } from "../attempt-choice/events.js"
 import {
   IntegratorCandidateResourceLocator,
+  IntegratorRunQualifiedCandidate,
   IntegratorSessionCorrelation,
   IntegratorSessionId,
   integratorSuccessorChronologyIsValid,
@@ -40,11 +41,7 @@ export const PlannedAttemptCleanupDisposition = Schema.Union([
   Schema.TaggedStruct("Settled", {
     dispositionAt: JournalPosition,
     plannedAttempt: PlannedTaskAttempt,
-    /**
-     * Compatibility data only.  The journal has no canonical planned-attempt
-     * terminal-settlement event, so this variant is deliberately rejected by
-     * cleanup provenance validation until such an event is introduced.
-     */
+    /** The deletion operation bound by the canonical IntegrationFinalitySettled occurrence. */
     settlementOperationId: OperationId
   }),
   PlannedAttemptCleanupDispositionSuperseded
@@ -76,6 +73,27 @@ export const IntegratorCandidateCleanupDisposition = Schema.TaggedStruct("Supers
   })
 )
 export type IntegratorCandidateCleanupDisposition = typeof IntegratorCandidateCleanupDisposition.Type
+
+/** Normal finality made one exact promoted Integrator candidate resource disposable. */
+export const IntegratorCandidateCleanupSettledDisposition = Schema.TaggedStruct("Settled", {
+  dispositionAt: JournalPosition,
+  qualifiedCandidate: IntegratorRunQualifiedCandidate,
+  settlementOperationId: OperationId
+})
+export type IntegratorCandidateCleanupSettledDisposition = typeof IntegratorCandidateCleanupSettledDisposition.Type
+
+export const IntegratorCandidateCleanupAuthorizationDisposition = Schema.Union([
+  IntegratorCandidateCleanupDisposition,
+  IntegratorCandidateCleanupSettledDisposition
+]).pipe(Schema.toTaggedUnion("_tag"))
+export type IntegratorCandidateCleanupAuthorizationDisposition =
+  typeof IntegratorCandidateCleanupAuthorizationDisposition.Type
+
+/** The exact session whose candidate resource is disposable under either terminal disposition. */
+export const integratorCandidateCleanupSessionOf = (
+  disposition: IntegratorCandidateCleanupAuthorizationDisposition
+): IntegratorSessionCorrelation =>
+  disposition._tag === "Superseded" ? disposition.predecessor : disposition.qualifiedCandidate.run.session
 
 /** Ownership evidence for the exact planned-attempt worktree registration. */
 export const WorktreeCleanupOwner = Schema.Struct({ attemptId: AttemptId, branch: TaskBranchRef }).pipe(
@@ -206,7 +224,7 @@ export type BranchCleanupAuthorization = typeof BranchCleanupAuthorization.Type
 /** A candidate authorization names only the predecessor resource transferred by FullRerun. */
 export const IntegratorCandidateCleanupAuthorization = Schema.Struct({
   causalPredecessors: Schema.NonEmptyArray(OperationId),
-  disposition: IntegratorCandidateCleanupDisposition,
+  disposition: IntegratorCandidateCleanupAuthorizationDisposition,
   evidenceRevision: IntegratorCandidateCleanupEvidenceRevision,
   locator: IntegratorCandidateResourceLocator,
   observationAt: JournalPosition,
@@ -216,7 +234,7 @@ export const IntegratorCandidateCleanupAuthorization = Schema.Struct({
   writerQuiescent: Schema.Literal(true)
 }).check(
   Schema.makeFilter((authorization) => {
-    const predecessor = authorization.disposition.predecessor
+    const predecessor = integratorCandidateCleanupSessionOf(authorization.disposition)
     return integratorCandidateCleanupSubjectEquivalence(
       { locator: authorization.locator, owner: authorization.owner },
       {
@@ -244,5 +262,6 @@ export type CleanupMutationFailureOutcome = typeof CleanupMutationFailureOutcome
 /** Only these terminal occurrences may produce cleanup authorization subjects. */
 export const isCleanupEligibleDisposition = (
   value: unknown
-): value is PlannedAttemptCleanupDisposition | IntegratorCandidateCleanupDisposition =>
-  Schema.is(PlannedAttemptCleanupDisposition)(value) || Schema.is(IntegratorCandidateCleanupDisposition)(value)
+): value is PlannedAttemptCleanupDisposition | IntegratorCandidateCleanupAuthorizationDisposition =>
+  Schema.is(PlannedAttemptCleanupDisposition)(value) ||
+  Schema.is(IntegratorCandidateCleanupAuthorizationDisposition)(value)

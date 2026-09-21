@@ -12,8 +12,8 @@ export type JournalEventKind = typeof JournalEventKind.Type
 
 /**
  * Current immutable semantic version shared by every workflow journal event.
- * Version 14 removes the rejected private active-refresh read vocabulary;
- * tracker and Git observations now use only their ordinary journal-first
- * protocols. The event codec remains fail-closed at this version.
+ * Version 15 adds the required Run-pinned remote-publication destination and
+ * the direct-publication journal vocabulary. The event codec remains
+ * fail-closed at this version; v14 rows cannot be resumed as current history.
  */
-export const workflowJournalEventVersion = 14 as const // eslint-disable-line no-magic-numbers
+export const workflowJournalEventVersion = 15 as const // eslint-disable-line no-magic-numbers

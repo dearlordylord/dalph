@@ -3,9 +3,11 @@ import { Schema } from "effect"
 import {
   AcceptedResult,
   AttemptId,
+  GitCommitSha,
   IntegrationTarget,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
+  RemotePublicationTarget,
   RunId,
   TaskId,
   TaskBranchRef,
@@ -92,7 +94,16 @@ import {
   WorktreeCleanupAuthorization,
   WorktreeCleanupMutationResult,
   WorktreeCleanupObservation,
-  RunFinalityEvidence
+  RunFinalityEvidence,
+  RemotePublicationAdmissionId,
+  RemotePublicationAdmissionObservation,
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationCorrelation,
+  RemotePublicationProofBasis,
+  RemotePublicationRetainedCause,
+  RemoteBaselineCorrelation,
+  RemoteBaselineObservation,
+  LocalTargetCatchUpResult
 } from "@dalph/orchestrator"
 
 const initiatedByCoordinator = {
@@ -353,6 +364,64 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     ...initiatedByCoordinator,
     integrationTarget: IntegrationTarget,
     plannedAttempt: PlannedTaskAttempt
+  },
+  RemotePublicationAdmissionReadIntended: {
+    admissionId: RemotePublicationAdmissionId,
+    ...initiatedByCoordinator,
+    runId: RunId,
+    target: RemotePublicationTarget
+  },
+  RemotePublicationAdmissionObserved: {
+    admissionId: RemotePublicationAdmissionId,
+    ...nonActionOccurrence,
+    observation: RemotePublicationAdmissionObservation,
+    runId: RunId,
+    target: RemotePublicationTarget
+  },
+  RemotePublicationIntended: {
+    correlation: RemotePublicationCorrelation,
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    occurrenceClassification: Schema.Literal("InitiatedAction")
+  },
+  RemotePublicationAttemptIntended: {
+    attemptOrdinal: RemotePublicationAttemptOrdinal,
+    correlation: RemotePublicationCorrelation,
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    occurrenceClassification: Schema.Literal("InitiatedAction")
+  },
+  RemotePublicationSucceeded: {
+    correlation: RemotePublicationCorrelation,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    proof: RemotePublicationProofBasis
+  },
+  RemotePublicationRetained: {
+    cause: RemotePublicationRetainedCause,
+    correlation: RemotePublicationCorrelation,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence")
+  },
+  RemoteBaselineReadIntended: {
+    correlation: RemoteBaselineCorrelation,
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    occurrenceClassification: Schema.Literal("InitiatedAction")
+  },
+  RemoteBaselineObserved: {
+    correlation: RemoteBaselineCorrelation,
+    observation: RemoteBaselineObservation,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence")
+  },
+  LocalTargetCatchUpIntended: {
+    correlation: RemoteBaselineCorrelation,
+    expectedLocalHead: GitCommitSha,
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    remoteHead: GitCommitSha
+  },
+  LocalTargetCatchUpObserved: {
+    correlation: RemoteBaselineCorrelation,
+    expectedLocalHead: GitCommitSha,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    remoteHead: GitCommitSha,
+    result: LocalTargetCatchUpResult
   },
   /** Outer Integrator facts retain the exact correlation, including causal Journal positions. */
   IntegratorSessionFixed: { correlation: IntegratorSessionCorrelation },
@@ -631,7 +700,12 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     previousRevision: RunPolicyRevision,
     revision: RunPolicyRevision
   },
-  WorkflowRunBegan: { ...initiatedByCoordinator, initialControlPolicy: InitialControlPolicy, target: TrackerTarget },
+  WorkflowRunBegan: {
+    ...initiatedByCoordinator,
+    initialControlPolicy: InitialControlPolicy,
+    remotePublicationTarget: RemotePublicationTarget,
+    target: TrackerTarget
+  },
   WorkflowRunTerminated: {
     ...nonActionOccurrence,
     disposition: Schema.Literals(["Completed", "Blocked", "Cancelled"]),
@@ -645,12 +719,11 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
 export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
 
 /**
- * Provisional recorded format version. Version 14 records active-work
- * authority refreshes through the ordinary tracker and Git read vocabulary.
- * Recorded cassettes remain fail-closed at the current version; this change
- * does not claim a migration path for the unreleased version 13 draft.
+ * Provisional recorded format version. Version 15 records the required
+ * Run-pinned publication destination and direct-publication journal facts.
+ * Recorded cassettes remain fail-closed at the current version.
  */
-const currentRecordedCassetteVersion = 14
+const currentRecordedCassetteVersion = 15
 export const recordedCassetteVersion = currentRecordedCassetteVersion
 
 export const RecordedCassette = Schema.TaggedStruct("RecordedCassette", {

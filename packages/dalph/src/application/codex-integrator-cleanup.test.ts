@@ -23,6 +23,7 @@ import {
   GitCommonDirectoryLocator,
   IntegratorCandidateCleanupAuthorization,
   IntegratorCandidateCleanupDisposition,
+  IntegratorCandidateCleanupSettledDisposition,
   IntegratorCandidateCleanupEvidenceRevision,
   IntegratorCandidateCleanupOwner,
   type IntegratorCandidateCleanupEvidenceSubject,
@@ -32,6 +33,8 @@ import {
   IntegratorResult,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
+  IntegratorRunQualifiedCandidate,
+  IntegratorCandidateText,
   IntegratorSessionCorrelation,
   IntegratorSessionId,
   JournalPosition,
@@ -109,6 +112,28 @@ const successor = IntegratorSessionCorrelation.make({
   sessionId: IntegratorSessionId.make("successor-session"),
   targetLineageObservedAt: JournalPosition.make(7)
 })
+const settledCandidateCommit = GitCommitSha.make("d".repeat(40))
+const settledAuthorization = IntegratorCandidateCleanupAuthorization.make({
+  causalPredecessors: [OperationId.make("settled-cleanup-predecessor")],
+  disposition: IntegratorCandidateCleanupSettledDisposition.make({
+    dispositionAt: JournalPosition.make(10),
+    qualifiedCandidate: IntegratorRunQualifiedCandidate.make({
+      candidateCommit: settledCandidateCommit,
+      candidateText: IntegratorCandidateText.make(settledCandidateCommit),
+      directParents: [head, acceptedCommit],
+      qualifiedAt: JournalPosition.make(8),
+      run: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: predecessor })
+    }),
+    settlementOperationId: OperationId.make("settled-cleanup-deletion")
+  }),
+  evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
+  locator: predecessor.candidateResource,
+  observationAt: predecessor.targetLineageObservedAt,
+  observationOperationId: OperationId.make("settled-cleanup-observation"),
+  operationId: OperationId.make("settled-cleanup-operation"),
+  owner: IntegratorCandidateCleanupOwner.make({ sessionId: predecessor.sessionId }),
+  writerQuiescent: true
+})
 const authorizationFor = (
   locator: IntegratorCandidateResourceLocator = predecessor.candidateResource,
   evidenceRevision = 1
@@ -132,9 +157,11 @@ const authorizationFor = (
 
 type Registration = "exact" | "none" | "foreign"
 type CleanupCase = {
+  readonly authorization?: IntegratorCandidateCleanupAuthorization
   readonly record?: CodexIntegratorPrivateRecord | null
   readonly occupied?: CodexIntegratorPrivateRecord
   readonly registration?: Registration
+  readonly registrationHead?: GitCommitSha
   readonly pathExists?: boolean
   readonly projection?: CodexOwnedActivityCensusProjection
   readonly projectionSequence?: ReadonlyArray<CodexOwnedActivityCensusProjection>
@@ -291,7 +318,7 @@ const runCase = <A>(
                     ? ""
                     : value === "foreign"
                       ? `worktree ${candidatePath}\0HEAD ${"c".repeat(40)}\0branch refs/heads/foreign\0\0`
-                      : `worktree ${candidatePath}\0HEAD ${head}\0detached\0\0`
+                      : `worktree ${candidatePath}\0HEAD ${options.registrationHead ?? head}\0detached\0\0`
                 return { exitCode: 0, stderr: "", stdout }
               }
               if (args[0] === "worktree" && args[1] === "remove") {
@@ -324,7 +351,7 @@ const runCase = <A>(
               : mutation
         })
         const authority = providerAuthorityFor(config, app, census, commands, fileSystem, store, ownership)
-        return yield* operation(authority, authorizationFor())
+        return yield* operation(authority, options.authorization ?? authorizationFor())
       }).pipe(Effect.provide(NodeFileSystem.layer))
     )
   )
@@ -419,6 +446,32 @@ const recordFor = (
 }
 
 describe("Codex Integrator cleanup boundary", () => {
+  it("classifies a settled candidate registration by its promoted final head", async () => {
+    const exact = await runCase(
+      {
+        authorization: settledAuthorization,
+        record: recordFor("/tmp/unused"),
+        registration: "exact",
+        registrationHead: settledCandidateCommit,
+        pathExists: true
+      },
+      (authority, authorization) => authority.observe(authorization)
+    )
+    expect(exact._tag).toBe("Present")
+
+    const stale = await runCase(
+      {
+        authorization: settledAuthorization,
+        record: recordFor("/tmp/unused"),
+        registration: "exact",
+        registrationHead: head,
+        pathExists: true
+      },
+      (authority, authorization) => authority.observe(authorization)
+    )
+    expect(stale._tag).toBe("Foreign")
+  })
+
   it("reads the exact private revision for authorization and rejects foreign evidence", async () => {
     const observed = await runCase(
       { record: recordFor("/tmp/unused", { revision: 9 }), registration: "none" },

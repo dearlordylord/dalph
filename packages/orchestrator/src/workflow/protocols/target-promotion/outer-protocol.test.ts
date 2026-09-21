@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { Effect, Layer, Ref, Schema } from "effect"
 import { expect } from "vitest"
@@ -57,6 +58,13 @@ import {
 } from "./protocol.js"
 import { targetPromotionContract } from "../../../../test/contracts/target-promotion-contract.js"
 import { makeTargetPromotionEngine } from "./protocol-engine.js"
+import {
+  PublishedIntegratorRunQualifiedCandidate,
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationProofBasis,
+  RemotePublicationSucceededEvent,
+  remotePublicationCorrelationFor
+} from "../direct-publication/events.js"
 const {
   authorizeTargetPromotionProgress,
   observeTargetPromotionRead,
@@ -112,6 +120,16 @@ const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
   directParents: [expectedHead, acceptedCommit],
   qualifiedAt: JournalPosition.make(5)
 })
+const publication = RemotePublicationSucceededEvent.make({
+  correlation: remotePublicationCorrelationFor(qualifiedCandidate, remotePublicationTargetForTest),
+  occurrenceClassification: "NonActionOccurrence",
+  proof: RemotePublicationProofBasis.cases.ReconciledCandidateCurrent.make({
+    attemptOrdinal: RemotePublicationAttemptOrdinal.make(1),
+    remoteHead: candidateCommit
+  }),
+  version: workflowJournalEventVersion
+})
+const publishedCandidate = PublishedIntegratorRunQualifiedCandidate.make({ candidate: qualifiedCandidate, publication })
 
 const request = targetPromotionCorrelationFor(qualifiedCandidate)
 
@@ -147,15 +165,15 @@ targetPromotionContract({
 })
 
 const run = (service: TargetPromotionGitService, records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
-  runFor(qualifiedCandidate, service, records)
+  runFor(publishedCandidate, service, records)
 
 const reconcile = (service: TargetPromotionGitService, records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
-  reconcileTargetPromotionAttempt(qualifiedCandidate).pipe(
+  reconcileTargetPromotionAttempt(publishedCandidate).pipe(
     Effect.provide(Layer.mergeAll(journalLayer(records), gitLayer(service.compareAndSet, service.read)))
   )
 
 const runFor = (
-  candidate: IntegratorRunQualifiedCandidate,
+  candidate: PublishedIntegratorRunQualifiedCandidate,
   service: TargetPromotionGitService,
   records: Ref.Ref<ReadonlyArray<JournalRecord>>
 ) =>
@@ -177,7 +195,7 @@ it.effect("rejects an unqualified intent during the live Journal append before c
       ),
       (stop) => Effect.sync(stop)
     )
-    const failure = yield* runAcceptedTargetPromotion(qualifiedCandidate).pipe(
+    const failure = yield* runAcceptedTargetPromotion(publishedCandidate).pipe(
       Effect.provideService(
         InRunJournal,
         InRunJournal.of({
@@ -216,7 +234,8 @@ it.effect("rejects an unqualified intent during the live Journal append before c
           makeWorkflowRunBeganRecord(
             runId,
             FixtureTarget.make("promotion-wrapper"),
-            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+            remotePublicationTargetForTest
           )
         ],
         runId,
@@ -1115,7 +1134,25 @@ it.effect("rejects recovery for a foreign exact promotion correlation sharing th
       const foreignRequest = targetPromotionCorrelationFor(foreignCandidate)
       expect(targetPromotionCorrelationEquals(foreignRequest, request), label).toBe(false)
       expect(deriveTargetPromotionState(yield* Ref.get(records), foreignRequest), label).toBeUndefined()
-      const failure = yield* Effect.flip(runFor(foreignCandidate, service, records))
+      const foreignPublication = RemotePublicationSucceededEvent.make({
+        correlation: remotePublicationCorrelationFor(foreignCandidate, remotePublicationTargetForTest),
+        occurrenceClassification: "NonActionOccurrence",
+        proof: RemotePublicationProofBasis.cases.ReconciledCandidateCurrent.make({
+          attemptOrdinal: RemotePublicationAttemptOrdinal.make(1),
+          remoteHead: foreignCandidate.candidateCommit
+        }),
+        version: workflowJournalEventVersion
+      })
+      const failure = yield* Effect.flip(
+        runFor(
+          PublishedIntegratorRunQualifiedCandidate.make({
+            candidate: foreignCandidate,
+            publication: foreignPublication
+          }),
+          service,
+          records
+        )
+      )
       expect(failure, label).toBeInstanceOf(TargetPromotionCorrelationContradiction)
     }
     expect(yield* Ref.get(calls)).toEqual(["read", "compare-and-set"])

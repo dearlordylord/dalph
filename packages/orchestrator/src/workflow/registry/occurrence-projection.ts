@@ -8,6 +8,7 @@ import {
   PlannedAttemptExecutorReport,
   plannedTaskAttemptEquivalence
 } from "@dalph/contracts"
+import type { RemotePublicationTarget } from "@dalph/contracts"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
@@ -58,6 +59,22 @@ import {
   type TargetPromotionAttemptIntendedEvent,
   type TargetPromotionIntendedEvent
 } from "../protocols/target-promotion/events.js"
+import {
+  remotePublicationAdmissionIdFor,
+  remotePublicationCorrelationEquals,
+  remotePublicationRunIdOf,
+  type RemotePublicationAdmissionReadIntendedEvent,
+  type RemotePublicationAttemptIntendedEvent,
+  type RemotePublicationIntendedEvent
+} from "../protocols/direct-publication/events.js"
+import {
+  RemoteBaselineCorrelation,
+  remoteBaselineCorrelationFor,
+  type LocalTargetCatchUpIntendedEvent,
+  type LocalTargetCatchUpObservedEvent,
+  type RemoteBaselineObservedEvent,
+  type RemoteBaselineReadIntendedEvent
+} from "../protocols/direct-publication/baseline-events.js"
 import { BranchCleanupJournalEvent } from "../protocols/disposition-cleanup/branch.js"
 import { IntegratorCandidateCleanupJournalEvent } from "../protocols/disposition-cleanup/integrator-candidate.js"
 import { WorktreeCleanupJournalEvent } from "../protocols/disposition-cleanup/worktree.js"
@@ -85,6 +102,16 @@ const {
   IntegratorRunStarted,
   IntegratorSessionFixed,
   IntegratorSuccessorSessionFixed,
+  LocalTargetCatchUpInitiated,
+  LocalTargetCatchUpObserved,
+  RemoteBaselineObserved,
+  RemoteBaselineReadInitiated,
+  RemotePublicationAdmissionObserved,
+  RemotePublicationAdmissionReadInitiated,
+  RemotePublicationAttemptRequested,
+  RemotePublicationRequested,
+  RemotePublicationRetained,
+  RemotePublicationSucceeded,
   RunCancellationApplied,
   StoppedAttemptClaimPreserved,
   TargetPromotionAttemptRequested,
@@ -392,6 +419,7 @@ const workflowOccurrenceSubjectRules = [
   [/^PlannedAttemptExecutorWorkResponsibilityBegan$/u, "coordinator responsibility record"],
   [/^PlannedAttemptExecutorWorkReported$/u, "executor report observed"],
   [/Integrator|Integration/u, "integration activity"],
+  [/RemotePublication/u, "remote publication"],
   [/TargetPromotion/u, "target promotion"],
   [/TaskClaim/u, "task claim activity"],
   [/Worktree|Lineage|GitRead/u, "Git activity"],
@@ -765,6 +793,16 @@ type NonProjectedJournalEvent = Exclude<WorkflowJournalEvent, ProjectedJournalEv
 const nonProjectedJournalEventKinds = {
   AttemptImplementationAbandoned: true,
   AttemptStoppageIntended: true,
+  LocalTargetCatchUpIntended: true,
+  LocalTargetCatchUpObserved: true,
+  RemoteBaselineObserved: true,
+  RemoteBaselineReadIntended: true,
+  RemotePublicationAdmissionObserved: true,
+  RemotePublicationAdmissionReadIntended: true,
+  RemotePublicationAttemptIntended: true,
+  RemotePublicationIntended: true,
+  RemotePublicationRetained: true,
+  RemotePublicationSucceeded: true,
   IntegratorRunCandidateGitObserved: true,
   IntegratorRunCandidateGitReadIntended: true,
   IntegratorRunResultRecorded: true,
@@ -875,6 +913,16 @@ const historicalJournalEventKinds = {
   IntegratorRunStarted: true,
   IntegratorSessionFixed: true,
   IntegratorSuccessorSessionFixed: true,
+  LocalTargetCatchUpIntended: true,
+  LocalTargetCatchUpObserved: true,
+  RemoteBaselineObserved: true,
+  RemoteBaselineReadIntended: true,
+  RemotePublicationAdmissionObserved: true,
+  RemotePublicationAdmissionReadIntended: true,
+  RemotePublicationAttemptIntended: true,
+  RemotePublicationIntended: true,
+  RemotePublicationRetained: true,
+  RemotePublicationSucceeded: true,
   PostPromotionBlockerCandidateAncestryObserved: true,
   PostPromotionBlockerCandidateAncestryReadIntended: true,
   StoppedAttemptClaimNoReleaseObserved: true,
@@ -1177,6 +1225,14 @@ type HistoricalProjectionContext = ProjectionContext & {
   readonly integratorSessions: Map<string, IntegratorSessionJournalEvent>
   readonly integratorRunStarts: Map<string, IntegratorRunStartedJournalEvent>
   readonly integratorCandidateIntents: Map<string, IntegratorCandidateIntentJournalEvent>
+  readonly publicationIntents: Map<string, RemotePublicationIntendedEvent>
+  readonly publicationAttemptIntents: Map<string, RemotePublicationAttemptIntendedEvent>
+  readonly publicationAdmissionReadIntents: Map<string, RemotePublicationAdmissionReadIntendedEvent>
+  readonly remoteBaselineReadIntents: Map<string, RemoteBaselineReadIntendedEvent>
+  readonly remoteBaselineObservations: Map<string, RemoteBaselineObservedEvent>
+  readonly localTargetCatchUpIntents: Map<string, LocalTargetCatchUpIntendedEvent>
+  readonly localTargetCatchUpObservations: Map<string, LocalTargetCatchUpObservedEvent>
+  readonly runPublicationTarget: RemotePublicationTarget | undefined
   readonly promotionIntents: Map<string, TargetPromotionIntendedEvent>
   readonly promotionAttemptIntents: Map<string, TargetPromotionAttemptIntendedEvent>
 }
@@ -1204,6 +1260,22 @@ const historicalIntegratorEventKinds = {
   IntegratorRunStarted: true,
   IntegratorSessionFixed: true,
   IntegratorSuccessorSessionFixed: true
+} as const
+
+const historicalPublicationEventKinds = {
+  RemotePublicationAdmissionObserved: true,
+  RemotePublicationAdmissionReadIntended: true,
+  RemotePublicationAttemptIntended: true,
+  RemotePublicationIntended: true,
+  RemotePublicationRetained: true,
+  RemotePublicationSucceeded: true
+} as const
+
+const historicalRemoteBaselineEventKinds = {
+  LocalTargetCatchUpIntended: true,
+  LocalTargetCatchUpObserved: true,
+  RemoteBaselineObserved: true,
+  RemoteBaselineReadIntended: true
 } as const
 
 const historicalPromotionEventKinds = {
@@ -1255,6 +1327,14 @@ type HistoricalIntegratorEvent = Extract<
   HistoricalJournalEvent,
   { readonly _tag: keyof typeof historicalIntegratorEventKinds }
 >
+type HistoricalPublicationEvent = Extract<
+  HistoricalJournalEvent,
+  { readonly _tag: keyof typeof historicalPublicationEventKinds }
+>
+type HistoricalRemoteBaselineEvent = Extract<
+  HistoricalJournalEvent,
+  { readonly _tag: keyof typeof historicalRemoteBaselineEventKinds }
+>
 type HistoricalPromotionEvent = Extract<
   HistoricalJournalEvent,
   { readonly _tag: keyof typeof historicalPromotionEventKinds }
@@ -1276,6 +1356,12 @@ const isHistoricalAttemptWorktreeEvent = (event: HistoricalJournalEvent): event 
 
 const isHistoricalIntegratorEvent = (event: HistoricalJournalEvent): event is HistoricalIntegratorEvent =>
   Object.hasOwn(historicalIntegratorEventKinds, event._tag)
+
+const isHistoricalPublicationEvent = (event: HistoricalJournalEvent): event is HistoricalPublicationEvent =>
+  Object.hasOwn(historicalPublicationEventKinds, event._tag)
+
+const isHistoricalRemoteBaselineEvent = (event: HistoricalJournalEvent): event is HistoricalRemoteBaselineEvent =>
+  Object.hasOwn(historicalRemoteBaselineEventKinds, event._tag)
 
 const isHistoricalPromotionEvent = (event: HistoricalJournalEvent): event is HistoricalPromotionEvent =>
   Object.hasOwn(historicalPromotionEventKinds, event._tag)
@@ -1687,6 +1773,401 @@ const projectHistoricalIntegrator = (
   return projectHistoricalCandidateObserved(record, event, context)
 }
 
+type HistoricalRemoteBaselineReadIntendedEvent = Extract<
+  HistoricalRemoteBaselineEvent,
+  { readonly _tag: "RemoteBaselineReadIntended" }
+>
+type HistoricalRemoteBaselineObservedEvent = Extract<
+  HistoricalRemoteBaselineEvent,
+  { readonly _tag: "RemoteBaselineObserved" }
+>
+type HistoricalLocalTargetCatchUpIntendedEvent = Extract<
+  HistoricalRemoteBaselineEvent,
+  { readonly _tag: "LocalTargetCatchUpIntended" }
+>
+type HistoricalLocalTargetCatchUpObservedEvent = Extract<
+  HistoricalRemoteBaselineEvent,
+  { readonly _tag: "LocalTargetCatchUpObserved" }
+>
+
+const remoteBaselineCorrelationEquals = (left: RemoteBaselineCorrelation, right: RemoteBaselineCorrelation): boolean =>
+  Schema.toEquivalence(RemoteBaselineCorrelation)(left, right)
+
+const remoteBaselineMatchesRun = (
+  correlation: RemoteBaselineCorrelation,
+  record: JournalRecord,
+  context: HistoricalProjectionContext
+): boolean =>
+  correlation.runId === record.runId &&
+  context.runPublicationTarget !== undefined &&
+  sameRemotePublicationTarget(context.runPublicationTarget, correlation.remoteTarget) &&
+  remoteBaselineCorrelationEquals(
+    correlation,
+    remoteBaselineCorrelationFor(
+      correlation.runId,
+      correlation.responsibility,
+      correlation.localTarget,
+      correlation.remoteTarget
+    )
+  )
+
+const projectHistoricalRemoteBaselineReadIntended = (
+  record: JournalRecord,
+  event: HistoricalRemoteBaselineReadIntendedEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const baselineId = event.correlation.baselineId
+  if (!remoteBaselineMatchesRun(event.correlation, record, context)) {
+    return historicalFailure(
+      record,
+      "remote baseline read " + baselineId + " does not match the Run target/correlation"
+    )
+  }
+  if (context.remoteBaselineReadIntents.has(baselineId)) {
+    return historicalFailure(record, "duplicate remote baseline read " + baselineId)
+  }
+  context.remoteBaselineReadIntents.set(baselineId, event)
+  return Effect.succeed(
+    RemoteBaselineReadInitiated.make({
+      correlation: event.correlation,
+      initiatedBy: event.initiatedBy,
+      occurrenceClassification: event.occurrenceClassification,
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalRemoteBaselineObserved = (
+  record: JournalRecord,
+  event: HistoricalRemoteBaselineObservedEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const baselineId = event.correlation.baselineId
+  const intent = context.remoteBaselineReadIntents.get(baselineId)
+  if (
+    intent === undefined ||
+    !remoteBaselineMatchesRun(event.correlation, record, context) ||
+    !remoteBaselineCorrelationEquals(intent.correlation, event.correlation) ||
+    context.remoteBaselineObservations.has(baselineId)
+  ) {
+    return historicalFailure(record, "remote baseline observation " + baselineId + " has no exact earlier read intent")
+  }
+  context.remoteBaselineObservations.set(baselineId, event)
+  return Effect.succeed(
+    RemoteBaselineObserved.make({
+      correlation: event.correlation,
+      occurrenceClassification: event.occurrenceClassification,
+      observation: event.observation,
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalLocalTargetCatchUpIntended = (
+  record: JournalRecord,
+  event: HistoricalLocalTargetCatchUpIntendedEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const baselineId = event.correlation.baselineId
+  const observation = context.remoteBaselineObservations.get(baselineId)
+  if (!remoteBaselineMatchesRun(event.correlation, record, context)) {
+    return historicalFailure(record, "local catch-up " + baselineId + " does not match the Run target/correlation")
+  }
+  if (observation === undefined || !remoteBaselineCorrelationEquals(observation.correlation, event.correlation)) {
+    return historicalFailure(record, "local catch-up " + baselineId + " has no exact earlier baseline observation")
+  }
+  if (
+    observation.observation._tag !== "LocalAncestor" ||
+    event.expectedLocalHead !== observation.observation.localHead ||
+    event.remoteHead !== observation.observation.remoteHead
+  ) {
+    return historicalFailure(
+      record,
+      "local catch-up " + baselineId + " is not authorized by a LocalAncestor observation"
+    )
+  }
+  if (context.localTargetCatchUpIntents.has(baselineId)) {
+    return historicalFailure(record, "duplicate local catch-up intent " + baselineId)
+  }
+  context.localTargetCatchUpIntents.set(baselineId, event)
+  return Effect.succeed(
+    LocalTargetCatchUpInitiated.make({
+      correlation: event.correlation,
+      expectedLocalHead: event.expectedLocalHead,
+      initiatedBy: event.initiatedBy,
+      occurrenceClassification: event.occurrenceClassification,
+      recordedAt: record.position,
+      remoteHead: event.remoteHead,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalLocalTargetCatchUpObserved = (
+  record: JournalRecord,
+  event: HistoricalLocalTargetCatchUpObservedEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const baselineId = event.correlation.baselineId
+  const intent = context.localTargetCatchUpIntents.get(baselineId)
+  if (
+    intent === undefined ||
+    !remoteBaselineMatchesRun(event.correlation, record, context) ||
+    !remoteBaselineCorrelationEquals(intent.correlation, event.correlation) ||
+    intent.expectedLocalHead !== event.expectedLocalHead ||
+    intent.remoteHead !== event.remoteHead ||
+    context.localTargetCatchUpObservations.has(baselineId)
+  ) {
+    return historicalFailure(record, "local catch-up observation " + baselineId + " has no exact earlier intent")
+  }
+  context.localTargetCatchUpObservations.set(baselineId, event)
+  return Effect.succeed(
+    LocalTargetCatchUpObserved.make({
+      correlation: event.correlation,
+      expectedLocalHead: event.expectedLocalHead,
+      occurrenceClassification: event.occurrenceClassification,
+      recordedAt: record.position,
+      remoteHead: event.remoteHead,
+      result: event.result,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalRemoteBaseline = (
+  record: JournalRecord,
+  event: HistoricalRemoteBaselineEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  if (event._tag === "RemoteBaselineReadIntended") {
+    return projectHistoricalRemoteBaselineReadIntended(record, event, context)
+  }
+  if (event._tag === "RemoteBaselineObserved") return projectHistoricalRemoteBaselineObserved(record, event, context)
+  if (event._tag === "LocalTargetCatchUpIntended") {
+    return projectHistoricalLocalTargetCatchUpIntended(record, event, context)
+  }
+  return projectHistoricalLocalTargetCatchUpObserved(record, event, context)
+}
+
+type HistoricalPublicationRequestedEvent = Extract<
+  HistoricalPublicationEvent,
+  { readonly _tag: "RemotePublicationIntended" }
+>
+type HistoricalPublicationAdmissionReadEvent = Extract<
+  HistoricalPublicationEvent,
+  { readonly _tag: "RemotePublicationAdmissionReadIntended" }
+>
+type HistoricalPublicationAdmissionObservedEvent = Extract<
+  HistoricalPublicationEvent,
+  { readonly _tag: "RemotePublicationAdmissionObserved" }
+>
+type HistoricalPublicationAttemptEvent = Extract<
+  HistoricalPublicationEvent,
+  { readonly _tag: "RemotePublicationAttemptIntended" }
+>
+type HistoricalPublicationSucceededEvent = Extract<
+  HistoricalPublicationEvent,
+  { readonly _tag: "RemotePublicationSucceeded" }
+>
+type HistoricalPublicationRetainedEvent = Extract<
+  HistoricalPublicationEvent,
+  { readonly _tag: "RemotePublicationRetained" }
+>
+
+const publicationAttemptKey = (requestId: string, ordinal: number): string => JSON.stringify([requestId, ordinal])
+
+const sameRemotePublicationTarget = (left: RemotePublicationTarget, right: RemotePublicationTarget): boolean =>
+  left.endpoint === right.endpoint && left.branch === right.branch
+
+const projectHistoricalPublicationAdmissionRead = (
+  record: JournalRecord,
+  event: HistoricalPublicationAdmissionReadEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  if (event.runId !== record.runId) {
+    return historicalFailure(record, "publication admission " + event.admissionId + " belongs to another Run")
+  }
+  if (
+    context.runPublicationTarget === undefined ||
+    !sameRemotePublicationTarget(context.runPublicationTarget, event.target)
+  ) {
+    return historicalFailure(record, "publication admission " + event.admissionId + " does not match the Run target")
+  }
+  if (event.admissionId !== remotePublicationAdmissionIdFor(event.runId, event.target)) {
+    return historicalFailure(record, "publication admission " + event.admissionId + " has an invalid identity")
+  }
+  if (context.publicationAdmissionReadIntents.has(event.admissionId)) {
+    return historicalFailure(record, "duplicate publication admission " + event.admissionId)
+  }
+  context.publicationAdmissionReadIntents.set(event.admissionId, event)
+  return Effect.succeed(
+    RemotePublicationAdmissionReadInitiated.make({
+      admissionId: event.admissionId,
+      initiatedBy: event.initiatedBy,
+      occurrenceClassification: event.occurrenceClassification,
+      recordedAt: record.position,
+      runId: record.runId,
+      target: event.target
+    })
+  )
+}
+
+const projectHistoricalPublicationAdmissionObserved = (
+  record: JournalRecord,
+  event: HistoricalPublicationAdmissionObservedEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  if (event.runId !== record.runId) {
+    return historicalFailure(record, "publication admission " + event.admissionId + " belongs to another Run")
+  }
+  const intent = context.publicationAdmissionReadIntents.get(event.admissionId)
+  if (
+    intent === undefined ||
+    intent.runId !== event.runId ||
+    !sameRemotePublicationTarget(intent.target, event.target) ||
+    event.admissionId !== remotePublicationAdmissionIdFor(event.runId, event.target)
+  ) {
+    return historicalFailure(record, "publication admission " + event.admissionId + " has no exact earlier read intent")
+  }
+  return Effect.succeed(
+    RemotePublicationAdmissionObserved.make({
+      admissionId: event.admissionId,
+      occurrenceClassification: event.occurrenceClassification,
+      observation: event.observation,
+      recordedAt: record.position,
+      runId: record.runId,
+      target: event.target
+    })
+  )
+}
+
+const projectHistoricalPublicationRequested = (
+  record: JournalRecord,
+  event: HistoricalPublicationRequestedEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const requestId = event.correlation.requestId
+  if (remotePublicationRunIdOf(event.correlation) !== record.runId) {
+    return historicalFailure(record, "publication " + requestId + " belongs to another Run")
+  }
+  if (
+    context.runPublicationTarget === undefined ||
+    !sameRemotePublicationTarget(context.runPublicationTarget, event.correlation.target)
+  ) {
+    return historicalFailure(record, "publication " + requestId + " does not match the Run target")
+  }
+  if (context.publicationIntents.has(requestId)) {
+    return historicalFailure(record, "duplicate publication intent " + requestId)
+  }
+  context.publicationIntents.set(requestId, event)
+  return Effect.succeed(
+    RemotePublicationRequested.make({
+      correlation: event.correlation,
+      initiatedBy: event.initiatedBy,
+      occurrenceClassification: event.occurrenceClassification,
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalPublicationAttempt = (
+  record: JournalRecord,
+  event: HistoricalPublicationAttemptEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const requestId = event.correlation.requestId
+  const intent = context.publicationIntents.get(requestId)
+  if (intent === undefined || !remotePublicationCorrelationEquals(intent.correlation, event.correlation)) {
+    return historicalFailure(record, "publication attempt " + requestId + " has no exact publication intent")
+  }
+  const attemptKey = publicationAttemptKey(requestId, event.attemptOrdinal)
+  if (context.publicationAttemptIntents.has(attemptKey)) {
+    return historicalFailure(record, "duplicate publication attempt " + attemptKey)
+  }
+  context.publicationAttemptIntents.set(attemptKey, event)
+  return Effect.succeed(
+    RemotePublicationAttemptRequested.make({
+      attemptOrdinal: event.attemptOrdinal,
+      correlation: event.correlation,
+      initiatedBy: event.initiatedBy,
+      occurrenceClassification: event.occurrenceClassification,
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalPublicationSucceeded = (
+  record: JournalRecord,
+  event: HistoricalPublicationSucceededEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const requestId = event.correlation.requestId
+  const intent = context.publicationIntents.get(requestId)
+  if (intent === undefined || !remotePublicationCorrelationEquals(intent.correlation, event.correlation)) {
+    return historicalFailure(record, "publication proof " + requestId + " has no exact publication intent")
+  }
+  const attemptKey = publicationAttemptKey(requestId, event.proof.attemptOrdinal)
+  const attempt = context.publicationAttemptIntents.get(attemptKey)
+  if (attempt === undefined || !remotePublicationCorrelationEquals(attempt.correlation, event.correlation)) {
+    return historicalFailure(record, "publication proof " + requestId + " has no exact earlier attempt intent")
+  }
+  return Effect.succeed(
+    RemotePublicationSucceeded.make({
+      correlation: event.correlation,
+      occurrenceClassification: event.occurrenceClassification,
+      proof: event.proof,
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalPublicationRetained = (
+  record: JournalRecord,
+  event: HistoricalPublicationRetainedEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const requestId = event.correlation.requestId
+  const intent = context.publicationIntents.get(requestId)
+  if (intent === undefined || !remotePublicationCorrelationEquals(intent.correlation, event.correlation)) {
+    return historicalFailure(record, "retained publication " + requestId + " has no exact publication intent")
+  }
+  return Effect.succeed(
+    RemotePublicationRetained.make({
+      cause: event.cause,
+      correlation: event.correlation,
+      occurrenceClassification: event.occurrenceClassification,
+      recordedAt: record.position,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalPublication = (
+  record: JournalRecord,
+  event: HistoricalPublicationEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  if (event._tag === "RemotePublicationAdmissionReadIntended") {
+    return projectHistoricalPublicationAdmissionRead(record, event, context)
+  }
+  if (event._tag === "RemotePublicationAdmissionObserved") {
+    return projectHistoricalPublicationAdmissionObserved(record, event, context)
+  }
+  if (event._tag === "RemotePublicationIntended") return projectHistoricalPublicationRequested(record, event, context)
+  if (event._tag === "RemotePublicationAttemptIntended") {
+    return projectHistoricalPublicationAttempt(record, event, context)
+  }
+  if (event._tag === "RemotePublicationRetained") {
+    return projectHistoricalPublicationRetained(record, event, context)
+  }
+  return projectHistoricalPublicationSucceeded(record, event, context)
+}
+
 type HistoricalPromotionRequestedEvent = Extract<HistoricalPromotionEvent, { readonly _tag: "TargetPromotionIntended" }>
 type HistoricalPromotionAttemptEvent = Extract<
   HistoricalPromotionEvent,
@@ -2021,6 +2502,8 @@ const projectHistoricalOccurrence = (
   if (isHistoricalTaskClaimEvent(event)) return projectHistoricalTaskClaim(record, event, context)
   if (isHistoricalAttemptWorktreeEvent(event)) return projectHistoricalAttemptWorktree(record, event, context)
   if (isHistoricalIntegratorEvent(event)) return projectHistoricalIntegrator(record, event, context)
+  if (isHistoricalRemoteBaselineEvent(event)) return projectHistoricalRemoteBaseline(record, event, context)
+  if (isHistoricalPublicationEvent(event)) return projectHistoricalPublication(record, event, context)
   if (isHistoricalPromotionEvent(event)) return projectHistoricalPromotion(record, event, context)
   if (isHistoricalBoundaryEvent(event)) return projectHistoricalBoundary(record, event)
   if (isHistoricalFinalityStepEvent(event)) return projectHistoricalFinalityStep(record, event)
@@ -2378,6 +2861,11 @@ const projectJournalRecord = (
  * Projects immutable journal records in one pass. Missing relationships fail
  * before any partial semantic projection becomes visible.
  */
+const runPublicationTargetFrom = (records: ReadonlyArray<JournalRecord>): RemotePublicationTarget | undefined => {
+  const beginning = records[0]?.event
+  return beginning?._tag === "WorkflowRunBegan" ? beginning.remotePublicationTarget : undefined
+}
+
 const projectWorkflowRecord = Effect.fn("WorkflowOccurrence.projectRecord")(function* (
   record: JournalRecord,
   context: ProjectionContext,
@@ -2417,6 +2905,14 @@ export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project"
     integratorCandidateIntents: new Map<string, IntegratorCandidateIntentJournalEvent>(),
     integratorRunStarts: new Map<string, IntegratorRunStartedJournalEvent>(),
     integratorSessions: new Map<string, IntegratorSessionJournalEvent>(),
+    publicationAdmissionReadIntents: new Map<string, RemotePublicationAdmissionReadIntendedEvent>(),
+    publicationAttemptIntents: new Map<string, RemotePublicationAttemptIntendedEvent>(),
+    publicationIntents: new Map<string, RemotePublicationIntendedEvent>(),
+    remoteBaselineReadIntents: new Map<string, RemoteBaselineReadIntendedEvent>(),
+    remoteBaselineObservations: new Map<string, RemoteBaselineObservedEvent>(),
+    runPublicationTarget: runPublicationTargetFrom(records),
+    localTargetCatchUpIntents: new Map<string, LocalTargetCatchUpIntendedEvent>(),
+    localTargetCatchUpObservations: new Map<string, LocalTargetCatchUpObservedEvent>(),
     promotionAttemptIntents: new Map<string, TargetPromotionAttemptIntendedEvent>(),
     promotionIntents: new Map<string, TargetPromotionIntendedEvent>(),
     taskClaimAcquisitionIntents: new Map<string, TaskClaimAcquisitionJournalEvent>(),

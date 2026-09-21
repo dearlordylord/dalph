@@ -1,5 +1,5 @@
 /* eslint-disable functional/immutable-data -- Validation accumulates private diagnostics and graph reachability only. */
-import { type RunId, type TaskId } from "@dalph/contracts"
+import { type RemotePublicationTarget, type RunId, type TaskId } from "@dalph/contracts"
 import { Effect } from "effect"
 import type { TrackerTarget } from "../authorities/task-tracker/target.js"
 import { exactTaskIdSetKey, taskTrackerTargetKey } from "../authorities/task-tracker/target.js"
@@ -43,12 +43,14 @@ type LifecycleTransition<A> =
 export const makeWorkflowRunBeganRecord = (
   runId: RunId,
   target: TrackerTarget,
-  initialControlPolicy: InitialControlPolicy
+  initialControlPolicy: InitialControlPolicy,
+  remotePublicationTarget: RemotePublicationTarget
 ): JournalRecord => ({
   event: WorkflowRunBeganEvent.make({
     initialControlPolicy,
     initiatedBy: { _tag: "DalphCoordinator" },
     occurrenceClassification: "InitiatedAction",
+    remotePublicationTarget,
     target,
     version: workflowJournalEventVersion
   }),
@@ -79,7 +81,8 @@ export const decideWorkflowRunBeginning = (
   records: ReadonlyArray<JournalRecord>,
   runId: RunId,
   target: TrackerTarget,
-  initialControlPolicy: InitialControlPolicy
+  initialControlPolicy: InitialControlPolicy,
+  remotePublicationTarget: RemotePublicationTarget
 ): LifecycleTransition<WorkflowRunAlreadyBegan | WorkflowRunIdentityAlreadyUsed> => {
   const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")
   if (began !== undefined) {
@@ -90,7 +93,10 @@ export const decideWorkflowRunBeginning = (
   }
   const first = records[0]
   return first === undefined
-    ? { _tag: "LifecycleTransitionAccepted", record: makeWorkflowRunBeganRecord(runId, target, initialControlPolicy) }
+    ? {
+        _tag: "LifecycleTransitionAccepted",
+        record: makeWorkflowRunBeganRecord(runId, target, initialControlPolicy, remotePublicationTarget)
+      }
     : {
         _tag: "LifecycleTransitionRejected",
         failure: new WorkflowRunIdentityAlreadyUsed({ firstRecordAt: first.position, runId })

@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { expect, it } from "vitest"
 import {
   AttemptId,
@@ -153,7 +154,8 @@ it.each([64, 256])("bounds checking a new direction after %i same-attempt Contin
   const began = makeWorkflowRunBeganRecord(
     runId,
     FixtureTarget.make("choice-count"),
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    remotePublicationTargetForTest
   )
   const records = [
     began,

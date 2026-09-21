@@ -22,6 +22,7 @@ const validRawConfiguration = () => ({
   repository: "/srv/dalph/repository.git",
   commonDirectory: "/srv/dalph/repository.git",
   integrationRef: "refs/heads/master",
+  remotePublicationTarget: { branch: "refs/heads/master", endpoint: "ssh://git@example.invalid/dalph.git" },
   plannedAttemptBaseSha: "a".repeat(40),
   plannedAttemptExecutor: "codex:production",
   claimOwner: "dalph:production",
@@ -41,6 +42,12 @@ const validRawConfiguration = () => ({
 })
 
 describe("production repository host configuration", () => {
+  it("rejects a host with no pinned remote publication target", async () => {
+    const { remotePublicationTarget: _omitted, ...input } = validRawConfiguration()
+    const result = await Effect.runPromiseExit(decodeProductionRepositoryHostConfiguration(input))
+    expect(result._tag).toBe("Failure")
+  })
+
   it("production configuration accepts ambient Codex CLI authentication without a provider credential", async () => {
     const decoded = await Effect.runPromise(decodeProductionRepositoryHostConfiguration(validRawConfiguration()))
     expect(decoded.target.issueNumber).toBe(292)

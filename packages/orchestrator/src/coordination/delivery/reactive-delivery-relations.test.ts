@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import {
   AttemptId,
@@ -201,7 +202,7 @@ const recoveredExecutorResponsibilityFixture: ExecutorResponsibilityFixture = {
 
 const makeJournalService = Effect.gen(function* () {
   const storage = yield* JournalStore
-  yield* storage.beginRun(runId, target, policy)
+  yield* storage.beginRun(runId, target, policy, remotePublicationTargetForTest)
   const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
   if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
   return yield* makeJournal(runId, target, initial, storage)

@@ -1,3 +1,5 @@
+/* eslint-disable max-lines -- Terminal-family authorization derivations stay co-located for provenance auditability. */
+
 import { Schema } from "effect"
 import { OperationId } from "../../identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
@@ -11,23 +13,27 @@ import {
 } from "../../../workflow-journal/record-evidence.js"
 import {
   branchCleanupAuthorizedRecordKey,
+  integrationFinalitySettledRecordKey,
   integratorCandidateCleanupAuthorizedRecordKey,
   outcomeRecordKey,
   worktreeCleanupAuthorizedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import type { PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
-import type { PlannedAttemptWorktreeObservedEvent } from "../../registry/event.js"
+import type { PlannedAttemptWorktreeObservedEvent, TaskWorktreeReadyEvent } from "../../registry/event.js"
 import { plannedAttemptWorktreeObservationMatchesPlan } from "../planned-attempt-worktree-observation/protocol.js"
 import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
 import { IntegratorRunCorrelation, integratorRetryRunOrdinal } from "../integrator/events.js"
 import { evaluateIntegratorFullRerunAuthorization } from "../integrator/retry-authorization.js"
 import { AttemptImplementationAbandonedEvent } from "../attempt-choice/events.js"
 import { PlannedAttemptReplacedEvent } from "../attempt-choice/replacement-events.js"
+import { IntegrationFinalitySettledEvent } from "../integration-finality/events.js"
 import {
   BranchCleanupEvidenceRevision,
   BranchCleanupAuthorization as BranchCleanupAuthorizationSchema,
   IntegratorCandidateCleanupDisposition,
-  type IntegratorCandidateCleanupEvidenceRevision,
+  IntegratorCandidateCleanupSettledDisposition,
+  integratorCandidateCleanupSessionOf,
+  IntegratorCandidateCleanupEvidenceRevision,
   type IntegratorCandidateCleanupEvidenceSubject,
   IntegratorCandidateCleanupOwner,
   IntegratorCandidateCleanupAuthorization as IntegratorCandidateCleanupAuthorizationSchema,
@@ -68,6 +74,10 @@ const branchAuthorizationEquals = Schema.toEquivalence(BranchCleanupAuthorizatio
 
 type PlannedWorktreeReadyObservedEvent = Omit<typeof PlannedAttemptWorktreeObservedEvent.Type, "observation"> & {
   readonly observation: PlannedWorktreeReady
+}
+
+type ReadyWorktreeAuthorityRecord = JournalRecord & {
+  readonly event: PlannedWorktreeReadyObservedEvent | typeof TaskWorktreeReadyEvent.Type
 }
 
 type AuthorizationEventTag = { readonly eventTag: string }
@@ -145,7 +155,7 @@ const candidateAuthorizationValidation: AuthorizationValidationStrategy<Integrat
   eventTag: "IntegratorCandidateCleanupAuthorized",
   authorizationOf: candidateAuthorizationOf,
   equals: candidateAuthorizationEquals,
-  runIdOf: (authorization) => authorization.disposition.predecessor.plannedAttempt.runId,
+  runIdOf: (authorization) => integratorCandidateCleanupSessionOf(authorization.disposition).plannedAttempt.runId,
   keyOf: (authorization) => integratorCandidateCleanupAuthorizedRecordKey(authorization.operationId),
   provenance: validateIntegratorCandidateCleanupProvenance,
   history: validateIntegratorCandidateCleanupHistory
@@ -166,6 +176,11 @@ const isAttemptImplementationAbandonedRecord = (
   record: JournalRecord
 ): record is JournalRecord & { readonly event: AttemptImplementationAbandonedEvent } =>
   Schema.is(AttemptImplementationAbandonedEvent)(record.event)
+
+const isIntegrationFinalitySettledRecord = (
+  record: JournalRecord
+): record is JournalRecord & { readonly event: IntegrationFinalitySettledEvent } =>
+  Schema.is(IntegrationFinalitySettledEvent)(record.event)
 
 const exactWorktreeAuthorityRecord = (
   records: JournalHistorySource,
@@ -282,13 +297,67 @@ const worktreeAuthorizationFromAbandonment = (
   })
 }
 
+const worktreeAuthorizationFromSettlement = (
+  records: JournalHistorySource,
+  record: JournalRecord & { readonly event: IntegrationFinalitySettledEvent }
+): WorktreeCleanupAuthorization | undefined => {
+  const event = record.event
+  const plannedAttempt = event.claim.plannedAttempt
+  if (
+    record.runId !== plannedAttempt.runId ||
+    record.key !== integrationFinalitySettledRecordKey(event.claim.promotionCorrelation.requestId)
+  ) {
+    return undefined
+  }
+  const observationRecord = (
+    isJournalRecordEvidence(records)
+      ? [
+          ...journalRecordsOfKind(records, "TaskWorktreeReady"),
+          ...journalRecordsOfKind(records, "PlannedAttemptWorktreeObserved")
+        ]
+      : records
+  )
+    .filter((candidate): candidate is ReadyWorktreeAuthorityRecord => {
+      if (candidate.event._tag === "PlannedAttemptWorktreeObserved") {
+        if (candidate.event.observation._tag !== "PlannedWorktreeReady") return false
+      } else if (candidate.event._tag !== "TaskWorktreeReady") return false
+      const proof = candidate.event._tag === "TaskWorktreeReady" ? candidate.event.proof : candidate.event.observation
+      return (
+        candidate.position < record.position &&
+        candidate.runId === plannedAttempt.runId &&
+        candidate.key === outcomeRecordKey(candidate.event.operationId) &&
+        plannedAttemptWorktreeObservationMatchesPlan(proof, plannedAttempt)
+      )
+    })
+    .toSorted((left, right) => Number(right.position) - Number(left.position))[0]
+  if (observationRecord === undefined) return undefined
+  const disposition = PlannedAttemptCleanupDisposition.cases.Settled.make({
+    dispositionAt: record.position,
+    plannedAttempt,
+    settlementOperationId: event.deletionOperationId
+  })
+  return decodeWorktreeAuthorization({
+    causalPredecessors: [event.deletionOperationId],
+    disposition,
+    evidenceRevision: WorktreeCleanupEvidenceRevision.make(1),
+    expectedHead: event.claim.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult.commit,
+    locator: plannedAttempt.worktree,
+    observationAt: observationRecord.position,
+    observationOperationId: observationRecord.event.operationId,
+    operationId: operationFor("worktree", plannedAttempt.attemptId),
+    owner: WorktreeCleanupOwner.make({ attemptId: plannedAttempt.attemptId, branch: plannedAttempt.branch }),
+    writerQuiescent: true
+  })
+}
+
 const worktreeAuthorizationsFromTerminalFacts = (
   records: JournalHistorySource
 ): ReadonlyArray<WorktreeCleanupAuthorization> =>
   (isJournalRecordEvidence(records)
     ? [
         ...journalRecordsOfKind(records, "PlannedAttemptReplaced"),
-        ...journalRecordsOfKind(records, "AttemptImplementationAbandoned")
+        ...journalRecordsOfKind(records, "AttemptImplementationAbandoned"),
+        ...journalRecordsOfKind(records, "IntegrationFinalitySettled")
       ].toSorted((left, right) => Number(left.position) - Number(right.position))
     : records
   ).flatMap((record) => {
@@ -296,7 +365,9 @@ const worktreeAuthorizationsFromTerminalFacts = (
       ? worktreeAuthorizationFromReplacement(records, record)
       : isAttemptImplementationAbandonedRecord(record)
         ? worktreeAuthorizationFromAbandonment(records, record)
-        : undefined
+        : isIntegrationFinalitySettledRecord(record)
+          ? worktreeAuthorizationFromSettlement(records, record)
+          : undefined
     if (authorization === undefined) return []
     if (hasValidatedAuthorization(records, authorization, worktreeAuthorizationValidation)) return []
     const canonicalRecords = recordsWithoutAuthorizationTag(records, "WorktreeCleanupAuthorized")
@@ -351,6 +422,11 @@ type CandidateSuccessorEvidence = {
   readonly subject: IntegratorCandidateCleanupEvidenceSubject
 }
 
+type CandidateSettlementEvidence = {
+  readonly authorization: IntegratorCandidateCleanupAuthorization
+  readonly subject: IntegratorCandidateCleanupEvidenceSubject
+}
+
 const isCandidateDirectionRecord = (
   record: JournalRecord | undefined
 ): record is CandidateSuccessorEvidence["direction"] => record?.event._tag === "IntegrationQuarantineDirectionApplied"
@@ -394,6 +470,46 @@ const candidateSuccessorEvidence = (
   }
 }
 
+const candidateSettlementEvidence = (
+  records: JournalHistorySource,
+  record: JournalRecord
+): CandidateSettlementEvidence | undefined => {
+  if (!isIntegrationFinalitySettledRecord(record)) return undefined
+  const qualifiedCandidate = record.event.claim.promotionCorrelation.qualifiedCandidate
+  const session = qualifiedCandidate.run.session
+  const lineage = exactTargetLineageRecord(records, {
+    expectedTargetHead: session.expectedTargetHead,
+    integrationTarget: session.integrationTarget,
+    plannedAttempt: session.plannedAttempt,
+    targetLineageObservedAt: session.targetLineageObservedAt
+  })
+  if (lineage === undefined) return undefined
+  const disposition = IntegratorCandidateCleanupSettledDisposition.make({
+    dispositionAt: record.position,
+    qualifiedCandidate,
+    settlementOperationId: record.event.deletionOperationId
+  })
+  const subject = { locator: session.candidateResource, predecessor: session }
+  const authorization = decodeCandidateAuthorization({
+    causalPredecessors: [record.event.deletionOperationId],
+    disposition,
+    evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
+    locator: session.candidateResource,
+    observationAt: lineage.observation.position,
+    observationOperationId: lineage.observation.event.operationId,
+    operationId: operationFor("integrator-candidate", session.sessionId),
+    owner: IntegratorCandidateCleanupOwner.make({ sessionId: session.sessionId }),
+    writerQuiescent: true
+  })
+  if (
+    authorization === undefined ||
+    validateIntegratorCandidateCleanupProvenance(records, authorization)._tag !== "Valid"
+  ) {
+    return undefined
+  }
+  return { authorization, subject }
+}
+
 const candidateAuthorizationsFromSuccessors = (
   records: JournalHistorySource,
   evidenceRevisionFor?: CandidateCleanupEvidenceRevisionFor
@@ -427,13 +543,37 @@ const candidateAuthorizationsFromSuccessors = (
     return [authorization]
   })
 
+const candidateAuthorizationsFromSettlements = (
+  records: JournalHistorySource,
+  evidenceRevisionFor?: CandidateCleanupEvidenceRevisionFor
+): ReadonlyArray<IntegratorCandidateCleanupAuthorization> =>
+  Array.from(journalRecordsOfKind(records, "IntegrationFinalitySettled")).flatMap((record) => {
+    const evidence = candidateSettlementEvidence(records, record)
+    if (evidence === undefined) return []
+    const evidenceRevision = evidenceRevisionFor?.(evidence.subject)
+    if (evidenceRevision === undefined) return []
+    const authorization = decodeCandidateAuthorization({ ...evidence.authorization, evidenceRevision })
+    if (authorization === undefined) return []
+    if (hasValidatedAuthorization(records, authorization, candidateAuthorizationValidation)) return []
+    const canonicalRecords = recordsWithoutAuthorizationTag(records, "IntegratorCandidateCleanupAuthorized")
+    const provenance = validateIntegratorCandidateCleanupProvenance(canonicalRecords, authorization)
+    const history = validateIntegratorCandidateCleanupHistory(canonicalRecords, authorization)
+    if (provenance._tag !== "Valid" || history._tag !== "Valid") return []
+    return [authorization]
+  })
+
 export const candidateCleanupEvidenceSubjects = (
   records: JournalHistorySource
-): ReadonlyArray<IntegratorCandidateCleanupEvidenceSubject> =>
-  Array.from(journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")).flatMap((record) => {
+): ReadonlyArray<IntegratorCandidateCleanupEvidenceSubject> => [
+  ...Array.from(journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")).flatMap((record) => {
     const evidence = candidateSuccessorEvidence(records, record)
     return evidence === undefined ? [] : [evidence.subject]
+  }),
+  ...Array.from(journalRecordsOfKind(records, "IntegrationFinalitySettled")).flatMap((record) => {
+    const evidence = candidateSettlementEvidence(records, record)
+    return evidence === undefined ? [] : [evidence.subject]
   })
+]
 
 const uniqueByOperation = <Authorization extends { readonly operationId: OperationId }>(
   values: ReadonlyArray<Authorization>
@@ -449,7 +589,10 @@ export const deriveCleanupAuthorizations = (
   evidenceRevisionFor?: CandidateCleanupEvidenceRevisionFor
 ) => ({
   branch: uniqueByOperation(branchAuthorizationsFromSettledWorktrees(records)),
-  candidate: uniqueByOperation(candidateAuthorizationsFromSuccessors(records, evidenceRevisionFor)),
+  candidate: uniqueByOperation([
+    ...candidateAuthorizationsFromSuccessors(records, evidenceRevisionFor),
+    ...candidateAuthorizationsFromSettlements(records, evidenceRevisionFor)
+  ]),
   worktree: uniqueByOperation(worktreeAuthorizationsFromTerminalFacts(records))
 })
 

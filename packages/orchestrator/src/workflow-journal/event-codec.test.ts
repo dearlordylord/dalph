@@ -26,6 +26,36 @@ import {
   IntegratorSessionId
 } from "../workflow/protocols/integrator/events.js"
 import { JournalPosition } from "./identity.js"
+import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
+import { InitialControlPolicy } from "../control/policy.js"
+import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
+import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
+
+it.effect("rejects unfinished Run bytes without a pinned publication target instead of inferring a destination", () =>
+  Effect.gen(function* () {
+    const { event } = makeWorkflowRunBeganRecord(
+      RunId.make("unpinned-legacy-run"),
+      FixtureTarget.make("fixture"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTargetForTest
+    )
+    if (event._tag !== "WorkflowRunBegan") return yield* Effect.die("fixture must begin the Run")
+    const encoded = encodeJournalEvent(event)
+    expect(yield* decodeJournalEvent(encoded)).toEqual(event)
+    const { _tag: _kind, remotePublicationTarget: _target, version: _version, ...unpinned } = event
+    for (const version of [workflowJournalEventVersion - 1, workflowJournalEventVersion]) {
+      const issue = yield* decodeJournalEvent({
+        ...encoded,
+        payloadJson: JSON.stringify(unpinned),
+        version: JournalEventVersion.make(version)
+      }).pipe(Effect.flip)
+      expect(issue._tag).toBe("JournalEventDecodeIssue")
+      expect(issue.detail).toContain(
+        version === workflowJournalEventVersion ? "remotePublicationTarget" : "unsupported"
+      )
+    }
+  })
+)
 
 it.effect("round-trips the current generic journal vocabulary", () =>
   Effect.gen(function* () {

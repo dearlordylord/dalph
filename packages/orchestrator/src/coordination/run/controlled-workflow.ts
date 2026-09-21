@@ -1,4 +1,12 @@
-import { PlannedAttemptExecutor, PlannedAttemptExecutorLifecycleObservation, type RunId } from "@dalph/contracts"
+import {
+  GitCommitSha,
+  PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
+  type RunId
+} from "@dalph/contracts"
 import { Effect, Layer } from "effect"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
@@ -18,6 +26,17 @@ import { validatedRunActivationLayer } from "./startup-recovery.js"
 import { preservingDispositionCleanupBoundaryLayer } from "../../workflow/protocols/disposition-cleanup/boundaries.js"
 import { ApplicationExitRequestBoundary, makeApplicationExitShell } from "../application-exit/application-shell.js"
 import { defaultJournalMaintenanceObservation } from "../../workflow-journal/maintenance.js"
+import {
+  RemotePublicationAdmissionObservation,
+  RemotePublicationGit,
+  RemotePublicationGitObservation,
+  RemotePublicationPushResult
+} from "../../workflow/protocols/direct-publication/events.js"
+import {
+  LocalTargetCatchUpResult,
+  RemoteBaselineGit,
+  RemoteBaselineObservation
+} from "../../workflow/protocols/direct-publication/baseline-events.js"
 
 const controlledOwnership = CoordinatorOwnership.of({
   /* v8 ignore next -- #167 owns controlled coordinator-lock behavior; #195 only installs the ordinary capability. */
@@ -25,6 +44,41 @@ const controlledOwnership = CoordinatorOwnership.of({
   runMutation: (mutation) => mutation
 })
 const controlledOwnershipLayer = Layer.succeed(CoordinatorOwnership, controlledOwnership)
+const controlledRemotePublicationTarget = RemotePublicationTarget.make({
+  branch: RemotePublicationBranchRef.make("refs/heads/controlled"),
+  endpoint: RemotePublicationEndpoint.make("file:///controlled/remote.git")
+})
+const gitShaHexLength = 40
+const controlledRemotePublicationLayer = Layer.succeed(
+  RemotePublicationGit,
+  RemotePublicationGit.of({
+    admit: () =>
+      Effect.succeed(
+        RemotePublicationAdmissionObservation.cases.ExistingBranch.make({
+          remoteHead: GitCommitSha.make("0".repeat(gitShaHexLength))
+        })
+      ),
+    observe: ({ candidateCommit }) =>
+      Effect.succeed(RemotePublicationGitObservation.cases.CandidateCurrent.make({ remoteHead: candidateCommit })),
+    prepareSenderCustody: () => Effect.void,
+    reconcileSenderCustody: () => Effect.void,
+    push: ({ candidateCommit }) =>
+      Effect.succeed(RemotePublicationPushResult.cases.UpToDate.make({ remoteHead: candidateCommit }))
+  })
+)
+const controlledRemoteBaselineLayer = Layer.succeed(
+  RemoteBaselineGit,
+  RemoteBaselineGit.of({
+    catchUp: (_correlation, _expectedLocalHead, remoteHead) =>
+      Effect.succeed(LocalTargetCatchUpResult.cases.AlreadyCurrent.make({ currentHead: remoteHead })),
+    observe: (correlation) => {
+      const head = correlation.responsibility.plannedAttempt.baseSha
+      return Effect.succeed(RemoteBaselineObservation.cases.Aligned.make({ localHead: head, remoteHead: head }))
+    },
+    reconcileCatchUp: (_correlation, _expectedLocalHead, remoteHead) =>
+      Effect.succeed(LocalTargetCatchUpResult.cases.AlreadyCurrent.make({ currentHead: remoteHead }))
+  })
+)
 
 /** Installs an in-memory journal around otherwise ordinary workflow boundary implementations. */
 const controlledJournaledRunLayer = (runId: RunId) =>
@@ -54,6 +108,8 @@ const controlledJournaledRunLayer = (runId: RunId) =>
           true,
           opportunity
         ).pipe(
+          Layer.provide(controlledRemoteBaselineLayer),
+          Layer.provideMerge(controlledRemotePublicationLayer),
           Layer.provide(
             journaledWorkflowInterpreterLayer(activeRunId, Layer.succeed(WorkflowInterpreter, interpreter))
           ),
@@ -64,7 +120,14 @@ const controlledJournaledRunLayer = (runId: RunId) =>
         )
       }
       return Layer.merge(
-        journaledRunBootstrapLayer(runId, runtimeLayer, applicationExit, defaultJournalMaintenanceObservation).pipe(
+        journaledRunBootstrapLayer(
+          runId,
+          runtimeLayer,
+          applicationExit,
+          defaultJournalMaintenanceObservation,
+          undefined,
+          controlledRemotePublicationTarget
+        ).pipe(
           Layer.provide(memoryJournalStoreLayer),
           Layer.provide(controlledOwnershipLayer),
           Layer.provide(Layer.succeed(PlannedAttemptExecutorLifecycleObservation, lifecycleObservation))

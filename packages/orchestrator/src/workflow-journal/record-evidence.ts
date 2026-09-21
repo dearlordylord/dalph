@@ -332,6 +332,14 @@ const attemptIdsOf = (record: JournalRecord): HashSet.HashSet<AttemptId> => {
   }
   if (event._tag === "PlannedAttemptReplaced") ids = HashSet.add(ids, event.successorPlan.plannedAttempt.attemptId)
   if ("run" in event) ids = HashSet.add(ids, event.run.session.plannedAttempt.attemptId)
+  if (
+    event._tag === "RemoteBaselineReadIntended" ||
+    event._tag === "RemoteBaselineObserved" ||
+    event._tag === "LocalTargetCatchUpIntended" ||
+    event._tag === "LocalTargetCatchUpObserved"
+  ) {
+    ids = HashSet.add(ids, event.correlation.responsibility.plannedAttempt.attemptId)
+  }
   if ("claim" in event && "plannedAttempt" in event.claim) {
     ids = HashSet.add(ids, event.claim.plannedAttempt.attemptId)
   }
@@ -517,6 +525,14 @@ const taskIdsOf = (record: JournalRecord, indexes?: EvidenceIndexes): HashSet.Ha
   if (event._tag === "TargetPromotionObservedSuccess") {
     ids = HashSet.add(ids, event.correlation.qualifiedCandidate.run.session.plannedAttempt.taskId)
   }
+  if (
+    event._tag === "RemoteBaselineReadIntended" ||
+    event._tag === "RemoteBaselineObserved" ||
+    event._tag === "LocalTargetCatchUpIntended" ||
+    event._tag === "LocalTargetCatchUpObserved"
+  ) {
+    ids = HashSet.add(ids, event.correlation.responsibility.plannedAttempt.taskId)
+  }
   for (const taskId of graphObservationTaskIds(record, indexes)) ids = HashSet.add(ids, taskId)
   return ids
 }
@@ -636,6 +652,15 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
   const { recordsByOperation, recordsByOperationKind } = appendOperationIndexes(indexes, record)
   const promotionRequestId = (() => {
     const event = record.event
+    // Direct publication has its own request identity; it is not a target-promotion index key.
+    if (
+      event._tag === "RemotePublicationIntended" ||
+      event._tag === "RemotePublicationAttemptIntended" ||
+      event._tag === "RemotePublicationRetained" ||
+      event._tag === "RemotePublicationSucceeded"
+    ) {
+      return undefined
+    }
     if ("correlation" in event && "requestId" in event.correlation) return event.correlation.requestId
     if ("claim" in event && "promotionCorrelation" in event.claim) {
       return event.claim.promotionCorrelation.requestId

@@ -26,6 +26,12 @@ import type {
   WorkflowRunNotBegan,
   WorkflowRunTargetMismatch
 } from "../../workflow-journal/store.js"
+import {
+  type RemotePublicationGit,
+  type RemotePublicationObservationFailure
+} from "../../workflow/protocols/direct-publication/events.js"
+import type { RemoteBaselineGit } from "../../workflow/protocols/direct-publication/baseline-events.js"
+import type { RemotePublicationAdmissionRejected } from "../../workflow/protocols/direct-publication/admission.js"
 import type { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import type { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import { Journal, type JournalInitialHistoryInvalid } from "../delivery/journal.js"
@@ -111,6 +117,8 @@ export type JournaledRunServices =
   | TaskWorkCapacityControl
   | TaskClaimReacquisitionControl
   | DispositionCleanupActivation
+  | RemoteBaselineGit
+  | RemotePublicationGit
   | WorkflowInterpreter
   | WorkflowTrace
 
@@ -130,6 +138,8 @@ export type JournaledRunBootstrapError =
   | WorkflowRunIdentityAlreadyUsed
   | WorkflowRunNotBegan
   | WorkflowRunTargetMismatch
+  | RemotePublicationObservationFailure
+  | RemotePublicationAdmissionRejected
 
 /** A fixed production composition was asked to begin a different Run identity. */
 export class JournaledRunIdentityMismatch extends Schema.TaggedError<JournaledRunIdentityMismatch>()(

@@ -1,3 +1,8 @@
+import {
+  remoteBaselineGitLayerForTest,
+  remotePublicationGitLayerForTest,
+  remotePublicationTargetForTest
+} from "../../orchestrator/test/support/direct-publication.js"
 /* eslint-disable max-lines -- One scoped driver keeps the chronological DS-01 through DS-11 handoffs auditable. */
 import {
   AcceptedResult,
@@ -833,7 +838,7 @@ const runControlledStartupCharacterizationFor = (
                 ),
               beginRun: (runId, target, policy) =>
                 baseSharedJournal
-                  .beginRun(runId, target, policy)
+                  .beginRun(runId, target, policy, remotePublicationTargetForTest)
                   .pipe(
                     Effect.tap((record) =>
                       recordOccurrence({
@@ -1279,13 +1284,17 @@ const runControlledStartupCharacterizationFor = (
           Layer.provide(controls),
           Layer.provide(executorLayer),
           Layer.provide(Layer.succeed(WorkflowTrace, trace)),
-          Layer.provide(sharedPlanningLayer)
+          Layer.provide(sharedPlanningLayer),
+          Layer.provide(remoteBaselineGitLayerForTest),
+          Layer.provideMerge(remotePublicationGitLayerForTest)
         )
       const application = journaledRunBootstrapLayer(
         scenario.runId,
         runtimeLayer,
         applicationExit,
-        noopJournalMaintenanceObservation
+        noopJournalMaintenanceObservation,
+        undefined,
+        remotePublicationTargetForTest
       ).pipe(
         Layer.provide(journalLayer),
         Layer.provide(Layer.succeed(CoordinatorOwnership, coordinatorOwnership)),

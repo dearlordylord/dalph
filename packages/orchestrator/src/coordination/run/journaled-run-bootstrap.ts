@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Run bootstrap keeps activation and its serialized operator controls in one ownership boundary. */
-import { plannedAttemptExecutorCorrelation, RunId } from "@dalph/contracts"
+import { plannedAttemptExecutorCorrelation, type RemotePublicationTarget, RunId } from "@dalph/contracts"
 import { RunActivationGraphBaseline } from "./activation-graph-baseline.js"
 import {
   Context,
@@ -96,6 +96,8 @@ import { ApplicationExitAdmission, type ForwardOwnerLease } from "../application
 import { ApplicationExitDiagnostic } from "../application-exit/lifecycle-decision.js"
 import { ApplicationExitDrainFailure, type ApplicationExitShellService } from "../application-exit/application-shell.js"
 import { suspendExecutingExecutorWorkForApplicationExit } from "../application-exit/executor-drain.js"
+import { admitRemotePublicationTarget } from "../../workflow/protocols/direct-publication/admission.js"
+import { RemotePublicationGit } from "../../workflow/protocols/direct-publication/events.js"
 
 import {
   AppliedRunCancellation,
@@ -217,8 +219,6 @@ interface RuntimeControlLease {
   readonly forwardOwner: ForwardOwnerLease
 }
 
-const identityOperatorControlGraphReadBoundary: OperatorControlGraphReadBoundary = (effect) => effect
-
 type RuntimeControlState =
   | { readonly _tag: "RuntimeInactive" }
   | {
@@ -337,7 +337,8 @@ export const journaledRunBootstrapLayer = (
   runtimeLayer: (input: JournaledRuntimeLayerInput) => JournaledRuntimeLayer,
   applicationExit: ApplicationExitShellService,
   maintenanceObservation: JournalMaintenanceObservationService,
-  operatorControlGraphReadBoundary: OperatorControlGraphReadBoundary = identityOperatorControlGraphReadBoundary
+  operatorControlGraphReadBoundary: OperatorControlGraphReadBoundary | undefined,
+  remotePublicationTarget: RemotePublicationTarget
 ) =>
   Layer.effectContext(
     Effect.gen(function* () {
@@ -693,6 +694,10 @@ export const journaledRunBootstrapLayer = (
                 Layer.provideMerge(Layer.succeed(RunActivationGraphBaseline, initialState.position))
               )
               const context = yield* Layer.build(runtime)
+              yield* admitRemotePublicationTarget(runId, remotePublicationTarget).pipe(
+                Effect.provide(context),
+                Effect.provideService(RemotePublicationGit, Context.get(context, RemotePublicationGit))
+              )
               const journal = processJournal.journal
               yield* applicationExit.registerExecutorDrain({
                 suspendExecutingExecutorWork: suspendExecutingExecutorWorkForApplicationExit().pipe(
@@ -858,7 +863,7 @@ export const journaledRunBootstrapLayer = (
                       yield* observeProducedWrite(
                         `begin:${runId}`,
                         "begin",
-                        lifecycle.beginRun(runId, target, initialControlPolicy)
+                        lifecycle.beginRun(runId, target, initialControlPolicy, remotePublicationTarget)
                       ).pipe(
                         Effect.catch((beginFailure) =>
                           lifecycle.readRunForRecovery(runId, target).pipe(
@@ -1092,7 +1097,9 @@ export const journaledRunBootstrapLayer = (
                       applyOperatorControlDirection(runId, target, request, {
                         allocator: operationIdAllocator,
                         application: controlDirection,
-                        graphReadBoundary: operatorControlGraphReadBoundary,
+                        ...(operatorControlGraphReadBoundary === undefined
+                          ? {}
+                          : { graphReadBoundary: operatorControlGraphReadBoundary }),
                         interpreter: workflowInterpreter,
                         trace: workflowTrace
                       }).pipe(Effect.tap(() => publishAcceptedRunControl))
@@ -1112,7 +1119,9 @@ export const journaledRunBootstrapLayer = (
                       applyOperatorControlDirection(runId, target, request, {
                         allocator: operationIdAllocator,
                         application: controlDirection,
-                        graphReadBoundary: operatorControlGraphReadBoundary,
+                        ...(operatorControlGraphReadBoundary === undefined
+                          ? {}
+                          : { graphReadBoundary: operatorControlGraphReadBoundary }),
                         interpreter: workflowInterpreter,
                         trace: workflowTrace
                       })

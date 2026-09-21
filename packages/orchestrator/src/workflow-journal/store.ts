@@ -1,6 +1,6 @@
 // @effect-diagnostics lazyEffect:off
 import { Context, Effect, Layer, Schema } from "effect"
-import { RunId } from "@dalph/contracts"
+import { RunId, type RemotePublicationTarget } from "@dalph/contracts"
 import { JournalPartition, JournalPosition, JournalRecordKey, JournalSchemaVersion } from "./identity.js"
 import { TrackerTarget } from "../authorities/task-tracker/target.js"
 import type { JournalAudit, JournalScan } from "./recovery-model.js"
@@ -242,7 +242,8 @@ export interface JournalStoreService {
   readonly beginRun: (
     runId: RunId,
     target: TrackerTarget,
-    initialControlPolicy: InitialControlPolicy
+    initialControlPolicy: InitialControlPolicy,
+    remotePublicationTarget: RemotePublicationTarget
   ) => Effect.Effect<JournalRecord, JournalStoreError | WorkflowRunAlreadyBegan | WorkflowRunIdentityAlreadyUsed>
   readonly append: (
     runId: RunId,

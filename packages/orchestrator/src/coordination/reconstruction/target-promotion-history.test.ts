@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { expect } from "vitest"
 import { HashMap } from "effect"
@@ -339,6 +340,7 @@ it("full history reduction rejects retry authority whose observed head contradic
     {
       event: WorkflowRunBeganEvent.make({
         initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTarget: remotePublicationTargetForTest,
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
         target,

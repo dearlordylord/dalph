@@ -87,9 +87,25 @@ import {
 } from "../task-claim-reacquisition/events.js"
 import { taskClaimReacquisitionOperationId } from "../task-claim-reacquisition/plan.js"
 import { observeSettledCompletionClaimReplacementLookup } from "../../../workflow-journal/settled-completion-claim-replacement.js"
+import { InitialControlPolicy } from "../../../control/policy.js"
+import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
+import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
+import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
+import {
+  RemotePublicationAttemptIntendedEvent,
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationIntendedEvent,
+  RemotePublicationSucceededEvent,
+  remotePublicationCorrelationFor
+} from "../direct-publication/events.js"
 
 const replacementOperationId = OperationId.make("history-replacement-operation")
 const deletionOperationId = OperationId.make("history-deletion-operation")
+const publicationCorrelation = remotePublicationCorrelationFor(
+  fixture.qualifiedCandidate,
+  remotePublicationTargetForTest
+)
+const publicationAttemptOrdinal = RemotePublicationAttemptOrdinal.make(1)
 
 const record = (position: number, event: JournalRecord["event"], key = `history:${position}`): JournalRecord => ({
   event,
@@ -98,7 +114,7 @@ const record = (position: number, event: JournalRecord["event"], key = `history:
   runId: fixture.runId
 })
 
-const successObservation = { ...fixture.successObservation, observedAt: JournalPosition.make(9) }
+const successObservation = { ...fixture.successObservation, observedAt: JournalPosition.make(13) }
 
 const cleanupReleaseOperation = makeTaskClaimReleaseOperation({
   authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
@@ -108,12 +124,12 @@ const cleanupReleaseOperation = makeTaskClaimReleaseOperation({
 
 const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
   const promotion = record(
-    3,
+    7,
     fixture.promotionSuccess,
     targetPromotionObservedSuccessRecordKey(fixture.promotionCorrelation.requestId)
   )
   const replacementIntent = record(
-    4,
+    8,
     CompletionClaimReplacementIntendedEvent.make({
       claim: fixture.claim,
       operationId: replacementOperationId,
@@ -121,7 +137,7 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     })
   )
   const replacementAttempt = record(
-    5,
+    9,
     CompletionClaimReplacementAttemptIntendedEvent.make({
       attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
       claim: fixture.claim,
@@ -130,7 +146,7 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     })
   )
   const replacement = record(
-    6,
+    10,
     CompletionClaimReplacedEvent.make({
       claim: fixture.claim,
       operationId: replacementOperationId,
@@ -138,13 +154,13 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     })
   )
   const completionIntent = record(
-    7,
+    11,
     CompletionTaskIntendedEvent.make({ request: fixture.completionRequest, version: workflowJournalEventVersion })
   )
-  const focusedIntent = record(8, fixture.focusedSuccessFactsReadIntentEvent)
-  const focusedFacts = record(9, fixture.focusedSuccessFactsEvent)
+  const focusedIntent = record(12, fixture.focusedSuccessFactsReadIntentEvent)
+  const focusedFacts = record(13, fixture.focusedSuccessFactsEvent)
   const deletionIntent = record(
-    10,
+    14,
     CompletionClaimDeletionIntendedEvent.make({
       claim: fixture.claim,
       operationId: deletionOperationId,
@@ -153,7 +169,7 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     })
   )
   const originalReleaseRead = record(
-    11,
+    15,
     CompletionClaimDeletionReadObservedEvent.make({
       observation: fixture.claim,
       purpose: CompletionClaimDeletionReadPurpose.cases.BeforeOriginalClaimRelease.make({
@@ -165,15 +181,15 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     })
   )
   const releaseIntent = record(
-    12,
+    16,
     TaskClaimReleaseIntendedEvent.make({ operation: cleanupReleaseOperation, version: workflowJournalEventVersion })
   )
   const released = record(
-    13,
+    17,
     TaskClaimReleasedEvent.make({ release: cleanupReleaseOperation.release, version: workflowJournalEventVersion })
   )
   const deletionRead = record(
-    14,
+    18,
     CompletionClaimDeletionReadObservedEvent.make({
       observation: fixture.claim,
       purpose: CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
@@ -186,7 +202,7 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     })
   )
   const releaseConfirmed = record(
-    15,
+    19,
     CompletionClaimDeletionReadObservedEvent.make({
       observation: { _tag: "UnclaimedTask", taskId: fixture.taskId },
       purpose: CompletionClaimDeletionReadPurpose.cases.ConfirmOriginalClaimReleased.make({
@@ -199,7 +215,7 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     })
   )
   const deletionAttempt = record(
-    16,
+    20,
     CompletionClaimDeletionAttemptIntendedEvent.make({
       attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
       claim: fixture.claim,
@@ -209,7 +225,7 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     })
   )
   const deletionAbsent = record(
-    17,
+    21,
     CompletionClaimDeletionReadObservedEvent.make({
       observation: CompletionClaimMarkerAbsent.make({ taskId: fixture.taskId }),
       purpose: CompletionClaimDeletionReadPurpose.cases.BeforeDeletionAttempt.make({
@@ -222,7 +238,7 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     })
   )
   const activeAbsentAfterMarker = record(
-    18,
+    22,
     CompletionClaimDeletionReadObservedEvent.make({
       observation: { _tag: "UnclaimedTask", taskId: fixture.taskId },
       purpose: CompletionClaimDeletionReadPurpose.cases.ConfirmNoActiveClaimAfterMarkerAbsent.make({
@@ -235,7 +251,7 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     })
   )
   const deleted = record(
-    19,
+    23,
     CompletionClaimDeletedEvent.make({
       claim: fixture.claim,
       operationId: deletionOperationId,
@@ -244,7 +260,7 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     })
   )
   const settled = record(
-    20,
+    24,
     IntegrationFinalitySettledEvent.make({
       claim: fixture.claim,
       deletionOperationId,
@@ -254,8 +270,46 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     })
   )
   return [
-    record(1, prerequisiteRecordEvents[0], outcomeRecordKey(fixture.activeClaim.operationId)),
-    record(2, prerequisiteRecordEvents[1]),
+    makeWorkflowRunBeganRecord(
+      fixture.runId,
+      fixture.target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTargetForTest
+    ),
+    record(2, prerequisiteRecordEvents[0], outcomeRecordKey(fixture.activeClaim.operationId)),
+    record(3, prerequisiteRecordEvents[1]),
+    record(
+      4,
+      RemotePublicationIntendedEvent.make({
+        correlation: publicationCorrelation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      5,
+      RemotePublicationAttemptIntendedEvent.make({
+        attemptOrdinal: publicationAttemptOrdinal,
+        correlation: publicationCorrelation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      6,
+      RemotePublicationSucceededEvent.make({
+        correlation: publicationCorrelation,
+        occurrenceClassification: "NonActionOccurrence",
+        proof: {
+          _tag: "PushApplied",
+          attemptOrdinal: publicationAttemptOrdinal,
+          remoteHead: fixture.qualifiedCandidate.candidateCommit
+        },
+        version: workflowJournalEventVersion
+      })
+    ),
     promotion,
     replacementIntent,
     replacementAttempt,
@@ -275,6 +329,21 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     deleted,
     settled
   ]
+}
+
+const recordsThroughTag = (
+  records: ReadonlyArray<JournalRecord>,
+  tag: JournalRecord["event"]["_tag"]
+): ReadonlyArray<JournalRecord> => {
+  const index = records.findIndex(({ event }) => event._tag === tag)
+  if (index < 0) throw new Error(`fixture must contain ${tag}`)
+  return records.slice(0, index + 1)
+}
+
+const positionAfter = (records: ReadonlyArray<JournalRecord>): number => {
+  const last = records.at(-1)
+  if (last === undefined) throw new Error("fixture must contain a preceding record")
+  return Number(last.position) + 1
 }
 
 const validationErrors = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<string> => {
@@ -310,12 +379,12 @@ const completeValidationErrors = (records: ReadonlyArray<JournalRecord>): Readon
 
 it("preserves raw outcome-before-intent issue ordering without inventing a later deletion defect", () => {
   const records = validFinalityRecords()
-    .filter(({ position }) => position <= 10)
+    .filter(({ position }) => Number(position) <= 10)
     .map((current) =>
       current.event._tag === "CompletionClaimReplaced"
-        ? { ...current, position: JournalPosition.make(4) }
+        ? { ...current, position: JournalPosition.make(8) }
         : current.event._tag === "CompletionClaimReplacementIntended"
-          ? { ...current, position: JournalPosition.make(6) }
+          ? { ...current, position: JournalPosition.make(10) }
           : current
     )
     .sort((left, right) => left.position - right.position)
@@ -328,11 +397,11 @@ it("preserves raw outcome-before-intent issue ordering without inventing a later
   }
   expect(issues).toEqual([
     {
-      position: 4,
+      position: 8,
       detail: `completion-claim replacement outcome ${replacementOperationId} has no unique matching intent`
     },
     {
-      position: 5,
+      position: 9,
       detail: `completion-claim replacement attempt ${replacementOperationId} is not the next exact request`
     }
   ])
@@ -356,7 +425,7 @@ const insertBeforeDeletionAttempt = (event: JournalRecord["event"]): ReadonlyArr
 }
 
 it("accepts only the exact next cleanup reread identity after deletion intent", () => {
-  const prefix = validFinalityRecords().slice(0, 10)
+  const prefix = recordsThroughTag(validFinalityRecords(), "CompletionClaimDeletionIntended")
   let indexes = makeIntegrationFinalityHistoryIndexes()
   for (const current of prefix) indexes = invalidIntegrationFinalityHistory(current, prefix, indexes).indexes
   const request = { claim: fixture.claim, operationId: deletionOperationId, successObservation }
@@ -370,7 +439,8 @@ it("accepts only the exact next cleanup reread identity after deletion intent", 
     request,
     version: workflowJournalEventVersion
   })
-  const read = record(11, observed, describeJournalEvent(observed).expectedKey)
+  const readPosition = positionAfter(prefix)
+  const read = record(readPosition, observed, describeJournalEvent(observed).expectedKey)
   expect(deletionReadPurposeMatches(observed, 0)).toBe(true)
   expect(deletionReadPurposeMatches(observed, 1)).toBe(false)
   const afterExhaustion = CompletionClaimDeletionReadObservedEvent.make({
@@ -403,7 +473,7 @@ it("accepts only the exact next cleanup reread identity after deletion intent", 
     })
   })
   validateIntegrationFinalityHistoryRecord(
-    record(11, wrongOrdinal, describeJournalEvent(wrongOrdinal).expectedKey),
+    record(readPosition, wrongOrdinal, describeJournalEvent(wrongOrdinal).expectedKey),
     fixture.runId,
     prefix,
     indexes,
@@ -435,9 +505,9 @@ it("keeps exact replacement prerequisites bounded after 64 and 256 unrelated acc
     const noise = Array.from({ length: size }, (_, index) =>
       record(index + 1, fixture.graphRecordEvent, `history:replacement-noise:${index}`)
     )
-    const relevant = validFinalityRecords()
-      .slice(0, 4)
-      .map((current, index) => ({ ...current, position: JournalPosition.make(size + index + 1) }))
+    const relevant = recordsThroughTag(validFinalityRecords(), "CompletionClaimReplacementIntended").map(
+      (current, index) => ({ ...current, position: JournalPosition.make(size + index + 1) })
+    )
     const intent = relevant.at(-1)
     if (intent?.event._tag !== "CompletionClaimReplacementIntended") {
       return expect.fail("fixture must end at replacement intent")
@@ -464,9 +534,10 @@ it("validates one completion request without materializing task or promotion his
     const noise = Array.from({ length: size }, (_, index) =>
       record(index + 1, fixture.graphRecordEvent, `history:completion-request-noise:${index}`)
     )
-    const relevant = validFinalityRecords()
-      .slice(0, 7)
-      .map((current, index) => ({ ...current, position: JournalPosition.make(size + index + 1) }))
+    const relevant = recordsThroughTag(validFinalityRecords(), "CompletionTaskIntended").map((current, index) => ({
+      ...current,
+      position: JournalPosition.make(size + index + 1)
+    }))
     const completionIntent = relevant.at(-1)
     if (completionIntent?.event._tag !== "CompletionTaskIntended") {
       return expect.fail("fixture must end at completion intent")
@@ -656,18 +727,24 @@ it("accepts a completion claim authorized by the exact post-plan reacquisition",
     version: workflowJournalEventVersion
   })
   const records = [
+    makeWorkflowRunBeganRecord(
+      fixture.runId,
+      fixture.target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTargetForTest
+    ),
     record(
-      1,
+      2,
       TaskClaimAcquiredEvent.make({ claim: fixture.activeClaim, version: workflowJournalEventVersion }),
       outcomeRecordKey(fixture.activeClaim.operationId)
     ),
     record(
-      2,
+      3,
       TaskAttemptPlannedEvent.make({ operation: fixture.planOperation, version: workflowJournalEventVersion }),
       attemptPlanRecordKey(fixture.plannedAttempt.attemptId)
     ),
     record(
-      3,
+      4,
       TaskClaimReacquisitionDirectedEvent.make({
         initiatedBy: { _tag: "Operator" },
         occurrenceClassification: "InitiatedAction",
@@ -678,21 +755,53 @@ it("accepts a completion claim authorized by the exact post-plan reacquisition",
       taskClaimReacquisitionDirectedRecordKey(requestId)
     ),
     record(
-      4,
+      5,
       TaskClaimAcquisitionIntendedEvent.make({ operation: reacquisition, version: workflowJournalEventVersion }),
       intentRecordKey(reacquiredClaim.operationId)
     ),
     record(
-      5,
+      6,
       TaskClaimAcquiredEvent.make({ claim: reacquiredClaim, version: workflowJournalEventVersion }),
       outcomeRecordKey(reacquiredClaim.operationId)
     ),
     record(
-      6,
+      7,
+      RemotePublicationIntendedEvent.make({
+        correlation: publicationCorrelation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      8,
+      RemotePublicationAttemptIntendedEvent.make({
+        attemptOrdinal: publicationAttemptOrdinal,
+        correlation: publicationCorrelation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      9,
+      RemotePublicationSucceededEvent.make({
+        correlation: publicationCorrelation,
+        occurrenceClassification: "NonActionOccurrence",
+        proof: {
+          _tag: "PushApplied",
+          attemptOrdinal: publicationAttemptOrdinal,
+          remoteHead: fixture.qualifiedCandidate.candidateCommit
+        },
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      10,
       fixture.promotionSuccess,
       targetPromotionObservedSuccessRecordKey(fixture.promotionCorrelation.requestId)
     ),
-    record(7, replacementIntent)
+    record(11, replacementIntent)
   ]
 
   expect(validationErrors(records)).toEqual([])
@@ -847,10 +956,20 @@ it("projects each phase from exact stored evidence without rescanning authority 
     ...candidate,
     key: describeJournalEvent(candidate.event).expectedKey
   }))
-  expect(deriveIntegrationFinalityStateFor(records.slice(0, 4), fixture.claim)?._tag).toBe("ReplacementPending")
-  expect(deriveIntegrationFinalityStateFor(records.slice(0, 6), fixture.claim)?._tag).toBe("CompletionClaimReplaced")
-  expect(deriveIntegrationFinalityStateFor(records.slice(0, 10), fixture.claim)?._tag).toBe("DeletionPending")
-  expect(deriveIntegrationFinalityStateFor(records.slice(0, 19), fixture.claim)?._tag).toBe("CompletionClaimDeleted")
+  expect(
+    deriveIntegrationFinalityStateFor(recordsThroughTag(records, "CompletionClaimReplacementIntended"), fixture.claim)
+      ?._tag
+  ).toBe("ReplacementPending")
+  expect(
+    deriveIntegrationFinalityStateFor(recordsThroughTag(records, "CompletionClaimReplaced"), fixture.claim)?._tag
+  ).toBe("CompletionClaimReplaced")
+  expect(
+    deriveIntegrationFinalityStateFor(recordsThroughTag(records, "CompletionClaimDeletionIntended"), fixture.claim)
+      ?._tag
+  ).toBe("DeletionPending")
+  expect(
+    deriveIntegrationFinalityStateFor(recordsThroughTag(records, "CompletionClaimDeleted"), fixture.claim)?._tag
+  ).toBe("CompletionClaimDeleted")
   expect(deriveIntegrationFinalityStateFor(records, fixture.claim)?._tag).toBe("IntegrationFinalitySettled")
   expect(deriveIntegrationFinalityStateFor(journalEvidenceFrom(canonicalRecords), fixture.claim)).toEqual(
     deriveIntegrationFinalityStateFor(records, fixture.claim)
@@ -968,8 +1087,9 @@ it("keeps every finality event accepted while excluding unrelated or malformed r
 
 it("does not settle from a terminal occurrence with different operation evidence", () => {
   const records = validFinalityRecords()
+  const preSettlement = records.slice(0, -1)
   const mismatchedSettlement = record(
-    13,
+    positionAfter(preSettlement),
     IntegrationFinalitySettledEvent.make({
       claim: fixture.claim,
       deletionOperationId: OperationId.make("foreign-deletion-operation"),
@@ -978,7 +1098,7 @@ it("does not settle from a terminal occurrence with different operation evidence
       version: workflowJournalEventVersion
     })
   )
-  expect(deriveIntegrationFinalityStateFor([...records.slice(0, 19), mismatchedSettlement], fixture.claim)?._tag).toBe(
+  expect(deriveIntegrationFinalityStateFor([...preSettlement, mismatchedSettlement], fixture.claim)?._tag).toBe(
     "CompletionClaimDeleted"
   )
 })
@@ -1035,18 +1155,22 @@ it("does not treat a later complete graph as cleanup authority", () => {
 })
 
 it("accepts exact successful focused facts directly and rejects a cleanup proof without them", () => {
-  const prefix = validFinalityRecords().slice(0, 6)
-  expect(validationErrors([...prefix, deletionIntentRecord(8, successObservation)])).toHaveLength(1)
+  const prefix = recordsThroughTag(validFinalityRecords(), "CompletionClaimReplaced")
+  expect(validationErrors([...prefix, deletionIntentRecord(positionAfter(prefix), successObservation)])).toHaveLength(1)
+  const completionIntentPosition = positionAfter(prefix)
+  const focusedIntentPosition = completionIntentPosition + 1
+  const focusedFactsPosition = focusedIntentPosition + 1
+  const deletionIntentPosition = focusedFactsPosition + 1
   expect(
     validationErrors([
       ...prefix,
       record(
-        7,
+        completionIntentPosition,
         CompletionTaskIntendedEvent.make({ request: fixture.completionRequest, version: workflowJournalEventVersion })
       ),
-      record(8, fixture.focusedSuccessFactsReadIntentEvent),
-      record(9, fixture.focusedSuccessFactsEvent),
-      deletionIntentRecord(10, successObservation)
+      record(focusedIntentPosition, fixture.focusedSuccessFactsReadIntentEvent),
+      record(focusedFactsPosition, fixture.focusedSuccessFactsEvent),
+      deletionIntentRecord(deletionIntentPosition, successObservation)
     ])
   ).toEqual([])
 })
@@ -1179,10 +1303,15 @@ it("rejects a same-task claim that is not the planned attempt's causal predecess
     }),
     version: workflowJournalEventVersion
   })
-  const records = validFinalityRecords()
-  const acquired = records[0]
-  if (acquired === undefined) return expect.fail("fixture must contain its exact acquired claim")
-  expect(validationErrors([acquired, record(2, unrelatedPlan), ...records.slice(2, 4)])).toHaveLength(1)
+  const records = recordsThroughTag(validFinalityRecords(), "CompletionClaimReplacementIntended")
+  const plannedIndex = records.findIndex(({ event }) => event._tag === "TaskAttemptPlanned")
+  const planned = records[plannedIndex]
+  if (planned === undefined) return expect.fail("fixture must contain its exact planned attempt")
+  expect(
+    validationErrors(
+      records.map((candidate, index) => (index === plannedIndex ? { ...candidate, event: unrelatedPlan } : candidate))
+    )
+  ).toHaveLength(1)
 })
 
 it("rejects duplicate terminal outcomes and settlement without exact deletion proof", () => {
@@ -1241,7 +1370,7 @@ it("rejects a replacement outcome without its exact intent", () => {
 })
 
 it("reports exact run binding and semantic issues through the reconstruction callbacks", () => {
-  const intent = validFinalityRecords()[3]
+  const intent = validFinalityRecords().find(({ event }) => event._tag === "CompletionClaimReplacementIntended")
   if (intent === undefined) return expect.fail("fixture must contain replacement intent")
   expect(invalidIntegrationFinalityRunBinding(intent.event, RunId.make("foreign-finality-run"))).toContain(
     fixture.runId

@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import {
   AttemptId,
@@ -244,6 +245,7 @@ const rows: ReadonlyArray<Pick<JournalRecord, "event" | "key">> = [
   {
     event: WorkflowRunBeganEvent.make({
       initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTarget: remotePublicationTargetForTest,
       initiatedBy: { _tag: "DalphCoordinator" },
       occurrenceClassification: "InitiatedAction",
       target,
@@ -1146,7 +1148,8 @@ it.effect("persists RunCancellationApplied in the memory journal store", () =>
     yield* journal.beginRun(
       runId,
       target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTargetForTest
     )
     const event = RunCancellationAppliedEvent.make({
       initiatedBy: { _tag: "Operator" },

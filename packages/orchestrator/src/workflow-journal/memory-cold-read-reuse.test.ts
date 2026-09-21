@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
@@ -24,7 +25,7 @@ const terminalRecordsFor = (
 ): ReadonlyArray<JournalRecord> => {
   const fixture = completedRunFinalityFixture({ runId, target })
   return [
-    makeWorkflowRunBeganRecord(runId, target, initialPolicy),
+    makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest),
     {
       event: fixture.intent,
       key: intentRecordKey(fixture.operation.operationId),
@@ -68,7 +69,7 @@ it.effect("validates a retired memory root once across repeated exact reads and 
   const fixture = completedRunFinalityFixture({ runId, target })
   return Effect.gen(function* () {
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target, initialPolicy)
+    yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
     yield* journal.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
     yield* journal.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
     yield* journal.terminateRun(runId, "Completed", fixture.evidence)

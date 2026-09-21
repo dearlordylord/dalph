@@ -39,7 +39,14 @@ export const hermeticQualificationPublicTaskSpecification = {
 /** Exact provider nodes initialized by the controlled fixture, not identities discovered from output. */
 export const hermeticQualificationTrackerIdentity = {
   repositoryNodeId: GithubRepositoryNodeId.make("hermetic-repository"),
-  issueNodeId: GithubIssueNodeId.make("hermetic-issue")
+  issueNodeId: GithubIssueNodeId.make("hermetic-issue"),
+  dependantIssueNodeId: GithubIssueNodeId.make("hermetic-dependant-issue")
+} as const
+
+/** Exact controlled dependant whose blocker is released only by a later complete graph read. */
+export const hermeticQualificationDependantTaskSpecification = {
+  title: "Hermetic dependant",
+  body: "Wait for the hermetic root task to complete."
 } as const
 
 const canonicalAbsolutePath = (subject: string) =>

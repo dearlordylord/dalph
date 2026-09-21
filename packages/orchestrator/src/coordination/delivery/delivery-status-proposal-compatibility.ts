@@ -85,7 +85,7 @@ const currentProposalEncodingForOwner = (
     ...(preservesMaterializedReadIdentity(owner, current) ? { actionIdentity: owner.proposal.actionIdentity } : {})
   })
 
-/** Current evaluation and integration-list positions may move without changing an already admitted action. */
+/** Current evaluation and descriptive frontier positions may move without changing an already admitted action. */
 export const currentProposalPresentationMatches = (
   owner: DeliveryRuntimeLiveOwnerSnapshot,
   current: DeliveryActionProposal,
@@ -93,6 +93,15 @@ export const currentProposalPresentationMatches = (
 ): boolean => {
   const admitted = owner.proposal
   if (admitted.order._tag === "IntegrationOrder" && current.order._tag === "IntegrationOrder") {
+    return (
+      canonicalEncodingOf(admitted) ===
+      currentProposalEncodingForOwner(owner, current, {
+        ...current.order,
+        frontierOrdinal: admitted.order.frontierOrdinal
+      })
+    )
+  }
+  if (admitted.order._tag === "FreshWorkflowOrder" && current.order._tag === "FreshWorkflowOrder") {
     return (
       canonicalEncodingOf(admitted) ===
       currentProposalEncodingForOwner(owner, current, {

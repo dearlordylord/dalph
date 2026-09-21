@@ -1,3 +1,5 @@
+/* eslint-disable max-lines -- Qualification checks keep the exact controlled fixture allowlist auditable in one module. */
+
 import { GitCommitSha, type TaskId } from "@dalph/contracts"
 import {
   TrackerTask,
@@ -29,6 +31,8 @@ import {
   sourceRejected,
   strictSource,
   validateActiveClaim,
+  isQualificationTaskId,
+  qualificationSpecificationFor,
   validateClaimOperation,
   validateOperationId,
   validateWorkflowOperationId,
@@ -39,20 +43,20 @@ import {
 } from "./production-hermetic-qualification-attempt-source.js"
 
 export const validateTask = Effect.fn("HermeticQualification.validateTask")(function* (
-  task: typeof TrackerTask.Type,
+  task: TrackerTask,
   context: QualificationContext
 ) {
   const decoded = yield* Schema.decodeUnknownEffect(
     TrackerTask,
     strictSource
   )(task).pipe(Effect.mapError(sourceRejected))
-  if (
-    decoded.id !== context.taskId ||
-    decoded.parentTaskId !== null ||
-    decoded.prerequisiteIds.length !== 0 ||
-    decoded.lifecycle._tag === "TerminalWithoutSuccess"
-  )
-    return yield* sourceRejected()
+  const root = decoded.id === context.taskId && decoded.parentTaskId === null && decoded.prerequisiteIds.length === 0
+  const dependant =
+    decoded.id === context.dependantTaskId &&
+    decoded.parentTaskId === context.taskId &&
+    decoded.prerequisiteIds.length === 1 &&
+    decoded.prerequisiteIds[0] === context.taskId
+  if ((!root && !dependant) || decoded.lifecycle._tag === "TerminalWithoutSuccess") return yield* sourceRejected()
   return decoded
 })
 
@@ -64,37 +68,56 @@ export const validateGraph = Effect.fn("HermeticQualification.validateGraph")(fu
     TaskDagWire,
     strictSource
   )(graph).pipe(Effect.mapError(sourceRejected))
-  if (original.tasks.length !== 1) return yield* sourceRejected()
+  const rootOnlyTaskCount = 1
+  const rootAndDependantTaskCount = 2
+  if (original.tasks.length !== rootOnlyTaskCount && original.tasks.length !== rootAndDependantTaskCount)
+    return yield* sourceRejected()
   const tasks = yield* Effect.forEach(original.tasks, (task) => validateTask(task, context))
+  if (
+    !tasks.some(({ id }) => id === context.taskId) ||
+    (tasks.length === rootAndDependantTaskCount && !tasks.some(({ id }) => id === context.dependantTaskId))
+  )
+    return yield* sourceRejected()
   if (original.revision !== trackerRevisionFor(tasks)) return yield* sourceRejected()
 })
 
 const validateTrackerRevision = (revision: TrackerRevision, context: QualificationContext) =>
-  ["Open", "CompletedSuccessfully"].some(
-    (lifecycle) =>
-      revision ===
-      trackerRevisionFor([
-        {
-          id: context.taskId,
-          lifecycle: lifecycle === "Open" ? { _tag: "Open" } : { _tag: "CompletedSuccessfully" },
-          parentTaskId: null,
-          prerequisiteIds: []
-        }
-      ])
-  )
+  [
+    ["Open", "Open"],
+    ["CompletedSuccessfully", "Open"],
+    ["CompletedSuccessfully", "CompletedSuccessfully"]
+  ].some(([rootLifecycle, dependantLifecycle]) => {
+    const root = TrackerTask.make({
+      id: context.taskId,
+      lifecycle: rootLifecycle === "Open" ? { _tag: "Open" } : { _tag: "CompletedSuccessfully" },
+      parentTaskId: null,
+      prerequisiteIds: []
+    })
+    const dependant = TrackerTask.make({
+      id: context.dependantTaskId,
+      lifecycle: dependantLifecycle === "Open" ? { _tag: "Open" } : { _tag: "CompletedSuccessfully" },
+      parentTaskId: context.taskId,
+      prerequisiteIds: [context.taskId]
+    })
+    return revision === trackerRevisionFor([root]) || revision === trackerRevisionFor([root, dependant])
+  })
     ? Effect.void
     : Effect.fail(sourceRejected())
 
 const validateTaskIds = (taskIds: ReadonlyArray<TaskId>, context: QualificationContext) =>
-  taskIds.every((id) => id === context.taskId) ? Effect.void : Effect.fail(sourceRejected())
+  new Set(taskIds).size === taskIds.length &&
+  taskIds.every((id) => id === context.taskId || id === context.dependantTaskId)
+    ? Effect.void
+    : Effect.fail(sourceRejected())
 
 export const validateCompletionFacts = Effect.fn("HermeticQualification.validateCompletionFacts")(function* (
   facts: FocusedTaskCompletionFacts,
   context: QualificationContext
 ) {
+  const expectedSpecification = qualificationSpecificationFor(facts.taskId, context)
   if (
-    facts.taskId !== context.taskId ||
-    facts.taskRevision !== context.specification.fingerprint ||
+    expectedSpecification === undefined ||
+    facts.taskRevision !== expectedSpecification.fingerprint ||
     facts.unfinishedPrerequisiteTaskIds.length !== 0 ||
     facts.targetMembership !== "Member" ||
     !Schema.toEquivalence(TrackerTarget)(facts.target, context.configuration.target)
@@ -120,7 +143,8 @@ const validateCompletionFactsClaim = Effect.fn("HermeticQualification.validateCo
 ) {
   if (claim._tag === "CompletionTaskClaim") yield* validateCompletionClaim(claim, context)
   else if (claim._tag === "ActiveTaskClaim") yield* validateActiveClaim(claim, context)
-  else if (claim._tag !== "UnclaimedTask" || claim.taskId !== context.taskId) return yield* sourceRejected()
+  else if (claim._tag !== "UnclaimedTask" || !isQualificationTaskId(claim.taskId, context))
+    return yield* sourceRejected()
 })
 
 export const validateTrackerFacts = Effect.fn("HermeticQualification.validateTrackerFacts")(function* (
@@ -164,11 +188,8 @@ const validateFocusedSpecificationFacts = Effect.fn("HermeticQualification.valid
     context: QualificationContext
   ) {
     const specification = facts.factFamily
-    if (
-      specification.coverage.taskId !== context.taskId ||
-      specification.contentIdentity !== context.specification.fingerprint
-    )
-      return yield* sourceRejected()
+    const expected = qualificationSpecificationFor(specification.coverage.taskId, context)
+    if (expected === undefined || specification.contentIdentity !== expected.fingerprint) return yield* sourceRejected()
     yield* validateSpecification(
       {
         taskId: specification.taskId,
@@ -186,9 +207,11 @@ const validateFocusedClaimFacts = Effect.fn("HermeticQualification.validateFocus
   facts: Extract<TaskTrackerFactsObservation, { readonly _tag: "FocusedTaskClaimFacts" }>,
   context: QualificationContext
 ) {
-  if (facts.coverage.taskId !== context.taskId) return yield* sourceRejected()
-  if (facts.observation._tag === "ActiveTaskClaim") yield* validateActiveClaim(facts.observation, context)
-  else if (facts.observation.taskId !== context.taskId) return yield* sourceRejected()
+  if (!isQualificationTaskId(facts.coverage.taskId, context)) return yield* sourceRejected()
+  if (facts.observation._tag === "ActiveTaskClaim") {
+    if (facts.observation.taskId !== facts.coverage.taskId) return yield* sourceRejected()
+    yield* validateActiveClaim(facts.observation, context)
+  } else if (facts.observation.taskId !== facts.coverage.taskId) return yield* sourceRejected()
   return
 })
 
@@ -216,18 +239,47 @@ const validateGraphFactRows = Effect.fn("HermeticQualification.validateGraphFact
   family: GraphFactFamily,
   context: QualificationContext
 ) {
-  if ("lifecycles" in family)
-    yield* Effect.forEach(family.lifecycles, (row) =>
-      validateTask({ id: row.taskId, lifecycle: row.lifecycle, parentTaskId: null, prerequisiteIds: [] }, context)
-    )
+  if ("lifecycles" in family) {
+    if (new Set(family.lifecycles.map(({ taskId }) => taskId)).size !== family.lifecycles.length)
+      return yield* sourceRejected()
+    yield* Effect.forEach(family.lifecycles, (row) => {
+      if (row.taskId === context.taskId)
+        return validateTask(
+          { id: row.taskId, lifecycle: row.lifecycle, parentTaskId: null, prerequisiteIds: [] },
+          context
+        )
+      return validateTask(
+        { id: row.taskId, lifecycle: row.lifecycle, parentTaskId: context.taskId, prerequisiteIds: [context.taskId] },
+        context
+      )
+    })
+  }
   if (
     "prerequisites" in family &&
-    family.prerequisites.some((row) => row.taskId !== context.taskId || row.prerequisiteTaskIds.length !== 0)
+    new Set(family.prerequisites.map(({ taskId }) => taskId)).size !== family.prerequisites.length
   )
     return yield* sourceRejected()
   if (
+    "prerequisites" in family &&
+    family.prerequisites.some(
+      (row) =>
+        (row.taskId === context.taskId && row.prerequisiteTaskIds.length !== 0) ||
+        (row.taskId === context.dependantTaskId &&
+          (row.prerequisiteTaskIds.length !== 1 || row.prerequisiteTaskIds[0] !== context.taskId)) ||
+        (row.taskId !== context.taskId && row.taskId !== context.dependantTaskId)
+    )
+  )
+    return yield* sourceRejected()
+  if ("groupings" in family && new Set(family.groupings.map(({ taskId }) => taskId)).size !== family.groupings.length)
+    return yield* sourceRejected()
+  if (
     "groupings" in family &&
-    family.groupings.some((row) => row.taskId !== context.taskId || row.parentTaskId !== null)
+    family.groupings.some(
+      (row) =>
+        (row.taskId === context.taskId && row.parentTaskId !== null) ||
+        (row.taskId === context.dependantTaskId && row.parentTaskId !== context.taskId) ||
+        (row.taskId !== context.taskId && row.taskId !== context.dependantTaskId)
+    )
   )
     return yield* sourceRejected()
 })
@@ -268,11 +320,12 @@ const validateTrackerReadOperation = Effect.fn("HermeticQualification.validateTr
   operation: Exclude<WorkflowOperation, { readonly _tag: "AcquireTaskClaim" | "ReleaseTaskClaim" }>,
   context: QualificationContext
 ) {
-  if ("taskId" in operation && operation.taskId !== context.taskId) return yield* sourceRejected()
+  if ("taskId" in operation && !isQualificationTaskId(operation.taskId, context)) return yield* sourceRejected()
   if ("target" in operation && !Schema.toEquivalence(TrackerTarget)(operation.target, context.configuration.target))
     return yield* sourceRejected()
   if (operation._tag !== "ReadTrackerGraph") return
-  if (operation.readShape.explicitlyCoveredTaskIds.some((id) => id !== context.taskId)) return yield* sourceRejected()
+  if (operation.readShape.explicitlyCoveredTaskIds.some((id) => !isQualificationTaskId(id, context)))
+    return yield* sourceRejected()
   if (operation.cause._tag === "PostQuiescenceReconfirmation")
     yield* validateOperationId(operation.cause.quiescentGraphOperationId)
 })

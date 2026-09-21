@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { Deferred, Effect, Fiber, FileSystem, Layer, Path, Ref } from "effect"
 import {
@@ -85,7 +86,7 @@ export const restartPredecessorCleanupAfterRemoval = (history: ReadonlyArray<Jou
       const prefixRecords = yield* Effect.scoped(
         Effect.gen(function* () {
           const journal = yield* JournalStore
-          yield* journal.beginRun(runId, target, initialPolicy)
+          yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
           for (const record of source.records.slice(1)) {
             if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated")
               return yield* Effect.die("cleanup source is not one unfinished Run")

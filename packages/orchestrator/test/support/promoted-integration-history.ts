@@ -28,6 +28,13 @@ import {
   IntegratorSessionFixedEvent
 } from "../../src/workflow/protocols/integrator/events.js"
 import {
+  RemotePublicationAttemptIntendedEvent,
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationIntendedEvent,
+  RemotePublicationSucceededEvent,
+  remotePublicationCorrelationFor
+} from "../../src/workflow/protocols/direct-publication/events.js"
+import {
   TargetPromotionAttemptIntendedEvent,
   TargetPromotionAttemptOrdinal,
   TargetPromotionIntendedEvent,
@@ -114,8 +121,44 @@ export const makePromotedIntegrationHistory = (input: {
     run
   })
   const promotionCorrelation = targetPromotionCorrelationFor(qualifiedCandidate)
-  const promotionIntent = append(
+  const began = input.records.find(({ event }) => event._tag === "WorkflowRunBegan")
+  if (began?.event._tag !== "WorkflowRunBegan")
+    return Effect.runSync(Effect.die("promoted integration fixture requires WorkflowRunBegan"))
+  const publicationCorrelation = remotePublicationCorrelationFor(
+    qualifiedCandidate,
+    began.event.remotePublicationTarget
+  )
+  const publicationIntent = append(
     qualified.records,
+    RemotePublicationIntendedEvent.make({
+      correlation: publicationCorrelation,
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      version
+    })
+  )
+  const publicationAttemptOrdinal = RemotePublicationAttemptOrdinal.make(1)
+  const publicationAttempt = append(
+    publicationIntent.records,
+    RemotePublicationAttemptIntendedEvent.make({
+      attemptOrdinal: publicationAttemptOrdinal,
+      correlation: publicationCorrelation,
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      version
+    })
+  )
+  const published = append(
+    publicationAttempt.records,
+    RemotePublicationSucceededEvent.make({
+      correlation: publicationCorrelation,
+      occurrenceClassification: "NonActionOccurrence",
+      proof: { _tag: "PushApplied", attemptOrdinal: publicationAttemptOrdinal, remoteHead: input.candidateCommit },
+      version
+    })
+  )
+  const promotionIntent = append(
+    published.records,
     TargetPromotionIntendedEvent.make({ correlation: promotionCorrelation, version })
   )
   const attemptOrdinal = TargetPromotionAttemptOrdinal.make(1)

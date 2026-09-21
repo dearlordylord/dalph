@@ -17,6 +17,7 @@ import type { IntegrationFrontierRuntimeFacts } from "./integration-frontier.js"
 import { integrationTargetResourceSnapshotIncludes } from "../admission/integration-target-resource.js"
 import {
   deriveCurrentIntegratorState,
+  integratorResponsibilityFactsFor,
   integratorRunQualifiedCandidateFromState,
   type CurrentIntegratorState
 } from "../../workflow/protocols/integrator/state.js"
@@ -48,6 +49,12 @@ import {
 } from "../../workflow-journal/record-evidence.js"
 import { exactWorkflowRunTargetFor } from "../../workflow-journal/run-target.js"
 import { integrationQuarantinedRecordKey } from "../../workflow-journal/record-key.js"
+import { remotePublicationCorrelationFor } from "../../workflow/protocols/direct-publication/events.js"
+import { deriveRemotePublicationState } from "../../workflow/protocols/direct-publication/state.js"
+import { remotePublicationEventsFor } from "../../workflow/protocols/direct-publication/transition-journal.js"
+import { remoteBaselineCorrelationFor } from "../../workflow/protocols/direct-publication/baseline-events.js"
+import { deriveRemoteBaselineState } from "../../workflow/protocols/direct-publication/baseline-state.js"
+import { remoteBaselineEventsFor } from "../../workflow/protocols/direct-publication/baseline-transition-journal.js"
 import {
   validateProviderRunActivityAbsent,
   type ProviderRunFailureQuarantineInput
@@ -60,6 +67,19 @@ import {
 type ClaimSubject = { readonly plannedAttempt: { readonly attemptId: AttemptId; readonly taskId: TaskId } }
 type PromotionState = ReturnType<typeof deriveTargetPromotionStateFor>
 type SucceededPromotion = Extract<PromotionState, { readonly _tag: "PromotionSucceeded" }>
+const lastRecordOffset = -1
+
+const remotePublicationSuccessFor = (
+  runState: ReconstructedRunState,
+  candidate: ReturnType<typeof integratorRunQualifiedCandidateFromState>
+) => {
+  const began = Array.from(journalRecordsOfKind(workflowHistorySource(runState), "WorkflowRunBegan"))[0]
+  if (began?.event._tag !== "WorkflowRunBegan") return undefined
+  const correlation = remotePublicationCorrelationFor(candidate, began.event.remotePublicationTarget)
+  return remotePublicationEventsFor(workflowHistorySource(runState), correlation).findLast(
+    (event) => event._tag === "RemotePublicationSucceeded"
+  )
+}
 
 interface StartedResponsibilityAnalysis {
   readonly trackerFactsAreCurrentFor: (responsibility: {
@@ -395,6 +415,9 @@ const explanationAfterPrerequisitesFor = (
   promotion: PromotionState
 ): FrontierExplanation => {
   if (promotion?._tag === "PromotionSucceeded") {
+    if (remotePublicationSuccessFor(runState, promotion.correlation.qualifiedCandidate) === undefined) {
+      return FrontierExplanation.IntegrationInProgress({ plannedAttempt: responsibility.plannedAttempt })
+    }
     return integrationFinalityExplanationFor(workflowHistorySource(runState), responsibility, promotion, runtimeFacts)
   }
   if (integratorState._tag === "GitQualifiedPrepared" && runtimeFacts.targetPromotionConfigured !== true) {
@@ -426,6 +449,7 @@ const promotionSucceededTransitionsFor = (
   waiting: boolean,
   trackerFactsAreCurrent: boolean
 ): ReadonlyArray<RunnableFrontierTransitionType> => {
+  if (remotePublicationSuccessFor(runState, promotion.correlation.qualifiedCandidate) === undefined) return []
   /* v8 ignore next -- @preserve The promotion action releases its exact target in ensuring; this defends same-process retained ownership. */
   if (held) return [RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })]
   if (!trackerFactsAreCurrent || waiting) return []
@@ -543,12 +567,10 @@ const transitionsBeforeStartedIntegrationAdmission = (
   ) {
     if (!held) return [RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })]
     if (!trackerFactsAreCurrentFor(responsibility) || !claimIsExactFor(responsibility) || waiting) {
-      return [
-        RunnableFrontierTransition.ReconcileTargetPromotionAttempt({
-          candidate: integratorRunQualifiedCandidateFromState(integratorState),
-          responsibility
-        })
-      ]
+      const candidate = integratorRunQualifiedCandidateFromState(integratorState)
+      const publication = remotePublicationSuccessFor(runState, candidate)
+      if (publication?._tag !== "RemotePublicationSucceeded") return []
+      return [RunnableFrontierTransition.ReconcileTargetPromotionAttempt({ candidate, publication, responsibility })]
     }
   }
   if (promotionReconciliationIsDeferred(promotion)) {
@@ -581,11 +603,44 @@ const absentIntegratorProgressTransitionsFor = (
   responsibility: StartedIntegrationResponsibility,
   held: boolean
 ): ReadonlyArray<RunnableFrontierTransitionType> => {
-  if (runtimeFacts.targetLineageRefreshRequiredAttemptIds?.has(responsibility.plannedAttempt.attemptId) === true) {
-    return []
+  const began = Array.from(journalRecordsOfKind(workflowHistorySource(runState), "WorkflowRunBegan"))[0]
+  if (began?.event._tag !== "WorkflowRunBegan") return []
+  const correlation = remoteBaselineCorrelationFor(
+    responsibility.plannedAttempt.runId,
+    integratorResponsibilityFactsFor(responsibility),
+    responsibility.integrationTarget,
+    began.event.remotePublicationTarget
+  )
+  const baseline = deriveRemoteBaselineState(remoteBaselineEventsFor(workflowHistorySource(runState), correlation))
+  if (
+    baseline._tag === "Absent" ||
+    baseline._tag === "ReadPending" ||
+    baseline._tag === "CatchUpRequired" ||
+    baseline._tag === "CatchUpPending"
+  ) {
+    return [RunnableFrontierTransition.EstablishRemoteBaseline({ correlation, responsibility })]
   }
-  const lineage = durableTargetLineageFor(runState, runtimeFacts, responsibility)
+  if (baseline._tag !== "Ready") return releaseStartedIntegrationTargetFor(responsibility, held)
+  const baselineCompletedAt = [
+    ...journalRecordsOfKind(workflowHistorySource(runState), "RemoteBaselineObserved"),
+    ...journalRecordsOfKind(workflowHistorySource(runState), "LocalTargetCatchUpObserved")
+  ]
+    .filter(
+      ({ event }) =>
+        (event._tag === "RemoteBaselineObserved" || event._tag === "LocalTargetCatchUpObserved") &&
+        event.correlation.baselineId === correlation.baselineId
+    )
+    .sort((left, right) => Number(left.position) - Number(right.position))
+    .at(lastRecordOffset)?.position
+  if (
+    baselineCompletedAt === undefined ||
+    runtimeFacts.targetLineageRefreshRequiredAttemptIds?.has(responsibility.plannedAttempt.attemptId) === true
+  )
+    return []
+  const lineage = durableTargetLineageFor(runState, runtimeFacts, responsibility, baselineCompletedAt)
   if (lineage === undefined) return []
+  if (lineage.observation.targetHeadSha !== baseline.remoteHead)
+    return releaseStartedIntegrationTargetFor(responsibility, held)
   if (targetLineageIsIncompatible(lineage.observation, responsibility)) {
     return releaseStartedIntegrationTargetFor(responsibility, held)
   }
@@ -604,20 +659,41 @@ const absentIntegratorProgressTransitionsFor = (
 }
 
 const qualifiedIntegratorProgressTransitionsFor = (
+  runState: ReconstructedRunState,
   runtimeFacts: IntegrationFrontierRuntimeFacts,
   responsibility: StartedIntegrationResponsibility,
   state: Extract<CurrentIntegratorState, { readonly _tag: "GitQualifiedPrepared" }>,
   promotion: PromotionState
-): ReadonlyArray<RunnableFrontierTransitionType> =>
-  runtimeFacts.targetLineageRefreshRequiredAttemptIds?.has(responsibility.plannedAttempt.attemptId) === true &&
-  !promotionRecoveryMustPrecedeFreshLineage(promotion)
-    ? []
-    : [
-        RunnableFrontierTransition.RunTargetPromotion({
-          candidate: integratorRunQualifiedCandidateFromState(state),
-          responsibility
-        })
-      ]
+): ReadonlyArray<RunnableFrontierTransitionType> => {
+  if (
+    runtimeFacts.targetLineageRefreshRequiredAttemptIds?.has(responsibility.plannedAttempt.attemptId) === true &&
+    !promotionRecoveryMustPrecedeFreshLineage(promotion)
+  )
+    return []
+  const began = Array.from(journalRecordsOfKind(workflowHistorySource(runState), "WorkflowRunBegan"))[0]
+  if (began?.event._tag !== "WorkflowRunBegan") return []
+  const candidate = integratorRunQualifiedCandidateFromState(state)
+  const correlation = remotePublicationCorrelationFor(candidate, began.event.remotePublicationTarget)
+  const publication = deriveRemotePublicationState(
+    remotePublicationEventsFor(workflowHistorySource(runState), correlation)
+  )
+  if (publication._tag === "PublicationSucceeded") {
+    const succeeded = remotePublicationEventsFor(workflowHistorySource(runState), correlation).findLast(
+      (event) => event._tag === "RemotePublicationSucceeded"
+    )
+    return succeeded?._tag === "RemotePublicationSucceeded"
+      ? [RunnableFrontierTransition.RunTargetPromotion({ candidate, publication: succeeded, responsibility })]
+      : []
+  }
+  if (publication._tag === "PublicationContradiction" || runtimeFacts.remotePublicationConfigured !== true) return []
+  return [
+    RunnableFrontierTransition.RunRemotePublication({
+      candidate,
+      responsibility,
+      target: began.event.remotePublicationTarget
+    })
+  ]
+}
 
 const explicitRetryProgressTransitionsFor = (
   responsibility: StartedIntegrationResponsibility,
@@ -669,7 +745,7 @@ const startedIntegrationProgressTransitionFor = (
   const retryTransitions = explicitRetryProgressTransitionsFor(responsibility, retryProgress)
   if (retryTransitions !== undefined) return retryTransitions
   if (integratorState._tag === "GitQualifiedPrepared") {
-    return qualifiedIntegratorProgressTransitionsFor(runtimeFacts, responsibility, integratorState, promotion)
+    return qualifiedIntegratorProgressTransitionsFor(runState, runtimeFacts, responsibility, integratorState, promotion)
   }
   if (integratorState._tag === "Absent") {
     return absentIntegratorProgressTransitionsFor(runState, runtimeFacts, responsibility, held)

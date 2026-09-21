@@ -22,6 +22,7 @@ import {
   branchCleanupAuthorizationEquals,
   cleanupMutationRequestLimit,
   integratorCandidateCleanupAuthorizationEquals,
+  integratorCandidateCleanupSessionOf,
   worktreeCleanupAuthorizationEquals
 } from "./disposition.js"
 import {
@@ -355,7 +356,7 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
   const scopedProposals = {
     branch: proposals.branch.filter((authorization) => authorization.disposition.plannedAttempt.runId === runId),
     candidate: proposals.candidate.filter(
-      (authorization) => authorization.disposition.predecessor.plannedAttempt.runId === runId
+      (authorization) => integratorCandidateCleanupSessionOf(authorization.disposition).plannedAttempt.runId === runId
     ),
     worktree: proposals.worktree.filter((authorization) => authorization.disposition.plannedAttempt.runId === runId)
   } satisfies DispositionCleanupProposals

@@ -2,16 +2,16 @@
 
 Issue: [Specify final remote publication before task completion](https://github.com/dearlordylord/dalph/issues/383).
 
-**Status: accepted by the maintainer on 2026-09-19; not implemented.**
+**Status: accepted by the maintainer on 2026-09-19; implementation in progress, acceptance unproven.**
 Alice selected direct publication, remote-first order, ordinary non-force push,
 and automatic integration recovery with user-authorized continuation after
 exhaustion. This document consolidates those decisions and their acceptance tests.
 
-This is a prose-only change at planning Base
+The specification was established before runtime work at planning Base
 `1f8cf021e129cb2590dcc9c4906ab44a3d806098`, in the fresh
-`/workspace/typescript/dalph-worktrees/issue-384-fresh` worktree. It changes no
-executable, schema, model, or runtime behavior. Tests below are required
-implementation evidence, not passing claims.
+`/workspace/typescript/dalph-worktrees/issue-384-fresh` worktree. That prerequisite
+changed no runtime behavior. Tests below remain required implementation evidence;
+the current work is tracked in the [development checkpoints](../postmortems/issue-384-supervised-dogfood-log.md#current-user-directed-orchestrator-method).
 
 ## Outcome and scope
 
@@ -33,9 +33,11 @@ Success means the exact integrated commit was published, local promotion and
 tracker confirmation succeeded, and existing cleanup/settlement obligations were
 met. It does not mean hosted CI or deployment passed. PR workflows, force pushes,
 branch-management commands, new reset interfaces, and multi-remote transactions
-are outside scope. Automatic competing-head successors and local catch-up are
-implemented by #385; additional-batch grants by #386; and the transport-neutral
-retained-delivery operation by #387. Those issues extend the retained waits
+are outside scope. Automatic competing-head successors and their local catch-up
+are implemented by #385. The initial remote baseline and its local catch-up belong
+to #384, including the catch-up recovery required by its S5 acceptance criterion.
+Additional-batch grants belong to #386, and the transport-neutral retained-delivery
+operation belongs to #387. Those issues extend the retained waits
 named here and do not change the initial publication order.
 
 ## Slice ownership and protected premises
@@ -49,7 +51,7 @@ delivery sequence; a deferred owner is not evidence that #384 is complete.
 | Destination admission | Validate one credential-free endpoint, one fully qualified existing branch, one local-to-remote mapping, and pin it in `WorkflowRunBegan` before claim/provider work. | None; unfinished history without the pin is a typed retained constraint. |
 | S1 publication order | Publish exact M with an ordinary non-force explicit refspec, retain correlated per-ref proof, request the local exact-head compare-and-set only after that proof, then complete the task from fresh tracker premises after local promotion is observed. | The disposable hosted journey is a later qualification step; this document does not claim it ran. |
 | S3 proof/reconciliation | Reuse exact M for up-to-date or same-endpoint descendant proof; reconcile ambiguous sends only after sender custody is stopped; retain work on typed denial/throttle. | #385 handles compatible competing heads; #387 handles repaired temporary authority. |
-| S5 recovery cuts | Cover intent-before-send, applied/unapplied response, lost response, ambiguous append, proof-before-promotion, and promotion-before-observation in memory and SQLite. | #385 adds successor/catch-up cuts; #386 adds grant-after-exhaustion cuts; #387 adds resume-after-receipt cuts. |
+| S5 recovery cuts | Cover initial baseline catch-up, intent-before-send, applied/unapplied response, lost response, ambiguous append, proof-before-promotion, and promotion-before-observation in memory and SQLite. | #385 adds successor authorization and successor catch-up cuts; #386 adds grant-after-exhaustion cuts; #387 adds resume-after-receipt cuts. |
 | Initial finite bounds | Enforce three Integrator sessions and three publication intents per candidate, 30-second remote observation, 120-second push, and precise retained exhaustion/denial waits. | #386 owns a new authorized batch; no ungranted fourth action is part of #384. |
 | S7 Exit and S8 finality | Preserve conclusive publication proof through lifecycle interruption, block new work after Exit admission, and require proof plus local promotion plus current tracker premises for completion. | #387 reuses these premises after a retained-delivery request. |
 | S2, S4, public recovery | Preserve the accepted parent chronology and its forbidden outcomes for later implementation. | #385 owns automatic successors/catch-up; #386 owns grants; #387 owns resume; public CLI control remains separately qualified. |
@@ -93,6 +95,13 @@ executor owns execution observations, and the Journal owns workflow history.
    `L` is an ancestor of H, compare-and-set `L -> H`, and observe the result.
    Never reset a divergent/ahead target or disturb foreign/dirty work. Catch-up
    copies a remote baseline; it is not proof that C has been delivered.
+   Before the compare-and-set, Git must report a direct target ref, an
+   unambiguous worktree inventory with no checkout of that ref, and the same
+   ancestor relation. An occupied target is refused even when clean; dirty
+   files and indexes remain untouched. Each admitted baseline action performs
+   one Git boundary and records its result before returning. The frontier
+   re-derives catch-up under a fresh owner, so Pause or Exit can prevent that
+   next action while preserving an already-produced result.
 4. Record one session S fixed to H and C with its distinct candidate worktree.
    The Integrator performs its normal merge, review and repository checks and
    reports M. Git must prove exact ordered parents `[H, C]`. Neither provider
@@ -123,6 +132,15 @@ correlation binds R, task revision, attempt, C, S, H, M and destination; identit
 refs, ordinals and durations are branded at schema boundaries. Derived queues,
 permits, counters and status are reconstructed from history, not stored as new
 authorities. Dry-run, controlled tests and production interpret one workflow.
+
+The shipped public CLI admits one repository-host configuration per process.
+That supported input contains one local integration target and one remote
+publication target, so two configured mappings for the same local target are
+not constructible inside this host authority. A future multi-host assembly
+must enforce the broader duplicate-mapping rejection before it enters either
+host. Git URL rewrite ambiguity remains observable within one host and is
+rejected by the publication adapter; rejection of an unrelated unknown field
+is not evidence for the duplicate-mapping rule.
 
 ## Push results and automatic recovery
 
@@ -257,8 +275,8 @@ Intent must be acknowledged before every uncertain push, catch-up, promotion or
 tracker mutation. The result is then recorded. Recovery selects the same R and
 reconciles each owning boundary; it never records a synthetic crash event.
 
-For #384, the recovery matrix covers the initial publication, local-promotion,
-completion, Exit, and conclusive-proof cuts. The successor-authorization,
+For #384, the recovery matrix covers initial baseline catch-up, publication,
+local promotion, completion, Exit, and conclusive-proof cuts. The successor-authorization,
 additional-batch, and retained-resume rows remain parent requirements whose
 implementation evidence belongs to #385, #386, and #387 respectively.
 
@@ -266,7 +284,7 @@ implementation evidence belongs to #385, #386, and #387 respectively.
 | --- | --- |
 | Before/after push intent; applied or unapplied send; lost response; response before durable append | Preserve consumed ordinals; resolve ambiguous journal appends; reconcile using the same idempotent push or remote read. Never infer non-application or overlap local senders. |
 | Automatic successor authorization before fixation | **Deferred to #385.** Refresh current permission and Git facts; fix at most one successor. No fabricated Operator direction. |
-| Local catch-up applied before observation | Read local Git, settle the same intent, then fix/restore the successor; no blind reset. |
+| Local catch-up applied before observation | Read local Git and settle the same intent before fixing/restoring the initial session; no blind reset. #385 applies the same rule to its successor catch-up. |
 | Fixed session before provider contact or during execution | Restore the same session; never allocate another cycle solely because the host died. |
 | Remote proof before local promotion, or local promotion before observation | Retain conclusive remote proof and reconcile local promotion; no remote read or reintegration solely because the process restarted. |
 | Full rerun grant committed before new work | **Deferred to #386.** Resume the one granted batch with unchanged history; no repeated user request required. |
@@ -287,6 +305,14 @@ nor a subsequent read prevents an outside rewrite before closure applies or
 after delivery settles. Report known contradictions without inventing atomicity,
 force-pushing, reopening successful tasks, or promising perpetual monitoring.
 
+On 2026-09-20 the maintainer reaffirmed the no-extra-read rule for #384:
+after Git confirms publication, Dalph does not add a remote check before closing
+the task. The current supported workflow has no later remote observation before
+that close. Adding a trigger to detect a subsequent branch rewrite is follow-up
+work; #384 must not claim that detection from malformed journal history or a
+synthetic observation. Historical proof and current tracker permission remain
+separate requirements.
+
 On Ctrl-C/SIGTERM, the existing Exit cutoff forbids fresh pushes, reconciliation,
 successors, completion or durable cleanup. Within the existing drain, record
 already-produced results and stop owned local writers. Report the actual Exit
@@ -303,14 +329,16 @@ D invariants and extended models, not solely by replaying a successful cassette.
 
 | Scenario and visible outcome | Required test owner/name and decisive evidence |
 | --- | --- |
-| **S1: Alice starts one fresh task; delivery succeeds.** Execute the normal chronology with no crash/retry. She sees separate remote publication, local promotion and confirmed closure. | Planned seams: `packages/orchestrator/src/workflow/protocols/direct-publication/admission.test.ts::admits one pinned endpoint and branch before claim`; `packages/dalph/test/cassettes/direct-remote-publication.test.ts::publishes M before local promotion and task completion`. Real Git plus a distinct bare remote, SQLite and controlled providers must assert exact order and identities, one Begin, zero redundant post-push workflow reads, independent remote ancestry, and no premature claim replacement/close/cleanup/dependant release. |
+| **S1: Alice starts one fresh task; delivery succeeds.** Execute the normal chronology with no crash/retry. She sees separate remote publication, local promotion and confirmed closure. | Planned seams: `packages/orchestrator/src/workflow/protocols/direct-publication/admission.test.ts::admits one pinned endpoint and branch before claim and restores the prior admission without another Git read`; `packages/dalph/test/cassettes/direct-remote-publication.test.ts::publishes M before local promotion and task completion`. Real Git plus a distinct bare remote, SQLite and controlled providers must assert exact order and identities, one Begin, zero redundant post-push workflow reads, independent remote ancestry, and no premature claim replacement/close/cleanup/dependant release. |
 | **S2: Outside work advances remote H to H2 without M.** Exercise before push discovery, between discovery/update and after a lost response. Dalph prepares M2 and completes automatically; Alice does nothing. | **Deferred to #385.** Planned seam: `packages/orchestrator/src/workflow/protocols/integration-quarantine/successor.test.ts::reintegrates the same C after a competing push`; assert exact M2 parents, H2 retention, same task/queue, one successor/resource, no task rerun or Operator direction. The separate `catches up only a proven local ancestor` seam is also #385. |
 | **S3: An identical push repeats or remote N already contains M.** Dalph reports publication, not failed delivery or new integration. | Planned seams: `packages/orchestrator/src/authorities/git/direct-publication.test.ts::records correlated per-ref update and up-to-date proof` and `packages/orchestrator/src/authorities/git/direct-publication.test.ts::proves same-endpoint descendant containment after rejection`. Assert exact repeat/up-to-date, safe fast-forward when the head differs from original H, and rejection of equal-content foreign commits, insufficient ancestry, dry-run proof, force, backward, or extra-ref mutation. |
-| **S4: Repeated races or transport failures exhaust allowance.** Work remains retained after the finite batch. | Initial #384 seam: `packages/orchestrator/src/workflow/protocols/direct-publication/bounds.test.ts::retains exact exhaustion without an ungranted fourth intent`; assert three sessions, three intents, consumed-but-unsent ordinals, precise wait, and unrelated-target progress. **Deferred to #386:** duplicate grant, crash-after-grant, successor-generation exhaustion, and reuse of an already-published or publishable M. |
-| **S5: Host dies at each initial publication/finality cut.** Replacement host continues the same Run and work. | Initial #384 seam: `packages/orchestrator/src/workflow/protocols/direct-publication/recovery.test.ts::recovers every initial remote delivery boundary`; exercise intent-before-send, applied/unapplied effects, lost response, ambiguous append, proof-before-promotion, promotion-before-observation, stopped-sender custody, and both stores. **Deferred:** successor cuts #385, grant cuts #386, and resume-after-receipt cuts #387. |
-| **S6: Invalid configuration or real authority failure.** Initial mismatch starts no task work; later failure retains work. | Initial #384 seams: `packages/orchestrator/src/workflow/protocols/direct-publication/admission.test.ts::rejects an ambiguous or changed destination before claim` and `packages/orchestrator/src/authorities/git/direct-publication.test.ts::retains work on typed denial or throttle`. Cover wrong/multiple endpoint, non-branch ref, missing initial branch, changed restart destination, unfinished history without destination, duplicate mappings, missing ref/ancestry, unsafe local state, and no credentials/raw diagnostics in journal/status. **Deferred to #387:** `resumes retained publication after repaired credentials or connectivity`, including deduplicated request and crash-after-receipt recovery. |
+| **S4: Repeated races or transport failures exhaust allowance.** Work remains retained after the finite batch. | Initial #384 seam: `packages/orchestrator/src/workflow/protocols/direct-publication/protocol-engine.test.ts::retains exact exhaustion without an ungranted fourth push intent`; assert three sessions, three intents, consumed-but-unsent ordinals, precise wait, and unrelated-target progress. **Deferred to #386:** duplicate grant, crash-after-grant, successor-generation exhaustion, and reuse of an already-published or publishable M. |
+| **S5: Host dies at each initial publication/finality cut.** Replacement host continues the same Run and work. | Initial #384 seam: `packages/orchestrator/src/workflow/protocols/direct-publication/recovery.test.ts::recovers every initial remote delivery boundary`; exercise intent-before-send, applied/unapplied effects, lost response, ambiguous append, proof-before-promotion, promotion-before-observation, stopped-sender custody, and both stores. Initial catch-up uses `direct-publication/baseline-recovery.test.ts::recovers the initial remote baseline across memory and reopened SQLite journals`; real host death uses `packages/dalph/src/application/git-sender-custody.real-host.test.ts`. These tests do not substitute for promotion and tracker-close recovery. **Deferred:** successor cuts #385, grant cuts #386, and resume-after-receipt cuts #387. |
+| **S6: Invalid configuration or real authority failure.** Initial mismatch starts no task work; later failure retains work. | Initial #384 seams: `packages/orchestrator/src/workflow/protocols/direct-publication/admission.test.ts::rejects a changed restart destination before appending or reading Git` and `packages/orchestrator/src/authorities/git/direct-publication.test.ts::retains work on typed denial or throttle`. Cover wrong/multiple endpoint, non-branch ref, missing initial branch, changed restart destination, unfinished history without destination, duplicate mappings, missing ref/ancestry, unsafe local state, and no credentials/raw diagnostics in journal/status. **Deferred to #387:** `resumes retained publication after repaired credentials or connectivity`, including deduplicated request and crash-after-receipt recovery. |
+| **Initial catch-up safety (S5/S6).** Git proves the target is behind before changing an unoccupied direct ref. | `direct-publication-git-characterization.test.ts`: `fast-forwards an unoccupied target and reconciles the applied intent without another mutation`; `rejects a checked-out target without changing its index or files (dirty=%s)` (clean and dirty linked worktrees); `rejects ambiguous worktree inventory and symbolic target ownership before mutation`; `refuses a backward catch-up before mutation`. |
+| **Initial baseline cutoff (S7).** Pause or Exit arrives during the baseline read or catch-up. | `direct-publication-cutoff.test.ts`: `Pause during initial baseline observe/catch-up preserves its exact intent and forbids later Git work`; corresponding `Exit` cases retain unresolved intent, and `Exit-produced` cases persist a produced observation/result before releasing the owner. The same one-boundary engine is used in controlled tests and production; `baseline-recovery.test.ts` advances its next action explicitly. |
 | **S7: Alice pauses or exits during publication/recovery.** Pause preserves work; Ctrl-C/SIGTERM reports actual Exit disposition. | Planned seam: `packages/dalph/test/scenarios/production.test.ts::retains remote delivery across Pause and Exit`. Assert no forward action while paused or after Exit cutoff, unchanged drain, exact stopped/unproven sender evidence, no remote-failure inference, and conclusive publication retained without a lifecycle-only read/push. |
-| **S8: Completion permission changes or its response is lost.** After publication, introduce tracker blocker/revision/claim changes or a genuine later contrary remote observation. | Planned seam: `packages/orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.test.ts::requires remote publication proof and local promotion before tracker completion`. Assert conclusive proof survives interruption/retry without mandatory remote reads, unknown publication is reconciled, known contradictions and independent tracker constraints block unsent mutations, and applied close is not repeated/reopened or fabricated from task success. #387 adds the same premises after retained resume. |
+| **S8: Completion permission changes or its response is lost.** After publication, introduce tracker blocker/revision/claim changes. | `packages/orchestrator/src/workflow/protocols/integration-finality/completion-task-protocol.test.ts::requires exact remote publication proof before a new tracker completion` preserves missing-proof rejection; `rejects malformed publication history before tracker completion without claiming a remote observation` distinguishes invalid journal history from external Git evidence. `direct-publication/recovery.test.ts::recovers every initial remote delivery boundary` proves committed success survives restart without remote calls. Independent tracker constraints block unsent mutations; applied close is not repeated/reopened or fabricated from task success. Both the event/ingress for genuine later remote contradiction evidence and the operation that obtains it are deferred; #384 does not claim supplied-evidence coverage or add a remote read before closure. #387 adds finality premises after retained resume. |
 | **Deferred public recovery: Alice uses the shipped command after failure/exhaustion.** | #386/#387 internal controls precede a later public-control seam `resumes and grants one batch through the public entry`. Exact retained subject, idempotent request/result, loss/reconnect, same Run, no duplicate grant, and one task Begin must be proven separately; do not claim this from core-control tests. |
 | **S1–S8: chronology and forbidden paths.** | The maintained cassette/public-status seam `directPublicationCassettePreservesRemoteProofAndOrder` records separate push results, remote proof, local promotion, finality, waits, and Exit. Conformance owners must retain negative controls for wrong candidate/destination, missing proof, unsafe mutation, duplicate successor/grant, reset budgets, early termination, and dependant release before the later complete graph. |
 | **S1: one real disposable dogfood task.** | Built production CLI with a named Kimi or Codex profile. The run log must capture exact source/Base/C/M, task/Run/attempt, endpoint/ref, remote acknowledgement and independent hosted-head evidence, local promotion, GitHub confirmation, exact cleanup and termination. No controlled fixture, local-only success, hosted #388 qualification, or provider smoke prompt substitutes. |

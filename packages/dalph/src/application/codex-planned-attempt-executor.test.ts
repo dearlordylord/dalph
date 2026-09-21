@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import {
   AttemptId,
@@ -2883,7 +2884,12 @@ for (const storage of ["memory", "sqlite-and-private-files"] as const) {
               if (beginning?.event._tag !== "WorkflowRunBegan") {
                 return yield* Effect.die("restart fixture requires a workflow beginning")
               }
-              yield* journal.beginRun(attempt.runId, trackerTarget, beginning.event.initialControlPolicy)
+              yield* journal.beginRun(
+                attempt.runId,
+                trackerTarget,
+                beginning.event.initialControlPolicy,
+                remotePublicationTargetForTest
+              )
               for (const record of seedRecords.slice(1)) {
                 if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
                   return yield* Effect.die("restart fixture must contain no later workflow lifecycle event")

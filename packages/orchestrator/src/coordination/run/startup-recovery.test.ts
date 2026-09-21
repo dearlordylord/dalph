@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
 import { it } from "@effect/vitest"
@@ -32,8 +33,8 @@ const seedTerminalAndActive = Effect.fn("StartupRecoveryTest.seedTerminalAndActi
   const terminalRunId = RunId.make(`startup-terminal-${suffix}`)
   const activeTarget = FixtureTarget.make(`startup-active-target-${suffix}`)
   const terminalTarget = FixtureTarget.make(`startup-terminal-target-${suffix}`)
-  yield* journal.beginRun(activeRunId, activeTarget, initialPolicy)
-  yield* journal.beginRun(terminalRunId, terminalTarget, initialPolicy)
+  yield* journal.beginRun(activeRunId, activeTarget, initialPolicy, remotePublicationTargetForTest)
+  yield* journal.beginRun(terminalRunId, terminalTarget, initialPolicy, remotePublicationTargetForTest)
   const fixture = completedRunFinalityFixture({ runId: terminalRunId, target: terminalTarget })
   yield* journal.append(terminalRunId, intentRecordKey(fixture.operation.operationId), fixture.intent)
   yield* journal.append(terminalRunId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)

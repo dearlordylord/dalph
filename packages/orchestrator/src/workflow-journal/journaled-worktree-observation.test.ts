@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
@@ -94,7 +95,11 @@ const journaledTestLayer = (
     Layer.succeed(WorkflowInterpreter, testInterpreter(readTaskWorktree, readTargetLineage))
   ).pipe(
     Layer.provideMerge(
-      liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy)], runId, target })
+      liveJournalTestLayer({
+        records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
+        runId,
+        target
+      })
     )
   )
 
@@ -163,7 +168,7 @@ it.effect("reopens persisted Git read intent in a fresh application and records 
       yield* Effect.scoped(
         Effect.gen(function* () {
           const journal = yield* JournalStore
-          yield* journal.beginRun(runId, target, initialPolicy)
+          yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
           const provider = Layer.succeed(
             WorkflowInterpreter,
             testInterpreter(() =>

@@ -67,6 +67,7 @@ import {
 import {
   CompletionClaimDidNotConverge,
   CompletionClaimPremiseContradiction,
+  CompletionClaimPublicationRequired,
   CompletionClaimPromotionRequired,
   FocusedTaskCompletionSuccessRequired,
   runCompletionClaimDeletionProtocol,
@@ -776,6 +777,35 @@ it.effect("requires exact promotion success and Integrator run before replacing 
     ])
     expect(yield* Ref.get(replacementCalls)).toBe(0)
     expect(yield* Ref.get(foreignRecords)).toHaveLength(accepted.records.length + 1)
+  })
+)
+
+it.effect("requires exact remote publication proof before replacing the active claim", () =>
+  Effect.gen(function* () {
+    const withoutPublication = promotionRecords()
+      .filter(
+        ({ event }) =>
+          event._tag !== "RemotePublicationIntended" &&
+          event._tag !== "RemotePublicationAttemptIntended" &&
+          event._tag !== "RemotePublicationSucceeded"
+      )
+      .map((record, index) => ({ ...record, position: JournalPosition.make(index + 1) }))
+    const records = yield* journalRecordsRef(withoutPublication)
+    const replacementCalls = yield* Ref.make(0)
+    const failure = yield* runWith(
+      runCompletionClaimReplacementProtocol(
+        makeBoundary({
+          initial: [fixture.activeClaim],
+          replacementCalls,
+          deletionCalls: yield* Ref.make(0),
+          readCalls: yield* Ref.make(0)
+        }),
+        completionClaimReplacementRequestFor(fixture.claim)
+      ).pipe(Effect.flip),
+      records
+    )
+    expect(failure).toBeInstanceOf(CompletionClaimPublicationRequired)
+    expect(yield* Ref.get(replacementCalls)).toBe(0)
   })
 )
 

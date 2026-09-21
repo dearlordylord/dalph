@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import { makeAcceptedIntegrationHistory } from "../../../test/support/accepted-integration-history.js"
@@ -104,6 +105,7 @@ import {
 import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
 import {
   acceptedWorkflowTransitionOperationId,
+  DeliveryProposalOrdinal,
   DeliveryProposalId,
   deliveryProposalsOf,
   freshContinuationDecisionsOf,
@@ -159,6 +161,7 @@ import {
   type DeliveryRuntimeObservationState
 } from "./delivery-runtime-observation.js"
 import { deliveryStatusOf, DeliveryStatusProjectionConflict, DeliveryStatusSubject } from "./delivery-status.js"
+import { currentProposalPresentationMatches } from "./delivery-status-proposal-compatibility.js"
 import { validateLiveOwnersForStatus } from "./delivery-status-support.js"
 import {
   makePlannedAttemptProtocolController,
@@ -1266,7 +1269,8 @@ it.effect("keeps the original graph-read owner while its acknowledged intent adv
           makeWorkflowRunBeganRecord(
             runId,
             target,
-            InitialControlPolicy.make({ taskExecutionCapacity: policy.taskExecutionCapacity })
+            InitialControlPolicy.make({ taskExecutionCapacity: policy.taskExecutionCapacity }),
+            remotePublicationTargetForTest
           )
         ]
       })
@@ -1428,6 +1432,179 @@ it.effect(
     ).pipe(
       Effect.provide(liveJournalTestLayer({ runId, target, records: effectiveAdmissionHistory.records.slice(0, 5) }))
     )
+)
+
+it.effect("accepts a moved fresh owner presentation without hiding malformed frontiers", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const taskId = TaskId.make("runtime-post-claim-graph-task")
+      const task = {
+        id: taskId,
+        lifecycle: TaskLifecycle.cases.Open.make({}),
+        parentTaskId: null,
+        prerequisiteIds: []
+      } satisfies Task
+      const claimOperation = makeTaskClaimAcquisitionOperation({
+        acquisition: {
+          operationId: OperationId.make("runtime-post-claim-graph-claim"),
+          owner: ClaimOwner.make("runtime-post-claim-graph-owner"),
+          taskId,
+          token: ClaimToken.make("runtime-post-claim-graph-token")
+        },
+        predecessorOperationIds: []
+      })
+      const step = FreshWorkflowStep.ReadPostClaimGraph({
+        claimOperation,
+        predecessorOperationId: claimOperation.acquisition.operationId,
+        task
+      })
+      const transition = RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+        operationId: claimOperation.acquisition.operationId,
+        taskId
+      })
+      const commitment = makeFreshTaskCommitmentForTest(taskId, claimOperation.acquisition.operationId, runId)
+      const postClaim = deliveryProposalsOf({
+        acceptedOperationIds: HashSet.empty<OperationId>(),
+        fresh: Result.getOrThrow(freshContinuationDecisionsOf([{ step, transition }], [commitment])),
+        runId,
+        transitions: [transition]
+      }).ticketDelivery[0]
+      if (
+        postClaim === undefined ||
+        postClaim.actionIdentity._tag !== "FreshOperationIdRequired" ||
+        postClaim.order._tag !== "FreshWorkflowOrder" ||
+        postClaim.route._tag !== "FreshWorkflowRoute" ||
+        postClaim.route.step._tag !== "ReadPostClaimGraph"
+      ) {
+        return yield* Effect.die("the post-claim graph fixture must derive one fresh workflow proposal")
+      }
+      const movedPostClaim: DeliveryActionProposal = {
+        _tag: postClaim._tag,
+        actionIdentity: postClaim.actionIdentity,
+        admission: postClaim.admission,
+        id: postClaim.id,
+        order: { ...postClaim.order, frontierOrdinal: DeliveryProposalOrdinal.make(1) },
+        owner: postClaim.owner,
+        route: { _tag: "FreshWorkflowRoute", step: postClaim.route.step },
+        waitsForLiveOperationId: postClaim.waitsForLiveOperationId
+      }
+      const taskWork = makeFreshTaskAdmissionTestBasis({
+        capacity: 1,
+        entries: [TaskAdmissionOccupancy.FreshTaskCommitted({ commitment })],
+        runId
+      })
+      const initial = { ...withProposals(base, [postClaim], 1), acceptedAt: JournalPosition.make(2), taskWork }
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const actionStarted = yield* Deferred.make<void>()
+      const initialOwnerPublished = yield* Deferred.make<void>()
+      const movedRequested = yield* Ref.make(false)
+      const movedPublished = yield* Deferred.make<void>()
+      const malformedPublished = yield* Deferred.make<void>()
+      const finishAction = yield* Deferred.make<void>()
+      const observer = DeliveryRuntimeObservationObserver.of({
+        observe: ({ evaluation, liveOwners }) =>
+          Effect.gen(function* () {
+            if (liveOwners.length !== 1) return
+            if (evaluation.acceptedAt === JournalPosition.make(4)) {
+              yield* Deferred.succeed(malformedPublished, undefined)
+              return
+            }
+            if (evaluation.acceptedAt === JournalPosition.make(3)) {
+              yield* Deferred.succeed(movedPublished, undefined)
+              return
+            }
+            if (evaluation.acceptedAt === JournalPosition.make(2) && !(yield* Ref.get(movedRequested))) {
+              yield* Deferred.succeed(initialOwnerPublished, undefined)
+            }
+          })
+      })
+      const executor = DeliveryActionExecutor.of({
+        execute: (action, lease) =>
+          Effect.gen(function* () {
+            if (action._tag !== "FreshOperationAction") {
+              return yield* Effect.die("the post-claim graph fixture must materialize one fresh operation")
+            }
+            yield* lease.recordIntent(action.operationId)
+            yield* Deferred.succeed(actionStarted, undefined)
+            yield* Deferred.await(finishAction)
+            return { _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult
+          })
+      })
+      const integrationTargets = yield* makeIntegrationTargetResourceController()
+      const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets).pipe(
+        Effect.provideService(DeliveryRuntimeObservationObserver, observer)
+      )
+      const runtime = yield* runDeliveryRuntimeQuiescence(relation).pipe(
+        Effect.provide(plannerLayer),
+        Effect.provide(deterministicOperationIdAllocatorLayer("runtime-post-claim-graph")),
+        Effect.provide(plannedAttemptProtocolControllerLayer),
+        Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.forkChild
+      )
+
+      yield* Deferred.await(actionStarted)
+      yield* Deferred.await(initialOwnerPublished)
+      yield* Ref.set(movedRequested, true)
+      yield* relation.publish({
+        ...withProposals(initial, [movedPostClaim], 1),
+        acceptedAt: JournalPosition.make(3),
+        taskWork
+      })
+      yield* Deferred.await(movedPublished)
+      const held = yield* capabilities.resources.runtimeObservation.get
+      if (held._tag !== "Ready") return expect.fail("the moved owner must remain observable")
+      const owner = held.liveOwners[0]
+      if (owner === undefined) return expect.fail("the moved owner must remain observable")
+      expect(held.evaluation.acceptedAt).toBe(JournalPosition.make(3))
+      expect(held.evaluation.proposedActions).toMatchObject({ proposals: [movedPostClaim] })
+      expect(currentProposalPresentationMatches(owner, movedPostClaim, held.evaluation)).toBe(true)
+      expect(deliveryStatusOf(DeliveryStatusSubject.cases.Run.make({ runId }), held)).not.toBeInstanceOf(
+        DeliveryStatusProjectionConflict
+      )
+
+      if (
+        movedPostClaim.route._tag !== "FreshWorkflowRoute" ||
+        movedPostClaim.route.step._tag !== "ReadPostClaimGraph"
+      ) {
+        return yield* Effect.die("the moved post-claim proposal must retain its fresh workflow route")
+      }
+      const malformed: DeliveryActionProposal = {
+        _tag: movedPostClaim._tag,
+        actionIdentity: movedPostClaim.actionIdentity,
+        admission: movedPostClaim.admission,
+        id: movedPostClaim.id,
+        order: movedPostClaim.order,
+        owner: movedPostClaim.owner,
+        route: {
+          _tag: "FreshWorkflowRoute",
+          step: {
+            ...movedPostClaim.route.step,
+            predecessorOperationId: OperationId.make("runtime-post-claim-graph-malformed")
+          }
+        },
+        waitsForLiveOperationId: movedPostClaim.waitsForLiveOperationId
+      }
+      yield* relation.publish({
+        ...withProposals(initial, [malformed], 1),
+        acceptedAt: JournalPosition.make(4),
+        taskWork
+      })
+      yield* Deferred.await(malformedPublished)
+      const malformedObservation = yield* capabilities.resources.runtimeObservation.get
+      expect(malformedObservation._tag).toBe("Ready")
+      expect(deliveryStatusOf(DeliveryStatusSubject.cases.Run.make({ runId }), malformedObservation)).toBeInstanceOf(
+        DeliveryStatusProjectionConflict
+      )
+
+      yield* relation.publish({ ...withProposals(initial, [], 1), acceptedAt: JournalPosition.make(5), taskWork })
+      yield* Deferred.succeed(finishAction, undefined)
+      yield* Fiber.join(runtime)
+      const closed = yield* capabilities.resources.runtimeObservation.get
+      expect(closed).toMatchObject({ _tag: "Closed", final: { liveOwners: [] } })
+    })
+  )
 )
 
 it.effect("interrupts an admitted tracker owner under Exit and starts no successor action", () =>

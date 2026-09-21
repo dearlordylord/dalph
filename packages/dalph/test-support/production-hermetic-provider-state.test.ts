@@ -1,11 +1,14 @@
 import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { GitCommitSha, makeTaskWorkSpecification } from "@dalph/contracts"
-import { GitCommand, githubTaskIdFor, nodeGitCommandLayer } from "@dalph/orchestrator"
+import { GitCommitSha, RunId, TaskId, makeTaskWorkSpecification } from "@dalph/contracts"
+import { GitCommand, PlannedTaskAttemptOrdinal, githubTaskIdFor, nodeGitCommandLayer } from "@dalph/orchestrator"
 import { Deferred, Effect, Exit, FileSystem, Fiber, Layer, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import { CodexOwnedTurnToken, CodexThreadOwnershipToken } from "../src/application/codex-attempt-store.js"
-import { decodeProductionRepositoryHostConfiguration } from "../src/application/production-configuration.js"
+import {
+  decodeProductionRepositoryHostConfiguration,
+  deriveProductionPlannedAttemptLocations
+} from "../src/application/production-configuration.js"
 import { makeHermeticProviderState } from "./production-hermetic-provider-state.js"
 import {
   HermeticInvocationId,
@@ -39,6 +42,7 @@ const setup = Effect.gen(function* () {
     repository,
     commonDirectory: `${repository}/.git`,
     integrationRef: "refs/heads/master",
+    remotePublicationTarget: { branch: "refs/heads/master", endpoint: repository },
     plannedAttemptBaseSha: head,
     plannedAttemptExecutor: "codex:hermetic",
     claimOwner: "dalph:hermetic",
@@ -63,6 +67,51 @@ const request = (operation: string, variables: Readonly<Record<string, unknown>>
   query: `query ${operation}($fixture: String!) { fixture }`,
   variables
 })
+
+it.effect("produces distinct accepted commits for long exact A/B attempt identities with bounded result paths", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { configuration, head, repository, runGit } = yield* setup
+      const provider = yield* makeHermeticProviderState(configuration, () => Effect.void, invocationId)
+      const runId = RunId.make(`run:${"r".repeat(190)}`)
+      const plans = [TaskId.make(`A:${"a".repeat(150)}`), TaskId.make(`B:${"b".repeat(150)}`)].map((taskId) =>
+        deriveProductionPlannedAttemptLocations(
+          configuration.plannedAttemptWorktreeRoot,
+          runId,
+          taskId,
+          PlannedTaskAttemptOrdinal.make(0)
+        )
+      )
+      const commits = [] as Array<GitCommitSha>
+      for (const [index, plan] of plans.entries()) {
+        yield* runGit(repository, ["worktree", "add", "--detach", plan.worktree, head])
+        const thread = yield* provider.codex.startThread(plan.worktree)
+        const token = CodexOwnedTurnToken.make(`turn-${index}`)
+        const turn = yield* provider.codex.startTurn(
+          thread.id,
+          thread.cwd,
+          [`run_id: ${runId}`, `attempt_id: ${plan.attemptId}`, `base_sha: ${head}`, `worktree: ${plan.worktree}`].join(
+            "\n"
+          ),
+          token
+        )
+        const item = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ type: Schema.Literal("agentMessage"), text: Schema.String })
+        )(turn.items[0])
+        const result = yield* Schema.decodeUnknownEffect(
+          Schema.fromJsonString(Schema.Struct({ commit: GitCommitSha, correlation: Schema.Unknown }))
+        )(item.text)
+        commits.push(result.commit)
+        const files = (yield* runGit(plan.worktree, ["show", "--name-only", "--format=", result.commit]))
+          .split("\n")
+          .filter(Boolean)
+        expect(files).toHaveLength(1)
+        expect(files[0]?.length).toBeLessThanOrEqual(255)
+      }
+      expect(commits[0]).not.toBe(commits[1])
+    })
+  ).pipe(Effect.provide(fixtureLayer))
+)
 
 it.effect(
   "keeps the original issue receipt while the actual tracker source and fresh ownership fingerprint change",
@@ -251,6 +300,62 @@ it.effect("returns one actual HTTP throttle response without closing and rejects
         true
       )
       expect((yield* provider.snapshot()).operationCounts).toEqual([{ tag: "CloseIssue", count: 1 }])
+    })
+  ).pipe(Effect.provide(fixtureLayer))
+)
+
+it.effect("retains a dependant until a later complete graph observation after the root closes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { configuration } = yield* setup
+      const provider = yield* makeHermeticProviderState(configuration, () => Effect.void, invocationId)
+      const rootIssueId = provider.graph.rootIssueId
+      const dependantIssueId = provider.graph.dependantIssueId
+      const read = (operation: "ReadBlockedBy" | "ReadSubIssues", issueNodeId: typeof rootIssueId) =>
+        provider.github(request(operation, { cursor: null, issueNodeId }))
+
+      expect((yield* provider.snapshot()).dependantReadyAfterCompleteGraph).toBe(false)
+      expect((yield* read("ReadSubIssues", rootIssueId)).body).toEqual({
+        data: {
+          node: {
+            __typename: "Issue",
+            id: rootIssueId,
+            subIssues: { nodes: [{ id: dependantIssueId }], pageInfo: { endCursor: null, hasNextPage: false } }
+          }
+        }
+      })
+      expect((yield* read("ReadBlockedBy", dependantIssueId)).body).toEqual({
+        data: {
+          node: {
+            __typename: "Issue",
+            id: dependantIssueId,
+            blockedBy: { nodes: [{ id: rootIssueId }], pageInfo: { endCursor: null, hasNextPage: false } }
+          }
+        }
+      })
+      expect((yield* provider.snapshot()).dependantReadyAfterCompleteGraph).toBe(false)
+
+      yield* provider.github(request("CloseIssue", { issueNodeId: rootIssueId, operationId: "close-root" }))
+      expect((yield* provider.github(request("ReadIssue", { issueNodeId: rootIssueId }))).body).toMatchObject({
+        data: { node: { id: rootIssueId, state: "CLOSED", stateReason: "COMPLETED" } }
+      })
+      expect((yield* provider.github(request("ReadIssue", { issueNodeId: dependantIssueId }))).body).toMatchObject({
+        data: { node: { id: dependantIssueId, state: "OPEN", stateReason: null } }
+      })
+
+      yield* read("ReadBlockedBy", rootIssueId)
+      yield* read("ReadSubIssues", rootIssueId)
+      yield* read("ReadBlockedBy", dependantIssueId)
+      yield* read("ReadSubIssues", dependantIssueId)
+
+      expect((yield* provider.snapshot()).completeGraphObservationCount).toBe(1)
+      expect((yield* provider.snapshot()).dependantReadyAfterCompleteGraph).toBe(true)
+      expect((yield* provider.finalTrackerFacts).graph).toMatchObject({
+        rootTaskId: provider.graph.rootTaskId,
+        dependantTaskId: provider.graph.dependantTaskId,
+        dependantLifecycle: "Open",
+        completeObservationCount: 1
+      })
     })
   ).pipe(Effect.provide(fixtureLayer))
 )

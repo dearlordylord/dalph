@@ -16,6 +16,62 @@ import { deliveryStoryCapstoneAuthoredCassette } from "./delivery-story-capstone
 const decodeStoryItem = Schema.decodeUnknownSync(AuthoredCassetteStoryItem)
 const terminalStoryItemOffset = -1
 
+/**
+ * The direct-publication protocol records each boundary as an intent/observation
+ * pair.  Authored Integrator positions are journal positions, so the admission
+ * pair precedes every later position and the baseline pair also precedes that
+ * session's lineage observation.  Keeping the named chronology here makes the
+ * causal shifts explicit when a cassette provides its pre-publication positions.
+ */
+const authoredDirectPublicationJournalChronology = {
+  remotePublicationAdmission: ["RemotePublicationAdmissionReadIntended", "RemotePublicationAdmissionObserved"],
+  remoteBaseline: ["RemoteBaselineReadIntended", "RemoteBaselineObserved"],
+  remotePublication: ["RemotePublicationIntended", "RemotePublicationAttemptIntended", "RemotePublicationSucceeded"]
+} as const
+
+type AuthoredIntegrationPositions = {
+  readonly queuedAt: number
+  readonly startedAt: number
+  readonly targetLineageObservedAt: number
+}
+
+const authoredIntegrationPositionsAfterDirectPublication = (
+  beforePublication: AuthoredIntegrationPositions,
+  priorIntegrationCount = 0
+): AuthoredIntegrationPositions => {
+  const admissionRecords = authoredDirectPublicationJournalChronology.remotePublicationAdmission.length
+  const baselineRecords = authoredDirectPublicationJournalChronology.remoteBaseline.length
+  const priorIntegrationRecords =
+    priorIntegrationCount * (baselineRecords + authoredDirectPublicationJournalChronology.remotePublication.length)
+  return {
+    queuedAt: beforePublication.queuedAt + admissionRecords + priorIntegrationRecords,
+    startedAt: beforePublication.startedAt + admissionRecords + priorIntegrationRecords,
+    targetLineageObservedAt:
+      beforePublication.targetLineageObservedAt + admissionRecords + priorIntegrationRecords + baselineRecords
+  }
+}
+
+const authoredPositionAfterRemotePublicationAdmission = (beforePublication: number): number =>
+  beforePublication + authoredDirectPublicationJournalChronology.remotePublicationAdmission.length
+
+const authoredPositionAfterRemoteBaseline = (beforePublication: number): number =>
+  authoredPositionAfterRemotePublicationAdmission(beforePublication) +
+  authoredDirectPublicationJournalChronology.remoteBaseline.length
+
+const authoredPositionAfterDirectPublication = (beforePublication: number): number =>
+  authoredPositionAfterRemoteBaseline(beforePublication) +
+  authoredDirectPublicationJournalChronology.remotePublication.length
+
+const authoredPauseObservationPositions = {
+  disconnectFirst: 5,
+  disconnectSecond: 13,
+  taskPrimary: 17,
+  groupingChild: 30,
+  groupingObserved: 35,
+  executorResponsibilityBegan: 68,
+  executorGroupingObserved: 77
+} as const
+
 const authoredReconcileProposal = (taskId: "A" | "B", attemptId: "attempt:A:0" | "attempt:B:1") => ({
   _tag: "FreshWorkflowRoute" as const,
   correlation: { _tag: "Attempt" as const, attemptId },
@@ -446,7 +502,7 @@ export const runPauseObservationDisconnectsAuthoredCassette: ScenarioCassette = 
         atBoundary: [
           {
             _tag: "WorkflowOperation",
-            beganAt: 5,
+            beganAt: authoredPositionAfterRemotePublicationAdmission(authoredPauseObservationPositions.disconnectFirst),
             coverage: { _tag: "RunPauseCoverage" },
             operationId: "cassette:$authored-run:activation:1:operation:5",
             responsibilityTag: "TaskWorktreeResponsibility",
@@ -478,7 +534,9 @@ export const runPauseObservationDisconnectsAuthoredCassette: ScenarioCassette = 
             ],
             responsibility: {
               _tag: "WorkflowOperation",
-              beganAt: 13,
+              beganAt: authoredPositionAfterRemotePublicationAdmission(
+                authoredPauseObservationPositions.disconnectSecond
+              ),
               coverage: { _tag: "RunPauseCoverage" },
               operationId: "cassette:$authored-run:activation:1:operation:6",
               responsibilityTag: "TaskWorktreeResponsibility",
@@ -737,7 +795,7 @@ export const taskPauseCoversGroupingChildAuthoredCassette: ScenarioCassette = Sc
             responsibility: {
               _tag: "PlannedAttemptExecutorWork",
               attemptId: "attempt:A:0",
-              beganAt: 17,
+              beganAt: authoredPositionAfterRemotePublicationAdmission(authoredPauseObservationPositions.taskPrimary),
               coverage: { _tag: "ExactTaskPauseCoverage" },
               taskId: "A"
             }
@@ -751,8 +809,14 @@ export const taskPauseCoversGroupingChildAuthoredCassette: ScenarioCassette = Sc
             responsibility: {
               _tag: "PlannedAttemptExecutorWork",
               attemptId: "attempt:B:1",
-              beganAt: 30,
-              coverage: { _tag: "GroupingDescendantPauseCoverage", groupingObservedAt: 35, pausedTaskId: "A" },
+              beganAt: authoredPositionAfterRemotePublicationAdmission(authoredPauseObservationPositions.groupingChild),
+              coverage: {
+                _tag: "GroupingDescendantPauseCoverage",
+                groupingObservedAt: authoredPositionAfterRemotePublicationAdmission(
+                  authoredPauseObservationPositions.groupingObserved
+                ),
+                pausedTaskId: "A"
+              },
               taskId: "B"
             }
           }
@@ -871,7 +935,7 @@ const unpauseWaitingA = {
   responsibility: {
     _tag: "PlannedAttemptExecutorWork",
     attemptId: "attempt:A:0",
-    beganAt: 17,
+    beganAt: authoredPositionAfterRemotePublicationAdmission(authoredPauseObservationPositions.taskPrimary),
     coverage: { _tag: "ExactTaskPauseCoverage" },
     taskId: "A"
   }
@@ -880,8 +944,14 @@ const unpauseWaitingA = {
 const unpauseSuspendedB = {
   _tag: "PlannedAttemptExecutorWork",
   attemptId: "attempt:B:1",
-  beganAt: 30,
-  coverage: { _tag: "GroupingDescendantPauseCoverage", groupingObservedAt: 35, pausedTaskId: "A" },
+  beganAt: authoredPositionAfterRemotePublicationAdmission(authoredPauseObservationPositions.groupingChild),
+  coverage: {
+    _tag: "GroupingDescendantPauseCoverage",
+    groupingObservedAt: authoredPositionAfterRemotePublicationAdmission(
+      authoredPauseObservationPositions.groupingObserved
+    ),
+    pausedTaskId: "A"
+  },
   taskId: "B"
 } as const
 
@@ -2359,8 +2429,8 @@ const targetPromotionGitRequest = (repository: string, candidateCommit: string, 
 })
 
 const pipelineIntegrationPositions = {
-  A: { queuedAt: 21, startedAt: 22, targetLineageObservedAt: 24 },
-  B: { queuedAt: 77, startedAt: 78, targetLineageObservedAt: 80 }
+  A: authoredIntegrationPositionsAfterDirectPublication({ queuedAt: 21, startedAt: 22, targetLineageObservedAt: 24 }),
+  B: authoredIntegrationPositionsAfterDirectPublication({ queuedAt: 77, startedAt: 78, targetLineageObservedAt: 80 }, 1)
 } as const
 
 const pipelineIntegrationFinality = (
@@ -2370,15 +2440,17 @@ const pipelineIntegrationFinality = (
   candidateCommit: string
 ): ReadonlyArray<unknown> => {
   const { queuedAt, startedAt, targetLineageObservedAt } = pipelineIntegrationPositions[taskId]
+  const expectedTargetHead =
+    taskId === "A" ? "2222222222222222222222222222222222222222" : "cccccccccccccccccccccccccccccccccccccccc"
   const candidateText = `refs/heads/dalph/integrator-candidate-${taskId}`
-  const candidateResource = `integrator-resource:$authored-run:${attemptId}:${startedAt}:${targetLineageObservedAt}:2222222222222222222222222222222222222222:${acceptedResultCommit}:/dalph/cassettes/pipeline.git:refs/heads/master`
+  const candidateResource = `integrator-resource:$authored-run:${attemptId}:${startedAt}:${targetLineageObservedAt}:${expectedTargetHead}:${acceptedResultCommit}:/dalph/cassettes/pipeline.git:refs/heads/master`
   const correlation = {
     acceptedResult: {
       commit: acceptedResultCommit,
       evidenceManifest: { byteLength: 285, digest: "1111111111111111111111111111111111111111111111111111111111111111" }
     },
     candidateResource,
-    expectedTargetHead: "2222222222222222222222222222222222222222",
+    expectedTargetHead,
     integrationTarget: { repository: "/dalph/cassettes/pipeline.git", ref: "refs/heads/master" },
     plannedAttempt: {
       attemptId,
@@ -2402,7 +2474,7 @@ const pipelineIntegrationFinality = (
   const promotionRequest = targetPromotionGitRequest(
     "/dalph/cassettes/pipeline.git",
     candidateCommit,
-    "2222222222222222222222222222222222222222"
+    expectedTargetHead
   )
   return [
     { _tag: "DalphSelects" as const, operation: { _tag: "ReadTargetLineage" as const, attemptId, taskId } },
@@ -2415,12 +2487,12 @@ const pipelineIntegrationFinality = (
         _tag: "Commit" as const,
         candidateText,
         commit: candidateCommit,
-        directParents: ["2222222222222222222222222222222222222222", acceptedResultCommit]
+        directParents: [expectedTargetHead, acceptedResultCommit]
       }
     },
     targetPromotionGitReadReturned("/dalph/cassettes/pipeline.git", candidateCommit, {
       _tag: "CandidateNotInAncestry" as const,
-      currentHeadSha: "2222222222222222222222222222222222222222"
+      currentHeadSha: expectedTargetHead
     }),
     {
       _tag: "TargetPromotionCompareAndSetReturned" as const,
@@ -2965,8 +3037,13 @@ const outerIntegratorPromotionGitRequest = targetPromotionGitRequest(
   outerIntegratorCandidateCommit,
   outerIntegratorExpectedHead
 )
+const outerIntegratorPositions = authoredIntegrationPositionsAfterDirectPublication({
+  queuedAt: 25,
+  startedAt: 26,
+  targetLineageObservedAt: 30
+})
 const outerIntegratorSessionSuffix =
-  `$authored-run:attempt:A:0:26:30:${outerIntegratorExpectedHead}:${outerIntegratorAcceptedCommit}` +
+  `$authored-run:attempt:A:0:${outerIntegratorPositions.startedAt}:${outerIntegratorPositions.targetLineageObservedAt}:${outerIntegratorExpectedHead}:${outerIntegratorAcceptedCommit}` +
   ":/dalph/cassettes/integration.git:refs/heads/master"
 const outerIntegratorSessionCorrelationA = {
   acceptedResult: {
@@ -2987,10 +3064,10 @@ const outerIntegratorSessionCorrelationA = {
       "tr1.eyJib2R5IjoiUHJvZHVjZSBhbiBhY2NlcHRlZCBjb21taXQuIiwidGl0bGUiOiJQcm9kdWNlIGFjY2VwdGVkIHJlc3VsdCJ9",
     worktree: "/dalph/cassettes/integration/attempt-A-0"
   },
-  queuedAt: 25,
+  queuedAt: outerIntegratorPositions.queuedAt,
   sessionId: `integrator-session:${outerIntegratorSessionSuffix}`,
-  startedAt: 26,
-  targetLineageObservedAt: 30
+  startedAt: outerIntegratorPositions.startedAt,
+  targetLineageObservedAt: outerIntegratorPositions.targetLineageObservedAt
 } as const
 
 const outerIntegratorRequestForA = {
@@ -3062,8 +3139,14 @@ const pauseExecutorAndPromotionAcceptedResult = {
   evidenceManifest: { byteLength: 273, digest: "1111111111111111111111111111111111111111111111111111111111111111" }
 } as const
 
+const pauseExecutorAndPromotionPositions = authoredIntegrationPositionsAfterDirectPublication({
+  queuedAt: 25,
+  startedAt: 26,
+  targetLineageObservedAt: 30
+})
+
 const pauseExecutorAndPromotionSessionSuffix =
-  `$authored-run:attempt:D:0:26:30:${promotionExpectedHead}:${pauseExecutorAndPromotionAcceptedResult.commit}` +
+  `$authored-run:attempt:D:0:${pauseExecutorAndPromotionPositions.startedAt}:${pauseExecutorAndPromotionPositions.targetLineageObservedAt}:${promotionExpectedHead}:${pauseExecutorAndPromotionAcceptedResult.commit}` +
   ":/dalph/cassettes/pause-boundaries.git:refs/heads/master"
 
 const pauseExecutorAndPromotionRequestD = {
@@ -3087,14 +3170,14 @@ const pauseExecutorAndPromotionRequestD = {
           taskRevision: "tr1.eyJib2R5IjoiUHJvZHVjZSBEJ3MgYWNjZXB0ZWQgY29tbWl0LiIsInRpdGxlIjoiSW50ZWdyYXRlIEQifQ",
           worktree: "/dalph/cassettes/pause-boundaries/attempt-D-0"
         },
-        queuedAt: 25,
+        queuedAt: pauseExecutorAndPromotionPositions.queuedAt,
         sessionId: `integrator-session:${pauseExecutorAndPromotionSessionSuffix}`,
-        startedAt: 26,
-        targetLineageObservedAt: 30
+        startedAt: pauseExecutorAndPromotionPositions.startedAt,
+        targetLineageObservedAt: pauseExecutorAndPromotionPositions.targetLineageObservedAt
       }
     },
     directParents: [promotionExpectedHead, pauseExecutorAndPromotionAcceptedResult.commit],
-    qualifiedAt: 35
+    qualifiedAt: authoredPositionAfterRemoteBaseline(authoredPauseObservationPositions.groupingObserved)
   },
   requestId: `target-promotion:integrator-session:${pauseExecutorAndPromotionSessionSuffix}:1:${promotionCandidateCommit}`
 } as const
@@ -3124,17 +3207,17 @@ const pauseExecutorAndPromotionRunD = {
   correlation: {
     _tag: "TargetPromotion",
     attemptId: "attempt:D:0",
-    queuedAt: 25,
+    queuedAt: pauseExecutorAndPromotionPositions.queuedAt,
     request: pauseExecutorAndPromotionRequestD
   },
-  proposalId: '["IdentityFreeWorkflowRoute","RunTargetPromotion",null,25,"D"]',
+  proposalId: '["IdentityFreeWorkflowRoute","RunTargetPromotion",null,27,"D"]',
   taskId: "D"
 } as const
 
 const pauseExecutorResponsibilityA = {
   _tag: "PlannedAttemptExecutorWork",
   attemptId: "attempt:A:0",
-  beganAt: 68,
+  beganAt: authoredPositionAfterDirectPublication(authoredPauseObservationPositions.executorResponsibilityBegan),
   coverage: { _tag: "ExactTaskPauseCoverage" },
   taskId: "A"
 } as const
@@ -3142,9 +3225,15 @@ const pauseExecutorResponsibilityA = {
 const pausePromotionResponsibilityD = {
   _tag: "StartedIntegration",
   attemptId: "attempt:D:0",
-  coverage: { _tag: "GroupingDescendantPauseCoverage", groupingObservedAt: 77, pausedTaskId: "A" },
-  queuedAt: 25,
-  startedAt: 26,
+  coverage: {
+    _tag: "GroupingDescendantPauseCoverage",
+    groupingObservedAt: authoredPositionAfterDirectPublication(
+      authoredPauseObservationPositions.executorGroupingObserved
+    ),
+    pausedTaskId: "A"
+  },
+  queuedAt: pauseExecutorAndPromotionPositions.queuedAt,
+  startedAt: pauseExecutorAndPromotionPositions.startedAt,
   taskId: "D"
 } as const
 
@@ -3170,8 +3259,14 @@ const pausePromotionRequiredD = {
   _tag: "TargetPromotionResultRequired",
   request: pauseExecutorAndPromotionRequestD
 } as const
-const pausePromotionHeldD = { _tag: "HeldIntegrationTarget", queuedAt: 25 } as const
-const pausePromotionActiveD = { _tag: "ActiveIntegrationTarget", queuedAt: 25 } as const
+const pausePromotionHeldD = {
+  _tag: "HeldIntegrationTarget",
+  queuedAt: pauseExecutorAndPromotionPositions.queuedAt
+} as const
+const pausePromotionActiveD = {
+  _tag: "ActiveIntegrationTarget",
+  queuedAt: pauseExecutorAndPromotionPositions.queuedAt
+} as const
 const pausePromotionLiveD = {
   _tag: "LiveDeliveryAction",
   owner: { _tag: "AdmittedDeliveryAction", proposal: pauseExecutorAndPromotionRunD }
@@ -4227,16 +4322,20 @@ const completionConflictStory = (() => {
   let independentPlanInserted = false
   let independentWorktreeInserted = false
   let restartSeen = false
-  let independentRunningInserted = false
   let rejectionSeen = false
   let terminalConflictSeen = false
+  const completionConflictPositions = authoredIntegrationPositionsAfterDirectPublication({
+    queuedAt: 27,
+    startedAt: 30,
+    targetLineageObservedAt: 37
+  })
   // eslint-disable-next-line complexity -- This authored chronology keeps C's independent concurrent steps ordered around A's restart and conflict.
   return deliveryFinalitySpineAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
     if (item._tag === "IntegratorRequestReceived") {
       const correlation = item.correlation
       const session = correlation.session
       const oldPositions = `:${session.startedAt}:${session.targetLineageObservedAt}:`
-      const newPositions = ":30:37:"
+      const newPositions = `:${completionConflictPositions.startedAt}:${completionConflictPositions.targetLineageObservedAt}:`
       return [
         {
           ...item,
@@ -4245,10 +4344,10 @@ const completionConflictStory = (() => {
             session: {
               ...session,
               candidateResource: session.candidateResource.replace(oldPositions, newPositions),
-              queuedAt: 27,
+              queuedAt: completionConflictPositions.queuedAt,
               sessionId: session.sessionId.replace(oldPositions, newPositions),
-              startedAt: 30,
-              targetLineageObservedAt: 37
+              startedAt: completionConflictPositions.startedAt,
+              targetLineageObservedAt: completionConflictPositions.targetLineageObservedAt
             }
           }
         }
@@ -4301,22 +4400,7 @@ const completionConflictStory = (() => {
       independentWorktreeInserted = true
       return [
         item,
-        { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:C:0", taskId: "C" } }
-      ]
-    }
-    if (
-      !independentPlanInserted &&
-      item._tag === "DalphSelects" &&
-      item.operation._tag === "ReconcileTaskWorktree" &&
-      item.operation.taskId === "A"
-    ) {
-      independentPlanInserted = true
-      return [item]
-    }
-    if (!independentRunningInserted && item._tag === "TargetPromotionCompareAndSetReturned") {
-      independentRunningInserted = true
-      return [
-        item,
+        { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:C:0", taskId: "C" } },
         {
           _tag: "PlannedAttemptExecutorWorkReported",
           report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:C:0" },
@@ -4327,6 +4411,15 @@ const completionConflictStory = (() => {
           report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:C:0", result: { _tag: "Completed" } }
         }
       ]
+    }
+    if (
+      !independentPlanInserted &&
+      item._tag === "DalphSelects" &&
+      item.operation._tag === "ReconcileTaskWorktree" &&
+      item.operation.taskId === "A"
+    ) {
+      independentPlanInserted = true
+      return [item]
     }
     if (!terminalConflictSeen && item._tag === "TrackerGraphReadReturned") {
       return [
@@ -4361,6 +4454,7 @@ const completionConflictStory = (() => {
             : [
                 ...item.orchestration.filter(
                   (evidence) =>
+                    evidence._tag !== "TargetPromotionSucceeded" &&
                     !("taskId" in evidence && evidence.taskId === "B") &&
                     !("attemptId" in evidence && evidence.attemptId === "attempt:B:0")
                 ),
@@ -4378,7 +4472,8 @@ const completionConflictStory = (() => {
                   _tag: "PlannedAttemptExecutorWorkReported" as const,
                   attemptId: "attempt:C:0",
                   report: "ExecutorWorkTerminalCompleted" as const
-                }
+                },
+                ...item.orchestration.filter((evidence) => evidence._tag === "TargetPromotionSucceeded")
               ],
         taskWork: {
           absences: [
@@ -4537,6 +4632,8 @@ const doubleDiamondCandidateCommit = (taskId: (typeof doubleDiamondTaskIds)[numb
   /* v8 ignore next -- @preserve taskId is branded from the closed doubleDiamondTaskIds tuple. */
   "abcdef0173"[doubleDiamondTaskIds.indexOf(taskId)]?.repeat(gitShaCharacterLength) ?? "f".repeat(gitShaCharacterLength)
 
+const doubleDiamondBaseHead = "2222222222222222222222222222222222222222"
+
 const doubleDiamondAcceptedReport = (attempt: {
   readonly attemptId: string
   readonly taskId: (typeof doubleDiamondTaskIds)[number]
@@ -4570,7 +4667,7 @@ const defaultDiamondIntegrationPositions = {
 const fiveTaskDiamondIntegrationPositions = {
   A: defaultDiamondIntegrationPositions,
   B: { queuedAt: 94, startedAt: 100, targetLineageObservedAt: 107 },
-  C: { queuedAt: 97, startedAt: 145, targetLineageObservedAt: 147 },
+  C: { queuedAt: 92, startedAt: 145, targetLineageObservedAt: 147 },
   D: { queuedAt: 237, startedAt: 238, targetLineageObservedAt: 240 },
   E: { queuedAt: 183, startedAt: 184, targetLineageObservedAt: 186 },
   F: defaultDiamondIntegrationPositions,
@@ -4595,18 +4692,27 @@ const doubleDiamondIntegrationPositions = {
 
 const integrationPositionsForDiamondTask = (
   taskId: DoubleDiamondTaskId,
-  fiveTaskDiamond: boolean
+  fiveTaskDiamond: boolean,
+  integrationOrdinal: number
 ): DoubleDiamondIntegrationPositions =>
-  fiveTaskDiamond ? fiveTaskDiamondIntegrationPositions[taskId] : doubleDiamondIntegrationPositions[taskId]
+  authoredIntegrationPositionsAfterDirectPublication(
+    fiveTaskDiamond ? fiveTaskDiamondIntegrationPositions[taskId] : doubleDiamondIntegrationPositions[taskId],
+    integrationOrdinal
+  )
 
 /** After the authored lineage read, cross the ordinary integration and completion-finality boundaries. */
 const doubleDiamondIntegrationFinality = (
-  attempt: { readonly attemptId: string; readonly taskId: (typeof doubleDiamondTaskIds)[number] },
+  attempt: {
+    readonly attemptId: string
+    readonly taskId: (typeof doubleDiamondTaskIds)[number]
+    readonly integrationOrdinal: number
+    readonly expectedTargetHead: string
+  },
   repository = "/dalph/cassettes/double-diamond.git"
 ) => {
   const acceptedResultCommit = doubleDiamondAcceptedCommit(attempt.taskId)
   const candidateCommit = doubleDiamondCandidateCommit(attempt.taskId)
-  const expectedTargetHead = "2222222222222222222222222222222222222222"
+  const expectedTargetHead = attempt.expectedTargetHead
   const promotionRequest = targetPromotionGitRequest(repository, candidateCommit, expectedTargetHead)
   const candidateText = `refs/heads/dalph/integrator-candidate-${attempt.taskId}`
   const attemptName = attempt.attemptId.replaceAll(":", "-")
@@ -4615,7 +4721,8 @@ const doubleDiamondIntegrationFinality = (
   const executor = fiveTaskDiamond ? "executor:five-task-diamond" : "executor:double-diamond"
   const { queuedAt, startedAt, targetLineageObservedAt } = integrationPositionsForDiamondTask(
     attempt.taskId,
-    fiveTaskDiamond
+    fiveTaskDiamond,
+    attempt.integrationOrdinal
   )
   const candidateResource = `integrator-resource:$authored-run:${attempt.attemptId}:${startedAt}:${targetLineageObservedAt}:${expectedTargetHead}:${acceptedResultCommit}:${repository}:refs/heads/master`
   const correlation = {
@@ -4628,7 +4735,7 @@ const doubleDiamondIntegrationFinality = (
     integrationTarget: { repository, ref: "refs/heads/master" },
     plannedAttempt: {
       attemptId: attempt.attemptId,
-      baseSha: expectedTargetHead,
+      baseSha: doubleDiamondBaseHead,
       branch: `refs/heads/dalph/${attemptName}`,
       executor,
       runId: "$authored-run",
@@ -4700,29 +4807,82 @@ const doubleDiamondIntegrationFinality = (
 
 /** Fresh exact acquisition and its later complete graph already authorize the lineage read. */
 const doubleDiamondFreshIntegrationFinality = (
-  attempt: { readonly attemptId: string; readonly taskId: DoubleDiamondTaskId },
+  attempt: {
+    readonly attemptId: string
+    readonly taskId: DoubleDiamondTaskId
+    readonly integrationOrdinal: number
+    readonly expectedTargetHead: string
+  },
   repository = "/dalph/cassettes/double-diamond.git"
 ) => [
-  { _tag: "DalphSelects" as const, operation: { _tag: "ReadTargetLineage" as const, ...attempt } },
+  {
+    _tag: "DalphSelects" as const,
+    operation: { _tag: "ReadTargetLineage" as const, attemptId: attempt.attemptId, taskId: attempt.taskId }
+  },
   ...doubleDiamondIntegrationFinality(attempt, repository)
 ]
 
 const doubleDiamondAttempts = {
-  a: { attemptId: "attempt:A:0", taskId: "A" },
-  b: { attemptId: "attempt:B:0", taskId: "B" },
-  c: { attemptId: "attempt:C:1", taskId: "C" },
-  d: { attemptId: "attempt:D:1", taskId: "D" },
-  x: { attemptId: "attempt:X:0", taskId: "X" },
-  e: { attemptId: "attempt:E:0", taskId: "E" },
-  f: { attemptId: "attempt:F:1", taskId: "F" },
-  h: { attemptId: "attempt:H:0", taskId: "H" },
-  i: { attemptId: "attempt:I:1", taskId: "I" },
-  g: { attemptId: "attempt:G:0", taskId: "G" }
+  a: { attemptId: "attempt:A:0", taskId: "A", integrationOrdinal: 0, expectedTargetHead: doubleDiamondBaseHead },
+  b: {
+    attemptId: "attempt:B:0",
+    taskId: "B",
+    integrationOrdinal: 1,
+    expectedTargetHead: doubleDiamondCandidateCommit("A")
+  },
+  c: {
+    attemptId: "attempt:C:1",
+    taskId: "C",
+    integrationOrdinal: 2,
+    expectedTargetHead: doubleDiamondCandidateCommit("B")
+  },
+  d: {
+    attemptId: "attempt:D:1",
+    taskId: "D",
+    integrationOrdinal: 3,
+    expectedTargetHead: doubleDiamondCandidateCommit("C")
+  },
+  x: {
+    attemptId: "attempt:X:0",
+    taskId: "X",
+    integrationOrdinal: 6,
+    expectedTargetHead: doubleDiamondCandidateCommit("F")
+  },
+  e: {
+    attemptId: "attempt:E:0",
+    taskId: "E",
+    integrationOrdinal: 4,
+    expectedTargetHead: doubleDiamondCandidateCommit("D")
+  },
+  f: {
+    attemptId: "attempt:F:1",
+    taskId: "F",
+    integrationOrdinal: 5,
+    expectedTargetHead: doubleDiamondCandidateCommit("E")
+  },
+  h: {
+    attemptId: "attempt:H:0",
+    taskId: "H",
+    integrationOrdinal: 7,
+    expectedTargetHead: doubleDiamondCandidateCommit("X")
+  },
+  i: {
+    attemptId: "attempt:I:1",
+    taskId: "I",
+    integrationOrdinal: 8,
+    expectedTargetHead: doubleDiamondCandidateCommit("H")
+  },
+  g: {
+    attemptId: "attempt:G:0",
+    taskId: "G",
+    integrationOrdinal: 9,
+    expectedTargetHead: doubleDiamondCandidateCommit("I")
+  }
 } as const
 const doubleDiamondBPromotionRequest = targetPromotionGitRequest(
   "/dalph/cassettes/double-diamond.git",
   doubleDiamondCandidateCommit("B"),
-  "2222222222222222222222222222222222222222"
+  doubleDiamondAttempts.b.expectedTargetHead
 )
 const doubleDiamondExecutionOrder = ["A", "B", "C", "D", "E", "X", "F", "H", "I", "G"] as const
 
@@ -4736,7 +4896,14 @@ const doubleDiamondRestartIntegrationAuthorization = () => [
   ...doubleDiamondGraphRead(doubleDiamondGraphs.xObservedDuringRestart),
   { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId: "X" as const } },
   { _tag: "TaskWorkSpecificationReadReturned" as const, ...doubleDiamondSpecification("X") },
-  { _tag: "DalphSelects" as const, operation: { _tag: "RecordTaskAttemptPlan" as const, ...doubleDiamondAttempts.x } },
+  {
+    _tag: "DalphSelects" as const,
+    operation: {
+      _tag: "RecordTaskAttemptPlan" as const,
+      attemptId: doubleDiamondAttempts.x.attemptId,
+      taskId: doubleDiamondAttempts.x.taskId
+    }
+  },
   {
     _tag: "DalphSelects" as const,
     operation: {
@@ -4749,8 +4916,18 @@ const doubleDiamondRestartIntegrationAuthorization = () => [
 
 /** Release the exact held worktree after promotion, then let its Begin report release the completion-read hold. */
 const doubleDiamondIntegrationReleasingWork = (
-  promoted: { readonly attemptId: string; readonly taskId: DoubleDiamondTaskId },
-  released: { readonly attemptId: string; readonly taskId: DoubleDiamondTaskId },
+  promoted: {
+    readonly attemptId: string
+    readonly taskId: DoubleDiamondTaskId
+    readonly integrationOrdinal: number
+    readonly expectedTargetHead: string
+  },
+  released: {
+    readonly attemptId: string
+    readonly taskId: DoubleDiamondTaskId
+    readonly integrationOrdinal: number
+    readonly expectedTargetHead: string
+  },
   repository = "/dalph/cassettes/double-diamond.git"
 ) =>
   doubleDiamondIntegrationFinality(promoted, repository).flatMap(
@@ -4764,7 +4941,7 @@ const doubleDiamondIntegrationReleasingWork = (
               promotionRequest: targetPromotionGitRequest(
                 repository,
                 doubleDiamondCandidateCommit(promoted.taskId),
-                "2222222222222222222222222222222222222222"
+                promoted.expectedTargetHead
               )
             }),
             decodeStoryItem({
@@ -4838,7 +5015,8 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     ...doubleDiamondRestartIntegrationAuthorization(),
     {
       _tag: "CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion",
-      ...doubleDiamondAttempts.x,
+      attemptId: doubleDiamondAttempts.x.attemptId,
+      taskId: doubleDiamondAttempts.x.taskId,
       promotionRequest: doubleDiamondBPromotionRequest
     },
     {
@@ -4906,10 +5084,38 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     { _tag: "TaskClaimCurrentReadReturned", taskId: "X" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "F" } },
     { _tag: "TaskClaimCurrentReadReturned", taskId: "F" },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", ...doubleDiamondAttempts.x } },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", ...doubleDiamondAttempts.f } },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", ...doubleDiamondAttempts.x } },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", ...doubleDiamondAttempts.f } },
+    {
+      _tag: "DalphSelects",
+      operation: {
+        _tag: "ReadTaskWorktree",
+        attemptId: doubleDiamondAttempts.x.attemptId,
+        taskId: doubleDiamondAttempts.x.taskId
+      }
+    },
+    {
+      _tag: "DalphSelects",
+      operation: {
+        _tag: "ReadTaskWorktree",
+        attemptId: doubleDiamondAttempts.f.attemptId,
+        taskId: doubleDiamondAttempts.f.taskId
+      }
+    },
+    {
+      _tag: "DalphSelects",
+      operation: {
+        _tag: "ReadTargetLineage",
+        attemptId: doubleDiamondAttempts.x.attemptId,
+        taskId: doubleDiamondAttempts.x.taskId
+      }
+    },
+    {
+      _tag: "DalphSelects",
+      operation: {
+        _tag: "ReadTargetLineage",
+        attemptId: doubleDiamondAttempts.f.attemptId,
+        taskId: doubleDiamondAttempts.f.taskId
+      }
+    },
     ...doubleDiamondGraphRead(doubleDiamondGraphs.dCompleteBeforeX),
     {
       _tag: "CoordinatorActivationReturned",
@@ -5014,11 +5220,31 @@ const fiveTaskDiamondGraphs = {
 const fiveTaskDiamondTaskIds = ["A", "B", "C", "E", "D"] as const
 
 const fiveTaskDiamondAttempts = {
-  a: { attemptId: "attempt:A:0", taskId: "A" },
-  b: { attemptId: "attempt:B:0", taskId: "B" },
-  c: { attemptId: "attempt:C:1", taskId: "C" },
-  e: { attemptId: "attempt:E:2", taskId: "E" },
-  d: { attemptId: "attempt:D:0", taskId: "D" }
+  a: { attemptId: "attempt:A:0", taskId: "A", integrationOrdinal: 0, expectedTargetHead: doubleDiamondBaseHead },
+  b: {
+    attemptId: "attempt:B:0",
+    taskId: "B",
+    integrationOrdinal: 1,
+    expectedTargetHead: doubleDiamondCandidateCommit("A")
+  },
+  c: {
+    attemptId: "attempt:C:1",
+    taskId: "C",
+    integrationOrdinal: 2,
+    expectedTargetHead: doubleDiamondCandidateCommit("B")
+  },
+  e: {
+    attemptId: "attempt:E:2",
+    taskId: "E",
+    integrationOrdinal: 3,
+    expectedTargetHead: doubleDiamondCandidateCommit("C")
+  },
+  d: {
+    attemptId: "attempt:D:0",
+    taskId: "D",
+    integrationOrdinal: 4,
+    expectedTargetHead: doubleDiamondCandidateCommit("E")
+  }
 } as const
 
 /** E's already-admitted worktree waits for B's CAS; B's completion read waits for E's Begin report. */
@@ -5087,14 +5313,22 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
     ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.aComplete),
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "E" } },
     { _tag: "TaskWorkSpecificationReadReturned", ...doubleDiamondSpecification("E") },
-    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", ...fiveTaskDiamondAttempts.e } },
+    {
+      _tag: "DalphSelects",
+      operation: {
+        _tag: "RecordTaskAttemptPlan",
+        attemptId: fiveTaskDiamondAttempts.e.attemptId,
+        taskId: fiveTaskDiamondAttempts.e.taskId
+      }
+    },
     {
       _tag: "CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion",
-      ...fiveTaskDiamondAttempts.e,
+      attemptId: fiveTaskDiamondAttempts.e.attemptId,
+      taskId: fiveTaskDiamondAttempts.e.taskId,
       promotionRequest: targetPromotionGitRequest(
         "/dalph/cassettes/five-task-diamond.git",
         doubleDiamondCandidateCommit("B"),
-        "2222222222222222222222222222222222222222"
+        fiveTaskDiamondAttempts.b.expectedTargetHead
       )
     },
     {
@@ -5104,7 +5338,14 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
       releasedByAttemptId: fiveTaskDiamondAttempts.e.attemptId,
       releasedByTaskId: "E"
     },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", ...fiveTaskDiamondAttempts.b } },
+    {
+      _tag: "DalphSelects",
+      operation: {
+        _tag: "ReadTargetLineage",
+        attemptId: fiveTaskDiamondAttempts.b.attemptId,
+        taskId: fiveTaskDiamondAttempts.b.taskId
+      }
+    },
     ...fiveTaskDiamondBIntegrationFinality(),
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:C:1", taskId: "C" } },
     ...doubleDiamondIntegrationFinality(fiveTaskDiamondAttempts.c, "/dalph/cassettes/five-task-diamond.git"),
@@ -5244,9 +5485,9 @@ export const targetPromotionLostResponseDiscoversCurrentCandidateAuthoredCassett
 const deliveryStoryChangedHead = GitCommitSha.make("2222222222222222222222222222222222222222")
 const deliveryStorySuccessorCandidateCommit = GitCommitSha.make("dddddddddddddddddddddddddddddddddddddddd")
 const deliveryStorySuccessorCandidateText = "refs/heads/dalph/integrator-candidate-A-successor"
-const deliveryStoryQuarantineAt = JournalPosition.make(39) // eslint-disable-line no-magic-numbers -- Exact authored Q position.
-const deliveryStoryDirectionAppliedAt = JournalPosition.make(40) // eslint-disable-line no-magic-numbers -- Exact authored D position.
-const deliveryStorySuccessorLineageObservedAt = JournalPosition.make(42) // eslint-disable-line no-magic-numbers -- Exact authored fresh-L position.
+const deliveryStoryQuarantineAt = JournalPosition.make(46) // eslint-disable-line no-magic-numbers -- Exact authored Q position after direct publication.
+const deliveryStoryDirectionAppliedAt = JournalPosition.make(47) // eslint-disable-line no-magic-numbers -- Exact authored D position after direct publication.
+const deliveryStorySuccessorLineageObservedAt = JournalPosition.make(49) // eslint-disable-line no-magic-numbers -- Exact authored fresh-L position after direct publication.
 const deliveryStoryPredecessor = Schema.decodeUnknownSync(IntegratorSessionCorrelation)(
   outerIntegratorSessionCorrelationA
 )

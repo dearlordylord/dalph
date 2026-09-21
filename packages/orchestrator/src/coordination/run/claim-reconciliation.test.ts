@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { Effect, Option, Ref } from "effect"
 import { expect } from "vitest"
@@ -427,7 +428,11 @@ it.effect(
       expect(events).toContainEqual(expect.objectContaining({ _tag: "TaskAttemptPlanned" }))
     }).pipe(
       Effect.provide(
-        liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, policy)], runId, target })
+        liveJournalTestLayer({
+          records: [makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)],
+          runId,
+          target
+        })
       ),
       Effect.provide(controlledFakePlannedAttemptExecutorLayer),
       Effect.provideService(
@@ -910,7 +915,11 @@ it.effect("reads current claim facts for safely suspended A and exposes its miss
     })
   }).pipe(
     Effect.provide(
-      liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, policy)], runId, target })
+      liveJournalTestLayer({
+        records: [makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)],
+        runId,
+        target
+      })
     ),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(

@@ -1,4 +1,4 @@
-import { type RunId } from "@dalph/contracts"
+import { type RemotePublicationTarget, type RunId } from "@dalph/contracts"
 import { Effect, Layer, Ref, Schema } from "effect"
 import { JournalPosition, type JournalRecordKey } from "../identity.js"
 import {
@@ -206,7 +206,8 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
       const beginRun = Effect.fn("JournalStore.Memory.beginRun")(function* (
         runId: RunId,
         target: TrackerTarget,
-        initialControlPolicy: InitialControlPolicy
+        initialControlPolicy: InitialControlPolicy,
+        remotePublicationTarget: RemotePublicationTarget
       ) {
         const update = (
           current: MemoryJournalState
@@ -222,7 +223,13 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
             return [Effect.fail(new JournalPartitionContradiction({ runId })), current]
           }
           const records = hot ?? cold ?? []
-          const decision = decideWorkflowRunBeginning(records, runId, target, initialControlPolicy)
+          const decision = decideWorkflowRunBeginning(
+            records,
+            runId,
+            target,
+            initialControlPolicy,
+            remotePublicationTarget
+          )
           if (decision._tag === "LifecycleTransitionRejected") {
             return [Effect.fail(decision.failure), current]
           }

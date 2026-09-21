@@ -12,6 +12,11 @@ import {
 } from "@dalph/contracts"
 import { idleRunCancellationRecoveryAuthoredCassette, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
+import {
+  remoteBaselineGitLayerForTest,
+  remotePublicationGitLayerForTest,
+  remotePublicationTargetForTest
+} from "../../../orchestrator/test/support/direct-publication.js"
 import { AllocatedWorkflowRunId } from "../../../orchestrator/src/coordination/run/fresh-run-identity.js"
 import { JournaledRunBootstrap } from "../../../orchestrator/src/coordination/run/run.js"
 import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
@@ -126,7 +131,9 @@ const productionRuntimeLayer = (
       })
     ),
     Layer.provide(executorLayer),
-    Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+    Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))),
+    Layer.provide(remoteBaselineGitLayerForTest),
+    Layer.provideMerge(remotePublicationGitLayerForTest)
   )
 }
 
@@ -153,7 +160,9 @@ const runProductionRecovery = (prefix: RecoveryPrefix, lane: "memory" | "sqlite"
           runId,
           ({ runId: activeRunId }) => productionRuntimeLayer(activeRunId, graph, executorLayer),
           applicationExit,
-          noopJournalMaintenanceObservation
+          noopJournalMaintenanceObservation,
+          undefined,
+          remotePublicationTargetForTest
         ).pipe(Layer.provide(dependencies), Layer.provide(executorLayer))
       )
       const bootstrap = Context.get(bootstrapContext, JournaledRunBootstrap)

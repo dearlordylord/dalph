@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import {
   AttemptId,
@@ -244,7 +245,8 @@ const safeContinuationEligibility = (
     makeWorkflowRunBeganRecord(
       runId,
       target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTargetForTest
     ),
     record(2, TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })),
     record(3, taskTrackerReadIntent(closedOperation)),
@@ -810,7 +812,8 @@ const exactHandoffFixture = (() => {
     makeWorkflowRunBeganRecord(
       runId,
       target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTargetForTest
     ),
     record(
       TaskClaimAcquisitionIntendedEvent.make({
@@ -1132,7 +1135,8 @@ const exactRejectionProjection = (claimOperationId: OperationId): FreshTaskAdmis
       ...makeWorkflowRunBeganRecord(
         runId,
         FixtureTarget.make("admission-release-projection"),
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTargetForTest
       ),
       position: JournalPosition.make(1),
       runId

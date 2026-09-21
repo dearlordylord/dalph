@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { GitCommitSha, PlannedTaskAttempt, RunId, makeTaskWorkSpecification } from "@dalph/contracts"
 import { Context, Effect, Layer, Schema } from "effect"
@@ -145,7 +146,12 @@ const appendQuarantine = Effect.fn("IntegrationQuarantineTest.appendQuarantine")
   event = quarantineEventFor(suffix)
 ) {
   const journal = yield* JournalStore
-  yield* journal.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }))
+  yield* journal.beginRun(
+    runId,
+    target,
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    remotePublicationTargetForTest
+  )
   if (event.basis._tag === "ConclusiveResult") {
     const correlation = event.correlation
     const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: correlation })
@@ -442,7 +448,8 @@ it.effect("accepts conclusive evidence bound to the exact initial Integrator run
     yield* journal.beginRun(
       runId,
       target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTargetForTest
     )
     const correlation = IntegratorSessionCorrelation.make({
       ...correlationFor("run-bound-not-prepared"),

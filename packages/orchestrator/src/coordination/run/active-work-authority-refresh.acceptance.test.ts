@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import {
   AttemptId,
@@ -292,7 +293,8 @@ const buildPrefix = (
     makeWorkflowRunBeganRecord(
       runId,
       target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+      remotePublicationTargetForTest
     ),
     record(2, TaskClaimAcquisitionIntendedEvent.make({ operation: acquisition, version: workflowJournalEventVersion })),
     record(

@@ -18,6 +18,7 @@ import {
   journalGraphObservationAt,
   journalRecordByKey,
   journalRecordByPosition,
+  journalRecordsOfKind,
   journalRecordsForIntegratorSession,
   type JournalHistorySource
 } from "../../../workflow-journal/record-evidence.js"
@@ -29,6 +30,7 @@ import { IntegratorJournalContradiction } from "./errors.js"
 import {
   firstFullRerunSuccessorGeneration,
   IntegratorSuccessorSessionFixedEvent,
+  maximumIntegratorSessionsPerResponsibility,
   type IntegratorSessionCorrelation
 } from "./events.js"
 import {
@@ -36,7 +38,11 @@ import {
   integratorSuccessorCorrelationFor,
   readRecordedIntegratorSession
 } from "./session.js"
-import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./state.js"
+import {
+  integratorCorrelationsEqual,
+  integratorResponsibilityFactsEqual,
+  integratorResponsibilityFactsFromCorrelation
+} from "./state.js"
 import { deriveIntegrationQuarantineState } from "../integration-quarantine/state.js"
 import { integrationQuarantineDirectionSubject } from "../integration-quarantine/events.js"
 import { integrationQuarantineDirectionTargetLineageOperationId } from "../integration-quarantine/direction-lineage-operation.js"
@@ -370,6 +376,36 @@ const successorIdentityCollision = (
     return false
   })
 
+const distinctSessionCountForResponsibility = (
+  records: JournalHistorySource,
+  responsibility: ReturnType<typeof integratorResponsibilityFactsFromCorrelation>
+): number => {
+  const sessionIds = new Set<string>()
+  for (const record of journalRecordsOfKind(records, "IntegratorSessionFixed")) {
+    if (
+      record.event._tag === "IntegratorSessionFixed" &&
+      integratorResponsibilityFactsEqual(
+        integratorResponsibilityFactsFromCorrelation(record.event.correlation),
+        responsibility
+      )
+    ) {
+      sessionIds.add(record.event.correlation.sessionId)
+    }
+  }
+  for (const record of journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")) {
+    if (
+      record.event._tag === "IntegratorSuccessorSessionFixed" &&
+      integratorResponsibilityFactsEqual(
+        integratorResponsibilityFactsFromCorrelation(record.event.successor),
+        responsibility
+      )
+    ) {
+      sessionIds.add(record.event.successor.sessionId)
+    }
+  }
+  return sessionIds.size
+}
+
 const validateSuccessorUniqueness = (
   records: JournalHistorySource,
   input: IntegratorSuccessorPreparationInput,
@@ -379,6 +415,10 @@ const validateSuccessorUniqueness = (
   | { readonly _tag: "Available" }
   | { readonly _tag: "Existing"; readonly record: IntegratorSuccessorSessionFixedRecord }
   | { readonly _tag: "Invalid"; readonly detail: string } => {
+  const responsibility = integratorResponsibilityFactsFromCorrelation(input.predecessor)
+  if (distinctSessionCountForResponsibility(records, responsibility) >= maximumIntegratorSessionsPerResponsibility) {
+    return { _tag: "Invalid", detail: "Integrator responsibility has reached its three-session aggregate bound" }
+  }
   const [existing, duplicate] = firstTwoSuccessorsFor(records, input.predecessor)
   if (duplicate) {
     return { _tag: "Invalid", detail: "Journal history contains multiple FullRerun successors for one predecessor" }

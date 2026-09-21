@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
 import {
@@ -77,7 +78,8 @@ const makeHostGraph = (
                 .beginRun(
                   selection.runId,
                   configuration.target,
-                  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+                  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+                  remotePublicationTargetForTest
                 )
                 .pipe(Effect.orDie))
             return JournaledRunEstablished.make({
