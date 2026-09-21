@@ -38,6 +38,69 @@ const fixtureLayer = nodeGitCommandLayer.pipe(Layer.provideMerge(NodeServices.la
 const diagnosticPath = "/tmp/public-s1-timeout-diagnostic.json"
 const diagnosticProviderPath = "/tmp/public-s1-timeout-provider.json"
 const diagnosticAuditPath = "/tmp/public-s1-timeout-audit.json"
+
+type DiagnosticRecord = { readonly [key: string]: unknown }
+
+const diagnosticRecord = (value: unknown): DiagnosticRecord | undefined =>
+  typeof value === "object" && value !== null && !Array.isArray(value) ? (value as DiagnosticRecord) : undefined
+
+const diagnosticString = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined)
+
+const diagnosticInteger = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isInteger(value) ? value : undefined
+
+/** Test-only failure projection: tags, ordinals, and shape flags contain no IDs, secrets, or paths. */
+const compactS1StatusEntry = (entry: unknown) => {
+  const record = diagnosticRecord(entry)
+  const order = diagnosticRecord(record?.order)
+  const actionIdentity = diagnosticRecord(record?.actionIdentity)
+  const route = diagnosticRecord(record?.route) ?? diagnosticRecord(diagnosticRecord(record?.proposal)?.route)
+  const step = diagnosticRecord(route?.step) ?? diagnosticRecord(record?.step)
+  const acceptedProgress = diagnosticRecord(step?.acceptedProgress) ?? diagnosticRecord(record?.acceptedProgress)
+  return {
+    entryTag: diagnosticString(record?._tag),
+    classification: diagnosticString(record?.classification),
+    orderTag: diagnosticString(order?._tag),
+    stepTag: diagnosticString(order?.step) ?? diagnosticString(step?._tag),
+    transitionTag: diagnosticString(order?.transition),
+    actionIdentityTag: diagnosticString(actionIdentity?._tag),
+    acceptedProgressTag: diagnosticString(acceptedProgress?._tag),
+    acceptedAt: diagnosticInteger(acceptedProgress?.acceptedAt),
+    reportOrdinal: diagnosticInteger(acceptedProgress?.ordinal),
+    proposalIdPresent: typeof record?.proposalId === "string",
+    taskIdPresent: typeof record?.taskId === "string" || typeof order?.taskId === "string",
+    waitsForLiveOperationId: typeof record?.waitsForLiveOperationId === "string"
+  }
+}
+
+/** The public history retains the executor report ordinal that becomes fresh accepted progress. */
+const compactS1HistoricalOccurrence = (occurrence: unknown) => {
+  const record = diagnosticRecord(occurrence)
+  const report = diagnosticRecord(record?.report)
+  const reportTag = diagnosticString(report?._tag)
+  return {
+    occurrenceTag: diagnosticString(record?._tag),
+    reportTag,
+    reportOrdinal: diagnosticInteger(record?.ordinal),
+    executorContinuationCandidate:
+      reportTag === "ExecutorWorkExecuting"
+        ? { acceptedProgressTag: "ExecutorReportAccepted", ordinal: diagnosticInteger(record?.ordinal) }
+        : undefined
+  }
+}
+
+const compactS1Diagnostic = (serialized: string): string => {
+  try {
+    const diagnostic = diagnosticRecord(JSON.parse(serialized))
+    return JSON.stringify({
+      status: Array.isArray(diagnostic?.statusEntryProjection) ? diagnostic.statusEntryProjection : [],
+      executorHistory: Array.isArray(diagnostic?.executorHistoryProjection) ? diagnostic.executorHistoryProjection : []
+    })
+  } catch {
+    return JSON.stringify({ _tag: "Unavailable" })
+  }
+}
+
 const githubProviderOperationTags = new Set<GithubGraphqlRequest["_tag"]>([
   "AddBlockedBy",
   "AddIssueComment",
@@ -209,6 +272,7 @@ it.live(
     Effect.scoped(
       Effect.gen(function* () {
         const git = yield* GitCommand
+        const fs = yield* FileSystem.FileSystem
         const fixture = yield* createProductionPublicPublicationFixture(builtEntry)
         const controller = yield* makeHermeticController(fixture, { _tag: "Unpaused" })
 
@@ -231,6 +295,20 @@ it.live(
                 statusEntries:
                   lastStatus?._tag === "CurrentStatus" && lastStatus.status._tag === "DeliveryStatusAvailable"
                     ? lastStatus.status.entries
+                    : [],
+                statusEntryProjection:
+                  lastStatus?._tag === "CurrentStatus" && lastStatus.status._tag === "DeliveryStatusAvailable"
+                    ? lastStatus.status.entries.map(compactS1StatusEntry)
+                    : [],
+                executorHistoryProjection:
+                  lastHistory?._tag === "HistoricalSnapshot"
+                    ? lastHistory.snapshot.items
+                        .slice(-80)
+                        .flatMap(({ occurrence }) =>
+                          occurrence._tag === "PlannedAttemptExecutorWorkReported"
+                            ? [compactS1HistoricalOccurrence(occurrence)]
+                            : []
+                        )
                     : [],
                 stderrTail: MutableList.toArray(child.stderrLog)
                   .map((bytes) => new TextDecoder().decode(bytes))
@@ -305,6 +383,15 @@ it.live(
         const childStderr = MutableList.toArray(child.stderrLog)
           .map((bytes) => new TextDecoder().decode(bytes))
           .join("")
+        const childDiagnosticProjection =
+          childStatus === 0
+            ? "not-read"
+            : yield* fs.readFileString(diagnosticPath).pipe(
+                Effect.result,
+                Effect.map((result) =>
+                  result._tag === "Success" ? compactS1Diagnostic(result.success) : "unavailable"
+                )
+              )
         const providerAfterChild = yield* controller.providerSnapshot
         const trackerAfterChild = yield* controller.finalTrackerFacts
 
@@ -323,7 +410,8 @@ it.live(
         )
         expect(
           childStatus,
-          `${childStderr}\njournal tags: ${tags.join(", ")}\ntracker facts: ${trackerFactsDiagnostics.join(", ")}`
+          `${childStderr}\njournal tags: ${tags.join(", ")}\ntracker facts: ${trackerFactsDiagnostics.join(", ")}\n` +
+            `diagnostic status/proposal projection: ${childDiagnosticProjection}`
         ).toBe(0)
 
         expect(tags.filter((tag) => tag === "WorkflowRunBegan")).toHaveLength(1)
