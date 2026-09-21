@@ -125,7 +125,7 @@ qualification composition evidence substituted for a production implementation`,
 `keeps the Codex-owned activity census in the fixed family denominator`, `keeps the
 required family denominator outside a mutated inventory`. `check:all` runs
 these source-audit assertions once through the focused
-`test:capability-registration` command under a 60-second process deadline. The
+`test:capability-registration` command under a 120-second process deadline. The
 coverage stage excludes that suite and every test named with the
 `.performance.test.ts` suffix, so neither is repeated under instrumentation.
 

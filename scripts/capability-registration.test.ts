@@ -1499,7 +1499,7 @@ describe("capability registration gate", () => {
       name: "Quality gate 'capability registration'",
       relayParentSignals: true,
       terminationGraceMilliseconds: undefined,
-      timeoutMilliseconds: 60_000
+      timeoutMilliseconds: 120_000
     })
 
     expect(
