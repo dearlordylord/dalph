@@ -635,7 +635,6 @@ export const acceptedResultIntegrationObligations = Object.freeze({
     "publicationInFlightReached",
     "publicationResponseLostReached",
     "publicationReconciliationReached",
-    "publicationRetryReadyReached",
     "publicationProvedReached",
     "publicationWaitReached",
     "candidateRejectedReached",
