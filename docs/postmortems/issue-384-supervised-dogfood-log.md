@@ -797,7 +797,7 @@ than treated as a qualification.
 The first scoped review round ran against the same Base. Standards findings
 closed here are the invalid S3/S6 scenario test names, the stale capstone status,
 and the three unused internal exports. The remaining acceptance evidence is the
-real disposable S1 journey after controlled S2 owned by #385. The spec review
+fresh supervised disposable S1 journey after the #390 retained-run closure. The spec review
 also found that a retained publication could be offered as a fresh frontier
 action; `qualifiedIntegratorProgressTransitionsFor` now stops that action and a
 controlled frontier assertion covers the retained boundary. At that frozen
@@ -811,12 +811,12 @@ The D28b evidence gap is now closed in commit `4abc4f52c` (`fix: persist exact d
 
 The Reducer Lab fixture refresh is committed as `072c1a5d4` (`test: refresh reducer lab remote-target fixtures`). Its typecheck passes. The bounded `pnpm check:lab` run stopped at the recorded 90-second wall bound after smoke reached the maintained catalog and failed on the authored `deliveryInvariantStory` interaction mismatch; the preserved log is `/tmp/check-lab-issue384.log`. No full gate was started from that red fixture run, and lingering child processes were stopped at the wall boundary.
 
-The current candidate's focused final check passed: the maintained 22-beat capstone execution and the direct-publication S1 order test both passed in `/tmp/issue384-focused-final.log`. The repository-wide full gate remains `UNPROVEN`, and the required disposable hosted S1 still follows controlled S2 owned by #385. The no-extra-remote-read decision remains in force.
+The current candidate's focused final check passed: the maintained 22-beat capstone execution and the direct-publication S1 order test both passed in `/tmp/issue384-focused-final.log`. The repository-wide full gate remains `UNPROVEN`, and the fresh supervised disposable hosted S1 remains unrun after the #390 retained-run closure. The no-extra-remote-read decision remains in force.
 
 ### Final bounded local verification, 2026-09-21 06:02 UTC
 
 The authored chronology repair is complete in `3477139d1` (`test: align reducer lab chronology fixtures`). It corrected the maintained double-diamond queued positions and the Reducer Lab continuation assertion without changing production workflow behavior. The complete `pnpm check:lab` then passed in `/tmp/issue384-check-lab-session.log`: all 94 maintained cassettes passed, followed by the Vite build. The earlier 90-second run remains historical evidence of the time bound and is superseded by this completed run.
 
-The test-support declaration repair is committed in `7fae5664c` (`fix: name qualification fixture effect boundaries`). `pnpm check:fast` passed after the repair, and the focused capstone/publication command passed again in `/tmp/issue384-focused-final-2.log`. These changes only name existing Effect boundaries and fixture result types; they do not add a remote read, a CLI operation, or a new workflow authority. The repository-wide full gate remains `UNPROVEN`, and the disposable hosted S1 still depends on controlled S2 owned by #385.
+The test-support declaration repair is committed in `7fae5664c` (`fix: name qualification fixture effect boundaries`). `pnpm check:fast` passed after the repair, and the focused capstone/publication command passed again in `/tmp/issue384-focused-final-2.log`. These changes only name existing Effect boundaries and fixture result types; they do not add a remote read, a CLI operation, or a new workflow authority. The repository-wide full gate remains `UNPROVEN`, and the fresh supervised disposable hosted S1 remains unrun.
 
 The admitted preflight `pnpm check:preflight --candidate=c64c3b899ca59eba8043d86a57ef93d23ef190c3` ran as `1d3ccb94-b627-4da4-bfbb-7afd8f58d88c` and closed with custody stopped and source unchanged. Its durable report is `.scratch/quality-gates/1d3ccb94-b627-4da4-bfbb-7afd8f58d88c`; the terminal command was `exit:1` before formal or application qualification. The remaining repository-control failures are recorded in that report: cyclomatic suppressions are out of sync, the checked-in hosted formal-input manifest is stale, three Git composition Layers are unregistered (`fileGitSenderCustodyLayer`, `nodeGitDirectPublicationLayer`, and `nodeGitRemoteBaselineLayer`), and one fresh workspace-state validation stage failed without retained diagnostic output. These are separate repository-gate repairs; no further runtime or no-extra-read change is justified by this preflight result.

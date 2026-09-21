@@ -2,7 +2,7 @@
 
 Issue: [Specify final remote publication before task completion](https://github.com/dearlordylord/dalph/issues/383).
 
-**Status: accepted by the maintainer on 2026-09-19; the maintained capstone chronology repair and controlled S1/S7 checks are complete, but acceptance remains unproven.** The frozen full gate is `UNPROVEN` on repository-wide baseline and candidate controls, and the required disposable S1 dogfood still follows controlled S2 owned by #385.
+**Status: accepted by the maintainer on 2026-09-19; the maintained capstone chronology repair and controlled S1/S7 checks are complete, but acceptance remains unproven.** The frozen full gate is `UNPROVEN` on repository-wide baseline and candidate controls. Issue #390's retained-run closure is complete; a fresh supervised disposable S1 dogfood remains required and must not repair the retained failed candidate.
 Alice selected direct publication, remote-first order, ordinary non-force push,
 and automatic integration recovery with user-authorized continuation after
 exhaustion. This document consolidates those decisions and their acceptance tests.
@@ -363,8 +363,9 @@ need an explicit cleanup disposition; no issue may fabricate Full rerun to reuse
 that code. Public control exposure retains the qualification limit stated above.
 
 Use focused scenario tests and `pnpm check:fast`, then the required frozen full
-gate for the implementation candidate. Finally run the single disposable S1
-dogfood journey after controlled S2 passes owned by #385. Record expected
+gate for the implementation candidate. Finally run one fresh supervised
+disposable S1 dogfood journey after the #390 retained-run closure; do not repair
+the retained failed candidate. Record expected
 duration and wall-clock stop time before long operations; reconcile retained
 Runs before retry, preserve failed evidence and unexecuted suffixes, and never
 retry throttled mutations.
