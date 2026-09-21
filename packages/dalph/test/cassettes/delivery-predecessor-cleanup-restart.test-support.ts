@@ -12,6 +12,7 @@ import {
   JournalStore,
   journalLayer,
   makeDispositionCleanupActivation,
+  type DispositionCleanupLoopResult,
   reduceWorkflowJournalHistory,
   sqliteJournalStoreLayer,
   worktreeCleanupTestLayer,
@@ -19,13 +20,27 @@ import {
 } from "@dalph/orchestrator"
 import { prefixThrough } from "../conformance/recovery-store-lanes.js"
 
+export interface RestartPredecessorCleanupAfterRemovalResult {
+  readonly prefix: ReadonlyArray<JournalRecord>
+  readonly reopened: ReadonlyArray<JournalRecord>
+  readonly result: DispositionCleanupLoopResult
+  readonly records: ReadonlyArray<JournalRecord>
+  readonly calls: ReadonlyArray<{
+    readonly tag: "Observe" | "Remove"
+    readonly locator: IntegratorCandidateResourceLocator
+    readonly sessionId: IntegratorSessionId
+  }>
+}
+
 const presentEvidenceOrdinal = 7
 const absentEvidenceOrdinal = 8
 const presentEvidenceRevision = IntegratorCandidateCleanupEvidenceRevision.make(presentEvidenceOrdinal)
 const absentEvidenceRevision = IntegratorCandidateCleanupEvidenceRevision.make(absentEvidenceOrdinal)
 
 /** The provider keeps its removed resource while fresh SQLite/application layers reopen the retained exact A prefix. */
-export const restartPredecessorCleanupAfterRemoval = (history: ReadonlyArray<JournalRecord>) =>
+export const restartPredecessorCleanupAfterRemoval = (
+  history: ReadonlyArray<JournalRecord>
+): Effect.Effect<RestartPredecessorCleanupAfterRemovalResult, unknown> =>
   Effect.scoped(
     Effect.gen(function* () {
       const source = prefixThrough(history, "BeforeCleanup", "A fixed successor before cleanup", history.length - 1)

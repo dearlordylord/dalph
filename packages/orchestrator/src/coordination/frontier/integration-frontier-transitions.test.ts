@@ -39,8 +39,11 @@ import {
   targetPromotionIntentRecordKey
 } from "../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
-import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../workflow/registry/event.js"
-import { WorkflowRunBeganEvent } from "../../workflow/registry/event.js"
+import {
+  GitReadIntentRecordedEvent,
+  TargetLineageObservedEvent,
+  WorkflowRunBeganEvent
+} from "../../workflow/registry/event.js"
 import { makeTargetLineageObservationOperation } from "../../workflow/registry/operation.js"
 import { OperationId } from "../../workflow/identity.js"
 import {
@@ -440,7 +443,7 @@ const transitionsFor = (scenario: ReturnType<typeof retryHistory>) =>
       heldResponsibilities: [identity(responsibility.queuedAt)],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map([[attemptId, scenario.currentLineage]]),
-      targetLineageRefreshRequiredAttemptIds: new Set(),
+      targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
       targetPromotionConfigured: true,
       taskClaimAuthorityByAttemptId: new Map([[attemptId, exactClaimAuthority]])
     },
@@ -508,7 +511,7 @@ it("releases the target before an initial Integrator run when fresh lineage is i
         heldResponsibilities: [identity(responsibility.queuedAt)],
         integrationTarget: Option.some(target),
         targetLineageByAttemptId: new Map([[attemptId, incompatibleLineage]]),
-        targetLineageRefreshRequiredAttemptIds: new Set(),
+        targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
         taskClaimAuthorityByAttemptId: new Map([[attemptId, { _tag: "Exact" as const }]])
       },
       [responsibility]
@@ -547,7 +550,7 @@ it("does not treat another Run at the same journal position as this Run's held t
       ],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map([[attemptId, incompatibleLineage]]),
-      targetLineageRefreshRequiredAttemptIds: new Set(),
+      targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
       taskClaimAuthorityByAttemptId: new Map([[attemptId, { _tag: "Exact" as const }]])
     },
     [responsibility]
@@ -647,7 +650,7 @@ it("explains incompatible lineage as a target rewrite after the fixed session", 
       heldResponsibilities: [identity(responsibility.queuedAt)],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map([[attemptId, incompatibleLineage]]),
-      targetLineageRefreshRequiredAttemptIds: new Set(),
+      targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
       taskClaimAuthorityByAttemptId: new Map([[attemptId, exactClaimAuthority]])
     },
     [responsibility]
@@ -706,7 +709,7 @@ it("records CandidateRejected quarantine from the exact run result and candidate
       heldResponsibilities: [],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map(),
-      targetLineageRefreshRequiredAttemptIds: new Set(),
+      targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
       taskClaimAuthorityByAttemptId: new Map()
     },
     [responsibility]
@@ -770,7 +773,7 @@ it("recovers a durable initial Integrator result by recording Q before any fresh
       heldResponsibilities: [],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map(),
-      targetLineageRefreshRequiredAttemptIds: new Set(),
+      targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
       taskClaimAuthorityByAttemptId: new Map()
     },
     [responsibility]
@@ -805,7 +808,7 @@ it("recovers provider-owned activity absence by recording Q without calling Inte
       heldResponsibilities: [],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map(),
-      targetLineageRefreshRequiredAttemptIds: new Set(),
+      targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
       taskClaimAuthorityByAttemptId: new Map()
     },
     [responsibility]
@@ -1136,7 +1139,7 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
   const publicationRuntimeFacts = {
     ...runtimeFacts,
     targetLineageByAttemptId: new Map([[attemptId, lineage(fixedHead)]]),
-    targetLineageRefreshRequiredAttemptIds: new Set(),
+    targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
     currentTrackerTaskIds: new Set([taskId]),
     taskClaimAuthorityByAttemptId: new Map([[attemptId, { _tag: "Exact" as const }]])
   }
@@ -1350,7 +1353,7 @@ it("derives a fresh quarantine after the authorized Retry run ends conclusively"
       heldResponsibilities: [identity(responsibility.queuedAt)],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map([[attemptId, scenario.currentLineage]]),
-      targetLineageRefreshRequiredAttemptIds: new Set(),
+      targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
       taskClaimAuthorityByAttemptId: new Map([[attemptId, { _tag: "Exact" as const }]])
     },
     [responsibility]
@@ -1503,7 +1506,7 @@ it("continues unrelated runnable work while an integration session is restored",
       heldResponsibilities: [],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map([[restored.plannedAttempt.attemptId, scenario.initialLineage]]),
-      targetLineageRefreshRequiredAttemptIds: new Set(),
+      targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
       taskClaimAuthorityByAttemptId: new Map([
         [restored.plannedAttempt.attemptId, { _tag: "Exact" as const }],
         [unrelated.plannedAttempt.attemptId, { _tag: "Exact" as const }]
@@ -1521,7 +1524,7 @@ it("continues unrelated runnable work while an integration session is restored",
       heldResponsibilities: [identity(restored.queuedAt, restored.plannedAttempt.runId)],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map([[restored.plannedAttempt.attemptId, scenario.initialLineage]]),
-      targetLineageRefreshRequiredAttemptIds: new Set(),
+      targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
       taskClaimAuthorityByAttemptId: new Map([
         [restored.plannedAttempt.attemptId, { _tag: "Exact" as const }],
         [unrelated.plannedAttempt.attemptId, { _tag: "Exact" as const }]
@@ -1619,7 +1622,7 @@ it("blocks later same-target integration while unrelated work continues", () => 
       heldResponsibilities: [],
       integrationTarget: Option.some(target),
       targetLineageByAttemptId: new Map(),
-      targetLineageRefreshRequiredAttemptIds: new Set(),
+      targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
       taskClaimAuthorityByAttemptId: new Map([
         [responsibility.plannedAttempt.attemptId, { _tag: "Exact" as const }],
         [laterSameTarget.plannedAttempt.attemptId, { _tag: "Exact" as const }],

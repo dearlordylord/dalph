@@ -290,7 +290,7 @@ export const AuthoredObservationCaptureOrder = Schema.Int.check(Schema.isGreater
 )
 export type AuthoredObservationCaptureOrder = typeof AuthoredObservationCaptureOrder.Type
 
-interface AuthoredObservationCorrelation {
+export interface AuthoredObservationCorrelation {
   readonly activationOrdinal: AuthoredRunActivationOrdinalType
   readonly captureOrder: AuthoredObservationCaptureOrder
   readonly storyPosition: AuthoredStoryPosition

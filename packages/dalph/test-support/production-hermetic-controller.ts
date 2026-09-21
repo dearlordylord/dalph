@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- One chronological adapter owns activation, pause, crash, candidate, and terminal story boundaries. */
 /* eslint-disable import/no-nodejs-modules -- Qualification owns real built children and one scoped loopback provider server. */
 import nodeProcess from "node:process"
 import { createServer, type IncomingMessage, type Server } from "node:http"
@@ -17,6 +18,7 @@ import {
   Redacted,
   Ref,
   Schema,
+  type Scope,
   Stream
 } from "effect"
 import {
@@ -24,8 +26,10 @@ import {
   HermeticRegistrationScopeId,
   type HermeticFixtureResource,
   type HermeticFixtureCreationFacts,
+  type HermeticInvocationId,
   HermeticFixtureManifest
 } from "../src/application/production-hermetic-contract.js"
+import type { GitCommand } from "@dalph/orchestrator"
 import {
   HermeticCodexRequest,
   HermeticControllerEndpoint,
@@ -114,6 +118,39 @@ export type HermeticControllerPause =
   | { readonly _tag: "Unpaused" }
   | { readonly _tag: "PauseAt"; readonly boundary: BoundaryReached["_tag"] }
 
+type HermeticProviderState = Effect.Success<ReturnType<typeof makeHermeticProviderState>>
+
+export interface HermeticController {
+  readonly invocationId: HermeticInvocationId
+  readonly endpoint: HermeticControllerEndpoint
+  readonly startChild: () => Effect.Effect<
+    HermeticPublicChild,
+    unknown,
+    FileSystem.FileSystem | GitCommand | Scope.Scope
+  >
+  readonly awaitBoundary: (
+    tag: BoundaryReached["_tag"],
+    child: HermeticPublicChild
+  ) => Effect.Effect<BoundaryReached, unknown>
+  readonly releaseBoundary: () => Effect.Effect<void>
+  readonly boundaryLog: MutableList.MutableList<BoundaryReached>
+  readonly processOutcomes: Effect.Effect<ReadonlyArray<HermeticProcessOutcome>>
+  readonly providerSnapshot: ReturnType<HermeticProviderState["snapshot"]>
+  readonly providerCreationManifest: HermeticProviderState["creationManifest"]
+  readonly finalTrackerFacts: HermeticProviderState["finalTrackerFacts"]
+  readonly githubCleanupAdapter: HermeticProviderState["cleanupAdapter"]
+  readonly setCompletionResponse: HermeticProviderState["setCompletionResponse"]
+  readonly setPublicTaskSpecification: HermeticProviderState["setPublicTaskSpecification"]
+  readonly activeRequestCount: Effect.Effect<number>
+  readonly activeRegistrationCount: Effect.Effect<number>
+  readonly stopTransport: Effect.Effect<void, unknown>
+  readonly selectedRunsCompleted: Effect.Effect<boolean>
+  readonly ownedChildrenStopped: Effect.Effect<boolean, unknown>
+  readonly terminateChild: (child: HermeticPublicChild) => Effect.Effect<void>
+  readonly killChild: (child: HermeticPublicChild) => Effect.Effect<unknown, unknown>
+  readonly awaitChild: (child: HermeticPublicChild) => Effect.Effect<number, unknown>
+}
+
 const providerFailureHttpStatus = 500
 const hermeticControlledProviderCredential = "controlled-hermetic-codex-credential"
 
@@ -149,10 +186,21 @@ const closeServer = (server: Server) =>
   })
 
 /** One fixed provider fixture and its three concrete gates survive every child started by this controller. */
-export const makeHermeticController = Effect.fn("HermeticController.make")(function* (
+export const makeHermeticController: (
   fixture: HermeticControllerFixture,
   pause: HermeticControllerPause
-) {
+) => Effect.Effect<
+  HermeticController,
+  unknown,
+  FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | GitCommand | Scope.Scope
+> = Effect.fn("HermeticController.make")(function* (
+  fixture: HermeticControllerFixture,
+  pause: HermeticControllerPause
+): Effect.fn.Return<
+  HermeticController,
+  unknown,
+  FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | GitCommand | Scope.Scope
+> {
   yield* authorizeHermeticControllerFixture(fixture)
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const crypto = yield* Crypto.Crypto
@@ -417,5 +465,3 @@ export const makeHermeticController = Effect.fn("HermeticController.make")(funct
       })
   }
 })
-
-export type HermeticController = Effect.Success<ReturnType<typeof makeHermeticController>>
