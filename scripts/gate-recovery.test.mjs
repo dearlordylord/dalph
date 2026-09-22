@@ -20,7 +20,6 @@ import {
 const wrapper = fileURLToPath(new URL("./with-gate-slot.mjs", import.meta.url))
 const diagnosis = fileURLToPath(new URL("./run-gate-diagnosis.mjs", import.meta.url))
 const verification = fileURLToPath(new URL("./run-gate-repair-verification.mjs", import.meta.url))
-const qualityGate = fileURLToPath(new URL("./run-quality-gate.mjs", import.meta.url))
 
 const fixture = () => {
   const root = mkdtempSync(join(tmpdir(), "dalph-gate-recovery-"))
@@ -268,7 +267,7 @@ void test("unsetting the mode cannot directly invoke the full quality entry poin
     const command = [
       "bash",
       "-c",
-      `unset DALPH_GATE_RECOVERY_MODE; quality_name=run-quality-; quality_name+=gate.mjs; exec ${process.execPath} ${JSON.stringify(dirname(qualityGate))}/$quality_name --local-handoff --candidate=${f.baseSha}`
+      `unset DALPH_GATE_RECOVERY_MODE; quality_name=run-quality-; quality_name+=gate.mjs; exec ${process.execPath} ${JSON.stringify(dirname(wrapper))}/$quality_name --local-handoff --candidate=${f.baseSha}`
     ]
     const result = focusedDiagnosis({
       command,
