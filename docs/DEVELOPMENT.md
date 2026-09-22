@@ -383,8 +383,12 @@ test later stops the group, a separate exact group-absence record can prove stop
 custody without rewriting that child result. Missing terminal receipts remain
 `UNPROVEN`; successful earlier stages are not a
 final green gate. `check:all --candidate=<base sha> --resume=<run-id>` still
-resumes only a contiguous proven application-gate prefix. It recomputes formal
-relevance for the same exact Base and candidate HEAD. An affected candidate's
+resumes only a contiguous proven application-gate prefix. Each passed stage
+records a drained input checkpoint, so a later bounded interruption can retain
+the prefix without pretending the interrupted run has final gate evidence.
+Stages without a checkpoint rerun, and changed current inputs still refuse all
+credit. The resumed gate recomputes formal relevance for the same exact Base and
+candidate HEAD. An affected candidate's
 formal profile has its own guarded local success record: a missing or stale
 record executes the profile, while an applicable record can be reused and names
 its original evidence. An unaffected candidate records not applicable without

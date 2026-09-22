@@ -311,12 +311,13 @@ void test("an unaffected candidate resumes proven stages with not-applicable for
   try {
     const counter = join(f.root, ".scratch", "counter")
     const release = join(f.root, ".scratch", "release")
+    const expectReused = join(f.root, ".scratch", "expect-reused")
     const script = join(f.root, ".scratch", "quality.mjs")
     const stageSources = [
       `if(process.env.GIT_OPTIONAL_LOCKS!=='0')throw Error('guarded child optional locks were not disabled');const fs=require('fs');fs.appendFileSync(${JSON.stringify(counter)},'build\\n');fs.mkdirSync('dist',{recursive:true});fs.writeFileSync('dist/result','built')`,
       `const fs=require('fs');fs.appendFileSync(${JSON.stringify(counter)},'negative\\n');const {runBoundedCommand}=await import(${JSON.stringify(bounded)});let failed=false;try{await runBoundedCommand({executable:process.execPath,args:['-e','process.exit(23)'],name:'expected failing child',timeoutMilliseconds:10000})}catch(error){if(error.quintCommandResult!=='exit:23')throw error;failed=true}if(!failed)throw Error('negative did not fail')`,
       `const fs=require('fs');fs.appendFileSync(${JSON.stringify(counter)},'coverage\\n');const d=process.env.DALPH_COVERAGE_DIRECTORY;fs.mkdirSync(d,{recursive:true});fs.writeFileSync(d+'/coverage-final.json','{}');fs.writeFileSync(d+'/coverage-summary.json','{}')`,
-      `const fs=require('fs');fs.appendFileSync(${JSON.stringify(counter)},'late\\n');if(!fs.existsSync(${JSON.stringify(release)}))process.exit(24)`
+      `const fs=require('fs');fs.appendFileSync(${JSON.stringify(counter)},'late\\n');process.stdout.write('late-output\\n');if(fs.existsSync(${JSON.stringify(expectReused)})){const composite=JSON.parse(fs.readFileSync(process.env.DALPH_GATE_RUN_DIRECTORY+'/composite.json','utf8'));if(composite.entries.filter(entry=>entry.kind==='reused').length!==3)process.exit(25)}if(!fs.existsSync(${JSON.stringify(release)}))process.exit(24)`
     ]
     writeFileSync(
       script,
@@ -336,10 +337,33 @@ return runBoundedCommand({executable:process.execPath,args:['--input-type=module
     const prior = runs(f.root)[0]
     assert.equal(prior.custody, "stopped")
     assert.equal(prior.resume.stages[0].outcome, "passed", JSON.stringify(prior.stages))
+    assert.equal(
+      prior.resume.stages.slice(0, 3).every((stage) => stage.inputGuard?.unchanged === true),
+      true
+    )
+    const priorDirectory = join(repositoryLocation(f.root).custodyRoot, "runs", prior.runId)
+    rmSync(join(priorDirectory, "input-guard.json"))
+    rmSync(join(priorDirectory, "composite.json"))
+    writeFileSync(expectReused, "expected\n")
     writeFileSync(release, "release")
-    const resumed = launch(f.root, script, prior.runId)
+    const interruptedResume = launch(f.root, script, prior.runId)
+    assert.equal(interruptedResume.status, 0, interruptedResume.stderr)
+    const resumedPrior = runs(f.root).find((run) => run.runId !== prior.runId)
+    assert.equal(resumedPrior.resume.composite.entries.filter((entry) => entry.kind === "reused").length, 3)
+    const resumedPriorDirectory = join(repositoryLocation(f.root).custodyRoot, "runs", resumedPrior.runId)
+    const partialComposite = structuredClone(resumedPrior.resume.composite)
+    partialComposite.finalized = false
+    partialComposite.entries[3] = { kind: "pending" }
+    partialComposite.successfulOutputLines = resumedPrior.resume.stages
+      .slice(0, 3)
+      .reduce((total, stage) => total + stage.outputLineCount, 0)
+    partialComposite.formalOutputLineCount = 0
+    delete partialComposite.formal
+    writeFileSync(join(resumedPriorDirectory, "composite.json"), JSON.stringify(partialComposite))
+    rmSync(join(resumedPriorDirectory, "input-guard.json"))
+    const resumed = launch(f.root, script, resumedPrior.runId)
     assert.equal(resumed.status, 0, resumed.stderr)
-    const evidence = runs(f.root).find((run) => run.runId !== prior.runId)
+    const evidence = runs(f.root).find((run) => ![prior.runId, resumedPrior.runId].includes(run.runId))
     assert.equal(evidence.qualification, "passed")
     assert.equal(evidence.resume.formal.disposition, "not-applicable")
     assert.equal(evidence.resume.formalProven, true)
@@ -351,13 +375,16 @@ return runBoundedCommand({executable:process.execPath,args:['--input-type=module
       "late",
       "late"
     ])
-    assert.equal(evidence.resume.composite.entries.filter((entry) => entry.kind === "reused").length, 3)
+    assert.equal(evidence.resume.composite.entries.filter((entry) => entry.kind === "reused").length, 4)
     assert.ok(evidence.coverage.final.path.startsWith(evidence.reportDirectory))
     assert.equal(readFileSync(evidence.coverage.final.path, "utf8"), "{}")
     assert.notEqual(evidence.coverage.final.path, prior.coverage.final.path)
+    rmSync(expectReused)
     const fresh = launch(f.root, script)
     assert.equal(fresh.status, 0, fresh.stderr)
-    const freshEvidence = runs(f.root).find((run) => run.runId !== prior.runId && run.runId !== evidence.runId)
+    const freshEvidence = runs(f.root).find(
+      (run) => ![prior.runId, resumedPrior.runId, evidence.runId].includes(run.runId)
+    )
     assert.equal(freshEvidence.resume.formal.disposition, "not-applicable")
     assert.deepEqual(
       freshEvidence.resume.stages.map((stage) => stage.outcome),

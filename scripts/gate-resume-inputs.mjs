@@ -437,29 +437,31 @@ export const startInputGuard = async ({
       invalidation ??= "Candidate-relevant Git configuration changed"
     if (invalidation !== undefined) throw new Error(invalidation)
   }
+  const checkpoint = async () => {
+    await assertUnchanged()
+    const currentLayout = inputLayout({ worktree, logicalInvocation, effectiveEnvironment, generatedOutputRoots })
+    if (JSON.stringify(currentLayout) !== JSON.stringify(layout))
+      throw new Error("Resolved input roots changed during execution")
+    const currentIdentity = snapshot({ layout, logicalInvocation, effectiveEnvironment })
+    await assertUnchanged()
+    if (currentIdentity.inputDigest !== identity.inputDigest)
+      throw new Error("Complete resume inputs changed during execution")
+    return {
+      version: 1,
+      observerVersion: 1,
+      unchanged: true,
+      ready: true,
+      drained: true,
+      inputDigest: identity.inputDigest,
+      sourceInputDigest: identity.sourceInputDigest
+    }
+  }
   return {
     identity,
     assertUnchanged,
+    checkpoint,
     protectArtifacts: observer.protect,
-    finish: async () => {
-      await assertUnchanged()
-      const finalLayout = inputLayout({ worktree, logicalInvocation, effectiveEnvironment, generatedOutputRoots })
-      if (JSON.stringify(finalLayout) !== JSON.stringify(layout))
-        throw new Error("Resolved input roots changed during execution")
-      const finalIdentity = snapshot({ layout, logicalInvocation, effectiveEnvironment })
-      await assertUnchanged()
-      if (finalIdentity.inputDigest !== identity.inputDigest)
-        throw new Error("Complete resume inputs changed during execution")
-      return {
-        version: 1,
-        observerVersion: 1,
-        unchanged: true,
-        ready: true,
-        drained: true,
-        inputDigest: identity.inputDigest,
-        sourceInputDigest: identity.sourceInputDigest
-      }
-    },
+    finish: checkpoint,
     close: observer.close
   }
 }
