@@ -531,13 +531,34 @@ it.live(
 
         const laterCompletedGraphIndex = cassette.entries.findIndex((entry, index) => {
           if (index <= completionIndex) return false
+          if (entry._tag !== "TaskTrackerFactsObserved") return false
           if (
-            entry._tag !== "TaskTrackerFactsObserved" ||
-            (entry.evidence._tag !== "CompleteTaskTrackerFacts" &&
-              entry.evidence._tag !== "UnchangedTaskTrackerFactsReconfirmed")
+            entry.evidence._tag !== "CompleteTaskTrackerFacts" &&
+            entry.evidence._tag !== "UnchangedTaskTrackerFactsReconfirmed"
           )
             return false
-          return entry.evidence.factFamilies.some(
+          const priorOperationId =
+            entry.evidence._tag === "UnchangedTaskTrackerFactsReconfirmed"
+              ? entry.evidence.priorFullObservationOperationId
+              : undefined
+          const prior =
+            priorOperationId === undefined
+              ? undefined
+              : cassette.entries
+                  .slice(0, index)
+                  .findLast(
+                    (candidate) =>
+                      candidate._tag === "TaskTrackerFactsObserved" &&
+                      candidate.originatingActionOperationId === priorOperationId
+                  )
+          const completeEvidence =
+            entry.evidence._tag === "CompleteTaskTrackerFacts"
+              ? entry.evidence
+              : prior?._tag === "TaskTrackerFactsObserved" && prior.evidence._tag === "CompleteTaskTrackerFacts"
+                ? prior.evidence
+                : undefined
+          if (completeEvidence?._tag !== "CompleteTaskTrackerFacts") return false
+          return completeEvidence.factFamilies.some(
             (family) =>
               "lifecycles" in family &&
               family.lifecycles.some(
