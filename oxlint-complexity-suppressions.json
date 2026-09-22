@@ -13,8 +13,8 @@
   },
   "packages/dalph/src/application/codex-planned-attempt-executor.ts": {
     "complexity": {
-      "count": 5,
-      "justification": "The planned-attempt executor keeps one fail-closed lifecycle boundary across durable Codex records, passive projections, command authority, and exact close/retry outcomes; these branches preserve chronology and ownership together rather than represent independent policy decisions."
+      "count": 6,
+      "justification": "The planned-attempt executor keeps one fail-closed lifecycle boundary across durable Codex records, passive projections, command authority, exact close/retry outcomes, and provider-ledger reconciliation; these branches preserve chronology and ownership together rather than represent independent policy decisions."
     }
   },
   "packages/dalph/src/application/codex-integrator-envelope.ts": {
