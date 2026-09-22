@@ -196,6 +196,7 @@ import {
   validateResponsibility,
   validateRunCorrelation,
   validateSessionCorrelation,
+  validateTask,
   validateTrackerFacts
 } from "./production-hermetic-qualification-fixture-source.js"
 import { validateContinuationRead } from "./production-hermetic-qualification-continuation-source.js"
@@ -278,10 +279,16 @@ const readyFor = (
   context: QualificationContext,
   proposals: ReadonlyArray<DeliveryActionProposal>,
   evidence: ReadonlyArray<TicketDeliveryEvidence> = [],
-  includeDependant = false
+  includeDependant = false,
+  rootCompleted = false
 ): DeliveryRuntimeObservationState => {
   const tasks = [
-    TrackerTask.make({ id: context.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }),
+    TrackerTask.make({
+      id: context.taskId,
+      lifecycle: { _tag: rootCompleted ? "CompletedSuccessfully" : "Open" },
+      parentTaskId: null,
+      prerequisiteIds: []
+    }),
     ...(includeDependant
       ? [
           TrackerTask.make({
@@ -447,7 +454,11 @@ const completionFixture = (
 
 const routeFixtures = (
   context: QualificationContext
-): { readonly routes: ReadonlyArray<DeliveryActionProposal["route"]>; readonly context: QualificationContext } => {
+): {
+  readonly routes: ReadonlyArray<DeliveryActionProposal["route"]>
+  readonly context: QualificationContext
+  readonly completionEvidence: ReadonlyArray<TicketDeliveryEvidence>
+} => {
   const fixture = completionFixture(context)
   const task = TrackerTask.make({
     id: context.taskId,
@@ -509,6 +520,31 @@ const routeFixtures = (
     )
   })
   const deletion = completionClaimDeletionRequestFor(fixture.claim, success)
+  const focusedObservation = FocusedTaskCompletionFactsObserved.make({
+    facts: FocusedTaskCompletionFacts.make({
+      currentClaim: fixture.claim,
+      lifecycle: success.lifecycle,
+      operationId: focused.operationId,
+      target: success.target,
+      targetMembership: "Member",
+      taskId: success.taskId,
+      taskRevision: success.taskRevision,
+      trackerRevision: success.trackerRevision,
+      unfinishedPrerequisiteTaskIds: []
+    }),
+    operationId: focused.operationId,
+    purpose: focused.purpose,
+    request: fixture.request,
+    target: success.target
+  })
+  const focusedEvidence: TicketDeliveryEvidence = {
+    _tag: "FocusedTaskCompletionSuccess",
+    observed: {
+      ...taskTrackerFactsObservedEvent(focused.operationId, focusedObservation),
+      observation: focusedObservation
+    },
+    recordedAt: JournalPosition.make(4)
+  }
   const routes: ReadonlyArray<DeliveryActionProposal["route"]> = [
     { _tag: "TrackerGraphReadRoute", purpose: "EstablishCurrentGraph", target: context.configuration.target },
     { _tag: "FreshWorkflowRoute", step: { _tag: "AcquireTaskClaim", task, predecessorOperationId: operationId } },
@@ -742,7 +778,21 @@ const routeFixtures = (
       }
     }
   ]
-  return { routes, context: { ...context, derivedOperationIds: [focused.operationId] } }
+  return {
+    routes,
+    completionEvidence: [
+      { _tag: "StartedIntegration" as const, responsibility: fixture.responsibility },
+      focusedEvidence
+    ],
+    context: {
+      ...context,
+      derivedOperationIds: [
+        focused.operationId,
+        deletion.operationId,
+        completionClaimReplacementRequestFor(fixture.claim).operationId
+      ]
+    }
+  }
 }
 
 const specificationHistory = (context: QualificationContext, specification: TaskWorkSpecification) => {
@@ -1899,11 +1949,12 @@ describe("qualification original source boundary", () => {
       expect(JSON.stringify(rejected)).not.toContain("private-thread-sentinel")
     }
 
-    const rejectProposal = async (proposal: unknown) => {
+    const rejectProposal = async (proposal: unknown, code?: HermeticQualificationSourceRejected["code"]) => {
       const rejected = await Effect.runPromise(
         validateProposal(proposal as DeliveryActionProposal, context).pipe(Effect.flip)
       )
       expect(rejected._tag).toBe("HermeticQualificationSourceRejected")
+      if (code !== undefined) expect(rejected.code).toBe(code)
     }
     const foreignTrackerTarget = await Effect.runPromise(
       Schema.decodeUnknownEffect(TrackerTarget)({
@@ -2067,29 +2118,61 @@ describe("qualification original source boundary", () => {
     const orderRoute = routes.find((route) => route._tag === "IdentityFreeWorkflowRoute")
     if (orderRoute === undefined) return expect.fail("identity-free route must exist")
     const orderCounterfeit = proposalForRoute(orderRoute, context)
-    await rejectProposal({
-      ...orderCounterfeit,
-      order: { ...orderCounterfeit.order, _tag: "FakeOrder", taskId: TaskId.make("foreign") } as never
-    })
+    await rejectProposal(
+      {
+        ...orderCounterfeit,
+        order: { ...orderCounterfeit.order, _tag: "FakeOrder", taskId: TaskId.make("foreign") } as never
+      },
+      "ProposalSubjectMismatch"
+    )
     await rejectProposal({ ...orderCounterfeit, route: { _tag: "UnsupportedRoute" } as never })
     const executorRoute = routes.find((route) => route._tag === "FreshExecutorWorkflowRoute")
     if (executorRoute?._tag !== "FreshExecutorWorkflowRoute") return expect.fail("executor route must exist")
     const regularFreshRoute = routes.find((route) => route._tag === "FreshWorkflowRoute")
     if (regularFreshRoute?._tag !== "FreshWorkflowRoute") return expect.fail("fresh route must exist")
-    await rejectProposal({
-      ...proposalForRoute(executorRoute, context),
-      route: { ...executorRoute, step: regularFreshRoute.step as never }
-    })
-    await rejectProposal({
-      ...proposalForRoute(regularFreshRoute, context),
-      route: { ...regularFreshRoute, step: executorRoute.step as never }
-    })
+    await rejectProposal(
+      {
+        ...proposalForRoute(executorRoute, context),
+        route: { ...executorRoute, step: regularFreshRoute.step as never }
+      },
+      "InvalidFreshRoute"
+    )
+    await rejectProposal(
+      {
+        ...proposalForRoute(regularFreshRoute, context),
+        route: { ...regularFreshRoute, step: executorRoute.step as never }
+      },
+      "InvalidFreshRoute"
+    )
     const firstRoute = routes[0]
     if (firstRoute === undefined) return expect.fail("proposal route list must not be empty")
-    await rejectProposal({
-      ...proposalForRoute(firstRoute, context),
-      actionIdentity: { _tag: "FreshOperationIdRequired", source: { _tag: "UnsupportedIdentitySource" } } as never
-    })
+    await rejectProposal(
+      {
+        ...proposalForRoute(firstRoute, context),
+        actionIdentity: { _tag: "FreshOperationIdRequired", source: { _tag: "UnsupportedIdentitySource" } } as never
+      },
+      "InvalidProposalIdentitySource"
+    )
+    await rejectProposal(
+      { ...proposalForRoute(firstRoute, context), id: "counterfeit-proposal-id" },
+      "ProposalIdentityMismatch"
+    )
+    const invalidTask = await Effect.runPromise(
+      validateTask({ id: context.taskId } as never, context).pipe(Effect.flip)
+    )
+    expect(invalidTask).toMatchObject({ _tag: "HermeticQualificationSourceRejected", code: "InvalidTask" })
+    const mismatchedTask = await Effect.runPromise(
+      validateTask(
+        TrackerTask.make({
+          id: TaskId.make("foreign"),
+          lifecycle: { _tag: "Open" },
+          parentTaskId: null,
+          prerequisiteIds: []
+        }),
+        context
+      ).pipe(Effect.flip)
+    )
+    expect(mismatchedTask).toMatchObject({ _tag: "HermeticQualificationSourceRejected", code: "TaskMismatch" })
     const continuationRoute = routes.find(
       (route) => route._tag === "RecoveredNewActionRoute" && route.action._tag === "ReadTrackerGraph"
     )
@@ -2121,16 +2204,35 @@ describe("qualification original source boundary", () => {
   it("validates every controlled route through the public status source", async () => {
     const { configuration, manifest, runId } = await Effect.runPromise(fixture)
     const originalContext = await Effect.runPromise(contextFor(manifest, configuration, runId))
-    const { context, routes } = routeFixtures(originalContext)
+    const { completionEvidence, context, routes } = routeFixtures(originalContext)
     for (const route of routes) {
-      const state = readyFor(context, [proposalForRoute(route, context)])
+      const supportingFocusedRoute =
+        route._tag === "IdentityFreeWorkflowRoute" && route.transition._tag === "DeleteCompletedTaskCompletionClaim"
+          ? routes.find(
+              (candidate) =>
+                candidate._tag === "IdentityFreeWorkflowRoute" &&
+                candidate.transition._tag === "ObserveFocusedTaskCompletion"
+            )
+          : undefined
+      const state = readyFor(
+        context,
+        [
+          ...(supportingFocusedRoute === undefined ? [] : [proposalForRoute(supportingFocusedRoute, context)]),
+          proposalForRoute(route, context)
+        ],
+        supportingFocusedRoute === undefined ? [] : completionEvidence,
+        false,
+        supportingFocusedRoute !== undefined
+      )
+      if (supportingFocusedRoute !== undefined && state._tag === "Ready")
+        expect(state.evaluation.current.ticketDeliveries.deliveries.flatMap(({ evidence }) => evidence)).toEqual(
+          expect.arrayContaining([expect.objectContaining({ _tag: "FocusedTaskCompletionSuccess" })])
+        )
       const checked = await Effect.runPromise(
         validateHermeticQualificationStatus(manifest, configuration, state, runId).pipe(Effect.result)
       )
-      if (checked._tag === "Failure") {
-        expect(checked.failure._tag).toBe("HermeticQualificationSourceRejected")
-        continue
-      }
+      if (checked._tag === "Failure")
+        expect.fail(`controlled route ${route._tag} was rejected: ${JSON.stringify(checked.failure)}`)
       expect(checked.success.status).toMatchObject({ _tag: "DeliveryStatusAvailable" })
     }
   })

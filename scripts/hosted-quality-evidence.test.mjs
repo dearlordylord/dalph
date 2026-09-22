@@ -3,7 +3,7 @@ import { spawn, spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { test } from "node:test"
 
 import { digest, readRecord, repositoryLocation, withoutInheritedCustody } from "./gate-custody-records.mjs"
@@ -85,6 +85,7 @@ const fixture = () => {
         finishedAt: "2026-09-20T10:01:00.000Z"
       },
       artifacts,
+      childDiagnostics: [],
       ...(stageId === "delivery-repeatability"
         ? {
             delivery: {
@@ -432,7 +433,22 @@ void test("the production runner exports owner-validated stopped custody from a 
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "candidate")
     const fixtureCandidate = git("rev-parse", "HEAD")
     const pnpm = join(root, "controlled-pnpm.mjs")
-    writeFileSync(pnpm, "process.stdout.write('controlled recorded catalog pass\\n')\n")
+    const boundedCommand = pathToFileURL(fileURLToPath(new URL("./run-bounded-command.mjs", import.meta.url))).href
+    const invalidTaskSource = `process.stdout.write(${JSON.stringify('"code":"InvalidTask"\n')});process.exit(23)`
+    const taskMismatchSource = `process.stdout.write(${JSON.stringify('"code":"TaskMismatch"\n')})`
+    const nested =
+      `import { runBoundedCommand } from ${JSON.stringify(boundedCommand)}\n` +
+      `await runBoundedCommand({ executable: process.execPath, args: ["-e", ${JSON.stringify(taskMismatchSource)}], name: "nested safe-code fixture", timeoutMilliseconds: 5_000 })\n`
+    writeFileSync(
+      pnpm,
+      `import { runBoundedCommand } from ${JSON.stringify(boundedCommand)}\n` +
+        `let rejected = false\n` +
+        `try { await runBoundedCommand({ executable: process.execPath, args: ["-e", ${JSON.stringify(invalidTaskSource)}], name: "caught failure fixture", timeoutMilliseconds: 5_000 }) } catch (error) { if (error.quintCommandResult !== "exit:23") throw error; rejected = true }\n` +
+        `await runBoundedCommand({ executable: process.execPath, args: ["--input-type=module", "-e", ${JSON.stringify(nested)}], name: "nested parent fixture", timeoutMilliseconds: 5_000 })\n` +
+        `if (!rejected) process.exit(42)\n` +
+        `process.stdout.write("controlled recorded catalog failure\\n")\n` +
+        `process.exitCode = 1\n`
+    )
     const runner = fileURLToPath(new URL("./run-hosted-quality-stage.mjs", import.meta.url))
     const output = join(root, ".scratch", "portable")
     const environment = withoutInheritedCustody(process.env)
@@ -460,12 +476,117 @@ void test("the production runner exports owner-validated stopped custody from a 
     )
     assert.equal(result.status, 0, result.stderr)
     const envelope = JSON.parse(readFileSync(join(output, "envelope.json"), "utf8"))
-    assert.equal(envelope.outcome, "passed")
+    assert.equal(envelope.outcome, "failed", `${result.stdout}\n${result.stderr}\n${JSON.stringify(envelope)}`)
     assert.equal(envelope.terminal.custody, "stopped")
     assert.equal(envelope.binding.candidateSha, fixtureCandidate)
-    assert.equal(readFileSync(join(output, "stage.log"), "utf8"), "controlled recorded catalog pass\n")
+    assert.match(readFileSync(join(output, "stage.log"), "utf8"), /controlled recorded catalog failure/u)
+    assert.equal(envelope.childDiagnostics.length, 3)
+    assert.deepEqual(
+      envelope.childDiagnostics.map(({ parent }) => parent),
+      ["stage", "stage", 1]
+    )
+    assert.deepEqual(
+      envelope.childDiagnostics.map(({ outcome }) => outcome),
+      ["exit:23", "passed", "passed"]
+    )
+    const expectedCommands = [
+      { args: ["-e", invalidTaskSource], name: "caught failure fixture" },
+      { args: ["--input-type=module", "-e", nested], name: "nested parent fixture" },
+      { args: ["-e", taskMismatchSource], name: "nested safe-code fixture" }
+    ].map(({ args, name }) => ({
+      executable: process.execPath,
+      args,
+      cwd: resolve(root),
+      name,
+      timeoutMilliseconds: 5_000,
+      acceptedExitCodes: [0],
+      relayParentSignals: false,
+      terminationGraceMilliseconds: 5_000,
+      processGroupAbsenceTimeoutMilliseconds: 2_000
+    }))
+    const expectedLogs = ['"code":"InvalidTask"\n', '"code":"TaskMismatch"\n', '"code":"TaskMismatch"\n']
+    assert.deepEqual(
+      envelope.childDiagnostics.map(({ command }) => command),
+      expectedCommands.map((command) => ({ acceptedExitCodes: [0], sha256: digest(JSON.stringify(command)) }))
+    )
+    assert.deepEqual(
+      envelope.childDiagnostics.map(({ log }) => ({ bytes: log.bytes, sha256: log.sha256 })),
+      expectedLogs.map((log) => ({ bytes: Buffer.byteLength(log), sha256: digest(Buffer.from(log)) }))
+    )
+    assert.deepEqual(
+      envelope.childDiagnostics.map(({ exitCode, signal, stopped }) => ({ exitCode, signal, stopped })),
+      [
+        { exitCode: 23, signal: null, stopped: true },
+        { exitCode: 0, signal: null, stopped: true },
+        { exitCode: 0, signal: null, stopped: true }
+      ]
+    )
+    assert.deepEqual(envelope.childDiagnostics[0].log.diagnosticCodes, ["InvalidTask"])
+    assert.deepEqual(envelope.childDiagnostics[2].log.diagnosticCodes, ["TaskMismatch"])
+    assert.equal(readdirSync(output).includes("child-logs"), false)
+    const aggregate = aggregateHostedQualityStages({
+      binding: { baseSha: fixtureBase, candidateSha: fixtureCandidate, runId: "44", runAttempt: "1" },
+      reports: [join(output, "envelope.json")]
+    })
+    const row = aggregate.rows.find(({ stageId }) => stageId === "recorded-catalog")
+    assert.equal(row?.outcome, "failed")
+    assert.deepEqual(row?.failures, [])
   } finally {
     rmSync(root, { recursive: true, force: true })
+  }
+})
+
+void test("rejects malformed or contradictory descendant terminal evidence", () => {
+  const valid = [
+    {
+      parent: "stage",
+      command: { acceptedExitCodes: [0], sha256: "1".repeat(64) },
+      log: { bytes: 10, diagnosticCodes: ["InvalidTask"], sha256: "2".repeat(64) },
+      stopped: true,
+      exitCode: 23,
+      outcome: "exit:23",
+      signal: null
+    },
+    {
+      parent: 0,
+      command: { acceptedExitCodes: [0], sha256: "3".repeat(64) },
+      log: { bytes: 20, diagnosticCodes: [], sha256: "4".repeat(64) },
+      stopped: true,
+      exitCode: 0,
+      outcome: "passed",
+      signal: null
+    }
+  ]
+  const mutations = [
+    (children) => (children[0].outcome = "invented"),
+    (children) => Object.assign(children[0], { outcome: "passed" }),
+    (children) => (children[0].signal = "SIGTERM"),
+    (children) => (children[1].parent = 1),
+    (children) => (children[0].extra = true),
+    (children) => children[0].log.diagnosticCodes.push("ProviderPayload"),
+    (children) => (children[0].command.sha256 = "not-a-digest"),
+    (children) => (children[0].log.bytes = -1)
+  ]
+  const accepted = fixture()
+  try {
+    accepted.rewrite(1, (envelope) => (envelope.childDiagnostics = structuredClone(valid)))
+    assert.equal(aggregateHostedQualityStages({ binding, reports: accepted.reports }).rows[1].outcome, "passed")
+  } finally {
+    accepted.cleanup()
+  }
+  for (const mutate of mutations) {
+    const f = fixture()
+    try {
+      f.rewrite(1, (envelope) => {
+        envelope.childDiagnostics = structuredClone(valid)
+        mutate(envelope.childDiagnostics)
+      })
+      const result = aggregateHostedQualityStages({ binding, reports: f.reports })
+      assert.equal(result.rows[1].outcome, "UNPROVEN")
+      assert.ok(result.rows[1].failures.some((failure) => failure.includes("child diagnostic")))
+    } finally {
+      f.cleanup()
+    }
   }
 })
 

@@ -135,6 +135,67 @@ const gitHead = (worktree) => {
 }
 
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right)
+const qualificationRejectionCodes = new Set([
+  "FixtureContextMismatch",
+  "IntegrationTargetMismatch",
+  "InvalidAcceptedProgress",
+  "InvalidFreshRoute",
+  "InvalidIntegrationTarget",
+  "InvalidOperationIdentity",
+  "InvalidPlannedAttempt",
+  "InvalidProposalIdentitySource",
+  "InvalidRunIdentity",
+  "InvalidSpecification",
+  "InvalidTask",
+  "PlannedAttemptMismatch",
+  "ProposalIdentityMismatch",
+  "ProposalSubjectMismatch",
+  "SpecificationMismatch",
+  "TaskMismatch"
+])
+const closedDiagnosticCodes = (log) =>
+  [...log.matchAll(/"code":"([A-Za-z0-9]+)"/gu)]
+    .map((match) => match[1])
+    .filter((code, index, codes) => qualificationRejectionCodes.has(code) && codes.indexOf(code) === index)
+
+const descendantStages = (stages, rootId) => {
+  const selected = []
+  const selectedIds = new Set([rootId])
+  for (;;) {
+    const next = stages.filter(
+      (stage) =>
+        selectedIds.has(stage.parentId) && stage.obligationId !== rootId && !selectedIds.has(stage.obligationId)
+    )
+    if (next.length === 0) return selected
+    for (const stage of next) {
+      selected.push(stage)
+      selectedIds.add(stage.obligationId)
+    }
+  }
+}
+
+const terminalEvidenceFailure = ({ acceptedExitCodes, exitCode, outcome, signal, stopped }) => {
+  if (
+    stopped !== true ||
+    !Array.isArray(acceptedExitCodes) ||
+    acceptedExitCodes.some((code) => !Number.isSafeInteger(code) || code < 0) ||
+    new Set(acceptedExitCodes).size !== acceptedExitCodes.length ||
+    !(exitCode === null || (Number.isSafeInteger(exitCode) && exitCode >= 0)) ||
+    !(signal === null || /^SIG[A-Z0-9]+$/u.test(signal ?? "")) ||
+    (exitCode !== null && signal !== null)
+  )
+    return true
+  if (outcome === "passed") return signal !== null || !acceptedExitCodes.includes(exitCode)
+  if (outcome === "launch-failed") return exitCode !== null || signal !== null
+  if (["failed", "timed-out", "cancelled", "interrupted"].includes(outcome)) return false
+  const ordinaryExit = /^exit:(\d+)$/u.exec(outcome ?? "")
+  return (
+    ordinaryExit === null ||
+    signal !== null ||
+    exitCode !== Number(ordinaryExit[1]) ||
+    acceptedExitCodes.includes(exitCode)
+  )
+}
 const portableArtifact = ({ outputDirectory, source, target }) => {
   const output = join(outputDirectory, target)
   mkdirSync(dirname(output), { recursive: true })
@@ -256,6 +317,22 @@ export const exportHostedQualityStageEvidence = ({
   if (realpathSync(outputDirectory) !== resolve(outputDirectory))
     throw new Error("Hosted quality output directory must not traverse a symbolic link")
   const artifacts = [portableArtifact({ outputDirectory, source: stage.logPath, target: "stage.log" })]
+  const descendants = descendantStages(evidence.stages, stage.obligationId)
+  const descendantIndexes = new Map(descendants.map((child, index) => [child.obligationId, index]))
+  const childDiagnostics = descendants.map((child) => {
+    if (!child.stopped || child.outcome === "UNPROVEN")
+      throw new Error("Hosted quality descendant lacks terminal stopped custody")
+    const log = readFileSync(child.logPath)
+    return {
+      parent: child.parentId === stage.obligationId ? "stage" : descendantIndexes.get(child.parentId),
+      command: { acceptedExitCodes: child.command.acceptedExitCodes, sha256: digest(JSON.stringify(child.command)) },
+      log: { bytes: log.length, diagnosticCodes: closedDiagnosticCodes(log.toString("utf8")), sha256: digest(log) },
+      stopped: child.stopped,
+      exitCode: child.exitCode,
+      outcome: child.outcome,
+      signal: child.signal
+    }
+  })
   if (stageId === "coverage") {
     for (const kind of ["final", "summary"]) {
       const artifact = evidence.coverage[kind]
@@ -272,7 +349,12 @@ export const exportHostedQualityStageEvidence = ({
     }
   }
   const outcome = stage.outcome === "passed" ? "passed" : "failed"
-  if (outcome === "passed" && stageId === "coverage" && artifacts.length !== 3)
+  const artifactPaths = artifacts.map(({ path }) => path)
+  if (
+    outcome === "passed" &&
+    stageId === "coverage" &&
+    !["coverage/coverage-final.json", "coverage/coverage-summary.json"].every((path) => artifactPaths.includes(path))
+  )
     throw new Error("Passing hosted coverage stage lacks final and summary artifacts")
   const log = readFileSync(join(outputDirectory, "stage.log"), "utf8")
   const selectedCell = selected.plan.stages.find((cell) => cell.nodeVersion === nodeVersion && cell.stageId === stageId)
@@ -298,6 +380,7 @@ export const exportHostedQualityStageEvidence = ({
     },
     timing: { cellStartedAt: cellStart, startedAt: stage.startedAt, finishedAt: stage.finishedAt },
     artifacts,
+    childDiagnostics,
     ...(stageId === "delivery-repeatability" ? { delivery: deliveryEvidence(log, outcome, binding.candidateSha) } : {})
   }
   const envelope = { ...payload, envelopeSha256: digest(JSON.stringify(payload)) }
@@ -342,6 +425,7 @@ const validateEnvelope = ({ binding, envelope, plan, reportRoot }) => {
   const expectedKeys = [
     "artifacts",
     "binding",
+    "childDiagnostics",
     "configurationDigest",
     ...(envelope?.stageId === "delivery-repeatability" ? ["delivery"] : []),
     "envelopeSha256",
@@ -456,6 +540,41 @@ const validateEnvelope = ({ binding, envelope, plan, reportRoot }) => {
     "stage.log",
     ...(envelope?.stageId === "coverage" ? ["coverage/coverage-final.json", "coverage/coverage-summary.json"] : [])
   ])
+  const childDiagnostics = Array.isArray(envelope?.childDiagnostics) ? envelope.childDiagnostics : []
+  if (!Array.isArray(envelope?.childDiagnostics)) failures.push("child diagnostic inventory is absent")
+  for (const [index, diagnostic] of childDiagnostics.entries()) {
+    const expectedDiagnosticKeys = ["command", "exitCode", "log", "outcome", "parent", "signal", "stopped"]
+    if (!same(Object.keys(diagnostic ?? {}).sort(), expectedDiagnosticKeys))
+      failures.push("malformed child diagnostic fields")
+    if (
+      diagnostic?.parent !== "stage" &&
+      (!Number.isSafeInteger(diagnostic?.parent) || diagnostic.parent < 0 || diagnostic.parent >= index)
+    )
+      failures.push("child diagnostic parent association is invalid")
+    if (
+      diagnostic?.command === null ||
+      typeof diagnostic?.command !== "object" ||
+      !same(Object.keys(diagnostic.command).sort(), ["acceptedExitCodes", "sha256"]) ||
+      !/^[0-9a-f]{64}$/u.test(diagnostic.command.sha256 ?? "") ||
+      diagnostic?.log === null ||
+      typeof diagnostic?.log !== "object" ||
+      !same(Object.keys(diagnostic.log).sort(), ["bytes", "diagnosticCodes", "sha256"]) ||
+      !Number.isSafeInteger(diagnostic.log.bytes) ||
+      diagnostic.log.bytes < 0 ||
+      !/^[0-9a-f]{64}$/u.test(diagnostic.log.sha256 ?? "") ||
+      !Array.isArray(diagnostic.log.diagnosticCodes) ||
+      diagnostic.log.diagnosticCodes.some((code) => !qualificationRejectionCodes.has(code)) ||
+      new Set(diagnostic.log.diagnosticCodes).size !== diagnostic.log.diagnosticCodes.length ||
+      terminalEvidenceFailure({
+        acceptedExitCodes: diagnostic.command.acceptedExitCodes,
+        exitCode: diagnostic.exitCode,
+        outcome: diagnostic.outcome,
+        signal: diagnostic.signal,
+        stopped: diagnostic.stopped
+      })
+    )
+      failures.push("child diagnostic terminal evidence is malformed")
+  }
   for (const path of paths) if (!allowedPaths.has(path)) failures.push(`unexpected portable artifact ${path}`)
   if (envelope?.outcome === "passed" && envelope.stageId === "coverage")
     for (const path of ["coverage/coverage-final.json", "coverage/coverage-summary.json"])

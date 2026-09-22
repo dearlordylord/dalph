@@ -1259,3 +1259,41 @@ executor or Integrator work. The test now uses
 Registration closed, custody stopped, and source remained unchanged; one
 focused rerun passed all five fixture tests. No gate success is inferred from
 that focused result, and a fresh candidate gate remains required.
+
+Fresh baseline run `e660358f-2f84-46fc-8c0c-6efd6d3b0397` on candidate
+`70f9f0d236464c675c07f0d8c007270dd1b4de80` passed all 94 maintained
+cassettes with stopped custody and unchanged source. Fresh full-gate run
+`f13370cf-3227-4367-8748-9adef910e571` then passed preflight, applicable
+formal evidence, all 20 delivery-repeatability iterations, the recorded
+catalog, and coverage: 4,433 tests passed and 42 were skipped. Registration
+closed, custody stopped, and source remained unchanged.
+
+The exact-branch hosted CI run `35710416868` passed classification, both formal
+shards, structural preflight, recorded catalog, and delivery repeatability, but
+its coverage envelope failed with three test files. The retained portable log
+contained only the last failure: the public direct-publication child rejected
+an `ObservePlannedAttemptExecutorWork` status after executor report ordinal one.
+The parent stopped normally; this was neither its 45-second timeout nor an
+unbounded process. The nested gate named the full runner-local log, but the
+portable artifact did not include it, so the first two failures were lost when
+the bounded console tail was retained. One local focused coverage run passed in
+9 seconds. One admitted full local coverage run
+`3ab598d4-2e5f-4055-a455-c743c6b60f27` passed all 4,433 tests with stopped
+custody and unchanged source in 394 seconds. The failure is therefore sensitive
+to the hosted schedule or resources; these observations do not establish which
+qualification atom was rejected.
+
+The next diagnostic candidate makes that uncertainty finite. Every ambiguous
+task, fresh-route, proposal-identity, proposal-subject, and identity-source
+rejection now carries a closed redacted code. The controlled-route unit test no
+longer accepts any rejection merely to cover its failure branch. Its deletion
+fixture now includes the focused-completion evidence that chronologically
+precedes deletion, and every valid route must succeed. Hosted stage evidence
+now seals the complete descendant custody tree: each child retains exact
+exit/signal correlation, an exact command digest, an exact log digest and byte
+count, and any recognized closed rejection codes. It deliberately does not
+publish arbitrary child argv or raw logs, which can contain credentials,
+provider payloads, private paths, or user data. The locally retained raw log
+remains digest-bound to the portable diagnostic. These changes affect
+qualification diagnostics and tooling only; they do not change Dalph workflow
+decisions, provider calls, retries, cleanup, or task-visible results.

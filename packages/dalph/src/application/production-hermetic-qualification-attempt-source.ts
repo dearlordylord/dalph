@@ -147,7 +147,13 @@ const QualificationRejectionCode = Schema.Literals([
   "IntegrationTargetMismatch",
   "InvalidRunIdentity",
   "FixtureContextMismatch",
-  "InvalidAcceptedProgress"
+  "InvalidAcceptedProgress",
+  "InvalidTask",
+  "TaskMismatch",
+  "InvalidFreshRoute",
+  "ProposalIdentityMismatch",
+  "ProposalSubjectMismatch",
+  "InvalidProposalIdentitySource"
 ])
 
 /** A qualification source or its expected-record registration failed before public presentation. */

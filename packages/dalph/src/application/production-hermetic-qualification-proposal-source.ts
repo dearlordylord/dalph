@@ -22,6 +22,7 @@ import { Effect, Schema } from "effect"
 
 import {
   sourceRejected,
+  sourceRejectedBecause,
   sourceRejectedWithTag,
   strictSource,
   isQualificationTaskId,
@@ -410,11 +411,11 @@ const validateFreshRoute = Effect.fn("HermeticQualification.validateFreshRoute")
   // Preserve the original workflow/executor route distinction as well as every step field.
   if (route._tag === "FreshExecutorWorkflowRoute") {
     if (step._tag !== "BeginPlannedAttemptExecutorWork" && step._tag !== "ObservePlannedAttemptExecutorWork")
-      return yield* sourceRejected()
+      return yield* sourceRejectedBecause("InvalidFreshRoute")()
     return { _tag: route._tag, step }
   }
   if (step._tag === "BeginPlannedAttemptExecutorWork" || step._tag === "ObservePlannedAttemptExecutorWork")
-    return yield* sourceRejected()
+    return yield* sourceRejectedBecause("InvalidFreshRoute")()
   // Planning needs both a fresh operation and attempt identity, unlike the other fresh operation routes.
   if (step._tag === "RecordTaskAttemptPlan") return { _tag: route._tag, step }
   return { _tag: route._tag, step }
@@ -428,9 +429,9 @@ export const validateProposal = Effect.fn("HermeticQualification.validateProposa
   const expected = yield* validateRoute(route, context)
   const expectedId = deliveryProposalIdOf(context.runId, expected)
   if (deliveryProposalIdOf(context.runId, route) !== expectedId || proposal.id !== expectedId)
-    return yield* sourceRejected()
+    return yield* sourceRejectedBecause("ProposalIdentityMismatch")()
   if (proposal.order._tag !== "TrackerGraphOrder" && !isQualificationTaskId(proposal.order.taskId, context))
-    return yield* sourceRejected()
+    return yield* sourceRejectedBecause("ProposalSubjectMismatch")()
   if (proposal.waitsForLiveOperationId !== null)
     yield* validateWorkflowOperationId(proposal.waitsForLiveOperationId, context)
   yield* validateProposalIdentitySource(proposal.actionIdentity, context)
@@ -444,6 +445,6 @@ const validateProposalIdentitySource = Effect.fn("HermeticQualification.validate
     const source = identity.source
     if (source._tag === "Preserve") yield* validateWorkflowOperationId(source.operationId, context)
     else if (source._tag === "ExternalSuccessReleaseClaim") yield* validateOperationId(source.claimOperationId)
-    else if (source._tag !== "Allocate") return yield* sourceRejected()
+    else if (source._tag !== "Allocate") return yield* sourceRejectedBecause("InvalidProposalIdentitySource")()
   }
 })

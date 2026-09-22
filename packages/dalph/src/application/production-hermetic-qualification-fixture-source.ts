@@ -29,6 +29,7 @@ import {
 import { Effect, Schema } from "effect"
 import {
   sourceRejected,
+  sourceRejectedBecause,
   strictSource,
   validateActiveClaim,
   isQualificationTaskId,
@@ -49,14 +50,15 @@ export const validateTask = Effect.fn("HermeticQualification.validateTask")(func
   const decoded = yield* Schema.decodeUnknownEffect(
     TrackerTask,
     strictSource
-  )(task).pipe(Effect.mapError(sourceRejected))
+  )(task).pipe(Effect.mapError(sourceRejectedBecause("InvalidTask")))
   const root = decoded.id === context.taskId && decoded.parentTaskId === null && decoded.prerequisiteIds.length === 0
   const dependant =
     decoded.id === context.dependantTaskId &&
     decoded.parentTaskId === context.taskId &&
     decoded.prerequisiteIds.length === 1 &&
     decoded.prerequisiteIds[0] === context.taskId
-  if ((!root && !dependant) || decoded.lifecycle._tag === "TerminalWithoutSuccess") return yield* sourceRejected()
+  if ((!root && !dependant) || decoded.lifecycle._tag === "TerminalWithoutSuccess")
+    return yield* sourceRejectedBecause("TaskMismatch")()
   return decoded
 })
 
