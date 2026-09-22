@@ -304,6 +304,45 @@ void test("a later candidate change invalidates verification but can be reverifi
   }
 })
 
+void test("obstruction diagnosis excludes expected nested failures beneath a passing stage", () => {
+  const f = fixture()
+  try {
+    const gateEvidence = evidence(f)
+    const rootFailure = {
+      ...gateEvidence.stages[0],
+      obligationId: "gate",
+      parentId: "root",
+      command: { name: "admitted gate command", executable: "node", args: ["gate.mjs"], cwd: f.root }
+    }
+    const passingSuite = {
+      ...rootFailure,
+      obligationId: "suite",
+      parentId: "gate",
+      outcome: "passed",
+      exitCode: 0,
+      command: { name: "passing negative-control suite", executable: "node", args: ["suite.mjs"], cwd: f.root }
+    }
+    const expectedNestedFailure = {
+      ...rootFailure,
+      obligationId: "expected-failure",
+      parentId: "suite",
+      command: { name: "expected nested failure", executable: "node", args: ["-e", "process.exit(1)"], cwd: f.root }
+    }
+    recordGateObstruction({
+      evidence: { ...gateEvidence, stages: [rootFailure, passingSuite, expectedNestedFailure] },
+      location: repositoryLocation(f.root)
+    })
+    const recovery = readRecord(gateRecoveryPath(repositoryLocation(f.root)))
+    assert.deepEqual(
+      recovery.failures.map(({ name }) => name),
+      ["admitted gate command"]
+    )
+    assert.equal(recovery.suggestedDiagnostic.name, "admitted gate command")
+  } finally {
+    f.cleanup()
+  }
+})
+
 void test("an ignored-resource intervention can be verified without a candidate content edit", () => {
   const f = fixture()
   try {

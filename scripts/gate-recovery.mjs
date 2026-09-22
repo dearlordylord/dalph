@@ -120,8 +120,26 @@ const writeObstruction = ({
 }
 
 export const recordGateObstruction = ({ evidence, location }) => {
-  const failedStages = evidence.stages.filter((stage) => stage.outcome !== "passed" && stage.outcome !== "UNPROVEN")
-  const failures = failedStages.map(stageSummary)
+  const stagesById = new Map(evidence.stages.map((stage) => [stage.obligationId, stage]))
+  const failed = (stage) => stage.outcome !== "passed" && stage.outcome !== "UNPROVEN"
+  const causalDepth = (stage) => {
+    let depth = 0
+    let current = stage
+    const visited = new Set()
+    while (current.parentId !== "root") {
+      if (visited.has(current.obligationId)) return null
+      visited.add(current.obligationId)
+      const parent = stagesById.get(current.parentId)
+      if (parent === undefined || !failed(parent)) return null
+      current = parent
+      depth += 1
+    }
+    return depth
+  }
+  const failedStages = evidence.stages
+    .map((stage) => ({ depth: failed(stage) ? causalDepth(stage) : null, stage }))
+    .filter(({ depth }) => depth !== null)
+  const failures = failedStages.map(({ stage }) => stageSummary(stage))
   if (failures.length === 0)
     failures.push({
       obligationId: "gate-terminal",
@@ -141,7 +159,9 @@ export const recordGateObstruction = ({ evidence, location }) => {
     suggestedDiagnostic:
       failedStages.length === 0
         ? null
-        : stageSummary(failedStages.find((stage) => stage.parentId !== "root") ?? failedStages[0]),
+        : stageSummary(
+            failedStages.reduce((best, candidate) => (candidate.depth > best.depth ? candidate : best)).stage
+          ),
     unexecuted: evidence.stages.filter((stage) => stage.outcome === "UNPROVEN").map(stageSummary)
   })
 }
