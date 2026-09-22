@@ -22,7 +22,7 @@ export const ensureRegistrationOpen = (context) => {
   if (registration.runId !== context.run.runId || registration.state !== "open")
     throw new Error("Gate registration is closed; old-run launches are refused")
 }
-export const registerSpawn = ({ beforeSpawn, command, environment, spawnChild }) => {
+export const registerSpawn = ({ beforeSpawn, command, environment, now = epochMilliseconds, spawnChild }) => {
   const ambient = inheritedCustody()
   const supplied = inheritedCustody(environment)
   if (
@@ -46,11 +46,19 @@ export const registerSpawn = ({ beforeSpawn, command, environment, spawnChild })
   const ambientDeadline =
     context.run.deadline === undefined
       ? undefined
-      : resolveGateDeadline({ inherited: context.run.deadline, configured: process.env[gateDeadlineEnvironmentName] })
+      : resolveGateDeadline({
+          inherited: context.run.deadline,
+          configured: process.env[gateDeadlineEnvironmentName],
+          now: now()
+        })
   const deadline =
     ambientDeadline === undefined
       ? undefined
-      : resolveGateDeadline({ inherited: ambientDeadline, configured: environment?.[gateDeadlineEnvironmentName] })
+      : resolveGateDeadline({
+          inherited: ambientDeadline,
+          configured: environment?.[gateDeadlineEnvironmentName],
+          now: now()
+        })
   return withFileLock(
     registrationLockPath(context.runDirectory),
     () => {
@@ -62,7 +70,7 @@ export const registerSpawn = ({ beforeSpawn, command, environment, spawnChild })
               ...command,
               timeoutMilliseconds: Math.min(
                 command.timeoutMilliseconds ?? Infinity,
-                remainingGateMilliseconds(deadline)
+                remainingGateMilliseconds(deadline, now())
               )
             }
       const obligationId = newIdentity()
@@ -90,7 +98,7 @@ export const registerSpawn = ({ beforeSpawn, command, environment, spawnChild })
       }
       if (deadline !== undefined) childEnvironment[gateDeadlineEnvironmentName] = deadline
       // Recheck after durable intent writes: an expired intent is not permission to spawn.
-      if (deadline !== undefined && Date.parse(deadline) <= epochMilliseconds()) {
+      if (deadline !== undefined && Date.parse(deadline) <= now()) {
         atomicRecord(path, { ...intent, state: "no-child" })
         throw new Error("Gate deadline expired before spawn; no child launched")
       }
@@ -99,6 +107,12 @@ export const registerSpawn = ({ beforeSpawn, command, environment, spawnChild })
       } catch (error) {
         atomicRecord(path, { ...intent, state: "no-child" })
         throw error
+      }
+      // The registered setup hook may perform synchronous filesystem work.
+      // Expiry during that work revokes permission before any child can exist.
+      if (deadline !== undefined && Date.parse(deadline) <= now()) {
+        atomicRecord(path, { ...intent, state: "no-child" })
+        throw new Error("Gate deadline expired during pre-spawn setup; no child launched")
       }
       const child = spawnChild(childEnvironment)
       // A missing pid is resolved only by the later definite launch-failure event.
@@ -112,7 +126,7 @@ export const registerSpawn = ({ beforeSpawn, command, environment, spawnChild })
       }
       return { child, deadline, obligation: { context, intent, path }, observationError }
     },
-    deadline === undefined ? undefined : remainingGateMilliseconds(deadline)
+    deadline === undefined ? undefined : remainingGateMilliseconds(deadline, now())
   )
 }
 export const publishNoChild = (obligation) => {

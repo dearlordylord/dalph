@@ -700,6 +700,55 @@ void test("spawn intent is durable before the spawn boundary; an unobserved boun
   }
 })
 
+void test("deadline expiry during registered pre-spawn setup records no child and refuses launch", async () => {
+  const f = fixture()
+  try {
+    assert.equal((await start(f.root, [process.execPath, "-e", ""]).done).code, 0)
+    const entry = runs(f.root)[0]
+    atomicRecord(join(entry.runDirectory, "registration.json"), {
+      version: custodyVersion,
+      runId: entry.runId,
+      state: "open",
+      obligations: []
+    })
+    for (const name of readdirSync(join(entry.runDirectory, "obligations")))
+      rmSync(join(entry.runDirectory, "obligations", name))
+    const deadline = new Date(epochMilliseconds() + 10_000).toISOString()
+    let clock = Date.parse(deadline) - 1
+    let spawned = false
+    assert.throws(
+      () =>
+        registerSpawn({
+          beforeSpawn: () => {
+            clock = Date.parse(deadline)
+          },
+          command: { name: "deadline-crossing setup", timeoutMilliseconds: 1000 },
+          environment: {
+            ...environment(),
+            DALPH_GATE_DEADLINE: deadline,
+            DALPH_GATE_RUN_DIRECTORY: entry.runDirectory,
+            DALPH_GATE_RUN_ID: entry.runId,
+            DALPH_GATE_OBLIGATION: "root"
+          },
+          now: () => clock,
+          spawnChild: () => {
+            spawned = true
+          }
+        }),
+      /expired during pre-spawn setup/u
+    )
+    assert.equal(spawned, false)
+    const registration = readRecord(join(entry.runDirectory, "registration.json"))
+    assert.equal(registration.obligations.length, 1)
+    assert.equal(
+      readRecord(join(entry.runDirectory, "obligations", `${registration.obligations[0]}.json`)).state,
+      "no-child"
+    )
+  } finally {
+    f.cleanup()
+  }
+})
+
 void test("definite no-child spawn failure releases custody but records a failing genuine outcome", async () => {
   const f = fixture()
   try {

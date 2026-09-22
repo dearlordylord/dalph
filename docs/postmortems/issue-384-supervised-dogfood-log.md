@@ -1164,3 +1164,11 @@ Responses endpoint. This exercises real JSON-RPC, persistence, ownership,
 restart, interruption, process-death cuts and cleanup without a live model
 request. `pnpm check:fast` passes. These results qualify the focused repairs;
 they still do not replace the frozen full gate or fresh Luna/max S1.
+
+Baseline run `4af25434-af77-4988-a467-9b07d9734ff1` against candidate
+`600f1ac9d2a0cd936e8aa8c13fdb0882b231ee4c` ended with stopped custody and
+unchanged source. Its clone-wide census found four missing explicit `void`
+markers in the new Node tests. Its independent Reducer Lab stage passed eight
+named tests but exceeded the existing 300-second stage bound. The lint finding
+is repaired directly. The Lab timeout is retained as separate fixture evidence
+and is not converted into a successful baseline or current-candidate gate.
