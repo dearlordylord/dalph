@@ -211,6 +211,7 @@ type Harness = {
   readonly replacementLedger: () => CodexPurgedWorkUnitReplacementLedger | undefined
   readonly setThread: (thread: CodexThreadSnapshot) => void
   readonly restoreProviderThread: (thread: CodexThreadSnapshot) => void
+  readonly setProviderTurnLedger: (turns: ReadonlyArray<CodexTurnSnapshot>) => void
   readonly preserveResumeCwd: () => void
   readonly setRecord: (record: CodexAttemptRecord) => void
   readonly setReadOverride: (record: CodexAttemptRecord | undefined) => void
@@ -292,6 +293,7 @@ const makeHarness = (
     turns
   }
   let currentTurn: CodexTurnSnapshot | undefined
+  let providerTurnLedger: ReadonlyArray<CodexTurnSnapshot> | undefined
   let turnNumber = 0
   let associationAtTurn: CodexAttemptRecord | undefined
   let firstTurnResponseLost = false
@@ -387,6 +389,10 @@ const makeHarness = (
         return currentThread
       })
     },
+    listThreadTurns: () =>
+      Effect.sync(() => {
+        return providerTurnLedger ?? currentThread.turns
+      }),
     startTurn: (threadIdValue, cwd, text, ownedTurnToken) =>
       Effect.gen(function* () {
         yield* options.beforeTurnStart?.() ?? Effect.void
@@ -599,6 +605,9 @@ const makeHarness = (
       currentThread = { ...thread, turns }
       currentTurn = turns.findLast((turn) => turn.ownedTurnToken !== undefined)
       turnNumber = turns.length
+    },
+    setProviderTurnLedger: (providerTurns) => {
+      providerTurnLedger = providerTurns
     },
     preserveResumeCwd: () => {
       preserveResumeCwdOnResume = true
@@ -1910,6 +1919,31 @@ it.effect("reconciles a lost provider response and keeps lost public Begin recon
       PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } })
     )
     expect(harness.turnCount()).toBe(1)
+    expect(harness.currentRecord()?._tag).toBe("Terminal")
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("reconciles a stale in-progress census from the provider turn ledger", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request, { _tag: "InitialDelivery" })
+    const turn = harness.currentThread().turns[0]
+    expect(turn).toBeDefined()
+    if (turn === undefined) return
+    const stale = { ...turn, status: "inProgress" as const }
+    const completed = {
+      ...turn,
+      status: "completed" as const,
+      items: [{ type: "agentMessage", text: finalResponse(head) }]
+    }
+    harness.setThread({ ...harness.currentThread(), status: "active", turns: [stale] })
+    harness.setProviderTurnLedger([completed])
+    const reconciled = yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Begin" })
+    expect(reconciled).toMatchObject({ _tag: "Exact", report: { _tag: "ExecutorWorkExecuting" } })
+    expect(harness.currentRecord()?._tag).toBe("Terminal")
+    const report = yield* observeExactReport(executor)
+    expect(report).toMatchObject({ _tag: "ExecutorWorkTerminal", correlation, result: { _tag: "Accepted" } })
     expect(harness.currentRecord()?._tag).toBe("Terminal")
   }).pipe(Effect.provide(layerFor(harness)))
 })

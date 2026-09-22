@@ -134,6 +134,14 @@ const CodexThreadTurnCensusBoundary = Schema.Struct({
 })
 type CodexThreadTurnCensusBoundary = typeof CodexThreadTurnCensusBoundary.Type
 
+/** One page returned by Codex 0.155's paginated thread-turns protocol. */
+const CodexThreadTurnsListEnvelope = Schema.Struct({
+  data: Schema.Array(CodexTurnBoundary),
+  nextCursor: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  next_cursor: Schema.optionalKey(Schema.NullOr(Schema.String))
+})
+type CodexThreadTurnsListEnvelope = typeof CodexThreadTurnsListEnvelope.Type
+
 const CodexThreadListValues = Schema.Array(CodexThreadSummaryBoundary)
 
 const sameCodexThreadListValues = Schema.toEquivalence(CodexThreadListValues)
@@ -241,6 +249,7 @@ const CodexAppServerOperation = Schema.Literals([
   "thread/start",
   "thread/list",
   "thread/read",
+  "thread/turns/list",
   "thread/resume",
   "turn/start",
   "turn/interrupt",
@@ -442,6 +451,10 @@ export interface CodexAppServerService {
     threadId: CodexThreadId,
     cwd: string
   ) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
+  /** Reads the provider's paginated persisted turn ledger for reconciliation. */
+  readonly listThreadTurns?: (
+    threadId: CodexThreadId
+  ) => Effect.Effect<ReadonlyArray<CodexTurnSnapshot>, CodexAppServerFailure>
   readonly startTurn: (
     threadId: CodexThreadId,
     cwd: string,
@@ -1524,6 +1537,24 @@ const normalizedThreadEffect = (
 
 const maximumThreadListPages = 100
 
+const threadTurnsListPage = (
+  response: unknown
+):
+  | { readonly turns: ReadonlyArray<CodexTurnSnapshot>; readonly nextCursor: string | null | undefined }
+  | CodexAppServerFailure => {
+  const decoded = Schema.decodeUnknownResult(CodexThreadTurnsListEnvelope)(response)
+  if (Result.isFailure(decoded)) {
+    return operationFailure(
+      "thread/turns/list",
+      "Malformed",
+      `thread turns page is invalid: ${String(decoded.failure)}`
+    )
+  }
+  const turns = normalizeThreadTurns(decoded.success.data, "thread/turns/list")
+  if (turns instanceof CodexAppServerFailure) return turns
+  return { turns, nextCursor: decoded.success.nextCursor ?? decoded.success.next_cursor }
+}
+
 const normalizeThreadListSummary = (
   source: CodexThreadSummaryBoundary
 ): CodexThreadListSummary | CodexAppServerFailure => {
@@ -1660,6 +1691,7 @@ interface JsonRpcClient {
       | "config/read"
       | "thread/start"
       | "thread/read"
+      | "thread/turns/list"
       | "thread/resume"
       | "turn/start"
       | "thread/backgroundTerminals/list",
@@ -3153,13 +3185,46 @@ export const codexAppServerLayer = (
         }
         return yield* Effect.fail(operationFailure("thread/list", "Malformed", "thread list exceeded page bound"))
       })
+      const listThreadTurns = Effect.fn("CodexAppServer.listThreadTurns")(function* (threadId: CodexThreadId) {
+        let turns: ReadonlyArray<CodexTurnSnapshot> = []
+        let cursors: ReadonlySet<string> = new Set<string>()
+        let cursor: string | undefined
+        for (let page = 0; page < maximumThreadListPages; page += 1) {
+          const response = yield* rpc.requestBounded(
+            "thread/turns/list",
+            "thread/turns/list",
+            cursor === undefined ? { threadId } : { threadId, cursor }
+          )
+          const parsed = threadTurnsListPage(response)
+          if (parsed instanceof CodexAppServerFailure) return yield* Effect.fail(parsed)
+          turns = [...turns, ...parsed.turns]
+          if (parsed.nextCursor === undefined || parsed.nextCursor === null) return turns
+          if (cursors.has(parsed.nextCursor)) {
+            return yield* Effect.fail(
+              operationFailure("thread/turns/list", "Malformed", "thread turns cursor repeated")
+            )
+          }
+          cursors = new Set([...cursors, parsed.nextCursor])
+          cursor = parsed.nextCursor
+        }
+        return yield* Effect.fail(
+          operationFailure("thread/turns/list", "Malformed", "thread turns exceeded page bound")
+        )
+      })
+      const hydrateEmptyTurnCensus = Effect.fn("CodexAppServer.hydrateEmptyTurnCensus")(function* (
+        thread: CodexThreadSnapshot
+      ) {
+        if (thread.turns.length > 0) return thread
+        return { ...thread, turns: yield* listThreadTurns(thread.id) }
+      })
       const readThread = Effect.fn("CodexAppServer.readThread")(function* (threadId: CodexThreadId) {
         const response = responseObject(
           yield* rpc.requestBounded("thread/read", "thread/read", { threadId, includeTurns: true }),
           "thread/read"
         )
         if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
-        return yield* normalizedThreadEffect(normalizeThreadTurnCensus(response["thread"], "thread/read"))
+        const thread = yield* normalizedThreadEffect(normalizeThreadTurnCensus(response["thread"], "thread/read"))
+        return yield* hydrateEmptyTurnCensus(thread)
       })
       const resumeThread = Effect.fn("CodexAppServer.resumeThread")(function* (threadId: CodexThreadId, cwd: string) {
         const response = responseObject(
@@ -3167,7 +3232,8 @@ export const codexAppServerLayer = (
           "thread/resume"
         )
         if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
-        return yield* normalizedThreadEffect(normalizeThreadTurnCensus(response["thread"], "thread/resume"))
+        const thread = yield* normalizedThreadEffect(normalizeThreadTurnCensus(response["thread"], "thread/resume"))
+        return yield* hydrateEmptyTurnCensus(thread)
       })
       const startTurn = Effect.fn("CodexAppServer.startTurn")(function* (
         threadId: CodexThreadId,
@@ -3246,6 +3312,7 @@ export const codexAppServerLayer = (
         listThreadsComplete: true,
         readThread,
         resumeThread,
+        listThreadTurns,
         startTurn,
         interruptTurn,
         listBackgroundTerminals,

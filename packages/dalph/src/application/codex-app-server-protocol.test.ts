@@ -74,6 +74,11 @@ const responseFor = (method, params = {}) => {
       ? { config: { approval_policy: "on-request", sandbox_mode: "workspace-write" } }
       : { config: { approval_policy: "never", sandbox_mode: "danger-full-access" } }
   }
+  if (method === "thread/turns/list") {
+    return mode === "thread-turns-list-hydration"
+      ? { data: [{ ...validTurn, id: "protocol-turn-hydrated" }], nextCursor: null }
+      : { data: [], nextCursor: null }
+  }
   if (mode === "unattended-policy" && method === "thread/start") {
     return params.approvalPolicy === "never" && params.sandbox === "danger-full-access"
       ? { thread: validThread }
@@ -1062,6 +1067,18 @@ it.effect("accepts explicit empty turn censuses from thread/read and thread/resu
       const started = yield* app.startThread("/fixture/worktree")
       expect((yield* app.readThread(started.id)).turns).toEqual([])
       expect((yield* app.resumeThread(started.id, "/fixture/worktree")).turns).toEqual([])
+    })
+  )
+)
+
+it.effect("hydrates an empty thread/read census from the paginated turns operation", () =>
+  withFixture("thread-turns-list-hydration", (app) =>
+    Effect.gen(function* () {
+      const started = yield* app.startThread("/fixture/worktree")
+      const read = yield* app.readThread(started.id)
+      expect(read.turns[0]?.id).toBe(CodexTurnId.make("protocol-turn-hydrated"))
+      expect(read.turns[0]?.status).toBe("completed")
+      expect(read.turns[0]?.items).toHaveLength(2)
     })
   )
 )

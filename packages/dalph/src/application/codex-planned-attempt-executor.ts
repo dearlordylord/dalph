@@ -1029,6 +1029,30 @@ const makeCodexPlannedAttemptExecutorContext = (
       return Effect.succeed({ _tag: "Idle" as const, thread, turn: lookup.turn })
     }
 
+    const refreshThreadTurnLedger = Effect.fn("CodexPlannedAttemptExecutor.refreshThreadTurnLedger")(function* (
+      thread: CodexThreadSnapshot
+    ) {
+      if (app.listThreadTurns === undefined) return thread
+      // Codex 0.155 can report a stale in-progress turn from thread/resume
+      // after the persisted turn has completed. Reconcile against its exact
+      // paginated turn ledger before treating the attempt as still running.
+      const persistedTurns = yield* app.listThreadTurns(thread.id)
+      const byId = new Map(thread.turns.map((turn) => [turn.id, turn]))
+      for (const turn of persistedTurns) byId.set(turn.id, turn)
+      const turns = [...byId.values()]
+      const status =
+        thread.status === "active" && !turns.some((turn) => turn.status === "inProgress") ? "idle" : thread.status
+      return { ...thread, status, turns }
+    })
+
+    const reconcileOwnedTurnWithProviderLedger = Effect.fn(
+      "CodexPlannedAttemptExecutor.reconcileOwnedTurnWithProviderLedger"
+    )(function* (thread: CodexThreadSnapshot, record: OwnedTurnRecord) {
+      const first = yield* reconcileOwnedTurn(thread, record)
+      if (first._tag !== "Running" || app.listThreadTurns === undefined) return first
+      return yield* reconcileOwnedTurn(yield* refreshThreadTurnLedger(thread), record)
+    })
+
     const reconcile = Effect.fn("CodexPlannedAttemptExecutor.reconcile")(function* (
       attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
@@ -1046,7 +1070,7 @@ const makeCodexPlannedAttemptExecutorContext = (
         }
         return yield* reconcileAssociatedThread(thread)
       }
-      const ownedTurn = yield* reconcileOwnedTurn(thread, record)
+      const ownedTurn = yield* reconcileOwnedTurnWithProviderLedger(thread, record)
       if (ownedTurn._tag === "Terminal") return ownedTurn
       if (thread.status === "notLoaded" || thread.status === "systemError") {
         return yield* Effect.fail(new CodexThreadMismatch({}))
@@ -1061,7 +1085,7 @@ const makeCodexPlannedAttemptExecutorContext = (
     ) {
       const thread = yield* app.readThread(record.threadId)
       yield* enforceThreadIdentity(attempt, correlation, record.threadId, thread)
-      const ownedTurn = yield* reconcileOwnedTurn(thread, record)
+      const ownedTurn = yield* reconcileOwnedTurnWithProviderLedger(thread, record)
       if (ownedTurn._tag === "Terminal") return ownedTurn
       if (thread.status === "notLoaded" || thread.status === "systemError") {
         return yield* Effect.fail(new CodexThreadMismatch({}))
@@ -1079,7 +1103,7 @@ const makeCodexPlannedAttemptExecutorContext = (
     const observeOwnedActivityByThreadId = Effect.fn("CodexPlannedAttemptExecutor.observeOwnedActivityByThreadId")(
       function* (threadId: CodexThreadId) {
         const thread = yield* app.readThread(threadId)
-        return yield* observeOwnedActivity(thread)
+        return yield* observeOwnedActivity(yield* refreshThreadTurnLedger(thread))
       }
     )
 

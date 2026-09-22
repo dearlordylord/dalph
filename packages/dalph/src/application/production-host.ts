@@ -335,6 +335,7 @@ const guardedCodexAppServerLayer = <E, R>(
     Effect.gen(function* () {
       const appServer = yield* CodexAppServer
       const listThreads = appServer.listThreads
+      const listThreadTurns = appServer.listThreadTurns
       return CodexAppServer.of({
         ...appServer,
         startThread: (cwd, ownedThreadToken) =>
@@ -342,6 +343,9 @@ const guardedCodexAppServerLayer = <E, R>(
         ...(listThreads === undefined ? {} : { listThreads: () => requestBoundary.run("thread/list", listThreads()) }),
         readThread: (threadId) => requestBoundary.run("thread/read", appServer.readThread(threadId)),
         resumeThread: (threadId, cwd) => requestBoundary.run("thread/resume", appServer.resumeThread(threadId, cwd)),
+        ...(listThreadTurns === undefined
+          ? {}
+          : { listThreadTurns: (threadId) => requestBoundary.run("thread/turns/list", listThreadTurns(threadId)) }),
         startTurn: (threadId, cwd, text, ownedTurnToken) =>
           requestBoundary.run("turn/start", appServer.startTurn(threadId, cwd, text, ownedTurnToken)),
         interruptTurn: (threadId, turnId) =>
