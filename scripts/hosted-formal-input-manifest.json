@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "c53233ea1183d817a46ea6c72a22b64a1824260eacdf99a622a748a83c833520",
+  "digest": "dee3e7285d4876e6ec8fff4640ff10fb8f77b257711d119f6578c1b2312ca5a3",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -441,6 +441,7 @@
     "scripts/gate-deadline.mjs",
     "scripts/gate-input-observer.mjs",
     "scripts/gate-quality-evidence.mjs",
+    "scripts/gate-recovery.mjs",
     "scripts/gate-registration.mjs",
     "scripts/gate-resume-artifacts.mjs",
     "scripts/gate-resume-policy.mjs",
@@ -451,7 +452,6 @@
     "scripts/generate-hosted-formal-input-manifest.mjs",
     "scripts/hosted-formal-input-manifest.json",
     "scripts/hosted-formal-input-manifest.mjs",
-    "scripts/qualification-allowance.mjs",
     "scripts/quality-gate-failure-policy.mjs",
     "scripts/quality-output-budget.mjs",
     "scripts/quint-effective-profile.mjs",

@@ -46,16 +46,14 @@ questions. Reuse guidance already read unless it changed or scope changed.
 
 ## Verification and closure
 
-- Autonomous task work has one end-to-end four-hour wall-clock ceiling from the
-  first tool action unless the user explicitly selects another deadline. The
-  ceiling covers preparation, implementation, review, repair, verification and
-  delivery; delegation, compaction, a changed hypothesis, a new candidate and a
-  resumed session do not reset it. After two attempts on the same obstruction or
-  about 30 minutes without an outcome-relevant result, choose one discriminating
-  next action instead of adding review or rerunning a broad check. At the ceiling,
-  start no new work, settle owned processes, preserve useful evidence, and return
-  a completed result or concise blocked handoff. Only an explicit user extension
-  authorizes more time.
+- A failed full qualification creates a worktree recovery obstruction. Before
+  another full qualification, execute its focused diagnostic action with an
+  explicit question, competing explanations, and distinguishing observation.
+  Candidate changes, delegation, compaction, and resumed sessions do not clear
+  the obstruction. A diagnosis records which competing explanation its observed
+  outcome supports; only a subsequent passing verification of the repaired
+  candidate admits one qualification attempt. An inconclusive diagnosis or
+  failed verification requires changed work rather than a broad rerun.
 - Before starting or waiting on an operation expected to exceed one minute,
   record its expected duration and wall-clock stop time. At that time, stop
   safely, preserve evidence, and name the next discriminating action before a

@@ -531,7 +531,7 @@ void test(
         "run-admitted-gate.mjs",
         "gate-run-identity.mjs",
         "gate-slot-policy.mjs",
-        "qualification-allowance.mjs"
+        "gate-recovery.mjs"
       ])
         assert.equal(
           formalSources.some((path) => path.endsWith(`/scripts/${source}`)),

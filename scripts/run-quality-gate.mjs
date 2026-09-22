@@ -18,6 +18,8 @@ import { qualityVerificationExecutables, stabilizeVerificationEnvironment } from
 
 // Admitted structural checks always inspect formatter inputs without incremental result reuse.
 process.env.DALPH_DPRINT_INCREMENTAL = "disabled"
+if (process.env.DALPH_GATE_RECOVERY_MODE !== undefined)
+  throw new Error("A focused gate recovery action cannot launch the full quality gate")
 
 const pnpmEntryPoint = process.env.npm_execpath
 const { candidateArgument, purpose, resumeRunId } = parseQualityCommandArguments(process.argv.slice(2))

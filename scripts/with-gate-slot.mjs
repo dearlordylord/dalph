@@ -23,6 +23,17 @@ if (process.env.DALPH_QUALIFICATION_ENV_CAPTURE !== undefined)
     "Ambient qualification environment capture is outside supported gate custody; tests set only disposable fixture paths"
   )
 const entryName = basename(commandArguments[1] ?? "")
+if (
+  process.env.DALPH_GATE_RECOVERY_MODE !== undefined &&
+  [
+    "run-baseline.mjs",
+    "run-formal-gate.mjs",
+    "run-hosted-quality-stage.mjs",
+    "run-preflight.mjs",
+    "run-quality-gate.mjs"
+  ].includes(entryName)
+)
+  throw new Error("A focused gate recovery action cannot launch a broad admitted command")
 const requiredExecutables = ["run-hosted-quality-stage.mjs", "run-quality-gate.mjs"].includes(entryName)
   ? qualityVerificationExecutables(process.env, commandArguments[0])
   : entryName === "run-formal-gate.mjs"

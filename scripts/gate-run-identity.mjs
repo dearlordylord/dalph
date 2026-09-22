@@ -10,14 +10,13 @@ const gitOutput = (worktree, args, encoding = "utf8") => {
     throw new Error(`Cannot fingerprint Git inputs: ${args.join(" ")}`)
   return result.stdout
 }
-/** All tracked content and unignored untracked content identify the current candidate; ignored tooling output is excluded. */
-export const currentSourceInputDigest = (worktree) => {
+const currentSourceEntries = (worktree) => {
   const paths = [
     ...new Set(
       gitOutput(worktree, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]).split("\0").filter(Boolean)
     )
   ].sort((left, right) => left.localeCompare(right))
-  const entries = paths.map((path) => {
+  return paths.map((path) => {
     const fullPath = join(worktree, path)
     let status
     try {
@@ -30,21 +29,24 @@ export const currentSourceInputDigest = (worktree) => {
       if (!statSync(fullPath).isFile()) throw new Error(`Cannot fingerprint a candidate directory symlink: ${path}`)
       return [path, "symlink", digest(readlinkSync(fullPath)), digest(readFileSync(fullPath))]
     }
-    if (status.isDirectory()) return [path, "submodule", currentSourceInputDigest(fullPath)]
+    if (status.isDirectory()) return [path, "submodule", currentSourceContentDigest(fullPath)]
     if (!status.isFile()) throw new Error(`Unsupported candidate input: ${path}`)
     return [path, status.mode & 0o777, digest(readFileSync(fullPath))]
   })
-  return digest(JSON.stringify({ head: gitOutput(worktree, ["rev-parse", "HEAD"]).trim(), entries }))
 }
-export const resolveRunBaseSha = ({ commandArguments, environment = process.env }) => {
+/** Content identifies an executable candidate change without treating an empty commit as a repair. */
+export const currentSourceContentDigest = (worktree) => digest(JSON.stringify(currentSourceEntries(worktree)))
+/** All tracked content and unignored untracked content identify the current candidate; ignored tooling output is excluded. */
+export const currentSourceInputDigest = (worktree) =>
+  digest(
+    JSON.stringify({ head: gitOutput(worktree, ["rev-parse", "HEAD"]).trim(), entries: currentSourceEntries(worktree) })
+  )
+export const createRunInputIdentity = ({ commandArguments, environment = process.env, worktree }) => {
   const candidate = commandArguments
     .find((argument) => argument.startsWith("--candidate="))
     ?.slice("--candidate=".length)
   // Existing base resolution runs in the worktree admitted by the wrapper.
-  return resolveQualityGateBase({ candidateBase: candidate, hostedBase: environment.DALPH_COVERAGE_BASE_SHA })
-}
-export const createRunInputIdentity = ({ commandArguments, environment = process.env, worktree }) => {
-  const baseSha = resolveRunBaseSha({ commandArguments, environment })
+  const baseSha = resolveQualityGateBase({ candidateBase: candidate, hostedBase: environment.DALPH_COVERAGE_BASE_SHA })
   const sourceInputDigest = currentSourceInputDigest(worktree)
   const relevantEnvironment = [
     "NODE_OPTIONS",

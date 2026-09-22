@@ -17,6 +17,7 @@ import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { withoutInheritedCustody, repositoryLocation } from "./gate-custody-records.mjs"
 import { readRunEvidence } from "./gate-run-evidence.mjs"
+import { gateRecoveryPath } from "./gate-recovery.mjs"
 import {
   controlledFormalWorkflowSource,
   copyQualityRuntimeFixture,
@@ -25,6 +26,8 @@ import {
 
 const wrapper = fileURLToPath(new URL("./with-gate-slot.mjs", import.meta.url))
 const bounded = new URL("./run-bounded-command.mjs", import.meta.url).href
+const diagnosis = fileURLToPath(new URL("./run-gate-diagnosis.mjs", import.meta.url))
+const verification = fileURLToPath(new URL("./run-gate-repair-verification.mjs", import.meta.url))
 const fixture = () => {
   const root = mkdtempSync(join(tmpdir(), "dalph-resume-"))
   const git = (...args) => {
@@ -164,6 +167,23 @@ sys.exit(124 if phase!='running' else (code if code is not None else 1))
     timeout: reap ? (reaperSeconds + 10) * 1_000 : 20_000
   })
 }
+const launchAdmitted = (root, commandArguments) => {
+  const env = withoutInheritedCustody(process.env)
+  for (const key of [
+    "DALPH_COVERAGE_BASE_SHA",
+    "DALPH_GATE_GIT_HISTORY",
+    "DALPH_QUALIFICATION_ENV_CAPTURE",
+    "DALPH_RUN_REAL_CODEX_QUALIFICATION",
+    "npm_execpath"
+  ])
+    delete env[key]
+  return spawnSync(process.execPath, [wrapper, "--", ...commandArguments], {
+    cwd: root,
+    env,
+    encoding: "utf8",
+    timeout: 20_000
+  })
+}
 const runs = (root) => {
   const location = repositoryLocation(root)
   return readdirSync(join(location.custodyRoot, "runs"))
@@ -225,6 +245,63 @@ finally: os.close(handle)
 `
   return spawnSync("python3", ["-c", source, String(pid), startIdentity], { encoding: "utf8", timeout: 3_000 })
 }
+void test("a failed full gate requires diagnosis and repair verification before one successful qualification", () => {
+  const f = fixture()
+  try {
+    const gate = join(f.root, "scripts", "run-quality-gate.mjs")
+    const reproducer = join(f.root, "scripts", "focused-reproducer.mjs")
+    const repair = join(f.root, "repair.marker")
+    const baseSha = f.git("rev-parse", "HEAD^")
+    writeFileSync(
+      reproducer,
+      `import {existsSync} from 'node:fs';if(!existsSync(${JSON.stringify(repair)})){console.error('controlled obstruction');process.exitCode=9}\n`
+    )
+    writeFileSync(
+      gate,
+      `import {executeResumableQualityGate} from './gate-quality-run.mjs';import {runBoundedCommand} from './run-bounded-command.mjs';
+const baseSha=process.argv.find(argument=>argument.startsWith('--candidate='))?.slice('--candidate='.length);if(!baseSha)throw Error('missing candidate');
+const execution={executable:process.execPath,args:[${JSON.stringify(reproducer)}],cwd:process.cwd(),name:'focused controlled obstruction',timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000};
+const stage={id:'controlled-obstruction',name:'focused controlled obstruction',boundary:'qualification',args:execution.args,timeout:10000,artifactRoots:[],execution};
+const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1],...process.argv.slice(2)],baseSha,stageManifest:[stage],toolExecutables:[],formalClassification:{version:1,status:'unaffected',baseSha,headSha:undefined,changedPaths:['application-only-input'],affectedPaths:[]}};
+await executeResumableQualityGate({logicalInvocation,stageManifest:[stage],prepareFreshInputs:()=>{},runStage:()=>runBoundedCommand(execution)});\n`
+    )
+    const fullCommand = [process.execPath, gate, "--local-handoff", `--candidate=${baseSha}`]
+    const failed = launchAdmitted(f.root, fullCommand)
+    assert.equal(failed.status, 1, failed.stderr)
+    const location = repositoryLocation(f.root)
+    const obstruction = JSON.parse(readFileSync(gateRecoveryPath(location), "utf8"))
+    assert.equal(obstruction.state, "diagnosis-required")
+    assert.equal(obstruction.suggestedDiagnostic.command.executable, process.execPath)
+    assert.deepEqual(obstruction.suggestedDiagnostic.command.args, [reproducer])
+
+    const blindRerun = launchAdmitted(f.root, fullCommand)
+    assert.equal(blindRerun.status, 1, blindRerun.stderr)
+    assert.match(blindRerun.stderr, /requires focused diagnosis/u)
+    const diagnosed = launchAdmitted(f.root, [
+      process.execPath,
+      diagnosis,
+      obstruction.failedRunId,
+      "--question=does the focused obstruction still fail before its repair marker?",
+      "--alternatives=the obstruction is present | the broad runner failed elsewhere",
+      "--observation=the exact failed-stage command exits 9 before the marker exists",
+      "--expect=exit:9",
+      "--supports=1",
+      "--",
+      process.execPath,
+      reproducer
+    ])
+    assert.equal(diagnosed.status, 0, diagnosed.stderr)
+
+    writeFileSync(repair, "repaired\n")
+    const verified = launchAdmitted(f.root, [process.execPath, verification, obstruction.failedRunId])
+    assert.equal(verified.status, 0, verified.stderr)
+    const passed = launchAdmitted(f.root, fullCommand)
+    assert.equal(passed.status, 0, passed.stderr)
+    assert.equal(existsSync(gateRecoveryPath(location)), false)
+  } finally {
+    f.cleanup()
+  }
+})
 void test("an unaffected candidate resumes proven stages with not-applicable formal evidence and no formal workflow", () => {
   const f = fixture()
   let completed = false
