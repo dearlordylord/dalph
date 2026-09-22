@@ -1354,3 +1354,16 @@ removes ambient same-UID runner processes from the proof domain. A workflow
 contract fixes setup, explicit environment forwarding, cleanup, and ordering
 before upload. Hosted confirmation is still required before this repair is
 claimed complete.
+
+The first frozen full gate for that candidate stopped with one coverage failure
+after 4,433 passing tests. A live-qualification fixture waited only for its
+observed Codex parent PID, then recursively removed the fixture while a
+descendant was still populating `codex-home`; the retained directory contained
+the resulting SQLite and plugin-sync files, and removal failed with `ENOTEMPTY`.
+The test now starts a detached process group, signals that exact group, escalates
+to `SIGKILL` only after the bounded graceful wait, and proves complete group
+absence before removing the fixture. Twenty-five focused repetitions pass.
+A controlled descendant that installs a `SIGTERM` handler also proves the
+bounded forced-stop path and complete group absence inside the ordinary test
+budget. This repairs test process custody only and cannot change Dalph runtime
+behavior.
