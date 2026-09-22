@@ -1047,3 +1047,31 @@ accepted Integrator chronology requires that token for lost-response adoption,
 replay, and cleanup, so this is a provider-contract incompatibility rather than
 evidence for weakening the fail-closed ownership rule. The supervised public
 S1 remains unproven and no new remote read or CLI operation was added.
+
+### Fresh supervised Kimi S1 and provider quota boundary, 2026-09-22 02:54–03:10 UTC
+
+The fresh supervised S1 used the accepted named Kimi profile
+`executor:kimi/for-coding` against the private disposable repository
+`dearlordylord/dalph-issue-384-s1-kimi-20260922`, issue 1, with target Base
+`a4011c8a1a78c4804518ce2a646c1d85bfd2fdd4`. The candidate source was
+`472da42ffdcfaa5b260e10e3ee9e901254fb7502`; the Kimi configuration requested
+maximum thinking effort.
+
+The first run was stopped after the bounded setup window because its isolated
+home lacked the GitHub credential helper. The same durable run was recovered
+after copying the already-authorized Git configuration; no second run was
+allocated. Recovery reached the tracker claim, planned worktree, executor
+responsibility, and prompt-intent stages. Kimi Code then returned the real
+provider response `403 You've reached your weekly (7-day) usage limit` at
+2026-09-22T03:07:23.369Z. The private executor record remained
+`PromptIntentRecorded` with `sessionClosed: false`, and no executor work
+report, publication, local promotion, or tracker closure was observed.
+
+The remote main branch remained at the existing Base and issue 1 remained
+open. The normal production `cancel` operation appended `RunCancellationApplied`
+but returned `cancellation.blocked` because it could not prove unsettled
+executor responsibility. The retained claim, task worktree, and private
+executor record are therefore preserved for fail-closed reconciliation; no
+private state or worktree was manually deleted. This provider quota boundary
+does not change runtime behavior, the accepted no-extra-remote-read rule, or
+the conclusion that the fresh supervised S1 remains unproven.
