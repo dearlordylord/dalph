@@ -274,20 +274,19 @@ export const assertDeliveryCapstonePredecessorCleanup = (run: AuthoredScenarioCa
         predecessor.candidateResource
   )
   expect(predecessorRevisionReads).toHaveLength(1)
-  for (const item of predecessorRevisionReads) {
-    if (
-      item._tag === "IntegratorCandidateCleanupEvidenceRevisionReturned" &&
-      item.subject.locator === predecessor.candidateResource
-    ) {
-      const predecessorWithActualIdentity = normalizeDeclaredIntegratorSession(item.subject.predecessor, run.runId)
-      expect({
-        ...item.subject,
-        locator: predecessorWithActualIdentity.candidateResource,
-        predecessor: predecessorWithActualIdentity
-      }).toEqual({ locator: predecessor.candidateResource, predecessor })
-      expect(item.revision).toBe(authorization.evidenceRevision)
-    }
-  }
+  const predecessorRevisionRead = predecessorRevisionReads[0]
+  if (predecessorRevisionRead?._tag !== "IntegratorCandidateCleanupEvidenceRevisionReturned")
+    return expect.fail("missing exact predecessor evidence revision read")
+  const predecessorWithActualIdentity = normalizeDeclaredIntegratorSession(
+    predecessorRevisionRead.subject.predecessor,
+    run.runId
+  )
+  expect({
+    ...predecessorRevisionRead.subject,
+    locator: resolveDeclaredAuthoredIdentity(predecessorRevisionRead.subject.locator, run.runId),
+    predecessor: predecessorWithActualIdentity
+  }).toEqual({ locator: predecessor.candidateResource, predecessor })
+  expect(predecessorRevisionRead.revision).toBe(authorization.evidenceRevision)
   // The final journal still contains predecessor qualification and rejected promotion evidence.
   const predecessorQualification = oneRecord(
     run,

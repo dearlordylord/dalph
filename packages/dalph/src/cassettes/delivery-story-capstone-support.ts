@@ -392,7 +392,6 @@ export {
   bPromotionRequest,
   bIntegrationReleasingE,
   cleanupFor,
-  predecessorCleanupRevision,
   predecessorCleanup,
   rerunA,
   bIntegrationPositions,

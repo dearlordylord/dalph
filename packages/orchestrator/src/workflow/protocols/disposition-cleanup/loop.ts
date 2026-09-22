@@ -520,7 +520,7 @@ export const appendDerivedCleanupAuthorizations = Effect.fn("DispositionCleanup.
               Effect.mapError(
                 () =>
                   new IntegratorCandidateCleanupEvidenceReadFailure({
-                    detail: `provider-private evidence revision could not be read for ${subject.locator}`
+                    detail: "provider-private evidence revision could not be read for the exact candidate subject"
                   })
               ),
               Effect.map((revision) => [subject, revision] as const)

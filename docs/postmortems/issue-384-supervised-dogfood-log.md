@@ -1195,5 +1195,7 @@ distinct candidate's single revision read and cleanup settlement at its actual
 terminal handoff. Its exact-run, cleanup and fresh-replay tests pass. The final
 bounded Lab run completed all 94 maintained cassettes and every Lab scenario,
 ending with its explicit success marker in under two minutes. Lab concurrency
-and per-key progress are qualification-only changes; the authorization reuse is
-the runtime repair that removes the redundant private boundary call.
+and per-key progress are qualification-only changes; a controlled batch
+regression proves four-wide peak concurrency, input-ordered results, and one
+progress notification per item. The authorization reuse is the runtime repair
+that removes the redundant private boundary call.
