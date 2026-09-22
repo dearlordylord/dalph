@@ -1714,6 +1714,18 @@ type PendingJsonRpcRequest = {
   readonly operation: CodexAppServerRequestOperation
 }
 
+const pendingJsonRpcRequest = (
+  deferred: Deferred.Deferred<unknown, CodexAppServerFailure>,
+  operation: CodexAppServerRequestOperation,
+  params: unknown
+): PendingJsonRpcRequest => {
+  if ((operation !== "thread/read" && operation !== "thread/resume") || !isJsonObject(params)) {
+    return { deferred, operation }
+  }
+  const threadId = params["threadId"]
+  return typeof threadId === "string" ? { deferred, expectedThreadId: threadId, operation } : { deferred, operation }
+}
+
 /** Protocol terminal state and pending calls share one linearization point. */
 type JsonRpcClientProtocolState = {
   readonly terminalFailure: Option.Option<CodexAppServerFailure>
@@ -1801,10 +1813,12 @@ const isCodexApprovalRequest = (method: string): boolean => codexApprovalRequest
 const jsonRpcInvalidRequestCode = -32600
 const jsonRpcResponseDeadline = Duration.seconds(60) // eslint-disable-line no-magic-numbers -- accepted Codex RPC acknowledgement bound
 
-const isMissingThreadResponse = (message: string, expectedThreadId: string | undefined): boolean =>
-  expectedThreadId !== undefined &&
-  (message === `no rollout found for thread id ${expectedThreadId}` ||
-    message === `thread not loaded: ${expectedThreadId}`)
+const isMissingThreadResponse = (message: string, expectedThreadId: string | undefined): boolean => {
+  if (expectedThreadId === undefined) return false
+  return [`no rollout found for thread id ${expectedThreadId}`, `thread not loaded: ${expectedThreadId}`].includes(
+    message
+  )
+}
 
 const jsonRpcResponseFailure = (
   operation: CodexAppServerOperation,
@@ -1988,12 +2002,6 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
     if (Option.isSome(protocol.terminalFailure)) return yield* Effect.fail(protocol.terminalFailure.value)
     const id = yield* Ref.modify(nextId, (current) => [current, current + 1] as const)
     const deferred = yield* Deferred.make<unknown, CodexAppServerFailure>()
-    const expectedThreadId =
-      (operation === "thread/read" || operation === "thread/resume") &&
-      isJsonObject(params) &&
-      typeof params["threadId"] === "string"
-        ? params["threadId"]
-        : undefined
     const removePending = Ref.update(protocolState, (current) => ({
       ...current,
       pending: new Map([...current.pending].filter(([key]) => key !== id))
@@ -2006,10 +2014,7 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
         Option.none<CodexAppServerFailure>(),
         {
           terminalFailure: current.terminalFailure,
-          pending: new Map([
-            ...current.pending,
-            [id, { deferred, ...(expectedThreadId === undefined ? {} : { expectedThreadId }), operation }] as const
-          ])
+          pending: new Map([...current.pending, [id, pendingJsonRpcRequest(deferred, operation, params)] as const])
         }
       ] as const
     }).pipe(Effect.flatMap((failure) => (Option.isSome(failure) ? Effect.fail(failure.value) : Effect.void)))
