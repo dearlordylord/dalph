@@ -1330,3 +1330,27 @@ injects the boundary immediately after the parent replacement and holds the
 obsolete record only when it arrived in the same read. Thirty focused
 iterations and the complete 113-test input-guard file pass. This changes the
 qualification fixture only; runtime input observation is unchanged.
+
+The version-two envelope from hosted run `35728002161` then retained all three
+failed files: the controlled direct-publication fixture and both real-process
+Git sender-custody suites. The direct fixture reported the closed
+`HermeticQualificationSourceRejected` code at
+`ObservePlannedAttemptExecutorWork`; the unit custody fixture reported
+`GitCommandSenderStopUnproven`. Their common boundary enumerates every process
+with the caller's effective UID and correctly refuses proof when `/proc` state
+is unreadable. An ordinary GitHub Actions account also owns unrelated runner
+services, whereas the passing Codex Linux qualification already runs under a
+fresh dedicated account. Ambient same-UID runner processes are therefore the
+leading shared-cause hypothesis, not proof of three independent workflow
+defects.
+
+The hosted coverage cell now runs under a fresh Linux UID after dependency and
+artifact preparation. It passes only the explicit non-secret quality context,
+then always restores workspace ownership, removes the copied pnpm installation,
+revokes traversal access, and deletes the account before evidence upload. The
+other suffix cells keep their existing execution path. This preserves the
+fail-closed sender-custody algorithm and changes no Dalph runtime decision; it
+removes ambient same-UID runner processes from the proof domain. A workflow
+contract fixes setup, explicit environment forwarding, cleanup, and ordering
+before upload. Hosted confirmation is still required before this repair is
+claimed complete.
