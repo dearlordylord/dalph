@@ -1320,7 +1320,11 @@ it.effect("keeps the initial lifecycle attachment through a delayed owned-turn c
         const visibleAfterBegin = harness.currentThread()
         // Model Codex's first thread/resume census lagging behind the
         // successful turn/start response. The durable record remains Running.
-        harness.setThread({ ...visibleAfterBegin, status: "active", turns: [] })
+        harness.setThread({
+          ...visibleAfterBegin,
+          status: "active",
+          turns: [{ id: CodexTurnId.make("codex-visible-but-unowned"), status: "inProgress", items: [] }]
+        })
 
         const attachment = yield* lifecycle.attach(correlation)
         expect(attachment.current).toMatchObject({

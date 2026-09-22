@@ -1001,14 +1001,15 @@ const makeCodexPlannedAttemptExecutorContext = (
       ThreadReconciliation,
       CodexThreadMismatch | CodexTurnBoundaryUnknown | CodexTurnCensusPending | ForeignAttemptRecord
     > => {
+      if (
+        record._tag === "Running" &&
+        !hasDuplicateOwnedTurnTokens(ownedTurnTokenCounts(thread.turns)) &&
+        !thread.turns.some((turn) => turn.ownedTurnToken === record.currentToken)
+      ) {
+        return Effect.fail(new CodexTurnCensusPending({}))
+      }
       const lookup = ownedTurnForRecord(thread, record)
       if (lookup._tag === "Contradiction") {
-        // A just-started Codex turn can be absent from the first thread
-        // census even though Begin persisted Running. Keep that transient
-        // boundary distinct from a nonempty contradictory census.
-        if (record._tag === "Running" && thread.turns.length === 0) {
-          return Effect.fail(new CodexTurnCensusPending({}))
-        }
         return Effect.fail(new CodexTurnBoundaryUnknown({}))
       }
       if (lookup._tag === "Foreign") return Effect.fail(new ForeignAttemptRecord({ observed: lookup.observed }))
