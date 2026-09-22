@@ -1215,3 +1215,17 @@ The custody suite passes 55/55, resume controls pass 191/191, coverage
 explanation passes 45/45, formal controls pass 133/133, and the exact-base
 complexity check passes. These repairs restore finite gate retry and resume
 behavior; they do not claim qualification until a fresh full gate succeeds.
+
+Fresh full-gate run `2da8306d-2176-49b9-ab6d-f9990d360082` on candidate
+`4e9e4aa24998b934f05af8c0884a0c30c0fddbba` passed preflight, the complete
+formal profile, delivery repeatability, and the recorded catalog. Coverage
+executed 4,469 tests and found one stale assertion in the recovered-promotion
+hermetic MVP: it still expected no resource cleanup after
+`TargetPromotionObservedSuccess(AfterAttempt(1))`, although the later accepted
+#384 chronology requires the same finality-derived exact cleanup before
+termination. The run stopped with closed registration, stopped custody, and
+unchanged source. The older crash and resource-census scenario passages now
+record the #383/#384 amendment, and the two hermetic paths assert the exact
+`IntegrationFinalitySettled` → exact worktree, branch, and Integrator-candidate
+authorization/settlement → termination order. Both focused paths pass; a fresh
+candidate gate is still required.
