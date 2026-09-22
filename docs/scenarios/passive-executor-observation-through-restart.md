@@ -184,9 +184,12 @@ Codex may acknowledge `turn/start` before its first `thread/resume` census
 exposes the owned turn. If the durable attempt record is already `Running`,
 the initial lifecycle attachment keeps the exact Executing projection alive
 for the existing provider completion hint. That hint performs the ordinary
-exact reread and may publish the terminal report. This is a one-time
-initial-attachment handoff; later contradictory or unreadable projections stay
-inert and fail closed without a timer or tight passive retry.
+exact reread and may publish the terminal report. The reread may use the
+durable observed provider turn id when Codex omits Dalph's private token marker
+from `thread/resume`; a changed id or duplicate token remains contradictory.
+This is a one-time initial-attachment handoff; later contradictory or
+unreadable projections stay inert and fail closed without a timer or tight
+passive retry.
 
 `NoReport`, `TemporarilyUnavailable`, `Unreadable`, and
 `CorrelationContradiction` are four distinct unresolved observations. The

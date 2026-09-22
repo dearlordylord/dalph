@@ -1013,7 +1013,10 @@ observer, so the existing completion hint could not trigger the exact reread.
 The candidate now keeps the initial lifecycle attachment at exact
 `ExecutorWorkExecuting` only when the durable record is the same attempt's
 `Running` record. The existing provider hint then performs the normal exact
-reread; later contradictory or unreadable projections retain the
-fail-closed behavior and do not schedule a passive retry. The controlled
-regression is `keeps the initial lifecycle attachment through a delayed
-owned-turn census`. No command, CLI, or post-publication remote read changed.
+reread. If Codex omits Dalph's private token marker from `thread/resume`, the
+persisted observed provider turn id remains the exact reconciliation key;
+later contradictory or unreadable projections retain the fail-closed behavior
+and do not schedule a passive retry. The controlled regressions are `keeps the
+initial lifecycle attachment through a delayed owned-turn census` and
+`reconciles a passive terminal by observed turn id when the provider omits its
+token`. No command, CLI, or post-publication remote read changed.

@@ -1985,6 +1985,17 @@ it.effect("backfills an omitted owned token on the started turn", () => {
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
+it.effect("reconciles a passive terminal by observed turn id when the provider omits its token", () => {
+  const harness = makeHarness({ omitOwnedTurnToken: true })
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request, { _tag: "InitialDelivery" })
+    harness.complete(finalResponse(head))
+    const terminal = yield* observeExactReport(executor)
+    expect(terminal).toMatchObject({ _tag: "ExecutorWorkTerminal", correlation, result: { _tag: "Accepted" } })
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
 it.effect("reconciles a lost turn response without sending a second turn", () => {
   const harness = makeHarness({ loseFirstTurnResponse: true })
   return Effect.gen(function* () {

@@ -377,6 +377,12 @@ const ownedTurnMatch = (thread: CodexThreadSnapshot, record: OwnedTurnRecord): T
   const turn = thread.turns.find((candidate) => candidate.ownedTurnToken === record.currentToken)
   if (turn === undefined) {
     if (record._tag === "TurnIntentRecorded") return { _tag: "Missing" }
+    // Codex's thread/read representation may omit Dalph's private token
+    // marker even though the durable observed provider turn id is exact.
+    // Preserve that provider identity for reconciliation; duplicate tokens
+    // and a changed observed id remain contradictions above/below.
+    const observedTurn = thread.turns.find((candidate) => candidate.id === record.observedTurnId)
+    if (observedTurn !== undefined) return { _tag: "Found", turn: observedTurn }
     return { _tag: "Contradiction" }
   }
   return { _tag: "Found", turn }
@@ -1004,7 +1010,8 @@ const makeCodexPlannedAttemptExecutorContext = (
       if (
         record._tag === "Running" &&
         !hasDuplicateOwnedTurnTokens(ownedTurnTokenCounts(thread.turns)) &&
-        !thread.turns.some((turn) => turn.ownedTurnToken === record.currentToken)
+        !thread.turns.some((turn) => turn.ownedTurnToken === record.currentToken) &&
+        !thread.turns.some((turn) => turn.id === record.observedTurnId)
       ) {
         return Effect.fail(new CodexTurnCensusPending({}))
       }
