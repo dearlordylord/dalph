@@ -546,10 +546,13 @@ it.live(
               )
           )
         })
-        const dependantReleaseIndex = cassette.entries.findIndex(
+        // Immutable attempt preparation may be journaled from an earlier current
+        // eligibility observation. The post-cleanup graph is the boundary for
+        // starting executor work, not for recording TaskAttemptPlanned.
+        const dependantExecutorStartIndex = cassette.entries.findIndex(
           (entry) =>
-            entry._tag === "TaskAttemptPlanned" &&
-            entry.operation.plannedAttempt.taskId === trackerAfterChild.graph.dependantTaskId
+            entry._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+            entry.plannedAttempt.taskId === trackerAfterChild.graph.dependantTaskId
         )
         expect(laterCompletedGraphIndex).toBeGreaterThan(completionIndex)
         for (const cleanupTag of [
@@ -561,7 +564,7 @@ it.live(
             laterCompletedGraphIndex
           )
         }
-        expect(dependantReleaseIndex).toBeGreaterThan(laterCompletedGraphIndex)
+        expect(dependantExecutorStartIndex).toBeGreaterThan(laterCompletedGraphIndex)
 
         const provider = providerAfterChild
         const githubProviderTransportCount = provider.operationCounts.reduce(

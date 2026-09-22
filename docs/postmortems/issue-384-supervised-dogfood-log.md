@@ -1243,3 +1243,19 @@ artifact fresh for the exact source and Base. Focused safety tests now exercise
 validation, executor-default resolution, optional bounded Git capability,
 pinned-endpoint rewrite reconciliation, and invalid remote-baseline history;
 the five focused files pass 70/70 and a fresh candidate gate remains required.
+
+Fresh baseline run `2327656f-80b6-4c2e-a404-6d584935169b` on candidate
+`c372b53f09099a4c1f09fd301b70436f1174323a` passed with 94 maintained
+cassettes, stopped custody, and unchanged source. Full-gate run
+`be5891ed-5888-4103-bfdd-74e0733d9738` then passed preflight, the exact
+applicable formal evidence, all 20 repeatability iterations, and the recorded
+catalog. Coverage executed 4,475 tests: 4,432 passed, 42 were skipped, and the
+public direct-publication S1 had the sole failure. The assertion compared the
+dependant's immutable `TaskAttemptPlanned` preparation with the later
+post-cleanup graph. That plan may validly precede root finality; the accepted
+boundary is cleanup, then a later completed graph, then the dependant's
+executor or Integrator work. The test now uses
+`PlannedAttemptExecutorWorkResponsibilityBegan` as that observable start.
+Registration closed, custody stopped, and source remained unchanged; one
+focused rerun passed all five fixture tests. No gate success is inferred from
+that focused result, and a fresh candidate gate remains required.
