@@ -50,6 +50,8 @@ void test("projects only closed repository-relative Vitest failure paths", () =>
     fc.property(testPath, (path) => {
       const log = `\u001b[31m FAIL \u001b[39m ${path} > controlled failure\n ❯ ${path}:12:3\n`
       assert.deepEqual(closedFailedTestFiles(log, new Set([path])), [path])
+      assert.deepEqual(closedFailedTestFiles(`FAIL /tmp/${path} > private\n`, new Set([path])), [])
+      assert.deepEqual(closedFailedTestFiles(`FAIL note ${path} > unrelated\n`, new Set([path])), [])
     }),
     { numRuns: 100 }
   )
