@@ -396,6 +396,11 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     occurrenceClassification: Schema.Literal("NonActionOccurrence"),
     proof: RemotePublicationProofBasis
   },
+  RemotePublicationAttemptRejectedNonFastForward: {
+    attemptOrdinal: RemotePublicationAttemptOrdinal,
+    correlation: RemotePublicationCorrelation,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence")
+  },
   RemotePublicationRetained: {
     cause: RemotePublicationRetainedCause,
     correlation: RemotePublicationCorrelation,

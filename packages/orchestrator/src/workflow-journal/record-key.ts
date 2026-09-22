@@ -382,6 +382,15 @@ export const remotePublicationAttemptIntendedRecordKey = (
   attemptOrdinal: RemotePublicationAttemptOrdinal
 ): JournalRecordKey => JournalRecordKey.make(`${remotePublicationRecordKeyPrefix(requestId)}:attempt:${attemptOrdinal}`)
 
+/** Stable journal key for one conclusive numbered non-fast-forward rejection. */
+export const remotePublicationAttemptRejectedRecordKey = (
+  requestId: RemotePublicationRequestId,
+  attemptOrdinal: RemotePublicationAttemptOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(
+    `${remotePublicationRecordKeyPrefix(requestId)}:attempt:${attemptOrdinal}:rejected-non-fast-forward`
+  )
+
 /** Stable journal key for the one exact remote publication proof. */
 export const remotePublicationSucceededRecordKey = (requestId: RemotePublicationRequestId): JournalRecordKey =>
   JournalRecordKey.make(`${remotePublicationRecordKeyPrefix(requestId)}:succeeded`)

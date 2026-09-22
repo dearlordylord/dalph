@@ -24,6 +24,7 @@ import {
 } from "./relations.js"
 import type { DeliveryRuntimeLocalDeferral } from "./delivery-runtime-local-deferral.js"
 import type { FreshTaskCandidateFrontier } from "./fresh-task-candidate.js"
+import type { JournalError } from "../../workflow-journal/store.js"
 
 /** Two lower relations claim the same proposal identity, so no action is authorized. */
 export class DeliveryRuntimeProposalOwnershipConflict extends Schema.TaggedError<DeliveryRuntimeProposalOwnershipConflict>()(
@@ -57,10 +58,10 @@ type DeliveryRuntimeAdmissionLoopActions = {
   readonly publishRuntimeObservationInsideGate: () => Effect.Effect<void>
   readonly reserveAndStart: (
     proposal: DeliveryActionProposal
-  ) => Effect.Effect<DeliveryRuntimeReservationResult, ApplicationExiting>
+  ) => Effect.Effect<DeliveryRuntimeReservationResult, ApplicationExiting | JournalError>
   readonly reserveFreshAndStart: (
     frontier: FreshTaskCandidateFrontier
-  ) => Effect.Effect<DeliveryRuntimeReservationResult, ApplicationExiting>
+  ) => Effect.Effect<DeliveryRuntimeReservationResult, ApplicationExiting | JournalError>
 }
 
 type DeliveryRuntimeAdmissionLoopDependencies<Evaluation extends DeliveryRuntimeAdmissionLoopEvaluation> =
@@ -79,7 +80,10 @@ type OrdinaryProposalAdmissionResult =
   | FreshAdmissionDecision
 
 type DeliveryRuntimeAdmissionLoopObservation = {
-  readonly admitPass: () => Effect.Effect<boolean, ApplicationExiting | DeliveryRuntimeProposalOwnershipConflict>
+  readonly admitPass: () => Effect.Effect<
+    boolean,
+    ApplicationExiting | JournalError | DeliveryRuntimeProposalOwnershipConflict
+  >
 }
 
 type DeliveryRuntimeAdmissionLoopCleanup = {
@@ -114,7 +118,7 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
     liveOperationIds: ReadonlySet<OperationId>,
     deferred: ReadonlyMap<DeliveryProposalId, DeliveryRuntimeLocalDeferral>,
     acceptedAt: JournalPosition | null
-  ): Effect.fn.Return<LaterProposalAdmissionResult, ApplicationExiting> {
+  ): Effect.fn.Return<LaterProposalAdmissionResult, ApplicationExiting | JournalError> {
     let freshAdmission: FreshAdmissionDecision = { _tag: "FreshAdmissionAllowed" }
     for (const independent of proposals.slice(deferredIndex + 1)) {
       if (!proposalIsAvailable(independent, live, liveActionKeys, liveOperationIds, deferred, acceptedAt)) {
@@ -139,7 +143,7 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
     liveOperationIds: ReadonlySet<OperationId>,
     deferred: ReadonlyMap<DeliveryProposalId, DeliveryRuntimeLocalDeferral>,
     acceptedAt: JournalPosition | null
-  ): Effect.fn.Return<OrdinaryProposalAdmissionResult, ApplicationExiting> {
+  ): Effect.fn.Return<OrdinaryProposalAdmissionResult, ApplicationExiting | JournalError> {
     const proposal = proposals.find((candidate) =>
       proposalIsAvailable(candidate, live, liveActionKeys, liveOperationIds, deferred, acceptedAt)
     )

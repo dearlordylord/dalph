@@ -59,6 +59,19 @@ export const RemotePublicationAttemptRequested = Schema.TaggedStruct("RemotePubl
 })
 export type RemotePublicationAttemptRequested = typeof RemotePublicationAttemptRequested.Type
 
+/** Git conclusively rejected one exact numbered non-force publication attempt. */
+export const RemotePublicationAttemptRejectedNonFastForward = Schema.TaggedStruct(
+  "RemotePublicationAttemptRejectedNonFastForward",
+  {
+    ...nonAction,
+    attemptOrdinal: RemotePublicationAttemptOrdinal,
+    correlation: RemotePublicationCorrelation,
+    recordedAt: JournalPosition,
+    runId: RunId
+  }
+)
+export type RemotePublicationAttemptRejectedNonFastForward = typeof RemotePublicationAttemptRejectedNonFastForward.Type
+
 /** The receiving branch proved the exact candidate; the proof retains its causal attempt ordinal. */
 export const RemotePublicationSucceeded = Schema.TaggedStruct("RemotePublicationSucceeded", {
   correlation: RemotePublicationCorrelation,

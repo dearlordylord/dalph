@@ -523,7 +523,10 @@ it.live(
           "BranchCleanupSettled",
           "IntegratorCandidateCleanupSettled"
         ] as const)
-          expect(tags.indexOf(cleanupTag)).toBeGreaterThan(closeIndex)
+          expect(
+            tags.indexOf(cleanupTag),
+            `${cleanupTag}; observed journal events: ${records.map(({ event }) => event._tag).join(", ")}`
+          ).toBeGreaterThan(closeIndex)
         expect(tags.at(-1)).toBe("WorkflowRunTerminated")
 
         const laterCompletedGraphIndex = cassette.entries.findIndex((entry, index) => {
@@ -549,6 +552,15 @@ it.live(
             entry.operation.plannedAttempt.taskId === trackerAfterChild.graph.dependantTaskId
         )
         expect(laterCompletedGraphIndex).toBeGreaterThan(completionIndex)
+        for (const cleanupTag of [
+          "WorktreeCleanupSettled",
+          "BranchCleanupSettled",
+          "IntegratorCandidateCleanupSettled"
+        ] as const) {
+          expect(tags.indexOf(cleanupTag), `${cleanupTag} must precede the dependant's authorizing graph`).toBeLessThan(
+            laterCompletedGraphIndex
+          )
+        }
         expect(dependantReleaseIndex).toBeGreaterThan(laterCompletedGraphIndex)
 
         const provider = providerAfterChild

@@ -458,7 +458,7 @@ export const makeDispositionCleanupActivation = Effect.fn("DispositionCleanup.ma
   const readEvidenceRevision =
     candidateBoundary.readEvidenceRevision ?? (() => Effect.fail("candidate evidence is unavailable"))
   const responsibilities = yield* activateDispositionCleanup(runId, readEvidenceRevision)
-  const run = runDispositionCleanupLoop(runId).pipe(
+  const run = runDispositionCleanupLoop(runId, undefined, readEvidenceRevision).pipe(
     Effect.provideService(InRunJournal, journal),
     Effect.provideService(AcceptedJournalReader, reader),
     Effect.provideService(WorktreeCleanupBoundary, worktreeBoundary),

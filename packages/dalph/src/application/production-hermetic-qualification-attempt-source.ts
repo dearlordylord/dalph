@@ -136,6 +136,20 @@ const HermeticQualificationDiagnosticTag = Schema.Union([
 ])
 type HermeticQualificationDiagnosticTag = typeof HermeticQualificationDiagnosticTag.Type
 
+/** Closed rejection codes distinguish fixture mismatches without exposing input data. */
+const QualificationRejectionCode = Schema.Literals([
+  "InvalidOperationIdentity",
+  "InvalidSpecification",
+  "SpecificationMismatch",
+  "InvalidPlannedAttempt",
+  "PlannedAttemptMismatch",
+  "InvalidIntegrationTarget",
+  "IntegrationTargetMismatch",
+  "InvalidRunIdentity",
+  "FixtureContextMismatch",
+  "InvalidAcceptedProgress"
+])
+
 /** A qualification source or its expected-record registration failed before public presentation. */
 export class HermeticQualificationSourceRejected extends Schema.TaggedError<HermeticQualificationSourceRejected>()(
   "HermeticQualificationSourceRejected",
@@ -143,11 +157,14 @@ export class HermeticQualificationSourceRejected extends Schema.TaggedError<Herm
     /** Closed internal transition tag; safe diagnostic context contains no provider or task data. */
     transitionTag: Schema.optional(HermeticQualificationDiagnosticTag),
     /** Runtime diagnostic operation mirrors the same closed, safe tag. */
-    operation: Schema.optional(HermeticQualificationDiagnosticTag)
+    operation: Schema.optional(HermeticQualificationDiagnosticTag),
+    code: Schema.optional(QualificationRejectionCode)
   }
 ) {}
 
 export const sourceRejected = () => new HermeticQualificationSourceRejected()
+export const sourceRejectedBecause = (code: typeof QualificationRejectionCode.Type) => () =>
+  new HermeticQualificationSourceRejected({ code })
 
 const diagnosticTag = (value: string): HermeticQualificationDiagnosticTag | undefined =>
   Schema.decodeUnknownOption(HermeticQualificationDiagnosticTag)(value).pipe(Option.getOrUndefined)
@@ -159,7 +176,13 @@ export const sourceRejectedWithTag = (transitionTag: HermeticQualificationDiagno
 export const sourceRejectedAt = (transitionTag: string) => (rejection: HermeticQualificationSourceRejected) => {
   const safeTag = rejection.transitionTag ?? diagnosticTag(transitionTag)
   /* v8 ignore next -- @preserve Every public transition diagnostic carries a closed tag; this is a foreign-error fallback. */
-  return safeTag === undefined ? rejection : sourceRejectedWithTag(safeTag)
+  return safeTag === undefined
+    ? rejection
+    : new HermeticQualificationSourceRejected({
+        operation: safeTag,
+        transitionTag: safeTag,
+        ...(rejection.code === undefined ? {} : { code: rejection.code })
+      })
 }
 const workflowOperationUuidVersion = 7
 const workflowOperationUuid = Schema.String.check(Schema.isUUID(workflowOperationUuidVersion))
@@ -188,12 +211,15 @@ export const qualificationSpecificationFor = (
       : undefined
 
 export const validateOperationId = (operationId: OperationId) =>
-  Schema.decodeUnknownEffect(workflowOperationUuid, strictSource)(operationId).pipe(Effect.mapError(sourceRejected))
+  Schema.decodeUnknownEffect(
+    workflowOperationUuid,
+    strictSource
+  )(operationId).pipe(Effect.mapError(sourceRejectedBecause("InvalidOperationIdentity")))
 
 export const validateWorkflowOperationId = (operationId: OperationId, context: QualificationContext) =>
   Schema.is(workflowOperationUuid)(operationId) || context.derivedOperationIds.includes(operationId)
     ? Effect.void
-    : Effect.fail(sourceRejected())
+    : Effect.fail(sourceRejectedBecause("InvalidOperationIdentity")())
 
 export const validateSpecification = Effect.fn("HermeticQualification.validateSpecification")(function* (
   specification: TaskWorkSpecification,
@@ -202,10 +228,10 @@ export const validateSpecification = Effect.fn("HermeticQualification.validateSp
   const decoded = yield* Schema.decodeUnknownEffect(
     TaskWorkSpecification,
     strictSource
-  )(specification).pipe(Effect.mapError(sourceRejected))
+  )(specification).pipe(Effect.mapError(sourceRejectedBecause("InvalidSpecification")))
   const expected = qualificationSpecificationFor(decoded.taskId, context)
   if (expected === undefined || !Schema.toEquivalence(TaskWorkSpecification)(decoded, expected))
-    return yield* sourceRejected()
+    return yield* sourceRejectedBecause("SpecificationMismatch")()
   return expected
 })
 
@@ -237,9 +263,10 @@ export const validatePlannedAttempt = Effect.fn("HermeticQualification.validateP
   const decoded = yield* Schema.decodeUnknownEffect(
     PlannedTaskAttempt,
     strictSource
-  )(plannedAttempt).pipe(Effect.mapError(sourceRejected))
+  )(plannedAttempt).pipe(Effect.mapError(sourceRejectedBecause("InvalidPlannedAttempt")))
   const expected = qualificationPlannedAttemptFor(context, decoded.taskId)
-  if (!Schema.toEquivalence(PlannedTaskAttempt)(decoded, expected)) return yield* sourceRejected()
+  if (!Schema.toEquivalence(PlannedTaskAttempt)(decoded, expected))
+    return yield* sourceRejectedBecause("PlannedAttemptMismatch")()
   return expected
 })
 
@@ -250,12 +277,13 @@ export const validateTarget = Effect.fn("HermeticQualification.validateTarget")(
   const decoded = yield* Schema.decodeUnknownEffect(
     IntegrationTarget,
     strictSource
-  )(target).pipe(Effect.mapError(sourceRejected))
+  )(target).pipe(Effect.mapError(sourceRejectedBecause("InvalidIntegrationTarget")))
   const expected = IntegrationTarget.make({
     repository: context.configuration.repository,
     ref: context.configuration.integrationRef
   })
-  if (!Schema.toEquivalence(IntegrationTarget)(decoded, expected)) return yield* sourceRejected()
+  if (!Schema.toEquivalence(IntegrationTarget)(decoded, expected))
+    return yield* sourceRejectedBecause("IntegrationTargetMismatch")()
   return expected
 })
 
@@ -264,7 +292,9 @@ export const contextFor = Effect.fn("HermeticQualification.contextFor")(function
   configuration: ProductionRepositoryHostConfiguration,
   runId: RunId
 ) {
-  const identity = yield* decodeFreshWorkflowRunIdForDiagnostics(runId).pipe(Effect.mapError(sourceRejected))
+  const identity = yield* decodeFreshWorkflowRunIdForDiagnostics(runId).pipe(
+    Effect.mapError(sourceRejectedBecause("InvalidRunIdentity"))
+  )
   if (
     !Schema.toEquivalence(TrackerTarget)(identity.target, configuration.target) ||
     manifest.repository !== configuration.repository ||
@@ -273,7 +303,7 @@ export const contextFor = Effect.fn("HermeticQualification.contextFor")(function
     manifest.baseSha !== configuration.plannedAttemptBaseSha ||
     manifest.attemptWorktreeRoot !== configuration.plannedAttemptWorktreeRoot
   )
-    return yield* sourceRejected()
+    return yield* sourceRejectedBecause("FixtureContextMismatch")()
   const taskId = githubTaskIdFor(
     hermeticQualificationTrackerIdentity.repositoryNodeId,
     hermeticQualificationTrackerIdentity.issueNodeId

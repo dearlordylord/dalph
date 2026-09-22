@@ -45,6 +45,15 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
   absence. A nested detached command must opt into parent-signal relay; the
   delivery repeatability runner does so for every child and Git lookup. Do not add an
   outer GNU `timeout` around `check:all`.
+- Admitted gates have one absolute `DALPH_GATE_DEADLINE` (ISO UTC, for example
+  `2026-09-22T06:00:00.000Z`), defaulting to one hour from invocation. Record the
+  expected duration and choose the deadline before starting. Worktree-lock and
+  clone-slot waiting consume this same budget. The run persists it; nested
+  commands may shorten but cannot extend it. Deadline expiry stops new work and
+  invokes bounded descendant cleanup. Missing stopped-writer proof retains the
+  fence for explicit reconciliation; a timeout never qualifies the candidate.
+  This tooling policy does not change Dalph runtime behavior or accepted task
+  execution deadlines.
 - For the workflow pilot, use the next existing milestone to record broad review rounds, reopened findings
   with new evidence, full-gate restarts, and closure time. Verify that required
   scenario evidence survives and reproduced accepted-path defects still block
@@ -1307,8 +1316,10 @@ drains; it is not the withdrawn 60-second final estimate. Final qualification me
 The local stage inventory is 30 minutes of preflight plus 51 minutes of
 application qualification, now plus 35 minutes of formal acquisition and
 0.5 minutes of final validation: 116.5 minutes before existing
-quality setup and termination overhead. This fits the existing 24-hour admitted
-command limit. These are ceilings, not measured duration or claimed savings.
+quality setup and termination overhead. A run that needs that entire ceiling
+must explicitly choose an absolute gate deadline beyond 116.5 minutes plus
+admission/setup/termination overhead; the default one-hour budget does not cover
+it. These are ceilings, not measured duration or claimed savings.
 Hosted formal verification has a 16-minute job deadline and reserves
 210 seconds for checkout, setup, network, and final reporting.
 

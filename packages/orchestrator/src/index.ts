@@ -613,6 +613,7 @@ export {
   RemotePublicationAdmissionObserved,
   RemotePublicationAdmissionReadInitiated,
   RemotePublicationAttemptRequested,
+  RemotePublicationAttemptRejectedNonFastForward,
   RemotePublicationRequested,
   RemotePublicationRetained,
   RemotePublicationSucceeded,

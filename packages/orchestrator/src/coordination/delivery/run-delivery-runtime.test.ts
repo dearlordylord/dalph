@@ -118,6 +118,7 @@ import {
   interruptibleBoundaryOf
 } from "./delivery-action-executor.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
+import { DeliveryCleanupBoundary } from "./delivery-cleanup-boundary.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import {
   liveActionIsPresent,
@@ -4370,6 +4371,68 @@ it.effect("rolls back an owner when its pending completion loses the relation", 
       if (afterFailure._tag !== "Closed") return expect.fail("failed runtime observation must close")
       expect(afterFailure.final?.liveOwners).toEqual([])
       expect(yield* Ref.get(outcomes)).toEqual([])
+    })
+  )
+)
+
+it.effect("cuts admission for cleanup but drains an existing owner through its accepted completion", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const holder = proposal(0, TaskId.make("cleanup-existing-owner"))
+      const forbidden = proposal(1, TaskId.make("cleanup-next-action"))
+      const relation = yield* dynamicEvaluationSignal({
+        ...withProposals(base, [holder]),
+        acceptedAt: JournalPosition.make(10)
+      })
+      const pending = yield* Ref.make(false)
+      const calls = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const publishing = yield* Deferred.make<void>()
+      const published = yield* Deferred.make<void>()
+      const cutoffObserved = yield* Deferred.make<void>()
+      const runtime = yield* runDeliveryRuntimePhase(runId, relation).pipe(
+        Effect.provideService(DeliveryCleanupBoundary, { pending: Ref.get(pending) }),
+        Effect.provideService(DeliveryActionExecutor, {
+          execute: ({ proposal }) =>
+            Effect.gen(function* () {
+              yield* Ref.update(calls, (values) => [...values, proposal.id])
+              yield* Deferred.succeed(started, undefined)
+              yield* Deferred.await(release)
+              return { _tag: "ActionCompleted", proposalId: proposal.id } satisfies DeliveryActionResult
+            })
+        }),
+        Effect.provideService(DeliveryAcceptedFactPublication, {
+          awaitCurrent: Deferred.succeed(publishing, undefined).pipe(
+            Effect.andThen(Deferred.await(published)),
+            Effect.as({
+              _tag: "DeliveryAcceptedPublicationBoundary" as const,
+              acceptedThrough: JournalPosition.make(12),
+              runId
+            })
+          )
+        }),
+        Effect.provide(identityLayers),
+        Effect.provideService(DeliveryRuntimeObservationObserver, {
+          observe: ({ evaluation }) =>
+            evaluation.acceptedAt === JournalPosition.make(12)
+              ? Deferred.succeed(cutoffObserved, undefined)
+              : Effect.void
+        }),
+        Effect.forkChild
+      )
+      yield* Deferred.await(started)
+      yield* Ref.set(pending, true)
+      yield* relation.publish({ ...withProposals(base, [forbidden]), acceptedAt: JournalPosition.make(12) })
+      yield* Deferred.await(cutoffObserved)
+      expect(runtime.pollUnsafe()).toBeUndefined()
+      yield* Deferred.succeed(release, undefined)
+      yield* Deferred.await(publishing)
+      expect(runtime.pollUnsafe()).toBeUndefined()
+      yield* Deferred.succeed(published, undefined)
+      expect(yield* Fiber.join(runtime)).toMatchObject({ _tag: "DispositionCleanupRuntimeQuiescence" })
+      expect(yield* Ref.get(calls)).toEqual([holder.id])
     })
   )
 )

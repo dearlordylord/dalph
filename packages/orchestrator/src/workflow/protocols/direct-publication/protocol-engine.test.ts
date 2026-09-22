@@ -282,8 +282,11 @@ it.effect("retains exact exhaustion without an ungranted fourth push intent", ()
     expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
       "RemotePublicationIntended",
       "RemotePublicationAttemptIntended",
+      "RemotePublicationAttemptRejectedNonFastForward",
       "RemotePublicationAttemptIntended",
+      "RemotePublicationAttemptRejectedNonFastForward",
       "RemotePublicationAttemptIntended",
+      "RemotePublicationAttemptRejectedNonFastForward",
       "RemotePublicationRetained"
     ])
   })

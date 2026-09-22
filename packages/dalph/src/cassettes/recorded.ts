@@ -12,6 +12,7 @@ import {
   RemotePublicationAdmissionObservedEvent,
   RemotePublicationAdmissionReadIntendedEvent,
   RemotePublicationAttemptIntendedEvent,
+  RemotePublicationAttemptRejectedNonFastForwardEvent,
   RemotePublicationIntendedEvent,
   RemotePublicationRetainedEvent,
   RemotePublicationSucceededEvent,
@@ -256,6 +257,7 @@ type RemotePublicationEvent = Extract<
       | "RemotePublicationAdmissionObserved"
       | "RemotePublicationIntended"
       | "RemotePublicationAttemptIntended"
+      | "RemotePublicationAttemptRejectedNonFastForward"
       | "RemotePublicationSucceeded"
       | "RemotePublicationRetained"
   }
@@ -268,6 +270,7 @@ type RecordedRemotePublicationEntry = Extract<
       | "RemotePublicationAdmissionObserved"
       | "RemotePublicationIntended"
       | "RemotePublicationAttemptIntended"
+      | "RemotePublicationAttemptRejectedNonFastForward"
       | "RemotePublicationSucceeded"
       | "RemotePublicationRetained"
   }
@@ -278,6 +281,7 @@ const isRemotePublicationEvent = (event: WorkflowJournalEvent): event is RemoteP
   event._tag === "RemotePublicationAdmissionObserved" ||
   event._tag === "RemotePublicationIntended" ||
   event._tag === "RemotePublicationAttemptIntended" ||
+  event._tag === "RemotePublicationAttemptRejectedNonFastForward" ||
   event._tag === "RemotePublicationSucceeded" ||
   event._tag === "RemotePublicationRetained"
 
@@ -286,6 +290,7 @@ const isRecordedRemotePublicationEntry = (entry: RecordedCassetteEntry): entry i
   entry._tag === "RemotePublicationAdmissionObserved" ||
   entry._tag === "RemotePublicationIntended" ||
   entry._tag === "RemotePublicationAttemptIntended" ||
+  entry._tag === "RemotePublicationAttemptRejectedNonFastForward" ||
   entry._tag === "RemotePublicationSucceeded" ||
   entry._tag === "RemotePublicationRetained"
 
@@ -327,6 +332,12 @@ const recordRemotePublicationEntry = (event: RemotePublicationEvent): RecordedRe
       correlation: value.correlation,
       occurrenceClassification: value.occurrenceClassification,
       proof: value.proof
+    }),
+    RemotePublicationAttemptRejectedNonFastForward: (value): RecordedRemotePublicationEntry => ({
+      _tag: value._tag,
+      attemptOrdinal: value.attemptOrdinal,
+      correlation: value.correlation,
+      occurrenceClassification: value.occurrenceClassification
     }),
     RemotePublicationRetained: (value): RecordedRemotePublicationEntry => ({
       _tag: "RemotePublicationRetained",
@@ -1413,6 +1424,13 @@ const eventForRemotePublicationEntry = (entry: RecordedRemotePublicationEntry): 
         proof: value.proof,
         version: workflowJournalEventVersion
       }),
+    RemotePublicationAttemptRejectedNonFastForward: (value) =>
+      RemotePublicationAttemptRejectedNonFastForwardEvent.make({
+        attemptOrdinal: value.attemptOrdinal,
+        correlation: value.correlation,
+        occurrenceClassification: value.occurrenceClassification,
+        version: workflowJournalEventVersion
+      }),
     RemotePublicationRetained: (value) =>
       RemotePublicationRetainedEvent.make({
         cause: value.cause,
@@ -2063,6 +2081,8 @@ const lyricForRemotePublicationEntry = (entry: RecordedRemotePublicationEntry): 
       `Dalph fixed direct publication of candidate ${value.correlation.qualifiedCandidate.candidateCommit}.`,
     RemotePublicationAttemptIntended: (value) =>
       `Dalph intended direct publication attempt ${value.attemptOrdinal} for candidate ${value.correlation.qualifiedCandidate.candidateCommit}.`,
+    RemotePublicationAttemptRejectedNonFastForward: (value) =>
+      `Git rejected direct publication attempt ${value.attemptOrdinal} as non-fast-forward.`,
     RemotePublicationSucceeded: (value) =>
       `The pinned remote destination contains candidate ${value.correlation.qualifiedCandidate.candidateCommit} by ${value.proof._tag}.`,
     RemotePublicationRetained: (value) =>

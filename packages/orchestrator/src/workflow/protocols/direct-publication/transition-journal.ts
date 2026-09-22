@@ -4,6 +4,7 @@ import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader
 import { journalRecordsOfKind, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import {
   remotePublicationAttemptIntendedRecordKey,
+  remotePublicationAttemptRejectedRecordKey,
   remotePublicationIntendedRecordKey,
   remotePublicationRetainedRecordKey,
   remotePublicationSucceededRecordKey
@@ -13,6 +14,7 @@ import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { WorkflowActor } from "../../registry/actor.js"
 import {
   RemotePublicationAttemptIntendedEvent,
+  RemotePublicationAttemptRejectedNonFastForwardEvent,
   type RemotePublicationAttemptOrdinal,
   type RemotePublicationCorrelation,
   RemotePublicationIntendedEvent,
@@ -32,6 +34,7 @@ export type CurrentRemotePublicationEvidence<E, R> = (runId: RunId) => Effect.Ef
 type RemotePublicationTransitionEvent =
   | RemotePublicationIntendedEvent
   | RemotePublicationAttemptIntendedEvent
+  | RemotePublicationAttemptRejectedNonFastForwardEvent
   | RemotePublicationSucceededEvent
   | RemotePublicationRetainedEvent
 
@@ -48,6 +51,7 @@ export const remotePublicationEventsFor = (
   [
     ...journalRecordsOfKind(source, "RemotePublicationIntended"),
     ...journalRecordsOfKind(source, "RemotePublicationAttemptIntended"),
+    ...journalRecordsOfKind(source, "RemotePublicationAttemptRejectedNonFastForward"),
     ...journalRecordsOfKind(source, "RemotePublicationRetained"),
     ...journalRecordsOfKind(source, "RemotePublicationSucceeded")
   ]
@@ -56,6 +60,7 @@ export const remotePublicationEventsFor = (
       if (
         (event._tag === "RemotePublicationIntended" ||
           event._tag === "RemotePublicationAttemptIntended" ||
+          event._tag === "RemotePublicationAttemptRejectedNonFastForward" ||
           event._tag === "RemotePublicationRetained" ||
           event._tag === "RemotePublicationSucceeded") &&
         event.correlation.requestId === correlation.requestId
@@ -120,6 +125,22 @@ export const appendRemotePublicationAttemptIntent = Effect.fn("RemotePublication
       initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
       occurrenceClassification: "InitiatedAction",
       refspec: remotePublicationRefspecFor(correlation.qualifiedCandidate.candidateCommit, correlation.target.branch),
+      version: workflowJournalEventVersion
+    })
+  )
+})
+
+export const appendRemotePublicationAttemptRejection = Effect.fn("RemotePublication.appendAttemptRejection")(function* (
+  correlation: RemotePublicationCorrelation,
+  attemptOrdinal: RemotePublicationAttemptOrdinal
+) {
+  yield* appendRemotePublicationEvent(
+    correlation,
+    remotePublicationAttemptRejectedRecordKey(correlation.requestId, attemptOrdinal),
+    RemotePublicationAttemptRejectedNonFastForwardEvent.make({
+      attemptOrdinal,
+      correlation,
+      occurrenceClassification: "NonActionOccurrence",
       version: workflowJournalEventVersion
     })
   )

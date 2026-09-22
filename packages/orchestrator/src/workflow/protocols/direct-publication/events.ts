@@ -233,6 +233,19 @@ export const RemotePublicationAttemptIntendedEvent = Schema.TaggedStruct("Remote
 )
 export type RemotePublicationAttemptIntendedEvent = typeof RemotePublicationAttemptIntendedEvent.Type
 
+/** A conclusive per-ref rejection consumes this attempt without proving publication. */
+export const RemotePublicationAttemptRejectedNonFastForwardEvent = Schema.TaggedStruct(
+  "RemotePublicationAttemptRejectedNonFastForward",
+  {
+    attemptOrdinal: RemotePublicationAttemptOrdinal,
+    correlation: RemotePublicationCorrelation,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+export type RemotePublicationAttemptRejectedNonFastForwardEvent =
+  typeof RemotePublicationAttemptRejectedNonFastForwardEvent.Type
+
 export const RemotePublicationProofBasis = Schema.TaggedUnion({
   PushApplied: { attemptOrdinal: RemotePublicationAttemptOrdinal, remoteHead: GitCommitSha },
   PushUpToDate: { attemptOrdinal: RemotePublicationAttemptOrdinal, remoteHead: GitCommitSha },
@@ -297,6 +310,7 @@ export const RemotePublicationJournalEvent = Schema.Union([
   RemotePublicationAdmissionObservedEvent,
   RemotePublicationIntendedEvent,
   RemotePublicationAttemptIntendedEvent,
+  RemotePublicationAttemptRejectedNonFastForwardEvent,
   RemotePublicationSucceededEvent,
   RemotePublicationRetainedEvent
 ])

@@ -56,6 +56,7 @@ type AppendCut = Readonly<{
   event:
     | "RemotePublicationIntended"
     | "RemotePublicationAttemptIntended"
+    | "RemotePublicationAttemptRejectedNonFastForward"
     | "RemotePublicationSucceeded"
     | "RemotePublicationRetained"
   timing: "before" | "after"
@@ -137,7 +138,7 @@ const publicationOrdinals = (records: ReadonlyArray<JournalRecord>): ReadonlyArr
 const makeGit = Effect.fn("DirectPublicationRecovery.makeGit")(function* (options?: {
   readonly custody?: "stopped" | "unproven"
   readonly observeApplied?: boolean
-  readonly push?: "applied" | "lost-applied" | "lost-unapplied"
+  readonly push?: "applied" | "lost-applied" | "lost-unapplied" | "rejected"
 }) {
   const calls = yield* Ref.make(emptyCalls())
   const remoteApplied = yield* Ref.make(options?.observeApplied ?? false)
@@ -184,13 +185,17 @@ const makeGit = Effect.fn("DirectPublicationRecovery.makeGit")(function* (option
         timeline: [...current.timeline, `push:${ordinalNumber(ordinal)}`]
       })).pipe(
         Effect.andThen(
-          options?.push === "lost-applied"
-            ? Ref.set(remoteApplied, true).pipe(Effect.andThen(Effect.die("process lost after applied push")))
-            : options?.push === "lost-unapplied"
-              ? Effect.die("process lost after stopped unapplied push")
-              : Ref.set(remoteApplied, true).pipe(
-                  Effect.as(RemotePublicationPushResult.cases.Applied.make({ remoteHead: candidate.candidateCommit }))
-                )
+          options?.push === "rejected"
+            ? Effect.succeed<RemotePublicationPushResult>(
+                RemotePublicationPushResult.cases.RejectedNonFastForward.make({})
+              )
+            : options?.push === "lost-applied"
+              ? Ref.set(remoteApplied, true).pipe(Effect.andThen(Effect.die("process lost after applied push")))
+              : options?.push === "lost-unapplied"
+                ? Effect.die("process lost after stopped unapplied push")
+                : Ref.set(remoteApplied, true).pipe(
+                    Effect.as(RemotePublicationPushResult.cases.Applied.make({ remoteHead: candidate.candidateCommit }))
+                  )
         )
       )
   })
@@ -221,6 +226,24 @@ const exerciseRecoveryCuts = Effect.fn("DirectPublicationRecovery.exerciseCuts")
   ) => Effect.Effect<A, unknown, Scope.Scope>
 ) {
   // The process disappears before the outer intent is durable. Recovery starts publication from the qualified prefix.
+  yield* fresh((open) =>
+    Effect.gen(function* () {
+      const rejected = yield* makeGit({ push: "rejected" })
+      yield* expectProcessLoss(
+        open((store) =>
+          runProcess(store, rejected.git, { event: "RemotePublicationAttemptRejectedNonFastForward", timing: "after" })
+        )
+      )
+      const retained = yield* open((store) => store.read(runId))
+      expect(recordTags(retained).at(-1)).toBe("RemotePublicationAttemptRejectedNonFastForward")
+      expect(publicationOrdinals(retained)).toEqual([1])
+      const recovery = yield* makeGit()
+      expect((yield* open((store) => runProcess(store, recovery.git)))._tag).toBe("PublicationSucceeded")
+      expect((yield* Ref.get(recovery.calls)).timeline).toEqual(["custody", "observe", "prepare:2", "push:2"])
+      expect(publicationOrdinals(yield* open((store) => store.read(runId)))).toEqual([1, 2])
+    })
+  )
+
   yield* fresh((open) =>
     Effect.gen(function* () {
       const beforeOuter = yield* makeGit()

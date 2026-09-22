@@ -83,6 +83,24 @@ export const deriveRemotePublicationState = (
   if (attemptIssue !== undefined) {
     return RemotePublicationState.cases.PublicationContradiction.make({ detail: attemptIssue })
   }
+  const rejectedOrdinals = new Set(
+    events.flatMap((event) =>
+      event._tag === "RemotePublicationAttemptRejectedNonFastForward" ? [event.attemptOrdinal] : []
+    )
+  )
+  for (const [index, event] of events.entries()) {
+    if (event._tag !== "RemotePublicationAttemptRejectedNonFastForward") continue
+    const previous = events[index - 1]
+    if (
+      previous?._tag !== "RemotePublicationAttemptIntended" ||
+      previous.attemptOrdinal !== event.attemptOrdinal ||
+      events.slice(0, index).some((prior) => prior._tag === event._tag && prior.attemptOrdinal === event.attemptOrdinal)
+    ) {
+      return RemotePublicationState.cases.PublicationContradiction.make({
+        detail: "publication rejection requires its exact unmatched preceding attempt intent"
+      })
+    }
+  }
   const successes = events.filter(
     (event): event is Extract<RemotePublicationJournalEvent, { readonly _tag: "RemotePublicationSucceeded" }> =>
       event._tag === "RemotePublicationSucceeded"
@@ -126,6 +144,14 @@ export const deriveRemotePublicationState = (
       })
     }
     const proofOrdinal = attemptOrdinalOfProof(success.proof)
+    if (
+      (success.proof._tag === "PushApplied" || success.proof._tag === "PushUpToDate") &&
+      rejectedOrdinals.has(proofOrdinal)
+    ) {
+      return RemotePublicationState.cases.PublicationContradiction.make({
+        detail: "one push attempt cannot both reject and succeed"
+      })
+    }
     const successIndex = events.indexOf(success)
     const intendedIndex = events.findIndex(
       (event) => event._tag === "RemotePublicationAttemptIntended" && event.attemptOrdinal === proofOrdinal

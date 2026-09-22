@@ -10,6 +10,7 @@ import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
 import {
   RemotePublicationAttemptIntendedEvent,
+  RemotePublicationAttemptRejectedNonFastForwardEvent,
   RemotePublicationAttemptOrdinal,
   RemotePublicationIntendedEvent,
   RemotePublicationProofBasis,
@@ -39,6 +40,39 @@ const attempt = RemotePublicationAttemptIntendedEvent.make({
   occurrenceClassification: "InitiatedAction",
   refspec: remotePublicationRefspecFor(correlation.qualifiedCandidate.candidateCommit, correlation.target.branch),
   version: workflowJournalEventVersion
+})
+
+it("retains a conclusive rejection and rejects orphan, duplicate, wrong-ordinal, or conflicting results", () => {
+  const rejected = RemotePublicationAttemptRejectedNonFastForwardEvent.make({
+    attemptOrdinal: attempt.attemptOrdinal,
+    correlation,
+    occurrenceClassification: "NonActionOccurrence",
+    version: workflowJournalEventVersion
+  })
+  expect(deriveRemotePublicationState([outerIntent, attempt, rejected])).toMatchObject({
+    _tag: "PublicationPending",
+    attemptOrdinals: [1]
+  })
+  for (const events of [
+    [outerIntent, rejected],
+    [outerIntent, attempt, rejected, rejected],
+    [outerIntent, attempt, { ...rejected, attemptOrdinal: RemotePublicationAttemptOrdinal.make(2) }],
+    [
+      outerIntent,
+      attempt,
+      rejected,
+      RemotePublicationSucceededEvent.make({
+        correlation,
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion,
+        proof: RemotePublicationProofBasis.cases.PushApplied.make({
+          attemptOrdinal: attempt.attemptOrdinal,
+          remoteHead: correlation.qualifiedCandidate.candidateCommit
+        })
+      })
+    ]
+  ])
+    expect(deriveRemotePublicationState(events)._tag).toBe("PublicationContradiction")
 })
 
 it("derives exact publication proof only after its numbered intent", () => {

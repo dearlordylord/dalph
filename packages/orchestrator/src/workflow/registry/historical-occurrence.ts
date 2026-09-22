@@ -64,6 +64,7 @@ import {
   RemotePublicationAdmissionObserved,
   RemotePublicationAdmissionReadInitiated,
   RemotePublicationAttemptRequested,
+  RemotePublicationAttemptRejectedNonFastForward,
   RemotePublicationRequested,
   RemotePublicationRetained,
   RemotePublicationSucceeded
@@ -84,6 +85,7 @@ export {
   RemotePublicationAdmissionObserved,
   RemotePublicationAdmissionReadInitiated,
   RemotePublicationAttemptRequested,
+  RemotePublicationAttemptRejectedNonFastForward,
   RemotePublicationRequested,
   RemotePublicationRetained,
   RemotePublicationSucceeded
@@ -408,6 +410,7 @@ export const HistoricalWorkflowOccurrence = Schema.Union([
   RemotePublicationAdmissionObserved,
   RemotePublicationAdmissionReadInitiated,
   RemotePublicationAttemptRequested,
+  RemotePublicationAttemptRejectedNonFastForward,
   RemotePublicationRequested,
   RemotePublicationRetained,
   RemotePublicationSucceeded,

@@ -42,6 +42,7 @@ import {
 } from "@dalph/orchestrator"
 import { NodeServices } from "@effect/platform-node"
 import {
+  Cause,
   Crypto,
   Deferred,
   Duration,
@@ -3089,9 +3090,17 @@ for (const storage of ["memory", "sqlite-and-private-files"] as const) {
               Effect.provide(productionJournalLayer(attempt.runId, trackerTarget, initial, journal), { local: true })
             )
           }).pipe(Effect.provide(journalLayer, { local: true }), Effect.provide(privateLayer, { local: true }))
-        expect((yield* activation(true).pipe(Effect.exit))._tag).toBe("Failure")
+        const originalLoss = yield* activation(true).pipe(Effect.exit)
+        expect(originalLoss._tag).toBe("Failure")
+        if (originalLoss._tag === "Failure") {
+          expect(Cause.pretty(originalLoss.cause)).toContain("original process lost after association")
+        }
         recovery = true
-        expect((yield* activation().pipe(Effect.exit))._tag).toBe("Failure")
+        const recoveryLoss = yield* activation().pipe(Effect.exit)
+        expect(recoveryLoss._tag).toBe("Failure")
+        if (recoveryLoss._tag === "Failure") {
+          expect(Cause.pretty(recoveryLoss.cause)).toContain(`coordinator lost at ${cut}`)
+        }
         expect(cutPending).toBe(false)
         const beforeRestart = calls.length
         const recovered = yield* activation().pipe(Effect.exit)

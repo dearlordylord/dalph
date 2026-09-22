@@ -308,6 +308,7 @@ export type DeliverySemanticTraceEvent =
       readonly _tag: "ProposalDeferred"
       readonly proposalId: DeliveryProposalId
       readonly reason:
+        | "DispositionCleanupRequired"
         | "IntegrationTargetUnavailable"
         | "PlannedAttemptProtocolUnavailable"
         | "TaskWorkPositionUnavailable"

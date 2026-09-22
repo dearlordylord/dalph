@@ -14,6 +14,7 @@ import {
 import { remotePublicationAttemptsExhausted, RemotePublicationState } from "./state.js"
 import {
   appendRemotePublicationAttemptIntent,
+  appendRemotePublicationAttemptRejection,
   appendRemotePublicationIntent,
   appendRemotePublicationRetained,
   appendRemotePublicationSuccess,
@@ -191,6 +192,7 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
           return RemotePublicationState.cases.PublicationSucceeded.make({ correlation, proof })
         }
         if (result._tag === "RejectedNonFastForward") {
+          yield* appendRemotePublicationAttemptRejection(correlation, attemptOrdinal)
           pendingState = RemotePublicationState.cases.PublicationPending.make({
             attemptOrdinals: [...pendingState.attemptOrdinals, attemptOrdinal],
             correlation

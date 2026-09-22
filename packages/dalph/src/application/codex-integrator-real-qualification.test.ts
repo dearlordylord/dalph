@@ -72,7 +72,7 @@ const threadFor = (thread) => ({
   cwd: thread.cwd,
   status: "idle",
   turns: thread.turns,
-  ...(thread.ownedThreadToken === undefined ? {} : { ownedThreadToken: thread.ownedThreadToken })
+  ...(thread.threadSource === undefined ? {} : { threadSource: thread.threadSource })
 })
 const tokenFrom = (message) => message?.params?.input?.[0]?.text?.match(/dalph-owned-turn-token:v1:([^\s>]+)\s-->/)?.[1]
 const modelCall = async () => {
@@ -89,20 +89,21 @@ const respond = async (message) => {
     write(message.id, { data: state.threads.map((thread) => ({ ...threadFor(thread), turns: [] })) })
     return
   }
+  if (message.method === "thread/loaded/list") return write(message.id, { data: state.threads.map((thread) => thread.id), nextCursor: null })
   if (message.method === "thread/start") {
-    const ownedThreadToken = message.params?.metadata?.dalphOwnedThreadToken
+    const threadSource = message.params?.threadSource
     const thread = state.threads[0] || {
       id: "qualification-thread",
       cwd: message.params.cwd,
       turns: [],
-      ...(ownedThreadToken === undefined ? {} : { ownedThreadToken })
+      ...(threadSource === undefined ? {} : { threadSource })
     }
     if (state.threads.length === 0) state.threads.push(thread)
     saveState()
     write(message.id, { thread: threadFor(thread) })
     return
   }
-  if (message.method === "thread/resume") {
+  if (message.method === "thread/resume" || message.method === "thread/read") {
     const thread = state.threads.find((item) => item.id === message.params.threadId)
     if (thread === undefined) return writeError(message.id)
     write(message.id, { thread: threadFor(thread) })

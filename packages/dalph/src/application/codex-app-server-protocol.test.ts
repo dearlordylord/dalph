@@ -76,8 +76,22 @@ const responseFor = (method, params = {}) => {
   }
   if (method === "thread/turns/list") {
     return mode === "thread-turns-list-hydration"
-      ? { data: [{ ...validTurn, id: "protocol-turn-hydrated" }], nextCursor: null }
-      : { data: [], nextCursor: null }
+      ? { data: [{ ...validTurn, id: "protocol-turn-hydrated", items: params.itemsView === "full" ? validTurn.items : [] }], nextCursor: null }
+      : { error: true }
+  }
+  if (method === "thread/loaded/list") {
+    if (mode === "loaded-thread-repeated-cursor") return { data: [], nextCursor: "repeated" }
+    if (mode === "loaded-thread-census") return params.cursor === undefined
+      ? { data: [validThread.id], nextCursor: "second" }
+      : { data: [validThread.id], nextCursor: null }
+    return { data: [], nextCursor: null }
+  }
+  if (mode === "thread-turns-list-hydration" && (method === "thread/read" || method === "thread/resume")) {
+    return { thread: { ...validThread, historyMode: "paginated" } }
+  }
+  if (mode === "loaded-thread-census" && method === "thread/list") return { data: [], nextCursor: null }
+  if (mode === "loaded-thread-census" && method === "thread/read") {
+    return { thread: { ...validThread, threadSource: "dalph-integrator-thread:v1:loaded-owned" } }
   }
   if (mode === "unattended-policy" && method === "thread/start") {
     return params.approvalPolicy === "never" && params.sandbox === "danger-full-access"
@@ -121,7 +135,7 @@ const responseFor = (method, params = {}) => {
     return { data: [{ ...validThread, correlation: { runId: "run" } }] }
   }
   if (mode === "thread-list-invalid-token" && method === "thread/list") {
-    return { data: [{ ...validThread, ownedThreadToken: 42 }] }
+    return { data: [{ ...validThread, threadSource: 42 }] }
   }
   if (mode === "thread-list-malformed-nested-item" && method === "thread/list") {
     return { data: [{ ...validThread, turns: [{ ...validTurn, items: [{ type: null }] }] }] }
@@ -168,7 +182,7 @@ const responseFor = (method, params = {}) => {
     return {
       thread: {
         ...validThread,
-        ownedThreadToken: params.metadata?.dalphOwnedThreadToken
+        threadSource: params.threadSource
       }
     }
   }
@@ -176,22 +190,22 @@ const responseFor = (method, params = {}) => {
     return {
       thread: {
         ...validThread,
-        metadata: { dalphOwnedThreadToken: params.metadata?.dalphOwnedThreadToken }
+        threadSource: params.threadSource,
+        metadata: { dalphOwnedThreadToken: "ignored-unsupported-field" }
       }
     }
   }
   if (mode === "thread-start-invalid-metadata-token" && method === "thread/start") {
-    return { thread: { ...validThread, metadata: { dalphOwnedThreadToken: 42 } } }
+    return { thread: { ...validThread, threadSource: 42 } }
   }
   if (mode === "thread-start-invalid-direct-token" && method === "thread/start") {
-    return { thread: { ...validThread, ownedThreadToken: 42 } }
+    return { thread: { ...validThread, threadSource: "dalph-integrator-thread:v1:" } }
   }
   if (mode === "thread-start-contradictory-tokens" && method === "thread/start") {
     return {
       thread: {
         ...validThread,
-        ownedThreadToken: "direct-token",
-        metadata: { dalphOwnedThreadToken: "metadata-token" }
+        threadSource: { invalid: true }
       }
     }
   }
@@ -425,7 +439,11 @@ const responseFor = (method, params = {}) => {
 const onMessage = (message) => {
   if (message.method === "initialized") return
   requestNumber += 1
-  if (message.method === "thread/read") threadReadNumber += 1
+  if (message.method === "thread/read" && message.params?.includeTurns === true) threadReadNumber += 1
+  if (mode === "unmaterialized-thread" && message.method === "thread/read" && message.params?.includeTurns === true) {
+    process.stdout.write(JSON.stringify({ id: message.id, error: { code: -32600, message: "thread protocol-thread is not materialized yet; includeTurns is unavailable before first user message" } }) + "\n")
+    return
+  }
   if (mode === "versionless-envelope" && (message.method === "initialize" || message.method === "thread/start")) {
     writeVersionless(message.id, responseFor(message.method, message.params))
     if (message.method === "thread/start") {
@@ -521,12 +539,12 @@ const onMessage = (message) => {
       process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { index } }) + "\n")
     }
   }
-  if (mode === "turn-completed-burst" && message.method === "thread/read" && threadReadNumber === 1) {
+  if (mode === "turn-completed-burst" && message.method === "thread/read" && message.params?.includeTurns === true && threadReadNumber === 1) {
     for (let index = 0; index < 64; index += 1) {
       process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "thread/status/changed", params: { index } }) + "\n")
     }
   }
-  if (mode === "turn-completed-burst" && message.method === "thread/read" && threadReadNumber === 2) {
+  if (mode === "turn-completed-burst" && message.method === "thread/read" && message.params?.includeTurns === true && threadReadNumber === 2) {
     process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { terminal: true } }) + "\n")
   }
   if (mode === "unexpected-approval-request" && message.method === "turn/start") {
@@ -1071,7 +1089,7 @@ it.effect("accepts explicit empty turn censuses from thread/read and thread/resu
   )
 )
 
-it.effect("hydrates an empty thread/read census from the paginated turns operation", () =>
+it.effect("hydrates paginated history with full items from the declared turns operation", () =>
   withFixture("thread-turns-list-hydration", (app) =>
     Effect.gen(function* () {
       const started = yield* app.startThread("/fixture/worktree")
@@ -1079,6 +1097,39 @@ it.effect("hydrates an empty thread/read census from the paginated turns operati
       expect(read.turns[0]?.id).toBe(CodexTurnId.make("protocol-turn-hydrated"))
       expect(read.turns[0]?.status).toBe("completed")
       expect(read.turns[0]?.items).toHaveLength(2)
+      expect((yield* app.resumeThread(started.id, "/fixture/worktree")).turns).toEqual(read.turns)
+    })
+  )
+)
+
+it.effect("includes loaded unpersisted threads, exhausts pagination, and deduplicates identities", () =>
+  withFixture("loaded-thread-census", (app) =>
+    Effect.gen(function* () {
+      if (app.listThreads === undefined) return expect.fail("thread census is required")
+      const threads = yield* app.listThreads()
+      expect(threads.map((thread) => thread.id)).toEqual(["protocol-thread"])
+      const first = threads[0]
+      if (first === undefined) return expect.fail("loaded thread must be present")
+      const thread = yield* app.readThread(first.id)
+      expect(thread.ownedThreadToken).toBe("loaded-owned")
+    })
+  )
+)
+
+it.effect("rejects an incomplete loaded census with a repeated cursor", () =>
+  withFixture("loaded-thread-repeated-cursor", (app) =>
+    Effect.gen(function* () {
+      if (app.listThreads === undefined) return expect.fail("thread census is required")
+      expectAppFailure(yield* Effect.exit(app.listThreads()), "thread/loaded/list")
+    })
+  )
+)
+
+it.effect("accepts an exact idle unmaterialized-thread proof without inventing a missing rollout", () =>
+  withFixture("unmaterialized-thread", (app) =>
+    Effect.gen(function* () {
+      const started = yield* app.startThread("/fixture/worktree")
+      expect((yield* app.readThread(started.id)).turns).toEqual([])
     })
   )
 )

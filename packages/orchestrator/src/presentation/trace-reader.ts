@@ -904,6 +904,7 @@ const keyCheckedHistoricalEventTags = {
   TargetPromotionNonConvergence: true,
   TargetPromotionObservedSuccess: true,
   RemotePublicationRetained: true,
+  RemotePublicationAttemptRejectedNonFastForward: true,
   RemoteBaselineObserved: true,
   RemoteBaselineReadIntended: true,
   TargetPromotionStale: true,

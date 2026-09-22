@@ -108,6 +108,7 @@ const {
   RemoteBaselineReadInitiated,
   RemotePublicationAdmissionObserved,
   RemotePublicationAdmissionReadInitiated,
+  RemotePublicationAttemptRejectedNonFastForward,
   RemotePublicationAttemptRequested,
   RemotePublicationRequested,
   RemotePublicationRetained,
@@ -800,6 +801,7 @@ const nonProjectedJournalEventKinds = {
   RemotePublicationAdmissionObserved: true,
   RemotePublicationAdmissionReadIntended: true,
   RemotePublicationAttemptIntended: true,
+  RemotePublicationAttemptRejectedNonFastForward: true,
   RemotePublicationIntended: true,
   RemotePublicationRetained: true,
   RemotePublicationSucceeded: true,
@@ -920,6 +922,7 @@ const historicalJournalEventKinds = {
   RemotePublicationAdmissionObserved: true,
   RemotePublicationAdmissionReadIntended: true,
   RemotePublicationAttemptIntended: true,
+  RemotePublicationAttemptRejectedNonFastForward: true,
   RemotePublicationIntended: true,
   RemotePublicationRetained: true,
   RemotePublicationSucceeded: true,
@@ -1266,6 +1269,7 @@ const historicalPublicationEventKinds = {
   RemotePublicationAdmissionObserved: true,
   RemotePublicationAdmissionReadIntended: true,
   RemotePublicationAttemptIntended: true,
+  RemotePublicationAttemptRejectedNonFastForward: true,
   RemotePublicationIntended: true,
   RemotePublicationRetained: true,
   RemotePublicationSucceeded: true
@@ -2161,6 +2165,23 @@ const projectHistoricalPublication = (
   if (event._tag === "RemotePublicationIntended") return projectHistoricalPublicationRequested(record, event, context)
   if (event._tag === "RemotePublicationAttemptIntended") {
     return projectHistoricalPublicationAttempt(record, event, context)
+  }
+  if (event._tag === "RemotePublicationAttemptRejectedNonFastForward") {
+    const attempt = context.publicationAttemptIntents.get(
+      publicationAttemptKey(event.correlation.requestId, event.attemptOrdinal)
+    )
+    if (attempt === undefined || !remotePublicationCorrelationEquals(attempt.correlation, event.correlation)) {
+      return historicalFailure(record, "publication rejection has no exact earlier attempt intent")
+    }
+    return Effect.succeed(
+      RemotePublicationAttemptRejectedNonFastForward.make({
+        attemptOrdinal: event.attemptOrdinal,
+        correlation: event.correlation,
+        occurrenceClassification: event.occurrenceClassification,
+        recordedAt: record.position,
+        runId: record.runId
+      })
+    )
   }
   if (event._tag === "RemotePublicationRetained") {
     return projectHistoricalPublicationRetained(record, event, context)

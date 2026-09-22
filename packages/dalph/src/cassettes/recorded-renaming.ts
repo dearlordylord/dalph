@@ -1811,6 +1811,13 @@ const renameRecordedCassetteEntry = (
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
           proof: preserveRemotePublicationProofBasis(entry.proof)
         }),
+      RemotePublicationAttemptRejectedNonFastForward: (entry) =>
+        completeFields<typeof entry>({
+          _tag: entry._tag,
+          attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
+          correlation: renameRemotePublicationCorrelation(entry.correlation, maps),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
+        }),
       RemotePublicationRetained: (entry) =>
         completeFields<typeof entry>({
           _tag: "RemotePublicationRetained",

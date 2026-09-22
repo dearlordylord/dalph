@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import {
   atomicRecord,
+  epochMilliseconds,
   custodyVersion,
   readRecord,
   repositoryLocation,
@@ -45,6 +46,7 @@ const environment = () => {
   const env = withoutInheritedCustody(process.env)
   for (const key of [
     "DALPH_COVERAGE_BASE_SHA",
+    "DALPH_GATE_DEADLINE",
     "DALPH_QUALIFICATION_ENV_CAPTURE",
     "DALPH_RUN_REAL_CODEX_QUALIFICATION",
     "npm_execpath"
@@ -110,6 +112,105 @@ const runs = (root) => {
     return []
   }
 }
+
+void test("gate deadline expires a quiet writer and preserves stopped custody evidence", async () => {
+  const f = fixture()
+  try {
+    const deadline = new Date(epochMilliseconds() + 2000).toISOString()
+    const result = await start(f.root, [process.execPath, "-e", "setInterval(()=>{},1000)"], {
+      DALPH_GATE_DEADLINE: deadline
+    }).done
+    assert.equal(result.code, 1, result.output)
+    const entry = runs(f.root)[0]
+    assert.ok(entry, result.output)
+    assert.equal(readRecord(join(entry.runDirectory, "run.json")).deadline, deadline)
+    const terminal = readRecord(join(entry.runDirectory, "terminal.json"))
+    assert.equal(terminal.custody, "stopped")
+    assert.notEqual(terminal.outcome, "passed")
+    assert.equal(existsSync(repositoryLocation(f.root).worktreeFence), false)
+  } finally {
+    f.cleanup()
+  }
+})
+
+void test("worktree lock waiting consumes the deadline without launching a second writer", async () => {
+  const f = fixture()
+  try {
+    const ready = join(f.root, ".scratch", "deadline-ready")
+    const release = join(f.root, ".scratch", "deadline-release")
+    const forbidden = join(f.root, ".scratch", "forbidden-writer")
+    const first = start(f.root, [
+      process.execPath,
+      "-e",
+      `require('fs').writeFileSync(${JSON.stringify(ready)},'ready');const timer=setInterval(()=>{if(require('fs').existsSync(${JSON.stringify(release)}))clearInterval(timer)},10)`
+    ])
+    try {
+      await until(() => existsSync(ready))
+      const second = await start(
+        f.root,
+        [process.execPath, "-e", `require('fs').writeFileSync(${JSON.stringify(forbidden)},'bad')`],
+        { DALPH_GATE_DEADLINE: new Date(epochMilliseconds() + 500).toISOString() }
+      ).done
+      assert.equal(second.code, 1, second.output)
+      assert.match(second.output, /deadline expired/u)
+      assert.equal(existsSync(forbidden), false)
+      assert.equal(runs(f.root).length, 1)
+    } finally {
+      writeFileSync(release, "release")
+      assert.equal((await first.done).code, 0)
+    }
+  } finally {
+    f.cleanup()
+  }
+})
+
+void test("a contracted deadline survives a replacement child environment", async () => {
+  const f = fixture()
+  try {
+    const script = join(f.root, ".scratch", "deadline-contraction.mjs")
+    writeFileSync(
+      script,
+      `import {runBoundedCommand} from ${JSON.stringify(new URL(`file://${bounded}`).href)};
+      const deadline=new Date(Date.now()+3000).toISOString();
+      process.env.DALPH_GATE_DEADLINE=deadline;
+      await runBoundedCommand({executable:process.execPath,args:['-e','console.log(process.env.DALPH_GATE_DEADLINE)'],environment:{},name:'contracted child',timeoutMilliseconds:10000});
+      console.log('expected='+deadline);`
+    )
+    const result = await start(f.root, [process.execPath, script], {
+      DALPH_GATE_DEADLINE: new Date(epochMilliseconds() + 10000).toISOString()
+    }).done
+    assert.equal(result.code, 0, result.output)
+    const expected = /expected=(\S+)/u.exec(result.output)?.[1]
+    assert.ok(expected, result.output)
+    assert.ok(result.output.split("\n").includes(expected), result.output)
+    const stage = readRunEvidence(runs(f.root)[0]).stages.find((entry) => entry.command.name === "contracted child")
+    assert.ok(stage.command.timeoutMilliseconds <= 3000)
+  } finally {
+    f.cleanup()
+  }
+})
+
+void test("direct bounded spawns reject expired, extended, and malformed child deadlines before registration", async () => {
+  const f = fixture()
+  try {
+    const script = join(f.root, ".scratch", "deadline-rejection.mjs")
+    writeFileSync(
+      script,
+      `import assert from 'node:assert/strict';import {runBoundedCommand} from ${JSON.stringify(new URL(`file://${bounded}`).href)};
+      for(const deadline of [new Date(Date.now()-1).toISOString(),new Date(Date.now()+60000).toISOString(),'later']) {
+        await assert.rejects(runBoundedCommand({executable:process.execPath,args:['-e','console.log("forbidden-child")'],environment:{DALPH_GATE_DEADLINE:deadline},name:'forbidden child',timeoutMilliseconds:10000}),/deadline|ISO UTC/);
+      }`
+    )
+    const result = await start(f.root, [process.execPath, script], {
+      DALPH_GATE_DEADLINE: new Date(epochMilliseconds() + 10000).toISOString()
+    }).done
+    assert.equal(result.code, 0, result.output)
+    assert.doesNotMatch(result.output, /forbidden-child/u)
+    assert.equal(readRecord(join(runs(f.root)[0].runDirectory, "registration.json")).obligations.length, 1)
+  } finally {
+    f.cleanup()
+  }
+})
 
 void test("same-worktree writers never overlap; nested bounded commands have registered obligations and logs", async () => {
   const f = fixture()
@@ -487,6 +588,42 @@ void test("killed custody owner retains both fences until observed surviving wri
   }
 })
 
+void test("clone-slot waiting consumes the deadline without creating a run or writer", async () => {
+  const f = fixture()
+  try {
+    const other = join(f.root, ".scratch", "deadline-other-worktree")
+    f.git("worktree", "add", "-qb", "deadline-other", other)
+    const ready = join(f.root, ".scratch", "slot-deadline-ready")
+    const release = join(f.root, ".scratch", "slot-deadline-release")
+    const first = start(
+      f.root,
+      [
+        process.execPath,
+        "-e",
+        `const fs=require('fs');fs.writeFileSync(${JSON.stringify(ready)},'ready');const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)}))clearInterval(timer)},10)`
+      ],
+      { DALPH_GATE_SLOTS: "1" }
+    )
+    try {
+      await until(() => existsSync(ready))
+      const result = await start(other, [process.execPath, "-e", "console.log('forbidden-slot-writer')"], {
+        DALPH_GATE_SLOTS: "1",
+        DALPH_GATE_DEADLINE: new Date(epochMilliseconds() + 500).toISOString()
+      }).done
+      assert.equal(result.code, 1, result.output)
+      assert.match(result.output, /deadline expired/u)
+      assert.doesNotMatch(result.output, /forbidden-slot-writer/u)
+      assert.equal(runs(f.root).length, 1)
+      assert.equal(existsSync(repositoryLocation(other).worktreeFence), false)
+    } finally {
+      writeFileSync(release, "release")
+      assert.equal((await first.done).code, 0)
+    }
+  } finally {
+    f.cleanup()
+  }
+})
+
 void test("another worktree runs while a same-worktree waiter consumes no spare clone slot", async () => {
   const f = fixture()
   try {
@@ -606,6 +743,30 @@ void test("launch failure publishes one launch-failed lifecycle terminal without
     assert.equal(nested.outcome, "launch-failed")
     assert.equal(nested.exitCode, null)
     assert.equal(nested.groupAbsent, true)
+  } finally {
+    f.cleanup()
+  }
+})
+
+void test("formal progress advertises a shorter child timeout instead of the enclosing gate deadline", async () => {
+  const f = fixture()
+  try {
+    const progressPath = join(f.root, ".scratch", "short-child-progress.jsonl")
+    const script = join(f.root, ".scratch", "short-child-progress.mjs")
+    writeFileSync(
+      script,
+      `import {writeFileSync} from 'node:fs';import {runBoundedCommand} from ${JSON.stringify(new URL(`file://${bounded}`).href)};const events=[];await runBoundedCommand({executable:process.execPath,args:['-e',''],name:'short progress child',progress:{emit:event=>events.push(event),identity:{position:0,kind:'test',name:'short progress child'}},timeoutMilliseconds:2000});writeFileSync(${JSON.stringify(progressPath)},events.map(event=>JSON.stringify(event)).join('\\n')+'\\n')`
+    )
+    const result = await start(f.root, [process.execPath, script]).done
+    assert.equal(result.code, 0, result.output)
+    const [started] = readFileSync(progressPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line))
+    assert.equal(started.type, "start")
+    const advertisedMilliseconds = Date.parse(started.deadline) - Date.parse(started.startedAt)
+    assert.ok(advertisedMilliseconds > 0, `expected a future deadline, received ${advertisedMilliseconds}`)
+    assert.ok(advertisedMilliseconds <= 2000, `expected child deadline <= 2000ms, received ${advertisedMilliseconds}`)
   } finally {
     f.cleanup()
   }

@@ -75,6 +75,7 @@ import {
   remotePublicationAdmissionObservedRecordKey,
   remotePublicationAdmissionReadIntendedRecordKey,
   remotePublicationAttemptIntendedRecordKey,
+  remotePublicationAttemptRejectedRecordKey,
   remotePublicationIntendedRecordKey,
   remotePublicationRetainedRecordKey,
   remotePublicationSucceededRecordKey,
@@ -473,6 +474,10 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     RemotePublicationSucceeded: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: remotePublicationSucceededRecordKey(event.correlation.requestId)
+    }),
+    RemotePublicationAttemptRejectedNonFastForward: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: remotePublicationAttemptRejectedRecordKey(event.correlation.requestId, event.attemptOrdinal)
     }),
     RemotePublicationRetained: (event) => ({
       _tag: "GenericEventDescriptor",

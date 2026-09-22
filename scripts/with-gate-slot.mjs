@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url"
 import { epochMilliseconds, inheritedCustody, repositoryLocation, withFileLock } from "./gate-custody-records.mjs"
 import { ensureRegistrationOpen, registrationLockPath } from "./gate-registration.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
+import { gateDeadlineEnvironmentName, remainingGateMilliseconds, resolveGateDeadline } from "./gate-deadline.mjs"
 import {
   formalVerificationExecutables,
   qualityVerificationExecutables,
@@ -34,18 +35,27 @@ const effectiveEnvironment =
 if (effectiveEnvironment.PATH !== undefined) process.env.PATH = effectiveEnvironment.PATH
 const context = inheritedCustody()
 const location = repositoryLocation()
+const deadline = resolveGateDeadline({
+  configured: effectiveEnvironment[gateDeadlineEnvironmentName],
+  inherited: context?.run.deadline
+})
+const deadlineEnvironment = { ...effectiveEnvironment, [gateDeadlineEnvironmentName]: deadline }
 if (context !== undefined) {
   if (context.run.worktree !== location.worktree || context.run.commonDirectory !== location.commonDirectory)
     throw new Error("Inherited gate custody belongs to another worktree")
-  withFileLock(registrationLockPath(context.runDirectory), () => ensureRegistrationOpen(context))
+  withFileLock(
+    registrationLockPath(context.runDirectory),
+    () => ensureRegistrationOpen(context),
+    remainingGateMilliseconds(deadline)
+  )
   try {
     const result = await runBoundedCommand({
       args: commandArguments.slice(1),
       executable: commandArguments[0],
-      environment: effectiveEnvironment,
+      environment: deadlineEnvironment,
       name: "nested admitted gate",
       relayParentSignals: true,
-      timeoutMilliseconds: 24 * 60 * 60 * 1000
+      timeoutMilliseconds: remainingGateMilliseconds(deadline)
     })
     process.exitCode = result.exitCode
   } catch (error) {
@@ -60,14 +70,15 @@ if (context !== undefined) {
   const shell = [
     "set -eu",
     'exec 8>"$DALPH_WORKTREE_LOCK"',
-    'if ! flock -n 8; then echo "[gate-slot] waiting for worktree writer" >&2; flock 8; fi',
+    'if ! flock -n 8; then echo "[gate-slot] waiting for worktree writer" >&2; flock -w "$DALPH_GATE_LOCK_WAIT_SECONDS" 8 || { echo "Gate deadline expired waiting for worktree writer" >&2; exit 1; }; fi',
     'exec "$@"'
   ].join("\n")
   const { mkdirSync } = await import("node:fs")
   mkdirSync(location.custodyRoot, { recursive: true })
   const child = spawn("bash", ["-c", shell, "gate-custody", process.execPath, runner, "--", ...commandArguments], {
     env: {
-      ...effectiveEnvironment,
+      ...deadlineEnvironment,
+      DALPH_GATE_LOCK_WAIT_SECONDS: String(remainingGateMilliseconds(deadline) / 1000),
       DALPH_WORKTREE_LOCK: location.worktreeLock,
       DALPH_GATE_WAIT_STARTED_MILLISECONDS: String(epochMilliseconds())
     },

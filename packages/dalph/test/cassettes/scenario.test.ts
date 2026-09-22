@@ -7069,6 +7069,7 @@ it.effect(
         RemotePublicationAdmissionObserved: true,
         RemotePublicationAdmissionReadIntended: true,
         RemotePublicationAttemptIntended: true,
+        RemotePublicationAttemptRejectedNonFastForward: true,
         RemotePublicationIntended: true,
         RemotePublicationRetained: true,
         RemotePublicationSucceeded: true,
@@ -7504,6 +7505,12 @@ it.effect(
       }
       const directPublicationEntries: ReadonlyArray<RecordedCassetteEntry> = [
         ...directPublicationSeedEntries,
+        {
+          _tag: "RemotePublicationAttemptRejectedNonFastForward",
+          attemptOrdinal: publication.proof.attemptOrdinal,
+          correlation: publication.correlation,
+          occurrenceClassification: "NonActionOccurrence"
+        },
         {
           _tag: "LocalTargetCatchUpIntended",
           correlation: baseline.correlation,

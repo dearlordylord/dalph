@@ -1,7 +1,9 @@
 import { join } from "node:path"
 import { readdirSync } from "node:fs"
+import { gateDeadlineEnvironmentName, remainingGateMilliseconds, resolveGateDeadline } from "./gate-deadline.mjs"
 import {
   canonicalUuidPattern,
+  epochMilliseconds,
   wallClockTimestamp,
   atomicRecord,
   custodyVersion,
@@ -20,7 +22,7 @@ export const ensureRegistrationOpen = (context) => {
   if (registration.runId !== context.run.runId || registration.state !== "open")
     throw new Error("Gate registration is closed; old-run launches are refused")
 }
-export const registerSpawn = ({ command, environment, spawnChild }) => {
+export const registerSpawn = ({ beforeSpawn, command, environment, spawnChild }) => {
   const ambient = inheritedCustody()
   const supplied = inheritedCustody(environment)
   if (
@@ -37,44 +39,81 @@ export const registerSpawn = ({ command, environment, spawnChild }) => {
     (process.env.DALPH_RUN_REAL_CODEX_QUALIFICATION === "1" || environment?.DALPH_RUN_REAL_CODEX_QUALIFICATION === "1")
   )
     throw new Error("Real Codex qualification is outside supported gate custody")
-  if (context === undefined) return { child: spawnChild(environment), obligation: undefined }
-  return withFileLock(registrationLockPath(context.runDirectory), () => {
-    ensureRegistrationOpen(context)
-    const obligationId = newIdentity()
-    const path = join(context.runDirectory, "obligations", `${obligationId}.json`)
-    const intent = {
-      version: custodyVersion,
-      runId: context.run.runId,
-      obligationId,
-      parentId: context.parentId,
-      command,
-      state: "intent",
-      startedAt: wallClockTimestamp()
-    }
-    const registration = readRecord(registrationPath(context.runDirectory))
-    atomicRecord(registrationPath(context.runDirectory), {
-      ...registration,
-      obligations: [...registration.obligations, obligationId]
-    })
-    atomicRecord(path, intent)
-    const childEnvironment = {
-      ...environment,
-      DALPH_GATE_RUN_DIRECTORY: context.runDirectory,
-      DALPH_GATE_RUN_ID: context.run.runId,
-      DALPH_GATE_OBLIGATION: obligationId
-    }
-    const child = spawnChild(childEnvironment)
-    // A missing pid is resolved only by the later definite launch-failure event.
-    let observationError
-    if (child.pid !== undefined) {
-      try {
-        atomicRecord(path, { ...intent, state: "observed", processGroup: child.pid })
-      } catch (error) {
-        observationError = error
+  if (context === undefined) {
+    beforeSpawn?.(undefined)
+    return { child: spawnChild(environment), obligation: undefined }
+  }
+  const ambientDeadline =
+    context.run.deadline === undefined
+      ? undefined
+      : resolveGateDeadline({ inherited: context.run.deadline, configured: process.env[gateDeadlineEnvironmentName] })
+  const deadline =
+    ambientDeadline === undefined
+      ? undefined
+      : resolveGateDeadline({ inherited: ambientDeadline, configured: environment?.[gateDeadlineEnvironmentName] })
+  return withFileLock(
+    registrationLockPath(context.runDirectory),
+    () => {
+      ensureRegistrationOpen(context)
+      const boundedCommand =
+        deadline === undefined
+          ? command
+          : {
+              ...command,
+              timeoutMilliseconds: Math.min(
+                command.timeoutMilliseconds ?? Infinity,
+                remainingGateMilliseconds(deadline)
+              )
+            }
+      const obligationId = newIdentity()
+      const path = join(context.runDirectory, "obligations", `${obligationId}.json`)
+      const intent = {
+        version: custodyVersion,
+        runId: context.run.runId,
+        obligationId,
+        parentId: context.parentId,
+        command: boundedCommand,
+        state: "intent",
+        startedAt: wallClockTimestamp()
       }
-    }
-    return { child, obligation: { context, intent, path }, observationError }
-  })
+      const registration = readRecord(registrationPath(context.runDirectory))
+      atomicRecord(registrationPath(context.runDirectory), {
+        ...registration,
+        obligations: [...registration.obligations, obligationId]
+      })
+      atomicRecord(path, intent)
+      const childEnvironment = {
+        ...environment,
+        DALPH_GATE_RUN_DIRECTORY: context.runDirectory,
+        DALPH_GATE_RUN_ID: context.run.runId,
+        DALPH_GATE_OBLIGATION: obligationId
+      }
+      if (deadline !== undefined) childEnvironment[gateDeadlineEnvironmentName] = deadline
+      // Recheck after durable intent writes: an expired intent is not permission to spawn.
+      if (deadline !== undefined && Date.parse(deadline) <= epochMilliseconds()) {
+        atomicRecord(path, { ...intent, state: "no-child" })
+        throw new Error("Gate deadline expired before spawn; no child launched")
+      }
+      try {
+        beforeSpawn?.({ context, intent, path })
+      } catch (error) {
+        atomicRecord(path, { ...intent, state: "no-child" })
+        throw error
+      }
+      const child = spawnChild(childEnvironment)
+      // A missing pid is resolved only by the later definite launch-failure event.
+      let observationError
+      if (child.pid !== undefined) {
+        try {
+          atomicRecord(path, { ...intent, state: "observed", processGroup: child.pid })
+        } catch (error) {
+          observationError = error
+        }
+      }
+      return { child, deadline, obligation: { context, intent, path }, observationError }
+    },
+    deadline === undefined ? undefined : remainingGateMilliseconds(deadline)
+  )
 }
 export const publishNoChild = (obligation) => {
   if (obligation === undefined) return

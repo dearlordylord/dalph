@@ -1075,3 +1075,92 @@ executor record are therefore preserved for fail-closed reconciliation; no
 private state or worktree was manually deleted. This provider quota boundary
 does not change runtime behavior, the accepted no-extra-remote-read rule, or
 the conclusion that the fresh supervised S1 remains unproven.
+
+### Supervisor takeover and non-convergence diagnosis, 2026-09-22
+
+The maintainer stopped session `01a0c0de-71fe-7c70-af02-301446c67d23`
+and authorized repair of its output and completion of #384. macOS verification
+is explicitly deferred; it is not an active takeover task.
+
+The retained session spans approximately 30 hours 49 minutes through the
+initial audit, with 51 compactions, at least 35 distinct full-gate commands,
+49 agent spawns, and 1,482 process-output polls. These are observations of
+workflow churn, not proof that every invocation performed a complete gate.
+The session used Astra/medium, then Sol/medium, then Luna/xhigh; supervised
+Codex task execution separately used Luna/max. Attribution to Luna alone is
+therefore not established.
+
+Two late tool-call messages provide direct non-convergence evidence. The
+04:03:16Z message contains 2,909 repetitions of a gate-status command in a
+276,334-character input; the 04:41:44Z message repeats it 2,908 times in
+276,274 characters. Both use a malformed hybrid run identifier and fail to
+execute as intended. The sequence outlasted the recorded 03:32Z stop time.
+A stronger model may reduce this risk, but this trace does not distinguish
+model capability from long-context and harness interaction. Documentation
+alone did not enforce the stop rule.
+
+Independent product defects were reproduced rather than attributed to model
+quality: the provider adapter assumed unsupported thread ownership metadata
+and a turn-list RPC absent from the pinned Codex release; cleanup ran before
+delivery but did not interleave after finality created new cleanup obligations;
+and a conclusive non-fast-forward rejection consumed an attempt without its
+own durable result record. The takeover repairs these boundaries while
+preserving exact thread ownership, cleanup proof, consumed push allowances,
+and the prohibition on an extra remote read after successful publication.
+
+The provider protocol tests now cover the supported source marker, loaded and
+persisted thread census, exact empty-thread response, legacy turn history,
+and paginated full-item hydration. A real pinned app-server protocol fixture
+also checks ownership without calling a live model. Direct-publication state,
+protocol, recovery and historical projection tests passed together (64 tests),
+including crash-after-rejection recovery in both stores. Cleanup tests cover
+draining an existing owner while cutting off new admissions. A later complete
+tracker graph is required by the new delivery phase's baseline, not by erasing
+the journal's current graph; two distinguishing authored scenarios passed.
+
+The gate launcher now propagates and persists one absolute deadline across
+worktree-lock waiting, clone-slot waiting and nested commands. A child cannot
+extend its parent's deadline. Expiry stops work and requires stopped-writer
+proof; absent proof retains the custody fence. This is qualification tooling,
+not an automatic deadline for accepted Dalph task execution. It does not
+prevent an external coding agent from generating an enormous tool call or
+starting indefinitely many new runs; enforcing a parent-session budget needs
+the owning agent harness, outside this repository's gate boundary.
+
+At this checkpoint, typechecking passes and the scoped review reports no
+blocker in the new rejection record or per-phase cleanup baseline. One broad
+focused-test batch hit its enforced 120-second bound before producing a
+complete failure report; its build and public-S1 suffix did not start. The
+next discriminating checks separate the suites and retain verbose output.
+No takeover full gate, fresh live-provider S1, PR merge, or #384 closure is
+claimed from this checkpoint.
+
+At 06:08Z the isolated build passed, followed by all five public
+direct-publication fixture tests. The complete controlled S1 took 13.2 seconds
+and proved publication, promotion, completion, cleanup, and the later graph
+before dependant release. All eight Run-composition tests also passed. These
+checks do not substitute for the fresh Luna/max live-provider journey or the
+frozen full gate. The prior broader test timeout occurred under shared-host
+load about 35 on 12 CPUs; its isolated verbose failure was the test's
+10-second timeout. The timed-out build's exact process group was subsequently
+proved absent before rebuilding. Two completed audit searches were separately
+found still running; their exact owned children were stopped and their parent
+shells verified absent. Read-only delegated work also needs enforced process
+bounds and explicit handle settlement.
+
+The deadline repair's final review found that formal progress advertised the
+enclosing gate deadline even when a child had a shorter timeout. The runner
+now freezes one remaining timeout after registration and uses it for both the
+progress deadline and the termination timer. Its deterministic regression
+passes. The complete custody suite passes 54/54. That suite also exposed a
+pre-existing spawn race: a child could reach its retained-log path before the
+parent created the file. Retained-log creation now occurs after durable intent
+but before spawn; append-failure and custody evidence regressions pass.
+
+The provider suites pass 251 tests (16 opt-in tests skipped), the publication
+state/protocol/recovery/projection suites pass 64 tests, and the actual pinned
+Codex 0.149.0 app-server passes all 15 real-process tests against a local fake
+Responses endpoint. This exercises real JSON-RPC, persistence, ownership,
+restart, interruption, process-death cuts and cleanup without a live model
+request. `pnpm check:fast` passes. These results qualify the focused repairs;
+they still do not replace the frozen full gate or fresh Luna/max S1.

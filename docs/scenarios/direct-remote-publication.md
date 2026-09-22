@@ -126,6 +126,18 @@ executor owns execution observations, and the Journal owns workflow history.
    A later complete tracker graph read, not the push, releases dependants.
    Normal Run termination still requires every responsibility settled.
 
+   Runtime phase boundary: when delivery records `IntegrationFinalitySettled`,
+   stop admitting new delivery actions and drain the already admitted owners.
+   Release phase resources, derive and execute exact worktree, branch and
+   candidate cleanup from the accepted journal (rereading candidate evidence),
+   and only then begin the next delivery phase. Pending or unproven cleanup
+   keeps the Run active. A later phase must obtain the later complete graph and
+   recompute its termination proof; a pre-cleanup proof cannot be reused.
+   Regression mapping: `coordination/run/run.test.ts::rechecks cleanup created
+   during delivery before accepting a later finality proof` covers interleaving;
+   the public S1 cassette below covers all three real cleanup families, the
+   graph/dependant ordering, and termination.
+
 The destination ref is the configured remote branch, not a temporary work branch
 or cached tracking ref. Credentials are excluded from journal/status. Journal
 correlation binds R, task revision, attempt, C, S, H, M and destination; identities,
@@ -274,6 +286,18 @@ or broad remote-control milestone is required.
 Intent must be acknowledged before every uncertain push, catch-up, promotion or
 tracker mutation. The result is then recorded. Recovery selects the same R and
 reconciles each owning boundary; it never records a synthetic crash event.
+
+A conclusive non-fast-forward response records
+`RemotePublicationAttemptRejectedNonFastForward` with the exact request and
+consumed ordinal before returning to the publication wait. Restart retains that
+known rejection; it still proves stopped sender custody and obtains the required
+fresh remote observation before considering the next ordinal. It must neither
+reuse that ordinal nor manufacture publication proof. A lost result remains
+ambiguous. `direct-publication/state.test.ts` covers orphan, duplicate,
+wrong-ordinal and contradictory results; `direct-publication/recovery.test.ts`
+covers a crash immediately after this append in memory and reopened SQLite;
+`direct-publication/protocol-engine.test.ts` retains the three-intent/no-fourth
+bound. Successful push handling remains unchanged and adds no remote read.
 
 For #384, the recovery matrix covers initial baseline catch-up, publication,
 local promotion, completion, Exit, and conclusive-proof cuts. The successor-authorization,

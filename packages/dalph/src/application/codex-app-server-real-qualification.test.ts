@@ -481,6 +481,37 @@ const qualificationTest = (name: string, test: () => Promise<void>): void => {
 }
 
 describe("#75 real built Codex app-server qualification", () => {
+  qualificationTest("owned empty thread: supported source marker survives exact read and loaded census", async () => {
+    const fixture = await createGitFixture("accepted")
+    const launched = await launchCodexProcess(fixture)
+    try {
+      const threadSource = "dalph-integrator-thread:v1:real-owned-empty-thread"
+      const started = await launched.rpc.request("thread/start", {
+        approvalPolicy: "never",
+        cwd: fixture.worktree,
+        ephemeral: false,
+        sandbox: "danger-full-access",
+        threadSource
+      })
+      const thread = Schema.decodeUnknownSync(IdentifiedProtocolValue)(started.result?.["thread"])
+      expect(started.result?.["thread"]).toMatchObject({ threadSource })
+      const read = await launched.rpc.request("thread/read", { threadId: thread.id, includeTurns: false })
+      expect(read.result?.["thread"]).toMatchObject({ id: thread.id, cwd: fixture.worktree, threadSource })
+      const loaded = await launched.rpc.request("thread/loaded/list", {})
+      expect(loaded.result?.["data"]).toContain(thread.id)
+      expect(loaded.result?.["nextCursor"]).toBeNull()
+      await expect(launched.rpc.request("thread/read", { threadId: thread.id, includeTurns: true })).rejects.toThrow(
+        JSON.stringify({
+          code: -32600,
+          message: `thread ${thread.id} is not materialized yet; includeTurns is unavailable before first user message`
+        })
+      )
+      expect(fixture.model.calls).toHaveLength(0)
+    } finally {
+      await cleanupFixture(fixture, launched.child)
+    }
+  })
+
   qualificationTest(
     "create and materialize: one real thread stores one task turn in the registered worktree",
     async () => {

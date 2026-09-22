@@ -272,6 +272,7 @@ export interface DeliveryRuntimeAdmissionController {
     | {
         readonly _tag: "Deferred"
         readonly reason:
+          | "DispositionCleanupRequired"
           | "IntegrationTargetUnavailable"
           | "PlannedAttemptProtocolUnavailable"
           | "TaskWorkPositionUnavailable"
@@ -286,6 +287,7 @@ export interface DeliveryRuntimeAdmissionController {
     | {
         readonly _tag: "Deferred"
         readonly reason:
+          | "DispositionCleanupRequired"
           | "IntegrationTargetUnavailable"
           | "PlannedAttemptProtocolUnavailable"
           | "TaskWorkPositionUnavailable"

@@ -401,7 +401,8 @@ it.effect("launches the Codex child with unattended production flags", () =>
         const missing = yield* app
           .resumeThread(CodexThreadId.make("fixture-missing"), "/isolated/qualification-worktree")
           .pipe(Effect.flip)
-        expect(missing).toMatchObject({ kind: "NotFound", operation: "thread/resume" })
+        // Missing rollout on resume is not absence: the exact loaded-thread read must also fail.
+        expect(missing).toMatchObject({ kind: "NotFound", operation: "thread/read" })
         yield* app.close
       }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer))
       expect(result).toBeUndefined()
