@@ -27,6 +27,7 @@ export const copyQualityRuntimeFixture = (worktree) => {
     "formal-evidence-contract.mjs",
     "formal-success-evidence.mjs",
     "gate-custody-records.mjs",
+    "gate-deadline.mjs",
     "gate-input-observer.mjs",
     "gate-input-observer.py",
     "gate-quality-evidence.mjs",

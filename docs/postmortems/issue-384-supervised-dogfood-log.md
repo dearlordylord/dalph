@@ -1199,3 +1199,19 @@ and per-key progress are qualification-only changes; a controlled batch
 regression proves four-wide peak concurrency, input-ordered results, and one
 progress notification per item. The authorization reuse is the runtime repair
 that removes the redundant private boundary call.
+
+Full-gate run `db84e9b9-205a-4ae4-84fe-b5d9b35edb23` on candidate
+`8308d7d466132d7a3256468969714be1e6d5c76a` stopped with unchanged source and
+stopped custody after preflight; qualification did not start. Its five
+failures were finite harness-closure findings: copied quality fixtures omitted
+the new deadline module, synthetic custody fixtures inherited the enclosing
+deadline, resume identity treated the per-run deadline and its derived
+lock-wait budget as candidate inputs, the generated hosted-formal manifest was
+stale, and complexity counts were stale. The copied runtime closure and
+generated projections are updated. `withoutInheritedCustody` now removes the
+deadline, while the resume-input guard excludes both deadline transport values;
+a regression changes both values and still requires an unchanged input proof.
+The custody suite passes 55/55, resume controls pass 191/191, coverage
+explanation passes 45/45, formal controls pass 133/133, and the exact-base
+complexity check passes. These repairs restore finite gate retry and resume
+behavior; they do not claim qualification until a fresh full gate succeeds.

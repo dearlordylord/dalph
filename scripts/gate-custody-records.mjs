@@ -222,6 +222,10 @@ export const withoutInheritedCustody = (environment) =>
   Object.fromEntries(
     Object.entries(environment).filter(
       ([name]) =>
-        !custodyEnvironmentNames.includes(name) && name !== "DALPH_GATE_SLOT" && name !== "DALPH_COVERAGE_DIRECTORY"
+        !custodyEnvironmentNames.includes(name) &&
+        name !== "DALPH_GATE_SLOT" &&
+        name !== "DALPH_GATE_DEADLINE" &&
+        name !== "DALPH_GATE_LOCK_WAIT_SECONDS" &&
+        name !== "DALPH_COVERAGE_DIRECTORY"
     )
   )

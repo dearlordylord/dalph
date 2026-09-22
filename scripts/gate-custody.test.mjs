@@ -36,6 +36,7 @@ for (const name of [
   "DALPH_GATE_RUN_ID",
   "DALPH_GATE_OBLIGATION",
   "DALPH_GATE_SLOT",
+  "DALPH_GATE_DEADLINE",
   "DALPH_COVERAGE_DIRECTORY"
 ])
   delete process.env[name]

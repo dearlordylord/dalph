@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "dca580bc384d295d6bb91918854b8e17ee85ae920e6b1ec15e00a60dfe4ee727",
+  "digest": "a9f6d73d2976370549ad70813311066abfec7c9ce01a518873928839b38d00d2",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -99,6 +99,7 @@
     "packages/orchestrator/src/coordination/delivery/delivery-action-planning.ts",
     "packages/orchestrator/src/coordination/delivery/delivery-action-proposal.ts",
     "packages/orchestrator/src/coordination/delivery/delivery-child-handoff.ts",
+    "packages/orchestrator/src/coordination/delivery/delivery-cleanup-boundary.ts",
     "packages/orchestrator/src/coordination/delivery/delivery-evidence.ts",
     "packages/orchestrator/src/coordination/delivery/delivery-proposal-derivation.ts",
     "packages/orchestrator/src/coordination/delivery/delivery-proposal-identity.ts",
@@ -437,6 +438,7 @@
     "scripts/formal-progress-events.mjs",
     "scripts/formal-success-evidence.mjs",
     "scripts/gate-custody-records.mjs",
+    "scripts/gate-deadline.mjs",
     "scripts/gate-input-observer.mjs",
     "scripts/gate-quality-evidence.mjs",
     "scripts/gate-registration.mjs",

@@ -64,6 +64,22 @@ void test("unchanged complete inputs produce identical identity and drained fina
   }
 })
 
+void test("per-run gate deadline does not invalidate otherwise reusable inputs", async () => {
+  const f = fixture()
+  f.environment.DALPH_GATE_DEADLINE = "2026-09-22T08:00:00.000Z"
+  f.environment.DALPH_GATE_LOCK_WAIT_SECONDS = "3600"
+  const guard = await f.guard()
+  try {
+    assert.equal(guard.identity.environmentDigests.DALPH_GATE_DEADLINE, undefined)
+    assert.equal(guard.identity.environmentDigests.DALPH_GATE_LOCK_WAIT_SECONDS, undefined)
+    f.environment.DALPH_GATE_DEADLINE = "2026-09-22T09:00:00.000Z"
+    f.environment.DALPH_GATE_LOCK_WAIT_SECONDS = "7200"
+    await guard.assertUnchanged()
+  } finally {
+    await guard.close()
+  }
+})
+
 for (const [name, mutate] of [
   [
     "source editrestore",
