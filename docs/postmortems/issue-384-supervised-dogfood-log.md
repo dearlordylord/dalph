@@ -1020,3 +1020,30 @@ and do not schedule a passive retry. The controlled regressions are `keeps the
 initial lifecycle attachment through a delayed owned-turn census` and
 `reconciles a passive terminal by observed turn id when the provider omits its
 token`. No command, CLI, or post-publication remote read changed.
+
+### Exact completion candidate gate and real Codex thread-token boundary, 2026-09-22 02:27–02:41 UTC
+
+The exact candidate `b6b671e440d3611cf1f0facad06c42b2df62e370` was frozen and
+admitted to full gate run `369b0ccb-3804-4866-accd-0ae3bb77f03a` against Base
+`309a94e87ab7898e45cc81cc5240e64ae5b4092a`. Custody stopped and the source
+input remained unchanged, but qualification was `UNPROVEN`: the maintained
+Reducer Lab exceeded its 300-second bound, the complexity registry was one
+entry behind the changed Codex executor, and the gate-control suites exceeded
+their 60-second bounds. No formal or application qualification stage started.
+
+The registry-only repair is `e91e4d1ab` (`chore: align complexity suppression
+registry`); it records the observed count of six for
+`codex-planned-attempt-executor.ts` and does not change runtime behavior. The
+Lab and gate-control timeouts remain separate tooling evidence and were not
+converted into runtime repairs.
+
+A direct JSON-RPC probe against the same authenticated Codex app-server path
+then checked both the workspace-pinned Codex `0.149.0` and the global Codex
+`0.155.1`. Both reported `gpt-5.6-luna` with `max` reasoning, and both accepted
+`thread/start` in the exact candidate cwd. Neither returned Dalph's supplied
+`metadata.dalphOwnedThreadToken` in the thread summary; the real provider
+therefore leaves the Integrator's exact thread-ownership token absent. The
+accepted Integrator chronology requires that token for lost-response adoption,
+replay, and cleanup, so this is a provider-contract incompatibility rather than
+evidence for weakening the fail-closed ownership rule. The supervised public
+S1 remains unproven and no new remote read or CLI operation was added.
