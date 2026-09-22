@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 import { RunId, TaskId } from "@dalph/contracts"
 import { expect, it } from "vitest"
 import { InitialControlPolicy } from "../control/policy.js"
@@ -51,7 +52,7 @@ const evidence = (overrides: Partial<RunFinalityEvidence> = {}): RunFinalityEvid
   })
 
 it("rejects terminal storage when evidence names another Run", () => {
-  const began = makeWorkflowRunBeganRecord(runId, target, policy)
+  const began = makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)
   const decision = decideWorkflowRunTermination(
     [began],
     runId,
@@ -69,7 +70,7 @@ it("rejects terminal storage when evidence names another Run", () => {
 })
 
 it("rejects terminal storage when the exact graph read is absent", () => {
-  const began = makeWorkflowRunBeganRecord(runId, target, policy)
+  const began = makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)
   const decision = decideWorkflowRunTermination([began], runId, "Completed", evidence())
 
   expect(decision._tag).toBe("LifecycleTransitionRejected")
@@ -115,7 +116,7 @@ it("rejects Cancelled termination evidence observed before cancellation", () => 
     ),
     operation
   }
-  const began = makeWorkflowRunBeganRecord(runId, target, policy)
+  const began = makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)
   const cancellation = {
     event: RunCancellationAppliedEvent.make({
       initiatedBy: { _tag: "Operator" },
@@ -159,7 +160,7 @@ it("rejects Cancelled termination evidence observed before cancellation", () => 
 
 it("rejects stale Completed evidence when cancellation was applied after the observation", () => {
   const fixture = completedRunFinalityFixture({ runId, target })
-  const began = makeWorkflowRunBeganRecord(runId, target, policy)
+  const began = makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)
   const cancellation = {
     event: RunCancellationAppliedEvent.make({
       initiatedBy: { _tag: "Operator" },
@@ -203,7 +204,7 @@ it("rejects stale Completed evidence when cancellation was applied after the obs
 
 it("accepts Completed when termination wins before cancellation is applied", () => {
   const fixture = completedRunFinalityFixture({ runId, target })
-  const began = makeWorkflowRunBeganRecord(runId, target, policy)
+  const began = makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)
   const decision = decideWorkflowRunTermination(
     [
       began,
@@ -259,7 +260,7 @@ it("rejects a different parentless task standing in for the selected Run root", 
     ...validEvidence,
     rootTaskId: TaskId.make("foreign-parentless")
   })
-  const began = makeWorkflowRunBeganRecord(runId, target, policy)
+  const began = makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)
   const decision = decideWorkflowRunTermination(
     [
       began,
@@ -296,7 +297,7 @@ it("rejects terminal evidence naming the graph intent position instead of its ob
     rootTaskId: "root",
     tasks: [{ id: "root", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }]
   })
-  const began = makeWorkflowRunBeganRecord(runId, target, policy)
+  const began = makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)
   const records = [
     began,
     {
@@ -350,7 +351,7 @@ const makeRunFinalityEvidenceForTest = (
 it("rejects every independently mismatched terminal evidence dimension at storage", () => {
   const fixture = completedRunFinalityFixture({ runId, target })
   const records: ReadonlyArray<JournalRecord> = [
-    makeWorkflowRunBeganRecord(runId, target, policy),
+    makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest),
     {
       event: fixture.intent,
       key: intentRecordKey(fixture.operation.operationId),
@@ -463,7 +464,7 @@ it("rejects finality evidence superseded by a later complete graph observation",
     makeCompleteTaskTrackerFactsObserved(operation, snapshot)
   )
   const records: ReadonlyArray<JournalRecord> = [
-    makeWorkflowRunBeganRecord(runId, target, policy),
+    makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest),
     {
       event: taskTrackerReadIntent(operation),
       key: intentRecordKey(operation.operationId),
@@ -537,7 +538,7 @@ it("keeps target-A termination evidence current when a later graph belongs to ta
     tasks: [{ id: "root", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
   })
   const records: ReadonlyArray<JournalRecord> = [
-    makeWorkflowRunBeganRecord(runId, target, policy),
+    makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest),
     {
       event: taskTrackerReadIntent(operation),
       key: intentRecordKey(operation.operationId),
@@ -655,7 +656,7 @@ it("rejects unchanged finality evidence whose named complete observation is abse
   expect(
     decideWorkflowRunTermination(
       [
-        makeWorkflowRunBeganRecord(runId, target, policy),
+        makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest),
         {
           event: taskTrackerReadIntent(unchangedOperation),
           key: intentRecordKey(unchangedOperation.operationId),

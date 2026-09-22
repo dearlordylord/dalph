@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
 import {
@@ -37,6 +38,7 @@ const validRawConfiguration = () => ({
   integrationRef: "refs/heads/master",
   plannedAttemptBaseSha: "a".repeat(40),
   plannedAttemptExecutor: "codex:production",
+  remotePublicationTarget: { branch: "refs/heads/main", endpoint: "ssh://git@example.invalid/repository.git" },
   claimOwner: "dalph:production",
   taskWorkCapacity: 2,
   journalDatabase: "/var/lib/dalph/journal.sqlite",
@@ -77,7 +79,8 @@ const makeHostGraph = (
                 .beginRun(
                   selection.runId,
                   configuration.target,
-                  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+                  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+                  remotePublicationTargetForTest
                 )
                 .pipe(Effect.orDie))
             return JournaledRunEstablished.make({

@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import {
   AttemptId,
@@ -191,7 +192,13 @@ it.effect("rejects a fresh attempt plan before append when its exact predecessor
       reason: "CausalPredecessorMissing"
     })
     expect((yield* journal.read(runId)).some(({ event }) => event._tag === "TaskAttemptPlanned")).toBe(false)
-  }).pipe(Effect.provide(runtimeFor([makeWorkflowRunBeganRecord(runId, trackerTarget, initialControlPolicy)])))
+  }).pipe(
+    Effect.provide(
+      runtimeFor([
+        makeWorkflowRunBeganRecord(runId, trackerTarget, initialControlPolicy, remotePublicationTargetForTest)
+      ])
+    )
+  )
 )
 
 it("checks one task without traversing the full graph after 64 and 256 unchanged observations", () => {
@@ -317,7 +324,11 @@ it.effect("rejects executor responsibility before append when an ordinary plan l
     ).toBe(false)
   }).pipe(
     Effect.provide(
-      runtimeFor([makeWorkflowRunBeganRecord(runId, trackerTarget, initialControlPolicy), ...priorRecords, plan])
+      runtimeFor([
+        makeWorkflowRunBeganRecord(runId, trackerTarget, initialControlPolicy, remotePublicationTargetForTest),
+        ...priorRecords,
+        plan
+      ])
     )
   )
 })

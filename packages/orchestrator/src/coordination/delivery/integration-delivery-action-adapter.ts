@@ -46,6 +46,7 @@ import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js
 import {
   journalRecordsForOperationId,
   journalRecordsForTask,
+  journalRecordsOfKind,
   type JournalHistorySource
 } from "../../workflow-journal/record-evidence.js"
 import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-boundary.js"
@@ -63,6 +64,13 @@ import {
 import { recordChangedHeadRetryQuarantine } from "./integration-quarantine-disposition-action.js"
 import { readPostPromotionBlockerCandidateAncestry } from "../../workflow/protocols/integration-finality/post-promotion-blocker-ancestry.js"
 import { pendingPromotionStaleIntegrationQuarantineFor } from "../../workflow/protocols/integration-quarantine/promotion-stale.js"
+import {
+  PublishedIntegratorRunQualifiedCandidate,
+  RemotePublicationGit
+} from "../../workflow/protocols/direct-publication/events.js"
+import { runRemotePublication } from "../../workflow/protocols/direct-publication/protocol-engine.js"
+import { RemoteBaselineGit } from "../../workflow/protocols/direct-publication/baseline-events.js"
+import { establishRemoteBaseline } from "../../workflow/protocols/direct-publication/baseline-protocol-engine.js"
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
 type IntegrationTransition = Exclude<
@@ -82,6 +90,8 @@ type IntegrationTransition = Exclude<
   }
 >
 type RunTargetPromotion = Extract<IntegrationTransition, { readonly _tag: "RunTargetPromotion" }>
+type RunRemotePublication = Extract<IntegrationTransition, { readonly _tag: "RunRemotePublication" }>
+type EstablishRemoteBaseline = Extract<IntegrationTransition, { readonly _tag: "EstablishRemoteBaseline" }>
 type ReconcileTargetPromotionAttempt = Extract<
   IntegrationTransition,
   { readonly _tag: "ReconcileTargetPromotionAttempt" }
@@ -343,7 +353,12 @@ const executeTargetPromotion = Effect.fn("DeliveryAction.runTargetPromotion")(fu
   yield* lease.integrationTargets
     .withPermit(
       transition.responsibility,
-      runTargetPromotion(transition.candidate).pipe(
+      runTargetPromotion(
+        PublishedIntegratorRunQualifiedCandidate.make({
+          candidate: transition.candidate,
+          publication: transition.publication
+        })
+      ).pipe(
         Effect.provideService(
           TargetPromotionGit,
           coordinatorOwnedTargetPromotionGit(runtime.value.git, ownership.value)
@@ -367,6 +382,60 @@ const executeTargetPromotion = Effect.fn("DeliveryAction.runTargetPromotion")(fu
   return deliveryActionCompleted(action.proposal.id)
 })
 
+const executeRemotePublication = Effect.fn("DeliveryAction.runRemotePublication")(function* (
+  action: IdentityFreeAction,
+  transition: RunRemotePublication,
+  lease: DeliveryActionExecutionLease
+) {
+  const git = yield* RemotePublicationGit
+  const acceptedJournal = yield* AcceptedJournalReader
+  const publicationSenderPhase = <A, E, R>(phase: Effect.Effect<A, E, R>) =>
+    runAtomicDeliveryBoundary(
+      lease,
+      Effect.gen(function* () {
+        const records = yield* acceptedJournal
+          .readAccepted(transition.responsibility.plannedAttempt.runId)
+          .pipe(Effect.orDie)
+        let runPaused = false
+        let taskPaused = false
+        for (const { event } of journalRecordsOfKind(records, "ControlDirectionApplied")) {
+          if (event._tag !== "ControlDirectionApplied") continue
+          if (event.subject._tag === "Run") runPaused = event.direction === "Pause"
+          else if (event.subject.taskId === transition.responsibility.plannedAttempt.taskId) {
+            taskPaused = event.direction === "Pause"
+          }
+        }
+        if (runPaused || taskPaused) return yield* Effect.interrupt
+        return yield* phase
+      })
+    )
+  yield* lease.integrationTargets
+    .withPermit(
+      transition.responsibility,
+      runRemotePublication(transition.candidate, transition.target, {
+        runObservation: (phase) => runAtomicDeliveryBoundary(lease, phase),
+        runSender: publicationSenderPhase
+      }).pipe(Effect.provideService(RemotePublicationGit, git))
+    )
+    .pipe(Effect.ensuring(lease.integrationTargets.release(transition.responsibility).pipe(Effect.ignore)))
+  return deliveryActionCompleted(action.proposal.id)
+})
+
+const executeRemoteBaseline = Effect.fn("DeliveryAction.establishRemoteBaseline")(function* (
+  action: IdentityFreeAction,
+  transition: EstablishRemoteBaseline,
+  lease: DeliveryActionExecutionLease
+) {
+  const git = yield* RemoteBaselineGit
+  yield* lease.integrationTargets.withPermit(
+    transition.responsibility,
+    establishRemoteBaseline(transition.correlation, interruptibleBoundaryOf(lease)).pipe(
+      Effect.provideService(RemoteBaselineGit, git)
+    )
+  )
+  return deliveryActionCompleted(action.proposal.id)
+})
+
 const executeTargetPromotionReconciliation = Effect.fn("DeliveryAction.reconcileTargetPromotionAttempt")(function* (
   action: IdentityFreeAction,
   transition: ReconcileTargetPromotionAttempt,
@@ -382,7 +451,12 @@ const executeTargetPromotionReconciliation = Effect.fn("DeliveryAction.reconcile
   const result = yield* lease.integrationTargets
     .withPermit(
       transition.responsibility,
-      reconcileTargetPromotionAttempt(transition.candidate).pipe(
+      reconcileTargetPromotionAttempt(
+        PublishedIntegratorRunQualifiedCandidate.make({
+          candidate: transition.candidate,
+          publication: transition.publication
+        })
+      ).pipe(
         Effect.provideService(
           TargetPromotionGit,
           coordinatorOwnedTargetPromotionGit(runtime.value.git, ownership.value)
@@ -442,6 +516,8 @@ const executeAdvancedIntegrationAction = Effect.fn("DeliveryAction.executeAdvanc
   lease: DeliveryActionExecutionLease,
   target: TrackerTarget
 ) {
+  if (transition._tag === "EstablishRemoteBaseline") return yield* executeRemoteBaseline(action, transition, lease)
+  if (transition._tag === "RunRemotePublication") return yield* executeRemotePublication(action, transition, lease)
   if (transition._tag === "RunTargetPromotion") return yield* executeTargetPromotion(action, transition, lease)
   if (transition._tag === "ReconcileTargetPromotionAttempt") {
     return yield* executeTargetPromotionReconciliation(action, transition, lease)
@@ -508,6 +584,7 @@ export const executeIntegrationAction = Effect.fn("DeliveryAction.executeIntegra
     return deliveryActionCompleted(action.proposal.id)
   }
   const execution = executeAdvancedIntegrationAction(action, transition, lease, target)
+  if (transition._tag === "RunRemotePublication") return yield* execution
   return yield* integrationExitBoundaryFamilyFor(transition) === null
     ? execution
     : runAtomicDeliveryBoundary(lease, execution)

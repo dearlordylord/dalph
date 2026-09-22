@@ -167,6 +167,8 @@ export const IntegratorSessionFixedEvent = Schema.TaggedStruct("IntegratorSessio
 
 /** One FullRerun may replace a quarantined predecessor with one fresh session. */
 export const firstFullRerunSuccessorGeneration = 2
+/** Aggregate safety ceiling for distinct Integrator identities assigned one responsibility. */
+export const maximumIntegratorSessionsPerResponsibility = 3
 export const IntegratorSuccessorGeneration = Schema.Literal(firstFullRerunSuccessorGeneration)
 
 /** FullRerun successors retain every responsibility fact; only session/resource

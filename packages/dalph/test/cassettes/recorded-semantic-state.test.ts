@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 import { RunId } from "@dalph/contracts"
 import {
   InitialControlPolicy,
@@ -21,7 +22,8 @@ it("reads exact accepted occurrence cardinality without materializing records or
   const began = makeWorkflowRunBeganRecord(
     runId,
     FixtureTarget.make("recorded-semantic-count-target"),
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    remotePublicationTargetForTest
   )
   const event = TaskWorkCapacityChangedEvent.make({
     capacity: TaskWorkCapacity.make(2),

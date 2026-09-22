@@ -64,6 +64,7 @@ import {
   type FocusedTaskCompletionFactsObserved
 } from "../../task-tracker-facts/observation.js"
 import { EvidenceStore } from "../evidence-store.js"
+import { publicationPremiseFor } from "./publication-premise.js"
 import {
   TargetPromotionGit,
   targetPromotionAcceptedResultOf,
@@ -101,6 +102,8 @@ export const CompletionTaskConflictReason = Schema.Literals([
   "FocusedSuccessContradiction",
   "PrerequisitesIncomplete",
   "PromotedCandidateStale",
+  "RemotePublicationHistoryInvalid",
+  "RemotePublicationMissing",
   "RequestIdentityContradiction",
   "SealedEvidenceChanged",
   "SealedEvidenceUnavailableOrInvalid",
@@ -1042,6 +1045,16 @@ export const runCompletionTaskProtocol = Effect.fn("IntegrationFinality.runCompl
   const resumed = yield* resumeLatestCompletionAttempt(boundary, request, target, initialRecords)
   if (Option.isSome(resumed.completed)) return resumed.completed.value
   let records = resumed.records
+  const publicationPremise = publicationPremiseFor(records, request.claim)
+  if (publicationPremise !== "Proved")
+    return yield* new CompletionTaskPreconditionConflict({
+      detail:
+        publicationPremise === "HistoryInvalid"
+          ? "remote publication history is invalid for the exact candidate proof"
+          : "remote publication proof for the exact candidate is missing",
+      reason: publicationPremise === "HistoryInvalid" ? "RemotePublicationHistoryInvalid" : "RemotePublicationMissing",
+      request
+    })
   for (let nextOrdinal = resumed.nextOrdinal; nextOrdinal <= completionTaskRequestLimit; nextOrdinal += 1) {
     const ordinal = ordinalFor(nextOrdinal)
     const attempt = yield* runCompletionAttempt(boundary, request, ordinal, target, records, authorization)

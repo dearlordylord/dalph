@@ -1,4 +1,5 @@
 import { Effect, FileSystem, MutableList, Schema } from "effect"
+import type { GitCommand } from "@dalph/orchestrator"
 import { HermeticFixtureResource } from "../src/application/production-hermetic-contract.js"
 import {
   HermeticFixtureContainer,
@@ -122,10 +123,15 @@ const removeFixtureResources = Effect.fn("HermeticFixture.removeResources")(func
 })
 
 /** Stops the original request fibers only after original owned children have exited; never retries any provider mutation. */
-export const disposeHermeticFixture = Effect.fn("HermeticFixture.dispose")(function* (
+export const disposeHermeticFixture: (
   fixture: HermeticControllerFixture,
   controller: HermeticController
-) {
+) => Effect.Effect<HermeticFixtureDisposal, never, FileSystem.FileSystem | GitCommand> = Effect.fn(
+  "HermeticFixture.dispose"
+)(function* (
+  fixture: HermeticControllerFixture,
+  controller: HermeticController
+): Effect.fn.Return<HermeticFixtureDisposal, never, FileSystem.FileSystem | GitCommand> {
   const removed = MutableList.make<HermeticFixtureResource>()
   const retain = (cause: RetentionCause) =>
     HermeticFixtureDisposal.cases.RetainedFixture.make({

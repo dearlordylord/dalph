@@ -59,22 +59,38 @@ import {
   TrackerMutation,
   TrackerRevision,
   UnclaimedTask,
-  unavailableIntegratorCandidateProviderAuthority,
   WorkflowTrace,
   completionTaskClaimEquals,
   type completionTaskRequestFor,
   type CompletionClaimBoundaryService,
   type CompletionTaskBoundaryService,
-  type IntegratorService
+  type IntegratorService,
+  type WorkflowJournalEvent
 } from "@dalph/orchestrator"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { ConfigProvider, Deferred, Effect, Exit, FileSystem, Fiber, Layer, Option, Ref, Schema, Scope } from "effect"
 import { expect } from "vitest"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
-import { acceptedManifestBytes, runInGitDirectory, runInWorktree } from "./hermetic-support.js"
+import {
+  acceptedManifestBytes,
+  hermeticCandidateProviderAuthority,
+  remoteBaselineGitLayerForCurrentHead,
+  runInGitDirectory,
+  runInWorktree
+} from "./hermetic-support.js"
+import {
+  remotePublicationGitLayerForProductionTest,
+  remotePublicationTargetForTest
+} from "../../../orchestrator/test/support/direct-publication.js"
 
 type TrackerClaim = ActiveTaskClaim | UnclaimedTask
+const hasEventTag =
+  <Tag extends WorkflowJournalEvent["_tag"]>(tag: Tag) =>
+  <Record extends { readonly event: WorkflowJournalEvent }>(
+    record: Record
+  ): record is Record & { readonly event: Extract<WorkflowJournalEvent, { readonly _tag: Tag }> } =>
+    record.event._tag === tag
 const maxActivationPasses = 64
 
 const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
@@ -390,12 +406,15 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
         integrationTarget,
         Layer.succeed(TrackerMutation, trackerMutation),
         controlledSynchronousPlannedAttemptExecutorLayer(Layer.succeed(PlannedAttemptExecutor, executor)),
-        unavailableIntegratorCandidateProviderAuthority,
+        hermeticCandidateProviderAuthority,
         {
           acceptedResultEvidenceStore: evidenceStore,
           completionTask,
           integrationFinality: completionClaim,
           integrator,
+          remoteBaselineGitLayer: remoteBaselineGitLayerForCurrentHead(git),
+          remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
+          remotePublicationTarget: remotePublicationTargetForTest,
           targetPromotion: {
             git: {
               compareAndSet: (request) =>
@@ -537,9 +556,17 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       const promotionAttemptAt = eventTags.indexOf("TargetPromotionAttemptIntended")
       const promotionSucceededAt = eventTags.indexOf("TargetPromotionObservedSuccess")
       const completionAttemptAt = eventTags.indexOf("CompletionTaskAttemptIntended")
+      const runTerminatedAt = eventTags.indexOf("WorkflowRunTerminated")
+      const finalitySettledRecords = records.filter(hasEventTag("IntegrationFinalitySettled"))
+      const worktreeCleanupAuthorized = records.filter(hasEventTag("WorktreeCleanupAuthorized"))
+      const worktreeCleanupSettled = records.filter(hasEventTag("WorktreeCleanupSettled"))
+      const branchCleanupAuthorized = records.filter(hasEventTag("BranchCleanupAuthorized"))
+      const branchCleanupSettled = records.filter(hasEventTag("BranchCleanupSettled"))
+      const candidateCleanupAuthorized = records.filter(hasEventTag("IntegratorCandidateCleanupAuthorized"))
+      const candidateCleanupSettled = records.filter(hasEventTag("IntegratorCandidateCleanupSettled"))
       const qualificationRecords = records.filter(({ event }) => event._tag === "IntegratorRunCandidateGitObserved")
       const promotionAttemptRecords = records.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")
-      const promotionSuccessRecords = records.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")
+      const promotionSuccessRecords = records.filter(hasEventTag("TargetPromotionObservedSuccess"))
       const runBeginningRecords = records.filter(({ event }) => event._tag === "WorkflowRunBegan")
       const runTerminationRecords = records.filter(({ event }) => event._tag === "WorkflowRunTerminated")
 
@@ -558,6 +585,8 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       expect(completionAttemptAt).toBeGreaterThan(promotionSucceededAt)
       expect(promotionAttemptRecords).toHaveLength(1)
       expect(promotionSuccessRecords).toHaveLength(1)
+      const promotionSuccess = Option.getOrThrow(Option.fromUndefinedOr(promotionSuccessRecords[0]))
+      const qualifiedCandidate = promotionSuccess.event.correlation.qualifiedCandidate
       expect(yield* Ref.get(targetPromotionCompareAndSetCalls)).toBe(1)
       expect(yield* Ref.get(executorStarts)).toBe(1)
       expect(yield* Ref.get(integratorCalls)).toBe(1)
@@ -577,17 +606,73 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       expect(runTerminationRecords).toHaveLength(1)
       expect(runTerminationRecords[0]?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Completed" })
       expect(records.at(-1)?.event).toEqual(runTerminationRecords[0]?.event)
-      expect(records.some(({ event }) => event._tag === "IntegrationFinalitySettled")).toBe(true)
-      expect(records.some(({ event }) => event._tag === "WorktreeCleanupAuthorized")).toBe(false)
-      expect(records.some(({ event }) => event._tag === "WorktreeCleanupSettled")).toBe(false)
-      expect(records.some(({ event }) => event._tag === "BranchCleanupAuthorized")).toBe(false)
-      expect(records.some(({ event }) => event._tag === "BranchCleanupSettled")).toBe(false)
+      expect(finalitySettledRecords).toHaveLength(1)
+      const finalitySettlement = Option.getOrThrow(Option.fromUndefinedOr(finalitySettledRecords[0]))
+      const finalitySettledAt = records.indexOf(finalitySettlement)
+      expect(finalitySettlement.event.claim).toMatchObject({
+        plannedAttempt,
+        promotionCorrelation: promotionSuccess.event.correlation
+      })
+      expect(finalitySettledAt).toBeGreaterThan(completionAttemptAt)
+      expect(worktreeCleanupAuthorized).toHaveLength(1)
+      expect(worktreeCleanupSettled).toHaveLength(1)
+      expect(branchCleanupAuthorized).toHaveLength(1)
+      expect(branchCleanupSettled).toHaveLength(1)
+      expect(candidateCleanupAuthorized).toHaveLength(1)
+      expect(candidateCleanupSettled).toHaveLength(1)
+      const worktreeAuthorization = Option.getOrThrow(Option.fromUndefinedOr(worktreeCleanupAuthorized[0]))
+      const worktreeSettlement = Option.getOrThrow(Option.fromUndefinedOr(worktreeCleanupSettled[0]))
+      const branchAuthorization = Option.getOrThrow(Option.fromUndefinedOr(branchCleanupAuthorized[0]))
+      const branchSettlement = Option.getOrThrow(Option.fromUndefinedOr(branchCleanupSettled[0]))
+      const candidateAuthorization = Option.getOrThrow(Option.fromUndefinedOr(candidateCleanupAuthorized[0]))
+      const candidateSettlement = Option.getOrThrow(Option.fromUndefinedOr(candidateCleanupSettled[0]))
+      expect(worktreeAuthorization.event).toMatchObject({
+        authorization: { disposition: { _tag: "Settled", plannedAttempt }, locator: plannedAttempt.worktree }
+      })
+      expect(branchAuthorization.event).toMatchObject({
+        authorization: { disposition: { _tag: "Settled", plannedAttempt }, locator: plannedAttempt.branch }
+      })
+      expect(candidateAuthorization.event).toMatchObject({
+        authorization: {
+          disposition: { _tag: "Settled", qualifiedCandidate },
+          locator: qualifiedCandidate.run.session.candidateResource,
+          owner: { sessionId: qualifiedCandidate.run.session.sessionId }
+        }
+      })
+      expect(worktreeSettlement.event).toMatchObject({ authorization: worktreeAuthorization.event.authorization })
+      expect(branchSettlement.event).toMatchObject({ authorization: branchAuthorization.event.authorization })
+      expect(candidateSettlement.event).toMatchObject({ authorization: candidateAuthorization.event.authorization })
+      expect(candidateSettlement.event.result).toEqual({
+        _tag: "AlreadyAbsent",
+        locator: qualifiedCandidate.run.session.candidateResource,
+        revision: 1,
+        sessionId: qualifiedCandidate.run.session.sessionId
+      })
+      const worktreeAuthorizationAt = records.indexOf(worktreeAuthorization)
+      const worktreeSettlementAt = records.indexOf(worktreeSettlement)
+      const branchAuthorizationAt = records.indexOf(branchAuthorization)
+      const branchSettlementAt = records.indexOf(branchSettlement)
+      const candidateAuthorizationAt = records.indexOf(candidateAuthorization)
+      const candidateSettlementAt = records.indexOf(candidateSettlement)
+      const cleanupOrder = [
+        worktreeAuthorizationAt,
+        worktreeSettlementAt,
+        branchAuthorizationAt,
+        branchSettlementAt,
+        candidateAuthorizationAt,
+        candidateSettlementAt
+      ]
+      expect(cleanupOrder.every((index) => index > finalitySettledAt && index < runTerminatedAt)).toBe(true)
+      expect(worktreeSettlementAt).toBeGreaterThan(worktreeAuthorizationAt)
+      expect(branchSettlementAt).toBeGreaterThan(branchAuthorizationAt)
+      expect(candidateSettlementAt).toBeGreaterThan(candidateAuthorizationAt)
       expect(yield* fileSystem.exists(journalFilename)).toBe(true)
       expect(yield* fileSystem.exists(evidenceDirectory)).toBe(true)
       expect(yield* fileSystem.exists(repository)).toBe(true)
       expect(yield* fileSystem.exists(bareRemote)).toBe(true)
-      expect(yield* fileSystem.exists(worktree)).toBe(true)
-      expect((yield* git.runInWorktree(repository, ["show-ref", "--verify", plannedAttempt.branch])).exitCode).toBe(0)
+      expect(yield* fileSystem.exists(worktree)).toBe(false)
+      const plannedBranchStatus = yield* git.runInWorktree(repository, ["show-ref", "--verify", plannedAttempt.branch])
+      expect(plannedBranchStatus.exitCode).not.toBe(0)
       expect((yield* git.runInWorktree(repository, ["show-ref", "--verify", "refs/heads/unrelated"])).exitCode).toBe(0)
       expect((yield* git.run(bareRemote, ["show-ref", "--verify", "refs/dalph/transfer-A"])).exitCode).not.toBe(0)
       expect(yield* Option.getOrThrow(yield* Ref.get(childHandle)).isRunning).toBe(false)

@@ -6,6 +6,9 @@ import {
   type GitRepositoryLocator,
   type IntegrationTargetRef,
   type PlannedAttemptExecutorReport,
+  type RemotePublicationBranchRef,
+  type RemotePublicationEndpoint,
+  type RemotePublicationTarget,
   type RunId,
   type TaskBranchRef,
   type TaskExecutorLocator,
@@ -79,7 +82,6 @@ import {
   type CleanupMutationOrdinal,
   type CleanupObservationOrdinal,
   type IntegratorCandidateCleanupAuthorization,
-  type IntegratorCandidateCleanupDisposition,
   type IntegratorCandidateCleanupMutationResult,
   type IntegratorCandidateCleanupObservation,
   type PlannedAttemptCleanupDisposition,
@@ -94,7 +96,17 @@ import {
   type WorktreeCleanupEvidenceRevision,
   type TargetPromotionAttemptOrdinal,
   type TargetPromotionAttemptLimit,
+  remotePublicationAdmissionIdFor,
   targetPromotionRequestIdForCandidate,
+  type RemotePublicationAttemptOrdinal,
+  type RemotePublicationRefspec,
+  type RemotePublicationCorrelation,
+  remotePublicationCorrelationFor,
+  type RemotePublicationProofBasis,
+  type RemoteBaselineCorrelation,
+  remoteBaselineCorrelationFor,
+  type RemoteBaselineObservation,
+  type LocalTargetCatchUpResult,
   type TaskTrackerFactsObservation,
   type TrackerRevision,
   type WorkflowOperation,
@@ -164,6 +176,10 @@ type PreservedCassetteBrand =
   | PlannedAttemptExecutorCommandProjectionOrdinal
   | PlannedAttemptExecutorStateObservationOrdinal
   | IntegrationTargetRef
+  | RemotePublicationAttemptOrdinal
+  | RemotePublicationRefspec
+  | RemotePublicationBranchRef
+  | RemotePublicationEndpoint
   | JournalPosition
   | EvidenceDigest
   | IntegratorCandidateText
@@ -514,6 +530,81 @@ const renameTargetPromotionCorrelation = (
   })
 }
 
+const renameRemotePublicationCorrelation = (
+  correlation: RemotePublicationCorrelation,
+  maps: IdentityRenamingMaps
+): RemotePublicationCorrelation => {
+  const qualifiedCandidate = renameIntegratorRunQualifiedCandidate(correlation.qualifiedCandidate, maps)
+  return remotePublicationCorrelationFor(qualifiedCandidate, {
+    branch: preserveCassetteValue(correlation.target.branch),
+    endpoint: preserveCassetteValue(correlation.target.endpoint)
+  })
+}
+
+const renameRemotePublicationTarget = (target: RemotePublicationTarget): RemotePublicationTarget => ({
+  branch: preserveCassetteValue(target.branch),
+  endpoint: preserveCassetteValue(target.endpoint)
+})
+
+const renameRemoteBaselineCorrelation = (
+  correlation: RemoteBaselineCorrelation,
+  maps: IdentityRenamingMaps
+): RemoteBaselineCorrelation =>
+  remoteBaselineCorrelationFor(
+    renamed(correlation.runId, maps.runIds),
+    {
+      acceptedResult: completeFields<typeof correlation.responsibility.acceptedResult>({
+        commit: preserveCassetteValue(correlation.responsibility.acceptedResult.commit),
+        evidenceManifest: completeFields<typeof correlation.responsibility.acceptedResult.evidenceManifest>({
+          byteLength: correlation.responsibility.acceptedResult.evidenceManifest.byteLength,
+          digest: preserveCassetteValue(correlation.responsibility.acceptedResult.evidenceManifest.digest)
+        })
+      }),
+      integrationTarget: completeFields<typeof correlation.responsibility.integrationTarget>({
+        repository: preserveCassetteValue(correlation.responsibility.integrationTarget.repository),
+        ref: preserveCassetteValue(correlation.responsibility.integrationTarget.ref)
+      }),
+      plannedAttempt: renamePlannedAttempt(correlation.responsibility.plannedAttempt, maps),
+      queuedAt: preserveCassetteValue(correlation.responsibility.queuedAt),
+      startedAt: preserveCassetteValue(correlation.responsibility.startedAt)
+    },
+    completeFields<typeof correlation.localTarget>({
+      repository: preserveCassetteValue(correlation.localTarget.repository),
+      ref: preserveCassetteValue(correlation.localTarget.ref)
+    }),
+    renameRemotePublicationTarget(correlation.remoteTarget)
+  )
+
+const preserveRemoteBaselineObservation = (observation: RemoteBaselineObservation): RemoteBaselineObservation =>
+  preserveCassetteValue(observation)
+
+const preserveLocalTargetCatchUpResult = (result: LocalTargetCatchUpResult): LocalTargetCatchUpResult =>
+  preserveCassetteValue(result)
+
+const preserveRemotePublicationProofBasis = (basis: RemotePublicationProofBasis): RemotePublicationProofBasis =>
+  Match.valueTags(basis, {
+    PushApplied: (value): RemotePublicationProofBasis => ({
+      _tag: "PushApplied",
+      attemptOrdinal: preserveCassetteValue(value.attemptOrdinal),
+      remoteHead: preserveCassetteValue(value.remoteHead)
+    }),
+    PushUpToDate: (value): RemotePublicationProofBasis => ({
+      _tag: "PushUpToDate",
+      attemptOrdinal: preserveCassetteValue(value.attemptOrdinal),
+      remoteHead: preserveCassetteValue(value.remoteHead)
+    }),
+    ReconciledCandidateAncestor: (value): RemotePublicationProofBasis => ({
+      _tag: "ReconciledCandidateAncestor",
+      attemptOrdinal: preserveCassetteValue(value.attemptOrdinal),
+      remoteHead: preserveCassetteValue(value.remoteHead)
+    }),
+    ReconciledCandidateCurrent: (value): RemotePublicationProofBasis => ({
+      _tag: "ReconciledCandidateCurrent",
+      attemptOrdinal: preserveCassetteValue(value.attemptOrdinal),
+      remoteHead: preserveCassetteValue(value.remoteHead)
+    })
+  })
+
 const renameCompletionTaskClaim = (claim: CompletionTaskClaim, maps: IdentityRenamingMaps): CompletionTaskClaim =>
   completeFields<CompletionTaskClaim>({
     _tag: "CompletionTaskClaim",
@@ -854,15 +945,25 @@ const renamePlannedAttemptCleanupDisposition = (
   })
 
 const renameIntegratorCandidateCleanupDisposition = (
-  disposition: IntegratorCandidateCleanupDisposition,
+  disposition: IntegratorCandidateCleanupAuthorization["disposition"],
   maps: IdentityRenamingMaps
-): IntegratorCandidateCleanupDisposition =>
-  completeFields<IntegratorCandidateCleanupDisposition>({
-    _tag: "Superseded",
-    directionAppliedAt: preserveCassetteValue(disposition.directionAppliedAt),
-    dispositionAt: preserveCassetteValue(disposition.dispositionAt),
-    predecessor: renameIntegratorSessionCorrelation(disposition.predecessor, maps),
-    successor: renameIntegratorSessionCorrelation(disposition.successor, maps)
+): IntegratorCandidateCleanupAuthorization["disposition"] =>
+  Match.valueTags(disposition, {
+    Settled: (value) =>
+      completeFields<typeof value>({
+        _tag: "Settled",
+        dispositionAt: preserveCassetteValue(value.dispositionAt),
+        qualifiedCandidate: renameIntegratorRunQualifiedCandidate(value.qualifiedCandidate, maps),
+        settlementOperationId: renamed(value.settlementOperationId, maps.operationIds)
+      }),
+    Superseded: (value) =>
+      completeFields<typeof value>({
+        _tag: "Superseded",
+        directionAppliedAt: preserveCassetteValue(value.directionAppliedAt),
+        dispositionAt: preserveCassetteValue(value.dispositionAt),
+        predecessor: renameIntegratorSessionCorrelation(value.predecessor, maps),
+        successor: renameIntegratorSessionCorrelation(value.successor, maps)
+      })
   })
 
 const renameWorktreeCleanupAuthorization = (
@@ -1629,6 +1730,99 @@ const renameRecordedCassetteEntry = (
           attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
           correlation: renameTargetPromotionCorrelation(entry.correlation, maps),
           lastObservation: preserveCassetteValue(entry.lastObservation),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
+        }),
+      RemoteBaselineReadIntended: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "RemoteBaselineReadIntended",
+          correlation: renameRemoteBaselineCorrelation(entry.correlation, maps),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
+        }),
+      RemoteBaselineObserved: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "RemoteBaselineObserved",
+          correlation: renameRemoteBaselineCorrelation(entry.correlation, maps),
+          observation: preserveRemoteBaselineObservation(entry.observation),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
+        }),
+      LocalTargetCatchUpIntended: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "LocalTargetCatchUpIntended",
+          correlation: renameRemoteBaselineCorrelation(entry.correlation, maps),
+          expectedLocalHead: preserveCassetteValue(entry.expectedLocalHead),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          remoteHead: preserveCassetteValue(entry.remoteHead)
+        }),
+      LocalTargetCatchUpObserved: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "LocalTargetCatchUpObserved",
+          correlation: renameRemoteBaselineCorrelation(entry.correlation, maps),
+          expectedLocalHead: preserveCassetteValue(entry.expectedLocalHead),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          remoteHead: preserveCassetteValue(entry.remoteHead),
+          result: preserveLocalTargetCatchUpResult(entry.result)
+        }),
+      RemotePublicationAdmissionReadIntended: (entry) => {
+        const runId = renamed(entry.runId, maps.runIds)
+        const target = renameRemotePublicationTarget(entry.target)
+        return completeFields<typeof entry>({
+          _tag: "RemotePublicationAdmissionReadIntended",
+          admissionId: remotePublicationAdmissionIdFor(runId, target),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          runId,
+          target
+        })
+      },
+      RemotePublicationAdmissionObserved: (entry) => {
+        const runId = renamed(entry.runId, maps.runIds)
+        const target = renameRemotePublicationTarget(entry.target)
+        return completeFields<typeof entry>({
+          _tag: "RemotePublicationAdmissionObserved",
+          admissionId: remotePublicationAdmissionIdFor(runId, target),
+          observation: preserveCassetteValue(entry.observation),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          runId,
+          target
+        })
+      },
+      RemotePublicationIntended: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "RemotePublicationIntended",
+          correlation: renameRemotePublicationCorrelation(entry.correlation, maps),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
+        }),
+      RemotePublicationAttemptIntended: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "RemotePublicationAttemptIntended",
+          attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
+          correlation: renameRemotePublicationCorrelation(entry.correlation, maps),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          refspec: preserveCassetteValue(entry.refspec)
+        }),
+      RemotePublicationSucceeded: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "RemotePublicationSucceeded",
+          correlation: renameRemotePublicationCorrelation(entry.correlation, maps),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          proof: preserveRemotePublicationProofBasis(entry.proof)
+        }),
+      RemotePublicationAttemptRejectedNonFastForward: (entry) =>
+        completeFields<typeof entry>({
+          _tag: entry._tag,
+          attemptOrdinal: preserveCassetteValue(entry.attemptOrdinal),
+          correlation: renameRemotePublicationCorrelation(entry.correlation, maps),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
+        }),
+      RemotePublicationRetained: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "RemotePublicationRetained",
+          cause: preserveCassetteValue(entry.cause),
+          correlation: renameRemotePublicationCorrelation(entry.correlation, maps),
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
         }),
       CompletionClaimReplacementIntended: (entry) =>

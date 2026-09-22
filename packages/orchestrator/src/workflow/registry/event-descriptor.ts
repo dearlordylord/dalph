@@ -72,6 +72,17 @@ import {
   integrationQuarantineDirectionAppliedRecordKey,
   integrationProviderRunActivityAbsentRecordKey,
   integratorSuccessorSessionFixedRecordKey,
+  remotePublicationAdmissionObservedRecordKey,
+  remotePublicationAdmissionReadIntendedRecordKey,
+  remotePublicationAttemptIntendedRecordKey,
+  remotePublicationAttemptRejectedRecordKey,
+  remotePublicationIntendedRecordKey,
+  remotePublicationRetainedRecordKey,
+  remotePublicationSucceededRecordKey,
+  remoteBaselineReadIntendedRecordKey,
+  remoteBaselineObservedRecordKey,
+  localTargetCatchUpIntendedRecordKey,
+  localTargetCatchUpObservedRecordKey,
   worktreeCleanupAuthorizedRecordKey,
   worktreeCleanupAbsenceConfirmedRecordKey,
   worktreeCleanupObservationIntendedRecordKey,
@@ -427,6 +438,50 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     IntegratorRunCandidateGitObserved: (event) => ({
       _tag: "GenericEventDescriptor",
       expectedKey: integratorRunCandidateGitObservedRecordKey(event.run, event.candidateText)
+    }),
+    RemoteBaselineReadIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: remoteBaselineReadIntendedRecordKey(event.correlation.baselineId)
+    }),
+    RemoteBaselineObserved: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: remoteBaselineObservedRecordKey(event.correlation.baselineId)
+    }),
+    LocalTargetCatchUpIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: localTargetCatchUpIntendedRecordKey(event.correlation.baselineId)
+    }),
+    LocalTargetCatchUpObserved: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: localTargetCatchUpObservedRecordKey(event.correlation.baselineId)
+    }),
+    RemotePublicationAdmissionReadIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: remotePublicationAdmissionReadIntendedRecordKey(event.admissionId)
+    }),
+    RemotePublicationAdmissionObserved: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: remotePublicationAdmissionObservedRecordKey(event.admissionId)
+    }),
+    RemotePublicationIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: remotePublicationIntendedRecordKey(event.correlation.requestId)
+    }),
+    RemotePublicationAttemptIntended: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: remotePublicationAttemptIntendedRecordKey(event.correlation.requestId, event.attemptOrdinal)
+    }),
+    RemotePublicationSucceeded: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: remotePublicationSucceededRecordKey(event.correlation.requestId)
+    }),
+    RemotePublicationAttemptRejectedNonFastForward: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: remotePublicationAttemptRejectedRecordKey(event.correlation.requestId, event.attemptOrdinal)
+    }),
+    RemotePublicationRetained: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: remotePublicationRetainedRecordKey(event.correlation.requestId)
     }),
     WorktreeCleanupAuthorized: (event) => ({
       _tag: "GenericEventDescriptor",

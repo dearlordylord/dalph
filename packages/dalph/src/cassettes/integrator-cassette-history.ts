@@ -3,6 +3,9 @@ import {
   makeTaskWorkSpecification,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
   type TaskWorkSpecification
 } from "@dalph/contracts"
 import {
@@ -87,6 +90,11 @@ const journalRecordFor = (
     position: JournalPosition.make(position),
     runId
   })
+
+const integratorCassetteRemotePublicationTarget = RemotePublicationTarget.make({
+  branch: RemotePublicationBranchRef.make("refs/heads/main"),
+  endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/repository.git")
+})
 
 /** Builds the complete accepted prefix required by the live Integrator protocol. */
 export const coherentHistoryFor = Effect.fn("IntegratorCassette.coherentHistoryFor")(function* (
@@ -179,6 +187,7 @@ export const coherentHistoryFor = Effect.fn("IntegratorCassette.coherentHistoryF
       initialControlPolicy: policy,
       initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
       occurrenceClassification: "InitiatedAction",
+      remotePublicationTarget: integratorCassetteRemotePublicationTarget,
       target,
       version: workflowJournalEventVersion
     })

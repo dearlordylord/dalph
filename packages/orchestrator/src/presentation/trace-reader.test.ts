@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Context, Effect, FileSystem, Layer, Option, Path, Ref, Schema, SubscriptionRef } from "effect"
@@ -133,6 +134,14 @@ import {
   TargetPromotionIntendedEvent,
   targetPromotionCorrelationFor
 } from "../workflow/protocols/target-promotion/events.js"
+import {
+  RemotePublicationAttemptIntendedEvent,
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationIntendedEvent,
+  RemotePublicationSucceededEvent,
+  remotePublicationCorrelationFor,
+  remotePublicationRefspecFor
+} from "../workflow/protocols/direct-publication/events.js"
 import {
   IntegrationProviderRunActivityAbsentEvent,
   IntegrationQuarantineBasis,
@@ -271,7 +280,7 @@ const seedRetiredTrace = Effect.fn("TraceReaderTest.seedRetiredTrace")(function*
   retiredRunId: RunId,
   retiredTarget: TrackerTarget
 ) {
-  yield* journal.beginRun(retiredRunId, retiredTarget, initialPolicy)
+  yield* journal.beginRun(retiredRunId, retiredTarget, initialPolicy, remotePublicationTargetForTest)
   const firstOperationId = OperationId.make(`retired-trace-first:${retiredRunId}`)
   const secondOperationId = OperationId.make(`retired-trace-second:${retiredRunId}`)
   yield* appendGraphObservationFor(journal, retiredRunId, retiredTarget, firstOperationId, [], retiredSnapshot)
@@ -421,6 +430,7 @@ const historicalIntegrationBoundaryRecords = (): ReadonlyArray<JournalRecord> =>
       1,
       WorkflowRunBeganEvent.make({
         initialControlPolicy: initialPolicy,
+        remotePublicationTarget: remotePublicationTargetForTest,
         initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
         occurrenceClassification: "InitiatedAction",
         target: fixture.target,
@@ -584,6 +594,10 @@ const historicalLookupRecords = (): ReadonlyArray<JournalRecord> => {
     run
   })
   const promotionCorrelation = targetPromotionCorrelationFor(qualifiedCandidate)
+  const publicationCorrelation = remotePublicationCorrelationFor(
+    promotionCorrelation.qualifiedCandidate,
+    remotePublicationTargetForTest
+  )
   const candidateObservation = IntegratorGitObservation.cases.Commit.make({
     candidateText,
     commit: qualifiedCandidate.candidateCommit,
@@ -695,15 +709,51 @@ const historicalLookupRecords = (): ReadonlyArray<JournalRecord> => {
     ),
     record(
       16,
-      TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+      RemotePublicationIntendedEvent.make({
+        correlation: publicationCorrelation,
+        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
     ),
-    record(17, TaskClaimAcquiredEvent.make({ claim: fixture.activeClaim, version: workflowJournalEventVersion })),
+    record(
+      17,
+      RemotePublicationAttemptIntendedEvent.make({
+        attemptOrdinal: RemotePublicationAttemptOrdinal.make(1),
+        correlation: publicationCorrelation,
+        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        refspec: remotePublicationRefspecFor(
+          publicationCorrelation.qualifiedCandidate.candidateCommit,
+          publicationCorrelation.target.branch
+        ),
+        version: workflowJournalEventVersion
+      })
+    ),
     record(
       18,
-      TaskAttemptPlannedEvent.make({ operation: fixture.planOperation, version: workflowJournalEventVersion })
+      RemotePublicationSucceededEvent.make({
+        correlation: publicationCorrelation,
+        occurrenceClassification: "NonActionOccurrence",
+        proof: {
+          _tag: "PushUpToDate",
+          attemptOrdinal: RemotePublicationAttemptOrdinal.make(1),
+          remoteHead: publicationCorrelation.qualifiedCandidate.candidateCommit
+        },
+        version: workflowJournalEventVersion
+      })
     ),
     record(
       19,
+      TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+    ),
+    record(20, TaskClaimAcquiredEvent.make({ claim: fixture.activeClaim, version: workflowJournalEventVersion })),
+    record(
+      21,
+      TaskAttemptPlannedEvent.make({ operation: fixture.planOperation, version: workflowJournalEventVersion })
+    ),
+    record(
+      22,
       CompletionClaimReplacementIntendedEvent.make({
         claim,
         operationId: OperationId.make("trace-reader-replacement"),
@@ -711,7 +761,7 @@ const historicalLookupRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      20,
+      23,
       CompletionClaimReplacementAttemptIntendedEvent.make({
         attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
         claim,
@@ -720,17 +770,17 @@ const historicalLookupRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      21,
+      24,
       CompletionClaimReplacedEvent.make({
         claim,
         operationId: OperationId.make("trace-reader-replacement"),
         version: workflowJournalEventVersion
       })
     ),
-    record(22, taskTrackerReadIntent(authorizationOperation)),
-    record(23, taskTrackerFactsObservedEvent(authorizationOperation.operationId, authorizationObservation)),
+    record(25, taskTrackerReadIntent(authorizationOperation)),
+    record(26, taskTrackerFactsObservedEvent(authorizationOperation.operationId, authorizationObservation)),
     record(
-      24,
+      27,
       CompletionTaskCandidateAncestryReadIntendedEvent.make({
         attemptOrdinal: ordinal,
         operationId: ancestryOperationId,
@@ -739,7 +789,7 @@ const historicalLookupRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      25,
+      28,
       CompletionTaskCandidateAncestryObservedEvent.make({
         attemptOrdinal: ordinal,
         observation: { _tag: "CandidateCurrent", currentHeadSha: qualifiedCandidate.candidateCommit },
@@ -748,9 +798,9 @@ const historicalLookupRecords = (): ReadonlyArray<JournalRecord> => {
         version: workflowJournalEventVersion
       })
     ),
-    record(26, CompletionTaskIntendedEvent.make({ request, version: workflowJournalEventVersion })),
+    record(29, CompletionTaskIntendedEvent.make({ request, version: workflowJournalEventVersion })),
     record(
-      27,
+      30,
       CompletionTaskAttemptIntendedEvent.make({
         attemptOrdinal: ordinal,
         focusedFactsOperationId: authorizationOperation.operationId,
@@ -760,13 +810,13 @@ const historicalLookupRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      28,
+      31,
       CompletionTaskResponseLostEvent.make({ attemptOrdinal: ordinal, request, version: workflowJournalEventVersion })
     ),
-    record(29, taskTrackerReadIntent(confirmationOperation)),
-    record(30, taskTrackerFactsObservedEvent(confirmationOperation.operationId, confirmationObservation)),
+    record(32, taskTrackerReadIntent(confirmationOperation)),
+    record(33, taskTrackerFactsObservedEvent(confirmationOperation.operationId, confirmationObservation)),
     record(
-      31,
+      34,
       CompletionTaskRequestLookupIntendedEvent.make({
         attemptOrdinal: ordinal,
         operationId: lookupOperationId,
@@ -775,7 +825,7 @@ const historicalLookupRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      32,
+      35,
       CompletionTaskRequestLookupObservedEvent.make({
         attemptOrdinal: ordinal,
         lookup: CompletionTaskRequestLookup.cases.NotApplied.make({ request }),
@@ -804,7 +854,7 @@ it.effect("indexes completion lookup and candidate ancestry roles in the public 
   Effect.gen(function* () {
     const records = historicalLookupRecords()
     const view = yield* readerFromRecords(records).readAt(
-      TraceCursor.make({ position: JournalPosition.make(32), runId: integrationFinalityFixture.runId })
+      TraceCursor.make({ position: JournalPosition.make(35), runId: integrationFinalityFixture.runId })
     )
     const lookup = view.items.find(({ occurrence }) => occurrence._tag === "IntegrationFocusedCompletionOccurred")
     expect(lookup?.operationIds.length).toBeGreaterThan(0)
@@ -876,12 +926,12 @@ it.effect("rejects a tracker read when its operation ID already identifies the c
       {
         event: collidingIntent,
         key: describeJournalEvent(collidingIntent).expectedKey,
-        position: JournalPosition.make(33),
+        position: JournalPosition.make(36),
         runId: integrationFinalityFixture.runId
       }
     ]
     const failure = yield* readerFromRecords(malformed)
-      .readAt(TraceCursor.make({ position: JournalPosition.make(33), runId: integrationFinalityFixture.runId }))
+      .readAt(TraceCursor.make({ position: JournalPosition.make(36), runId: integrationFinalityFixture.runId }))
       .pipe(Effect.flip)
     expect(failure).toMatchObject({
       _tag: "TraceCausalPredecessorContradiction",
@@ -898,6 +948,7 @@ it.effect("maps projection failures consistently through complete and cursor tra
       {
         event: WorkflowRunBeganEvent.make({
           initialControlPolicy: initialPolicy,
+          remotePublicationTarget: remotePublicationTargetForTest,
           initiatedBy: { _tag: "DalphCoordinator" },
           occurrenceClassification: "InitiatedAction",
           target,
@@ -997,7 +1048,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const journal = yield* JournalStore
-      yield* journal.beginRun(runId, target, initialPolicy)
+      yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
       const firstOperationId = OperationId.make("first-graph-read")
       yield* appendGraphObservation(journal, firstOperationId)
       const unrelatedOperationId = OperationId.make("unrelated-graph-read")
@@ -1077,7 +1128,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const journal = yield* JournalStore
-      yield* journal.beginRun(runId, target, initialPolicy)
+      yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
       const missingOperationId = OperationId.make("missing-predecessor")
       yield* appendGraphObservation(journal, OperationId.make("operation-with-missing-predecessor"), [
         missingOperationId
@@ -1093,7 +1144,7 @@ it.effect(
 it.effect("reuses the immutable complete-prefix trace result for repeated reads", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target, initialPolicy)
+    yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
     yield* appendGraphObservation(journal, OperationId.make("repeatable-prefix"))
 
     const records = yield* journal.read(runId)
@@ -1120,7 +1171,7 @@ it.effect("reuses the immutable complete-prefix trace result for repeated reads"
 it.effect("matches the prefix projection at every early cursor when a later immutable suffix is malformed", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target, initialPolicy)
+    yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
     yield* appendGraphObservation(journal, OperationId.make("malformed-suffix-prefix"))
     const records = yield* journal.read(runId)
     const duplicated = records[1]
@@ -1159,7 +1210,7 @@ it.effect("matches the prefix projection at every early cursor when a later immu
 it.effect("keeps process-local integration serialization separate from other trace relationships", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target, initialPolicy)
+    yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
     yield* appendIntegrationStart(journal)
 
     const reader = yield* TraceReader
@@ -1181,7 +1232,7 @@ it.effect("keeps process-local integration serialization separate from other tra
 it.effect("rejects duplicate OperationIds as visible causal contradictions", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
-    const beginning = yield* journal.beginRun(runId, target, initialPolicy)
+    const beginning = yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
     const duplicateOperationId = OperationId.make("duplicate-operation")
     const operation = makeTrackerGraphObservationOperation(
       { _tag: "WorkflowEstablishment" },
@@ -1210,7 +1261,7 @@ it.effect("rejects duplicate OperationIds as visible causal contradictions", () 
 it.effect("rejects a predecessor recorded after its successor as a visible causal contradiction", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
-    const beginning = yield* journal.beginRun(runId, target, initialPolicy)
+    const beginning = yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
     const predecessorOperationId = OperationId.make("recorded-later")
     const successorOperationId = OperationId.make("recorded-first")
     const successor = makeTrackerGraphObservationOperation(
@@ -1251,7 +1302,7 @@ it.effect("rejects a predecessor recorded after its successor as a visible causa
 it.effect("rejects trace identities and observations outside their committed prefix", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target, initialPolicy)
+    yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
     yield* appendGraphObservation(journal, OperationId.make("schema-invariants"))
 
     const reader = yield* TraceReader
@@ -1447,7 +1498,7 @@ it.effect("reports empty, mismatched, gapped, and non-beginning committed prefix
     expect(emptyFailure).toBeInstanceOf(TraceRunNotFound)
 
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target, initialPolicy)
+    yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
     yield* appendGraphObservation(journal, OperationId.make("prefix-validation"))
     const records = yield* journal.read(runId)
     const first = records[0]
@@ -1487,7 +1538,7 @@ it.effect("reports empty, mismatched, gapped, and non-beginning committed prefix
 it.effect("fails closed when a complete tracker observation addresses another target", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target, initialPolicy)
+    yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
     const otherTarget = FixtureTarget.make("trace-reader-other-target")
     yield* appendGraphObservation(journal, OperationId.make("irrelevant-target-graph"), [], otherTarget)
 
@@ -1500,7 +1551,7 @@ it.effect("fails closed when a complete tracker observation addresses another ta
 it.effect("does not reconstruct a graph from a reconfirmation with no earlier full observation", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target, initialPolicy)
+    yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
     const firstOperation = makeTrackerGraphObservationOperation(
       { _tag: "WorkflowEstablishment" },
       OperationId.make("reconfirmation-first"),
@@ -1544,7 +1595,7 @@ it.effect("does not reconstruct a graph from a reconfirmation with no earlier fu
 it.effect("combines a fixed historical trace with a newer passive current status without rewriting either", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target, initialPolicy)
+    yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
     yield* appendGraphObservation(journal, OperationId.make("fixed-history"))
 
     const reader = yield* TraceReader
@@ -1560,7 +1611,7 @@ it.effect("combines a fixed historical trace with a newer passive current status
 it.effect("keeps the fixed cursor when the passive current status is explicitly unavailable", () =>
   Effect.gen(function* () {
     const journal = yield* JournalStore
-    yield* journal.beginRun(runId, target, initialPolicy)
+    yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
     yield* appendGraphObservation(journal, OperationId.make("unavailable-status"))
     const reader = yield* TraceReader
     const cursor = TraceCursor.make({ position: JournalPosition.make(3), runId })
@@ -1672,7 +1723,7 @@ it.effect("replays a committed occurrence at its original Run and JournalPositio
       const inMemoryReplay = yield* Effect.scoped(
         Effect.gen(function* () {
           const journal = yield* JournalStore
-          yield* journal.beginRun(runId, target, initialPolicy)
+          yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
           yield* appendGraphObservation(journal, OperationId.make("memory-replay"))
           const reader = yield* TraceReader
           const first = yield* reader.read(runId)
@@ -1691,7 +1742,7 @@ it.effect("replays a committed occurrence at its original Run and JournalPositio
       const firstRead = yield* Effect.scoped(
         Effect.gen(function* () {
           const journal = yield* JournalStore
-          yield* journal.beginRun(runId, target, initialPolicy)
+          yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
           yield* appendGraphObservation(journal, OperationId.make("sqlite-replay"))
           const reader = yield* TraceReader
           const history = yield* reader.read(runId)
@@ -1750,7 +1801,7 @@ it.effect("reconnects current status while retaining the same historical cursor"
   Effect.scoped(
     Effect.gen(function* () {
       const journal = yield* JournalStore
-      yield* journal.beginRun(runId, target, initialPolicy)
+      yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
       yield* appendGraphObservation(journal, OperationId.make("status-reconnect"))
       const reader = yield* TraceReader
       const history = yield* readTraceAt(reader, TraceCursor.make({ position: JournalPosition.make(3), runId }))

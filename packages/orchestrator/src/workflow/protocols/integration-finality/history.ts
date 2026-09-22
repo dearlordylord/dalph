@@ -25,6 +25,7 @@ import { isExactTaskClaim } from "../../../authorities/task-tracker/claim-mutati
 import { taskTrackerTargetKey } from "../../../authorities/task-tracker/target.js"
 import { invalidCompletionTaskHistory } from "./completion-task-history.js"
 import { taskTrackerObservationMatchesRead } from "../../task-tracker-facts/observation-match.js"
+import { exactPublicationWasObserved } from "./publication-premise.js"
 import { recordedTaskAttemptPlanFor } from "../task-attempt-planning/journal-evidence.js"
 import {
   isJournalRecordEvidence,
@@ -241,11 +242,12 @@ const invalidReplacementIntent = (
     !duplicate &&
     exactPlanPrior(records, event.claim, record.position) &&
     exactOriginalClaimPrior(records, event.claim, record.position) &&
+    exactPublicationWasObserved(records, event.claim, record.position) &&
     exactPromotionPrior(records, event.claim, record.position)
   return {
     detail: valid
       ? undefined
-      : `completion-claim replacement intent ${event.operationId} has no exact claim-bound planned attempt, active claim, and promotion proof`,
+      : `completion-claim replacement intent ${event.operationId} has no exact claim-bound planned attempt, active claim, publication proof, and promotion proof`,
     indexes: {
       ...indexes,
       replacementIntents: HashMap.set(indexes.replacementIntents, event.operationId, { ...record, event })

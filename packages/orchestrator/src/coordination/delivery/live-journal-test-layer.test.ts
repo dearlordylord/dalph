@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { RunId } from "@dalph/contracts"
 import { Context, Effect, Layer, Exit, Option } from "effect"
@@ -22,7 +23,8 @@ const target = FixtureTarget.make("live-journal-test-layer")
 const began = makeWorkflowRunBeganRecord(
   runId,
   target,
-  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+  remotePublicationTargetForTest
 )
 
 it.effect("imports once and shares warm append publication with every accepted reader", () =>

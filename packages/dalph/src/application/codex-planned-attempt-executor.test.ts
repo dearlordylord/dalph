@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import {
   AttemptId,
@@ -41,6 +42,7 @@ import {
 } from "@dalph/orchestrator"
 import { NodeServices } from "@effect/platform-node"
 import {
+  Cause,
   Crypto,
   Deferred,
   Duration,
@@ -210,6 +212,7 @@ type Harness = {
   readonly replacementLedger: () => CodexPurgedWorkUnitReplacementLedger | undefined
   readonly setThread: (thread: CodexThreadSnapshot) => void
   readonly restoreProviderThread: (thread: CodexThreadSnapshot) => void
+  readonly setProviderTurnLedger: (turns: ReadonlyArray<CodexTurnSnapshot>) => void
   readonly preserveResumeCwd: () => void
   readonly setRecord: (record: CodexAttemptRecord) => void
   readonly setReadOverride: (record: CodexAttemptRecord | undefined) => void
@@ -273,6 +276,7 @@ const makeHarness = (
     readonly lifecycleHintCount?: number
     readonly lifecycleHints?: CodexAppServerService["attachTurnCompletedHints"]
     readonly activityHints?: CodexAppServerService["attachOwnedActivityHints"]
+    readonly beforeTurnStart?: () => Effect.Effect<void>
     readonly beforeAttemptRead?: () => Effect.Effect<void>
     readonly afterActivityCensus?: () => Effect.Effect<void>
   } = {}
@@ -290,6 +294,7 @@ const makeHarness = (
     turns
   }
   let currentTurn: CodexTurnSnapshot | undefined
+  let providerTurnLedger: ReadonlyArray<CodexTurnSnapshot> | undefined
   let turnNumber = 0
   let associationAtTurn: CodexAttemptRecord | undefined
   let firstTurnResponseLost = false
@@ -385,8 +390,13 @@ const makeHarness = (
         return currentThread
       })
     },
+    listThreadTurns: () =>
+      Effect.sync(() => {
+        return providerTurnLedger ?? currentThread.turns
+      }),
     startTurn: (threadIdValue, cwd, text, ownedTurnToken) =>
       Effect.gen(function* () {
+        yield* options.beforeTurnStart?.() ?? Effect.void
         if (threadIdValue !== threadId) return yield* Effect.fail(unavailable("turn/start"))
         turnCwds.push(cwd)
         turnTexts.push(text)
@@ -596,6 +606,9 @@ const makeHarness = (
       currentThread = { ...thread, turns }
       currentTurn = turns.findLast((turn) => turn.ownedTurnToken !== undefined)
       turnNumber = turns.length
+    },
+    setProviderTurnLedger: (providerTurns) => {
+      providerTurnLedger = providerTurns
     },
     preserveResumeCwd: () => {
       preserveResumeCwdOnResume = true
@@ -1296,6 +1309,114 @@ it.effect("current-first attachment cannot miss a terminal change between projec
   )
 )
 
+it.effect("keeps the initial lifecycle attachment through a delayed owned-turn census", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const providerHints = yield* PubSub.unbounded<void>()
+      const harness = makeHarness({
+        lifecycleHints: PubSub.subscribe(providerHints).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const))
+            )
+          )
+        )
+      })
+
+      const result = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        const visibleAfterBegin = harness.currentThread()
+        // Model Codex's first thread/resume census lagging behind the
+        // successful turn/start response. The durable record remains Running.
+        harness.setThread({
+          ...visibleAfterBegin,
+          status: "active",
+          turns: [{ id: CodexTurnId.make("codex-visible-but-unowned"), status: "inProgress", items: [] }]
+        })
+
+        const attachment = yield* lifecycle.attach(correlation)
+        expect(attachment.current).toMatchObject({
+          _tag: "Exact",
+          report: { _tag: "ExecutorWorkExecuting", correlation }
+        })
+
+        harness.complete(finalResponse(head))
+        yield* PubSub.publish(providerHints, undefined)
+        const changed = yield* Stream.runHead(attachment.changes)
+        return { attachment, changed }
+      }).pipe(Effect.provide(layerFor(harness)))
+
+      expect(result.changed).toMatchObject({
+        _tag: "Some",
+        value: { _tag: "Exact", report: { _tag: "ExecutorWorkTerminal", correlation, result: { _tag: "Accepted" } } }
+      })
+      yield* result.attachment.close
+    })
+  )
+)
+
+it.effect("keeps an initial nonempty lifecycle contradiction unreadable", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = makeHarness()
+      const projection = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request, { _tag: "InitialDelivery" })
+        harness.duplicateOwnedTurn()
+        const attachment = yield* lifecycle.attach(correlation)
+        const current = attachment.current
+        yield* attachment.close
+        return current
+      }).pipe(Effect.provide(layerFor(harness)))
+
+      expect(projection).toMatchObject({ _tag: "Unreadable", correlation })
+    })
+  )
+)
+
+it.effect("serializes the initial lifecycle projection with an in-flight Begin", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const turnStartEntered = yield* Deferred.make<void>()
+      const releaseTurnStart = yield* Deferred.make<void>()
+      const attachmentCompleted = yield* Deferred.make<void>()
+      const harness = makeHarness({
+        beforeTurnStart: () =>
+          Deferred.succeed(turnStartEntered, undefined).pipe(Effect.andThen(Deferred.await(releaseTurnStart)))
+      })
+
+      const attachment = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        const beginning = yield* executor.begin(request, { _tag: "InitialDelivery" }).pipe(Effect.forkChild)
+        yield* Deferred.await(turnStartEntered)
+
+        const attaching = yield* lifecycle.attach(correlation).pipe(
+          Effect.tap(() => Deferred.succeed(attachmentCompleted, undefined)),
+          Effect.forkChild
+        )
+        yield* Effect.yieldNow
+        const attachmentBeforeBeginSettles = yield* Deferred.poll(attachmentCompleted)
+        expect(Option.isNone(attachmentBeforeBeginSettles)).toBe(true)
+
+        yield* Deferred.succeed(releaseTurnStart, undefined)
+        yield* Fiber.join(beginning)
+        return yield* Fiber.join(attaching)
+      }).pipe(Effect.provide(layerFor(harness)))
+
+      expect(attachment.current).toMatchObject({
+        _tag: "Exact",
+        report: { _tag: "ExecutorWorkExecuting", correlation }
+      })
+      expect(harness.currentRecord()?._tag).toBe("Running")
+      yield* attachment.close
+    })
+  )
+)
+
 it.effect("rebuilds Codex lifecycle attachment from durable association across scoped restart", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -1803,6 +1924,31 @@ it.effect("reconciles a lost provider response and keeps lost public Begin recon
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
+it.effect("reconciles a stale in-progress census from the provider turn ledger", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request, { _tag: "InitialDelivery" })
+    const turn = harness.currentThread().turns[0]
+    expect(turn).toBeDefined()
+    if (turn === undefined) return
+    const stale = { ...turn, status: "inProgress" as const }
+    const completed = {
+      ...turn,
+      status: "completed" as const,
+      items: [{ type: "agentMessage", text: finalResponse(head) }]
+    }
+    harness.setThread({ ...harness.currentThread(), status: "active", turns: [stale] })
+    harness.setProviderTurnLedger([completed])
+    const reconciled = yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Begin" })
+    expect(reconciled).toMatchObject({ _tag: "Exact", report: { _tag: "ExecutorWorkExecuting" } })
+    expect(harness.currentRecord()?._tag).toBe("Terminal")
+    const report = yield* observeExactReport(executor)
+    expect(report).toMatchObject({ _tag: "ExecutorWorkTerminal", correlation, result: { _tag: "Accepted" } })
+    expect(harness.currentRecord()?._tag).toBe("Terminal")
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
 it.effect("reconciles a lost Begin terminal after restart before exposing it passively", () => {
   const harness = makeHarness({ terminalTurnStatus: "completed", dieAfterFirstTurnStartOnce: true })
   const firstProcess = Effect.gen(function* () {
@@ -1871,6 +2017,17 @@ it.effect("backfills an omitted owned token on the started turn", () => {
       expect(harness.currentThread().turns[0]?.ownedTurnToken).toBeUndefined()
       expect(record.currentToken).toBeDefined()
     }
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("reconciles a passive terminal by observed turn id when the provider omits its token", () => {
+  const harness = makeHarness({ omitOwnedTurnToken: true })
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request, { _tag: "InitialDelivery" })
+    harness.complete(finalResponse(head))
+    const terminal = yield* observeExactReport(executor)
+    expect(terminal).toMatchObject({ _tag: "ExecutorWorkTerminal", correlation, result: { _tag: "Accepted" } })
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
@@ -2883,7 +3040,12 @@ for (const storage of ["memory", "sqlite-and-private-files"] as const) {
               if (beginning?.event._tag !== "WorkflowRunBegan") {
                 return yield* Effect.die("restart fixture requires a workflow beginning")
               }
-              yield* journal.beginRun(attempt.runId, trackerTarget, beginning.event.initialControlPolicy)
+              yield* journal.beginRun(
+                attempt.runId,
+                trackerTarget,
+                beginning.event.initialControlPolicy,
+                remotePublicationTargetForTest
+              )
               for (const record of seedRecords.slice(1)) {
                 if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
                   return yield* Effect.die("restart fixture must contain no later workflow lifecycle event")
@@ -2928,9 +3090,17 @@ for (const storage of ["memory", "sqlite-and-private-files"] as const) {
               Effect.provide(productionJournalLayer(attempt.runId, trackerTarget, initial, journal), { local: true })
             )
           }).pipe(Effect.provide(journalLayer, { local: true }), Effect.provide(privateLayer, { local: true }))
-        expect((yield* activation(true).pipe(Effect.exit))._tag).toBe("Failure")
+        const originalLoss = yield* activation(true).pipe(Effect.exit)
+        expect(originalLoss._tag).toBe("Failure")
+        if (originalLoss._tag === "Failure") {
+          expect(Cause.pretty(originalLoss.cause)).toContain("original process lost after association")
+        }
         recovery = true
-        expect((yield* activation().pipe(Effect.exit))._tag).toBe("Failure")
+        const recoveryLoss = yield* activation().pipe(Effect.exit)
+        expect(recoveryLoss._tag).toBe("Failure")
+        if (recoveryLoss._tag === "Failure") {
+          expect(Cause.pretty(recoveryLoss.cause)).toContain(`coordinator lost at ${cut}`)
+        }
         expect(cutPending).toBe(false)
         const beforeRestart = calls.length
         const recovered = yield* activation().pipe(Effect.exit)

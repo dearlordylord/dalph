@@ -46,7 +46,7 @@ const successorAttempt = {
   taskRevision: replacementRevision,
   worktree: "/dalph/cassettes/attempt-A-1"
 }
-const integrationSessionSuffix = `$authored-run:attempt:A:1:57:61:${expectedHead}:${acceptedCommit}:/dalph/cassettes/repository.git:refs/heads/master`
+const integrationSessionSuffix = `$authored-run:attempt:A:1:59:65:${expectedHead}:${acceptedCommit}:/dalph/cassettes/repository.git:refs/heads/master`
 const integrationCorrelation = {
   ordinal: 1,
   session: {
@@ -58,10 +58,10 @@ const integrationCorrelation = {
     expectedTargetHead: expectedHead,
     integrationTarget,
     plannedAttempt: successorAttempt,
-    queuedAt: 56,
+    queuedAt: 58,
     sessionId: `integrator-session:${integrationSessionSuffix}`,
-    startedAt: 57,
-    targetLineageObservedAt: 61
+    startedAt: 59,
+    targetLineageObservedAt: 65
   }
 }
 
@@ -70,6 +70,11 @@ const replacementPromotedAuthoredCassette = Schema.decodeUnknownSync(AuthoredSce
   name: "a valid same-Run replacement successor reaches target promotion",
   startingFacts: {
     ...replacementBase.startingFacts,
+    targetLineageObservation: {
+      plannedBaseIsAncestorOfTargetHead: true,
+      plannedBaseSha: expectedHead,
+      targetHeadSha: expectedHead
+    },
     targetLineageObservations: [
       replacementBase.startingFacts.targetLineageObservation,
       { plannedBaseIsAncestorOfTargetHead: true, plannedBaseSha: expectedHead, targetHeadSha: expectedHead }
@@ -198,9 +203,9 @@ it.effect("accepts a promoted history containing a replacement plan while select
         promoted.observationCaptures.filter((capture) => capture._tag === "AuthoredStoryOccurrenceCaptured")
       ).toHaveLength(replacementPromotedAuthoredCassette.story.length)
       expect(promotion.correlation.qualifiedCandidate.run.session).toMatchObject({
-        queuedAt: 56,
-        startedAt: 57,
-        targetLineageObservedAt: 61
+        queuedAt: 58,
+        startedAt: 59,
+        targetLineageObservedAt: 65
       })
       const finalized = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(
         maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess,

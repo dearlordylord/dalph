@@ -29,6 +29,24 @@ module acceptedResultIntegration {
     | CandidateGitReadPending
     | CandidateReady
     | CandidateRejected
+    // Remote publication is a separately journaled boundary. Promotion and
+    // finality cannot consume a candidate until this proof is durable.
+    | PublicationPremise
+    | PublicationIntent
+    | PublicationAttemptIntended
+    | PublicationInFlight
+    | PublicationResponseLost
+    | PublicationReconciliation
+    | PublicationReadPending
+    | PublicationProved
+    | PublicationMissing
+    | PublicationUnreadable
+    | PublicationInsufficient
+    | PublicationIncompatible
+    | PublicationDenied
+    | PublicationThrottled
+    | PublicationCompetingHead
+    | PublicationNonConvergence
     | PromotionPremise
     | PromotionIntent
     | PromotionAttemptIntended
@@ -84,6 +102,42 @@ module acceptedResultIntegration {
     | PromotionCandidateAncestor
     | PromotionOtherHead
     | PromotionUnreadableHead
+
+  // The remote publication proof records the exact accepted outcome. A
+  // process-success flag, equal content, or a resource HEAD never creates one.
+  type PublicationProofBasis =
+    | NoPublicationProof
+    | PushApplied
+    | PushUpToDate
+    | ReconciledCandidateCurrent
+    | ReconciledCandidateAncestor
+
+  type PublicationObservation =
+    | NoPublicationObservation
+    | PublicationApplied
+    | PublicationUpToDate
+    | PublicationRemoteCandidateCurrent
+    | PublicationRemoteCandidateAncestor
+    | PublicationRemoteAncestorOfCandidate
+    | PublicationRemoteNonFastForward
+    | PublicationRemoteMissing
+    | PublicationRemoteUnreadable
+    | PublicationRemoteInsufficient
+    | PublicationRemoteIncompatible
+    | PublicationRemoteDenied
+    | PublicationRemoteThrottled
+    | PublicationRemoteCompetingHead
+    | PublicationRemoteNonConvergence
+
+  // Admission pins the fully-qualified destination before any accepted
+  // result work starts. Rejections are retained waits with no provider retry.
+  type DestinationAdmission =
+    | DestinationUnvalidated
+    | DestinationAdmitted
+    | DestinationMissing
+    | DestinationWrongRef
+    | DestinationUnreadable
+    | DestinationIncompatible
 
   type ResultState = {
     phase: Phase,
@@ -155,6 +209,34 @@ module acceptedResultIntegration {
     promotionCompareAndSetRequested: bool,
     promotionForceRequested: bool,
     promotionEquivalentContentAccepted: bool,
+    // RemotePublicationCorrelation is the exact S/M/destination/request
+    // tuple consumed by local promotion. Each numbered intent is durable
+    // before the provider call and survives recovery.
+    publicationIntentRecorded: bool,
+    publicationAttemptCount: int,
+    publicationLastAttempt: int,
+    publicationResponseAmbiguous: bool,
+    // A third non-fast-forward result still owns one read-only reconciliation
+    // before the bounded wait becomes AttemptsExhausted. This flag is set by
+    // that push result and consumed by the following read outcome.
+    publicationFinalReadRequired: bool,
+    publicationResultRecorded: bool,
+    publicationProofRecorded: bool,
+    publicationProofBasis: PublicationProofBasis,
+    publicationObservation: PublicationObservation,
+    publicationObservedRemoteHead: int,
+    publicationEndpoint: int,
+    publicationBranch: int,
+    publicationRequestId: int,
+    publicationCandidate: int,
+    publicationIntegratorSession: int,
+    publicationExpectedTargetHead: int,
+    publicationOrdinaryRefspecRequested: bool,
+    publicationForceRequested: bool,
+    publicationDryRunOnly: bool,
+    publicationEqualContentAccepted: bool,
+    publicationProcessSuccessObserved: bool,
+    publicationSenderStopped: bool,
     // Issue #68: the conclusive outer result is quarantined before its live
     // target ownership is released. The position is the Journal position of
     // this exact quarantine occurrence.
@@ -199,6 +281,11 @@ module acceptedResultIntegration {
 
   type State = {
     results: int -> ResultState,
+    destinationAdmission: DestinationAdmission,
+    destinationAdmissionIntentRecorded: bool,
+    destinationEndpoint: int,
+    destinationBranch: int,
+    destinationCompatibilityProven: bool,
     nextJournalPosition: int,
     recovered: bool,
     restartCount: int,
@@ -210,6 +297,8 @@ module acceptedResultIntegration {
 
   pure val RESULT_IDS = Set(1, 2)
   pure val PROMOTION_ATTEMPT_LIMIT = 3
+  pure val DESTINATION_ENDPOINT = 9001
+  pure val DESTINATION_BRANCH = 9002
   // Finite model bounds for exploration; neither is a production policy.
   // Enough finite recovery turns to exercise all three promotion ordinals;
   // this bounds the model only and is not a production retry policy.
@@ -239,6 +328,46 @@ module acceptedResultIntegration {
       PromotionExhausted,
     ).contains(phase)
 
+  pure def publicationProtocolPhase(phase: Phase): bool =
+    Set(
+      PublicationPremise,
+      PublicationIntent,
+      PublicationAttemptIntended,
+      PublicationInFlight,
+      PublicationResponseLost,
+      PublicationReconciliation,
+      PublicationReadPending,
+      PublicationProved,
+      PublicationMissing,
+      PublicationUnreadable,
+      PublicationInsufficient,
+      PublicationIncompatible,
+      PublicationDenied,
+      PublicationThrottled,
+      PublicationCompetingHead,
+      PublicationNonConvergence,
+    ).contains(phase)
+
+  pure def publicationRetainedWaitPhase(phase: Phase): bool =
+    Set(
+      PublicationMissing,
+      PublicationUnreadable,
+      PublicationInsufficient,
+      PublicationIncompatible,
+      PublicationDenied,
+      PublicationThrottled,
+      PublicationCompetingHead,
+      PublicationNonConvergence,
+    ).contains(phase)
+
+  pure def destinationAdmissionIsExact(s: State): bool = and {
+    s.destinationAdmission == DestinationAdmitted,
+    s.destinationAdmissionIntentRecorded,
+    s.destinationEndpoint == DESTINATION_ENDPOINT,
+    s.destinationBranch == DESTINATION_BRANCH,
+    s.destinationCompatibilityProven,
+  }
+
   pure def integratorActivePhase(phase: Phase): bool =
     Set(
       Started,
@@ -252,6 +381,13 @@ module acceptedResultIntegration {
       SuccessorResponseLost,
       CandidateGitReadIntent,
       CandidateGitReadPending,
+      PublicationPremise,
+      PublicationIntent,
+      PublicationAttemptIntended,
+      PublicationInFlight,
+      PublicationResponseLost,
+      PublicationReconciliation,
+      PublicationReadPending,
     ).contains(phase)
 
   // Once S is fixed, resuming the opaque call or qualifying its reported M
@@ -270,6 +406,14 @@ module acceptedResultIntegration {
   pure def candidateQualificationPhase(phase: Phase): bool =
     Set(
       CandidateReady,
+      PublicationPremise,
+      PublicationIntent,
+      PublicationAttemptIntended,
+      PublicationInFlight,
+      PublicationResponseLost,
+      PublicationReconciliation,
+      PublicationReadPending,
+      PublicationProved,
       PromotionPremise,
       PromotionIntent,
       PromotionAttemptIntended,
@@ -291,6 +435,22 @@ module acceptedResultIntegration {
       CandidateGitReadPending,
       CandidateReady,
       CandidateRejected,
+      PublicationPremise,
+      PublicationIntent,
+      PublicationAttemptIntended,
+      PublicationInFlight,
+      PublicationResponseLost,
+      PublicationReconciliation,
+      PublicationReadPending,
+      PublicationProved,
+      PublicationMissing,
+      PublicationUnreadable,
+      PublicationInsufficient,
+      PublicationIncompatible,
+      PublicationDenied,
+      PublicationThrottled,
+      PublicationCompetingHead,
+      PublicationNonConvergence,
     ).contains(phase)
 
   // A started responsibility remains a logical same-target blocker until
@@ -369,6 +529,7 @@ module acceptedResultIntegration {
       SuccessorInFlight,
       SuccessorResponseLost,
       PromotionPremise,
+      PublicationReadPending,
     ).contains(phase)
 
   // The finite model carries one current target-head proof. When one of two
@@ -397,6 +558,15 @@ module acceptedResultIntegration {
   val restartReached: bool = state.recovered
   val targetHeadProofReached: bool =
     state.targetFactsCurrent and state.targetHeadProof != 0
+  val destinationAdmissionReached: bool =
+    state.destinationAdmission == DestinationAdmitted
+  val destinationRejectedReached: bool =
+    Set(
+      DestinationMissing,
+      DestinationWrongRef,
+      DestinationUnreadable,
+      DestinationIncompatible,
+    ).contains(state.destinationAdmission)
   val incompatibleTargetLineageReached: bool =
     RESULT_IDS.exists(id =>
       state.results.get(id).phase == Queued and not(state.results.get(id).lineageCompatible)
@@ -435,6 +605,33 @@ module acceptedResultIntegration {
     RESULT_IDS.exists(id => state.results.get(id).phase == CandidateGitReadPending)
   val candidateReadyReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == CandidateReady)
+  val publicationPremiseReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == PublicationPremise)
+  val publicationIntentReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == PublicationIntent)
+  val publicationAttemptIntendedReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == PublicationAttemptIntended)
+  val publicationInFlightReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == PublicationInFlight)
+  val publicationResponseLostReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == PublicationResponseLost)
+  val publicationReconciliationReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == PublicationReconciliation)
+  val publicationProvedReached: bool =
+    RESULT_IDS.exists(id => state.results.get(id).phase == PublicationProved)
+  val publicationWaitReached: bool =
+    RESULT_IDS.exists(id => publicationRetainedWaitPhase(state.results.get(id).phase))
+
+  val destinationAdmissionPrecedesTaskWork: bool =
+    state.destinationAdmission == DestinationAdmitted
+      or RESULT_IDS.forall(id => state.results.get(id).phase == NoAcceptedResult)
+
+  val destinationIdentityIsPinned: bool =
+    state.destinationAdmission != DestinationAdmitted or and {
+      state.destinationEndpoint == DESTINATION_ENDPOINT,
+      state.destinationBranch == DESTINATION_BRANCH,
+      state.destinationCompatibilityProven,
+    }
   val candidateRejectedReached: bool =
     RESULT_IDS.exists(id => state.results.get(id).phase == CandidateRejected)
   val promotionPremiseReached: bool =
@@ -541,6 +738,11 @@ module acceptedResultIntegration {
           CandidateGitReadIntent,
           CandidateGitReadPending,
           CandidateReady,
+          PublicationPremise,
+          PublicationIntent,
+          PublicationAttemptIntended,
+          PublicationInFlight,
+          PublicationReconciliation,
           PromotionPremise,
           PromotionIntent,
           PromotionAttemptIntended,
@@ -1208,6 +1410,135 @@ module acceptedResultIntegration {
       }
     })
 
+  // Local promotion cannot be offered from candidate qualification alone.
+  // The exact destination/correlation and one of the four accepted remote
+  // proof bases must already be durable.
+  val promotionRequiresPublicationProof: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(
+        Set(
+          PromotionPremise,
+          PromotionIntent,
+          PromotionAttemptIntended,
+          PromotionInFlight,
+          PromotionResponseLost,
+          PromotionReconciliation,
+          PromotionRetryAuthorityRequired,
+          PromotionRetryReady,
+          PromotionReadPending,
+          PromotionSucceeded,
+          PromotionStale,
+          PromotionExhausted,
+        ).contains(result.phase)
+      ) or and {
+        result.publicationProofRecorded,
+        result.publicationProofBasis != NoPublicationProof,
+        result.publicationEndpoint == DESTINATION_ENDPOINT,
+        result.publicationBranch == DESTINATION_BRANCH,
+        result.publicationRequestId == result.integrationSession + result.submittedCandidate,
+        result.publicationCandidate == result.submittedCandidate,
+        result.publicationIntegratorSession == result.integrationSession,
+        result.publicationExpectedTargetHead == result.expectedTargetHead,
+        state.destinationAdmission == DestinationAdmitted,
+      }
+    })
+
+  val publicationIntentPrecedesProviderCall: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(result.publicationOrdinaryRefspecRequested) or and {
+        result.publicationIntentRecorded,
+        result.publicationAttemptCount > 0,
+        result.publicationAttemptCount == result.publicationLastAttempt,
+        result.publicationEndpoint == DESTINATION_ENDPOINT,
+        result.publicationBranch == DESTINATION_BRANCH,
+        result.publicationCandidate == result.submittedCandidate,
+        result.publicationIntegratorSession == result.integrationSession,
+        result.publicationExpectedTargetHead == result.expectedTargetHead,
+        not(result.publicationForceRequested),
+        not(result.publicationDryRunOnly),
+        not(result.publicationEqualContentAccepted),
+        not(result.publicationProcessSuccessObserved),
+      }
+    })
+
+  val publicationAttemptsAreBounded: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      and {
+        result.publicationAttemptCount >= 0,
+        result.publicationAttemptCount <= PROMOTION_ATTEMPT_LIMIT,
+        result.publicationLastAttempt >= 0,
+        result.publicationLastAttempt <= PROMOTION_ATTEMPT_LIMIT,
+        result.publicationLastAttempt == result.publicationAttemptCount,
+      }
+    })
+
+  val publicationProofRequiresPerRefSuccess: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(result.publicationProofRecorded) or and {
+        result.publicationResultRecorded,
+        Set(
+          PushApplied,
+          PushUpToDate,
+          ReconciledCandidateCurrent,
+          ReconciledCandidateAncestor,
+        ).contains(result.publicationProofBasis),
+        Set(
+          PublicationApplied,
+          PublicationUpToDate,
+          PublicationRemoteCandidateCurrent,
+          PublicationRemoteCandidateAncestor,
+        ).contains(result.publicationObservation),
+        result.publicationCandidate == result.submittedCandidate,
+        result.publicationEndpoint == DESTINATION_ENDPOINT,
+        result.publicationBranch == DESTINATION_BRANCH,
+        not(result.publicationForceRequested),
+        not(result.publicationDryRunOnly),
+        not(result.publicationEqualContentAccepted),
+        not(result.publicationProcessSuccessObserved),
+      }
+    })
+
+  val publicationWaitRetainsResponsibility: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(publicationRetainedWaitPhase(result.phase)) or and {
+        result.publicationIntentRecorded,
+        result.publicationResultRecorded,
+        not(result.publicationProofRecorded),
+        not(result.publicationOrdinaryRefspecRequested) or result.publicationAttemptCount > 0,
+        not(result.targetHeld),
+      }
+    })
+
+  val publicationFinalReconciliationIsReadOnlyAndBounded: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      not(result.publicationFinalReadRequired) or and {
+        result.phase == PublicationReconciliation,
+        result.targetHeld,
+        result.publicationAttemptCount == PROMOTION_ATTEMPT_LIMIT,
+        not(result.publicationOrdinaryRefspecRequested),
+        Set(NoPublicationObservation, PublicationRemoteNonFastForward).contains(
+          result.publicationObservation
+        ),
+      }
+    })
+
+  val publicationProofIsRetainedAcrossRecovery: bool =
+    RESULT_IDS.forall(id => {
+      val result = state.results.get(id)
+      result.publicationProofRecorded implies and {
+        result.publicationProofBasis != NoPublicationProof,
+        result.publicationCandidate == result.submittedCandidate,
+        result.publicationEndpoint == DESTINATION_ENDPOINT,
+        result.publicationBranch == DESTINATION_BRANCH,
+      }
+    })
+
   val promotionRetryOrdinalsHaveFreshHeadReads: bool =
     RESULT_IDS.forall(id => {
       val result = state.results.get(id)
@@ -1271,6 +1602,28 @@ module acceptedResultIntegration {
         promotionCompareAndSetRequested: false,
         promotionForceRequested: false,
         promotionEquivalentContentAccepted: false,
+        publicationIntentRecorded: false,
+        publicationAttemptCount: 0,
+        publicationLastAttempt: 0,
+        publicationResponseAmbiguous: false,
+        publicationFinalReadRequired: false,
+        publicationResultRecorded: false,
+        publicationProofRecorded: false,
+        publicationProofBasis: NoPublicationProof,
+        publicationObservation: NoPublicationObservation,
+        publicationObservedRemoteHead: 0,
+        publicationEndpoint: 0,
+        publicationBranch: 0,
+        publicationRequestId: 0,
+        publicationCandidate: 0,
+        publicationIntegratorSession: 0,
+        publicationExpectedTargetHead: 0,
+        publicationOrdinaryRefspecRequested: false,
+        publicationForceRequested: false,
+        publicationDryRunOnly: false,
+        publicationEqualContentAccepted: false,
+        publicationProcessSuccessObserved: false,
+        publicationSenderStopped: false,
         quarantineRecorded: false,
         quarantineOccurrenceCount: 0,
         quarantinePosition: 0,
@@ -1303,6 +1656,11 @@ module acceptedResultIntegration {
         lastDirectionSession: 0,
         lastDirectionPosition: 0,
       }),
+      destinationAdmission: DestinationUnvalidated,
+      destinationAdmissionIntentRecorded: false,
+      destinationEndpoint: 0,
+      destinationBranch: 0,
+      destinationCompatibilityProven: false,
       nextJournalPosition: 1,
       recovered: false,
       restartCount: 0,
@@ -1313,10 +1671,55 @@ module acceptedResultIntegration {
     }
   }
 
+  // The coordinator records and pins the exact endpoint/ref before accepting
+  // any integration responsibility. The compatibility bit stands for the
+  // initial ancestry/read check; a later race is handled by #385.
+  action admitDestination: bool = all {
+    state.destinationAdmission == DestinationUnvalidated,
+    state' = {
+      ...state,
+      destinationAdmission: DestinationAdmitted,
+      destinationAdmissionIntentRecorded: true,
+      destinationEndpoint: DESTINATION_ENDPOINT,
+      destinationBranch: DESTINATION_BRANCH,
+      destinationCompatibilityProven: true,
+    },
+  }
+
+  action rejectMissingDestination: bool = all {
+    state.destinationAdmission == DestinationUnvalidated,
+    state' = { ...state, destinationAdmission: DestinationMissing },
+  }
+
+  action rejectWrongDestinationRef: bool = all {
+    state.destinationAdmission == DestinationUnvalidated,
+    state' = {
+      ...state,
+      destinationAdmission: DestinationWrongRef,
+      destinationAdmissionIntentRecorded: true,
+      destinationEndpoint: DESTINATION_ENDPOINT,
+      destinationBranch: DESTINATION_BRANCH + 1,
+    },
+  }
+
+  action rejectIncompatibleDestination: bool = all {
+    state.destinationAdmission == DestinationUnvalidated,
+    state' = {
+      ...state,
+      destinationAdmission: DestinationIncompatible,
+      destinationAdmissionIntentRecorded: true,
+      destinationEndpoint: DESTINATION_ENDPOINT,
+      destinationBranch: DESTINATION_BRANCH,
+    },
+  }
+
   action acceptResult(id: int): bool = {
     val result = state.results.get(id)
     all {
       RESULT_IDS.contains(id),
+      state.destinationAdmission == DestinationAdmitted,
+      state.destinationAdmissionIntentRecorded,
+      state.destinationCompatibilityProven,
       result.phase == NoAcceptedResult,
       state' = {
         ...state,
@@ -2120,9 +2523,9 @@ module acceptedResultIntegration {
     }
   }
 
-  // Git qualification is the direct premise for promotion. There is no
-  // target-verification plan, manifest, wrapper, or separate Dalph phase.
-  action offerPromotionPremise(id: int): bool = {
+  // Candidate qualification is the premise for remote publication, not local
+  // promotion. The latter consumes only the durable publication proof below.
+  action offerPublicationPremise(id: int): bool = {
     val result = state.results.get(id)
     all {
       id == 1,
@@ -2131,6 +2534,558 @@ module acceptedResultIntegration {
       result.integratorOutcome == PreparedCandidate,
       result.submittedCandidate != 0,
       result.candidateGitObservation == CandidateExactParents,
+      not(result.targetHeld),
+      destinationAdmissionIsExact(state),
+      state.trackerFactsCurrent,
+      state.targetFactsCurrent,
+      state.targetHeadProof == result.expectedTargetHead,
+      not(state.targetReacquisitionRequired),
+      state' = {
+        ...state,
+        results: state.results.put(id, { ...result, phase: PublicationPremise }),
+      },
+    }
+  }
+
+  action recordPublicationIntent(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationPremise,
+      result.candidateQualificationProven,
+      result.submittedCandidate != 0,
+      destinationAdmissionIsExact(state),
+      not(result.targetHeld),
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: PublicationIntent,
+          targetHeld: true,
+          publicationIntentRecorded: true,
+          publicationAttemptCount: 0,
+          publicationLastAttempt: 0,
+          publicationResponseAmbiguous: false,
+          publicationFinalReadRequired: false,
+          publicationResultRecorded: false,
+          publicationProofRecorded: false,
+          publicationProofBasis: NoPublicationProof,
+          publicationObservation: NoPublicationObservation,
+          publicationObservedRemoteHead: 0,
+          publicationEndpoint: state.destinationEndpoint,
+          publicationBranch: state.destinationBranch,
+          publicationRequestId: result.integrationSession + result.submittedCandidate,
+          publicationCandidate: result.submittedCandidate,
+          publicationIntegratorSession: result.integrationSession,
+          publicationExpectedTargetHead: result.expectedTargetHead,
+          publicationOrdinaryRefspecRequested: false,
+          publicationForceRequested: false,
+          publicationDryRunOnly: false,
+          publicationEqualContentAccepted: false,
+          publicationProcessSuccessObserved: false,
+          publicationSenderStopped: false,
+        }),
+      },
+    }
+  }
+
+  pure def recordInitialPublicationProof(
+    s: State,
+    id: int,
+    basis: PublicationProofBasis,
+    observation: PublicationObservation,
+    remoteHead: int,
+  ): State = {
+    val result = s.results.get(id)
+    {
+      ...s,
+      results: s.results.put(id, {
+        ...result,
+        phase: PublicationProved,
+        targetHeld: false,
+        // The engine appends the first attempt intent before the proof even
+        // when the initial read already proves publication. Count that exact
+        // correlation rather than manufacturing a push result.
+        publicationAttemptCount: 1,
+        publicationLastAttempt: 1,
+        publicationFinalReadRequired: false,
+        publicationResultRecorded: true,
+        publicationProofRecorded: true,
+        publicationProofBasis: basis,
+        publicationObservation: observation,
+        publicationObservedRemoteHead: remoteHead,
+        publicationResponseAmbiguous: false,
+        publicationOrdinaryRefspecRequested: false,
+        publicationSenderStopped: true,
+      }),
+    }
+  }
+
+  action observeInitialPublicationCandidateCurrent(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationIntent,
+      result.targetHeld,
+      result.publicationIntentRecorded,
+      result.publicationAttemptCount == 0,
+      result.publicationLastAttempt == 0,
+      state' = recordInitialPublicationProof(
+        state,
+        id,
+        ReconciledCandidateCurrent,
+        PublicationRemoteCandidateCurrent,
+        result.submittedCandidate,
+      ),
+    }
+  }
+
+  action observeInitialPublicationCandidateAncestor(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationIntent,
+      result.targetHeld,
+      result.publicationIntentRecorded,
+      result.publicationAttemptCount == 0,
+      result.publicationLastAttempt == 0,
+      state' = recordInitialPublicationProof(
+        state,
+        id,
+        ReconciledCandidateAncestor,
+        PublicationRemoteCandidateAncestor,
+        result.expectedTargetHead,
+      ),
+    }
+  }
+
+  action observeInitialPublicationRemoteAncestorOfCandidate(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationIntent,
+      result.targetHeld,
+      result.publicationIntentRecorded,
+      result.publicationAttemptCount == 0,
+      result.publicationLastAttempt == 0,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: PublicationAttemptIntended,
+          publicationAttemptCount: 1,
+          publicationLastAttempt: 1,
+          publicationResponseAmbiguous: false,
+          publicationFinalReadRequired: false,
+          publicationResultRecorded: false,
+          publicationProofRecorded: false,
+          publicationProofBasis: NoPublicationProof,
+          publicationObservation: PublicationRemoteAncestorOfCandidate,
+          publicationObservedRemoteHead: 0,
+          publicationOrdinaryRefspecRequested: false,
+          publicationForceRequested: false,
+          publicationDryRunOnly: false,
+          publicationEqualContentAccepted: false,
+          publicationProcessSuccessObserved: false,
+          publicationSenderStopped: false,
+        }),
+      },
+    }
+  }
+
+  action sendPublicationAttempt(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationAttemptIntended,
+      result.targetHeld,
+      result.publicationIntentRecorded,
+      result.publicationAttemptCount > 0,
+      result.publicationAttemptCount == result.publicationLastAttempt,
+      result.publicationAttemptCount <= PROMOTION_ATTEMPT_LIMIT,
+      result.publicationEndpoint == DESTINATION_ENDPOINT,
+      result.publicationBranch == DESTINATION_BRANCH,
+      result.publicationCandidate == result.submittedCandidate,
+      result.publicationIntegratorSession == result.integrationSession,
+      result.publicationExpectedTargetHead == result.expectedTargetHead,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: PublicationInFlight,
+          publicationOrdinaryRefspecRequested: true,
+          publicationForceRequested: false,
+          publicationDryRunOnly: false,
+          publicationEqualContentAccepted: false,
+          publicationProcessSuccessObserved: false,
+          publicationSenderStopped: false,
+        }),
+      },
+    }
+  }
+
+  pure def recordPublicationProof(
+    s: State,
+    id: int,
+    basis: PublicationProofBasis,
+    observation: PublicationObservation,
+    remoteHead: int,
+  ): State = {
+    val result = s.results.get(id)
+    {
+      ...s,
+      results: s.results.put(id, {
+        ...result,
+        phase: PublicationProved,
+        targetHeld: false,
+        publicationFinalReadRequired: false,
+        publicationResultRecorded: true,
+        publicationProofRecorded: true,
+        publicationProofBasis: basis,
+        publicationObservation: observation,
+        publicationObservedRemoteHead: remoteHead,
+        publicationResponseAmbiguous: false,
+        publicationSenderStopped: true,
+      }),
+    }
+  }
+
+  action observePublicationApplied(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationInFlight,
+      result.targetHeld,
+      result.publicationOrdinaryRefspecRequested,
+      state' = recordPublicationProof(
+        state,
+        id,
+        PushApplied,
+        PublicationApplied,
+        result.submittedCandidate,
+      ),
+    }
+  }
+
+  action observePublicationUpToDate(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationInFlight,
+      result.targetHeld,
+      result.publicationOrdinaryRefspecRequested,
+      state' = recordPublicationProof(
+        state,
+        id,
+        PushUpToDate,
+        PublicationUpToDate,
+        result.submittedCandidate,
+      ),
+    }
+  }
+
+  action losePublicationResponse(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationInFlight,
+      result.targetHeld,
+      result.publicationIntentRecorded,
+      result.publicationAttemptCount > 0,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: PublicationResponseLost,
+          targetHeld: false,
+          publicationResponseAmbiguous: true,
+          publicationSenderStopped: true,
+          publicationOrdinaryRefspecRequested: false,
+        }),
+        trackerFactsCurrent: false,
+        targetFactsCurrent: anotherTargetIsHeld(state, id),
+        targetHeadProof: remainingHeldTargetHead(state, id),
+        targetReacquisitionRequired: true,
+      },
+    }
+  }
+
+  action reconcilePublication(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationResponseLost,
+      not(result.targetHeld),
+      result.publicationIntentRecorded,
+      result.publicationResponseAmbiguous,
+      state.trackerFactsCurrent,
+      state.targetFactsCurrent,
+      state.targetHeadProof == result.expectedTargetHead,
+      state.targetReacquisitionRequired,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: PublicationReconciliation,
+          targetHeld: true,
+          publicationResponseAmbiguous: false,
+          publicationFinalReadRequired:
+            result.publicationAttemptCount >= PROMOTION_ATTEMPT_LIMIT,
+          publicationObservation: NoPublicationObservation,
+          publicationObservedRemoteHead: 0,
+        }),
+        targetReacquisitionRequired: false,
+      },
+    }
+  }
+
+  action observeReconciledPublicationCandidateCurrent(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationReconciliation,
+      result.targetHeld,
+      Set(NoPublicationObservation, PublicationRemoteNonFastForward).contains(
+        result.publicationObservation
+      ),
+      state' = recordPublicationProof(
+        state,
+        id,
+        ReconciledCandidateCurrent,
+        PublicationRemoteCandidateCurrent,
+        result.submittedCandidate,
+      ),
+    }
+  }
+
+  action observeReconciledPublicationCandidateAncestor(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationReconciliation,
+      result.targetHeld,
+      Set(NoPublicationObservation, PublicationRemoteNonFastForward).contains(
+        result.publicationObservation
+      ),
+      state' = recordPublicationProof(
+        state,
+        id,
+        ReconciledCandidateAncestor,
+        PublicationRemoteCandidateAncestor,
+        result.expectedTargetHead,
+      ),
+    }
+  }
+
+  action observePublicationNonFastForward(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationInFlight,
+      result.targetHeld,
+      result.publicationOrdinaryRefspecRequested,
+      result.publicationAttemptCount > 0,
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: PublicationReconciliation,
+          targetHeld: true,
+          publicationResultRecorded: true,
+          publicationProofRecorded: false,
+          publicationProofBasis: NoPublicationProof,
+          publicationObservation: PublicationRemoteNonFastForward,
+          publicationObservedRemoteHead: 0,
+          publicationFinalReadRequired:
+            result.publicationAttemptCount == PROMOTION_ATTEMPT_LIMIT,
+          publicationOrdinaryRefspecRequested: false,
+          publicationSenderStopped: true,
+        }),
+      },
+    }
+  }
+
+  // A read that proves the remote is behind the candidate authorizes the next
+  // numbered push intent. At the finite limit that same final read resolves
+  // to an exhaustion wait, never a fourth intent.
+  action observePublicationRemoteAncestorOfCandidate(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationReconciliation,
+      result.targetHeld,
+      Set(NoPublicationObservation, PublicationRemoteNonFastForward).contains(
+        result.publicationObservation
+      ),
+      result.publicationAttemptCount <= PROMOTION_ATTEMPT_LIMIT,
+      result.publicationAttemptCount < PROMOTION_ATTEMPT_LIMIT
+        or result.publicationFinalReadRequired,
+      state' = if (result.publicationAttemptCount < PROMOTION_ATTEMPT_LIMIT) {
+        {
+          ...state,
+          results: state.results.put(id, {
+            ...result,
+            phase: PublicationAttemptIntended,
+            publicationAttemptCount: result.publicationAttemptCount + 1,
+            publicationLastAttempt: result.publicationLastAttempt + 1,
+            publicationResponseAmbiguous: false,
+            publicationFinalReadRequired: false,
+            publicationResultRecorded: false,
+            publicationProofRecorded: false,
+            publicationProofBasis: NoPublicationProof,
+            publicationObservation: PublicationRemoteAncestorOfCandidate,
+            publicationObservedRemoteHead: 0,
+            publicationOrdinaryRefspecRequested: false,
+            publicationForceRequested: false,
+            publicationDryRunOnly: false,
+            publicationEqualContentAccepted: false,
+            publicationProcessSuccessObserved: false,
+            publicationSenderStopped: false,
+          }),
+        }
+      } else
+        recordPublicationWait(
+          state,
+          id,
+          PublicationNonConvergence,
+          PublicationRemoteNonConvergence,
+        ),
+    }
+  }
+
+  pure def recordPublicationWait(
+    s: State,
+    id: int,
+    phase: Phase,
+    observation: PublicationObservation,
+  ): State = {
+    val result = s.results.get(id)
+    {
+      ...s,
+      results: s.results.put(id, {
+        ...result,
+        phase: phase,
+        targetHeld: false,
+        publicationFinalReadRequired: false,
+        publicationResultRecorded: true,
+        publicationProofRecorded: false,
+        publicationProofBasis: NoPublicationProof,
+        publicationObservation: observation,
+        publicationObservedRemoteHead: 0,
+        publicationResponseAmbiguous: false,
+        publicationSenderStopped: true,
+      }),
+      targetReacquisitionRequired: false,
+    }
+  }
+
+  action observePublicationMissing(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      Set(PublicationIntent, PublicationReconciliation).contains(result.phase),
+      result.targetHeld,
+      state' = recordPublicationWait(state, id, PublicationMissing, PublicationRemoteMissing),
+    }
+  }
+
+  action observePublicationUnreadable(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      Set(PublicationIntent, PublicationReconciliation).contains(result.phase),
+      result.targetHeld,
+      state' = recordPublicationWait(state, id, PublicationUnreadable, PublicationRemoteUnreadable),
+    }
+  }
+
+  action observePublicationInsufficient(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      Set(PublicationIntent, PublicationReconciliation).contains(result.phase),
+      result.targetHeld,
+      state' = recordPublicationWait(state, id, PublicationInsufficient, PublicationRemoteInsufficient),
+    }
+  }
+
+  action observePublicationDenied(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationInFlight,
+      result.targetHeld,
+      result.publicationOrdinaryRefspecRequested,
+      state' = recordPublicationWait(state, id, PublicationDenied, PublicationRemoteDenied),
+    }
+  }
+
+  action observePublicationThrottled(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationInFlight,
+      result.targetHeld,
+      result.publicationOrdinaryRefspecRequested,
+      state' = recordPublicationWait(state, id, PublicationThrottled, PublicationRemoteThrottled),
+    }
+  }
+
+  action observePublicationCompetingHead(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      Set(PublicationIntent, PublicationReconciliation).contains(result.phase),
+      result.targetHeld,
+      state' = recordPublicationWait(state, id, PublicationCompetingHead, PublicationRemoteCompetingHead),
+    }
+  }
+
+  action observePublicationIncompatible(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      Set(PublicationIntent, PublicationReconciliation).contains(result.phase),
+      result.targetHeld,
+      state' = recordPublicationWait(
+        state,
+        id,
+        PublicationIncompatible,
+        PublicationRemoteIncompatible,
+      ),
+    }
+  }
+
+  action observePublicationNonConvergence(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationReconciliation,
+      result.targetHeld,
+      result.publicationAttemptCount >= PROMOTION_ATTEMPT_LIMIT,
+      result.publicationFinalReadRequired,
+      state' = recordPublicationWait(
+        state,
+        id,
+        PublicationNonConvergence,
+        PublicationRemoteNonConvergence,
+      ),
+    }
+  }
+
+  // Local promotion consumes the exact durable remote proof. Candidate Git
+  // qualification alone is insufficient even when all local fields match.
+  action offerPromotionPremise(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationProved,
+      result.candidateQualificationProven,
+      result.integratorOutcome == PreparedCandidate,
+      result.submittedCandidate != 0,
+      result.candidateGitObservation == CandidateExactParents,
+      result.publicationProofRecorded,
+      result.publicationProofBasis != NoPublicationProof,
       not(result.targetHeld),
       state.trackerFactsCurrent,
       state.targetFactsCurrent,
@@ -2583,6 +3538,10 @@ module acceptedResultIntegration {
               RetrySelected
             else if (result.phase == SuccessorInFlight)
               SuccessorResponseLost
+            else if (result.phase == PublicationInFlight)
+              PublicationResponseLost
+            else if (result.phase == PublicationReconciliation)
+              PublicationResponseLost
             else if (
               Set(PromotionInFlight, PromotionAttemptIntended, PromotionReconciliation, PromotionRetryReady)
                 .contains(result.phase)
@@ -2594,6 +3553,18 @@ module acceptedResultIntegration {
               result.phase,
           integratorResponseAmbiguous:
             if (result.phase == IntegratorInFlight) true else result.integratorResponseAmbiguous,
+          publicationResponseAmbiguous:
+            if (Set(PublicationInFlight, PublicationReconciliation).contains(result.phase))
+              true
+            else result.publicationResponseAmbiguous,
+          publicationSenderStopped:
+            if (Set(PublicationInFlight, PublicationReconciliation).contains(result.phase))
+              true
+            else result.publicationSenderStopped,
+          publicationOrdinaryRefspecRequested:
+            if (Set(PublicationInFlight, PublicationReconciliation).contains(result.phase))
+              false
+            else result.publicationOrdinaryRefspecRequested,
           promotionTargetFactsCurrent:
             if (promotionProtocolPhase(result.phase)) false else result.promotionTargetFactsCurrent,
           promotionFreshExactHeadObservation:
@@ -2728,6 +3699,10 @@ module acceptedResultIntegration {
   // scenarios and make every normal protocol action reachable to Quint runs.
   action acceptResultOne: bool = acceptResult(1)
   action acceptResultTwo: bool = acceptResult(2)
+  action admitDestinationStep: bool = admitDestination
+  action rejectMissingDestinationStep: bool = rejectMissingDestination
+  action rejectWrongDestinationRefStep: bool = rejectWrongDestinationRef
+  action rejectIncompatibleDestinationStep: bool = rejectIncompatibleDestination
   action queueAcceptedResultOne: bool = queueAcceptedResult(1)
   action queueAcceptedResultTwo: bool = queueAcceptedResult(2)
   action startIntegrationOne: bool = startIntegration(1)
@@ -2751,6 +3726,34 @@ module acceptedResultIntegration {
   action observeMissingCandidateOne: bool = observeMissingCandidate(1)
   action observeNonCommitCandidateOne: bool = observeNonCommitCandidate(1)
   action observeWrongParentCandidateOne: bool = observeWrongParentCandidate(1)
+  action offerPublicationPremiseOne: bool = offerPublicationPremise(1)
+  action recordPublicationIntentOne: bool = recordPublicationIntent(1)
+  action observeInitialPublicationCandidateCurrentOne: bool =
+    observeInitialPublicationCandidateCurrent(1)
+  action observeInitialPublicationCandidateAncestorOne: bool =
+    observeInitialPublicationCandidateAncestor(1)
+  action observeInitialPublicationRemoteAncestorOfCandidateOne: bool =
+    observeInitialPublicationRemoteAncestorOfCandidate(1)
+  action sendPublicationAttemptOne: bool = sendPublicationAttempt(1)
+  action observePublicationAppliedOne: bool = observePublicationApplied(1)
+  action observePublicationUpToDateOne: bool = observePublicationUpToDate(1)
+  action losePublicationResponseOne: bool = losePublicationResponse(1)
+  action reconcilePublicationOne: bool = reconcilePublication(1)
+  action observeReconciledPublicationCandidateCurrentOne: bool =
+    observeReconciledPublicationCandidateCurrent(1)
+  action observeReconciledPublicationCandidateAncestorOne: bool =
+    observeReconciledPublicationCandidateAncestor(1)
+  action observePublicationNonFastForwardOne: bool = observePublicationNonFastForward(1)
+  action observePublicationRemoteAncestorOfCandidateOne: bool =
+    observePublicationRemoteAncestorOfCandidate(1)
+  action observePublicationMissingOne: bool = observePublicationMissing(1)
+  action observePublicationUnreadableOne: bool = observePublicationUnreadable(1)
+  action observePublicationInsufficientOne: bool = observePublicationInsufficient(1)
+  action observePublicationIncompatibleOne: bool = observePublicationIncompatible(1)
+  action observePublicationDeniedOne: bool = observePublicationDenied(1)
+  action observePublicationThrottledOne: bool = observePublicationThrottled(1)
+  action observePublicationCompetingHeadOne: bool = observePublicationCompetingHead(1)
+  action observePublicationNonConvergenceOne: bool = observePublicationNonConvergence(1)
   action chooseRetryOne: bool = chooseRetry(1, state.results.get(1).quarantinePosition)
   action chooseFullRerunOne: bool = chooseFullRerun(1, state.results.get(1).quarantinePosition)
   action redeliverRetryOne: bool = redeliverRetry(1, state.results.get(1).quarantineDirectionPosition)
@@ -2791,6 +3794,7 @@ module acceptedResultIntegration {
   // only leaves a queued result blocked before session creation.
 
   action step: bool = any {
+    admitDestinationStep,
     acceptResultOne,
     acceptResultTwo,
     queueAcceptedResultOne,
@@ -2816,6 +3820,28 @@ module acceptedResultIntegration {
     observeMissingCandidateOne,
     observeNonCommitCandidateOne,
     observeWrongParentCandidateOne,
+    offerPublicationPremiseOne,
+    recordPublicationIntentOne,
+    observeInitialPublicationCandidateCurrentOne,
+    observeInitialPublicationCandidateAncestorOne,
+    observeInitialPublicationRemoteAncestorOfCandidateOne,
+    sendPublicationAttemptOne,
+    observePublicationAppliedOne,
+    observePublicationUpToDateOne,
+    losePublicationResponseOne,
+    reconcilePublicationOne,
+    observeReconciledPublicationCandidateCurrentOne,
+    observeReconciledPublicationCandidateAncestorOne,
+    observePublicationNonFastForwardOne,
+    observePublicationRemoteAncestorOfCandidateOne,
+    observePublicationMissingOne,
+    observePublicationUnreadableOne,
+    observePublicationInsufficientOne,
+    observePublicationIncompatibleOne,
+    observePublicationDeniedOne,
+    observePublicationThrottledOne,
+    observePublicationCompetingHeadOne,
+    observePublicationNonConvergenceOne,
     chooseRetryOne,
     chooseFullRerunOne,
     redeliverRetryOne,
@@ -2861,6 +3887,7 @@ module acceptedResultIntegration {
   }
 
   action promotionExhaustionWitnessCoverageStep: bool = any {
+    admitDestinationStep,
     acceptResultOne,
     queueAcceptedResultOne,
     startIntegrationOne,
@@ -2870,6 +3897,11 @@ module acceptedResultIntegration {
     recordCandidateGitReadIntentOne,
     readCandidateGitOne,
     observeExactCandidateOne,
+    offerPublicationPremiseOne,
+    recordPublicationIntentOne,
+    observeInitialPublicationRemoteAncestorOfCandidateOne,
+    sendPublicationAttemptOne,
+    observePublicationAppliedOne,
     offerPromotionPremiseOne,
     recordPromotionIntentOne,
     observePromotionExactExpectedHeadOne,
@@ -2891,6 +3923,7 @@ module acceptedResultIntegration {
   }
 
   action successorWitnessCoverageStep: bool = any {
+    admitDestinationStep,
     acceptResultOne,
     queueAcceptedResultOne,
     startIntegrationOne,

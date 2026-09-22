@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 /* eslint-disable import/no-nodejs-modules -- The fixture is the real second Node host process. */
 import { NodeCrypto, NodeFileSystem, NodePath } from "@effect/platform-node"
+import { GitCommitSha } from "@dalph/contracts"
 import {
   GithubGraphqlClient,
+  RemotePublicationAdmissionObservation,
+  RemotePublicationGit,
+  RemotePublicationGitObservation,
+  RemotePublicationPushResult,
   TaskClaimCheckSelected,
   WorkflowTrace,
   type GithubGraphqlRequest
@@ -30,6 +35,23 @@ import type { RestartFixtureEvent } from "./production-restart-host-fixture-cont
 const plannedAttemptBaseShaLength = 40
 const expectedRecoveredPolicyRevision = 2
 const expectedRecoveredTaskWorkCapacity = 7
+const remotePublicationGitLayerForProductionFixture = Layer.succeed(
+  RemotePublicationGit,
+  RemotePublicationGit.of({
+    admit: () =>
+      Effect.succeed(
+        RemotePublicationAdmissionObservation.cases.ExistingBranch.make({
+          remoteHead: GitCommitSha.make("0".repeat(plannedAttemptBaseShaLength))
+        })
+      ),
+    observe: ({ candidateCommit }) =>
+      Effect.succeed(RemotePublicationGitObservation.cases.CandidateCurrent.make({ remoteHead: candidateCommit })),
+    prepareSenderCustody: () => Effect.void,
+    reconcileSenderCustody: () => Effect.void,
+    push: ({ candidateCommit }) =>
+      Effect.succeed(RemotePublicationPushResult.cases.UpToDate.make({ remoteHead: candidateCommit }))
+  })
+)
 
 type RecoveryEvent = Extract<RestartFixtureEvent, { readonly _tag: "RecoveryReconstructed" }>
 type TaskClaimCheckEvent = Extract<RestartFixtureEvent, { readonly _tag: "TaskClaimCheckSelected" }>
@@ -43,6 +65,7 @@ const validRawConfiguration = (input: RestartFixtureInput) => {
     integrationRef: "refs/heads/master",
     plannedAttemptBaseSha: "a".repeat(plannedAttemptBaseShaLength),
     plannedAttemptExecutor: "codex:production",
+    remotePublicationTarget: { branch: "refs/heads/main", endpoint: "ssh://git@example.invalid/repository.git" },
     claimOwner: "dalph:production",
     taskWorkCapacity: input.taskWorkCapacity,
     journalDatabase: input.journalDatabase,
@@ -194,6 +217,7 @@ const runFixture = Effect.scoped(
     const adapters = {
       codexAppServer: () => Layer.succeed(CodexAppServerService, fakeCodexAppServer),
       githubClient: () => Layer.succeed(GithubGraphqlClient, githubClient),
+      remotePublicationGitLayer: remotePublicationGitLayerForProductionFixture,
       workflowTrace: () => Layer.succeed(WorkflowTrace, workflowTrace),
       onReconstructed
     }

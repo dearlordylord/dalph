@@ -27,6 +27,8 @@ import {
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorRunQualifiedCandidate,
+  PublishedIntegratorRunQualifiedCandidate,
+  RemotePublicationGit,
   StartedIntegrationResponsibility,
   JournalPosition,
   TargetLineageObservation,
@@ -35,6 +37,7 @@ import {
   makeIntegrationTargetResourceController,
   prepareIntegrationCandidateRun,
   runTargetPromotion,
+  runRemotePublication,
   TargetPromotionCompareAndSetResult,
   TargetPromotionGit,
   TargetPromotionGitReadFailure,
@@ -171,7 +174,40 @@ const preparedPromotion = Effect.fn("TargetPromotionProtocolCassette.prepareProm
   ) {
     return yield* Effect.die(`target promotion ${owner} lease does not name its accepted responsibility`)
   }
-  return { accepted, baselineLength: records.length, candidate, journal, responsibility, runId }
+  const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")?.event
+  if (began?._tag !== "WorkflowRunBegan") {
+    return yield* Effect.die(`target promotion ${owner} setup lacks its pinned destination`)
+  }
+  yield* runRemotePublication(candidate, began.remotePublicationTarget, {
+    runObservation: (phase) => phase,
+    runSender: (phase) => phase
+  }).pipe(
+    Effect.provideService(AcceptedJournalReader, accepted),
+    Effect.provideService(InRunJournal, journal),
+    Effect.provideService(
+      RemotePublicationGit,
+      RemotePublicationGit.of({
+        admit: () => Effect.succeed({ _tag: "ExistingBranch", remoteHead: expectedHead }),
+        observe: () => Effect.succeed({ _tag: "RemoteAncestorOfCandidate", remoteHead: expectedHead }),
+        prepareSenderCustody: () => Effect.void,
+        reconcileSenderCustody: () => Effect.void,
+        push: () => Effect.succeed({ _tag: "Applied", remoteHead: candidate.candidateCommit })
+      })
+    )
+  )
+  const publishedRecords = yield* journal.read(runId)
+  const publication = publishedRecords.findLast(({ event }) => event._tag === "RemotePublicationSucceeded")?.event
+  if (publication?._tag !== "RemotePublicationSucceeded") {
+    return yield* Effect.die(`target promotion ${owner} setup lacks durable publication proof`)
+  }
+  return {
+    accepted,
+    baselineLength: publishedRecords.length,
+    candidate: PublishedIntegratorRunQualifiedCandidate.make({ candidate, publication }),
+    journal,
+    responsibility,
+    runId
+  }
 })
 
 type ExactTargetResponsibility = Pick<

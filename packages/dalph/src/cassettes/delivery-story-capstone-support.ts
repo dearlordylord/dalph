@@ -19,21 +19,22 @@ const shaLength = 40
 const digestLength = 64
 const acceptedCommitOffset = 3
 const candidateCommitPatternWidth = 2
+const secondRetryAttemptOrdinal = 2
 const admissionClaimGraphEnd = 3
 const admissionSpecificationEnd = 5
-const predecessorPositions = { queuedAt: 134, startedAt: 135, targetLineageObservedAt: 137 }
-const cPositions = { queuedAt: 315, startedAt: 318, targetLineageObservedAt: 322 }
-const dPositions = { queuedAt: 371, startedAt: 374, targetLineageObservedAt: 378 }
-const ePositions = { queuedAt: 423, startedAt: 424, targetLineageObservedAt: 428 }
-const fPositions = { queuedAt: 464, startedAt: 465, targetLineageObservedAt: 473 }
-const gPositions = { queuedAt: 509, startedAt: 510, targetLineageObservedAt: 518 }
-const bIntegrationPositions = { queuedAt: 265, startedAt: 268, targetLineageObservedAt: 271 }
-const rerunPositions = { quarantineAt: 146, directionAppliedAt: 147, targetLineageObservedAt: 149 }
+const predecessorPositions = { queuedAt: 136, startedAt: 137, targetLineageObservedAt: 141 }
+const cPositions = { queuedAt: 345, startedAt: 348, targetLineageObservedAt: 354 }
+const dPositions = { queuedAt: 415, startedAt: 418, targetLineageObservedAt: 424 }
+const ePositions = { queuedAt: 483, startedAt: 484, targetLineageObservedAt: 490 }
+const fPositions = { queuedAt: 538, startedAt: 539, targetLineageObservedAt: 543 }
+const gPositions = { queuedAt: 591, startedAt: 592, targetLineageObservedAt: 596 }
+const bIntegrationPositions = { queuedAt: 279, startedAt: 282, targetLineageObservedAt: 287 }
+const rerunPositions = { quarantineAt: 153, directionAppliedAt: 154, targetLineageObservedAt: 156 }
 const initialHead = "1".repeat(shaLength)
 const changedHead = "2".repeat(shaLength)
 const successorCommit = "d".repeat(shaLength)
 const attempt = (taskId: string) =>
-  `attempt:${taskId}:${taskId === "D" || taskId === "E" || taskId === "G" ? 0 : taskId === "F" ? 1 : ["A", "C", "B"].indexOf(taskId)}`
+  `attempt:${taskId}:${taskId === "D" || taskId === "E" ? 0 : taskId === "F" ? 1 : taskId === "G" ? secondRetryAttemptOrdinal : ["A", "C", "B"].indexOf(taskId)}`
 const specification = (taskId: string) => ({
   taskId: TaskId.make(taskId),
   title: `Implement ${taskId}`,
@@ -273,6 +274,22 @@ const predecessorCleanupRevision = {
   revision: 1,
   subject: { locator: predecessor.candidateResource, predecessor }
 }
+const cleanupFor = (taskId: string, head: string, positions: typeof predecessorPositions) => {
+  const integration = Schema.decodeUnknownSync(IntegratorSessionCorrelation)(
+    session(taskId, head, positions.queuedAt, positions.startedAt, positions.targetLineageObservedAt)
+  )
+  return {
+    revision: {
+      _tag: "IntegratorCandidateCleanupEvidenceRevisionReturned" as const,
+      revision: 1,
+      subject: { locator: integration.candidateResource, predecessor: integration }
+    },
+    absent: {
+      _tag: "IntegratorCandidateCleanupObservationReturned" as const,
+      observation: { _tag: "Absent" as const, locator: integration.candidateResource, revision: 1 }
+    }
+  }
+}
 const predecessorCleanup = [
   predecessorCleanupRevision,
   {
@@ -296,7 +313,6 @@ const predecessorCleanup = [
   },
   { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMustRemainActiveReasonUnasserted" } },
   { _tag: "CoordinatorProcessDies" },
-  predecessorCleanupRevision,
   {
     _tag: "IntegratorCandidateCleanupObservationReturned",
     observation: { _tag: "Absent", locator: predecessor.candidateResource, revision: 2 }
@@ -375,7 +391,7 @@ export {
   integrate,
   bPromotionRequest,
   bIntegrationReleasingE,
-  predecessorCleanupRevision,
+  cleanupFor,
   predecessorCleanup,
   rerunA,
   bIntegrationPositions,

@@ -1,4 +1,5 @@
 import { type AttemptId } from "@dalph/contracts"
+import type { RemoteBaselineId } from "../workflow/protocols/direct-publication/baseline-events.js"
 import { type OperationId } from "../workflow/identity.js"
 import { type JournalPosition, JournalRecordKey } from "./identity.js"
 import type {
@@ -39,6 +40,11 @@ import type {
   CleanupObservationOrdinal
 } from "../workflow/protocols/disposition-cleanup/disposition.js"
 import type { PlannedAttemptContinuationWitness } from "../workflow/protocols/planned-attempt-continuation/events.js"
+import type {
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationAdmissionId,
+  RemotePublicationRequestId
+} from "../workflow/protocols/direct-publication/events.js"
 
 export const workflowRunBeganRecordKey = JournalRecordKey.make("run:began")
 
@@ -339,6 +345,59 @@ export const integratorSuccessorSessionFixedRecordKey = (
   JournalRecordKey.make(
     `${integratorCorrelationRecordKeyPrefix(predecessor)}:successor:full-rerun:${quarantineAt}:${directionAppliedAt}:fixed`
   )
+
+/** Stable keys for one initial baseline read and its optional exact local catch-up. */
+export const remoteBaselineReadIntendedRecordKey = (baselineId: RemoteBaselineId): JournalRecordKey =>
+  JournalRecordKey.make(`remote-baseline:${baselineId}:read-intended`)
+export const remoteBaselineObservedRecordKey = (baselineId: RemoteBaselineId): JournalRecordKey =>
+  JournalRecordKey.make(`remote-baseline:${baselineId}:observed`)
+export const localTargetCatchUpIntendedRecordKey = (baselineId: RemoteBaselineId): JournalRecordKey =>
+  JournalRecordKey.make(`remote-baseline:${baselineId}:catch-up-intended`)
+export const localTargetCatchUpObservedRecordKey = (baselineId: RemoteBaselineId): JournalRecordKey =>
+  JournalRecordKey.make(`remote-baseline:${baselineId}:catch-up-observed`)
+
+const remotePublicationRecordKeyPrefix = (requestId: RemotePublicationRequestId): string =>
+  `remote-publication:${requestId}`
+
+const remotePublicationAdmissionRecordKeyPrefix = (admissionId: RemotePublicationAdmissionId): string =>
+  `remote-publication-admission:${admissionId}`
+
+/** Stable key for the preclaim read intent for one Run-pinned destination. */
+export const remotePublicationAdmissionReadIntendedRecordKey = (
+  admissionId: RemotePublicationAdmissionId
+): JournalRecordKey => JournalRecordKey.make(`${remotePublicationAdmissionRecordKeyPrefix(admissionId)}:read:intended`)
+
+/** Stable key for the complete preclaim destination observation. */
+export const remotePublicationAdmissionObservedRecordKey = (
+  admissionId: RemotePublicationAdmissionId
+): JournalRecordKey => JournalRecordKey.make(`${remotePublicationAdmissionRecordKeyPrefix(admissionId)}:observed`)
+
+/** Stable journal key for one exact candidate and pinned destination. */
+export const remotePublicationIntendedRecordKey = (requestId: RemotePublicationRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`${remotePublicationRecordKeyPrefix(requestId)}:intended`)
+
+/** Stable journal key for one numbered exact push intent. */
+export const remotePublicationAttemptIntendedRecordKey = (
+  requestId: RemotePublicationRequestId,
+  attemptOrdinal: RemotePublicationAttemptOrdinal
+): JournalRecordKey => JournalRecordKey.make(`${remotePublicationRecordKeyPrefix(requestId)}:attempt:${attemptOrdinal}`)
+
+/** Stable journal key for one conclusive numbered non-fast-forward rejection. */
+export const remotePublicationAttemptRejectedRecordKey = (
+  requestId: RemotePublicationRequestId,
+  attemptOrdinal: RemotePublicationAttemptOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(
+    `${remotePublicationRecordKeyPrefix(requestId)}:attempt:${attemptOrdinal}:rejected-non-fast-forward`
+  )
+
+/** Stable journal key for the one exact remote publication proof. */
+export const remotePublicationSucceededRecordKey = (requestId: RemotePublicationRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`${remotePublicationRecordKeyPrefix(requestId)}:succeeded`)
+
+/** Stable journal key for a conclusive publication wait that preserves its exact candidate. */
+export const remotePublicationRetainedRecordKey = (requestId: RemotePublicationRequestId): JournalRecordKey =>
+  JournalRecordKey.make(`remote-publication-retained:${requestId}`)
 
 const targetPromotionRecordKeyPrefix = (requestId: TargetPromotionRequestId): string => `target-promotion:${requestId}`
 

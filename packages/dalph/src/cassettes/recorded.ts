@@ -9,6 +9,17 @@ import {
   describeJournalEvent,
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent,
+  RemotePublicationAdmissionObservedEvent,
+  RemotePublicationAdmissionReadIntendedEvent,
+  RemotePublicationAttemptIntendedEvent,
+  RemotePublicationAttemptRejectedNonFastForwardEvent,
+  RemotePublicationIntendedEvent,
+  RemotePublicationRetainedEvent,
+  RemotePublicationSucceededEvent,
+  LocalTargetCatchUpIntendedEvent,
+  LocalTargetCatchUpObservedEvent,
+  RemoteBaselineObservedEvent,
+  RemoteBaselineReadIntendedEvent,
   IntegrationProviderRunActivityAbsentEvent,
   IntegrationQuarantineDirectionAppliedEvent,
   IntegrationQuarantinedEvent,
@@ -237,6 +248,169 @@ const recordIntegrationEntry = (
   occurrenceClassification: "InitiatedAction",
   plannedAttempt: event.plannedAttempt
 })
+
+type RemotePublicationEvent = Extract<
+  WorkflowJournalEvent,
+  {
+    readonly _tag:
+      | "RemotePublicationAdmissionReadIntended"
+      | "RemotePublicationAdmissionObserved"
+      | "RemotePublicationIntended"
+      | "RemotePublicationAttemptIntended"
+      | "RemotePublicationAttemptRejectedNonFastForward"
+      | "RemotePublicationSucceeded"
+      | "RemotePublicationRetained"
+  }
+>
+type RecordedRemotePublicationEntry = Extract<
+  RecordedCassetteEntry,
+  {
+    readonly _tag:
+      | "RemotePublicationAdmissionReadIntended"
+      | "RemotePublicationAdmissionObserved"
+      | "RemotePublicationIntended"
+      | "RemotePublicationAttemptIntended"
+      | "RemotePublicationAttemptRejectedNonFastForward"
+      | "RemotePublicationSucceeded"
+      | "RemotePublicationRetained"
+  }
+>
+
+const isRemotePublicationEvent = (event: WorkflowJournalEvent): event is RemotePublicationEvent =>
+  event._tag === "RemotePublicationAdmissionReadIntended" ||
+  event._tag === "RemotePublicationAdmissionObserved" ||
+  event._tag === "RemotePublicationIntended" ||
+  event._tag === "RemotePublicationAttemptIntended" ||
+  event._tag === "RemotePublicationAttemptRejectedNonFastForward" ||
+  event._tag === "RemotePublicationSucceeded" ||
+  event._tag === "RemotePublicationRetained"
+
+const isRecordedRemotePublicationEntry = (entry: RecordedCassetteEntry): entry is RecordedRemotePublicationEntry =>
+  entry._tag === "RemotePublicationAdmissionReadIntended" ||
+  entry._tag === "RemotePublicationAdmissionObserved" ||
+  entry._tag === "RemotePublicationIntended" ||
+  entry._tag === "RemotePublicationAttemptIntended" ||
+  entry._tag === "RemotePublicationAttemptRejectedNonFastForward" ||
+  entry._tag === "RemotePublicationSucceeded" ||
+  entry._tag === "RemotePublicationRetained"
+
+/** Direct publication facts retain their complete correlation, provenance, and exact proof. */
+const recordRemotePublicationEntry = (event: RemotePublicationEvent): RecordedRemotePublicationEntry =>
+  Match.valueTags(event, {
+    RemotePublicationAdmissionReadIntended: (value): RecordedRemotePublicationEntry => ({
+      _tag: "RemotePublicationAdmissionReadIntended",
+      admissionId: value.admissionId,
+      initiatedBy: value.initiatedBy,
+      occurrenceClassification: value.occurrenceClassification,
+      runId: value.runId,
+      target: value.target
+    }),
+    RemotePublicationAdmissionObserved: (value): RecordedRemotePublicationEntry => ({
+      _tag: "RemotePublicationAdmissionObserved",
+      admissionId: value.admissionId,
+      occurrenceClassification: value.occurrenceClassification,
+      observation: value.observation,
+      runId: value.runId,
+      target: value.target
+    }),
+    RemotePublicationIntended: (value): RecordedRemotePublicationEntry => ({
+      _tag: "RemotePublicationIntended",
+      correlation: value.correlation,
+      initiatedBy: value.initiatedBy,
+      occurrenceClassification: value.occurrenceClassification
+    }),
+    RemotePublicationAttemptIntended: (value): RecordedRemotePublicationEntry => ({
+      _tag: "RemotePublicationAttemptIntended",
+      attemptOrdinal: value.attemptOrdinal,
+      correlation: value.correlation,
+      initiatedBy: value.initiatedBy,
+      occurrenceClassification: value.occurrenceClassification,
+      refspec: value.refspec
+    }),
+    RemotePublicationSucceeded: (value): RecordedRemotePublicationEntry => ({
+      _tag: "RemotePublicationSucceeded",
+      correlation: value.correlation,
+      occurrenceClassification: value.occurrenceClassification,
+      proof: value.proof
+    }),
+    RemotePublicationAttemptRejectedNonFastForward: (value): RecordedRemotePublicationEntry => ({
+      _tag: value._tag,
+      attemptOrdinal: value.attemptOrdinal,
+      correlation: value.correlation,
+      occurrenceClassification: value.occurrenceClassification
+    }),
+    RemotePublicationRetained: (value): RecordedRemotePublicationEntry => ({
+      _tag: "RemotePublicationRetained",
+      cause: value.cause,
+      correlation: value.correlation,
+      occurrenceClassification: value.occurrenceClassification
+    })
+  })
+
+type RemoteBaselineEvent = Extract<
+  WorkflowJournalEvent,
+  {
+    readonly _tag:
+      | "RemoteBaselineReadIntended"
+      | "RemoteBaselineObserved"
+      | "LocalTargetCatchUpIntended"
+      | "LocalTargetCatchUpObserved"
+  }
+>
+type RecordedRemoteBaselineEntry = Extract<
+  RecordedCassetteEntry,
+  {
+    readonly _tag:
+      | "RemoteBaselineReadIntended"
+      | "RemoteBaselineObserved"
+      | "LocalTargetCatchUpIntended"
+      | "LocalTargetCatchUpObserved"
+  }
+>
+
+const isRemoteBaselineEvent = (event: WorkflowJournalEvent): event is RemoteBaselineEvent =>
+  event._tag === "RemoteBaselineReadIntended" ||
+  event._tag === "RemoteBaselineObserved" ||
+  event._tag === "LocalTargetCatchUpIntended" ||
+  event._tag === "LocalTargetCatchUpObserved"
+
+const isRecordedRemoteBaselineEntry = (entry: RecordedCassetteEntry): entry is RecordedRemoteBaselineEntry =>
+  entry._tag === "RemoteBaselineReadIntended" ||
+  entry._tag === "RemoteBaselineObserved" ||
+  entry._tag === "LocalTargetCatchUpIntended" ||
+  entry._tag === "LocalTargetCatchUpObserved"
+
+const recordRemoteBaselineEntry = (event: RemoteBaselineEvent): RecordedRemoteBaselineEntry =>
+  Match.valueTags(event, {
+    RemoteBaselineReadIntended: (value): RecordedRemoteBaselineEntry => ({
+      _tag: "RemoteBaselineReadIntended",
+      correlation: value.correlation,
+      initiatedBy: value.initiatedBy,
+      occurrenceClassification: value.occurrenceClassification
+    }),
+    RemoteBaselineObserved: (value): RecordedRemoteBaselineEntry => ({
+      _tag: "RemoteBaselineObserved",
+      correlation: value.correlation,
+      observation: value.observation,
+      occurrenceClassification: value.occurrenceClassification
+    }),
+    LocalTargetCatchUpIntended: (value): RecordedRemoteBaselineEntry => ({
+      _tag: "LocalTargetCatchUpIntended",
+      correlation: value.correlation,
+      expectedLocalHead: value.expectedLocalHead,
+      initiatedBy: value.initiatedBy,
+      occurrenceClassification: value.occurrenceClassification,
+      remoteHead: value.remoteHead
+    }),
+    LocalTargetCatchUpObserved: (value): RecordedRemoteBaselineEntry => ({
+      _tag: "LocalTargetCatchUpObserved",
+      correlation: value.correlation,
+      expectedLocalHead: value.expectedLocalHead,
+      occurrenceClassification: value.occurrenceClassification,
+      remoteHead: value.remoteHead,
+      result: value.result
+    })
+  })
 
 type TargetPromotionEvent = Extract<WorkflowJournalEvent, { readonly _tag: `TargetPromotion${string}` }>
 type RecordedTargetPromotionEntry = Extract<RecordedCassetteEntry, { readonly _tag: TargetPromotionEvent["_tag"] }>
@@ -936,6 +1110,8 @@ const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry =>
     Match.when(isCleanupEvent, recordCleanupEntry),
     Match.when(isOuterIntegratorEvent, recordOuterIntegratorEntry),
     Match.when(isIntegrationQuarantineEvent, recordIntegrationQuarantineEntry),
+    Match.when(isRemoteBaselineEvent, recordRemoteBaselineEntry),
+    Match.when(isRemotePublicationEvent, recordRemotePublicationEntry),
     Match.when(isJournalRunEntry, recordedRunEntryFor),
     Match.when(isOperatorDirectionEvent, recordedOperatorDirectionEntryFor),
     Match.when(isAttemptStopEvent, recordedAttemptStopEntryFor),
@@ -1204,6 +1380,101 @@ const eventForIntegrationEntry = (
     version: workflowJournalEventVersion
   })
 }
+
+const eventForRemotePublicationEntry = (entry: RecordedRemotePublicationEntry): WorkflowJournalEvent =>
+  Match.valueTags(entry, {
+    RemotePublicationAdmissionReadIntended: (value) =>
+      RemotePublicationAdmissionReadIntendedEvent.make({
+        admissionId: value.admissionId,
+        initiatedBy: value.initiatedBy,
+        occurrenceClassification: value.occurrenceClassification,
+        runId: value.runId,
+        target: value.target,
+        version: workflowJournalEventVersion
+      }),
+    RemotePublicationAdmissionObserved: (value) =>
+      RemotePublicationAdmissionObservedEvent.make({
+        admissionId: value.admissionId,
+        observation: value.observation,
+        occurrenceClassification: value.occurrenceClassification,
+        runId: value.runId,
+        target: value.target,
+        version: workflowJournalEventVersion
+      }),
+    RemotePublicationIntended: (value) =>
+      RemotePublicationIntendedEvent.make({
+        correlation: value.correlation,
+        initiatedBy: value.initiatedBy,
+        occurrenceClassification: value.occurrenceClassification,
+        version: workflowJournalEventVersion
+      }),
+    RemotePublicationAttemptIntended: (value) =>
+      RemotePublicationAttemptIntendedEvent.make({
+        attemptOrdinal: value.attemptOrdinal,
+        correlation: value.correlation,
+        initiatedBy: value.initiatedBy,
+        occurrenceClassification: value.occurrenceClassification,
+        refspec: value.refspec,
+        version: workflowJournalEventVersion
+      }),
+    RemotePublicationSucceeded: (value) =>
+      RemotePublicationSucceededEvent.make({
+        correlation: value.correlation,
+        occurrenceClassification: value.occurrenceClassification,
+        proof: value.proof,
+        version: workflowJournalEventVersion
+      }),
+    RemotePublicationAttemptRejectedNonFastForward: (value) =>
+      RemotePublicationAttemptRejectedNonFastForwardEvent.make({
+        attemptOrdinal: value.attemptOrdinal,
+        correlation: value.correlation,
+        occurrenceClassification: value.occurrenceClassification,
+        version: workflowJournalEventVersion
+      }),
+    RemotePublicationRetained: (value) =>
+      RemotePublicationRetainedEvent.make({
+        cause: value.cause,
+        correlation: value.correlation,
+        occurrenceClassification: value.occurrenceClassification,
+        version: workflowJournalEventVersion
+      })
+  })
+
+const eventForRemoteBaselineEntry = (entry: RecordedRemoteBaselineEntry): WorkflowJournalEvent =>
+  Match.valueTags(entry, {
+    RemoteBaselineReadIntended: (value) =>
+      RemoteBaselineReadIntendedEvent.make({
+        correlation: value.correlation,
+        initiatedBy: value.initiatedBy,
+        occurrenceClassification: value.occurrenceClassification,
+        version: workflowJournalEventVersion
+      }),
+    RemoteBaselineObserved: (value) =>
+      RemoteBaselineObservedEvent.make({
+        correlation: value.correlation,
+        observation: value.observation,
+        occurrenceClassification: value.occurrenceClassification,
+        version: workflowJournalEventVersion
+      }),
+    LocalTargetCatchUpIntended: (value) =>
+      LocalTargetCatchUpIntendedEvent.make({
+        correlation: value.correlation,
+        expectedLocalHead: value.expectedLocalHead,
+        initiatedBy: value.initiatedBy,
+        occurrenceClassification: value.occurrenceClassification,
+        remoteHead: value.remoteHead,
+        version: workflowJournalEventVersion
+      }),
+    LocalTargetCatchUpObserved: (value) =>
+      LocalTargetCatchUpObservedEvent.make({
+        correlation: value.correlation,
+        expectedLocalHead: value.expectedLocalHead,
+        occurrenceClassification: value.occurrenceClassification,
+        remoteHead: value.remoteHead,
+        result: value.result,
+        version: workflowJournalEventVersion
+      })
+  })
 
 type RecordedOperatorDirectionEntry = Extract<
   RecordedCassetteEntry,
@@ -1505,6 +1776,8 @@ const eventForOtherRecordedEntry = (
     ),
     Match.when(isRecordedOuterIntegratorEntry, eventForOuterIntegratorEntry),
     Match.when(isRecordedIntegrationQuarantineEntry, eventForIntegrationQuarantineEntry),
+    Match.when(isRecordedRemoteBaselineEntry, eventForRemoteBaselineEntry),
+    Match.when(isRecordedRemotePublicationEntry, eventForRemotePublicationEntry),
     Match.when(isRecordedIntegrationPreparationEntry, eventForIntegrationPreparationEntry),
     Match.when(isRecordedGitObservationCassetteEntry, eventForGitObservationEntry),
     Match.when(isRecordedExecutorEntry, eventForExecutorEntry),
@@ -1798,6 +2071,36 @@ const lyricForTargetPromotionEntry = (entry: RecordedTargetPromotionEntry): stri
       `Dalph stopped candidate ${value.correlation.qualifiedCandidate.candidateCommit} after ${value.attemptOrdinal} ambiguous compare-and-set attempts.`
   })
 
+const lyricForRemotePublicationEntry = (entry: RecordedRemotePublicationEntry): string =>
+  Match.valueTags(entry, {
+    RemotePublicationAdmissionReadIntended: (value) =>
+      `Dalph intended the pinned remote destination admission read for Run ${value.runId}.`,
+    RemotePublicationAdmissionObserved: (value) =>
+      `The pinned remote destination admission read for Run ${value.runId} observed ${value.observation._tag}.`,
+    RemotePublicationIntended: (value) =>
+      `Dalph fixed direct publication of candidate ${value.correlation.qualifiedCandidate.candidateCommit}.`,
+    RemotePublicationAttemptIntended: (value) =>
+      `Dalph intended direct publication attempt ${value.attemptOrdinal} for candidate ${value.correlation.qualifiedCandidate.candidateCommit}.`,
+    RemotePublicationAttemptRejectedNonFastForward: (value) =>
+      `Git rejected direct publication attempt ${value.attemptOrdinal} as non-fast-forward.`,
+    RemotePublicationSucceeded: (value) =>
+      `The pinned remote destination contains candidate ${value.correlation.qualifiedCandidate.candidateCommit} by ${value.proof._tag}.`,
+    RemotePublicationRetained: (value) =>
+      `Dalph retained publication of candidate ${value.correlation.qualifiedCandidate.candidateCommit} after ${value.cause._tag}.`
+  })
+
+const lyricForRemoteBaselineEntry = (entry: RecordedRemoteBaselineEntry): string =>
+  Match.valueTags(entry, {
+    RemoteBaselineReadIntended: (value) =>
+      `Dalph intended the exact remote-baseline read for Run ${value.correlation.runId}.`,
+    RemoteBaselineObserved: (value) =>
+      `The remote-baseline read for Run ${value.correlation.runId} observed ${value.observation._tag}.`,
+    LocalTargetCatchUpIntended: (value) =>
+      `Dalph intended local catch-up to ${value.remoteHead} for Run ${value.correlation.runId}.`,
+    LocalTargetCatchUpObserved: (value) =>
+      `Local catch-up for Run ${value.correlation.runId} returned ${value.result._tag}.`
+  })
+
 const lyricForIntegrationFinalityEntry = (entry: RecordedIntegrationFinalityEntry): string =>
   Match.valueTags(entry, {
     CompletionClaimReplacementIntended: (value) =>
@@ -1869,6 +2172,8 @@ const lyricForTaskBoundaryEntry = (
     | RecordedAttemptStopEntry
     | RecordedExecutorEntry
     | RecordedGitObservationEntry
+    | RecordedRemoteBaselineEntry
+    | RecordedRemotePublicationEntry
     | RecordedRunEntry
     | RecordedTrackerEntry
     | RecordedTargetPromotionEntry
@@ -1927,6 +2232,8 @@ type RecordedPresentationResidualEntry = Exclude<
   | RecordedAttemptStopEntry
   | RecordedCleanupEntry
   | RecordedIntegrationPreparationEntry
+  | RecordedRemoteBaselineEntry
+  | RecordedRemotePublicationEntry
   | RecordedOperatorDirectionEntry
   | RecordedOuterIntegratorEntry
   | RecordedIntegrationQuarantineEntry
@@ -1947,6 +2254,8 @@ const lyricForOtherRecordedEntry = (entry: RecordedOtherEntry): string => {
   if (isRecordedOuterIntegratorEntry(entry)) return lyricForOuterIntegratorEntry(entry)
   if (isRecordedIntegrationQuarantineEntry(entry)) return lyricForIntegrationQuarantineEntry(entry)
   if (isRecordedIntegrationPreparationEntry(entry)) return lyricForIntegrationPreparationEntry(entry)
+  if (isRecordedRemotePublicationEntry(entry)) return lyricForRemotePublicationEntry(entry)
+  if (isRecordedRemoteBaselineEntry(entry)) return lyricForRemoteBaselineEntry(entry)
   return lyricForRecordedPresentationResidual(entry)
 }
 

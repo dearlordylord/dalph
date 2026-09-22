@@ -10,6 +10,7 @@ import {
   ProductionPlannedAttemptWorktreeRoot,
   decodeProductionRepositoryHostConfiguration,
   deriveProductionPlannedAttemptLocations,
+  productionExecutorLocator,
   productionKimiExecutorPrivateStateDirectory,
   productionPlannedTaskAttemptLayer,
   withProductionRepositoryHostConfiguration
@@ -22,6 +23,7 @@ const validRawConfiguration = () => ({
   repository: "/srv/dalph/repository.git",
   commonDirectory: "/srv/dalph/repository.git",
   integrationRef: "refs/heads/master",
+  remotePublicationTarget: { branch: "refs/heads/master", endpoint: "ssh://git@example.invalid/dalph.git" },
   plannedAttemptBaseSha: "a".repeat(40),
   plannedAttemptExecutor: "codex:production",
   claimOwner: "dalph:production",
@@ -41,6 +43,12 @@ const validRawConfiguration = () => ({
 })
 
 describe("production repository host configuration", () => {
+  it("rejects a host with no pinned remote publication target", async () => {
+    const { remotePublicationTarget: _omitted, ...input } = validRawConfiguration()
+    const result = await Effect.runPromiseExit(decodeProductionRepositoryHostConfiguration(input))
+    expect(result._tag).toBe("Failure")
+  })
+
   it("production configuration accepts ambient Codex CLI authentication without a provider credential", async () => {
     const decoded = await Effect.runPromise(decodeProductionRepositoryHostConfiguration(validRawConfiguration()))
     expect(decoded.target.issueNumber).toBe(292)
@@ -79,6 +87,12 @@ describe("production repository host configuration", () => {
     expect(decoded.plannedAttemptExecutor).toBe("executor:default")
     expect(decoded.executorProfileDefault).toBe("kimi/for-coding")
     expect(decoded.executorProfiles?.[0]?.adapter).toBe("kimi-acp")
+    expect(productionExecutorLocator(decoded)).toBe("executor:kimi/for-coding")
+  })
+
+  it("keeps an explicitly selected executor locator", async () => {
+    const decoded = await Effect.runPromise(decodeProductionRepositoryHostConfiguration(validRawConfiguration()))
+    expect(productionExecutorLocator(decoded)).toBe("codex:production")
   })
 
   it("production keeps Codex CLI state separate from Dalph executor private state", async () => {

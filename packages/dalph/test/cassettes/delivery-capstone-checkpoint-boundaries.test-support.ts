@@ -26,7 +26,7 @@ export const attempts = {
   D: "attempt:D:0",
   E: "attempt:E:0",
   F: "attempt:F:1",
-  G: "attempt:G:0"
+  G: "attempt:G:2"
 }
 export type Occurrence = Extract<AuthoredObservationCapture, { readonly _tag: "AuthoredStoryOccurrenceCaptured" }>
 export type Publication = Extract<AuthoredObservationCapture, { readonly _tag: "DeliveryPublicationCaptured" }>

@@ -1169,15 +1169,46 @@ integration responsibility.
 _Avoid_: Candidate submission, agent completion, promotion alone, tracker completion
 
 **Remote publication target**:
-The explicitly selected remote Git repository and branch that receive a task's
-integrated commit. It is distinct from the local integration repository/ref.
-_Avoid_: Local integration target, inferred default branch, remote-tracking ref
+The one credential-free remote Git repository endpoint and fully qualified
+branch that receive a task's integrated commit. The host validates that the
+branch exists, maps it to exactly one local integration target, and pins the
+destination in the initial `WorkflowRunBegan` fact before task claim or
+provider work. It is distinct from the local integration repository/ref and
+from a remote-tracking cache. An unfinished history without the pin cannot
+infer a destination or append a retargeting option.
+_Avoid_: Local integration target, inferred default branch, remote-tracking ref,
+late destination override
 
 **Remote publication proof**:
-A successful remote acknowledgement of the exact branch update, or a remote
-observation proving that branch contains the exact integrated commit. It does
-not prove tracker completion or prevent later outside branch changes.
-_Avoid_: Uncorrelated process success, local promotion proof, equivalent patch, cached origin ref
+A correlated receiving-server per-ref success for the exact branch update or
+up-to-date result, or a same-endpoint ancestry observation proving that branch
+contains the exact integrated commit. The proof retains the Run,
+responsibility, candidate, endpoint, branch, and ordinal correlation; once
+durable, it survives restart, Pause, Exit, and completion retry. It does not
+prove local promotion or tracker completion and does not prevent later outside
+branch changes.
+_Avoid_: Uncorrelated process success, local promotion proof, equivalent patch,
+cached origin ref, dry-run output, equal contents
+
+**Remote publication intent**:
+The durable initiated action written before Dalph asks Git to send one exact
+candidate to its pinned remote publication target. It names the Run,
+integration responsibility, candidate M, endpoint, fully qualified branch,
+explicit refspec, and monotonic candidate-publication ordinal. The ordinal is
+consumed even when process loss occurs before the send; the intent alone is not
+publication proof.
+_Avoid_: Push process, remote acknowledgement, publication proof, retry-loop
+iteration
+
+**Remote publication constraint**:
+The typed retained condition that prevents the next publication boundary from
+crossing. An ambiguous send requires sender-custody proof and reconciliation;
+`TargetMissingOrUnreadable`, `InsufficientAncestry`, `IncompatibleHistory`,
+`AuthenticationOrPolicyDenied`, `Throttled`, and `UnsafeLocalState` retain the
+exact responsibility without an automatic mutation retry. Provider credentials
+and raw diagnostics are not part of the constraint's journal or status value.
+_Avoid_: Failed task, inferred non-application, automatic denied retry, deleted
+responsibility
 
 **Retained-delivery resumption**:
 The Operator's request to reconsider the unfinished delivery of an already

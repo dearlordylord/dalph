@@ -236,6 +236,7 @@ const validProductionDocument = {
   plannedAttemptBaseSha: "a".repeat(40),
   plannedAttemptExecutor: "codex:production",
   plannedAttemptWorktreeRoot: "/srv/dalph/planned-attempts",
+  remotePublicationTarget: { branch: "refs/heads/main", endpoint: "ssh://git@example.invalid/repository.git" },
   repository: "/srv/dalph/repository.git",
   taskWorkCapacity: 2
 }

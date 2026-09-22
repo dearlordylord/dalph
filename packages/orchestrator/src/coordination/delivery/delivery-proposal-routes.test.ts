@@ -1,3 +1,5 @@
+import { unexpectedRemoteDeliveryLayer } from "../../../test/support/unexpected-remote-delivery.js"
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import {
   AcceptedResult,
   AcceptedResultEvidenceManifest,
@@ -557,7 +559,8 @@ const provideLiveJournal = <A, E, R>(
   effect.pipe(
     Effect.provideService(AcceptedJournalReader, harness.accepted),
     Effect.provideService(Journal, coordinatedJournal),
-    Effect.provideService(InRunJournal, journal)
+    Effect.provideService(InRunJournal, journal),
+    Effect.provide(unexpectedRemoteDeliveryLayer)
   )
 
 effectIt.effect("executes cancellation no-release only for a fresh foreign claim observation", () =>
@@ -802,7 +805,8 @@ effectIt.effect("executes cancellation settlement through suspension, abandonmen
       makeWorkflowRunBeganRecord(
         runId,
         target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTargetForTest
       ),
       {
         event: TaskClaimAcquisitionIntendedEvent.make({
@@ -966,6 +970,7 @@ effectIt.effect("executes cancellation settlement through suspension, abandonmen
       withPlannedAttemptProtocol: (correlation, effect) => protocolController.withPermit(correlation, effect)
     }
     const live = yield* makeLiveDeliveryActionExecutor(runId, target).pipe(
+      Effect.provide(unexpectedRemoteDeliveryLayer),
       Effect.provide(journaledInterpreter),
       Effect.provideService(Journal, harness.coordinatedJournal),
       Effect.provideService(InRunJournal, journal),
@@ -2465,8 +2470,14 @@ describe("delivery proposal route matrix", () => {
         )
       ).toMatchObject({ _tag: "ActionDeferred", reason: { _tag: "AcceptedResultEvidenceConflict" } })
 
+      const publication = promotedFinalityHistory.promotedRecords.find(
+        ({ event }) => event._tag === "RemotePublicationSucceeded"
+      )?.event
+      if (publication?._tag !== "RemotePublicationSucceeded")
+        return yield* Effect.die("fixture lacks publication proof")
       const promotion = RunnableFrontierTransition.RunTargetPromotion({
         candidate: integrationFinalityFixture.qualifiedCandidate,
+        publication,
         responsibility: started
       })
       const promotionProposal = proposalsFor(promotion).proposals[0]
@@ -2491,6 +2502,7 @@ describe("delivery proposal route matrix", () => {
 
       const reconciliation = RunnableFrontierTransition.ReconcileTargetPromotionAttempt({
         candidate: integrationFinalityFixture.qualifiedCandidate,
+        publication,
         responsibility: started
       })
       const reconciliationProposal = proposalsFor(reconciliation).proposals[0]

@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../orchestrator/test/support/direct-publication.js"
 /* eslint-disable import/no-nodejs-modules -- This qualification test executes and observes the real Node process boundary. */
 import { spawn } from "node:child_process"
 import { readFile } from "node:fs/promises"
@@ -109,6 +110,8 @@ import { githubGraphqlTestClient } from "../../orchestrator/src/authorities/task
 
 const layer = nodeGitCommandLayer.pipe(Layer.provideMerge(NodeServices.layer), Layer.merge(NodeCrypto.layer))
 const processBoundMilliseconds = 5_000
+const gracefulStopMilliseconds = 1_000
+const forcedStopMilliseconds = processBoundMilliseconds - gracefulStopMilliseconds
 
 const waitFor = async <A>(observe: () => Promise<A | undefined>): Promise<A> => {
   const attempts = processBoundMilliseconds / 20
@@ -120,20 +123,51 @@ const waitFor = async <A>(observe: () => Promise<A | undefined>): Promise<A> => 
   throw new Error("bounded process observation timed out")
 }
 
-const stopChild = async (child: ReturnType<typeof spawn>): Promise<void> => {
-  if (child.exitCode !== null || child.signalCode !== null) return
-  const exited = new Promise<void>((resolve, reject) => {
-    child.once("exit", () => resolve())
-    child.once("error", reject)
-  })
-  child.kill("SIGTERM")
-  const timer = nodeTimers.setTimeout(() => child.kill("SIGKILL"), processBoundMilliseconds)
+const signalProcessGroup = (processGroup: number, signal: NodeJS.Signals): void => {
   try {
-    await exited
-  } finally {
-    clearTimeout(timer)
+    nodeProcess.kill(-processGroup, signal)
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "ESRCH") throw error
   }
 }
+
+const waitForProcessGroupAbsence = async (processGroup: number, timeoutMilliseconds: number): Promise<void> => {
+  const attempts = timeoutMilliseconds / 20
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      nodeProcess.kill(-processGroup, 0)
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ESRCH") return
+      throw error
+    }
+    await new Promise((resolve) => nodeTimers.setTimeout(resolve, 20))
+  }
+  throw new Error(`fixture process group ${processGroup} remained live`)
+}
+
+const stopChild = async (child: ReturnType<typeof spawn>): Promise<"Graceful" | "Forced"> => {
+  if (child.pid === undefined) throw new Error("fixture process did not expose a process-group id")
+  signalProcessGroup(child.pid, "SIGTERM")
+  try {
+    await waitForProcessGroupAbsence(child.pid, gracefulStopMilliseconds)
+    return "Graceful"
+  } catch (error) {
+    signalProcessGroup(child.pid, "SIGKILL")
+    try {
+      await waitForProcessGroupAbsence(child.pid, forcedStopMilliseconds)
+      return "Forced"
+    } catch (forceError) {
+      throw new AggregateError([error, forceError], `cannot prove fixture process group ${child.pid} absent`)
+    }
+  }
+}
+
+const termResistantDescendant = [
+  'const { spawn } = require("node:child_process")',
+  'const descendant = spawn(process.execPath, ["-e", "process.on(\\"SIGTERM\\", () => {}); process.stdout.write(\\"ready\\\\n\\"); setInterval(() => {}, 1000)"], { stdio: ["ignore", "pipe", "ignore"] })',
+  'descendant.stdout.once("data", () => process.stdout.write("ready\\n"))',
+  "setInterval(() => {}, 1000)"
+].join(";")
 const formalPositions = (shard: number) =>
   Array.from({ length: 105 }, (_value, position) => position).filter((position) =>
     shard === 0
@@ -356,7 +390,8 @@ const completedEvidenceObservationFixture = () => {
     makeWorkflowRunBeganRecord(
       runId,
       target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTargetForTest
     ),
     record(2, TaskClaimAcquiredEvent.make({ claim: activeClaim, version: workflowJournalEventVersion })),
     record(3, TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })),
@@ -488,6 +523,7 @@ const completedEvidenceObservationFixture = () => {
       integrationTargetCount: 1,
       journal,
       targetHead: candidateCommit,
+      remotePublicationHead: candidateCommit,
       taskWorktreeCount: 1
     },
     processId: ProductionLiveQualificationProcessId.make(307),
@@ -506,6 +542,42 @@ const completedEvidenceObservationFixture = () => {
 }
 
 describe("#307 production live qualification runtime", () => {
+  it("proves a term-resistant fixture descendant absent before cleanup", async () => {
+    const child = spawn(nodeProcess.execPath, ["-e", termResistantDescendant], {
+      detached: true,
+      stdio: ["ignore", "pipe", "ignore"]
+    })
+    let settled = false
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = nodeTimers.setTimeout(
+          () => reject(new Error("fixture descendant did not become ready")),
+          processBoundMilliseconds
+        )
+        child.stdout.once("data", () => {
+          clearTimeout(timer)
+          resolve()
+        })
+        child.once("error", (error) => {
+          clearTimeout(timer)
+          reject(error)
+        })
+        child.once("exit", (code, signal) => {
+          clearTimeout(timer)
+          reject(new Error(`fixture leader exited before cleanup: ${code}/${signal}`))
+        })
+      })
+      const stopDisposition = await stopChild(child)
+      settled = true
+      expect(stopDisposition).toBe("Forced")
+    } finally {
+      if (!settled && child.pid !== undefined) {
+        signalProcessGroup(child.pid, "SIGKILL")
+        await waitForProcessGroupAbsence(child.pid, forcedStopMilliseconds)
+      }
+    }
+  })
+
   it("derives exact completed evidence observations and rejects one-fact mutations", () => {
     const fixture = completedEvidenceObservationFixture()
     const canonical = deriveProductionLiveQualificationEvidenceObservations(
@@ -752,7 +824,7 @@ describe("#307 production live qualification runtime", () => {
         "IntegratorRequest",
         "IntegratorGitReadHead"
       ],
-      controllerFinal: ["GitReadTargetHead", "TaskTrackerReadGraph", "TaskTrackerReadClaim"],
+      controllerFinal: ["GitReadTargetHead", "GitReadPublicationHead", "TaskTrackerReadGraph", "TaskTrackerReadClaim"],
       process: ["Spawn", "Exit"]
     })
     expect(productionLiveQualificationOperationCounts(["Read", "Read"], ["RunSelected"], boundaries)).toEqual(
@@ -764,6 +836,7 @@ describe("#307 production live qualification runtime", () => {
         { tag: "Responses.ExecutorGitReadHead", count: 1 },
         { tag: "Responses.IntegratorGitReadHead", count: 1 },
         { tag: "ControllerFinal.GitReadTargetHead", count: 1 },
+        { tag: "ControllerFinal.GitReadPublicationHead", count: 1 },
         { tag: "ControllerFinal.TaskTrackerReadGraph", count: 1 },
         { tag: "ControllerFinal.TaskTrackerReadClaim", count: 1 }
       ])
@@ -785,7 +858,16 @@ describe("#307 production live qualification runtime", () => {
         const fs = yield* FileSystem.FileSystem
         expect(fixture.configuration.plannedAttemptBaseSha).toBe(fixture.initialTargetCommit)
         expect(fixture.configuration.claimOwner).toBe("dalph:q:9d733827aa1df60e")
-        expect(fixture.localManifest.resources).toHaveLength(11)
+        expect(fixture.localManifest.resources).toHaveLength(12)
+        expect(fixture.publicationRepository).not.toBe(fixture.configuration.repository)
+        expect(fixture.configuration.remotePublicationTarget).toEqual({
+          branch: "refs/heads/master",
+          endpoint: fixture.publicationRepository
+        })
+        expect(JSON.parse(yield* fs.readFileString(fixture.configurationPath)).remotePublicationTarget).toEqual({
+          branch: "refs/heads/master",
+          endpoint: fixture.publicationRepository
+        })
         expect(fixture.codexHome).not.toBe(fixture.configuration.codexExecutorPrivateStateDirectory)
         const config = yield* fs.readFileString(`${fixture.codexHome}/config.toml`)
         expect(config).toContain('base_url = "http://127.0.0.1:4307/v1"')
@@ -818,6 +900,7 @@ describe("#307 production live qualification runtime", () => {
           ])
         ).toBe(false)
         const child = spawn(fixture.configuration.codexExecutable, ["app-server"], {
+          detached: true,
           env: { ...nodeProcess.env, CODEX_HOME: fixture.codexHome },
           stdio: "ignore"
         })

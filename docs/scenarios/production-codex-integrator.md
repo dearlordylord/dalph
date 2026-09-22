@@ -17,6 +17,40 @@ candidate path is the canonical path derived from that session's resource.
 Every ambiguous boundary records intent before the call and rereads the
 authoritative Git, Codex, or private-store fact before repeating an effect.
 
+### Provider representation of the accepted ownership proof
+
+The exact thread token travels in Codex's supported `threadSource` field as
+`dalph-integrator-thread:v1:<token>`. The app-server must return that same
+source on creation and subsequent reads. Arbitrary `metadata` and
+`ownedThreadToken` response properties are not a Codex wire contract. The
+adapter decodes the supported source into its private branded ownership token;
+it never substitutes candidate-cwd equality for ownership.
+
+A newly created thread may be loaded without a persisted first user message.
+After a lost creation response, a complete census therefore includes both
+paginated `thread/list` and `thread/loaded/list`, deduplicated by provider id,
+followed by exact reads. Missing pages or unreadable threads stop adoption.
+An explicitly unmaterialized, idle thread is an empty pre-turn census only
+when the provider's response names that exact thread and states that no first
+user message exists; an ordinary missing rollout is not that proof. A crash
+that loses an unmaterialized thread permits a same-token creation only after
+the complete census proves absence. A persisted or loaded matching thread is
+adopted once; duplicate/foreign ownership still blocks all turn starts.
+
+Thread history mode determines the read boundary. A legacy full-history read
+may legitimately contain zero turns. A paginated thread requires every turn
+page with full items, even when an embedded summary contains some turns.
+Summary omission must not become an empty census or a fabricated terminal
+result. The supported installed binary must exercise these contracts in the
+real app-server qualification, using a local deterministic model endpoint.
+
+These representations repair the accepted ownership, complete-census, and
+lost-response scenarios above without changing their visible results or
+authorizing a new retry. Focused protocol tests cover source decoding,
+loaded-only adoption inputs, pagination failures, legacy empty histories, and
+full paginated terminal items; the Integrator tests continue to cover exact
+adoption, no duplicate turns, replay, and cleanup.
+
 ## Scenario-to-test map
 
 | Scenario | Concrete acceptance outcome | Executable evidence |

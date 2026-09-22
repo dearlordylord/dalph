@@ -105,6 +105,7 @@ export const createHermeticFixture = Effect.fn("HermeticFixture.create")(functio
       repository,
       commonDirectory: `${repository}/.git`,
       integrationRef: "refs/heads/master",
+      remotePublicationTarget: { branch: "refs/heads/master", endpoint: repository },
       plannedAttemptBaseSha: baseSha,
       plannedAttemptExecutor: "codex:hermetic",
       claimOwner: "dalph:hermetic",

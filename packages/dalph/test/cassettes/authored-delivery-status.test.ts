@@ -153,12 +153,15 @@ it.effect(
       ).toBe(true)
       const absent = exactlyOne(result.records, "IntegratorCandidateCleanupAbsenceConfirmed")
       const settled = exactlyOne(result.records, "IntegratorCandidateCleanupSettled")
+      if (absent.event.authorization.disposition._tag !== "Superseded") {
+        return yield* Effect.die("authored predecessor cleanup must retain its FullRerun disposition")
+      }
       expect(absent.event.cause).toBe("MutationResponseReconciliation")
       expect(settled.position).toBeGreaterThan(absent.position)
       expect(absent.position).toBeGreaterThan(result.prefix.length)
-      expect(result.records.filter(({ event }) => !event._tag.startsWith("IntegratorCandidateCleanup"))).toEqual(
-        retained
-      )
+      const nonCleanupRecords = ({ event }: (typeof result.records)[number]) =>
+        !event._tag.startsWith("IntegratorCandidateCleanup") && !event._tag.startsWith("WorktreeCleanup")
+      expect(result.records.filter(nonCleanupRecords)).toEqual(retained.filter(nonCleanupRecords))
       expect(result.records).toContainEqual(successor)
       expect(absent.event.authorization.disposition.predecessor).toEqual(predecessor)
       expect(absent.event.authorization.disposition.successor).toEqual(successor.event.successor)

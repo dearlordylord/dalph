@@ -7,7 +7,7 @@ import {
   PlannedTaskAttemptPlanner
 } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
-import { journalAppendFailureDisposition } from "../../workflow-journal/store.js"
+import { journalAppendFailureDisposition, type JournalError } from "../../workflow-journal/store.js"
 import {
   DeliveryActionExecutor,
   type DeliveryActionExecutionError,
@@ -62,6 +62,7 @@ import {
   type DeliveryAcceptedPublicationBoundary
 } from "./delivery-accepted-fact-publication.js"
 import type { FreshTaskCandidateFrontier } from "./fresh-task-candidate.js"
+import { DeliveryCleanupBoundary } from "./delivery-cleanup-boundary.js"
 
 export { DeliveryRuntimeProposalOwnershipConflict } from "./delivery-runtime-admission-loop.js"
 export { DeliveryRuntimeAdmissionProgressContradiction } from "./delivery-runtime-admission-sweep.js"
@@ -165,6 +166,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
 ): Effect.fn.Return<
   DeliveryRuntimeQuiescence,
   | E
+  | JournalError
   | ApplicationExiting
   | DeliveryActionCompletionPublicationMismatch
   | DeliveryActionExecutionError
@@ -191,6 +193,11 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const operationAllocator = yield* OperationIdAllocator
       const attemptPlanner = yield* PlannedTaskAttemptPlanner
       const ambient = yield* Effect.context<never>()
+      const cleanupBoundary = Context.getOption(ambient, DeliveryCleanupBoundary)
+      const cleanupPending = Option.match(cleanupBoundary, {
+        onNone: () => Effect.succeed(false),
+        onSome: ({ pending }) => pending
+      })
       const semanticTrace = Context.getOption(ambient, DeliverySemanticTrace)
       const emit = (event: DeliverySemanticTraceEvent) =>
         Option.match(semanticTrace, { onNone: () => Effect.void, onSome: ({ emit }) => emit(event) })
@@ -337,6 +344,8 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const reserveAndStart = Effect.fn("DeliveryRuntime.reserveAndStart")((proposal: DeliveryActionProposal) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
+            if (yield* cleanupPending)
+              return { _tag: "Deferred" as const, reason: "DispositionCleanupRequired" as const }
             const result = yield* admission.tryReserve(proposal)
             if (result._tag === "Deferred") return result
             const started = yield* start(result.reservation)
@@ -349,6 +358,8 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         (frontier: FreshTaskCandidateFrontier) =>
           Effect.uninterruptible(
             Effect.gen(function* () {
+              if (yield* cleanupPending)
+                return { _tag: "Deferred" as const, reason: "DispositionCleanupRequired" as const }
               const result = yield* admission.tryReserveFresh(frontier, deliveryProposalOfAcceptedFreshTask)
               if (result._tag === "Deferred") return result
               const started = yield* start(result.reservation)
@@ -609,6 +620,14 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
                   taskWorkPosition._tag === "TaskWorkPositionRequired" && taskWorkPosition.mode === "ReserveOrReuse"
               )
             if (live.size !== 0) return Option.none<DeliveryRuntimeQuiescence>()
+            if (yield* cleanupPending)
+              return Option.some<DeliveryRuntimeQuiescence>({
+                _tag: "DispositionCleanupRuntimeQuiescence",
+                acceptedAt: current.acceptedAt,
+                current: current.current,
+                disposition: current.quiescence,
+                proposedActions
+              })
             // Fresh candidates may still wait for exact held positions after
             // an active refresh. Use the same live admission authority as an
             // ordinary activation; the wait neither admits work nor proves finality.
@@ -697,7 +716,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         const current = Option.getOrThrow(yield* Ref.get(latest))
         const activeRefreshG2Pending =
           phase._tag === "ActiveRefreshPreG2RuntimePhase" && current.activeRefreshBoundary !== undefined
-        if (!activeRefreshG2Pending) {
+        if (!activeRefreshG2Pending && !(yield* cleanupPending)) {
           yield* runDeliveryRuntimeAdmissionSweep(current.proposedActions, admissionLoop.admitPass)
         }
 

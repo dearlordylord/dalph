@@ -1,4 +1,9 @@
 import {
+  remoteBaselineGitLayerForTest,
+  remotePublicationGitLayerForTest,
+  remotePublicationTargetForTest
+} from "../../../test/support/direct-publication.js"
+import {
   AttemptId,
   GitCommitSha,
   makeTaskWorkSpecification,
@@ -193,6 +198,8 @@ const runtimeLayer = (
   runtimeFinalizers: Ref.Ref<number>
 ) =>
   Layer.mergeAll(
+    remoteBaselineGitLayerForTest,
+    remotePublicationGitLayerForTest,
     Layer.effectDiscard(Effect.addFinalizer(() => Ref.update(runtimeFinalizers, (count) => count + 1))),
     Layer.effect(InRunJournal, InRunJournal),
     Layer.effect(AcceptedJournalReader, AcceptedJournalReader),
@@ -288,7 +295,7 @@ it.effect("returns admission-stalled finality through production bootstrap teard
       const applicationExit = yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void })
       const memory = Context.get(yield* Layer.build(memoryJournalStoreLayer), JournalStore)
       const storage = countingJournalStore(memory, counts)
-      yield* storage.beginRun(runId, target, initialPolicy)
+      yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
       const claimOperation = cCommitment.operation
       const claim = ActiveTaskClaim.make(claimOperation.acquisition)
       yield* storage.append(
@@ -404,7 +411,9 @@ it.effect("returns admission-stalled finality through production bootstrap teard
         runId,
         ({ runId: activeRunId }) => runtimeLayer(activeRunId, plannedAttemptExecutor, interpreter, runtimeFinalizers),
         applicationExit,
-        noopJournalMaintenanceObservation
+        noopJournalMaintenanceObservation,
+        undefined,
+        remotePublicationTargetForTest
       ).pipe(
         Layer.provide(
           Layer.mergeAll(

@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
@@ -16,7 +17,8 @@ const target = FixtureTarget.make("cleanup-disposition-cleanup")
 const beginning = makeWorkflowRunBeganRecord(
   runId,
   target,
-  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+  remotePublicationTargetForTest
 )
 
 /** One real accepted Journal lifecycle for runtime-style disposition-cleanup tests. */
@@ -33,7 +35,8 @@ export const dispositionCleanupSqliteLiveJournalTestLayer = (filename: JournalDa
         yield* journalStore.beginRun(
           runId,
           target,
-          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+          remotePublicationTargetForTest
         )
       }
       const records = yield* journalStore.read(runId)

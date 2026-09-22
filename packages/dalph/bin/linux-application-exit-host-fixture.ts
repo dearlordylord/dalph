@@ -7,6 +7,9 @@ import nodeProcess from "node:process"
 import { setImmediate as scheduleNextTurn } from "node:timers"
 import { NodeServices } from "@effect/platform-node"
 import {
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
   makeTaskWorkSpecification,
   PlannedTaskAttempt,
   PlannedAttemptExecutor,
@@ -86,6 +89,11 @@ const gitCommonDirectoryArgument = nodeProcess.argv[3]
 const journalArgument = nodeProcess.argv[4]
 const worktreeArgument = nodeProcess.argv[5]
 const baseShaArgument = nodeProcess.argv[6]
+
+const linuxFixtureRemotePublicationTarget = RemotePublicationTarget.make({
+  branch: RemotePublicationBranchRef.make("refs/heads/main"),
+  endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/repository.git")
+})
 
 const decodedInput = Schema.decodeUnknownResult(HostFixtureInput)(
   modeArgument === "running"
@@ -194,6 +202,7 @@ const runningRecords = (fixtureAttempt: ReturnType<typeof makeFixturePlannedAtte
       initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
       initiatedBy: { _tag: "DalphCoordinator" },
       occurrenceClassification: "InitiatedAction",
+      remotePublicationTarget: linuxFixtureRemotePublicationTarget,
       target,
       version
     }),

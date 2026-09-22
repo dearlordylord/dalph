@@ -63,7 +63,6 @@ import {
   TrackerMutation,
   TrackerRevision,
   UnclaimedTask,
-  unavailableIntegratorCandidateProviderAuthority,
   WorkflowTrace,
   completionTaskClaimEquals,
   type completionTaskRequestFor,
@@ -90,7 +89,17 @@ import {
 import { expect } from "vitest"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
-import { acceptedManifestBytes, runInGitDirectory, runInWorktree } from "./hermetic-support.js"
+import {
+  acceptedManifestBytes,
+  hermeticCandidateProviderAuthority,
+  remoteBaselineGitLayerForCurrentHead,
+  runInGitDirectory,
+  runInWorktree
+} from "./hermetic-support.js"
+import {
+  remotePublicationGitLayerForProductionTest,
+  remotePublicationTargetForTest
+} from "../../../orchestrator/test/support/direct-publication.js"
 
 type TaskKey = "A" | "B" | "D"
 type TrackerClaim = ActiveTaskClaim | UnclaimedTask
@@ -666,12 +675,15 @@ it.effect(
           integrationTarget,
           Layer.succeed(TrackerMutation, trackerMutation),
           controlledSynchronousPlannedAttemptExecutorLayer(Layer.succeed(PlannedAttemptExecutor, executor)),
-          unavailableIntegratorCandidateProviderAuthority,
+          hermeticCandidateProviderAuthority,
           {
             acceptedResultEvidenceStore: evidenceStore,
             completionTask,
             integrationFinality: completionClaim,
             integrator,
+            remoteBaselineGitLayer: remoteBaselineGitLayerForCurrentHead(git),
+            remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
+            remotePublicationTarget: remotePublicationTargetForTest,
             targetPromotion: {
               git: {
                 compareAndSet: (request) =>
@@ -850,6 +862,13 @@ it.effect(
         const promotionRecords = recordsOfTag(records, "TargetPromotionObservedSuccess")
         const promotionAttemptRecords = recordsOfTag(records, "TargetPromotionAttemptIntended")
         const completionRecords = recordsOfTag(records, "CompletionTaskAcknowledged")
+        const finalitySettledRecords = recordsOfTag(records, "IntegrationFinalitySettled")
+        const worktreeCleanupAuthorizedRecords = recordsOfTag(records, "WorktreeCleanupAuthorized")
+        const worktreeCleanupSettledRecords = recordsOfTag(records, "WorktreeCleanupSettled")
+        const branchCleanupAuthorizedRecords = recordsOfTag(records, "BranchCleanupAuthorized")
+        const branchCleanupSettledRecords = recordsOfTag(records, "BranchCleanupSettled")
+        const candidateCleanupAuthorizedRecords = recordsOfTag(records, "IntegratorCandidateCleanupAuthorized")
+        const candidateCleanupSettledRecords = recordsOfTag(records, "IntegratorCandidateCleanupSettled")
         const graphRecords = recordsOfTag(records, "TaskTrackerFactsObserved")
         const lineageRecords = recordsOfTag(records, "TargetLineageObserved")
         const executorReportRecords = recordsOfTag(records, "PlannedAttemptExecutorWorkReported")
@@ -1022,10 +1041,13 @@ it.effect(
         expect(terminationRecords).toHaveLength(1)
         expect(terminationRecords[0]?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Completed" })
         expect(records.at(-1)?.event).toEqual(terminationRecords[0]?.event)
-        expect(eventTags.some((tag) => tag === "WorktreeCleanupAuthorized")).toBe(false)
-        expect(eventTags.some((tag) => tag === "WorktreeCleanupSettled")).toBe(false)
-        expect(eventTags.some((tag) => tag === "BranchCleanupAuthorized")).toBe(false)
-        expect(eventTags.some((tag) => tag === "BranchCleanupSettled")).toBe(false)
+        expect(finalitySettledRecords).toHaveLength(3)
+        expect(worktreeCleanupAuthorizedRecords).toHaveLength(3)
+        expect(worktreeCleanupSettledRecords).toHaveLength(3)
+        expect(branchCleanupAuthorizedRecords).toHaveLength(3)
+        expect(branchCleanupSettledRecords).toHaveLength(3)
+        expect(candidateCleanupAuthorizedRecords).toHaveLength(3)
+        expect(candidateCleanupSettledRecords).toHaveLength(3)
         expect(graphRecords.length).toBeGreaterThanOrEqual(2)
         expect(
           (yield* Ref.get(graphSnapshots)).some(
@@ -1123,6 +1145,95 @@ it.effect(
         expect(completePrerequisitesGraph.position).toBeLessThan(dResponsibility.position)
         expect(completePrerequisitesGraph.position).toBeLessThan(dIntegratorStart.position)
         for (const task of taskKeys) {
+          const plannedAttempt = taskValue(plannedAttempts, task)
+          const promotion = promotionRecords.filter(
+            ({ event }) => event.correlation.qualifiedCandidate.run.session.plannedAttempt.taskId === taskIdOf(task)
+          )
+          const finality = finalitySettledRecords.filter(
+            ({ event }) => event.claim.plannedAttempt.taskId === taskIdOf(task)
+          )
+          const worktreeAuthorization = worktreeCleanupAuthorizedRecords.filter(
+            ({ event }) => event.authorization.disposition.plannedAttempt.taskId === taskIdOf(task)
+          )
+          const worktreeSettlement = worktreeCleanupSettledRecords.filter(
+            ({ event }) => event.authorization.disposition.plannedAttempt.taskId === taskIdOf(task)
+          )
+          const branchAuthorization = branchCleanupAuthorizedRecords.filter(
+            ({ event }) => event.authorization.disposition.plannedAttempt.taskId === taskIdOf(task)
+          )
+          const branchSettlement = branchCleanupSettledRecords.filter(
+            ({ event }) => event.authorization.disposition.plannedAttempt.taskId === taskIdOf(task)
+          )
+          const candidateAuthorization = candidateCleanupAuthorizedRecords.filter(
+            ({ event }) =>
+              event.authorization.disposition._tag === "Settled" &&
+              event.authorization.disposition.qualifiedCandidate.run.session.plannedAttempt.taskId === taskIdOf(task)
+          )
+          const candidateSettlement = candidateCleanupSettledRecords.filter(
+            ({ event }) =>
+              event.authorization.disposition._tag === "Settled" &&
+              event.authorization.disposition.qualifiedCandidate.run.session.plannedAttempt.taskId === taskIdOf(task)
+          )
+          expect(promotion).toHaveLength(1)
+          expect(finality).toHaveLength(1)
+          expect(worktreeAuthorization).toHaveLength(1)
+          expect(worktreeSettlement).toHaveLength(1)
+          expect(branchAuthorization).toHaveLength(1)
+          expect(branchSettlement).toHaveLength(1)
+          expect(candidateAuthorization).toHaveLength(1)
+          expect(candidateSettlement).toHaveLength(1)
+          const exactPromotion = Option.getOrThrow(Option.fromUndefinedOr(promotion[0]))
+          const exactFinality = Option.getOrThrow(Option.fromUndefinedOr(finality[0]))
+          const exactWorktreeAuthorization = Option.getOrThrow(Option.fromUndefinedOr(worktreeAuthorization[0]))
+          const exactWorktreeSettlement = Option.getOrThrow(Option.fromUndefinedOr(worktreeSettlement[0]))
+          const exactBranchAuthorization = Option.getOrThrow(Option.fromUndefinedOr(branchAuthorization[0]))
+          const exactBranchSettlement = Option.getOrThrow(Option.fromUndefinedOr(branchSettlement[0]))
+          const exactCandidateAuthorization = Option.getOrThrow(Option.fromUndefinedOr(candidateAuthorization[0]))
+          const exactCandidateSettlement = Option.getOrThrow(Option.fromUndefinedOr(candidateSettlement[0]))
+          const qualifiedCandidate = exactPromotion.event.correlation.qualifiedCandidate
+          expect(exactFinality.event.claim).toMatchObject({
+            plannedAttempt,
+            promotionCorrelation: exactPromotion.event.correlation
+          })
+          expect(exactWorktreeAuthorization.event.authorization).toMatchObject({
+            disposition: { _tag: "Settled", plannedAttempt },
+            locator: plannedAttempt.worktree
+          })
+          expect(exactWorktreeSettlement.event.authorization).toEqual(exactWorktreeAuthorization.event.authorization)
+          expect(exactBranchAuthorization.event.authorization).toMatchObject({
+            disposition: { _tag: "Settled", plannedAttempt },
+            locator: plannedAttempt.branch
+          })
+          expect(exactBranchSettlement.event.authorization).toEqual(exactBranchAuthorization.event.authorization)
+          expect(exactCandidateAuthorization.event.authorization).toMatchObject({
+            disposition: { _tag: "Settled", qualifiedCandidate },
+            locator: qualifiedCandidate.run.session.candidateResource,
+            owner: { sessionId: qualifiedCandidate.run.session.sessionId }
+          })
+          expect(exactCandidateSettlement.event.authorization).toEqual(exactCandidateAuthorization.event.authorization)
+          expect(exactCandidateSettlement.event.result).toEqual({
+            _tag: "AlreadyAbsent",
+            locator: qualifiedCandidate.run.session.candidateResource,
+            revision: 1,
+            sessionId: qualifiedCandidate.run.session.sessionId
+          })
+          const cleanupRecords = [
+            exactWorktreeAuthorization,
+            exactWorktreeSettlement,
+            exactBranchAuthorization,
+            exactBranchSettlement,
+            exactCandidateAuthorization,
+            exactCandidateSettlement
+          ]
+          expect(cleanupRecords.every(({ position }) => position > exactFinality.position)).toBe(true)
+          expect(exactWorktreeSettlement.position).toBeGreaterThan(exactWorktreeAuthorization.position)
+          expect(exactBranchSettlement.position).toBeGreaterThan(exactBranchAuthorization.position)
+          expect(exactCandidateSettlement.position).toBeGreaterThan(exactCandidateAuthorization.position)
+          const cleanupBoundary = task === "D" ? terminationRecords[0]?.position : completePrerequisitesGraph.position
+          expect(cleanupBoundary).toBeDefined()
+          expect(cleanupRecords.every(({ position }) => position < (cleanupBoundary ?? 0))).toBe(true)
+        }
+        for (const task of taskKeys) {
           const evidenceReference = (yield* Ref.get(acceptedEvidence)).get(task)
           expect(evidenceReference).toBeDefined()
           if (evidenceReference === undefined) return yield* Effect.die(`missing accepted evidence for ${task}`)
@@ -1134,11 +1245,10 @@ it.effect(
           expect(decoded.correlation.runId).toBe(runId)
           const taskWorktree = taskValue(worktrees, task)
           const plannedAttempt = taskValue(plannedAttempts, task)
-          expect(yield* fileSystem.exists(taskWorktree)).toBe(true)
-          expect(yield* fileSystem.readFileString(`${taskWorktree}/RESULT-${task}.md`)).toBe(`implemented ${task}\n`)
-          expect((yield* git.runInWorktree(repository, ["show-ref", "--verify", plannedAttempt.branch])).exitCode).toBe(
-            0
-          )
+          expect(yield* fileSystem.exists(taskWorktree)).toBe(false)
+          expect(
+            (yield* git.runInWorktree(repository, ["show-ref", "--verify", plannedAttempt.branch])).exitCode
+          ).not.toBe(0)
           expect(
             (yield* git.run(bareRemote, ["show-ref", "--verify", `refs/dalph/transfer-${task}`])).exitCode
           ).not.toBe(0)

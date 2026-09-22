@@ -16,6 +16,8 @@ import { Effect, Schema } from "effect"
 import { deriveProductionPlannedAttemptLocations } from "./production-configuration.js"
 import {
   sourceRejected,
+  sourceRejectedAt,
+  isQualificationTaskId,
   strictSource,
   validateOperationId,
   validateWorkflowOperationId,
@@ -49,11 +51,37 @@ const validateEntry = Effect.fn("HermeticQualification.validateEntry")(function*
   return yield* validateControlledEntry(entry, context)
 })
 
+const proposalDiagnosticTag = (
+  proposal: Extract<DeliveryStatusEntry, { readonly _tag: "ProposedDeliveryAction" }>["proposal"]
+): string => {
+  const route = proposal.route
+  switch (route._tag) {
+    case "FreshWorkflowRoute":
+    case "FreshExecutorWorkflowRoute":
+      return route.step._tag
+    case "RecoveredNewActionRoute":
+      return route.action._tag
+    case "AcceptedWorkflowRoute":
+    case "IdentityFreeWorkflowRoute":
+      return route.transition._tag
+    case "TrackerGraphReadRoute":
+      return route._tag
+  }
+}
+
+const entryDiagnosticTag = (entry: DeliveryStatusEntry): string =>
+  entry._tag === "ProposedDeliveryAction"
+    ? proposalDiagnosticTag(entry.proposal)
+    : entry._tag === "LiveDeliveryAction" || entry._tag === "AcceptedFactPublicationWait"
+      ? proposalDiagnosticTag(entry.owner.proposal)
+      : entry._tag
+
 type ControlledEntry = Extract<
   DeliveryStatusEntry,
   {
     readonly _tag:
       | "ProposedDeliveryAction"
+      | "DependencyWait"
       | "LiveDeliveryAction"
       | "AcceptedFactPublicationWait"
       | "TrackerFactWait"
@@ -64,6 +92,7 @@ type ControlledEntry = Extract<
 >
 const isControlledEntry = (entry: DeliveryStatusEntry): entry is ControlledEntry =>
   entry._tag === "ProposedDeliveryAction" ||
+  entry._tag === "DependencyWait" ||
   entry._tag === "LiveDeliveryAction" ||
   entry._tag === "AcceptedFactPublicationWait" ||
   entry._tag === "TrackerFactWait" ||
@@ -78,6 +107,8 @@ const validateControlledEntry = Effect.fn("HermeticQualification.validateControl
   switch (entry._tag) {
     case "ProposedDeliveryAction":
       return yield* validateProposal(entry.proposal, context)
+    case "DependencyWait":
+      return yield* validateDependencyWaitEntry(entry, context)
     case "LiveDeliveryAction":
     case "AcceptedFactPublicationWait":
       return yield* validateOwnedEntry(entry, context)
@@ -91,9 +122,39 @@ const validateControlledEntry = Effect.fn("HermeticQualification.validateControl
       return yield* validateUnavailableEntry(entry, context)
     case "Settlement":
       return yield* validateSettlementEntry(entry, context)
+    /* v8 ignore next -- @preserve ControlledEntry is a closed union selected by isControlledEntry above. */
     default:
       return yield* sourceRejected()
   }
+})
+
+const validateDependencyWaitEntry = Effect.fn("HermeticQualification.validateDependencyWaitEntry")(function* (
+  entry: Extract<DeliveryStatusEntry, { readonly _tag: "DependencyWait" }>,
+  context: QualificationContext
+) {
+  if (
+    entry.taskId !== context.dependantTaskId ||
+    entry.prerequisiteTaskIds.length !== 1 ||
+    entry.prerequisiteTaskIds[0] !== context.taskId
+  )
+    return yield* sourceRejected()
+
+  if (entry.standing._tag === "GraphExcluded") {
+    if (
+      entry.standing.reasons.length !== 1 ||
+      entry.standing.reasons[0]._tag !== "PrerequisitesIncomplete" ||
+      entry.standing.reasons[0].prerequisiteTaskIds.length !== 1 ||
+      entry.standing.reasons[0].prerequisiteTaskIds[0] !== context.taskId
+    )
+      return yield* sourceRejected()
+    return
+  }
+  if (entry.standing._tag === "PromotedPrerequisiteReleasePending") {
+    if (entry.standing.prerequisiteTaskIds.length !== 1 || entry.standing.prerequisiteTaskIds[0] !== context.taskId)
+      return yield* sourceRejected()
+    return
+  }
+  return yield* sourceRejected()
 })
 
 const validateEntrySubject = Effect.fn("HermeticQualification.validateEntrySubject")(function* (
@@ -102,7 +163,9 @@ const validateEntrySubject = Effect.fn("HermeticQualification.validateEntrySubje
 ) {
   if (
     entry.subject.runId !== context.runId ||
-    (entry.subject._tag === "Task" && entry.subject.taskId !== context.taskId)
+    (entry.subject._tag === "Task" &&
+      entry.subject.taskId !== context.taskId &&
+      entry.subject.taskId !== context.dependantTaskId)
   )
     return yield* sourceRejected()
 })
@@ -131,7 +194,7 @@ const validateUnavailableEntry = Effect.fn("HermeticQualification.validateUnavai
   if (entry.evidence._tag === "ResponsibilityFacts")
     yield* validateWorkflowResponsibility(entry.evidence.facts.responsibility, context)
   else if (entry.evidence._tag === "ProposalDerivationIssue") {
-    if (entry.evidence.issue.taskId !== context.taskId) return yield* sourceRejected()
+    if (!isQualificationTaskId(entry.evidence.issue.taskId, context)) return yield* sourceRejected()
     if (entry.evidence.issue._tag === "AcceptedOperationEvidenceMissing")
       yield* validateWorkflowOperationId(entry.evidence.issue.operationId, context)
   } else yield* validatePlannedAttempt(entry.evidence.wait.plannedAttempt, context)
@@ -141,12 +204,12 @@ const validateSettlementEntry = Effect.fn("HermeticQualification.validateSettlem
   entry: Extract<DeliveryStatusEntry, { readonly _tag: "Settlement" }>,
   context: QualificationContext
 ) {
-  if (entry.settlement._tag !== "DeliverySettlement" || entry.settlement.taskId !== context.taskId)
+  if (entry.settlement._tag !== "DeliverySettlement" || !isQualificationTaskId(entry.settlement.taskId, context))
     return yield* sourceRejected()
   const expected = deriveProductionPlannedAttemptLocations(
     context.configuration.plannedAttemptWorktreeRoot,
     context.runId,
-    context.taskId,
+    entry.settlement.taskId,
     PlannedTaskAttemptOrdinal.make(0)
   )
   if (entry.settlement.attemptId !== expected.attemptId) return yield* sourceRejected()
@@ -164,7 +227,7 @@ const validateWorkflowResponsibility = Effect.fn("HermeticQualification.validate
     yield* validatePlannedAttempt(decoded.plannedAttempt, context)
     return
   }
-  if (decoded.taskId !== context.taskId) return yield* sourceRejected()
+  if (!isQualificationTaskId(decoded.taskId, context)) return yield* sourceRejected()
   const operationId =
     decoded._tag === "TaskClaimResponsibility"
       ? decoded.acquisition.operationId
@@ -210,9 +273,12 @@ const completionReleaseOperationIds = Effect.fn("HermeticQualification.completio
           : entry._tag === "LiveDeliveryAction" || entry._tag === "AcceptedFactPublicationWait"
             ? entry.owner.proposal
             : null
-      const claim = proposal === null ? null : completionClaimOfProposal(proposal)
+      if (proposal === null) return []
+      const claim = completionClaimOfProposal(proposal)
       if (claim === null) return []
-      const validated = yield* validateCompletionClaim(claim, context)
+      const validated = yield* validateCompletionClaim(claim, context).pipe(
+        Effect.mapError(sourceRejectedAt(proposalDiagnosticTag(proposal)))
+      )
       return [completionOriginalTaskClaimReleaseFor(validated).operationId]
     })
   ).pipe(Effect.map((ids) => ids.flat()))
@@ -262,8 +328,9 @@ const validateStatusTag = (
     status._tag !== "DeliveryStatusAvailable" &&
     status._tag !== "DeliveryStatusClosed" &&
     status._tag !== "TaskAbsentFromCurrentGraph"
-  )
+  ) {
     return Effect.fail(sourceRejected())
+  }
   return Effect.succeed(status)
 }
 
@@ -277,7 +344,9 @@ const validateStatusSnapshot = Effect.fn("HermeticQualification.validateStatusSn
     const focusedContext = { ...context, derivedOperationIds: focusedOperationIds }
     const releaseIds = yield* completionReleaseOperationIds(snapshot.entries, focusedContext)
     yield* Effect.forEach(snapshot.entries, (entry) =>
-      validateEntry(entry, { ...context, derivedOperationIds: [...focusedOperationIds, ...releaseIds] })
+      validateEntry(entry, { ...context, derivedOperationIds: [...focusedOperationIds, ...releaseIds] }).pipe(
+        Effect.mapError(sourceRejectedAt(entryDiagnosticTag(entry)))
+      )
     )
   }
   if (snapshot?._tag === "TaskAbsentFromCurrentGraph") return yield* sourceRejected()

@@ -65,6 +65,7 @@ import {
   runInterruptibleBoundary,
   type InterruptibleWorkflowBoundaryExecution
 } from "../../interpretation/interruptible-boundary.js"
+import { exactPublicationWasObserved } from "./publication-premise.js"
 
 /** The offered claim is not the exact claim authorized by promotion history. */
 export class CompletionClaimPremiseContradiction extends Schema.TaggedError<CompletionClaimPremiseContradiction>()(
@@ -75,6 +76,12 @@ export class CompletionClaimPremiseContradiction extends Schema.TaggedError<Comp
 /** Replacement requires durable proof that the exact candidate was promoted. */
 export class CompletionClaimPromotionRequired extends Schema.TaggedError<CompletionClaimPromotionRequired>()(
   "IntegrationFinality.CompletionClaimPromotionRequired",
+  { claim: CompletionTaskClaim }
+) {}
+
+/** Replacement requires durable publication proof for the exact promoted candidate and pinned Run target. */
+export class CompletionClaimPublicationRequired extends Schema.TaggedError<CompletionClaimPublicationRequired>()(
+  "IntegrationFinality.CompletionClaimPublicationRequired",
   { claim: CompletionTaskClaim }
 ) {}
 
@@ -436,6 +443,9 @@ export const runCompletionClaimReplacementProtocol = Effect.fn(
   const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
   if (!exactPromotionWasObserved(records, request.claim)) {
     return yield* new CompletionClaimPromotionRequired({ claim: request.claim })
+  }
+  if (!exactPublicationWasObserved(records, request.claim)) {
+    return yield* new CompletionClaimPublicationRequired({ claim: request.claim })
   }
   const knownOutcome = yield* existingReplacementOutcome(request, records)
   /* v8 ignore next -- @preserve Frontier reconstruction suppresses an already-settled replacement action; direct idempotent replay remains supported. */

@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { expect, it } from "vitest"
 import {
   AttemptId,
@@ -84,7 +85,8 @@ const fixture = (unrelatedReads: number) => {
     makeWorkflowRunBeganRecord(
       runId,
       target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTargetForTest
     )
   ]
   const append = (event: JournalRecord["event"]) => {

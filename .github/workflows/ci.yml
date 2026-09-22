@@ -183,20 +183,73 @@ jobs:
         timeout-minutes: 5
         run: pnpm check:artifacts
 
+      # Real-process custody is deliberately fail-closed when any process with
+      # the caller's effective UID cannot be inspected. GitHub's shared runner
+      # account owns unrelated service processes, so the coverage cell gets a
+      # fresh UID whose complete process population belongs to this command.
+      - name: Prepare isolated coverage account
+        if: matrix.stageId == 'coverage'
+        run: |
+          echo "QUALITY_WORKSPACE_OWNER=$(stat -c '%u:%g' "$GITHUB_WORKSPACE")" >> "$GITHUB_ENV"
+          echo "QUALITY_PNPM_HOME=/opt/dalph-quality-pnpm/node_modules/.bin" >> "$GITHUB_ENV"
+          mkdir -p "hosted-quality/stages/${{ matrix.nodeVersion }}/${{ matrix.stageId }}"
+          sudo useradd --create-home --shell /bin/bash dalph-quality
+          sudo cp -a "$(dirname "$(dirname "$PNPM_HOME")")" /opt/dalph-quality-pnpm
+          sudo chmod -R a+rX /opt/dalph-quality-pnpm
+          sudo setfacl -m u:dalph-quality:--x \
+            "$(dirname "$(dirname "$(dirname "$GITHUB_WORKSPACE")")")" \
+            "$(dirname "$(dirname "$GITHUB_WORKSPACE")")" \
+            "$(dirname "$GITHUB_WORKSPACE")"
+          sudo chown -R dalph-quality:dalph-quality "$GITHUB_WORKSPACE"
+
       # The stage command emits its ordinary pass/fail envelope and exits zero
       # after an ordinary stage verdict. Export/ownership failures remain
       # nonzero so the aggregate reports that cell as unproven.
       - name: Run hosted quality stage
         run: |
-          mkdir -p "hosted-quality/stages/${{ matrix.nodeVersion }}/${{ matrix.stageId }}"
-          pnpm check:ci:quality:stage \
+          stage_command=(pnpm check:ci:quality:stage \
             --stage "${{ matrix.stageId }}" \
             --base "${{ needs.change-plan.outputs.base-sha }}" \
             --candidate "${{ needs.change-plan.outputs.head-sha }}" \
             --node-version "${{ matrix.nodeVersion }}" \
             --run-id "${{ github.run_id }}" \
             --run-attempt "${{ github.run_attempt }}" \
-            --output "hosted-quality/stages/${{ matrix.nodeVersion }}/${{ matrix.stageId }}"
+            --output "hosted-quality/stages/${{ matrix.nodeVersion }}/${{ matrix.stageId }}")
+          if [[ "${{ matrix.stageId }}" == coverage ]]; then
+            sudo -H -u dalph-quality env -i \
+              "HOME=/home/dalph-quality" \
+              "PATH=$QUALITY_PNPM_HOME:$PATH" \
+              "CI=$CI" \
+              "GITHUB_ACTIONS=$GITHUB_ACTIONS" \
+              "GITHUB_SHA=$GITHUB_SHA" \
+              "GITHUB_RUN_ID=$GITHUB_RUN_ID" \
+              "GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT" \
+              "NODE_OPTIONS=$NODE_OPTIONS" \
+              "DALPH_HOSTED_QUALITY_CANDIDATE_SHA=$DALPH_HOSTED_QUALITY_CANDIDATE_SHA" \
+              "DALPH_HOSTED_QUALITY_BASE_SHA=$DALPH_HOSTED_QUALITY_BASE_SHA" \
+              "DALPH_HOSTED_QUALITY_WORKFLOW=$DALPH_HOSTED_QUALITY_WORKFLOW" \
+              "DALPH_HOSTED_QUALITY_RUN_ID=$DALPH_HOSTED_QUALITY_RUN_ID" \
+              "DALPH_HOSTED_QUALITY_RUN_ATTEMPT=$DALPH_HOSTED_QUALITY_RUN_ATTEMPT" \
+              "DALPH_HOSTED_QUALITY_NODE_VERSION=$DALPH_HOSTED_QUALITY_NODE_VERSION" \
+              "DALPH_HOSTED_QUALITY_STAGE_ID=$DALPH_HOSTED_QUALITY_STAGE_ID" \
+              "DALPH_HOSTED_QUALITY_CELL_STARTED_AT=$DALPH_HOSTED_QUALITY_CELL_STARTED_AT" \
+              "DALPH_COVERAGE_BASE_SHA=$DALPH_COVERAGE_BASE_SHA" \
+              "${stage_command[@]}"
+          else
+            mkdir -p "hosted-quality/stages/${{ matrix.nodeVersion }}/${{ matrix.stageId }}"
+            "${stage_command[@]}"
+          fi
+
+      - name: Restore coverage workspace ownership
+        if: always() && matrix.stageId == 'coverage'
+        run: |
+          sudo chown -R "$QUALITY_WORKSPACE_OWNER" "$GITHUB_WORKSPACE"
+          sudo rm -rf /opt/dalph-quality-pnpm
+          sudo setfacl -x u:dalph-quality \
+            "$(dirname "$(dirname "$(dirname "$GITHUB_WORKSPACE")")")" \
+            "$(dirname "$(dirname "$GITHUB_WORKSPACE")")" \
+            "$(dirname "$GITHUB_WORKSPACE")"
+          sudo userdel --remove dalph-quality
 
       # This step must run after an ordinary command failure so the aggregate
       # can distinguish a failed stage from a missing/unproven stage.

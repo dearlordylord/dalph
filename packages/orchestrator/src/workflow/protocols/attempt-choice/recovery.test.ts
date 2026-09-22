@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { appendAcceptedSafeExecutorHistory } from "./live-executor-history.js"
 import {
@@ -65,7 +66,7 @@ const taskId = TaskId.make("attempt-choice-recovery-task")
 const target = FixtureTarget.make("attempt-choice-recovery-target")
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 const testJournalLayer = liveJournalTestLayer({
-  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy)],
+  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
   runId,
   target
 })

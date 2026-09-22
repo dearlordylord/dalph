@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import {
   AttemptId,
@@ -155,7 +156,8 @@ it.effect("rebuilds the tracker application from its recovery projection and rec
           makeWorkflowRunBeganRecord(
             RunId.make("interruptible-tracker-recovery-run"),
             FixtureTarget.make("interruptible-tracker-recovery-target"),
-            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+            remotePublicationTargetForTest
           )
         ],
         runId: RunId.make("interruptible-tracker-recovery-run"),
@@ -327,7 +329,8 @@ it.effect("rebuilds the Git application from its recovery projection and records
           makeWorkflowRunBeganRecord(
             RunId.make("interruptible-git-recovery-run"),
             FixtureTarget.make("interruptible-git-recovery-target"),
-            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+            remotePublicationTargetForTest
           )
         ],
         runId: RunId.make("interruptible-git-recovery-run"),

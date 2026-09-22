@@ -180,6 +180,7 @@ export const hermeticCodexAppServerLayer = (
         attachTurnCompletedHints: Effect.succeed(Stream.empty),
         attachOwnedActivityHints: Effect.succeed(Stream.empty),
         listThreadsComplete: true,
+        unattendedPolicyAdmission: Effect.void,
         startThread: Effect.fn("HermeticProviderBridge.startThread")(function* (cwd, ownedThreadToken) {
           return yield* request(
             {

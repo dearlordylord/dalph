@@ -52,7 +52,7 @@ it.effect(
           event._tag === "IntegrationFinalitySettled" ? [event.claim.plannedAttempt.taskId] : []
         )
       ).toEqual(["A", "B", "C", "D", "E", "F", "X", "H", "I", "G"])
-      expect(run.records).toHaveLength(588)
+      expect(run.records).toHaveLength(640)
       expect(run.records.every(({ runId }) => runId === run.runId)).toBe(true)
       expect(run.records.at(-1)?.event._tag).toBe("WorkflowRunTerminated")
       expect(run.deliveryFrames.at(-1)?.heldPositions).toEqual([])

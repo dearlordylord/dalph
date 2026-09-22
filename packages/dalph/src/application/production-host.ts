@@ -31,6 +31,8 @@ import {
   JournaledRunObservationSource,
   JournalStore,
   RunLifecycleJournal,
+  type RemoteBaselineGit,
+  type RemotePublicationGit,
   TargetPromotionGit,
   type TaskTrackerMutationThrottled,
   type TargetPromotionGitRequest,
@@ -213,6 +215,10 @@ export interface ProductionRepositoryHostAdapters<ECodex = never, EGithub = neve
   readonly applicationExitTraceObserver?: ProductionApplicationExitTraceObserver
   /** Optional direct observation of workflow disposition cleanup calls. */
   readonly workflowCleanupObserver?: ProductionWorkflowCleanupObserver
+  /** Controlled direct-publication Git authority for hermetic host qualification. */
+  readonly remoteBaselineGitLayer?: Layer.Layer<RemoteBaselineGit>
+  /** Controlled direct-publication Git authority for hermetic host qualification. */
+  readonly remotePublicationGitLayer?: Layer.Layer<RemotePublicationGit>
   /** Optional observation of the process-local timer lifecycle. */
   readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
   /** Optional observation of each admitted activation finalization. */
@@ -233,6 +239,8 @@ export interface ProductionRepositoryHostAdapters<ECodex = never, EGithub = neve
   readonly githubClient?: (
     configuration: ProductionRepositoryHostConfiguration
   ) => Layer.Layer<GithubGraphqlClient, EGithub>
+  /** Qualification-only budget for controlled multi-task fixtures; production keeps the fixed default. */
+  readonly githubRequestCircuitMaxRequests?: number
   readonly workflowTrace?: () => Layer.Layer<WorkflowTrace, ETrace>
 }
 
@@ -277,12 +285,20 @@ type GuardedGithubClientService = {
  * this provider instance.
  */
 export const makeGuardedGithubClient = Effect.fn("ProductionHost.makeGuardedGithubClient")(function* (
-  client: GuardedGithubClientService
+  client: GuardedGithubClientService,
+  maxRequests = githubRequestCircuitPolicy.maxRequests
 ): Effect.fn.Return<GuardedGithubClientService> {
   const requestCircuit = yield* makeRequestCircuit({
     onOpen: (operation: GithubGraphqlRequest["_tag"]) =>
-      new GithubGraphqlRequestError({ detail: githubRequestCircuitOpenDetail, kind: "CircuitOpen", operation }),
-    policy: githubRequestCircuitPolicy
+      new GithubGraphqlRequestError({
+        detail:
+          maxRequests === githubRequestCircuitPolicy.maxRequests
+            ? githubRequestCircuitOpenDetail
+            : `GitHub request circuit is open after ${maxRequests} requests in 60 seconds; retrying is locally deferred for 30 seconds`,
+        kind: "CircuitOpen",
+        operation
+      }),
+    policy: { ...githubRequestCircuitPolicy, maxRequests }
   })
   function execute(request: GithubGraphqlReadRequest): GithubGraphqlReadExecution
   function execute(request: GithubGraphqlMutationRequest): GithubGraphqlMutationExecution
@@ -295,12 +311,13 @@ export const makeGuardedGithubClient = Effect.fn("ProductionHost.makeGuardedGith
 
 /** Decorates the one production GitHub client after its transport is selected. */
 const guardedGithubClientLayer = <E, R>(
-  layer: Layer.Layer<GithubGraphqlClient, E, R>
+  layer: Layer.Layer<GithubGraphqlClient, E, R>,
+  maxRequests?: number
 ): Layer.Layer<GithubGraphqlClient, E, R> =>
   Layer.effect(
     GithubGraphqlClient,
     Effect.gen(function* () {
-      return yield* makeGuardedGithubClient(yield* GithubGraphqlClient)
+      return yield* makeGuardedGithubClient(yield* GithubGraphqlClient, maxRequests)
     })
   ).pipe(Layer.provide(layer))
 
@@ -318,6 +335,7 @@ const guardedCodexAppServerLayer = <E, R>(
     Effect.gen(function* () {
       const appServer = yield* CodexAppServer
       const listThreads = appServer.listThreads
+      const listThreadTurns = appServer.listThreadTurns
       return CodexAppServer.of({
         ...appServer,
         startThread: (cwd, ownedThreadToken) =>
@@ -325,6 +343,9 @@ const guardedCodexAppServerLayer = <E, R>(
         ...(listThreads === undefined ? {} : { listThreads: () => requestBoundary.run("thread/list", listThreads()) }),
         readThread: (threadId) => requestBoundary.run("thread/read", appServer.readThread(threadId)),
         resumeThread: (threadId, cwd) => requestBoundary.run("thread/resume", appServer.resumeThread(threadId, cwd)),
+        ...(listThreadTurns === undefined
+          ? {}
+          : { listThreadTurns: (threadId) => requestBoundary.run("thread/turns/list", listThreadTurns(threadId)) }),
         startTurn: (threadId, cwd, text, ownedTurnToken) =>
           requestBoundary.run("turn/start", appServer.startTurn(threadId, cwd, text, ownedTurnToken)),
         interruptTurn: (threadId, turnId) =>
@@ -626,7 +647,8 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const workflowApplicationExitObserver = adapters.workflowApplicationExitObserver
         /* v8 ignore start -- @preserve Hermetic host tests replace the live GitHub boundary; this assignment retains the production-only provider default. */
         const githubClientLayer = guardedGithubClientLayer(
-          adapters.githubClient?.(configuration) ?? defaultGithubClientLayer(configuration)
+          adapters.githubClient?.(configuration) ?? defaultGithubClientLayer(configuration),
+          adapters.githubRequestCircuitMaxRequests
         )
         /* v8 ignore stop */
         const githubAuthorityLayer = observedLayerBuild(
@@ -818,6 +840,13 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
             coordinatorOwnership: ownership,
             integrationFinality: completionClaim,
             integrator,
+            remotePublicationTarget: configuration.remotePublicationTarget,
+            ...(adapters.remoteBaselineGitLayer === undefined
+              ? {}
+              : { remoteBaselineGitLayer: adapters.remoteBaselineGitLayer }),
+            ...(adapters.remotePublicationGitLayer === undefined
+              ? {}
+              : { remotePublicationGitLayer: adapters.remotePublicationGitLayer }),
             targetPromotion: { git: targetPromotionGit },
             journalStoreLayer: journalLayer,
             applicationExit: { _tag: "SuppliedHostShell", shell: applicationExit },

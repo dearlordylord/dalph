@@ -30,7 +30,7 @@
     "check:unused-exports": "node scripts/check-unused-exports.mjs",
     "gate:status": "node scripts/gate-run-status.mjs",
     "gate:reconcile": "node scripts/reconcile-gate-run.mjs",
-    "test:gate-custody": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/gate-custody.test.mjs",
+    "test:gate-custody": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/gate-deadline.test.mjs scripts/gate-custody.test.mjs",
     "test:gate-previous-boot-reconcile": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/gate-previous-boot-reconcile.test.mjs",
     "test:gate-resume": "node --test --test-reporter=./scripts/compact-node-test-reporter.mjs scripts/gate-resume-policy.test.mjs scripts/gate-quality-evidence.test.mjs scripts/local-formal-relevance.test.mjs scripts/gate-resume-integration.test.mjs scripts/gate-resume-inputs.test.mjs scripts/gate-vite-cache.test.mjs scripts/prewarm-vitest.test.mjs scripts/gate-pnpm-state.test.mjs scripts/compact-node-test-reporter.test.mjs scripts/quality-output-budget.test.mjs scripts/quality-gate-qualification-scheduler.test.mjs",
     "check:preflight": "node scripts/with-gate-slot.mjs -- node scripts/run-preflight.mjs",

@@ -85,6 +85,13 @@ export const classifyTaskWorkAdmissionStalledRuntimeQuiescence = (
 export type DeliveryRuntimeQuiescence =
   | TaskWorkAdmissionStalledRuntimeQuiescence
   | {
+      readonly _tag: "DispositionCleanupRuntimeQuiescence"
+      readonly acceptedAt: DeliveryRuntimeEvaluation["acceptedAt"]
+      readonly current: DeliveryRuntimeSnapshot
+      readonly disposition: DeliveryQuiescenceDisposition
+      readonly proposedActions: AvailableProposalFrontier
+    }
+  | {
       readonly _tag: "PassiveRuntimeQuiescence"
       readonly acceptedAt: DeliveryRuntimeEvaluation["acceptedAt"]
       readonly current: DeliveryRuntimeSnapshot

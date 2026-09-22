@@ -1,3 +1,5 @@
+import { unexpectedRemoteDeliveryLayer } from "../../../test/support/unexpected-remote-delivery.js"
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import {
   GitCommitSha,
@@ -98,7 +100,11 @@ const target = FixtureTarget.make("fresh-admission-production-target")
 const capacity = TaskWorkCapacity.make(3)
 const policy = InitialControlPolicy.make({ taskExecutionCapacity: capacity })
 const productionJournalLayer = () =>
-  liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, policy)], runId, target })
+  liveJournalTestLayer({
+    records: [makeWorkflowRunBeganRecord(runId, target, policy, remotePublicationTargetForTest)],
+    runId,
+    target
+  })
 const taskIds = ["A", "B", "C", "D", "E"].map((value) => TaskId.make(value))
 const taskA = Option.getOrThrowWith(Option.fromUndefinedOr(taskIds[0]), () => new Error("missing A fixture"))
 const selectedTaskIds = taskIds.slice(0, 3)
@@ -502,7 +508,10 @@ const buildProductionHarness = Effect.fn("FreshAdmissionProductionTest.buildHarn
     ),
     Context.add(PassivePlannedAttemptProjectionPublication, inertPassivePublication)
   )
-  const liveExecutor = yield* makeLiveDeliveryActionExecutor(runId, target).pipe(Effect.provide(actionContext))
+  const liveExecutor = yield* makeLiveDeliveryActionExecutor(runId, target).pipe(
+    Effect.provide(actionContext),
+    Effect.provide(unexpectedRemoteDeliveryLayer)
+  )
   const crossed = yield* Ref.make<ReadonlyArray<MaterializedDeliveryAction>>([])
   const crossedQueue = yield* Queue.unbounded<MaterializedDeliveryAction>()
   const outsideBoundary = yield* Queue.unbounded<TaskId>()

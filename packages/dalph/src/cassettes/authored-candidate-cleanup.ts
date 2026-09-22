@@ -30,7 +30,9 @@ export const authoredCandidateCleanupBoundaryLayer = (cursor: StoryCursor, runId
               resolveIdentity(authored.subject.locator) === subject.locator &&
               resolveIdentity(authored.subject.predecessor.sessionId) === subject.predecessor.sessionId
                 ? Effect.succeed(authored.revision)
-                : Effect.fail("authored candidate evidence revision subject does not match the production predecessor")
+                : Effect.fail(
+                    `authored candidate evidence subject ${resolveIdentity(authored.subject.locator)} does not match production subject ${subject.locator}`
+                  )
             )
           ),
         observe: () =>

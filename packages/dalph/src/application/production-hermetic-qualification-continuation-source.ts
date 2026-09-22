@@ -2,6 +2,7 @@ import { TrackerTarget, WorkflowOperation, type DeliveryActionProposal } from "@
 import { Effect, Schema } from "effect"
 import {
   sourceRejected,
+  isQualificationTaskId,
   strictSource,
   validateOperationId,
   validatePlannedAttempt,
@@ -33,10 +34,12 @@ const validateContinuationGraph = Effect.fn("HermeticQualification.validateConti
   operation: Extract<typeof NewContinuationRead.Type, { readonly _tag: "ReadTrackerGraph" }>,
   context: QualificationContext
 ) {
+  const explicitTaskId = operation.readShape.explicitlyCoveredTaskIds[0]
   if (
     !Schema.toEquivalence(TrackerTarget)(operation.target, context.configuration.target) ||
     operation.readShape.explicitlyCoveredTaskIds.length !== 1 ||
-    operation.readShape.explicitlyCoveredTaskIds[0] !== context.taskId ||
+    explicitTaskId === undefined ||
+    !isQualificationTaskId(explicitTaskId, context) ||
     (operation.cause._tag !== "ExecutingWorkAuthorityCheck" && operation.cause._tag !== "AttemptContinuation")
   )
     return yield* sourceRejected()
@@ -48,7 +51,7 @@ const validateContinuationSpecification = Effect.fn("HermeticQualification.valid
     context: QualificationContext
   ) {
     if (
-      operation.taskId !== context.taskId ||
+      !isQualificationTaskId(operation.taskId, context) ||
       !Schema.toEquivalence(TrackerTarget)(operation.target, context.configuration.target)
     )
       return yield* sourceRejected()

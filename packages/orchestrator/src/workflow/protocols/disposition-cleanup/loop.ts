@@ -22,6 +22,7 @@ import {
   branchCleanupAuthorizationEquals,
   cleanupMutationRequestLimit,
   integratorCandidateCleanupAuthorizationEquals,
+  integratorCandidateCleanupSessionOf,
   worktreeCleanupAuthorizationEquals
 } from "./disposition.js"
 import {
@@ -65,6 +66,30 @@ type CandidateEvidenceRevisionReader = (
 ) => Effect.Effect<IntegratorCandidateCleanupEvidenceRevision, unknown>
 
 const candidateEvidenceSubjectEquivalence = Schema.toEquivalence(IntegratorCandidateCleanupEvidenceSubject)
+
+const candidateEvidenceSubjectsRequiringAuthorization = (
+  records: JournalHistorySource
+): ReadonlyArray<IntegratorCandidateCleanupEvidenceSubject> => {
+  const authorizedSubjects = Array.from(journalRecordsOfKind(records, "IntegratorCandidateCleanupAuthorized")).flatMap(
+    ({ event }) =>
+      event._tag === "IntegratorCandidateCleanupAuthorized" && validCandidate(records, event.authorization)
+        ? [
+            {
+              locator: event.authorization.locator,
+              predecessor: integratorCandidateCleanupSessionOf(event.authorization.disposition)
+            }
+          ]
+        : []
+  )
+  return candidateCleanupEvidenceSubjects(records).reduce<ReadonlyArray<IntegratorCandidateCleanupEvidenceSubject>>(
+    (required, subject) =>
+      authorizedSubjects.some((authorized) => candidateEvidenceSubjectEquivalence(authorized, subject)) ||
+      required.some((candidate) => candidateEvidenceSubjectEquivalence(candidate, subject))
+        ? required
+        : [...required, subject],
+    []
+  )
+}
 
 /** The three independent cleanup responsibilities reconstructed for one Run. */
 export type DispositionCleanupResponsibilities = {
@@ -355,7 +380,7 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
   const scopedProposals = {
     branch: proposals.branch.filter((authorization) => authorization.disposition.plannedAttempt.runId === runId),
     candidate: proposals.candidate.filter(
-      (authorization) => authorization.disposition.predecessor.plannedAttempt.runId === runId
+      (authorization) => integratorCandidateCleanupSessionOf(authorization.disposition).plannedAttempt.runId === runId
     ),
     worktree: proposals.worktree.filter((authorization) => authorization.disposition.plannedAttempt.runId === runId)
   } satisfies DispositionCleanupProposals
@@ -457,7 +482,7 @@ export const makeDispositionCleanupActivation = Effect.fn("DispositionCleanup.ma
   const readEvidenceRevision =
     candidateBoundary.readEvidenceRevision ?? (() => Effect.fail("candidate evidence is unavailable"))
   const responsibilities = yield* activateDispositionCleanup(runId, readEvidenceRevision)
-  const run = runDispositionCleanupLoop(runId).pipe(
+  const run = runDispositionCleanupLoop(runId, undefined, readEvidenceRevision).pipe(
     Effect.provideService(InRunJournal, journal),
     Effect.provideService(AcceptedJournalReader, reader),
     Effect.provideService(WorktreeCleanupBoundary, worktreeBoundary),
@@ -483,7 +508,7 @@ export const appendDerivedCleanupAuthorizations = Effect.fn("DispositionCleanup.
     if (!hasImmutableRunBeginning(records)) return
     const evidenceSubjects =
       families.includes("candidate") && readEvidenceRevision !== undefined
-        ? candidateCleanupEvidenceSubjects(records)
+        ? candidateEvidenceSubjectsRequiringAuthorization(records)
         : []
     const evidencePairs: ReadonlyArray<
       readonly [IntegratorCandidateCleanupEvidenceSubject, IntegratorCandidateCleanupEvidenceRevision]
@@ -495,7 +520,7 @@ export const appendDerivedCleanupAuthorizations = Effect.fn("DispositionCleanup.
               Effect.mapError(
                 () =>
                   new IntegratorCandidateCleanupEvidenceReadFailure({
-                    detail: "provider-private evidence revision could not be reread"
+                    detail: "provider-private evidence revision could not be read for the exact candidate subject"
                   })
               ),
               Effect.map((revision) => [subject, revision] as const)

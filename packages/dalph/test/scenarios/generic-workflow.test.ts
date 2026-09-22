@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import {
   AttemptId,
@@ -66,7 +67,8 @@ const plannedAttempt = PlannedTaskAttempt.make({
 const runBegan = makeWorkflowRunBeganRecord(
   runId,
   target,
-  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+  remotePublicationTargetForTest
 )
 
 it.effect("journals claim, plan, and Git worktree boundaries without executor internals", () => {

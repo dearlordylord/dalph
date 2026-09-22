@@ -45,6 +45,15 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
   absence. A nested detached command must opt into parent-signal relay; the
   delivery repeatability runner does so for every child and Git lookup. Do not add an
   outer GNU `timeout` around `check:all`.
+- Admitted gates have one absolute `DALPH_GATE_DEADLINE` (ISO UTC, for example
+  `2026-09-22T06:00:00.000Z`), defaulting to one hour from invocation. Record the
+  expected duration and choose the deadline before starting. Worktree-lock and
+  clone-slot waiting consume this same budget. The run persists it; nested
+  commands may shorten but cannot extend it. Deadline expiry stops new work and
+  invokes bounded descendant cleanup. Missing stopped-writer proof retains the
+  fence for explicit reconciliation; a timeout never qualifies the candidate.
+  This tooling policy does not change Dalph runtime behavior or accepted task
+  execution deadlines.
 - For the workflow pilot, use the next existing milestone to record broad review rounds, reopened findings
   with new evidence, full-gate restarts, and closure time. Verify that required
   scenario evidence survives and reproduced accepted-path defects still block
@@ -836,23 +845,26 @@ export DALPH_DEMO_COMMON_DIRECTORY
 DALPH_DEMO_COMMON_DIRECTORY="$(git -C "${DALPH_DEMO_LOCAL_REPOSITORY}" \
   rev-parse --path-format=absolute --git-common-dir)"
 test "${DALPH_DEMO_COMMON_DIRECTORY}" = "${DALPH_DEMO_LOCAL_REPOSITORY}/.git"
+export DALPH_DEMO_PUBLICATION_REPOSITORY="${DALPH_DEMO_ROOT}/publication.git"
+git clone --bare "${DALPH_DEMO_LOCAL_REPOSITORY}" "${DALPH_DEMO_PUBLICATION_REPOSITORY}"
+test "$(git --git-dir "${DALPH_DEMO_PUBLICATION_REPOSITORY}" rev-parse "${DALPH_DEMO_INTEGRATION_REF}")" = "${DALPH_DEMO_BASE_SHA}"
 ```
 
 `DALPH_DEMO_BASE_SHA` is the exact planned Base SHA, not a branch name. The
 configured `integrationRef` is the local `refs/heads/main`; Dalph updates that
-local ref and does not promise to push it to GitHub. The common directory is
-also the exact OS-backed coordinator-lock target. The Codex executable is the
-built workspace dependency, not an inferred executable from a target
-repository.
+local ref and publishes the integrated commit to the distinct bare repository
+at `DALPH_DEMO_PUBLICATION_REPOSITORY`. The common directory is also the exact
+OS-backed coordinator-lock target. The Codex executable is the built workspace
+dependency, not an inferred executable from a target repository.
 
 #### 3. Write the complete non-secret configuration
 
 The [direct remote publication specification for acceptance](scenarios/direct-remote-publication.md)
 adds an explicit remote/ref and publication proof before task completion. The
 normal path uses Git's exact push acknowledgement; interrupted or ambiguous
-paths reconcile as specified. This contract is not implemented by this walkthrough.
-Future dogfood qualification must capture the actual remote head containing the
-integrated commit; a local head and closed GitHub issue alone cannot prove it.
+paths reconcile as specified. This walkthrough uses a disposable bare
+repository as that publication target and independently reads its head after
+the shipped process exits.
 
 Create disjoint sibling locations under the disposable root. The two worktree
 roots must not contain each other or the repository/private state. The Journal
@@ -895,6 +907,7 @@ const requiredEnvironment = [
   "DALPH_DEMO_INTEGRATOR_WORKTREES",
   "DALPH_DEMO_JOURNAL",
   "DALPH_DEMO_LOCAL_REPOSITORY",
+  "DALPH_DEMO_PUBLICATION_REPOSITORY",
   "DALPH_DEMO_TASK_WORKTREES"
 ]
 
@@ -904,6 +917,10 @@ for (const name of requiredEnvironment) {
 
 const configuration = {
   repository: process.env.DALPH_DEMO_LOCAL_REPOSITORY,
+  remotePublicationTarget: {
+    endpoint: process.env.DALPH_DEMO_PUBLICATION_REPOSITORY,
+    branch: process.env.DALPH_DEMO_INTEGRATION_REF
+  },
   commonDirectory: process.env.DALPH_DEMO_COMMON_DIRECTORY,
   integrationRef: process.env.DALPH_DEMO_INTEGRATION_REF,
   plannedAttemptBaseSha: process.env.DALPH_DEMO_BASE_SHA,
@@ -946,6 +963,14 @@ node "${DALPH_EXECUTABLE}" \
   --config "${DALPH_DEMO_CONFIG}"
 ```
 
+For the independent publication check, read the bare repository directly and
+compare the result with the candidate commit reported by the completed Run:
+
+```bash
+git --git-dir "${DALPH_DEMO_PUBLICATION_REPOSITORY}" \
+  rev-parse "${DALPH_DEMO_INTEGRATION_REF}"
+```
+
 Each stdout line is one version-1 JSON record. The first successful selection
 has `_tag: "RunSelected"`, `selection: "Allocated"`, an exact `runId`, and
 `version: 1`. Later records can be:
@@ -986,9 +1011,10 @@ The run can change each owning system:
   `dalph-completion-*` repository labels, and may have the issue closed. Dalph
   re-reads GitHub before retrying an ambiguous label or completion effect.
 - Local Git can gain deterministic task branches/worktrees, executor commits,
-  an Integrator candidate worktree/commit, and an atomic update of the configured
-  local `refs/heads/main`. It does not treat GitHub as Git lineage authority and
-  does not promise a remote push.
+  an Integrator candidate worktree/commit, an atomic update of the configured
+  local `refs/heads/main`, and a publication push to the distinct bare
+  repository. The walkthrough independently checks that bare repository's ref
+  after the process exits; it does not treat GitHub as Git lineage authority.
 - SQLite at `journalDatabase` records the Run beginning and workflow history.
   The coordinator holds an OS lock on the exact Git common directory while the
   host scope is live; it does not persist a second ownership database.
@@ -1290,8 +1316,10 @@ drains; it is not the withdrawn 60-second final estimate. Final qualification me
 The local stage inventory is 30 minutes of preflight plus 51 minutes of
 application qualification, now plus 35 minutes of formal acquisition and
 0.5 minutes of final validation: 116.5 minutes before existing
-quality setup and termination overhead. This fits the existing 24-hour admitted
-command limit. These are ceilings, not measured duration or claimed savings.
+quality setup and termination overhead. A run that needs that entire ceiling
+must explicitly choose an absolute gate deadline beyond 116.5 minutes plus
+admission/setup/termination overhead; the default one-hour budget does not cover
+it. These are ceilings, not measured duration or claimed savings.
 Hosted formal verification has a 16-minute job deadline and reserves
 210 seconds for checkout, setup, network, and final reporting.
 

@@ -599,6 +599,29 @@ export const runAuthoredCassetteInput = async (
     : completedResult(inputDescriptor, authoredCassetteExecution(exit.value))
 }
 
+export const maintainedCassetteBatchConcurrency = 4
+
+/** Bounded ordered batch seam; every successful item publishes one settlement notification. */
+export const runBoundedCassetteBatch = <Key, Value>(
+  keys: ReadonlyArray<Key>,
+  run: (key: Key) => Promise<Value>,
+  onSettled?: (key: Key, result: Value) => void
+): Promise<ReadonlyArray<Value>> =>
+  Effect.runPromise(
+    Effect.forEach(
+      keys,
+      (key) =>
+        Effect.promise(() => run(key)).pipe(
+          Effect.tap((result) => Effect.sync(() => onSettled?.(key, result)))
+        ),
+      // The maintained catalog is deliberately bulk evidence. Bounding it
+      // avoids starving each cassette's timers and process-local services.
+      { concurrency: maintainedCassetteBatchConcurrency }
+    )
+  )
+
 /** Runs all maintained catalogs independently; one failure never becomes a passing summary. */
-export const runEveryMaintainedCassette = (): Promise<ReadonlyArray<CassetteLabResult>> =>
-  Promise.all(maintainedCassetteKeys.map((catalogKey) => runMaintainedCassette(catalogKey)))
+export const runEveryMaintainedCassette = (
+  onSettled?: (catalogKey: MaintainedCassetteKey, result: CassetteLabResult) => void
+): Promise<ReadonlyArray<CassetteLabResult>> =>
+  runBoundedCassetteBatch(maintainedCassetteKeys, runMaintainedCassette, onSettled)

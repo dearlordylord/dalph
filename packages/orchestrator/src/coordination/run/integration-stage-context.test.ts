@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { Effect } from "effect"
 import { it } from "@effect/vitest"
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
@@ -53,7 +54,8 @@ const integrationJournalLayer = (plannedAttempt: PlannedTaskAttempt) => {
       makeWorkflowRunBeganRecord(
         plannedAttempt.runId,
         target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTargetForTest
       )
     ],
     runId: plannedAttempt.runId,

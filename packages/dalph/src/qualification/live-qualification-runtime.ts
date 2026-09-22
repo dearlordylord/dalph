@@ -2,7 +2,13 @@
 /* eslint-disable import-x/no-unused-modules -- Shipped qualification and external test-support consume these boundary contracts outside the production lint graph. */
 import nodePath from "node:path"
 import nodeProcess from "node:process"
-import { GitCommitSha, GitRepositoryLocator } from "@dalph/contracts"
+import {
+  GitCommitSha,
+  GitRepositoryLocator,
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget
+} from "@dalph/contracts"
 import {
   GitCommand,
   GithubClaimOwner,
@@ -194,6 +200,7 @@ export interface ProductionLiveLocalFixture {
   readonly configurationPath: ProductionConfigurationLocator
   readonly codexHome: ProductionLiveCodexHome
   readonly initialTargetCommit: GitCommitSha
+  readonly publicationRepository: GitRepositoryLocator
   readonly applicationServerObservationPath: ProductionLiveLocalResourceLocator
   readonly localManifest: ProductionLiveLocalFixtureManifest
 }
@@ -259,6 +266,7 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
   yield* observeContainer(container)
   const at = (name: string) => nodePath.join(container, name)
   const repository = at("repository")
+  const publicationRepository = GitRepositoryLocator.make(at("publication.git"))
   const journalDatabase = at("journal.sqlite")
   const evidenceStoreRoot = at("evidence")
   const plannedAttemptWorktreeRoot = at("tasks")
@@ -291,6 +299,12 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
   yield* runGit(["add", "README.md"])
   yield* runGit(["commit", "-m", "qualification base H"])
   const initialTargetCommit = yield* Schema.decodeUnknownEffect(GitCommitSha)(yield* runGit(["rev-parse", "HEAD"]))
+  const publicationClone = yield* git.runInWorktree(container, ["clone", "--bare", repository, publicationRepository])
+  if (publicationClone.exitCode !== 0)
+    return yield* new ProductionLiveLocalSetupFailure({ operation: "git.clone-publication" })
+  const publicationBaseResult = yield* git.run(publicationRepository, ["rev-parse", "refs/heads/master"])
+  if (publicationBaseResult.exitCode !== 0 || publicationBaseResult.stdout.trim() !== initialTargetCommit)
+    return yield* new ProductionLiveLocalSetupFailure({ operation: "git.read-publication-base" })
   yield* Effect.forEach(
     [
       evidenceStoreRoot,
@@ -318,8 +332,13 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
     repository: targetInput.repository,
     issueNumber: targetInput.issueNumber
   })
+  const remotePublicationTarget = RemotePublicationTarget.make({
+    branch: RemotePublicationBranchRef.make("refs/heads/master"),
+    endpoint: RemotePublicationEndpoint.make(publicationRepository)
+  })
   const safeDocument = {
     repository,
+    remotePublicationTarget,
     githubGraphqlEndpoint,
     commonDirectory: nodePath.join(repository, ".git"),
     integrationRef: "refs/heads/master",
@@ -352,6 +371,7 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
   yield* fs.writeFileString(ownershipMarker, JSON.stringify({ invocationId: manifest.invocationId }))
   const resourceInputs = [
     ["Repository", repository],
+    ["PublicationRepository", publicationRepository],
     ["JournalDatabase", journalDatabase],
     ["EvidenceRoot", evidenceStoreRoot],
     ["AttemptWorktreeRoot", plannedAttemptWorktreeRoot],
@@ -382,6 +402,7 @@ export const createProductionLiveLocalFixture = Effect.fn("ProductionLiveQualifi
     configurationPath,
     codexHome,
     initialTargetCommit,
+    publicationRepository,
     applicationServerObservationPath: codexAppServerObservationPath,
     localManifest
   } satisfies ProductionLiveLocalFixture
@@ -448,7 +469,12 @@ export const productionLiveQualificationBoundaryObservations = (
 ) => ({
   shippedGithub,
   responses,
-  controllerFinal: ["GitReadTargetHead", "TaskTrackerReadGraph", "TaskTrackerReadClaim"] as const,
+  controllerFinal: [
+    "GitReadTargetHead",
+    "GitReadPublicationHead",
+    "TaskTrackerReadGraph",
+    "TaskTrackerReadClaim"
+  ] as const,
   process: ["Spawn", "Exit"] as const
 })
 
@@ -717,7 +743,8 @@ const publishCompletedQualification = Effect.fn("ProductionLiveQualification.pub
       },
       promotionRequestId: observation.promotionRequestId,
       initialTargetCommit: fixture.initialTargetCommit,
-      finalTargetCommit: completion.facts.targetHead
+      finalTargetCommit: completion.facts.targetHead,
+      remotePublicationHead: completion.facts.remotePublicationHead
     },
     journal: {
       positions: completion.facts.journal.map(({ position }) => position),
@@ -1194,6 +1221,12 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
                 fixture.configuration.integrationRef
               ])
               if (headResult.exitCode !== 0) return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
+              const remotePublicationHeadResult = yield* git.run(fixture.publicationRepository, [
+                "rev-parse",
+                fixture.configuration.remotePublicationTarget.branch
+              ])
+              if (remotePublicationHeadResult.exitCode !== 0)
+                return yield* Effect.fail(qualificationFailed("EvidenceValidation"))
               const graph = yield* trackerReader.read(target)
               const plannedAttempt =
                 planned[0]?.event._tag === "TaskAttemptPlanned" ? planned[0].event.operation.plannedAttempt : undefined
@@ -1218,7 +1251,10 @@ export const runProductionLiveQualificationRuntime = Effect.fn("ProductionLiveQu
                 ).size,
                 journal,
                 github: { lifecycle: lifecycle?._tag, claim: claim._tag, responses: responsesObservation },
-                targetHead: yield* Schema.decodeUnknownEffect(GitCommitSha)(headResult.stdout.trim())
+                targetHead: yield* Schema.decodeUnknownEffect(GitCommitSha)(headResult.stdout.trim()),
+                remotePublicationHead: yield* Schema.decodeUnknownEffect(GitCommitSha)(
+                  remotePublicationHeadResult.stdout.trim()
+                )
               }
             })
           ),

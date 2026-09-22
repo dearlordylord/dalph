@@ -24,10 +24,10 @@ it.effect(
         Array.from({ length: run.records.length }, (_, index) => index + 1)
       )
       expect(run.records.slice(18, 22).map(({ event, position }) => [Number(position), event._tag])).toEqual([
-        [19, "PlannedAttemptExecutorStateObserved"],
+        [19, "PlannedAttemptExecutorCommandResponseObserved"],
         [20, "PlannedAttemptExecutorWorkReported"],
-        [21, "TaskTrackerReadIntentRecorded"],
-        [22, "TaskTrackerFactsObserved"]
+        [21, "PlannedAttemptExecutorStateObserved"],
+        [22, "PlannedAttemptExecutorWorkReported"]
       ])
     }),
   120_000

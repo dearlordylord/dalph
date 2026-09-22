@@ -377,6 +377,12 @@ const ownedTurnMatch = (thread: CodexThreadSnapshot, record: OwnedTurnRecord): T
   const turn = thread.turns.find((candidate) => candidate.ownedTurnToken === record.currentToken)
   if (turn === undefined) {
     if (record._tag === "TurnIntentRecorded") return { _tag: "Missing" }
+    // Codex's thread/read representation may omit Dalph's private token
+    // marker even though the durable observed provider turn id is exact.
+    // Preserve that provider identity for reconciliation; duplicate tokens
+    // and a changed observed id remain contradictions above/below.
+    const observedTurn = thread.turns.find((candidate) => candidate.id === record.observedTurnId)
+    if (observedTurn !== undefined) return { _tag: "Found", turn: observedTurn }
     return { _tag: "Contradiction" }
   }
   return { _tag: "Found", turn }
@@ -997,9 +1003,22 @@ const makeCodexPlannedAttemptExecutorContext = (
     const reconcileOwnedTurn = (
       thread: CodexThreadSnapshot,
       record: OwnedTurnRecord
-    ): Effect.Effect<ThreadReconciliation, CodexThreadMismatch | CodexTurnBoundaryUnknown | ForeignAttemptRecord> => {
+    ): Effect.Effect<
+      ThreadReconciliation,
+      CodexThreadMismatch | CodexTurnBoundaryUnknown | CodexTurnCensusPending | ForeignAttemptRecord
+    > => {
+      if (
+        record._tag === "Running" &&
+        !hasDuplicateOwnedTurnTokens(ownedTurnTokenCounts(thread.turns)) &&
+        !thread.turns.some((turn) => turn.ownedTurnToken === record.currentToken) &&
+        !thread.turns.some((turn) => turn.id === record.observedTurnId)
+      ) {
+        return Effect.fail(new CodexTurnCensusPending({}))
+      }
       const lookup = ownedTurnForRecord(thread, record)
-      if (lookup._tag === "Contradiction") return Effect.fail(new CodexTurnBoundaryUnknown({}))
+      if (lookup._tag === "Contradiction") {
+        return Effect.fail(new CodexTurnBoundaryUnknown({}))
+      }
       if (lookup._tag === "Foreign") return Effect.fail(new ForeignAttemptRecord({ observed: lookup.observed }))
       if (lookup._tag === "Missing") {
         return Effect.succeed({ _tag: "Unresolved" as const, thread, turn: undefined })
@@ -1009,6 +1028,30 @@ const makeCodexPlannedAttemptExecutorContext = (
         return Effect.succeed({ _tag: "Running" as const, thread, turn: lookup.turn })
       return Effect.succeed({ _tag: "Idle" as const, thread, turn: lookup.turn })
     }
+
+    const refreshThreadTurnLedger = Effect.fn("CodexPlannedAttemptExecutor.refreshThreadTurnLedger")(function* (
+      thread: CodexThreadSnapshot
+    ) {
+      if (app.listThreadTurns === undefined) return thread
+      // Codex 0.155 can report a stale in-progress turn from thread/resume
+      // after the persisted turn has completed. Reconcile against its exact
+      // paginated turn ledger before treating the attempt as still running.
+      const persistedTurns = yield* app.listThreadTurns(thread.id)
+      const byId = new Map(thread.turns.map((turn) => [turn.id, turn]))
+      for (const turn of persistedTurns) byId.set(turn.id, turn)
+      const turns = [...byId.values()]
+      const status =
+        thread.status === "active" && !turns.some((turn) => turn.status === "inProgress") ? "idle" : thread.status
+      return { ...thread, status, turns }
+    })
+
+    const reconcileOwnedTurnWithProviderLedger = Effect.fn(
+      "CodexPlannedAttemptExecutor.reconcileOwnedTurnWithProviderLedger"
+    )(function* (thread: CodexThreadSnapshot, record: OwnedTurnRecord) {
+      const first = yield* reconcileOwnedTurn(thread, record)
+      if (first._tag !== "Running" || app.listThreadTurns === undefined) return first
+      return yield* reconcileOwnedTurn(yield* refreshThreadTurnLedger(thread), record)
+    })
 
     const reconcile = Effect.fn("CodexPlannedAttemptExecutor.reconcile")(function* (
       attempt: CodexAttemptContext,
@@ -1027,7 +1070,7 @@ const makeCodexPlannedAttemptExecutorContext = (
         }
         return yield* reconcileAssociatedThread(thread)
       }
-      const ownedTurn = yield* reconcileOwnedTurn(thread, record)
+      const ownedTurn = yield* reconcileOwnedTurnWithProviderLedger(thread, record)
       if (ownedTurn._tag === "Terminal") return ownedTurn
       if (thread.status === "notLoaded" || thread.status === "systemError") {
         return yield* Effect.fail(new CodexThreadMismatch({}))
@@ -1042,7 +1085,7 @@ const makeCodexPlannedAttemptExecutorContext = (
     ) {
       const thread = yield* app.readThread(record.threadId)
       yield* enforceThreadIdentity(attempt, correlation, record.threadId, thread)
-      const ownedTurn = yield* reconcileOwnedTurn(thread, record)
+      const ownedTurn = yield* reconcileOwnedTurnWithProviderLedger(thread, record)
       if (ownedTurn._tag === "Terminal") return ownedTurn
       if (thread.status === "notLoaded" || thread.status === "systemError") {
         return yield* Effect.fail(new CodexThreadMismatch({}))
@@ -1060,7 +1103,7 @@ const makeCodexPlannedAttemptExecutorContext = (
     const observeOwnedActivityByThreadId = Effect.fn("CodexPlannedAttemptExecutor.observeOwnedActivityByThreadId")(
       function* (threadId: CodexThreadId) {
         const thread = yield* app.readThread(threadId)
-        return yield* observeOwnedActivity(thread)
+        return yield* observeOwnedActivity(yield* refreshThreadTurnLedger(thread))
       }
     )
 
@@ -1932,13 +1975,34 @@ const makeCodexPlannedAttemptExecutorContext = (
     })
 
     const projectLifecycle = Effect.fn("CodexPlannedAttemptExecutor.projectLifecycle")(function* (
-      correlation: PlannedAttemptExecutorCorrelation
+      correlation: PlannedAttemptExecutorCorrelation,
+      allowInitialRunningRecovery = false
     ) {
       return yield* projectStoredRecord(correlation, { _tag: "PassiveLifecycleObservation" }).pipe(
         Effect.catch((error: unknown) =>
-          logProjectionFailure(correlation, { _tag: "PassiveLifecycleObservation" }, error).pipe(
-            Effect.andThen(Effect.succeed(projectionOutcome(projectFailure(correlation, error))))
-          )
+          Effect.gen(function* () {
+            // Codex can acknowledge turn/start before thread/resume exposes
+            // the owned turn in its first census. A durable Running record
+            // proves that Dalph already crossed the boundary; keep the
+            // lifecycle attachment alive for the existing provider hint so a
+            // later exact census can settle it. This recovery is limited to
+            // the first attachment read. Subsequent contradictory reads stay
+            // unreadable and therefore fail closed.
+            if (allowInitialRunningRecovery && error instanceof CodexTurnCensusPending) {
+              const stored = yield* store.readAttempt(correlation.runId, correlation.attemptId).pipe(Effect.result)
+              if (
+                Result.isSuccess(stored) &&
+                Option.isSome(stored.success) &&
+                stored.success.value._tag === "Running" &&
+                stored.success.value.correlationRunId === correlation.runId &&
+                stored.success.value.correlationAttemptId === correlation.attemptId
+              ) {
+                return projectionOutcome(exact(running(correlation)))
+              }
+            }
+            yield* logProjectionFailure(correlation, { _tag: "PassiveLifecycleObservation" }, error)
+            return projectionOutcome(projectFailure(correlation, error))
+          })
         )
       )
     })
@@ -2730,6 +2794,7 @@ const makeCodexPlannedAttemptExecutorContext = (
           const attachmentScope = yield* Scope.make()
           yield* Effect.addFinalizer((exit) => Scope.close(attachmentScope, exit))
           const projectionGate = yield* Semaphore.make(1)
+          const attemptGate = yield* gateFor(correlation)
           const heldTerminalActivity = yield* Deferred.make<void>()
           const closed = yield* Deferred.make<void>()
           const turnHints = yield* app.attachTurnCompletedHints.pipe(
@@ -2739,20 +2804,21 @@ const makeCodexPlannedAttemptExecutorContext = (
             Effect.provideService(Scope.Scope, attachmentScope)
           )
           const hints = Stream.merge(turnHints, activityHints)
-          const readLifecycle = projectionGate
-            .withPermit(projectLifecycle(correlation))
-            .pipe(
-              Effect.tap((outcome) =>
-                outcome.heldTerminalActivity ? Deferred.succeed(heldTerminalActivity, undefined) : Effect.void
+          const readLifecycle = (initial: boolean) =>
+            projectionGate
+              .withPermit(attemptGate.withPermit(projectLifecycle(correlation, initial)))
+              .pipe(
+                Effect.tap((outcome) =>
+                  outcome.heldTerminalActivity ? Deferred.succeed(heldTerminalActivity, undefined) : Effect.void
+                )
               )
-            )
-          const current = yield* readLifecycle
+          const current = yield* readLifecycle(true)
           const heldActivityCadence = Stream.fromEffect(Deferred.await(heldTerminalActivity)).pipe(
             Stream.flatMap(() => Stream.fromSchedule(Schedule.spaced(ownedActivityObservationInterval))),
-            Stream.mapEffect(() => readLifecycle),
+            Stream.mapEffect(() => readLifecycle(false)),
             Stream.takeUntil((candidate) => !candidate.heldTerminalActivity)
           )
-          const notificationCandidates = hints.pipe(Stream.mapEffect(() => readLifecycle))
+          const notificationCandidates = hints.pipe(Stream.mapEffect(() => readLifecycle(false)))
           const changes = Stream.merge(notificationCandidates, heldActivityCadence).pipe(
             Stream.map((candidate) => candidate.projection),
             Stream.filter((candidate) => !samePlannedAttemptExecutorProjection(candidate, current.projection)),
@@ -2795,6 +2861,8 @@ class ForeignAttemptRecord extends Schema.TaggedError<ForeignAttemptRecord>()("F
 class CodexThreadMismatch extends Schema.TaggedError<CodexThreadMismatch>()("CodexThreadMismatch", {}) {}
 
 class CodexTurnBoundaryUnknown extends Schema.TaggedError<CodexTurnBoundaryUnknown>()("CodexTurnBoundaryUnknown", {}) {}
+
+class CodexTurnCensusPending extends Schema.TaggedError<CodexTurnCensusPending>()("CodexTurnCensusPending", {}) {}
 
 class CodexActivityCensusUnknown extends Schema.TaggedError<CodexActivityCensusUnknown>()(
   "CodexActivityCensusUnknown",

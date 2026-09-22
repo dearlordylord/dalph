@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import {
   acceptedResultEvidenceLayer,
   acceptedResultFixture,
@@ -114,7 +115,8 @@ const seedTerminalAccepted = Effect.gen(function* () {
   yield* journal.beginRun(
     runId,
     trackerTarget,
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    remotePublicationTargetForTest
   )
   const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] })
   const graphOperation = makeTrackerGraphObservationOperation(

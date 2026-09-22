@@ -180,11 +180,15 @@ export {
 export { GitCommonDirectoryLocator, GitCommonDirectoryTarget } from "./authorities/coordinator-ownership/ownership.js"
 export {
   GitCommand,
+  GitCommandInterrupted,
   GitCommandInvocationFailure,
+  GitCommandResponseDeadline,
   GitCommandResult,
+  GitCommandSenderStopUnproven,
   type GitCommandService,
   nodeGitCommandLayer
 } from "./authorities/git/command.js"
+export { nodeGitDirectPublicationLayer, nodeGitRemoteBaselineLayer } from "./authorities/git/direct-publication.js"
 export {
   GitTargetLineage,
   GitTargetLineageReadFailure,
@@ -437,6 +441,16 @@ export {
 } from "./coordination/run/passive-planned-attempt-observer.js"
 export * from "./workflow/protocols/integration-admission/events.js"
 export * from "./workflow/protocols/integration-admission/protocol.js"
+export * from "./workflow/protocols/direct-publication/events.js"
+export * from "./workflow/protocols/direct-publication/baseline-events.js"
+export { establishRemoteBaseline } from "./workflow/protocols/direct-publication/baseline-protocol-engine.js"
+export { RemoteBaselineHistoryContradiction } from "./workflow/protocols/direct-publication/baseline-transition-journal.js"
+export { runRemotePublication } from "./workflow/protocols/direct-publication/protocol-engine.js"
+export { RemotePublicationAdmissionRejected } from "./workflow/protocols/direct-publication/admission.js"
+export {
+  RemotePublicationHistoryContradiction,
+  RemotePublicationResultContradiction
+} from "./workflow/protocols/direct-publication/errors.js"
 export * from "./workflow/protocols/evidence-store.js"
 export * from "./workflow/protocols/target-promotion/events.js"
 export * from "./workflow/protocols/target-promotion/protocol.js"
@@ -596,6 +610,13 @@ export {
   IntegratorRunStarted,
   IntegratorSessionFixed,
   IntegratorSuccessorSessionFixed,
+  RemotePublicationAdmissionObserved,
+  RemotePublicationAdmissionReadInitiated,
+  RemotePublicationAttemptRequested,
+  RemotePublicationAttemptRejectedNonFastForward,
+  RemotePublicationRequested,
+  RemotePublicationRetained,
+  RemotePublicationSucceeded,
   StoppedAttemptClaimPreserved,
   TargetPromotionAttemptRequested,
   TargetPromotionNonConvergent,
@@ -795,6 +816,7 @@ export {
 export {
   CompletionClaimDidNotConverge,
   CompletionClaimPremiseContradiction,
+  CompletionClaimPublicationRequired,
   CompletionClaimPromotionRequired,
   CompletionClaimReplacementRequired,
   FocusedTaskCompletionSuccessRequired,
@@ -1050,3 +1072,12 @@ export {
   TrackerExecutionAdmitted,
   TaskTrackerFactsObservedTrace
 } from "./presentation/tracker-workflow-trace.js"
+
+export {
+  GitCommandCustodySubject,
+  GitSenderCustody,
+  GitSenderCustodyFailure,
+  GitSenderProcessId,
+  GitSenderToken,
+  gitSenderTokenEnvironment
+} from "./authorities/git/sender-custody.js"

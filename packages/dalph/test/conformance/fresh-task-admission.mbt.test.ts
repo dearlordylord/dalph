@@ -10,6 +10,9 @@ import {
   IntegrationTargetRef,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
@@ -140,6 +143,10 @@ type ContinuationWitnessTag = (typeof continuationWitnessTags)[number]
 
 const runId = RunId.make("fresh-task-admission-mbt-run")
 const target = FixtureTarget.make("fresh-task-admission-mbt-target")
+const remotePublicationTarget = RemotePublicationTarget.make({
+  branch: RemotePublicationBranchRef.make("refs/heads/main"),
+  endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/repository.git")
+})
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(3) })
 const taskIds = new Map<TaskTag, TaskId>(taskTags.map((tag) => [tag, TaskId.make(tag.slice(-1))]))
 const taskIdFor = (tag: TaskTag): TaskId => Option.getOrThrow(Option.fromUndefinedOr(taskIds.get(tag)))
@@ -407,7 +414,7 @@ const makeDriverPrefixPreparation = () => {
 const prefixReaderFixture = (): ReadonlyArray<JournalRecord> => {
   const revision = RunPolicyRevision.make(initialRunPolicyRevision + 1)
   return [
-    makeWorkflowRunBeganRecord(runId, target, initialPolicy),
+    makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTarget),
     {
       event: TaskWorkCapacityChangedEvent.make({
         capacity: TaskWorkCapacity.make(2),
@@ -665,7 +672,9 @@ it("cold-folds full invalid successor diagnostics repeatedly and concealed malfo
 const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
   const prefixReader = makeDriverPrefixPreparation()
   let process: "ProcessDown" | "ProcessUp" = "ProcessUp"
-  let records: ReadonlyArray<JournalRecord> = [makeWorkflowRunBeganRecord(runId, target, initialPolicy)]
+  let records: ReadonlyArray<JournalRecord> = [
+    makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTarget)
+  ]
   let controller: DeliveryRuntimeAdmissionController | undefined
   let sequence = 1
   let visiblePrefixLength = 1
@@ -1266,7 +1275,7 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
         if (journalRuntime !== undefined) yield* journalRuntime.managed.disposeEffect
         process = "ProcessUp"
         prefixReader.reset()
-        records = [makeWorkflowRunBeganRecord(runId, target, initialPolicy)]
+        records = [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTarget)]
         journalRuntime = acquireJournalRuntime(records)
         sequence = 1
         visiblePrefixLength = 1

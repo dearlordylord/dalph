@@ -57,7 +57,8 @@ const facts: ProductionLiveQualificationFinalFacts = {
   taskWorktreeCount: 1,
   journal: [],
   github: { lifecycle: "Completed", claims: [] },
-  targetHead: GitCommitSha.make("2222222222222222222222222222222222222222")
+  targetHead: GitCommitSha.make("2222222222222222222222222222222222222222"),
+  remotePublicationHead: GitCommitSha.make("2222222222222222222222222222222222222222")
 }
 
 const boundary = (spawn: ProductionLiveQualificationBoundary["spawn"]): ProductionLiveQualificationBoundary => ({

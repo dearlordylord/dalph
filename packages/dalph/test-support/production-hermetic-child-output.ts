@@ -20,16 +20,21 @@ export class QualificationInputRejected extends Schema.TaggedError<Qualification
 ) {}
 
 /** The controller calls this before recordLog or Queue publication, never after releasing rejected bytes. */
-export const validateQualificationRecordBinding = Effect.fn("Qualification.validateRecordBinding")(function* (
+export const validateQualificationRecordBinding: (
   record: ProductionCliRecord,
   expectedDigests: HashSet.HashSet<EvidenceDigest>
-) {
-  if (record._tag === "Failure" && record.code !== "delivery.provider_throttled")
-    return yield* new QualificationInputRejected({})
-  if (!HashSet.has(expectedDigests, hermeticCanonicalRecordDigest(record)))
-    return yield* new QualificationInputRejected({})
-  return record
-})
+) => Effect.Effect<ProductionCliRecord, QualificationInputRejected> = Effect.fn("Qualification.validateRecordBinding")(
+  function* (
+    record: ProductionCliRecord,
+    expectedDigests: HashSet.HashSet<EvidenceDigest>
+  ): Effect.fn.Return<ProductionCliRecord, QualificationInputRejected> {
+    if (record._tag === "Failure" && record.code !== "delivery.provider_throttled")
+      return yield* new QualificationInputRejected({})
+    if (!HashSet.has(expectedDigests, hermeticCanonicalRecordDigest(record)))
+      return yield* new QualificationInputRejected({})
+    return record
+  }
+)
 
 /** Rejected original bytes never become public records or error diagnostics. */
 export class HermeticChildOutputCanonicalFailure extends Schema.TaggedError<HermeticChildOutputCanonicalFailure>()(

@@ -14,6 +14,7 @@ import {
 } from "./formal-progress-events.mjs"
 import { createConsoleOutputPresenter } from "./quality-output-budget.mjs"
 import { isOrdinaryQualityCommandResult } from "./quality-gate-failure-policy.mjs"
+import { gateCommandTimeout } from "./gate-deadline.mjs"
 
 const defaultTerminationGraceMilliseconds = 5000
 const defaultProcessGroupAbsenceTimeoutMilliseconds = 2000
@@ -113,6 +114,7 @@ export const runBoundedCommand = ({
         signalListeners.set(parentSignal, listener)
         process.on(parentSignal, listener)
       }
+    let loggingError
     let registered
     try {
       const command = {
@@ -129,6 +131,20 @@ export const runBoundedCommand = ({
       if (relayedSignalGraceMilliseconds !== undefined)
         command.relayedSignalGraceMilliseconds = relayedSignalGraceMilliseconds
       registered = registerSpawn({
+        beforeSpawn: (obligation) => {
+          if (obligation === undefined) return
+          const retainedLogPath = join(
+            obligation.context.run.reportDirectory,
+            "logs",
+            `${obligation.intent.obligationId}.log`
+          )
+          try {
+            mkdirSync(join(obligation.context.run.reportDirectory, "logs"), { recursive: true })
+            writeFileSync(retainedLogPath, "", { flag: "wx" })
+          } catch (error) {
+            loggingError = retainedLogFailure(name, "create", error)
+          }
+        },
         command,
         environment: environment ?? process.env,
         spawnChild: (childEnvironment) =>
@@ -144,19 +160,14 @@ export const runBoundedCommand = ({
       throw error
     }
     const { child, obligation, observationError } = registered
-    let loggingError
+    const effectiveTimeoutMilliseconds = Math.min(
+      timeoutMilliseconds,
+      obligation?.intent.command.timeoutMilliseconds ?? timeoutMilliseconds
+    )
     const logPath =
       obligation === undefined
         ? undefined
         : join(obligation.context.run.reportDirectory, "logs", `${obligation.intent.obligationId}.log`)
-    if (logPath !== undefined) {
-      try {
-        mkdirSync(join(obligation.context.run.reportDirectory, "logs"), { recursive: true })
-        writeFileSync(logPath, "", { flag: "wx" })
-      } catch (error) {
-        loggingError = retainedLogFailure(name, "create", error)
-      }
-    }
     let actualExit
     let absenceProven = false
     const progressReader =
@@ -167,8 +178,15 @@ export const runBoundedCommand = ({
     child.stdio?.[3]?.on("error", () => progressReader?.close())
     const progressStartedAt = wallClockTimestamp()
     const progressStartedEpochMilliseconds = performance.now()
-    const progressDeadline = Number.isFinite(timeoutMilliseconds)
-      ? new Date(Date.parse(progressStartedAt) + timeoutMilliseconds).toISOString()
+    // Registration and admission consume the absolute gate budget. Freeze the
+    // one remaining child timeout here so progress evidence and termination
+    // advertise and enforce the same clock boundary.
+    const installedTimeoutMilliseconds = gateCommandTimeout({
+      requested: effectiveTimeoutMilliseconds,
+      deadline: registered.deadline
+    })
+    const progressDeadline = Number.isFinite(installedTimeoutMilliseconds)
+      ? new Date(Date.parse(progressStartedAt) + installedTimeoutMilliseconds).toISOString()
       : progressStartedAt
     const progressLifecycle =
       progressSpec === undefined
@@ -399,9 +417,9 @@ export const runBoundedCommand = ({
     const timer = setTimeout(
       () =>
         beginTermination({
-          error: commandError(`${name} exceeded ${timeoutMilliseconds / 1000} seconds`, "timed-out")
+          error: commandError(`${name} exceeded ${installedTimeoutMilliseconds / 1000} seconds`, "timed-out")
         }),
-      timeoutMilliseconds
+      installedTimeoutMilliseconds
     )
 
     signal?.addEventListener("abort", cancel, { once: true })

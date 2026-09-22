@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { Effect, FileSystem, Layer, Path } from "effect"
@@ -27,14 +28,18 @@ const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWor
 const nodePathAndFileSystemLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
 
 const controlJournalLayer = (target: ReturnType<typeof FixtureTarget.make>) =>
-  liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy)], runId, target })
+  liveJournalTestLayer({
+    records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)],
+    runId,
+    target
+  })
 
 const sqliteControlJournalLayer = (filename: JournalDatabaseLocator) => {
   const target = FixtureTarget.make("control-direction-fixture")
   return Layer.unwrap(
     Effect.gen(function* () {
       const store = yield* JournalStore
-      yield* store.beginRun(runId, target, initialPolicy)
+      yield* store.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
       const records = yield* store.read(runId)
       const initial = reduceWorkflowJournalHistory(runId, records)
       if (initial._tag === "InvalidWorkflowJournalHistory") {
@@ -174,7 +179,12 @@ describe("ControlDirectionApplication", () => {
   it.effect("rejects a decoded history whose first applied direction skips ordinal one", () =>
     Effect.gen(function* () {
       const journal = yield* JournalStore
-      yield* journal.beginRun(runId, FixtureTarget.make("control-direction-fixture"), initialPolicy)
+      yield* journal.beginRun(
+        runId,
+        FixtureTarget.make("control-direction-fixture"),
+        initialPolicy,
+        remotePublicationTargetForTest
+      )
       const ordinal = ControlDirectionApplicationOrdinal.make(2)
       yield* journal.append(
         runId,

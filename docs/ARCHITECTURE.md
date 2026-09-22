@@ -456,10 +456,34 @@ Integrator. The Integrator owns merge construction, conflict resolution,
 repository checks, review, and provider-private retry or recovery. Dalph does
 not model or invoke those internal stages separately.
 
+For a direct-publication Run, the host validates and pins one
+credential-free remote endpoint and fully qualified existing branch before
+claiming the task or starting provider work. That destination is part of the
+initial Run beginning fact; an unfinished history without it, a changed restart
+destination, an ambiguous endpoint, a non-branch ref, a missing initial branch,
+or a duplicate local-target mapping fails closed before task mutation. One
+local target owns each configured remote branch for process-local coordination,
+while remote writers remain outside Dalph's authority.
+
 When the Integrator reports one prepared candidate M, Dalph asks Git to prove
 that M has exact ordered parents `[H, C]`. Only that Git-qualified report may
 reach target promotion. A conclusive unsuccessful report or an invalid
 reported candidate enters the #68 quarantine and operator-direction protocol.
+
+The direct-publication order is exact: the receiving server first proves the
+correlated update of M to the pinned branch (or a same-endpoint ancestry read
+proves that branch contains M), then Dalph promotes the local target, then it
+settles tracker completion from fresh tracker premises. A later complete graph
+read releases dependants. The proof survives restart, Pause, Exit, and a lost
+completion response; an ambiguous send is reconciled after sender custody is
+proved, while a typed denial or throttle retains work without an automatic
+retry. The initial three-session, three-publication-intent, observation, and
+push bounds apply before later issue-owned controls extend the protocol.
+
+Issue #384 owns this initial order, destination admission, exact proof,
+retained waits, and finality/Exit premises. Issue #385 owns automatic
+competing-head successors and local catch-up, #386 owns user-authorized batch
+grants, and #387 owns retained-delivery resumption.
 
 See [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md),
 [queue-accepted-integration.md](scenarios/queue-accepted-integration.md),
@@ -491,7 +515,7 @@ depart from the community knowledge base.
 | [Journal and Reconstruction](architecture/journal-and-reconstruction.md) | Run establishment, journal publication, reduction, later-activation reconstruction, responsibility reconstruction, and failure locality |
 | [Coordinator, Control, and Admission](architecture/coordinator-control-and-admission.md) | exclusive coordinator ownership, Run establishment and activation, pause, frontier/admission separation, capacity, waits, and stabilization |
 | [Tracker Graph and Claims](architecture/tracker-graph-and-claims.md) | tracker closure, observation evidence, GitHub consistency limits, named reads, mutations, and claims |
-| [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md) | immutable attempts, Git worktree reconciliation, executor boundary, integration serialization, outer Integrator, Git qualification, and exact-head promotion |
+| [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md) | pre-claim remote-destination admission, immutable attempts, Git worktree reconciliation, executor boundary, integration serialization, outer Integrator, direct publication, Git qualification, and exact-head promotion |
 | [Control-plane latency and responsiveness](architecture/control-plane-latency-and-responsiveness.md) | tracker freshness, local derivation, admission, executor observation, local ownership contradiction, application drain, and recovery timing policy |
 | [CONTEXT.md](CONTEXT.md) | canonical domain vocabulary |
 | [scenarios/](scenarios/) | chronological behavior and acceptance-test mappings |

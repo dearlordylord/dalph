@@ -108,6 +108,11 @@ import {
   nodeCodexAttemptStoreLayer
 } from "./codex-attempt-store.js"
 import { isolatedCodexProcessNativeService } from "../../test-support/isolated-codex-process-native.js"
+import {
+  remoteBaselineGitLayerForTest,
+  remotePublicationGitLayerForProductionTest,
+  remotePublicationTargetForTest
+} from "../../../orchestrator/test/support/direct-publication.js"
 import { completedRunFinalityFixture } from "../../../orchestrator/test/run-finality.js"
 import { GithubGraphqlThrottled } from "../../../orchestrator/src/authorities/task-tracker/github/graphql-client.js"
 import { GithubGraphqlRequestError } from "../../../orchestrator/src/authorities/task-tracker/github/graphql-response.js"
@@ -119,6 +124,15 @@ import {
   type RestartFixtureInput as RestartFixtureInputType
 } from "../../bin/production-restart-host-fixture-contract.js"
 
+const productionRepositoryHostTestGraph = <ECodex = never, EGithub = never, ETrace = never>(
+  adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace> = {}
+) =>
+  productionRepositoryHostGraph({
+    ...adapters,
+    remoteBaselineGitLayer: remoteBaselineGitLayerForTest,
+    remotePublicationGitLayer: remotePublicationGitLayerForProductionTest
+  })
+
 const unterminatedRun = { await: Effect.never, poll: Effect.succeed(Option.none()) }
 
 const validRawConfiguration = () => ({
@@ -128,6 +142,7 @@ const validRawConfiguration = () => ({
   integrationRef: "refs/heads/master",
   plannedAttemptBaseSha: "a".repeat(40),
   plannedAttemptExecutor: "codex:production",
+  remotePublicationTarget: { branch: "refs/heads/main", endpoint: "ssh://git@example.invalid/repository.git" },
   claimOwner: "dalph:production",
   taskWorkCapacity: 2,
   journalDatabase: "/var/lib/dalph/journal.sqlite",
@@ -234,7 +249,7 @@ it.effect("production provider cleanup preserves safe suspension across close an
       yield* Effect.scoped(
         Effect.flatMap(CodexAttemptStore, (store) => store.writeAttempt(running)).pipe(Effect.provide(diskStore))
       )
-      const graph = productionRepositoryHostGraph({ codexProcessNative: isolatedCodexProcessNativeService })
+      const graph = productionRepositoryHostTestGraph({ codexProcessNative: isolatedCodexProcessNativeService })
       yield* Effect.scoped(
         Effect.gen(function* () {
           const shell = yield* graph.makeApplicationExit()
@@ -347,7 +362,7 @@ it.effect("production host composition keeps ambient Codex home separate from ex
         () =>
           withProductionRepositoryHost(
             input,
-            productionRepositoryHostGraph({
+            productionRepositoryHostTestGraph({
               codexProcessNative: isolatedCodexProcessNativeService,
               githubClient: () => Layer.succeed(GithubGraphqlClient, githubClient)
             }),
@@ -384,7 +399,7 @@ it.effect("production host composition keeps ambient Codex home separate from ex
 it.effect("production host Exit succeeds when qualification observers are absent", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const applicationExit = yield* productionRepositoryHostGraph().makeApplicationExit()
+      const applicationExit = yield* productionRepositoryHostTestGraph().makeApplicationExit()
       const result = yield* applicationExit.requestBoundary.requestExit
 
       expect(result._tag).toBe("Succeeded")
@@ -393,7 +408,7 @@ it.effect("production host Exit succeeds when qualification observers are absent
 )
 
 it("production host graph exposes only explicit non-retryable activation failures", () => {
-  const graph = productionRepositoryHostGraph()
+  const graph = productionRepositoryHostTestGraph()
   type ActivationFailure = Parameters<typeof graph.run>[2] extends (failure: infer Failure) => Effect.Effect<void>
     ? Failure
     : never
@@ -403,7 +418,7 @@ it("production host graph exposes only explicit non-retryable activation failure
 it.effect("rejects a retained non-Codex provider before building a Codex Run", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const graph = productionRepositoryHostGraph()
+      const graph = productionRepositoryHostTestGraph()
       const configuration = yield* decodeProductionRepositoryHostConfiguration(validRawConfiguration())
       const applicationExit = yield* graph.makeApplicationExit()
       const selection = ProductionRunSelection.cases.Allocated.make({
@@ -466,7 +481,7 @@ it.effect("does not acquire a Codex provider for the built-in Kimi executor prof
       plannedAttemptExecutor: "executor:kimi/for-coding"
     })
     const applicationExit = yield* makeProductionHostApplicationExitShell()
-    const provider = yield* productionRepositoryHostGraph().acquireProvider(configuration, applicationExit)
+    const provider = yield* productionRepositoryHostTestGraph().acquireProvider(configuration, applicationExit)
 
     expect(provider).toEqual({ _tag: "NonCodex" })
   }).pipe(Effect.scoped)
@@ -492,7 +507,8 @@ it.effect(
                   .beginRun(
                     selection.runId,
                     configuration.target,
-                    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+                    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+                    remotePublicationTargetForTest
                   )
                   .pipe(Effect.orDie)
                 yield* Ref.update(events, (current) => [...current, "begin-acknowledged"])
@@ -650,7 +666,8 @@ it.effect("next host invocation recovers the same Run and authority-reads before
           yield* journal.beginRun(
             runId,
             target,
-            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+            remotePublicationTargetForTest
           )
           yield* journal.append(
             runId,
@@ -738,9 +755,9 @@ it.effect("next host invocation recovers the same Run and authority-reads before
           ),
         onActivationFinalizationStart: (kind) => Ref.update(activationFinalizations, (current) => [...current, kind])
       }
-      const graph = productionRepositoryHostGraph(adapters)
+      const graph = productionRepositoryHostTestGraph(adapters)
       const { onActivationFailure: _onActivationFailure, ...adaptersWithoutActivationFailureObserver } = adapters
-      const graphWithoutActivationFailureObserver = productionRepositoryHostGraph(
+      const graphWithoutActivationFailureObserver = productionRepositoryHostTestGraph(
         adaptersWithoutActivationFailureObserver
       )
       const callbackEntered = yield* Deferred.make<void>()
@@ -834,7 +851,7 @@ it.effect("next host invocation recovers the same Run and authority-reads before
       expect(yield* Ref.get(workflowCleanupCalls)).toEqual([])
       expect(yield* Ref.get(activationFailures)).toEqual(["TaskTrackerMutationThrottled"])
       expect(yield* Ref.get(timerStates)).toEqual(["Started", "Stopped", "Started", "Stopped"])
-      expect(yield* Ref.get(activationFinalizations)).toEqual(["Ordinary", "Ordinary"])
+      expect(yield* Ref.get(activationFinalizations)).toEqual(["Ordinary", "Ordinary", "Ordinary"])
       expect(yield* Ref.get(activations)).toBe(2)
       expect(recordsAfterFirst.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
       expect(recordsAfterSecond.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
@@ -961,7 +978,8 @@ it.effect("allocated and recovered selections identify the exact Run and never a
           .beginRun(
             existingRunId,
             target,
-            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+            remotePublicationTargetForTest
           )
           .pipe(Effect.orDie)
         return context
@@ -1094,7 +1112,7 @@ it.effect("cold production host records one beginning before the first GitHub de
       }
       const observed = yield* withProductionRepositoryHost(
         input,
-        productionRepositoryHostGraph(adapters),
+        productionRepositoryHostTestGraph(adapters),
         (observation) =>
           Deferred.await(providerStarted).pipe(
             Effect.andThen(observation.acceptedHistory.get),
@@ -1111,9 +1129,14 @@ it.effect("cold production host records one beginning before the first GitHub de
         sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
       )
       const records = yield* Context.get(journalContext, JournalStore).read(observed.selection.runId)
-      expect(records.map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan", "TaskTrackerReadIntentRecorded"])
+      expect(records.map(({ event }) => event._tag)).toEqual([
+        "WorkflowRunBegan",
+        "RemotePublicationAdmissionReadIntended",
+        "RemotePublicationAdmissionObserved",
+        "TaskTrackerReadIntentRecorded"
+      ])
       expect(observed.cursor).toEqual(
-        TraceCursor.make({ position: JournalPosition.make(2), runId: observed.selection.runId })
+        TraceCursor.make({ position: JournalPosition.make(4), runId: observed.selection.runId })
       )
       expect(yield* Ref.get(appAcquisitions)).toBe(1)
       expect(yield* Ref.get(githubAcquisitions)).toBe(1)
@@ -1187,7 +1210,7 @@ it.effect("production host connects supplied Exit request and trace observers", 
 
       const hostExit = yield* withProductionRepositoryHost(
         input,
-        productionRepositoryHostGraph(adapters),
+        productionRepositoryHostTestGraph(adapters),
         (observation) =>
           Effect.gen(function* () {
             yield* Deferred.await(providerStarted)
@@ -1299,7 +1322,8 @@ const restartHostProcesses = Effect.scoped(
         yield* journal.beginRun(
           seededRunId,
           target,
-          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+          remotePublicationTargetForTest
         )
         yield* journal.append(
           seededRunId,
@@ -1399,7 +1423,7 @@ it.effect(
           })
           expect(history?.record).toMatchObject({
             _tag: "HistoricalSnapshot",
-            snapshot: { cursor: { position: 5, runId: input.runId } },
+            snapshot: { cursor: { position: 7, runId: input.runId } },
             version: 1
           })
           if (status?.record._tag !== "CurrentStatus") return undefined
@@ -1419,6 +1443,7 @@ it.effect("public restart reconciles an acknowledged boundary intent before any 
   restartHostProcesses.pipe(
     Effect.map(({ first, input, second }) => {
       for (const events of [first, second]) {
+        const expectedPosition = eventsWithTag(events, "RestartChildStarted")[0]?.label === "first-host-process" ? 5 : 7
         const reconstructed = eventsWithTag(events, "RecoveryReconstructed")[0]
         const selected = eventsWithTag(events, "TaskClaimCheckSelected")[0]
         const githubRead = eventsWithTag(events, "GithubReadStarted")[0]
@@ -1433,7 +1458,7 @@ it.effect("public restart reconciles an acknowledged boundary intent before any 
           "HostCompleted"
         ])
         expect(reconstructed).toMatchObject({
-          acceptedPosition: 5,
+          acceptedPosition: expectedPosition,
           policy: { revision: 2, taskExecutionCapacity: 7 },
           responsibilities: [
             {
@@ -1544,7 +1569,7 @@ const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) 
         return Effect.void
     }
   }
-  const productionGraph = productionRepositoryHostGraph({
+  const productionGraph = productionRepositoryHostTestGraph({
     boundaryObserver,
     githubClient: () => Layer.effect(GithubGraphqlClient, count("boundaryAcquisitions").pipe(Effect.as(githubClient))),
     codexAppServer: () => Layer.effect(CodexAppServer, count("boundaryAcquisitions").pipe(Effect.as(app))),
@@ -1565,7 +1590,7 @@ const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) 
           ...journal,
           append: (runId, key, event) => countJournalMutation(journal.append(runId, key, event)),
           beginRun: (runId, target, initialControlPolicy) =>
-            countJournalMutation(journal.beginRun(runId, target, initialControlPolicy)),
+            countJournalMutation(journal.beginRun(runId, target, initialControlPolicy, remotePublicationTargetForTest)),
           terminateRun: (runId, disposition, journalEvidence) =>
             countJournalMutation(journal.terminateRun(runId, disposition, journalEvidence)),
           retireTerminalRun: (runId) => countJournalMutation(journal.retireTerminalRun(runId))
@@ -1640,7 +1665,8 @@ it.effect("terminal Run is not reactivated", () =>
           yield* journal.beginRun(
             terminalRunId,
             target,
-            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+            remotePublicationTargetForTest
           )
           yield* journal.append(terminalRunId, intentRecordKey(fixture.operation.operationId), fixture.intent)
           yield* journal.append(terminalRunId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
@@ -1675,7 +1701,7 @@ it.effect("terminal Run is not reactivated", () =>
       }
       const observed = yield* withProductionRepositoryHost(
         input,
-        productionRepositoryHostGraph(adapters),
+        productionRepositoryHostTestGraph(adapters),
         (observation) => Deferred.await(providerStarted).pipe(Effect.as(observation.selection))
       )
 
@@ -1711,7 +1737,8 @@ it.effect(
               yield* journal.beginRun(
                 runId,
                 target,
-                InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+                InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+                remotePublicationTargetForTest
               )
             }
           })
@@ -1753,7 +1780,8 @@ it.effect(
             yield* Context.get(context, JournalStore).beginRun(
               runId,
               recordedTarget,
-              InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+              InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+              remotePublicationTargetForTest
             )
           })
         )
@@ -1785,7 +1813,8 @@ it.effect(
             yield* Context.get(context, JournalStore).beginRun(
               runId,
               target,
-              InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+              InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+              remotePublicationTargetForTest
             )
           })
         )
@@ -1860,7 +1889,7 @@ it.effect(
           codexAppServer: () => Layer.effect(CodexAppServer, record("codex.acquire").pipe(Effect.as(app))),
           githubClient: () => Layer.effect(GithubGraphqlClient, record("github.acquire").pipe(Effect.as(githubClient)))
         }
-        const productionGraph = productionRepositoryHostGraph(adapters)
+        const productionGraph = productionRepositoryHostTestGraph(adapters)
         const foundation = (configuration: ProductionRepositoryHostConfiguration) =>
           Layer.effectContext(
             Effect.gen(function* () {
@@ -1885,7 +1914,7 @@ it.effect(
                 }),
                 beginRun: Effect.fn("ProductionHostOwnershipTest.beginRun")(function* (runId, target, policy) {
                   yield* record("journal.begin")
-                  return yield* journal.beginRun(runId, target, policy)
+                  return yield* journal.beginRun(runId, target, policy, remotePublicationTargetForTest)
                 }),
                 append: Effect.fn("ProductionHostOwnershipTest.append")(function* (runId, key, event) {
                   yield* record("journal.append")

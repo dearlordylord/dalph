@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { expect, it } from "vitest"
 import {
   AttemptId,
@@ -94,6 +95,7 @@ const completedHistory = (target: ReturnType<typeof FixtureTarget.make>): Readon
     {
       event: WorkflowRunBeganEvent.make({
         initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTarget: remotePublicationTargetForTest,
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
         target,
@@ -162,6 +164,7 @@ it("rejects Completed termination when the fresh graph is unsettled without canc
     {
       event: WorkflowRunBeganEvent.make({
         initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTarget: remotePublicationTargetForTest,
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
         target,
@@ -224,6 +227,7 @@ it("folds nonconsecutive task-work capacity revisions into history issues", () =
     {
       event: WorkflowRunBeganEvent.make({
         initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTarget: remotePublicationTargetForTest,
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
         target,
@@ -344,6 +348,7 @@ it("rejects a Run beginning that follows workflow records", () => {
     {
       event: WorkflowRunBeganEvent.make({
         initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTarget: remotePublicationTargetForTest,
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
         target,

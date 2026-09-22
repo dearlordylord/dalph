@@ -1,7 +1,13 @@
 import { strict as assert } from "node:assert"
 import { parseHTML } from "linkedom"
 import { Effect, Result } from "effect"
-import { RunId, TaskId } from "@dalph/contracts"
+import {
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
+  RunId,
+  TaskId
+} from "@dalph/contracts"
 import {
   FixtureTarget,
   InitialControlPolicy,
@@ -23,6 +29,10 @@ import { renderProductionTraceHistory } from "./cassette-lab-workbench.ts"
 
 const runId = RunId.make("run:lab-selected-history")
 const taskId = TaskId.make("selected-history-task")
+const remotePublicationTarget = RemotePublicationTarget.make({
+  branch: RemotePublicationBranchRef.make("refs/heads/main"),
+  endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/repository.git")
+})
 const prepared = await Effect.runPromise(
   Effect.gen(function* () {
     const journal = yield* JournalStore
@@ -30,7 +40,8 @@ const prepared = await Effect.runPromise(
     yield* journal.beginRun(
       runId,
       target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTarget
     )
     const graph = projectTrackerSnapshot({
       revision: "selected-history-r1",

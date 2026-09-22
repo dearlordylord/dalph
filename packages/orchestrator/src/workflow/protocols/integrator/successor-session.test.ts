@@ -57,6 +57,7 @@ import {
 } from "../integration-quarantine/events.js"
 import { IntegratorJournalContradiction } from "./errors.js"
 import {
+  IntegratorCandidateResourceLocator,
   IntegratorNotPreparedDetail,
   IntegratorResult,
   IntegratorRunOrdinal,
@@ -1054,6 +1055,44 @@ describe("Integrator FullRerun successor session", () => {
         successorResourceCollisionRecords
       ).pipe(Effect.flip)
       expect(successorResourceCollisionFailure).toBeInstanceOf(IntegratorJournalContradiction)
+
+      const existingSecond = {
+        ...valid,
+        event: IntegratorSuccessorSessionFixedEvent.make({
+          ...valid.event,
+          successor: {
+            ...valid.event.successor,
+            candidateResource: IntegratorCandidateResourceLocator.make("aggregate-session-resource-2"),
+            sessionId: IntegratorSessionId.make("aggregate-session-2")
+          }
+        }),
+        key: JournalRecordKey.make("aggregate-session-2"),
+        position: JournalPosition.make(16)
+      }
+      const existingThird = {
+        ...valid,
+        event: IntegratorSuccessorSessionFixedEvent.make({
+          ...valid.event,
+          successor: {
+            ...valid.event.successor,
+            candidateResource: IntegratorCandidateResourceLocator.make("aggregate-session-resource-3"),
+            sessionId: IntegratorSessionId.make("aggregate-session-3")
+          }
+        }),
+        key: JournalRecordKey.make("aggregate-session-3"),
+        position: JournalPosition.make(17)
+      }
+      const fourthSession = yield* appendIntegratorSuccessorSessionIfNeeded(
+        {
+          append: () => Effect.die("a fourth Integrator session must not append"),
+          read: () => Effect.succeed([...initial, existingSecond, existingThird])
+        },
+        input,
+        [...initial, existingSecond, existingThird]
+      ).pipe(Effect.flip)
+      expect(fourthSession).toMatchObject({
+        detail: "Integrator responsibility has reached its three-session aggregate bound"
+      })
 
       const relatedOne = {
         ...valid,

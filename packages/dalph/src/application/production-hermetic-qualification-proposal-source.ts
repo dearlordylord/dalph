@@ -1,8 +1,14 @@
+/* eslint-disable max-lines -- Exact proposal-family qualification remains co-located for source-boundary auditability. */
 import {
   deliveryProposalIdOf,
   WorkflowOperation,
   TrackerTarget,
   IntegratorSessionCorrelation,
+  RemotePublicationCorrelation,
+  RemotePublicationSucceededEvent,
+  remotePublicationCorrelationFor,
+  RemoteBaselineCorrelation,
+  remoteBaselineCorrelationFor,
   QueuedIntegrationResponsibility,
   UnqueuedAcceptedResult,
   TargetLineageObservation,
@@ -11,11 +17,15 @@ import {
   completionClaimReplacementRequestFor,
   type DeliveryActionProposal
 } from "@dalph/orchestrator"
+import { RemotePublicationTarget } from "@dalph/contracts"
 import { Effect, Schema } from "effect"
 
 import {
   sourceRejected,
+  sourceRejectedBecause,
+  sourceRejectedWithTag,
   strictSource,
+  isQualificationTaskId,
   validateOperationId,
   validateWorkflowOperationId,
   validatePlannedAttempt,
@@ -64,6 +74,7 @@ const validateRecoveredAction = Effect.fn("HermeticQualification.validateRecover
     }
     case "ReadTaskClaim":
       return yield* validateRecoveredTaskClaimRead(action, context)
+    /* v8 ignore next -- @preserve Recovered-action schema narrows this union before exhaustive routing. */
     default:
       return yield* sourceRejected()
   }
@@ -78,8 +89,8 @@ const validateRecoveredTaskClaimRead = Effect.fn("HermeticQualification.validate
     strictSource
   )(action.operation).pipe(Effect.mapError(sourceRejected))
   if (
-    operation.taskId !== context.taskId ||
-    action.taskId !== context.taskId ||
+    !isQualificationTaskId(operation.taskId, context) ||
+    action.taskId !== operation.taskId ||
     !Schema.toEquivalence(TrackerTarget)(operation.target, context.configuration.target)
   )
     return yield* sourceRejected()
@@ -87,7 +98,7 @@ const validateRecoveredTaskClaimRead = Effect.fn("HermeticQualification.validate
   return {
     _tag: action._tag,
     operation,
-    taskId: context.taskId,
+    taskId: operation.taskId,
     plannedAttempt:
       action.plannedAttempt === null ? null : yield* validatePlannedAttempt(action.plannedAttempt, context)
   }
@@ -111,9 +122,10 @@ const validateAcceptedTransition = Effect.fn("HermeticQualification.validateAcce
     case "CheckTaskClaim":
     case "ReconcileTaskClaimRelease":
     case "ReconcileTaskWorktree":
-      if (transition.taskId !== context.taskId) return yield* sourceRejected()
+      if (!isQualificationTaskId(transition.taskId, context)) return yield* sourceRejected()
       yield* validateWorkflowOperationId(transition.operationId, context)
-      return { _tag: transition._tag, operationId: transition.operationId, taskId: context.taskId }
+      return { _tag: transition._tag, operationId: transition.operationId, taskId: transition.taskId }
+    /* v8 ignore next -- @preserve Accepted-transition schema narrows this union before exhaustive routing. */
     default:
       return yield* sourceRejected()
   }
@@ -182,6 +194,7 @@ const validateQueuedIntegrationTransition = Effect.fn("HermeticQualification.val
           _tag: transition._tag,
           responsibility: yield* validateResponsibility(transition.responsibility, context)
         }
+      /* v8 ignore next -- @preserve Queued-transition schema narrows this union before exhaustive routing. */
       default:
         return yield* sourceRejected()
     }
@@ -197,6 +210,8 @@ const validateRunningIntegrationTransition = Effect.fn("HermeticQualification.va
       }
     if (
       transition._tag === "RunIntegrator" ||
+      transition._tag === "EstablishRemoteBaseline" ||
+      transition._tag === "RunRemotePublication" ||
       transition._tag === "RunTargetPromotion" ||
       transition._tag === "RecordPromotionStaleIntegrationQuarantine"
     )
@@ -208,11 +223,36 @@ const validateRunningIntegrationTransition = Effect.fn("HermeticQualification.va
 const validateIntegrationRunTransition = Effect.fn("HermeticQualification.validateIntegrationRunTransition")(function* (
   transition: Extract<
     IntegrationTransition,
-    { readonly _tag: "RunIntegrator" | "RunTargetPromotion" | "RecordPromotionStaleIntegrationQuarantine" }
+    {
+      readonly _tag:
+        | "RunIntegrator"
+        | "EstablishRemoteBaseline"
+        | "RunRemotePublication"
+        | "RunTargetPromotion"
+        | "RecordPromotionStaleIntegrationQuarantine"
+    }
   >,
   context: QualificationContext
 ) {
   switch (transition._tag) {
+    case "EstablishRemoteBaseline": {
+      const responsibility = yield* validateResponsibility(transition.responsibility, context)
+      const expected = remoteBaselineCorrelationFor(
+        context.runId,
+        {
+          acceptedResult: responsibility.acceptedResult,
+          integrationTarget: responsibility.integrationTarget,
+          plannedAttempt: responsibility.plannedAttempt,
+          queuedAt: responsibility.queuedAt,
+          startedAt: responsibility.startedAt
+        },
+        responsibility.integrationTarget,
+        context.configuration.remotePublicationTarget
+      )
+      if (!Schema.toEquivalence(RemoteBaselineCorrelation)(transition.correlation, expected))
+        return yield* sourceRejected()
+      return { _tag: transition._tag, correlation: expected, responsibility }
+    }
     case "RunIntegrator": {
       const responsibility = yield* validateResponsibility(transition.responsibility, context)
       const lineage = yield* Schema.decodeUnknownEffect(
@@ -229,12 +269,19 @@ const validateIntegrationRunTransition = Effect.fn("HermeticQualification.valida
         return yield* sourceRejected()
       return { _tag: transition._tag, responsibility, lineage, lineageObservedAt: transition.lineageObservedAt, run }
     }
+    case "RunRemotePublication":
+      if (
+        !Schema.toEquivalence(RemotePublicationTarget)(transition.target, context.configuration.remotePublicationTarget)
+      )
+        return yield* sourceRejected()
+      yield* validateCandidate(transition.candidate, context)
+      yield* validateResponsibility(transition.responsibility, context)
+      return transition
     case "RunTargetPromotion":
-      return {
-        _tag: transition._tag,
-        candidate: yield* validateCandidate(transition.candidate, context),
-        responsibility: yield* validateResponsibility(transition.responsibility, context)
-      }
+      yield* validateCandidate(transition.candidate, context)
+      yield* validateResponsibility(transition.responsibility, context)
+      yield* validateRemotePublicationSuccess(transition.candidate, transition.publication, context)
+      return transition
     case "RecordPromotionStaleIntegrationQuarantine": {
       const input = yield* Schema.decodeUnknownEffect(
         PromotionStaleIntegrationQuarantineInput,
@@ -247,9 +294,29 @@ const validateIntegrationRunTransition = Effect.fn("HermeticQualification.valida
         responsibility: yield* validateResponsibility(transition.responsibility, context)
       }
     }
+    /* v8 ignore next -- @preserve Integration-run schema narrows this union before exhaustive routing. */
     default:
       return yield* sourceRejected()
   }
+})
+
+const validateRemotePublicationSuccess = Effect.fn("HermeticQualification.validateRemotePublicationSuccess")(function* (
+  candidate: Parameters<typeof remotePublicationCorrelationFor>[0],
+  publication: RemotePublicationSucceededEvent,
+  context: QualificationContext
+) {
+  const decoded = yield* Schema.decodeUnknownEffect(
+    RemotePublicationSucceededEvent,
+    strictSource
+  )(publication).pipe(Effect.mapError(sourceRejected))
+  const expected = remotePublicationCorrelationFor(candidate, context.configuration.remotePublicationTarget)
+  if (
+    !Schema.toEquivalence(RemotePublicationCorrelation)(decoded.correlation, expected) ||
+    decoded.proof._tag !== "PushApplied" ||
+    decoded.proof.attemptOrdinal !== 1 ||
+    decoded.proof.remoteHead !== candidate.candidateCommit
+  )
+    return yield* sourceRejected()
 })
 
 const validateCompletionTransition = Effect.fn("HermeticQualification.validateCompletionTransition")(function* (
@@ -263,7 +330,7 @@ const validateCompletionTransition = Effect.fn("HermeticQualification.validateCo
     transition._tag === "DeleteCompletedTaskCompletionClaim"
   )
     return yield* validateCompletionRequestTransition(transition, context)
-  return yield* sourceRejected()
+  return yield* sourceRejectedWithTag(transition._tag)
 })
 
 const validateCompletionRequestTransition = Effect.fn("HermeticQualification.validateCompletionRequestTransition")(
@@ -305,6 +372,7 @@ const validateCompletionRequestTransition = Effect.fn("HermeticQualification.val
           responsibility: yield* validateResponsibility(transition.responsibility, context)
         }
       }
+      /* v8 ignore next -- @preserve Completion-transition schema narrows this union before exhaustive routing. */
       default:
         return yield* sourceRejected()
     }
@@ -343,11 +411,11 @@ const validateFreshRoute = Effect.fn("HermeticQualification.validateFreshRoute")
   // Preserve the original workflow/executor route distinction as well as every step field.
   if (route._tag === "FreshExecutorWorkflowRoute") {
     if (step._tag !== "BeginPlannedAttemptExecutorWork" && step._tag !== "ObservePlannedAttemptExecutorWork")
-      return yield* sourceRejected()
+      return yield* sourceRejectedBecause("InvalidFreshRoute")()
     return { _tag: route._tag, step }
   }
   if (step._tag === "BeginPlannedAttemptExecutorWork" || step._tag === "ObservePlannedAttemptExecutorWork")
-    return yield* sourceRejected()
+    return yield* sourceRejectedBecause("InvalidFreshRoute")()
   // Planning needs both a fresh operation and attempt identity, unlike the other fresh operation routes.
   if (step._tag === "RecordTaskAttemptPlan") return { _tag: route._tag, step }
   return { _tag: route._tag, step }
@@ -361,9 +429,9 @@ export const validateProposal = Effect.fn("HermeticQualification.validateProposa
   const expected = yield* validateRoute(route, context)
   const expectedId = deliveryProposalIdOf(context.runId, expected)
   if (deliveryProposalIdOf(context.runId, route) !== expectedId || proposal.id !== expectedId)
-    return yield* sourceRejected()
-  if (proposal.order._tag !== "TrackerGraphOrder" && proposal.order.taskId !== context.taskId)
-    return yield* sourceRejected()
+    return yield* sourceRejectedBecause("ProposalIdentityMismatch")()
+  if (proposal.order._tag !== "TrackerGraphOrder" && !isQualificationTaskId(proposal.order.taskId, context))
+    return yield* sourceRejectedBecause("ProposalSubjectMismatch")()
   if (proposal.waitsForLiveOperationId !== null)
     yield* validateWorkflowOperationId(proposal.waitsForLiveOperationId, context)
   yield* validateProposalIdentitySource(proposal.actionIdentity, context)
@@ -377,6 +445,6 @@ const validateProposalIdentitySource = Effect.fn("HermeticQualification.validate
     const source = identity.source
     if (source._tag === "Preserve") yield* validateWorkflowOperationId(source.operationId, context)
     else if (source._tag === "ExternalSuccessReleaseClaim") yield* validateOperationId(source.claimOperationId)
-    else if (source._tag !== "Allocate") return yield* sourceRejected()
+    else if (source._tag !== "Allocate") return yield* sourceRejectedBecause("InvalidProposalIdentitySource")()
   }
 })

@@ -95,6 +95,7 @@ const ResponsesBoundaryTag = Schema.Literals([
 ])
 const ControllerFinalBoundaryTags = Schema.Tuple([
   Schema.Literal("GitReadTargetHead"),
+  Schema.Literal("GitReadPublicationHead"),
   Schema.Literal("TaskTrackerReadGraph"),
   Schema.Literal("TaskTrackerReadClaim")
 ])
@@ -160,15 +161,17 @@ const DeliveryEvidence = Schema.Struct({
   integration: Schema.Struct({ sessionId: IntegratorSessionId, runOrdinal: IntegratorRunOrdinal }),
   promotionRequestId: TargetPromotionRequestId,
   initialTargetCommit: GitCommitSha,
-  finalTargetCommit: GitCommitSha
+  finalTargetCommit: GitCommitSha,
+  remotePublicationHead: GitCommitSha
 }).check(
   Schema.makeFilter((delivery) =>
     delivery.candidateParents[0] === delivery.baseCommit &&
     delivery.candidateParents[1] === delivery.acceptedCommit &&
     delivery.initialTargetCommit === delivery.baseCommit &&
-    delivery.finalTargetCommit === delivery.candidateCommit
+    delivery.finalTargetCommit === delivery.candidateCommit &&
+    delivery.remotePublicationHead === delivery.candidateCommit
       ? undefined
-      : "live delivery evidence must preserve H/C/M and the final target equality"
+      : "live delivery evidence must preserve H/C/M, final target equality, and remote publication equality"
   )
 )
 

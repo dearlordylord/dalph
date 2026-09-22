@@ -72,6 +72,7 @@ const rawConfiguration = (
   integrationRef: manifest.integrationRef,
   plannedAttemptBaseSha: manifest.baseSha,
   plannedAttemptExecutor: "codex:hermetic",
+  remotePublicationTarget: { branch: "refs/heads/main", endpoint: "ssh://git@example.invalid/repository.git" },
   claimOwner: "dalph:hermetic",
   taskWorkCapacity: 1,
   journalDatabase: manifest.journalDatabase,

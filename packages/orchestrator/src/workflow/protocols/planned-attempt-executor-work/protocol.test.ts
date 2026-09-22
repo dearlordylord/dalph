@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 // @effect-diagnostics multipleEffectProvide:off
 import { it } from "@effect/vitest"
 import {
@@ -299,7 +300,8 @@ const recoveryTarget = FixtureTarget.make("planned-attempt-executor-recovery-tar
 const runBegan = makeWorkflowRunBeganRecord(
   plannedAttempt.runId,
   recoveryTarget,
-  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+  remotePublicationTargetForTest
 )
 const acceptedAttemptHistory = makeExecutingAttemptHistory({
   activeClaim: taskClaim,

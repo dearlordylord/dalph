@@ -70,7 +70,7 @@ void test("materializes the independent complete 105 obligations before any laun
   }))
   assert.equal(
     createHash("sha256").update(JSON.stringify(commandContract)).digest("hex"),
-    "d20ea6e5d51d529deedca645a70443dae17532481c21ba589169d9e4313ae638"
+    "9d10caba9f38efaa13abb9a3fca880be07607c4e97a0a7e6690fcb248276c08b"
   )
   const counts = Object.fromEntries(
     ["typecheck", "test", "sampled-run", "verify"].map((kind) => [

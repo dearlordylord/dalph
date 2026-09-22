@@ -1,3 +1,7 @@
+import {
+  remotePublicationGitLayerForProductionTest,
+  remotePublicationTargetForTest
+} from "../../../orchestrator/test/support/direct-publication.js"
 import { NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import {
@@ -257,7 +261,12 @@ const seedRetiredTerminal = Effect.fn("ProductionReactivationTest.seedRetiredTer
   runId: RunId,
   target: ReturnType<typeof FixtureTarget.make>
 ) {
-  yield* journal.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: defaultTaskWorkCapacity }))
+  yield* journal.beginRun(
+    runId,
+    target,
+    InitialControlPolicy.make({ taskExecutionCapacity: defaultTaskWorkCapacity }),
+    remotePublicationTargetForTest
+  )
   const fixture = completedRunFinalityFixture({ runId, target })
   yield* journal.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
   yield* journal.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
@@ -357,7 +366,12 @@ const runTerminalProductionOwner = Effect.fn("ProductionReactivationTest.runTerm
   // This raw store assertion covers the lower-level RunId reuse guard; ordinary
   // establishment is covered by the JournaledRunBootstrap cold-history tests.
   const runIdReuse = yield* journal
-    .beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: defaultTaskWorkCapacity }))
+    .beginRun(
+      runId,
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: defaultTaskWorkCapacity }),
+      remotePublicationTargetForTest
+    )
     .pipe(Effect.flip)
   return {
     calls: yield* Ref.get(calls),
@@ -882,7 +896,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
           const storageContext = yield* Layer.build(seedJournalLayer)
           const storage = Context.get(storageContext, JournalStore)
           const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: seedCapacity })
-          yield* storage.beginRun(runId, target, initialPolicy)
+          yield* storage.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
           const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
           if (initial._tag === "InvalidWorkflowJournalHistory") {
             return yield* Effect.die(`production refresh seed is invalid: ${JSON.stringify(initial.issues)}`)
@@ -1580,6 +1594,8 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             const observeApplicationExit = source === "TrackerNotification"
             const runtimeBoundaries = {
               ...(journalStoreLayer === undefined ? {} : { journalStoreLayer }),
+              remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
+              remotePublicationTarget: remotePublicationTargetForTest,
               applicationExit: observeApplicationExit
                 ? {
                     _tag: "ConstructOrdinaryShell" as const,
@@ -2080,13 +2096,13 @@ it.effect(
       })
 
       expect(result.activationKinds).toEqual(["OrdinaryRunEntry", "OrdinaryRunEntry"])
-      expect(result.stableJournalRecordsBeforeWake).toHaveLength(233)
+      expect(result.stableJournalRecordsBeforeWake).toHaveLength(235)
       expect(result.stableJournalRecordsBeforeWake?.[231]).toMatchObject({
         position: 232,
         event: { _tag: "PlannedAttemptExecutorWorkReported", report: { _tag: "ExecutorWorkExecuting" } }
       })
-      expect(result.stableJournalRecordsBeforeWake?.[232]).toMatchObject({
-        position: 233,
+      expect(result.stableJournalRecordsBeforeWake?.[234]).toMatchObject({
+        position: 235,
         event: { _tag: "PlannedAttemptExecutorStateObserved", observation: { _tag: "ExecutorStateUnreadable" } }
       })
       expect(result.executorEntries).toEqual([
@@ -2097,9 +2113,9 @@ it.effect(
         { command: "observe", taskId: "A" },
         { command: "observe", taskId: "A" }
       ])
-      expect(result.journalRecords).toHaveLength(234)
-      expect(result.journalRecords[233]).toMatchObject({
-        position: 234,
+      expect(result.journalRecords).toHaveLength(236)
+      expect(result.journalRecords[235]).toMatchObject({
+        position: 236,
         event: { _tag: "PlannedAttemptExecutorStateObserved", observation: { _tag: "ExecutorStateUnreadable" } }
       })
       expect(result.trackerCalls).toEqual([])
@@ -2188,7 +2204,11 @@ it.effect(
           Layer.succeed(TrackerMutation, trackerMutation),
           controlledSynchronousPlannedAttemptExecutorLayer(Layer.succeed(PlannedAttemptExecutor, executor)),
           unavailableIntegratorCandidateProviderAuthority,
-          { journalStoreLayer: Layer.succeedContext(journalContext) }
+          {
+            journalStoreLayer: Layer.succeedContext(journalContext),
+            remotePublicationGitLayer: remotePublicationGitLayerForProductionTest,
+            remotePublicationTarget: remotePublicationTargetForTest
+          }
         ).pipe(
           Layer.provide(Layer.succeed(TrackerGraphReader, trackerGraphReader)),
           Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))

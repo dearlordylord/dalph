@@ -23,6 +23,23 @@ import type { DeliveryActionProposal, IdentityFreeDeliveryProposal } from "./del
 import { deliveryProposalsOf } from "./delivery-proposal.js"
 import { executeIntegrationAction } from "./integration-delivery-action-adapter.js"
 import { Journal } from "./journal.js"
+import {
+  RemotePublicationAttemptIntendedEvent,
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationIntendedEvent,
+  RemotePublicationProofBasis,
+  RemotePublicationSucceededEvent,
+  RemotePublicationGit,
+  remotePublicationCorrelationFor,
+  remotePublicationRefspecFor
+} from "../../workflow/protocols/direct-publication/events.js"
+import { RemoteBaselineGit } from "../../workflow/protocols/direct-publication/baseline-events.js"
+import { InitialControlPolicy } from "../../control/policy.js"
+import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
+import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
+import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 
 const target = FixtureTarget.make("integration-adapter-finality-target")
 const responsibility = StartedIntegrationResponsibility.make({
@@ -117,6 +134,70 @@ const unusedJournal = Journal.of({
   terminate: () => unexpectedJournalCall("terminate")
 })
 
+const unusedRemotePublicationGit = RemotePublicationGit.of({
+  admit: () => Effect.die("remote publication is outside this adapter test"),
+  observe: () => Effect.die("remote publication is outside this adapter test"),
+  prepareSenderCustody: () => Effect.die("remote publication is outside this adapter test"),
+  push: () => Effect.die("remote publication is outside this adapter test"),
+  reconcileSenderCustody: () => Effect.die("remote publication is outside this adapter test")
+})
+const unusedRemoteBaselineGit = RemoteBaselineGit.of({
+  catchUp: () => Effect.die("remote baseline is outside this adapter test"),
+  observe: () => Effect.die("remote baseline is outside this adapter test"),
+  reconcileCatchUp: () => Effect.die("remote baseline is outside this adapter test")
+})
+
+const provideRemoteGit = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(
+    Effect.provideService(RemotePublicationGit, unusedRemotePublicationGit),
+    Effect.provideService(RemoteBaselineGit, unusedRemoteBaselineGit)
+  )
+
+const publishedRecordsFor = (): ReadonlyArray<JournalRecord> => {
+  const began = makeWorkflowRunBeganRecord(
+    fixture.runId,
+    target,
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    remotePublicationTargetForTest
+  )
+  const correlation = remotePublicationCorrelationFor(fixture.qualifiedCandidate, remotePublicationTargetForTest)
+  const attemptOrdinal = RemotePublicationAttemptOrdinal.make(1)
+  const events = [
+    RemotePublicationIntendedEvent.make({
+      correlation,
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      version: workflowJournalEventVersion
+    }),
+    RemotePublicationAttemptIntendedEvent.make({
+      attemptOrdinal,
+      correlation,
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      refspec: remotePublicationRefspecFor(fixture.qualifiedCandidate.candidateCommit, correlation.target.branch),
+      version: workflowJournalEventVersion
+    }),
+    RemotePublicationSucceededEvent.make({
+      correlation,
+      occurrenceClassification: "NonActionOccurrence",
+      proof: RemotePublicationProofBasis.cases.PushApplied.make({
+        attemptOrdinal,
+        remoteHead: fixture.qualifiedCandidate.candidateCommit
+      }),
+      version: workflowJournalEventVersion
+    })
+  ] as const
+  return [
+    began,
+    ...events.map((event, offset) => ({
+      event,
+      key: describeJournalEvent(event).expectedKey,
+      position: JournalPosition.make(Number(began.position) + offset + 1),
+      runId: fixture.runId
+    }))
+  ]
+}
+
 it.effect("defers blocker-clear ancestry without runtime and completes after the configured Git read", () =>
   Effect.gen(function* () {
     const authorization = PostPromotionBlockerClearAuthorization.make({
@@ -136,7 +217,7 @@ it.effect("defers blocker-clear ancestry without runtime and completes after the
     const journal = appendableJournal(records)
 
     expect(
-      yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+      yield* provideRemoteGit(executeIntegrationAction(action, transition, inertLease, target)).pipe(
         Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
         Effect.provideService(Journal, unusedJournal),
         Effect.provideService(InRunJournal, journal)
@@ -145,7 +226,7 @@ it.effect("defers blocker-clear ancestry without runtime and completes after the
     expect(yield* Ref.get(records)).toEqual([])
 
     expect(
-      yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+      yield* provideRemoteGit(executeIntegrationAction(action, transition, inertLease, target)).pipe(
         Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
         Effect.provideService(Journal, unusedJournal),
         Effect.provideService(TargetPromotionRuntime, promotionRuntime),
@@ -168,7 +249,7 @@ it.effect("translates a changed focused revision into a deferred completion acti
     if (proposal === undefined) return yield* Effect.die("missing completion-task proposal")
     const action: IdentityFreeAction = { _tag: "IdentityFreeAction", proposal }
     const completionCalls = yield* Ref.make(0)
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(publishedRecordsFor())
     const boundary = CompletionTaskBoundary.of({
       completeTask: () =>
         Ref.update(completionCalls, (count) => count + 1).pipe(
@@ -190,7 +271,7 @@ it.effect("translates a changed focused revision into a deferred completion acti
       read: () => Effect.die("changed revision stops before reading evidence")
     })
 
-    const result = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+    const result = yield* provideRemoteGit(executeIntegrationAction(action, transition, inertLease, target)).pipe(
       Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
       Effect.provideService(Journal, unusedJournal),
       Effect.provideService(CompletionTaskBoundary, boundary),

@@ -107,16 +107,12 @@ const CodexTurnBoundary = Schema.Struct({
 })
 type CodexTurnBoundary = typeof CodexTurnBoundary.Type
 
-const CodexThreadBoundaryMetadata = Schema.Struct({
-  dalphOwnedThreadToken: Schema.optionalKey(Schema.NullOr(CodexThreadOwnershipToken))
-})
-
 const CodexThreadBoundaryFields = {
   correlation: Schema.optionalKey(Schema.NullOr(PlannedAttemptExecutorCorrelation)),
   cwd: CodexThreadWorkingDirectory,
   id: CodexThreadId,
-  metadata: Schema.optionalKey(CodexThreadBoundaryMetadata),
-  ownedThreadToken: Schema.optionalKey(Schema.NullOr(CodexThreadOwnershipToken)),
+  historyMode: Schema.optionalKey(Schema.Literals(["legacy", "paginated"])),
+  threadSource: Schema.optionalKey(Schema.NullOr(Schema.String)),
   status: Schema.optionalKey(CodexThreadStatusBoundary)
 }
 
@@ -134,7 +130,20 @@ const CodexThreadTurnCensusBoundary = Schema.Struct({
 })
 type CodexThreadTurnCensusBoundary = typeof CodexThreadTurnCensusBoundary.Type
 
+/** One page returned by Codex 0.155's paginated thread-turns protocol. */
+const CodexThreadTurnsListEnvelope = Schema.Struct({
+  data: Schema.Array(CodexTurnBoundary),
+  nextCursor: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  next_cursor: Schema.optionalKey(Schema.NullOr(Schema.String))
+})
+type CodexThreadTurnsListEnvelope = typeof CodexThreadTurnsListEnvelope.Type
+
 const CodexThreadListValues = Schema.Array(CodexThreadSummaryBoundary)
+
+const CodexLoadedThreadListEnvelope = Schema.Struct({
+  data: Schema.Array(CodexThreadId),
+  nextCursor: Schema.NullOr(Schema.NonEmptyString)
+})
 
 const sameCodexThreadListValues = Schema.toEquivalence(CodexThreadListValues)
 
@@ -240,7 +249,9 @@ const CodexAppServerOperation = Schema.Literals([
   "config/read",
   "thread/start",
   "thread/list",
+  "thread/loaded/list",
   "thread/read",
+  "thread/turns/list",
   "thread/resume",
   "turn/start",
   "turn/interrupt",
@@ -257,6 +268,7 @@ const CodexAppServerFailureKind = Schema.Literals([
   "ResponseDeadline",
   "CircuitOpen",
   "NotFound",
+  "NotMaterialized",
   "Protocol",
   "Ownership",
   "Malformed",
@@ -442,6 +454,10 @@ export interface CodexAppServerService {
     threadId: CodexThreadId,
     cwd: string
   ) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
+  /** Reads the provider's paginated persisted turn ledger for reconciliation. */
+  readonly listThreadTurns?: (
+    threadId: CodexThreadId
+  ) => Effect.Effect<ReadonlyArray<CodexTurnSnapshot>, CodexAppServerFailure>
   readonly startTurn: (
     threadId: CodexThreadId,
     cwd: string,
@@ -1457,12 +1473,12 @@ const normalizeThreadOwnership = (
   source: CodexThreadSummaryBoundary,
   operation: CodexAppServerOperation
 ): CodexThreadOwnershipToken | CodexAppServerFailure | undefined => {
-  const directToken = source.ownedThreadToken ?? undefined
-  const metadataToken = source.metadata?.dalphOwnedThreadToken ?? undefined
-  if (directToken !== undefined && metadataToken !== undefined && directToken !== metadataToken) {
-    return operationFailure(operation, "Malformed", "thread ownership token fields contradict each other")
-  }
-  return directToken ?? metadataToken
+  const prefix = "dalph-integrator-thread:v1:"
+  if (!source.threadSource?.startsWith(prefix)) return undefined
+  const token = Schema.decodeUnknownResult(CodexThreadOwnershipToken)(source.threadSource.slice(prefix.length))
+  return Result.isSuccess(token)
+    ? token.success
+    : operationFailure(operation, "Malformed", "thread source ownership token is invalid")
 }
 
 const normalizedThreadSnapshot = (
@@ -1523,6 +1539,24 @@ const normalizedThreadEffect = (
   thread instanceof CodexAppServerFailure ? Effect.fail(thread) : Effect.succeed(thread)
 
 const maximumThreadListPages = 100
+
+const threadTurnsListPage = (
+  response: unknown
+):
+  | { readonly turns: ReadonlyArray<CodexTurnSnapshot>; readonly nextCursor: string | null | undefined }
+  | CodexAppServerFailure => {
+  const decoded = Schema.decodeUnknownResult(CodexThreadTurnsListEnvelope)(response)
+  if (Result.isFailure(decoded)) {
+    return operationFailure(
+      "thread/turns/list",
+      "Malformed",
+      `thread turns page is invalid: ${String(decoded.failure)}`
+    )
+  }
+  const turns = normalizeThreadTurns(decoded.success.data, "thread/turns/list")
+  if (turns instanceof CodexAppServerFailure) return turns
+  return { turns, nextCursor: decoded.success.nextCursor ?? decoded.success.next_cursor }
+}
 
 const normalizeThreadListSummary = (
   source: CodexThreadSummaryBoundary
@@ -1660,6 +1694,9 @@ interface JsonRpcClient {
       | "config/read"
       | "thread/start"
       | "thread/read"
+      | "thread/list"
+      | "thread/loaded/list"
+      | "thread/turns/list"
       | "thread/resume"
       | "turn/start"
       | "thread/backgroundTerminals/list",
@@ -1673,7 +1710,20 @@ interface JsonRpcClient {
 
 type PendingJsonRpcRequest = {
   readonly deferred: Deferred.Deferred<unknown, CodexAppServerFailure>
+  readonly expectedThreadId?: string
   readonly operation: CodexAppServerRequestOperation
+}
+
+const pendingJsonRpcRequest = (
+  deferred: Deferred.Deferred<unknown, CodexAppServerFailure>,
+  operation: CodexAppServerRequestOperation,
+  params: unknown
+): PendingJsonRpcRequest => {
+  if ((operation !== "thread/read" && operation !== "thread/resume") || !isJsonObject(params)) {
+    return { deferred, operation }
+  }
+  const threadId = params["threadId"]
+  return typeof threadId === "string" ? { deferred, expectedThreadId: threadId, operation } : { deferred, operation }
 }
 
 /** Protocol terminal state and pending calls share one linearization point. */
@@ -1763,14 +1813,36 @@ const isCodexApprovalRequest = (method: string): boolean => codexApprovalRequest
 const jsonRpcInvalidRequestCode = -32600
 const jsonRpcResponseDeadline = Duration.seconds(60) // eslint-disable-line no-magic-numbers -- accepted Codex RPC acknowledgement bound
 
-const jsonRpcResponseFailure = (operation: CodexAppServerOperation, error: unknown): CodexAppServerFailure => {
+const isMissingThreadResponse = (message: string, expectedThreadId: string | undefined): boolean => {
+  if (expectedThreadId === undefined) return false
+  return [`no rollout found for thread id ${expectedThreadId}`, `thread not loaded: ${expectedThreadId}`].includes(
+    message
+  )
+}
+
+const jsonRpcResponseFailure = (
+  operation: CodexAppServerOperation,
+  error: unknown,
+  expectedThreadId?: string
+): CodexAppServerFailure => {
   const detail = JSON.stringify(error)
+  if (
+    (operation === "thread/read" || operation === "thread/turns/list") &&
+    isJsonObject(error) &&
+    error["code"] === jsonRpcInvalidRequestCode &&
+    typeof error["message"] === "string" &&
+    error["message"].endsWith(
+      `is not materialized yet; ${operation === "thread/read" ? "includeTurns" : operation} is unavailable before first user message`
+    )
+  ) {
+    return operationFailure(operation, "NotMaterialized", error["message"])
+  }
   if (
     (operation === "thread/read" || operation === "thread/resume") &&
     isJsonObject(error) &&
     error["code"] === jsonRpcInvalidRequestCode &&
     typeof error["message"] === "string" &&
-    error["message"].includes("no rollout found for thread id")
+    isMissingThreadResponse(error["message"], expectedThreadId)
   ) {
     return operationFailure(operation, "NotFound", detail)
   }
@@ -1874,7 +1946,11 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
               if (envelope._tag === "ErrorResponse") {
                 return Deferred.fail(
                   maybeDeferred.value.deferred,
-                  jsonRpcResponseFailure(maybeDeferred.value.operation, envelope.error)
+                  jsonRpcResponseFailure(
+                    maybeDeferred.value.operation,
+                    envelope.error,
+                    maybeDeferred.value.expectedThreadId
+                  )
                 )
               }
               return Deferred.succeed(maybeDeferred.value.deferred, envelope.result)
@@ -1938,7 +2014,7 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
         Option.none<CodexAppServerFailure>(),
         {
           terminalFailure: current.terminalFailure,
-          pending: new Map([...current.pending, [id, { deferred, operation }] as const])
+          pending: new Map([...current.pending, [id, pendingJsonRpcRequest(deferred, operation, params)] as const])
         }
       ] as const
     }).pipe(Effect.flatMap((failure) => (Option.isSome(failure) ? Effect.fail(failure.value) : Effect.void)))
@@ -3122,23 +3198,50 @@ export const codexAppServerLayer = (
             cwd,
             ephemeral: false,
             sandbox: "danger-full-access",
-            ...(ownedThreadToken === undefined ? {} : { metadata: { dalphOwnedThreadToken: ownedThreadToken } })
+            ...(ownedThreadToken === undefined
+              ? {}
+              : { threadSource: `dalph-integrator-thread:v1:${ownedThreadToken}` })
           }),
           "thread/start"
         )
         if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
         return yield* normalizedThreadEffect(normalizeThreadSummary(response["thread"], "thread/start"))
       })
-      const listThreads = Effect.fn("CodexAppServer.listThreads")(function* () {
+      const readThreadMetadata = Effect.fn("CodexAppServer.readThreadMetadata")(function* (threadId: CodexThreadId) {
+        const response = responseObject(
+          yield* rpc.requestBounded("thread/read", "thread/read", { threadId, includeTurns: false }),
+          "thread/read"
+        )
+        if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
+        const source = yield* Schema.decodeUnknownEffect(CodexThreadSummaryBoundary)(response["thread"]).pipe(
+          Effect.mapError(preserveAppServerFailure("thread/read", "Malformed"))
+        )
+        if (source.id !== threadId) {
+          return yield* Effect.fail(operationFailure("thread/read", "Ownership", "thread read returned a foreign id"))
+        }
+        return source
+      })
+      const listPersistentThreads = Effect.fn("CodexAppServer.listPersistentThreads")(function* () {
         let pages: ReadonlyArray<ReadonlyArray<CodexThreadListSummary>> = []
         let cursors: ReadonlySet<CodexThreadListCursor> = new Set<CodexThreadListCursor>()
         let cursor: CodexThreadListCursor | undefined
         for (let page = 0; page < maximumThreadListPages; page += 1) {
-          const response = yield* rpc.request(
-            "thread/list",
-            "thread/list",
-            cursor === undefined ? { includeTurns: false } : { includeTurns: false, cursor }
-          )
+          const response = yield* rpc.requestBounded("thread/list", "thread/list", {
+            modelProviders: [],
+            sourceKinds: [
+              "cli",
+              "vscode",
+              "exec",
+              "appServer",
+              "subAgent",
+              "subAgentReview",
+              "subAgentCompact",
+              "subAgentThreadSpawn",
+              "subAgentOther",
+              "unknown"
+            ],
+            ...(cursor === undefined ? {} : { cursor })
+          })
           const parsed = threadListPage(response)
           if (parsed instanceof CodexAppServerFailure) return yield* Effect.fail(parsed)
           pages = [...pages, parsed.threads]
@@ -3153,21 +3256,119 @@ export const codexAppServerLayer = (
         }
         return yield* Effect.fail(operationFailure("thread/list", "Malformed", "thread list exceeded page bound"))
       })
-      const readThread = Effect.fn("CodexAppServer.readThread")(function* (threadId: CodexThreadId) {
-        const response = responseObject(
-          yield* rpc.requestBounded("thread/read", "thread/read", { threadId, includeTurns: true }),
-          "thread/read"
+      const listThreads = Effect.fn("CodexAppServer.listThreads")(function* () {
+        let threads = yield* listPersistentThreads()
+        let cursors: ReadonlySet<string> = new Set()
+        let cursor: string | undefined
+        for (let page = 0; page < maximumThreadListPages; page += 1) {
+          const response = yield* rpc.requestBounded(
+            "thread/loaded/list",
+            "thread/loaded/list",
+            cursor === undefined ? {} : { cursor }
+          )
+          const loaded = yield* Schema.decodeUnknownEffect(CodexLoadedThreadListEnvelope)(response).pipe(
+            Effect.mapError(preserveAppServerFailure("thread/loaded/list", "Malformed"))
+          )
+          for (const id of loaded.data) {
+            const source = yield* readThreadMetadata(id)
+            const prior = threads.find((thread) => thread.id === id)
+            if (prior !== undefined && prior.cwd !== source.cwd) {
+              return yield* Effect.fail(
+                operationFailure("thread/loaded/list", "Ownership", "loaded and persisted thread directories disagree")
+              )
+            }
+            if (prior === undefined) {
+              threads = [...threads, CodexThreadListSummary.IdentityOnly({ id, cwd: source.cwd })]
+            }
+          }
+          if (loaded.nextCursor === null) return threads
+          if (cursors.has(loaded.nextCursor)) {
+            return yield* Effect.fail(
+              operationFailure("thread/loaded/list", "Malformed", "loaded thread list cursor repeated")
+            )
+          }
+          cursors = new Set([...cursors, loaded.nextCursor])
+          cursor = loaded.nextCursor
+        }
+        return yield* Effect.fail(
+          operationFailure("thread/loaded/list", "Malformed", "loaded thread list exceeded page bound")
         )
-        if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
-        return yield* normalizedThreadEffect(normalizeThreadTurnCensus(response["thread"], "thread/read"))
+      })
+      const listThreadTurns = Effect.fn("CodexAppServer.listThreadTurns")(function* (threadId: CodexThreadId) {
+        let turns: ReadonlyArray<CodexTurnSnapshot> = []
+        let cursors: ReadonlySet<string> = new Set<string>()
+        let cursor: string | undefined
+        for (let page = 0; page < maximumThreadListPages; page += 1) {
+          const response = yield* rpc.requestBounded("thread/turns/list", "thread/turns/list", {
+            threadId,
+            itemsView: "full",
+            ...(cursor === undefined ? {} : { cursor })
+          })
+          const parsed = threadTurnsListPage(response)
+          if (parsed instanceof CodexAppServerFailure) return yield* Effect.fail(parsed)
+          turns = [...turns, ...parsed.turns]
+          if (parsed.nextCursor === undefined || parsed.nextCursor === null) return turns
+          if (cursors.has(parsed.nextCursor)) {
+            return yield* Effect.fail(
+              operationFailure("thread/turns/list", "Malformed", "thread turns cursor repeated")
+            )
+          }
+          cursors = new Set([...cursors, parsed.nextCursor])
+          cursor = parsed.nextCursor
+        }
+        return yield* Effect.fail(
+          operationFailure("thread/turns/list", "Malformed", "thread turns exceeded page bound")
+        )
+      })
+      const hydrateTurnCensus = Effect.fn("CodexAppServer.hydrateTurnCensus")(function* (
+        thread: CodexThreadSnapshot,
+        historyMode: CodexThreadSummaryBoundary["historyMode"]
+      ) {
+        if (historyMode !== "paginated") return thread
+        return { ...thread, turns: yield* listThreadTurns(thread.id) }
+      })
+      const readThread = Effect.fn("CodexAppServer.readThread")(function* (threadId: CodexThreadId) {
+        const source = yield* readThreadMetadata(threadId)
+        const census =
+          source.historyMode === "paginated"
+            ? Effect.gen(function* () {
+                const turns = yield* listThreadTurns(threadId)
+                const thread = yield* normalizedThreadEffect(
+                  normalizeThreadBoundary({ ...source, turns: [] }, "thread/read")
+                )
+                return { ...thread, turns }
+              })
+            : Effect.gen(function* () {
+                const response = responseObject(
+                  yield* rpc.requestBounded("thread/read", "thread/read", { threadId, includeTurns: true }),
+                  "thread/read"
+                )
+                if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
+                return yield* normalizedThreadEffect(normalizeThreadTurnCensus(response["thread"], "thread/read"))
+              })
+        return yield* census.pipe(
+          Effect.catchTag("CodexAppServerFailure", (error) => {
+            const expected = `thread ${threadId} is not materialized yet; ${error.operation === "thread/read" ? "includeTurns" : error.operation} is unavailable before first user message`
+            return error.kind === "NotMaterialized" &&
+              error.detail === expected &&
+              threadStatusValue(source.status) === "idle"
+              ? normalizedThreadEffect(normalizeThreadBoundary({ ...source, turns: [] }, "thread/read"))
+              : Effect.fail(error)
+          })
+        )
       })
       const resumeThread = Effect.fn("CodexAppServer.resumeThread")(function* (threadId: CodexThreadId, cwd: string) {
-        const response = responseObject(
-          yield* rpc.requestBounded("thread/resume", "thread/resume", { threadId, cwd }),
-          "thread/resume"
-        )
+        const resumed = yield* Effect.result(rpc.requestBounded("thread/resume", "thread/resume", { threadId, cwd }))
+        if (Result.isFailure(resumed)) {
+          return resumed.failure.kind === "NotFound" ? yield* readThread(threadId) : yield* Effect.fail(resumed.failure)
+        }
+        const response = responseObject(resumed.success, "thread/resume")
         if (response instanceof CodexAppServerFailure) return yield* Effect.fail(response)
-        return yield* normalizedThreadEffect(normalizeThreadTurnCensus(response["thread"], "thread/resume"))
+        const thread = yield* normalizedThreadEffect(normalizeThreadTurnCensus(response["thread"], "thread/resume"))
+        const source = yield* Schema.decodeUnknownEffect(CodexThreadTurnCensusBoundary)(response["thread"]).pipe(
+          Effect.mapError(preserveAppServerFailure("thread/resume", "Malformed"))
+        )
+        return yield* hydrateTurnCensus(thread, source.historyMode)
       })
       const startTurn = Effect.fn("CodexAppServer.startTurn")(function* (
         threadId: CodexThreadId,
@@ -3246,6 +3447,7 @@ export const codexAppServerLayer = (
         listThreadsComplete: true,
         readThread,
         resumeThread,
+        listThreadTurns,
         startTurn,
         interruptTurn,
         listBackgroundTerminals,

@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../orchestrator/test/support/direct-publication.js"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { Deferred, Effect, Fiber, FileSystem, Layer, Path, Ref } from "effect"
 import {
@@ -11,6 +12,7 @@ import {
   JournalStore,
   journalLayer,
   makeDispositionCleanupActivation,
+  type DispositionCleanupLoopResult,
   reduceWorkflowJournalHistory,
   sqliteJournalStoreLayer,
   worktreeCleanupTestLayer,
@@ -18,13 +20,27 @@ import {
 } from "@dalph/orchestrator"
 import { prefixThrough } from "../conformance/recovery-store-lanes.js"
 
+export interface RestartPredecessorCleanupAfterRemovalResult {
+  readonly prefix: ReadonlyArray<JournalRecord>
+  readonly reopened: ReadonlyArray<JournalRecord>
+  readonly result: DispositionCleanupLoopResult
+  readonly records: ReadonlyArray<JournalRecord>
+  readonly calls: ReadonlyArray<{
+    readonly tag: "Observe" | "Remove"
+    readonly locator: IntegratorCandidateResourceLocator
+    readonly sessionId: IntegratorSessionId
+  }>
+}
+
 const presentEvidenceOrdinal = 7
 const absentEvidenceOrdinal = 8
 const presentEvidenceRevision = IntegratorCandidateCleanupEvidenceRevision.make(presentEvidenceOrdinal)
 const absentEvidenceRevision = IntegratorCandidateCleanupEvidenceRevision.make(absentEvidenceOrdinal)
 
 /** The provider keeps its removed resource while fresh SQLite/application layers reopen the retained exact A prefix. */
-export const restartPredecessorCleanupAfterRemoval = (history: ReadonlyArray<JournalRecord>) =>
+export const restartPredecessorCleanupAfterRemoval = (
+  history: ReadonlyArray<JournalRecord>
+): Effect.Effect<RestartPredecessorCleanupAfterRemovalResult, unknown> =>
   Effect.scoped(
     Effect.gen(function* () {
       const source = prefixThrough(history, "BeforeCleanup", "A fixed successor before cleanup", history.length - 1)
@@ -85,7 +101,7 @@ export const restartPredecessorCleanupAfterRemoval = (history: ReadonlyArray<Jou
       const prefixRecords = yield* Effect.scoped(
         Effect.gen(function* () {
           const journal = yield* JournalStore
-          yield* journal.beginRun(runId, target, initialPolicy)
+          yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
           for (const record of source.records.slice(1)) {
             if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated")
               return yield* Effect.die("cleanup source is not one unfinished Run")

@@ -19,7 +19,9 @@ import {
   TargetPromotionCorrelation,
   TraceCursor
 } from "@dalph/orchestrator"
+import type { ChildProcessSpawner } from "effect/unstable/process"
 import { DateTime, Effect, MutableList, Schema } from "effect"
+import type { Clock, Crypto, FileSystem } from "effect"
 import {
   measureQualificationBuild,
   QualificationBuild,
@@ -172,9 +174,29 @@ export type QualificationPublicationOutcome =
     }
 
 type QualificationController = Effect.Success<ReturnType<typeof makeHermeticController>>
+type QualificationEvidenceEnvironment =
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Clock.Clock
+  | Crypto.Crypto
+  | FileSystem.FileSystem
+  | GitCommand
 
 /** Captures final owning-authority facts once after the original children are joined, then cleans and publishes once. */
-export const completeQualificationEvidence = Effect.fn("Qualification.completeEvidence")(function* (
+export const completeQualificationEvidence: (
+  fixture: HermeticControllerFixture,
+  controller: QualificationController,
+  input: {
+    readonly scenario: ProductionMvpQualificationEvidence["scenario"]
+    readonly startedAt: string
+    readonly sourceRepository: GitRepositoryLocator
+    readonly lockfile: string
+    readonly children: ReadonlyArray<HermeticPublicChild>
+    readonly journal: ReadonlyArray<JournalRecord>
+    readonly artifact: QualificationArtifactLocator
+  }
+) => Effect.Effect<QualificationPublicationOutcome, unknown, QualificationEvidenceEnvironment> = Effect.fn(
+  "Qualification.completeEvidence"
+)(function* (
   fixture: HermeticControllerFixture,
   controller: QualificationController,
   input: {
@@ -319,35 +341,40 @@ const journalEvidenceFields = (
 }
 
 /** Publication validates the complete artifact before the single outside-Q write; failure never retries qualification or cleanup. */
-export const publishQualificationEvidence = Effect.fn("Qualification.publishEvidence")(function* (
+export const publishQualificationEvidence: (
   container: HermeticFixtureContainer,
   locator: QualificationArtifactLocator,
   input: ProductionMvpQualificationEvidence
-) {
-  const evidence = yield* Schema.decodeUnknownEffect(ProductionMvpQualificationEvidence, {
-    reportInput: false,
-    onExcessProperty: "error"
-  })(input).pipe(Effect.mapError(() => new QualificationEvidenceFailure({ operation: "ValidateEvidence" })))
-  const transcriptDigest = yield* qualificationTranscriptDigest(evidence.transcript.records).pipe(
-    Effect.mapError(() => new QualificationEvidenceFailure({ operation: "ValidateEvidence" }))
-  )
-  if (
-    evidence.invocationId !== evidence.fixture.invocationId ||
-    evidence.build.sourceBaseSha !== evidence.fixture.sourceBaseSha ||
-    evidence.build.builtEntryDigest !== evidence.fixture.builtEntryDigest ||
-    !Schema.toEquivalence(QualificationCleanupDisposition)(
-      evidence.cleanupDisposition,
-      qualificationCleanupDisposition(evidence.githubCleanup, evidence.localCleanup)
-    ) ||
-    evidence.transcript.records.some(
-      (record) => record._tag === "Failure" && record.code !== "delivery.provider_throttled"
-    ) ||
-    evidence.transcript.digest !== transcriptDigest
-  )
-    return yield* new QualificationEvidenceFailure({ operation: "ValidateEvidence" })
-  const encoded = yield* Schema.encodeUnknownEffect(ProductionMvpQualificationEvidence)(evidence).pipe(
-    Effect.mapError(() => new QualificationEvidenceFailure({ operation: "ValidateEvidence" }))
-  )
-  yield* writeQualificationArtifact(container, locator, JSON.stringify(encoded))
-  return locator
-})
+) => Effect.Effect<QualificationArtifactLocator, QualificationEvidenceFailure, Crypto.Crypto | FileSystem.FileSystem> =
+  Effect.fn("Qualification.publishEvidence")(function* (
+    container: HermeticFixtureContainer,
+    locator: QualificationArtifactLocator,
+    input: ProductionMvpQualificationEvidence
+  ) {
+    const evidence = yield* Schema.decodeUnknownEffect(ProductionMvpQualificationEvidence, {
+      reportInput: false,
+      onExcessProperty: "error"
+    })(input).pipe(Effect.mapError(() => new QualificationEvidenceFailure({ operation: "ValidateEvidence" })))
+    const transcriptDigest = yield* qualificationTranscriptDigest(evidence.transcript.records).pipe(
+      Effect.mapError(() => new QualificationEvidenceFailure({ operation: "ValidateEvidence" }))
+    )
+    if (
+      evidence.invocationId !== evidence.fixture.invocationId ||
+      evidence.build.sourceBaseSha !== evidence.fixture.sourceBaseSha ||
+      evidence.build.builtEntryDigest !== evidence.fixture.builtEntryDigest ||
+      !Schema.toEquivalence(QualificationCleanupDisposition)(
+        evidence.cleanupDisposition,
+        qualificationCleanupDisposition(evidence.githubCleanup, evidence.localCleanup)
+      ) ||
+      evidence.transcript.records.some(
+        (record) => record._tag === "Failure" && record.code !== "delivery.provider_throttled"
+      ) ||
+      evidence.transcript.digest !== transcriptDigest
+    )
+      return yield* new QualificationEvidenceFailure({ operation: "ValidateEvidence" })
+    const encoded = yield* Schema.encodeUnknownEffect(ProductionMvpQualificationEvidence)(evidence).pipe(
+      Effect.mapError(() => new QualificationEvidenceFailure({ operation: "ValidateEvidence" }))
+    )
+    yield* writeQualificationArtifact(container, locator, JSON.stringify(encoded))
+    return locator
+  })

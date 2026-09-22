@@ -71,10 +71,11 @@ export const removeRecord = (path) => {
 }
 
 // flock operates on the inherited open file description; the caller retains the lock on its descriptor.
-export const openFileLock = (path, nonblocking = false) => {
+export const openFileLock = (path, nonblocking = false, timeoutMilliseconds) => {
   mkdirSync(dirname(path), { recursive: true })
   const descriptor = openSync(path, "a", 0o600)
-  const result = spawnSync("flock", ["-x", ...(nonblocking ? ["-n"] : []), "3"], {
+  const wait = timeoutMilliseconds === undefined ? [] : ["-w", String(Math.max(0, timeoutMilliseconds) / 1000)]
+  const result = spawnSync("flock", ["-x", ...(nonblocking ? ["-n"] : wait), "3"], {
     stdio: ["ignore", "ignore", "pipe", descriptor]
   })
   if (result.error !== undefined || (result.status !== 0 && !(nonblocking && result.status === 1))) {
@@ -103,8 +104,8 @@ export const requireWorktreeLock = (path) => {
   if (result.error !== undefined || result.status !== 0)
     throw new Error("Cannot prove the fresh custody owner's worktree lock")
 }
-export const withFileLock = (path, use) => {
-  const release = openFileLock(path)
+export const withFileLock = (path, use, timeoutMilliseconds) => {
+  const release = openFileLock(path, false, timeoutMilliseconds)
   try {
     return use()
   } finally {
@@ -200,11 +201,20 @@ export const inheritedCustody = (environment = process.env) => {
     if (!/^[0-9a-f-]{36}$/u.test(parentId)) throw new Error("Invalid parent obligation ID")
     // The spawning observer holds this lock through observed publication. An early
     // child waits for that publication, or still refuses intent after observer death.
-    withFileLock(registrationLockPath(runDirectory), () => {
-      const parent = readRecord(join(runDirectory, "obligations", `${parentId}.json`))
-      if (parent.runId !== run.runId || parent.obligationId !== parentId || parent.state !== "observed")
-        throw new Error("Invalid inherited parent obligation")
-    })
+    const deadlines = [environment.DALPH_GATE_DEADLINE, run.deadline]
+      .filter((value) => value !== undefined)
+      .map(Date.parse)
+    const wait = Math.max(0, Math.min(5000, Math.min(...deadlines) - epochMilliseconds()))
+    if (!Number.isFinite(wait)) throw new Error("Invalid inherited gate deadline")
+    withFileLock(
+      registrationLockPath(runDirectory),
+      () => {
+        const parent = readRecord(join(runDirectory, "obligations", `${parentId}.json`))
+        if (parent.runId !== run.runId || parent.obligationId !== parentId || parent.state !== "observed")
+          throw new Error("Invalid inherited parent obligation")
+      },
+      wait
+    )
   }
   return { parentId, run, runDirectory }
 }
@@ -212,6 +222,10 @@ export const withoutInheritedCustody = (environment) =>
   Object.fromEntries(
     Object.entries(environment).filter(
       ([name]) =>
-        !custodyEnvironmentNames.includes(name) && name !== "DALPH_GATE_SLOT" && name !== "DALPH_COVERAGE_DIRECTORY"
+        !custodyEnvironmentNames.includes(name) &&
+        name !== "DALPH_GATE_SLOT" &&
+        name !== "DALPH_GATE_DEADLINE" &&
+        name !== "DALPH_GATE_LOCK_WAIT_SECONDS" &&
+        name !== "DALPH_COVERAGE_DIRECTORY"
     )
   )

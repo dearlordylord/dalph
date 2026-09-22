@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import {
   AttemptId,
   GitCommitSha,
@@ -859,6 +860,7 @@ it.effect("replays an intent-only G2 after a crash without allocating a second i
         {
           event: WorkflowRunBeganEvent.make({
             initialControlPolicy: { taskExecutionCapacity: capacity },
+            remotePublicationTarget: remotePublicationTargetForTest,
             initiatedBy: { _tag: "DalphCoordinator" },
             occurrenceClassification: "InitiatedAction",
             target,
@@ -1195,6 +1197,172 @@ it.effect("reopens ordinary delivery only from exact settled executor lifecycle 
 
         expect(yield* Ref.get(executions), lifecycleCase.name).toBe(lifecycleCase.expectedExecutions)
       }
+    })
+  )
+)
+
+it.effect("requires ordinary G2 after a terminal active-refresh subject hands off finality", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const correlation = plannedAttemptExecutorCorrelation(activeVerticalAttempt)
+      const beforeOrdinary = snapshot("terminal-active-refresh-handoff-before-ordinary", [
+        { id: activeVerticalTaskA, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+        { id: activeVerticalTaskB, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+      ])
+      const completed = snapshot(
+        "terminal-active-refresh-handoff-completed",
+        [
+          {
+            id: activeVerticalTaskA,
+            lifecycle: { _tag: "CompletedSuccessfully" },
+            parentTaskId: null,
+            prerequisiteIds: []
+          },
+          {
+            id: activeVerticalTaskB,
+            lifecycle: { _tag: "CompletedSuccessfully" },
+            parentTaskId: null,
+            prerequisiteIds: []
+          }
+        ],
+        activeVerticalTaskA
+      )
+      const g1 = graph("terminal-active-refresh-handoff-G1", 4, beforeOrdinary)
+      const independentProposal = freshGraphReadProposal(g1, activeVerticalTaskB)
+      const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>({
+        ...withRunFacts(
+          evaluation(base, g1, freshGraphReadFrontierWith(g1, activeVerticalTaskB, [independentProposal])),
+          false
+        ),
+        activeRefreshBoundary: { _tag: "ActiveRefreshRuntimeBoundary", reconciledAttempts: [correlation], runId }
+      })
+      const responsibility: JournalRecord = {
+        event: PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+          plannedAttempt: activeVerticalAttempt,
+          version: workflowJournalEventVersion
+        }),
+        key: JournalRecordKey.make("terminal-handoff-responsibility"),
+        position: JournalPosition.make(1),
+        runId
+      }
+      const executing: JournalRecord = {
+        event: PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
+          version: workflowJournalEventVersion
+        }),
+        key: JournalRecordKey.make("terminal-handoff-executing"),
+        position: JournalPosition.make(2),
+        runId
+      }
+      const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+      const command: JournalRecord = {
+        event: PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "Suspend",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: commandOrdinal,
+          plannedAttempt: activeVerticalAttempt,
+          version: workflowJournalEventVersion
+        }),
+        key: JournalRecordKey.make("terminal-handoff-command"),
+        position: JournalPosition.make(3),
+        runId
+      }
+      const terminalReport = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+        correlation,
+        result: { _tag: "Completed" }
+      })
+      const response: JournalRecord = {
+        event: PlannedAttemptExecutorCommandResponseObservedEvent.make({
+          commandOrdinal,
+          occurrenceClassification: "NonActionOccurrence",
+          plannedAttempt: activeVerticalAttempt,
+          report: terminalReport,
+          version: workflowJournalEventVersion
+        }),
+        key: JournalRecordKey.make("terminal-handoff-response"),
+        position: JournalPosition.make(4),
+        runId
+      }
+      const terminal: JournalRecord = {
+        event: PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+          report: terminalReport,
+          version: workflowJournalEventVersion
+        }),
+        key: JournalRecordKey.make("terminal-handoff-report"),
+        position: JournalPosition.make(5),
+        runId
+      }
+      const records = [responsibility, executing, command, response, terminal]
+      const journal = InRunJournal.of({
+        append: () => Effect.die("terminal handoff reads but never appends executor evidence"),
+        read: () => Effect.succeed(records)
+      })
+      const reads = yield* Ref.make<ReadonlyArray<TrackerGraphObservationOperation>>([])
+      const executions = yield* Ref.make(0)
+      const interpreter = Layer.mock(WorkflowInterpreter, {
+        readTrackerGraph: (operation: TrackerGraphObservationOperation) => {
+          const g2 = graph(operation.operationId, 8, completed, operation.cause)
+          return Ref.update(reads, (current) => [...current, operation]).pipe(
+            Effect.andThen(SubscriptionRef.set(state, withRunFacts(evaluation(base, g2), false))),
+            Effect.as(completed)
+          )
+        }
+      })
+
+      const proof = yield* runStabilizedDelivery(
+        target,
+        runId,
+        signalOf(state),
+        activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor([correlation]))
+      ).pipe(
+        Effect.provide(
+          Layer.merge(
+            supportWithResourcesWithoutAllocator,
+            deterministicOperationIdAllocatorLayer("terminal-active-refresh-handoff")
+          )
+        ),
+        Effect.provideService(
+          AcceptedJournalReader,
+          AcceptedJournalReader.of({
+            readAccepted: (requestedRunId) =>
+              Effect.succeed(acceptedJournalPrefixFromValidatedHistory(requestedRunId, records))
+          })
+        ),
+        Effect.provideService(InRunJournal, journal),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({
+            execute: ({ proposal }) => {
+              const ordinary = graph("terminal-active-refresh-handoff-ordinary", 7, completed)
+              return Ref.update(executions, (count) => count + 1).pipe(
+                Effect.andThen(SubscriptionRef.set(state, withRunFacts(evaluation(base, ordinary), false))),
+                Effect.as({ _tag: "ActionCompleted", proposalId: proposal.id } as const)
+              )
+            }
+          })
+        ),
+        Effect.provide(interpreter)
+      )
+
+      const operations = yield* Ref.get(reads)
+      expect(yield* Ref.get(executions)).toBe(1)
+      expect(operations).toHaveLength(1)
+      expect(operations[0]?.cause).toEqual({
+        _tag: "PostQuiescenceReconfirmation",
+        quiescentGraphOperationId: OperationId.make("terminal-active-refresh-handoff-ordinary")
+      })
+      expect(operations[0]?.predecessorOperationIds).toContain(
+        OperationId.make("terminal-active-refresh-handoff-ordinary")
+      )
+      expect(proof).toMatchObject({
+        acceptedAt: JournalPosition.make(8),
+        decision: { _tag: "RunMayTerminate" },
+        evidence: { operationId: operations[0]?.operationId, runId, target }
+      })
     })
   )
 )

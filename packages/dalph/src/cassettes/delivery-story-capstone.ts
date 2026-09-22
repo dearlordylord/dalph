@@ -12,6 +12,7 @@ import {
   bPromotionRequest,
   candidateCommit,
   changedSpecification,
+  cleanupFor,
   cPositions,
   changedHead,
   dPositions,
@@ -27,7 +28,6 @@ import {
   orderedNames,
   planTaskWorktree,
   predecessorCleanup,
-  predecessorCleanupRevision,
   prepareIntegration,
   readCurrent,
   readGraph,
@@ -50,11 +50,40 @@ const integrationPromotionEnd = 6
 const integrationCompletionReplacementEnd = 8
 const finalTaskIds = ["E", "F", "G"] as const
 const finalTaskProfiles = {
-  E: { readsPredecessorCleanupRevision: false, positions: ePositions },
-  F: { readsPredecessorCleanupRevision: true, positions: fPositions },
-  G: { readsPredecessorCleanupRevision: true, positions: gPositions }
+  E: { positions: ePositions },
+  F: { positions: fPositions },
+  G: { positions: gPositions }
 } as const
-
+const { absent: bCleanupAbsentObservation, revision: bCleanupRevision } = cleanupFor(
+  "B",
+  successorCommit,
+  bIntegrationPositions
+)
+const { absent: cCleanupAbsentObservation, revision: cCleanupRevision } = cleanupFor(
+  "C",
+  candidateCommit("B"),
+  cPositions
+)
+const { absent: dCleanupAbsentObservation, revision: dCleanupRevision } = cleanupFor(
+  "D",
+  candidateCommit("C"),
+  dPositions
+)
+const { absent: eCleanupAbsentObservation, revision: eCleanupRevision } = cleanupFor(
+  "E",
+  candidateCommit("D"),
+  ePositions
+)
+const { absent: fCleanupAbsentObservation, revision: fCleanupRevision } = cleanupFor(
+  "F",
+  candidateCommit("E"),
+  fPositions
+)
+const { absent: gCleanupAbsentObservation, revision: gCleanupRevision } = cleanupFor(
+  "G",
+  candidateCommit("F"),
+  gPositions
+)
 /** Alice's single five-to-seven task Run; all boundary results are interpreted by the ordinary authored runner. */
 export const deliveryStoryCapstoneAuthoredCassette = Schema.decodeUnknownSync(AuthoredScenarioCassette)({
   _tag: "AuthoredScenarioCassette",
@@ -157,11 +186,9 @@ export const deliveryStoryCapstoneAuthoredCassette = Schema.decodeUnknownSync(Au
     ...readGraph(graphs.G3),
     { _tag: "CassetteOffersRunReactivationHints", hints: ["TrackerNotification"] },
     { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMustRemainActiveReasonUnasserted" } },
-    predecessorCleanupRevision,
     ...readGraph(graphs.G4),
     ...["B", "D"].flatMap(readCurrent),
     { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMustRemainActiveReasonUnasserted" } },
-    predecessorCleanupRevision,
     ...readGraph(graphs.G4),
     {
       _tag: "CassetteAwaitsSafeContinuationRevalidationPublication",
@@ -174,7 +201,6 @@ export const deliveryStoryCapstoneAuthoredCassette = Schema.decodeUnknownSync(Au
     ...readCurrent("C"),
     report("C", "Resume"),
     { _tag: "CassetteOffersRunReactivationHints", hints: ["TrackerNotification"] },
-    predecessorCleanupRevision,
     ...readGraph(graphs.G5),
     ...["B", "C", "D"].flatMap(readCurrent),
     terminal("B"),
@@ -184,7 +210,6 @@ export const deliveryStoryCapstoneAuthoredCassette = Schema.decodeUnknownSync(Au
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
     },
-    predecessorCleanupRevision,
     ...readGraph(graphs.G5),
     select({ _tag: "ReadTaskClaim", taskId: "B" }),
     { _tag: "TaskClaimCurrentReadReturned", taskId: "B" },
@@ -206,30 +231,34 @@ export const deliveryStoryCapstoneAuthoredCassette = Schema.decodeUnknownSync(Au
     ...prepareIntegration("B", successorCommit, candidateCommit("B"), bIntegrationPositions),
     ...bIntegrationReleasingE,
     terminal("C"),
+    bCleanupRevision,
+    bCleanupAbsentObservation,
     ...readGraph(graphs.G5),
     select({ _tag: "ReadTaskClaim", taskId: "C" }),
     { _tag: "TaskClaimCurrentReadReturned", taskId: "C" },
-    ...admission("F", graphs.G5).slice(0, 1),
     ...admission("F", graphs.G5).slice(1, admissionClaimGraphEnd),
+    ...admission("F", graphs.G5).slice(0, 1),
+    ...readGraph(graphs.G5),
     ...integrate("C", candidateCommit("B"), candidateCommit("C"), cPositions).slice(0, 1),
     ...admission("F", graphs.G5).slice(admissionClaimGraphEnd, admissionSpecificationEnd),
     ...integrate("C", candidateCommit("B"), candidateCommit("C"), cPositions).slice(1, integrationPreparationEnd),
     ...admission("F", graphs.G5).slice(admissionSpecificationEnd, admissionPlanEnd),
+    ...admission("F", graphs.G5).slice(admissionPlanEnd, admissionReconciliationEnd),
+    ...admission("F", graphs.G5).slice(admissionReconciliationEnd),
     ...integrate("C", candidateCommit("B"), candidateCommit("C"), cPositions).slice(
       integrationPreparationEnd,
       integrationPromotionEnd
     ),
-    ...admission("F", graphs.G5).slice(admissionPlanEnd, admissionReconciliationEnd),
     ...integrate("C", candidateCommit("B"), candidateCommit("C"), cPositions).slice(
       integrationPromotionEnd,
       integrationCompletionReplacementEnd
     ),
-    ...admission("F", graphs.G5).slice(admissionReconciliationEnd),
     ...integrate("C", candidateCommit("B"), candidateCommit("C"), cPositions).slice(
       integrationCompletionReplacementEnd
     ),
-    predecessorCleanupRevision,
     terminal("D"),
+    cCleanupRevision,
+    cCleanupAbsentObservation,
     ...readGraph(graphs.G5),
     select({ _tag: "ReadTaskClaim", taskId: "D" }),
     { _tag: "TaskClaimCurrentReadReturned", taskId: "D" },
@@ -239,40 +268,42 @@ export const deliveryStoryCapstoneAuthoredCassette = Schema.decodeUnknownSync(Au
     ...admission("G", graphs.G5).slice(admissionClaimGraphEnd, admissionSpecificationEnd),
     ...integrate("D", candidateCommit("C"), candidateCommit("D"), dPositions).slice(1, integrationPreparationEnd),
     ...admission("G", graphs.G5).slice(admissionSpecificationEnd, admissionPlanEnd),
+    ...admission("G", graphs.G5).slice(admissionPlanEnd, admissionReconciliationEnd),
+    ...admission("G", graphs.G5).slice(admissionReconciliationEnd),
     ...integrate("D", candidateCommit("C"), candidateCommit("D"), dPositions).slice(
       integrationPreparationEnd,
       integrationPromotionEnd
     ),
-    ...admission("G", graphs.G5).slice(admissionPlanEnd, admissionReconciliationEnd),
     ...integrate("D", candidateCommit("C"), candidateCommit("D"), dPositions).slice(
       integrationPromotionEnd,
       integrationCompletionReplacementEnd
     ),
-    ...admission("G", graphs.G5).slice(admissionReconciliationEnd),
     ...integrate("D", candidateCommit("C"), candidateCommit("D"), dPositions).slice(
       integrationCompletionReplacementEnd
     ),
     ...finalTaskIds.flatMap((taskId) => {
-      const { positions, readsPredecessorCleanupRevision } = finalTaskProfiles[taskId]
+      const { positions } = finalTaskProfiles[taskId]
+      const integration = integrate(
+        taskId,
+        candidateCommit(orderedNames[orderedNames.indexOf(taskId) - 1] ?? "A"),
+        candidateCommit(taskId),
+        positions
+      )
       return [
         terminal(taskId),
-        select({ _tag: "ReadTaskClaim", taskId }),
-        { _tag: "TaskClaimCurrentReadReturned", taskId },
-        ...(readsPredecessorCleanupRevision ? [predecessorCleanupRevision] : []),
+        ...(taskId === "E" ? [dCleanupRevision, dCleanupAbsentObservation] : []),
+        ...(taskId === "F" ? [eCleanupRevision, eCleanupAbsentObservation] : []),
+        ...(taskId === "G" ? [fCleanupRevision, fCleanupAbsentObservation] : []),
         ...readGraph(graphs.G5),
-        ...(readsPredecessorCleanupRevision
-          ? [select({ _tag: "ReadTaskClaim", taskId }), { _tag: "TaskClaimCurrentReadReturned", taskId }]
-          : []),
-        ...(readsPredecessorCleanupRevision ? readGraph(graphs.G5) : []),
-        ...integrate(
-          taskId,
-          candidateCommit(orderedNames[orderedNames.indexOf(taskId) - 1] ?? "A"),
-          candidateCommit(taskId),
-          positions
-        )
+        ...(taskId === "F" || taskId === "G"
+          ? []
+          : [select({ _tag: "ReadTaskClaim", taskId }), { _tag: "TaskClaimCurrentReadReturned", taskId }]),
+        ...(taskId === "F" || taskId === "G" ? [] : readGraph(graphs.G5)),
+        ...integration
       ]
     }),
-    predecessorCleanupRevision,
+    gCleanupRevision,
+    gCleanupAbsentObservation,
     ...readGraph(graphs.Gfinal),
     ...readGraph(graphs.Gfinal),
     { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMayTerminate" } },

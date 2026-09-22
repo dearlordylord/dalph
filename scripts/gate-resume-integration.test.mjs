@@ -61,7 +61,7 @@ const fixture = () => {
   writeFileSync(join(root, ".scratch", "controlled-formal-path"), seedQualityFormalBoundary(root))
   return { root, git, cleanup: () => rmSync(root, { recursive: true, force: true }) }
 }
-const launch = (root, script, resumeRunId, reap = false) => {
+const launch = (root, script, resumeRunId, reap = false, reaperSeconds = 30) => {
   const env = withoutInheritedCustody(process.env)
   for (const key of [
     "DALPH_COVERAGE_BASE_SHA",
@@ -79,22 +79,89 @@ const launch = (root, script, resumeRunId, reap = false) => {
     script,
     ...(resumeRunId ? [`--resume=${resumeRunId}`] : [])
   ]
-  const reaper = `import ctypes, os, subprocess, sys, time
+  const reaper = `import ctypes, os, signal, subprocess, sys, time
 assert ctypes.CDLL(None).prctl(36,1,0,0,0)==0, 'Unrun custody cleanup acceptance: Linux prctl subreaper unavailable'
-p=subprocess.Popen(sys.argv[1:])
+def snapshot():
+    processes={}
+    for entry in os.listdir('/proc'):
+        if not entry.isdigit(): continue
+        try:
+            fields=open('/proc/'+entry+'/stat').read().rsplit(')',1)[1].split()
+            processes[int(entry)]=(int(fields[1]),fields[19])
+        except (FileNotFoundError,IndexError,PermissionError,ValueError): pass
+    return processes
+p=subprocess.Popen(sys.argv[1:], start_new_session=True)
+root_before=snapshot().get(p.pid)
+try: root_handle=os.pidfd_open(p.pid)
+except ProcessLookupError: root_handle=None
+root_after=snapshot().get(p.pid)
+if root_handle is not None and root_before is not None and root_before==root_after:
+    root_start=root_before[1]
+else:
+    if root_handle is not None: os.close(root_handle)
+    root_handle=None
+    root_start=None
 code=None
+phase='running'
+deadline=time.monotonic()+${reaperSeconds}
+next_signal=0
+def descendants():
+    processes=snapshot()
+    root=processes.get(p.pid)
+    frontier=sorted(pid for pid,(parent,_start) in processes.items() if parent==os.getpid())
+    if root_start is not None and root is not None and root[1]==root_start: frontier.insert(0,p.pid)
+    owned=[]
+    seen=set()
+    while frontier:
+        pid=frontier.pop(0)
+        if pid in seen: continue
+        seen.add(pid)
+        if pid in processes:
+            owned.append((pid,processes[pid][1]))
+            frontier.extend(sorted(child for child,(parent,_start) in processes.items() if parent==pid))
+    return owned
+def signal_owned(sig):
+    for pid,start in descendants():
+        try:
+            handle=root_handle if pid==p.pid and start==root_start else os.pidfd_open(pid)
+            if handle is None: continue
+            try:
+                current=dict(descendants()).get(pid)
+                if current==start: signal.pidfd_send_signal(handle,sig)
+            finally:
+                if handle!=root_handle: os.close(handle)
+        except ProcessLookupError: pass
 while True:
     try: pid,status=os.waitpid(-1,os.WNOHANG)
     except ChildProcessError: break
     if pid==p.pid: code=os.waitstatus_to_exitcode(status)
+    now=time.monotonic()
+    if now>=deadline:
+        if phase=='running':
+            signal_owned(signal.SIGTERM)
+            phase='terminating'
+            deadline=now+2
+        elif phase=='terminating':
+            signal_owned(signal.SIGKILL)
+            phase='killing'
+            deadline=now+4
+            next_signal=now+.02
+        else:
+            unresolved=','.join(str(pid)+':'+start for pid,start in descendants())
+            sys.stderr.write('subreaper unresolved identities: '+unresolved+'\\n')
+            sys.exit(125)
+    elif phase=='killing' and now>=next_signal:
+        signal_owned(signal.SIGKILL)
+        next_signal=now+.02
     if pid==0: time.sleep(.005)
-sys.exit(code if code is not None else 1)
+if root_handle is not None: os.close(root_handle)
+sys.exit(124 if phase!='running' else (code if code is not None else 1))
 `
   return spawnSync(reap ? "python3" : args[0], reap ? ["-c", reaper, ...args] : args.slice(1), {
     cwd: root,
     env,
     encoding: "utf8",
-    timeout: 20_000
+    timeout: reap ? (reaperSeconds + 10) * 1_000 : 20_000
   })
 }
 const runs = (root) => {
@@ -106,6 +173,57 @@ const runs = (root) => {
         true
     )
     .map((runId) => readRunEvidence({ runId, runDirectory: join(location.custodyRoot, "runs", runId) }))
+}
+const processStartIdentity = (pid) => {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8")
+    return stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[19]
+  } catch (error) {
+    if (error.code === "ENOENT") return undefined
+    throw error
+  }
+}
+const forceRecordedProcessGroupAbsent = (pid, startIdentity) => {
+  const source = `import os, signal, sys, time
+pid=int(sys.argv[1]); expected=sys.argv[2]
+def identity():
+    try:
+        fields=open('/proc/'+str(pid)+'/stat').read().rsplit(')',1)[1].split()
+        return (fields[1],fields[19])
+    except (FileNotFoundError,IndexError,PermissionError): return None
+before=identity()
+if before is None:
+    try: os.killpg(pid,0)
+    except ProcessLookupError: sys.exit(0)
+    except PermissionError: pass
+    sys.stderr.write('recorded leader absent while process group remains\\n'); sys.exit(125)
+if before[1]!=expected:
+    sys.stderr.write('recorded leader identity was reused\\n'); sys.exit(126)
+try: handle=os.pidfd_open(pid)
+except ProcessLookupError:
+    sys.stderr.write('recorded leader exited before pidfd bind\\n'); sys.exit(125)
+try:
+    after=identity()
+    if after!=before:
+        sys.stderr.write('recorded leader changed during pidfd bind\\n'); sys.exit(126)
+    try: signal.pidfd_send_signal(handle,signal.SIGKILL)
+    except ProcessLookupError: pass
+    deadline=time.monotonic()+2
+    while True:
+        current=identity()
+        if current is None:
+            try: os.killpg(pid,0)
+            except ProcessLookupError: break
+            except PermissionError: pass
+            sys.stderr.write('recorded leader absent while process group remains\\n'); sys.exit(125)
+        if current!=before:
+            sys.stderr.write('recorded leader identity was reused during cleanup\\n'); sys.exit(126)
+        if time.monotonic()>=deadline:
+            sys.stderr.write('recorded process remains after pidfd SIGKILL\\n'); sys.exit(125)
+        time.sleep(.005)
+finally: os.close(handle)
+`
+  return spawnSync("python3", ["-c", source, String(pid), startIdentity], { encoding: "utf8", timeout: 3_000 })
 }
 void test("an unaffected candidate resumes proven stages with not-applicable formal evidence and no formal workflow", () => {
   const f = fixture()
@@ -372,6 +490,62 @@ const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,pro
     assert.equal(evidence.resume.composite, undefined)
   } finally {
     f.cleanup()
+  }
+})
+
+void test("the bounded subreaper stops a detached descendant before returning its timeout", () => {
+  const f = fixture()
+  const pidPath = join(f.root, ".scratch", "reaper-descendant")
+  let descendantPid
+  let descendantStartIdentity
+  let absenceProved = false
+  const loadRecordedIdentity = () => {
+    if (descendantPid !== undefined || !existsSync(pidPath)) return
+    const [recordedPid, recordedStartIdentity] = readFileSync(pidPath, "utf8").split(":")
+    const parsedPid = Number(recordedPid)
+    if (!Number.isSafeInteger(parsedPid) || parsedPid <= 0 || !recordedStartIdentity)
+      throw new Error("invalid recorded reaper descendant identity")
+    descendantPid = parsedPid
+    descendantStartIdentity = recordedStartIdentity
+  }
+  const finishFixture = () => {
+    let cleanupFailure
+    try {
+      loadRecordedIdentity()
+    } catch (error) {
+      cleanupFailure = error
+    }
+    if (!absenceProved && descendantPid === undefined && cleanupFailure === undefined)
+      cleanupFailure = new Error("missing recorded reaper descendant identity; fixture retained")
+    if (
+      !absenceProved &&
+      descendantPid !== undefined &&
+      descendantStartIdentity !== undefined &&
+      cleanupFailure === undefined
+    ) {
+      const cleanup = forceRecordedProcessGroupAbsent(descendantPid, descendantStartIdentity)
+      if (cleanup.status !== 0)
+        cleanupFailure = new Error(
+          `fixture process group cleanup failed (${String(cleanup.status)}): ${cleanup.stderr.trim()}`
+        )
+    }
+    if (cleanupFailure !== undefined) throw cleanupFailure
+    f.cleanup()
+  }
+  try {
+    const script = join(f.root, ".scratch", "reaper-timeout.mjs")
+    writeFileSync(
+      script,
+      `import {spawn} from 'node:child_process';import fs from 'node:fs';const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});const stat=fs.readFileSync('/proc/'+child.pid+'/stat','utf8');const start=stat.slice(stat.lastIndexOf(') ')+2).split(' ')[19];fs.writeFileSync(${JSON.stringify(pidPath)},child.pid+':'+start);child.unref();setInterval(()=>{},1000)`
+    )
+    const result = launch(f.root, script, undefined, true, 1)
+    loadRecordedIdentity()
+    assert.equal(result.status, 124, result.stderr)
+    assert.notEqual(descendantPid, undefined)
+    assert.equal(processStartIdentity(descendantPid), undefined)
+    absenceProved = true
+  } finally {
+    finishFixture()
   }
 })
 

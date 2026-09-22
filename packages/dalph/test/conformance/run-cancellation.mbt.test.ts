@@ -16,6 +16,9 @@ import {
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
+  RemotePublicationBranchRef,
+  RemotePublicationEndpoint,
+  RemotePublicationTarget,
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
@@ -69,6 +72,12 @@ import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/ru
 import { RunActivationGraphBaseline } from "../../../orchestrator/src/coordination/run/activation-graph-baseline.js"
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
+import {
+  remoteBaselineGitLayerForTest,
+  remotePublicationGitLayerForTest
+} from "../../../orchestrator/test/support/direct-publication.js"
+import { runRemotePublication } from "../../../orchestrator/src/workflow/protocols/direct-publication/protocol-engine.js"
+import type { RemotePublicationSucceededEvent } from "../../../orchestrator/src/workflow/protocols/direct-publication/events.js"
 import { noopJournalMaintenanceObservation } from "../../../orchestrator/src/workflow-journal/maintenance.js"
 import { JournaledRunBootstrap } from "../../../orchestrator/src/coordination/run/run.js"
 import { runStabilizedDelivery } from "../../../orchestrator/src/coordination/run/run-stabilization.js"
@@ -403,6 +412,10 @@ type RuntimeCommand =
 
 const runId = RunId.make("run-cancellation-R1")
 const target = FixtureTarget.make("run-cancellation-T1")
+const remotePublicationTarget = RemotePublicationTarget.make({
+  branch: RemotePublicationBranchRef.make("refs/heads/main"),
+  endpoint: RemotePublicationEndpoint.make("ssh://git@example.invalid/repository.git")
+})
 const taskId = TaskId.make("run-cancellation-task")
 const cancellationTrackerRevision = TrackerRevision.make("run-cancellation-tracker-revision")
 const taskSpecification = makeTaskWorkSpecification({
@@ -461,6 +474,7 @@ interface IntegrationFixture {
   readonly lineage: TargetLineageObservation
   readonly run: ReturnType<typeof RunnableFrontierTransition.RunIntegrator>["run"]
   readonly candidate: IntegratorRunQualifiedCandidate
+  readonly publication: RemotePublicationSucceededEvent
 }
 
 interface IntegrationQuarantineFixture {
@@ -470,7 +484,7 @@ interface IntegrationQuarantineFixture {
   readonly run: ReturnType<typeof RunnableFrontierTransition.RunIntegrator>["run"]
 }
 
-const integrationRunTransitionFor = (fixture: IntegrationFixture) =>
+const integrationRunTransitionFor = (fixture: Pick<IntegrationFixture, "lineage" | "responsibility" | "run">) =>
   RunnableFrontierTransition.RunIntegrator({
     lineage: fixture.lineage,
     lineageObservedAt: fixture.run.session.targetLineageObservedAt,
@@ -815,6 +829,8 @@ const runtimeLayer = (
     deterministicOperationIdAllocatorLayer(`run-cancellation:${activeRunId}`),
     plannedAttemptProtocolControllerLayer,
     journaledWorkflowInterpreterLayer(activeRunId, Layer.succeed(WorkflowInterpreter, interpreter)),
+    remoteBaselineGitLayerForTest,
+    remotePublicationGitLayerForTest,
     Layer.mock(WorkflowTrace, { emit: () => Effect.void }),
     Layer.succeed(
       DispositionCleanupActivation,
@@ -859,7 +875,13 @@ const makeStorage = (
 
   const beginRun = (eventRunId: RunId, eventTarget: TrackerTarget, policy: InitialControlPolicy) =>
     Effect.sync(() => {
-      const decision = decideWorkflowRunBeginning(readRecords(), eventRunId, eventTarget, policy)
+      const decision = decideWorkflowRunBeginning(
+        readRecords(),
+        eventRunId,
+        eventTarget,
+        policy,
+        remotePublicationTarget
+      )
       if (decision._tag !== "LifecycleTransitionAccepted") {
         expect.fail(JSON.stringify(decision.failure))
       }
@@ -1083,7 +1105,9 @@ const makeCancellationDriverImplementation = () => {
         runId,
         ({ runId: activeRunId }) => runtimeLayer(activeRunId, executorForSettlement, workflowInterpreterForSettlement),
         exitShell,
-        noopJournalMaintenanceObservation
+        noopJournalMaintenanceObservation,
+        undefined,
+        remotePublicationTarget
       ).pipe(Layer.provide(dependencies), Layer.provide(executorLayer))
     ).pipe(Effect.provideService(Scope.Scope, scope))
     applicationExit = exitShell
@@ -1145,12 +1169,14 @@ const makeCancellationDriverImplementation = () => {
       const finalityPlanner = PlannedTaskAttemptPlanner.of({
         plan: () => Effect.die("cancellation finality unexpectedly planned new task work")
       })
-      const ensureIntegrationTarget = Effect.gen(function* () {
-        const fixture = integrationFixture
-        if (fixture === undefined) return yield* Effect.die("integration fixture was not prepared")
-        yield* runtimeResources.integrationTargets.acquire(fixture.responsibility)
-        yield* runtimeResources.integrationTargets.publishAcceptedOwnership(fixture.responsibility)
-      })
+      const ensureIntegrationTarget = (
+        responsibility: StartedIntegrationResponsibility | undefined = integrationFixture?.responsibility
+      ) =>
+        Effect.gen(function* () {
+          if (responsibility === undefined) return yield* Effect.die("integration fixture was not prepared")
+          yield* runtimeResources.integrationTargets.acquire(responsibility)
+          yield* runtimeResources.integrationTargets.publishAcceptedOwnership(responsibility)
+        })
       const readGraphThroughProduction = (operationNumber: number, lifecycle: "Open" | "CompletedSuccessfully") =>
         Effect.gen(function* () {
           graphLifecycle = lifecycle
@@ -1592,7 +1618,7 @@ const makeCancellationDriverImplementation = () => {
             })
             const run = { ordinal: IntegratorRunOrdinal.make(1), session: integratorCorrelationFor(preparation) }
             const fixtureWithoutCandidate = { lineage, responsibility, run }
-            integrationFixture = {
+            const integrationRunFixture = {
               ...fixtureWithoutCandidate,
               candidate: IntegratorRunQualifiedCandidate.make({
                 candidateCommit: integrationCandidateCommit,
@@ -1602,10 +1628,10 @@ const makeCancellationDriverImplementation = () => {
                 run
               })
             }
-            yield* ensureIntegrationTarget
+            yield* ensureIntegrationTarget(responsibility)
             const result = yield* executeIntegrationAction(
-              identityFreeIntegrationActionFor(integrationRunTransitionFor(integrationFixture), responsibility),
-              integrationRunTransitionFor(integrationFixture),
+              identityFreeIntegrationActionFor(integrationRunTransitionFor(integrationRunFixture), responsibility),
+              integrationRunTransitionFor(integrationRunFixture),
               integrationLease,
               target
             )
@@ -1621,18 +1647,26 @@ const makeCancellationDriverImplementation = () => {
             if (observed?.event._tag !== "IntegratorRunCandidateGitObserved") {
               return yield* Effect.die("production Integrator qualification did not persist Git evidence")
             }
-            integrationFixture = {
-              ...fixtureWithoutCandidate,
-              candidate: IntegratorRunQualifiedCandidate.make({
-                candidateCommit: integrationCandidateCommit,
-                candidateText: integrationCandidateText,
-                directParents: [integrationExpectedTargetHead, integrationAcceptedResult.commit],
-                qualifiedAt: observed.position,
-                run
-              })
+            const candidate = IntegratorRunQualifiedCandidate.make({
+              candidateCommit: integrationCandidateCommit,
+              candidateText: integrationCandidateText,
+              directParents: [integrationExpectedTargetHead, integrationAcceptedResult.commit],
+              qualifiedAt: observed.position,
+              run
+            })
+            yield* runRemotePublication(candidate, remotePublicationTarget, {
+              runObservation: (phase) => phase,
+              runSender: (phase) => phase
+            }).pipe(Effect.provide(remotePublicationGitLayerForTest))
+            const publication = (yield* journal.read(runId)).findLast(
+              (record) => record.event._tag === "RemotePublicationSucceeded"
+            )
+            if (publication?.event._tag !== "RemotePublicationSucceeded") {
+              return yield* Effect.die("production direct publication did not persist exact proof")
             }
+            integrationFixture = { ...fixtureWithoutCandidate, candidate, publication: publication.event }
           } else {
-            yield* ensureIntegrationTarget
+            yield* ensureIntegrationTarget()
           }
           if (integrationQuarantineFixture === undefined) {
             const preparedFixture = integrationFixture
@@ -1761,10 +1795,11 @@ const makeCancellationDriverImplementation = () => {
         } else if (command._tag === "ObserveUnreadableIntegration") {
           const fixture = integrationFixture
           if (fixture === undefined) return yield* Effect.die("integration fixture was not prepared")
-          yield* ensureIntegrationTarget
+          yield* ensureIntegrationTarget()
           promotionReadMode = "Unreadable"
           const transition = RunnableFrontierTransition.RunTargetPromotion({
             candidate: fixture.candidate,
+            publication: fixture.publication,
             responsibility: fixture.responsibility
           })
           const result = yield* executeIntegrationAction(
@@ -1784,17 +1819,19 @@ const makeCancellationDriverImplementation = () => {
         } else if (command._tag === "RunIntegrationPromotion" || command._tag === "ObserveIntegrationPromotion") {
           const fixture = integrationFixture
           if (fixture === undefined) return yield* Effect.die("integration fixture was not prepared")
-          yield* ensureIntegrationTarget
+          yield* ensureIntegrationTarget()
           const result = yield* executeIntegrationAction(
             identityFreeIntegrationActionFor(
               RunnableFrontierTransition.RunTargetPromotion({
                 candidate: fixture.candidate,
+                publication: fixture.publication,
                 responsibility: fixture.responsibility
               }),
               fixture.responsibility
             ),
             RunnableFrontierTransition.RunTargetPromotion({
               candidate: fixture.candidate,
+              publication: fixture.publication,
               responsibility: fixture.responsibility
             }),
             integrationLease,

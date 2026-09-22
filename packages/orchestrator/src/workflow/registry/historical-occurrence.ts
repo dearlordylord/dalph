@@ -23,17 +23,6 @@ import {
   IntegratorSessionCorrelation
 } from "../protocols/integrator/events.js"
 import {
-  TargetPromotionCorrelation,
-  TargetPromotionAttemptReason,
-  TargetPromotionAttemptOrdinal,
-  TargetPromotionAttemptLimit,
-  TargetPromotionSuccessObservation,
-  TargetPromotionStaleObservation,
-  TargetPromotionNonConvergenceObservation,
-  TargetPromotionReconciliationDeferral,
-  TargetPromotionTerminalBasis
-} from "../protocols/target-promotion/events.js"
-import {
   IntegrationQuarantineBasis,
   IntegrationQuarantineDirectionFingerprint,
   IntegrationQuarantineDirectionRequestId
@@ -67,6 +56,48 @@ import {
   RunCancellationApplied,
   WorktreeCleanupOccurred
 } from "./historical-control-disposition-occurrence.js"
+import {
+  LocalTargetCatchUpInitiated,
+  LocalTargetCatchUpObserved,
+  RemoteBaselineObserved,
+  RemoteBaselineReadInitiated,
+  RemotePublicationAdmissionObserved,
+  RemotePublicationAdmissionReadInitiated,
+  RemotePublicationAttemptRequested,
+  RemotePublicationAttemptRejectedNonFastForward,
+  RemotePublicationRequested,
+  RemotePublicationRetained,
+  RemotePublicationSucceeded
+} from "../protocols/direct-publication/historical-occurrence.js"
+import {
+  TargetPromotionAttemptRequested,
+  TargetPromotionNonConvergent,
+  TargetPromotionReconciliationDeferred,
+  TargetPromotionRequested,
+  TargetPromotionStale,
+  TargetPromotionSucceeded
+} from "../protocols/target-promotion/historical-occurrence.js"
+export {
+  LocalTargetCatchUpInitiated,
+  LocalTargetCatchUpObserved,
+  RemoteBaselineObserved,
+  RemoteBaselineReadInitiated,
+  RemotePublicationAdmissionObserved,
+  RemotePublicationAdmissionReadInitiated,
+  RemotePublicationAttemptRequested,
+  RemotePublicationAttemptRejectedNonFastForward,
+  RemotePublicationRequested,
+  RemotePublicationRetained,
+  RemotePublicationSucceeded
+} from "../protocols/direct-publication/historical-occurrence.js"
+export {
+  TargetPromotionAttemptRequested,
+  TargetPromotionNonConvergent,
+  TargetPromotionReconciliationDeferred,
+  TargetPromotionRequested,
+  TargetPromotionStale,
+  TargetPromotionSucceeded
+} from "../protocols/target-promotion/historical-occurrence.js"
 export {
   BranchCleanupOccurred,
   CancelledAttemptClaimNoReleaseObserved,
@@ -257,71 +288,6 @@ export const IntegratorCandidateQualificationObserved = Schema.TaggedStruct(
 )
 export type IntegratorCandidateQualificationObserved = typeof IntegratorCandidateQualificationObserved.Type
 
-/** Dalph recorded the deterministic promotion request before any Git mutation. */
-export const TargetPromotionRequested = Schema.TaggedStruct("TargetPromotionRequested", {
-  ...initiatedByCoordinator,
-  correlation: TargetPromotionCorrelation,
-  recordedAt: JournalPosition,
-  runId: RunId
-})
-export type TargetPromotionRequested = typeof TargetPromotionRequested.Type
-
-/** Dalph recorded one numbered compare-and-set attempt before asking Git. */
-export const TargetPromotionAttemptRequested = Schema.TaggedStruct("TargetPromotionAttemptRequested", {
-  ...initiatedByCoordinator,
-  attemptOrdinal: TargetPromotionAttemptOrdinal,
-  correlation: TargetPromotionCorrelation,
-  reason: TargetPromotionAttemptReason,
-  recordedAt: JournalPosition,
-  runId: RunId
-})
-export type TargetPromotionAttemptRequested = typeof TargetPromotionAttemptRequested.Type
-
-/** One ambiguous promotion attempt is durably idle until exact retry authority returns. */
-export const TargetPromotionReconciliationDeferred = Schema.TaggedStruct("TargetPromotionReconciliationDeferred", {
-  afterAttemptOrdinal: TargetPromotionAttemptOrdinal,
-  correlation: TargetPromotionCorrelation,
-  deferral: TargetPromotionReconciliationDeferral,
-  ...nonAction,
-  recordedAt: JournalPosition,
-  runId: RunId
-})
-export type TargetPromotionReconciliationDeferred = typeof TargetPromotionReconciliationDeferred.Type
-
-/** Git proved the qualified candidate current or in target ancestry. */
-export const TargetPromotionSucceeded = Schema.TaggedStruct("TargetPromotionSucceeded", {
-  basis: TargetPromotionTerminalBasis,
-  ...nonAction,
-  correlation: TargetPromotionCorrelation,
-  observation: TargetPromotionSuccessObservation,
-  recordedAt: JournalPosition,
-  runId: RunId
-})
-export type TargetPromotionSucceeded = typeof TargetPromotionSucceeded.Type
-
-/** Git proved the expected head or candidate ancestry was stale. */
-export const TargetPromotionStale = Schema.TaggedStruct("TargetPromotionStale", {
-  basis: TargetPromotionTerminalBasis,
-  ...nonAction,
-  correlation: TargetPromotionCorrelation,
-  observation: TargetPromotionStaleObservation,
-  recordedAt: JournalPosition,
-  runId: RunId
-})
-export type TargetPromotionStale = typeof TargetPromotionStale.Type
-
-/** Three unresolved promotion attempts preserved the candidate and evidence. */
-export const TargetPromotionNonConvergent = Schema.TaggedStruct("TargetPromotionNonConvergent", {
-  attemptLimit: TargetPromotionAttemptLimit,
-  attemptOrdinal: TargetPromotionAttemptOrdinal,
-  correlation: TargetPromotionCorrelation,
-  lastObservation: TargetPromotionNonConvergenceObservation,
-  ...nonAction,
-  recordedAt: JournalPosition,
-  runId: RunId
-})
-export type TargetPromotionNonConvergent = typeof TargetPromotionNonConvergent.Type
-
 /** A conclusive integration result preserved the session for operator direction. */
 export const IntegrationQuarantined = Schema.TaggedStruct("IntegrationQuarantined", {
   basis: IntegrationQuarantineBasis,
@@ -441,6 +407,17 @@ export const HistoricalWorkflowOccurrence = Schema.Union([
   IntegratorRunStarted,
   IntegratorSessionFixed,
   IntegratorSuccessorSessionFixed,
+  RemotePublicationAdmissionObserved,
+  RemotePublicationAdmissionReadInitiated,
+  RemotePublicationAttemptRequested,
+  RemotePublicationAttemptRejectedNonFastForward,
+  RemotePublicationRequested,
+  RemotePublicationRetained,
+  RemotePublicationSucceeded,
+  RemoteBaselineReadInitiated,
+  RemoteBaselineObserved,
+  LocalTargetCatchUpInitiated,
+  LocalTargetCatchUpObserved,
   RunCancellationApplied,
   StoppedAttemptClaimPreserved,
   TargetPromotionAttemptRequested,

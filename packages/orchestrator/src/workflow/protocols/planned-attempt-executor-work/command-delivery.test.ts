@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../../test/support/direct-publication.js"
 import { it } from "@effect/vitest"
 import { expect } from "vitest"
 import { Effect } from "effect"
@@ -74,7 +75,8 @@ const journalLayer = memoryJournalTestLayerFromPartitionRecords({
     makeWorkflowRunBeganRecord(
       plannedAttempt.runId,
       FixtureTarget.make("receipt-target"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+      remotePublicationTargetForTest
     )
   ]
 })
@@ -105,7 +107,8 @@ const alteredResults: ReadonlyArray<readonly [string, (record: JournalRecord) =>
       event: makeWorkflowRunBeganRecord(
         plannedAttempt.runId,
         FixtureTarget.make("foreign-returned-record"),
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTargetForTest
       ).event
     })
   ],

@@ -61,7 +61,12 @@ const appendRetainedPrefix = Effect.fn("RecoveryStoreLanes.appendRetainedPrefix"
     return yield* Effect.die("recovery prefix must retain its WorkflowRunBegan record")
   }
   const runId = first.runId
-  yield* journal.beginRun(runId, first.event.target, first.event.initialControlPolicy)
+  yield* journal.beginRun(
+    runId,
+    first.event.target,
+    first.event.initialControlPolicy,
+    first.event.remotePublicationTarget
+  )
   for (const record of prefix.slice(1)) {
     if (record.event._tag === "WorkflowRunBegan") {
       return yield* Effect.die("recovery prefix cannot contain a second WorkflowRunBegan record")
@@ -208,7 +213,18 @@ export const withRecoveryPrefixStore = <A, E, R, Cut extends string>(
       const path = yield* Path.Path
       const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-recovery-prefix-" })
       const filename = JournalDatabaseLocator.make(path.join(directory, "journal.sqlite"))
-      return yield* replay(sqliteJournalStoreLayer({ filename }))
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const journal = yield* JournalStore
+          yield* appendRetainedPrefix(journal, prefix.records)
+        }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+      )
+      return yield* Effect.scoped(
+        Effect.gen(function* () {
+          const journal = yield* JournalStore
+          return yield* use(journal)
+        }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+      )
     }).pipe(Effect.provide(nodePathAndFileSystemLayer))
   )
 }

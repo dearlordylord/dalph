@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "./direct-publication.js"
 import { RunId, type PlannedTaskAttempt, type TaskId } from "@dalph/contracts"
 import { Effect } from "effect"
 import {
@@ -34,7 +35,6 @@ interface FreshTaskAdmissionTestFixtureInput {
 
 const defaultFreshTaskAdmissionTestRunId = RunId.make("fresh-task-admission-test-run")
 const firstClaimIntentPosition = 2
-
 type TaskSelectionClaimOperation = Extract<WorkflowOperation, { readonly _tag: "AcquireTaskClaim" }>
 
 export const projectFreshTaskAdmissionForTest = (
@@ -45,7 +45,8 @@ export const projectFreshTaskAdmissionForTest = (
     makeWorkflowRunBeganRecord(
       runId,
       FixtureTarget.make(`fresh-task-admission-test:${runId}`),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(Math.max(1, operations.length)) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(Math.max(1, operations.length)) }),
+      remotePublicationTargetForTest
     ),
     ...operations.map((operation, index) => ({
       event: TaskClaimAcquisitionIntendedEvent.make({ operation, version: workflowJournalEventVersion }),

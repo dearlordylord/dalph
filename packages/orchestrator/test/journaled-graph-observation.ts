@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "./support/direct-publication.js"
 import { RunId } from "@dalph/contracts"
 import { Effect } from "effect"
 import { FixtureTarget } from "../src/authorities/task-tracker/fixture/target.js"
@@ -42,7 +43,7 @@ export const makeTestJournaledTrackerGraphObservation = (input: {
     Effect.scoped(
       Effect.gen(function* () {
         const storage = yield* JournalStore
-        yield* storage.beginRun(runId, target, policy)
+        yield* storage.beginRun(runId, target, policy, remotePublicationTargetForTest)
         const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
         if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
         const journal = yield* makeJournal(runId, target, initial, storage)

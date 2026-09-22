@@ -1,6 +1,8 @@
 /* eslint-disable max-lines -- Run entry points remain together so every composition shares one Journal activation boundary. */
 import { type PlannedAttemptExecutor, RunId } from "@dalph/contracts"
-import { Context, Effect, Schema, type Stream } from "effect"
+import { Context, Effect, Ref, Schema, type Stream } from "effect"
+import { journalRecordsOfKind } from "../../workflow-journal/record-evidence.js"
+import { DeliveryCleanupBoundary } from "../delivery/delivery-cleanup-boundary.js"
 import { RunActivationGraphBaseline } from "./activation-graph-baseline.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { InitialControlPolicy } from "../../control/policy.js"
@@ -26,6 +28,12 @@ import type {
   WorkflowRunNotBegan,
   WorkflowRunTargetMismatch
 } from "../../workflow-journal/store.js"
+import {
+  type RemotePublicationGit,
+  type RemotePublicationObservationFailure
+} from "../../workflow/protocols/direct-publication/events.js"
+import type { RemoteBaselineGit } from "../../workflow/protocols/direct-publication/baseline-events.js"
+import type { RemotePublicationAdmissionRejected } from "../../workflow/protocols/direct-publication/admission.js"
 import type { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import type { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import { Journal, type JournalInitialHistoryInvalid } from "../delivery/journal.js"
@@ -111,6 +119,8 @@ export type JournaledRunServices =
   | TaskWorkCapacityControl
   | TaskClaimReacquisitionControl
   | DispositionCleanupActivation
+  | RemoteBaselineGit
+  | RemotePublicationGit
   | WorkflowInterpreter
   | WorkflowTrace
 
@@ -130,6 +140,8 @@ export type JournaledRunBootstrapError =
   | WorkflowRunIdentityAlreadyUsed
   | WorkflowRunNotBegan
   | WorkflowRunTargetMismatch
+  | RemotePublicationObservationFailure
+  | RemotePublicationAdmissionRejected
 
 /** A fixed production composition was asked to begin a different Run identity. */
 export class JournaledRunIdentityMismatch extends Schema.TaggedError<JournaledRunIdentityMismatch>()(
@@ -354,23 +366,31 @@ export type InitialControlPolicySource<E = never, R = never> = Effect.Effect<Ini
 const liveDeliveryActionExecutorFactory = (runId: RunId, target: TrackerTarget) =>
   makeLiveDeliveryActionExecutor(runId, target)
 
-/** Runs ordinary delivery only after the activation's exact cleanup pass. */
+/** Interleaves exact cleanup with delivery phases; no pre-cleanup proof authorizes termination. */
 export const runDeliveryAfterDispositionCleanup = Effect.fn("Run.runDeliveryAfterDispositionCleanup")(function* <E, R>(
   cleanup: DispositionCleanupActivationService,
-  deliveryProgram: Effect.Effect<RunFinalityProof, E, R>
-) {
-  const cleanupResult = yield* cleanup.run
-  if (
-    cleanupResult.remaining.branch.length > 0 ||
-    cleanupResult.remaining.candidate.length > 0 ||
-    cleanupResult.remaining.worktree.length > 0
-  ) {
-    return {
-      acceptedAt: null,
-      decision: RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
-    } satisfies RunFinalityProof
+  deliveryProgram: Effect.Effect<RunFinalityProof, E, R>,
+  boundary?: {
+    readonly pending: Effect.Effect<boolean, JournalError>
+    readonly reset: Effect.Effect<void, JournalError>
   }
-  return yield* deliveryProgram
+) {
+  for (;;) {
+    const cleanupResult = yield* cleanup.run
+    if (
+      cleanupResult.remaining.branch.length > 0 ||
+      cleanupResult.remaining.candidate.length > 0 ||
+      cleanupResult.remaining.worktree.length > 0
+    ) {
+      return {
+        acceptedAt: null,
+        decision: RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+      } satisfies RunFinalityProof
+    }
+    if (boundary !== undefined) yield* boundary.reset
+    const proof = yield* deliveryProgram
+    if (boundary === undefined || !(yield* boundary.pending)) return proof
+  }
 })
 
 const runJournaledDelivery = <E, R>(
@@ -379,34 +399,38 @@ const runJournaledDelivery = <E, R>(
   executorFactory: ControlledDeliveryActionExecutorFactory<E, R>,
   activateCleanup: boolean,
   opportunity: RunActivationOpportunity
-) => {
-  if (activateCleanup) {
-    return Effect.gen(function* () {
-      // Ordinary Run activation owns the one journal-derived cleanup
-      // capability. It executes before delivery and captures the real family
-      // boundaries at activation, so production and controlled runs share the
-      // same loop.
-      const cleanup = yield* DispositionCleanupActivation
-      return yield* runDeliveryAfterDispositionCleanup(
-        cleanup,
-        runDeliveryComposition(
-          target,
-          runId,
-          makeJournaledDeliveryRelations(runId, target, opportunity),
-          () => executorFactory(runId, target),
-          opportunity
-        )
+) =>
+  Effect.gen(function* () {
+    const compose = () =>
+      runDeliveryComposition(
+        target,
+        runId,
+        makeJournaledDeliveryRelations(runId, target, opportunity),
+        () => executorFactory(runId, target),
+        opportunity
       )
-    })
-  }
-  return runDeliveryComposition(
-    target,
-    runId,
-    makeJournaledDeliveryRelations(runId, target, opportunity),
-    () => executorFactory(runId, target),
-    opportunity
-  )
-}
+    // Partial controlled stories may omit cleanup; production always uses the
+    // journal-derived cutoff and starts a fresh graph phase after cleanup.
+    if (!activateCleanup) return yield* compose()
+    const journal = yield* Journal
+    const baseline = yield* Ref.make((yield* journal.state.get).position)
+    const boundary = {
+      pending: Effect.gen(function* () {
+        const after = yield* Ref.get(baseline)
+        const state = yield* journal.state.get
+        return Array.from(journalRecordsOfKind(state.prefix, "IntegrationFinalitySettled")).some(
+          ({ position }) => position > after
+        )
+      }),
+      reset: journal.state.get.pipe(Effect.flatMap(({ position }) => Ref.set(baseline, position)))
+    }
+    const deliveryProgram = Ref.get(baseline).pipe(
+      Effect.flatMap((position) => compose().pipe(Effect.provideService(RunActivationGraphBaseline, position))),
+      Effect.provideService(DeliveryCleanupBoundary, boundary)
+    )
+    const cleanup = yield* DispositionCleanupActivation
+    return yield* runDeliveryAfterDispositionCleanup(cleanup, deliveryProgram, boundary)
+  })
 
 /** Explicit controlled composition; production callers use {@link runWorkflow}. */
 export const runWorkflowWithControlledDeliveryActionExecutor = <EInitial, RInitial, E, R>(

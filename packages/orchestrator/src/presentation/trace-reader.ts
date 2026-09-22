@@ -135,6 +135,7 @@ import { WorkflowActor } from "../workflow/registry/actor.js"
 import {
   BranchCleanupAuthorization,
   IntegratorCandidateCleanupAuthorization,
+  integratorCandidateCleanupSessionOf,
   WorktreeCleanupAuthorization
 } from "../workflow/protocols/disposition-cleanup/disposition.js"
 import { BranchCleanupJournalEvent } from "../workflow/protocols/disposition-cleanup/branch.js"
@@ -893,6 +894,8 @@ const keyCheckedHistoricalEventTags = {
   IntegratorRunStarted: true,
   IntegratorSessionFixed: true,
   IntegratorSuccessorSessionFixed: true,
+  LocalTargetCatchUpIntended: true,
+  LocalTargetCatchUpObserved: true,
   PostPromotionBlockerCandidateAncestryObserved: true,
   PostPromotionBlockerCandidateAncestryReadIntended: true,
   StoppedAttemptClaimNoReleaseObserved: true,
@@ -900,6 +903,10 @@ const keyCheckedHistoricalEventTags = {
   TargetPromotionIntended: true,
   TargetPromotionNonConvergence: true,
   TargetPromotionObservedSuccess: true,
+  RemotePublicationRetained: true,
+  RemotePublicationAttemptRejectedNonFastForward: true,
+  RemoteBaselineObserved: true,
+  RemoteBaselineReadIntended: true,
   TargetPromotionStale: true,
   TaskAttemptPlanned: true,
   TaskClaimAcquired: true,
@@ -1676,7 +1683,7 @@ const taskIdsOfControlDispositionOccurrence = (
     return [occurrence.event.authorization.disposition.plannedAttempt.taskId]
   }
   if (occurrence._tag === "IntegratorCandidateCleanupOccurred") {
-    return [occurrence.event.authorization.disposition.predecessor.plannedAttempt.taskId]
+    return [integratorCandidateCleanupSessionOf(occurrence.event.authorization.disposition).plannedAttempt.taskId]
   }
   return undefined
 }

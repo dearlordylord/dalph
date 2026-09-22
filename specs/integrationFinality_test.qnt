@@ -612,4 +612,54 @@ module integrationFinalityTest {
           and runTerminationRequiresWholeRunSettlement
       )
   }
+
+  run publicationProofSurvivesPauseRestartAndContradictionTest = {
+    init
+      .then(pauseAfterPublicationProof)
+      .then(restartAfterPublicationProof)
+      .expect(
+        publicationProofReached
+          and publicationPauseReached
+          and publicationRestartReached
+          and state.promoted.publicationPauseCount == 1
+          and state.promoted.publicationRestartCount == 1
+          and exactProofAndBinding
+          and completionClaimRequiresRemotePublicationProof
+      )
+      .then(observeRemotePublicationContradiction)
+      .expect(
+        publicationContradictionReached
+          and state.promoted.phase == BlockedAfterPublicationContradiction
+          and state.promoted.proofPresent
+          and publicationProofRetainedAcrossContradiction
+          and publicationContradictionBlocksUnsentFinality
+      )
+      .then(pauseAfterPublicationProof)
+      .then(restartAfterPublicationProof)
+      .expect(
+        state.promoted.publicationPauseCount == 2
+          and state.promoted.publicationRestartCount == 2
+          and publicationProofRetainedAcrossContradiction
+          and publicationContradictionBlocksUnsentFinality
+      )
+      .then(deriveCompletionClaim.fail())
+  }
+
+  run laterContradictionBlocksFinalityAfterClaimDerivationTest = {
+    init
+      .then(deriveCompletionClaim)
+      .then(recordCompletionClaimReplacementIntent)
+      .then(requestCompletionClaimReplacement)
+      .then(observeCompletionClaimReplacement)
+      .expect(state.promoted.phase == CompletionClaimCurrent)
+      .then(observeRemotePublicationContradiction)
+      .expect(
+        state.promoted.phase == BlockedAfterPublicationContradiction
+          and state.promoted.completionClaimDerived
+          and state.promoted.completionRequests == 0
+          and not(state.promoted.completionIntentRecorded)
+          and publicationProofRetainedAcrossContradiction
+          and publicationContradictionBlocksUnsentFinality
+      )
+  }
 }

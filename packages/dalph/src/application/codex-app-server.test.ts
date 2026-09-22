@@ -85,9 +85,21 @@ const onMessage = (message) => {
     return write(message.id, { thread })
   }
   if (message.method === "thread/read" || message.method === "thread/resume") {
-    if (process.env.DALPH_QUALIFICATION_MISSING_ROLLOUT === "1") {
+    if (process.env.DALPH_QUALIFICATION_THREAD_RESPONSE === "missing-rollout") {
       return writeError(message.id, { code: -32600, message: "no rollout found for thread id fixture-missing" })
     }
+    if (process.env.DALPH_QUALIFICATION_THREAD_RESPONSE === "thread-not-loaded") {
+      return writeError(message.id, { code: -32600, message: "thread not loaded: fixture-missing" })
+    }
+    if (process.env.DALPH_QUALIFICATION_THREAD_RESPONSE === "foreign-thread")
+      return writeError(message.id, { code: -32600, message: "thread not loaded: fixture-foreign" })
+    if (
+      process.env.DALPH_QUALIFICATION_THREAD_RESPONSE === "read-foreign-thread" &&
+      message.method === "thread/read"
+    )
+      return writeError(message.id, { code: -32600, message: "thread not loaded: fixture-foreign" })
+    if (process.env.DALPH_QUALIFICATION_THREAD_RESPONSE === "read-foreign-thread")
+      return writeError(message.id, { code: -32600, message: "thread not loaded: fixture-missing" })
     return write(message.id, { thread })
   }
   if (message.method === "turn/start") {
@@ -379,7 +391,7 @@ it.effect("launches the Codex child with unattended production flags", () =>
             CODEX_HOME: "/isolated/qualification-codex-home",
             DALPH_QUALIFICATION_ENV_CAPTURE: capture,
             DALPH_QUALIFICATION_PROVIDER_KEY: "fixture-only-provider-key",
-            DALPH_QUALIFICATION_MISSING_ROLLOUT: "1"
+            DALPH_QUALIFICATION_THREAD_RESPONSE: "missing-rollout"
           }
         },
         isolatedCodexProcessNativeService
@@ -401,10 +413,44 @@ it.effect("launches the Codex child with unattended production flags", () =>
         const missing = yield* app
           .resumeThread(CodexThreadId.make("fixture-missing"), "/isolated/qualification-worktree")
           .pipe(Effect.flip)
-        expect(missing).toMatchObject({ kind: "NotFound", operation: "thread/resume" })
+        // Missing rollout on resume is not absence: the exact loaded-thread read must also fail.
+        expect(missing).toMatchObject({ kind: "NotFound", operation: "thread/read" })
         yield* app.close
       }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer))
       expect(result).toBeUndefined()
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("accepts only exact resume and confirming-read pinned Codex thread-not-loaded absence", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-342-thread-not-loaded-" })
+      const executable = path.join(root, "fixture-codex")
+      yield* fileSystem.writeFileString(executable, fakeServer)
+      yield* fileSystem.chmod(executable, 0o755)
+
+      const observe = (response: "thread-not-loaded" | "foreign-thread" | "read-foreign-thread") => {
+        const appLayer = codexAppServerNodeLayer(
+          { executable, environment: { DALPH_QUALIFICATION_THREAD_RESPONSE: response } },
+          isolatedCodexProcessNativeService
+        ).pipe(Layer.provide(memoryCodexAttemptStoreLayer()))
+        return Effect.gen(function* () {
+          const app = yield* CodexAppServer
+          yield* app.startThread("/isolated/qualification-worktree")
+          return yield* app
+            .resumeThread(CodexThreadId.make("fixture-missing"), "/isolated/qualification-worktree")
+            .pipe(Effect.flip)
+        }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer))
+      }
+
+      // Resume absence alone is ambiguous. The adapter retries the exact read,
+      // and only the same closed provider response proves the empty thread absent.
+      expect(yield* observe("thread-not-loaded")).toMatchObject({ kind: "NotFound", operation: "thread/read" })
+      expect(yield* observe("foreign-thread")).toMatchObject({ kind: "Protocol", operation: "thread/resume" })
+      expect(yield* observe("read-foreign-thread")).toMatchObject({ kind: "Protocol", operation: "thread/read" })
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )

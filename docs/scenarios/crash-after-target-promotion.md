@@ -78,10 +78,12 @@ records the accepted executor report and integration responsibility in SQLite.
    consumed exactly once.
 6. Dalph replaces the exact active claim with the completion claim, completes
    A only after the promotion observation is durable, rereads focused and
-   complete tracker facts, deletes only the exact completion claim, and
-   terminates the Run. The accepted evidence remains readable and the original
-   successful worktree and branch remain because #89 owns terminal disposition
-   cleanup.
+   complete tracker facts, and deletes only the exact completion claim. The
+   accepted `IntegrationFinalitySettled` occurrence supplies the later #384
+   `Settled` disposition: Dalph drains delivery, removes the exact present
+   worktree and branch, confirms the exact Integrator candidate is already
+   absent, settles all three journaled cleanup authorizations, and only then
+   terminates the Run. The accepted evidence remains readable.
 7. The harness closes the restarted scope, proves the coordinator lock and
    child process are gone, and removes only its owned temporary root.
 
@@ -101,8 +103,8 @@ Dalph must not assume the missing response means Git did nothing, issue a
 second compare-and-set, rerun the Integrator, allocate a new attempt, worktree,
 session, candidate resource, evidence object, or claim identity, complete the
 tracker before observing promotion success, double-consume a retry or semantic
-budget, delete immutable evidence, or remove resources without an accepted
-disposition.
+budget, delete immutable evidence, remove resources before finality supplies
+the exact disposition, or terminate before cleanup settles.
 
 ### Acceptance-test mapping
 

@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 // @effect-diagnostics multipleEffectProvide:off
 import { Cause, Effect, Layer, Option, Ref, Result, Schema } from "effect"
 import { it as effectIt } from "@effect/vitest"
@@ -66,7 +67,11 @@ import { workflowJournalEventVersion } from "../kernel/event.js"
 const initialControlPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 
 const liveObservationJournalLayer = (runId: RunId, target: FixtureTarget) =>
-  liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, initialControlPolicy)], runId, target })
+  liveJournalTestLayer({
+    records: [makeWorkflowRunBeganRecord(runId, target, initialControlPolicy, remotePublicationTargetForTest)],
+    runId,
+    target
+  })
 
 const finalityTaskSpecification = makeTaskWorkSpecification({
   body: "Exercise task-facts observation after an accepted integration prefix.",
@@ -1155,7 +1160,7 @@ it("fails replay with a typed error when recorded facts cannot reconstruct the p
     })
   )
   const graphRecords = [
-    makeWorkflowRunBeganRecord(runId, target, initialControlPolicy),
+    makeWorkflowRunBeganRecord(runId, target, initialControlPolicy, remotePublicationTargetForTest),
     {
       event: taskTrackerReadIntent(graphRead),
       key: intentRecordKey(graphRead.operationId),
@@ -1358,7 +1363,7 @@ it("keeps live and replayed target-A focused reads on target A across a Journal 
     })
   )
   const journalLayer = liveJournalTestLayer({
-    records: [makeWorkflowRunBeganRecord(runId, targetA, initialControlPolicy)],
+    records: [makeWorkflowRunBeganRecord(runId, targetA, initialControlPolicy, remotePublicationTargetForTest)],
     runId,
     target: targetA
   })

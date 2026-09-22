@@ -26,6 +26,7 @@ import {
 import { createRunInputIdentity, currentSourceInputDigest } from "./gate-run-identity.mjs"
 import { artifactEvidence, readRunEvidence } from "./gate-run-evidence.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
+import { gateDeadlineEnvironmentName, remainingGateMilliseconds, resolveGateDeadline } from "./gate-deadline.mjs"
 
 const commandArguments = process.argv.slice(process.argv.indexOf("--") + 1)
 if (commandArguments.length === 0) throw new Error("Name an admitted command after --")
@@ -38,6 +39,7 @@ if (process.env.DALPH_QUALIFICATION_ENV_CAPTURE !== undefined)
   throw new Error("Ambient qualification environment capture is outside supported gate custody")
 if (inherited !== undefined) throw new Error("The fresh custody runner cannot inherit an active run")
 const location = repositoryLocation()
+const deadline = resolveGateDeadline({ configured: process.env[gateDeadlineEnvironmentName] })
 requireWorktreeLock(location.worktreeLock)
 if (existsSync(location.worktreeFence)) {
   const fence = readRecord(location.worktreeFence)
@@ -52,6 +54,7 @@ let releaseSlot
 const startedWaiting = Number(process.env.DALPH_GATE_WAIT_STARTED_MILLISECONDS ?? epochMilliseconds())
 if (!Number.isFinite(startedWaiting)) throw new Error("Invalid admission wait observation")
 for (;;) {
+  remainingGateMilliseconds(deadline)
   const fenced = []
   for (const slot of slots) {
     const release = openFileLock(slot.lock, true)
@@ -71,7 +74,13 @@ for (;;) {
   console.error(
     `[gate-slot] waiting; holders: ${slots.map((slot) => (existsSync(slot.fence) ? readRecord(slot.fence).runId : "busy or available")).join(", ")}`
   )
-  await setTimeout(250)
+  await setTimeout(Math.min(250, remainingGateMilliseconds(deadline)))
+}
+try {
+  remainingGateMilliseconds(deadline)
+} catch (error) {
+  releaseSlot()
+  throw error
 }
 const runId = newIdentity()
 const runDirectory = join(location.custodyRoot, "runs", runId)
@@ -91,6 +100,7 @@ const run = {
   host: localHostIdentity(),
   ownerPid: process.pid,
   commandArguments,
+  deadline,
   requiresQualityComposite:
     commandArguments.includes("--local-handoff") &&
     resolve(commandArguments[1] ?? "") === join(location.worktree, "scripts", "run-quality-gate.mjs"),
@@ -115,6 +125,7 @@ try {
   atomicRecord(join(runDirectory, "identity.json"), identity)
   const environment = {
     ...process.env,
+    [gateDeadlineEnvironmentName]: deadline,
     DALPH_GATE_RUN_DIRECTORY: runDirectory,
     DALPH_GATE_RUN_ID: runId,
     DALPH_GATE_OBLIGATION: "root",
@@ -133,7 +144,7 @@ try {
       name: "admitted gate command",
       relayParentSignals: true,
       ...(isOwnedHostedQualityStage ? { relayedSignalGraceMilliseconds: 4_000 } : {}),
-      timeoutMilliseconds: 24 * 60 * 60 * 1000
+      timeoutMilliseconds: remainingGateMilliseconds(deadline)
     })
     commandExit = result.exitCode
   } catch (error) {

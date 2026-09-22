@@ -69,6 +69,8 @@ import type {
 import type { IntegratorBoundaryUnavailable } from "./integrator-boundary.js"
 import type { runTargetPromotion } from "../../workflow/protocols/target-promotion/protocol.js"
 import type { TargetPromotionRuntimeUnavailable } from "./target-promotion-boundary.js"
+import type { runRemotePublication } from "../../workflow/protocols/direct-publication/protocol-engine.js"
+import type { establishRemoteBaseline } from "../../workflow/protocols/direct-publication/baseline-protocol-engine.js"
 import type {
   runCompletionClaimDeletionProtocol,
   runCompletionClaimReplacementProtocol
@@ -239,6 +241,8 @@ export type DeliveryActionExecutionError =
   | EffectFunctionFailure<typeof appendPromotionStaleIntegrationQuarantine>
   | EffectFunctionFailure<typeof runTaskClaimReacquisition>
   | EffectFunctionFailure<typeof runTargetPromotion>
+  | EffectFunctionFailure<typeof runRemotePublication>
+  | EffectFunctionFailure<typeof establishRemoteBaseline>
   | EffectFunctionFailure<typeof runCompletionClaimReplacementProtocol>
   | EffectFunctionFailure<typeof runCompletionClaimDeletionProtocol>
   | EffectFunctionFailure<typeof startQueuedIntegration>
@@ -304,6 +308,7 @@ export type DeliverySemanticTraceEvent =
       readonly _tag: "ProposalDeferred"
       readonly proposalId: DeliveryProposalId
       readonly reason:
+        | "DispositionCleanupRequired"
         | "IntegrationTargetUnavailable"
         | "PlannedAttemptProtocolUnavailable"
         | "TaskWorkPositionUnavailable"

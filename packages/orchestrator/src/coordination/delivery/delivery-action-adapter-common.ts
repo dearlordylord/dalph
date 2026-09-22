@@ -3,6 +3,7 @@ import { OperationSelected, TaskTrackerFactsObservedTrace } from "../../presenta
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import { makeCompleteTaskTrackerFactsObserved } from "../../workflow/task-tracker-facts/observation.js"
+import type { InterruptibleWorkflowBoundaryExecution } from "../../workflow/interpretation/interruptible-boundary.js"
 import {
   type DeliveryActionExecutionLease,
   type DeliveryActionResult,
@@ -22,7 +23,8 @@ export const deliveryActionDeferred = (
 
 export const executeTrackerGraphRead = Effect.fn("DeliveryAction.readGraph")(function* (
   operation: ReturnType<typeof makeTrackerGraphObservationOperation>,
-  lease?: DeliveryActionExecutionLease
+  lease?: DeliveryActionExecutionLease,
+  interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
 ) {
   const interpreter = yield* WorkflowInterpreter
   const trace = yield* WorkflowTrace
@@ -30,7 +32,7 @@ export const executeTrackerGraphRead = Effect.fn("DeliveryAction.readGraph")(fun
   const snapshot = yield* interpreter.readTrackerGraph(
     operation,
     lease?.recordIntent(operation.operationId),
-    lease === undefined ? undefined : interruptibleBoundaryOf(lease)
+    interruptibleBoundary ?? (lease === undefined ? undefined : interruptibleBoundaryOf(lease))
   )
   yield* trace.emit(
     TaskTrackerFactsObservedTrace.make({

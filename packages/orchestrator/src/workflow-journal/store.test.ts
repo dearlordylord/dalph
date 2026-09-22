@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../test/support/direct-publication.js"
 // @effect-diagnostics unnecessaryEffectGen:off
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
@@ -226,7 +227,7 @@ const appendTerminalDisposition = (
 const terminalRecordsFor = (runId: RunId, target: ReturnType<typeof FixtureTarget.make>) => {
   const fixture = completedRunFinalityFixture({ runId, target })
   return [
-    makeWorkflowRunBeganRecord(runId, target, initialPolicy),
+    makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest),
     {
       event: fixture.intent,
       key: intentRecordKey(fixture.operation.operationId),
@@ -249,7 +250,12 @@ it.effect("opens the configured production journal only with coordinator ownersh
       Effect.gen(function* () {
         const journal = yield* JournalStore
         const runId = RunId.make("production-journal-composition")
-        const began = yield* journal.beginRun(runId, FixtureTarget.make("production-target"), initialPolicy)
+        const began = yield* journal.beginRun(
+          runId,
+          FixtureTarget.make("production-target"),
+          initialPolicy,
+          remotePublicationTargetForTest
+        )
 
         expect(began.runId).toBe(runId)
       }).pipe(
@@ -326,7 +332,7 @@ it.effect(
 it.effect("rejects exact reads and recovery of a nonterminal memory Cold history", () => {
   const runId = RunId.make("memory-nonterminal-cold-read")
   const target = FixtureTarget.make("memory-nonterminal-cold-read-target")
-  const records = [makeWorkflowRunBeganRecord(runId, target, initialPolicy)]
+  const records = [makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)]
   return Effect.gen(function* () {
     const journal = yield* JournalStore
     const fixture = completedRunFinalityFixture({ runId, target })
@@ -382,9 +388,9 @@ it.effect("fails every memory operation closed when a Run is in both partitions"
     const journal = yield* JournalStore
     const fixture = completedRunFinalityFixture({ runId, target })
     expect(yield* Effect.flip(journal.read(runId))).toBeInstanceOf(JournalPartitionContradiction)
-    expect(yield* Effect.flip(journal.beginRun(runId, target, initialPolicy))).toBeInstanceOf(
-      JournalPartitionContradiction
-    )
+    expect(
+      yield* Effect.flip(journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest))
+    ).toBeInstanceOf(JournalPartitionContradiction)
     expect(
       yield* Effect.flip(journal.append(runId, JournalRecordKey.make("contradictory-append"), fixture.intent))
     ).toBeInstanceOf(JournalPartitionContradiction)
@@ -414,8 +420,10 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
       Effect.gen(function* () {
         const journal = yield* JournalStore
         const target = FixtureTarget.make("single-start-target")
-        const began = yield* journal.beginRun(runId, target, initialPolicy)
-        const repeated = yield* Effect.flip(journal.beginRun(runId, target, initialPolicy))
+        const began = yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
+        const repeated = yield* Effect.flip(
+          journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
+        )
 
         expect(began).toMatchObject({ event: { _tag: "WorkflowRunBegan", target }, position: 1, runId })
         expect(repeated).toBeInstanceOf(WorkflowRunAlreadyBegan)
@@ -428,7 +436,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
       Effect.gen(function* () {
         const journal = yield* JournalStore
         const target = FixtureTarget.make("terminated-target")
-        yield* journal.beginRun(runId, target, initialPolicy)
+        yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
         const terminated = yield* terminateCompleted(journal, target)
         const failure = yield* Effect.flip(journal.append(runId, firstKey, intent("one", "task-1")))
 
@@ -446,7 +454,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
       Effect.gen(function* () {
         const journal = yield* JournalStore
         const target = FixtureTarget.make("retirement-target")
-        const began = yield* journal.beginRun(runId, target, initialPolicy)
+        const began = yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
         const terminated = yield* terminateCompleted(journal, target)
         const before = yield* journal.read(runId)
 
@@ -464,9 +472,9 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
           partition: "Cold",
           runId
         })
-        expect(yield* Effect.flip(journal.beginRun(runId, target, initialPolicy))).toBeInstanceOf(
-          WorkflowRunAlreadyBegan
-        )
+        expect(
+          yield* Effect.flip(journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest))
+        ).toBeInstanceOf(WorkflowRunAlreadyBegan)
         expect(yield* Effect.flip(journal.readRunForRecovery(runId, target))).toBeInstanceOf(
           WorkflowRunAlreadyTerminated
         )
@@ -491,7 +499,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
         for (const condition of conditions) {
           const conditionRunId = RunId.make(`nonterminal-retirement-${name}-${condition.name}`)
           const target = FixtureTarget.make(`nonterminal-retirement-target-${condition.name}`)
-          yield* journal.beginRun(conditionRunId, target, initialPolicy)
+          yield* journal.beginRun(conditionRunId, target, initialPolicy, remotePublicationTargetForTest)
           const fixture = completedRunFinalityFixture({ runId: conditionRunId, target })
           if (condition.prefix === "intent-pending" || condition.prefix === "operation-settled") {
             yield* journal.append(conditionRunId, intentRecordKey(fixture.operation.operationId), fixture.intent)
@@ -539,7 +547,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
         for (const disposition of ["Completed", "Blocked", "Cancelled"] as const) {
           const dispositionRunId = RunId.make(`retirement-disposition-${name}-${disposition}`)
           const target = FixtureTarget.make(`retirement-disposition-target-${name}-${disposition}`)
-          yield* journal.beginRun(dispositionRunId, target, initialPolicy)
+          yield* journal.beginRun(dispositionRunId, target, initialPolicy, remotePublicationTargetForTest)
           const terminated = yield* appendTerminalDisposition(journal, dispositionRunId, target, disposition)
           const before = yield* journal.read(dispositionRunId)
           const retired = yield* journal.retireTerminalRun(dispositionRunId)
@@ -557,7 +565,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
       Effect.gen(function* () {
         const journal = yield* JournalStore
         const target = FixtureTarget.make("recoverable-target")
-        const began = yield* journal.beginRun(runId, target, initialPolicy)
+        const began = yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
 
         expect(yield* journal.readRunForRecovery(runId, target)).toEqual(began)
         const mismatch = yield* Effect.flip(journal.readRunForRecovery(runId, FixtureTarget.make("different-target")))
@@ -583,7 +591,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
       Effect.gen(function* () {
         const journal = yield* JournalStore
         const target = FixtureTarget.make("invalid-evidence-target")
-        yield* journal.beginRun(runId, target, initialPolicy)
+        yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
         const fixture = completedRunFinalityFixture({ runId, target })
 
         const failure = yield* Effect.flip(
@@ -599,7 +607,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
       Effect.gen(function* () {
         const journal = yield* JournalStore
         const target = FixtureTarget.make("unsettled-responsibility-target")
-        yield* journal.beginRun(runId, target, initialPolicy)
+        yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
         const fixture = completedRunFinalityFixture({ runId, target })
         yield* journal.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
         yield* journal.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
@@ -634,7 +642,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
       Effect.gen(function* () {
         const journal = yield* JournalStore
         const target = FixtureTarget.make("settled-responsibility-target")
-        yield* journal.beginRun(runId, target, initialPolicy)
+        yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
         const fixture = completedRunFinalityFixture({ runId, target })
         yield* journal.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
         yield* journal.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
@@ -680,7 +688,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
       Effect.gen(function* () {
         const journal = yield* JournalStore
         const target = FixtureTarget.make("active-claim-target")
-        yield* journal.beginRun(runId, target, initialPolicy)
+        yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
         const fixture = completedRunFinalityFixture({ runId, target })
         yield* journal.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
         yield* journal.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
@@ -723,7 +731,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
       Effect.gen(function* () {
         const journal = yield* JournalStore
         const target = FixtureTarget.make("incomparable-graph-target")
-        yield* journal.beginRun(runId, target, initialPolicy)
+        yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
         const first = completedRunFinalityFixture({ runId, target })
         yield* journal.append(runId, intentRecordKey(first.operation.operationId), first.intent)
         yield* journal.append(runId, outcomeRecordKey(first.operation.operationId), first.observation)
@@ -772,7 +780,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
       Effect.gen(function* () {
         const journal = yield* JournalStore
         const target = FixtureTarget.make("causal-graph-target")
-        yield* journal.beginRun(runId, target, initialPolicy)
+        yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
         const first = completedRunFinalityFixture({ runId, target })
         yield* journal.append(runId, intentRecordKey(first.operation.operationId), first.intent)
         yield* journal.append(runId, outcomeRecordKey(first.operation.operationId), first.observation)
@@ -824,7 +832,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
       Effect.gen(function* () {
         const journal = yield* JournalStore
         const target = FixtureTarget.make("already-terminated-target")
-        yield* journal.beginRun(runId, target, initialPolicy)
+        yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
         const terminated = yield* terminateCompleted(journal, target)
 
         expect(yield* Effect.flip(journal.readRunForRecovery(runId, target))).toMatchObject({
@@ -844,7 +852,12 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
         const journal = yield* JournalStore
         const existing = yield* journal.append(runId, firstKey, intent("one", "task-1"))
         const failure = yield* Effect.flip(
-          journal.beginRun(runId, FixtureTarget.make("late-beginning-target"), initialPolicy)
+          journal.beginRun(
+            runId,
+            FixtureTarget.make("late-beginning-target"),
+            initialPolicy,
+            remotePublicationTargetForTest
+          )
         )
 
         expect(failure).toBeInstanceOf(WorkflowRunIdentityAlreadyUsed)
@@ -998,7 +1011,7 @@ durableJournalStoreContract(
           Effect.gen(function* () {
             const runId = RunId.make("schema-v1-preserved-run")
             const target = FixtureTarget.make("schema-v1-target")
-            const record = makeWorkflowRunBeganRecord(runId, target, initialPolicy)
+            const record = makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)
             yield* seedSchemaV1(filename, record)
             const history = yield* Effect.gen(function* () {
               const journal = yield* JournalStore
@@ -1030,7 +1043,7 @@ durableJournalStoreContract(
             const target = FixtureTarget.make("sqlite-retirement-byte-parity-target")
             yield* Effect.gen(function* () {
               const journal = yield* JournalStore
-              yield* journal.beginRun(runId, target, initialPolicy)
+              yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
               yield* appendTerminalDisposition(journal, runId, target, "Cancelled")
             }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
 
@@ -1068,7 +1081,7 @@ durableJournalStoreContract(
             const target = FixtureTarget.make("sqlite-read-retirement-overlap-target")
             yield* Effect.gen(function* () {
               const journal = yield* JournalStore
-              yield* journal.beginRun(runId, target, initialPolicy)
+              yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
               yield* appendTerminalDisposition(journal, runId, target, "Completed")
             }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
             const before = yield* Effect.gen(function* () {
@@ -1110,7 +1123,7 @@ durableJournalStoreContract(
             const target = FixtureTarget.make("sqlite-retirement-rollback-cut-target")
             yield* Effect.gen(function* () {
               const journal = yield* JournalStore
-              yield* journal.beginRun(runId, target, initialPolicy)
+              yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
               yield* appendTerminalDisposition(journal, runId, target, "Completed")
             }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
 
@@ -1160,7 +1173,7 @@ durableJournalStoreContract(
             const first = yield* Effect.flip(
               Effect.gen(function* () {
                 const journal = yield* JournalStore
-                yield* journal.beginRun(runId, target, initialPolicy)
+                yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
                 yield* appendTerminalDisposition(journal, runId, target, "Completed")
                 const history = yield* journal.read(runId)
                 yield* journal.retireTerminalRun(runId)
@@ -1204,7 +1217,7 @@ durableJournalStoreContract(
             const target = FixtureTarget.make("sqlite-retirement-verification-mismatch-target")
             yield* Effect.gen(function* () {
               const journal = yield* JournalStore
-              yield* journal.beginRun(runId, target, initialPolicy)
+              yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
               yield* appendTerminalDisposition(journal, runId, target, "Completed")
             }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
             yield* withSqliteClient(
@@ -1242,7 +1255,7 @@ durableJournalStoreContract(
           Effect.gen(function* () {
             const runId = RunId.make("schema-v1-rollback-run")
             const target = FixtureTarget.make("schema-v1-rollback-target")
-            const record = makeWorkflowRunBeganRecord(runId, target, initialPolicy)
+            const record = makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)
             yield* seedSchemaV1(filename, record)
             const failure = yield* Effect.flip(
               Effect.gen(function* () {
@@ -1285,7 +1298,7 @@ durableJournalStoreContract(
           Effect.gen(function* () {
             const runId = RunId.make("schema-v1-reopen-run")
             const target = FixtureTarget.make("schema-v1-reopen-target")
-            const record = makeWorkflowRunBeganRecord(runId, target, initialPolicy)
+            const record = makeWorkflowRunBeganRecord(runId, target, initialPolicy, remotePublicationTargetForTest)
             yield* seedSchemaV1(filename, record)
             yield* Effect.gen(function* () {
               yield* JournalStore
@@ -1462,7 +1475,7 @@ durableJournalStoreContract(
             const target = FixtureTarget.make("cold-corruption-isolated-target")
             yield* Effect.gen(function* () {
               const journal = yield* JournalStore
-              yield* journal.beginRun(runId, target, initialPolicy)
+              yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
               yield* appendTerminalDisposition(journal, runId, target, "Completed")
               yield* journal.retireTerminalRun(runId)
             }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
@@ -1531,7 +1544,7 @@ durableJournalStoreContract(
               const target = FixtureTarget.make("sqlite-contradictory-partitions-target")
               yield* Effect.gen(function* () {
                 const journal = yield* JournalStore
-                yield* journal.beginRun(runId, target, initialPolicy)
+                yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
                 yield* appendTerminalDisposition(journal, runId, target, "Completed")
               }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
               yield* withSqliteClient(filename, (sql) =>
@@ -1549,7 +1562,9 @@ durableJournalStoreContract(
                 const journal = yield* JournalStore
                 const fixture = completedRunFinalityFixture({ runId, target })
                 const read = yield* Effect.flip(journal.read(runId))
-                const begin = yield* Effect.flip(journal.beginRun(runId, target, initialPolicy))
+                const begin = yield* Effect.flip(
+                  journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
+                )
                 const append = yield* Effect.flip(
                   journal.append(runId, JournalRecordKey.make("contradictory-append"), intent("contradictory", "task"))
                 )
@@ -1578,7 +1593,7 @@ durableJournalStoreContract(
             const fixture = completedRunFinalityFixture({ runId, target })
             yield* Effect.gen(function* () {
               const journal = yield* JournalStore
-              yield* journal.beginRun(runId, target, initialPolicy)
+              yield* journal.beginRun(runId, target, initialPolicy, remotePublicationTargetForTest)
               yield* journal.append(runId, intentRecordKey(fixture.operation.operationId), fixture.intent)
               yield* journal.append(runId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
             }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))

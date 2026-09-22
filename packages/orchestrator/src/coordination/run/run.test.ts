@@ -35,6 +35,46 @@ const programDependencies = Layer.mergeAll(
   Layer.mock(TaskClaimAcquisitionPlanner, {})
 )
 
+it.effect("rechecks cleanup created during delivery before accepting a later finality proof", () =>
+  Effect.gen(function* () {
+    const phases = yield* Ref.make<ReadonlyArray<string>>([])
+    const pending = yield* Ref.make(false)
+    const deliveries = yield* Ref.make(0)
+    const cleanup = {
+      responsibilities: { branch: [], candidate: [], worktree: [] },
+      run: Ref.update(phases, (events) => [...events, "cleanup"]).pipe(
+        Effect.as({
+          branch: undefined,
+          branchOutcomes: [],
+          candidate: undefined,
+          candidateOutcomes: [],
+          remaining: { branch: [], candidate: [], worktree: [] },
+          selected: { branch: undefined, candidate: undefined, worktree: undefined },
+          worktree: undefined,
+          worktreeOutcomes: []
+        })
+      )
+    } satisfies DispositionCleanupActivationService
+    const proof = {
+      acceptedAt: null,
+      decision: RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+    } as const
+    const delivery = Effect.gen(function* () {
+      yield* Ref.update(phases, (events) => [...events, "delivery"])
+      const count = yield* Ref.updateAndGet(deliveries, (value) => value + 1)
+      yield* Ref.set(pending, count === 1)
+      return proof
+    })
+    expect(
+      yield* runDeliveryAfterDispositionCleanup(cleanup, delivery, {
+        pending: Ref.get(pending),
+        reset: Ref.set(pending, false)
+      })
+    ).toBe(proof)
+    expect(yield* Ref.get(phases)).toEqual(["cleanup", "delivery", "cleanup", "delivery"])
+  })
+)
+
 it.effect("keeps the Run active and skips delivery until pending cleanup settles on a later activation", () =>
   Effect.gen(function* () {
     const deliveryCalls = yield* Ref.make(0)

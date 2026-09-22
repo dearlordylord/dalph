@@ -1,3 +1,4 @@
+import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { expect, it } from "vitest"
 import { AttemptId, RunId, makeTaskWorkSpecification } from "@dalph/contracts"
 import { makeExecutingAttemptHistory } from "../../../test/support/executing-attempt-history.js"
@@ -69,7 +70,8 @@ it.each([64, 256])(
       makeWorkflowRunBeganRecord(
         runId,
         target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+        remotePublicationTargetForTest
       )
     ]
     for (let position = 2; position <= size; position += 1) {
@@ -133,7 +135,8 @@ it("exposes accepted reconstruction only as indexed evidence, with no implicit r
   const began = makeWorkflowRunBeganRecord(
     runId,
     FixtureTarget.make("explicit-history-export"),
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    remotePublicationTargetForTest
   )
   const valid = reduceWorkflowJournalHistory(runId, [began])
   if (valid._tag !== "ValidWorkflowJournalHistory") return expect.fail("fixture must validate")
@@ -147,7 +150,8 @@ it("rejects a fabricated valid-history shape without replaying its accepted pref
   const began = makeWorkflowRunBeganRecord(
     runId,
     FixtureTarget.make("fabricated-history"),
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    remotePublicationTargetForTest
   )
   const valid = reduceWorkflowJournalHistory(runId, [began])
   if (valid._tag !== "ValidWorkflowJournalHistory") return expect.fail("fixture prefix must validate")
@@ -174,7 +178,8 @@ it.each([64, 256])(
     const began = makeWorkflowRunBeganRecord(
       runId,
       FixtureTarget.make("capacity-scaling"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+      remotePublicationTargetForTest
     )
     const capacityRecord = (position: number) => ({
       event: TaskWorkCapacityChangedEvent.make({

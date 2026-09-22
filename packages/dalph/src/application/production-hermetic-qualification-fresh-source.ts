@@ -2,6 +2,7 @@ import { JournalPosition, PlannedAttemptExecutorReportOrdinal, type DeliveryActi
 import { Effect, Schema } from "effect"
 import {
   sourceRejected,
+  sourceRejectedBecause,
   strictSource,
   validateOperationId,
   validateClaimOperation,
@@ -91,6 +92,7 @@ const validateFreshOperationStep = Effect.fn("HermeticQualification.validateFres
         plannedAttempt: yield* validatePlannedAttempt(step.plannedAttempt, context),
         task
       }
+    /* v8 ignore next -- @preserve Fresh operation schema narrows this union before exhaustive routing. */
     default:
       return yield* sourceRejected()
   }
@@ -119,9 +121,10 @@ const validateExecutorStep = Effect.fn("HermeticQualification.validateExecutorSt
         acceptedProgress: yield* Schema.decodeUnknownEffect(
           acceptedProgress,
           strictSource
-        )(step.acceptedProgress).pipe(Effect.mapError(sourceRejected)),
+        )(step.acceptedProgress).pipe(Effect.mapError(sourceRejectedBecause("InvalidAcceptedProgress"))),
         task
       }
+    /* v8 ignore next -- @preserve Executor-step schema narrows this union before exhaustive routing. */
     default:
       return yield* sourceRejected()
   }

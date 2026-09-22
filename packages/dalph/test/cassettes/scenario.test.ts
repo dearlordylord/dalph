@@ -1326,7 +1326,7 @@ it.effect("pauses A and its grouping child while recording only A's direction", 
             responsibility: {
               _tag: "PlannedAttemptExecutorWork",
               attemptId: "attempt:A:0",
-              beganAt: 17,
+              beganAt: 19,
               coverage: { _tag: "ExactTaskPauseCoverage" },
               taskId: "A"
             }
@@ -1360,8 +1360,8 @@ it.effect("pauses A and its grouping child while recording only A's direction", 
             responsibility: {
               _tag: "PlannedAttemptExecutorWork",
               attemptId: "attempt:B:1",
-              beganAt: 30,
-              coverage: { _tag: "GroupingDescendantPauseCoverage", groupingObservedAt: 35, pausedTaskId: "A" },
+              beganAt: 32,
+              coverage: { _tag: "GroupingDescendantPauseCoverage", groupingObservedAt: 37, pausedTaskId: "A" },
               taskId: "B"
             }
           }
@@ -4362,6 +4362,8 @@ it.effect("runs the maintained singleton through production activation and descr
     expect(JSON.stringify(expected)).not.toContain("attempt:A:0")
     expect(run.records.map(({ event }) => event._tag)).toEqual([
       "WorkflowRunBegan",
+      "RemotePublicationAdmissionReadIntended",
+      "RemotePublicationAdmissionObserved",
       "TaskTrackerReadIntentRecorded",
       "TaskTrackerFactsObserved",
       "TaskTrackerReadIntentRecorded",
@@ -7060,6 +7062,17 @@ it.effect(
         GitReadInitiated: true,
         IntegrationResponsibilityBegan: true,
         IntegrationStarted: true,
+        LocalTargetCatchUpIntended: true,
+        LocalTargetCatchUpObserved: true,
+        RemoteBaselineObserved: true,
+        RemoteBaselineReadIntended: true,
+        RemotePublicationAdmissionObserved: true,
+        RemotePublicationAdmissionReadIntended: true,
+        RemotePublicationAttemptIntended: true,
+        RemotePublicationAttemptRejectedNonFastForward: true,
+        RemotePublicationIntended: true,
+        RemotePublicationRetained: true,
+        RemotePublicationSucceeded: true,
         PlannedAttemptContinuationAuthorized: true,
         PlannedAttemptReplaced: true,
         TargetPromotionIntended: true,
@@ -7468,9 +7481,59 @@ it.effect(
       expect(lostCompletionRun.records.some(({ event }) => event._tag === "CompletionTaskResponseLost")).toBe(true)
       expect(rejectedCompletionRun.records.some(({ event }) => event._tag === "CompletionTaskRejected")).toBe(true)
       expect(renderRecordedCassetteLyrics(executorObservationVariants)).toContain("kept the command unresolved")
-      const completionEntries: ReadonlyArray<RecordedCassetteEntry> = (yield* Effect.all(
+      const projectedCompletionEntries = (yield* Effect.all(
         [completionRun, lostCompletionRun, rejectedCompletionRun].map(({ records }) => projectRecordedCassette(records))
-      )).flatMap(({ entries }) => entries.filter(({ _tag }) => _tag.startsWith("Integrator")))
+      )).flatMap(({ entries }) => entries)
+      const completionEntries: ReadonlyArray<RecordedCassetteEntry> = projectedCompletionEntries.filter(({ _tag }) =>
+        _tag.startsWith("Integrator")
+      )
+      const directPublicationSeedEntries = projectedCompletionEntries.filter(
+        ({ _tag }) =>
+          _tag.startsWith("LocalTargetCatchUp") ||
+          _tag.startsWith("RemoteBaseline") ||
+          _tag.startsWith("RemotePublication")
+      )
+      const baseline = directPublicationSeedEntries.find((entry) => entry._tag === "RemoteBaselineObserved")
+      const publication = directPublicationSeedEntries.find((entry) => entry._tag === "RemotePublicationSucceeded")
+      if (
+        baseline?._tag !== "RemoteBaselineObserved" ||
+        baseline.observation._tag === "RemoteMissing" ||
+        baseline.observation._tag === "Unavailable" ||
+        publication?._tag !== "RemotePublicationSucceeded"
+      ) {
+        return yield* Effect.die("direct-publication alpha-renaming fixture requires exact baseline and publication")
+      }
+      const directPublicationEntries: ReadonlyArray<RecordedCassetteEntry> = [
+        ...directPublicationSeedEntries,
+        {
+          _tag: "RemotePublicationAttemptRejectedNonFastForward",
+          attemptOrdinal: publication.proof.attemptOrdinal,
+          correlation: publication.correlation,
+          occurrenceClassification: "NonActionOccurrence"
+        },
+        {
+          _tag: "LocalTargetCatchUpIntended",
+          correlation: baseline.correlation,
+          expectedLocalHead: baseline.observation.localHead,
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          remoteHead: baseline.observation.remoteHead
+        },
+        {
+          _tag: "LocalTargetCatchUpObserved",
+          correlation: baseline.correlation,
+          expectedLocalHead: baseline.observation.localHead,
+          occurrenceClassification: "NonActionOccurrence",
+          remoteHead: baseline.observation.remoteHead,
+          result: { _tag: "AlreadyCurrent", currentHead: baseline.observation.remoteHead }
+        },
+        {
+          _tag: "RemotePublicationRetained",
+          cause: { _tag: "AttemptsExhausted" },
+          correlation: publication.correlation,
+          occurrenceClassification: "NonActionOccurrence"
+        }
+      ]
       const fixedSession = completionEntries.find((entry) => entry._tag === "IntegratorSessionFixed")
       if (fixedSession?._tag !== "IntegratorSessionFixed") {
         return yield* Effect.die("quarantine alpha-renaming fixture requires one fixed Integrator session")
@@ -7546,6 +7609,7 @@ it.effect(
             ...executorObservationVariants.entries,
             resumeRedeliveryEntry,
             ...completionEntries,
+            ...directPublicationEntries,
             ...quarantineEntries
           ]
             .map(({ _tag }) => _tag)

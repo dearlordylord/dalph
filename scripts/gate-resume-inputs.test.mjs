@@ -64,6 +64,22 @@ void test("unchanged complete inputs produce identical identity and drained fina
   }
 })
 
+void test("per-run gate deadline does not invalidate otherwise reusable inputs", async () => {
+  const f = fixture()
+  f.environment.DALPH_GATE_DEADLINE = "2026-09-22T08:00:00.000Z"
+  f.environment.DALPH_GATE_LOCK_WAIT_SECONDS = "3600"
+  const guard = await f.guard()
+  try {
+    assert.equal(guard.identity.environmentDigests.DALPH_GATE_DEADLINE, undefined)
+    assert.equal(guard.identity.environmentDigests.DALPH_GATE_LOCK_WAIT_SECONDS, undefined)
+    f.environment.DALPH_GATE_DEADLINE = "2026-09-22T09:00:00.000Z"
+    f.environment.DALPH_GATE_LOCK_WAIT_SECONDS = "7200"
+    await guard.assertUnchanged()
+  } finally {
+    await guard.close()
+  }
+})
+
 for (const [name, mutate] of [
   [
     "source editrestore",
@@ -212,11 +228,12 @@ def split_read(fd, size):
         offset = end
     ordinary = [record for mask, record in records if not mask & 0x8000]
     ignored = [record for mask, record in records if mask & 0x8000]
-    if ordinary and ignored and any(mask & 0x80 for mask, _ in records):
+    if ordinary and any(mask & 0x80 for mask, _ in records):
         split_once = True
         with open(split_marker, "w", encoding="utf-8") as marker:
             marker.write("split")
-        held.append(b"".join(ignored))
+        if ignored:
+            held.append(b"".join(ignored))
         block_once = True
         return b"".join(ordinary)
     return data

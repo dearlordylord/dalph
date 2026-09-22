@@ -208,6 +208,52 @@ describe("hosted formal-model contract", () => {
     )
     expect(suffixJob.indexOf("pnpm install --frozen-lockfile")).toBeLessThan(suffixJob.indexOf("pnpm check:artifacts"))
     expect(suffixJob.indexOf("pnpm check:artifacts")).toBeLessThan(suffixJob.indexOf("pnpm check:ci:quality:stage \\"))
+    expect(suffixJob).toMatch(
+      /- name: Prepare isolated coverage account\n\s+if: matrix\.stageId == 'coverage'[\s\S]*?sudo useradd --create-home --shell \/bin\/bash dalph-quality/u
+    )
+    expect(suffixJob).toContain('echo "QUALITY_WORKSPACE_OWNER=$(stat -c \'%u:%g\' "$GITHUB_WORKSPACE")"')
+    const firstOutputDirectoryCreation = suffixJob.indexOf(
+      'mkdir -p "hosted-quality/stages/${{ matrix.nodeVersion }}/${{ matrix.stageId }}"'
+    )
+    expect(firstOutputDirectoryCreation).toBeGreaterThan(suffixJob.indexOf("Prepare isolated coverage account"))
+    expect(firstOutputDirectoryCreation).toBeLessThan(
+      suffixJob.indexOf('sudo chown -R dalph-quality:dalph-quality "$GITHUB_WORKSPACE"')
+    )
+    expect(suffixJob).toContain('sudo chown -R dalph-quality:dalph-quality "$GITHUB_WORKSPACE"')
+    expect(suffixJob).toContain('if [[ "${{ matrix.stageId }}" == coverage ]]')
+    expect(suffixJob).toContain("sudo -H -u dalph-quality env -i \\")
+    const isolatedEnvironment =
+      /sudo -H -u dalph-quality env -i \\\n(?<assignments>[\s\S]*?)\n\s+"\$\{stage_command\[@\]\}"/u.exec(suffixJob)
+        ?.groups?.["assignments"]
+    expect(isolatedEnvironment).toBeDefined()
+    const forwardedNames = [...(isolatedEnvironment ?? "").matchAll(/^\s+"(?<name>[A-Z0-9_]+)=/gmu)].map(
+      ({ groups }) => groups?.["name"]
+    )
+    expect(forwardedNames).toEqual([
+      "HOME",
+      "PATH",
+      "CI",
+      "GITHUB_ACTIONS",
+      "GITHUB_SHA",
+      "GITHUB_RUN_ID",
+      "GITHUB_RUN_ATTEMPT",
+      "NODE_OPTIONS",
+      "DALPH_HOSTED_QUALITY_CANDIDATE_SHA",
+      "DALPH_HOSTED_QUALITY_BASE_SHA",
+      "DALPH_HOSTED_QUALITY_WORKFLOW",
+      "DALPH_HOSTED_QUALITY_RUN_ID",
+      "DALPH_HOSTED_QUALITY_RUN_ATTEMPT",
+      "DALPH_HOSTED_QUALITY_NODE_VERSION",
+      "DALPH_HOSTED_QUALITY_STAGE_ID",
+      "DALPH_HOSTED_QUALITY_CELL_STARTED_AT",
+      "DALPH_COVERAGE_BASE_SHA"
+    ])
+    expect(isolatedEnvironment).toContain('"GITHUB_RUN_ID=$GITHUB_RUN_ID"')
+    expect(isolatedEnvironment).toContain('"GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT"')
+    expect(isolatedEnvironment).toContain('"HOME=/home/dalph-quality"')
+    expect(suffixJob).toMatch(
+      /- name: Restore coverage workspace ownership\n\s+if: always\(\) && matrix\.stageId == 'coverage'[\s\S]*?sudo userdel --remove dalph-quality/u
+    )
     const qualityGateCleanRunnerPreparation = fullQualityGateManifest("0".repeat(40)).find(
       ({ boundary }: { boundary: string }) => boundary === "qualification"
     )?.cleanRunnerPreparation
@@ -222,6 +268,9 @@ describe("hosted formal-model contract", () => {
     ])
     expect(suffixJob).not.toContain("pnpm check:preflight")
     expect(suffixJob.indexOf("pnpm check:ci:quality:stage \\")).toBeLessThan(
+      suffixJob.indexOf("Restore coverage workspace ownership")
+    )
+    expect(suffixJob.indexOf("Restore coverage workspace ownership")).toBeLessThan(
       suffixJob.indexOf("Upload hosted quality stage evidence")
     )
     expect(suffixJob).toMatch(/- name: Upload hosted quality stage evidence[\s\S]*?if: always\(\)/u)
