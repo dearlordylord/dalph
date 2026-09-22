@@ -1367,3 +1367,22 @@ A controlled descendant that installs a `SIGTERM` handler also proves the
 bounded forced-stop path and complete group absence inside the ordinary test
 budget. This repairs test process custody only and cannot change Dalph runtime
 behavior.
+
+The next frozen gate stopped during its resume-control negative test. Under the
+full preflight load, a synchronous 20-second outer timeout killed the Linux
+subreaper before its nested cleanup command settled, orphaning two exact gate
+processes. The gate retained an unresolved custody fence as designed. The
+supervisor identified process group `3742981`, sent `SIGTERM` then `SIGKILL`,
+proved it absent, and reconciled run
+`bb2ded4d-32b0-4297-ba45-f7460c5937f0` to stopped custody; qualification remains
+`UNPROVEN`.
+
+That negative-test harness now owns the deadline inside the subreaper. It starts
+the command in a new session, opens Linux PID handles and revalidates start
+identities before signaling each fresh descendant census, escalates from
+`SIGTERM` to repeated `SIGKILL` censuses, reaps adopted children, and reports
+exact unresolved identities rather than claiming cleanup. A controlled nested
+detached descendant proves that the distinct timeout result returns only after
+its recorded process identity is absent. The original cleanup/reuse negative
+test also passes. This changes qualification fixtures only, not production gate
+or Dalph runtime behavior.
