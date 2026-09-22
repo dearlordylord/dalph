@@ -235,6 +235,8 @@ describe("hosted formal-model contract", () => {
       "CI",
       "GITHUB_ACTIONS",
       "GITHUB_SHA",
+      "GITHUB_RUN_ID",
+      "GITHUB_RUN_ATTEMPT",
       "NODE_OPTIONS",
       "DALPH_HOSTED_QUALITY_CANDIDATE_SHA",
       "DALPH_HOSTED_QUALITY_BASE_SHA",
@@ -246,6 +248,8 @@ describe("hosted formal-model contract", () => {
       "DALPH_HOSTED_QUALITY_CELL_STARTED_AT",
       "DALPH_COVERAGE_BASE_SHA"
     ])
+    expect(isolatedEnvironment).toContain('"GITHUB_RUN_ID=$GITHUB_RUN_ID"')
+    expect(isolatedEnvironment).toContain('"GITHUB_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT"')
     expect(isolatedEnvironment).toContain('"HOME=/home/dalph-quality"')
     expect(suffixJob).toMatch(
       /- name: Restore coverage workspace ownership\n\s+if: always\(\) && matrix\.stageId == 'coverage'[\s\S]*?sudo userdel --remove dalph-quality/u

@@ -1386,3 +1386,13 @@ detached descendant proves that the distinct timeout result returns only after
 its recorded process identity is absent. The original cleanup/reuse negative
 test also passes. This changes qualification fixtures only, not production gate
 or Dalph runtime behavior.
+
+Hosted run `35738119830` rejected the first isolated coverage cell before it
+launched any test. The clean environment forwarded the merge candidate SHA and
+the workflow's redundant identity, but omitted GitHub's authoritative
+`GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT`; the evidence boundary correctly
+refused the incomplete runner binding and therefore produced no stage envelope.
+The explicit non-secret allowlist and its exact-order workflow contract now
+include both fields. This is a hosted harness configuration repair; it does not
+change Dalph runtime behavior, and the isolated coverage hypothesis remains
+unconfirmed until the next hosted run.
