@@ -69,6 +69,7 @@ const launch = (root, script, resumeRunId, reap = false, reaperSeconds = 30) => 
   for (const key of [
     "DALPH_COVERAGE_BASE_SHA",
     "DALPH_GATE_GIT_HISTORY",
+    "DALPH_GATE_RECOVERY_MODE",
     "DALPH_QUALIFICATION_ENV_CAPTURE",
     "DALPH_RUN_REAL_CODEX_QUALIFICATION",
     "npm_execpath"
@@ -172,6 +173,7 @@ const launchAdmitted = (root, commandArguments) => {
   for (const key of [
     "DALPH_COVERAGE_BASE_SHA",
     "DALPH_GATE_GIT_HISTORY",
+    "DALPH_GATE_RECOVERY_MODE",
     "DALPH_QUALIFICATION_ENV_CAPTURE",
     "DALPH_RUN_REAL_CODEX_QUALIFICATION",
     "npm_execpath"
@@ -284,6 +286,7 @@ await executeResumableQualityGate({logicalInvocation,stageManifest:[stage],prepa
       "--question=does the focused obstruction still fail before its repair marker?",
       "--alternatives=the obstruction is present | the broad runner failed elsewhere",
       "--observation=the exact failed-stage command exits 9 before the marker exists",
+      "--contains=controlled obstruction",
       "--expect=exit:9",
       "--supports=1",
       "--",

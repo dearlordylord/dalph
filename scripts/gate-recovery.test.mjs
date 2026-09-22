@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import { readRecord, repositoryLocation } from "./gate-custody-records.mjs"
@@ -20,6 +20,7 @@ import {
 const wrapper = fileURLToPath(new URL("./with-gate-slot.mjs", import.meta.url))
 const diagnosis = fileURLToPath(new URL("./run-gate-diagnosis.mjs", import.meta.url))
 const verification = fileURLToPath(new URL("./run-gate-repair-verification.mjs", import.meta.url))
+const qualityGate = fileURLToPath(new URL("./run-quality-gate.mjs", import.meta.url))
 
 const fixture = () => {
   const root = mkdtempSync(join(tmpdir(), "dalph-gate-recovery-"))
@@ -68,7 +69,9 @@ const environment = (extra = {}) => {
     "DALPH_GATE_SLOT",
     "DALPH_GATE_DEADLINE",
     "DALPH_GATE_RECOVERY_MODE",
-    "DALPH_COVERAGE_DIRECTORY"
+    "DALPH_COVERAGE_DIRECTORY",
+    "DALPH_COVERAGE_BASE_SHA",
+    "DALPH_GATE_GIT_HISTORY"
   ])
     delete value[name]
   return value
@@ -118,6 +121,7 @@ const focusedDiagnosis = ({
   expected = "exit:9",
   failedRunId,
   fixture_,
+  contains = command === undefined ? "cleanup join stalled" : "controlled diagnostic observation",
   question = "where did execution stop?"
 }) =>
   spawnSync(
@@ -131,6 +135,7 @@ const focusedDiagnosis = ({
       `--question=${question}`,
       "--alternatives=product progress stopped | cleanup join stalled",
       "--observation=the focused child exposes whether cleanup reaches its final checkpoint",
+      `--contains=${contains}`,
       `--expect=${expected}`,
       "--supports=2",
       "--",
@@ -215,6 +220,25 @@ void test("an inconclusive diagnosis retains the obstruction and prose renaming 
   }
 })
 
+void test("a matching exit without the predicted output remains inconclusive", () => {
+  const f = fixture()
+  try {
+    const { failedRunId, location } = seedObstruction(f)
+    const result = focusedDiagnosis({
+      command: [process.execPath, "-e", "console.error('different observation');process.exit(9)"],
+      failedRunId,
+      fixture_: f
+    })
+    assert.equal(result.status, 1, result.stderr)
+    const attempt = readRecord(gateRecoveryPath(location)).diagnosisAttempts.at(-1)
+    assert.equal(attempt.actualOutcome, "exit:9")
+    assert.equal(attempt.outputMatched, false)
+    assert.equal(attempt.outcome, "inconclusive")
+  } finally {
+    f.cleanup()
+  }
+})
+
 void test("a shell-wrapped broad gate is rejected at the nested admission boundary", () => {
   const f = fixture()
   try {
@@ -223,7 +247,7 @@ void test("a shell-wrapped broad gate is rejected at the nested admission bounda
     mkdirSync(join(f.root, ".scratch"), { recursive: true })
     writeFileSync(
       shell,
-      `#!/bin/bash\nexec ${process.execPath} ${wrapper} -- ${process.execPath} ${join(f.root, "scripts", "run-quality-gate.mjs")} --local-handoff --candidate=${f.baseSha}\n`
+      `#!/bin/bash\nunset DALPH_GATE_RECOVERY_MODE\nexec ${process.execPath} ${wrapper} -- ${process.execPath} ${join(f.root, "scripts", "run-quality-gate.mjs")} --local-handoff --candidate=${f.baseSha}\n`
     )
     const command = ["bash", shell]
     const result = focusedDiagnosis({ command, expected: "passed", failedRunId, fixture_: f })
@@ -232,6 +256,31 @@ void test("a shell-wrapped broad gate is rejected at the nested admission bounda
     assert.equal(recovery.state, "diagnosis-required")
     const log = readFileSync(recovery.diagnosisAttempts.at(-1).log.path, "utf8")
     assert.match(log, /cannot launch a broad admitted command/u)
+  } finally {
+    f.cleanup()
+  }
+})
+
+void test("unsetting the mode cannot directly invoke the full quality entry point", () => {
+  const f = fixture()
+  try {
+    const { failedRunId, location } = seedObstruction(f)
+    const command = [
+      "bash",
+      "-c",
+      `unset DALPH_GATE_RECOVERY_MODE; quality_name=run-quality-; quality_name+=gate.mjs; exec ${process.execPath} ${JSON.stringify(dirname(qualityGate))}/$quality_name --local-handoff --candidate=${f.baseSha}`
+    ]
+    const result = focusedDiagnosis({
+      command,
+      contains: "cannot launch the full quality gate",
+      expected: "exit:1",
+      failedRunId,
+      fixture_: f
+    })
+    assert.equal(result.status, 0, result.stderr)
+    const attempt = readRecord(gateRecoveryPath(location)).diagnosisAttempts.at(-1)
+    assert.equal(attempt.actualOutcome, "exit:1")
+    assert.equal(attempt.outputMatched, true)
   } finally {
     f.cleanup()
   }
@@ -264,7 +313,7 @@ void test("an ignored-resource intervention can be verified without a candidate 
     const command = [
       process.execPath,
       "-e",
-      `if(!require('fs').existsSync(${JSON.stringify(ignoredMarker)}))process.exit(9)`
+      `if(!require('fs').existsSync(${JSON.stringify(ignoredMarker)})){console.error('controlled diagnostic observation');process.exit(9)}`
     ]
     assert.equal(focusedDiagnosis({ command, failedRunId, fixture_: f }).status, 0)
     mkdirSync(join(f.root, ".scratch"), { recursive: true })
@@ -289,7 +338,7 @@ void test("a failed verification permits a changed diagnostic strategy", () => {
     assert.equal(failedVerification.status, 1, failedVerification.stderr)
     assert.equal(readRecord(gateRecoveryPath(location)).state, "repair-required")
     const changed = focusedDiagnosis({
-      command: [process.execPath, "-e", "process.exit(8)"],
+      command: [process.execPath, "-e", "console.error('controlled diagnostic observation');process.exit(8)"],
       expected: "exit:8",
       failedRunId,
       fixture_: f,

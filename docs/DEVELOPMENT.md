@@ -60,11 +60,13 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
   `check:all` is not admitted merely because the candidate, session, hypothesis,
   or command wording changed. Run `pnpm gate:diagnose <failed-run-id>
   --question=<question> --alternatives='<a> | <b>'
-  --observation=<distinguishing-observation> --expect=<outcome>
+  --observation=<distinguishing-observation> --contains=<expected-output>
+  --expect=<outcome>
   --supports=<alternative-number> -- <focused-reproducer>`. The command records
   intent before execution, rejects broad gates and an identical repeated
-  experiment, retains its output, and records which predicted outcome was
-  observed. It does not authorize qualification. Repair the candidate, then run
+  experiment, retains its output, and records which predicted exit and literal
+  output observation were both seen. It does not authorize qualification.
+  Repair the candidate, then run
   `pnpm gate:verify-repair <failed-run-id>`; this reruns the exact focused command
   after candidate content changes. For an environment, resource, or ignored-artifact
   repair, add `--intervention=<observed external change>` instead; the agent records

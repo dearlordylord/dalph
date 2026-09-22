@@ -23,14 +23,13 @@ const states = new Set([
 export const gateRecoveryPath = (location) =>
   join(location.custodyRoot, "recovery", `${digest(location.worktree)}.json`)
 
-export const gateRecoveryLockPath = (location) =>
-  join(location.custodyRoot, "recovery", `${digest(location.worktree)}.lock`)
+const gateRecoveryLockPath = (location) => join(location.custodyRoot, "recovery", `${digest(location.worktree)}.lock`)
 
 const canonicalCommit = (value) => typeof value === "string" && /^[0-9a-f]{40}$/u.test(value)
 const canonicalDigest = (value) => typeof value === "string" && /^[0-9a-f]{64}$/u.test(value)
 const canonicalRunId = (value) => typeof value === "string" && /^[0-9a-f-]{36}$/u.test(value)
 
-export const validateGateRecovery = ({ location, record }) => {
+const validateGateRecovery = ({ location, record }) => {
   const validInputIdentity =
     (canonicalCommit(record.baseSha) && canonicalDigest(record.failedSourceInputDigest)) ||
     (record.baseSha === null && record.failedSourceInputDigest === null && record.inputIdentity === "UNPROVEN")
@@ -147,7 +146,7 @@ export const recordGateObstruction = ({ evidence, location }) => {
   })
 }
 
-export const recordInterruptedGateObstruction = ({ identity, location, runId }) =>
+const recordInterruptedGateObstruction = ({ identity, location, runId }) =>
   writeObstruction({
     baseSha: identity?.baseSha ?? null,
     failedRunId: runId,
@@ -186,7 +185,7 @@ export const requireGateRecoveryAdmission = ({ currentSourceInputDigest, locatio
           ? `reconcile qualification run ${record.qualificationRunId}`
           : record.state === "repair-required"
             ? `repair the diagnosed obstruction, then run pnpm gate:verify-repair ${record.failedRunId}`
-            : `run pnpm gate:diagnose ${record.failedRunId} --question=<question> --alternatives='<a> | <b>' --observation=<distinguishing-observation> --expect=<outcome> --supports=<alternative-number> -- <focused-command>`
+            : `run pnpm gate:diagnose ${record.failedRunId} --question=<question> --alternatives='<a> | <b>' --observation=<distinguishing-observation> --contains=<expected-output> --expect=<outcome> --supports=<alternative-number> -- <focused-command>`
   throw new Error(`Gate recovery requires focused diagnosis before another broad gate: ${action}`)
 }
 

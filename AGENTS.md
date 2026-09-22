@@ -49,6 +49,7 @@ questions. Reuse guidance already read unless it changed or scope changed.
 - A failed full qualification creates a worktree recovery obstruction. Before
   another full qualification, execute its focused diagnostic action with an
   explicit question, competing explanations, and distinguishing observation.
+  The harness must match both its predicted command outcome and expected output.
   Candidate changes, delegation, compaction, and resumed sessions do not clear
   the obstruction. A diagnosis records which competing explanation its observed
   outcome supports; only a subsequent passing verification of the repaired

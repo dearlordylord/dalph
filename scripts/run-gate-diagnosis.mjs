@@ -23,6 +23,7 @@ const alternatives = option("alternatives")
   .map((value) => value.trim())
   .filter(Boolean)
 const observation = option("observation")
+const expectedOutput = option("contains")
 const expectedOutcome = option("expect")
 const supportedAlternativeIndex = Number(option("supports")) - 1
 const validExpectedOutcome =
@@ -39,13 +40,15 @@ if (
   alternatives.length < 2 ||
   typeof observation !== "string" ||
   observation.trim() === "" ||
+  typeof expectedOutput !== "string" ||
+  expectedOutput === "" ||
   !validExpectedOutcome ||
   !Number.isInteger(supportedAlternativeIndex) ||
   supportedAlternativeIndex < 0 ||
   supportedAlternativeIndex >= alternatives.length
 )
   throw new Error(
-    "Usage: pnpm gate:diagnose <failed-run-id> --question=<question> --alternatives='<a> | <b>' --observation=<distinguishing-observation> --expect=passed|failed|timed-out|exit:<code> --supports=<alternative-number> -- <focused-command>"
+    "Usage: pnpm gate:diagnose <failed-run-id> --question=<question> --alternatives='<a> | <b>' --observation=<distinguishing-observation> --contains=<expected-output> --expect=passed|failed|timed-out|exit:<code> --supports=<alternative-number> -- <focused-command>"
   )
 
 const broadNames = new Set([
@@ -90,6 +93,7 @@ withGateRecoveryLock(location, () => {
         question,
         alternatives,
         observation,
+        expectedOutput,
         expectedOutcome,
         supportedAlternative: alternatives[supportedAlternativeIndex],
         command,
@@ -118,10 +122,12 @@ try {
   failure = error
 }
 const actualOutcome = failure?.quintCommandResult ?? (result?.exitCode === 0 ? "passed" : `exit:${result?.exitCode}`)
-const expectationMatched =
+const outcomeMatched =
   expectedOutcome === actualOutcome ||
   (expectedOutcome === "failed" && actualOutcome !== "passed" && actualOutcome !== "timed-out")
 const output = result?.output ?? failure?.output ?? ""
+const outputMatched = output.includes(expectedOutput)
+const expectationMatched = outcomeMatched && outputMatched
 const logDirectory = join(location.custodyRoot, "recovery", "logs")
 mkdirSync(logDirectory, { recursive: true })
 const logPath = join(logDirectory, `${actionId}.log`)
@@ -135,6 +141,7 @@ withGateRecoveryLock(location, () => {
     finishedAt: wallClockTimestamp(),
     outcome: expectationMatched ? "observed" : "inconclusive",
     actualOutcome,
+    outputMatched,
     exitCode: result?.exitCode ?? failure?.exitCode ?? null,
     log: { path: logPath, sha256: digest(output), bytes: Buffer.byteLength(output) }
   }
@@ -147,7 +154,9 @@ withGateRecoveryLock(location, () => {
   })
 })
 if (!expectationMatched) {
-  console.error(`Focused diagnosis expected ${expectedOutcome}, observed ${actualOutcome}`)
+  console.error(
+    `Focused diagnosis expected ${expectedOutcome} containing ${JSON.stringify(expectedOutput)}, observed ${actualOutcome} with output match=${outputMatched}`
+  )
   process.exitCode = 1
 } else {
   console.error(

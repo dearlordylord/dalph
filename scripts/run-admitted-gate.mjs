@@ -200,7 +200,7 @@ try {
     if (!passed) {
       const obstruction = recordGateObstruction({ evidence, location })
       console.error(
-        `[gate-recovery] obstruction ${obstruction.obstructionId}; suggested=${JSON.stringify(obstruction.suggestedDiagnostic?.command ?? null)}; next=pnpm gate:diagnose ${runId} --question=<question> --alternatives='<a> | <b>' --observation=<distinguishing-observation> --expect=<outcome> --supports=<alternative-number> -- <focused-command>`
+        `[gate-recovery] obstruction ${obstruction.obstructionId}; suggested=${JSON.stringify(obstruction.suggestedDiagnostic?.command ?? null)}; next=pnpm gate:diagnose ${runId} --question=<question> --alternatives='<a> | <b>' --observation=<distinguishing-observation> --contains=<expected-output> --expect=<outcome> --supports=<alternative-number> -- <focused-command>`
       )
     }
   }
