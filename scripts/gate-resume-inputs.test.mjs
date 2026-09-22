@@ -228,11 +228,12 @@ def split_read(fd, size):
         offset = end
     ordinary = [record for mask, record in records if not mask & 0x8000]
     ignored = [record for mask, record in records if mask & 0x8000]
-    if ordinary and ignored and any(mask & 0x80 for mask, _ in records):
+    if ordinary and any(mask & 0x80 for mask, _ in records):
         split_once = True
         with open(split_marker, "w", encoding="utf-8") as marker:
             marker.write("split")
-        held.append(b"".join(ignored))
+        if ignored:
+            held.append(b"".join(ignored))
         block_once = True
         return b"".join(ordinary)
     return data

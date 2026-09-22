@@ -1319,3 +1319,14 @@ lacked recorded-catalog and delivery-repeatability envelopes. This recurrence
 rules out a unique transient runner incident, but the missing first two file
 identities still prevent a justified shared-cause claim. The version-two hosted
 envelope makes the next recurrence retain those closed identities.
+
+Hosted preflight for candidate `744df41db11f713d2d3376253a312991d57aeb74`
+then exposed an independent observer-fixture race. The split-event regression
+required one kernel read to contain both the parent replacement and obsolete
+inode removal before its injected `EAGAIN`; the hosted overlay delivered those
+records in separate reads, so the fixture read a marker that it had never
+created. Production observation still passed its drain barrier. The fixture now
+injects the boundary immediately after the parent replacement and holds the
+obsolete record only when it arrived in the same read. Thirty focused
+iterations and the complete 113-test input-guard file pass. This changes the
+qualification fixture only; runtime input observation is unchanged.
