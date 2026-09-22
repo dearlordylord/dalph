@@ -30,10 +30,14 @@ it("accepts a full Git integration target branch ref", () => {
 })
 
 it.each([
+  " ",
+  "-upload-pack=malicious",
+  "https://example.invalid/repository.git\u0007",
+  "ext::sh -c malicious",
   "https://token@example.invalid/repository.git",
   "https://example.invalid/repository.git?token=secret",
   "user:password@example.invalid:repository.git"
-])("rejects credential-bearing remote publication endpoint %s", (endpoint) => {
+])("rejects unsafe remote publication endpoint %s", (endpoint) => {
   expect(() => Schema.decodeUnknownSync(RemotePublicationEndpoint)(endpoint)).toThrow()
 })
 

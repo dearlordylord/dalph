@@ -1229,3 +1229,17 @@ record the #383/#384 amendment, and the two hermetic paths assert the exact
 `IntegrationFinalitySettled` → exact worktree, branch, and Integrator-candidate
 authorization/settlement → termination order. Both focused paths pass; a fresh
 candidate gate is still required.
+
+Fresh full-gate run `69a8c6f8-6aaf-43cb-867c-b1fd278b5318` on candidate
+`cc1783b90b37fb5f883f728d7a107316e0b74bbf` passed structural preflight, reused
+the exact applicable formal success without starting a checker, passed all 20
+delivery-repeatability iterations, passed the recorded catalog, and executed
+4,427 tests with no failures. The completed coverage stage then enforced the
+production branch floor that the prior test-failing run had not reached:
+94.95812325513563% against the required 95%. Registration closed, custody
+stopped, and source remained unchanged. `coverage:explain` proved the retained
+artifact fresh for the exact source and Base. Focused safety tests now exercise
+13 previously uncovered production branch arms across remote endpoint
+validation, executor-default resolution, optional bounded Git capability,
+pinned-endpoint rewrite reconciliation, and invalid remote-baseline history;
+the five focused files pass 70/70 and a fresh candidate gate remains required.

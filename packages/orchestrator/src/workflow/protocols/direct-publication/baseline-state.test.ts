@@ -7,6 +7,7 @@ import {
   LocalTargetCatchUpIntendedEvent,
   LocalTargetCatchUpObservedEvent,
   LocalTargetCatchUpResult,
+  RemoteBaselineId,
   RemoteBaselineObservedEvent,
   RemoteBaselineObservation,
   RemoteBaselineReadIntendedEvent,
@@ -49,11 +50,17 @@ const catchUpIntent = LocalTargetCatchUpIntendedEvent.make({
   remoteHead,
   version: workflowJournalEventVersion
 })
+const foreignObservation: RemoteBaselineJournalEvent = {
+  ...localAncestor,
+  correlation: { ...correlation, baselineId: RemoteBaselineId.make("foreign-baseline") }
+}
 
 it("requires a journaled catch-up after proving the local target is behind the remote baseline", () => {
   expect(deriveRemoteBaselineState([])).toMatchObject({ _tag: "Absent" })
   expect(deriveRemoteBaselineState([localAncestor])).toMatchObject({ _tag: "Contradiction" })
   expect(deriveRemoteBaselineState([readIntent])).toMatchObject({ _tag: "ReadPending" })
+  expect(deriveRemoteBaselineState([readIntent, catchUpIntent])).toMatchObject({ _tag: "Contradiction" })
+  expect(deriveRemoteBaselineState([readIntent, foreignObservation])).toMatchObject({ _tag: "Contradiction" })
   expect(deriveRemoteBaselineState([readIntent, localAncestor])).toMatchObject({
     _tag: "CatchUpRequired",
     expectedLocalHead: localHead,

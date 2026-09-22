@@ -10,6 +10,7 @@ import {
   ProductionPlannedAttemptWorktreeRoot,
   decodeProductionRepositoryHostConfiguration,
   deriveProductionPlannedAttemptLocations,
+  productionExecutorLocator,
   productionKimiExecutorPrivateStateDirectory,
   productionPlannedTaskAttemptLayer,
   withProductionRepositoryHostConfiguration
@@ -86,6 +87,12 @@ describe("production repository host configuration", () => {
     expect(decoded.plannedAttemptExecutor).toBe("executor:default")
     expect(decoded.executorProfileDefault).toBe("kimi/for-coding")
     expect(decoded.executorProfiles?.[0]?.adapter).toBe("kimi-acp")
+    expect(productionExecutorLocator(decoded)).toBe("executor:kimi/for-coding")
+  })
+
+  it("keeps an explicitly selected executor locator", async () => {
+    const decoded = await Effect.runPromise(decodeProductionRepositoryHostConfiguration(validRawConfiguration()))
+    expect(productionExecutorLocator(decoded)).toBe("codex:production")
   })
 
   it("production keeps Codex CLI state separate from Dalph executor private state", async () => {

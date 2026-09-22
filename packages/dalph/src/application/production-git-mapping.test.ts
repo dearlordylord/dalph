@@ -12,6 +12,17 @@ import { Context, Effect, FileSystem, Layer } from "effect"
 import { NodeServices } from "@effect/platform-node"
 import { productionTargetGitCommands, productionWorkflowGitCommandLayer } from "./production.js"
 
+it("preserves the absence of an optional bounded Git command", () => {
+  const repository = GitRepositoryLocator.make("/fixture/worktree")
+  const target = GitCommonDirectoryTarget.make("/fixture/worktree/.git")
+  const commands = GitCommand.of({
+    run: () => Effect.die("unused"),
+    runInWorktree: () => Effect.die("unused"),
+    runBytesInWorktree: () => Effect.die("unused")
+  })
+  expect(productionTargetGitCommands(commands, target, repository).runBoundedInRepository).toBeUndefined()
+})
+
 it.effect("maps bounded Git commands to the exact working repository's common directory", () =>
   Effect.gen(function* () {
     const repository = GitRepositoryLocator.make("/fixture/worktree")

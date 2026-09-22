@@ -110,6 +110,7 @@ describe("direct publication command boundaries", () => {
     expect(pushFailure(target, new GitCommandResponseDeadline()).reason).toBe("ResponseDeadline")
     expect(pushFailure(target, new GitCommandSenderStopUnproven()).reason).toBe("SenderStopUnproven")
     expect(pushFailure(target, new GitCommandInvocationFailure({ detail: "x" })).reason).toBe("TransportUnavailable")
+    expect(pushFailure(target, new EndpointMappingUnstable()).reason).toBe("EndpointMappingChanged")
     expect(new RemotePublicationPushFailure({ reason: "TransportUnavailable", target })).toBeInstanceOf(
       RemotePublicationPushFailure
     )
@@ -130,6 +131,15 @@ describe("direct publication command boundaries", () => {
       "-c",
       `url.${target.endpoint}.pushInsteadOf=${target.endpoint}`
     ])
+    const emptyRules = await Effect.runPromise(
+      resolvePinnedEndpoint(
+        commandService(() => Effect.succeed(result())),
+        repository,
+        target,
+        deadline
+      )
+    )
+    expect(emptyRules).toEqual(noRules)
     await expect(
       Effect.runPromise(resolvePinnedEndpoint(commandService(undefined), repository, target, deadline))
     ).rejects.toBeInstanceOf(GitCommandSenderStopUnproven)
@@ -149,6 +159,17 @@ describe("direct publication command boundaries", () => {
       Effect.runPromise(
         resolvePinnedEndpoint(
           commandService(() => Effect.succeed(result({ stdout: selfRule + pushRule }))),
+          repository,
+          target,
+          deadline
+        )
+      )
+    ).rejects.toBeInstanceOf(EndpointMappingUnstable)
+    const duplicateLongestRules = `${selfRule}${selfRule}`
+    await expect(
+      Effect.runPromise(
+        resolvePinnedEndpoint(
+          commandService(() => Effect.succeed(result({ stdout: duplicateLongestRules }))),
           repository,
           target,
           deadline
@@ -194,6 +215,17 @@ describe("direct publication command boundaries", () => {
         )
       )
     ).toHaveLength(4)
+    const equalsTarget = { ...target, endpoint: RemotePublicationEndpoint.make("https://example.invalid/dalph=a.git") }
+    await expect(
+      Effect.runPromise(
+        resolvePinnedEndpoint(
+          commandService(() => Effect.succeed(result({ exitCode: 1 }))),
+          repository,
+          equalsTarget,
+          deadline
+        )
+      )
+    ).rejects.toBeInstanceOf(EndpointMappingUnstable)
   })
 
   it("runs a bounded command only while its deadline and command member exist", async () => {
