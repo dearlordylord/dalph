@@ -6,7 +6,7 @@ import type { AuthoredScenarioCassetteRun } from "../../src/cassettes/authored-r
 import { acceptedManifestReferenceFor } from "./delivery-capstone-authored-correlations.test-support.js"
 import { comparisonValue, firstDifference } from "./delivery-capstone-replay-comparison.test-support.js"
 
-const declaredStoryLength = 423
+const declaredStoryLength = 397
 /** Descriptor substitution is permitted only after independently checking the original exact bytes. */
 const verifiedManifestReferences = (run: AuthoredScenarioCassetteRun, referenceRun: RunId) => {
   const references = run.records.reduce((previousReferences, { event }) => {

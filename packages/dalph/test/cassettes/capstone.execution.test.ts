@@ -32,14 +32,14 @@ it.effect(
       )
       // The maintained chronology includes the cleanup reactivation reads and
       // evidence observations that occur after the terminal G claim.
-      expect(deliveryStoryCapstoneAuthoredCassette.story).toHaveLength(423)
+      expect(deliveryStoryCapstoneAuthoredCassette.story).toHaveLength(397)
       expect(occurrences).toEqual(
         deliveryStoryCapstoneAuthoredCassette.story.map((occurrence, index) => ({
           storyPosition: index + 1,
           occurrence
         }))
       )
-      expect(run.activationOrdinals).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+      expect(run.activationOrdinals).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
       expect(run.records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
       const settlements = run.records.flatMap(({ event }) =>
         event._tag === "IntegrationFinalitySettled" ? [event] : []
@@ -57,7 +57,7 @@ it.effect(
         { taskId: "D", attemptId: "attempt:D:0", runId: run.runId },
         { taskId: "E", attemptId: "attempt:E:0", runId: run.runId },
         { taskId: "F", attemptId: "attempt:F:1", runId: run.runId },
-        { taskId: "G", attemptId: "attempt:G:0", runId: run.runId }
+        { taskId: "G", attemptId: "attempt:G:2", runId: run.runId }
       ])
       expect(new Set(settlements.map(({ claim }) => claim.plannedAttempt.taskId)).size).toBe(7)
       const successorRecord = run.records.find(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")

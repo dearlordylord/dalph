@@ -600,5 +600,18 @@ export const runAuthoredCassetteInput = async (
 }
 
 /** Runs all maintained catalogs independently; one failure never becomes a passing summary. */
-export const runEveryMaintainedCassette = (): Promise<ReadonlyArray<CassetteLabResult>> =>
-  Promise.all(maintainedCassetteKeys.map((catalogKey) => runMaintainedCassette(catalogKey)))
+export const runEveryMaintainedCassette = (
+  onSettled?: (catalogKey: MaintainedCassetteKey, result: CassetteLabResult) => void
+): Promise<ReadonlyArray<CassetteLabResult>> =>
+  Effect.runPromise(
+    Effect.forEach(
+      maintainedCassetteKeys,
+      (catalogKey) =>
+        Effect.promise(() => runMaintainedCassette(catalogKey)).pipe(
+          Effect.tap((result) => Effect.sync(() => onSettled?.(catalogKey, result)))
+        ),
+      // The maintained catalog is deliberately bulk evidence. Bounding it
+      // avoids starving each cassette's timers and process-local services.
+      { concurrency: 4 }
+    )
+  )

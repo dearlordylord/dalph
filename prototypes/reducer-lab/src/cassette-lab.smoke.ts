@@ -266,7 +266,9 @@ const expectedCatalogSize =
   Object.keys(maintainedCodexPlannedAttemptExecutorCassetteCatalog).length +
   Object.keys(dispositionCleanupAuthoredCassetteCatalog).length
 
-let everyResult = await runEveryMaintainedCassette()
+let everyResult = await runEveryMaintainedCassette((catalogKey, result) => {
+  console.log(`✓ maintained cassette ${catalogKey} settled ${result._tag}`)
+})
 let mismatchedResult: Awaited<ReturnType<typeof runAuthoredCassetteInput>> | undefined
 
 await scenario("does not mark delivery source outputs changed for runtime-only or story-only moments", () => {

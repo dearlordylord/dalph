@@ -267,7 +267,14 @@ export const assertDeliveryCapstonePredecessorCleanup = (run: AuthoredScenarioCa
     locator: resolveDeclaredAuthoredIdentity(removed.result.locator, run.runId),
     sessionId: resolveDeclaredAuthoredIdentity(removed.result.sessionId, run.runId)
   }).toEqual(lost.event.result)
-  for (const item of occurrences) {
+  const predecessorRevisionReads = occurrences.filter(
+    (item) =>
+      item._tag === "IntegratorCandidateCleanupEvidenceRevisionReturned" &&
+      normalizeDeclaredIntegratorSession(item.subject.predecessor, run.runId).candidateResource ===
+        predecessor.candidateResource
+  )
+  expect(predecessorRevisionReads).toHaveLength(1)
+  for (const item of predecessorRevisionReads) {
     if (
       item._tag === "IntegratorCandidateCleanupEvidenceRevisionReturned" &&
       item.subject.locator === predecessor.candidateResource

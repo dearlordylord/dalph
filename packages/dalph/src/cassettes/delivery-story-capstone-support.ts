@@ -19,21 +19,22 @@ const shaLength = 40
 const digestLength = 64
 const acceptedCommitOffset = 3
 const candidateCommitPatternWidth = 2
+const secondRetryAttemptOrdinal = 2
 const admissionClaimGraphEnd = 3
 const admissionSpecificationEnd = 5
 const predecessorPositions = { queuedAt: 136, startedAt: 137, targetLineageObservedAt: 141 }
-const cPositions = { queuedAt: 334, startedAt: 337, targetLineageObservedAt: 343 }
-const dPositions = { queuedAt: 413, startedAt: 416, targetLineageObservedAt: 422 }
-const ePositions = { queuedAt: 470, startedAt: 471, targetLineageObservedAt: 477 }
-const fPositions = { queuedAt: 536, startedAt: 537, targetLineageObservedAt: 543 }
-const gPositions = { queuedAt: 582, startedAt: 583, targetLineageObservedAt: 602 }
+const cPositions = { queuedAt: 345, startedAt: 348, targetLineageObservedAt: 354 }
+const dPositions = { queuedAt: 415, startedAt: 418, targetLineageObservedAt: 424 }
+const ePositions = { queuedAt: 483, startedAt: 484, targetLineageObservedAt: 490 }
+const fPositions = { queuedAt: 538, startedAt: 539, targetLineageObservedAt: 543 }
+const gPositions = { queuedAt: 591, startedAt: 592, targetLineageObservedAt: 596 }
 const bIntegrationPositions = { queuedAt: 279, startedAt: 282, targetLineageObservedAt: 287 }
 const rerunPositions = { quarantineAt: 153, directionAppliedAt: 154, targetLineageObservedAt: 156 }
 const initialHead = "1".repeat(shaLength)
 const changedHead = "2".repeat(shaLength)
 const successorCommit = "d".repeat(shaLength)
 const attempt = (taskId: string) =>
-  `attempt:${taskId}:${taskId === "D" || taskId === "E" || taskId === "G" ? 0 : taskId === "F" ? 1 : ["A", "C", "B"].indexOf(taskId)}`
+  `attempt:${taskId}:${taskId === "D" || taskId === "E" ? 0 : taskId === "F" ? 1 : taskId === "G" ? secondRetryAttemptOrdinal : ["A", "C", "B"].indexOf(taskId)}`
 const specification = (taskId: string) => ({
   taskId: TaskId.make(taskId),
   title: `Implement ${taskId}`,
@@ -312,7 +313,6 @@ const predecessorCleanup = [
   },
   { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMustRemainActiveReasonUnasserted" } },
   { _tag: "CoordinatorProcessDies" },
-  predecessorCleanupRevision,
   {
     _tag: "IntegratorCandidateCleanupObservationReturned",
     observation: { _tag: "Absent", locator: predecessor.candidateResource, revision: 2 }

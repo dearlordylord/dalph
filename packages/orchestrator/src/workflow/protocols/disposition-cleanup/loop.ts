@@ -67,6 +67,30 @@ type CandidateEvidenceRevisionReader = (
 
 const candidateEvidenceSubjectEquivalence = Schema.toEquivalence(IntegratorCandidateCleanupEvidenceSubject)
 
+const candidateEvidenceSubjectsRequiringAuthorization = (
+  records: JournalHistorySource
+): ReadonlyArray<IntegratorCandidateCleanupEvidenceSubject> => {
+  const authorizedSubjects = Array.from(journalRecordsOfKind(records, "IntegratorCandidateCleanupAuthorized")).flatMap(
+    ({ event }) =>
+      event._tag === "IntegratorCandidateCleanupAuthorized" && validCandidate(records, event.authorization)
+        ? [
+            {
+              locator: event.authorization.locator,
+              predecessor: integratorCandidateCleanupSessionOf(event.authorization.disposition)
+            }
+          ]
+        : []
+  )
+  return candidateCleanupEvidenceSubjects(records).reduce<ReadonlyArray<IntegratorCandidateCleanupEvidenceSubject>>(
+    (required, subject) =>
+      authorizedSubjects.some((authorized) => candidateEvidenceSubjectEquivalence(authorized, subject)) ||
+      required.some((candidate) => candidateEvidenceSubjectEquivalence(candidate, subject))
+        ? required
+        : [...required, subject],
+    []
+  )
+}
+
 /** The three independent cleanup responsibilities reconstructed for one Run. */
 export type DispositionCleanupResponsibilities = {
   readonly branch: BranchCleanupAuthorization | undefined
@@ -484,7 +508,7 @@ export const appendDerivedCleanupAuthorizations = Effect.fn("DispositionCleanup.
     if (!hasImmutableRunBeginning(records)) return
     const evidenceSubjects =
       families.includes("candidate") && readEvidenceRevision !== undefined
-        ? candidateCleanupEvidenceSubjects(records)
+        ? candidateEvidenceSubjectsRequiringAuthorization(records)
         : []
     const evidencePairs: ReadonlyArray<
       readonly [IntegratorCandidateCleanupEvidenceSubject, IntegratorCandidateCleanupEvidenceRevision]
@@ -496,7 +520,7 @@ export const appendDerivedCleanupAuthorizations = Effect.fn("DispositionCleanup.
               Effect.mapError(
                 () =>
                   new IntegratorCandidateCleanupEvidenceReadFailure({
-                    detail: "provider-private evidence revision could not be reread"
+                    detail: `provider-private evidence revision could not be read for ${subject.locator}`
                   })
               ),
               Effect.map((revision) => [subject, revision] as const)

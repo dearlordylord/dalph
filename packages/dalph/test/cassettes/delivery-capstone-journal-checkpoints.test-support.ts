@@ -37,7 +37,7 @@ const attempts = {
   D: "attempt:D:0",
   E: "attempt:E:0",
   F: "attempt:F:1",
-  G: "attempt:G:0"
+  G: "attempt:G:2"
 } as const
 type Task = keyof typeof attempts
 

@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
@@ -867,12 +867,15 @@ it.effect("does not append a duplicate candidate authorization on repeated activ
   Effect.gen(function* () {
     const journal = yield* InRunJournal
     yield* appendCandidateProvenance(predecessor, successor, "cleanup-full-rerun", "StartupValid")
-    const revisionReader = () => Effect.succeed(IntegratorCandidateCleanupEvidenceRevision.make(1))
+    const reads = yield* Ref.make(0)
+    const revisionReader = () =>
+      Ref.update(reads, (count) => count + 1).pipe(Effect.as(IntegratorCandidateCleanupEvidenceRevision.make(1)))
     yield* appendDerivedCleanupAuthorizations(runId, ["candidate"], revisionReader)
     yield* appendDerivedCleanupAuthorizations(runId, ["candidate"], revisionReader)
     expect(
       (yield* journal.read(runId)).filter(({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized")
     ).toHaveLength(1)
+    expect(yield* Ref.get(reads)).toBe(1)
   }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 

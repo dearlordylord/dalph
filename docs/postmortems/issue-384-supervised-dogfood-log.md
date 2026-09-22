@@ -1172,3 +1172,28 @@ markers in the new Node tests. Its independent Reducer Lab stage passed eight
 named tests but exceeded the existing 300-second stage bound. The lint finding
 is repaired directly. The Lab timeout is retained as separate fixture evidence
 and is not converted into a successful baseline or current-candidate gate.
+
+The distinguishing Lab inspection found that its test-only bulk seam launched
+the complete maintained cassette catalog with unbounded `Promise.all`. Both
+300-second failures stopped before the first assertion after that catalog run,
+while focused cassette checks completed. The first changed experiment bounded
+the Lab to four independent cassettes at a time, preserving result order and
+typed failures. It still did not settle in the separate 90-second diagnostic
+window; the supervisor stopped its exact process group and proved it absent.
+The next experiment emitted each settled catalog key under the same bound. It
+settled 94 cassettes in about 75 seconds and identified the sole failure as
+`authored:deliveryInvariantStoryCapstone`, not an indefinitely running
+cassette.
+
+That capstone exposed a separate runtime defect. Ordinary activation derived a
+durable `IntegratorCandidateCleanupAuthorized` record, then the cleanup loop
+derived it again and reread the same provider-private evidence revision. Every
+later activation repeated that read. The loop now reads only subjects without
+an existing durable authorization, and a regression proves two derivation
+passes perform one provider read. The capstone chronology now places each
+distinct candidate's single revision read and cleanup settlement at its actual
+terminal handoff. Its exact-run, cleanup and fresh-replay tests pass. The final
+bounded Lab run completed all 94 maintained cassettes and every Lab scenario,
+ending with its explicit success marker in under two minutes. Lab concurrency
+and per-key progress are qualification-only changes; the authorization reuse is
+the runtime repair that removes the redundant private boundary call.
