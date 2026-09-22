@@ -7,7 +7,7 @@ const DEFAULT_TERMINATION_GRACE = 5 * SECOND
  * hosted post-preflight jobs.  The candidate and reviewed Base are inputs to a
  * plan; this identity names the stage policy that interpreted those inputs.
  */
-export const qualityGatePolicyIdentity = Object.freeze({ id: "dalph-quality-stage-algebra", revision: 3, version: 1 })
+export const qualityGatePolicyIdentity = Object.freeze({ id: "dalph-quality-stage-algebra", revision: 4, version: 1 })
 
 // Local Vitest-backed obligations are admitted under the highest fixed cap
 // proven safe by the pairwise memory campaign recorded for issue #336.  This
@@ -64,6 +64,13 @@ export const recordedCatalogQualityGate = Object.freeze({
 // unchanged while allowing the measured source audit headroom to complete.
 const CAPABILITY_REGISTRATION_TIMEOUT = 120 * SECOND
 
+// Recovery qualification measured the custody and resume suites at 70.5s and
+// 98.5s under admitted execution. Two minutes keeps both finite without making
+// normal host variance a false product failure. The maintained Lab completed
+// just below its former five-minute edge, so its bounded headroom is seven minutes.
+const GATE_CONTROL_TIMEOUT = 2 * 60 * SECOND
+const REDUCER_LAB_TIMEOUT = 7 * 60 * SECOND
+
 export const capabilityRegistrationQualityGate = Object.freeze({
   args: Object.freeze(["test:capability-registration"]),
   name: "capability registration",
@@ -100,7 +107,7 @@ export const boundedQualityGateCommand = ({ gate, nodeExecutable, pnpmEntryPoint
 /** The early admitted baseline reuses the exact lint and Lab stages from full preflight. */
 export const baselineQualityGates = () => [
   { args: ["lint:code", "--census"], name: "format and lint", timeout: 5 * 60 * SECOND },
-  { args: ["check:lab"], name: "Reducer Lab maintained evaluation", timeout: 5 * 60 * SECOND }
+  { args: ["check:lab"], name: "Reducer Lab maintained evaluation", timeout: REDUCER_LAB_TIMEOUT }
 ]
 
 /** Structural checks run once before qualification; production artifacts are prepared before source checks. */
@@ -112,9 +119,9 @@ export const preflightQualityGates = (baseSha) => [
   complexityQualityGate(baseSha),
   { args: ["check:duplicates"], name: "duplication", timeout: 60 * SECOND },
   { args: ["test:coverage:explanation"], name: "coverage explanation controls", timeout: 60 * SECOND },
-  { args: ["test:gate-custody"], name: "gate custody controls", timeout: 60 * SECOND },
+  { args: ["test:gate-custody"], name: "gate custody controls", timeout: GATE_CONTROL_TIMEOUT },
   { args: ["test:gate-previous-boot-reconcile"], name: "previous-boot gate reconciliation", timeout: 60 * SECOND },
-  { args: ["test:gate-resume"], name: "gate resume controls", timeout: 60 * SECOND },
+  { args: ["test:gate-resume"], name: "gate resume controls", timeout: GATE_CONTROL_TIMEOUT },
   { args: ["test:preflight"], name: "preflight controls", timeout: 60 * SECOND },
   { args: ["test:ci-change-classification"], name: "CI change classification", timeout: 60 * SECOND },
   { args: ["test:formal:controls"], name: "formal verification controls", timeout: 60 * SECOND },

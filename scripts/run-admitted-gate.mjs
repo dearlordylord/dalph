@@ -27,9 +27,17 @@ import { createRunInputIdentity, currentSourceInputDigest } from "./gate-run-ide
 import { artifactEvidence, readRunEvidence } from "./gate-run-evidence.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { gateDeadlineEnvironmentName, remainingGateMilliseconds, resolveGateDeadline } from "./gate-deadline.mjs"
+import {
+  beginRecoveredQualification,
+  completeRecoveredQualification,
+  recordGateObstruction,
+  requireGateRecoveryAdmission
+} from "./gate-recovery.mjs"
 
 const commandArguments = process.argv.slice(process.argv.indexOf("--") + 1)
 if (commandArguments.length === 0) throw new Error("Name an admitted command after --")
+if (process.env.DALPH_GATE_RECOVERY_MODE !== undefined)
+  throw new Error("A focused gate recovery action cannot launch a fresh admitted command")
 if (process.env.DALPH_RUN_REAL_CODEX_QUALIFICATION === "1")
   throw new Error(
     "Real Codex qualification is outside supported gate custody; run direct opt-in qualification separately"
@@ -39,12 +47,19 @@ if (process.env.DALPH_QUALIFICATION_ENV_CAPTURE !== undefined)
   throw new Error("Ambient qualification environment capture is outside supported gate custody")
 if (inherited !== undefined) throw new Error("The fresh custody runner cannot inherit an active run")
 const location = repositoryLocation()
-const deadline = resolveGateDeadline({ configured: process.env[gateDeadlineEnvironmentName] })
 requireWorktreeLock(location.worktreeLock)
 if (existsSync(location.worktreeFence)) {
   const fence = readRecord(location.worktreeFence)
   throw new Error(`Worktree requires reconciliation of gate run ${fence.runId}; no writer launched`)
 }
+const isLocalFullQualityCommand =
+  commandArguments.includes("--local-handoff") &&
+  resolve(commandArguments[1] ?? "") === join(location.worktree, "scripts", "run-quality-gate.mjs")
+const admissionSourceInputDigest = isLocalFullQualityCommand ? currentSourceInputDigest(location.worktree) : undefined
+const recoveryAdmission = isLocalFullQualityCommand
+  ? requireGateRecoveryAdmission({ currentSourceInputDigest: admissionSourceInputDigest, location })
+  : undefined
+const deadline = resolveGateDeadline({ configured: process.env[gateDeadlineEnvironmentName] })
 const slots = gateSlots({
   lockDirectory: location.commonDirectory,
   slotCount: resolveGateSlotCount({ configured: process.env[gateSlotCountEnvironmentName] })
@@ -101,9 +116,7 @@ const run = {
   ownerPid: process.pid,
   commandArguments,
   deadline,
-  requiresQualityComposite:
-    commandArguments.includes("--local-handoff") &&
-    resolve(commandArguments[1] ?? "") === join(location.worktree, "scripts", "run-quality-gate.mjs"),
+  requiresQualityComposite: isLocalFullQualityCommand,
   startedAt: wallClockTimestamp(),
   queueMilliseconds: epochMilliseconds() - startedWaiting
 }
@@ -118,6 +131,8 @@ atomicRecord(join(runDirectory, "registration.json"), {
 const fence = { version: custodyVersion, runId, runDirectory, worktree: run.worktree, slot: run.slot }
 atomicRecord(location.worktreeFence, fence)
 atomicRecord(ownedSlot.fence, fence)
+if (recoveryAdmission !== undefined)
+  beginRecoveredQualification({ currentSourceInputDigest: admissionSourceInputDigest, location, runId })
 console.error(`[gate-run] ${runId} reports=${reportDirectory}`)
 let commandExit = 1
 try {
@@ -175,13 +190,23 @@ try {
     console.error("Gate qualification UNPROVEN: terminal evidence is incomplete")
     commandExit = 1
   }
-  for (const path of [ownedSlot.fence, location.worktreeFence]) {
-    if (readRecord(path).runId !== runId) throw new Error("Gate fence changed; cannot clear another run's custody")
-    removeRecord(path)
-  }
   if (!sourceUnchanged) {
     console.error("Candidate inputs changed during qualification; result is UNPROVEN")
     commandExit = 1
+  }
+  if (run.requiresQualityComposite) {
+    const passed = commandExit === 0 && evidence.qualification === "passed" && sourceUnchanged
+    completeRecoveredQualification({ location, passed, runId })
+    if (!passed) {
+      const obstruction = recordGateObstruction({ evidence, location })
+      console.error(
+        `[gate-recovery] obstruction ${obstruction.obstructionId}; suggested=${JSON.stringify(obstruction.suggestedDiagnostic?.command ?? null)}; next=pnpm gate:diagnose ${runId} --question=<question> --alternatives='<a> | <b>' --observation=<distinguishing-observation> --contains=<expected-output> --expect=<outcome> --supports=<alternative-number> -- <focused-command>`
+      )
+    }
+  }
+  for (const path of [ownedSlot.fence, location.worktreeFence]) {
+    if (readRecord(path).runId !== runId) throw new Error("Gate fence changed; cannot clear another run's custody")
+    removeRecord(path)
   }
 } catch (error) {
   console.error(`[gate-run] ${runId} remains fenced: ${error.message}`)

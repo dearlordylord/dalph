@@ -527,7 +527,12 @@ void test(
       assert.equal(checkerCount, 105)
       assert.equal(serverCount, 1)
       const formalSources = f.saved().success.identity.sourceManifest.map((entry) => entry.path)
-      for (const source of ["run-admitted-gate.mjs", "gate-run-identity.mjs", "gate-slot-policy.mjs"])
+      for (const source of [
+        "run-admitted-gate.mjs",
+        "gate-run-identity.mjs",
+        "gate-slot-policy.mjs",
+        "gate-recovery.mjs"
+      ])
         assert.equal(
           formalSources.some((path) => path.endsWith(`/scripts/${source}`)),
           true

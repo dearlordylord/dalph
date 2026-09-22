@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { digest, readRecord } from "./gate-custody-records.mjs"
-import { inputGuardProven } from "./gate-resume-policy.mjs"
+import { inputGuardProven, resumeStageInputProven } from "./gate-resume-policy.mjs"
 import { captureResumeArtifacts } from "./gate-resume-artifacts.mjs"
 import { addSuccessfulOutputLines, outputPresentationPolicy } from "./quality-output-budget.mjs"
 import { readReferencedFormalSuccess } from "./formal-success-evidence.mjs"
@@ -77,12 +77,14 @@ export const readQualityEvidence = ({
   if (
     composite !== undefined &&
     (composite.runId !== runId ||
+      ![undefined, false, true].includes(composite.finalized) ||
       !same(composite.manifest, contract.manifest) ||
       !same(composite.logicalInvocation, contract.logicalInvocation) ||
       !Array.isArray(composite.entries) ||
       composite.entries.length !== contract.manifest.length)
   )
     throw new Error("Invalid composite inventory")
+  const partialComposite = composite?.finalized === false
   let executedSuffix = false
   const effectiveStages = contract.manifest.map((stage, ordinal) => {
     const entry = composite?.entries[ordinal]
@@ -91,10 +93,17 @@ export const readQualityEvidence = ({
         throw new Error("Invalid noncontiguous or fabricated reused stage")
       const prior = readPrior(entry.runId)
       const original = prior.resume?.stages?.[entry.ordinal]
+      const originalInputProven = resumeStageInputProven({
+        identity: prior.resume?.identity,
+        ordinal,
+        result: original ?? {},
+        stage,
+        terminalGuard: prior.resume?.guard
+      })
       if (
         prior.custody !== "stopped" ||
         prior.registration !== "closed" ||
-        !inputGuardProven(prior.resume?.identity, prior.resume?.guard) ||
+        !originalInputProven ||
         prior.resume.identity?.inputDigest !== identity?.inputDigest ||
         original?.outcome !== "passed" ||
         original.subtreeProven !== true ||
@@ -144,7 +153,7 @@ export const readQualityEvidence = ({
     }
     const record = readRecord(path)
     if (
-      entry?.kind === "pending" ||
+      (entry?.kind === "pending" && !partialComposite) ||
       record.runId !== runId ||
       record.stageId !== stage.id ||
       record.ordinal !== ordinal ||
@@ -241,10 +250,11 @@ export const readQualityEvidence = ({
       formalProven = true
     }
   }
-  if (composite !== undefined && composite.successfulOutputLines !== outputLines)
+  if (composite !== undefined && !partialComposite && composite.successfulOutputLines !== outputLines)
     throw new Error("Composite output accounting does not match stage evidence")
   const complete =
     composite !== undefined &&
+    !partialComposite &&
     formalProven &&
     inputGuardProven(identity, guard) &&
     effectiveStages.every((stage) => stage.outcome === "passed" && stage.subtreeProven === true)

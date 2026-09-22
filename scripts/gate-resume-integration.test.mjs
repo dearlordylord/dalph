@@ -17,6 +17,7 @@ import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { withoutInheritedCustody, repositoryLocation } from "./gate-custody-records.mjs"
 import { readRunEvidence } from "./gate-run-evidence.mjs"
+import { gateRecoveryPath } from "./gate-recovery.mjs"
 import {
   controlledFormalWorkflowSource,
   copyQualityRuntimeFixture,
@@ -25,6 +26,8 @@ import {
 
 const wrapper = fileURLToPath(new URL("./with-gate-slot.mjs", import.meta.url))
 const bounded = new URL("./run-bounded-command.mjs", import.meta.url).href
+const diagnosis = fileURLToPath(new URL("./run-gate-diagnosis.mjs", import.meta.url))
+const verification = fileURLToPath(new URL("./run-gate-repair-verification.mjs", import.meta.url))
 const fixture = () => {
   const root = mkdtempSync(join(tmpdir(), "dalph-resume-"))
   const git = (...args) => {
@@ -66,6 +69,7 @@ const launch = (root, script, resumeRunId, reap = false, reaperSeconds = 30) => 
   for (const key of [
     "DALPH_COVERAGE_BASE_SHA",
     "DALPH_GATE_GIT_HISTORY",
+    "DALPH_GATE_RECOVERY_MODE",
     "DALPH_QUALIFICATION_ENV_CAPTURE",
     "DALPH_RUN_REAL_CODEX_QUALIFICATION",
     "npm_execpath"
@@ -164,6 +168,24 @@ sys.exit(124 if phase!='running' else (code if code is not None else 1))
     timeout: reap ? (reaperSeconds + 10) * 1_000 : 20_000
   })
 }
+const launchAdmitted = (root, commandArguments) => {
+  const env = withoutInheritedCustody(process.env)
+  for (const key of [
+    "DALPH_COVERAGE_BASE_SHA",
+    "DALPH_GATE_GIT_HISTORY",
+    "DALPH_GATE_RECOVERY_MODE",
+    "DALPH_QUALIFICATION_ENV_CAPTURE",
+    "DALPH_RUN_REAL_CODEX_QUALIFICATION",
+    "npm_execpath"
+  ])
+    delete env[key]
+  return spawnSync(process.execPath, [wrapper, "--", ...commandArguments], {
+    cwd: root,
+    env,
+    encoding: "utf8",
+    timeout: 20_000
+  })
+}
 const runs = (root) => {
   const location = repositoryLocation(root)
   return readdirSync(join(location.custodyRoot, "runs"))
@@ -225,18 +247,77 @@ finally: os.close(handle)
 `
   return spawnSync("python3", ["-c", source, String(pid), startIdentity], { encoding: "utf8", timeout: 3_000 })
 }
+void test("a failed full gate requires diagnosis and repair verification before one successful qualification", () => {
+  const f = fixture()
+  try {
+    const gate = join(f.root, "scripts", "run-quality-gate.mjs")
+    const reproducer = join(f.root, "scripts", "focused-reproducer.mjs")
+    const repair = join(f.root, "repair.marker")
+    const baseSha = f.git("rev-parse", "HEAD^")
+    writeFileSync(
+      reproducer,
+      `import {existsSync} from 'node:fs';if(!existsSync(${JSON.stringify(repair)})){console.error('controlled obstruction');process.exitCode=9}\n`
+    )
+    writeFileSync(
+      gate,
+      `import {executeResumableQualityGate} from './gate-quality-run.mjs';import {runBoundedCommand} from './run-bounded-command.mjs';
+const baseSha=process.argv.find(argument=>argument.startsWith('--candidate='))?.slice('--candidate='.length);if(!baseSha)throw Error('missing candidate');
+const execution={executable:process.execPath,args:[${JSON.stringify(reproducer)}],cwd:process.cwd(),name:'focused controlled obstruction',timeoutMilliseconds:10000,acceptedExitCodes:[0],relayParentSignals:false,terminationGraceMilliseconds:5000,processGroupAbsenceTimeoutMilliseconds:2000};
+const stage={id:'controlled-obstruction',name:'focused controlled obstruction',boundary:'qualification',args:execution.args,timeout:10000,artifactRoots:[],execution};
+const logicalInvocation={mode:'check:all',commandArguments:[process.execPath,process.argv[1],...process.argv.slice(2)],baseSha,stageManifest:[stage],toolExecutables:[],formalClassification:{version:1,status:'unaffected',baseSha,headSha:undefined,changedPaths:['application-only-input'],affectedPaths:[]}};
+await executeResumableQualityGate({logicalInvocation,stageManifest:[stage],prepareFreshInputs:()=>{},runStage:()=>runBoundedCommand(execution)});\n`
+    )
+    const fullCommand = [process.execPath, gate, "--local-handoff", `--candidate=${baseSha}`]
+    const failed = launchAdmitted(f.root, fullCommand)
+    assert.equal(failed.status, 1, failed.stderr)
+    const location = repositoryLocation(f.root)
+    const obstruction = JSON.parse(readFileSync(gateRecoveryPath(location), "utf8"))
+    assert.equal(obstruction.state, "diagnosis-required")
+    assert.equal(obstruction.suggestedDiagnostic.command.executable, process.execPath)
+    assert.deepEqual(obstruction.suggestedDiagnostic.command.args, [reproducer])
+
+    const blindRerun = launchAdmitted(f.root, fullCommand)
+    assert.equal(blindRerun.status, 1, blindRerun.stderr)
+    assert.match(blindRerun.stderr, /requires focused diagnosis/u)
+    const diagnosed = launchAdmitted(f.root, [
+      process.execPath,
+      diagnosis,
+      obstruction.failedRunId,
+      "--question=does the focused obstruction still fail before its repair marker?",
+      "--alternatives=the obstruction is present | the broad runner failed elsewhere",
+      "--observation=the exact failed-stage command exits 9 before the marker exists",
+      "--contains=controlled obstruction",
+      "--expect=exit:9",
+      "--supports=1",
+      "--",
+      process.execPath,
+      reproducer
+    ])
+    assert.equal(diagnosed.status, 0, diagnosed.stderr)
+
+    writeFileSync(repair, "repaired\n")
+    const verified = launchAdmitted(f.root, [process.execPath, verification, obstruction.failedRunId])
+    assert.equal(verified.status, 0, verified.stderr)
+    const passed = launchAdmitted(f.root, fullCommand)
+    assert.equal(passed.status, 0, passed.stderr)
+    assert.equal(existsSync(gateRecoveryPath(location)), false)
+  } finally {
+    f.cleanup()
+  }
+})
 void test("an unaffected candidate resumes proven stages with not-applicable formal evidence and no formal workflow", () => {
   const f = fixture()
   let completed = false
   try {
     const counter = join(f.root, ".scratch", "counter")
     const release = join(f.root, ".scratch", "release")
+    const expectReused = join(f.root, ".scratch", "expect-reused")
     const script = join(f.root, ".scratch", "quality.mjs")
     const stageSources = [
       `if(process.env.GIT_OPTIONAL_LOCKS!=='0')throw Error('guarded child optional locks were not disabled');const fs=require('fs');fs.appendFileSync(${JSON.stringify(counter)},'build\\n');fs.mkdirSync('dist',{recursive:true});fs.writeFileSync('dist/result','built')`,
       `const fs=require('fs');fs.appendFileSync(${JSON.stringify(counter)},'negative\\n');const {runBoundedCommand}=await import(${JSON.stringify(bounded)});let failed=false;try{await runBoundedCommand({executable:process.execPath,args:['-e','process.exit(23)'],name:'expected failing child',timeoutMilliseconds:10000})}catch(error){if(error.quintCommandResult!=='exit:23')throw error;failed=true}if(!failed)throw Error('negative did not fail')`,
       `const fs=require('fs');fs.appendFileSync(${JSON.stringify(counter)},'coverage\\n');const d=process.env.DALPH_COVERAGE_DIRECTORY;fs.mkdirSync(d,{recursive:true});fs.writeFileSync(d+'/coverage-final.json','{}');fs.writeFileSync(d+'/coverage-summary.json','{}')`,
-      `const fs=require('fs');fs.appendFileSync(${JSON.stringify(counter)},'late\\n');if(!fs.existsSync(${JSON.stringify(release)}))process.exit(24)`
+      `const fs=require('fs');fs.appendFileSync(${JSON.stringify(counter)},'late\\n');process.stdout.write('late-output\\n');if(fs.existsSync(${JSON.stringify(expectReused)})){const composite=JSON.parse(fs.readFileSync(process.env.DALPH_GATE_RUN_DIRECTORY+'/composite.json','utf8'));if(composite.entries.filter(entry=>entry.kind==='reused').length!==3)process.exit(25)}if(!fs.existsSync(${JSON.stringify(release)}))process.exit(24)`
     ]
     writeFileSync(
       script,
@@ -256,10 +337,33 @@ return runBoundedCommand({executable:process.execPath,args:['--input-type=module
     const prior = runs(f.root)[0]
     assert.equal(prior.custody, "stopped")
     assert.equal(prior.resume.stages[0].outcome, "passed", JSON.stringify(prior.stages))
+    assert.equal(
+      prior.resume.stages.slice(0, 3).every((stage) => stage.inputGuard?.unchanged === true),
+      true
+    )
+    const priorDirectory = join(repositoryLocation(f.root).custodyRoot, "runs", prior.runId)
+    rmSync(join(priorDirectory, "input-guard.json"))
+    rmSync(join(priorDirectory, "composite.json"))
+    writeFileSync(expectReused, "expected\n")
     writeFileSync(release, "release")
-    const resumed = launch(f.root, script, prior.runId)
+    const interruptedResume = launch(f.root, script, prior.runId)
+    assert.equal(interruptedResume.status, 0, interruptedResume.stderr)
+    const resumedPrior = runs(f.root).find((run) => run.runId !== prior.runId)
+    assert.equal(resumedPrior.resume.composite.entries.filter((entry) => entry.kind === "reused").length, 3)
+    const resumedPriorDirectory = join(repositoryLocation(f.root).custodyRoot, "runs", resumedPrior.runId)
+    const partialComposite = structuredClone(resumedPrior.resume.composite)
+    partialComposite.finalized = false
+    partialComposite.entries[3] = { kind: "pending" }
+    partialComposite.successfulOutputLines = resumedPrior.resume.stages
+      .slice(0, 3)
+      .reduce((total, stage) => total + stage.outputLineCount, 0)
+    partialComposite.formalOutputLineCount = 0
+    delete partialComposite.formal
+    writeFileSync(join(resumedPriorDirectory, "composite.json"), JSON.stringify(partialComposite))
+    rmSync(join(resumedPriorDirectory, "input-guard.json"))
+    const resumed = launch(f.root, script, resumedPrior.runId)
     assert.equal(resumed.status, 0, resumed.stderr)
-    const evidence = runs(f.root).find((run) => run.runId !== prior.runId)
+    const evidence = runs(f.root).find((run) => ![prior.runId, resumedPrior.runId].includes(run.runId))
     assert.equal(evidence.qualification, "passed")
     assert.equal(evidence.resume.formal.disposition, "not-applicable")
     assert.equal(evidence.resume.formalProven, true)
@@ -271,13 +375,16 @@ return runBoundedCommand({executable:process.execPath,args:['--input-type=module
       "late",
       "late"
     ])
-    assert.equal(evidence.resume.composite.entries.filter((entry) => entry.kind === "reused").length, 3)
+    assert.equal(evidence.resume.composite.entries.filter((entry) => entry.kind === "reused").length, 4)
     assert.ok(evidence.coverage.final.path.startsWith(evidence.reportDirectory))
     assert.equal(readFileSync(evidence.coverage.final.path, "utf8"), "{}")
     assert.notEqual(evidence.coverage.final.path, prior.coverage.final.path)
+    rmSync(expectReused)
     const fresh = launch(f.root, script)
     assert.equal(fresh.status, 0, fresh.stderr)
-    const freshEvidence = runs(f.root).find((run) => run.runId !== prior.runId && run.runId !== evidence.runId)
+    const freshEvidence = runs(f.root).find(
+      (run) => ![prior.runId, resumedPrior.runId, evidence.runId].includes(run.runId)
+    )
     assert.equal(freshEvidence.resume.formal.disposition, "not-applicable")
     assert.deepEqual(
       freshEvidence.resume.stages.map((stage) => stage.outcome),
