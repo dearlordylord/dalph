@@ -28,6 +28,7 @@ import {
 import { readRunEvidence } from "./gate-run-evidence.mjs"
 import { reconcileGateRun } from "./reconcile-gate-run.mjs"
 import { registerSpawn } from "./gate-registration.mjs"
+import { qualificationAllowancePath } from "./qualification-allowance.mjs"
 
 // The admitted parent boundary already registered this controlled test process.
 // Its synthetic temporary-repository protocols start with explicit fixture custody.
@@ -124,11 +125,46 @@ void test("gate deadline expires a quiet writer and preserves stopped custody ev
     assert.equal(result.code, 1, result.output)
     const entry = runs(f.root)[0]
     assert.ok(entry, result.output)
-    assert.equal(readRecord(join(entry.runDirectory, "run.json")).deadline, deadline)
+    const run = readRecord(join(entry.runDirectory, "run.json"))
+    assert.equal(run.deadline, deadline)
+    assert.equal(run.qualificationAllowance.baseSha, f.git("rev-parse", "HEAD^"))
+    assert.match(result.output, new RegExp(`\\[gate-allowance\\] base=${run.qualificationAllowance.baseSha}`))
     const terminal = readRecord(join(entry.runDirectory, "terminal.json"))
     assert.equal(terminal.custody, "stopped")
     assert.notEqual(terminal.outcome, "passed")
     assert.equal(existsSync(repositoryLocation(f.root).worktreeFence), false)
+  } finally {
+    f.cleanup()
+  }
+})
+
+void test("an expired worktree and planned-Base allowance refuses a fresh gate before writer launch", async () => {
+  const f = fixture()
+  try {
+    const location = repositoryLocation(f.root)
+    const baseSha = f.git("rev-parse", "HEAD^")
+    const path = qualificationAllowancePath(location, baseSha)
+    const now = epochMilliseconds()
+    atomicRecord(path, {
+      version: custodyVersion,
+      kind: "qualification-allowance",
+      worktree: location.worktree,
+      baseSha,
+      startedAt: new Date(now - 2000).toISOString(),
+      deadline: new Date(now - 1000).toISOString()
+    })
+    const forbidden = join(f.root, ".scratch", "forbidden-after-allowance")
+    const result = await start(f.root, [
+      process.execPath,
+      "-e",
+      `require('fs').writeFileSync(${JSON.stringify(forbidden)},'bad')`,
+      `--candidate=${baseSha}`
+    ]).done
+
+    assert.equal(result.code, 1, result.output)
+    assert.match(result.output, /Qualification allowance expired/u)
+    assert.equal(existsSync(forbidden), false)
+    assert.equal(runs(f.root).length, 0)
   } finally {
     f.cleanup()
   }
@@ -238,9 +274,12 @@ void test("same-worktree writers never overlap; nested bounded commands have reg
     assert.equal((await a.done).code, 0)
     assert.equal((await b.done).code, 0)
     assert.equal(readFileSync(second, "utf8"), "second")
-    const first = runs(f.root)
-      .map(readRunEvidence)
-      .find((entry) => entry.stages.length === 2)
+    const completedRuns = runs(f.root)
+    const allowances = completedRuns.map(({ runDirectory }) => readRecord(join(runDirectory, "run.json")))
+    assert.equal(allowances.length, 2)
+    assert.equal(allowances[0].qualificationAllowance.deadline, allowances[1].qualificationAllowance.deadline)
+    assert.equal(allowances[0].qualificationAllowance.baseSha, allowances[1].qualificationAllowance.baseSha)
+    const first = completedRuns.map(readRunEvidence).find((entry) => entry.stages.length === 2)
     assert.equal(first.registration, "closed")
     assert.equal(first.stages.length, 2)
     assert.ok(first.stages.every((stage) => stage.groupAbsent && stage.exitCode === 0))

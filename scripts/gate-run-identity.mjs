@@ -36,12 +36,15 @@ export const currentSourceInputDigest = (worktree) => {
   })
   return digest(JSON.stringify({ head: gitOutput(worktree, ["rev-parse", "HEAD"]).trim(), entries }))
 }
-export const createRunInputIdentity = ({ commandArguments, environment = process.env, worktree }) => {
+export const resolveRunBaseSha = ({ commandArguments, environment = process.env }) => {
   const candidate = commandArguments
     .find((argument) => argument.startsWith("--candidate="))
     ?.slice("--candidate=".length)
   // Existing base resolution runs in the worktree admitted by the wrapper.
-  const baseSha = resolveQualityGateBase({ candidateBase: candidate, hostedBase: environment.DALPH_COVERAGE_BASE_SHA })
+  return resolveQualityGateBase({ candidateBase: candidate, hostedBase: environment.DALPH_COVERAGE_BASE_SHA })
+}
+export const createRunInputIdentity = ({ commandArguments, environment = process.env, worktree }) => {
+  const baseSha = resolveRunBaseSha({ commandArguments, environment })
   const sourceInputDigest = currentSourceInputDigest(worktree)
   const relevantEnvironment = [
     "NODE_OPTIONS",

@@ -46,6 +46,16 @@ questions. Reuse guidance already read unless it changed or scope changed.
 
 ## Verification and closure
 
+- Autonomous task work has one end-to-end four-hour wall-clock ceiling from the
+  first tool action unless the user explicitly selects another deadline. The
+  ceiling covers preparation, implementation, review, repair, verification and
+  delivery; delegation, compaction, a changed hypothesis, a new candidate and a
+  resumed session do not reset it. After two attempts on the same obstruction or
+  about 30 minutes without an outcome-relevant result, choose one discriminating
+  next action instead of adding review or rerunning a broad check. At the ceiling,
+  start no new work, settle owned processes, preserve useful evidence, and return
+  a completed result or concise blocked handoff. Only an explicit user extension
+  authorizes more time.
 - Before starting or waiting on an operation expected to exceed one minute,
   record its expected duration and wall-clock stop time. At that time, stop
   safely, preserve evidence, and name the next discriminating action before a

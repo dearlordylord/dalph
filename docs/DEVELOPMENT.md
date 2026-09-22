@@ -15,6 +15,15 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
 
 ## Keeping implementation work finite
 
+- One outer deadline covers the complete task from its first tool action through
+  delivery. Autonomous work defaults to four wall-clock hours unless the user
+  explicitly selects another deadline. Compaction, delegation, a changed
+  hypothesis, a new candidate, review, and resumed work consume the same window.
+  At expiry, start nothing new, settle owned processes, preserve useful evidence,
+  and return a completed result or one concise blocked handoff. Only an explicit
+  user extension starts more authorized time. This outer Codex-host policy is not
+  enforceable by repository code; the durable qualification allowance below is
+  the enforced boundary for repository-owned expensive checks.
 - Attempt a minimally instrumented complete-story diagnostic before polishing
   prefixes. Check accepted outcomes, causal requirements, and forbidden effects;
   predicted internal call order is a hypothesis. Record the first obstruction
@@ -54,6 +63,17 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
   fence for explicit reconciliation; a timeout never qualifies the candidate.
   This tooling policy does not change Dalph runtime behavior or accepted task
   execution deadlines.
+- The first admitted qualification for an exact worktree and planned Base SHA
+  starts one durable four-hour qualification allowance in the Git common
+  directory. Independent baseline, preflight, formal, and full-gate invocations
+  for that same identity reuse its absolute deadline; a new shell, candidate
+  revision, review, failure, or command name cannot reset it. Each invocation
+  still has its shorter `DALPH_GATE_DEADLINE`. Once the allowance expires, a gate
+  refuses to launch another writer. A genuinely new task attempt uses its own
+  exact worktree or planned Base and therefore receives a new allowance. The
+  record bounds repository-owned qualification churn only: it does not claim to
+  stop an outer coding-agent session, and it does not replace the operator's
+  parent-outcome deadline.
 - For the workflow pilot, use the next existing milestone to record broad review rounds, reopened findings
   with new evidence, full-gate restarts, and closure time. Verify that required
   scenario evidence survives and reproduced accepted-path defects still block
@@ -72,7 +92,9 @@ Choose checks by affected behavior, not by commit or handoff alone:
   during development; run the full gate before integration. Model or conformance
   changes also require adequacy review and a negative control.
 - **Early task-attempt baseline:** after focused checks settle for an attempt, run
-  `pnpm check:baseline` before expensive formal or delivery-repeatability work. It
+  `pnpm check:baseline --candidate=<base sha>` before expensive formal or
+  delivery-repeatability work. Use the same planned Base later supplied to
+  `check:all`, so both commands consume the same durable qualification allowance. It
   runs the clone-wide lint census followed by the maintained Reducer Lab evaluation;
   the complete command takes exact-worktree admission, and it does not expand
   `check:fast` or replace the frozen-candidate gate. This is qualification tooling

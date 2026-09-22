@@ -23,10 +23,11 @@ import {
   gateSlots,
   resolveGateSlotCount
 } from "./gate-slot-policy.mjs"
-import { createRunInputIdentity, currentSourceInputDigest } from "./gate-run-identity.mjs"
+import { createRunInputIdentity, currentSourceInputDigest, resolveRunBaseSha } from "./gate-run-identity.mjs"
 import { artifactEvidence, readRunEvidence } from "./gate-run-evidence.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
-import { gateDeadlineEnvironmentName, remainingGateMilliseconds, resolveGateDeadline } from "./gate-deadline.mjs"
+import { gateDeadlineEnvironmentName, remainingGateMilliseconds } from "./gate-deadline.mjs"
+import { resolveQualificationAllowance } from "./qualification-allowance.mjs"
 
 const commandArguments = process.argv.slice(process.argv.indexOf("--") + 1)
 if (commandArguments.length === 0) throw new Error("Name an admitted command after --")
@@ -39,12 +40,19 @@ if (process.env.DALPH_QUALIFICATION_ENV_CAPTURE !== undefined)
   throw new Error("Ambient qualification environment capture is outside supported gate custody")
 if (inherited !== undefined) throw new Error("The fresh custody runner cannot inherit an active run")
 const location = repositoryLocation()
-const deadline = resolveGateDeadline({ configured: process.env[gateDeadlineEnvironmentName] })
 requireWorktreeLock(location.worktreeLock)
 if (existsSync(location.worktreeFence)) {
   const fence = readRecord(location.worktreeFence)
   throw new Error(`Worktree requires reconciliation of gate run ${fence.runId}; no writer launched`)
 }
+const baseSha = resolveRunBaseSha({ commandArguments })
+const allowance = resolveQualificationAllowance({
+  baseSha,
+  configuredGateDeadline: process.env[gateDeadlineEnvironmentName],
+  location
+})
+const deadline = allowance.deadline
+console.error(`[gate-allowance] base=${baseSha} deadline=${allowance.record.deadline}`)
 const slots = gateSlots({
   lockDirectory: location.commonDirectory,
   slotCount: resolveGateSlotCount({ configured: process.env[gateSlotCountEnvironmentName] })
@@ -101,6 +109,7 @@ const run = {
   ownerPid: process.pid,
   commandArguments,
   deadline,
+  qualificationAllowance: { baseSha, deadline: allowance.record.deadline, path: allowance.path },
   requiresQualityComposite:
     commandArguments.includes("--local-handoff") &&
     resolve(commandArguments[1] ?? "") === join(location.worktree, "scripts", "run-quality-gate.mjs"),
