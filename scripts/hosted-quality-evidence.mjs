@@ -12,7 +12,7 @@ import {
   deliveryRepeatabilityExpectedOccurrenceCount
 } from "./run-delivery-repeatability.mjs"
 
-const hostedQualityEvidenceVersion = 1
+const hostedQualityEvidenceVersion = 2
 export const hostedQualityStageIds = qualityGateQualificationStageIds
 export const hostedQualityNodeVersions = Object.freeze(supportedNodeVersionsFromPackage())
 
@@ -157,6 +157,35 @@ const closedDiagnosticCodes = (log) =>
   [...log.matchAll(/"code":"([A-Za-z0-9]+)"/gu)]
     .map((match) => match[1])
     .filter((code, index, codes) => qualificationRejectionCodes.has(code) && codes.indexOf(code) === index)
+
+const ansiControlSequence = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "gu")
+const repositoryTestFailureLine =
+  /(?:^|\n)\s*(?:FAIL|❯)[^\r\n]*?\b((?:packages|scripts|src|test)\/[A-Za-z0-9._/-]+\.test\.(?:mjs|ts))(?=[:\s>])/gu
+const repositoryTestFile = /^(?:packages|scripts|src|test)\/[A-Za-z0-9._/-]+\.test\.(?:mjs|ts)$/u
+const isRepositoryTestFile = (path) =>
+  repositoryTestFile.test(path) && path.split("/").every((segment) => segment !== "." && segment !== "..")
+
+const trackedRepositoryTestFiles = (worktree) => {
+  const result = spawnSync("git", ["ls-files", "-z", "--cached", "--"], {
+    cwd: worktree,
+    encoding: "utf8",
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }
+  })
+  if (result.error !== undefined || result.status !== 0)
+    throw new Error("Hosted quality tracked test inventory is unavailable")
+  return new Set(result.stdout.split("\0").filter(isRepositoryTestFile))
+}
+
+/** Retains only repository-relative test file identities; assertion text and arbitrary paths stay private. */
+export const closedFailedTestFiles = (log, trackedTestFiles) => {
+  const plain = log.replace(ansiControlSequence, "")
+  return [...plain.matchAll(repositoryTestFailureLine)]
+    .map((match) => match[1])
+    .filter(
+      (path, index, paths) =>
+        path !== undefined && trackedTestFiles.has(path) && isRepositoryTestFile(path) && paths.indexOf(path) === index
+    )
+}
 
 const descendantStages = (stages, rootId) => {
   const selected = []
@@ -319,6 +348,7 @@ export const exportHostedQualityStageEvidence = ({
   const artifacts = [portableArtifact({ outputDirectory, source: stage.logPath, target: "stage.log" })]
   const descendants = descendantStages(evidence.stages, stage.obligationId)
   const descendantIndexes = new Map(descendants.map((child, index) => [child.obligationId, index]))
+  const trackedTestFiles = trackedRepositoryTestFiles(evidence.worktree)
   const childDiagnostics = descendants.map((child) => {
     if (!child.stopped || child.outcome === "UNPROVEN")
       throw new Error("Hosted quality descendant lacks terminal stopped custody")
@@ -326,7 +356,12 @@ export const exportHostedQualityStageEvidence = ({
     return {
       parent: child.parentId === stage.obligationId ? "stage" : descendantIndexes.get(child.parentId),
       command: { acceptedExitCodes: child.command.acceptedExitCodes, sha256: digest(JSON.stringify(child.command)) },
-      log: { bytes: log.length, diagnosticCodes: closedDiagnosticCodes(log.toString("utf8")), sha256: digest(log) },
+      log: {
+        bytes: log.length,
+        diagnosticCodes: closedDiagnosticCodes(log.toString("utf8")),
+        failedTestFiles: closedFailedTestFiles(log.toString("utf8"), trackedTestFiles),
+        sha256: digest(log)
+      },
       stopped: child.stopped,
       exitCode: child.exitCode,
       outcome: child.outcome,
@@ -417,6 +452,7 @@ const artifactFailure = (envelope, root, artifact) => {
 
 const validateEnvelope = ({ binding, envelope, plan, reportRoot }) => {
   const failures = []
+  const trackedTestFiles = trackedRepositoryTestFiles(process.cwd())
   const { envelopeSha256, ...payload } = envelope ?? {}
   if (envelope?.version !== hostedQualityEvidenceVersion || digest(JSON.stringify(payload)) !== envelopeSha256)
     failures.push("malformed or unsealed envelope")
@@ -558,13 +594,18 @@ const validateEnvelope = ({ binding, envelope, plan, reportRoot }) => {
       !/^[0-9a-f]{64}$/u.test(diagnostic.command.sha256 ?? "") ||
       diagnostic?.log === null ||
       typeof diagnostic?.log !== "object" ||
-      !same(Object.keys(diagnostic.log).sort(), ["bytes", "diagnosticCodes", "sha256"]) ||
+      !same(Object.keys(diagnostic.log).sort(), ["bytes", "diagnosticCodes", "failedTestFiles", "sha256"]) ||
       !Number.isSafeInteger(diagnostic.log.bytes) ||
       diagnostic.log.bytes < 0 ||
       !/^[0-9a-f]{64}$/u.test(diagnostic.log.sha256 ?? "") ||
       !Array.isArray(diagnostic.log.diagnosticCodes) ||
       diagnostic.log.diagnosticCodes.some((code) => !qualificationRejectionCodes.has(code)) ||
       new Set(diagnostic.log.diagnosticCodes).size !== diagnostic.log.diagnosticCodes.length ||
+      !Array.isArray(diagnostic.log.failedTestFiles) ||
+      diagnostic.log.failedTestFiles.some(
+        (path) => typeof path !== "string" || !trackedTestFiles.has(path) || !isRepositoryTestFile(path)
+      ) ||
+      new Set(diagnostic.log.failedTestFiles).size !== diagnostic.log.failedTestFiles.length ||
       terminalEvidenceFailure({
         acceptedExitCodes: diagnostic.command.acceptedExitCodes,
         exitCode: diagnostic.exitCode,

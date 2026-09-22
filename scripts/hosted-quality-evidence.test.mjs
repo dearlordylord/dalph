@@ -5,11 +5,13 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { test } from "node:test"
+import * as fc from "fast-check"
 
 import { digest, readRecord, repositoryLocation, withoutInheritedCustody } from "./gate-custody-records.mjs"
 import { createQualityGateStagePlan } from "./quality-gate-stage-plan.mjs"
 import {
   aggregateHostedQualityStages,
+  closedFailedTestFiles,
   hostedQualityNodeVersions,
   hostedQualityStageIds,
   selectedHostedQualityStage
@@ -32,6 +34,40 @@ const plan = createQualityGateStagePlan({
   nodeExecutable: "node",
   nodeVersions: hostedQualityNodeVersions,
   pnpmEntryPoint: "pnpm"
+})
+
+void test("projects only closed repository-relative Vitest failure paths", () => {
+  const firstCharacter = fc.constantFrom(...Array.from("abcdefghijklmnopqrstuvwxyz0123456789"))
+  const remainingCharacter = fc.constantFrom(...Array.from("abcdefghijklmnopqrstuvwxyz0123456789._-"))
+  const segment = fc
+    .tuple(firstCharacter, fc.array(remainingCharacter, { maxLength: 19 }))
+    .map(([first, remaining]) => `${first}${remaining.join("")}`)
+  const testPath = fc
+    .tuple(fc.constantFrom("packages", "scripts", "src", "test"), fc.array(segment, { minLength: 1, maxLength: 4 }))
+    .map(([root, segments]) => `${root}/${segments.join("/")}.test.ts`)
+
+  fc.assert(
+    fc.property(testPath, (path) => {
+      const log = `\u001b[31m FAIL \u001b[39m ${path} > controlled failure\n ❯ ${path}:12:3\n`
+      assert.deepEqual(closedFailedTestFiles(log, new Set([path])), [path])
+    }),
+    { numRuns: 100 }
+  )
+  fc.assert(
+    fc.property(segment, (value) => {
+      assert.deepEqual(closedFailedTestFiles(`FAIL /tmp/${value}.test.ts > private\n`, new Set()), [])
+      const traversal = `packages/../${value}.test.ts`
+      assert.deepEqual(closedFailedTestFiles(`FAIL ${traversal} > traversal\n`, new Set([traversal])), [])
+    }),
+    { numRuns: 100 }
+  )
+  assert.deepEqual(
+    closedFailedTestFiles(
+      "FAIL  packages/dalph/src/one.test.ts > first\nFAIL  scripts/two.test.mjs > second\n",
+      new Set(["packages/dalph/src/one.test.ts", "scripts/two.test.mjs"])
+    ),
+    ["packages/dalph/src/one.test.ts", "scripts/two.test.mjs"]
+  )
 })
 
 const seal = (payload) => ({ ...payload, envelopeSha256: digest(JSON.stringify(payload)) })
@@ -64,7 +100,7 @@ const fixture = () => {
       }
     }
     const payload = {
-      version: 1,
+      version: 2,
       binding,
       stageId,
       expectedStageIds: hostedQualityStageIds,
@@ -424,8 +460,10 @@ void test("the production runner exports owner-validated stopped custody from a 
       return result.stdout.trim()
     }
     git("init", "-q")
+    mkdirSync(join(root, "scripts"), { recursive: true })
     writeFileSync(join(root, ".gitignore"), ".scratch/\n")
-    git("add", ".gitignore")
+    writeFileSync(join(root, "scripts", "hosted-quality-evidence.test.mjs"), "// tracked fixture identity\n")
+    git("add", ".gitignore", "scripts/hosted-quality-evidence.test.mjs")
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "base")
     const fixtureBase = git("rev-parse", "HEAD")
     writeFileSync(join(root, "candidate.txt"), "candidate\n")
@@ -434,7 +472,8 @@ void test("the production runner exports owner-validated stopped custody from a 
     const fixtureCandidate = git("rev-parse", "HEAD")
     const pnpm = join(root, "controlled-pnpm.mjs")
     const boundedCommand = pathToFileURL(fileURLToPath(new URL("./run-bounded-command.mjs", import.meta.url))).href
-    const invalidTaskSource = `process.stdout.write(${JSON.stringify('"code":"InvalidTask"\n')});process.exit(23)`
+    const invalidTaskLog = '"code":"InvalidTask"\nFAIL  scripts/hosted-quality-evidence.test.mjs > bounded failure\n'
+    const invalidTaskSource = `process.stdout.write(${JSON.stringify(invalidTaskLog)});process.exit(23)`
     const taskMismatchSource = `process.stdout.write(${JSON.stringify('"code":"TaskMismatch"\n')})`
     const nested =
       `import { runBoundedCommand } from ${JSON.stringify(boundedCommand)}\n` +
@@ -504,7 +543,7 @@ void test("the production runner exports owner-validated stopped custody from a 
       terminationGraceMilliseconds: 5_000,
       processGroupAbsenceTimeoutMilliseconds: 2_000
     }))
-    const expectedLogs = ['"code":"InvalidTask"\n', '"code":"TaskMismatch"\n', '"code":"TaskMismatch"\n']
+    const expectedLogs = [invalidTaskLog, '"code":"TaskMismatch"\n', '"code":"TaskMismatch"\n']
     assert.deepEqual(
       envelope.childDiagnostics.map(({ command }) => command),
       expectedCommands.map((command) => ({ acceptedExitCodes: [0], sha256: digest(JSON.stringify(command)) }))
@@ -523,6 +562,8 @@ void test("the production runner exports owner-validated stopped custody from a 
     )
     assert.deepEqual(envelope.childDiagnostics[0].log.diagnosticCodes, ["InvalidTask"])
     assert.deepEqual(envelope.childDiagnostics[2].log.diagnosticCodes, ["TaskMismatch"])
+    assert.deepEqual(envelope.childDiagnostics[0].log.failedTestFiles, ["scripts/hosted-quality-evidence.test.mjs"])
+    assert.deepEqual(envelope.childDiagnostics[1].log.failedTestFiles, [])
     assert.equal(readdirSync(output).includes("child-logs"), false)
     const aggregate = aggregateHostedQualityStages({
       binding: { baseSha: fixtureBase, candidateSha: fixtureCandidate, runId: "44", runAttempt: "1" },
@@ -541,7 +582,7 @@ void test("rejects malformed or contradictory descendant terminal evidence", () 
     {
       parent: "stage",
       command: { acceptedExitCodes: [0], sha256: "1".repeat(64) },
-      log: { bytes: 10, diagnosticCodes: ["InvalidTask"], sha256: "2".repeat(64) },
+      log: { bytes: 10, diagnosticCodes: ["InvalidTask"], failedTestFiles: [], sha256: "2".repeat(64) },
       stopped: true,
       exitCode: 23,
       outcome: "exit:23",
@@ -550,7 +591,7 @@ void test("rejects malformed or contradictory descendant terminal evidence", () 
     {
       parent: 0,
       command: { acceptedExitCodes: [0], sha256: "3".repeat(64) },
-      log: { bytes: 20, diagnosticCodes: [], sha256: "4".repeat(64) },
+      log: { bytes: 20, diagnosticCodes: [], failedTestFiles: [], sha256: "4".repeat(64) },
       stopped: true,
       exitCode: 0,
       outcome: "passed",
@@ -564,6 +605,7 @@ void test("rejects malformed or contradictory descendant terminal evidence", () 
     (children) => (children[1].parent = 1),
     (children) => (children[0].extra = true),
     (children) => children[0].log.diagnosticCodes.push("ProviderPayload"),
+    (children) => children[0].log.failedTestFiles.push("/tmp/private.test.ts"),
     (children) => (children[0].command.sha256 = "not-a-digest"),
     (children) => (children[0].log.bytes = -1)
   ]

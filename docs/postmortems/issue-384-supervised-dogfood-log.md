@@ -1139,14 +1139,14 @@ At 06:08Z the isolated build passed, followed by all five public
 direct-publication fixture tests. The complete controlled S1 took 13.2 seconds
 and proved publication, promotion, completion, cleanup, and the later graph
 before dependant release. All eight Run-composition tests also passed. These
-checks do not substitute for the fresh Luna/max live-provider journey or the
-frozen full gate. The prior broader test timeout occurred under shared-host
-load about 35 on 12 CPUs; its isolated verbose failure was the test's
-10-second timeout. The timed-out build's exact process group was subsequently
-proved absent before rebuilding. Two completed audit searches were separately
-found still running; their exact owned children were stopped and their parent
-shells verified absent. Read-only delegated work also needs enforced process
-bounds and explicit handle settlement.
+checks do not substitute for the fresh Sol/medium live-provider journey
+required by #390 or the frozen full gate. The prior broader test timeout
+occurred under shared-host load about 35 on 12 CPUs; its isolated verbose
+failure was the test's 10-second timeout. The timed-out build's exact process
+group was subsequently proved absent before rebuilding. Two completed audit
+searches were separately found still running; their exact owned children were
+stopped and their parent shells verified absent. Read-only delegated work also
+needs enforced process bounds and explicit handle settlement.
 
 The deadline repair's final review found that formal progress advertised the
 enclosing gate deadline even when a child had a shorter timeout. The runner
@@ -1163,7 +1163,8 @@ Codex 0.149.0 app-server passes all 15 real-process tests against a local fake
 Responses endpoint. This exercises real JSON-RPC, persistence, ownership,
 restart, interruption, process-death cuts and cleanup without a live model
 request. `pnpm check:fast` passes. These results qualify the focused repairs;
-they still do not replace the frozen full gate or fresh Luna/max S1.
+they still do not replace the frozen full gate or the fresh Sol/medium S1
+required by #390.
 
 Baseline run `4af25434-af77-4988-a467-9b07d9734ff1` against candidate
 `600f1ac9d2a0cd936e8aa8c13fdb0882b231ee4c` ended with stopped custody and
@@ -1297,3 +1298,24 @@ provider payloads, private paths, or user data. The locally retained raw log
 remains digest-bound to the portable diagnostic. These changes affect
 qualification diagnostics and tooling only; they do not change Dalph workflow
 decisions, provider calls, retries, cleanup, or task-visible results.
+
+The next diagnostic projection also retains the deduplicated repository-relative
+test file names from Vitest failure headers and stack frames in each sealed child
+diagnostic. It rejects absolute paths and traversal segments, and still excludes
+assertion text, arbitrary paths, argv, provider payloads and raw logs. Thus a
+future hosted multi-file failure identifies every failed test file without
+turning the portable artifact into an output-exfiltration channel. Property
+tests cover ANSI-decorated headers, stack frames, duplicates, absolute paths and
+traversal attempts. This is qualification tooling only; Dalph runtime behavior
+cannot change.
+
+A single-job rerun of the same hosted coverage candidate reproduced the same
+three-file, three-test rejection. The only retained failure again reached
+`ObservePlannedAttemptExecutorWork` after executor report ordinal one. The
+coverage job itself completed with stopped custody, while its sealed outcome
+remained failed. The aggregate correctly stayed failed: GitHub reran only the
+coverage matrix cell under run attempt two, so the attempt-two evidence set
+lacked recorded-catalog and delivery-repeatability envelopes. This recurrence
+rules out a unique transient runner incident, but the missing first two file
+identities still prevent a justified shared-cause claim. The version-two hosted
+envelope makes the next recurrence retain those closed identities.
