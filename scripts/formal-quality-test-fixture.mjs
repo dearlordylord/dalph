@@ -45,6 +45,7 @@ export const copyQualityRuntimeFixture = (worktree) => {
     "quality-output-budget.mjs",
     "formal-progress-events.mjs",
     "quint-effective-profile.mjs",
+    "quint-gate-automatic-successor-command-oracle.mjs",
     "quint-gate-command-contract.mjs",
     "quint-gate-command-manifest.mjs",
     "quint-gate-concurrency.mjs",

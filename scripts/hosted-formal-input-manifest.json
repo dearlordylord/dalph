@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "caf4a364d7850bab51cd83e7bfa103bdc4e32e9d40bc072a120b5dafb51d11ea",
+  "digest": "d3058588fcc4ce2df57b011832adff4dda9503b5c91fbadf48b17b0312cbb535",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -341,8 +341,11 @@
     "packages/orchestrator/src/workflow/protocols/integration-quarantine/request.ts",
     "packages/orchestrator/src/workflow/protocols/integration-quarantine/retry-conclusive.ts",
     "packages/orchestrator/src/workflow/protocols/integration-quarantine/state.ts",
+    "packages/orchestrator/src/workflow/protocols/integrator/automatic-successor-events.ts",
+    "packages/orchestrator/src/workflow/protocols/integrator/automatic-successor-session.ts",
     "packages/orchestrator/src/workflow/protocols/integrator/errors.ts",
     "packages/orchestrator/src/workflow/protocols/integrator/events.ts",
+    "packages/orchestrator/src/workflow/protocols/integrator/journal-errors.ts",
     "packages/orchestrator/src/workflow/protocols/integrator/journal-record-reconciliation.ts",
     "packages/orchestrator/src/workflow/protocols/integrator/protocol.ts",
     "packages/orchestrator/src/workflow/protocols/integrator/retry-authorization.ts",
