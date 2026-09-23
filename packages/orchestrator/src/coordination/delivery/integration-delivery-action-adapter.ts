@@ -417,7 +417,7 @@ const executeRemotePublication = Effect.fn("DeliveryAction.runRemotePublication"
         runId: transition.responsibility.plannedAttempt.runId
       })
     })
-  const publicationSenderPhase = <A, E, R>(phase: Effect.Effect<A, E, R>) =>
+  const publicationPhase = <A, E, R>(phase: Effect.Effect<A, E, R>) =>
     runAtomicDeliveryBoundary(
       lease,
       Effect.gen(function* () {
@@ -445,10 +445,7 @@ const executeRemotePublication = Effect.fn("DeliveryAction.runRemotePublication"
           .readAccepted(transition.responsibility.plannedAttempt.runId)
           .pipe(Effect.orDie)
         const request = yield* activeResumeRequest(records)
-        const phaseBoundary = {
-          runObservation: <A, E, R>(phase: Effect.Effect<A, E, R>) => runAtomicDeliveryBoundary(lease, phase),
-          runSender: publicationSenderPhase
-        }
+        const phaseBoundary = { runObservation: publicationPhase, runSender: publicationPhase }
         if (request === undefined) {
           return yield* runRemotePublication(transition.candidate, transition.target, phaseBoundary).pipe(
             Effect.provideService(RemotePublicationGit, git)

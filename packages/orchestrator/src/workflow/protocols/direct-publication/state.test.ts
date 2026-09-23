@@ -7,7 +7,9 @@ import {
 import { Schema } from "effect"
 import { expect, it } from "vitest"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
+import { WorkflowActor } from "../../registry/actor.js"
 import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
+import { IntegrationResponsibilityIdentity } from "../integration-admission/responsibility.js"
 import {
   RemotePublicationAttemptAuthorization,
   RemotePublicationAttemptIntendedEvent,
@@ -17,6 +19,9 @@ import {
   RemotePublicationProofBasis,
   RemotePublicationRetainedCause,
   RemotePublicationRetainedEvent,
+  RemotePublicationResumeRequest,
+  RemotePublicationResumeRequestId,
+  RemotePublicationResumeRequestedEvent,
   RemotePublicationSucceededEvent,
   remotePublicationCorrelationFor,
   remotePublicationRefspecFor
@@ -94,6 +99,72 @@ it("derives exact publication proof only after its numbered intent", () => {
       })
     ])
   ).toEqual({ _tag: "PublicationSucceeded", correlation, proof })
+})
+
+it("accepts only exact reconciled proof from the active resume receipt and its latest retained attempt", () => {
+  const runId = correlation.qualifiedCandidate.run.session.plannedAttempt.runId
+  const request = RemotePublicationResumeRequest.make({
+    requestId: RemotePublicationResumeRequestId.make("resume-reconcile-current-proof"),
+    responsibility: IntegrationResponsibilityIdentity.make({
+      queuedAt: correlation.qualifiedCandidate.run.session.queuedAt,
+      runId
+    }),
+    runId,
+    schemaVersion: 1
+  })
+  const retained = RemotePublicationRetainedEvent.make({
+    authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
+    cause: RemotePublicationRetainedCause.cases.AuthenticationDenied.make({}),
+    correlation,
+    occurrenceClassification: "NonActionOccurrence",
+    version: workflowJournalEventVersion
+  })
+  const receipt = RemotePublicationResumeRequestedEvent.make({
+    correlation,
+    initiatedBy: WorkflowActor.cases.Operator.make({}),
+    occurrenceClassification: "InitiatedAction",
+    request,
+    version: workflowJournalEventVersion
+  })
+  const proof = RemotePublicationProofBasis.cases.ReconciledCandidateCurrent.make({
+    attemptOrdinal: attempt.attemptOrdinal,
+    remoteHead: correlation.qualifiedCandidate.candidateCommit
+  })
+  const success = RemotePublicationSucceededEvent.make({
+    correlation,
+    occurrenceClassification: "NonActionOccurrence",
+    proof,
+    version: workflowJournalEventVersion
+  })
+  expect(deriveRemotePublicationState([outerIntent, attempt, retained, receipt, success])).toEqual({
+    _tag: "PublicationSucceeded",
+    correlation,
+    proof
+  })
+
+  const pushSuccess = RemotePublicationSucceededEvent.make({
+    ...success,
+    proof: RemotePublicationProofBasis.cases.PushApplied.make({
+      attemptOrdinal: attempt.attemptOrdinal,
+      remoteHead: correlation.qualifiedCandidate.candidateCommit
+    })
+  })
+  expect(deriveRemotePublicationState([outerIntent, attempt, retained, receipt, pushSuccess])).toEqual({
+    _tag: "PublicationContradiction",
+    detail: "resume receipt can settle publication only through exact remote reconciliation"
+  })
+
+  const wrongOrdinalSuccess = RemotePublicationSucceededEvent.make({
+    ...success,
+    proof: RemotePublicationProofBasis.cases.ReconciledCandidateCurrent.make({
+      attemptOrdinal: RemotePublicationAttemptOrdinal.make(2),
+      remoteHead: correlation.qualifiedCandidate.candidateCommit
+    })
+  })
+  expect(deriveRemotePublicationState([outerIntent, attempt, retained, receipt, wrongOrdinalSuccess])).toEqual({
+    _tag: "PublicationContradiction",
+    detail: "resumed publication proof must identify the latest pre-receipt attempt"
+  })
 })
 
 it("rejects a numbered intent whose explicit refspec does not name the exact candidate and branch", () => {

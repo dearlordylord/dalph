@@ -1,7 +1,7 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { AcceptedResultEvidenceManifest, GitCommitSha, makeTaskWorkSpecification, RunId } from "@dalph/contracts"
 import { expect, it } from "@effect/vitest"
-import { Context, Effect, FileSystem, Layer, Path, Ref, type Scope } from "effect"
+import { Context, Effect, FileSystem, Layer, Option, Path, Ref, type Scope } from "effect"
 import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
 import { integratorCorrelationFor } from "../integrator/session.js"
 import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
@@ -10,6 +10,8 @@ import { journalLayer, type JournalStorageBoundary } from "../../../coordination
 import type { RunReactivationOwnerService } from "../../../coordination/run/run-reactivation-owner.js"
 import { RunReactivationHint } from "../../../coordination/run/run-reactivation-owner.js"
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
+import { reconstructRunState } from "../../../coordination/reconstruction/reduce.js"
+import { deriveIntegrationFrontier } from "../../../coordination/frontier/integration-frontier.js"
 import { JournalDatabaseLocator, JournalPosition } from "../../../workflow-journal/identity.js"
 import { memoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { sqliteJournalStoreLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
@@ -358,26 +360,75 @@ it.effect("recovers the same retained resume receipt after restart with memory a
   )
 )
 
-it.effect("continues settled proof through promotion and fresh tracker finality; a new request does no work", () =>
+it.effect("continues a resumed publication proof through promotion and fresh tracker finality", () =>
   memoryFresh((process) =>
     Effect.gen(function* () {
-      const published = yield* makeGit("applied")
-      const firstStatus = yield* process((store) => invoke(store, published.git, "run"))
+      const firstFailure = yield* makeGit("denied")
+      expect((yield* process((store) => invoke(store, firstFailure.git, "run")))._tag).toBe("PublicationRetained")
+      const request = requestFor("resume-proof-through-promotion-and-finality")
+      const published = yield* makeGit("candidate-current")
+      const firstStatus = yield* process((store) => invoke(store, published.git, { request }))
       expect(firstStatus._tag).toBe("PublicationSucceeded")
-      const beforeResume = yield* process((store) => store.read(runId))
+      expect(yield* Ref.get(published.calls)).toMatchObject({
+        custody: 1,
+        observations: 1,
+        preparations: [],
+        pushes: []
+      })
+      const afterResume = yield* process((store) => store.read(runId))
+      expect(afterResume.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(
+        qualified.qualifiedRecords.filter(({ event }) => event._tag === "WorkflowRunBegan").length
+      )
+      expect(afterResume.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(
+        qualified.qualifiedRecords.filter(({ event }) => event._tag === "IntegratorRunStarted").length
+      )
+      expect(publicationOrdinals(afterResume)).toEqual([1])
+      expect(afterResume.filter(({ event }) => event._tag === "RemotePublicationResumeRequested")).toEqual([
+        expect.objectContaining({ event: expect.objectContaining({ request }) })
+      ])
       const statusOnlyGit = yield* makeGit("applied")
       const replayedStatus = yield* process((store) =>
         invoke(store, statusOnlyGit.git, { request: requestFor("new-request-after-settlement") })
       )
       expect(replayedStatus).toEqual(firstStatus)
       expect(yield* Ref.get(statusOnlyGit.calls)).toEqual(emptyCalls())
-      expect(recordTags(yield* process((store) => store.read(runId)))).toEqual(recordTags(beforeResume))
+      expect(recordTags(yield* process((store) => store.read(runId)))).toEqual(recordTags(afterResume))
 
-      const successRecord = beforeResume.find(({ event }) => event._tag === "RemotePublicationSucceeded")
+      const successRecord = afterResume.find(({ event }) => event._tag === "RemotePublicationSucceeded")
       if (successRecord?.event._tag !== "RemotePublicationSucceeded" || firstStatus._tag !== "PublicationSucceeded") {
         return yield* Effect.die("settled publication proof must remain available to finality")
       }
-      const handoff = PublishedIntegratorRunQualifiedCandidate.make({ candidate, publication: successRecord.event })
+      const reconstructed = reconstructRunState(runId, afterResume)
+      if (reconstructed._tag !== "ValidReconstructedRun") {
+        return yield* Effect.die("resumed publication history must remain reconstructable for the Run selector")
+      }
+      const targetLineageRecord = qualified.qualifiedRecords.find(({ event }) => event._tag === "TargetLineageObserved")
+      if (targetLineageRecord?.event._tag !== "TargetLineageObserved") {
+        return yield* Effect.die("qualified candidate history must retain its exact target lineage")
+      }
+      const attemptId = candidate.run.session.plannedAttempt.attemptId
+      const selectedActions = deriveIntegrationFrontier(reconstructed.state, {
+        currentTrackerTaskIds: new Set([candidate.run.session.plannedAttempt.taskId]),
+        heldResponsibilities: [
+          IntegrationResponsibilityIdentity.make({ queuedAt: candidate.run.session.queuedAt, runId })
+        ],
+        integrationTarget: Option.some(candidate.run.session.integrationTarget),
+        targetLineageByAttemptId: new Map([[attemptId, targetLineageRecord.event.observation]]),
+        targetPromotionConfigured: true,
+        remotePublicationConfigured: true,
+        taskClaimAuthorityByAttemptId: new Map([[attemptId, { _tag: "Exact" as const }]])
+      }).transitions
+      expect(selectedActions).toHaveLength(1)
+      const nextAction = selectedActions[0]
+      if (nextAction?._tag !== "RunTargetPromotion") {
+        return yield* Effect.die("fresh permission after resumed proof must select the existing local promotion")
+      }
+      expect(nextAction.candidate).toEqual(candidate)
+      expect(nextAction.publication).toEqual(successRecord.event)
+      const handoff = PublishedIntegratorRunQualifiedCandidate.make({
+        candidate: nextAction.candidate,
+        publication: nextAction.publication
+      })
       expect(handoff.candidate).toEqual(candidate)
       expect(targetPromotionCorrelationFor(handoff.candidate)).toEqual(targetPromotionCorrelationFor(candidate))
       expect(handoff.candidate.run.session.expectedTargetHead).toBe(candidate.run.session.expectedTargetHead)
@@ -428,6 +479,8 @@ it.effect("continues settled proof through promotion and fresh tracker finality;
         read: () => Effect.succeed(new TextEncoder().encode(JSON.stringify(manifest)))
       })
       const currentClaim = yield* Ref.make<CompletionClaimObservation>(accepted.activeClaim)
+      const completionCalls = yield* Ref.make<ReadonlyArray<unknown>>([])
+      const currentPermissionReads = yield* Ref.make<ReadonlyArray<unknown>>([])
       const replacementBoundary = CompletionClaimBoundary.of({
         readOriginalTaskClaim: () => Effect.succeed(accepted.activeClaim),
         readTaskClaim: () => Ref.get(currentClaim),
@@ -453,18 +506,20 @@ it.effect("continues settled proof through promotion and fresh tracker finality;
       expect(replacement._tag).toBe("CompletionClaimReplaced")
       const completionBoundary = CompletionTaskBoundary.of({
         completeTask: (request) =>
-          Effect.succeed(
-            CompletionTaskAcknowledgement.make({ operationId: request.operationId, taskId: request.taskId })
+          Ref.update(completionCalls, (calls) => [...calls, request]).pipe(
+            Effect.as(CompletionTaskAcknowledgement.make({ operationId: request.operationId, taskId: request.taskId }))
           ),
         readCompletionRequest: () => Effect.die("fresh completion does not need request lookup"),
-        readFocusedTaskCompletion: ({ operationId }) =>
-          Effect.succeed({
+        readFocusedTaskCompletion: ({ operationId }) => {
+          const facts = {
             ...fixture.focusedSuccessFactsEvent.observation.facts,
             currentClaim: completionRequest.claim,
             lifecycle: "Open" as const,
             taskRevision: candidate.run.session.plannedAttempt.taskRevision,
             operationId
-          })
+          }
+          return Ref.update(currentPermissionReads, (reads) => [...reads, facts]).pipe(Effect.as(facts))
+        }
       })
       const completion = yield* process((store) =>
         Effect.gen(function* () {
@@ -488,6 +543,16 @@ it.effect("continues settled proof through promotion and fresh tracker finality;
         CompletionTaskAcknowledgement.make({
           operationId: completionRequest.operationId,
           taskId: completionRequest.taskId
+        })
+      )
+      expect(yield* Ref.get(completionCalls)).toEqual([completionRequest])
+      const observedPermissions = yield* Ref.get(currentPermissionReads)
+      expect(observedPermissions).not.toHaveLength(0)
+      expect(observedPermissions).toContainEqual(
+        expect.objectContaining({
+          currentClaim: completionRequest.claim,
+          lifecycle: "Open",
+          taskRevision: candidate.run.session.plannedAttempt.taskRevision
         })
       )
       expect(recordTags(yield* process((store) => store.read(runId)))).toContain("CompletionTaskAcknowledged")
@@ -759,65 +824,72 @@ it.effect("a persistent denial stops at the accepted attempt limit and cannot be
   )
 )
 
-it.effect("Pause allows retained custody and head reconciliation but blocks the next sender action", () =>
+it.effect("a permitted reconciliation phase retains the same attempt when the sender phase is interrupted", () =>
   memoryFresh((process) =>
     Effect.gen(function* () {
       const first = yield* makeGit("denied")
       yield* process((store) => invoke(store, first.git, "run"))
-      const paused: RemotePublicationPhaseBoundary = {
+      const permittedReconciliation: RemotePublicationPhaseBoundary = {
         runObservation: (phase) => phase,
         runSender: (_phase) => Effect.interrupt
       }
       const request = requestFor("resume-during-pause")
-      const pausedGit = yield* makeGit("applied")
+      const reconciledGit = yield* makeGit("applied")
       expect(
-        (yield* Effect.exit(process((store) => invoke(store, pausedGit.git, { request }, false, paused))))._tag
+        (yield* Effect.exit(
+          process((store) => invoke(store, reconciledGit.git, { request }, false, permittedReconciliation))
+        ))._tag
       ).toBe("Failure")
-      expect(yield* Ref.get(pausedGit.calls)).toMatchObject({
+      expect(yield* Ref.get(reconciledGit.calls)).toMatchObject({
         custody: 1,
         observations: 1,
         preparations: [],
         pushes: []
       })
-      expect((yield* Ref.get(pausedGit.calls)).timeline).toEqual([
+      expect((yield* Ref.get(reconciledGit.calls)).timeline).toEqual([
         `custody:1`,
         `observe:${candidate.run.session.expectedTargetHead}`
       ])
       expect(publicationOrdinals(yield* process((store) => store.read(runId)))).toEqual([1])
 
-      const blockedReplay = yield* makeGit("applied")
+      const blockedSenderReplay = yield* makeGit("applied")
       expect(
-        (yield* Effect.exit(process((store) => invoke(store, blockedReplay.git, { request }, false, paused))))._tag
+        (yield* Effect.exit(
+          process((store) => invoke(store, blockedSenderReplay.git, { request }, false, permittedReconciliation))
+        ))._tag
       ).toBe("Failure")
-      expect((yield* Ref.get(blockedReplay.calls)).pushes).toEqual([])
-      expect((yield* Ref.get(blockedReplay.calls)).preparations).toEqual([])
+      expect((yield* Ref.get(blockedSenderReplay.calls)).pushes).toEqual([])
+      expect((yield* Ref.get(blockedSenderReplay.calls)).preparations).toEqual([])
       expect(
         (yield* process((store) => store.read(runId))).filter(
           ({ event }) => event._tag === "RemotePublicationResumeRequested"
         )
       ).toHaveLength(1)
 
-      const unpaused = yield* makeGit("applied")
-      expect((yield* process((store) => invoke(store, unpaused.git, { request })))._tag).toBe("PublicationSucceeded")
-      expect(yield* Ref.get(unpaused.calls)).toMatchObject({ preparations: [2], pushes: [2] })
+      const permittedSender = yield* makeGit("applied")
+      expect((yield* process((store) => invoke(store, permittedSender.git, { request })))._tag).toBe(
+        "PublicationSucceeded"
+      )
+      expect(yield* Ref.get(permittedSender.calls)).toMatchObject({ preparations: [2], pushes: [2] })
     })
   )
 )
 
-it.effect("Pause records exact already-published proof from reconciliation without preparing or sending", () =>
+it.effect("a permitted reconciliation phase records exact proof without preparing or sending", () =>
   memoryFresh((process) =>
     Effect.gen(function* () {
       const first = yield* makeGit("denied")
       yield* process((store) => invoke(store, first.git, "run"))
-      const paused: RemotePublicationPhaseBoundary = {
+      const permittedReconciliation: RemotePublicationPhaseBoundary = {
         runObservation: (phase) => phase,
         runSender: (_phase) => Effect.interrupt
       }
       const receipt = requestFor("resume-observed-published-under-pause")
       const observed = yield* makeGit("candidate-current")
-      expect((yield* process((store) => invoke(store, observed.git, { request: receipt }, false, paused)))._tag).toBe(
-        "PublicationSucceeded"
-      )
+      expect(
+        (yield* process((store) => invoke(store, observed.git, { request: receipt }, false, permittedReconciliation)))
+          ._tag
+      ).toBe("PublicationSucceeded")
       expect(yield* Ref.get(observed.calls)).toMatchObject({
         custody: 1,
         observations: 1,

@@ -195,8 +195,24 @@ export const deriveRemotePublicationState = (
       continue
     }
     if (event._tag === "RemotePublicationSucceeded") {
-      if (phase._tag !== "Pending") return contradiction("publication proof has no active delivery phase")
+      if (phase._tag !== "Pending" && phase._tag !== "ResumeReady") {
+        return contradiction("publication proof has no active delivery phase")
+      }
       const proofOrdinal = attemptOrdinalOfProof(event.proof)
+      if (phase._tag === "ResumeReady") {
+        const latestAttempt = events
+          .slice(0, index)
+          .findLast((prior) => prior._tag === "RemotePublicationAttemptIntended")
+        if (event.proof._tag !== "ReconciledCandidateCurrent" && event.proof._tag !== "ReconciledCandidateAncestor") {
+          return contradiction("resume receipt can settle publication only through exact remote reconciliation")
+        }
+        if (
+          latestAttempt?._tag !== "RemotePublicationAttemptIntended" ||
+          latestAttempt.attemptOrdinal !== proofOrdinal
+        ) {
+          return contradiction("resumed publication proof must identify the latest pre-receipt attempt")
+        }
+      }
       if (
         (event.proof._tag === "PushApplied" || event.proof._tag === "PushUpToDate") &&
         rejectedOrdinals.has(proofOrdinal)

@@ -49,6 +49,10 @@ import {
 import { type RunReactivationHint, RunReactivationOwner } from "../run/run-reactivation-owner.js"
 import { RemoteBaselineGit } from "../../workflow/protocols/direct-publication/baseline-events.js"
 import { InitialControlPolicy } from "../../control/policy.js"
+import {
+  ControlDirectionApplicationOrdinal,
+  ControlDirectionAppliedEvent
+} from "../../workflow/protocols/control-direction-application/events.js"
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
@@ -401,6 +405,54 @@ it.effect("fails closed on compatible competition when the existing same-commit 
     expect(
       (yield* Ref.get(records)).filter(({ event }) => event._tag === "RemotePublicationAttemptIntended")
     ).toHaveLength(1)
+  })
+)
+
+it.effect("a paused retained Run stops before custody, head observation, or publication boundaries", () =>
+  Effect.gen(function* () {
+    const { records: retainedRecords } = retainedResumePrefix()
+    const pause = ControlDirectionAppliedEvent.make({
+      direction: "Pause",
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: ControlDirectionApplicationOrdinal.make(1),
+      subject: { _tag: "Run", runId: fixture.runId },
+      version: workflowJournalEventVersion
+    })
+    const pausedRecords = appendJournalEvents(retainedRecords, [pause])
+    const records = yield* Ref.make(pausedRecords)
+    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const recordCall = (name: string) =>
+      Ref.update(calls, (current) => [...current, name]).pipe(Effect.andThen(Effect.die(`unexpected ${name}`)))
+    const git = RemotePublicationGit.of({
+      admit: () => recordCall("admit"),
+      observe: () => recordCall("observe"),
+      prepareSenderCustody: () => recordCall("prepare"),
+      reconcileSenderCustody: () => recordCall("custody"),
+      push: () => recordCall("push")
+    })
+    const transition = remotePublicationTransition()
+    const proposal = proposalFor(transition)
+    expect(proposal).toBeDefined()
+    if (proposal === undefined) return yield* Effect.die("missing direct-publication proposal")
+
+    const exit = yield* Effect.exit(
+      executeIntegrationAction({ _tag: "IdentityFreeAction", proposal }, transition, inertLease, target).pipe(
+        Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
+        Effect.provideService(RemotePublicationGit, git),
+        Effect.provideService(InRunJournal, appendableJournal(records)),
+        Effect.provideService(Journal, unusedJournal),
+        Effect.provideService(RemoteBaselineGit, unusedRemoteBaselineGit)
+      )
+    )
+
+    expect(exit._tag).toBe("Failure")
+    expect(yield* Ref.get(calls)).toEqual([])
+    expect(yield* Ref.get(records)).toEqual(pausedRecords)
+    expect(pausedRecords.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+    expect(pausedRecords.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(0)
+    expect(pausedRecords.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended")).toHaveLength(1)
+    expect(pausedRecords.filter(({ event }) => event._tag === "RemotePublicationResumeRequested")).toHaveLength(1)
   })
 )
 
