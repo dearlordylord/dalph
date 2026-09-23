@@ -108,7 +108,10 @@ const automaticAuthorizationAppendMatches = (
   record.event._tag === "IntegratorCompetingHeadSuccessorAuthorized" &&
   Schema.toEquivalence(IntegratorCompetingHeadSuccessorAuthorizedEvent)(record.event, event)
 
-const automaticAuthorizationCanBeRecorded = (sessionCount: number, lastPosition: JournalRecord["position"] | null) =>
+const automaticAuthorizationCanBeRecorded = (
+  sessionCount: number,
+  lastPosition: JournalRecord["position"] | null
+): lastPosition is JournalRecord["position"] =>
   sessionCount < maximumIntegratorSessionsPerResponsibility && lastPosition !== null
 
 /** Appends the missing initial Q before releasing any held target responsibility. */
@@ -250,12 +253,13 @@ export const authorizeIntegratorCompetingHeadSuccessor = Effect.fn(
   }
   const predecessor = transition.correlation.qualifiedCandidate.run.session
   const sessions = fixedSessionIdsForResponsibility(records, predecessor)
-  if (!automaticAuthorizationCanBeRecorded(sessions.size, records.lastPosition)) {
+  const lastPosition = records.lastPosition
+  if (!automaticAuthorizationCanBeRecorded(sessions.size, lastPosition)) {
     return deliveryActionDeferred(action.proposal.id, "ContinuationAuthorizationStale")
   }
   const appended = yield* journal.appendIfAcceptedPrefixCurrent(
     runId,
-    ExpectedAcceptedPrefixPosition.make(records.lastPosition),
+    ExpectedAcceptedPrefixPosition.make(lastPosition),
     key,
     event
   )
