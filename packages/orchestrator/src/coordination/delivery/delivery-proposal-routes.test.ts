@@ -1304,6 +1304,13 @@ const completionPromotionRuntime = TargetPromotionRuntime.of({
   }
 })
 
+type AutomaticS2ProviderQuarantineTransition = Extract<
+  Transition,
+  {
+    readonly _tag: "RunIntegrator" | "RecordProviderRunFailureIntegrationQuarantine"
+  }
+>
+
 describe("delivery proposal route matrix", () => {
   it("reuses accepted identity for every operation-reconciliation route", () => {
     const operationId = OperationId.make("accepted-operation")
@@ -2620,7 +2627,7 @@ describe("delivery proposal route matrix", () => {
             input: { detail: quarantineDetail, run },
             responsibility
           })
-          const proposalFor = (transition: Transition) => {
+          const proposalFor = (transition: AutomaticS2ProviderQuarantineTransition) => {
             const routed = deliveryProposalsOf({
               acceptedOperationIds: HashSet.empty(),
               fresh: [],
@@ -2733,7 +2740,7 @@ describe("delivery proposal route matrix", () => {
           const execute = (
             store: JournalStore["Service"],
             action: ReturnType<typeof proposalFor>,
-            transition: Transition,
+            transition: AutomaticS2ProviderQuarantineTransition,
             providerMode: "Ambiguous" | "ActivityAbsent" | "Unexpected",
             quarantineCut: "BeforeCommit" | "LoseAcknowledgement" | undefined
           ) =>
@@ -2755,7 +2762,8 @@ describe("delivery proposal route matrix", () => {
                 return yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
                   Effect.provide(journalLayer(fixture.runId, target, history, storageBoundary(store, quarantineCut))),
                   Effect.provideService(Integrator, provider(providerMode)),
-                  Effect.provideService(IntegratorGit, git)
+                  Effect.provideService(IntegratorGit, git),
+                  Effect.provide(unexpectedRemoteDeliveryLayer)
                 )
               })
             )
@@ -2851,7 +2859,7 @@ describe("delivery proposal route matrix", () => {
             cut: "BeforeCommit" | "LoseAcknowledgement",
             open: (
               action: ReturnType<typeof proposalFor>,
-              transition: Transition,
+              transition: AutomaticS2ProviderQuarantineTransition,
               providerMode: "Ambiguous" | "ActivityAbsent" | "Unexpected",
               quarantineCut: "BeforeCommit" | "LoseAcknowledgement" | undefined
             ) => Effect.Effect<unknown, unknown, R>,
@@ -3065,7 +3073,8 @@ describe("delivery proposal route matrix", () => {
                 return yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
                   Effect.provide(journalLayer(fixture.runId, target, history, storageBoundary(store, startFailure))),
                   Effect.provideService(Integrator, provider(providerMode)),
-                  Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") }))
+                  Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
+                  Effect.provide(unexpectedRemoteDeliveryLayer)
                 )
               })
             )
@@ -3325,7 +3334,8 @@ describe("delivery proposal route matrix", () => {
                           ? Effect.succeed(candidateObservation)
                           : Effect.die("provider-result recovery must read the exact candidate text")
                     })
-                  )
+                  ),
+                  Effect.provide(unexpectedRemoteDeliveryLayer)
                 )
               })
             )
@@ -3567,7 +3577,8 @@ describe("delivery proposal route matrix", () => {
                           return rejectedObservation
                         })
                     })
-                  )
+                  ),
+                  Effect.provide(unexpectedRemoteDeliveryLayer)
                 )
               })
             )
@@ -3820,7 +3831,8 @@ describe("delivery proposal route matrix", () => {
                     IntegratorGit.of({
                       readCandidate: () => Effect.die("NotPrepared results do not read or qualify a candidate")
                     })
-                  )
+                  ),
+                  Effect.provide(unexpectedRemoteDeliveryLayer)
                 )
               })
             )
