@@ -36,6 +36,7 @@ import {
   remotePublicationAttemptIntendedRecordKey,
   remotePublicationIntendedRecordKey,
   remotePublicationRetainedRecordKey,
+  remotePublicationResumeRequestedRecordKey,
   remotePublicationSucceededRecordKey,
   targetPromotionAttemptIntentRecordKey,
   targetPromotionIntentRecordKey
@@ -120,10 +121,15 @@ import {
   RemotePublicationProofBasis,
   RemotePublicationRetainedCause,
   RemotePublicationRetainedEvent,
+  RemotePublicationResumeRequest,
+  RemotePublicationResumeRequestId,
+  RemotePublicationResumeRequestedEvent,
   RemotePublicationSucceededEvent,
   remotePublicationCorrelationFor,
   remotePublicationRefspecFor
 } from "../../workflow/protocols/direct-publication/events.js"
+import { deriveRemotePublicationState } from "../../workflow/protocols/direct-publication/state.js"
+import { WorkflowActor } from "../../workflow/registry/actor.js"
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../control/policy.js"
@@ -1044,7 +1050,7 @@ it("promotes the Git-qualified candidate from the successful Retry run", () => {
   ])
 })
 
-it("reconciles an unmatched initial promotion attempt before fresh lineage can reject its own candidate", () => {
+it("reselects receipt-authorized compatible publication and reconciles unmatched promotion before fresh lineage", () => {
   const scenario = unfinishedFirstSessionHistory()
   const result = IntegratorResult.cases.PreparedCandidate.make({
     candidateText: preparedCandidateText,
@@ -1227,6 +1233,99 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
         workflowHistory: { evidence: journalEvidenceFrom(retainedRecords) }
       },
       { ...publicationRuntimeFacts },
+      [responsibility]
+    ).transitions()
+  ).toEqual([])
+  const resumeRequestId = RemotePublicationResumeRequestId.make("frontier-compatible-handoff-resume")
+  const resumeRequest = RemotePublicationResumeRequest.make({
+    requestId: resumeRequestId,
+    responsibility: IntegrationResponsibilityIdentity.make({
+      queuedAt: candidate.run.session.queuedAt,
+      runId: candidate.run.session.plannedAttempt.runId
+    }),
+    runId: candidate.run.session.plannedAttempt.runId,
+    schemaVersion: 1
+  })
+  const compatibleCause = RemotePublicationRetainedCause.cases.CompatibleCompetingHead.make({
+    mergeBase: candidate.run.session.expectedTargetHead,
+    remoteHead: changedHead
+  })
+  const initialRetained = RemotePublicationRetainedEvent.make({
+    authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
+    correlation: publicationCorrelation,
+    cause: RemotePublicationRetainedCause.cases.AuthenticationDenied.make({}),
+    occurrenceClassification: "NonActionOccurrence",
+    version: workflowJournalEventVersion
+  })
+  const resumeReceipt = RemotePublicationResumeRequestedEvent.make({
+    correlation: publicationCorrelation,
+    initiatedBy: WorkflowActor.cases.Operator.make({}),
+    occurrenceClassification: "InitiatedAction",
+    request: resumeRequest,
+    version: workflowJournalEventVersion
+  })
+  const resumedCompatibleRetained = RemotePublicationRetainedEvent.make({
+    authorization: RemotePublicationAttemptAuthorization.cases.ResumeRequest.make({ requestId: resumeRequestId }),
+    correlation: publicationCorrelation,
+    cause: compatibleCause,
+    occurrenceClassification: "NonActionOccurrence",
+    version: workflowJournalEventVersion
+  })
+  const resumeAuthorizedRecords = [
+    ...retainedRecords.slice(0, -1),
+    record(
+      13,
+      initialRetained,
+      remotePublicationRetainedRecordKey(
+        publicationCorrelation.requestId,
+        RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({})
+      )
+    ),
+    record(
+      14,
+      resumeReceipt,
+      remotePublicationResumeRequestedRecordKey(publicationCorrelation.requestId, resumeRequestId)
+    ),
+    record(
+      15,
+      resumedCompatibleRetained,
+      remotePublicationRetainedRecordKey(
+        publicationCorrelation.requestId,
+        RemotePublicationAttemptAuthorization.cases.ResumeRequest.make({ requestId: resumeRequestId })
+      )
+    )
+  ]
+  const resumedPublicationState = deriveRemotePublicationState(
+    resumeAuthorizedRecords.flatMap(({ event }) =>
+      event._tag === "RemotePublicationIntended" ||
+      event._tag === "RemotePublicationAttemptIntended" ||
+      event._tag === "RemotePublicationRetained" ||
+      event._tag === "RemotePublicationResumeRequested"
+        ? [event]
+        : []
+    )
+  )
+  expect(resumedPublicationState).toMatchObject({
+    _tag: "PublicationRetained",
+    authorization: { _tag: "ResumeRequest", requestId: resumeRequestId },
+    cause: { _tag: "CompatibleCompetingHead" }
+  })
+  const receiptAuthorizedCompatibleRunState = {
+    ...scenario.runState,
+    appliedThrough: JournalPosition.make(15),
+    workflowHistory: { evidence: journalEvidenceFrom(resumeAuthorizedRecords) }
+  }
+  expect(
+    deriveStartedIntegrationFrontier(receiptAuthorizedCompatibleRunState, publicationRuntimeFacts, [
+      responsibility
+    ]).transitions()
+  ).toEqual([expect.objectContaining({ _tag: "RunRemotePublication", responsibility })])
+  // Replay remains fail-closed when this exact receipt and retained handoff are
+  // present but the current host has no configured publication authority.
+  expect(
+    deriveStartedIntegrationFrontier(
+      receiptAuthorizedCompatibleRunState,
+      { ...publicationRuntimeFacts, remotePublicationConfigured: false },
       [responsibility]
     ).transitions()
   ).toEqual([])

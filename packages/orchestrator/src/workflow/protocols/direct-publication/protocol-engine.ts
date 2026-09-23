@@ -171,7 +171,11 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
       if (!prepared) {
         const cause = RemotePublicationRetainedCause.cases.PushCustodyUnproven.make({})
         yield* appendRemotePublicationRetained(correlation, cause, pendingState.authorization)
-        return RemotePublicationState.cases.PublicationRetained.make({ cause, correlation })
+        return RemotePublicationState.cases.PublicationRetained.make({
+          authorization: pendingState.authorization,
+          cause,
+          correlation
+        })
       }
       yield* appendRemotePublicationAttemptIntent(correlation, attemptOrdinal)
     })
@@ -238,7 +242,11 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
     )
     if (observationResult._tag === "SucceededOrRetained") return observationResult.state
     if (observationResult._tag === "Retained") {
-      return RemotePublicationState.cases.PublicationRetained.make({ cause: observationResult.cause, correlation })
+      return RemotePublicationState.cases.PublicationRetained.make({
+        authorization: pendingState.authorization,
+        cause: observationResult.cause,
+        correlation
+      })
     }
     const { observation } = observationResult
     return yield* phaseBoundary.runSender(
@@ -256,12 +264,20 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
                 : undefined
         if (retainedCause !== undefined) {
           yield* appendRemotePublicationRetained(correlation, retainedCause, pendingState.authorization)
-          return RemotePublicationState.cases.PublicationRetained.make({ cause: retainedCause, correlation })
+          return RemotePublicationState.cases.PublicationRetained.make({
+            authorization: pendingState.authorization,
+            cause: retainedCause,
+            correlation
+          })
         }
         if (remotePublicationAttemptsExhausted(pendingState)) {
           const cause = RemotePublicationRetainedCause.cases.AttemptsExhausted.make({})
           yield* appendRemotePublicationRetained(correlation, cause, pendingState.authorization)
-          return RemotePublicationState.cases.PublicationRetained.make({ cause, correlation })
+          return RemotePublicationState.cases.PublicationRetained.make({
+            authorization: pendingState.authorization,
+            cause,
+            correlation
+          })
         }
         const attemptOrdinal = RemotePublicationAttemptOrdinal.make(pendingState.attemptOrdinals.length + 1)
         const preparation = yield* prepareAttemptIntent(attemptOrdinal)
@@ -282,7 +298,11 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
             return pendingState
           const cause = retainedCauseForPushFailure(pushResult.failure)
           yield* appendRemotePublicationRetained(correlation, cause, pendingState.authorization)
-          return RemotePublicationState.cases.PublicationRetained.make({ cause, correlation })
+          return RemotePublicationState.cases.PublicationRetained.make({
+            authorization: pendingState.authorization,
+            cause,
+            correlation
+          })
         }
         const { result } = pushResult
         if (result._tag === "Applied" || result._tag === "UpToDate") {
@@ -311,7 +331,11 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
                 ? RemotePublicationRetainedCause.cases.PolicyDenied.make({})
                 : RemotePublicationRetainedCause.cases.RemoteDenied.make({})
         yield* appendRemotePublicationRetained(correlation, cause, pendingState.authorization)
-        return RemotePublicationState.cases.PublicationRetained.make({ cause, correlation })
+        return RemotePublicationState.cases.PublicationRetained.make({
+          authorization: pendingState.authorization,
+          cause,
+          correlation
+        })
       })
     )
   })
@@ -350,6 +374,16 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
       if (!sameRequest) return yield* new RemotePublicationResumeRequestConflict({ requestId: request.requestId })
       if (state._tag === "PublicationResumeReady" && state.request.requestId === request.requestId) {
         return { state: yield* runRemotePublication(candidate, target, phaseBoundary), activated: true }
+      }
+      if (
+        state._tag === "PublicationRetained" &&
+        state.cause._tag === "CompatibleCompetingHead" &&
+        state.authorization._tag === "ResumeRequest" &&
+        state.authorization.requestId === request.requestId
+      ) {
+        // The retained event is the durable handoff payload. A crash after its
+        // append but before the existing owner ran must replay that same handoff.
+        return { state, activated: true }
       }
       const latestEvent = events.at(events.length - 1)
       if (

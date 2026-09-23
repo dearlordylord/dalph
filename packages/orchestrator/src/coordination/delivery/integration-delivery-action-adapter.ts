@@ -406,8 +406,15 @@ const executeRemotePublication = Effect.fn("DeliveryAction.runRemotePublication"
       const correlation = remotePublicationCorrelationFor(transition.candidate, transition.target)
       const state: RemotePublicationState = yield* validateRemotePublicationState(records, correlation)
       if (state._tag === "PublicationResumeReady") return state.request
-      if (state._tag !== "PublicationPending" || state.authorization._tag !== "ResumeRequest") return undefined
-      const resumeRequestId = state.authorization.requestId
+      const resumeRequestId =
+        state._tag === "PublicationPending" && state.authorization._tag === "ResumeRequest"
+          ? state.authorization.requestId
+          : state._tag === "PublicationRetained" &&
+              state.cause._tag === "CompatibleCompetingHead" &&
+              state.authorization._tag === "ResumeRequest"
+            ? state.authorization.requestId
+            : undefined
+      if (resumeRequestId === undefined) return undefined
       const receipt = remotePublicationEventsFor(records, correlation).find(
         (event) => event._tag === "RemotePublicationResumeRequested" && event.request.requestId === resumeRequestId
       )

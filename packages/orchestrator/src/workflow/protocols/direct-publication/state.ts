@@ -27,7 +27,11 @@ export const RemotePublicationState = Schema.TaggedUnion({
     request: RemotePublicationResumeRequest
   },
   PublicationSucceeded: { correlation: RemotePublicationCorrelation, proof: RemotePublicationProofBasis },
-  PublicationRetained: { cause: RemotePublicationRetainedCause, correlation: RemotePublicationCorrelation }
+  PublicationRetained: {
+    authorization: RemotePublicationAttemptAuthorization,
+    cause: RemotePublicationRetainedCause,
+    correlation: RemotePublicationCorrelation
+  }
 })
 export type RemotePublicationState = typeof RemotePublicationState.Type
 
@@ -58,7 +62,11 @@ type ReductionPhase =
       readonly cause: RemotePublicationRetainedCause
       readonly request: RemotePublicationResumeRequest
     }
-  | { readonly _tag: "Retained"; readonly cause: RemotePublicationRetainedCause }
+  | {
+      readonly _tag: "Retained"
+      readonly authorization: RemotePublicationAttemptAuthorization
+      readonly cause: RemotePublicationRetainedCause
+    }
   | { readonly _tag: "Succeeded"; readonly proof: RemotePublicationProofBasis }
 
 const contradiction = (detail: string): RemotePublicationState =>
@@ -153,19 +161,22 @@ export const deriveRemotePublicationState = (
       continue
     }
     if (event._tag === "RemotePublicationRetained") {
-      if (phase._tag !== "Pending") return contradiction("publication retained outcome has no active delivery phase")
-      if (
-        event.authorization._tag !== phase.authorization._tag ||
-        (event.authorization._tag === "ResumeRequest" &&
-          (phase.authorization._tag !== "ResumeRequest" ||
-            event.authorization.requestId !== phase.authorization.requestId))
-      ) {
+      const matchesAuthorization =
+        phase._tag === "Pending"
+          ? event.authorization._tag === phase.authorization._tag &&
+            (event.authorization._tag === "InitialAttempt" ||
+              (phase.authorization._tag === "ResumeRequest" &&
+                event.authorization.requestId === phase.authorization.requestId))
+          : phase._tag === "ResumeReady" &&
+            event.authorization._tag === "ResumeRequest" &&
+            event.authorization.requestId === phase.request.requestId
+      if (!matchesAuthorization) {
         return contradiction("publication retained outcome must identify its exact active authorization")
       }
       if (event.cause._tag === "AttemptsExhausted" && attempts.length !== remotePublicationAttemptLimit) {
         return contradiction("publication exhaustion requires the exact accepted attempt limit")
       }
-      phase = { _tag: "Retained", cause: event.cause }
+      phase = { _tag: "Retained", authorization: event.authorization, cause: event.cause }
       continue
     }
     if (event._tag === "RemotePublicationResumeRequested") {
@@ -191,7 +202,7 @@ export const deriveRemotePublicationState = (
       phase =
         remotePublicationRetainedCauseIsResumable(phase.cause) && attemptsBeforeReceipt < remotePublicationAttemptLimit
           ? { _tag: "ResumeReady", cause: phase.cause, request }
-          : { _tag: "Retained", cause: phase.cause }
+          : { _tag: "Retained", authorization: phase.authorization, cause: phase.cause }
       continue
     }
     if (event._tag === "RemotePublicationSucceeded") {
@@ -252,6 +263,7 @@ export const deriveRemotePublicationState = (
       })
     case "Retained":
       return RemotePublicationState.cases.PublicationRetained.make({
+        authorization: phase.authorization,
         cause: phase.cause,
         correlation: intent.correlation
       })

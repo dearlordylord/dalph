@@ -686,12 +686,26 @@ const qualifiedIntegratorProgressTransitionsFor = (
       ? [RunnableFrontierTransition.RunTargetPromotion({ candidate, publication: succeeded, responsibility })]
       : []
   }
-  if (
-    publication._tag === "PublicationRetained" ||
-    publication._tag === "PublicationContradiction" ||
-    runtimeFacts.remotePublicationConfigured !== true
-  )
+  if (publication._tag === "PublicationRetained") {
+    // A receipt-authorized compatible-head outcome may have been durably
+    // recorded just before the host died, before the existing #385 owner ran.
+    // Re-enter this same action so the adapter can replay that exact handoff.
+    if (
+      publication.cause._tag === "CompatibleCompetingHead" &&
+      publication.authorization._tag === "ResumeRequest" &&
+      runtimeFacts.remotePublicationConfigured === true
+    ) {
+      return [
+        RunnableFrontierTransition.RunRemotePublication({
+          candidate,
+          responsibility,
+          target: began.event.remotePublicationTarget
+        })
+      ]
+    }
     return []
+  }
+  if (publication._tag === "PublicationContradiction" || runtimeFacts.remotePublicationConfigured !== true) return []
   return [
     RunnableFrontierTransition.RunRemotePublication({
       candidate,

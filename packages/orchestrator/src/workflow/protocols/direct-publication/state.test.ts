@@ -259,6 +259,7 @@ it("retains an exact competing head only as the terminal outcome", () => {
   })
   expect(deriveRemotePublicationState([outerIntent, retained])).toEqual({
     _tag: "PublicationRetained",
+    authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
     cause,
     correlation
   })

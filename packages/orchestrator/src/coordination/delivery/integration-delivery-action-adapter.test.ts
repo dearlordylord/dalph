@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { HashSet, Effect, Ref, Stream } from "effect"
+import { HashSet, Effect, Layer, Ref, Stream } from "effect"
 import { expect } from "vitest"
 import { GitCommitSha, TaskRevision } from "@dalph/contracts"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
@@ -46,7 +46,6 @@ import {
   RemotePublicationResumeRuntimeUnavailable,
   type ExistingSameCommitRecoveryInput
 } from "../../workflow/protocols/direct-publication/resume-runtime.js"
-import { type RunReactivationHint, RunReactivationOwner } from "../run/run-reactivation-owner.js"
 import { RemoteBaselineGit } from "../../workflow/protocols/direct-publication/baseline-events.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import {
@@ -87,7 +86,10 @@ const proposalFor = (transition: Transition): IdentityFreeDeliveryProposal | und
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
 
-const appendableJournal = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
+const appendableJournal = (
+  records: Ref.Ref<ReadonlyArray<JournalRecord>>,
+  crashAfterCompatibleRetainedAppend = false
+) =>
   InRunJournal.of({
     append: (runId, key, event) =>
       Ref.modify(records, (current): [Effect.Effect<JournalRecord>, ReadonlyArray<JournalRecord>] => {
@@ -95,7 +97,17 @@ const appendableJournal = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
         if (existing !== undefined) return [Effect.succeed(existing), current]
         const appended: JournalRecord = { event, key, position: JournalPosition.make(current.length + 1), runId }
         return [Effect.succeed(appended), [...current, appended]]
-      }).pipe(Effect.flatten),
+      }).pipe(
+        Effect.flatten,
+        Effect.flatMap((record) =>
+          crashAfterCompatibleRetainedAppend &&
+          event._tag === "RemotePublicationRetained" &&
+          event.cause._tag === "CompatibleCompetingHead" &&
+          event.authorization._tag === "ResumeRequest"
+            ? Effect.die("process lost after compatible-head retained outcome committed")
+            : Effect.succeed(record)
+        )
+      ),
     read: () => Ref.get(records)
   })
 
@@ -104,6 +116,29 @@ const acceptedJournal = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
     readAccepted: (runId) =>
       Ref.get(records).pipe(Effect.map((current) => acceptedJournalPrefixFromValidatedHistory(runId, current)))
   })
+
+const publicationAdapterLayer = (
+  records: Ref.Ref<ReadonlyArray<JournalRecord>>,
+  git: ReturnType<typeof RemotePublicationGit.of>,
+  journal = appendableJournal(records)
+) =>
+  Layer.merge(
+    Layer.merge(
+      Layer.merge(
+        Layer.succeed(AcceptedJournalReader, acceptedJournal(records)),
+        Layer.succeed(RemotePublicationGit, git)
+      ),
+      Layer.succeed(InRunJournal, journal)
+    ),
+    Layer.merge(Layer.succeed(Journal, unusedJournal), Layer.succeed(RemoteBaselineGit, unusedRemoteBaselineGit))
+  )
+
+const publicationAdapterLayerWithOwner = (
+  records: Ref.Ref<ReadonlyArray<JournalRecord>>,
+  git: ReturnType<typeof RemotePublicationGit.of>,
+  owner: ReturnType<typeof ExistingSameCommitRecoveryOwner.of>,
+  journal = appendableJournal(records)
+) => Layer.merge(publicationAdapterLayer(records, git, journal), Layer.succeed(ExistingSameCommitRecoveryOwner, owner))
 
 const inertLease: DeliveryActionExecutionLease = {
   acceptIntegrationTargetOwnership: Effect.void,
@@ -329,17 +364,8 @@ it.effect("ordinary Run replay hands the exact retained candidate to the existin
     const recoveryOwner = ExistingSameCommitRecoveryOwner.of({
       recover: (input) => Ref.update(handoffs, (current) => [...current, input])
     })
-    const hints = yield* Ref.make<ReadonlyArray<RunReactivationHint>>([])
     const result = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
-      Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
-      Effect.provideService(RemotePublicationGit, git),
-      Effect.provideService(ExistingSameCommitRecoveryOwner, recoveryOwner),
-      Effect.provideService(RunReactivationOwner, {
-        hint: (hint) => Ref.update(hints, (current) => [...current, hint])
-      }),
-      Effect.provideService(InRunJournal, appendableJournal(records)),
-      Effect.provideService(Journal, unusedJournal),
-      Effect.provideService(RemoteBaselineGit, unusedRemoteBaselineGit)
+      Effect.provide(publicationAdapterLayerWithOwner(records, git, recoveryOwner))
     )
     expect(result).toMatchObject({ _tag: "ActionCompleted", proposalId: proposal.id })
     expect(yield* Ref.get(handoffs)).toEqual([
@@ -350,7 +376,6 @@ it.effect("ordinary Run replay hands the exact retained candidate to the existin
         remoteHead
       }
     ])
-    expect(yield* Ref.get(hints)).toEqual([])
     expect(yield* Ref.get(boundaryCalls)).toEqual(["custody", "observe"])
     const finalRecords = yield* Ref.get(records)
     expect(finalRecords.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
@@ -390,11 +415,7 @@ it.effect("fails closed on compatible competition when the existing same-commit 
     })
     const failure = yield* Effect.flip(
       executeIntegrationAction(action, transition, inertLease, target).pipe(
-        Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
-        Effect.provideService(RemotePublicationGit, git),
-        Effect.provideService(InRunJournal, appendableJournal(records)),
-        Effect.provideService(Journal, unusedJournal),
-        Effect.provideService(RemoteBaselineGit, unusedRemoteBaselineGit)
+        Effect.provide(publicationAdapterLayer(records, git))
       )
     )
     expect(failure).toBeInstanceOf(RemotePublicationResumeRuntimeUnavailable)
@@ -405,6 +426,83 @@ it.effect("fails closed on compatible competition when the existing same-commit 
     expect(
       (yield* Ref.get(records)).filter(({ event }) => event._tag === "RemotePublicationAttemptIntended")
     ).toHaveLength(1)
+  })
+)
+
+it.effect("replays the exact compatible-head handoff after its retained outcome commits before owner dispatch", () =>
+  Effect.gen(function* () {
+    const { records: initialRecords, request } = retainedResumePrefix()
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(initialRecords)
+    const transition = remotePublicationTransition()
+    const proposal = proposalFor(transition)
+    expect(proposal).toBeDefined()
+    if (proposal === undefined) return yield* Effect.die("missing direct-publication proposal")
+    const action: IdentityFreeAction = { _tag: "IdentityFreeAction", proposal }
+    const remoteHead = GitCommitSha.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    const boundaryCalls = yield* Ref.make<ReadonlyArray<string>>([])
+    const firstGit = RemotePublicationGit.of({
+      admit: () => Effect.die("resume does not re-admit the pinned target"),
+      observe: () =>
+        Ref.update(boundaryCalls, (current) => [...current, "observe"]).pipe(
+          Effect.as(
+            RemotePublicationGitObservation.cases.CompatibleCompetingHead.make({
+              mergeBase: fixture.qualifiedCandidate.run.session.expectedTargetHead,
+              remoteHead
+            })
+          )
+        ),
+      prepareSenderCustody: () => Effect.die("compatible head does not prepare a sender"),
+      reconcileSenderCustody: () => Ref.update(boundaryCalls, (current) => [...current, "custody"]),
+      push: () => Effect.die("compatible head does not push")
+    })
+    const handoffs = yield* Ref.make<ReadonlyArray<ExistingSameCommitRecoveryInput>>([])
+    const owner = ExistingSameCommitRecoveryOwner.of({
+      recover: (input) => Ref.update(handoffs, (current) => [...current, input])
+    })
+    const interrupted = yield* Effect.exit(
+      executeIntegrationAction(action, transition, inertLease, target).pipe(
+        Effect.provide(publicationAdapterLayerWithOwner(records, firstGit, owner, appendableJournal(records, true)))
+      )
+    )
+    expect(interrupted._tag).toBe("Failure")
+    expect(yield* Ref.get(handoffs)).toEqual([])
+    expect(yield* Ref.get(boundaryCalls)).toEqual(["custody", "observe"])
+    const afterCrash = yield* Ref.get(records)
+    expect(afterCrash.at(-1)?.event).toMatchObject({
+      _tag: "RemotePublicationRetained",
+      cause: {
+        _tag: "CompatibleCompetingHead",
+        mergeBase: fixture.qualifiedCandidate.run.session.expectedTargetHead,
+        remoteHead
+      },
+      authorization: { _tag: "ResumeRequest", requestId: request.requestId }
+    })
+
+    const replayGit = RemotePublicationGit.of({
+      admit: () => Effect.die("replay uses the retained handoff"),
+      observe: () => Effect.die("replay uses the retained handoff"),
+      prepareSenderCustody: () => Effect.die("replay uses the retained handoff"),
+      reconcileSenderCustody: () => Effect.die("replay uses the retained handoff"),
+      push: () => Effect.die("replay uses the retained handoff")
+    })
+    const replayed = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+      Effect.provide(publicationAdapterLayerWithOwner(records, replayGit, owner))
+    )
+    expect(replayed).toMatchObject({ _tag: "ActionCompleted", proposalId: proposal.id })
+    expect(yield* Ref.get(handoffs)).toEqual([
+      {
+        candidate: fixture.qualifiedCandidate,
+        target: remotePublicationTargetForTest,
+        mergeBase: fixture.qualifiedCandidate.run.session.expectedTargetHead,
+        remoteHead
+      }
+    ])
+    expect(yield* Ref.get(boundaryCalls)).toEqual(["custody", "observe"])
+    const finalRecords = yield* Ref.get(records)
+    expect(finalRecords.filter(({ event }) => event._tag === "RemotePublicationResumeRequested")).toHaveLength(1)
+    expect(finalRecords.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended")).toHaveLength(1)
+    expect(finalRecords.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+    expect(finalRecords.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(0)
   })
 )
 
@@ -438,11 +536,7 @@ it.effect("a paused retained Run stops before custody, head observation, or publ
 
     const exit = yield* Effect.exit(
       executeIntegrationAction({ _tag: "IdentityFreeAction", proposal }, transition, inertLease, target).pipe(
-        Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
-        Effect.provideService(RemotePublicationGit, git),
-        Effect.provideService(InRunJournal, appendableJournal(records)),
-        Effect.provideService(Journal, unusedJournal),
-        Effect.provideService(RemoteBaselineGit, unusedRemoteBaselineGit)
+        Effect.provide(publicationAdapterLayer(records, git))
       )
     )
 
@@ -468,11 +562,7 @@ it.effect("ordinary publication replay preserves settled success and conclusive 
       Effect.gen(function* () {
         const records = yield* Ref.make(initial)
         const result = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
-          Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
-          Effect.provideService(RemotePublicationGit, git),
-          Effect.provideService(InRunJournal, appendableJournal(records)),
-          Effect.provideService(Journal, unusedJournal),
-          Effect.provideService(RemoteBaselineGit, unusedRemoteBaselineGit)
+          Effect.provide(publicationAdapterLayer(records, git))
         )
         return { records: yield* Ref.get(records), result }
       })

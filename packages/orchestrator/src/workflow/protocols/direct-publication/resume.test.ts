@@ -213,6 +213,19 @@ const boundaryWithReceiptCrash = (store: JournalStore["Service"]): JournalStorag
   terminateRun: store.terminateRun
 })
 
+const boundaryWithCompatibleRetainedCrash = (store: JournalStore["Service"]): JournalStorageBoundary => ({
+  append: (requestedRunId, key, event) =>
+    event._tag === "RemotePublicationRetained" &&
+    event.cause._tag === "CompatibleCompetingHead" &&
+    event.authorization._tag === "ResumeRequest"
+      ? store
+          .append(requestedRunId, key, event)
+          .pipe(Effect.flatMap(() => Effect.die("process lost after compatible-head retained COMMIT")))
+      : store.append(requestedRunId, key, event),
+  read: store.read,
+  terminateRun: store.terminateRun
+})
+
 const invoke = Effect.fn("DirectPublicationResume.invoke")(function* (
   store: JournalStore["Service"],
   git: RemotePublicationGitService,
@@ -223,7 +236,7 @@ const invoke = Effect.fn("DirectPublicationResume.invoke")(function* (
         readonly dispatchBoundary?: RemotePublicationResumeDispatchBoundary<unknown, never>
         readonly runtimeOwners?: RemotePublicationResumeRuntimeOwners<unknown, never>
       }>,
-  crashAfterReceipt = false,
+  crashAt?: "receipt" | "compatibleRetained" | undefined,
   boundary: RemotePublicationPhaseBoundary = phaseBoundary
 ) {
   const records = yield* store.read(runId)
@@ -251,11 +264,16 @@ const invoke = Effect.fn("DirectPublicationResume.invoke")(function* (
               boundary,
               operation.dispatchBoundary
             )
+  const storage =
+    crashAt === "receipt"
+      ? boundaryWithReceiptCrash(store)
+      : crashAt === "compatibleRetained"
+        ? boundaryWithCompatibleRetainedCrash(store)
+        : store
   return yield* action.pipe(
     Effect.provide(
-      journalLayer(runId, fixture.target, history, crashAfterReceipt ? boundaryWithReceiptCrash(store) : store)
-    ),
-    Effect.provideService(RemotePublicationGit, git)
+      Layer.merge(journalLayer(runId, fixture.target, history, storage), Layer.succeed(RemotePublicationGit, git))
+    )
   )
 })
 
@@ -313,7 +331,7 @@ const exerciseReceiptRecovery = (process: StoreProcess): Effect.Effect<void, unk
     const before = yield* process((store) => store.read(runId))
     const receiptCrash = yield* makeGit("applied")
     const failedActivation = yield* Effect.exit(
-      process((store) => invoke(store, receiptCrash.git, { request: requestFor("resume-receipt-recovery") }, true))
+      process((store) => invoke(store, receiptCrash.git, { request: requestFor("resume-receipt-recovery") }, "receipt"))
     )
     expect(failedActivation._tag).toBe("Failure")
     expect(yield* Ref.get(receiptCrash.calls)).toEqual(emptyCalls())
@@ -356,6 +374,68 @@ it.effect("recovers the same retained resume receipt after restart with memory a
     Effect.gen(function* () {
       yield* memoryFresh(exerciseReceiptRecovery)
       yield* sqliteFresh(exerciseReceiptRecovery)
+    })
+  )
+)
+
+const exerciseCompatibleHandoffRecovery = (process: StoreProcess): Effect.Effect<void, unknown> =>
+  Effect.gen(function* () {
+    const initialDenial = yield* makeGit("denied")
+    yield* process((store) => invoke(store, initialDenial.git, "run"))
+    const request = requestFor("resume-compatible-head-handoff-recovery")
+    const handoffs = yield* Ref.make<ReadonlyArray<unknown>>([])
+    const hints = yield* Ref.make<ReadonlyArray<RunReactivationHint>>([])
+    const runtimeOwners: RemotePublicationResumeRuntimeOwners<unknown, never> = {
+      ordinaryRun: { hint: (hint) => Ref.update(hints, (current) => [...current, hint]) },
+      sameCommitRecovery: (input) => Ref.update(handoffs, (current) => [...current, input])
+    }
+    const competing = yield* makeGit("competing")
+    const interrupted = yield* Effect.exit(
+      process((store) => invoke(store, competing.git, { request, runtimeOwners }, "compatibleRetained"))
+    )
+    expect(interrupted._tag).toBe("Failure")
+    expect(yield* Ref.get(handoffs)).toEqual([])
+    expect(yield* Ref.get(hints)).toEqual([])
+    expect(yield* Ref.get(competing.calls)).toMatchObject({ custody: 1, observations: 1, pushes: [] })
+
+    const afterCrash = yield* process((store) => store.read(runId))
+    expect(afterCrash.at(-1)?.event).toMatchObject({
+      _tag: "RemotePublicationRetained",
+      authorization: { _tag: "ResumeRequest", requestId: request.requestId },
+      cause: {
+        _tag: "CompatibleCompetingHead",
+        mergeBase: candidate.run.session.expectedTargetHead,
+        remoteHead: GitCommitSha.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+      }
+    })
+
+    const replayGit = yield* makeGit("applied")
+    const replayed = yield* process((store) => invoke(store, replayGit.git, { request, runtimeOwners }))
+    expect(replayed).toMatchObject({ _tag: "PublicationRetained", cause: { _tag: "CompatibleCompetingHead" } })
+    expect(yield* Ref.get(replayGit.calls)).toEqual(emptyCalls())
+    expect(yield* Ref.get(hints)).toEqual([])
+    expect(yield* Ref.get(handoffs)).toEqual([
+      {
+        candidate,
+        target,
+        mergeBase: candidate.run.session.expectedTargetHead,
+        remoteHead: GitCommitSha.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+      }
+    ])
+
+    const afterReplay = yield* process((store) => store.read(runId))
+    expect(afterReplay.filter(({ event }) => event._tag === "RemotePublicationResumeRequested")).toHaveLength(1)
+    expect(afterReplay.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended")).toHaveLength(1)
+    expect(afterReplay.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+    expect(afterReplay.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(1)
+    expect(afterReplay.at(-1)).toEqual(afterCrash.at(-1))
+  })
+
+it.effect("re-dispatches the exact compatible-head handoff after restart from memory and reopened SQLite", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* memoryFresh(exerciseCompatibleHandoffRecovery)
+      yield* sqliteFresh(exerciseCompatibleHandoffRecovery)
     })
   )
 )
@@ -453,8 +533,12 @@ it.effect("continues a resumed publication proof through promotion and fresh tra
             return yield* Effect.die("resume proof must leave a valid prefix for existing promotion")
           }
           return yield* runTargetPromotion(handoff).pipe(
-            Effect.provide(journalLayer(runId, fixture.target, history, store)),
-            Effect.provideService(TargetPromotionGit, promotionGit)
+            Effect.provide(
+              Layer.merge(
+                journalLayer(runId, fixture.target, history, store),
+                Layer.succeed(TargetPromotionGit, promotionGit)
+              )
+            )
           )
         })
       )
@@ -530,12 +614,18 @@ it.effect("continues a resumed publication proof through promotion and fresh tra
           }
           return yield* runCompletionTaskProtocol(completionBoundary, completionRequest, fixture.target, (ordinal) =>
             authorizeCompletionTaskAttempt(completionBoundary, completionRequest, fixture.target, ordinal).pipe(
-              Effect.provideService(TargetPromotionGit, promotionGit)
+              Effect.provide(Layer.succeed(TargetPromotionGit, promotionGit))
             )
           ).pipe(
-            Effect.provide(journalLayer(runId, fixture.target, history, store)),
-            Effect.provideService(EvidenceStore, completionEvidence),
-            Effect.provideService(TargetPromotionGit, promotionGit)
+            Effect.provide(
+              Layer.merge(
+                journalLayer(runId, fixture.target, history, store),
+                Layer.merge(
+                  Layer.succeed(EvidenceStore, completionEvidence),
+                  Layer.succeed(TargetPromotionGit, promotionGit)
+                )
+              )
+            )
           )
         })
       )
@@ -837,7 +927,7 @@ it.effect("a permitted reconciliation phase retains the same attempt when the se
       const reconciledGit = yield* makeGit("applied")
       expect(
         (yield* Effect.exit(
-          process((store) => invoke(store, reconciledGit.git, { request }, false, permittedReconciliation))
+          process((store) => invoke(store, reconciledGit.git, { request }, undefined, permittedReconciliation))
         ))._tag
       ).toBe("Failure")
       expect(yield* Ref.get(reconciledGit.calls)).toMatchObject({
@@ -855,7 +945,7 @@ it.effect("a permitted reconciliation phase retains the same attempt when the se
       const blockedSenderReplay = yield* makeGit("applied")
       expect(
         (yield* Effect.exit(
-          process((store) => invoke(store, blockedSenderReplay.git, { request }, false, permittedReconciliation))
+          process((store) => invoke(store, blockedSenderReplay.git, { request }, undefined, permittedReconciliation))
         ))._tag
       ).toBe("Failure")
       expect((yield* Ref.get(blockedSenderReplay.calls)).pushes).toEqual([])
@@ -887,8 +977,9 @@ it.effect("a permitted reconciliation phase records exact proof without preparin
       const receipt = requestFor("resume-observed-published-under-pause")
       const observed = yield* makeGit("candidate-current")
       expect(
-        (yield* process((store) => invoke(store, observed.git, { request: receipt }, false, permittedReconciliation)))
-          ._tag
+        (yield* process((store) =>
+          invoke(store, observed.git, { request: receipt }, undefined, permittedReconciliation)
+        ))._tag
       ).toBe("PublicationSucceeded")
       expect(yield* Ref.get(observed.calls)).toMatchObject({
         custody: 1,
@@ -922,7 +1013,7 @@ it.effect("application Exit interrupts resume before observation or a new public
       const request = requestFor("resume-during-exit")
       const priorRecords = yield* process((store) => store.read(runId))
       expect(
-        (yield* Effect.exit(process((store) => invoke(store, exitingGit.git, { request }, false, exiting))))._tag
+        (yield* Effect.exit(process((store) => invoke(store, exitingGit.git, { request }, undefined, exiting))))._tag
       ).toBe("Failure")
       expect(yield* Ref.get(exitingGit.calls)).toEqual(emptyCalls())
       const records = yield* process((store) => store.read(runId))
