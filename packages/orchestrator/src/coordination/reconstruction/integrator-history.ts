@@ -465,6 +465,13 @@ const invalidIntegratorAutomaticSuccessorSession = (
   const predecessorPosition = mapGet(indexes.integratorSessionsBySessionId, event.predecessor.sessionId)
   const predecessor =
     predecessorPosition === undefined ? undefined : mapGet(indexes.integratorSessionFixed, predecessorPosition)
+  const predecessorCorrelation =
+    predecessor?._tag === "IntegratorSessionFixed"
+      ? predecessor.correlation
+      : predecessor?._tag === "IntegratorSuccessorSessionFixed" ||
+          predecessor?._tag === "IntegratorAutomaticSuccessorSessionFixed"
+        ? predecessor.successor
+        : undefined
   const existingSuccessorPosition = mapGet(
     indexes.integratorSuccessorSessionsByPredecessor,
     event.predecessor.sessionId
@@ -476,15 +483,15 @@ const invalidIntegratorAutomaticSuccessorSession = (
   const exactPredecessor =
     predecessorPosition !== undefined &&
     predecessorPosition < record.position &&
-    predecessor?._tag === "IntegratorSessionFixed" &&
-    integratorCorrelationsEqual(predecessor.correlation, event.predecessor)
+    predecessorCorrelation !== undefined &&
+    integratorCorrelationsEqual(predecessorCorrelation, event.predecessor)
   const detail =
     existingSuccessorPosition !== undefined
       ? `Integrator predecessor already has a successor at ${existingSuccessorPosition}`
       : existingSessionIdentity !== undefined
         ? `Integrator automatic successor reuses a session or resource at ${existingSessionIdentity}`
         : !exactPredecessor
-          ? "Integrator automatic successor has no exact earlier initial predecessor session"
+          ? "Integrator automatic successor has no exact earlier predecessor session"
           : validation._tag === "Invalid"
             ? validation.detail
             : undefined

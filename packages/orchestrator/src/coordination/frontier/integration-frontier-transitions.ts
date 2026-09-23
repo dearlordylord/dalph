@@ -426,6 +426,8 @@ const explanationAfterPrerequisitesFor = (
   integratorState: CurrentIntegratorState,
   promotion: PromotionState
 ): FrontierExplanation => {
+  const boundedRetainedWait = boundedRetainedWaitFor(runState, responsibility, integratorState)
+  if (boundedRetainedWait !== undefined) return boundedRetainedWait
   if (promotion?._tag === "PromotionSucceeded") {
     if (remotePublicationSuccessFor(runState, promotion.correlation.qualifiedCandidate) === undefined) {
       return FrontierExplanation.IntegrationInProgress({ plannedAttempt: responsibility.plannedAttempt })
@@ -883,6 +885,54 @@ const automaticSuccessorSessionCountFor = (
     }
   }
   return sessionIds.size
+}
+
+/** Derives the accepted bounded retained wait from exact compatible-head and fixed-session Journal facts. */
+const boundedRetainedWaitFor = (
+  runState: ReconstructedRunState,
+  responsibility: StartedIntegrationResponsibility,
+  integratorState: CurrentIntegratorState
+): Extract<FrontierExplanation, { readonly _tag: "BoundedRetainedWait" }> | undefined => {
+  if (integratorState._tag !== "GitQualifiedPrepared") return undefined
+  const source = workflowHistorySource(runState)
+  const began = Array.from(journalRecordsOfKind(source, "WorkflowRunBegan"))[0]
+  if (began?.event._tag !== "WorkflowRunBegan") return undefined
+  const candidate = integratorRunQualifiedCandidateFromState(integratorState)
+  const correlation = remotePublicationCorrelationFor(candidate, began.event.remotePublicationTarget)
+  const publication = deriveRemotePublicationState(remotePublicationEventsFor(source, correlation))
+  if (publication._tag !== "PublicationRetained") return undefined
+  const publicationCause = publication.cause
+  if (publicationCause._tag !== "CompatibleCompetingHead") return undefined
+  const retained = Array.from(journalRecordsOfKind(source, "RemotePublicationRetained")).findLast(
+    ({ event }) =>
+      event._tag === "RemotePublicationRetained" &&
+      remotePublicationCorrelationEquals(event.correlation, correlation) &&
+      event.cause._tag === "CompatibleCompetingHead" &&
+      event.cause.mergeBase === publicationCause.mergeBase &&
+      event.cause.remoteHead === publicationCause.remoteHead
+  )
+  if (retained?.event._tag !== "RemotePublicationRetained") return undefined
+  const hasSuccessorAuthorization = Array.from(
+    journalRecordsOfKind(source, "IntegratorCompetingHeadSuccessorAuthorized")
+  ).some(
+    ({ event }) =>
+      event._tag === "IntegratorCompetingHeadSuccessorAuthorized" &&
+      remotePublicationCorrelationEquals(event.correlation, correlation)
+  )
+  if (hasSuccessorAuthorization) return undefined
+  if (
+    automaticSuccessorSessionCountFor(source, integratorState.run.session) !==
+    maximumIntegratorSessionsPerResponsibility
+  ) {
+    return undefined
+  }
+  return FrontierExplanation.BoundedRetainedWait({
+    mergeBase: publicationCause.mergeBase,
+    plannedAttempt: responsibility.plannedAttempt,
+    remoteHead: publicationCause.remoteHead,
+    remotePublicationRetainedAt: retained.position,
+    sessionCount: maximumIntegratorSessionsPerResponsibility
+  })
 }
 
 const explicitRetryProgressTransitionsFor = (

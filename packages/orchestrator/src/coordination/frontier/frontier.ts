@@ -45,7 +45,8 @@ import type { TargetLineageObservation } from "../../authorities/git/target-line
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type {
   IntegratorRunCorrelation,
-  IntegratorRunQualifiedCandidate
+  IntegratorRunQualifiedCandidate,
+  maximumIntegratorSessionsPerResponsibility
 } from "../../workflow/protocols/integrator/events.js"
 import type { InitialConclusiveIntegrationQuarantineInput } from "../../workflow/protocols/integration-quarantine/initial-conclusive.js"
 import type { ProviderRunFailureQuarantineInput } from "../../workflow/protocols/integration-quarantine/provider-failure.js"
@@ -508,6 +509,14 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection" | "TaskClaimFactsObserved"
   }
   IntegrationInProgress: { readonly plannedAttempt: PlannedTaskAttempt }
+  /** Compatible remote work is retained after the exact Integrator session batch is consumed. */
+  BoundedRetainedWait: {
+    readonly mergeBase: GitCommitSha
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly remoteHead: GitCommitSha
+    readonly remotePublicationRetainedAt: JournalPosition
+    readonly sessionCount: typeof maximumIntegratorSessionsPerResponsibility
+  }
   IntegrationTrackerFactsWait: {
     readonly plannedAttempt: PlannedTaskAttempt
     readonly wakeCondition: "TaskTrackerFactsObserved"

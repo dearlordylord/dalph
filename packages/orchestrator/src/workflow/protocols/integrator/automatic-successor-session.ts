@@ -9,6 +9,8 @@ import {
 } from "../../../workflow-journal/record-key.js"
 import { exactJournalRecordAtKey } from "../../../workflow-journal/exact-record.js"
 import {
+  isJournalRecordEvidence,
+  journalEvidenceBefore,
   journalRecordByPosition,
   journalRecordByKey,
   journalRecordsOfKind,
@@ -84,6 +86,11 @@ export const integratorAutomaticSuccessorCorrelationFor = (
 
 const reject = (predecessor: IntegratorSessionCorrelation, detail: string) =>
   Effect.fail(new IntegratorJournalContradiction({ detail, runId: runIdFor(predecessor) }))
+
+const historyBefore = (records: JournalHistorySource, position: JournalPosition): JournalHistorySource =>
+  isJournalRecordEvidence(records)
+    ? journalEvidenceBefore(records, Number(position))
+    : records.filter((record) => record.position < position)
 
 const baselineCompleteAt = (
   records: JournalHistorySource,
@@ -266,7 +273,8 @@ export const validateAutomaticSuccessorSessionFixedRecord = (
   ) {
     return { _tag: "Invalid", detail: "automatic successor predecessor does not match the active session" }
   }
-  const lineage = journalRecordByPosition(records, record.event.successor.targetLineageObservedAt)
+  const priorRecords = historyBefore(records, record.position)
+  const lineage = journalRecordByPosition(priorRecords, record.event.successor.targetLineageObservedAt)
   if (lineage?.event._tag !== "TargetLineageObserved") {
     return { _tag: "Invalid", detail: "automatic successor lacks its exact fresh target-lineage observation" }
   }
@@ -277,13 +285,13 @@ export const validateAutomaticSuccessorSessionFixedRecord = (
     targetLineageObservedAt: lineage.position
   }
   const successor = integratorAutomaticSuccessorCorrelationFor(input)
-  const sessionIds = fixedSessionIdsFor(records, predecessor)
-  const expectedEvent = eventFor(input, successor, sessionIds.size)
+  const sessionIds = fixedSessionIdsFor(priorRecords, predecessor)
+  const expectedEvent = eventFor(input, successor, sessionIds.size + 1)
   const expectedKey = integratorAutomaticSuccessorSessionFixedRecordKey(predecessor, record.event.authorizationAt)
   if (
-    !exactFixedSessionExists(records, predecessor) ||
-    !integratorAutomaticSuccessorPreparationIsCurrent(records, input) ||
-    sessionIds.size > maximumIntegratorSessionsPerResponsibility ||
+    !exactFixedSessionExists(priorRecords, predecessor) ||
+    !integratorAutomaticSuccessorPreparationIsCurrent(priorRecords, input) ||
+    sessionIds.size >= maximumIntegratorSessionsPerResponsibility ||
     record.position <= lineage.position ||
     !integratorAutomaticSuccessorAppendRecordMatches(record, expectedKey, expectedEvent)
   ) {
@@ -301,21 +309,22 @@ export const prepareIntegratorAutomaticSuccessorSessionAppend = Effect.fn(
 )(function* (input: IntegratorAutomaticSuccessorPreparationInput, records: JournalHistorySource) {
   const predecessor = input.predecessor
   const successor = integratorAutomaticSuccessorCorrelationFor(input)
+  const key = integratorAutomaticSuccessorSessionFixedRecordKey(predecessor, input.authorizationAt)
+  const existing = exactJournalRecordAtKey(records, key)
+  if (existing._tag === "Duplicate") return yield* reject(predecessor, existing.detail)
+  const premiseRecords = existing._tag === "Found" ? historyBefore(records, existing.record.position) : records
   if (
-    !exactFixedSessionExists(records, predecessor) ||
-    !integratorAutomaticSuccessorPreparationIsCurrent(records, input)
+    !exactFixedSessionExists(premiseRecords, predecessor) ||
+    !integratorAutomaticSuccessorPreparationIsCurrent(premiseRecords, input)
   ) {
     return yield* reject(
       predecessor,
       "automatic successor requires its exact fixed predecessor, authorization, ready baseline, and fresh lineage"
     )
   }
-  const sessionIds = fixedSessionIdsFor(records, predecessor)
-  const key = integratorAutomaticSuccessorSessionFixedRecordKey(predecessor, input.authorizationAt)
-  const existing = exactJournalRecordAtKey(records, key)
-  if (existing._tag === "Duplicate") return yield* reject(predecessor, existing.detail)
+  const sessionIds = fixedSessionIdsFor(premiseRecords, predecessor)
   if (existing._tag === "Found") {
-    const existingEvent = eventFor(input, successor, sessionIds.size)
+    const existingEvent = eventFor(input, successor, sessionIds.size + 1)
     return integratorAutomaticSuccessorAppendRecordMatches(existing.record, key, existingEvent)
       ? ({ _tag: "Existing", record: existing.record } as const)
       : yield* reject(predecessor, "automatic successor key contains a foreign or contradictory fixed event")
