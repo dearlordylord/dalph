@@ -2592,6 +2592,360 @@ describe("delivery proposal route matrix", () => {
   )
 
   effectIt.effect(
+    "recovers automatic S2 provider-absence quarantine append cuts after process loss across memory and reopened SQLite",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fixture = makeSuccessorPrefix()
+          const prepared = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+            fixture.input,
+            fixture.reduction.prefix
+          )
+          if (prepared._tag !== "Append") {
+            return yield* Effect.die("provider-quarantine recovery requires the exact automatic S2 session")
+          }
+          fixture.append(prepared.event)
+          const session = prepared.event.successor
+          const responsibility = fixture.accepted.responsibility
+          const run = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(1))
+          const detail = "controlled custody proves no automatic S2 provider activity"
+          const quarantineDetail = IntegrationQuarantineFailureDetail.make(detail)
+          const runTransition = RunnableFrontierTransition.RunIntegrator({
+            lineage: fixture.input.targetLineage,
+            lineageObservedAt: fixture.input.targetLineageObservedAt,
+            responsibility,
+            run
+          })
+          const providerRecoveryTransition = RunnableFrontierTransition.RecordProviderRunFailureIntegrationQuarantine({
+            input: { detail: quarantineDetail, run },
+            responsibility
+          })
+          const proposalFor = (transition: Transition) => {
+            const routed = deliveryProposalsOf({
+              acceptedOperationIds: HashSet.empty(),
+              fresh: [],
+              integrationResponsibilities: [responsibility],
+              responsibilities: [],
+              runId: fixture.runId,
+              transitions: [transition]
+            })
+            const proposal = [...routed.ticketDelivery, ...routed.deliverySettlement][0]
+            if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+              throw new Error(`missing ordinary identity-free proposal for ${transition._tag}`)
+            }
+            return { _tag: "IdentityFreeAction" as const, proposal }
+          }
+          const runAction = proposalFor(runTransition)
+          const providerRecoveryAction = proposalFor(providerRecoveryTransition)
+          const fixedRecords = fixture.records()
+          const providerCalls = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
+          const writerStarts = yield* Ref.make(0)
+          const absenceProofs = yield* Ref.make(0)
+          const candidateGitReads = yield* Ref.make(0)
+          const absenceAppendAttempts = yield* Ref.make(0)
+          const quarantineAppendAttempts = yield* Ref.make(0)
+
+          const provider = (mode: "Ambiguous" | "ActivityAbsent" | "Unexpected") =>
+            Integrator.of({
+              prepare: (request) => {
+                if (JSON.stringify(request.correlation) !== JSON.stringify(run)) {
+                  return Effect.die("provider-absence recovery must retain the exact automatic S2 run")
+                }
+                const tracked = Ref.update(providerCalls, (calls) => [...calls, request.correlation])
+                if (mode === "Ambiguous") {
+                  return tracked.pipe(
+                    Effect.andThen(Ref.update(writerStarts, (count) => count + 1)),
+                    Effect.andThen(
+                      Effect.fail(
+                        new IntegratorCallFailure({
+                          correlation: request.correlation,
+                          detail: "controlled ambiguous automatic S2 provider response"
+                        })
+                      )
+                    )
+                  )
+                }
+                if (mode === "ActivityAbsent") {
+                  return tracked.pipe(
+                    Effect.andThen(Ref.update(absenceProofs, (count) => count + 1)),
+                    Effect.andThen(Effect.fail(new IntegratorProviderActivityAbsent({ correlation: run, detail })))
+                  )
+                }
+                return tracked.pipe(Effect.andThen(Effect.die("quarantine recovery must not call the provider")))
+              }
+            })
+
+          const storageBoundary = (
+            store: JournalStore["Service"],
+            quarantineCut: "BeforeCommit" | "LoseAcknowledgement" | undefined
+          ): JournalStorageBoundary => ({
+            append: (runId, key, event) => {
+              if (
+                event._tag === "IntegrationProviderRunActivityAbsent" &&
+                event.run.session.sessionId === session.sessionId
+              ) {
+                return Ref.update(absenceAppendAttempts, (count) => count + 1).pipe(
+                  Effect.andThen(store.append(runId, key, event))
+                )
+              }
+              if (event._tag !== "IntegrationQuarantined" || event.correlation.sessionId !== session.sessionId) {
+                return store.append(runId, key, event)
+              }
+              return Ref.update(quarantineAppendAttempts, (count) => count + 1).pipe(
+                Effect.andThen(
+                  quarantineCut === "BeforeCommit"
+                    ? Effect.die("process stopped before automatic S2 provider quarantine committed")
+                    : quarantineCut === "LoseAcknowledgement"
+                      ? store
+                          .append(runId, key, event)
+                          .pipe(
+                            Effect.andThen(Effect.die("process lost after automatic S2 provider quarantine committed"))
+                          )
+                      : store.append(runId, key, event)
+                )
+              )
+            },
+            read: store.read,
+            terminateRun: store.terminateRun
+          })
+
+          const seedStore = Effect.fn("DeliveryProposalRoutesTest.seedAutomaticSuccessorProviderAbsenceStore")(
+            function* (store: JournalStore["Service"]) {
+              const [beginning, ...remaining] = fixedRecords
+              if (beginning?.event._tag !== "WorkflowRunBegan") {
+                return yield* Effect.die("automatic S2 provider-absence history must begin one Run")
+              }
+              yield* store.beginRun(
+                fixture.runId,
+                beginning.event.target,
+                beginning.event.initialControlPolicy,
+                beginning.event.remotePublicationTarget
+              )
+              for (const record of remaining) {
+                if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+                  return yield* Effect.die("automatic S2 provider-absence history may not contain another Run event")
+                }
+                yield* store.append(fixture.runId, record.key, record.event)
+              }
+            }
+          )
+
+          const execute = (
+            store: JournalStore["Service"],
+            action: ReturnType<typeof proposalFor>,
+            transition: Transition,
+            providerMode: "Ambiguous" | "ActivityAbsent" | "Unexpected",
+            quarantineCut: "BeforeCommit" | "LoseAcknowledgement" | undefined
+          ) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const stored = yield* store.read(fixture.runId)
+                const history = reduceWorkflowJournalHistory(fixture.runId, stored)
+                if (history._tag !== "ValidWorkflowJournalHistory") {
+                  return yield* Effect.die(
+                    `reopened provider-quarantine prefix is invalid: ${JSON.stringify(history.issues)}`
+                  )
+                }
+                const git = IntegratorGit.of({
+                  readCandidate: () =>
+                    Ref.update(candidateGitReads, (count) => count + 1).pipe(
+                      Effect.andThen(Effect.die("provider-absence recovery must not read a candidate"))
+                    )
+                })
+                return yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+                  Effect.provide(journalLayer(fixture.runId, target, history, storageBoundary(store, quarantineCut))),
+                  Effect.provideService(Integrator, provider(providerMode)),
+                  Effect.provideService(IntegratorGit, git)
+                )
+              })
+            )
+
+          const fixedAuthorizationCount = fixedRecords.filter(
+            ({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized"
+          ).length
+          const fixedSessionCount = fixedRecords.filter(
+            ({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed"
+          ).length
+          const targetLineageReadCount = fixedRecords.filter(
+            ({ event }) => event._tag === "GitReadIntentRecorded"
+          ).length
+          const assertRecords = (
+            records: ReadonlyArray<JournalRecord>,
+            hasAbsence: boolean,
+            hasQuarantine: boolean
+          ) => {
+            const absences = records.filter(
+              ({ event }) =>
+                event._tag === "IntegrationProviderRunActivityAbsent" &&
+                event.run.session.sessionId === session.sessionId
+            )
+            expect(absences).toHaveLength(hasAbsence ? 1 : 0)
+            const quarantines = records.filter(
+              ({ event }) =>
+                event._tag === "IntegrationQuarantined" && event.correlation.sessionId === session.sessionId
+            )
+            expect(quarantines).toHaveLength(hasQuarantine ? 1 : 0)
+            expect(
+              records.filter(
+                ({ event }) =>
+                  event._tag === "IntegratorRunStarted" && event.run.session.sessionId === session.sessionId
+              )
+            ).toHaveLength(1)
+            expect(
+              records.filter(
+                ({ event }) =>
+                  event._tag === "IntegratorRunResultRecorded" && event.run.session.sessionId === session.sessionId
+              )
+            ).toHaveLength(0)
+            expect(
+              records.filter(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")
+            ).toHaveLength(fixedAuthorizationCount)
+            expect(
+              records.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+            ).toHaveLength(fixedSessionCount)
+            expect(records.filter(({ event }) => event._tag === "GitReadIntentRecorded")).toHaveLength(
+              targetLineageReadCount
+            )
+            expect(records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+            expect(records.filter(({ event }) => event._tag === "IntegrationResponsibilityBegan")).toHaveLength(1)
+            expect(records.filter(({ event }) => event._tag === "IntegrationStarted")).toHaveLength(1)
+            if (hasAbsence) {
+              const absence = absences[0]
+              if (absence?.event._tag !== "IntegrationProviderRunActivityAbsent") {
+                throw new Error("provider quarantine requires the exact durable absence event")
+              }
+              expect(absence.event).toMatchObject({
+                correlation: session,
+                detail: quarantineDetail,
+                occurrenceClassification: "NonActionOccurrence",
+                run
+              })
+              if (hasQuarantine) {
+                const quarantine = quarantines[0]
+                if (quarantine?.event._tag !== "IntegrationQuarantined") {
+                  throw new Error("provider quarantine recovery requires one exact quarantine event")
+                }
+                expect(quarantine.event).toMatchObject({
+                  basis: {
+                    _tag: "ProviderRunFailure",
+                    detail: quarantineDetail,
+                    ownedActivityProvenAbsentAt: absence.position
+                  },
+                  correlation: session
+                })
+                expect(quarantine.position).toBeGreaterThan(absence.position)
+              }
+            }
+          }
+
+          const resetCounts = Effect.gen(function* () {
+            yield* Ref.set(providerCalls, [])
+            yield* Ref.set(writerStarts, 0)
+            yield* Ref.set(absenceProofs, 0)
+            yield* Ref.set(candidateGitReads, 0)
+            yield* Ref.set(absenceAppendAttempts, 0)
+            yield* Ref.set(quarantineAppendAttempts, 0)
+          })
+
+          const exercise = <R>(
+            cut: "BeforeCommit" | "LoseAcknowledgement",
+            open: (
+              action: ReturnType<typeof proposalFor>,
+              transition: Transition,
+              providerMode: "Ambiguous" | "ActivityAbsent" | "Unexpected",
+              quarantineCut: "BeforeCommit" | "LoseAcknowledgement" | undefined
+            ) => Effect.Effect<unknown, unknown, R>,
+            readCurrent: () => Effect.Effect<ReadonlyArray<JournalRecord>, unknown, R>
+          ) =>
+            Effect.gen(function* () {
+              yield* resetCounts
+              const ambiguous = yield* Effect.exit(open(runAction, runTransition, "Ambiguous", undefined))
+              expect(ambiguous._tag).toBe("Failure")
+              assertRecords(yield* readCurrent(), false, false)
+              expect(yield* Ref.get(providerCalls)).toEqual([run])
+              expect(yield* Ref.get(writerStarts)).toBe(1)
+              expect(yield* Ref.get(absenceProofs)).toBe(0)
+
+              const absent = yield* Effect.exit(open(runAction, runTransition, "ActivityAbsent", cut))
+              expect(absent._tag).toBe("Failure")
+              assertRecords(yield* readCurrent(), true, cut === "LoseAcknowledgement")
+              expect(yield* Ref.get(providerCalls)).toEqual([run, run])
+              expect(yield* Ref.get(writerStarts)).toBe(1)
+              expect(yield* Ref.get(absenceProofs)).toBe(1)
+              expect(yield* Ref.get(candidateGitReads)).toBe(0)
+
+              let committedQuarantineBeforeRecovery: JournalRecord | undefined
+              if (cut === "LoseAcknowledgement") {
+                const beforeRetry = yield* readCurrent()
+                committedQuarantineBeforeRecovery = beforeRetry.find(
+                  ({ event }) =>
+                    event._tag === "IntegrationQuarantined" && event.correlation.sessionId === session.sessionId
+                )
+                if (committedQuarantineBeforeRecovery?.event._tag !== "IntegrationQuarantined") {
+                  throw new Error("lost provider-quarantine acknowledgement must leave its exact event committed")
+                }
+              }
+              expect(
+                yield* open(providerRecoveryAction, providerRecoveryTransition, "Unexpected", undefined)
+              ).toMatchObject({ _tag: "ActionCompleted", proposalId: providerRecoveryAction.proposal.id })
+              const recovered = yield* readCurrent()
+              assertRecords(recovered, true, true)
+              if (cut === "LoseAcknowledgement") {
+                const committedQuarantine = recovered.find(
+                  ({ event }) =>
+                    event._tag === "IntegrationQuarantined" && event.correlation.sessionId === session.sessionId
+                )
+                expect(committedQuarantine).toEqual(committedQuarantineBeforeRecovery)
+              }
+              expect(yield* Ref.get(providerCalls)).toEqual([run, run])
+              expect(yield* Ref.get(writerStarts)).toBe(1)
+              expect(yield* Ref.get(absenceProofs)).toBe(1)
+              expect(yield* Ref.get(candidateGitReads)).toBe(0)
+              expect(yield* Ref.get(absenceAppendAttempts)).toBe(1)
+              expect(yield* Ref.get(quarantineAppendAttempts)).toBe(cut === "BeforeCommit" ? 2 : 1)
+            })
+
+          for (const cut of ["BeforeCommit", "LoseAcknowledgement"] as const) {
+            const memoryContext = yield* Layer.build(memoryJournalStoreLayer)
+            const memoryStore = Context.get(memoryContext, JournalStore)
+            yield* seedStore(memoryStore)
+            yield* exercise(
+              cut,
+              (action, transition, providerMode, quarantineCut) =>
+                execute(memoryStore, action, transition, providerMode, quarantineCut),
+              () => memoryStore.read(fixture.runId)
+            )
+          }
+
+          const fileSystem = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const directory = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "dalph-automatic-s2-provider-quarantine-"
+          })
+          for (const cut of ["BeforeCommit", "LoseAcknowledgement"] as const) {
+            const filename = JournalDatabaseLocator.make(path.join(directory, `${cut}.sqlite`))
+            const openSqlite = <A>(
+              use: (store: JournalStore["Service"]) => Effect.Effect<A, unknown>
+            ): Effect.Effect<A, unknown, Scope.Scope> =>
+              Effect.scoped(
+                Effect.gen(function* () {
+                  const store = yield* JournalStore
+                  return yield* use(store)
+                }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+              )
+            yield* openSqlite((store) => seedStore(store))
+            yield* exercise(
+              cut,
+              (action, transition, providerMode, quarantineCut) =>
+                openSqlite((store) => execute(store, action, transition, providerMode, quarantineCut)),
+              () => openSqlite((store) => store.read(fixture.runId))
+            )
+          }
+        }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)))
+      )
+  )
+
+  effectIt.effect(
     "recovers an automatic S2 provider start after lost acknowledgement without overlapping or replacing its run",
     () =>
       Effect.scoped(
