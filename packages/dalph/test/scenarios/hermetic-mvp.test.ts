@@ -107,11 +107,15 @@ const runHermeticMvpJourney = (
   crashAfterPromotion: boolean,
   competingHeadBeforeDiscovery = false,
   competingHeadBetweenDiscoveryAndPush = false,
-  competingHeadAfterLostPushResponse = false
+  competingHeadAfterLostPushResponse = false,
+  exhaustAutomaticSuccessorBounds = false
 ) =>
   Effect.gen(function* () {
     const competingHeadRace =
-      competingHeadBeforeDiscovery || competingHeadBetweenDiscoveryAndPush || competingHeadAfterLostPushResponse
+      competingHeadBeforeDiscovery ||
+      competingHeadBetweenDiscoveryAndPush ||
+      competingHeadAfterLostPushResponse ||
+      exhaustAutomaticSuccessorBounds
     const fileSystem = yield* FileSystem.FileSystem
     const git = yield* GitCommand
     const childProcesses = yield* ChildProcessSpawner.ChildProcessSpawner
@@ -156,29 +160,46 @@ const runHermeticMvpJourney = (
           "create unoccupied local integration target"
         )
       }
-      const competingHead = yield* Effect.gen(function* () {
-        if (!competingHeadRace) return undefined
-        const outsideWorktree = `${root}/outside-H2`
-        yield* runInWorktree(
-          git,
-          repository,
-          ["worktree", "add", "--detach", outsideWorktree, baseSha],
-          "create outside H2 worktree"
-        )
-        yield* fileSystem.writeFileString(`${outsideWorktree}/OUTSIDE.md`, "compatible outside change\n")
-        yield* runInWorktree(git, outsideWorktree, ["add", "OUTSIDE.md"], "stage outside change")
-        yield* runInWorktree(git, outsideWorktree, ["commit", "-m", "outside H2"], "commit outside H2")
-        const head = GitCommitSha.make(
-          yield* runInWorktree(git, outsideWorktree, ["rev-parse", "HEAD"], "read outside H2")
-        )
-        yield* runInWorktree(
-          git,
-          repository,
-          ["worktree", "remove", "--force", outsideWorktree],
-          "remove outside H2 worktree"
-        )
-        return head
+      const competingHeads = yield* Effect.gen(function* () {
+        if (!competingHeadRace) return [] as const
+        const count = exhaustAutomaticSuccessorBounds ? 3 : 1
+        const heads: Array<GitCommitSha> = []
+        let parent = baseSha
+        for (let index = 0; index < count; index += 1) {
+          const generation = index + 2
+          const outsideWorktree = `${root}/outside-H${generation}`
+          const outsideBranch = `outside-H${generation}`
+          yield* runInWorktree(
+            git,
+            repository,
+            ["worktree", "add", "-b", outsideBranch, outsideWorktree, parent],
+            `create outside H${generation} worktree`
+          )
+          yield* fileSystem.writeFileString(
+            `${outsideWorktree}/OUTSIDE-${generation}.md`,
+            `compatible outside change ${generation}\n`
+          )
+          yield* runInWorktree(git, outsideWorktree, ["add", `OUTSIDE-${generation}.md`], `stage outside H${generation}`)
+          yield* runInWorktree(
+            git,
+            outsideWorktree,
+            ["commit", "-m", `outside H${generation}`],
+            `commit outside H${generation}`
+          )
+          parent = GitCommitSha.make(
+            yield* runInWorktree(git, outsideWorktree, ["rev-parse", "HEAD"], `read outside H${generation}`)
+          )
+          heads.push(parent)
+          yield* runInWorktree(
+            git,
+            repository,
+            ["worktree", "remove", "--force", outsideWorktree],
+            `remove outside H${generation} worktree`
+          )
+        }
+        return heads
       })
+      const competingHead = competingHeads[0]
       yield* runInWorktree(git, repository, ["branch", "unrelated", baseSha], "create unrelated branch")
 
       const runId = RunId.make("hermetic-mvp-run")
@@ -219,6 +240,9 @@ const runHermeticMvpJourney = (
       const operationCounter = yield* Ref.make(0)
       const executorStarts = yield* Ref.make(0)
       const integratorCalls = yield* Ref.make(0)
+      const completionMutationCalls = yield* Ref.make(0)
+      const candidatePublicationPushCalls = yield* Ref.make(0)
+      const outsidePublicationPushCalls = yield* Ref.make(0)
       const runtimeTrace = yield* Ref.make<ReadonlyArray<string>>([])
       const runtimeObservation = DeliveryRuntimeObservationObserver.of({
         observe: ({ evaluation, liveOwners }) => {
@@ -293,6 +317,51 @@ const runHermeticMvpJourney = (
               }),
             push: (request, attemptOrdinal) =>
               Effect.gen(function* () {
+                const candidatePush = yield* Ref.updateAndGet(candidatePublicationPushCalls, (count) => count + 1)
+                if (exhaustAutomaticSuccessorBounds) {
+                  if (candidatePush > 3) {
+                    return yield* Effect.die("an ungranted fourth automatic publication push reached Git")
+                  }
+                  const outsideHead = competingHeads[candidatePush - 1]
+                  if (outsideHead === undefined) {
+                    return yield* Effect.die(`bounded S2 push ${candidatePush} lacked its exact outside head`)
+                  }
+                  yield* runInWorktree(
+                    git,
+                    repository,
+                    ["push", "target", `${outsideHead}:refs/heads/master`],
+                    `publish outside H${candidatePush + 1} before candidate push ${candidatePush} settles`
+                  )
+                  yield* Ref.update(outsidePublicationPushCalls, (count) => count + 1)
+                  yield* Ref.set(outsideHeadPublished, true)
+                  const actualResult = yield* gitAuthority.push(request, attemptOrdinal)
+                  yield* Ref.update(actualCompetingPushCalls, (count) => count + 1)
+                  if (actualResult._tag !== "RejectedNonFastForward") {
+                    return yield* Effect.die(
+                      `bounded S2 push ${candidatePush} expected a real non-fast-forward rejection, received ${actualResult._tag}`
+                    )
+                  }
+                  const remoteHeadAfterRejection = GitCommitSha.make(
+                    yield* runInGitDirectory(
+                      git,
+                      bareRemote,
+                      ["rev-parse", "refs/heads/master"],
+                      `verify candidate push ${candidatePush} preserved its outside head`
+                    )
+                  )
+                  if (remoteHeadAfterRejection !== outsideHead) {
+                    return yield* Effect.die(`candidate push ${candidatePush} changed the outside remote head`)
+                  }
+                  if (candidatePush === 1) {
+                    yield* Ref.update(suppressedNonFastForwardResponses, (count) => count + 1)
+                    yield* Ref.update(lostPushResponseCount, (count) => count + 1)
+                    yield* Ref.set(lostPushResponseReturned, true)
+                    return yield* Effect.fail(
+                      new RemotePublicationPushFailure({ reason: "ResponseDeadline", target: request.target })
+                    )
+                  }
+                  return actualResult
+                }
                 const alreadyPushed = yield* Ref.getAndSet(publicationPushed, true)
                 if (!alreadyPushed && competingHeadAfterLostPushResponse) {
                   if (!(yield* Ref.get(publicationObserved))) {
@@ -423,6 +492,7 @@ const runHermeticMvpJourney = (
           }),
         completeTask: (request) =>
           Effect.gen(function* () {
+            yield* Ref.update(completionMutationCalls, (count) => count + 1)
             const candidate = yield* Ref.get(integratorCandidate)
             if (Option.isNone(candidate)) return yield* Effect.die("tracker completion preceded Integrator output")
             const currentTarget = GitCommitSha.make(
@@ -539,6 +609,9 @@ const runHermeticMvpJourney = (
         prepare: (request) =>
           Effect.gen(function* () {
             const call = yield* Ref.updateAndGet(integratorCalls, (calls) => calls + 1)
+            if (exhaustAutomaticSuccessorBounds && call > 3) {
+              return yield* Effect.die("an ungranted fourth Integrator provider start reached the test boundary")
+            }
             const acceptedCommit = request.correlation.session.acceptedResult.commit
             const candidateRepository = competingHeadRace ? repository + "/.git" : bareRemote
             const tree = yield* runInGitDirectory(
@@ -704,6 +777,126 @@ const runHermeticMvpJourney = (
       }
 
       yield* activationDriver
+      if (exhaustAutomaticSuccessorBounds) {
+        const records = yield* Effect.gen(function* () {
+          return yield* (yield* JournalStore).read(runId)
+        }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: journalFilename })))
+        const evidenceReference = Option.getOrThrow(yield* Ref.get(acceptedEvidence))
+        const evidenceBytes = yield* evidenceStore.read(evidenceReference)
+        const decodedEvidence = yield* Schema.decodeUnknownEffect(AcceptedResultEvidenceManifest)(
+          JSON.parse(new TextDecoder().decode(evidenceBytes))
+        )
+        const runBeginningRecords = records.filter(hasEventTag("WorkflowRunBegan"))
+        const plannedAttemptRecords = records.filter(hasEventTag("TaskAttemptPlanned"))
+        const runStartedRecords = records.filter(hasEventTag("IntegratorRunStarted"))
+        const candidateProofs = records.filter(hasEventTag("IntegratorRunCandidateGitObserved"))
+        const automaticAuthorizations = records.filter(hasEventTag("IntegratorCompetingHeadSuccessorAuthorized"))
+        const automaticSessionFixations = records.filter(hasEventTag("IntegratorAutomaticSuccessorSessionFixed"))
+        const publicationIntents = records.filter(hasEventTag("RemotePublicationIntended"))
+        const publicationAttemptIntents = records.filter(hasEventTag("RemotePublicationAttemptIntended"))
+        const retainedPublications = records.filter(hasEventTag("RemotePublicationRetained"))
+        const h2 = competingHeads[0]
+        const h3 = competingHeads[1]
+        const h4 = competingHeads[2]
+        if (h2 === undefined || h3 === undefined || h4 === undefined) {
+          return yield* Effect.die("bounded S2 fixture requires outside heads H2, H3, and H4")
+        }
+
+        expect(records.every((record) => record.runId === runId)).toBe(true)
+        expect(runBeginningRecords).toHaveLength(1)
+        expect(plannedAttemptRecords).toHaveLength(1)
+        expect(yield* Ref.get(executorStarts)).toBe(1)
+        expect(yield* Ref.get(integratorCalls)).toBe(3)
+        expect(runStartedRecords).toHaveLength(3)
+        expect(records.filter(hasEventTag("IntegratorRunResultRecorded"))).toHaveLength(3)
+        expect(candidateProofs).toHaveLength(3)
+        expect(automaticAuthorizations).toHaveLength(2)
+        expect(automaticSessionFixations).toHaveLength(2)
+        expect(publicationIntents).toHaveLength(3)
+        expect(publicationAttemptIntents).toHaveLength(3)
+        expect(retainedPublications).toHaveLength(3)
+
+        const startedSessions = runStartedRecords.map(({ event }) => event.run.session)
+        expect(startedSessions.map(({ expectedTargetHead }) => expectedTargetHead)).toEqual([baseSha, h2, h3])
+        for (const session of startedSessions) {
+          expect(session.plannedAttempt).toEqual(plannedAttempt)
+          expect(session.acceptedResult.commit).toBe(decodedEvidence.commit)
+          expect(session.plannedAttempt.baseSha).toBe(baseSha)
+        }
+        const candidateCommits = candidateProofs.map(({ event }) =>
+          event.observation._tag === "Commit" ? event.observation.commit : `unexpected ${event.observation._tag}`
+        )
+        expect(candidateProofs.map(({ event }) =>
+          event.observation._tag === "Commit" ? event.observation.directParents : [event.observation._tag]
+        )).toEqual([[baseSha, decodedEvidence.commit], [h2, decodedEvidence.commit], [h3, decodedEvidence.commit]])
+        expect(publicationIntents.map(({ event }) => event.correlation.qualifiedCandidate.candidateCommit)).toEqual(
+          candidateCommits
+        )
+        expect(publicationAttemptIntents.map(({ event }) => event.correlation.qualifiedCandidate.candidateCommit)).toEqual(
+          candidateCommits
+        )
+        expect(publicationAttemptIntents.map(({ event }) => event.attemptOrdinal)).toEqual([1, 1, 1])
+
+        const finalCandidate = candidateCommits[2]
+        if (typeof finalCandidate !== "string" || finalCandidate.startsWith("unexpected ")) {
+          return yield* Effect.die("third bounded S2 session did not produce its Git-qualified candidate")
+        }
+        const finalRetention = retainedPublications.findLast(
+          ({ event }) => event.correlation.qualifiedCandidate.candidateCommit === finalCandidate
+        )
+        if (finalRetention === undefined) {
+          return yield* Effect.die("third bounded S2 candidate lacks its exact retained competing head")
+        }
+        expect(finalRetention.event.cause).toMatchObject({
+          _tag: "CompatibleCompetingHead",
+          mergeBase: h3,
+          remoteHead: h4
+        })
+        expect(
+          automaticAuthorizations.some(
+            ({ event }) => event.correlation.qualifiedCandidate.candidateCommit === finalCandidate
+          )
+        ).toBe(false)
+        expect(automaticAuthorizations.every(({ position }) => position < finalRetention.position)).toBe(true)
+
+        expect(records.filter(hasEventTag("IntegratorSessionFixed"))).toHaveLength(1)
+        expect(records.filter(hasEventTag("RemotePublicationAttemptRejectedNonFastForward"))).toHaveLength(2)
+        expect(records.filter(hasEventTag("RemotePublicationSucceeded"))).toHaveLength(0)
+        expect(records.filter(hasEventTag("TargetPromotionAttemptIntended"))).toHaveLength(0)
+        expect(records.filter(hasEventTag("CompletionTaskAttemptIntended"))).toHaveLength(0)
+        expect(records.filter(hasEventTag("CompletionTaskAcknowledged"))).toHaveLength(0)
+        expect(records.filter(hasEventTag("WorkflowRunTerminated"))).toHaveLength(0)
+        expect(yield* Ref.get(candidatePublicationPushCalls)).toBe(3)
+        expect(yield* Ref.get(outsidePublicationPushCalls)).toBe(3)
+        expect(yield* Ref.get(actualCompetingPushCalls)).toBe(3)
+        expect(yield* Ref.get(targetPromotionCompareAndSetCalls)).toBe(0)
+        expect(yield* Ref.get(completionMutationCalls)).toBe(0)
+        expect(yield* Ref.get(lostPushResponseCount)).toBe(1)
+        expect(yield* Ref.get(lostPushResponseReturned)).toBe(true)
+        expect(yield* Ref.get(outsideHeadPublished)).toBe(true)
+        expect(yield* Ref.get(lifecycle)).toBe("Open")
+        expect((yield* Ref.get(trackerClaim))._tag).toBe("ActiveTaskClaim")
+        expect(yield* Ref.get(terminated)).toBe(false)
+        const finalDecision = Option.getOrElse(yield* Ref.get(lastWorkflowDecision), () => "{}")
+        expect(JSON.parse(finalDecision)).toMatchObject({
+          _tag: "RunMustRemainActive",
+          reason: "UnsettledResponsibility"
+        })
+        const localTarget = GitCommitSha.make(
+          yield* runInWorktree(git, repository, ["rev-parse", integrationRef], "read retained bounded local target")
+        )
+        const remoteTarget = GitCommitSha.make(
+          yield* runInGitDirectory(
+            git,
+            bareRemote,
+            ["rev-parse", "refs/heads/master"],
+            "read retained bounded remote target"
+          )
+        )
+        expect(localTarget).toBe(h3)
+        expect(remoteTarget).toBe(h4)
+        return
+      }
       if (!(yield* Ref.get(terminated))) {
         const stalledRecords = yield* Effect.gen(function* () {
           return yield* (yield* JournalStore).read(runId)
@@ -1214,5 +1407,11 @@ it.effect(
 it.effect(
   "recovers a competing remote head advanced after a lost publication response through the automatic S2 full suffix",
   () => runHermeticMvpJourney(false, false, false, true),
+  120_000
+)
+
+it.effect(
+  "retains the exact third competing head without an ungranted fourth automatic session or push",
+  () => runHermeticMvpJourney(false, false, false, false, true),
   120_000
 )
