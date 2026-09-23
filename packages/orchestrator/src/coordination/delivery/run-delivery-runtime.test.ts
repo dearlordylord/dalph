@@ -21,7 +21,21 @@ import {
   makeTaskWorkSpecification,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
-import { HashSet, Deferred, Effect, Fiber, Layer, Option, Queue, Ref, Result, Stream, SubscriptionRef } from "effect"
+import {
+  Context,
+  HashSet,
+  Deferred,
+  Duration,
+  Effect,
+  Fiber,
+  Layer,
+  Option,
+  Queue,
+  Ref,
+  Result,
+  Stream,
+  SubscriptionRef
+} from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot, taskRevisionFor } from "../../authorities/task-tracker/graph.js"
@@ -151,6 +165,7 @@ import {
   type DeliveryRuntimeInput
 } from "./run-delivery-runtime.js"
 import {
+  DeliveryRuntimeResources,
   type DeliveryRuntimeResourceCapabilities,
   deliveryRuntimeResourceCapabilitiesLayer,
   deliveryRuntimeResourceCapabilitiesOf as makeCapabilitiesWithAdmission,
@@ -215,6 +230,13 @@ import {
   PassivePlannedAttemptProjectionPublication
 } from "../run/passive-planned-attempt-observer.js"
 import { liveJournalTestLayer } from "./live-journal-test-layer.js"
+import { makeSuccessorPrefix } from "../../../test/support/automatic-successor-history.js"
+import { executeIntegrationAction } from "./integration-delivery-action-adapter.js"
+import {
+  LocalTargetCatchUpResult,
+  RemoteBaselineFailure,
+  RemoteBaselineGit
+} from "../../workflow/protocols/direct-publication/baseline-events.js"
 
 const deliveryRuntimeResourceCapabilitiesOf = Effect.fn("RunDeliveryRuntimeTest.makeCapabilities")(function* (
   integrationTargets: Parameters<typeof makeCapabilitiesWithAdmission>[0]
@@ -5603,6 +5625,189 @@ const freshExecutingObservePair = (name: string) => {
   )
   return { fixture, proposal, refreshed }
 }
+
+it.effect("defers an ambiguous automatic baseline reconciliation to a fresh delivery activation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = makeSuccessorPrefix()
+      const completePrefix = fixture.records()
+      const catchUpIntentIndex = completePrefix.findIndex(({ event }) => event._tag === "LocalTargetCatchUpIntended")
+      const baselineRead = completePrefix.find(({ event }) => event._tag === "RemoteBaselineReadIntended")
+      const authorizationCount = completePrefix.filter(
+        ({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized"
+      ).length
+      const fixedSessionCount = completePrefix.filter(({ event }) => event._tag === "IntegratorSessionFixed").length
+      const runStartedCount = completePrefix.filter(({ event }) => event._tag === "IntegratorRunStarted").length
+      if (catchUpIntentIndex < 0 || baselineRead?.event._tag !== "RemoteBaselineReadIntended") {
+        return yield* Effect.die("successor fixture must contain the exact committed catch-up intent")
+      }
+      const seedRecords = completePrefix.slice(0, catchUpIntentIndex + 1)
+      const correlation = baselineRead.event.correlation
+      const authorization = completePrefix.find(
+        ({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized"
+      )
+      if (authorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized") {
+        return yield* Effect.die("successor fixture must contain its automatic authorization")
+      }
+      const localHead = fixture.input.predecessor.expectedTargetHead
+      const remoteHead = authorization.event.remoteHead
+      const transition = RunnableFrontierTransition.EstablishRemoteBaseline({
+        correlation,
+        responsibility: fixture.accepted.responsibility
+      })
+      const baselineProposals = deliveryProposalsOf({
+        acceptedOperationIds: HashSet.empty(),
+        fresh: [],
+        integrationResponsibilities: [fixture.accepted.responsibility],
+        responsibilities: [],
+        runId: fixture.runId,
+        transitions: [transition]
+      })
+      const baselineProposal = [...baselineProposals.ticketDelivery, ...baselineProposals.deliverySettlement][0]
+      if (baselineProposal === undefined) return yield* Effect.die("missing automatic baseline proposal")
+
+      const baselineCalls = yield* Ref.make(0)
+      const remoteReads = yield* Ref.make(0)
+      const casCount = yield* Ref.make(0)
+      const acceptedThrough = yield* Ref.make(JournalPosition.make(seedRecords.length))
+      const git = RemoteBaselineGit.of({
+        observe: () =>
+          Ref.update(remoteReads, (count) => count + 1).pipe(
+            Effect.andThen(Effect.die("pending baseline must reuse its recorded read"))
+          ),
+        catchUp: () => Effect.die("pending baseline must reconcile its committed catch-up intent"),
+        reconcileCatchUp: (receivedCorrelation, expectedLocalHead, observedRemoteHead) =>
+          Effect.gen(function* () {
+            expect(receivedCorrelation).toEqual(correlation)
+            expect(expectedLocalHead).toBe(localHead)
+            expect(observedRemoteHead).toBe(remoteHead)
+            const count = yield* Ref.updateAndGet(baselineCalls, (current) => current + 1)
+            if (count === 1) return yield* Effect.fail(new RemoteBaselineFailure({ reason: "ResponseDeadline" }))
+            yield* Ref.update(casCount, (current) => current + 1)
+            yield* Ref.set(acceptedThrough, JournalPosition.make(seedRecords.length + 1))
+            return LocalTargetCatchUpResult.cases.Applied.make({ newHead: remoteHead })
+          })
+      })
+      const base = yield* baseEvaluation
+      const initial: DeliveryRuntimeEvaluation = {
+        ...withProposals(base, [baselineProposal]),
+        acceptedAt: JournalPosition.make(seedRecords.length),
+        current: { ...base.current, runId: fixture.runId },
+        runId: fixture.runId,
+        taskWork: makeFreshTaskAdmissionTestBasis({ capacity: policy.taskExecutionCapacity, runId: fixture.runId })
+      }
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const executorResults = yield* Ref.make<ReadonlyArray<string>>([])
+      const pendingPublication = yield* Ref.make(false)
+      const executor = DeliveryActionExecutor.of({
+        execute: (action, lease) =>
+          executeIntegrationAction(action, transition, lease, fixture.accepted.trackerTarget).pipe(
+            Effect.provideService(RemoteBaselineGit, git),
+            Effect.tap((result) => Ref.update(executorResults, (tags) => [...tags, result._tag])),
+            Effect.tap((result) =>
+              result._tag === "ActionCompleted"
+                ? relation.publish({
+                    ...initial,
+                    acceptedAt: JournalPosition.make(seedRecords.length + 1),
+                    proposedActions: {
+                      _tag: "DeliveryProposalsAvailable",
+                      freshTaskCandidates: [],
+                      isolatedIssues: [],
+                      proposals: []
+                    }
+                  })
+                : Effect.void
+            )
+          )
+      })
+      const publication = DeliveryAcceptedFactPublication.of({
+        awaitCurrent: Ref.get(acceptedThrough).pipe(
+          Effect.map((acceptedThrough) => ({
+            _tag: "DeliveryAcceptedPublicationBoundary" as const,
+            acceptedThrough,
+            runId: fixture.runId
+          }))
+        )
+      })
+      const activationSupportLayers = Layer.mergeAll(
+        deterministicOperationIdAllocatorLayer("automatic-successor-baseline-activation"),
+        plannerLayer,
+        plannedAttemptProtocolControllerLayer,
+        Layer.succeed(DeliveryAcceptedFactPublication, publication)
+      )
+      const trace = DeliverySemanticTrace.of({
+        emit: (event) =>
+          event._tag === "ActionCompletionPublicationPending" ? Ref.set(pendingPublication, true) : Effect.void
+      })
+      const journalContext = yield* Layer.build(
+        liveJournalTestLayer({ records: seedRecords, runId: fixture.runId, target: fixture.accepted.trackerTarget })
+      )
+      const journal = Context.get(journalContext, Journal)
+      const runtimeResourceContext = yield* Layer.build(testDeliveryRuntimeResourcesLayer)
+      const integrationTargets = Context.get(runtimeResourceContext, DeliveryRuntimeResources).integrationTargets
+      yield* integrationTargets.acquire(fixture.accepted.responsibility)
+      yield* integrationTargets.publishAcceptedOwnership(fixture.accepted.responsibility)
+      yield* Effect.addFinalizer(() => integrationTargets.releaseAll)
+      const runActivation = () =>
+        runDeliveryRuntime(fixture.runId, relation).pipe(
+          Effect.provideContext(journalContext),
+          Effect.provideContext(runtimeResourceContext),
+          Effect.provide(activationSupportLayers),
+          Effect.provideService(DeliveryActionExecutor, executor),
+          Effect.provideService(RemoteBaselineGit, git),
+          Effect.provideService(DeliverySemanticTrace, trace)
+        )
+      const runDiagnosticActivation = (label: string) =>
+        runActivation().pipe(
+          Effect.timeoutOption(Duration.seconds(2)),
+          Effect.flatMap((result) =>
+            Option.isSome(result)
+              ? Effect.succeed(result.value)
+              : Effect.gen(function* () {
+                  const resultTags = yield* Ref.get(executorResults)
+                  const publicationPending = yield* Ref.get(pendingPublication)
+                  return yield* Effect.die(
+                    `activation diagnostic timeout (${label}): executorResults=${JSON.stringify(resultTags)}; actionCompletionPublicationPending=${publicationPending}`
+                  )
+                })
+          )
+        )
+
+      const firstActivation = yield* runDiagnosticActivation("first")
+      expect(firstActivation._tag).toBe("PassiveRuntimeQuiescence")
+      expect(yield* Ref.get(baselineCalls)).toBe(1)
+      expect(yield* Ref.get(casCount)).toBe(0)
+      expect(yield* Ref.get(remoteReads)).toBe(0)
+      const firstHistory = yield* journal.read(fixture.runId)
+      expect(firstHistory.filter(({ event }) => event._tag === "LocalTargetCatchUpIntended")).toHaveLength(1)
+      expect(firstHistory.filter(({ event }) => event._tag === "LocalTargetCatchUpObserved")).toHaveLength(0)
+
+      yield* integrationTargets.acquire(fixture.accepted.responsibility)
+      yield* integrationTargets.publishAcceptedOwnership(fixture.accepted.responsibility)
+      const secondActivation = yield* runDiagnosticActivation("second")
+      expect(secondActivation._tag).toBe("PassiveRuntimeQuiescence")
+      expect(yield* Ref.get(baselineCalls)).toBe(2)
+      expect(yield* Ref.get(casCount)).toBe(1)
+      expect(yield* Ref.get(remoteReads)).toBe(0)
+      const finalHistory = yield* journal.read(fixture.runId)
+      expect(finalHistory.filter(({ event }) => event._tag === "LocalTargetCatchUpIntended")).toHaveLength(1)
+      expect(finalHistory.filter(({ event }) => event._tag === "LocalTargetCatchUpObserved")).toHaveLength(1)
+      expect(
+        finalHistory.filter(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")
+      ).toHaveLength(authorizationCount)
+      expect(finalHistory.filter(({ event }) => event._tag === "IntegratorSessionFixed")).toHaveLength(
+        fixedSessionCount
+      )
+      expect(finalHistory.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(runStartedCount)
+      expect(
+        finalHistory.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+      ).toHaveLength(0)
+      expect(finalHistory.find(({ event }) => event._tag === "LocalTargetCatchUpIntended")?.event).toEqual(
+        seedRecords.find(({ event }) => event._tag === "LocalTargetCatchUpIntended")?.event
+      )
+    })
+  )
+)
 
 it("derives a passive-attachment marker live-action key from its proposal", () => {
   const { fixture, proposal } = freshExecutingObservePair("derived-passive-marker-key")

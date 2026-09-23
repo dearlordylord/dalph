@@ -252,6 +252,38 @@ process-local position. It starts no fourth action without the later issue-owned
 authorization. #385 owns competing-head successors and catch-up, #386 owns
 additional-batch grants, and #387 owns retained-delivery resumption.
 
+### Automatic competing-head successor and local catch-up
+
+When Git proves the pinned remote branch advanced compatibly beyond exact M
+without containing M, the Journal first retains that publication result. A
+separate Dalph-coordinator action then records automatic successor
+authorization for the exact integration responsibility, predecessor session
+and candidate, immutable attempt and Base, accepted C, pinned endpoint/ref, and
+existing FIFO position. It cannot be represented by an Operator Full rerun
+direction. Conclusive Integrator failure, denied or throttled publication,
+incompatible history, and unproven writer custody do not authorize this action.
+
+After current tracker, claim, and control facts permit progress, the successor
+path records a fresh remote/local-baseline read for that authorization. It may
+advance the local target only after Git proves the exact local head is an
+ancestor of the advertised remote head and rechecks that the direct target ref
+is unoccupied. The coordinator journals the exact local-to-remote
+compare-and-set before calling Git. Git reports the applied, already-current,
+rejected, or unavailable result; no reset, worktree repair, or cleanup is
+implied. A following target-lineage read verifies the original planned Base is
+an ancestor before Dalph fixes one deterministic successor session and
+distinct candidate resource with parents `[H2, C]`.
+
+The new session consumes the existing three-session batch when its durable
+fixation is recorded, even if the process stops before contacting the
+Integrator. Each candidate keeps its own three publication-intent limit. At
+either limit, Dalph retains the exact wait and starts no ungranted fourth
+session or push. Predecessor session, candidate, and evidence remain until the
+writer is proved stopped and the exact superseded-resource disposition permits
+cleanup. Recovery reconstructs the pending authorization, exact catch-up, or
+fixed session from Journal history in the same path used by normal activation;
+it does not restart task execution or overlap provider writers.
+
 Tracker completion is a separate boundary after publication proof and exact
 local promotion. It requires fresh task, claim, revision, dependency, and
 cleanup premises; a push acknowledgement or focused success cannot substitute

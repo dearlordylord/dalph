@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "a9f6d73d2976370549ad70813311066abfec7c9ce01a518873928839b38d00d2",
+  "digest": "caf4a364d7850bab51cd83e7bfa103bdc4e32e9d40bc072a120b5dafb51d11ea",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -455,6 +455,7 @@
     "scripts/quality-output-budget.mjs",
     "scripts/quint-effective-profile.mjs",
     "scripts/quint-evaluator-provenance.mjs",
+    "scripts/quint-gate-automatic-successor-command-oracle.mjs",
     "scripts/quint-gate-command-contract.mjs",
     "scripts/quint-gate-command-manifest.mjs",
     "scripts/quint-gate-concurrency.mjs",
@@ -475,6 +476,9 @@
     "scripts/stabilize-verification-path.mjs",
     "scripts/verify-changed-coverage.mjs",
     "scripts/with-gate-slot.mjs",
+    "specs/acceptedResultIntegration_automaticSuccessor_proof_negative_test.qnt",
+    "specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt",
+    "specs/acceptedResultIntegration_automaticSuccessor_proof.qnt",
     "specs/acceptedResultIntegration_negative_test.qnt",
     "specs/acceptedResultIntegration_proof_negative_test.qnt",
     "specs/acceptedResultIntegration_proof_test.qnt",

@@ -20,7 +20,16 @@ import {
   acceptedResultEquivalence,
   integrationResponsibilityEquivalence
 } from "../protocols/integration-admission/responsibility.js"
-import { IntegratorRunCorrelation, IntegratorSessionCorrelation } from "../protocols/integrator/events.js"
+import {
+  IntegratorRunCorrelation,
+  IntegratorSessionCorrelation,
+  integratorSuccessorResponsibilityMatches,
+  maximumIntegratorSessionsPerResponsibility
+} from "../protocols/integrator/events.js"
+import {
+  integratorResponsibilityFactsEqual,
+  integratorResponsibilityFactsFromCorrelation
+} from "../protocols/integrator/state.js"
 import { WorkflowOperation } from "./operation.js"
 import { WorkflowActor } from "./actor.js"
 import {
@@ -67,19 +76,25 @@ import {
   type RemotePublicationAttemptIntendedEvent,
   type RemotePublicationIntendedEvent
 } from "../protocols/direct-publication/events.js"
+import { type IntegratorCompetingHeadSuccessorAuthorizedEvent } from "../protocols/integrator/automatic-successor-events.js"
 import {
+  automaticCompetingHeadRemoteBaselineCorrelationFor,
   RemoteBaselineCorrelation,
   remoteBaselineCorrelationFor,
   type LocalTargetCatchUpIntendedEvent,
   type LocalTargetCatchUpObservedEvent,
+  type RemoteBaselineJournalEvent,
   type RemoteBaselineObservedEvent,
   type RemoteBaselineReadIntendedEvent
 } from "../protocols/direct-publication/baseline-events.js"
+import { deriveRemoteBaselineState } from "../protocols/direct-publication/baseline-state.js"
 import { BranchCleanupJournalEvent } from "../protocols/disposition-cleanup/branch.js"
 import { IntegratorCandidateCleanupJournalEvent } from "../protocols/disposition-cleanup/integrator-candidate.js"
 import { WorktreeCleanupJournalEvent } from "../protocols/disposition-cleanup/worktree.js"
 export { IntegrationResponsibilityBegan, IntegrationStarted } from "./integration-occurrence.js"
 export { WorkflowActor } from "./actor.js"
+
+const lastArrayElementOffset = -1
 
 const {
   AttemptImplementationAbandoned,
@@ -805,12 +820,14 @@ const nonProjectedJournalEventKinds = {
   RemotePublicationIntended: true,
   RemotePublicationRetained: true,
   RemotePublicationSucceeded: true,
+  IntegratorCompetingHeadSuccessorAuthorized: true,
   IntegratorRunCandidateGitObserved: true,
   IntegratorRunCandidateGitReadIntended: true,
   IntegratorRunResultRecorded: true,
   IntegratorRunStarted: true,
   IntegratorSessionFixed: true,
   IntegratorSuccessorSessionFixed: true,
+  IntegratorAutomaticSuccessorSessionFixed: true,
   TargetPromotionAttemptIntended: true,
   TargetPromotionReconciliationDeferred: true,
   TargetPromotionIntended: true,
@@ -909,12 +926,14 @@ const historicalJournalEventKinds = {
   IntegrationProviderRunActivityAbsent: true,
   IntegrationQuarantineDirectionApplied: true,
   IntegrationQuarantined: true,
+  IntegratorCompetingHeadSuccessorAuthorized: true,
   IntegratorRunCandidateGitObserved: true,
   IntegratorRunCandidateGitReadIntended: true,
   IntegratorRunResultRecorded: true,
   IntegratorRunStarted: true,
   IntegratorSessionFixed: true,
   IntegratorSuccessorSessionFixed: true,
+  IntegratorAutomaticSuccessorSessionFixed: true,
   LocalTargetCatchUpIntended: true,
   LocalTargetCatchUpObserved: true,
   RemoteBaselineObserved: true,
@@ -1165,7 +1184,12 @@ type TaskClaimAcquisitionJournalEvent = Extract<WorkflowJournalEvent, { readonly
 type TaskClaimReleaseJournalEvent = Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimReleaseIntended" }>
 type IntegratorSessionJournalEvent = Extract<
   WorkflowJournalEvent,
-  { readonly _tag: "IntegratorSessionFixed" | "IntegratorSuccessorSessionFixed" }
+  {
+    readonly _tag:
+      | "IntegratorSessionFixed"
+      | "IntegratorSuccessorSessionFixed"
+      | "IntegratorAutomaticSuccessorSessionFixed"
+  }
 >
 type IntegratorRunStartedJournalEvent = Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorRunStarted" }>
 type IntegratorCandidateIntentJournalEvent = Extract<
@@ -1257,6 +1281,8 @@ const historicalAttemptWorktreeEventKinds = {
 } as const
 
 const historicalIntegratorEventKinds = {
+  IntegratorAutomaticSuccessorSessionFixed: true,
+  IntegratorCompetingHeadSuccessorAuthorized: true,
   IntegratorRunCandidateGitObserved: true,
   IntegratorRunCandidateGitReadIntended: true,
   IntegratorRunResultRecorded: true,
@@ -1570,7 +1596,12 @@ const projectHistoricalAttemptWorktree = (
 
 type HistoricalSessionEvent = Extract<
   HistoricalIntegratorEvent,
-  { readonly _tag: "IntegratorSessionFixed" | "IntegratorSuccessorSessionFixed" }
+  {
+    readonly _tag:
+      | "IntegratorSessionFixed"
+      | "IntegratorSuccessorSessionFixed"
+      | "IntegratorAutomaticSuccessorSessionFixed"
+  }
 >
 type HistoricalRunEvent = Extract<
   HistoricalIntegratorEvent,
@@ -1580,6 +1611,50 @@ type HistoricalCandidateEvent = Extract<
   HistoricalIntegratorEvent,
   { readonly _tag: "IntegratorRunCandidateGitReadIntended" | "IntegratorRunCandidateGitObserved" }
 >
+
+const projectHistoricalCompetingHeadSuccessorAuthorization = (
+  record: JournalRecord,
+  event: IntegratorCompetingHeadSuccessorAuthorizedEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const predecessor = event.correlation.qualifiedCandidate.run.session
+  const fixedSession = context.integratorSessions.get(integratorSessionKey(predecessor))
+  const retained = context.occurrences.find(
+    (occurrence): occurrence is HistoricalOccurrence.RemotePublicationRetained =>
+      occurrence._tag === "RemotePublicationRetained" &&
+      occurrence.recordedAt === event.remotePublicationRetainedAt &&
+      occurrence.runId === record.runId &&
+      remotePublicationCorrelationEquals(occurrence.correlation, event.correlation)
+  )
+  if (
+    record.runId !== predecessor.plannedAttempt.runId ||
+    fixedSession === undefined ||
+    !integratorSessionCorrelationsEqual(sessionCorrelationOf(fixedSession), predecessor) ||
+    retained === undefined ||
+    retained.recordedAt >= record.position ||
+    retained.cause._tag !== "CompatibleCompetingHead" ||
+    retained.cause.mergeBase !== event.mergeBase ||
+    retained.cause.remoteHead !== event.remoteHead
+  ) {
+    return historicalFailure(
+      record,
+      "automatic successor authorization must follow the exact compatible retained head for a fixed predecessor session"
+    )
+  }
+  return Effect.succeed(
+    HistoricalOccurrence.IntegratorCompetingHeadSuccessorAuthorized.make({
+      authorizationId: event.authorizationId,
+      correlation: event.correlation,
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      mergeBase: event.mergeBase,
+      occurrenceClassification: "InitiatedAction",
+      recordedAt: record.position,
+      remoteHead: event.remoteHead,
+      remotePublicationRetainedAt: event.remotePublicationRetainedAt,
+      runId: record.runId
+    })
+  )
+}
 
 const projectHistoricalSessionFixed = (
   record: JournalRecord,
@@ -1648,6 +1723,118 @@ const projectHistoricalSuccessorSession = (
       occurrenceClassification: "InitiatedAction",
       predecessor: event.predecessor,
       quarantineAt: event.quarantineAt,
+      recordedAt: record.position,
+      runId: record.runId,
+      successor: event.successor,
+      successorGeneration: event.successorGeneration
+    })
+  )
+}
+
+const projectHistoricalAutomaticSuccessorSession = (
+  record: JournalRecord,
+  event: Extract<HistoricalSessionEvent, { readonly _tag: "IntegratorAutomaticSuccessorSessionFixed" }>,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const predecessorKey = integratorSessionKey(event.predecessor)
+  const fixedSession = context.integratorSessions.get(predecessorKey)
+  const authorization = context.occurrences.find(
+    (occurrence): occurrence is HistoricalOccurrence.IntegratorCompetingHeadSuccessorAuthorized =>
+      occurrence._tag === "IntegratorCompetingHeadSuccessorAuthorized" &&
+      occurrence.recordedAt === event.authorizationAt &&
+      occurrence.runId === record.runId
+  )
+  if (authorization === undefined) {
+    return historicalFailure(record, "automatic successor lacks its exact earlier authorization occurrence")
+  }
+  const baselineCorrelation = automaticCompetingHeadRemoteBaselineCorrelationFor(
+    event.predecessor.plannedAttempt.runId,
+    integratorResponsibilityFactsFromCorrelation(event.predecessor),
+    event.predecessor.integrationTarget,
+    authorization.correlation.target,
+    event.authorizationAt
+  )
+  const baselineEvents: ReadonlyArray<RemoteBaselineJournalEvent> = [
+    context.remoteBaselineReadIntents.get(baselineCorrelation.baselineId),
+    context.remoteBaselineObservations.get(baselineCorrelation.baselineId),
+    context.localTargetCatchUpIntents.get(baselineCorrelation.baselineId),
+    context.localTargetCatchUpObservations.get(baselineCorrelation.baselineId)
+  ].filter((baselineEvent): baselineEvent is RemoteBaselineJournalEvent => baselineEvent !== undefined)
+  const baselineState = deriveRemoteBaselineState(baselineEvents)
+  const completedBaseline = context.occurrences
+    .filter(
+      (occurrence) =>
+        (occurrence._tag === "RemoteBaselineObserved" || occurrence._tag === "LocalTargetCatchUpObserved") &&
+        occurrence.correlation.baselineId === baselineCorrelation.baselineId
+    )
+    .at(lastArrayElementOffset)
+  const lineage = context.occurrences.find(
+    (occurrence): occurrence is TargetLineageObserved =>
+      occurrence._tag === "TargetLineageObserved" &&
+      occurrence.recordedAt === event.successor.targetLineageObservedAt &&
+      plannedTaskAttemptEquivalence(occurrence.plannedAttempt, event.successor.plannedAttempt) &&
+      occurrence.observation.targetHeadSha === event.successor.expectedTargetHead &&
+      occurrence.observation.plannedBaseSha === event.successor.plannedAttempt.baseSha &&
+      occurrence.observation.plannedBaseIsAncestorOfTargetHead
+  )
+  const hasFreshLineageRead =
+    completedBaseline !== undefined &&
+    context.occurrences.some(
+      (occurrence) =>
+        occurrence._tag === "GitReadInitiated" &&
+        occurrence.recordedAt > completedBaseline.recordedAt &&
+        occurrence.recordedAt < (lineage?.recordedAt ?? record.position) &&
+        occurrence.operation._tag === "ReadTargetLineage" &&
+        plannedTaskAttemptEquivalence(occurrence.operation.plannedAttempt, event.successor.plannedAttempt) &&
+        integrationTargetEqual(occurrence.operation.integrationTarget, event.successor.integrationTarget)
+    )
+  const sessionIds = new Set<string>()
+  const addSession = (session: IntegratorSessionCorrelation) => {
+    if (integratorSuccessorResponsibilityMatches(event.predecessor, session)) sessionIds.add(session.sessionId)
+  }
+  for (const occurrence of context.occurrences) {
+    if (occurrence._tag === "IntegratorSessionFixed") addSession(occurrence.correlation)
+    if (occurrence._tag === "IntegratorSuccessorSessionFixed") {
+      addSession(occurrence.predecessor)
+      addSession(occurrence.successor)
+    }
+    if (occurrence._tag === "IntegratorAutomaticSuccessorSessionFixed") {
+      addSession(occurrence.predecessor)
+      addSession(occurrence.successor)
+    }
+  }
+  if (
+    record.runId !== event.predecessor.plannedAttempt.runId ||
+    fixedSession === undefined ||
+    !integratorSessionCorrelationsEqual(sessionCorrelationOf(fixedSession), event.predecessor) ||
+    !integratorSuccessorResponsibilityMatches(event.predecessor, event.successor) ||
+    authorization.correlation.qualifiedCandidate.run.session.sessionId !== event.predecessor.sessionId ||
+    authorization.correlation.qualifiedCandidate.run.session.acceptedResult.commit !==
+      event.successor.acceptedResult.commit ||
+    authorization.remoteHead !== event.successor.expectedTargetHead ||
+    baselineState._tag !== "Ready" ||
+    completedBaseline === undefined ||
+    lineage === undefined ||
+    !hasFreshLineageRead ||
+    event.successor.targetLineageObservedAt <= completedBaseline.recordedAt ||
+    event.successor.targetLineageObservedAt >= record.position ||
+    context.integratorSessions.has(integratorSessionKey(event.successor)) ||
+    event.successorGeneration !== sessionIds.size + 1 ||
+    sessionIds.size >= maximumIntegratorSessionsPerResponsibility
+  ) {
+    return historicalFailure(
+      record,
+      "automatic successor must follow its exact authorization, ready baseline, and fresh lineage while preserving the fixed responsibility"
+    )
+  }
+  context.integratorSessions.set(predecessorKey, event)
+  context.integratorSessions.set(integratorSessionKey(event.successor), event)
+  return Effect.succeed(
+    HistoricalOccurrence.IntegratorAutomaticSuccessorSessionFixed.make({
+      authorizationAt: event.authorizationAt,
+      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
+      occurrenceClassification: "InitiatedAction",
+      predecessor: event.predecessor,
       recordedAt: record.position,
       runId: record.runId,
       successor: event.successor,
@@ -1768,8 +1955,14 @@ const projectHistoricalIntegrator = (
   event: HistoricalIntegratorEvent,
   context: HistoricalProjectionContext
 ): HistoricalProjectionResult => {
+  if (event._tag === "IntegratorCompetingHeadSuccessorAuthorized") {
+    return projectHistoricalCompetingHeadSuccessorAuthorization(record, event, context)
+  }
   if (event._tag === "IntegratorSessionFixed") return projectHistoricalSessionFixed(record, event, context)
   if (event._tag === "IntegratorSuccessorSessionFixed") return projectHistoricalSuccessorSession(record, event, context)
+  if (event._tag === "IntegratorAutomaticSuccessorSessionFixed") {
+    return projectHistoricalAutomaticSuccessorSession(record, event, context)
+  }
   if (event._tag === "IntegratorRunStarted") return projectHistoricalRunStarted(record, event, context)
   if (event._tag === "IntegratorRunResultRecorded") return projectHistoricalRunResult(record, event, context)
   if (event._tag === "IntegratorRunCandidateGitReadIntended")
@@ -1801,19 +1994,52 @@ const remoteBaselineMatchesRun = (
   correlation: RemoteBaselineCorrelation,
   record: JournalRecord,
   context: HistoricalProjectionContext
-): boolean =>
-  correlation.runId === record.runId &&
-  context.runPublicationTarget !== undefined &&
-  sameRemotePublicationTarget(context.runPublicationTarget, correlation.remoteTarget) &&
-  remoteBaselineCorrelationEquals(
+): boolean => {
+  if (
+    correlation.runId !== record.runId ||
+    context.runPublicationTarget === undefined ||
+    !sameRemotePublicationTarget(context.runPublicationTarget, correlation.remoteTarget)
+  )
+    return false
+  const authorizationAt = correlation.automaticCompetingHeadAuthorizationAt
+  if (authorizationAt === undefined) {
+    return remoteBaselineCorrelationEquals(
+      correlation,
+      remoteBaselineCorrelationFor(
+        correlation.runId,
+        correlation.responsibility,
+        correlation.localTarget,
+        correlation.remoteTarget
+      )
+    )
+  }
+  const authorization = context.occurrences.find(
+    (occurrence): occurrence is HistoricalOccurrence.IntegratorCompetingHeadSuccessorAuthorized =>
+      occurrence._tag === "IntegratorCompetingHeadSuccessorAuthorized" &&
+      occurrence.recordedAt === authorizationAt &&
+      occurrence.runId === record.runId
+  )
+  if (
+    authorization === undefined ||
+    authorization.recordedAt >= record.position ||
+    !sameRemotePublicationTarget(authorization.correlation.target, correlation.remoteTarget) ||
+    !integratorResponsibilityFactsEqual(
+      integratorResponsibilityFactsFromCorrelation(authorization.correlation.qualifiedCandidate.run.session),
+      correlation.responsibility
+    )
+  )
+    return false
+  return remoteBaselineCorrelationEquals(
     correlation,
-    remoteBaselineCorrelationFor(
+    automaticCompetingHeadRemoteBaselineCorrelationFor(
       correlation.runId,
       correlation.responsibility,
       correlation.localTarget,
-      correlation.remoteTarget
+      correlation.remoteTarget,
+      authorization.recordedAt
     )
   )
+}
 
 const projectHistoricalRemoteBaselineReadIntended = (
   record: JournalRecord,

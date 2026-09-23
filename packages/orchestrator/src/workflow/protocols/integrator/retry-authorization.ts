@@ -9,6 +9,7 @@ import {
   integratorRunStartedRecordKey,
   integratorSessionFixedRecordKey,
   integratorSuccessorSessionFixedRecordKey,
+  integratorAutomaticSuccessorSessionFixedRecordKey,
   integrationQuarantineDirectionAppliedRecordKey,
   integrationQuarantinedRecordKey,
   integrationProviderRunActivityAbsentRecordKey
@@ -39,6 +40,7 @@ import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelati
 import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
 import { validatePromotionStaleQuarantineEvidence } from "../integration-quarantine/promotion-stale-evidence.js"
 import { evaluateIntegratorFullRerunSuccessor } from "./successor-history.js"
+import { validateAutomaticSuccessorSessionFixedRecord } from "./automatic-successor-session.js"
 
 type SessionRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorSessionFixed" }>
@@ -46,7 +48,10 @@ type SessionRecord = JournalRecord & {
 type SuccessorSessionRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorSuccessorSessionFixed" }>
 }
-type CanonicalSessionRecord = SessionRecord | SuccessorSessionRecord
+type AutomaticSuccessorSessionRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorAutomaticSuccessorSessionFixed" }>
+}
+type CanonicalSessionRecord = SessionRecord | SuccessorSessionRecord | AutomaticSuccessorSessionRecord
 type RunStartedRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorRunStarted" }>
 }
@@ -234,7 +239,20 @@ const exactSessionRecord = (
       record.position > session.targetLineageObservedAt &&
       integratorCorrelationsEqual(record.event.correlation, session)
   )
-  return matches.count === 1 ? matches.first : undefined
+  const automatic = matchingOfKind<AutomaticSuccessorSessionRecord>(
+    records,
+    "IntegratorAutomaticSuccessorSessionFixed",
+    (record): record is AutomaticSuccessorSessionRecord =>
+      record.event._tag === "IntegratorAutomaticSuccessorSessionFixed" &&
+      record.runId === session.plannedAttempt.runId &&
+      record.key ===
+        integratorAutomaticSuccessorSessionFixedRecordKey(record.event.predecessor, record.event.authorizationAt) &&
+      record.position > session.targetLineageObservedAt &&
+      integratorCorrelationsEqual(record.event.successor, session) &&
+      validateAutomaticSuccessorSessionFixedRecord(records, record, record.event.predecessor)._tag === "Valid"
+  )
+  const count = matches.count + automatic.count
+  return count === 1 ? (matches.first ?? automatic.first) : undefined
 }
 
 const exactRunStart = (

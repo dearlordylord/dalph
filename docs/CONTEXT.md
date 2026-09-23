@@ -1200,13 +1200,35 @@ publication proof.
 _Avoid_: Push process, remote acknowledgement, publication proof, retry-loop
 iteration
 
+**Automatic competing-head successor authorization**:
+The Dalph-coordinator action recorded after Git proves that the pinned remote
+branch advanced compatibly beyond one candidate without containing it. It binds
+the exact predecessor session and candidate, accepted task commit, immutable
+task attempt and Base, destination, responsibility, and existing FIFO position.
+It permits ordinary recovery to catch the local target up safely and fix one
+fresh-head Integrator session within the current three-session batch. It is not
+an Operator direction, an integration result, a new task attempt, or a budget
+grant.
+_Avoid_: Operator Full rerun, Retry, automatic task execution, session retry
+
+**Local remote-head catch-up**:
+The journaled local compare-and-set that advances one unoccupied direct
+integration ref from exact local L to freshly observed remote H2 after Git
+proves L is an ancestor of H2. Its intent names both heads; its observation
+records the exact applied, already-current, rejected, or unavailable result.
+It preserves checked-out, dirty, ahead, divergent, foreign, symbolic, and
+ambiguous local state, and it does not prove that task commit C was published.
+_Avoid_: Reset, force update, worktree cleanup, publication proof
+
 **Remote publication constraint**:
 The typed retained condition that prevents the next publication boundary from
 crossing. An ambiguous send requires sender-custody proof and reconciliation;
 `TargetMissingOrUnreadable`, `InsufficientAncestry`, `IncompatibleHistory`,
 `AuthenticationOrPolicyDenied`, `Throttled`, and `UnsafeLocalState` retain the
-exact responsibility without an automatic mutation retry. Provider credentials
-and raw diagnostics are not part of the constraint's journal or status value.
+exact responsibility without an automatic mutation retry. A compatible
+competing head has its own retained outcome and can authorize only the distinct
+Dalph successor action above. Provider credentials and raw diagnostics are not
+part of the constraint's journal or status value.
 _Avoid_: Failed task, inferred non-application, automatic denied retry, deleted
 responsibility
 
@@ -1302,6 +1324,16 @@ writer-quiescence facts. The successor candidate and predecessor history remain
 outside this subject.
 _Avoid_: Integration quarantine, successor-session creation, candidate
 qualification, evidence deletion
+
+**Automatic-successor predecessor-candidate cleanup settlement**:
+The terminal fact that the exact predecessor candidate resource named by one
+`IntegratorCompetingHeadSuccessorAuthorized` action and its matching
+`IntegratorAutomaticSuccessorSessionFixed` occurrence is absent or removed
+after fresh provider evidence proves the same owner and writer quiescence. This
+disposition has its own authorization and chronology; it is not an Operator
+Full rerun disposition.
+_Avoid_: Full rerun cleanup, successor-candidate cleanup, inferred writer stop,
+candidate evidence deletion
 
 **Non-convergent target promotion**:
 The durable preservation disposition after three exact target-promotion

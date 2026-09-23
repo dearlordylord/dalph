@@ -109,6 +109,8 @@ import {
 } from "../workflow/protocols/integration-finality/completion-task-operation-identity.js"
 import { makeFocusedTaskCompletionFactsObserved } from "../workflow/task-tracker-facts/focused-completion-observation.js"
 import { integrationFinalityFixture } from "../workflow/protocols/integration-finality/fixtures.js"
+import { makeSuccessorPrefix } from "../../test/support/automatic-successor-history.js"
+import { prepareIntegratorAutomaticSuccessorSessionAppend } from "../workflow/protocols/integrator/automatic-successor-session.js"
 import {
   IntegratorRunCorrelation,
   IntegratorRunCandidateGitObservedEvent,
@@ -847,6 +849,49 @@ it.effect("indexes provider quarantine and successor identities in the public tr
     const quarantine = view.items.find(({ occurrence }) => occurrence._tag === "IntegrationQuarantined")
     expect(successor?.taskIds).toEqual([integrationFinalityFixture.taskId])
     expect(quarantine?.taskIds).toEqual([integrationFinalityFixture.taskId])
+  })
+)
+
+it.effect("projects automatic S2 authorization and predecessor preservation as distinct coordinator facts", () =>
+  Effect.gen(function* () {
+    const fixture = makeSuccessorPrefix()
+    const prepared = yield* prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, fixture.reduction.prefix)
+    if (prepared._tag !== "Append") return yield* Effect.die("accepted S2 history must prepare its exact fixed session")
+    const fixed = fixture.append(prepared.event)
+    const view = yield* readerFromRecords(fixture.records()).readAt(
+      TraceCursor.make({ position: fixed.position, runId: fixture.runId })
+    )
+    const authorization = view.items.find(
+      ({ occurrence }) => occurrence._tag === "IntegratorCompetingHeadSuccessorAuthorized"
+    )
+    const successor = view.items.find(
+      ({ occurrence }) => occurrence._tag === "IntegratorAutomaticSuccessorSessionFixed"
+    )
+    expect(authorization?.occurrence).toMatchObject({
+      _tag: "IntegratorCompetingHeadSuccessorAuthorized",
+      initiatedBy: { _tag: "DalphCoordinator" }
+    })
+    expect(successor?.occurrence).toMatchObject({
+      _tag: "IntegratorAutomaticSuccessorSessionFixed",
+      authorizationAt: prepared.event.authorizationAt,
+      predecessor: fixture.input.predecessor,
+      successor: prepared.event.successor
+    })
+    expect(successor?.taskIds).toEqual([fixture.input.predecessor.plannedAttempt.taskId])
+    expect(view.facets.controlDisposition.dispositions).toContainEqual(
+      expect.objectContaining({
+        _tag: "AutomaticCandidateSuperseded",
+        authorizationAt: prepared.event.authorizationAt,
+        predecessor: fixture.input.predecessor,
+        source: successor?.identity,
+        successor: prepared.event.successor
+      })
+    )
+    expect(
+      view.facets.controlDisposition.dispositions.some(
+        (fact) => fact._tag === "IntegratorCandidatePreserved" && fact.source === successor?.identity
+      )
+    ).toBe(false)
   })
 )
 

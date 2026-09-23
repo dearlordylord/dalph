@@ -30,6 +30,8 @@ import {
   integratorRunStartedRecordKey,
   integratorSessionFixedRecordKey,
   integratorSuccessorSessionFixedRecordKey,
+  integratorCompetingHeadSuccessorAuthorizedRecordKey,
+  integratorAutomaticSuccessorSessionFixedRecordKey,
   outcomeRecordKey,
   remoteBaselineObservedRecordKey,
   remoteBaselineReadIntendedRecordKey,
@@ -78,9 +80,16 @@ import {
   IntegratorRunOrdinal,
   IntegratorSessionFixedEvent,
   IntegratorSuccessorSessionFixedEvent,
+  IntegratorAutomaticSuccessorGeneration,
+  IntegratorAutomaticSuccessorSessionFixedEvent,
   IntegratorNotPreparedDetail,
   firstFullRerunSuccessorGeneration
 } from "../../workflow/protocols/integrator/events.js"
+import {
+  IntegratorCompetingHeadSuccessorAuthorizedEvent,
+  integratorCompetingHeadSuccessorAuthorizationIdFor
+} from "../../workflow/protocols/integrator/automatic-successor-events.js"
+import { integratorAutomaticSuccessorCorrelationFor } from "../../workflow/protocols/integrator/automatic-successor-session.js"
 import {
   integratorCorrelationFor,
   integratorRunCorrelationForSession,
@@ -107,6 +116,7 @@ import type { ReconstructedRunState } from "../reconstruction/state.js"
 import type { CurrentTaskClaimAuthority } from "./task-claim-authority.js"
 import { IntegrationResponsibilityIdentity } from "../../workflow/protocols/integration-admission/responsibility.js"
 import {
+  automaticCompetingHeadRemoteBaselineCorrelationFor,
   RemoteBaselineObservedEvent,
   RemoteBaselineObservation,
   RemoteBaselineReadIntendedEvent,
@@ -1041,6 +1051,263 @@ it("promotes the Git-qualified candidate from the successful Retry run", () => {
       target: remotePublicationTargetForTest
     })
   ])
+})
+
+it("authorizes one automatic successor for a compatible competing remote head without Operator direction", () => {
+  const scenario = unfinishedFirstSessionHistory()
+  const candidateObservation = IntegratorGitObservation.cases.Commit.make({
+    candidateText: preparedCandidateText,
+    commit: preparedCandidateCommit,
+    directParents: [fixedHead, acceptedCommit]
+  })
+  const publicationAttemptOrdinal = RemotePublicationAttemptOrdinal.make(1)
+  const runBegan = workflowRunBegan()
+  const resultRecorded = record(
+    7,
+    IntegratorRunResultRecordedEvent.make({
+      result: IntegratorResult.cases.PreparedCandidate.make({
+        candidateText: preparedCandidateText,
+        correlation: scenario.run
+      }),
+      run: scenario.run,
+      version: workflowJournalEventVersion
+    }),
+    integratorRunResultRecordedRecordKey(scenario.run)
+  )
+  const candidateReadIntent = record(
+    8,
+    IntegratorRunCandidateGitReadIntendedEvent.make({
+      candidateText: preparedCandidateText,
+      run: scenario.run,
+      version: workflowJournalEventVersion
+    }),
+    integratorRunCandidateGitReadIntendedRecordKey(scenario.run, preparedCandidateText)
+  )
+  const candidateObserved = record(
+    9,
+    IntegratorRunCandidateGitObservedEvent.make({
+      candidateText: preparedCandidateText,
+      observation: candidateObservation,
+      run: scenario.run,
+      version: workflowJournalEventVersion
+    }),
+    integratorRunCandidateGitObservedRecordKey(scenario.run, preparedCandidateText)
+  )
+  const qualifiedRecords = [...scenario.records, resultRecorded, candidateReadIntent, candidateObserved]
+  const qualifiedState = deriveCurrentIntegratorState(qualifiedRecords, responsibility)
+  expect(qualifiedState._tag).toBe("GitQualifiedPrepared")
+  if (qualifiedState._tag !== "GitQualifiedPrepared") return
+  const candidate = integratorRunQualifiedCandidateFromState(qualifiedState)
+  const publicationCorrelation = remotePublicationCorrelationFor(candidate, remotePublicationTargetForTest)
+  const retainedCause = RemotePublicationRetainedCause.cases.CompatibleCompetingHead.make({
+    mergeBase: fixedHead,
+    remoteHead: changedHead
+  })
+  const retained = RemotePublicationRetainedEvent.make({
+    correlation: publicationCorrelation,
+    cause: retainedCause,
+    occurrenceClassification: "NonActionOccurrence",
+    version: workflowJournalEventVersion
+  })
+  const records = [
+    runBegan,
+    ...qualifiedRecords,
+    record(
+      10,
+      RemotePublicationIntendedEvent.make({
+        correlation: publicationCorrelation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      }),
+      remotePublicationIntendedRecordKey(publicationCorrelation.requestId)
+    ),
+    record(
+      11,
+      RemotePublicationAttemptIntendedEvent.make({
+        attemptOrdinal: publicationAttemptOrdinal,
+        correlation: publicationCorrelation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        refspec: remotePublicationRefspecFor(candidate.candidateCommit, publicationCorrelation.target.branch),
+        version: workflowJournalEventVersion
+      }),
+      remotePublicationAttemptIntendedRecordKey(publicationCorrelation.requestId, publicationAttemptOrdinal)
+    ),
+    record(12, retained, remotePublicationRetainedRecordKey(publicationCorrelation.requestId))
+  ]
+  const runState = {
+    ...scenario.runState,
+    appliedThrough: JournalPosition.make(12),
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
+  }
+  const runtimeFacts = {
+    activeResponsibilities: [],
+    currentTrackerTaskIds: new Set([taskId]),
+    heldResponsibilities: [identity(responsibility.queuedAt)],
+    integrationTarget: Option.some(target),
+    remotePublicationConfigured: true,
+    targetPromotionConfigured: true,
+    targetLineageByAttemptId: new Map([[attemptId, lineage(fixedHead)]]),
+    targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
+    taskClaimAuthorityByAttemptId: new Map([[attemptId, exactClaimAuthority]])
+  }
+  const expected = RunnableFrontierTransition.AuthorizeIntegratorCompetingHeadSuccessor({
+    authorizationId: integratorCompetingHeadSuccessorAuthorizationIdFor(
+      publicationCorrelation.requestId,
+      JournalPosition.make(12),
+      fixedHead,
+      changedHead
+    ),
+    correlation: publicationCorrelation,
+    mergeBase: fixedHead,
+    remoteHead: changedHead,
+    remotePublicationRetainedAt: JournalPosition.make(12),
+    responsibility
+  })
+
+  expect(deriveStartedIntegrationFrontier(runState, runtimeFacts, [responsibility]).transitions()).toEqual([expected])
+  expect(records.some(({ event }) => event._tag === "IntegrationQuarantineDirectionApplied")).toBe(false)
+  const authorizationAt = JournalPosition.make(13)
+  const authorization = IntegratorCompetingHeadSuccessorAuthorizedEvent.make({
+    authorizationId: expected.authorizationId,
+    correlation: publicationCorrelation,
+    initiatedBy: { _tag: "DalphCoordinator" },
+    mergeBase: fixedHead,
+    occurrenceClassification: "InitiatedAction",
+    remoteHead: changedHead,
+    remotePublicationRetainedAt: JournalPosition.make(12),
+    version: workflowJournalEventVersion
+  })
+  const authorizedRecords = [
+    ...records,
+    record(
+      Number(authorizationAt),
+      authorization,
+      integratorCompetingHeadSuccessorAuthorizedRecordKey(expected.authorizationId).toString()
+    )
+  ]
+  const authorizedRunState = {
+    ...runState,
+    appliedThrough: authorizationAt,
+    workflowHistory: { evidence: journalEvidenceFrom(authorizedRecords) }
+  }
+  const automaticBaselineCorrelation = automaticCompetingHeadRemoteBaselineCorrelationFor(
+    runId,
+    integratorResponsibilityFactsFor(responsibility),
+    target,
+    remotePublicationTargetForTest,
+    authorizationAt
+  )
+  expect(automaticBaselineCorrelation.baselineId).not.toBe(
+    remoteBaselineCorrelationFor(
+      runId,
+      integratorResponsibilityFactsFor(responsibility),
+      target,
+      remotePublicationTargetForTest
+    ).baselineId
+  )
+  expect(deriveStartedIntegrationFrontier(authorizedRunState, runtimeFacts, [responsibility]).transitions()).toEqual([
+    RunnableFrontierTransition.EstablishRemoteBaseline({ correlation: automaticBaselineCorrelation, responsibility })
+  ])
+  const freshLineage = lineageRecords(17, lineage(changedHead), "automatic-successor-fresh-head")
+  const readyBaselineRecords = [
+    ...authorizedRecords,
+    record(
+      14,
+      RemoteBaselineReadIntendedEvent.make({
+        correlation: automaticBaselineCorrelation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      }),
+      remoteBaselineReadIntendedRecordKey(automaticBaselineCorrelation.baselineId).toString()
+    ),
+    record(
+      15,
+      RemoteBaselineObservedEvent.make({
+        correlation: automaticBaselineCorrelation,
+        observation: RemoteBaselineObservation.cases.Aligned.make({ localHead: changedHead, remoteHead: changedHead }),
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      }),
+      remoteBaselineObservedRecordKey(automaticBaselineCorrelation.baselineId).toString()
+    ),
+    freshLineage.intent,
+    freshLineage.observation
+  ]
+  const readyBaselineRunState = {
+    ...authorizedRunState,
+    appliedThrough: JournalPosition.make(17),
+    workflowHistory: { evidence: journalEvidenceFrom(readyBaselineRecords) }
+  }
+  const successorInput = {
+    authorizationAt,
+    predecessor: scenario.session,
+    targetLineage: lineage(changedHead),
+    targetLineageObservedAt: JournalPosition.make(17)
+  }
+  const fixSuccessor = RunnableFrontierTransition.FixIntegratorAutomaticSuccessorSession({
+    input: successorInput,
+    responsibility
+  })
+  expect(
+    deriveStartedIntegrationFrontier(
+      readyBaselineRunState,
+      { ...runtimeFacts, targetLineageByAttemptId: new Map([[attemptId, lineage(changedHead)]]) },
+      [responsibility]
+    ).transitions()
+  ).toEqual([fixSuccessor])
+  const automaticSuccessor = integratorAutomaticSuccessorCorrelationFor(successorInput)
+  const fixedAutomaticSuccessor = IntegratorAutomaticSuccessorSessionFixedEvent.make({
+    authorizationAt,
+    predecessor: scenario.session,
+    successor: automaticSuccessor,
+    successorGeneration: IntegratorAutomaticSuccessorGeneration.make(2),
+    version: workflowJournalEventVersion
+  })
+  const fixedSuccessorRecords = [
+    ...readyBaselineRecords,
+    record(
+      18,
+      fixedAutomaticSuccessor,
+      integratorAutomaticSuccessorSessionFixedRecordKey(scenario.session, authorizationAt).toString()
+    )
+  ]
+  const fixedSuccessorState = deriveCurrentIntegratorState(fixedSuccessorRecords, responsibility)
+  expect(fixedSuccessorState).toMatchObject({ _tag: "RunUnfinished", run: { ordinal: 1 } })
+  if (fixedSuccessorState._tag !== "RunUnfinished") return
+  expect(fixedSuccessorState.run.session).toEqual(automaticSuccessor)
+  const fixedSuccessorRunState = {
+    ...readyBaselineRunState,
+    appliedThrough: JournalPosition.make(18),
+    workflowHistory: { evidence: journalEvidenceFrom(fixedSuccessorRecords) }
+  }
+  expect(
+    deriveStartedIntegrationFrontier(
+      fixedSuccessorRunState,
+      { ...runtimeFacts, targetLineageByAttemptId: new Map([[attemptId, lineage(changedHead)]]) },
+      [responsibility]
+    ).transitions()
+  ).toEqual([
+    RunnableFrontierTransition.RunIntegrator({
+      lineage: lineage(changedHead),
+      lineageObservedAt: JournalPosition.make(17),
+      responsibility,
+      run: integratorRunCorrelationForSession(automaticSuccessor, IntegratorRunOrdinal.make(1))
+    })
+  ])
+  expect(fixedSuccessorRecords.filter(({ event }) => event._tag === "IntegrationStarted")).toHaveLength(1)
+  expect(
+    deriveStartedIntegrationFrontier(runState, { ...runtimeFacts, taskClaimAuthorityByAttemptId: new Map() }, [
+      responsibility
+    ]).transitions()
+  ).toEqual([])
+  expect(
+    deriveStartedIntegrationFrontier(runState, { ...runtimeFacts, heldResponsibilities: [] }, [
+      responsibility
+    ]).transitions()
+  ).toEqual([RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility })])
 })
 
 it("reconciles an unmatched initial promotion attempt before fresh lineage can reject its own candidate", () => {

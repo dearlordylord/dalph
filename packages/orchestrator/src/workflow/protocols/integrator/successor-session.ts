@@ -47,6 +47,7 @@ import { deriveIntegrationQuarantineState } from "../integration-quarantine/stat
 import { integrationQuarantineDirectionSubject } from "../integration-quarantine/events.js"
 import { integrationQuarantineDirectionTargetLineageOperationId } from "../integration-quarantine/direction-lineage-operation.js"
 import { exactWorkflowRunTargetFor } from "../../../workflow-journal/run-target.js"
+import { validateAutomaticSuccessorSessionFixedRecord } from "./automatic-successor-session.js"
 
 /**
  * Whether a queued S2 fix still names the lineage read bound to the latest
@@ -498,12 +499,51 @@ const activeIntegratorSuccessorFor = (
   | { readonly _tag: "Absent" }
   | { readonly _tag: "Invalid"; readonly detail: string }
   | { readonly _tag: "Valid"; readonly successor: IntegratorSessionCorrelation } => {
-  const [fixed, duplicate] = firstTwoSuccessorsFor(records, predecessor)
-  if (duplicate) {
-    return { _tag: "Invalid", detail: "Journal history contains multiple successors for one Integrator session" }
+  let active = predecessor
+  let successorCount = 0
+  let advanced = false
+  const visited = new Set<string>()
+  for (;;) {
+    if (visited.has(active.sessionId)) {
+      return { _tag: "Invalid", detail: "Journal history contains a successor-session cycle" }
+    }
+    visited.add(active.sessionId)
+    const related = [
+      ...journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed"),
+      ...journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")
+    ].filter(
+      ({ event }) =>
+        (event._tag === "IntegratorSuccessorSessionFixed" ||
+          event._tag === "IntegratorAutomaticSuccessorSessionFixed") &&
+        event.predecessor.sessionId === active.sessionId
+    )
+    if (related.length === 0) {
+      return advanced ? { _tag: "Valid", successor: active } : { _tag: "Absent" }
+    }
+    if (related.length !== 1) {
+      return { _tag: "Invalid", detail: "Journal history contains multiple successors for one Integrator session" }
+    }
+    const fixed = related[0]
+    if (fixed === undefined) {
+      return { _tag: "Invalid", detail: "Journal history contains an unexpected successor event" }
+    }
+    if (isIntegratorSuccessorSessionFixedRecord(fixed)) {
+      const validated = validateActiveIntegratorSuccessorRecord(records, fixed, active)
+      if (validated._tag !== "Valid") return validated
+      active = validated.successor
+    } else if (fixed.event._tag === "IntegratorAutomaticSuccessorSessionFixed") {
+      const validated = validateAutomaticSuccessorSessionFixedRecord(records, fixed, active)
+      if (validated._tag !== "Valid") return validated
+      active = fixed.event.successor
+    } else {
+      return { _tag: "Invalid", detail: "Journal history contains an unexpected successor event" }
+    }
+    advanced = true
+    successorCount += 1
+    if (successorCount + 1 > maximumIntegratorSessionsPerResponsibility) {
+      return { _tag: "Invalid", detail: "Integrator responsibility exceeds its three-session bound" }
+    }
   }
-  if (fixed === undefined) return { _tag: "Absent" }
-  return validateActiveIntegratorSuccessorRecord(records, fixed, predecessor)
 }
 
 /**

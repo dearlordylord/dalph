@@ -107,7 +107,10 @@ import {
   recordedTaskAttemptPlans
 } from "../../workflow/protocols/task-attempt-planning/journal-evidence.js"
 import { activeWorkAuthorityRefreshSubjectsContain, RunActivationOpportunity } from "./run-activation-opportunity.js"
-import { remoteBaselineCorrelationFor } from "../../workflow/protocols/direct-publication/baseline-events.js"
+import {
+  automaticCompetingHeadRemoteBaselineCorrelationFor,
+  remoteBaselineCorrelationFor
+} from "../../workflow/protocols/direct-publication/baseline-events.js"
 import { deriveRemoteBaselineState } from "../../workflow/protocols/direct-publication/baseline-state.js"
 import { remoteBaselineEventsFor } from "../../workflow/protocols/direct-publication/baseline-transition-journal.js"
 
@@ -4122,25 +4125,49 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     responsibility: StartedIntegrationResponsibility
   ): JournalPosition | undefined => {
     if (runBeginning?.event._tag !== "WorkflowRunBegan") return undefined
-    const correlation = remoteBaselineCorrelationFor(
+    const source = journalHistoryOf(runState)
+    const initialCorrelation = remoteBaselineCorrelationFor(
       responsibility.plannedAttempt.runId,
       integratorResponsibilityFactsFor(responsibility),
       responsibility.integrationTarget,
       runBeginning.event.remotePublicationTarget
     )
-    const baseline = deriveRemoteBaselineState(remoteBaselineEventsFor(journalHistoryOf(runState), correlation))
-    if (baseline._tag !== "Ready") return undefined
-    return [
-      ...journalRecordsOfKind(journalHistoryOf(runState), "RemoteBaselineObserved"),
-      ...journalRecordsOfKind(journalHistoryOf(runState), "LocalTargetCatchUpObserved")
-    ]
-      .filter(
+    const correlations = [initialCorrelation]
+    for (const { event, position } of journalRecordsOfKind(source, "IntegratorCompetingHeadSuccessorAuthorized")) {
+      if (
+        event._tag === "IntegratorCompetingHeadSuccessorAuthorized" &&
+        integratorResponsibilityFactsEqual(
+          integratorResponsibilityFactsFor(responsibility),
+          integratorResponsibilityFactsFromCorrelation(event.correlation.qualifiedCandidate.run.session)
+        )
+      ) {
+        correlations.push(
+          automaticCompetingHeadRemoteBaselineCorrelationFor(
+            responsibility.plannedAttempt.runId,
+            integratorResponsibilityFactsFor(responsibility),
+            responsibility.integrationTarget,
+            runBeginning.event.remotePublicationTarget,
+            position
+          )
+        )
+      }
+    }
+    const completedPositions = correlations.flatMap((correlation) => {
+      if (deriveRemoteBaselineState(remoteBaselineEventsFor(source, correlation))._tag !== "Ready") return []
+      const completed = [
+        ...journalRecordsOfKind(source, "RemoteBaselineObserved"),
+        ...journalRecordsOfKind(source, "LocalTargetCatchUpObserved")
+      ].filter(
         ({ event }) =>
           (event._tag === "RemoteBaselineObserved" || event._tag === "LocalTargetCatchUpObserved") &&
           event.correlation.baselineId === correlation.baselineId
       )
-      .sort((left, right) => Number(left.position) - Number(right.position))
-      .at(finalRecordOffset)?.position
+      const position = completed
+        .sort((left, right) => Number(left.position) - Number(right.position))
+        .at(finalRecordOffset)?.position
+      return position === undefined ? [] : [position]
+    })
+    return completedPositions.sort((left, right) => Number(left) - Number(right)).at(finalRecordOffset)
   }
   const exactIntegrationResourceSnapshot = currentIntegrationResources ?? (yield* integrationResources.snapshot)
   const integrationResourceSnapshot = exactIntegrationResourceSnapshot
@@ -4166,24 +4193,65 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           ]
     })
   )
+  const targetLineageInvalidationPositionFor = (plannedAttempt: PlannedTaskAttempt): JournalPosition | undefined => {
+    const currentGraph = currentCompleteGraphObservationAfter(
+      journalHistoryOf(runState),
+      Option.none(),
+      establishedRunTarget,
+      plannedAttempt
+    )
+    const claimAt = latestIntegrationClaimObservationPosition(
+      journalHistoryOf(runState),
+      plannedAttempt,
+      establishedRunTarget,
+      Option.none()
+    )
+    const responsibility = integrationResponsibilities.find(
+      (candidate) =>
+        candidate._tag === "StartedIntegrationResponsibility" &&
+        plannedTaskAttemptEquivalence(candidate.plannedAttempt, plannedAttempt)
+    )
+    const baselineAt =
+      responsibility?._tag === "StartedIntegrationResponsibility"
+        ? completedRemoteBaselinePositionFor(responsibility)
+        : undefined
+    const pauseAt = Math.max(
+      latestCompletedRunPauseCyclePosition(runState) ?? 0,
+      latestCompletedTaskPauseCyclePositionFor(runState, plannedAttempt.taskId, ordinaryTaskGraph) ?? 0
+    )
+    const positions = [currentGraph?.position, claimAt, baselineAt, pauseAt || undefined].filter(
+      (position): position is JournalPosition => position !== undefined
+    )
+    return positions.length === 0 ? undefined : JournalPosition.make(Math.max(...positions.map(Number)))
+  }
   const activationTargetLineage = Array.from(
     journalRecordsOfKind(journalHistoryOf(runState), "TargetLineageObserved")
   ).flatMap(({ event, position }) => {
     if (event._tag !== "TargetLineageObserved") return []
-    const taskBaseline = freshnessBaselineForTask(event.plannedAttempt.taskId)
     const directionLineage = directionLineageByAttemptId.get(event.plannedAttempt.attemptId)
     const isExactDirectionLineage =
       directionLineage !== undefined &&
       position > directionLineage.directionAt &&
       event.operationId === directionLineage.operationId
-    return positionIsAfter(position, taskBaseline) || isExactDirectionLineage
+    const operationMatchesAttemptAndTarget =
+      Option.isSome(integrationTarget) &&
+      Array.from(journalRecordsForOperationId(journalHistoryOf(runState), event.operationId)).some(
+        ({ event: intent }) =>
+          intent._tag === "GitReadIntentRecorded" &&
+          intent.operation._tag === "ReadTargetLineage" &&
+          plannedTaskAttemptEquivalence(intent.operation.plannedAttempt, event.plannedAttempt) &&
+          intent.operation.integrationTarget.repository === integrationTarget.value.repository &&
+          intent.operation.integrationTarget.ref === integrationTarget.value.ref
+      )
+    const invalidatedAt = targetLineageInvalidationPositionFor(event.plannedAttempt)
+    return operationMatchesAttemptAndTarget &&
+      (invalidatedAt === undefined || position > invalidatedAt || isExactDirectionLineage)
       ? [[event.plannedAttempt.attemptId, event.observation] as const]
       : []
   })
   const targetLineageByAttemptId = new Map(activationTargetLineage)
   const targetLineageRefreshRequiredAttemptIds = new Set([
     ...recordedTaskAttemptPlans(journalHistoryOf(runState)).flatMap(({ plannedAttempt }) => {
-      const graphObservedAt = currentGraphObservationForTask(plannedAttempt.taskId)?.position
       const lineageObservedAt = lastMatchingRecord(
         journalRecordsOfKind(journalHistoryOf(runState), "TargetLineageObserved"),
         ({ event }) =>
@@ -4191,7 +4259,8 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           event.plannedAttempt.attemptId === plannedAttempt.attemptId &&
           event.plannedAttempt.runId === plannedAttempt.runId
       )?.position
-      return graphObservedAt !== undefined && (lineageObservedAt === undefined || graphObservedAt > lineageObservedAt)
+      const invalidatedAt = targetLineageInvalidationPositionFor(plannedAttempt)
+      return invalidatedAt !== undefined && (lineageObservedAt === undefined || invalidatedAt > lineageObservedAt)
         ? [plannedAttempt.attemptId]
         : []
     })

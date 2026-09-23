@@ -45,6 +45,7 @@ import type {
   RemotePublicationAdmissionId,
   RemotePublicationRequestId
 } from "../workflow/protocols/direct-publication/events.js"
+import type { IntegratorCompetingHeadSuccessorAuthorizationId } from "../workflow/protocols/integrator/automatic-successor-events.js"
 
 export const workflowRunBeganRecordKey = JournalRecordKey.make("run:began")
 
@@ -344,6 +345,20 @@ export const integratorSuccessorSessionFixedRecordKey = (
 ): JournalRecordKey =>
   JournalRecordKey.make(
     `${integratorCorrelationRecordKeyPrefix(predecessor)}:successor:full-rerun:${quarantineAt}:${directionAppliedAt}:fixed`
+  )
+
+/** Stable key for one automatically authorized competing-head successor. */
+export const integratorCompetingHeadSuccessorAuthorizedRecordKey = (
+  authorizationId: IntegratorCompetingHeadSuccessorAuthorizationId
+): JournalRecordKey => JournalRecordKey.make("integrator:" + authorizationId + ":successor-authorized")
+
+/** Stable key for one fresh session fixed by an exact automatic authorization. */
+export const integratorAutomaticSuccessorSessionFixedRecordKey = (
+  predecessor: IntegratorSessionCorrelation,
+  authorizationAt: JournalPosition
+): JournalRecordKey =>
+  JournalRecordKey.make(
+    `${integratorCorrelationRecordKeyPrefix(predecessor)}:successor:automatic-competing-head:${authorizationAt}:fixed`
   )
 
 /** Stable keys for one initial baseline read and its optional exact local catch-up. */

@@ -1,6 +1,7 @@
 import { applicationExitCheckRegistry } from "./application-exit-model-registry.mjs"
 import {
   acceptedResultIntegrationObligations,
+  acceptedResultIntegrationAutomaticSuccessorProofObligations,
   acceptedResultIntegrationQuarantineProofObligations,
   freshTaskAdmissionObligations,
   freshTaskAdmissionProofObligations,
@@ -980,6 +981,71 @@ export const createQuintEffectiveProfile = ({ purpose = "hosted" } = {}) => {
         "tlc",
         "--invariants",
         ...acceptedResultIntegrationQuarantineProofInvariants,
+        "--verbosity",
+        "1"
+      ]
+    }
+  ])
+
+  const acceptedResultIntegrationAutomaticSuccessorProofInvariants =
+    acceptedResultIntegrationAutomaticSuccessorProofObligations.invariants
+  const acceptedResultIntegrationAutomaticSuccessorProofWitnesses =
+    acceptedResultIntegrationAutomaticSuccessorProofObligations.witnesses
+  run("accepted-result automatic successor proof typecheck", [
+    "typecheck",
+    "specs/acceptedResultIntegration_automaticSuccessor_proof.qnt"
+  ])
+  runFamily([
+    {
+      name: "accepted-result automatic successor proof deterministic tests",
+      args: [
+        "test",
+        "specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt",
+        "--main",
+        "acceptedResultIntegrationAutomaticSuccessorProofTest"
+      ]
+    },
+    {
+      name: "accepted-result automatic successor proof negative mutation profile",
+      args: [
+        "test",
+        "specs/acceptedResultIntegration_automaticSuccessor_proof_negative_test.qnt",
+        "--main",
+        "acceptedResultIntegrationAutomaticSuccessorProofNegativeTest"
+      ]
+    },
+    {
+      name: "accepted-result automatic successor proof sampled model",
+      args: [
+        "run",
+        "specs/acceptedResultIntegration_automaticSuccessor_proof.qnt",
+        "--main",
+        "acceptedResultIntegrationAutomaticSuccessorProof",
+        "--invariants",
+        ...acceptedResultIntegrationAutomaticSuccessorProofInvariants,
+        "--witnesses",
+        ...acceptedResultIntegrationAutomaticSuccessorProofWitnesses,
+        "--max-steps",
+        "34",
+        "--max-samples",
+        "5000",
+        "--seed",
+        "38501",
+        "--verbosity",
+        "1"
+      ]
+    },
+    {
+      name: "accepted-result automatic successor proof exhaustive model",
+      args: [
+        "verify",
+        "specs/acceptedResultIntegration_automaticSuccessor_proof.qnt",
+        "--main",
+        "acceptedResultIntegrationAutomaticSuccessorProof",
+        "--backend",
+        "tlc",
+        "--invariants",
+        ...acceptedResultIntegrationAutomaticSuccessorProofInvariants,
         "--verbosity",
         "1"
       ]

@@ -695,3 +695,41 @@ export const acceptedResultIntegrationQuarantineProofObligations = Object.freeze
     "conflictRejectedReached"
   ])
 })
+
+// This bounded projection covers automatic competing-head authorization,
+// journal-first local catch-up, and restart reuse of one fixed successor run.
+// The activation invariant covers every modeled pre-fixation Git observation
+// and compare-and-set; the negative test supplies an independent second-read
+// mutation rather than relying on a model action's guard alone.
+export const acceptedResultIntegrationAutomaticSuccessorProofObligations = Object.freeze({
+  invariants: Object.freeze([
+    "journalFirstAutomaticAuthorization",
+    "authorizationRequiresCurrentExactAuthority",
+    "catchUpRequiresJournaledExactCompareAndSet",
+    "localCatchUpPreservesUnsafeWork",
+    "successorRequiresFreshBaseLineageAndJournaledAuthorization",
+    "successorKeepsAcceptedResultLineage",
+    "successorRecoveryReusesOneFixedRun",
+    "automaticSuccessorBoundsAreFinite",
+    "automaticAuthorizationIsOccurrenceScoped",
+    "predecessorCleanupRequiresStoppedWriter",
+    "noUnrequestedFourthSession",
+    "oneGitObservationOrCompareAndSetPerActivation",
+    "noReadUntilStableLoop",
+    "pauseAndExitStopNewSuccessorActions",
+    "exactTaskAndResponsibilityAreRetained",
+    "forbiddenProofAndForceShortcutsRemainFalse",
+    "proofStateIsBounded"
+  ]),
+  witnesses: Object.freeze([
+    "competingHeadRetainedReached",
+    "automaticAuthorizationReached",
+    "baselineReadReached",
+    "catchUpIntentReached",
+    "catchUpAppliedReached",
+    "successorSessionFixedReached",
+    "successorRecoveryReached",
+    "boundedWaitReached",
+    "unsafeLocalWaitReached"
+  ])
+})

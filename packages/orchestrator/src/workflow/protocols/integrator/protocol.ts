@@ -27,9 +27,15 @@ import {
   IntegratorCandidateResourceLocator,
   IntegratorSessionId,
   integratorCandidateHasExactParents,
+  IntegratorAutomaticSuccessorGeneration,
   IntegratorSuccessorGeneration,
   firstFullRerunSuccessorGeneration
 } from "./events.js"
+import {
+  IntegratorCompetingHeadSuccessorAuthorizationId,
+  IntegratorCompetingHeadSuccessorAuthorizedEvent,
+  integratorCompetingHeadSuccessorAuthorizationIdFor
+} from "./automatic-successor-events.js"
 import {
   IntegratorCallFailure,
   IntegratorGitReadFailure,
@@ -104,17 +110,28 @@ export {
   IntegratorRunOrdinal,
   IntegratorSessionId,
   integratorCandidateHasExactParents,
+  IntegratorAutomaticSuccessorGeneration,
   IntegratorSuccessorGeneration,
   firstFullRerunSuccessorGeneration
 }
 export type {
   IntegratorSessionCorrelation as IntegratorSessionCorrelationType,
+  IntegratorAutomaticSuccessorGeneration as IntegratorAutomaticSuccessorGenerationType,
   IntegratorGitObservation as IntegratorGitObservationType,
   IntegratorJournalEvent as IntegratorJournalEventType,
   IntegratorRequest as IntegratorRequestType,
   IntegratorResult as IntegratorResultType
 } from "./events.js"
 export type { IntegratorResponsibilityFacts } from "./events.js"
+export {
+  IntegratorCompetingHeadSuccessorAuthorizationId,
+  IntegratorCompetingHeadSuccessorAuthorizedEvent,
+  integratorCompetingHeadSuccessorAuthorizationIdFor
+}
+export type {
+  IntegratorCompetingHeadSuccessorAuthorizationId as IntegratorCompetingHeadSuccessorAuthorizationIdType,
+  IntegratorCompetingHeadSuccessorAuthorizedEvent as IntegratorCompetingHeadSuccessorAuthorizedEventType
+} from "./automatic-successor-events.js"
 
 /** The generic outer service owns private process, turn, review, and provider retry state. */
 export interface IntegratorService {

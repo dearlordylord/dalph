@@ -2688,6 +2688,8 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
     IntegratorCandidateCleanupOccurred: true,
     IntegratorRunResultRecorded: true,
     IntegratorRunStarted: true,
+    IntegratorAutomaticSuccessorSessionFixed: true,
+    IntegratorCompetingHeadSuccessorAuthorized: true,
     IntegratorSessionFixed: true,
     IntegratorSuccessorSessionFixed: true,
     GitReadInitiated: true,
@@ -2728,6 +2730,6 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
   } satisfies Record<WorkflowOccurrence["_tag"], true>
   const actorVariants = { DalphCoordinator: true, Operator: true } satisfies Record<WorkflowActor["_tag"], true>
 
-  expect(Object.keys(occurrenceVariants)).toHaveLength(61)
+  expect(Object.keys(occurrenceVariants)).toHaveLength(63)
   expect(Object.keys(actorVariants)).toHaveLength(2)
 })

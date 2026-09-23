@@ -1,5 +1,6 @@
 import { unexpectedRemoteDeliveryLayer } from "../../../test/support/unexpected-remote-delivery.js"
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
+import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import {
   AcceptedResult,
   AcceptedResultEvidenceManifest,
@@ -28,7 +29,22 @@ import {
 } from "@dalph/contracts"
 import { describe, expect, expectTypeOf, it } from "vitest"
 import { it as effectIt } from "@effect/vitest"
-import { HashSet, Context, Deferred, Effect, Fiber, Layer, Option, Queue, Ref, Result, Stream } from "effect"
+import {
+  HashSet,
+  Context,
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Queue,
+  Ref,
+  Result,
+  Stream,
+  type Scope
+} from "effect"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { GraphProjectionError, projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
@@ -56,10 +72,11 @@ import {
 } from "../../../test/support/fresh-task-admission.js"
 import { makeExecutingAttemptHistory } from "../../../test/support/executing-attempt-history.js"
 import { makeAcceptedIntegrationHistory } from "../../../test/support/accepted-integration-history.js"
+import { makeSuccessorPrefix } from "../../../test/support/automatic-successor-history.js"
 import { makePromotedIntegrationHistory } from "../../../test/support/promoted-integration-history.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
-import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
+import { JournalDatabaseLocator, JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import {
   AuthoritativePlannedAttemptWorktreeObserved,
@@ -74,8 +91,10 @@ import {
 import { AuthoritativeTaskClaimReleased } from "../../workflow/protocols/task-claim-release/protocol.js"
 import { AuthoritativeTaskWorktreeReady } from "../../workflow/protocols/worktree-reconciliation/protocol.js"
 import { TaskAttemptPlanRecordAcknowledged } from "../../workflow/protocols/task-attempt-planning/record.js"
-import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
+import { InRunJournal, JournalStore, type JournalRecord } from "../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
+import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
+import { sqliteJournalStoreLayer } from "../../workflow-journal/adapters/sqlite-store.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import {
@@ -164,6 +183,7 @@ import type {
   TrackerGraphActionProposal
 } from "./delivery-action-proposal.js"
 import { executeIntegrationAction } from "./integration-delivery-action-adapter.js"
+import { Journal, journalLayer, type JournalStorageBoundary } from "./journal.js"
 import {
   Integrator,
   IntegratorCallFailure,
@@ -189,9 +209,11 @@ import { IntegratorBoundaryUnavailable } from "./integrator-boundary.js"
 import {
   integratorCorrelationFor,
   integratorInitialRunCorrelationFor,
-  integratorSuccessorCorrelationFor
+  integratorSuccessorCorrelationFor,
+  integratorRunCorrelationForSession
 } from "../../workflow/protocols/integrator/session.js"
 import { IntegratorJournalContradiction } from "../../workflow/protocols/integrator/errors.js"
+import { prepareIntegratorAutomaticSuccessorSessionAppend } from "../../workflow/protocols/integrator/automatic-successor-session.js"
 import { executeFreshWorkflowOperation } from "./fresh-delivery-action-adapter.js"
 import { executeFreshTrackerGraphRead, executeTrackerGraphRead } from "./delivery-action-adapter-common.js"
 import { executePlannedAttemptTransition as executePlannedAttemptTransitionRaw } from "./planned-attempt-delivery-action-adapter.js"
@@ -251,7 +273,6 @@ import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-bo
 import { TargetPromotionRuntimeUnavailable } from "./target-promotion-boundary.js"
 import { postPromotionBlockerClearAuthorizationFor } from "../../workflow/protocols/integration-finality/post-promotion-blocker-ancestry.js"
 import { liveJournalTestLayer } from "./live-journal-test-layer.js"
-import { Journal } from "./journal.js"
 import { journalEvidenceFrom, journalGraphObservationAt } from "../../workflow-journal/record-evidence.js"
 
 const runId = RunId.make("route-matrix-run")
@@ -2420,6 +2441,410 @@ describe("delivery proposal route matrix", () => {
       )
       expect(yield* Ref.get(deliveredSessions)).toEqual([runIntegrator.run.session.sessionId, successor.sessionId])
     })
+  )
+
+  effectIt.effect("routes automatic S2 through exact provider custody and quarantine recovery", () =>
+    Effect.gen(function* () {
+      const fixture = makeSuccessorPrefix()
+      const prepared = yield* prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, fixture.reduction.prefix)
+      if (prepared._tag !== "Append")
+        return yield* Effect.die("automatic S2 route requires the exact authorized append")
+
+      const session = prepared.event.successor
+      const run = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(1))
+      const responsibility = fixture.accepted.responsibility
+      const transition = RunnableFrontierTransition.RunIntegrator({
+        lineage: fixture.input.targetLineage,
+        lineageObservedAt: fixture.input.targetLineageObservedAt,
+        responsibility,
+        run
+      })
+      const routed = deliveryProposalsOf({
+        acceptedOperationIds: HashSet.empty(),
+        fresh: [],
+        integrationResponsibilities: [responsibility],
+        responsibilities: [],
+        runId: fixture.runId,
+        transitions: [transition]
+      })
+      const proposal = [...routed.ticketDelivery, ...routed.deliverySettlement][0]
+      if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+        return yield* Effect.die("automatic S2 requires its ordinary identity-free RunIntegrator proposal")
+      }
+      const action = { _tag: "IdentityFreeAction" as const, proposal }
+      const harness = yield* makeLiveJournalHarness(fixture.records(), fixture.runId, target)
+      const preFixationRequests = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
+      const preFixation = yield* Effect.exit(
+        executeIntegrationAction(action, transition, inertLease, target).pipe(
+          Effect.provideService(
+            Integrator,
+            Integrator.of({
+              prepare: (request) =>
+                Ref.update(preFixationRequests, (current) => [...current, request.correlation]).pipe(
+                  Effect.as(
+                    IntegratorResult.cases.NotPrepared.make({
+                      correlation: request.correlation,
+                      detail: IntegratorNotPreparedDetail.make("pre-fixation provider must remain unreachable")
+                    })
+                  )
+                )
+            })
+          ),
+          Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
+          (effect) => provideLiveJournal(effect, harness)
+        )
+      )
+      expect(preFixation._tag).toBe("Failure")
+      expect(yield* Ref.get(preFixationRequests)).toEqual([])
+      const beforeFixationRecords = yield* harness.records
+      expect(
+        beforeFixationRecords.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+      ).toHaveLength(0)
+      expect(
+        beforeFixationRecords.filter(
+          ({ event }) => event._tag === "IntegratorRunStarted" && event.run.session.sessionId === session.sessionId
+        )
+      ).toHaveLength(0)
+
+      yield* harness.coordinatedJournal.append(fixture.runId, prepared.key, prepared.event)
+      const fixedHistory = reduceWorkflowJournalHistory(fixture.runId, yield* harness.records)
+      if (fixedHistory._tag !== "ValidWorkflowJournalHistory") {
+        return yield* Effect.die(
+          `recovered automatic S2 route fixture is invalid: ${JSON.stringify(fixedHistory.issues)}`
+        )
+      }
+      expect(fixedHistory.prefix.lastPosition).toBeGreaterThan(fixture.reduction.prefix.lastPosition ?? 0)
+
+      const requests = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
+
+      const ambiguous = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+        Effect.provideService(
+          Integrator,
+          Integrator.of({
+            prepare: (request) =>
+              Ref.update(requests, (current) => [...current, request.correlation]).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    new IntegratorCallFailure({
+                      correlation: request.correlation,
+                      detail: "controlled ambiguous automatic S2 provider outcome"
+                    })
+                  )
+                )
+              )
+          })
+        ),
+        Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
+        (effect) => provideLiveJournal(effect, harness),
+        Effect.flip
+      )
+      expect(ambiguous).toMatchObject({ _tag: "IntegratorCallFailure" })
+      expect(yield* Ref.get(requests)).toEqual([run])
+      const afterAmbiguous = yield* harness.records
+      expect(
+        afterAmbiguous.filter(
+          ({ event }) =>
+            event._tag === "IntegrationProviderRunActivityAbsent" || event._tag === "IntegrationQuarantined"
+        )
+      ).toHaveLength(0)
+      expect(
+        afterAmbiguous.filter(
+          ({ event }) => event._tag === "IntegratorRunStarted" && event.run.session.sessionId === session.sessionId
+        )
+      ).toHaveLength(1)
+
+      const absent = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+        Effect.provideService(
+          Integrator,
+          Integrator.of({
+            prepare: (request) =>
+              Effect.fail(
+                new IntegratorProviderActivityAbsent({
+                  correlation: request.correlation,
+                  detail: "controlled provider confirms no automatic S2 activity"
+                })
+              )
+          })
+        ),
+        Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
+        (effect) => provideLiveJournal(effect, harness)
+      )
+      expect(absent).toMatchObject({ _tag: "ActionCompleted", proposalId: proposal.id })
+      const recovered = yield* harness.records
+      expect(recovered.slice(-2).map(({ event }) => event._tag)).toEqual([
+        "IntegrationProviderRunActivityAbsent",
+        "IntegrationQuarantined"
+      ])
+      expect(
+        recovered.filter(
+          ({ event }) => event._tag === "IntegratorRunStarted" && event.run.session.sessionId === session.sessionId
+        )
+      ).toHaveLength(1)
+      expect(recovered.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+      expect(recovered.filter(({ event }) => event._tag === "IntegrationResponsibilityBegan")).toHaveLength(1)
+      expect(recovered.filter(({ event }) => event._tag === "IntegrationStarted")).toHaveLength(1)
+      expect(session.acceptedResult.commit).toBe(fixture.accepted.acceptedResult.commit)
+      expect(session.plannedAttempt.baseSha).toBe(fixture.accepted.plannedAttempt.baseSha)
+      expect(session.queuedAt).toBe(responsibility.queuedAt)
+      expect(session.startedAt).toBe(responsibility.startedAt)
+    })
+  )
+
+  effectIt.effect(
+    "recovers an automatic S2 provider start after lost acknowledgement without overlapping or replacing its run",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fixture = makeSuccessorPrefix()
+          const prepared = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+            fixture.input,
+            fixture.reduction.prefix
+          )
+          if (prepared._tag !== "Append") {
+            return yield* Effect.die("provider-start recovery requires the exact automatic fixed session")
+          }
+          fixture.append(prepared.event)
+          const session = prepared.event.successor
+          const run = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(1))
+          const responsibility = fixture.accepted.responsibility
+          const transition = RunnableFrontierTransition.RunIntegrator({
+            lineage: fixture.input.targetLineage,
+            lineageObservedAt: fixture.input.targetLineageObservedAt,
+            responsibility,
+            run
+          })
+          const routed = deliveryProposalsOf({
+            acceptedOperationIds: HashSet.empty(),
+            fresh: [],
+            integrationResponsibilities: [responsibility],
+            responsibilities: [],
+            runId: fixture.runId,
+            transitions: [transition]
+          })
+          const proposal = [...routed.ticketDelivery, ...routed.deliverySettlement][0]
+          if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+            return yield* Effect.die("automatic S2 requires its ordinary RunIntegrator proposal")
+          }
+          const action = { _tag: "IdentityFreeAction" as const, proposal }
+          const fixedRecords = fixture.records()
+          const providerCalls = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
+          const writerStarts = yield* Ref.make(0)
+          const absenceObservations = yield* Ref.make(0)
+
+          const provider = (mode: "Unexpected" | "Ambiguous" | "ActivityAbsent") =>
+            Integrator.of({
+              prepare: (request) => {
+                if (JSON.stringify(request.correlation) !== JSON.stringify(run)) {
+                  return Effect.die("provider recovery must use the exact automatic S2 run correlation")
+                }
+                const trackedCall = Ref.update(providerCalls, (calls) => [...calls, request.correlation])
+                if (mode === "Ambiguous") {
+                  return trackedCall.pipe(
+                    Effect.andThen(Ref.update(writerStarts, (count) => count + 1)),
+                    Effect.andThen(
+                      Effect.fail(
+                        new IntegratorCallFailure({
+                          correlation: request.correlation,
+                          detail: "controlled ambiguous automatic S2 provider response"
+                        })
+                      )
+                    )
+                  )
+                }
+                if (mode === "ActivityAbsent") {
+                  return trackedCall.pipe(
+                    Effect.andThen(Ref.update(absenceObservations, (count) => count + 1)),
+                    Effect.andThen(
+                      Effect.fail(
+                        new IntegratorProviderActivityAbsent({
+                          correlation: request.correlation,
+                          detail: "controlled provider custody proves this exact S2 run absent"
+                        })
+                      )
+                    )
+                  )
+                }
+                return trackedCall.pipe(
+                  Effect.andThen(Effect.die("provider must remain unreachable before RunStarted"))
+                )
+              }
+            })
+
+          const storageBoundary = (
+            store: JournalStore["Service"],
+            startFailure: "BeforeCommit" | "LoseAcknowledgement" | undefined
+          ): JournalStorageBoundary => ({
+            append: (runId, key, event) => {
+              if (
+                event._tag !== "IntegratorRunStarted" ||
+                event.run.session.sessionId !== session.sessionId ||
+                startFailure === undefined
+              ) {
+                return store.append(runId, key, event)
+              }
+              if (startFailure === "BeforeCommit") {
+                return Effect.die("process stopped before automatic S2 RunStarted committed")
+              }
+              return store
+                .append(runId, key, event)
+                .pipe(Effect.andThen(Effect.die("process lost after automatic S2 RunStarted committed")))
+            },
+            read: store.read,
+            terminateRun: store.terminateRun
+          })
+
+          const runAction = (
+            store: JournalStore["Service"],
+            startFailure: "BeforeCommit" | "LoseAcknowledgement" | undefined,
+            providerMode: "Unexpected" | "Ambiguous" | "ActivityAbsent"
+          ) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const stored = yield* store.read(fixture.runId)
+                const history = reduceWorkflowJournalHistory(fixture.runId, stored)
+                if (history._tag !== "ValidWorkflowJournalHistory") {
+                  return yield* Effect.die(
+                    `reopened provider-start prefix is invalid: ${JSON.stringify(history.issues)}`
+                  )
+                }
+                return yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+                  Effect.provide(journalLayer(fixture.runId, target, history, storageBoundary(store, startFailure))),
+                  Effect.provideService(Integrator, provider(providerMode)),
+                  Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") }))
+                )
+              })
+            )
+
+          const seedStore = Effect.fn("DeliveryProposalRoutesTest.seedAutomaticSuccessorStore")(function* (
+            store: JournalStore["Service"]
+          ) {
+            const [beginning, ...remaining] = fixedRecords
+            if (beginning?.event._tag !== "WorkflowRunBegan") {
+              return yield* Effect.die("automatic S2 provider history must begin one Run")
+            }
+            yield* store.beginRun(
+              fixture.runId,
+              beginning.event.target,
+              beginning.event.initialControlPolicy,
+              beginning.event.remotePublicationTarget
+            )
+            for (const record of remaining) {
+              if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+                return yield* Effect.die("automatic S2 provider history may not contain another Run lifecycle event")
+              }
+              yield* store.append(fixture.runId, record.key, record.event)
+            }
+          })
+
+          const assertRunState = (
+            records: ReadonlyArray<JournalRecord>,
+            hasRunStart: boolean,
+            hasResult: boolean,
+            hasAbsence: boolean,
+            hasQuarantine: boolean
+          ) => {
+            const starts = records.filter(
+              ({ event }) => event._tag === "IntegratorRunStarted" && event.run.session.sessionId === session.sessionId
+            )
+            expect(starts).toHaveLength(hasRunStart ? 1 : 0)
+            if (hasRunStart) expect(starts[0]?.event).toMatchObject({ run })
+            expect(
+              records.filter(
+                ({ event }) =>
+                  event._tag === "IntegratorRunResultRecorded" && event.run.session.sessionId === session.sessionId
+              )
+            ).toHaveLength(hasResult ? 1 : 0)
+            expect(
+              records.filter(
+                ({ event }) =>
+                  event._tag === "IntegrationProviderRunActivityAbsent" &&
+                  event.correlation.sessionId === session.sessionId
+              )
+            ).toHaveLength(hasAbsence ? 1 : 0)
+            expect(
+              records.filter(
+                ({ event }) =>
+                  event._tag === "IntegrationQuarantined" && event.correlation.sessionId === session.sessionId
+              )
+            ).toHaveLength(hasQuarantine ? 1 : 0)
+            expect(records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+            expect(records.filter(({ event }) => event._tag === "IntegrationStarted")).toHaveLength(1)
+            expect(
+              records.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+            ).toHaveLength(1)
+          }
+
+          const exercise = <R>(
+            open: (
+              startFailure: "BeforeCommit" | "LoseAcknowledgement" | undefined,
+              providerMode: "Unexpected" | "Ambiguous" | "ActivityAbsent"
+            ) => Effect.Effect<unknown, unknown, R>,
+            readCurrent: () => Effect.Effect<ReadonlyArray<JournalRecord>, unknown, R>
+          ) =>
+            Effect.gen(function* () {
+              const precommit = yield* Effect.exit(open("BeforeCommit", "Unexpected"))
+              expect(precommit._tag).toBe("Failure")
+              assertRunState(yield* readCurrent(), false, false, false, false)
+              expect(yield* Ref.get(providerCalls)).toEqual([])
+              expect(yield* Ref.get(writerStarts)).toBe(0)
+
+              const lostAcknowledgement = yield* Effect.exit(open("LoseAcknowledgement", "Unexpected"))
+              expect(lostAcknowledgement._tag).toBe("Failure")
+              assertRunState(yield* readCurrent(), true, false, false, false)
+              expect(yield* Ref.get(providerCalls)).toEqual([])
+              expect(yield* Ref.get(writerStarts)).toBe(0)
+
+              const ambiguous = yield* Effect.exit(open(undefined, "Ambiguous"))
+              expect(ambiguous._tag).toBe("Failure")
+              assertRunState(yield* readCurrent(), true, false, false, false)
+              expect(yield* Ref.get(providerCalls)).toEqual([run])
+              expect(yield* Ref.get(writerStarts)).toBe(1)
+              expect(yield* Ref.get(absenceObservations)).toBe(0)
+
+              expect(yield* open(undefined, "ActivityAbsent")).toMatchObject({
+                _tag: "ActionCompleted",
+                proposalId: proposal.id
+              })
+              assertRunState(yield* readCurrent(), true, false, true, true)
+              expect(yield* Ref.get(providerCalls)).toEqual([run, run])
+              expect(yield* Ref.get(writerStarts)).toBe(1)
+              expect(yield* Ref.get(absenceObservations)).toBe(1)
+            })
+
+          const memoryContext = yield* Layer.build(memoryJournalStoreLayer)
+          const memoryStore = Context.get(memoryContext, JournalStore)
+          yield* seedStore(memoryStore)
+          yield* exercise(
+            (startFailure, providerMode) => runAction(memoryStore, startFailure, providerMode),
+            () => memoryStore.read(fixture.runId)
+          )
+
+          yield* Ref.set(providerCalls, [])
+          yield* Ref.set(writerStarts, 0)
+          yield* Ref.set(absenceObservations, 0)
+          const fileSystem = yield* FileSystem.FileSystem
+          const path = yield* Path.Path
+          const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-automatic-provider-start-" })
+          const filename = JournalDatabaseLocator.make(path.join(directory, "journal.sqlite"))
+          const openSqlite = <A>(
+            use: (store: JournalStore["Service"]) => Effect.Effect<A, unknown>,
+            _startFailure: "BeforeCommit" | "LoseAcknowledgement" | undefined
+          ): Effect.Effect<A, unknown, Scope.Scope> =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const store = yield* JournalStore
+                return yield* use(store)
+              }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+            )
+
+          yield* openSqlite((store) => seedStore(store), undefined)
+          yield* exercise(
+            (startFailure, providerMode) =>
+              openSqlite((store) => runAction(store, startFailure, providerMode), startFailure),
+            () => openSqlite((store) => store.read(fixture.runId), undefined)
+          )
+        }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)))
+      )
   )
 
   effectIt.effect("defers missing or contradictory acceptance evidence and rejects incomplete promotion runtime", () =>

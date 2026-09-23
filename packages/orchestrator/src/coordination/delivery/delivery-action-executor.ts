@@ -190,6 +190,7 @@ export type DeliveryActionResult =
         | "CompletionTaskNonConvergent"
         | "CompletionTaskUnavailable"
         | "ContinuationAuthorizationStale"
+        | "RemoteBaselineReconciliationPending"
         | "FocusedTaskCompletionSuccessRequired"
         | "TargetPromotionDestinationUnreadable"
         | "TargetPromotionRetryAuthorityRequired"

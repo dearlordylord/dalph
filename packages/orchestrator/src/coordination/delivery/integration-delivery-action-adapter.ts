@@ -55,6 +55,8 @@ import { integrationExitBoundaryFamilyFor } from "./integration-exit-boundary.js
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import {
   executeIntegratorAction,
+  authorizeIntegratorCompetingHeadSuccessor,
+  fixIntegratorAutomaticSuccessorSession,
   fixIntegratorSuccessorSession,
   recordInitialConclusiveIntegrationQuarantine,
   recordProviderRunFailureIntegrationQuarantine,
@@ -111,6 +113,8 @@ type OuterIntegratorTransition = Extract<
   IntegrationTransition,
   {
     readonly _tag:
+      | "AuthorizeIntegratorCompetingHeadSuccessor"
+      | "FixIntegratorAutomaticSuccessorSession"
       | "FixIntegratorSuccessorSession"
       | "RecordChangedHeadRetryQuarantine"
       | "RecordPromotionStaleIntegrationQuarantine"
@@ -427,12 +431,15 @@ const executeRemoteBaseline = Effect.fn("DeliveryAction.establishRemoteBaseline"
   lease: DeliveryActionExecutionLease
 ) {
   const git = yield* RemoteBaselineGit
-  yield* lease.integrationTargets.withPermit(
+  const state = yield* lease.integrationTargets.withPermit(
     transition.responsibility,
     establishRemoteBaseline(transition.correlation, interruptibleBoundaryOf(lease)).pipe(
       Effect.provideService(RemoteBaselineGit, git)
     )
   )
+  if (state._tag === "CatchUpRequired" || state._tag === "CatchUpPending") {
+    return deliveryActionDeferred(action.proposal.id, "RemoteBaselineReconciliationPending")
+  }
   return deliveryActionCompleted(action.proposal.id)
 })
 
@@ -489,6 +496,12 @@ const executeOuterIntegratorAction = Effect.fn("DeliveryAction.executeOuterInteg
   transition: OuterIntegratorTransition,
   lease: DeliveryActionExecutionLease
 ) {
+  if (transition._tag === "AuthorizeIntegratorCompetingHeadSuccessor") {
+    return yield* authorizeIntegratorCompetingHeadSuccessor(action, transition)
+  }
+  if (transition._tag === "FixIntegratorAutomaticSuccessorSession") {
+    return yield* fixIntegratorAutomaticSuccessorSession(action, transition)
+  }
   if (transition._tag === "FixIntegratorSuccessorSession") {
     return yield* fixIntegratorSuccessorSession(action, transition)
   }

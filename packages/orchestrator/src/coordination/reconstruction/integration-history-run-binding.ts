@@ -360,6 +360,10 @@ const invalidRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | 
         candidate.predecessor.plannedAttempt.runId === runId && candidate.successor.plannedAttempt.runId === runId
           ? undefined
           : "Integrator successor session binds a foreign run",
+      IntegratorAutomaticSuccessorSessionFixed: (candidate) =>
+        candidate.predecessor.plannedAttempt.runId === runId && candidate.successor.plannedAttempt.runId === runId
+          ? undefined
+          : "Integrator automatic successor session binds a foreign run",
       IntegratorRunStarted: (candidate) =>
         candidate.run.session.plannedAttempt.runId === runId
           ? undefined

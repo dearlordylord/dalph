@@ -336,8 +336,19 @@ const reduceRunCancellationDisposition = (item: TraceHistoryItem, state: Histori
 }
 
 const reduceCandidatePreservationDisposition = (item: TraceHistoryItem, state: HistoricalFacetReductionState): void => {
-  if (item.occurrence._tag !== "IntegratorSuccessorSessionFixed") return
   const occurrence = item.occurrence
+  if (occurrence._tag === "IntegratorAutomaticSuccessorSessionFixed") {
+    state.dispositions.push(
+      state.factories.dispositionFact.AutomaticCandidateSuperseded.make({
+        authorizationAt: occurrence.authorizationAt,
+        predecessor: occurrence.predecessor,
+        source: item.identity,
+        successor: occurrence.successor
+      })
+    )
+    return
+  }
+  if (occurrence._tag !== "IntegratorSuccessorSessionFixed") return
   state.dispositions.push(
     state.factories.dispositionFact.IntegratorCandidatePreserved.make({
       predecessor: occurrence.predecessor,

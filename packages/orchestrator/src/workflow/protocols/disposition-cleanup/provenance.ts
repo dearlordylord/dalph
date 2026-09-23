@@ -33,6 +33,8 @@ import {
   integratorCandidateCleanupObservedRecordKey,
   integratorCandidateCleanupSettledRecordKey,
   integrationFinalitySettledRecordKey,
+  integratorAutomaticSuccessorSessionFixedRecordKey,
+  integratorCompetingHeadSuccessorAuthorizedRecordKey,
   integrationQuarantineDirectionAppliedRecordKey,
   integratorRunCandidateGitObservedRecordKey,
   integratorRunCandidateGitReadIntendedRecordKey,
@@ -76,6 +78,7 @@ import {
   integratorSuccessorChronologyIsValid
 } from "../integrator/events.js"
 import { evaluateIntegratorFullRerunAuthorization } from "../integrator/retry-authorization.js"
+import { validateAutomaticSuccessorSessionFixedRecord } from "../integrator/automatic-successor-session.js"
 import {
   IntegrationQuarantineDirectionFingerprint,
   integrationQuarantineDirectionSubject
@@ -816,7 +819,7 @@ export const validateIntegratorCandidateCleanupProvenance = (
       return invalid("candidate settlement does not bind finality's exact qualified candidate")
     }
     const sessionFacts = integratorResponsibilityFactsFromCorrelation(session)
-    const fixedSessions = recordsOfKind(records, "IntegratorSessionFixed").filter(
+    const ordinaryFixedSessions = recordsOfKind(records, "IntegratorSessionFixed").filter(
       (candidate) =>
         candidate.position < disposition.qualifiedCandidate.qualifiedAt &&
         candidate.runId === session.plannedAttempt.runId &&
@@ -824,6 +827,22 @@ export const validateIntegratorCandidateCleanupProvenance = (
         candidate.event._tag === "IntegratorSessionFixed" &&
         integratorCorrelationsEqual(candidate.event.correlation, session)
     )
+    const automaticFixedSessions = recordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed").filter(
+      (candidate) => {
+        if (
+          candidate.event._tag !== "IntegratorAutomaticSuccessorSessionFixed" ||
+          candidate.position >= disposition.qualifiedCandidate.qualifiedAt ||
+          candidate.runId !== session.plannedAttempt.runId ||
+          !integratorCorrelationsEqual(candidate.event.successor, session)
+        ) {
+          return false
+        }
+        return (
+          validateAutomaticSuccessorSessionFixedRecord(records, candidate, candidate.event.predecessor)._tag === "Valid"
+        )
+      }
+    )
+    const fixedSessions = [...ordinaryFixedSessions, ...automaticFixedSessions]
     const run = disposition.qualifiedCandidate.run
     const started = journalRecordByKey(records, integratorRunStartedRecordKey(run))
     const result = journalRecordByKey(records, integratorRunResultRecordedRecordKey(run))
@@ -864,10 +883,115 @@ export const validateIntegratorCandidateCleanupProvenance = (
       !integratorRunCorrelationsEqual(readIntent.event.run, run) ||
       !candidateObservationIsExact
     ) {
-      return invalid("settled candidate cleanup requires the exact fixed session and qualified candidate observation")
+      return invalid(
+        "settled candidate cleanup requires the exact ordinary or automatic fixed session and qualified candidate observation"
+      )
     }
     return valid("integration finality settled the exact fixed Integrator candidate resource")
   }
+  if (disposition._tag === "AutomaticSuccessorSuperseded") {
+    const automaticAuthorization = recordAt(records, disposition.authorizationAt)
+    if (
+      automaticAuthorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
+      automaticAuthorization.runId !== disposition.predecessor.plannedAttempt.runId ||
+      automaticAuthorization.key !==
+        integratorCompetingHeadSuccessorAuthorizedRecordKey(automaticAuthorization.event.authorizationId) ||
+      !integratorCorrelationsEqual(
+        automaticAuthorization.event.correlation.qualifiedCandidate.run.session,
+        disposition.predecessor
+      ) ||
+      !operationIdsEqual(authorization.causalPredecessors, [
+        OperationId.make(`automatic-successor-authorization:${automaticAuthorization.event.authorizationId}`)
+      ])
+    ) {
+      return invalid("automatic candidate cleanup does not bind the exact competing-head authorization")
+    }
+    const fixed = recordAt(records, disposition.dispositionAt)
+    if (
+      fixed?.event._tag !== "IntegratorAutomaticSuccessorSessionFixed" ||
+      fixed.runId !== disposition.predecessor.plannedAttempt.runId ||
+      fixed.key !==
+        integratorAutomaticSuccessorSessionFixedRecordKey(disposition.predecessor, disposition.authorizationAt) ||
+      fixed.event.authorizationAt !== disposition.authorizationAt ||
+      !integratorCorrelationsEqual(fixed.event.predecessor, disposition.predecessor) ||
+      !integratorCorrelationsEqual(fixed.event.successor, disposition.successor)
+    ) {
+      return invalid("automatic candidate cleanup requires the exact durable authorization-successor relation")
+    }
+    const matchingFixed = recordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed").filter(
+      (record) =>
+        record.event._tag === "IntegratorAutomaticSuccessorSessionFixed" &&
+        record.runId === fixed.runId &&
+        record.key === fixed.key &&
+        record.position === fixed.position &&
+        record.event.authorizationAt === disposition.authorizationAt &&
+        integratorCorrelationsEqual(record.event.predecessor, disposition.predecessor) &&
+        integratorCorrelationsEqual(record.event.successor, disposition.successor)
+    )
+    if (matchingFixed.length !== 1) {
+      return invalid("automatic candidate cleanup fixed-session relation is duplicate or contradictory")
+    }
+    const automaticValidation = validateAutomaticSuccessorSessionFixedRecord(records, fixed, disposition.predecessor)
+    if (automaticValidation._tag === "Invalid") return invalid(automaticValidation.detail)
+
+    const candidate = automaticAuthorization.event.correlation.qualifiedCandidate
+    const run = candidate.run
+    const fixedSessionRecords = recordsOfKind(records, "IntegratorSessionFixed").filter(
+      (record) =>
+        record.event._tag === "IntegratorSessionFixed" &&
+        record.position < candidate.qualifiedAt &&
+        record.runId === run.session.plannedAttempt.runId &&
+        record.key === integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(run.session)) &&
+        integratorCorrelationsEqual(record.event.correlation, run.session)
+    )
+    const started = journalRecordByKey(records, integratorRunStartedRecordKey(run))
+    const result = journalRecordByKey(records, integratorRunResultRecordedRecordKey(run))
+    const readIntent = journalRecordByKey(
+      records,
+      integratorRunCandidateGitReadIntendedRecordKey(run, candidate.candidateText)
+    )
+    const observed = recordAt(records, candidate.qualifiedAt)
+    const exactPreparedResult =
+      fixedSessionRecords.length === 1 &&
+      started?.event._tag === "IntegratorRunStarted" &&
+      result?.event._tag === "IntegratorRunResultRecorded" &&
+      started.position < result.position &&
+      started.runId === run.session.plannedAttempt.runId &&
+      integratorRunCorrelationsEqual(started.event.run, run) &&
+      result.position < automaticAuthorization.position &&
+      result.runId === run.session.plannedAttempt.runId &&
+      result.event.result._tag === "PreparedCandidate" &&
+      result.event.result.candidateText === candidate.candidateText &&
+      integratorRunCorrelationsEqual(result.event.run, run) &&
+      integratorRunCorrelationsEqual(result.event.result.correlation, run)
+    const exactCandidateObservation =
+      readIntent?.event._tag === "IntegratorRunCandidateGitReadIntended" &&
+      readIntent.key === integratorRunCandidateGitReadIntendedRecordKey(run, candidate.candidateText) &&
+      readIntent.position < candidate.qualifiedAt &&
+      readIntent.runId === run.session.plannedAttempt.runId &&
+      readIntent.event.candidateText === candidate.candidateText &&
+      integratorRunCorrelationsEqual(readIntent.event.run, run) &&
+      observed?.event._tag === "IntegratorRunCandidateGitObserved" &&
+      observed.key === integratorRunCandidateGitObservedRecordKey(run, candidate.candidateText) &&
+      observed.position === candidate.qualifiedAt &&
+      observed.position < automaticAuthorization.position &&
+      observed.runId === run.session.plannedAttempt.runId &&
+      observed.event.candidateText === candidate.candidateText &&
+      integratorRunCorrelationsEqual(observed.event.run, run) &&
+      observed.event.observation._tag === "Commit" &&
+      observed.event.observation.commit === candidate.candidateCommit &&
+      Schema.toEquivalence(Schema.Array(GitCommitSha))(
+        observed.event.observation.directParents,
+        candidate.directParents
+      )
+    if (!exactPreparedResult || !exactCandidateObservation) {
+      return invalid(
+        "automatic candidate cleanup requires the predecessor provider result and exact candidate Git proof"
+      )
+    }
+    return valid("the journaled automatic S2 fixation follows the exact stopped S1 provider result and candidate proof")
+  }
+
   const direction = recordAt(records, disposition.directionAppliedAt)
   if (
     direction?.event._tag !== "IntegrationQuarantineDirectionApplied" ||

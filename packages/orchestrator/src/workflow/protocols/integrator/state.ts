@@ -15,11 +15,14 @@ import {
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorRunQualifiedCandidate,
-  integratorRetryRunOrdinal
+  type IntegratorRunState,
+  type IntegratorSessionCorrelation,
+  integratorRetryRunOrdinal,
+  maximumIntegratorSessionsPerResponsibility
 } from "./events.js"
-import type { IntegratorSessionCorrelation, IntegratorRunState } from "./events.js"
 import { deriveIntegratorRunStateFromHistory } from "./run-state.js"
 import { evaluateIntegratorFullRerunSuccessor } from "./successor-history.js"
+import { validateAutomaticSuccessorSessionFixedRecord } from "./automatic-successor-session.js"
 
 const responsibilityFactsEquivalence = Schema.toEquivalence(IntegratorResponsibilityFacts)
 
@@ -141,22 +144,52 @@ const activeSuccessorFor = (
   | { readonly _tag: "Absent" }
   | { readonly _tag: "Invalid"; readonly detail: string }
   | { readonly _tag: "Valid"; readonly successor: IntegratorSessionCorrelation } => {
-  let record: JournalRecord | undefined
-  let relatedCount = 0
-  for (const candidate of journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")) {
-    if (
-      candidate.event._tag === "IntegratorSuccessorSessionFixed" &&
-      candidate.event.predecessor.sessionId === predecessor.sessionId
-    ) {
-      relatedCount += 1
-      record ??= candidate
+  let active = predecessor
+  let successorCount = 0
+  let advanced = false
+  const visited = new Set<string>()
+  for (;;) {
+    if (visited.has(active.sessionId)) {
+      return { _tag: "Invalid", detail: "Integrator successor relations contain a session cycle" }
+    }
+    visited.add(active.sessionId)
+    const related = [
+      ...journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed"),
+      ...journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")
+    ].filter(
+      ({ event }) =>
+        (event._tag === "IntegratorSuccessorSessionFixed" ||
+          event._tag === "IntegratorAutomaticSuccessorSessionFixed") &&
+        event.predecessor.sessionId === active.sessionId
+    )
+    if (related.length === 0) {
+      return advanced ? { _tag: "Valid", successor: active } : { _tag: "Absent" }
+    }
+    if (related.length !== 1) {
+      return { _tag: "Invalid", detail: "multiple successor relations describe one Integrator predecessor" }
+    }
+    const record = related[0]
+    if (record === undefined) return { _tag: "Invalid", detail: "successor relation disappeared during reconstruction" }
+    if (record.event._tag === "IntegratorSuccessorSessionFixed") {
+      const validated = evaluateIntegratorFullRerunSuccessor(records, record, active)
+      if (validated._tag !== "Valid") return validated
+      active = validated.successor
+    } else if (record.event._tag === "IntegratorAutomaticSuccessorSessionFixed") {
+      const validated = validateAutomaticSuccessorSessionFixedRecord(records, record, active)
+      if (validated._tag !== "Valid") return validated
+      active = record.event.successor
+    } else {
+      return { _tag: "Invalid", detail: "successor relation has an unexpected event kind" }
+    }
+    advanced = true
+    successorCount += 1
+    if (successorCount + 1 >= maximumIntegratorSessionsPerResponsibility && visited.has(active.sessionId)) {
+      return { _tag: "Invalid", detail: "Integrator successor relations exceed the three-session bound" }
+    }
+    if (successorCount + 1 > maximumIntegratorSessionsPerResponsibility) {
+      return { _tag: "Invalid", detail: "Integrator successor relations exceed the three-session bound" }
     }
   }
-  if (relatedCount > 1) {
-    return { _tag: "Invalid", detail: "multiple FullRerun successors describe one Integrator predecessor" }
-  }
-  if (record === undefined || record.event._tag !== "IntegratorSuccessorSessionFixed") return { _tag: "Absent" }
-  return evaluateIntegratorFullRerunSuccessor(records, record, predecessor)
 }
 
 /**

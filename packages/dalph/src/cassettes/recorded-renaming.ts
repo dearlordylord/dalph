@@ -49,6 +49,7 @@ import {
   IntegrationQuarantineDirectionRequestId,
   type IntegrationQuarantineFailureDetail,
   type IntegratorCandidateResourceLocator,
+  type IntegratorAutomaticSuccessorGenerationType,
   type IntegratorCandidateText,
   IntegratorSessionId,
   type IntegratorSessionCorrelation,
@@ -93,6 +94,7 @@ import {
   IntegratorCandidateCleanupOwner,
   type BranchCleanupEvidenceRevision,
   type IntegratorCandidateCleanupEvidenceRevision,
+  integratorCompetingHeadSuccessorAuthorizationIdFor,
   type WorktreeCleanupEvidenceRevision,
   type TargetPromotionAttemptOrdinal,
   type TargetPromotionAttemptLimit,
@@ -183,6 +185,7 @@ type PreservedCassetteBrand =
   | JournalPosition
   | EvidenceDigest
   | IntegratorCandidateText
+  | IntegratorAutomaticSuccessorGenerationType
   | IntegratorNotPreparedDetail
   | IntegrationQuarantineFailureDetail
   | TargetPromotionAttemptOrdinal
@@ -963,6 +966,14 @@ const renameIntegratorCandidateCleanupDisposition = (
         dispositionAt: preserveCassetteValue(value.dispositionAt),
         predecessor: renameIntegratorSessionCorrelation(value.predecessor, maps),
         successor: renameIntegratorSessionCorrelation(value.successor, maps)
+      }),
+    AutomaticSuccessorSuperseded: (value) =>
+      completeFields<typeof value>({
+        _tag: "AutomaticSuccessorSuperseded",
+        authorizationAt: preserveCassetteValue(value.authorizationAt),
+        dispositionAt: preserveCassetteValue(value.dispositionAt),
+        predecessor: renameIntegratorSessionCorrelation(value.predecessor, maps),
+        successor: renameIntegratorSessionCorrelation(value.successor, maps)
       })
   })
 
@@ -1597,6 +1608,24 @@ const renameRecordedCassetteEntry = (
       renameRecordedIntegrationEntry(integrationEntry, (attempt) => renamePlannedAttempt(attempt, maps))
     ),
     Match.tags({
+      IntegratorCompetingHeadSuccessorAuthorized: (entry) => {
+        const correlation = renameRemotePublicationCorrelation(entry.correlation, maps)
+        return completeFields<typeof entry>({
+          _tag: "IntegratorCompetingHeadSuccessorAuthorized",
+          authorizationId: integratorCompetingHeadSuccessorAuthorizationIdFor(
+            correlation.requestId,
+            entry.remotePublicationRetainedAt,
+            entry.mergeBase,
+            entry.remoteHead
+          ),
+          correlation,
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          mergeBase: preserveCassetteValue(entry.mergeBase),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          remoteHead: preserveCassetteValue(entry.remoteHead),
+          remotePublicationRetainedAt: preserveCassetteValue(entry.remotePublicationRetainedAt)
+        })
+      },
       IntegratorSessionFixed: (entry) =>
         completeFields<typeof entry>({
           _tag: "IntegratorSessionFixed",
@@ -1609,6 +1638,14 @@ const renameRecordedCassetteEntry = (
           directionAppliedAt: preserveCassetteValue(entry.directionAppliedAt),
           predecessor: renameIntegratorSessionCorrelation(entry.predecessor, maps),
           quarantineAt: preserveCassetteValue(entry.quarantineAt),
+          successor: renameIntegratorSessionCorrelation(entry.successor, maps),
+          successorGeneration: preserveCassetteValue(entry.successorGeneration)
+        }),
+      IntegratorAutomaticSuccessorSessionFixed: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "IntegratorAutomaticSuccessorSessionFixed",
+          authorizationAt: preserveCassetteValue(entry.authorizationAt),
+          predecessor: renameIntegratorSessionCorrelation(entry.predecessor, maps),
           successor: renameIntegratorSessionCorrelation(entry.successor, maps),
           successorGeneration: preserveCassetteValue(entry.successorGeneration)
         }),

@@ -37,6 +37,7 @@ import {
 } from "../integrator/retry-authorization.js"
 import { exactTargetLineageRecord } from "./canonical-lineage.js"
 import { evaluateIntegratorFullRerunSuccessor } from "../integrator/successor-history.js"
+import { validateAutomaticSuccessorSessionFixedRecord } from "../integrator/automatic-successor-session.js"
 import { validatePromotionStaleQuarantineEvidence } from "./promotion-stale-evidence.js"
 
 type AbsenceRecord = JournalRecord & {
@@ -321,6 +322,17 @@ const indexedSuccessorSession = (
     ) {
       if (session !== undefined) return undefined
       const relation = evaluateIntegratorFullRerunSuccessor(records, candidate, candidate.event.predecessor)
+      if (relation._tag === "Invalid") return undefined
+      session = candidate
+    }
+  }
+  for (const candidate of journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")) {
+    if (
+      candidate.event._tag === "IntegratorAutomaticSuccessorSessionFixed" &&
+      integratorCorrelationsEqual(candidate.event.successor, run.session)
+    ) {
+      if (session !== undefined) return undefined
+      const relation = validateAutomaticSuccessorSessionFixedRecord(records, candidate, candidate.event.predecessor)
       if (relation._tag === "Invalid") return undefined
       session = candidate
     }

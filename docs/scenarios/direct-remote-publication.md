@@ -63,10 +63,10 @@ delivery sequence; a deferred owner is not evidence that #384 is complete.
 | Task planning and candidate preparation | Preserve [immutable attempts](../architecture/attempt-delivery-and-integration.md#immutable-planned-attempt), [D26–D28](../DELIVERY-INVARIANTS.md#integration-and-promotion), and candidate parents `[H, C]`: H is the session's fixed integration head; C is the immutable accepted task commit. The [integration model](../../specs/acceptedResultIntegration.qnt) and [tests](../../specs/acceptedResultIntegration_test.qnt), including `exactGitParentsQualifyReportedCandidateTest`, continue to govern qualification. |
 | Remote destination and publication | Apply [D28a–D28b](../DELIVERY-INVARIANTS.md#integration-and-promotion): pin one endpoint/ref in `WorkflowRunBegan` before claim/provider work, then record exact per-ref proof for M with an ordinary non-force explicit refspec. |
 | Remote publication and local promotion | Amend [promotion/finality order](migrate-promotion-and-finality.md#the-reported-and-git-qualified-candidate-reaches-promotion) under [D28c](../DELIVERY-INVARIANTS.md#integration-and-promotion): publication precedes local promotion. Preserve the local exact-head protocol and `exactCandidatePromotesWithDirectCompareAndSetTest`; ordinary remote push is a separate boundary, not another use of local promotion proof. |
-| Competing remote work | #385 extends [successor fixation and recovery](recover-or-quarantine-integration-session.md#the-operator-requests-a-full-rerun) with a Dalph-authorized successor for a compatible competing remote advance. #384 preserves the wait and forbids an unowned successor; conclusive Integrator failure does not become automatically retryable. |
+| Competing remote work | #385 extends [successor fixation and recovery](recover-or-quarantine-integration-session.md#the-operator-requests-a-full-rerun) with a distinct Dalph authorization for a compatible competing remote advance, journaled local catch-up, and one fresh-head successor. #384 preserves the wait until that authorization; conclusive Integrator failure does not become automatically retryable. |
 | Task completion | Extend [integration finality](../../specs/integrationFinality.qnt), especially `completionRequestUsesExactPremises`, with [D28c](../DELIVERY-INVARIANTS.md#integration-and-promotion) remote publication proof. Preserve `dependantReleaseRequiresLaterCompleteGraph` and `settledTaskRequiresExactCleanup`; after publication, `noReintegration` still forbids repeating integration merely to recover completion. |
 | Ambiguity and custody | Apply [D28d](../DELIVERY-INVARIANTS.md#integration-and-promotion) with [D21–D24](../DELIVERY-INVARIANTS.md#ambiguity-and-evidence), [D16–D17](../DELIVERY-INVARIANTS.md#preservation), [D29–D32](../DELIVERY-INVARIANTS.md#process-and-durability), and [D41–D46](../DELIVERY-INVARIANTS.md#serialized-integration). Push discovery may perform the owning-system reread before retrying a ref update; a separate network read is not mandatory when Git already provides that reconciliation. Raw auth/provider diagnostics do not enter journal/status. |
-| Bounds and Exit | Apply [D28e](../DELIVERY-INVARIANTS.md#integration-and-promotion), the [interruptible Git boundary](interruptible-tracker-git-exit.md), and [D50–D52](../DELIVERY-INVARIANTS.md#application-exit). No successor, grant, resume, or fresh work starts after Exit admission closes; the five-second drain is unchanged. |
+| Bounds and Exit | Apply [D28e–D28f](../DELIVERY-INVARIANTS.md#integration-and-promotion), the [interruptible Git boundary](interruptible-tracker-git-exit.md), and [D50–D52](../DELIVERY-INVARIANTS.md#application-exit). No successor, grant, resume, or fresh work starts after Exit admission closes; the five-second drain is unchanged. |
 
 Acceptance must incorporate these amendments into the owning D invariants,
 architecture, protected delivery-composition premises, and prior scenarios before
@@ -169,7 +169,7 @@ wait and never fabricates that successor.
 | Lost/ambiguous response, old local sender proved stopped | Repeat the same safe push within its allowance, or read the remote. Push discovery is reconciliation before mutation, not permission to assume the earlier push failed. |
 | Rejection; fresh remote head N contains M | Prove ancestry and record publication. Do not push N backward or rerun integration. |
 | Fresh remote head can fast-forward to M | Retry the same candidate under current permission and remaining allowance. No new integration cycle. |
-| Compatible competing head H2; neither side contains the other | **Deferred to #385.** Record the precise competing-head wait in #384; #385 records automatic successor authorization for the same integration responsibility and C, preserves the predecessor, catches local Git up safely, and fixes one new session against H2. |
+| Compatible competing head H2; neither side contains the other | Record the precise competing-head wait, then #385 records a separate Dalph authorization for the same integration responsibility and C, preserves the predecessor, catches local Git up safely, and fixes one new session against freshly qualified H2. |
 | Missing/unreadable target, insufficient ancestry, incompatible history, authentication/policy denial or throttle | Report the precise reason and retain work. Resume through the retained-delivery operation below after the relevant facts change. No inferred absence, automatic denied mutation, or throttled mutation retry. |
 
 A remote advertisement names a commit; descendant proof additionally requires
@@ -178,16 +178,151 @@ evidence without moving task/target/foreign refs. No separate durable observatio
 resource is required; if the implementation creates one, its cleanup must follow
 the existing exact ownership and disposition rules.
 
-For the deferred successor, #385 retains the task Base/worktree, accepted C,
-responsibility and FIFO position. It preserves predecessor
-session/candidate/evidence until stopped writers and the specific superseded
-disposition authorize cleanup, records the automatic authorization as Dalph's
-action, and never fabricates an Operator choice. Before fixation it revalidates
-current tracker, claim, remote and local Git facts, fixes one new S2 and
-candidate resource at freshly qualified H2, and gives M2 parents `[H2, C]`.
-At most one pre-fixation read occurs per activation; restart restores S2 or the
-pending authorization without duplication. These are #385 seams, not #384
-completion evidence.
+For a successor, #385 retains the task Base/worktree, accepted C,
+responsibility and FIFO position. It preserves predecessor session/candidate/
+evidence until stopped writers and the specific superseded disposition
+authorize cleanup. Dalph records the automatic authorization as its action,
+never as a fabricated Operator choice. Before fixation, it revalidates current
+tracker, exact claim, control permission, remote head, and local Git state. The
+remote read fixes one advertised H2 and proves its ancestry. Catch-up may
+compare-and-set local L to H2 only after Git proves L is an ancestor of H2 and
+proves the direct target ref is unoccupied. An ahead, divergent, dirty,
+checked-out, foreign, symbolic, ambiguous, missing, unreadable, or
+insufficiently proven target remains retained with its exact typed constraint;
+it is never reset, cleaned, or overwritten. A later activation reads at most
+one fresh remote head before fixation and, when it changed, uses that
+observation under the same authorization. A catch-up read or compare-and-set
+is one boundary per activation, not an inner read-until-stable loop. Dalph fixes
+one new S2 and candidate resource at freshly qualified H2; M2 must have parents
+`[H2, C]`. A fixed H2 never changes. Restart restores the pending
+authorization, exact catch-up, or S2 without duplication or overlapping
+provider writers.
+
+The initial batch admits at most three Integrator sessions, including S1, and
+at most three publication intents for each candidate. Fixing a successor
+consumes one session even if Dalph crashes before provider contact. A race at
+the limit retains the exact exhausted responsibility and never starts an
+ungranted fourth session or fourth push for one candidate. The predecessor
+remains evidence until its writer is proved stopped and a disposition specific
+to supersession authorizes its exact candidate cleanup. These are #385 seams,
+not #384 completion evidence.
+
+## S2: Outside work advances the pinned remote branch
+
+### Starting situation
+
+Alice's task A has one exact planned attempt at immutable Base B, one accepted
+task commit C, and one durable integration responsibility at its original
+same-target FIFO position. Dalph called the task executor's Begin once. The
+first Integrator session S1 is fixed to H and C; its isolated candidate M is a
+Git-qualified commit with ordered parents `[H, C]`. The local target is H and
+the pinned remote branch was H when S1 was fixed. No later same-target
+responsibility may pass A. The S1 provider writer has settled before its
+candidate is offered for publication.
+
+### Dalph action and outside event
+
+An outside contributor pushes compatible H2, which contains H but not M. That
+push may occur before Dalph's first publication discovery, after discovery but
+before Dalph's exact push, or while Dalph loses the response to an earlier
+push. Dalph uses only the destination pinned in `WorkflowRunBegan` and ordinary
+non-force Git operations.
+
+1. Dalph records and attempts publication of exact M. Git may report a
+   non-fast-forward rejection or, after an ambiguous response and stopped
+   sender, read-only discovery may report the exact compatible competing head
+   H2. Dalph records the correlated competing-head retention. It does not
+   infer failure from a lost response and does not push H2 backward.
+2. After a fresh tracker graph, exact claim, and current control permit allow
+   progress, Dalph records one `IntegratorCompetingHeadSuccessorAuthorized`
+   action naming the predecessor session, accepted C, exact competing-head
+   publication occurrence, pinned destination, and original responsibility.
+   This action is distinct from `IntegrationQuarantineDirectionApplied` and
+   cannot be supplied by, or represented as, Operator Full rerun.
+3. Dalph records one remote-baseline read intent for this authorization. Git
+   reads the pinned branch H2 and local target L with sufficient ancestry. If
+   L equals H2, catch-up is already current. If L is a proven ancestor of H2,
+   Dalph records an exact L-to-H2 catch-up intent; Git rechecks the direct ref,
+   unoccupied worktree inventory, and ancestry, then compare-and-sets only L to
+   H2 and records the exact result. One observation or compare-and-set is
+   admitted per activation.
+4. A fresh target-lineage observation proves immutable Base B is an ancestor
+   of the exact local target H2. Dalph fixes one deterministic S2 and distinct
+   candidate resource for the same attempt, C, target, queue position, and
+   integration responsibility. The successor's expected head is H2 and
+   cannot change after fixation.
+5. The Integrator receives H2 and existing C, then returns M2. Git accepts
+   M2 only when its exact ordered parents are `[H2, C]`. Dalph publishes M2
+   through the pinned destination, records exact per-ref proof, promotes the
+   local target from H2 to M2, and completes A from fresh tracker/claim facts.
+   A later complete graph observation releases A's dependant.
+
+### Crash, retry, and lifecycle cuts
+
+The Journal records automatic authorization before remote/local baseline reads,
+catch-up intent before compare-and-set, and S2 fixation before provider
+contact. If Dalph dies after authorization, replacement work resumes that
+authorization after fresh tracker and claim reads. If it dies after a baseline
+read, catch-up intent, catch-up application, or S2 fixation, the next activation
+reconstructs the same occurrence from memory or reopened SQLite and performs
+only its exact required reconciliation. It creates no second authorization,
+baseline, catch-up, session, candidate resource, or task Begin. An ambiguous
+Integrator call waits for exact provider-writer custody before resuming the
+same S2 run ordinal; it never overlaps a replacement writer.
+
+Pause prevents later reads, catch-up, fixation, publication, promotion, and
+completion while retaining exact durable results. Exit admits no successor
+action after its cutoff; an already-admitted Git boundary may return and record
+its produced result only within the existing five-second drain. Restart uses
+the normal activation and current-facts path.
+
+### Visible and forbidden results
+
+Alice sees automatic delivery continue under the same queued task after
+ordinary competing remote work. The task executor still has one Begin. Dalph
+preserves B, C, the task worktree, same-target FIFO position, predecessor
+session/candidate/evidence, and pinned destination. It does not fabricate
+Operator Full rerun, rerun the task, change candidate parents, force-push,
+overwrite local work, delete a predecessor before stopped-writer proof, retry a
+throttled or conclusively denied mutation, exceed three sessions or three
+publication intents per candidate in the authorized batch, or read until
+stable.
+
+### Acceptance-test mapping
+
+The focused implementation evidence currently covers these S2 outcomes:
+
+- Authorization, exact competing-head correlation, one pre-fixation Git boundary per activation, no Operator Full rerun, and retained FIFO/Base/C: `packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.test.ts::authorizes one automatic successor for a compatible competing remote head without Operator direction`.
+- Journal-first authorization, authorization-scoped baseline, stale-prefix refusal with no Git call, and exact baseline/catch-up intent plus CAS order: `packages/orchestrator/src/coordination/delivery/integration-delivery-action-adapter.test.ts::appends automatic successor authorization before baseline and catch-up CAS and defers stale-prefix authorization without Git`.
+- Authorization append failure before commit produces no Git read, baseline intent, catch-up, successor fixation or provider start; after retry, the same append commits and loses its acknowledgement, then memory/reopened-SQLite replay accepts one exact event without a duplicate append or Git read: `packages/orchestrator/src/coordination/delivery/automatic-successor-authorization-recovery.test.ts::recovers a lost automatic authorization acknowledgement without another Git read across memory and reopened SQLite`.
+- The authorization-scoped LocalAncestor observation commits before its acknowledgement is lost; reopen reconstructs CatchUpRequired without another remote read, then performs one exact catch-up boundary in memory and reopened SQLite: `packages/orchestrator/src/workflow/protocols/direct-publication/automatic-successor-baseline-recovery.test.ts::recovers the exact automatic-successor baseline observation after a lost acknowledgement and then catches up once`.
+- Read-intent append failure before commit produces no Git read; observation append failure before commit retains only the exact pending intent, and a later activation performs one new read to persist the exact result in memory and reopened SQLite without another authorization/session or duplicate intent: `packages/orchestrator/src/workflow/protocols/direct-publication/automatic-successor-baseline-recovery.test.ts::recovers precommit automatic-successor baseline intent and observation failures with one read per activation`.
+- The authorization-scoped H→H2 catch-up CAS applies before its observation is durable; restart reconciles the same intent as AlreadyCurrent without another CAS/read or new authorization/session in memory and reopened SQLite: `packages/orchestrator/src/workflow/protocols/direct-publication/automatic-successor-baseline-recovery.test.ts::reconciles one applied automatic-successor catch-up CAS after memory and reopened SQLite process loss`.
+- The exact catch-up result append commits before its acknowledgement is lost; memory recovery and reopened SQLite accept that result as Ready without another reconcile, CAS, remote read, authorization, session, or append: `packages/orchestrator/src/workflow/protocols/direct-publication/automatic-successor-baseline-recovery.test.ts::replays a committed automatic-successor catch-up result after lost acknowledgement without another Git boundary`.
+- The exact catch-up intent commits before the host stops ahead of CAS. A `ResponseDeadline` from reconciliation is ambiguous, does not prove the CAS was unapplied, and leaves the same intent pending with zero confirmed CAS; a later activation reconciles exact old H and applies one CAS without another remote read, authorization, or session in memory and reopened SQLite: `packages/orchestrator/src/workflow/protocols/direct-publication/automatic-successor-baseline-recovery.test.ts::keeps an ambiguous ResponseDeadline catch-up pending until a later activation reconciles the exact old head`.
+- The exact catch-up-intent append commits but loses its acknowledgement; reopening memory and SQLite recovers the same intent, does not repeat baseline observation or the initial CAS, and performs one Git reconciliation without another authorization/session or duplicate intent: `packages/orchestrator/src/workflow/protocols/direct-publication/automatic-successor-baseline-recovery.test.ts::recovers a committed automatic-successor catch-up intent after lost acknowledgement with one reconciliation`.
+- One deterministic successor at freshly observed H2 with the same accepted C, immutable Base, queue/start positions, and one automatic fixation: `packages/orchestrator/src/workflow/protocols/integrator/automatic-successor-session.test.ts::projects and fixes one automatic successor after the exact competing-head catch-up and fresh lineage`.
+- Automatic fixation append failure before commit in memory and SQLite leaves the accepted authorization prefix at GitQualifiedPrepared; restart derives the exact same key/event and fixes one session, while the provider-route negative control proves that RunIntegrator cannot reach the provider before this fixed record exists: `packages/orchestrator/src/workflow/protocols/integrator/automatic-successor-session.test.ts::retries a precommit automatic successor fixation from the exact authorization before provider eligibility` and `packages/orchestrator/src/coordination/delivery/delivery-proposal-routes.test.ts::routes automatic S2 through exact provider custody and quarantine recovery`.
+- Fixed-session append loss and exact replay after in-memory process loss and reopened SQLite process loss, with no duplicate S2: `packages/orchestrator/src/workflow/protocols/integrator/automatic-successor-session.test.ts::recovers a fixed successor append after memory and reopened SQLite process loss without a duplicate session`.
+- Ambiguous provider outcome, no fabricated absence or Q, and the explicit provider-activity-absent to Q path for the exact automatic S2 run: `packages/orchestrator/src/coordination/delivery/delivery-proposal-routes.test.ts::routes automatic S2 through exact provider custody and quarantine recovery`.
+- Ordinary Operator Retry after automatic S2 itself reaches a conclusive Q is bound to the exact auto-fixed session and its own auth/predecessor chain: `packages/orchestrator/src/workflow/protocols/integrator/automatic-successor-session.test.ts::authorizes ordinary Retry only from the exact automatically fixed S2 and its own quarantine`.
+- Superseded predecessor cleanup derives a distinct exact S2 disposition, preserves when a controlled provider boundary reports `LiveWriter`, and permits Remove only after a controlled exact-owner/quiescent observation followed by post-removal Absent evidence: `packages/orchestrator/src/workflow/protocols/disposition-cleanup/integrator-candidate.test.ts::preserves an automatically superseded candidate until provider custody proves its writer stopped`.
+- Finality cleanup derives a separate `Settled` authorization for the exact automatically fixed S2 session, candidate, `[H2, C]` parents, and deletion operation while retaining the predecessor's distinct supersession authorization: `packages/orchestrator/src/workflow/protocols/disposition-cleanup/activation.test.ts::derives finality cleanup for an exact automatically fixed S2 candidate`.
+- Historical trace exposes the Dalph authorization, exact auto-fixed session and predecessor preservation without emitting the FullRerun disposition: `packages/orchestrator/src/presentation/trace-reader.test.ts::projects automatic S2 authorization and predecessor preservation as distinct coordinator facts`.
+- Outside work advances the remote head before discovery; the formal recovery oracle is `specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt::beforeDiscoveryCatchesUpExactAncestorAndFixesOneSuccessorTest`.
+- Fresh activation reuses exact H2 lineage only when its pinned Git target and same-attempt evidence remain eligible; a newer graph requires exact claim refresh, a graph after that claim, then fresh lineage before publication: `packages/orchestrator/src/coordination/run/recovery-activation.test.ts::reuses exact H2 lineage after fresh activation and publishes the qualified automatic successor` and `packages/orchestrator/src/coordination/run/recovery-activation.test.ts::requires fresh lineage and blocks successor publication after a newer target graph observation`. These are projection tests; they do not prove a real-Git race placement.
+- The real-Git runtime race placements covered are before publication discovery (`packages/dalph/test/scenarios/hermetic-mvp.test.ts::recovers a competing remote head found before publication discovery through the automatic S2 full suffix`) and between discovery and update (`packages/dalph/test/scenarios/hermetic-mvp.test.ts::recovers a competing remote head advanced between publication discovery and update through the automatic S2 full suffix`). The latter injects H2 only after exact publication discovery, observes one typed non-fast-forward rejection for the B-based candidate, then proves one same-C `[H2, C]` successor, one task Begin, finality, and both exact candidate cleanup dispositions. The after-lost-response placement remains uncovered.
+- Outside work advances the remote head between discovery and push; the formal recovery oracle is `specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt::betweenDiscoveryAndPushUsesSameHeadAndProviderRunAfterRecoveryTest`.
+- The competing push response is lost before authorization recovery; the formal recovery oracle is `specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt::lostPushResponseAndAuthorizationCutRecoverFromReopenedSQLiteTest`.
+- The third session and third publication intent exhaust the initial batch without a fourth; the formal bound oracle is `specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt::thirdSessionAndThirdPushExhaustWithoutUnrequestedFourthSessionTest`.
+- Ahead, divergent, dirty, checked-out, symbolic, foreign, and ambiguous local states retain typed dispositions without catch-up; the formal safety oracle is `specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt::unsafeLocalWorkKeepsTypedDispositionAndNoCatchUpTest`.
+- Pause retains the authorized S2 without later effects; the formal lifecycle oracle is `specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt::pauseRetainsAuthorizedSuccessorWithoutForwardEffectsTest`.
+- Exit retains the authorized S2 at the cutoff; the formal lifecycle oracle is `specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt::exitRetainsAuthorizedSuccessorAtCutoffTest`.
+- The independent negative control proves a second pre-fixation Git read in one activation violates the accepted bound: `specs/acceptedResultIntegration_automaticSuccessor_proof_negative_test.qnt::secondPreFixationGitReadInOneActivationIsDetectedTest`.
+
+The following accepted S2 edges still lack production-backed tests and remain open: provider-contact/RunStarted/result append and restart cuts across both stores; the real-Git race after a lost push response; unsafe automatic catch-up for ahead, divergent, dirty, checked-out, symbolic, foreign, or ambiguous local state; three-session/three-push production exhaustion and denial of an ungranted fourth session or push; automatic S2 behavior under Pause and Exit; and integration of the cleanup disposition with a real provider adapter plus recovery across a reopened SQLite process. A ResponseDeadline while reconciling a committed catch-up intent is covered as pending and retried only on a later activation; it is not evidence of conclusive non-application. The controlled cleanup test proves the journaled exact predecessor relation and fail-closed custody protocol, not provider-specific behavior. The named authorization and fixed-session tests cover authorization append failure before commit, append-commit loss and exact replay in memory and reopened SQLite, plus fixation append failure before commit; the named baseline tests separately cover precommit read-intent/observation failure and retry, a catch-up CAS before result durability, a LocalAncestor observation before its acknowledgement is lost, a catch-up-intent append whose acknowledgement is lost and exact one-boundary recovery, a committed catch-up result before its acknowledgement is lost, and the ResponseDeadline-before-later-CAS recovery path. The generic initial-baseline characterization and Quint projection are supporting evidence and do not close these S2 runtime edges.
+
+Not applicable to S2 authorization: there is no Operator request or task-executor Begin/Resume command. The same existing accepted task attempt remains the unit of work; its tracker facts and Git lineage are reread through their owning authorities before fixation and delivery.
 
 Ordinary non-force push can recreate its explicitly named branch if that branch
 vanishes during the invocation. We retain ordinary Git semantics: initial
@@ -307,9 +442,9 @@ implementation evidence belongs to #385, #386, and #387 respectively.
 | Crash cut | Required continuation |
 | --- | --- |
 | Before/after push intent; applied or unapplied send; lost response; response before durable append | Preserve consumed ordinals; resolve ambiguous journal appends; reconcile using the same idempotent push or remote read. Never infer non-application or overlap local senders. |
-| Automatic successor authorization before fixation | **Deferred to #385.** Refresh current permission and Git facts; fix at most one successor. No fabricated Operator direction. |
-| Local catch-up applied before observation | Read local Git and settle the same intent before fixing/restoring the initial session; no blind reset. #385 applies the same rule to its successor catch-up. |
-| Fixed session before provider contact or during execution | Restore the same session; never allocate another cycle solely because the host died. |
+| Automatic successor authorization before fixation | Dalph records its own exact competing-head authorization before the baseline Git boundary and recovers a post-commit lost acknowledgement without a duplicate event or Git read: `packages/orchestrator/src/coordination/delivery/automatic-successor-authorization-recovery.test.ts::recovers a lost automatic authorization acknowledgement without another Git read across memory and reopened SQLite`. Remaining authorization crash cuts are listed in the S2 acceptance mapping below. |
+| Local catch-up intent/effect/result cuts | A committed intent survives a pre-CAS stop as CatchUpPending after ResponseDeadline; a later activation reconciles exact old H and applies one CAS. If CAS applies before result append, restart settles the same intent; if result append commits but its acknowledgement is lost, replay accepts exact Ready history with no new Git boundary. #385 evidence: `automatic-successor-baseline-recovery.test.ts::waits after an unapplied automatic-successor catch-up intent until a later activation retries its exact CAS`; `automatic-successor-baseline-recovery.test.ts::reconciles one applied automatic-successor catch-up CAS after memory and reopened SQLite process loss`; `automatic-successor-baseline-recovery.test.ts::replays a committed automatic-successor catch-up result after lost acknowledgement without another Git boundary`. |
+| Fixed session before provider contact or during execution | Restore the same session; never allocate another cycle solely because the host died. #385 covers precommit fixed-session recovery in `packages/orchestrator/src/workflow/protocols/integrator/automatic-successor-session.test.ts::retries a precommit automatic successor fixation from the exact authorization before provider eligibility`, and provider-start precommit/commit-lost-ack recovery plus one exact provider call and no overlapping replacement writer in memory and reopened SQLite in `packages/orchestrator/src/coordination/delivery/delivery-proposal-routes.test.ts::recovers an automatic S2 provider start after lost acknowledgement without overlapping or replacing its run`. The adjacent exact custody, ambiguous-response and ProviderActivityAbsent-to-Q continuation is `packages/orchestrator/src/coordination/delivery/delivery-proposal-routes.test.ts::routes automatic S2 through exact provider custody and quarantine recovery`. |
 | Remote proof before local promotion, or local promotion before observation | Retain conclusive remote proof and reconcile local promotion; no remote read or reintegration solely because the process restarted. |
 | Full rerun grant committed before new work | **Deferred to #386.** Resume the one granted batch with unchanged history; no repeated user request required. |
 | Resume request recorded before activation | **Deferred to #387.** Resume the same recorded request; ordinary boundary intents prevent duplicate effects, and allowance is unchanged. |
@@ -354,7 +489,7 @@ D invariants and extended models, not solely by replaying a successful cassette.
 | Scenario and visible outcome | Required test owner/name and decisive evidence |
 | --- | --- |
 | **S1: Alice starts one fresh task; delivery succeeds.** Execute the normal chronology with no crash/retry. She sees separate remote publication, local promotion and confirmed closure. | Planned seams: `packages/orchestrator/src/workflow/protocols/direct-publication/admission.test.ts::admits one pinned endpoint and branch before claim and restores the prior admission without another Git read`; `packages/dalph/test/cassettes/direct-remote-publication.test.ts::publishes M before local promotion and task completion`. Real Git plus a distinct bare remote, SQLite and controlled providers must assert exact order and identities, one Begin, zero redundant post-push workflow reads, independent remote ancestry, and no premature claim replacement/close/cleanup/dependant release. |
-| **S2: Outside work advances remote H to H2 without M.** Exercise before push discovery, between discovery/update and after a lost response. Dalph prepares M2 and completes automatically; Alice does nothing. | **Deferred to #385.** Planned seam: `packages/orchestrator/src/workflow/protocols/integration-quarantine/successor.test.ts::reintegrates the same C after a competing push`; assert exact M2 parents, H2 retention, same task/queue, one successor/resource, no task rerun or Operator direction. The separate `catches up only a proven local ancestor` seam is also #385. |
+| **S2: Outside work advances remote H to H2 without M.** Exercise before push discovery, between discovery/update and after a lost response. Dalph prepares M2 and completes automatically; Alice does nothing. | Implemented focused seams: `packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.test.ts::authorizes one automatic successor for a compatible competing remote head without Operator direction`; `packages/orchestrator/src/coordination/delivery/integration-delivery-action-adapter.test.ts::appends automatic successor authorization before baseline and catch-up CAS and defers stale-prefix authorization without Git`; `packages/orchestrator/src/coordination/delivery/automatic-successor-authorization-recovery.test.ts::recovers a lost automatic authorization acknowledgement without another Git read across memory and reopened SQLite`; `packages/orchestrator/src/workflow/protocols/direct-publication/automatic-successor-baseline-recovery.test.ts::recovers precommit automatic-successor baseline intent and observation failures with one read per activation`; `packages/orchestrator/src/workflow/protocols/direct-publication/automatic-successor-baseline-recovery.test.ts::recovers the exact automatic-successor baseline observation after a lost acknowledgement and then catches up once`; `packages/orchestrator/src/workflow/protocols/direct-publication/automatic-successor-baseline-recovery.test.ts::reconciles one applied automatic-successor catch-up CAS after memory and reopened SQLite process loss`; `packages/orchestrator/src/workflow/protocols/direct-publication/automatic-successor-baseline-recovery.test.ts::waits after an unapplied automatic-successor catch-up intent until a later activation retries its exact CAS`; `packages/orchestrator/src/workflow/protocols/direct-publication/automatic-successor-baseline-recovery.test.ts::recovers a committed automatic-successor catch-up intent after lost acknowledgement with one reconciliation`; `packages/orchestrator/src/workflow/protocols/direct-publication/automatic-successor-baseline-recovery.test.ts::replays a committed automatic-successor catch-up result after lost acknowledgement without another Git boundary`; `packages/orchestrator/src/workflow/protocols/integrator/automatic-successor-session.test.ts::projects and fixes one automatic successor after the exact competing-head catch-up and fresh lineage`; `packages/orchestrator/src/workflow/protocols/integrator/automatic-successor-session.test.ts::retries a precommit automatic successor fixation from the exact authorization before provider eligibility`; `packages/orchestrator/src/workflow/protocols/integrator/automatic-successor-session.test.ts::recovers a fixed successor append after memory and reopened SQLite process loss without a duplicate session`; `packages/orchestrator/src/coordination/delivery/delivery-proposal-routes.test.ts::recovers an automatic S2 provider start after lost acknowledgement without overlapping or replacing its run`; `packages/orchestrator/src/coordination/delivery/delivery-proposal-routes.test.ts::routes automatic S2 through exact provider custody and quarantine recovery`; `packages/orchestrator/src/workflow/protocols/disposition-cleanup/activation.test.ts::derives finality cleanup for an exact automatically fixed S2 candidate`; and the projection-only lineage cases named above. Cleanup, Retry, trace, formal projection outcomes, the bounded-read negative control, and the two real-Git placements below are named above. **Still open:** provider result append and restart cuts; the real-Git after-lost-response placement; unsafe local-state S2 cases; production session/push exhaustion; production stopped-predecessor custody/resource disposition; and S2 Pause/Exit tests. |
 | **S3: An identical push repeats or remote N already contains M.** Dalph reports publication, not failed delivery or new integration. | Planned seams: `packages/orchestrator/src/authorities/git/direct-publication.test.ts::pushes the exact candidate, recognizes up-to-date, and rejects stale non-fast-forward updates` and `packages/orchestrator/src/authorities/git/direct-publication.test.ts::observes exact current, both safe fast-forward directions, compatible competition, unrelated history, and a missing branch`. Assert exact repeat/up-to-date, safe fast-forward when the head differs from original H, and rejection of equal-content foreign commits, insufficient ancestry, dry-run proof, force, backward, or extra-ref mutation. |
 | **S4: Repeated races or transport failures exhaust allowance.** Work remains retained after the finite batch. | Initial #384 seam: `packages/orchestrator/src/workflow/protocols/direct-publication/protocol-engine.test.ts::retains exact exhaustion without an ungranted fourth push intent`; assert three sessions, three intents, consumed-but-unsent ordinals, precise wait, and unrelated-target progress. **Deferred to #386:** duplicate grant, crash-after-grant, successor-generation exhaustion, and reuse of an already-published or publishable M. |
 | **S5: Host dies at each initial publication/finality cut.** Replacement host continues the same Run and work. | Initial #384 seam: `packages/orchestrator/src/workflow/protocols/direct-publication/recovery.test.ts::recovers every initial remote delivery boundary`; exercise intent-before-send, applied/unapplied effects, lost response, ambiguous append, proof-before-promotion, promotion-before-observation, stopped-sender custody, and both stores. Initial catch-up uses `direct-publication/baseline-recovery.test.ts::recovers the initial remote baseline across memory and reopened SQLite journals`; real host death uses `packages/dalph/src/application/git-sender-custody.real-host.test.ts`. These tests do not substitute for promotion and tracker-close recovery. **Deferred:** successor cuts #385, grant cuts #386, and resume-after-receipt cuts #387. |

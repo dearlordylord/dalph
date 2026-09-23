@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest"
 import { HashSet, Effect, Ref, Stream } from "effect"
 import { expect } from "vitest"
-import { TaskRevision } from "@dalph/contracts"
+import { GitCommitSha, TaskRevision } from "@dalph/contracts"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
@@ -28,18 +28,28 @@ import {
   RemotePublicationAttemptOrdinal,
   RemotePublicationIntendedEvent,
   RemotePublicationProofBasis,
+  RemotePublicationRetainedCause,
+  RemotePublicationRetainedEvent,
   RemotePublicationSucceededEvent,
   RemotePublicationGit,
   remotePublicationCorrelationFor,
   remotePublicationRefspecFor
 } from "../../workflow/protocols/direct-publication/events.js"
-import { RemoteBaselineGit } from "../../workflow/protocols/direct-publication/baseline-events.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
+import {
+  automaticCompetingHeadRemoteBaselineCorrelationFor,
+  LocalTargetCatchUpResult,
+  RemoteBaselineGit,
+  RemoteBaselineObservation
+} from "../../workflow/protocols/direct-publication/baseline-events.js"
+import { integratorCompetingHeadSuccessorAuthorizationIdFor } from "../../workflow/protocols/integrator/automatic-successor-events.js"
+import { IntegratorSessionFixedEvent } from "../../workflow/protocols/integrator/events.js"
+import { integratorResponsibilityFactsFor } from "../../workflow/protocols/integrator/state.js"
 
 const target = FixtureTarget.make("integration-adapter-finality-target")
 const responsibility = StartedIntegrationResponsibility.make({
@@ -67,6 +77,7 @@ const proposalFor = (transition: Transition): IdentityFreeDeliveryProposal | und
 }
 
 type IdentityFreeAction = Extract<MaterializedDeliveryAction, { readonly _tag: "IdentityFreeAction" }>
+type ConditionalJournalAppendResult = Effect.Success<ReturnType<Journal["Service"]["appendIfAcceptedPrefixCurrent"]>>
 
 const appendableJournal = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
   InRunJournal.of({
@@ -290,4 +301,283 @@ it.effect("translates a changed focused revision into a deferred completion acti
     expect(yield* Ref.get(completionCalls)).toBe(0)
     expect((yield* Ref.get(records)).map(({ event }) => event._tag)).not.toContain("CompletionTaskAttemptIntended")
   })
+)
+
+it.effect(
+  "appends automatic successor authorization before baseline and catch-up CAS and defers stale-prefix authorization without Git",
+  () =>
+    Effect.gen(function* () {
+      const correlation = remotePublicationCorrelationFor(fixture.qualifiedCandidate, remotePublicationTargetForTest)
+      const retainedAt = JournalPosition.make(3)
+      const mergeBase = GitCommitSha.make("1111111111111111111111111111111111111111")
+      const remoteHead = GitCommitSha.make("2222222222222222222222222222222222222222")
+      const sessionFixed = IntegratorSessionFixedEvent.make({
+        correlation: fixture.qualifiedCandidate.run.session,
+        version: workflowJournalEventVersion
+      })
+      const retained = RemotePublicationRetainedEvent.make({
+        cause: RemotePublicationRetainedCause.cases.CompatibleCompetingHead.make({ mergeBase, remoteHead }),
+        correlation,
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      })
+      const initialRecords: ReadonlyArray<JournalRecord> = [
+        makeWorkflowRunBeganRecord(
+          fixture.runId,
+          target,
+          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+          remotePublicationTargetForTest
+        ),
+        {
+          event: sessionFixed,
+          key: describeJournalEvent(sessionFixed).expectedKey,
+          position: JournalPosition.make(2),
+          runId: fixture.runId
+        },
+        { event: retained, key: describeJournalEvent(retained).expectedKey, position: retainedAt, runId: fixture.runId }
+      ]
+      const authorization = RunnableFrontierTransition.AuthorizeIntegratorCompetingHeadSuccessor({
+        authorizationId: integratorCompetingHeadSuccessorAuthorizationIdFor(
+          correlation.requestId,
+          retainedAt,
+          mergeBase,
+          remoteHead
+        ),
+        correlation,
+        mergeBase,
+        remoteHead,
+        remotePublicationRetainedAt: retainedAt,
+        responsibility
+      })
+      const authorizationProposal = proposalFor(authorization)
+      expect(authorizationProposal).toBeDefined()
+      if (authorizationProposal === undefined) return yield* Effect.die("missing authorization proposal")
+      const authorizationAction: IdentityFreeAction = { _tag: "IdentityFreeAction", proposal: authorizationProposal }
+
+      const records = yield* Ref.make(initialRecords)
+      const trace = yield* Ref.make<ReadonlyArray<string>>([])
+      const instrumentedJournal = (stalePrefix: boolean) =>
+        Journal.of({
+          ...unusedJournal,
+          appendIfAcceptedPrefixCurrent: (runId, expectedPosition, key, event) =>
+            Ref.modify(
+              records,
+              (current): [Effect.Effect<ConditionalJournalAppendResult>, ReadonlyArray<JournalRecord>] => {
+                const last = current.at(-1)?.position ?? null
+                if (stalePrefix || last !== expectedPosition) {
+                  const advanced = JournalPosition.make((last === null ? 0 : Number(last)) + 1)
+                  return [
+                    Effect.succeed<ConditionalJournalAppendResult>({
+                      _tag: "PrefixAdvanced",
+                      currentPosition: advanced,
+                      expectedPosition
+                    }),
+                    current
+                  ]
+                }
+                const record: JournalRecord = { event, key, position: JournalPosition.make(Number(last) + 1), runId }
+                return [
+                  Effect.succeed<ConditionalJournalAppendResult>({ _tag: "Appended", record }),
+                  [...current, record]
+                ]
+              }
+            ).pipe(
+              Effect.flatten,
+              Effect.tap((result: ConditionalJournalAppendResult) =>
+                result._tag === "Appended"
+                  ? Ref.update(trace, (items) => [...items, "authorization-append"])
+                  : Effect.void
+              )
+            ),
+          readAccepted: (runId) =>
+            Ref.get(records).pipe(Effect.map((current) => acceptedJournalPrefixFromValidatedHistory(runId, current)))
+        })
+
+      const baseInRunJournal = appendableJournal(records)
+      const loggedInRunJournal = InRunJournal.of({
+        append: (runId, key, event) =>
+          Ref.update(trace, (items) => [...items, "baseline-journal-append"]).pipe(
+            Effect.andThen(baseInRunJournal.append(runId, key, event))
+          ),
+        read: baseInRunJournal.read
+      })
+      const remoteHeadSha = remoteHead
+      const baselineGit = RemoteBaselineGit.of({
+        catchUp: (correlation, expectedLocalHead, observedRemoteHead) =>
+          Ref.update(trace, (items) => [...items, "git-baseline-catch-up"]).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                expect(correlation).toEqual(baselineCorrelation)
+                expect(expectedLocalHead).toBe(fixture.qualifiedCandidate.run.session.expectedTargetHead)
+                expect(observedRemoteHead).toBe(remoteHeadSha)
+              })
+            ),
+            Effect.as(LocalTargetCatchUpResult.cases.Applied.make({ newHead: remoteHeadSha }))
+          ),
+        observe: () =>
+          Ref.update(trace, (items) => [...items, "git-baseline-observe"]).pipe(
+            Effect.as(
+              RemoteBaselineObservation.cases.LocalAncestor.make({
+                localHead: fixture.qualifiedCandidate.run.session.expectedTargetHead,
+                remoteHead: remoteHeadSha
+              })
+            )
+          ),
+        reconcileCatchUp: () => Effect.die("aligned authorization baseline does not reconcile catch up")
+      })
+
+      const authorizationResult = yield* executeIntegrationAction(
+        authorizationAction,
+        authorization,
+        inertLease,
+        target
+      ).pipe(
+        Effect.provideService(Journal, instrumentedJournal(false)),
+        Effect.provideService(InRunJournal, loggedInRunJournal),
+        Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
+        Effect.provideService(RemoteBaselineGit, baselineGit),
+        Effect.provideService(RemotePublicationGit, unusedRemotePublicationGit)
+      )
+      expect(authorizationResult).toMatchObject({ _tag: "ActionCompleted", proposalId: authorizationProposal.id })
+      const authorizationRecord = (yield* Ref.get(records)).find(
+        ({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized"
+      )
+      expect(authorizationRecord?.position).toBe(JournalPosition.make(4))
+
+      const baselineCorrelation = automaticCompetingHeadRemoteBaselineCorrelationFor(
+        fixture.runId,
+        integratorResponsibilityFactsFor(responsibility),
+        responsibility.integrationTarget,
+        remotePublicationTargetForTest,
+        JournalPosition.make(4)
+      )
+      const baseline = RunnableFrontierTransition.EstablishRemoteBaseline({
+        correlation: baselineCorrelation,
+        responsibility
+      })
+      const interruptibleLease: DeliveryActionExecutionLease = {
+        ...inertLease,
+        forwardBoundary: {
+          _tag: "InterruptibleBoundary",
+          execution: { run: (_intent, call, recordResult) => Effect.flatMap(call, recordResult) }
+        }
+      }
+      const baselineProposal = proposalFor(baseline)
+      expect(baselineProposal).toBeDefined()
+      if (baselineProposal === undefined) return yield* Effect.die("missing authorization-baseline proposal")
+      const baselineResult = yield* executeIntegrationAction(
+        { _tag: "IdentityFreeAction", proposal: baselineProposal },
+        baseline,
+        interruptibleLease,
+        target
+      ).pipe(
+        Effect.provideService(Journal, instrumentedJournal(false)),
+        Effect.provideService(InRunJournal, loggedInRunJournal),
+        Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
+        Effect.provideService(RemoteBaselineGit, baselineGit),
+        Effect.provideService(RemotePublicationGit, unusedRemotePublicationGit)
+      )
+      expect(baselineResult).toMatchObject({
+        _tag: "ActionDeferred",
+        proposalId: baselineProposal.id,
+        reason: "RemoteBaselineReconciliationPending"
+      })
+      const observedRecords = yield* Ref.get(records)
+      expect(observedRecords.map(({ event }) => event._tag)).toEqual([
+        "WorkflowRunBegan",
+        "IntegratorSessionFixed",
+        "RemotePublicationRetained",
+        "IntegratorCompetingHeadSuccessorAuthorized",
+        "RemoteBaselineReadIntended",
+        "RemoteBaselineObserved"
+      ])
+      const catchUpTransition = RunnableFrontierTransition.EstablishRemoteBaseline({
+        correlation: baselineCorrelation,
+        responsibility
+      })
+      const catchUpResult = yield* executeIntegrationAction(
+        { _tag: "IdentityFreeAction", proposal: baselineProposal },
+        catchUpTransition,
+        interruptibleLease,
+        target
+      ).pipe(
+        Effect.provideService(Journal, instrumentedJournal(false)),
+        Effect.provideService(InRunJournal, loggedInRunJournal),
+        Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
+        Effect.provideService(RemoteBaselineGit, baselineGit),
+        Effect.provideService(RemotePublicationGit, unusedRemotePublicationGit)
+      )
+      expect(catchUpResult).toMatchObject({ _tag: "ActionCompleted", proposalId: baselineProposal.id })
+      const caughtUpRecords = yield* Ref.get(records)
+      expect(caughtUpRecords.map(({ event }) => event._tag)).toEqual([
+        "WorkflowRunBegan",
+        "IntegratorSessionFixed",
+        "RemotePublicationRetained",
+        "IntegratorCompetingHeadSuccessorAuthorized",
+        "RemoteBaselineReadIntended",
+        "RemoteBaselineObserved",
+        "LocalTargetCatchUpIntended",
+        "LocalTargetCatchUpObserved"
+      ])
+      const traceAfterCatchUp = yield* Ref.get(trace)
+      expect(traceAfterCatchUp).toEqual([
+        "authorization-append",
+        "baseline-journal-append",
+        "git-baseline-observe",
+        "baseline-journal-append",
+        "baseline-journal-append",
+        "git-baseline-catch-up",
+        "baseline-journal-append"
+      ])
+      const [authorizedRecord, readIntent, observed, catchUpIntent, catchUpObserved] = [
+        caughtUpRecords.find(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized"),
+        caughtUpRecords.find(({ event }) => event._tag === "RemoteBaselineReadIntended"),
+        caughtUpRecords.find(({ event }) => event._tag === "RemoteBaselineObserved"),
+        caughtUpRecords.find(({ event }) => event._tag === "LocalTargetCatchUpIntended"),
+        caughtUpRecords.find(({ event }) => event._tag === "LocalTargetCatchUpObserved")
+      ]
+      expect(authorizedRecord?.position).toBeLessThan(readIntent?.position ?? 0)
+      expect(readIntent?.position).toBeLessThan(observed?.position ?? 0)
+      expect(observed?.position).toBeLessThan(catchUpIntent?.position ?? 0)
+      expect(catchUpIntent?.position).toBeLessThan(catchUpObserved?.position ?? 0)
+
+      const staleRecords = yield* Ref.make(initialRecords)
+      const staleGitCalls = yield* Ref.make(0)
+      const staleBaselineGit = RemoteBaselineGit.of({
+        catchUp: () => Effect.die("stale authorization must not catch up"),
+        observe: () =>
+          Ref.update(staleGitCalls, (count) => count + 1).pipe(
+            Effect.as(RemoteBaselineObservation.cases.Aligned.make({ localHead: remoteHead, remoteHead }))
+          ),
+        reconcileCatchUp: () => Effect.die("stale authorization must not reconcile catch up")
+      })
+      const staleTrace = yield* Ref.make<ReadonlyArray<string>>([])
+      const staleJournal = Journal.of({
+        ...unusedJournal,
+        appendIfAcceptedPrefixCurrent: (_runId, expectedPosition) =>
+          Ref.update(staleTrace, (items) => [...items, "stale-prefix"]).pipe(
+            Effect.as({
+              _tag: "PrefixAdvanced" as const,
+              currentPosition: JournalPosition.make(Number(expectedPosition) + 1),
+              expectedPosition
+            })
+          ),
+        readAccepted: (runId) =>
+          Ref.get(staleRecords).pipe(Effect.map((current) => acceptedJournalPrefixFromValidatedHistory(runId, current)))
+      })
+      const staleResult = yield* executeIntegrationAction(authorizationAction, authorization, inertLease, target).pipe(
+        Effect.provideService(Journal, staleJournal),
+        Effect.provideService(InRunJournal, appendableJournal(staleRecords)),
+        Effect.provideService(AcceptedJournalReader, acceptedJournal(staleRecords)),
+        Effect.provideService(RemoteBaselineGit, staleBaselineGit),
+        Effect.provideService(RemotePublicationGit, unusedRemotePublicationGit)
+      )
+      expect(staleResult).toMatchObject({
+        _tag: "ActionDeferred",
+        proposalId: authorizationProposal.id,
+        reason: "ContinuationAuthorizationStale"
+      })
+      expect(yield* Ref.get(staleGitCalls)).toBe(0)
+      expect(yield* Ref.get(staleTrace)).toEqual(["stale-prefix"])
+    })
 )
