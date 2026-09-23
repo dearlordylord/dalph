@@ -1,5 +1,5 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
-import { type GitCommitSha } from "@dalph/contracts"
+import { type GitCommitSha, GitCommitSha as GitCommitShaSchema } from "@dalph/contracts"
 import { expect, it } from "@effect/vitest"
 import { Context, Effect, FileSystem, Layer, Path, Ref, type Scope } from "effect"
 import { makeSuccessorPrefix } from "../../../../test/support/automatic-successor-history.js"
@@ -14,11 +14,220 @@ import {
   RemoteBaselineGit,
   RemoteBaselineFailure,
   RemoteBaselineObservation,
+  type RemoteBaselineCorrelation,
   type RemoteBaselineGitService
 } from "./baseline-events.js"
 import { establishRemoteBaseline } from "./baseline-protocol-engine.js"
 import { validateRemoteBaselineState } from "./baseline-transition-journal.js"
 import type { RemoteBaselineState } from "./baseline-state.js"
+
+it.effect("retains unsafe automatic S2 catch-up evidence without moving the target or fixing a successor", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const unsafeObservations = [
+        RemoteBaselineObservation.cases.LocalAhead.make({
+          localHead: GitCommitShaSchema.make("7".repeat(40)),
+          remoteHead: GitCommitShaSchema.make("6".repeat(40))
+        }),
+        RemoteBaselineObservation.cases.Diverged.make({
+          localHead: GitCommitShaSchema.make("7".repeat(40)),
+          remoteHead: GitCommitShaSchema.make("6".repeat(40))
+        })
+      ] as const
+
+      const seedS2Baseline = Effect.fn("AutomaticSuccessorUnsafeCatchUp.seedS2Baseline")(function* (
+        store: JournalStore["Service"],
+        runId: typeof integrationFinalityFixture.runId,
+        records: ReadonlyArray<JournalRecord>,
+        baselineIntent: JournalRecord
+      ) {
+        const [beginning, ...remaining] = records
+        if (beginning?.event._tag !== "WorkflowRunBegan") {
+          return yield* Effect.die("automatic S2 prefix must begin with its original Run pin")
+        }
+        yield* store.beginRun(
+          runId,
+          beginning.event.target,
+          beginning.event.initialControlPolicy,
+          beginning.event.remotePublicationTarget
+        )
+        for (const record of [...remaining, baselineIntent]) {
+          if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+            return yield* Effect.die("automatic S2 baseline prefix may not contain another Run lifecycle event")
+          }
+          yield* store.append(runId, record.key, record.event)
+        }
+      })
+
+      const activate = (
+        store: JournalStore["Service"],
+        runId: typeof integrationFinalityFixture.runId,
+        target: typeof integrationFinalityFixture.target,
+        correlation: RemoteBaselineCorrelation,
+        git: RemoteBaselineGitService
+      ) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const stored = yield* store.read(runId)
+            const history = reduceWorkflowJournalHistory(runId, stored)
+            if (history._tag === "InvalidWorkflowJournalHistory") {
+              return yield* Effect.die(`automatic S2 test prefix is invalid: ${JSON.stringify(history.issues)}`)
+            }
+            return yield* establishRemoteBaseline(correlation).pipe(
+              Effect.provide(journalLayer(runId, target, history, store)),
+              Effect.provideService(RemoteBaselineGit, git)
+            )
+          })
+        )
+
+      for (const observation of unsafeObservations) {
+        const successor = makeSuccessorPrefix()
+        const records = successor.records()
+        const authorization = records.find(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")
+        const baselineIntent = records.find(({ event }) => event._tag === "RemoteBaselineReadIntended")
+        if (
+          authorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
+          baselineIntent?.event._tag !== "RemoteBaselineReadIntended"
+        ) {
+          return yield* Effect.die("accepted S2 prefix must contain one exact authorization-scoped baseline intent")
+        }
+        const correlation = baselineIntent.event.correlation
+        if (
+          correlation.automaticCompetingHeadAuthorizationAt !== authorization.position ||
+          Number(authorization.position) !== Number(successor.input.authorizationAt)
+        ) {
+          return yield* Effect.die("baseline correlation must bind the exact S2 authorization position")
+        }
+        const seed = records.filter(({ position }) => Number(position) < Number(baselineIntent.position))
+        const context = yield* Layer.build(memoryJournalStoreLayer)
+        const store = Context.get(context, JournalStore)
+        yield* seedS2Baseline(store, successor.runId, seed, baselineIntent)
+        const gitTimeline = yield* Ref.make<ReadonlyArray<string>>([])
+        const localState = yield* Ref.make({
+          head: successor.input.predecessor.expectedTargetHead,
+          index: "exact-index-before-S2",
+          worktree: "exact-worktree-before-S2"
+        })
+        const git = RemoteBaselineGit.of({
+          observe: (observedCorrelation) =>
+            Effect.gen(function* () {
+              expect(observedCorrelation).toEqual(correlation)
+              yield* Ref.update(gitTimeline, (entries) => [...entries, "observe"])
+              return observation
+            }),
+          catchUp: () =>
+            Ref.update(gitTimeline, (entries) => [...entries, "catch-up"]).pipe(
+              Effect.andThen(Effect.die("unsafe ahead/divergent S2 state must not attempt catch-up"))
+            ),
+          reconcileCatchUp: () =>
+            Ref.update(gitTimeline, (entries) => [...entries, "reconcile-catch-up"]).pipe(
+              Effect.andThen(Effect.die("unsafe ahead/divergent S2 state must not reconcile catch-up"))
+            )
+        })
+        const before = yield* Ref.get(localState)
+        const state = yield* activate(store, successor.runId, successor.accepted.trackerTarget, correlation, git)
+        expect(state).toMatchObject({ _tag: "Retained", cause: { _tag: "UnsafeObservation", observation } })
+        expect(yield* Ref.get(localState)).toEqual(before)
+        expect(yield* Ref.get(gitTimeline)).toEqual(["observe"])
+        const persisted = yield* store.read(successor.runId)
+        expect(
+          persisted.filter(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")
+        ).toHaveLength(1)
+        expect(persisted.filter(({ event }) => event._tag === "RemoteBaselineReadIntended")).toHaveLength(1)
+        expect(persisted.filter(({ event }) => event._tag === "RemoteBaselineObserved")).toMatchObject([
+          { event: { observation } }
+        ])
+        expect(persisted.filter(({ event }) => event._tag === "LocalTargetCatchUpIntended")).toHaveLength(0)
+        expect(persisted.filter(({ event }) => event._tag === "LocalTargetCatchUpObserved")).toHaveLength(0)
+        expect(persisted.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")).toHaveLength(
+          0
+        )
+      }
+
+      const successor = makeSuccessorPrefix()
+      const records = successor.records()
+      const baselineIntent = records.find(({ event }) => event._tag === "RemoteBaselineReadIntended")
+      if (baselineIntent?.event._tag !== "RemoteBaselineReadIntended") {
+        return yield* Effect.die("accepted S2 prefix must contain its exact baseline intent")
+      }
+      const authorization = records.find(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")
+      if (authorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized") {
+        return yield* Effect.die("accepted S2 prefix must contain its exact successor authorization")
+      }
+      const correlation = baselineIntent.event.correlation
+      const seed = records.filter(({ position }) => Number(position) < Number(baselineIntent.position))
+      const context = yield* Layer.build(memoryJournalStoreLayer)
+      const store = Context.get(context, JournalStore)
+      yield* seedS2Baseline(store, successor.runId, seed, baselineIntent)
+      const gitTimeline = yield* Ref.make<ReadonlyArray<string>>([])
+      const localState = yield* Ref.make({
+        head: successor.input.predecessor.expectedTargetHead,
+        index: "exact-index-before-S2",
+        worktree: "exact-worktree-before-S2"
+      })
+      const localAncestor = RemoteBaselineObservation.cases.LocalAncestor.make({
+        localHead: successor.input.predecessor.expectedTargetHead,
+        remoteHead: authorization.event.remoteHead
+      })
+      const git = RemoteBaselineGit.of({
+        observe: (observedCorrelation) =>
+          Effect.gen(function* () {
+            expect(observedCorrelation).toEqual(correlation)
+            yield* Ref.update(gitTimeline, (entries) => [...entries, "observe"])
+            return localAncestor
+          }),
+        catchUp: (observedCorrelation, expectedLocalHead, remoteHead) =>
+          Effect.gen(function* () {
+            expect(observedCorrelation).toEqual(correlation)
+            expect(expectedLocalHead).toBe(localAncestor.localHead)
+            expect(remoteHead).toBe(localAncestor.remoteHead)
+            yield* Ref.update(gitTimeline, (entries) => [...entries, "catch-up"])
+            return yield* Effect.fail(new RemoteBaselineFailure({ reason: "TargetUnreadable" }))
+          }),
+        reconcileCatchUp: (observedCorrelation, expectedLocalHead, remoteHead) =>
+          Effect.gen(function* () {
+            expect(observedCorrelation).toEqual(correlation)
+            expect(expectedLocalHead).toBe(localAncestor.localHead)
+            expect(remoteHead).toBe(localAncestor.remoteHead)
+            yield* Ref.update(gitTimeline, (entries) => [...entries, "reconcile-catch-up"])
+            return yield* Effect.fail(new RemoteBaselineFailure({ reason: "TargetUnreadable" }))
+          })
+      })
+      const before = yield* Ref.get(localState)
+      expect((yield* activate(store, successor.runId, successor.accepted.trackerTarget, correlation, git))._tag).toBe(
+        "CatchUpRequired"
+      )
+      expect((yield* activate(store, successor.runId, successor.accepted.trackerTarget, correlation, git))._tag).toBe(
+        "CatchUpPending"
+      )
+      const retained = yield* activate(store, successor.runId, successor.accepted.trackerTarget, correlation, git)
+      expect(retained).toMatchObject({
+        _tag: "Retained",
+        cause: { _tag: "CatchUpUnavailable", reason: "TargetUnreadable" },
+        correlation
+      })
+      expect(yield* Ref.get(localState)).toEqual(before)
+      expect(yield* Ref.get(gitTimeline)).toEqual(["observe", "catch-up", "reconcile-catch-up"])
+      const persisted = yield* store.read(successor.runId)
+      expect(persisted.filter(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")).toEqual([
+        authorization
+      ])
+      expect(persisted.filter(({ event }) => event._tag === "LocalTargetCatchUpIntended")).toHaveLength(1)
+      expect(persisted.filter(({ event }) => event._tag === "LocalTargetCatchUpObserved")).toMatchObject([
+        {
+          event: {
+            correlation,
+            expectedLocalHead: localAncestor.localHead,
+            remoteHead: localAncestor.remoteHead,
+            result: { _tag: "Unavailable", reason: "TargetUnreadable" }
+          }
+        }
+      ])
+      expect(persisted.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")).toHaveLength(0)
+      expect(persisted.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(1)
+    })
+  )
+)
 
 it.effect("reconciles one applied automatic-successor catch-up CAS after memory and reopened SQLite process loss", () =>
   Effect.scoped(
