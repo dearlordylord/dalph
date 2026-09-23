@@ -37,6 +37,7 @@ import {
 } from "@dalph/contracts"
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
+import type { CompletionTaskClaim } from "@dalph/orchestrator"
 import {
   type GithubGraphqlRequest,
   ApplicationExitShell,
@@ -51,7 +52,6 @@ import {
   CompletionClaimMarkerAbsent,
   CompletionTaskAcknowledgement,
   CompletionTaskBoundary,
-  CompletionTaskClaim,
   CompletionTaskRequestFailure,
   CompletionTaskRequestLookup,
   controlledTrackerMutationLayer,
@@ -87,7 +87,6 @@ import {
   IntegratorSessionId,
   IntegratorCandidateText,
   IntegratorBoundaryUnavailable,
-  Integrator,
   IntegrationResponsibilityIdentity,
   isExactTaskClaim,
   makeFocusedTaskClaimFactsObserved,
@@ -3284,7 +3283,15 @@ it.effect("retains remote delivery across Pause and Exit", () =>
   )
 )
 
-it.effect("ordinary production Run retries resumed finality after a lost completion response", () =>
+it.effect.each([
+  { name: "ordinary production Run retries resumed finality after a lost completion response", premise: "unchanged" },
+  {
+    name: "ordinary production Run retains resumed finality when a dependency becomes unfinished",
+    premise: "dependency"
+  },
+  { name: "ordinary production Run retains resumed finality when the task revision changes", premise: "revision" },
+  { name: "ordinary production Run retains resumed finality when its claim is replaced", premise: "claim" }
+] as const)("$name", ({ premise }) =>
   Effect.scoped(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
@@ -3304,7 +3311,9 @@ it.effect("ordinary production Run retries resumed finality after a lost complet
       yield* fileSystem.writeFileString(`${worktree}/accepted.txt`, "accepted result\n")
       yield* git.runInWorktree(worktree, ["add", "accepted.txt"])
       yield* git.runInWorktree(worktree, ["commit", "-m", "accepted task result"])
-      const acceptedCommit = GitCommitSha.make((yield* git.runInWorktree(worktree, ["rev-parse", "HEAD"])).stdout.trim())
+      const acceptedCommit = GitCommitSha.make(
+        (yield* git.runInWorktree(worktree, ["rev-parse", "HEAD"])).stdout.trim()
+      )
       const candidateCommit = GitCommitSha.make(
         (yield* git.runInWorktree(directory, [
           "commit-tree",
@@ -3321,7 +3330,17 @@ it.effect("ordinary production Run retries resumed finality after a lost complet
       const taskId = TaskId.make("resumed-finality-task")
       const target = FixtureTarget.make("resumed-finality-target")
       const runId = RunId.make("resumed-finality-run")
-      const specification = makeTaskWorkSpecification({ body: "Publish the accepted result.", taskId, title: "Publish" })
+      const specification = makeTaskWorkSpecification({
+        body: "Publish the accepted result.",
+        taskId,
+        title: "Publish"
+      })
+      const changedSpecification = makeTaskWorkSpecification({
+        body: "The task changed after publication resumption.",
+        taskId,
+        title: "Changed publish"
+      })
+      const unfinishedPrerequisiteTaskId = TaskId.make("resumed-finality-unfinished-prerequisite")
       const attempt = PlannedTaskAttempt.make({
         attemptId: AttemptId.make("resumed-finality-attempt"),
         baseSha,
@@ -3374,15 +3393,15 @@ it.effect("ordinary production Run retries resumed finality after a lost complet
         records: accepted.records,
         session
       })
-      const oldProofIndex = published.promotedRecords.findIndex(({ event }) => event._tag === "RemotePublicationSucceeded")
+      const oldProofIndex = published.promotedRecords.findIndex(
+        ({ event }) => event._tag === "RemotePublicationSucceeded"
+      )
       const oldProof = published.promotedRecords[oldProofIndex]?.event
-      if (oldProof?._tag !== "RemotePublicationSucceeded") return yield* Effect.die("fixture lacks publication correlation")
+      if (oldProof?._tag !== "RemotePublicationSucceeded")
+        return yield* Effect.die("fixture lacks publication correlation")
       const request = RemotePublicationResumeRequest.make({
         requestId: RemotePublicationResumeRequestId.make("resumed-finality-request"),
-        responsibility: IntegrationResponsibilityIdentity.make({
-          queuedAt: accepted.responsibility.queuedAt,
-          runId
-        }),
+        responsibility: IntegrationResponsibilityIdentity.make({ queuedAt: accepted.responsibility.queuedAt, runId }),
         runId,
         schemaVersion: 1
       })
@@ -3437,6 +3456,14 @@ it.effect("ordinary production Run retries resumed finality after a lost complet
 
       const lifecycle = yield* Ref.make<"Open" | "CompletedSuccessfully">("Open")
       const trackerClaim = yield* Ref.make<ActiveTaskClaim | UnclaimedTask>(claim)
+      const foreignClaim = ActiveTaskClaim.make({
+        operationId: OperationId.make("resumed-finality-foreign-claim"),
+        owner: ClaimOwner.make("another-owner"),
+        taskId,
+        token: ClaimToken.make("resumed-finality-foreign-token")
+      })
+      const currentSpecification = yield* Ref.make(specification)
+      const currentPrerequisites = yield* Ref.make<ReadonlyArray<TaskId>>([])
       const completionMarker = yield* Ref.make<Option.Option<CompletionTaskClaim>>(Option.none())
       const completionRequest = published.completionRequest
       const completionRequestResult = yield* Ref.make<Option.Option<typeof completionRequest>>(Option.none())
@@ -3462,12 +3489,12 @@ it.effect("ordinary production Run retries resumed finality after a lost complet
       const candidateProvider: IntegratorCandidateProviderAuthorityService = {
         readEvidenceRevision: (subject) =>
           Ref.update(candidateEvidenceReads, (count) => count + 1).pipe(
-              Effect.andThen(
-                subject.locator === candidateResource && sessionEquivalence(subject.predecessor, session)
-                  ? Effect.succeed(candidateEvidenceRevision)
-                  : Effect.die("candidate cleanup requested foreign provider evidence")
-              )
-            ),
+            Effect.andThen(
+              subject.locator === candidateResource && sessionEquivalence(subject.predecessor, session)
+                ? Effect.succeed(candidateEvidenceRevision)
+                : Effect.die("candidate cleanup requested foreign provider evidence")
+            )
+          ),
         observe: (authorization) =>
           Ref.update(candidateObservations, (count) => count + 1).pipe(
             Effect.andThen(
@@ -3538,11 +3565,11 @@ it.effect("ordinary production Run retries resumed finality after a lost complet
         acquireTaskClaim: () => Effect.die("resumed finality must not acquire another task claim"),
         readTaskClaim: () =>
           Ref.get(completionMarker).pipe(
-            Effect.flatMap((marker) => Option.isSome(marker) ? Effect.succeed(marker.value) : Ref.get(trackerClaim))
+            Effect.flatMap((marker) => (Option.isSome(marker) ? Effect.succeed(marker.value) : Ref.get(trackerClaim)))
           ),
         releaseTaskClaim: (release) =>
           Ref.modify(trackerClaim, (current) =>
-          current._tag === "ActiveTaskClaim" && isExactTaskClaim(current, release.claim)
+            current._tag === "ActiveTaskClaim" && isExactTaskClaim(current, release.claim)
               ? ([Effect.void, UnclaimedTask.make({ taskId })] as const)
               : ([Effect.die("resumed finality refused a non-exact claim release"), current] as const)
           ).pipe(Effect.flatten)
@@ -3551,7 +3578,7 @@ it.effect("ordinary production Run retries resumed finality after a lost complet
         readOriginalTaskClaim: () => Ref.get(trackerClaim),
         readTaskClaim: () =>
           Ref.get(completionMarker).pipe(
-            Effect.flatMap((marker) => Option.isSome(marker) ? Effect.succeed(marker.value) : Ref.get(trackerClaim))
+            Effect.flatMap((marker) => (Option.isSome(marker) ? Effect.succeed(marker.value) : Ref.get(trackerClaim)))
           ),
         readCompletionClaimMarker: () =>
           Ref.get(completionMarker).pipe(
@@ -3583,17 +3610,22 @@ it.effect("ordinary production Run retries resumed finality after a lost complet
               Option.isSome(current)
                 ? Ref.update(completionClaimReads, (claims) => [...claims, current.value]).pipe(
                     Effect.andThen(
-                      Effect.map(Ref.get(lifecycle), (currentLifecycle) => ({
-                        currentClaim: current.value,
-                        lifecycle: currentLifecycle,
-                        operationId,
-                        target: requestedTarget,
-                        targetMembership: "Member" as const,
-                        taskId,
-                        taskRevision: specification.fingerprint,
-                        trackerRevision: TrackerRevision.make(`resumed-finality:${operationId}`),
-                        unfinishedPrerequisiteTaskIds: []
-                      }))
+                      Effect.gen(function* () {
+                        const currentLifecycle = yield* Ref.get(lifecycle)
+                        const currentTaskSpecification = yield* Ref.get(currentSpecification)
+                        const unfinishedPrerequisites = yield* Ref.get(currentPrerequisites)
+                        return {
+                          currentClaim: current.value,
+                          lifecycle: currentLifecycle,
+                          operationId,
+                          target: requestedTarget,
+                          targetMembership: "Member" as const,
+                          taskId,
+                          taskRevision: currentTaskSpecification.fingerprint,
+                          trackerRevision: TrackerRevision.make(`resumed-finality:${operationId}`),
+                          unfinishedPrerequisiteTaskIds: unfinishedPrerequisites
+                        }
+                      })
                     )
                   )
                 : Effect.die("fresh completion read requires the exact completion claim")
@@ -3621,64 +3653,83 @@ it.effect("ordinary production Run retries resumed finality after a lost complet
           Ref.get(completionRequestResult).pipe(
             Effect.flatMap((recorded) => {
               const lookup =
-              Option.isSome(recorded) && recorded.value.operationId === readRequest.operationId
-                ? CompletionTaskRequestLookup.cases.Applied.make({ request: readRequest })
-                : CompletionTaskRequestLookup.cases.NotApplied.make({ request: readRequest })
+                Option.isSome(recorded) && recorded.value.operationId === readRequest.operationId
+                  ? CompletionTaskRequestLookup.cases.Applied.make({ request: readRequest })
+                  : CompletionTaskRequestLookup.cases.NotApplied.make({ request: readRequest })
               return Ref.update(completionLookups, (lookups) => [...lookups, lookup._tag]).pipe(Effect.as(lookup))
             })
           )
+      })
+      const applyChangedTrackerPremise = Effect.gen(function* () {
+        if (premise === "dependency") yield* Ref.set(currentPrerequisites, [unfinishedPrerequisiteTaskId])
+        if (premise === "revision") yield* Ref.set(currentSpecification, changedSpecification)
+        if (premise === "claim") yield* Ref.set(trackerClaim, foreignClaim)
       })
       const targetPromotion: TargetPromotionGitService = {
         compareAndSet: (promote) =>
           Ref.update(promotionCalls, (calls) => ({ ...calls, compareAndSet: calls.compareAndSet + 1 })).pipe(
             Effect.andThen(
-              git.run(promote.integrationTarget.repository, [
-                "update-ref",
-                promote.integrationTarget.ref,
-                promote.candidateCommit,
-                promote.expectedTargetHead
-              ]).pipe(Effect.orDie)
+              git
+                .run(promote.integrationTarget.repository, [
+                  "update-ref",
+                  promote.integrationTarget.ref,
+                  promote.candidateCommit,
+                  promote.expectedTargetHead
+                ])
+                .pipe(Effect.orDie)
             ),
             Effect.flatMap((result) =>
               result.exitCode === 0
-                ? Effect.succeed(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: promote.candidateCommit }))
+                ? applyChangedTrackerPremise.pipe(
+                    Effect.as(
+                      TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: promote.candidateCommit })
+                    )
+                  )
                 : Effect.die(`target compare-and-set failed: ${result.stderr}`)
             )
           ),
         read: (promote) =>
           Ref.update(promotionCalls, (calls) => ({ ...calls, read: calls.read + 1 })).pipe(
             Effect.andThen(
-              git.run(promote.integrationTarget.repository, [
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                `${promote.integrationTarget.ref}^{commit}`
-              ]).pipe(Effect.orDie)
+              git
+                .run(promote.integrationTarget.repository, [
+                  "rev-parse",
+                  "--verify",
+                  "--quiet",
+                  `${promote.integrationTarget.ref}^{commit}`
+                ])
+                .pipe(Effect.orDie)
             ),
             Effect.flatMap((result) => {
               if (result.exitCode !== 0) return Effect.die(`target read failed: ${result.stderr}`)
               const head = GitCommitSha.make(result.stdout.trim())
               if (head === promote.candidateCommit) {
-                return Effect.succeed(TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha: head }))
-              }
-              return git.run(promote.integrationTarget.repository, [
-                "merge-base",
-                "--is-ancestor",
-                promote.candidateCommit,
-                head
-              ]).pipe(
-                Effect.orDie,
-                Effect.map((ancestry) =>
-                  ancestry.exitCode === 0
-                    ? TargetPromotionGitReadObservation.cases.CandidateAncestor.make({ currentHeadSha: head })
-                    : TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: head })
+                return Effect.succeed(
+                  TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha: head })
                 )
-              )
+              }
+              return git
+                .run(promote.integrationTarget.repository, [
+                  "merge-base",
+                  "--is-ancestor",
+                  promote.candidateCommit,
+                  head
+                ])
+                .pipe(
+                  Effect.orDie,
+                  Effect.map((ancestry) =>
+                    ancestry.exitCode === 0
+                      ? TargetPromotionGitReadObservation.cases.CandidateAncestor.make({ currentHeadSha: head })
+                      : TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: head })
+                  )
+                )
             })
           )
       }
       const unexpectedRemote = (name: string) =>
-        Ref.update(remoteCalls, (calls) => [...calls, name]).pipe(Effect.andThen(Effect.die(`unexpected remote ${name}`)))
+        Ref.update(remoteCalls, (calls) => [...calls, name]).pipe(
+          Effect.andThen(Effect.die(`unexpected remote ${name}`))
+        )
       const remoteGit = RemotePublicationGit.of({
         admit: () => unexpectedRemote("admit"),
         observe: () => unexpectedRemote("observe"),
@@ -3687,15 +3738,30 @@ it.effect("ordinary production Run retries resumed finality after a lost complet
         push: () => unexpectedRemote("push")
       })
       const executor = PlannedAttemptExecutor.of({
-        observe: () => Effect.succeed(PlannedAttemptExecutorProjection.cases.NoReport.make({
-          correlation: plannedAttemptExecutorCorrelation(attempt)
-        })),
-        requestSuspension: () => Ref.update(executorCommands, (calls) => [...calls, "Suspend"]).pipe(Effect.andThen(Effect.die("unexpected Suspend"))),
-        resume: () => Ref.update(executorCommands, (calls) => [...calls, "Resume"]).pipe(Effect.andThen(Effect.die("unexpected Resume"))),
-        begin: () => Ref.update(executorCommands, (calls) => [...calls, "Begin"]).pipe(Effect.andThen(Effect.die("unexpected Begin")))
+        observe: () =>
+          Effect.succeed(
+            PlannedAttemptExecutorProjection.cases.NoReport.make({
+              correlation: plannedAttemptExecutorCorrelation(attempt)
+            })
+          ),
+        requestSuspension: () =>
+          Ref.update(executorCommands, (calls) => [...calls, "Suspend"]).pipe(
+            Effect.andThen(Effect.die("unexpected Suspend"))
+          ),
+        resume: () =>
+          Ref.update(executorCommands, (calls) => [...calls, "Resume"]).pipe(
+            Effect.andThen(Effect.die("unexpected Resume"))
+          ),
+        begin: () =>
+          Ref.update(executorCommands, (calls) => [...calls, "Begin"]).pipe(
+            Effect.andThen(Effect.die("unexpected Begin"))
+          )
       })
       const integrator = {
-        prepare: () => Ref.update(integratorCalls, (calls) => [...calls, "prepare"]).pipe(Effect.andThen(Effect.die("unexpected Integrator call")))
+        prepare: () =>
+          Ref.update(integratorCalls, (calls) => [...calls, "prepare"]).pipe(
+            Effect.andThen(Effect.die("unexpected Integrator call"))
+          )
       }
       const evidenceManifest = AcceptedResultEvidenceManifest.make({
         commit: acceptedCommit,
@@ -3723,23 +3789,44 @@ it.effect("ordinary production Run retries resumed finality after a lost complet
           remotePublicationGitLayer: Layer.succeed(RemotePublicationGit, remoteGit),
           remotePublicationTarget: remotePublicationTargetForTest,
           targetPromotion: { git: targetPromotion },
-          workflowCleanupObserver: () => Effect.void,
+          workflowCleanupObserver: () => Effect.void
         }
       ).pipe(
-        Layer.provide(Layer.succeed(TrackerGraphReader, TrackerGraphReader.of({
-          read: () => Ref.update(trackerReads, (count) => count + 1).pipe(
-            Effect.andThen(Ref.get(lifecycle)),
-            Effect.flatMap((currentLifecycle) => {
-              const graph = projectTrackerSnapshot({
-                revision: `resumed-finality:${currentLifecycle}`,
-                rootTaskId: taskId,
-                tasks: [{ id: taskId, lifecycle: { _tag: currentLifecycle }, parentTaskId: null, prerequisiteIds: [] }]
-              })
-              return graph._tag === "Valid" ? Effect.succeed(graph.snapshot) : Effect.die("tracker graph invalid")
+        Layer.provide(
+          Layer.succeed(
+            TrackerGraphReader,
+            TrackerGraphReader.of({
+              read: () =>
+                Ref.update(trackerReads, (count) => count + 1).pipe(
+                  Effect.andThen(
+                    Effect.all({ currentLifecycle: Ref.get(lifecycle), prerequisites: Ref.get(currentPrerequisites) })
+                  ),
+                  Effect.flatMap(({ currentLifecycle, prerequisites }) => {
+                    const graph = projectTrackerSnapshot({
+                      revision: `resumed-finality:${currentLifecycle}`,
+                      rootTaskId: taskId,
+                      tasks: [
+                        {
+                          id: taskId,
+                          lifecycle: { _tag: currentLifecycle },
+                          parentTaskId: null,
+                          prerequisiteIds: prerequisites
+                        },
+                        ...prerequisites.map((id) => ({
+                          id,
+                          lifecycle: { _tag: "Open" as const },
+                          parentTaskId: null,
+                          prerequisiteIds: []
+                        }))
+                      ]
+                    })
+                    return graph._tag === "Valid" ? Effect.succeed(graph.snapshot) : Effect.die("tracker graph invalid")
+                  })
+                ),
+              readTaskWorkSpecification: () => Ref.get(currentSpecification)
             })
-          ),
-          readTaskWorkSpecification: () => Effect.succeed(specification)
-        }))),
+          )
+        ),
         Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
       )
       const nextOperation = yield* Ref.make(0)
@@ -3748,17 +3835,23 @@ it.effect("ordinary production Run retries resumed finality after a lost complet
         Effect.die("resumed history supplies its initial policy"),
         AllocatedWorkflowRunId.make(runId)
       ).pipe(
-        Effect.provideService(OperationIdAllocator, OperationIdAllocator.of({
-          allocate: () => Ref.getAndUpdate(nextOperation, (value) => value + 1).pipe(
-            Effect.map((value) => OperationId.make(`resumed-finality-operation-${value}`))
-          )
-        })),
-        Effect.provideService(TaskClaimAcquisitionPlanner, TaskClaimAcquisitionPlanner.of({
-          plan: () => Effect.die("resumed finality must not plan a new claim")
-        })),
-        Effect.provideService(PlannedTaskAttemptPlanner, PlannedTaskAttemptPlanner.of({
-          plan: () => Effect.die("resumed finality must not plan another attempt")
-        })),
+        Effect.provideService(
+          OperationIdAllocator,
+          OperationIdAllocator.of({
+            allocate: () =>
+              Ref.getAndUpdate(nextOperation, (value) => value + 1).pipe(
+                Effect.map((value) => OperationId.make(`resumed-finality-operation-${value}`))
+              )
+          })
+        ),
+        Effect.provideService(
+          TaskClaimAcquisitionPlanner,
+          TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("resumed finality must not plan a new claim") })
+        ),
+        Effect.provideService(
+          PlannedTaskAttemptPlanner,
+          PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("resumed finality must not plan another attempt") })
+        )
       )
       yield* run.pipe(
         Effect.provide(application),
@@ -3767,11 +3860,18 @@ it.effect("ordinary production Run retries resumed finality after a lost complet
       const after = yield* Effect.gen(function* () {
         return yield* (yield* JournalStore).read(runId)
       }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+      expect(reduceWorkflowJournalHistory(runId, after)._tag).toBe("ValidWorkflowJournalHistory")
       const promotions = after.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")
       const completions = after.filter(({ event }) => event._tag === "CompletionTaskAcknowledged")
       const lostResponses = after.filter(({ event }) => event._tag === "CompletionTaskResponseLost")
       const requestLookups = after.filter(({ event }) => event._tag === "CompletionTaskRequestLookupObserved")
       const cleanupSettlements = after.filter(({ event }) => event._tag === "IntegratorCandidateCleanupSettled")
+      const focusedCompletionFacts = after.flatMap(({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskCompletionFacts"
+          ? [event.observation.facts]
+          : []
+      )
+      const finalitySettlements = after.filter(({ event }) => event._tag === "IntegrationFinalitySettled")
       const completeGraphObservations = after.flatMap(({ event }) =>
         event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "CompleteTaskTrackerFacts"
           ? [event.observation]
@@ -3779,32 +3879,56 @@ it.effect("ordinary production Run retries resumed finality after a lost complet
       )
       expect(promotions).toHaveLength(1)
       expect(promotions[0]?.event).toMatchObject({ correlation: { qualifiedCandidate: { candidateCommit } } })
-      expect(completions).toHaveLength(1)
-      expect(completions[0]?.event).toMatchObject({
-        acknowledgement: { operationId: completionRequest.operationId, taskId }
-      })
-      expect(lostResponses).toHaveLength(1)
-      expect(lostResponses[0]?.event).toMatchObject({ attemptOrdinal: 1, request: completionRequest })
-      expect(requestLookups).toHaveLength(1)
-      expect(requestLookups[0]?.event).toMatchObject({
-        lookup: { _tag: "NotApplied", request: completionRequest },
-        request: completionRequest
-      })
-      expect(cleanupSettlements).toHaveLength(1)
-      expect(cleanupSettlements[0]?.event).toMatchObject({
-        authorization: {
-          disposition: { qualifiedCandidate: { candidateCommit } },
-          evidenceRevision: candidateEvidenceRevision,
-          locator: candidateResource,
-          owner: { sessionId: candidateSessionId }
-        },
-        result: {
-          _tag: "Removed",
-          locator: candidateResource,
-          revision: candidateEvidenceRevision,
-          sessionId: candidateSessionId
+      if (premise === "unchanged") {
+        expect(completions).toHaveLength(1)
+        expect(completions[0]?.event).toMatchObject({
+          acknowledgement: { operationId: completionRequest.operationId, taskId }
+        })
+        expect(lostResponses).toHaveLength(1)
+        expect(lostResponses[0]?.event).toMatchObject({ attemptOrdinal: 1, request: completionRequest })
+        expect(requestLookups).toHaveLength(1)
+        expect(requestLookups[0]?.event).toMatchObject({
+          lookup: { _tag: "NotApplied", request: completionRequest },
+          request: completionRequest
+        })
+        expect(cleanupSettlements).toHaveLength(1)
+        expect(cleanupSettlements[0]?.event).toMatchObject({
+          authorization: {
+            disposition: { qualifiedCandidate: { candidateCommit } },
+            evidenceRevision: candidateEvidenceRevision,
+            locator: candidateResource,
+            owner: { sessionId: candidateSessionId }
+          },
+          result: {
+            _tag: "Removed",
+            locator: candidateResource,
+            revision: candidateEvidenceRevision,
+            sessionId: candidateSessionId
+          }
+        })
+        expect(finalitySettlements).toHaveLength(1)
+      } else {
+        expect(completions).toEqual([])
+        expect(lostResponses).toEqual([])
+        expect(requestLookups).toEqual([])
+        expect(cleanupSettlements).toEqual([])
+        expect(after.filter(({ event }) => event._tag === "IntegratorCandidateCleanupIntended")).toEqual([])
+        expect(finalitySettlements).toEqual([])
+        expect(after.filter(({ event }) => event._tag === "CompletionTaskAttemptIntended")).toEqual([])
+        expect(yield* Ref.get(completionCalls)).toEqual([])
+        expect(yield* Ref.get(completionAppliedCalls)).toBe(0)
+        expect(yield* Ref.get(candidateEvidenceReads)).toBe(0)
+        expect(yield* Ref.get(candidateRemovals)).toBe(0)
+        expect((yield* Ref.get(candidateResources)).get(candidateResource)).toBe(candidateSessionId)
+        if (premise === "dependency") {
+          expect(focusedCompletionFacts.at(-1)?.unfinishedPrerequisiteTaskIds).toEqual([unfinishedPrerequisiteTaskId])
+        } else if (premise === "revision") {
+          expect(focusedCompletionFacts.at(-1)?.taskRevision).toBe(changedSpecification.fingerprint)
+        } else {
+          expect(after.filter(({ event }) => event._tag === "CompletionClaimReplaced")).toEqual([])
+          expect(yield* Ref.get(trackerClaim)).toEqual(foreignClaim)
         }
-      })
+      }
       expect(completeGraphObservations[0]?.rootTaskId).toBe(taskId)
       expect(completeGraphObservations.at(-1)?.rootTaskId).toBe(taskId)
       expect(after.filter(({ event }) => event._tag === "RemotePublicationResumeRequested")).toEqual([
@@ -3832,23 +3956,51 @@ it.effect("ordinary production Run retries resumed finality after a lost complet
       expect(yield* Ref.get(remoteCalls)).toEqual([])
       expect(yield* Ref.get(integratorCalls)).toEqual([])
       expect(yield* Ref.get(executorCommands)).toEqual([])
-      expect(yield* Ref.get(completionCalls)).toEqual([completionRequest, completionRequest])
-      expect(yield* Ref.get(completionAppliedCalls)).toBe(1)
-      expect(yield* Ref.get(completionAttempts)).toBe(2)
       const currentCompletionClaims = yield* Ref.get(completionClaimReads)
-      expect(currentCompletionClaims.length).toBeGreaterThanOrEqual(3)
-      expect(currentCompletionClaims.every((observed) => completionTaskClaimEquals(observed, completionRequest.claim))).toBe(
-        true
-      )
-      expect(yield* Ref.get(completionReads)).toBeGreaterThan(0)
+      if (premise === "unchanged") {
+        expect(yield* Ref.get(completionCalls)).toEqual([completionRequest, completionRequest])
+        expect(yield* Ref.get(completionAppliedCalls)).toBe(1)
+        expect(yield* Ref.get(completionAttempts)).toBe(2)
+        expect(currentCompletionClaims.length).toBeGreaterThanOrEqual(3)
+        expect(
+          currentCompletionClaims.every((observed) => completionTaskClaimEquals(observed, completionRequest.claim))
+        ).toBe(true)
+        expect(yield* Ref.get(completionReads)).toBeGreaterThan(0)
+      } else {
+        expect(yield* Ref.get(completionAttempts)).toBe(0)
+        if (premise === "claim") {
+          expect(yield* Ref.get(completionReads)).toBe(0)
+          expect(yield* Ref.get(completionClaimReads)).toEqual([])
+          expect(Option.isNone(yield* Ref.get(completionMarker))).toBe(true)
+        } else {
+          expect(yield* Ref.get(completionReads)).toBeGreaterThan(0)
+          expect(currentCompletionClaims.length).toBeGreaterThan(0)
+          expect(
+            currentCompletionClaims.every((observed) => completionTaskClaimEquals(observed, completionRequest.claim))
+          ).toBe(true)
+          expect(Option.isSome(yield* Ref.get(completionMarker))).toBe(true)
+        }
+      }
       expect(yield* Ref.get(trackerReads)).toBeGreaterThan(0)
-      expect(yield* Ref.get(lifecycle)).toBe("CompletedSuccessfully")
-      expect(yield* Ref.get(trackerClaim)).toEqual(UnclaimedTask.make({ taskId }))
-      expect(Option.isNone(yield* Ref.get(completionMarker))).toBe(true)
-      expect(yield* Ref.get(candidateEvidenceReads)).toBe(1)
-      expect(yield* Ref.get(candidateObservations)).toBe(2)
-      expect(yield* Ref.get(candidateRemovals)).toBe(1)
-      expect((yield* Ref.get(candidateResources)).size).toBe(0)
+      if (premise === "unchanged") {
+        expect(yield* Ref.get(lifecycle)).toBe("CompletedSuccessfully")
+        expect(yield* Ref.get(trackerClaim)).toEqual(UnclaimedTask.make({ taskId }))
+        expect(Option.isNone(yield* Ref.get(completionMarker))).toBe(true)
+        expect(yield* Ref.get(candidateEvidenceReads)).toBe(1)
+        expect(yield* Ref.get(candidateObservations)).toBe(2)
+        expect(yield* Ref.get(candidateRemovals)).toBe(1)
+        expect((yield* Ref.get(candidateResources)).size).toBe(0)
+      } else {
+        expect(yield* Ref.get(lifecycle)).toBe("Open")
+        expect(yield* Ref.get(candidateObservations)).toBe(0)
+        expect(yield* Ref.get(candidateRemovals)).toBe(0)
+        if (premise === "dependency") {
+          expect(yield* Ref.get(currentPrerequisites)).toEqual([unfinishedPrerequisiteTaskId])
+        }
+        if (premise === "revision") {
+          expect((yield* Ref.get(currentSpecification)).fingerprint).toBe(changedSpecification.fingerprint)
+        }
+      }
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
   )
 )
