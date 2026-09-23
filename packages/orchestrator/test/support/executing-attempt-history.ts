@@ -5,7 +5,7 @@ import {
   RemotePublicationEndpoint,
   RemotePublicationTarget
 } from "@dalph/contracts"
-import type { PlannedTaskAttempt, RunId, TaskWorkSpecification } from "@dalph/contracts"
+import type { PlannedTaskAttempt, RunId, TaskId, TaskWorkSpecification } from "@dalph/contracts"
 import { Effect, Option } from "effect"
 import { PlannedWorktreeReady } from "../../src/authorities/git/worktree.js"
 import { projectTrackerSnapshot } from "../../src/authorities/task-tracker/graph.js"
@@ -54,6 +54,7 @@ export interface ExecutingAttemptHistoryInput {
   readonly activeClaim: ActiveTaskClaim
   readonly initialControlPolicy?: InitialControlPolicy
   readonly plannedAttempt: PlannedTaskAttempt
+  readonly rootTaskId?: TaskId
   readonly runId: RunId
   readonly taskSpecification?: TaskWorkSpecification
   readonly trackerTarget: TrackerTarget
@@ -130,6 +131,7 @@ export const makeExecutingAttemptHistory = (input: ExecutingAttemptHistoryInput)
   })
   const projected = projectTrackerSnapshot({
     revision: TrackerRevision.make(`${input.runId}:accepted-integration-graph`),
+    ...(input.rootTaskId === undefined ? {} : { rootTaskId: input.rootTaskId }),
     tasks: [
       {
         id: input.plannedAttempt.taskId,

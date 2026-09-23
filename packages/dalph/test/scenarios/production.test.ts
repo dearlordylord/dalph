@@ -8,6 +8,7 @@ import { makePromotedIntegrationHistory } from "../../../orchestrator/test/suppo
 import {
   AttemptId,
   AcceptedResult,
+  AcceptedResultEvidenceManifest,
   EvidenceDigest,
   EvidenceReference,
   GitCommitSha,
@@ -46,6 +47,12 @@ import {
   AttemptChoiceAppliedEvent,
   ClaimOwner,
   ClaimToken,
+  CompletionClaimBoundary,
+  CompletionClaimMarkerAbsent,
+  CompletionTaskAcknowledgement,
+  CompletionTaskBoundary,
+  CompletionTaskClaim,
+  CompletionTaskRequestLookup,
   controlledTrackerMutationLayer,
   EvidenceStore,
   type EvidenceStoreService,
@@ -79,6 +86,9 @@ import {
   IntegratorSessionId,
   IntegratorCandidateText,
   IntegratorBoundaryUnavailable,
+  Integrator,
+  IntegrationResponsibilityIdentity,
+  isExactTaskClaim,
   makeFocusedTaskClaimFactsObserved,
   makeTargetLineageObservationOperation,
   makeTaskClaimObservationOperation,
@@ -141,6 +151,22 @@ import {
   TrackerAdapterReadFailureReason,
   TrackerMutation,
   TrackerRevision,
+  UnclaimedTask,
+  completionTaskClaimEquals,
+  RemotePublicationAttemptAuthorization,
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationGit,
+  RemotePublicationProofBasis,
+  RemotePublicationResumeRequest,
+  RemotePublicationResumeRequestId,
+  RemotePublicationResumeRequestedEvent,
+  RemotePublicationRetainedCause,
+  RemotePublicationRetainedEvent,
+  RemotePublicationSucceededEvent,
+  TargetPromotionCompareAndSetResult,
+  TargetPromotionGitReadObservation,
+  type TargetPromotionGitService,
+  WorkflowActor,
   WorkflowRunAlreadyTerminated,
   workflowJournalEventVersion,
   WorkflowTrace,
@@ -159,6 +185,7 @@ import {
   Option,
   PubSub,
   Ref,
+  Schema,
   Scope,
   Stream
 } from "effect"
@@ -169,6 +196,7 @@ import {
 } from "../../../orchestrator/test/task-tracker-facts.js"
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../orchestrator/test/controlled-planned-attempt-executor.js"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
+import { describeJournalEvent } from "../../../orchestrator/src/workflow/registry/event-descriptor.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
 import {
   CodexAppServer,
@@ -3251,6 +3279,537 @@ it.effect("retains remote delivery across Pause and Exit", () =>
         expect(yield* Ref.get(cleanupCalls), cutoff).toEqual([])
         expect(yield* fileSystem.exists(`${directory}/.git/dalph/git-senders`), cutoff).toBe(false)
       }
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("ordinary production Run promotes resumed publication proof and completes from fresh tracker facts", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-resumed-finality-" })
+      const git = yield* GitCommand
+      yield* git.runInWorktree(directory, ["init"])
+      yield* git.runInWorktree(directory, ["config", "user.email", "dalph@example.invalid"])
+      yield* git.runInWorktree(directory, ["config", "user.name", "Dalph Test"])
+      yield* fileSystem.writeFileString(`${directory}/README.md`, "resumed publication finality\n")
+      yield* git.runInWorktree(directory, ["add", "README.md"])
+      yield* git.runInWorktree(directory, ["commit", "-m", "initial"])
+      yield* git.runInWorktree(directory, ["branch", "-M", "master"])
+      const baseSha = GitCommitSha.make((yield* git.runInWorktree(directory, ["rev-parse", "HEAD"])).stdout.trim())
+      const worktree = WorktreeLocator.make(`${directory}/worktree`)
+      const branch = TaskBranchRef.make("refs/heads/dalph/resumed-finality")
+      yield* git.runInWorktree(directory, ["worktree", "add", "-b", "dalph/resumed-finality", worktree, baseSha])
+      yield* fileSystem.writeFileString(`${worktree}/accepted.txt`, "accepted result\n")
+      yield* git.runInWorktree(worktree, ["add", "accepted.txt"])
+      yield* git.runInWorktree(worktree, ["commit", "-m", "accepted task result"])
+      const acceptedCommit = GitCommitSha.make((yield* git.runInWorktree(worktree, ["rev-parse", "HEAD"])).stdout.trim())
+      const candidateCommit = GitCommitSha.make(
+        (yield* git.runInWorktree(directory, [
+          "commit-tree",
+          `${acceptedCommit}^{tree}`,
+          "-p",
+          baseSha,
+          "-p",
+          acceptedCommit,
+          "-m",
+          "integrated candidate"
+        ])).stdout.trim()
+      )
+
+      const taskId = TaskId.make("resumed-finality-task")
+      const target = FixtureTarget.make("resumed-finality-target")
+      const runId = RunId.make("resumed-finality-run")
+      const specification = makeTaskWorkSpecification({ body: "Publish the accepted result.", taskId, title: "Publish" })
+      const attempt = PlannedTaskAttempt.make({
+        attemptId: AttemptId.make("resumed-finality-attempt"),
+        baseSha,
+        branch,
+        executor: TaskExecutorLocator.make("executor:production-resumed-finality"),
+        runId,
+        taskId,
+        taskRevision: specification.fingerprint,
+        worktree
+      })
+      const claim = ActiveTaskClaim.make({
+        operationId: OperationId.make("resumed-finality-claim"),
+        owner: ClaimOwner.make("dalph"),
+        taskId,
+        token: ClaimToken.make("resumed-finality-token")
+      })
+      const acceptedResult = AcceptedResult.make({
+        commit: acceptedCommit,
+        evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("c".repeat(64)) })
+      })
+      const integrationTarget = productionIntegrationTarget(`${directory}/.git`)
+      const accepted = makeAcceptedIntegrationHistory({
+        acceptedResult,
+        activeClaim: claim,
+        integrationTarget,
+        plannedAttempt: attempt,
+        rootTaskId: taskId,
+        runId,
+        targetHeadSha: baseSha,
+        taskSpecification: specification,
+        trackerTarget: target
+      })
+      const candidateResource = IntegratorCandidateResourceLocator.make("candidate:resumed-finality")
+      const candidateSessionId = IntegratorSessionId.make("session:resumed-finality")
+      const session = IntegratorSessionCorrelation.make({
+        acceptedResult,
+        candidateResource,
+        expectedTargetHead: baseSha,
+        integrationTarget,
+        plannedAttempt: attempt,
+        queuedAt: accepted.responsibility.queuedAt,
+        sessionId: candidateSessionId,
+        startedAt: accepted.responsibility.startedAt,
+        targetLineageObservedAt: accepted.targetLineageObservedAt
+      })
+      const published = makePromotedIntegrationHistory({
+        candidateCommit,
+        candidateText: IntegratorCandidateText.make("candidate:resumed-finality"),
+        originalClaim: claim,
+        records: accepted.records,
+        session
+      })
+      const oldProofIndex = published.promotedRecords.findIndex(({ event }) => event._tag === "RemotePublicationSucceeded")
+      const oldProof = published.promotedRecords[oldProofIndex]?.event
+      if (oldProof?._tag !== "RemotePublicationSucceeded") return yield* Effect.die("fixture lacks publication correlation")
+      const request = RemotePublicationResumeRequest.make({
+        requestId: RemotePublicationResumeRequestId.make("resumed-finality-request"),
+        responsibility: IntegrationResponsibilityIdentity.make({
+          queuedAt: accepted.responsibility.queuedAt,
+          runId
+        }),
+        runId,
+        schemaVersion: 1
+      })
+      const append = (records: ReadonlyArray<JournalRecord>, event: JournalRecord["event"]): JournalRecord => ({
+        event,
+        key: describeJournalEvent(event).expectedKey,
+        position: JournalPosition.make(records.length + 1),
+        runId
+      })
+      const retained = RemotePublicationRetainedEvent.make({
+        authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
+        cause: RemotePublicationRetainedCause.cases.AuthenticationDenied.make({}),
+        correlation: oldProof.correlation,
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      })
+      const receipt = RemotePublicationResumeRequestedEvent.make({
+        correlation: oldProof.correlation,
+        initiatedBy: WorkflowActor.cases.Operator.make({}),
+        occurrenceClassification: "InitiatedAction",
+        request,
+        version: workflowJournalEventVersion
+      })
+      const resumedProof = RemotePublicationSucceededEvent.make({
+        correlation: oldProof.correlation,
+        occurrenceClassification: "NonActionOccurrence",
+        proof: RemotePublicationProofBasis.cases.ReconciledCandidateCurrent.make({
+          attemptOrdinal: RemotePublicationAttemptOrdinal.make(1),
+          remoteHead: candidateCommit
+        }),
+        version: workflowJournalEventVersion
+      })
+      const publicationPrefix = published.promotedRecords.slice(0, oldProofIndex)
+      const resumedRecords = [
+        ...publicationPrefix,
+        append(publicationPrefix, retained),
+        append([...publicationPrefix, retained], receipt),
+        append([...publicationPrefix, retained, receipt], resumedProof)
+      ]
+      const reduced = reduceWorkflowJournalHistory(runId, resumedRecords)
+      if (reduced._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die("resumed fixture must reduce")
+      const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
+      yield* Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const began = resumedRecords[0]
+        if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("resumed fixture lacks Run begin")
+        yield* journal.beginRun(runId, target, began.event.initialControlPolicy, began.event.remotePublicationTarget)
+        for (const record of resumedRecords.slice(1)) {
+          yield* journal.append(runId, record.key, record.event)
+        }
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+
+      const lifecycle = yield* Ref.make<"Open" | "CompletedSuccessfully">("Open")
+      const trackerClaim = yield* Ref.make<ActiveTaskClaim | UnclaimedTask>(claim)
+      const completionMarker = yield* Ref.make<Option.Option<CompletionTaskClaim>>(Option.none())
+      const completionRequest = published.completionRequest
+      const completionRequestResult = yield* Ref.make<Option.Option<typeof completionRequest>>(Option.none())
+      const completionCalls = yield* Ref.make<ReadonlyArray<typeof completionRequest>>([])
+      const remoteCalls = yield* Ref.make<ReadonlyArray<string>>([])
+      const integratorCalls = yield* Ref.make<ReadonlyArray<string>>([])
+      const executorCommands = yield* Ref.make<ReadonlyArray<string>>([])
+      const trackerReads = yield* Ref.make(0)
+      const completionReads = yield* Ref.make(0)
+      const promotionCalls = yield* Ref.make({ compareAndSet: 0, read: 0 })
+      const candidateEvidenceRevision = IntegratorCandidateCleanupEvidenceRevision.make(1)
+      const candidateResources = yield* Ref.make<ReadonlyMap<IntegratorCandidateResourceLocator, IntegratorSessionId>>(
+        new Map([[candidateResource, candidateSessionId]])
+      )
+      const candidateEvidenceReads = yield* Ref.make(0)
+      const candidateObservations = yield* Ref.make(0)
+      const candidateRemovals = yield* Ref.make(0)
+      const sessionEquivalence = Schema.toEquivalence(IntegratorSessionCorrelation)
+      const candidateProvider: IntegratorCandidateProviderAuthorityService = {
+        readEvidenceRevision: (subject) =>
+          Ref.update(candidateEvidenceReads, (count) => count + 1).pipe(
+            Effect.andThen(
+              subject.locator === candidateResource && sessionEquivalence(subject.predecessor, session)
+                ? Effect.succeed(candidateEvidenceRevision)
+                : Effect.die("candidate cleanup requested foreign provider evidence")
+            )
+          ),
+        observe: (authorization) =>
+          Ref.update(candidateObservations, (count) => count + 1).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                if (
+                  authorization.locator !== candidateResource ||
+                  authorization.owner.sessionId !== candidateSessionId ||
+                  authorization.evidenceRevision !== candidateEvidenceRevision
+                ) {
+                  return IntegratorCandidateCleanupObservation.cases.Unreadable.make({
+                    detail: "candidate cleanup did not preserve the exact predecessor authority",
+                    locator: authorization.locator
+                  })
+                }
+                const owner = (yield* Ref.get(candidateResources)).get(candidateResource)
+                return owner === undefined
+                  ? IntegratorCandidateCleanupObservation.cases.Absent.make({
+                      locator: candidateResource,
+                      revision: candidateEvidenceRevision
+                    })
+                  : IntegratorCandidateCleanupObservation.cases.Present.make({
+                      locator: candidateResource,
+                      revision: candidateEvidenceRevision,
+                      sessionId: owner,
+                      writerQuiescent: true
+                    })
+              })
+            )
+          ),
+        remove: (authorization) =>
+          Ref.update(candidateRemovals, (count) => count + 1).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                if (
+                  authorization.locator !== candidateResource ||
+                  authorization.owner.sessionId !== candidateSessionId ||
+                  authorization.evidenceRevision !== candidateEvidenceRevision
+                ) {
+                  return IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+                    detail: "candidate cleanup mutation did not preserve the exact predecessor authority",
+                    locator: authorization.locator,
+                    sessionId: authorization.owner.sessionId
+                  })
+                }
+                const owner = (yield* Ref.get(candidateResources)).get(candidateResource)
+                if (owner !== candidateSessionId) {
+                  return IntegratorCandidateCleanupMutationResult.cases.Unknown.make({
+                    detail: "candidate cleanup mutation lost the exact provider owner",
+                    locator: candidateResource,
+                    sessionId: candidateSessionId
+                  })
+                }
+                yield* Ref.update(candidateResources, (resources) => {
+                  const next = new Map(resources)
+                  next.delete(candidateResource)
+                  return next
+                })
+                return IntegratorCandidateCleanupMutationResult.cases.Removed.make({
+                  locator: candidateResource,
+                  revision: candidateEvidenceRevision,
+                  sessionId: candidateSessionId
+                })
+              })
+            )
+          )
+      }
+      const taskMutation = TrackerMutation.of({
+        acquireTaskClaim: () => Effect.die("resumed finality must not acquire another task claim"),
+        readTaskClaim: () =>
+          Ref.get(completionMarker).pipe(
+            Effect.flatMap((marker) => Option.isSome(marker) ? Effect.succeed(marker.value) : Ref.get(trackerClaim))
+          ),
+        releaseTaskClaim: (release) =>
+          Ref.modify(trackerClaim, (current) =>
+          current._tag === "ActiveTaskClaim" && isExactTaskClaim(current, release.claim)
+              ? ([Effect.void, UnclaimedTask.make({ taskId })] as const)
+              : ([Effect.die("resumed finality refused a non-exact claim release"), current] as const)
+          ).pipe(Effect.flatten)
+      })
+      const completionClaim = CompletionClaimBoundary.of({
+        readOriginalTaskClaim: () => Ref.get(trackerClaim),
+        readTaskClaim: () =>
+          Ref.get(completionMarker).pipe(
+            Effect.flatMap((marker) => Option.isSome(marker) ? Effect.succeed(marker.value) : Ref.get(trackerClaim))
+          ),
+        readCompletionClaimMarker: () =>
+          Ref.get(completionMarker).pipe(
+            Effect.map((current) =>
+              Option.isSome(current) ? current.value : CompletionClaimMarkerAbsent.make({ taskId })
+            )
+          ),
+        replaceTaskClaim: (replacement) =>
+          Ref.get(trackerClaim).pipe(
+            Effect.flatMap((current) =>
+              current._tag === "ActiveTaskClaim" && isExactTaskClaim(current, replacement.claim.originalClaim)
+                ? Ref.set(completionMarker, Option.some(replacement.claim)).pipe(Effect.as(replacement.claim))
+                : Effect.die("completion claim replacement lacked the exact active claim")
+            )
+          ),
+        releaseOriginalTaskClaim: taskMutation.releaseTaskClaim,
+        deleteTaskClaim: (request) =>
+          Ref.modify(completionMarker, (current) =>
+            Option.isSome(current) && completionTaskClaimEquals(current.value, request.claim)
+              ? ([Effect.void, Option.none()] as const)
+              : ([Effect.die("completion claim deletion lacked the exact completion claim"), current] as const)
+          ).pipe(Effect.flatten)
+      })
+      const completionTask = CompletionTaskBoundary.of({
+        readFocusedTaskCompletion: ({ operationId, target: requestedTarget }) =>
+          Ref.update(completionReads, (count) => count + 1).pipe(
+            Effect.andThen(Ref.get(completionMarker)),
+            Effect.flatMap((current) =>
+              Option.isSome(current)
+                ? Effect.map(Ref.get(lifecycle), (currentLifecycle) => ({
+                    currentClaim: current.value,
+                    lifecycle: currentLifecycle,
+                    operationId,
+                    target: requestedTarget,
+                    targetMembership: "Member" as const,
+                    taskId,
+                    taskRevision: specification.fingerprint,
+                    trackerRevision: TrackerRevision.make(`resumed-finality:${operationId}`),
+                    unfinishedPrerequisiteTaskIds: []
+                  }))
+                : Effect.die("fresh completion read requires the exact completion claim")
+            )
+          ),
+        completeTask: (completeRequest) =>
+          Ref.update(completionCalls, (calls) => [...calls, completeRequest]).pipe(
+            Effect.andThen(Ref.set(lifecycle, "CompletedSuccessfully")),
+            Effect.andThen(Ref.set(completionRequestResult, Option.some(completeRequest))),
+            Effect.as(CompletionTaskAcknowledgement.make({ operationId: completeRequest.operationId, taskId }))
+          ),
+        readCompletionRequest: (readRequest) =>
+          Ref.get(completionRequestResult).pipe(
+            Effect.map((recorded) =>
+              Option.isSome(recorded) && recorded.value.operationId === readRequest.operationId
+                ? CompletionTaskRequestLookup.cases.Applied.make({ request: readRequest })
+                : CompletionTaskRequestLookup.cases.NotApplied.make({ request: readRequest })
+            )
+          )
+      })
+      const targetPromotion: TargetPromotionGitService = {
+        compareAndSet: (promote) =>
+          Ref.update(promotionCalls, (calls) => ({ ...calls, compareAndSet: calls.compareAndSet + 1 })).pipe(
+            Effect.andThen(
+              git.run(promote.integrationTarget.repository, [
+                "update-ref",
+                promote.integrationTarget.ref,
+                promote.candidateCommit,
+                promote.expectedTargetHead
+              ]).pipe(Effect.orDie)
+            ),
+            Effect.flatMap((result) =>
+              result.exitCode === 0
+                ? Effect.succeed(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: promote.candidateCommit }))
+                : Effect.die(`target compare-and-set failed: ${result.stderr}`)
+            )
+          ),
+        read: (promote) =>
+          Ref.update(promotionCalls, (calls) => ({ ...calls, read: calls.read + 1 })).pipe(
+            Effect.andThen(
+              git.run(promote.integrationTarget.repository, [
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                `${promote.integrationTarget.ref}^{commit}`
+              ]).pipe(Effect.orDie)
+            ),
+            Effect.flatMap((result) => {
+              if (result.exitCode !== 0) return Effect.die(`target read failed: ${result.stderr}`)
+              const head = GitCommitSha.make(result.stdout.trim())
+              if (head === promote.candidateCommit) {
+                return Effect.succeed(TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha: head }))
+              }
+              return git.run(promote.integrationTarget.repository, [
+                "merge-base",
+                "--is-ancestor",
+                promote.candidateCommit,
+                head
+              ]).pipe(
+                Effect.orDie,
+                Effect.map((ancestry) =>
+                  ancestry.exitCode === 0
+                    ? TargetPromotionGitReadObservation.cases.CandidateAncestor.make({ currentHeadSha: head })
+                    : TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: head })
+                )
+              )
+            })
+          )
+      }
+      const unexpectedRemote = (name: string) =>
+        Ref.update(remoteCalls, (calls) => [...calls, name]).pipe(Effect.andThen(Effect.die(`unexpected remote ${name}`)))
+      const remoteGit = RemotePublicationGit.of({
+        admit: () => unexpectedRemote("admit"),
+        observe: () => unexpectedRemote("observe"),
+        prepareSenderCustody: () => unexpectedRemote("prepareSenderCustody"),
+        reconcileSenderCustody: () => unexpectedRemote("reconcileSenderCustody"),
+        push: () => unexpectedRemote("push")
+      })
+      const executor = PlannedAttemptExecutor.of({
+        observe: () => Effect.succeed(PlannedAttemptExecutorProjection.cases.NoReport.make({
+          correlation: plannedAttemptExecutorCorrelation(attempt)
+        })),
+        requestSuspension: () => Ref.update(executorCommands, (calls) => [...calls, "Suspend"]).pipe(Effect.andThen(Effect.die("unexpected Suspend"))),
+        resume: () => Ref.update(executorCommands, (calls) => [...calls, "Resume"]).pipe(Effect.andThen(Effect.die("unexpected Resume"))),
+        begin: () => Ref.update(executorCommands, (calls) => [...calls, "Begin"]).pipe(Effect.andThen(Effect.die("unexpected Begin")))
+      })
+      const integrator = {
+        prepare: () => Ref.update(integratorCalls, (calls) => [...calls, "prepare"]).pipe(Effect.andThen(Effect.die("unexpected Integrator call")))
+      }
+      const evidenceManifest = AcceptedResultEvidenceManifest.make({
+        commit: acceptedCommit,
+        correlation: { attemptId: attempt.attemptId, runId },
+        formatVersion: 1,
+        outcome: "Accepted",
+        predecessor: null
+      })
+      const application = productionWorkflowInterpreterLayer(
+        runId,
+        GitCommonDirectoryTarget.make(`${directory}/.git`),
+        GitRepositoryLocator.make(directory),
+        integrationTarget,
+        Layer.succeed(TrackerMutation, taskMutation),
+        controlledSynchronousPlannedAttemptExecutorLayer(Layer.succeed(PlannedAttemptExecutor, executor)),
+        candidateProvider,
+        {
+          acceptedResultEvidenceStore: EvidenceStore.of({
+            put: () => Effect.die("resumed finality does not write evidence"),
+            read: () => Effect.succeed(new TextEncoder().encode(JSON.stringify(evidenceManifest)))
+          }),
+          completionTask,
+          integrationFinality: completionClaim,
+          integrator,
+          remotePublicationGitLayer: Layer.succeed(RemotePublicationGit, remoteGit),
+          remotePublicationTarget: remotePublicationTargetForTest,
+          targetPromotion: { git: targetPromotion },
+          workflowCleanupObserver: () => Effect.void
+        }
+      ).pipe(
+        Layer.provide(Layer.succeed(TrackerGraphReader, TrackerGraphReader.of({
+          read: () => Ref.update(trackerReads, (count) => count + 1).pipe(
+            Effect.andThen(Ref.get(lifecycle)),
+            Effect.flatMap((currentLifecycle) => {
+              const graph = projectTrackerSnapshot({
+                revision: `resumed-finality:${currentLifecycle}`,
+                rootTaskId: taskId,
+                tasks: [{ id: taskId, lifecycle: { _tag: currentLifecycle }, parentTaskId: null, prerequisiteIds: [] }]
+              })
+              return graph._tag === "Valid" ? Effect.succeed(graph.snapshot) : Effect.die("tracker graph invalid")
+            })
+          ),
+          readTaskWorkSpecification: () => Effect.succeed(specification)
+        }))),
+        Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+      )
+      const nextOperation = yield* Ref.make(0)
+      const run = runWorkflow(
+        target,
+        Effect.die("resumed history supplies its initial policy"),
+        AllocatedWorkflowRunId.make(runId)
+      ).pipe(
+        Effect.provideService(OperationIdAllocator, OperationIdAllocator.of({
+          allocate: () => Ref.getAndUpdate(nextOperation, (value) => value + 1).pipe(
+            Effect.map((value) => OperationId.make(`resumed-finality-operation-${value}`))
+          )
+        })),
+        Effect.provideService(TaskClaimAcquisitionPlanner, TaskClaimAcquisitionPlanner.of({
+          plan: () => Effect.die("resumed finality must not plan a new claim")
+        })),
+        Effect.provideService(PlannedTaskAttemptPlanner, PlannedTaskAttemptPlanner.of({
+          plan: () => Effect.die("resumed finality must not plan another attempt")
+        }))
+      )
+      yield* run.pipe(
+        Effect.provide(application),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
+      )
+      const after = yield* Effect.gen(function* () {
+        return yield* (yield* JournalStore).read(runId)
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+      const promotions = after.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")
+      const completions = after.filter(({ event }) => event._tag === "CompletionTaskAcknowledged")
+      const cleanupSettlements = after.filter(({ event }) => event._tag === "IntegratorCandidateCleanupSettled")
+      const completeGraphObservations = after.flatMap(({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "CompleteTaskTrackerFacts"
+          ? [event.observation]
+          : []
+      )
+      expect(promotions).toHaveLength(1)
+      expect(promotions[0]?.event).toMatchObject({ correlation: { qualifiedCandidate: { candidateCommit } } })
+      expect(completions).toHaveLength(1)
+      expect(completions[0]?.event).toMatchObject({
+        acknowledgement: { operationId: completionRequest.operationId, taskId }
+      })
+      expect(cleanupSettlements).toHaveLength(1)
+      expect(cleanupSettlements[0]?.event).toMatchObject({
+        authorization: {
+          disposition: { qualifiedCandidate: { candidateCommit } },
+          evidenceRevision: candidateEvidenceRevision,
+          locator: candidateResource,
+          owner: { sessionId: candidateSessionId }
+        },
+        result: {
+          _tag: "Removed",
+          locator: candidateResource,
+          revision: candidateEvidenceRevision,
+          sessionId: candidateSessionId
+        }
+      })
+      expect(completeGraphObservations[0]?.rootTaskId).toBe(taskId)
+      expect(completeGraphObservations.at(-1)?.rootTaskId).toBe(taskId)
+      expect(after.filter(({ event }) => event._tag === "RemotePublicationResumeRequested")).toEqual([
+        expect.objectContaining({ event: receipt })
+      ])
+      expect(after.filter(({ event }) => event._tag === "RemotePublicationSucceeded")).toEqual([
+        expect.objectContaining({ event: resumedProof })
+      ])
+      expect(after.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(
+        published.promotedRecords.filter(({ event }) => event._tag === "IntegratorRunStarted").length
+      )
+      for (const tag of [
+        "TaskClaimAcquired",
+        "TaskAttemptPlanned",
+        "IntegratorSessionFixed",
+        "RemotePublicationIntended",
+        "RemotePublicationAttemptIntended"
+      ] as const) {
+        expect(after.filter(({ event }) => event._tag === tag)).toHaveLength(
+          resumedRecords.filter(({ event }) => event._tag === tag).length
+        )
+      }
+      expect(after.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+      expect(yield* Ref.get(promotionCalls)).toMatchObject({ compareAndSet: 1 })
+      expect(yield* Ref.get(remoteCalls)).toEqual([])
+      expect(yield* Ref.get(integratorCalls)).toEqual([])
+      expect(yield* Ref.get(executorCommands)).toEqual([])
+      expect(yield* Ref.get(completionCalls)).toEqual([completionRequest])
+      expect(yield* Ref.get(completionReads)).toBeGreaterThan(0)
+      expect(yield* Ref.get(trackerReads)).toBeGreaterThan(0)
+      expect(yield* Ref.get(lifecycle)).toBe("CompletedSuccessfully")
+      expect(yield* Ref.get(trackerClaim)).toEqual(UnclaimedTask.make({ taskId }))
+      expect(Option.isNone(yield* Ref.get(completionMarker))).toBe(true)
+      expect(yield* Ref.get(candidateEvidenceReads)).toBe(1)
+      expect(yield* Ref.get(candidateObservations)).toBe(2)
+      expect(yield* Ref.get(candidateRemovals)).toBe(1)
+      expect((yield* Ref.get(candidateResources)).size).toBe(0)
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
   )
 )

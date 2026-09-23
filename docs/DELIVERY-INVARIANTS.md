@@ -358,8 +358,11 @@ publication order.
 **D28f Retained-delivery resume is exact, durable, and bounded.** A resume
 request names the exact Run, integration responsibility, and request identity.
 Schema or subject mismatch is rejected before journal mutation; exact redelivery
-returns the recorded result and dispatches no second action. A request creates no
-task attempt, Integrator invocation, Begin, or allowance. The ordinary owner
+returns the recorded receipt/result without duplicate Git, session, or task
+effects. Recovery after `RemotePublicationRetained(CompatibleCompetingHead)` may
+invoke the same typed recovery-owner handoff again; the #385 owner must be
+idempotent for that exact C, target, merge base, and competing head. A request
+creates no task attempt, Integrator invocation, Begin, or allowance. The ordinary owner
 reconciles unfinished intent and local writer custody, then resumes the same C,
 M, and remaining publication allowance. A conclusive authentication or policy
 denial needs an explicit request and fresh required facts; a repeated denial
@@ -369,15 +372,23 @@ existing same-commit recovery owner. A settled subject returns its actual
 status without work.
 → `packages/orchestrator/src/workflow/protocols/direct-publication/resume.test.ts`:
 `recovers the same retained resume receipt after restart with memory and reopened SQLite journals`,
+`re-dispatches the exact compatible-head handoff after restart from memory and reopened SQLite`,
 `reconciles the active receipt after an ambiguous push before any later push`,
 `rejects resume schema and exact Run or responsibility mismatches before journal mutation`,
 `deduplicates one resume identity and allows a later distinct repair request within the same allowance`,
 `a persistent denial stops at the accepted attempt limit and cannot be resumed again`,
 `does not retry a throttled publication through a retained resume request`,
-`routes a compatible competing head to the existing same-commit recovery owner`,
-`Pause blocks resume activation until the ordinary owner allows work`,
-`application Exit interrupts resume before observation or a new publication attempt`,
-and `returns settled proof to finality for a new request without appending or dispatching work`.
+`resume calls the existing same-commit owner with the exact C, target, merge base, and competing head`,
+and `application Exit interrupts resume before observation or a new publication attempt`.
+The ordinary Run boundary is covered by
+`packages/orchestrator/src/coordination/delivery/integration-delivery-action-adapter.test.ts`:
+`ordinary Run replay hands the exact retained candidate to the existing same-commit owner`,
+`replays the exact compatible-head handoff after its retained outcome commits before owner dispatch`,
+`a paused retained Run stops before custody, head observation, or publication boundaries`,
+and `ordinary publication replay preserves settled success and conclusive denial without provider work`;
+these tests make no new task/session or Git action for settlement or exact handoff replay. The resumed-proof
+completion path is covered by the passing
+`packages/dalph/test/scenarios/production.test.ts::ordinary production Run promotes resumed publication proof and completes from fresh tracker facts`.
 
 ## Process and durability
 
