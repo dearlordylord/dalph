@@ -28,6 +28,8 @@ import {
   nodeGitCommandLayer
 } from "../../../authorities/git/command.js"
 import { JournalDatabaseLocator, JournalPosition } from "../../../workflow-journal/identity.js"
+import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
+import { journalLayer } from "../../../coordination/delivery/journal.js"
 import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
 import { OperationId } from "../../identity.js"
 import {
@@ -47,11 +49,7 @@ import {
 import { gitDispositionCleanupBoundaryLayer } from "./boundaries.js"
 import { BranchCleanupBoundary } from "./branch.js"
 import { runWorktreeCleanup, WorktreeCleanupBoundary } from "./worktree.js"
-import {
-  appendCandidateProvenance,
-  appendCurrentQuarantineProvenance,
-  appendReplacementProvenance
-} from "./provenance-fixtures.js"
+import { appendCurrentQuarantineProvenance, appendReplacementProvenance } from "./provenance-fixtures.js"
 import {
   dispositionCleanupLiveJournalTestLayer,
   dispositionCleanupSqliteLiveJournalTestLayer
@@ -65,6 +63,11 @@ import {
 } from "../integrator/events.js"
 import { integratorSuccessorCorrelationFor } from "../integrator/session.js"
 import { dispositionCleanupContract } from "../../../../test/contracts/disposition-cleanup-contract.js"
+import { makeSuccessorPrefix } from "../../../../test/support/automatic-successor-history.js"
+import { prepareIntegratorAutomaticSuccessorSessionAppend } from "../integrator/automatic-successor-session.js"
+import { deriveCleanupAuthorizations } from "./activation.js"
+import { JournalHistoryInvalid, JournalStore } from "../../../workflow-journal/store.js"
+import { sqliteJournalTestLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
 import {
   IntegratorCandidateCleanupBoundary,
   IntegratorCandidateCleanupMutationResult,
@@ -411,19 +414,36 @@ it.effect("production SQLite cleanup reopens after a lost Git response without a
 )
 
 it.effect(
-  "production SQLite cleanup reopens after a lost provider response without a duplicate delete for an exact FullRerun predecessor",
+  "production SQLite cleanup preserves an automatic S2 predecessor while its writer is live and reconciles one lost deletion response after reopen",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem
+        const fixture = makeSuccessorPrefix()
+        const prepared = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+          fixture.input,
+          fixture.reduction.prefix
+        )
+        if (prepared._tag !== "Append") return yield* Effect.die("accepted automatic S2 history must fix one successor")
+        fixture.append(prepared.event)
+        const history = fixture.records()
+        const authorization = deriveCleanupAuthorizations(history, () =>
+          IntegratorCandidateCleanupEvidenceRevision.make(1)
+        ).candidate[0]
+        if (authorization === undefined)
+          return yield* Effect.die("exact automatic S2 history must authorize predecessor cleanup")
+        expect(authorization.disposition._tag).toBe("AutomaticSuccessorSuperseded")
+        expect(authorization.locator).toBe(fixture.input.predecessor.candidateResource)
+        expect(authorization.owner.sessionId).toBe(fixture.input.predecessor.sessionId)
         const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-candidate-recovery-" })
         const filename = JournalDatabaseLocator.make(`${root}/journal.sqlite`)
         const activeResources = yield* Ref.make<ReadonlyArray<IntegratorCandidateResourceLocator>>([
-          candidatePredecessor.candidateResource,
-          candidateSuccessor.candidateResource
+          fixture.input.predecessor.candidateResource,
+          prepared.event.successor.candidateResource
         ])
         const observedResources = yield* Ref.make<ReadonlyArray<IntegratorCandidateResourceLocator>>([])
         const removedResources = yield* Ref.make<ReadonlyArray<IntegratorCandidateResourceLocator>>([])
+        const liveWriterReported = yield* Ref.make(false)
         const providerAuthorityLayer = Layer.succeed(
           IntegratorCandidateProviderAuthority,
           IntegratorCandidateProviderAuthority.of({
@@ -437,14 +457,19 @@ it.effect(
                     revision: subject.evidenceRevision
                   })
                 }
-                const ownerSessionId =
-                  subject.locator === candidatePredecessor.candidateResource
-                    ? candidatePredecessor.sessionId
-                    : candidateSuccessor.sessionId
+                if (!(yield* Ref.get(liveWriterReported))) {
+                  yield* Ref.set(liveWriterReported, true)
+                  return IntegratorCandidateCleanupObservation.cases.Foreign.make({
+                    locator: subject.locator,
+                    observedSessionId: subject.owner.sessionId,
+                    reason: "LiveWriter",
+                    revision: subject.evidenceRevision
+                  })
+                }
                 return IntegratorCandidateCleanupObservation.cases.Present.make({
                   locator: subject.locator,
                   revision: subject.evidenceRevision,
-                  sessionId: ownerSessionId,
+                  sessionId: subject.owner.sessionId,
                   writerQuiescent: true
                 })
               }),
@@ -478,51 +503,124 @@ it.effect(
           runInWorktree: () => Effect.succeed({ exitCode: 1, stderr: "not a git repository", stdout: "" }),
           runBytesInWorktree: () => Effect.die("byte command is outside provider authority")
         } satisfies GitCommandService)
+        const beginningRecord = history[0]
+        if (beginningRecord?.event._tag !== "WorkflowRunBegan") {
+          return yield* Effect.die("accepted automatic S2 fixture must begin with one WorkflowRunBegan event")
+        }
+        const beginning = beginningRecord.event
+        const sqliteRunLayer = () =>
+          Layer.unwrap(
+            Effect.gen(function* () {
+              const journalStore = yield* JournalStore
+              if ((yield* journalStore.read(fixture.runId)).length === 0) {
+                yield* journalStore.beginRun(
+                  fixture.runId,
+                  beginning.target,
+                  beginning.initialControlPolicy,
+                  beginning.remotePublicationTarget
+                )
+              }
+              const records = yield* journalStore.read(fixture.runId)
+              const initial = reduceWorkflowJournalHistory(fixture.runId, records)
+              if (initial._tag === "InvalidWorkflowJournalHistory") {
+                const issue = initial.issues[0]
+                return yield* new JournalHistoryInvalid({
+                  detail: JSON.stringify(initial.issues),
+                  position: issue !== undefined && "position" in issue ? issue.position : JournalPosition.make(1),
+                  runId: fixture.runId
+                })
+              }
+              return journalLayer(fixture.runId, fixture.accepted.trackerTarget, initial, journalStore)
+            })
+          ).pipe(Layer.provideMerge(sqliteJournalTestLayer({ filename })))
         const run = (seed: boolean) =>
           Effect.gen(function* () {
             const journal = yield* InRunJournal
             if (seed) {
-              yield* appendCandidateProvenance(
-                candidatePredecessor,
-                candidateSuccessor,
-                "production-provider-full-rerun",
-                "StartupValid"
-              )
+              for (const record of history.slice(1)) {
+                yield* journal.append(fixture.runId, record.key, record.event)
+              }
             }
-            const outcome = yield* runIntegratorCandidateCleanup(candidateAuthorization)
-            return { outcome, records: yield* journal.read(fixtureRunId) }
+            const outcome = yield* runIntegratorCandidateCleanup(authorization)
+            return { outcome, records: yield* journal.read(fixture.runId) }
           }).pipe(
-            Effect.provide(dispositionCleanupSqliteLiveJournalTestLayer(filename)),
+            Effect.provide(sqliteRunLayer()),
             Effect.provide(gitDispositionCleanupBoundaryLayer(target, providerAuthorityLayer)),
             Effect.provide(Layer.succeed(GitCommand, commands)),
             Effect.provide(productionCoordinatorOwnershipLayer(target)),
             Effect.provide(NodeServices.layer)
           )
         const first = yield* Effect.scoped(run(true))
-        const second = yield* Effect.scoped(run(false))
         expect(first.outcome._tag).toBe("Pending")
-        expect(second.outcome._tag).toBe("Settled")
-        expect(yield* Ref.get(observedResources)).toEqual([
-          candidatePredecessor.candidateResource,
-          candidatePredecessor.candidateResource
-        ])
-        expect(yield* Ref.get(removedResources)).toEqual([candidatePredecessor.candidateResource])
-        expect(yield* Ref.get(activeResources)).toEqual([candidateSuccessor.candidateResource])
-        const records = second.records
-        expect(records.some(({ event }) => event._tag === "IntegratorSessionFixed")).toBe(true)
-        expect(records.some(({ event }) => event._tag === "IntegrationQuarantined")).toBe(true)
-        const successorFixed = records.find(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")?.event
-        expect(successorFixed?._tag).toBe("IntegratorSuccessorSessionFixed")
-        if (successorFixed?._tag === "IntegratorSuccessorSessionFixed") {
-          expect(successorFixed.predecessor.candidateResource).toBe(candidatePredecessor.candidateResource)
-          expect(successorFixed.successor.candidateResource).toBe(candidateSuccessor.candidateResource)
-          expect(successorFixed.successor.acceptedResult).toEqual(candidatePredecessor.acceptedResult)
+        const authorized = first.records.find(
+          ({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized"
+        )?.event
+        expect(authorized?._tag).toBe("IntegratorCandidateCleanupAuthorized")
+        if (authorized?._tag === "IntegratorCandidateCleanupAuthorized") {
+          expect(authorized.authorization.disposition._tag).toBe("AutomaticSuccessorSuperseded")
         }
-        const predecessorFixed = records.find(({ event }) => event._tag === "IntegratorSessionFixed")?.event
-        expect(predecessorFixed?._tag).toBe("IntegratorSessionFixed")
-        if (predecessorFixed?._tag === "IntegratorSessionFixed") {
-          expect(predecessorFixed.correlation.candidateResource).toBe(candidatePredecessor.candidateResource)
-          expect(predecessorFixed.correlation.acceptedResult).toEqual(candidateAcceptedResult)
+        const liveObservation = first.records.find(
+          ({ event }) => event._tag === "IntegratorCandidateCleanupObserved"
+        )?.event
+        expect(liveObservation?._tag).toBe("IntegratorCandidateCleanupObserved")
+        if (liveObservation?._tag === "IntegratorCandidateCleanupObserved") {
+          expect(liveObservation.observation).toMatchObject({
+            _tag: "Foreign",
+            observedSessionId: fixture.input.predecessor.sessionId,
+            reason: "LiveWriter"
+          })
+        }
+        expect(
+          first.records.filter(({ event }) => event._tag === "IntegratorCandidateCleanupMutationIntended")
+        ).toHaveLength(0)
+        expect(yield* Ref.get(activeResources)).toEqual([
+          fixture.input.predecessor.candidateResource,
+          prepared.event.successor.candidateResource
+        ])
+        const second = yield* Effect.scoped(run(false))
+        expect(second.outcome._tag).toBe("Pending")
+        const quiescentObservation = second.records.find(
+          ({ event }) => event._tag === "IntegratorCandidateCleanupObserved" && event.observation._tag === "Present"
+        )?.event
+        expect(quiescentObservation?._tag).toBe("IntegratorCandidateCleanupObserved")
+        if (quiescentObservation?._tag === "IntegratorCandidateCleanupObserved") {
+          expect(quiescentObservation.observation).toMatchObject({
+            _tag: "Present",
+            sessionId: fixture.input.predecessor.sessionId,
+            writerQuiescent: true
+          })
+        }
+        const lostMutationResponse = second.records.find(
+          ({ event }) => event._tag === "IntegratorCandidateCleanupMutationResultRecorded"
+        )?.event
+        expect(lostMutationResponse?._tag).toBe("IntegratorCandidateCleanupMutationResultRecorded")
+        if (lostMutationResponse?._tag === "IntegratorCandidateCleanupMutationResultRecorded") {
+          expect(lostMutationResponse.result._tag).toBe("Unknown")
+        }
+        const third = yield* Effect.scoped(run(false))
+        expect(third.outcome._tag).toBe("Settled")
+        expect(yield* Ref.get(observedResources)).toEqual([
+          fixture.input.predecessor.candidateResource,
+          fixture.input.predecessor.candidateResource,
+          fixture.input.predecessor.candidateResource
+        ])
+        expect(yield* Ref.get(removedResources)).toEqual([fixture.input.predecessor.candidateResource])
+        expect(yield* Ref.get(activeResources)).toEqual([prepared.event.successor.candidateResource])
+        const records = third.records
+        expect(records.some(({ event }) => event._tag === "IntegratorCandidateCleanupContradicted")).toBe(false)
+        expect(records.filter(({ event }) => event._tag === "IntegratorCandidateCleanupMutationIntended")).toHaveLength(
+          1
+        )
+        expect(
+          records.filter(({ event }) => event._tag === "IntegratorCandidateCleanupMutationResultRecorded")
+        ).toHaveLength(1)
+        expect(records.some(({ event }) => event._tag === "IntegratorCandidateCleanupSettled")).toBe(true)
+        const reconciledAbsence = records.find(
+          ({ event }) => event._tag === "IntegratorCandidateCleanupAbsenceConfirmed"
+        )?.event
+        expect(reconciledAbsence?._tag).toBe("IntegratorCandidateCleanupAbsenceConfirmed")
+        if (reconciledAbsence?._tag === "IntegratorCandidateCleanupAbsenceConfirmed") {
+          expect(reconciledAbsence.cause).toBe("MutationResponseReconciliation")
         }
       })
     ).pipe(Effect.provide(NodeServices.layer))

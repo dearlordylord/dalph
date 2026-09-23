@@ -22,12 +22,14 @@ import {
   CoordinatorOwnership,
   GitCommonDirectoryLocator,
   IntegratorCandidateCleanupAuthorization,
+  IntegratorCandidateAutomaticSuccessorCleanupDisposition,
+  IntegratorCandidateCleanupBoundary,
   IntegratorCandidateCleanupDisposition,
   IntegratorCandidateCleanupSettledDisposition,
   IntegratorCandidateCleanupEvidenceRevision,
   IntegratorCandidateCleanupOwner,
+  IntegratorCandidateProviderAuthority,
   type IntegratorCandidateCleanupEvidenceSubject,
-  type IntegratorCandidateProviderAuthority,
   IntegratorCandidateResourceLocator,
   IntegratorNotPreparedDetail,
   IntegratorResult,
@@ -40,10 +42,12 @@ import {
   JournalPosition,
   OperationId,
   CoordinatorOwnershipLost,
+  GitCommand,
   GitCommandInvocationFailure,
-  type GitCommandService
+  type GitCommandService,
+  GitCommonDirectoryTarget
 } from "@dalph/orchestrator"
-import { Effect, FileSystem, Option, Ref, Schema, Stream } from "effect"
+import { Effect, FileSystem, Layer, Option, Ref, Schema, Stream } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   CodexOwnedTurnToken,
@@ -73,6 +77,7 @@ import {
   revision
 } from "./codex-integrator-private-store.js"
 import { providerAuthorityFor } from "./codex-integrator-cleanup.js"
+import { gitDispositionCleanupBoundaryLayer } from "../../../orchestrator/src/workflow/protocols/disposition-cleanup/boundaries.js"
 
 const head = GitCommitSha.make("a".repeat(40))
 const acceptedCommit = GitCommitSha.make("b".repeat(40))
@@ -155,6 +160,31 @@ const authorizationFor = (
     writerQuiescent: true
   })
 
+const automaticSuccessorAuthorization = (): IntegratorCandidateCleanupAuthorization => {
+  const automaticSuccessor = IntegratorSessionCorrelation.make({
+    ...predecessor,
+    candidateResource: IntegratorCandidateResourceLocator.make("candidate:automatic-successor-cleanup-successor"),
+    sessionId: IntegratorSessionId.make("automatic-successor-cleanup-session"),
+    targetLineageObservedAt: JournalPosition.make(7)
+  })
+  return IntegratorCandidateCleanupAuthorization.make({
+    causalPredecessors: [OperationId.make("automatic-successor-cleanup-authorization")],
+    disposition: IntegratorCandidateAutomaticSuccessorCleanupDisposition.make({
+      authorizationAt: JournalPosition.make(4),
+      dispositionAt: JournalPosition.make(8),
+      predecessor,
+      successor: automaticSuccessor
+    }),
+    evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
+    locator: predecessor.candidateResource,
+    observationAt: predecessor.targetLineageObservedAt,
+    observationOperationId: OperationId.make("automatic-successor-cleanup-observation"),
+    operationId: OperationId.make("automatic-successor-cleanup-operation"),
+    owner: IntegratorCandidateCleanupOwner.make({ sessionId: predecessor.sessionId }),
+    writerQuiescent: true
+  })
+}
+
 type Registration = "exact" | "none" | "foreign"
 type CleanupCase = {
   readonly authorization?: IntegratorCandidateCleanupAuthorization
@@ -193,7 +223,8 @@ const runCase = <A>(
   options: CleanupCase,
   operation: (
     authority: IntegratorCandidateProviderAuthority["Service"],
-    authorization: IntegratorCandidateCleanupAuthorization
+    authorization: IntegratorCandidateCleanupAuthorization,
+    boundary: IntegratorCandidateCleanupBoundary["Service"]
   ) => Effect.Effect<A>
 ) =>
   Effect.runPromise(
@@ -351,7 +382,20 @@ const runCase = <A>(
               : mutation
         })
         const authority = providerAuthorityFor(config, app, census, commands, fileSystem, store, ownership)
-        return yield* operation(authority, options.authorization ?? authorizationFor())
+        const boundary = yield* Effect.gen(function* () {
+          return yield* IntegratorCandidateCleanupBoundary
+        }).pipe(
+          Effect.provide(
+            gitDispositionCleanupBoundaryLayer(
+              GitCommonDirectoryTarget.make(config.commonDirectory),
+              Layer.succeed(IntegratorCandidateProviderAuthority, authority)
+            )
+          ),
+          Effect.provide(Layer.succeed(GitCommand, GitCommand.of(commands))),
+          Effect.provide(Layer.succeed(CoordinatorOwnership, ownership)),
+          Effect.provide(NodeFileSystem.layer)
+        )
+        return yield* operation(authority, options.authorization ?? authorizationFor(), boundary)
       }).pipe(Effect.provide(NodeFileSystem.layer))
     )
   )
@@ -446,6 +490,29 @@ const recordFor = (
 }
 
 describe("Codex Integrator cleanup boundary", () => {
+  it("keeps an automatically superseded candidate until Codex proves the writer stopped", async () => {
+    const authorization = automaticSuccessorAuthorization()
+    expect(authorization.disposition._tag).toBe("AutomaticSuccessorSuperseded")
+
+    const live = await runCase(
+      {
+        authorization,
+        record: recordFor("/tmp/unused"),
+        registration: "exact",
+        pathExists: true,
+        projection: { _tag: "ExactLive", activities: [] }
+      },
+      (_authority, exactAuthorization, boundary) => boundary.remove(exactAuthorization, CleanupMutationOrdinal.make(1))
+    )
+    expect(live._tag).toBe("DefinitelyNotApplied")
+
+    const stopped = await runCase(
+      { authorization, record: recordFor("/tmp/unused"), registration: "exact", pathExists: true, applyRemoval: true },
+      (_authority, exactAuthorization, boundary) => boundary.remove(exactAuthorization, CleanupMutationOrdinal.make(1))
+    )
+    expect(stopped._tag).toBe("Removed")
+  })
+
   it("classifies a settled candidate registration by its promoted final head", async () => {
     const exact = await runCase(
       {

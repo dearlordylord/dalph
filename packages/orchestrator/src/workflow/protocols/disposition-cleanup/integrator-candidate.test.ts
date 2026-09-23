@@ -799,7 +799,7 @@ it.effect("preserves an automatically superseded candidate until provider custod
       Effect.provide(integratorCandidateCleanupTestLayer({ observations: [liveWriter] })),
       Effect.provide(liveJournalTestLayer({ records, runId: fixture.runId, target: fixture.accepted.trackerTarget }))
     )
-    expect(blocked.outcome._tag).toBe("Preserved")
+    expect(blocked.outcome._tag).toBe("Pending")
     expect(blocked.calls.map(({ _tag }) => _tag)).toEqual(["Observe"])
 
     const quiescent = IntegratorCandidateCleanupObservation.cases.Present.make({
