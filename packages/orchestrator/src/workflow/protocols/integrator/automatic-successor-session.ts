@@ -369,9 +369,3 @@ export const prepareIntegratorAutomaticSuccessorSessionAppend = Effect.fn(
   }
   return { _tag: "Append", event, key } as const
 })
-
-export const integratorAutomaticSuccessorAppendRecordMatchesResult = (
-  record: JournalRecord,
-  key: JournalRecord["key"],
-  event: IntegratorAutomaticSuccessorSessionFixedEvent
-): boolean => integratorAutomaticSuccessorAppendRecordMatches(record, key, event)
