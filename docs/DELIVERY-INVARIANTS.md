@@ -371,7 +371,8 @@ divergent, missing/unreadable, insufficiently proven, checked-out, dirty,
 foreign, symbolic, or ambiguous local state retains the responsibility and
 cannot authorize reset, cleanup, or a successor session. The successor keeps
 the same attempt, Base, accepted result, and queue position, and uses a distinct
-session/resource fixed to H2 with exact candidate parents `[H2, C]`. Session
+session/resource fixed to the latest Ready baseline head Hn with exact
+candidate parents `[Hn, C]`. Session
 fixation consumes one of the existing three sessions in the authorized batch,
 including a crash before provider contact. A compatible race cannot authorize
 an ungranted fourth session; an exact exhaustion wait preserves the
@@ -379,10 +380,24 @@ responsibility and predecessor evidence. Conclusive Integrator failure,
 publication denial, throttle, incompatible history, or uncertain provider
 custody does not meet this trigger. Predecessor cleanup additionally requires
 proved stopped writers and its exact superseded disposition under D16–D17.
-→ `acceptedResultIntegration`'s automatic competing-head authorization,
-same-C successor, bounded-session and exact-local-catch-up laws; its collected
-positive and negative tests; and the direct-publication S2/S5/S7 production
-tests.
+
+The authorization's original competing head H2 is immutable. If its first
+baseline was Ready before a later activation begins, that activation records
+one recovery-entry refresh round under the same authorization, even when the
+remote branch has not advanced beyond H2. An incomplete round resumes its exact
+read intent or catch-up intent; Dalph does not create another round until the
+existing round is Ready. There are at most two baseline rounds for one
+authorization, and one activation admits at most one fresh remote read. Dalph
+fixes the successor only from the latest Ready round and a later target-lineage
+observation for that exact head. This closes the stale-H2 window without
+changing the accepted result or authorizing a third round.
+
+→ `acceptedResultIntegrationAutomaticSuccessorProof`'s
+`successorRefreshRoundsAreBounded`,
+`successorUsesLatestBaselineRoundUnderOriginalAuthorization`,
+`oneGitObservationOrCompareAndSetPerActivation`, and `noReadUntilStableLoop`
+laws; its collected positive and negative tests; and the direct-publication
+S2/S5/S7 production tests.
 
 ## Process and durability
 

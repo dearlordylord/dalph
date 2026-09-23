@@ -18,11 +18,8 @@ import {
 } from "../../../workflow-journal/record-evidence.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
-import {
-  automaticCompetingHeadRemoteBaselineCorrelationFor,
-  type RemoteBaselineJournalEvent
-} from "../direct-publication/baseline-events.js"
-import { deriveRemoteBaselineState } from "../direct-publication/baseline-state.js"
+import { automaticCompetingHeadRemoteBaselineCorrelationFor } from "../direct-publication/baseline-events.js"
+import { automaticRemoteBaselineRoundsFor } from "../direct-publication/baseline-rounds.js"
 import { remotePublicationCorrelationEquals } from "../direct-publication/events.js"
 import {
   IntegratorCandidateResourceLocator,
@@ -92,38 +89,6 @@ const historyBefore = (records: JournalHistorySource, position: JournalPosition)
     ? journalEvidenceBefore(records, Number(position))
     : records.filter((record) => record.position < position)
 
-const baselineCompleteAt = (
-  records: JournalHistorySource,
-  correlation: ReturnType<typeof automaticCompetingHeadRemoteBaselineCorrelationFor>
-): JournalPosition | undefined => {
-  const events: ReadonlyArray<RemoteBaselineJournalEvent> = [
-    ...journalRecordsOfKind(records, "RemoteBaselineReadIntended"),
-    ...journalRecordsOfKind(records, "RemoteBaselineObserved"),
-    ...journalRecordsOfKind(records, "LocalTargetCatchUpIntended"),
-    ...journalRecordsOfKind(records, "LocalTargetCatchUpObserved")
-  ]
-    .sort((left, right) => Number(left.position) - Number(right.position))
-    .flatMap(({ event }) =>
-      (event._tag === "RemoteBaselineReadIntended" ||
-        event._tag === "RemoteBaselineObserved" ||
-        event._tag === "LocalTargetCatchUpIntended" ||
-        event._tag === "LocalTargetCatchUpObserved") &&
-      event.correlation.baselineId === correlation.baselineId
-        ? [event]
-        : []
-    )
-  if (deriveRemoteBaselineState(events)._tag !== "Ready") return undefined
-  const completed = [
-    ...journalRecordsOfKind(records, "RemoteBaselineObserved"),
-    ...journalRecordsOfKind(records, "LocalTargetCatchUpObserved")
-  ].filter(
-    ({ event }) =>
-      (event._tag === "RemoteBaselineObserved" || event._tag === "LocalTargetCatchUpObserved") &&
-      event.correlation.baselineId === correlation.baselineId
-  )
-  return completed.sort((left, right) => Number(left.position) - Number(right.position)).at(lastElementOffset)?.position
-}
-
 /** Confirms exact authorization, completed catch-up, and later fresh lineage remain in accepted history. */
 export const integratorAutomaticSuccessorPreparationIsCurrent = (
   records: JournalHistorySource,
@@ -155,7 +120,9 @@ export const integratorAutomaticSuccessorPreparationIsCurrent = (
     authorization.correlation.target,
     authRecord.position
   )
-  const completedAt = baselineCompleteAt(records, baselineCorrelation)
+  const latestBaselineRound = automaticRemoteBaselineRoundsFor(records, baselineCorrelation).at(lastElementOffset)
+  if (latestBaselineRound === undefined || latestBaselineRound.state._tag !== "Ready") return false
+  const completedAt = latestBaselineRound.completedAt
   if (completedAt === undefined) return false
   const lineageRecord = journalRecordByPosition(records, input.targetLineageObservedAt)
   if (
@@ -165,7 +132,7 @@ export const integratorAutomaticSuccessorPreparationIsCurrent = (
     !lineageEquivalence(lineageRecord.event.observation, input.targetLineage) ||
     input.targetLineage.plannedBaseSha !== predecessor.plannedAttempt.baseSha ||
     !input.targetLineage.plannedBaseIsAncestorOfTargetHead ||
-    input.targetLineage.targetHeadSha !== authorization.remoteHead
+    input.targetLineage.targetHeadSha !== latestBaselineRound.state.remoteHead
   ) {
     return false
   }

@@ -10,17 +10,34 @@ import { JournalDatabaseLocator } from "../../../workflow-journal/identity.js"
 import { memoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { sqliteJournalStoreLayer, sqliteJournalTestLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
 import { JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
+import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../registry/event.js"
+import { makeTargetLineageObservationOperation } from "../../registry/operation.js"
+import { projectWorkflowOccurrences } from "../../registry/occurrence-projection.js"
+import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
+import { OperationId } from "../../identity.js"
+import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
+  LocalTargetCatchUpIntendedEvent,
+  LocalTargetCatchUpObservedEvent,
   LocalTargetCatchUpResult,
   RemoteBaselineGit,
   RemoteBaselineFailure,
   RemoteBaselineObservation,
+  RemoteBaselineObservedEvent,
+  RemoteBaselineRound,
+  RemoteBaselineReadIntendedEvent,
   type RemoteBaselineCorrelation,
-  type RemoteBaselineGitService
+  type RemoteBaselineGitService,
+  automaticCompetingHeadRemoteBaselineCorrelationFor
 } from "./baseline-events.js"
 import { establishRemoteBaseline } from "./baseline-protocol-engine.js"
 import { validateRemoteBaselineState } from "./baseline-transition-journal.js"
 import type { RemoteBaselineState } from "./baseline-state.js"
+import {
+  integratorAutomaticSuccessorPreparationIsCurrent,
+  prepareIntegratorAutomaticSuccessorSessionAppend
+} from "../integrator/automatic-successor-session.js"
+import { automaticRemoteBaselineRoundsFor } from "./baseline-rounds.js"
 
 it.effect("retains unsafe automatic S2 catch-up evidence without moving the target or fixing a successor", () =>
   Effect.scoped(
@@ -421,6 +438,275 @@ it.effect("reconciles one applied automatic-successor catch-up CAS after memory 
 )
 
 it.effect(
+  "uses the first automatic-successor baseline read after remote H3 advances under the same authorization",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = makeSuccessorPrefix()
+        const acceptedRecords = fixture.records()
+        const authorization = acceptedRecords.find(
+          ({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized"
+        )
+        const firstBaselineIntent = acceptedRecords.find(({ event }) => event._tag === "RemoteBaselineReadIntended")
+        if (
+          authorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
+          firstBaselineIntent?.event._tag !== "RemoteBaselineReadIntended"
+        ) {
+          return yield* Effect.die("accepted successor fixture must contain its exact H2 authorization")
+        }
+        const correlation = firstBaselineIntent.event.correlation
+        expect(correlation.automaticCompetingHeadAuthorizationAt).toBe(authorization.position)
+        const prefix = acceptedRecords.filter(({ position }) => Number(position) < Number(firstBaselineIntent.position))
+        const h3 = GitCommitShaSchema.make("8".repeat(40))
+        const localHead = fixture.input.predecessor.expectedTargetHead
+        const timeline = yield* Ref.make<ReadonlyArray<string>>([])
+        const currentHead = yield* Ref.make(localHead)
+        const git = RemoteBaselineGit.of({
+          observe: (receivedCorrelation) =>
+            Effect.gen(function* () {
+              yield* Ref.update(timeline, (entries) => [...entries, "observe"])
+              expect(receivedCorrelation).toEqual(correlation)
+              return RemoteBaselineObservation.cases.LocalAncestor.make({ localHead, remoteHead: h3 })
+            }),
+          catchUp: (receivedCorrelation, expectedLocalHead, remoteHead) =>
+            Effect.gen(function* () {
+              yield* Ref.update(timeline, (entries) => [...entries, "catch-up"])
+              expect(receivedCorrelation).toEqual(correlation)
+              expect(expectedLocalHead).toBe(localHead)
+              expect(remoteHead).toBe(h3)
+              const current = yield* Ref.get(currentHead)
+              if (current !== localHead) return LocalTargetCatchUpResult.cases.Rejected.make({ observedHead: current })
+              yield* Ref.set(currentHead, h3)
+              return LocalTargetCatchUpResult.cases.Applied.make({ newHead: h3 })
+            }),
+          reconcileCatchUp: () => Effect.die("first H3 baseline round has no pending catch-up intent to reconcile")
+        })
+        const context = yield* Layer.build(memoryJournalStoreLayer)
+        const store = Context.get(context, JournalStore)
+        const [beginning, ...remaining] = prefix
+        if (beginning?.event._tag !== "WorkflowRunBegan")
+          return yield* Effect.die("H3 baseline prefix must begin with Run")
+        yield* store.beginRun(
+          fixture.runId,
+          beginning.event.target,
+          beginning.event.initialControlPolicy,
+          beginning.event.remotePublicationTarget
+        )
+        for (const record of remaining) {
+          if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+            return yield* Effect.die("H3 authorization prefix may not contain another Run lifecycle event")
+          }
+          yield* store.append(fixture.runId, record.key, record.event)
+        }
+
+        const storedBeforeRead = yield* store.read(fixture.runId)
+        const historyBeforeRead = reduceWorkflowJournalHistory(fixture.runId, storedBeforeRead)
+        if (historyBeforeRead._tag === "InvalidWorkflowJournalHistory") {
+          return yield* Effect.die(`H3 authorization prefix is invalid: ${JSON.stringify(historyBeforeRead.issues)}`)
+        }
+        const readState = yield* establishRemoteBaseline(correlation).pipe(
+          Effect.provide(journalLayer(fixture.runId, fixture.accepted.trackerTarget, historyBeforeRead, store)),
+          Effect.provideService(RemoteBaselineGit, git)
+        )
+        expect(readState).toMatchObject({ _tag: "CatchUpRequired", expectedLocalHead: localHead, remoteHead: h3 })
+
+        const storedAfterRead = yield* store.read(fixture.runId)
+        const historyAfterRead = reduceWorkflowJournalHistory(fixture.runId, storedAfterRead)
+        if (historyAfterRead._tag === "InvalidWorkflowJournalHistory") {
+          return yield* Effect.die(
+            `recorded H3 baseline observation is invalid: ${JSON.stringify(historyAfterRead.issues)}`
+          )
+        }
+        const state = yield* establishRemoteBaseline(correlation).pipe(
+          Effect.provide(journalLayer(fixture.runId, fixture.accepted.trackerTarget, historyAfterRead, store)),
+          Effect.provideService(RemoteBaselineGit, git)
+        )
+        expect(state).toMatchObject({ _tag: "Ready", remoteHead: h3 })
+        expect(yield* Ref.get(currentHead)).toBe(h3)
+        expect(yield* Ref.get(timeline)).toEqual(["observe", "catch-up"])
+        const stored = yield* store.read(fixture.runId)
+        expect(stored.filter(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")).toHaveLength(
+          1
+        )
+        expect(stored.filter(({ event }) => event._tag === "RemoteBaselineReadIntended")).toHaveLength(1)
+        expect(stored.filter(({ event }) => event._tag === "RemoteBaselineObserved")).toMatchObject([
+          { event: { correlation, observation: { _tag: "LocalAncestor", localHead, remoteHead: h3 } } }
+        ])
+        const rounds = automaticRemoteBaselineRoundsFor(stored, correlation)
+        expect(rounds).toHaveLength(1)
+        expect(rounds[0]?.state).toMatchObject({ _tag: "Ready", remoteHead: h3 })
+        const projection = yield* projectWorkflowOccurrences(stored)
+        expect(
+          projection.occurrences.filter(({ _tag }) => _tag === "IntegratorCompetingHeadSuccessorAuthorized")
+        ).toHaveLength(1)
+      })
+    )
+)
+
+it.effect(
+  "reconciles the same H3 refresh catch-up after memory and reopened SQLite process loss without another read",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = makeSuccessorPrefix()
+        const initialRecords = fixture.records()
+        const authorization = initialRecords.find(
+          ({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized"
+        )
+        const firstRead = initialRecords.find(({ event }) => event._tag === "RemoteBaselineReadIntended")
+        if (
+          authorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
+          firstRead?.event._tag !== "RemoteBaselineReadIntended"
+        ) {
+          return yield* Effect.die("accepted H2 prefix must contain its exact authorization and baseline")
+        }
+        const h2 = authorization.event.remoteHead
+        const h3 = GitCommitShaSchema.make("8".repeat(40))
+        const firstRoundCorrelation = firstRead.event.correlation
+        const roundTwo = automaticCompetingHeadRemoteBaselineCorrelationFor(
+          fixture.runId,
+          firstRoundCorrelation.responsibility,
+          firstRoundCorrelation.localTarget,
+          firstRoundCorrelation.remoteTarget,
+          authorization.position,
+          RemoteBaselineRound.make(2)
+        )
+        fixture.append(
+          RemoteBaselineReadIntendedEvent.make({
+            correlation: roundTwo,
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            version: workflowJournalEventVersion
+          })
+        )
+        fixture.append(
+          RemoteBaselineObservedEvent.make({
+            correlation: roundTwo,
+            observation: RemoteBaselineObservation.cases.LocalAncestor.make({ localHead: h2, remoteHead: h3 }),
+            occurrenceClassification: "NonActionOccurrence",
+            version: workflowJournalEventVersion
+          })
+        )
+        fixture.append(
+          LocalTargetCatchUpIntendedEvent.make({
+            correlation: roundTwo,
+            expectedLocalHead: h2,
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            remoteHead: h3,
+            version: workflowJournalEventVersion
+          })
+        )
+
+        const seedRecords = (store: JournalStore["Service"]) =>
+          Effect.gen(function* () {
+            const [beginning, ...remaining] = fixture.records()
+            if (beginning?.event._tag !== "WorkflowRunBegan") {
+              return yield* Effect.die("H3 refresh prefix must begin with its pinned Run")
+            }
+            yield* store.beginRun(
+              fixture.runId,
+              beginning.event.target,
+              beginning.event.initialControlPolicy,
+              beginning.event.remotePublicationTarget
+            )
+            for (const record of remaining) {
+              if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+                return yield* Effect.die("H3 refresh prefix may not contain another Run lifecycle event")
+              }
+              yield* store.append(fixture.runId, record.key, record.event)
+            }
+          })
+        const timeline = yield* Ref.make<ReadonlyArray<string>>([])
+        const localHead = yield* Ref.make(h3)
+        const git = RemoteBaselineGit.of({
+          observe: () =>
+            Ref.update(timeline, (entries) => [...entries, "observe"]).pipe(
+              Effect.andThen(Effect.die("pending H3 catch-up must reuse its read intent without another remote read"))
+            ),
+          catchUp: () =>
+            Ref.update(timeline, (entries) => [...entries, "catch-up"]).pipe(
+              Effect.andThen(Effect.die("applied H3 catch-up must be reconciled, not applied twice"))
+            ),
+          reconcileCatchUp: (correlation, expectedLocalHead, remoteHead) =>
+            Effect.gen(function* () {
+              yield* Ref.update(timeline, (entries) => [...entries, "reconcile-catch-up"])
+              expect(correlation).toEqual(roundTwo)
+              expect(expectedLocalHead).toBe(h2)
+              expect(remoteHead).toBe(h3)
+              const currentHead = yield* Ref.get(localHead)
+              expect(currentHead).toBe(h3)
+              return LocalTargetCatchUpResult.cases.AlreadyCurrent.make({ currentHead })
+            })
+        })
+        const resume = (store: JournalStore["Service"]) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const stored = yield* store.read(fixture.runId)
+              const history = reduceWorkflowJournalHistory(fixture.runId, stored)
+              if (history._tag === "InvalidWorkflowJournalHistory") {
+                return yield* Effect.die(`H3 refresh recovery prefix is invalid: ${JSON.stringify(history.issues)}`)
+              }
+              return yield* establishRemoteBaseline(roundTwo).pipe(
+                Effect.provide(journalLayer(fixture.runId, fixture.accepted.trackerTarget, history, store)),
+                Effect.provideService(RemoteBaselineGit, git)
+              )
+            })
+          )
+        const assertReadyHistory = (stored: ReadonlyArray<JournalRecord>) => {
+          expect(
+            stored.filter(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")
+          ).toHaveLength(1)
+          expect(stored.filter(({ event }) => event._tag === "RemoteBaselineReadIntended")).toHaveLength(2)
+          expect(stored.filter(({ event }) => event._tag === "RemoteBaselineObserved")).toHaveLength(2)
+          expect(stored.filter(({ event }) => event._tag === "LocalTargetCatchUpIntended")).toHaveLength(2)
+          expect(stored.filter(({ event }) => event._tag === "LocalTargetCatchUpObserved")).toHaveLength(2)
+          const history = reduceWorkflowJournalHistory(fixture.runId, stored)
+          if (history._tag === "InvalidWorkflowJournalHistory") {
+            throw new Error(`reconciled H3 refresh history is invalid: ${JSON.stringify(history.issues)}`)
+          }
+          const initialBaselineRead = stored.find(({ event }) => event._tag === "RemoteBaselineReadIntended")
+          if (initialBaselineRead?.event._tag !== "RemoteBaselineReadIntended") {
+            throw new Error("reconciled H3 refresh history must preserve the initial read intent")
+          }
+          const reconstructedFirstRound = automaticCompetingHeadRemoteBaselineCorrelationFor(
+            fixture.runId,
+            initialBaselineRead.event.correlation.responsibility,
+            initialBaselineRead.event.correlation.localTarget,
+            initialBaselineRead.event.correlation.remoteTarget,
+            authorization.position
+          )
+          const rounds = automaticRemoteBaselineRoundsFor(history.prefix, reconstructedFirstRound)
+          expect(rounds.map(({ state }) => state._tag)).toEqual(["Ready", "Ready"])
+          expect(rounds.at(-1)?.state).toMatchObject({ _tag: "Ready", remoteHead: h3 })
+        }
+
+        const memoryContext = yield* Layer.build(memoryJournalStoreLayer)
+        const memoryStore = Context.get(memoryContext, JournalStore)
+        yield* seedRecords(memoryStore)
+        expect((yield* resume(memoryStore))._tag).toBe("Ready")
+        expect(yield* Ref.get(timeline)).toEqual(["reconcile-catch-up"])
+        assertReadyHistory(yield* memoryStore.read(fixture.runId))
+
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-h3-refresh-recovery-" })
+        const filename = JournalDatabaseLocator.make(path.join(directory, "journal.sqlite"))
+        const openSqlite = <A>(use: (store: JournalStore["Service"]) => Effect.Effect<A, unknown>) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              return yield* use(yield* JournalStore)
+            }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+          )
+        yield* openSqlite(seedRecords)
+        expect((yield* openSqlite(resume))._tag).toBe("Ready")
+        expect(yield* Ref.get(timeline)).toEqual(["reconcile-catch-up", "reconcile-catch-up"])
+        assertReadyHistory(yield* openSqlite((store) => store.read(fixture.runId)))
+      }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)))
+    )
+)
+
+it.effect(
   "recovers the exact automatic-successor baseline observation after a lost acknowledgement and then catches up once",
   () =>
     Effect.scoped(
@@ -660,6 +946,439 @@ it.effect(
         expect(yield* Ref.get(gitTimeline)).toEqual(["observe", "catch-up"])
       }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)))
     )
+)
+
+it.effect("refreshes Ready H2 to H3 under one authorization and reopens the exact successor in memory and SQLite", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = makeSuccessorPrefix()
+      const records = fixture.records()
+      const auth = records.find(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")
+      const first = records.find(({ event }) => event._tag === "RemoteBaselineReadIntended")
+      if (
+        auth?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
+        first?.event._tag !== "RemoteBaselineReadIntended"
+      )
+        return yield* Effect.die("fixture must contain the H2 authorization and first Ready baseline")
+      const h2 = auth.event.remoteHead
+      const h3 = GitCommitShaSchema.make("8".repeat(40))
+      const round2 = automaticCompetingHeadRemoteBaselineCorrelationFor(
+        fixture.runId,
+        first.event.correlation.responsibility,
+        first.event.correlation.localTarget,
+        first.event.correlation.remoteTarget,
+        auth.position,
+        RemoteBaselineRound.make(2)
+      )
+      fixture.append(
+        RemoteBaselineReadIntendedEvent.make({
+          correlation: round2,
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          version: workflowJournalEventVersion
+        })
+      )
+      fixture.append(
+        RemoteBaselineObservedEvent.make({
+          correlation: round2,
+          observation: RemoteBaselineObservation.cases.LocalAncestor.make({ localHead: h2, remoteHead: h3 }),
+          occurrenceClassification: "NonActionOccurrence",
+          version: workflowJournalEventVersion
+        })
+      )
+      fixture.append(
+        LocalTargetCatchUpIntendedEvent.make({
+          correlation: round2,
+          expectedLocalHead: h2,
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          remoteHead: h3,
+          version: workflowJournalEventVersion
+        })
+      )
+      fixture.append(
+        LocalTargetCatchUpObservedEvent.make({
+          correlation: round2,
+          expectedLocalHead: h2,
+          occurrenceClassification: "NonActionOccurrence",
+          remoteHead: h3,
+          result: LocalTargetCatchUpResult.cases.Applied.make({ newHead: h3 }),
+          version: workflowJournalEventVersion
+        })
+      )
+      const operation = makeTargetLineageObservationOperation({
+        integrationTarget: fixture.accepted.integrationTarget,
+        operationId: OperationId.make("automatic-successor-H3-lineage"),
+        plannedAttempt: fixture.input.predecessor.plannedAttempt,
+        predecessorOperationIds: [fixture.accepted.targetLineageOperation.operationId]
+      })
+      const observation = TargetLineageObservation.make({
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: fixture.input.predecessor.plannedAttempt.baseSha,
+        targetHeadSha: h3
+      })
+      fixture.append(
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operation,
+          version: workflowJournalEventVersion
+        })
+      )
+      const lineage = fixture.append(
+        TargetLineageObservedEvent.make({
+          observation,
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: operation.operationId,
+          plannedAttempt: fixture.input.predecessor.plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      const input = { ...fixture.input, targetLineage: observation, targetLineageObservedAt: lineage.position }
+      const history = reduceWorkflowJournalHistory(fixture.runId, fixture.records())
+      if (history._tag === "InvalidWorkflowJournalHistory")
+        return yield* Effect.die("H3 refresh chronology must be valid")
+      expect(integratorAutomaticSuccessorPreparationIsCurrent(history.prefix, fixture.input)).toBe(false)
+      expect(integratorAutomaticSuccessorPreparationIsCurrent(history.prefix, input)).toBe(true)
+      const prepared = yield* prepareIntegratorAutomaticSuccessorSessionAppend(input, history.prefix)
+      if (prepared._tag !== "Append") return yield* Effect.die("fresh H3 evidence must prepare one successor")
+      expect(prepared.event.authorizationAt).toBe(auth.position)
+      expect(prepared.event.successor.expectedTargetHead).toBe(h3)
+      expect(prepared.event.successor.acceptedResult).toEqual(fixture.input.predecessor.acceptedResult)
+      expect(prepared.event.successor.plannedAttempt).toEqual(fixture.input.predecessor.plannedAttempt)
+      fixture.append(prepared.event)
+
+      const seed = (store: JournalStore["Service"]) =>
+        Effect.gen(function* () {
+          const [began, ...rest] = fixture.records()
+          if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("history must begin with Run")
+          yield* store.beginRun(
+            fixture.runId,
+            began.event.target,
+            began.event.initialControlPolicy,
+            began.event.remotePublicationTarget
+          )
+          for (const record of rest) {
+            if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+              return yield* Effect.die("history may not contain another Run lifecycle event")
+            }
+            yield* store.append(fixture.runId, record.key, record.event)
+          }
+        })
+      const memoryContext = yield* Layer.build(memoryJournalStoreLayer)
+      const memory = Context.get(memoryContext, JournalStore)
+      yield* seed(memory)
+      const memoryRecords = yield* memory.read(fixture.runId)
+      expect(
+        memoryRecords.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+      ).toHaveLength(1)
+
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-h3-round-reopen-" })
+      const filename = JournalDatabaseLocator.make(path.join(directory, "journal.sqlite"))
+      const openSqlite = <A>(use: (store: JournalStore["Service"]) => Effect.Effect<A, unknown>) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            return yield* use(yield* JournalStore)
+          }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+        )
+      yield* openSqlite(seed)
+      const reopened = yield* openSqlite((store) => store.read(fixture.runId))
+      expect(reopened.filter(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")).toHaveLength(
+        1
+      )
+      expect(reopened.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")).toEqual([
+        expect.objectContaining({ event: prepared.event })
+      ])
+      expect(
+        reopened
+          .filter(({ event }) => event._tag === "RemoteBaselineReadIntended")
+          .map(({ event }) =>
+            event._tag === "RemoteBaselineReadIntended"
+              ? (event.correlation.automaticCompetingHeadBaselineRound ?? 1)
+              : 0
+          )
+      ).toEqual([1, 2])
+    }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)))
+  )
+)
+
+it.effect(
+  "reconciles a pending H3 refresh catch-up through ResponseDeadline before one CAS in memory and reopened SQLite",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = makeSuccessorPrefix()
+        const initialRecords = fixture.records()
+        const authorization = initialRecords.find(
+          ({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized"
+        )
+        const firstRead = initialRecords.find(({ event }) => event._tag === "RemoteBaselineReadIntended")
+        if (
+          authorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
+          firstRead?.event._tag !== "RemoteBaselineReadIntended"
+        ) {
+          return yield* Effect.die("accepted H2 prefix must contain its exact authorization and baseline")
+        }
+        const h2 = authorization.event.remoteHead
+        const h3 = GitCommitShaSchema.make("8".repeat(40))
+        const roundTwo = automaticCompetingHeadRemoteBaselineCorrelationFor(
+          fixture.runId,
+          firstRead.event.correlation.responsibility,
+          firstRead.event.correlation.localTarget,
+          firstRead.event.correlation.remoteTarget,
+          authorization.position,
+          RemoteBaselineRound.make(2)
+        )
+        fixture.append(
+          RemoteBaselineReadIntendedEvent.make({
+            correlation: roundTwo,
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            version: workflowJournalEventVersion
+          })
+        )
+        const roundTwoRead = fixture.records().at(-1)
+        if (roundTwoRead?.event._tag !== "RemoteBaselineReadIntended") {
+          return yield* Effect.die("H3 refresh prefix must end at its exact read intent")
+        }
+
+        const currentLocalHead = yield* Ref.make(h2)
+        const timeline = yield* Ref.make<ReadonlyArray<string>>([])
+        const remoteReadCount = yield* Ref.make(0)
+        const catchUpEntryCount = yield* Ref.make(0)
+        const reconciliationCount = yield* Ref.make(0)
+        const casCount = yield* Ref.make(0)
+        type Phase = "ObserveH3" | "StopBeforeCas" | "ResponseDeadline" | "Apply"
+        const makeGit = (phase: Phase): RemoteBaselineGitService =>
+          RemoteBaselineGit.of({
+            observe: (receivedCorrelation) =>
+              Effect.gen(function* () {
+                expect(phase).toBe("ObserveH3")
+                expect(receivedCorrelation).toEqual(roundTwo)
+                yield* Ref.update(timeline, (items) => [...items, "observe-H3"])
+                yield* Ref.update(remoteReadCount, (count) => count + 1)
+                return RemoteBaselineObservation.cases.LocalAncestor.make({ localHead: h2, remoteHead: h3 })
+              }),
+            catchUp: (receivedCorrelation, expectedLocalHead, remoteHead) =>
+              Effect.gen(function* () {
+                expect(phase).toBe("StopBeforeCas")
+                expect(receivedCorrelation).toEqual(roundTwo)
+                expect(expectedLocalHead).toBe(h2)
+                expect(remoteHead).toBe(h3)
+                expect(yield* Ref.get(currentLocalHead)).toBe(h2)
+                yield* Ref.update(timeline, (items) => [...items, "catch-up-intent-before-CAS"])
+                yield* Ref.update(catchUpEntryCount, (count) => count + 1)
+                return yield* Effect.die("process stopped after the exact catch-up intent and before CAS")
+              }),
+            reconcileCatchUp: (receivedCorrelation, expectedLocalHead, remoteHead) =>
+              Effect.gen(function* () {
+                expect(phase === "ResponseDeadline" || phase === "Apply").toBe(true)
+                expect(receivedCorrelation).toEqual(roundTwo)
+                expect(expectedLocalHead).toBe(h2)
+                expect(remoteHead).toBe(h3)
+                expect(yield* Ref.get(currentLocalHead)).toBe(h2)
+                yield* Ref.update(timeline, (items) => [...items, `reconcile-${phase}`])
+                yield* Ref.update(reconciliationCount, (count) => count + 1)
+                if (phase === "ResponseDeadline") {
+                  return yield* Effect.fail(new RemoteBaselineFailure({ reason: "ResponseDeadline" }))
+                }
+                yield* Ref.update(casCount, (count) => count + 1)
+                yield* Ref.set(currentLocalHead, h3)
+                return LocalTargetCatchUpResult.cases.Applied.make({ newHead: h3 })
+              })
+          })
+
+        const seedRecords = (store: JournalStore["Service"]) =>
+          Effect.gen(function* () {
+            const [beginning, ...remaining] = fixture.records()
+            if (beginning?.event._tag !== "WorkflowRunBegan") {
+              return yield* Effect.die("H3 refresh prefix must begin with its pinned Run")
+            }
+            yield* store.beginRun(
+              fixture.runId,
+              beginning.event.target,
+              beginning.event.initialControlPolicy,
+              beginning.event.remotePublicationTarget
+            )
+            for (const record of remaining) {
+              if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+                return yield* Effect.die("H3 refresh prefix may not contain another Run lifecycle event")
+              }
+              yield* store.append(fixture.runId, record.key, record.event)
+            }
+          })
+        const activate = (store: JournalStore["Service"], phase: Phase) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const records = yield* store.read(fixture.runId)
+              const history = reduceWorkflowJournalHistory(fixture.runId, records)
+              if (history._tag === "InvalidWorkflowJournalHistory") {
+                return yield* Effect.die(`reopened H3 pending prefix is invalid: ${JSON.stringify(history.issues)}`)
+              }
+              return yield* establishRemoteBaseline(roundTwo).pipe(
+                Effect.provide(journalLayer(fixture.runId, fixture.accepted.trackerTarget, history, store)),
+                Effect.provideService(RemoteBaselineGit, makeGit(phase))
+              )
+            })
+          )
+        const assertExactPendingIntent = (records: ReadonlyArray<JournalRecord>) => {
+          const authorizations = records.filter(
+            ({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized"
+          )
+          expect(authorizations).toEqual([authorization])
+          const reads = records.filter(({ event }) => event._tag === "RemoteBaselineReadIntended")
+          expect(reads).toHaveLength(2)
+          expect(reads[1]).toEqual(roundTwoRead)
+          const observations = records.filter(({ event }) => event._tag === "RemoteBaselineObserved")
+          expect(observations).toHaveLength(2)
+          expect(observations[1]?.event).toMatchObject({
+            correlation: roundTwo,
+            observation: { _tag: "LocalAncestor", localHead: h2, remoteHead: h3 }
+          })
+          const catchUpIntents = records.filter(({ event }) => event._tag === "LocalTargetCatchUpIntended")
+          expect(catchUpIntents).toHaveLength(2)
+          expect(catchUpIntents[1]?.event).toMatchObject({
+            correlation: roundTwo,
+            expectedLocalHead: h2,
+            remoteHead: h3
+          })
+          expect(records.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")).toHaveLength(
+            0
+          )
+          return catchUpIntents[1]
+        }
+        const exercise = (
+          seed: Effect.Effect<unknown, unknown>,
+          runActivation: (phase: Phase) => Effect.Effect<RemoteBaselineState, unknown>,
+          read: () => Effect.Effect<ReadonlyArray<JournalRecord>, unknown>
+        ) =>
+          Effect.gen(function* () {
+            yield* seed
+            expect((yield* runActivation("ObserveH3"))._tag).toBe("CatchUpRequired")
+            const interrupted = yield* Effect.exit(runActivation("StopBeforeCas"))
+            expect(interrupted._tag).toBe("Failure")
+            expect(yield* Ref.get(currentLocalHead)).toBe(h2)
+            expect(yield* Ref.get(casCount)).toBe(0)
+            const pendingBeforeDeadline = yield* read()
+            const expectedCatchUpIntent = assertExactPendingIntent(pendingBeforeDeadline)
+            expect(
+              pendingBeforeDeadline.filter(({ event }) => event._tag === "LocalTargetCatchUpObserved")
+            ).toHaveLength(1)
+
+            expect((yield* runActivation("ResponseDeadline"))._tag).toBe("CatchUpPending")
+            const pendingAfterDeadline = yield* read()
+            expect(assertExactPendingIntent(pendingAfterDeadline)).toEqual(expectedCatchUpIntent)
+            expect(
+              pendingAfterDeadline.filter(({ event }) => event._tag === "LocalTargetCatchUpObserved")
+            ).toHaveLength(1)
+            expect(yield* Ref.get(currentLocalHead)).toBe(h2)
+            expect(yield* Ref.get(casCount)).toBe(0)
+
+            expect((yield* runActivation("Apply"))._tag).toBe("Ready")
+            const settled = yield* read()
+            expect(assertExactPendingIntent(settled)).toEqual(expectedCatchUpIntent)
+            const results = settled.filter(({ event }) => event._tag === "LocalTargetCatchUpObserved")
+            expect(results).toHaveLength(2)
+            expect(results[1]?.event).toMatchObject({
+              correlation: roundTwo,
+              expectedLocalHead: h2,
+              remoteHead: h3,
+              result: { _tag: "Applied", newHead: h3 }
+            })
+            expect(yield* Ref.get(currentLocalHead)).toBe(h3)
+            expect(yield* Ref.get(remoteReadCount)).toBe(1)
+            expect(yield* Ref.get(catchUpEntryCount)).toBe(1)
+            expect(yield* Ref.get(reconciliationCount)).toBe(2)
+            expect(yield* Ref.get(casCount)).toBe(1)
+          })
+
+        const memoryContext = yield* Layer.build(memoryJournalStoreLayer)
+        const memoryStore = Context.get(memoryContext, JournalStore)
+        yield* exercise(
+          seedRecords(memoryStore),
+          (phase) => activate(memoryStore, phase),
+          () => memoryStore.read(fixture.runId)
+        )
+
+        const fileSystem = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-h3-catch-up-deadline-" })
+        const filename = JournalDatabaseLocator.make(path.join(directory, "journal.sqlite"))
+        const openSqlite = <A>(use: (store: JournalStore["Service"]) => Effect.Effect<A, unknown, Scope.Scope>) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const store = yield* JournalStore
+              return yield* use(store)
+            }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
+          )
+        yield* Ref.set(currentLocalHead, h2)
+        yield* Ref.set(timeline, [])
+        yield* Ref.set(remoteReadCount, 0)
+        yield* Ref.set(catchUpEntryCount, 0)
+        yield* Ref.set(reconciliationCount, 0)
+        yield* Ref.set(casCount, 0)
+        yield* exercise(
+          openSqlite(seedRecords),
+          (phase) => openSqlite((store) => activate(store, phase)),
+          () => openSqlite((store) => store.read(fixture.runId))
+        )
+        expect(yield* Ref.get(timeline)).toEqual([
+          "observe-H3",
+          "catch-up-intent-before-CAS",
+          "reconcile-ResponseDeadline",
+          "reconcile-Apply"
+        ])
+      }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)))
+    )
+)
+
+it.effect("rejects a fresh automatic-successor baseline round after session fixation", () =>
+  Effect.gen(function* () {
+    const fixture = makeSuccessorPrefix()
+    const initialHistory = reduceWorkflowJournalHistory(fixture.runId, fixture.records())
+    if (initialHistory._tag === "InvalidWorkflowJournalHistory") {
+      return yield* Effect.die("accepted successor prefix must reduce before fixation")
+    }
+    const fixed = yield* prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, initialHistory.prefix)
+    if (fixed._tag !== "Append") return yield* Effect.die("ready H2 baseline must prepare the initial successor")
+    fixture.append(fixed.event)
+    const fixedProjection = yield* projectWorkflowOccurrences(fixture.records())
+    expect(fixedProjection.occurrences.some(({ _tag }) => _tag === "IntegratorAutomaticSuccessorSessionFixed")).toBe(
+      true
+    )
+
+    const authorization = fixture
+      .records()
+      .find(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")
+    const firstBaseline = fixture.records().find(({ event }) => event._tag === "RemoteBaselineReadIntended")
+    if (
+      authorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
+      firstBaseline?.event._tag !== "RemoteBaselineReadIntended"
+    ) {
+      return yield* Effect.die("fixed successor history must preserve its exact authorization and baseline")
+    }
+    const roundTwo = automaticCompetingHeadRemoteBaselineCorrelationFor(
+      fixture.runId,
+      firstBaseline.event.correlation.responsibility,
+      firstBaseline.event.correlation.localTarget,
+      firstBaseline.event.correlation.remoteTarget,
+      authorization.position,
+      RemoteBaselineRound.make(2)
+    )
+    fixture.append(
+      RemoteBaselineReadIntendedEvent.make({
+        correlation: roundTwo,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const afterLateRefresh = yield* Effect.exit(projectWorkflowOccurrences(fixture.records()))
+    expect(afterLateRefresh._tag).toBe("Failure")
+  })
 )
 
 it.effect(

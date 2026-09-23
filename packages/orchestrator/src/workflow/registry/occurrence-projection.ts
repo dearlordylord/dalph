@@ -80,6 +80,7 @@ import { type IntegratorCompetingHeadSuccessorAuthorizedEvent } from "../protoco
 import {
   automaticCompetingHeadRemoteBaselineCorrelationFor,
   RemoteBaselineCorrelation,
+  RemoteBaselineRound,
   remoteBaselineCorrelationFor,
   type LocalTargetCatchUpIntendedEvent,
   type LocalTargetCatchUpObservedEvent,
@@ -95,6 +96,7 @@ export { IntegrationResponsibilityBegan, IntegrationStarted } from "./integratio
 export { WorkflowActor } from "./actor.js"
 
 const lastArrayElementOffset = -1
+const automaticSuccessorRefreshRoundNumber = 2
 
 const {
   AttemptImplementationAbandoned,
@@ -1747,13 +1749,22 @@ const projectHistoricalAutomaticSuccessorSession = (
   if (authorization === undefined) {
     return historicalFailure(record, "automatic successor lacks its exact earlier authorization occurrence")
   }
-  const baselineCorrelation = automaticCompetingHeadRemoteBaselineCorrelationFor(
+  const firstBaselineCorrelation = automaticCompetingHeadRemoteBaselineCorrelationFor(
     event.predecessor.plannedAttempt.runId,
     integratorResponsibilityFactsFromCorrelation(event.predecessor),
     event.predecessor.integrationTarget,
     authorization.correlation.target,
     event.authorizationAt
   )
+  const latestBaselineIntent = Array.from(context.remoteBaselineReadIntents.values())
+    .filter(({ correlation }) => correlation.automaticCompetingHeadAuthorizationAt === event.authorizationAt)
+    .sort(
+      (left, right) =>
+        Number(left.correlation.automaticCompetingHeadBaselineRound ?? 1) -
+        Number(right.correlation.automaticCompetingHeadBaselineRound ?? 1)
+    )
+    .at(lastArrayElementOffset)
+  const baselineCorrelation = latestBaselineIntent?.correlation ?? firstBaselineCorrelation
   const baselineEvents: ReadonlyArray<RemoteBaselineJournalEvent> = [
     context.remoteBaselineReadIntents.get(baselineCorrelation.baselineId),
     context.remoteBaselineObservations.get(baselineCorrelation.baselineId),
@@ -1811,8 +1822,8 @@ const projectHistoricalAutomaticSuccessorSession = (
     authorization.correlation.qualifiedCandidate.run.session.sessionId !== event.predecessor.sessionId ||
     authorization.correlation.qualifiedCandidate.run.session.acceptedResult.commit !==
       event.successor.acceptedResult.commit ||
-    authorization.remoteHead !== event.successor.expectedTargetHead ||
     baselineState._tag !== "Ready" ||
+    baselineState.remoteHead !== event.successor.expectedTargetHead ||
     completedBaseline === undefined ||
     lineage === undefined ||
     !hasFreshLineageRead ||
@@ -2036,7 +2047,8 @@ const remoteBaselineMatchesRun = (
       correlation.responsibility,
       correlation.localTarget,
       correlation.remoteTarget,
-      authorization.recordedAt
+      authorization.recordedAt,
+      RemoteBaselineRound.make(Number(correlation.automaticCompetingHeadBaselineRound ?? 1))
     )
   )
 }
@@ -2055,6 +2067,55 @@ const projectHistoricalRemoteBaselineReadIntended = (
   }
   if (context.remoteBaselineReadIntents.has(baselineId)) {
     return historicalFailure(record, "duplicate remote baseline read " + baselineId)
+  }
+  const authorizationAt = event.correlation.automaticCompetingHeadAuthorizationAt
+  const round = Number(event.correlation.automaticCompetingHeadBaselineRound ?? 1)
+  if (authorizationAt !== undefined) {
+    const fixedSuccessor = context.occurrences.find(
+      (occurrence) =>
+        occurrence._tag === "IntegratorAutomaticSuccessorSessionFixed" && occurrence.authorizationAt === authorizationAt
+    )
+    if (fixedSuccessor !== undefined) {
+      return historicalFailure(record, "automatic successor baseline refresh cannot follow successor fixation")
+    }
+    const priorIntents = Array.from(context.remoteBaselineReadIntents.values())
+      .filter(({ correlation }) => correlation.automaticCompetingHeadAuthorizationAt === authorizationAt)
+      .sort(
+        (left, right) =>
+          Number(left.correlation.automaticCompetingHeadBaselineRound ?? 1) -
+          Number(right.correlation.automaticCompetingHeadBaselineRound ?? 1)
+      )
+    const prior = priorIntents.at(lastArrayElementOffset)
+    if (
+      round === 1
+        ? prior !== undefined
+        : round === automaticSuccessorRefreshRoundNumber
+          ? prior === undefined || Number(prior.correlation.automaticCompetingHeadBaselineRound ?? 1) !== 1
+          : true
+    ) {
+      return historicalFailure(record, "automatic successor baseline rounds must be contiguous and bounded to two")
+    }
+    if (round === automaticSuccessorRefreshRoundNumber && prior !== undefined) {
+      const priorEvents: ReadonlyArray<RemoteBaselineJournalEvent> = [
+        context.remoteBaselineReadIntents.get(prior.correlation.baselineId),
+        context.remoteBaselineObservations.get(prior.correlation.baselineId),
+        context.localTargetCatchUpIntents.get(prior.correlation.baselineId),
+        context.localTargetCatchUpObservations.get(prior.correlation.baselineId)
+      ].filter((baselineEvent): baselineEvent is RemoteBaselineJournalEvent => baselineEvent !== undefined)
+      if (deriveRemoteBaselineState(priorEvents)._tag !== "Ready") {
+        return historicalFailure(record, "automatic successor refresh must follow a ready prior round")
+      }
+      const priorCompletion = context.occurrences
+        .filter(
+          (occurrence) =>
+            (occurrence._tag === "RemoteBaselineObserved" || occurrence._tag === "LocalTargetCatchUpObserved") &&
+            occurrence.correlation.baselineId === prior.correlation.baselineId
+        )
+        .at(lastArrayElementOffset)
+      if (priorCompletion === undefined || priorCompletion.recordedAt >= record.position) {
+        return historicalFailure(record, "automatic successor refresh intent must follow prior round completion")
+      }
+    }
   }
   context.remoteBaselineReadIntents.set(baselineId, event)
   return Effect.succeed(

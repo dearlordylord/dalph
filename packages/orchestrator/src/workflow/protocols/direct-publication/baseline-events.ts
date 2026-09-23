@@ -9,12 +9,19 @@ import { JournalPosition } from "../../../workflow-journal/identity.js"
 export const RemoteBaselineId = Schema.NonEmptyString.pipe(Schema.brand("RemoteBaselineId"))
 export type RemoteBaselineId = typeof RemoteBaselineId.Type
 
+/** One exact baseline observation round within an automatic-successor authorization. */
+export const RemoteBaselineRound = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).pipe(
+  Schema.brand("RemoteBaselineRound")
+)
+export type RemoteBaselineRound = typeof RemoteBaselineRound.Type
+
 const remoteBaselineIdFor = (
   runId: RunId,
   responsibility: IntegratorResponsibilityFacts,
   localTarget: IntegrationTarget,
   remoteTarget: RemotePublicationTarget,
-  automaticCompetingHeadAuthorizationAt?: JournalPosition
+  automaticCompetingHeadAuthorizationAt?: JournalPosition,
+  automaticCompetingHeadBaselineRound?: RemoteBaselineRound
 ): RemoteBaselineId =>
   RemoteBaselineId.make(
     [
@@ -27,7 +34,13 @@ const remoteBaselineIdFor = (
       remoteTarget.branch,
       ...(automaticCompetingHeadAuthorizationAt === undefined
         ? []
-        : ["automatic-competing-head", automaticCompetingHeadAuthorizationAt])
+        : [
+            "automatic-competing-head",
+            automaticCompetingHeadAuthorizationAt,
+            ...(automaticCompetingHeadBaselineRound === undefined || automaticCompetingHeadBaselineRound === 1
+              ? []
+              : ["baseline-round", automaticCompetingHeadBaselineRound])
+          ])
     ].join(":")
   )
 
@@ -37,19 +50,23 @@ export const RemoteBaselineCorrelation = Schema.Struct({
   remoteTarget: RemotePublicationTarget,
   responsibility: IntegratorResponsibilityFacts,
   automaticCompetingHeadAuthorizationAt: Schema.optionalKey(JournalPosition),
+  automaticCompetingHeadBaselineRound: Schema.optionalKey(RemoteBaselineRound),
   runId: RunId
 }).check(
   Schema.makeFilter((correlation) =>
     correlation.runId === correlation.responsibility.plannedAttempt.runId &&
     correlation.localTarget.repository === correlation.responsibility.integrationTarget.repository &&
     correlation.localTarget.ref === correlation.responsibility.integrationTarget.ref &&
+    (correlation.automaticCompetingHeadAuthorizationAt !== undefined ||
+      correlation.automaticCompetingHeadBaselineRound === undefined) &&
     correlation.baselineId ===
       remoteBaselineIdFor(
         correlation.runId,
         correlation.responsibility,
         correlation.localTarget,
         correlation.remoteTarget,
-        correlation.automaticCompetingHeadAuthorizationAt
+        correlation.automaticCompetingHeadAuthorizationAt,
+        correlation.automaticCompetingHeadBaselineRound
       )
       ? undefined
       : "remote baseline correlation must bind its responsibility, local target, Run, and deterministic identity"
@@ -77,11 +94,13 @@ export const automaticCompetingHeadRemoteBaselineCorrelationFor = (
   responsibility: IntegratorResponsibilityFacts,
   localTarget: IntegrationTarget,
   remoteTarget: RemotePublicationTarget,
-  authorizationAt: JournalPosition
+  authorizationAt: JournalPosition,
+  baselineRound: RemoteBaselineRound = RemoteBaselineRound.make(1)
 ): RemoteBaselineCorrelation =>
   RemoteBaselineCorrelation.make({
     automaticCompetingHeadAuthorizationAt: authorizationAt,
-    baselineId: remoteBaselineIdFor(runId, responsibility, localTarget, remoteTarget, authorizationAt),
+    ...(baselineRound === 1 ? {} : { automaticCompetingHeadBaselineRound: baselineRound }),
+    baselineId: remoteBaselineIdFor(runId, responsibility, localTarget, remoteTarget, authorizationAt, baselineRound),
     localTarget,
     remoteTarget,
     responsibility,

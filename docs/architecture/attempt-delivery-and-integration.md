@@ -272,7 +272,20 @@ compare-and-set before calling Git. Git reports the applied, already-current,
 rejected, or unavailable result; no reset, worktree repair, or cleanup is
 implied. A following target-lineage read verifies the original planned Base is
 an ancestor before Dalph fixes one deterministic successor session and
-distinct candidate resource with parents `[H2, C]`.
+distinct candidate resource with parents `[Hn, C]`, where Hn is the head from
+the latest completed baseline round.
+
+The authorization continues to name the original competing head H2. If the
+first baseline was Ready before a later activation begins, recovery records one
+fresh baseline round under that same authorization before fixation, including
+when the remote remains at H2. If a round is incomplete, recovery resumes its
+existing read or catch-up intent before considering another round. The initial
+round and this one refresh round are the maximum; a third read is not admitted.
+One activation performs at most one fresh remote read, and a baseline completed
+during that activation is used directly without another reread. Dalph fixes
+against the latest Ready head only after a later target-lineage read confirms
+the unchanged task Base is its ancestor. The original accepted C, Base, and
+FIFO position do not change.
 
 The new session consumes the existing three-session batch when its durable
 fixation is recorded, even if the process stops before contacting the

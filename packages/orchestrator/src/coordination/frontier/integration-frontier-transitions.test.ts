@@ -15,6 +15,7 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
+import { makeSuccessorPrefix } from "../../../test/support/automatic-successor-history.js"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
@@ -32,6 +33,8 @@ import {
   integratorSuccessorSessionFixedRecordKey,
   integratorCompetingHeadSuccessorAuthorizedRecordKey,
   integratorAutomaticSuccessorSessionFixedRecordKey,
+  localTargetCatchUpIntendedRecordKey,
+  localTargetCatchUpObservedRecordKey,
   outcomeRecordKey,
   remoteBaselineObservedRecordKey,
   remoteBaselineReadIntendedRecordKey,
@@ -124,9 +127,13 @@ import type { CurrentTaskClaimAuthority } from "./task-claim-authority.js"
 import { IntegrationResponsibilityIdentity } from "../../workflow/protocols/integration-admission/responsibility.js"
 import {
   automaticCompetingHeadRemoteBaselineCorrelationFor,
+  LocalTargetCatchUpIntendedEvent,
+  LocalTargetCatchUpObservedEvent,
+  LocalTargetCatchUpResult,
   RemoteBaselineObservedEvent,
   RemoteBaselineObservation,
   RemoteBaselineReadIntendedEvent,
+  RemoteBaselineRound,
   remoteBaselineCorrelationFor
 } from "../../workflow/protocols/direct-publication/baseline-events.js"
 import {
@@ -1060,6 +1067,68 @@ it("promotes the Git-qualified candidate from the successful Retry run", () => {
   ])
 })
 
+it("schedules one bounded baseline refresh when Ready H2 predates activation entry", () => {
+  const fixture = makeSuccessorPrefix()
+  const records = fixture.records()
+  const authorization = records.find(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")
+  const runBeginning = records.find(({ event }) => event._tag === "WorkflowRunBegan")
+  if (
+    authorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
+    runBeginning?.event._tag !== "WorkflowRunBegan"
+  ) {
+    throw new Error("Ready H2 fixture must include its exact authorization and pinned Run")
+  }
+  const responsibility = deriveIntegrationAdmission(fixture.reduction.prefix).responsibilities.find(
+    (entry): entry is StartedIntegrationResponsibility => entry._tag === "StartedIntegrationResponsibility"
+  )
+  if (responsibility === undefined) throw new Error("Ready H2 fixture must retain its started FIFO responsibility")
+  const activationBaselinePosition = records.at(-1)?.position
+  if (activationBaselinePosition === undefined) throw new Error("Ready H2 fixture must have a stable activation entry")
+  const automaticBaselineRoundTwo = automaticCompetingHeadRemoteBaselineCorrelationFor(
+    fixture.runId,
+    integratorResponsibilityFactsFor(responsibility),
+    responsibility.integrationTarget,
+    runBeginning.event.remotePublicationTarget,
+    authorization.position,
+    RemoteBaselineRound.make(2)
+  )
+  const runState: ReconstructedRunState = {
+    appliedThrough: activationBaselinePosition,
+    controlPolicy: Option.none(),
+    graphKnowledge: { taskTrackerFacts: [] },
+    pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
+    cancellation: notAppliedCancellation,
+    responsibility: { entries: [] },
+    runId: fixture.runId,
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
+  }
+  const plannedAttempt = responsibility.plannedAttempt
+  const transitions = deriveStartedIntegrationFrontier(
+    runState,
+    {
+      activeResponsibilities: [],
+      activationBaselinePosition: Option.some(activationBaselinePosition),
+      currentTrackerTaskIds: new Set([plannedAttempt.taskId]),
+      heldResponsibilities: [
+        IntegrationResponsibilityIdentity.make({ queuedAt: responsibility.queuedAt, runId: fixture.runId })
+      ],
+      integrationTarget: Option.some(responsibility.integrationTarget),
+      remotePublicationConfigured: true,
+      targetLineageByAttemptId: new Map([[plannedAttempt.attemptId, fixture.input.targetLineage]]),
+      targetLineageRefreshRequiredAttemptIds: new Set<AttemptId>(),
+      targetPromotionConfigured: true,
+      taskClaimAuthorityByAttemptId: new Map([[plannedAttempt.attemptId, { _tag: "Exact" as const }]])
+    },
+    [responsibility]
+  ).transitions()
+
+  expect(transitions).toEqual([
+    RunnableFrontierTransition.EstablishRemoteBaseline({ correlation: automaticBaselineRoundTwo, responsibility })
+  ])
+  expect(automaticBaselineRoundTwo.automaticCompetingHeadAuthorizationAt).toBe(authorization.position)
+  expect(automaticBaselineRoundTwo.automaticCompetingHeadBaselineRound).toBe(2)
+})
+
 it("retains the exact compatible-head wait after the third automatic successor", () => {
   const scenario = unfinishedFirstSessionHistory()
   const candidateObservation = IntegratorGitObservation.cases.Commit.make({
@@ -1248,6 +1317,108 @@ it("retains the exact compatible-head wait after the third automatic successor",
     appliedThrough: JournalPosition.make(17),
     workflowHistory: { evidence: journalEvidenceFrom(readyBaselineRecords) }
   }
+  const recoveryEntryPosition = JournalPosition.make(17)
+  const refreshCorrelation = automaticCompetingHeadRemoteBaselineCorrelationFor(
+    runId,
+    integratorResponsibilityFactsFor(responsibility),
+    target,
+    remotePublicationTargetForTest,
+    authorizationAt,
+    RemoteBaselineRound.make(2)
+  )
+  expect(
+    deriveStartedIntegrationFrontier(
+      readyBaselineRunState,
+      {
+        ...runtimeFacts,
+        activationBaselinePosition: Option.some(recoveryEntryPosition),
+        targetLineageByAttemptId: new Map([[attemptId, lineage(changedHead)]])
+      },
+      [responsibility]
+    ).transitions()
+  ).toEqual([RunnableFrontierTransition.EstablishRemoteBaseline({ correlation: refreshCorrelation, responsibility })])
+
+  const refreshedHead = sha("f")
+  const refreshedLineage = lineageRecords(23, lineage(refreshedHead), "automatic-successor-refreshed-head")
+  const secondRoundReadyRecords = [
+    ...readyBaselineRecords,
+    record(
+      18,
+      RemoteBaselineReadIntendedEvent.make({
+        correlation: refreshCorrelation,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      }),
+      remoteBaselineReadIntendedRecordKey(refreshCorrelation.baselineId).toString()
+    ),
+    record(
+      19,
+      RemoteBaselineObservedEvent.make({
+        correlation: refreshCorrelation,
+        observation: RemoteBaselineObservation.cases.LocalAncestor.make({
+          localHead: changedHead,
+          remoteHead: refreshedHead
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        version: workflowJournalEventVersion
+      }),
+      remoteBaselineObservedRecordKey(refreshCorrelation.baselineId).toString()
+    ),
+    record(
+      20,
+      LocalTargetCatchUpIntendedEvent.make({
+        correlation: refreshCorrelation,
+        expectedLocalHead: changedHead,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        remoteHead: refreshedHead,
+        version: workflowJournalEventVersion
+      }),
+      localTargetCatchUpIntendedRecordKey(refreshCorrelation.baselineId).toString()
+    ),
+    record(
+      21,
+      LocalTargetCatchUpObservedEvent.make({
+        correlation: refreshCorrelation,
+        expectedLocalHead: changedHead,
+        occurrenceClassification: "NonActionOccurrence",
+        remoteHead: refreshedHead,
+        result: LocalTargetCatchUpResult.cases.Applied.make({ newHead: refreshedHead }),
+        version: workflowJournalEventVersion
+      }),
+      localTargetCatchUpObservedRecordKey(refreshCorrelation.baselineId).toString()
+    ),
+    refreshedLineage.intent,
+    refreshedLineage.observation
+  ]
+  const refreshedBaselineRunState = {
+    ...authorizedRunState,
+    appliedThrough: JournalPosition.make(23),
+    workflowHistory: { evidence: journalEvidenceFrom(secondRoundReadyRecords) }
+  }
+  const refreshedSuccessorInput = {
+    authorizationAt,
+    predecessor: scenario.session,
+    targetLineage: lineage(refreshedHead),
+    targetLineageObservedAt: JournalPosition.make(23)
+  }
+  expect(
+    deriveStartedIntegrationFrontier(
+      refreshedBaselineRunState,
+      {
+        ...runtimeFacts,
+        activationBaselinePosition: Option.some(recoveryEntryPosition),
+        targetLineageByAttemptId: new Map([[attemptId, lineage(refreshedHead)]])
+      },
+      [responsibility]
+    ).transitions()
+  ).toEqual([
+    RunnableFrontierTransition.FixIntegratorAutomaticSuccessorSession({
+      input: refreshedSuccessorInput,
+      responsibility
+    })
+  ])
   const successorInput = {
     authorizationAt,
     predecessor: scenario.session,

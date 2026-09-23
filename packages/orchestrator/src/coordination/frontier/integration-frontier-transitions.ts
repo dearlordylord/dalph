@@ -63,10 +63,14 @@ import { deriveRemotePublicationState } from "../../workflow/protocols/direct-pu
 import { remotePublicationEventsFor } from "../../workflow/protocols/direct-publication/transition-journal.js"
 import {
   automaticCompetingHeadRemoteBaselineCorrelationFor,
+  RemoteBaselineRound,
   remoteBaselineCorrelationFor
 } from "../../workflow/protocols/direct-publication/baseline-events.js"
 import { deriveRemoteBaselineState } from "../../workflow/protocols/direct-publication/baseline-state.js"
-import { remoteBaselineEventsFor } from "../../workflow/protocols/direct-publication/baseline-transition-journal.js"
+import {
+  automaticRemoteBaselineRoundsFor,
+  remoteBaselineEventsFor
+} from "../../workflow/protocols/direct-publication/baseline-rounds.js"
 import {
   validateProviderRunActivityAbsent,
   type ProviderRunFailureQuarantineInput
@@ -80,6 +84,7 @@ type ClaimSubject = { readonly plannedAttempt: { readonly attemptId: AttemptId; 
 type PromotionState = ReturnType<typeof deriveTargetPromotionStateFor>
 type SucceededPromotion = Extract<PromotionState, { readonly _tag: "PromotionSucceeded" }>
 const lastRecordOffset = -1
+const automaticSuccessorRefreshRoundNumber = 2
 
 const remotePublicationSuccessFor = (
   runState: ReconstructedRunState,
@@ -726,11 +731,9 @@ const qualifiedIntegratorProgressTransitionsFor = (
   state: Extract<CurrentIntegratorState, { readonly _tag: "GitQualifiedPrepared" }>,
   promotion: PromotionState
 ): ReadonlyArray<RunnableFrontierTransitionType> => {
-  if (
+  const targetLineageRefreshRequired =
     runtimeFacts.targetLineageRefreshRequiredAttemptIds?.has(responsibility.plannedAttempt.attemptId) === true &&
     !promotionRecoveryMustPrecedeFreshLineage(promotion)
-  )
-    return []
   const began = Array.from(journalRecordsOfKind(workflowHistorySource(runState), "WorkflowRunBegan"))[0]
   if (began?.event._tag !== "WorkflowRunBegan") return []
   const candidate = integratorRunQualifiedCandidateFromState(state)
@@ -739,6 +742,7 @@ const qualifiedIntegratorProgressTransitionsFor = (
     remotePublicationEventsFor(workflowHistorySource(runState), correlation)
   )
   if (publication._tag === "PublicationSucceeded") {
+    if (targetLineageRefreshRequired) return []
     const succeeded = remotePublicationEventsFor(workflowHistorySource(runState), correlation).findLast(
       (event) => event._tag === "RemotePublicationSucceeded"
     )
@@ -791,6 +795,7 @@ const qualifiedIntegratorProgressTransitionsFor = (
         automaticSuccessorSessionCountFor(source, state.run.session) >= maximumIntegratorSessionsPerResponsibility
       )
         return []
+      if (targetLineageRefreshRequired) return []
       return [
         RunnableFrontierTransition.AuthorizeIntegratorCompetingHeadSuccessor({
           authorizationId: expectedAuthorizationId,
@@ -802,14 +807,42 @@ const qualifiedIntegratorProgressTransitionsFor = (
         })
       ]
     }
-    const baselineCorrelation = automaticCompetingHeadRemoteBaselineCorrelationFor(
+    const firstBaselineCorrelation = automaticCompetingHeadRemoteBaselineCorrelationFor(
       responsibility.plannedAttempt.runId,
       integratorResponsibilityFactsFor(responsibility),
       responsibility.integrationTarget,
       began.event.remotePublicationTarget,
       authorization.position
     )
-    const baseline = deriveRemoteBaselineState(remoteBaselineEventsFor(source, baselineCorrelation))
+    const baselineRounds = automaticRemoteBaselineRoundsFor(source, firstBaselineCorrelation)
+    let baselineRound = baselineRounds.at(lastRecordOffset)
+    if (baselineRound === undefined) return []
+    if (
+      baselineRound.state._tag === "Ready" &&
+      Number(baselineRound.round) === 1 &&
+      runtimeFacts.activationBaselinePosition !== undefined &&
+      Option.isSome(runtimeFacts.activationBaselinePosition) &&
+      baselineRound.completedAt !== undefined &&
+      baselineRound.completedAt <= runtimeFacts.activationBaselinePosition.value
+    ) {
+      baselineRound = baselineRounds.find((round) => Number(round.round) === automaticSuccessorRefreshRoundNumber) ?? {
+        correlation: automaticCompetingHeadRemoteBaselineCorrelationFor(
+          responsibility.plannedAttempt.runId,
+          integratorResponsibilityFactsFor(responsibility),
+          responsibility.integrationTarget,
+          began.event.remotePublicationTarget,
+          authorization.position,
+          RemoteBaselineRound.make(automaticSuccessorRefreshRoundNumber)
+        ),
+        completedAt: undefined,
+        latestEvidenceAt: undefined,
+        readIntentAt: undefined,
+        round: RemoteBaselineRound.make(automaticSuccessorRefreshRoundNumber),
+        state: deriveRemoteBaselineState([])
+      }
+    }
+    const baselineCorrelation = baselineRound.correlation
+    const baseline = baselineRound.state
     if (
       baseline._tag === "Absent" ||
       baseline._tag === "ReadPending" ||
@@ -819,20 +852,7 @@ const qualifiedIntegratorProgressTransitionsFor = (
       return [RunnableFrontierTransition.EstablishRemoteBaseline({ correlation: baselineCorrelation, responsibility })]
     }
     if (baseline._tag !== "Ready") return releaseStartedIntegrationTargetFor(responsibility, true)
-    if (runtimeFacts.targetLineageRefreshRequiredAttemptIds?.has(responsibility.plannedAttempt.attemptId) === true) {
-      return []
-    }
-    const baselineCompletedAt = [
-      ...journalRecordsOfKind(source, "RemoteBaselineObserved"),
-      ...journalRecordsOfKind(source, "LocalTargetCatchUpObserved")
-    ]
-      .filter(
-        ({ event }) =>
-          (event._tag === "RemoteBaselineObserved" || event._tag === "LocalTargetCatchUpObserved") &&
-          event.correlation.baselineId === baselineCorrelation.baselineId
-      )
-      .sort((left, right) => Number(left.position) - Number(right.position))
-      .at(lastRecordOffset)?.position
+    const baselineCompletedAt = baselineRound.completedAt
     if (baselineCompletedAt === undefined) return []
     const lineage = durableTargetLineageFor(runState, runtimeFacts, responsibility, baselineCompletedAt)
     if (lineage === undefined) return []
@@ -851,6 +871,7 @@ const qualifiedIntegratorProgressTransitionsFor = (
     return [RunnableFrontierTransition.FixIntegratorAutomaticSuccessorSession({ input, responsibility })]
   }
   if (publication._tag === "PublicationContradiction" || runtimeFacts.remotePublicationConfigured !== true) return []
+  if (targetLineageRefreshRequired) return []
   return [
     RunnableFrontierTransition.RunRemotePublication({
       candidate,

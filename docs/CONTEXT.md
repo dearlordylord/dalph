@@ -1206,9 +1206,13 @@ branch advanced compatibly beyond one candidate without containing it. It binds
 the exact predecessor session and candidate, accepted task commit, immutable
 task attempt and Base, destination, responsibility, and existing FIFO position.
 It permits ordinary recovery to catch the local target up safely and fix one
-fresh-head Integrator session within the current three-session batch. It is not
-an Operator direction, an integration result, a new task attempt, or a budget
-grant.
+fresh-head Integrator session within the current three-session batch. Its
+original competing head is immutable. If its first baseline is already Ready
+when a later activation begins, recovery may take one bounded refresh round
+under the same authorization before fixation; an incomplete round resumes its
+exact read or catch-up intent. The successor binds the latest Ready head, the
+original accepted commit, Base, and FIFO position. It is not an Operator
+direction, an integration result, a new task attempt, or a budget grant.
 _Avoid_: Operator Full rerun, Retry, automatic task execution, session retry
 
 **Local remote-head catch-up**:
