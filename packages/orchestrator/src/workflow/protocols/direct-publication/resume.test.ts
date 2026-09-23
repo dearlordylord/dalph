@@ -236,7 +236,7 @@ const invoke = Effect.fn("DirectPublicationResume.invoke")(function* (
         readonly dispatchBoundary?: RemotePublicationResumeDispatchBoundary<unknown, never>
         readonly runtimeOwners?: RemotePublicationResumeRuntimeOwners<unknown, never>
       }>,
-  crashAt?: "receipt" | "compatibleRetained" | undefined,
+  crashAt?: "receipt" | "compatibleRetained",
   boundary: RemotePublicationPhaseBoundary = phaseBoundary
 ) {
   const records = yield* store.read(runId)
