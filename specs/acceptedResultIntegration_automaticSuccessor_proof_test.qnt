@@ -340,4 +340,148 @@ module acceptedResultIntegrationAutomaticSuccessorProofTest {
         exactTaskAndResponsibilityAreRetained,
       })
   }
+
+  // H3 arrives after the durable H2 authorization but before any S2 baseline.
+  // The first S2 observation is H3, and catch-up/fixation retain that one auth.
+  run compatibleH3BeforeBaselineFixesUnderSameAuthorizationTest = {
+    init
+      .then(recordInitialPublicationIntent)
+      .then(outsidePushBeforeInitialDiscovery)
+      .then(discoverCompatibleCompetingHead)
+      .then(recordAutomaticSuccessorAuthorization)
+      .then(outsideRemoteAdvancesBeforeFirstSuccessorBaseline)
+      .then(beginNextActivation)
+      .then(rereadAuthorityFacts)
+      .then(recordRemoteBaselineReadIntent)
+      .then(observeAncestorLocalBaseline)
+      .expect(and {
+        state.authorizationRemoteHead == INITIAL_HEAD + 1,
+        state.baselineReadRemoteHead == INITIAL_HEAD + 2,
+        state.baselineReadIntentCount == 1,
+        state.authorizationCount == 1,
+        refreshedH3BaselineReached,
+        oneGitObservationOrCompareAndSetPerActivation,
+      })
+      .then(recordCatchUpIntent)
+      .then(beginNextActivation)
+      .then(rereadAuthorityFacts)
+      .then(compareAndSetLocalTargetToRemoteHead)
+      .then(recordCatchUpResult)
+      .then(beginNextActivation)
+      .then(rereadAuthorityFacts)
+      .then(proveBaseAncestorOfSuccessorHead)
+      .then(fixAutomaticSuccessorSession)
+      .expect(and {
+        state.successorExpectedHead == INITIAL_HEAD + 2,
+        state.successorSessionCount == 1,
+        state.authorizationCount == 1,
+        successorKeepsAcceptedResultLineage,
+        successorUsesLatestBaselineRoundUnderOriginalAuthorization,
+        oneGitObservationOrCompareAndSetPerActivation,
+      })
+  }
+
+  // A completed H2 baseline survives process restart in SQLite. After a
+  // compatible H3 advance, the next activation journals a second baseline
+  // round, catches the exact H2 local ancestor up to H3, then fixes one S2.
+  run compatibleH3AfterBaselineAndSQLiteRestartFixesUnderSameAuthorizationTest = {
+    init
+      .then(selectReopenedSQLiteJournal)
+      .then(recordInitialPublicationIntent)
+      .then(outsidePushBeforeInitialDiscovery)
+      .then(discoverCompatibleCompetingHead)
+      .then(recordAutomaticSuccessorAuthorization)
+      .then(beginNextActivation)
+      .then(rereadAuthorityFacts)
+      .then(recordRemoteBaselineReadIntent)
+      .then(observeAncestorLocalBaseline)
+      .then(recordCatchUpIntent)
+      .then(beginNextActivation)
+      .then(rereadAuthorityFacts)
+      .then(compareAndSetLocalTargetToRemoteHead)
+      .then(recordCatchUpResult)
+      .then(outsideRemoteAdvancesAfterReadyBaselineBeforeSuccessorFixation)
+      .then(crashCoordinator)
+      .then(restartCoordinator)
+      .then(rereadAuthorityFacts)
+      .then(recordRemoteBaselineReadIntent)
+      .then(crashCoordinator)
+      .then(restartCoordinator)
+      .then(rereadAuthorityFacts)
+      .then(observeAncestorLocalBaseline)
+      .expect(and {
+        state.baselineReadRemoteHead == INITIAL_HEAD + 2,
+        state.baselineReadLocalHead == INITIAL_HEAD + 1,
+        state.baselineReadIntentCount == 2,
+        state.authorizationRemoteHead == INITIAL_HEAD + 1,
+        state.authorizationCount == 1,
+        state.store == ReopenedSQLiteJournal,
+        refreshedH3BaselineReached,
+      })
+      .then(recordCatchUpIntent)
+      .then(beginNextActivation)
+      .then(rereadAuthorityFacts)
+      .then(compareAndSetLocalTargetToRemoteHead)
+      .then(crashCoordinator)
+      .then(restartCoordinator)
+      .then(rereadAuthorityFacts)
+      .then(observeCatchUpAfterRecovery)
+      .then(beginNextActivation)
+      .then(rereadAuthorityFacts)
+      .then(proveBaseAncestorOfSuccessorHead)
+      .then(fixAutomaticSuccessorSession)
+      .expect(and {
+        state.successorExpectedHead == INITIAL_HEAD + 2,
+        state.successorSessionCount == 1,
+        state.authorizationCount == 1,
+        state.store == ReopenedSQLiteJournal,
+        successorKeepsAcceptedResultLineage,
+        successorUsesLatestBaselineRoundUnderOriginalAuthorization,
+        oneGitObservationOrCompareAndSetPerActivation,
+      })
+  }
+
+  // Recovery must perform at most one fresh baseline round even if the
+  // provider head stayed at H2; the refresh trigger comes from the stable
+  // entry boundary, not from an already observed H3 value.
+  run recoveredReadyBaselineRefreshesSameHeadOnceTest = {
+    init
+      .then(recordInitialPublicationIntent)
+      .then(outsidePushBeforeInitialDiscovery)
+      .then(discoverCompatibleCompetingHead)
+      .then(recordAutomaticSuccessorAuthorization)
+      .then(beginNextActivation)
+      .then(rereadAuthorityFacts)
+      .then(recordRemoteBaselineReadIntent)
+      .then(observeAncestorLocalBaseline)
+      .then(recordCatchUpIntent)
+      .then(beginNextActivation)
+      .then(rereadAuthorityFacts)
+      .then(compareAndSetLocalTargetToRemoteHead)
+      .then(recordCatchUpResult)
+      .then(crashCoordinator)
+      .then(restartCoordinator)
+      .then(rereadAuthorityFacts)
+      .then(recordRemoteBaselineReadIntent)
+      .then(outsideTargetAlreadyMatchesRemote)
+      .then(observeAlreadyCurrentLocalBaseline)
+      .expect(and {
+        state.baselineReadRemoteHead == INITIAL_HEAD + 1,
+        state.baselineReadIntentCount == 2,
+        state.refreshRoundCount == 1,
+        state.authorizationCount == 1,
+        successorRefreshRoundsAreBounded,
+      })
+      .then(beginNextActivation)
+      .then(rereadAuthorityFacts)
+      .then(proveBaseAncestorOfSuccessorHead)
+      .then(fixAutomaticSuccessorSession)
+      .expect(and {
+        state.successorExpectedHead == INITIAL_HEAD + 1,
+        state.successorSessionCount == 1,
+        state.authorizationCount == 1,
+        successorUsesLatestBaselineRoundUnderOriginalAuthorization,
+        successorRefreshRoundsAreBounded,
+      })
+  }
 }

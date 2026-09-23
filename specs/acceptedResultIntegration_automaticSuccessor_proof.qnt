@@ -88,6 +88,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     lifecycleFreezePushCount: int,
     lifecycleFreezeJournalPosition: int,
     activation: int,
+    activationBaselinePosition: int,
     gitBoundariesThisActivation: int,
     nextJournalPosition: int,
     baseCommit: int,
@@ -112,6 +113,8 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     currentCandidateFirstParent: int,
     currentCandidateSecondParent: int,
     remoteHead: int,
+    outsideHeadIsCompatible: bool,
+    remoteHeadCompatibleWithAuthorization: bool,
     localTargetHead: int,
     competingHead: int,
     competitionOccurrence: int,
@@ -124,6 +127,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     publicationAuthorizationRecorded: bool,
     authorizationCount: int,
     authorizationJournalPosition: int,
+    authorizationRemoteHead: int,
     authorizationPredecessorSession: int,
     authorizationPublicationOccurrence: int,
     authorizationBaseCommit: int,
@@ -136,15 +140,21 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     controlAllowsProgress: bool,
     baselineReadIntentRecorded: bool,
     baselineReadIntentPosition: int,
+    baselineReadIntentCount: int,
     baselineReadCount: int,
+    baselineReadCountForAuthorization: int,
     baselineReadRemoteHead: int,
     baselineReadLocalHead: int,
+    baselineReadyPosition: int,
+    refreshRoundAvailable: bool,
+    refreshRoundCount: int,
     catchUpIntentRecorded: bool,
     catchUpIntentPosition: int,
     catchUpIntentFrom: int,
     catchUpIntentTo: int,
     catchUpCasCount: int,
     catchUpCasCountForAuthorization: int,
+    catchUpCasCountForBaselineRound: int,
     catchUpCasPosition: int,
     catchUpEffectApplied: bool,
     catchUpResultRecorded: bool,
@@ -159,6 +169,8 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     successorResourceBoundHead: int,
     successorResourceBoundCommit: int,
     successorExpectedHead: int,
+    successorFixedBaselineReadHead: int,
+    successorFixedRemoteHead: int,
     successorCandidate: int,
     successorCandidateFirstParent: int,
     successorCandidateSecondParent: int,
@@ -207,6 +219,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
   val journalFirstAutomaticAuthorization: bool =
     not(state.publicationAuthorizationRecorded) or and {
       state.authorizationJournalPosition > 0,
+      state.authorizationRemoteHead == state.competingHead,
       state.authorizationPredecessorSession == state.predecessorSession,
       state.authorizationPublicationOccurrence == state.competitionOccurrence,
       state.authorizationBaseCommit == BASE_COMMIT,
@@ -224,6 +237,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       state.authorizationFactsCurrentWhenRecorded,
       state.publicationWait == CompatibleCompetingHeadWait,
       state.competitionOccurrence > 0,
+      state.authorizationRemoteHead == state.competingHead,
       state.predecessorWriterStopped,
       state.authorizationPredecessorSession == state.predecessorSession,
       state.sessionCount < MAX_SESSIONS,
@@ -231,19 +245,40 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     }
 
   val catchUpRequiresJournaledExactCompareAndSet: bool =
-    state.catchUpCasCountForAuthorization == 0 or and {
+    state.catchUpCasCountForBaselineRound == 0 or and {
       state.catchUpIntentRecorded,
       state.catchUpIntentPosition > 0,
       state.catchUpIntentPosition < state.catchUpCasPosition,
       state.catchUpIntentFrom == state.baselineReadLocalHead,
       state.catchUpIntentTo == state.baselineReadRemoteHead,
-      state.catchUpIntentTo == state.competingHead,
       state.baselineReadLocalHead < state.baselineReadRemoteHead,
-      state.localTargetHead == state.catchUpIntentTo,
-      state.localTargetState == LocalIsRemoteHead,
-      state.catchUpCasCountForAuthorization == 1,
-      state.catchUpEffectApplied,
+      state.catchUpCasCountForAuthorization <= state.baselineReadCount,
+      state.catchUpCasCountForBaselineRound <= 1,
+      state.catchUpCasCountForBaselineRound == 0 or and {
+        state.localTargetHead == state.catchUpIntentTo,
+        state.localTargetState == LocalIsRemoteHead,
+        state.catchUpEffectApplied,
+        state.catchUpIntentTo == state.baselineReadRemoteHead,
+      },
     }
+
+  val catchUpCasIsBoundedByBaselineRounds: bool = and {
+    state.catchUpCasCountForAuthorization <= state.baselineReadCountForAuthorization,
+    state.catchUpCasCountForBaselineRound <= 1,
+  }
+
+  val successorRefreshRoundsAreBounded: bool = and {
+    state.refreshRoundCount >= 0,
+    state.refreshRoundCount <= 1,
+    state.baselineReadIntentCount <= 2,
+    not(state.refreshRoundAvailable) or and {
+      state.publicationAuthorizationRecorded,
+      state.successorSession == 0,
+      state.baselineReadyPosition > 0,
+      state.baselineReadyPosition <= state.activationBaselinePosition,
+      state.refreshRoundCount == 0,
+    },
+  }
 
   val localCatchUpPreservesUnsafeWork: bool =
     state.localTargetState != LocalIsAhead
@@ -256,7 +291,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
         state.phase == UnsafeLocalWorkRetained,
         state.unsafeDisposition == unsafeDispositionFor(state.localTargetState),
         not(state.catchUpIntentRecorded),
-        state.catchUpCasCountForAuthorization == 0,
+        state.catchUpCasCountForBaselineRound == 0,
         state.localTargetHead == state.baselineReadLocalHead,
         not(state.baseAncestorOfSuccessorHead),
       }
@@ -264,7 +299,8 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
   val successorKeepsAcceptedResultLineage: bool =
     state.successorSession == 0 or and {
       state.currentSession == state.successorSession,
-      state.successorExpectedHead == state.competingHead,
+      state.successorExpectedHead == state.successorFixedBaselineReadHead,
+      state.successorExpectedHead == state.successorFixedRemoteHead,
       state.successorResource != INITIAL_RESOURCE,
       state.successorResourceBoundTarget == TASK_TARGET,
       state.successorResourceBoundHead == state.successorExpectedHead,
@@ -278,6 +314,16 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       state.authorizationQueuePosition == ORIGINAL_QUEUE_POSITION,
       state.taskBeginCount == 1,
       state.taskWorktreeRetained,
+    }
+
+  val successorUsesLatestBaselineRoundUnderOriginalAuthorization: bool =
+    state.successorSession == 0 or and {
+      state.authorizationRemoteHead == state.competingHead,
+      state.baselineReadRemoteHead >= state.authorizationRemoteHead,
+      state.remoteHeadCompatibleWithAuthorization,
+      not(state.refreshRoundAvailable),
+      state.successorFixedBaselineReadHead == state.baselineReadRemoteHead,
+      state.successorFixedRemoteHead == state.baselineReadRemoteHead,
     }
 
   val successorRequiresFreshBaseLineageAndJournaledAuthorization: bool =
@@ -310,6 +356,8 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     state.successorSessionCount >= 0,
     state.successorSessionCount <= MAX_SESSIONS - 1,
     state.sessionCount == 1 + state.successorSessionCount,
+    state.baselineReadIntentCount >= state.baselineReadCountForAuthorization,
+    state.baselineReadIntentCount <= 2,
       state.publicationPushCount >= 0,
       state.publicationPushCount <= MAX_PUBLICATION_PUSHES,
     state.successorPublicationIntentCount >= 0,
@@ -352,7 +400,9 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
 
   val noReadUntilStableLoop: bool = and {
     state.baselineReadCount <= state.activation,
-    state.catchUpCasCount <= state.authorizationCount,
+    state.catchUpCasCount <= state.baselineReadCount,
+    catchUpCasIsBoundedByBaselineRounds,
+    successorRefreshRoundsAreBounded,
   }
 
   val pauseAndExitStopNewSuccessorActions: bool =
@@ -400,6 +450,9 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
   val competingHeadRetainedReached: bool = state.phase == PublicationCompetingHead
   val automaticAuthorizationReached: bool = state.publicationAuthorizationRecorded
   val baselineReadReached: bool = state.baselineReadCount > 0
+  val refreshedH3BaselineReached: bool =
+    state.baselineReadCountForAuthorization > 0
+      and state.baselineReadRemoteHead > state.authorizationRemoteHead
   val catchUpIntentReached: bool = state.catchUpIntentRecorded
   val catchUpAppliedReached: bool = state.catchUpResultRecorded
   val successorSessionFixedReached: bool = state.successorSession != 0
@@ -423,6 +476,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       lifecycleFreezePushCount: 0,
       lifecycleFreezeJournalPosition: 0,
       activation: 0,
+      activationBaselinePosition: 0,
       gitBoundariesThisActivation: 0,
       nextJournalPosition: 1,
       baseCommit: BASE_COMMIT,
@@ -447,6 +501,8 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       currentCandidateFirstParent: INITIAL_HEAD,
       currentCandidateSecondParent: ACCEPTED_TASK_COMMIT,
       remoteHead: INITIAL_HEAD,
+      outsideHeadIsCompatible: false,
+      remoteHeadCompatibleWithAuthorization: false,
       localTargetHead: INITIAL_HEAD,
       competingHead: 0,
       competitionOccurrence: 0,
@@ -459,6 +515,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       publicationAuthorizationRecorded: false,
       authorizationCount: 0,
       authorizationJournalPosition: 0,
+      authorizationRemoteHead: 0,
       authorizationPredecessorSession: 0,
       authorizationPublicationOccurrence: 0,
       authorizationBaseCommit: 0,
@@ -471,15 +528,21 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       controlAllowsProgress: true,
       baselineReadIntentRecorded: false,
       baselineReadIntentPosition: 0,
+      baselineReadIntentCount: 0,
       baselineReadCount: 0,
+      baselineReadCountForAuthorization: 0,
       baselineReadRemoteHead: 0,
       baselineReadLocalHead: 0,
+      baselineReadyPosition: 0,
+      refreshRoundAvailable: false,
+      refreshRoundCount: 0,
       catchUpIntentRecorded: false,
       catchUpIntentPosition: 0,
       catchUpIntentFrom: 0,
       catchUpIntentTo: 0,
       catchUpCasCount: 0,
       catchUpCasCountForAuthorization: 0,
+      catchUpCasCountForBaselineRound: 0,
       catchUpCasPosition: 0,
       catchUpEffectApplied: false,
       catchUpResultRecorded: false,
@@ -494,6 +557,8 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       successorResourceBoundHead: 0,
       successorResourceBoundCommit: 0,
       successorExpectedHead: 0,
+      successorFixedBaselineReadHead: 0,
+      successorFixedRemoteHead: 0,
       successorCandidate: 0,
       successorCandidateFirstParent: 0,
       successorCandidateSecondParent: 0,
@@ -711,6 +776,53 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     },
   }
 
+  // The accepted publication occurrence remains tied to H2; a compatible
+  // outside update may nevertheless advance the live remote to H3 before S2.
+  action outsideRemoteAdvancesBeforeFirstSuccessorBaseline: bool = all {
+    isRunning(state),
+    state.phase == AutomaticAuthorizationRecorded,
+    state.publicationAuthorizationRecorded,
+    state.authorizationRemoteHead == state.competingHead,
+    state.remoteHead == state.authorizationRemoteHead,
+    state.baselineReadIntentCount == 0,
+    state' = {
+      ...state,
+      remoteHead: state.remoteHead + 1,
+      outsideHeadIsCompatible: true,
+    },
+  }
+
+  action outsideRemoteAdvancesAfterReadyBaselineBeforeSuccessorFixation: bool = all {
+    isRunning(state),
+    state.phase == BaselineObserved or state.phase == CatchUpResultRecorded or state.phase == TargetLineageProven,
+    state.publicationAuthorizationRecorded,
+    state.baselineReadCountForAuthorization > 0,
+    state.baselineReadIntentCount == state.baselineReadCountForAuthorization,
+    state.remoteHead == state.baselineReadRemoteHead,
+    state.remoteHead >= state.authorizationRemoteHead,
+    state' = {
+      ...state,
+      remoteHead: state.remoteHead + 1,
+      outsideHeadIsCompatible: true,
+      baseAncestorOfSuccessorHead: false,
+    },
+  }
+
+  action outsideRemoteAdvancesToIncompatibleHead: bool = all {
+    isRunning(state),
+    state.phase == BaselineObserved or state.phase == CatchUpResultRecorded or state.phase == TargetLineageProven,
+    state.publicationAuthorizationRecorded,
+    state.baselineReadCountForAuthorization > 0,
+    state.baselineReadIntentCount == state.baselineReadCountForAuthorization,
+    state.remoteHead == state.baselineReadRemoteHead,
+    state' = {
+      ...state,
+      remoteHead: state.remoteHead + 1,
+      outsideHeadIsCompatible: false,
+      baseAncestorOfSuccessorHead: false,
+    },
+  }
+
   action denyCurrentAuthorityFacts: bool = all {
     isRunning(state),
     state.phase == PublicationCompetingHead,
@@ -741,6 +853,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       publicationAuthorizationRecorded: true,
       authorizationCount: state.authorizationCount + 1,
       authorizationJournalPosition: state.nextJournalPosition,
+      authorizationRemoteHead: state.competingHead,
       authorizationPredecessorSession: state.predecessorSession,
       authorizationPublicationOccurrence: state.competitionOccurrence,
       authorizationBaseCommit: BASE_COMMIT,
@@ -748,13 +861,20 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       authorizationTarget: TASK_TARGET,
       authorizationQueuePosition: ORIGINAL_QUEUE_POSITION,
       authorizationFactsCurrentWhenRecorded: true,
+      outsideHeadIsCompatible: true,
+      remoteHeadCompatibleWithAuthorization: true,
       predecessorDisposition: PredecessorPreservedAfterStoppedWriter,
       predecessorResourcesPreserved: state.predecessorResourcesPreserved + 1,
       nextJournalPosition: state.nextJournalPosition + 1,
       baselineReadIntentRecorded: false,
       baselineReadIntentPosition: 0,
+      baselineReadIntentCount: 0,
+      baselineReadCountForAuthorization: 0,
       baselineReadRemoteHead: 0,
       baselineReadLocalHead: 0,
+      baselineReadyPosition: 0,
+      refreshRoundAvailable: false,
+      refreshRoundCount: 0,
       catchUpIntentRecorded: false,
       catchUpIntentPosition: 0,
       catchUpIntentFrom: 0,
@@ -762,6 +882,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       catchUpEffectApplied: false,
       catchUpResultRecorded: false,
       catchUpCasCountForAuthorization: 0,
+      catchUpCasCountForBaselineRound: 0,
       baseAncestorOfSuccessorHead: false,
       targetLineageObservationCount: 0,
       targetLineageObservedBaseCommit: 0,
@@ -771,6 +892,8 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       successorResourceBoundHead: 0,
       successorResourceBoundCommit: 0,
       successorExpectedHead: 0,
+      successorFixedBaselineReadHead: 0,
+      successorFixedRemoteHead: 0,
       successorCandidate: 0,
       successorCandidateFirstParent: 0,
       successorCandidateSecondParent: 0,
@@ -785,19 +908,39 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
 
   action recordRemoteBaselineReadIntent: bool = all {
     isRunning(state),
-    state.phase == AutomaticAuthorizationRecorded,
+    (state.phase == AutomaticAuthorizationRecorded and state.baselineReadCountForAuthorization == 0)
+      or and {
+        state.phase == BaselineObserved or state.phase == CatchUpResultRecorded or state.phase == TargetLineageProven,
+        state.refreshRoundAvailable,
+        state.baselineReadyPosition > 0,
+        state.baselineReadyPosition <= state.activationBaselinePosition,
+        state.refreshRoundCount == 0,
+      },
     state.publicationAuthorizationRecorded,
     state.trackerFactsCurrent,
     state.exactClaimCurrent,
     state.controlAllowsProgress,
     state.authorizationJournalPosition > 0,
     state.nextJournalPosition > state.authorizationJournalPosition,
-    not(state.baselineReadIntentRecorded),
+    state.baselineReadIntentCount == state.baselineReadCountForAuthorization,
+    state.remoteHead >= state.authorizationRemoteHead,
     state' = {
       ...state,
       phase: BaselineReadIntentRecorded,
       baselineReadIntentRecorded: true,
       baselineReadIntentPosition: state.nextJournalPosition,
+      baselineReadIntentCount: state.baselineReadIntentCount + 1,
+      refreshRoundAvailable: false,
+      refreshRoundCount: if (state.baselineReadCountForAuthorization > 0) state.refreshRoundCount + 1 else state.refreshRoundCount,
+      baselineReadyPosition: 0,
+      catchUpIntentRecorded: false,
+      catchUpIntentPosition: 0,
+      catchUpIntentFrom: 0,
+      catchUpIntentTo: 0,
+      catchUpEffectApplied: false,
+      catchUpResultRecorded: false,
+      catchUpCasCountForBaselineRound: 0,
+      baseAncestorOfSuccessorHead: false,
       nextJournalPosition: state.nextJournalPosition + 1,
     },
   }
@@ -808,13 +951,16 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     state.baselineReadIntentRecorded,
     state.authorizationJournalPosition < state.baselineReadIntentPosition,
     state.gitBoundariesThisActivation == 0,
-    state.remoteHead == state.competingHead,
+    state.remoteHead >= state.authorizationRemoteHead,
+    state.baselineReadIntentCount == state.baselineReadCountForAuthorization + 1,
     state.localTargetHead < state.remoteHead,
     state' = {
       ...state,
       phase: BaselineObserved,
       localTargetState: LocalIsRemoteAncestor,
+      remoteHeadCompatibleWithAuthorization: state.outsideHeadIsCompatible,
       baselineReadCount: state.baselineReadCount + 1,
+      baselineReadCountForAuthorization: state.baselineReadCountForAuthorization + 1,
       baselineReadRemoteHead: state.remoteHead,
       baselineReadLocalHead: state.localTargetHead,
       gitBoundariesThisActivation: 1,
@@ -825,15 +971,19 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     isRunning(state),
     state.phase == BaselineReadIntentRecorded,
     state.gitBoundariesThisActivation == 0,
-    state.remoteHead == state.competingHead,
+    state.remoteHead >= state.authorizationRemoteHead,
+    state.baselineReadIntentCount == state.baselineReadCountForAuthorization + 1,
     state.localTargetHead == state.remoteHead,
     state' = {
       ...state,
       phase: BaselineObserved,
       localTargetState: LocalIsRemoteHead,
+      remoteHeadCompatibleWithAuthorization: state.outsideHeadIsCompatible,
       baselineReadCount: state.baselineReadCount + 1,
+      baselineReadCountForAuthorization: state.baselineReadCountForAuthorization + 1,
       baselineReadRemoteHead: state.remoteHead,
       baselineReadLocalHead: state.localTargetHead,
+      baselineReadyPosition: state.nextJournalPosition,
       gitBoundariesThisActivation: 1,
     },
   }
@@ -841,7 +991,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
   action outsideTargetAlreadyMatchesRemote: bool = all {
     isRunning(state),
     state.phase == BaselineReadIntentRecorded,
-    state.remoteHead == state.competingHead,
+    state.remoteHead >= state.authorizationRemoteHead,
     state' = { ...state, localTargetHead: state.remoteHead },
   }
 
@@ -859,8 +1009,10 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       ...state,
       phase: UnsafeLocalWorkRetained,
       localTargetState: local,
+      remoteHeadCompatibleWithAuthorization: state.outsideHeadIsCompatible,
       unsafeDisposition: unsafeDispositionFor(local),
       baselineReadCount: state.baselineReadCount + 1,
+      baselineReadCountForAuthorization: state.baselineReadCountForAuthorization + 1,
       baselineReadRemoteHead: state.remoteHead,
       baselineReadLocalHead: state.localTargetHead,
       gitBoundariesThisActivation: 1,
@@ -884,8 +1036,10 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
         ...state,
         phase: UnsafeLocalWorkRetained,
         localTargetState: local,
+        remoteHeadCompatibleWithAuthorization: state.outsideHeadIsCompatible,
         unsafeDisposition: unsafeDispositionFor(local),
         baselineReadCount: state.baselineReadCount + 1,
+        baselineReadCountForAuthorization: state.baselineReadCountForAuthorization + 1,
         baselineReadRemoteHead: state.remoteHead,
         baselineReadLocalHead: state.localTargetHead,
         gitBoundariesThisActivation: 1,
@@ -900,7 +1054,8 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     state.baselineReadIntentRecorded,
     not(state.catchUpIntentRecorded),
     state.baselineReadLocalHead < state.baselineReadRemoteHead,
-    state.baselineReadRemoteHead == state.competingHead,
+    state.baselineReadRemoteHead >= state.authorizationRemoteHead,
+    state.remoteHeadCompatibleWithAuthorization,
     state.nextJournalPosition > state.baselineReadIntentPosition,
     state' = {
       ...state,
@@ -920,7 +1075,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     state.trackerFactsCurrent,
     state.exactClaimCurrent,
     state.controlAllowsProgress,
-    state.catchUpCasCountForAuthorization == 0,
+    state.catchUpCasCountForBaselineRound == 0,
     state.gitBoundariesThisActivation == 0,
     state.localTargetHead == state.catchUpIntentFrom,
     state.localTargetState == LocalIsRemoteAncestor,
@@ -934,6 +1089,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       localTargetState: LocalIsRemoteHead,
       catchUpCasCount: state.catchUpCasCount + 1,
       catchUpCasCountForAuthorization: state.catchUpCasCountForAuthorization + 1,
+      catchUpCasCountForBaselineRound: state.catchUpCasCountForBaselineRound + 1,
       catchUpCasPosition: state.nextJournalPosition,
       catchUpEffectApplied: true,
       predecessorDisposition: PredecessorPreservedAfterStoppedWriter,
@@ -951,6 +1107,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       ...state,
       phase: CatchUpResultRecorded,
       catchUpResultRecorded: true,
+      baselineReadyPosition: state.nextJournalPosition,
       nextJournalPosition: state.nextJournalPosition + 1,
     },
   }
@@ -973,6 +1130,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       ...state,
       phase: CatchUpResultRecorded,
       catchUpResultRecorded: true,
+      baselineReadyPosition: state.nextJournalPosition,
       gitBoundariesThisActivation: 1,
       nextJournalPosition: state.nextJournalPosition + 1,
     },
@@ -983,8 +1141,10 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     state.phase == BaselineObserved
       or state.phase == CatchUpResultRecorded
       or state.phase == TargetLineageProven,
-    state.localTargetHead == state.competingHead,
+    state.localTargetHead == state.baselineReadRemoteHead,
     state.localTargetState == LocalIsRemoteHead,
+    state.remoteHead == state.baselineReadRemoteHead,
+    state.remoteHeadCompatibleWithAuthorization,
     state.catchUpIntentRecorded implies state.catchUpResultRecorded,
     state.gitBoundariesThisActivation == 0,
     state.trackerFactsCurrent,
@@ -1007,7 +1167,10 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     state.authorizationCount == state.successorSessionCount + 1,
     state.sessionCount < MAX_SESSIONS,
     state.baseAncestorOfSuccessorHead,
-    state.localTargetHead == state.competingHead,
+    not(state.refreshRoundAvailable),
+    state.localTargetHead == state.baselineReadRemoteHead,
+    state.remoteHead == state.baselineReadRemoteHead,
+    state.remoteHeadCompatibleWithAuthorization,
     state.trackerFactsCurrent,
     state.exactClaimCurrent,
     state.controlAllowsProgress,
@@ -1021,7 +1184,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       predecessorCandidateSecondParent: state.currentCandidateSecondParent,
       currentSession: state.currentSession + 1,
       sessionCount: state.sessionCount + 1,
-      currentExpectedHead: state.competingHead,
+      currentExpectedHead: state.baselineReadRemoteHead,
       currentCandidate: 0,
       currentCandidateFirstParent: 0,
       currentCandidateSecondParent: 0,
@@ -1031,9 +1194,11 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       successorFixedWithCurrentAuthority: true,
       successorResource: INITIAL_RESOURCE + state.currentSession + 1,
       successorResourceBoundTarget: TASK_TARGET,
-      successorResourceBoundHead: state.competingHead,
+      successorResourceBoundHead: state.baselineReadRemoteHead,
       successorResourceBoundCommit: ACCEPTED_TASK_COMMIT,
-      successorExpectedHead: state.competingHead,
+      successorExpectedHead: state.baselineReadRemoteHead,
+      successorFixedBaselineReadHead: state.baselineReadRemoteHead,
+      successorFixedRemoteHead: state.remoteHead,
       successorCandidate: 0,
       successorCandidateFirstParent: 0,
       successorCandidateSecondParent: 0,
@@ -1204,6 +1369,7 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       competitionOccurrence: state.publicationOccurrenceCount + 1,
       competingHead: state.remoteHead,
       publicationAuthorizationRecorded: false,
+      authorizationRemoteHead: 0,
       authorizationJournalPosition: 0,
       authorizationPredecessorSession: 0,
       authorizationPublicationOccurrence: 0,
@@ -1214,6 +1380,8 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       authorizationFactsCurrentWhenRecorded: false,
       baselineReadIntentRecorded: false,
       baselineReadIntentPosition: 0,
+      baselineReadIntentCount: 0,
+      baselineReadCountForAuthorization: 0,
       baselineReadRemoteHead: 0,
       baselineReadLocalHead: 0,
       catchUpIntentRecorded: false,
@@ -1300,10 +1468,17 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       ...state,
       coordinatorLive: true,
       activation: state.activation + 1,
+      activationBaselinePosition: state.nextJournalPosition,
       gitBoundariesThisActivation: 0,
       trackerFactsCurrent: false,
       exactClaimCurrent: false,
       controlAllowsProgress: false,
+      refreshRoundAvailable: state.publicationAuthorizationRecorded
+        and state.successorSession == 0
+        and state.refreshRoundCount == 0
+        and state.baselineReadyPosition > 0
+        and state.baselineReadyPosition <= state.nextJournalPosition
+        and (state.phase == BaselineObserved or state.phase == CatchUpResultRecorded or state.phase == TargetLineageProven),
     },
   }
 
@@ -1359,6 +1534,9 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     recordThrottledWait,
     recordIncompatibleRemoteWait,
     recordAutomaticSuccessorAuthorization,
+    outsideRemoteAdvancesBeforeFirstSuccessorBaseline,
+    outsideRemoteAdvancesAfterReadyBaselineBeforeSuccessorFixation,
+    outsideRemoteAdvancesToIncompatibleHead,
     recordRemoteBaselineReadIntent,
     observeAncestorLocalBaseline,
     observeAlreadyCurrentLocalBaseline,

@@ -14,6 +14,24 @@ module acceptedResultIntegrationAutomaticSuccessorProofNegativeTest {
     },
   }
 
+  action duplicateAuthorizationOccurrence: bool = all {
+    state.phase == AutomaticAuthorizationRecorded,
+    state.authorizationCount == 1,
+    state' = { ...state, authorizationCount: state.authorizationCount + 1 },
+  }
+
+  action forceStaleH2FixationDuringRequiredRefresh: bool = all {
+    state.refreshRoundAvailable,
+    state.successorSession == 0,
+    state' = {
+      ...state,
+      successorSession: INITIAL_SESSION + 1,
+      successorExpectedHead: state.baselineReadRemoteHead,
+      successorFixedBaselineReadHead: state.baselineReadRemoteHead,
+      successorFixedRemoteHead: state.baselineReadRemoteHead,
+    },
+  }
+
   run secondPreFixationGitReadInOneActivationIsDetectedTest = {
     init
       .then(recordInitialPublicationIntent)
@@ -29,5 +47,61 @@ module acceptedResultIntegrationAutomaticSuccessorProofNegativeTest {
         not(oneGitObservationOrCompareAndSetPerActivation),
         not(noReadUntilStableLoop),
       })
+  }
+
+  run staleH2FixationBeforeRequiredRefreshIsDetectedTest = {
+    init
+      .then(recordInitialPublicationIntent)
+      .then(outsidePushBeforeInitialDiscovery)
+      .then(discoverCompatibleCompetingHead)
+      .then(recordAutomaticSuccessorAuthorization)
+      .then(beginNextActivation)
+      .then(rereadAuthorityFacts)
+      .then(recordRemoteBaselineReadIntent)
+      .then(outsideTargetAlreadyMatchesRemote)
+      .then(observeAlreadyCurrentLocalBaseline)
+      .then(outsideRemoteAdvancesAfterReadyBaselineBeforeSuccessorFixation)
+      .then(crashCoordinator)
+      .then(restartCoordinator)
+      .then(forceStaleH2FixationDuringRequiredRefresh)
+      .expect(not(successorRefreshRoundsAreBounded))
+  }
+
+  run incompatibleH3StaysInOriginalRetainedWaitTest = {
+    init
+      .then(recordInitialPublicationIntent)
+      .then(outsidePushBeforeInitialDiscovery)
+      .then(discoverCompatibleCompetingHead)
+      .then(recordAutomaticSuccessorAuthorization)
+      .then(beginNextActivation)
+      .then(rereadAuthorityFacts)
+      .then(recordRemoteBaselineReadIntent)
+      .then(outsideTargetAlreadyMatchesRemote)
+      .then(observeAlreadyCurrentLocalBaseline)
+      .then(outsideRemoteAdvancesToIncompatibleHead)
+      .then(crashCoordinator)
+      .then(restartCoordinator)
+      .then(rereadAuthorityFacts)
+      .then(recordRemoteBaselineReadIntent)
+      .then(observeAncestorLocalBaseline)
+      .expect(and {
+        state.baselineReadRemoteHead == INITIAL_HEAD + 2,
+        not(state.remoteHeadCompatibleWithAuthorization),
+        state.phase == BaselineObserved,
+        state.publicationWait == CompatibleCompetingHeadWait,
+        state.authorizationCount == 1,
+        state.successorSessionCount == 0,
+        not(state.catchUpIntentRecorded),
+      })
+  }
+
+  run duplicateAuthorizationForOneOccurrenceIsDetectedTest = {
+    init
+      .then(recordInitialPublicationIntent)
+      .then(outsidePushBeforeInitialDiscovery)
+      .then(discoverCompatibleCompetingHead)
+      .then(recordAutomaticSuccessorAuthorization)
+      .then(duplicateAuthorizationOccurrence)
+      .expect(not(automaticAuthorizationIsOccurrenceScoped))
   }
 }
