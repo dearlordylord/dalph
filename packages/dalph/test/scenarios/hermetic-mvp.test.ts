@@ -252,6 +252,8 @@ const runHermeticMvpJourney = (
       const outsideHeadPublished = yield* Ref.make(false)
       const lostPushResponseReturned = yield* Ref.make(false)
       const lostPushResponseCount = yield* Ref.make(0)
+      const actualCompetingPushCalls = yield* Ref.make(0)
+      const suppressedNonFastForwardResponses = yield* Ref.make(0)
       const remotePublicationGitLayer = yield* Effect.gen(function* () {
         if (!competingHeadRace) return remotePublicationGitLayerForProductionTest
         const publicationGitCommand = yield* GitCommand.pipe(
@@ -287,19 +289,6 @@ const runHermeticMvpJourney = (
                   )
                   yield* Ref.set(outsideHeadPublished, true)
                 }
-                if (competingHeadAfterLostPushResponse && (yield* Ref.get(lostPushResponseReturned))) {
-                  const alreadyPublished = yield* Ref.get(outsideHeadPublished)
-                  if (!alreadyPublished) {
-                    if (competingHead === undefined) return yield* Effect.die("automatic S2 lacked outside H2")
-                    yield* runInWorktree(
-                      git,
-                      repository,
-                      ["push", "target", `${competingHead}:refs/heads/master`],
-                      "publish outside H2 after the lost publication response"
-                    )
-                    yield* Ref.set(outsideHeadPublished, true)
-                  }
-                }
                 return yield* gitAuthority.observe(request)
               }),
             push: (request, attemptOrdinal) =>
@@ -309,6 +298,31 @@ const runHermeticMvpJourney = (
                   if (!(yield* Ref.get(publicationObserved))) {
                     return yield* Effect.die("lost-response S2 must follow the initial publication discovery read")
                   }
+                  if (competingHead === undefined) return yield* Effect.die("automatic S2 lacked outside H2")
+                  yield* runInWorktree(
+                    git,
+                    repository,
+                    ["push", "target", `${competingHead}:refs/heads/master`],
+                    "publish outside H2 while the exact M push is in flight"
+                  )
+                  yield* Ref.set(outsideHeadPublished, true)
+                  yield* Ref.update(actualCompetingPushCalls, (count) => count + 1)
+                  const actualResult = yield* gitAuthority.push(request, attemptOrdinal)
+                  if (actualResult._tag !== "RejectedNonFastForward") {
+                    return yield* Effect.die(`expected real non-fast-forward rejection, received ${actualResult._tag}`)
+                  }
+                  const remoteHeadAfterRejection = GitCommitSha.make(
+                    yield* runInGitDirectory(
+                      git,
+                      bareRemote,
+                      ["rev-parse", "refs/heads/master"],
+                      "verify the rejected push left H2 published"
+                    )
+                  )
+                  if (remoteHeadAfterRejection !== competingHead) {
+                    return yield* Effect.die("real non-fast-forward rejection changed the remote target")
+                  }
+                  yield* Ref.update(suppressedNonFastForwardResponses, (count) => count + 1)
                   yield* Ref.update(lostPushResponseCount, (count) => count + 1)
                   yield* Ref.set(lostPushResponseReturned, true)
                   return yield* Effect.fail(
@@ -1021,6 +1035,8 @@ const runHermeticMvpJourney = (
         expect(yield* Ref.get(lostPushResponseCount)).toBe(1)
         expect(yield* Ref.get(lostPushResponseReturned)).toBe(true)
         expect(yield* Ref.get(outsideHeadPublished)).toBe(true)
+        expect(yield* Ref.get(actualCompetingPushCalls)).toBe(1)
+        expect(yield* Ref.get(suppressedNonFastForwardResponses)).toBe(1)
       }
       if (competingHeadBetweenDiscoveryAndPush) {
         expect(yield* Ref.get(outsideHeadPublished)).toBe(true)
