@@ -25,11 +25,17 @@ import { ExpectedAcceptedPrefixPosition, Journal } from "./journal.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   integratorSuccessorResponsibilityMatches,
-  maximumIntegratorSessionsPerResponsibility
+  maximumIntegratorSessionsPerResponsibility,
+  type IntegratorSessionCorrelation
 } from "../../workflow/protocols/integrator/events.js"
 import { IntegratorCompetingHeadSuccessorAuthorizedEvent } from "../../workflow/protocols/integrator/automatic-successor-events.js"
 import { remotePublicationCorrelationEquals } from "../../workflow/protocols/direct-publication/events.js"
-import { journalRecordByKey, journalRecordsOfKind } from "../../workflow-journal/record-evidence.js"
+import {
+  journalRecordByKey,
+  journalRecordsOfKind,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
+import type { JournalRecord } from "../../workflow-journal/store.js"
 import { integratorCompetingHeadSuccessorAuthorizedRecordKey } from "../../workflow-journal/record-key.js"
 import {
   integratorAutomaticSuccessorAppendRecordMatches,
@@ -68,6 +74,42 @@ type FixIntegratorAutomaticSuccessorSession = Extract<
   RunnableFrontierTransition,
   { readonly _tag: "FixIntegratorAutomaticSuccessorSession" }
 >
+
+const fixedSessionIdsForResponsibility = (
+  records: JournalHistorySource,
+  predecessor: IntegratorSessionCorrelation
+): Set<string> => {
+  const sessions = new Set<string>()
+  const addIfSameResponsibility = (session: IntegratorSessionCorrelation) => {
+    if (integratorSuccessorResponsibilityMatches(predecessor, session)) sessions.add(session.sessionId)
+  }
+  for (const { event: prior } of journalRecordsOfKind(records, "IntegratorSessionFixed")) {
+    if (prior._tag === "IntegratorSessionFixed") addIfSameResponsibility(prior.correlation)
+  }
+  for (const { event: prior } of journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")) {
+    if (prior._tag === "IntegratorSuccessorSessionFixed") {
+      addIfSameResponsibility(prior.predecessor)
+      addIfSameResponsibility(prior.successor)
+    }
+  }
+  for (const { event: prior } of journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")) {
+    if (prior._tag === "IntegratorAutomaticSuccessorSessionFixed") {
+      addIfSameResponsibility(prior.predecessor)
+      addIfSameResponsibility(prior.successor)
+    }
+  }
+  return sessions
+}
+
+const automaticAuthorizationAppendMatches = (
+  record: JournalRecord,
+  event: IntegratorCompetingHeadSuccessorAuthorizedEvent
+) =>
+  record.event._tag === "IntegratorCompetingHeadSuccessorAuthorized" &&
+  Schema.toEquivalence(IntegratorCompetingHeadSuccessorAuthorizedEvent)(record.event, event)
+
+const automaticAuthorizationCanBeRecorded = (sessionCount: number, lastPosition: JournalRecord["position"] | null) =>
+  sessionCount < maximumIntegratorSessionsPerResponsibility && lastPosition !== null
 
 /** Appends the missing initial Q before releasing any held target responsibility. */
 export const recordInitialConclusiveIntegrationQuarantine = Effect.fn(
@@ -175,10 +217,7 @@ export const authorizeIntegratorCompetingHeadSuccessor = Effect.fn(
   const key = integratorCompetingHeadSuccessorAuthorizedRecordKey(transition.authorizationId)
   const existing = journalRecordByKey(records, key)
   if (existing !== undefined) {
-    if (
-      existing.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
-      !Schema.toEquivalence(IntegratorCompetingHeadSuccessorAuthorizedEvent)(existing.event, event)
-    ) {
+    if (!automaticAuthorizationAppendMatches(existing, event)) {
       return yield* new IntegratorJournalContradiction({
         detail: "automatic successor authorization key identifies a different journal event",
         runId
@@ -210,26 +249,8 @@ export const authorizeIntegratorCompetingHeadSuccessor = Effect.fn(
     })
   }
   const predecessor = transition.correlation.qualifiedCandidate.run.session
-  const sessions = new Set<string>()
-  const addIfSameResponsibility = (session: typeof predecessor) => {
-    if (integratorSuccessorResponsibilityMatches(predecessor, session)) sessions.add(session.sessionId)
-  }
-  for (const { event: prior } of journalRecordsOfKind(records, "IntegratorSessionFixed")) {
-    if (prior._tag === "IntegratorSessionFixed") addIfSameResponsibility(prior.correlation)
-  }
-  for (const { event: prior } of journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")) {
-    if (prior._tag === "IntegratorSuccessorSessionFixed") {
-      addIfSameResponsibility(prior.predecessor)
-      addIfSameResponsibility(prior.successor)
-    }
-  }
-  for (const { event: prior } of journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")) {
-    if (prior._tag === "IntegratorAutomaticSuccessorSessionFixed") {
-      addIfSameResponsibility(prior.predecessor)
-      addIfSameResponsibility(prior.successor)
-    }
-  }
-  if (sessions.size >= maximumIntegratorSessionsPerResponsibility || records.lastPosition === null) {
+  const sessions = fixedSessionIdsForResponsibility(records, predecessor)
+  if (!automaticAuthorizationCanBeRecorded(sessions.size, records.lastPosition)) {
     return deliveryActionDeferred(action.proposal.id, "ContinuationAuthorizationStale")
   }
   const appended = yield* journal.appendIfAcceptedPrefixCurrent(
@@ -241,10 +262,7 @@ export const authorizeIntegratorCompetingHeadSuccessor = Effect.fn(
   if (appended._tag === "PrefixAdvanced") {
     return deliveryActionDeferred(action.proposal.id, "ContinuationAuthorizationStale")
   }
-  if (
-    appended.record.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
-    !Schema.toEquivalence(IntegratorCompetingHeadSuccessorAuthorizedEvent)(appended.record.event, event)
-  ) {
+  if (!automaticAuthorizationAppendMatches(appended.record, event)) {
     return yield* new IntegratorJournalContradiction({
       detail: "automatic successor conditional append returned a foreign journal record",
       runId

@@ -211,8 +211,8 @@
   },
   "packages/orchestrator/src/coordination/delivery/integration-delivery-action-adapter.ts": {
     "complexity": {
-      "count": 1,
-      "justification": "executeAdvancedIntegrationAction sequences one advanced integration action through journaled proposal, finality, publication, cleanup, and error outcomes. Its alternatives are one lifecycle boundary that preserves durable ordering."
+      "count": 2,
+      "justification": "executeAdvancedIntegrationAction sequences one advanced integration action through journaled proposal, finality, publication, cleanup, and error outcomes. executeOuterIntegratorAction maps the exact typed Integrator transition variants to their identity-free delivery handlers. These branches preserve one action-routing and acknowledgement boundary; separating transition routing from proposal completion would obscure the durable action order."
     }
   },
   "packages/orchestrator/src/coordination/delivery/reactive-delivery-relations.ts": {
@@ -227,13 +227,19 @@
   },
   "packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.ts": {
     "complexity": {
-      "count": 3,
-      "justification": "explanationAfterPrerequisitesFor, absentIntegratorProgressTransitionsFor, and qualifiedIntegratorProgressTransitionsFor enumerate ordered frontier explanations and Integrator actions across prerequisite, retained, and qualified boundaries. Their branches encode one causal frontier decision table, including the retained-publication guard, rather than separate policies."
+      "count": 4,
+      "justification": "explanationAfterPrerequisitesFor, absentIntegratorProgressTransitionsFor, and qualifiedIntegratorProgressTransitionsFor enumerate ordered frontier explanations and Integrator actions across prerequisite, retained, baseline, and qualified boundaries. boundedRetainedWaitFor proves the exact compatible-head publication lacks successor authorization and the responsibility reached its session bound before exposing a wait. These branches form one causal frontier decision table."
     }
   },
   "packages/orchestrator/src/coordination/frontier/task-claim-authority.ts": {
     "complexity": {
       "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/reconstruction/integrator-history.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "invalidIntegratorAutomaticSuccessorSession validates one automatic successor against its indexed predecessor, unique session and candidate identity, exact authorization chronology, and bounded generation before adding it to reconstructed history. Those clauses are the complete accepted-history proof for this event."
     }
   },
   "packages/orchestrator/src/coordination/run/journaled-run-bootstrap.ts": {
@@ -243,8 +249,8 @@
   },
   "packages/orchestrator/src/coordination/run/recovery-activation.ts": {
     "complexity": {
-      "count": 8,
-      "justification": "The seven existing cohesive recovery functions remain within their previous allowance. After separating pending-read selection, graph deduplication, and suspension boundaries, gitReadIntentHasOutcome retains one closed inventory of exact-operation worktree, lineage, and Restart-authority outcomes, excluding task-facts failure. Splitting those event-family alternatives would fragment one completed-read membership decision."
+      "count": 9,
+      "justification": "The existing recovery functions retain exact operation, worktree, lineage, and Restart-authority outcomes. gitReadIntentHasOutcome remains one closed completed-read membership decision. The activationTargetLineage projection admits a refreshed observation only when its operation matches the exact retry direction and target read and its position follows invalidation; those clauses prove one activation lineage fact."
     }
   },
   "packages/orchestrator/src/coordination/run/run-reactivation-owner.ts": {
@@ -352,7 +358,8 @@
   },
   "packages/orchestrator/src/workflow/protocols/integration-quarantine/canonical-provenance.ts": {
     "complexity": {
-      "count": 1
+      "count": 2,
+      "justification": "indexedSuccessorSession selects the unique fixed successor for a provider Run across the legacy FullRerun and automatic S2 event families and validates its predecessor relation. validateProviderRunActivityAbsent then binds that exact session to the ordered Run start and absence evidence. The scans jointly define one fail-closed provider absence proof."
     }
   },
   "packages/orchestrator/src/workflow/protocols/integration-quarantine/promotion-stale-evidence.ts": {
@@ -368,7 +375,14 @@
   },
   "packages/orchestrator/src/workflow/protocols/integration-quarantine/provider-failure.ts": {
     "complexity": {
-      "count": 1
+      "count": 3,
+      "justification": "targetLineageAt binds one target observation to its exact earlier Git-read intent. successorPredecessorChronologyIsExact and exactSuccessorSession validate the legacy Q/D FullRerun path or the automatic S2 authorization path before accepting provider absence. These clauses bind the no-activity result to one exact fixed session and chronology."
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/integrator/automatic-successor-session.ts": {
+    "complexity": {
+      "count": 5,
+      "justification": "integratorAutomaticSuccessorPreparationIsCurrent proves exact authorization, retained publication, completed baseline, and later lineage intent/observation. fixedSessionIdsFor and exactFixedSessionExists count the distinct exact responsibility sessions; validateAutomaticSuccessorSessionFixedRecord checks the committed event chronology; prepareIntegratorAutomaticSuccessorSessionAppend distinguishes exact idempotent reuse from invalid history, identity collision, and quota exhaustion. These are the evidence phases of one successor-session protocol."
     }
   },
   "packages/orchestrator/src/workflow/protocols/integrator/retry-authorization.ts": {
@@ -378,13 +392,25 @@
   },
   "packages/orchestrator/src/workflow/protocols/integrator/run-state.ts": {
     "complexity": {
+      "count": 4,
+      "justification": "expectedBaseSessionFor and hasForeignSuccessorRelation follow the unique predecessor chain and reject foreign branches. exactSessionRecordForRun counts direct, legacy successor, and automatic S2 session identities; runStateWithoutStarted and runStartHasExactSession preserve the unfinished-versus-contradictory classification and bind each Run start to that exact session. Together they derive one fail-closed Integrator Run state."
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/integrator/state.ts": {
+    "complexity": {
       "count": 1,
-      "justification": "expectedBaseSessionFor keeps the first exact predecessor/successor relation selection in Run chronology, while base-session cardinality validation and foreign-related-session classification are separate. Its remaining ordered event alternatives identify one expected session; fragmenting them would conceal precedence without separating another decision."
+      "justification": "activeSuccessorFor derives the one current successor across direct, legacy FullRerun, and automatic S2 fixed-session events while checking exact predecessor relation and generation. Its alternatives jointly establish active session identity for one Integrator responsibility."
     }
   },
   "packages/orchestrator/src/workflow/protocols/integrator/successor-history.ts": {
     "complexity": {
       "count": 2
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/integrator/successor-session.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "activeIntegratorSuccessorFor follows one fixed predecessor chain across explicit FullRerun and automatic S2 successor event families and rejects missing, duplicate, or foreign relations before returning the current session. Keeping those alternatives together preserves exact active-session precedence."
     }
   },
   "packages/orchestrator/src/workflow/protocols/planned-attempt-continuation/resume-redelivery-authorization.ts": {
@@ -406,8 +432,8 @@
   },
   "packages/orchestrator/src/workflow/registry/occurrence-projection.ts": {
     "complexity": {
-      "count": 2,
-      "justification": "projectHistoricalOccurrence maps each registered journal event family to its historical occurrence while preserving exact occurrence identity, correlation, and the closed unknown fallback. Its branches form one exhaustive registry projection boundary."
+      "count": 5,
+      "justification": "projectHistoricalCompetingHeadSuccessorAuthorization binds an authorization to the exact earlier fixed predecessor and retained compatible publication. projectHistoricalAutomaticSuccessorSession validates authorization, completed baseline, fresh lineage, and responsibility bounds; remoteBaselineMatchesRun binds automatic baseline reads back to that authorization. projectHistoricalPublication and projectHistoricalOccurrence retain exhaustive historical dispatch. These branches preserve one occurrence chronology projection."
     }
   }
 }
