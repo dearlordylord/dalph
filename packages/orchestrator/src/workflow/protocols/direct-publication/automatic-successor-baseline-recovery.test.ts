@@ -3,6 +3,7 @@ import { type GitCommitSha, GitCommitSha as GitCommitShaSchema } from "@dalph/co
 import { expect, it } from "@effect/vitest"
 import { Context, Effect, FileSystem, Layer, Path, Ref, type Scope } from "effect"
 import { makeSuccessorPrefix } from "../../../../test/support/automatic-successor-history.js"
+import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
 import { journalLayer, type JournalStorageBoundary } from "../../../coordination/delivery/journal.js"
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
 import { JournalDatabaseLocator } from "../../../workflow-journal/identity.js"
@@ -125,7 +126,7 @@ it.effect("retains unsafe automatic S2 catch-up evidence without moving the targ
             )
         })
         const before = yield* Ref.get(localState)
-        const state = yield* activate(store, successor.runId, successor.accepted.trackerTarget, correlation, git)
+        const state = yield* activate(store, successor.runId, integrationFinalityFixture.target, correlation, git)
         expect(state).toMatchObject({ _tag: "Retained", cause: { _tag: "UnsafeObservation", observation } })
         expect(yield* Ref.get(localState)).toEqual(before)
         expect(yield* Ref.get(gitTimeline)).toEqual(["observe"])
@@ -194,13 +195,13 @@ it.effect("retains unsafe automatic S2 catch-up evidence without moving the targ
           })
       })
       const before = yield* Ref.get(localState)
-      expect((yield* activate(store, successor.runId, successor.accepted.trackerTarget, correlation, git))._tag).toBe(
+      expect((yield* activate(store, successor.runId, integrationFinalityFixture.target, correlation, git))._tag).toBe(
         "CatchUpRequired"
       )
-      expect((yield* activate(store, successor.runId, successor.accepted.trackerTarget, correlation, git))._tag).toBe(
+      expect((yield* activate(store, successor.runId, integrationFinalityFixture.target, correlation, git))._tag).toBe(
         "CatchUpPending"
       )
-      const retained = yield* activate(store, successor.runId, successor.accepted.trackerTarget, correlation, git)
+      const retained = yield* activate(store, successor.runId, integrationFinalityFixture.target, correlation, git)
       expect(retained).toMatchObject({
         _tag: "Retained",
         cause: { _tag: "CatchUpUnavailable", reason: "TargetUnreadable" },

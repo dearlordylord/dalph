@@ -179,7 +179,12 @@ const runHermeticMvpJourney = (
             `${outsideWorktree}/OUTSIDE-${generation}.md`,
             `compatible outside change ${generation}\n`
           )
-          yield* runInWorktree(git, outsideWorktree, ["add", `OUTSIDE-${generation}.md`], `stage outside H${generation}`)
+          yield* runInWorktree(
+            git,
+            outsideWorktree,
+            ["add", `OUTSIDE-${generation}.md`],
+            `stage outside H${generation}`
+          )
           yield* runInWorktree(
             git,
             outsideWorktree,
@@ -310,7 +315,7 @@ const runHermeticMvpJourney = (
                     repository,
                     ["push", "target", `${competingHead}:refs/heads/master`],
                     "publish outside H2 before publication discovery"
-                  )
+                  ).pipe(Effect.orDie)
                   yield* Ref.set(outsideHeadPublished, true)
                 }
                 return yield* gitAuthority.observe(request)
@@ -331,7 +336,7 @@ const runHermeticMvpJourney = (
                     repository,
                     ["push", "target", `${outsideHead}:refs/heads/master`],
                     `publish outside H${candidatePush + 1} before candidate push ${candidatePush} settles`
-                  )
+                  ).pipe(Effect.orDie)
                   yield* Ref.update(outsidePublicationPushCalls, (count) => count + 1)
                   yield* Ref.set(outsideHeadPublished, true)
                   const actualResult = yield* gitAuthority.push(request, attemptOrdinal)
@@ -347,7 +352,7 @@ const runHermeticMvpJourney = (
                       bareRemote,
                       ["rev-parse", "refs/heads/master"],
                       `verify candidate push ${candidatePush} preserved its outside head`
-                    )
+                    ).pipe(Effect.orDie)
                   )
                   if (remoteHeadAfterRejection !== outsideHead) {
                     return yield* Effect.die(`candidate push ${candidatePush} changed the outside remote head`)
@@ -373,7 +378,7 @@ const runHermeticMvpJourney = (
                     repository,
                     ["push", "target", `${competingHead}:refs/heads/master`],
                     "publish outside H2 while the exact M push is in flight"
-                  )
+                  ).pipe(Effect.orDie)
                   yield* Ref.set(outsideHeadPublished, true)
                   yield* Ref.update(actualCompetingPushCalls, (count) => count + 1)
                   const actualResult = yield* gitAuthority.push(request, attemptOrdinal)
@@ -386,7 +391,7 @@ const runHermeticMvpJourney = (
                       bareRemote,
                       ["rev-parse", "refs/heads/master"],
                       "verify the rejected push left H2 published"
-                    )
+                    ).pipe(Effect.orDie)
                   )
                   if (remoteHeadAfterRejection !== competingHead) {
                     return yield* Effect.die("real non-fast-forward rejection changed the remote target")
@@ -408,7 +413,7 @@ const runHermeticMvpJourney = (
                     repository,
                     ["push", "target", `${competingHead}:refs/heads/master`],
                     "publish outside H2 between discovery and publication update"
-                  )
+                  ).pipe(Effect.orDie)
                   yield* Ref.set(outsideHeadPublished, true)
                 }
                 return yield* gitAuthority.push(request, attemptOrdinal)
@@ -826,15 +831,21 @@ const runHermeticMvpJourney = (
         const candidateCommits = candidateProofs.map(({ event }) =>
           event.observation._tag === "Commit" ? event.observation.commit : `unexpected ${event.observation._tag}`
         )
-        expect(candidateProofs.map(({ event }) =>
-          event.observation._tag === "Commit" ? event.observation.directParents : [event.observation._tag]
-        )).toEqual([[baseSha, decodedEvidence.commit], [h2, decodedEvidence.commit], [h3, decodedEvidence.commit]])
+        expect(
+          candidateProofs.map(({ event }) =>
+            event.observation._tag === "Commit" ? event.observation.directParents : [event.observation._tag]
+          )
+        ).toEqual([
+          [baseSha, decodedEvidence.commit],
+          [h2, decodedEvidence.commit],
+          [h3, decodedEvidence.commit]
+        ])
         expect(publicationIntents.map(({ event }) => event.correlation.qualifiedCandidate.candidateCommit)).toEqual(
           candidateCommits
         )
-        expect(publicationAttemptIntents.map(({ event }) => event.correlation.qualifiedCandidate.candidateCommit)).toEqual(
-          candidateCommits
-        )
+        expect(
+          publicationAttemptIntents.map(({ event }) => event.correlation.qualifiedCandidate.candidateCommit)
+        ).toEqual(candidateCommits)
         expect(publicationAttemptIntents.map(({ event }) => event.attemptOrdinal)).toEqual([1, 1, 1])
 
         const finalCandidate = candidateCommits[2]
@@ -1188,7 +1199,9 @@ const runHermeticMvpJourney = (
         expect(rejectedNonFastForwardAttempts).toHaveLength(competingHeadBetweenDiscoveryAndPush ? 1 : 0)
         if (competingHeadBetweenDiscoveryAndPush) {
           const qualifiedCandidateCommits = qualificationRecords.flatMap(({ event }) =>
-            event._tag === "IntegratorRunCandidateGitObserved" ? [event.observation.commit] : []
+            event._tag === "IntegratorRunCandidateGitObserved" && event.observation._tag === "Commit"
+              ? [event.observation.commit]
+              : []
           )
           expect(
             publicationAttemptIntents.flatMap(({ event }) => [event.correlation.qualifiedCandidate.candidateCommit])
@@ -1201,7 +1214,9 @@ const runHermeticMvpJourney = (
         expect(eventTags.filter((tag) => tag === "IntegratorAutomaticSuccessorSessionFixed")).toHaveLength(1)
         expect(qualificationRecords).toHaveLength(2)
         const qualifiedParents = qualificationRecords.map((record) =>
-          record.event._tag === "IntegratorRunCandidateGitObserved" ? record.event.observation.directParents : []
+          record.event._tag === "IntegratorRunCandidateGitObserved" && record.event.observation._tag === "Commit"
+            ? record.event.observation.directParents
+            : []
         )
         expect(qualifiedParents).toContainEqual([baseSha, decodedEvidence.commit])
         expect(qualifiedParents).toContainEqual([expectedTargetHead, decodedEvidence.commit])
