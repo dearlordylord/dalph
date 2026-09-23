@@ -37,8 +37,8 @@ import {
 } from "@dalph/contracts"
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import type { CompletionTaskClaim } from "@dalph/orchestrator"
 import {
+  type CompletionTaskClaim,
   type GithubGraphqlRequest,
   ApplicationExitShell,
   ActiveTaskClaim,
@@ -50,6 +50,7 @@ import {
   ClaimToken,
   CompletionClaimBoundary,
   CompletionClaimMarkerAbsent,
+  type CompletionClaimBoundaryService,
   CompletionTaskAcknowledgement,
   CompletionTaskBoundary,
   CompletionTaskRequestFailure,
@@ -150,6 +151,7 @@ import {
   TrackerAdapterReadError,
   TrackerAdapterReadFailureReason,
   TrackerMutation,
+  type TrackerMutationService,
   TrackerRevision,
   UnclaimedTask,
   completionTaskClaimEquals,
@@ -197,6 +199,7 @@ import {
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../orchestrator/test/controlled-planned-attempt-executor.js"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
 import { describeJournalEvent } from "../../../orchestrator/src/workflow/registry/event-descriptor.js"
+import type { AppendableWorkflowJournalEvent } from "../../../orchestrator/src/workflow-journal/store.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
 import {
   CodexAppServer,
@@ -3405,7 +3408,7 @@ it.effect.each([
         runId,
         schemaVersion: 1
       })
-      const append = (records: ReadonlyArray<JournalRecord>, event: JournalRecord["event"]): JournalRecord => ({
+      const append = (records: ReadonlyArray<JournalRecord>, event: AppendableWorkflowJournalEvent): JournalRecord => ({
         event,
         key: describeJournalEvent(event).expectedKey,
         position: JournalPosition.make(records.length + 1),
@@ -3435,11 +3438,14 @@ it.effect.each([
         version: workflowJournalEventVersion
       })
       const publicationPrefix = published.promotedRecords.slice(0, oldProofIndex)
-      const resumedRecords = [
+      const retainedRecord = append(publicationPrefix, retained)
+      const receiptRecord = append([...publicationPrefix, retainedRecord], receipt)
+      const resumedProofRecord = append([...publicationPrefix, retainedRecord, receiptRecord], resumedProof)
+      const resumedRecords: ReadonlyArray<JournalRecord> = [
         ...publicationPrefix,
-        append(publicationPrefix, retained),
-        append([...publicationPrefix, retained], receipt),
-        append([...publicationPrefix, retained, receipt], resumedProof)
+        retainedRecord,
+        receiptRecord,
+        resumedProofRecord
       ]
       const reduced = reduceWorkflowJournalHistory(runId, resumedRecords)
       if (reduced._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die("resumed fixture must reduce")
@@ -3450,6 +3456,9 @@ it.effect.each([
         if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("resumed fixture lacks Run begin")
         yield* journal.beginRun(runId, target, began.event.initialControlPolicy, began.event.remotePublicationTarget)
         for (const record of resumedRecords.slice(1)) {
+          if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+            return yield* Effect.die("resumed fixture contains an invalid Run lifecycle suffix")
+          }
           yield* journal.append(runId, record.key, record.event)
         }
       }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
@@ -3561,25 +3570,25 @@ it.effect.each([
             )
           )
       }
-      const taskMutation = TrackerMutation.of({
+      const taskMutationService: TrackerMutationService = {
         acquireTaskClaim: () => Effect.die("resumed finality must not acquire another task claim"),
-        readTaskClaim: () =>
-          Ref.get(completionMarker).pipe(
-            Effect.flatMap((marker) => (Option.isSome(marker) ? Effect.succeed(marker.value) : Ref.get(trackerClaim)))
-          ),
+        readTaskClaim: () => Ref.get(trackerClaim),
         releaseTaskClaim: (release) =>
           Ref.modify(trackerClaim, (current) =>
             current._tag === "ActiveTaskClaim" && isExactTaskClaim(current, release.claim)
               ? ([Effect.void, UnclaimedTask.make({ taskId })] as const)
               : ([Effect.die("resumed finality refused a non-exact claim release"), current] as const)
           ).pipe(Effect.flatten)
-      })
-      const completionClaim = CompletionClaimBoundary.of({
+      }
+      const taskMutation = TrackerMutation.of(taskMutationService)
+      const completionClaimService: CompletionClaimBoundaryService = {
         readOriginalTaskClaim: () => Ref.get(trackerClaim),
         readTaskClaim: () =>
-          Ref.get(completionMarker).pipe(
-            Effect.flatMap((marker) => (Option.isSome(marker) ? Effect.succeed(marker.value) : Ref.get(trackerClaim)))
-          ),
+          Effect.gen(function* () {
+            const marker = yield* Ref.get(completionMarker)
+            if (Option.isSome(marker)) return marker.value
+            return yield* Ref.get(trackerClaim)
+          }),
         readCompletionClaimMarker: () =>
           Ref.get(completionMarker).pipe(
             Effect.map((current) =>
@@ -3601,7 +3610,8 @@ it.effect.each([
               ? ([Effect.void, Option.none()] as const)
               : ([Effect.die("completion claim deletion lacked the exact completion claim"), current] as const)
           ).pipe(Effect.flatten)
-      })
+      }
+      const completionClaim = CompletionClaimBoundary.of(completionClaimService)
       const completionTask = CompletionTaskBoundary.of({
         readFocusedTaskCompletion: ({ operationId, target: requestedTarget }) =>
           Ref.update(completionReads, (count) => count + 1).pipe(
@@ -3689,42 +3699,28 @@ it.effect.each([
             )
           ),
         read: (promote) =>
-          Ref.update(promotionCalls, (calls) => ({ ...calls, read: calls.read + 1 })).pipe(
-            Effect.andThen(
-              git
-                .run(promote.integrationTarget.repository, [
-                  "rev-parse",
-                  "--verify",
-                  "--quiet",
-                  `${promote.integrationTarget.ref}^{commit}`
-                ])
-                .pipe(Effect.orDie)
-            ),
-            Effect.flatMap((result) => {
-              if (result.exitCode !== 0) return Effect.die(`target read failed: ${result.stderr}`)
-              const head = GitCommitSha.make(result.stdout.trim())
-              if (head === promote.candidateCommit) {
-                return Effect.succeed(
-                  TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha: head })
-                )
-              }
-              return git
-                .run(promote.integrationTarget.repository, [
-                  "merge-base",
-                  "--is-ancestor",
-                  promote.candidateCommit,
-                  head
-                ])
-                .pipe(
-                  Effect.orDie,
-                  Effect.map((ancestry) =>
-                    ancestry.exitCode === 0
-                      ? TargetPromotionGitReadObservation.cases.CandidateAncestor.make({ currentHeadSha: head })
-                      : TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: head })
-                  )
-                )
-            })
-          )
+          Effect.gen(function* () {
+            yield* Ref.update(promotionCalls, (calls) => ({ ...calls, read: calls.read + 1 }))
+            const result = yield* git
+              .run(promote.integrationTarget.repository, [
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                `${promote.integrationTarget.ref}^{commit}`
+              ])
+              .pipe(Effect.orDie)
+            if (result.exitCode !== 0) return yield* Effect.die(`target read failed: ${result.stderr}`)
+            const head = GitCommitSha.make(result.stdout.trim())
+            if (head === promote.candidateCommit) {
+              return TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha: head })
+            }
+            const ancestry = yield* git
+              .run(promote.integrationTarget.repository, ["merge-base", "--is-ancestor", promote.candidateCommit, head])
+              .pipe(Effect.orDie)
+            return ancestry.exitCode === 0
+              ? TargetPromotionGitReadObservation.cases.CandidateAncestor.make({ currentHeadSha: head })
+              : TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: head })
+          })
       }
       const unexpectedRemote = (name: string) =>
         Ref.update(remoteCalls, (calls) => [...calls, name]).pipe(
@@ -3912,7 +3908,14 @@ it.effect.each([
         expect(lostResponses).toEqual([])
         expect(requestLookups).toEqual([])
         expect(cleanupSettlements).toEqual([])
-        expect(after.filter(({ event }) => event._tag === "IntegratorCandidateCleanupIntended")).toEqual([])
+        expect(
+          after.filter(
+            ({ event }) =>
+              event._tag === "IntegratorCandidateCleanupAuthorized" ||
+              event._tag === "IntegratorCandidateCleanupObservationIntended" ||
+              event._tag === "IntegratorCandidateCleanupMutationIntended"
+          )
+        ).toEqual([])
         expect(finalitySettlements).toEqual([])
         expect(after.filter(({ event }) => event._tag === "CompletionTaskAttemptIntended")).toEqual([])
         expect(yield* Ref.get(completionCalls)).toEqual([])
