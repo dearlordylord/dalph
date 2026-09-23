@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import {
   integrationQuarantinedRecordKey,
+  integratorAutomaticSuccessorSessionFixedRecordKey,
   integratorRunCandidateGitObservedRecordKey,
   integratorRunCandidateGitReadIntendedRecordKey,
   integratorRunResultRecordedRecordKey,
@@ -135,41 +136,58 @@ type EvidenceValidation<Value> =
 type FixedSessionRecord = JournalRecord & {
   readonly event: Extract<
     JournalRecord["event"],
-    { readonly _tag: "IntegratorSessionFixed" | "IntegratorSuccessorSessionFixed" }
+    {
+      readonly _tag:
+        | "IntegratorSessionFixed"
+        | "IntegratorSuccessorSessionFixed"
+        | "IntegratorAutomaticSuccessorSessionFixed"
+    }
   >
 }
 
 const invalidEvidence = (detail: string): EvidenceValidation<never> => ({ _tag: "Invalid", detail })
 const validEvidence = <Value>(value: Value): EvidenceValidation<Value> => ({ _tag: "Valid", value })
 
-const fixedSessionEventMatches = (record: JournalRecord, run: IntegratorRunCorrelation): record is FixedSessionRecord =>
+const fixedSessionEventMatches = (
+  record: JournalRecord,
+  run: IntegratorRunCorrelation,
+  allowAutomaticNotPreparedSession: boolean
+): record is FixedSessionRecord =>
   record.runId === runIdFor(run) &&
   ((record.event._tag === "IntegratorSessionFixed" &&
     integratorCorrelationsEqual(record.event.correlation, run.session)) ||
     (record.event._tag === "IntegratorSuccessorSessionFixed" &&
+      integratorCorrelationsEqual(record.event.successor, run.session)) ||
+    (allowAutomaticNotPreparedSession &&
+      record.event._tag === "IntegratorAutomaticSuccessorSessionFixed" &&
       integratorCorrelationsEqual(record.event.successor, run.session)))
 
 const fixedSessionRecordMatches = (
   record: JournalRecord,
-  run: IntegratorRunCorrelation
+  run: IntegratorRunCorrelation,
+  allowAutomaticNotPreparedSession: boolean
 ): record is FixedSessionRecord =>
-  fixedSessionEventMatches(record, run) && record.position > run.session.targetLineageObservedAt
+  fixedSessionEventMatches(record, run, allowAutomaticNotPreparedSession) &&
+  record.position > run.session.targetLineageObservedAt
 
 const fixedSessionRecordKey = (record: FixedSessionRecord) =>
   record.event._tag === "IntegratorSessionFixed"
     ? integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(record.event.correlation))
-    : integratorSuccessorSessionFixedRecordKey(
-        record.event.predecessor,
-        record.event.quarantineAt,
-        record.event.directionAppliedAt
-      )
+    : record.event._tag === "IntegratorSuccessorSessionFixed"
+      ? integratorSuccessorSessionFixedRecordKey(
+          record.event.predecessor,
+          record.event.quarantineAt,
+          record.event.directionAppliedAt
+        )
+      : integratorAutomaticSuccessorSessionFixedRecordKey(record.event.predecessor, record.event.authorizationAt)
 
 const validateFixedSession = (
   records: JournalHistorySource,
-  run: IntegratorRunCorrelation
+  run: IntegratorRunCorrelation,
+  allowAutomaticNotPreparedSession: boolean
 ): EvidenceValidation<FixedSessionRecord> => {
   const matching = Array.from(journalRecordsForIntegratorSession(records, run.session.sessionId)).filter((record) =>
-    fixedSessionEventMatches(record, run)
+    fixedSessionEventMatches(record, run, allowAutomaticNotPreparedSession)
   )
   if (matching.length !== 1) {
     return invalidEvidence("initial conclusive quarantine requires one exact fixed session predecessor")
@@ -184,7 +202,7 @@ const validateFixedSession = (
   }
   const exact = exactJournalRecordAtKey(records, key)
   if (exact._tag === "Duplicate") return invalidEvidence(exact.detail)
-  return exact._tag === "Found" && fixedSessionRecordMatches(exact.record, run)
+  return exact._tag === "Found" && fixedSessionRecordMatches(exact.record, run, allowAutomaticNotPreparedSession)
     ? validEvidence(exact.record)
     : invalidEvidence("initial conclusive quarantine lacks the exact fixed session predecessor")
 }
@@ -338,7 +356,7 @@ const validateModernRunEvidence = (
 ): EvidenceValidation<ConclusiveBasis> => {
   const run = result.run
   if (run.ordinal !== 1) return invalidEvidence("initial conclusive quarantine requires Integrator run 1")
-  const session = validateFixedSession(records, run)
+  const session = validateFixedSession(records, run, result._tag === "NotPrepared")
   if (session._tag === "Invalid") return session
   const start = validateRunStart(records, run, session.value)
   if (start._tag === "Invalid") return start
