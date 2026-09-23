@@ -56,21 +56,29 @@ import {
 const gitShaLength = 40
 const sha = (digit: string): GitCommitSha => GitCommitSha.make(digit.repeat(gitShaLength))
 
-export const makeSuccessorPrefix = () => {
+export const makeSuccessorPrefix = (options: {
+  readonly competingHead?: GitCommitSha
+  readonly expectedTargetHead?: GitCommitSha
+} = {}) => {
   const fixture = integrationFinalityFixture
   const specification = makeTaskWorkSpecification({
     body: "Recover one exact accepted task result after a competing remote update.",
     taskId: fixture.taskId,
     title: "Automatic competing-head successor"
   })
-  const plannedAttempt = { ...fixture.plannedAttempt, taskRevision: specification.fingerprint }
+  const expectedTargetHead = options.expectedTargetHead ?? fixture.qualifiedCandidate.run.session.expectedTargetHead
+  const plannedAttempt = {
+    ...fixture.plannedAttempt,
+    baseSha: expectedTargetHead,
+    taskRevision: specification.fingerprint
+  }
   const accepted = makeAcceptedIntegrationHistory({
     acceptedResult: fixture.qualifiedCandidate.run.session.acceptedResult,
     activeClaim: fixture.activeClaim,
     integrationTarget: fixture.integrationTarget,
     plannedAttempt,
     runId: fixture.runId,
-    targetHeadSha: fixture.qualifiedCandidate.run.session.expectedTargetHead,
+    targetHeadSha: expectedTargetHead,
     taskSpecification: specification,
     trackerTarget: fixture.target
   })
@@ -94,7 +102,7 @@ export const makeSuccessorPrefix = () => {
   const run = integratorRunCorrelationForSession(predecessor, IntegratorRunOrdinal.make(1))
   const candidateText = IntegratorCandidateText.make("refs/heads/dalph/automatic-successor-candidate")
   const candidateCommit = sha("5")
-  const competingHead = sha("6")
+  const competingHead = options.competingHead ?? sha("6")
   append(IntegratorSessionFixedEvent.make({ correlation: predecessor, version: workflowJournalEventVersion }))
   append(IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion }))
   append(
