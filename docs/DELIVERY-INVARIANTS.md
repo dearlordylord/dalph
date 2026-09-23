@@ -360,35 +360,36 @@ request names the exact Run, integration responsibility, and request identity.
 Schema or subject mismatch is rejected before journal mutation; exact redelivery
 returns the recorded receipt/result without duplicate Git, session, or task
 effects. Recovery after `RemotePublicationRetained(CompatibleCompetingHead)` may
-invoke the same typed recovery-owner handoff again; the #385 owner must be
-idempotent for that exact C, target, merge base, and competing head. A request
-creates no task attempt, Integrator invocation, Begin, or allowance. The ordinary owner
-reconciles unfinished intent and local writer custody, then resumes the same C,
-M, and remaining publication allowance. A conclusive authentication or policy
-denial needs an explicit request and fresh required facts; a repeated denial
+repeat the accepted-fact hint after a crash between durable outcome and dispatch.
+The ordinary Run selector rereads the exact retained C, target, merge base, and
+competing head, then uses #385's same-commit path under the remaining cycle
+allowance. A request creates no task attempt, Integrator invocation, Begin, or
+allowance. A conclusive authentication or policy denial needs an explicit
+request and fresh required facts; a repeated denial
 retains work and stops. Throttled mutation is never retried. Resume cannot
-override Pause, Exit, or exhaustion. Compatible competition dispatches to the
-existing same-commit recovery owner. A settled subject returns its actual
+override Pause, Exit, or exhaustion. Compatible competition wakes the ordinary
+Run selector, which dispatches the retained occurrence through #385's existing
+same-commit path. A settled subject returns its actual
 status without work.
 → `packages/orchestrator/src/workflow/protocols/direct-publication/resume.test.ts`:
 `recovers the same retained resume receipt after restart with memory and reopened SQLite journals`,
-`re-dispatches the exact compatible-head handoff after restart from memory and reopened SQLite`,
+`replays the exact compatible-head continuation after restart from memory and reopened SQLite`,
 `reconciles the active receipt after an ambiguous push before any later push`,
 `rejects resume schema and exact Run or responsibility mismatches before journal mutation`,
 `deduplicates one resume identity and allows a later distinct repair request within the same allowance`,
 `a persistent denial stops at the accepted attempt limit and cannot be resumed again`,
 `does not retry a throttled publication through a retained resume request`,
-`resume calls the existing same-commit owner with the exact C, target, merge base, and competing head`,
+`resumes a pre-existing compatible-head wait through the ordinary Run frontier`,
 and `application Exit interrupts resume before observation or a new publication attempt`.
 The ordinary Run boundary is covered by
 `packages/orchestrator/src/coordination/delivery/integration-delivery-action-adapter.test.ts`:
-`ordinary Run replay hands the exact retained candidate to the existing same-commit owner`,
-`replays the exact compatible-head handoff after its retained outcome commits before owner dispatch`,
+`ordinary Run replay leaves the exact compatible head for the normal frontier selector`,
+`replays the retained compatible head through the ordinary Run selector after restart`,
 `a paused retained Run stops before custody, head observation, or publication boundaries`,
 and `ordinary publication replay preserves settled success and conclusive denial without provider work`;
 these tests make no new task/session or Git action for settlement or exact handoff replay. The resumed-proof
-completion path is covered by the passing
-`packages/dalph/test/scenarios/production.test.ts::ordinary production Run promotes resumed publication proof and completes from fresh tracker facts`.
+completion retry is covered by the passing
+`packages/dalph/test/scenarios/production.test.ts::ordinary production Run retries resumed finality after a lost completion response`.
 
 ## Process and durability
 

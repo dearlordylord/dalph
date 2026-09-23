@@ -172,13 +172,15 @@ stop before a journal append or provider call; exact redelivery returns the
 recorded result. After a conclusive recoverable denial, the ordinary publication
 owner reuses the same candidate and remaining allowance after the required
 intent and custody reconciliation. It does not create another task Begin or
-Integrator call. A compatible competing head is handed to the existing
-same-commit recovery owner; resume does not add another recovery engine.
+Integrator call. A compatible competing head wakes the ordinary Run selector,
+which routes the retained occurrence through #385's same-commit successor path
+under the remaining cycle allowance; resume does not add another recovery
+engine.
 Throttling, Pause, Exit, and exhausted allowance remain blocking states, and a
 settled Run returns its recorded status without work.
 
 See [direct remote publication](../scenarios/direct-remote-publication.md) and
-[D28a–D28e](../DELIVERY-INVARIANTS.md#integration-and-promotion) for the
+[D28a–D28f](../DELIVERY-INVARIANTS.md#integration-and-promotion) for the
 chronology, bounds, and deferred issue boundaries.
 
 ## Integrator session and candidate

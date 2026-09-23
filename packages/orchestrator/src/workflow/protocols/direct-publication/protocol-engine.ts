@@ -1,4 +1,4 @@
-import type { GitCommitSha, RemotePublicationTarget } from "@dalph/contracts"
+import type { RemotePublicationTarget } from "@dalph/contracts"
 import { Effect, Schema } from "effect"
 import { integrationResponsibilityIdentity } from "../integration-admission/responsibility.js"
 import type { IntegratorRunQualifiedCandidate } from "../integrator/events.js"
@@ -35,7 +35,7 @@ import {
 } from "./transition-journal.js"
 import { RemotePublicationResumeRequestConflict, RemotePublicationResumeSubjectMismatch } from "./errors.js"
 
-/** Post-resume handoff to the existing direct-delivery or same-commit integration owner. */
+/** Post-resume continuation through the ordinary Run frontier. */
 export type RemotePublicationResumeDispatch =
   | {
       readonly _tag: "ContinueDirectPublication"
@@ -56,28 +56,16 @@ export type RemotePublicationResumeDispatch =
       readonly state: Extract<RemotePublicationStateType, { readonly _tag: "PublicationSucceeded" }>
     }
   | {
-      readonly _tag: "ExistingSameCommitRecovery"
-      readonly candidate: IntegratorRunQualifiedCandidate
-      readonly target: RemotePublicationTarget
-      readonly mergeBase: GitCommitSha
-      readonly remoteHead: GitCommitSha
+      readonly _tag: "ContinueRunFrontier"
+      readonly state: Extract<RemotePublicationStateType, { readonly _tag: "PublicationRetained" }>
     }
 
-/** Route compatibility recovery to its existing owner without creating another recovery engine. */
+/** Route compatible competition through the ordinary Run frontier without creating a recovery engine. */
 export const remotePublicationResumeDispatchOf = (
-  candidate: IntegratorRunQualifiedCandidate,
-  target: RemotePublicationTarget,
   state: RemotePublicationStateType
 ): RemotePublicationResumeDispatch => {
-  if (state._tag === "PublicationRetained" && state.cause._tag === "CompatibleCompetingHead") {
-    return {
-      _tag: "ExistingSameCommitRecovery",
-      candidate,
-      target,
-      mergeBase: state.cause.mergeBase,
-      remoteHead: state.cause.remoteHead
-    }
-  }
+  if (state._tag === "PublicationRetained" && state.cause._tag === "CompatibleCompetingHead")
+    return { _tag: "ContinueRunFrontier", state }
   if (
     state._tag === "PublicationAbsent" ||
     state._tag === "PublicationPending" ||
@@ -429,7 +417,7 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
   ) {
     const outcome = yield* resumeRemotePublicationOutcome(candidate, target, unknownRequest, phaseBoundary)
     if (outcome.activated && resumeOutcomeNeedsContinuation(outcome.state)) {
-      yield* dispatchBoundary.dispatch(remotePublicationResumeDispatchOf(candidate, target, outcome.state))
+      yield* dispatchBoundary.dispatch(remotePublicationResumeDispatchOf(outcome.state))
     }
     return outcome.state
   })

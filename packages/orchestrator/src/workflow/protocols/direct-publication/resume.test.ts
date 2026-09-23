@@ -7,7 +7,6 @@ import { integratorCorrelationFor } from "../integrator/session.js"
 import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
 import { makePromotedIntegrationHistory } from "../../../../test/support/promoted-integration-history.js"
 import { journalLayer, type JournalStorageBoundary } from "../../../coordination/delivery/journal.js"
-import type { RunReactivationOwnerService } from "../../../coordination/run/run-reactivation-owner.js"
 import { RunReactivationHint } from "../../../coordination/run/run-reactivation-owner.js"
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
 import { reconstructRunState } from "../../../coordination/reconstruction/reduce.js"
@@ -234,7 +233,7 @@ const invoke = Effect.fn("DirectPublicationResume.invoke")(function* (
     | Readonly<{
         readonly request: unknown
         readonly dispatchBoundary?: RemotePublicationResumeDispatchBoundary<unknown, never>
-        readonly runtimeOwners?: RemotePublicationResumeRuntimeOwners<unknown, never>
+        readonly runtimeOwners?: RemotePublicationResumeRuntimeOwners
       }>,
   crashAt?: "receipt" | "compatibleRetained",
   boundary: RemotePublicationPhaseBoundary = phaseBoundary
@@ -383,18 +382,15 @@ const exerciseCompatibleHandoffRecovery = (process: StoreProcess): Effect.Effect
     const initialDenial = yield* makeGit("denied")
     yield* process((store) => invoke(store, initialDenial.git, "run"))
     const request = requestFor("resume-compatible-head-handoff-recovery")
-    const handoffs = yield* Ref.make<ReadonlyArray<unknown>>([])
     const hints = yield* Ref.make<ReadonlyArray<RunReactivationHint>>([])
-    const runtimeOwners: RemotePublicationResumeRuntimeOwners<unknown, never> = {
-      ordinaryRun: { hint: (hint) => Ref.update(hints, (current) => [...current, hint]) },
-      sameCommitRecovery: (input) => Ref.update(handoffs, (current) => [...current, input])
+    const runtimeOwners: RemotePublicationResumeRuntimeOwners = {
+      ordinaryRun: { hint: (hint) => Ref.update(hints, (current) => [...current, hint]) }
     }
     const competing = yield* makeGit("competing")
     const interrupted = yield* Effect.exit(
       process((store) => invoke(store, competing.git, { request, runtimeOwners }, "compatibleRetained"))
     )
     expect(interrupted._tag).toBe("Failure")
-    expect(yield* Ref.get(handoffs)).toEqual([])
     expect(yield* Ref.get(hints)).toEqual([])
     expect(yield* Ref.get(competing.calls)).toMatchObject({ custody: 1, observations: 1, pushes: [] })
 
@@ -413,15 +409,7 @@ const exerciseCompatibleHandoffRecovery = (process: StoreProcess): Effect.Effect
     const replayed = yield* process((store) => invoke(store, replayGit.git, { request, runtimeOwners }))
     expect(replayed).toMatchObject({ _tag: "PublicationRetained", cause: { _tag: "CompatibleCompetingHead" } })
     expect(yield* Ref.get(replayGit.calls)).toEqual(emptyCalls())
-    expect(yield* Ref.get(hints)).toEqual([])
-    expect(yield* Ref.get(handoffs)).toEqual([
-      {
-        candidate,
-        target,
-        mergeBase: candidate.run.session.expectedTargetHead,
-        remoteHead: GitCommitSha.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-      }
-    ])
+    expect(yield* Ref.get(hints)).toEqual([RunReactivationHint.AcceptedFactPublication()])
 
     const afterReplay = yield* process((store) => store.read(runId))
     expect(afterReplay.filter(({ event }) => event._tag === "RemotePublicationResumeRequested")).toHaveLength(1)
@@ -431,7 +419,7 @@ const exerciseCompatibleHandoffRecovery = (process: StoreProcess): Effect.Effect
     expect(afterReplay.at(-1)).toEqual(afterCrash.at(-1))
   })
 
-it.effect("re-dispatches the exact compatible-head handoff after restart from memory and reopened SQLite", () =>
+it.effect("replays the exact compatible-head continuation after restart from memory and reopened SQLite", () =>
   Effect.scoped(
     Effect.gen(function* () {
       yield* memoryFresh(exerciseCompatibleHandoffRecovery)
@@ -688,42 +676,52 @@ it.effect("reconciles the active receipt after an ambiguous push before any late
   )
 )
 
-it.effect("resume calls the existing same-commit owner with the exact C, target, merge base, and competing head", () =>
-  memoryFresh((process) =>
+const exercisePreExistingCompatibleHeadWait = (process: StoreProcess): Effect.Effect<void, unknown> =>
+  Effect.gen(function* () {
+    const initialGit = yield* makeGit("competing")
+    const initial = yield* process((store) => invoke(store, initialGit.git, "run"))
+    expect(initial).toMatchObject({ _tag: "PublicationRetained", cause: { _tag: "CompatibleCompetingHead" } })
+    const before = yield* process((store) => store.read(runId))
+    const hints = yield* Ref.make<ReadonlyArray<RunReactivationHint>>([])
+    const owners: RemotePublicationResumeRuntimeOwners = {
+      ordinaryRun: { hint: (hint) => Ref.update(hints, (current) => [...current, hint]) }
+    }
+    const request = requestFor("resume-to-pre-existing-competing-head")
+    const resumedGit = yield* makeGit("competing")
+    const retained = yield* process((store) => invoke(store, resumedGit.git, { request, runtimeOwners: owners }))
+    expect(retained).toMatchObject({
+      _tag: "PublicationRetained",
+      authorization: { _tag: "ResumeRequest", requestId: request.requestId },
+      correlation: { qualifiedCandidate: candidate, target },
+      cause: {
+        _tag: "CompatibleCompetingHead",
+        mergeBase: candidate.run.session.expectedTargetHead,
+        remoteHead: GitCommitSha.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+      }
+    })
+    expect(yield* Ref.get(hints)).toEqual([RunReactivationHint.AcceptedFactPublication()])
+    expect(yield* Ref.get(resumedGit.calls)).toMatchObject({
+      custody: 0,
+      observations: 1,
+      pushes: [],
+      preparations: []
+    })
+    const records = yield* process((store) => store.read(runId))
+    const runBeginsBefore = before.filter(({ event }) => event._tag === "WorkflowRunBegan").length
+    const integratorStartsBefore = before.filter(({ event }) => event._tag === "IntegratorRunStarted").length
+    expect(records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(runBeginsBefore)
+    expect(records.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(integratorStartsBefore)
+    expect(publicationOrdinals(records)).toEqual([])
+    expect(records.filter(({ event }) => event._tag === "RemotePublicationResumeRequested")).toEqual([
+      expect.objectContaining({ event: expect.objectContaining({ request }) })
+    ])
+  })
+
+it.effect("resumes a pre-existing compatible-head wait through the ordinary Run frontier", () =>
+  Effect.scoped(
     Effect.gen(function* () {
-      const first = yield* makeGit("denied")
-      yield* process((store) => invoke(store, first.git, "run"))
-      const ordinaryHints = yield* Ref.make<ReadonlyArray<RunReactivationHint>>([])
-      const sameCommitCalls = yield* Ref.make<ReadonlyArray<unknown>>([])
-      const ordinaryRun: RunReactivationOwnerService = {
-        hint: (hint) => Ref.update(ordinaryHints, (current) => [...current, hint])
-      }
-      const runtimeOwners = {
-        ordinaryRun,
-        sameCommitRecovery: (input: Parameters<RemotePublicationResumeRuntimeOwners["sameCommitRecovery"]>[0]) =>
-          Ref.update(sameCommitCalls, (current) => [...current, input])
-      }
-      const competing = yield* makeGit("competing")
-      const retained = yield* process((store) =>
-        invoke(store, competing.git, { request: requestFor("resume-to-competing-head"), runtimeOwners })
-      )
-      expect(retained).toMatchObject({ _tag: "PublicationRetained", cause: { _tag: "CompatibleCompetingHead" } })
-      if (retained._tag !== "PublicationRetained") return
-      expect(yield* Ref.get(sameCommitCalls)).toEqual([
-        {
-          candidate,
-          target,
-          mergeBase: candidate.run.session.expectedTargetHead,
-          remoteHead: GitCommitSha.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-        }
-      ])
-      expect(yield* Ref.get(ordinaryHints)).toEqual([])
-      expect(yield* Ref.get(competing.calls)).toMatchObject({ pushes: [], preparations: [] })
-      const records = yield* process((store) => store.read(runId))
-      expect(records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
-      expect(records.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(1)
-      expect(publicationOrdinals(records)).toEqual([1])
-      expect(records.filter(({ event }) => event._tag === "RemotePublicationResumeRequested")).toHaveLength(1)
+      yield* memoryFresh(exercisePreExistingCompatibleHeadWait)
+      yield* sqliteFresh(exercisePreExistingCompatibleHeadWait)
     })
   )
 )
@@ -734,10 +732,8 @@ it.effect("resume proof wakes the ordinary Run owner, while settled status invok
       const denied = yield* makeGit("denied")
       yield* process((store) => invoke(store, denied.git, "run"))
       const hints = yield* Ref.make<ReadonlyArray<RunReactivationHint>>([])
-      const sameCommitCalls = yield* Ref.make<ReadonlyArray<unknown>>([])
       const owners = {
-        ordinaryRun: { hint: (hint: RunReactivationHint) => Ref.update(hints, (current) => [...current, hint]) },
-        sameCommitRecovery: (input: unknown) => Ref.update(sameCommitCalls, (current) => [...current, input])
+        ordinaryRun: { hint: (hint: RunReactivationHint) => Ref.update(hints, (current) => [...current, hint]) }
       }
       const resumedGit = yield* makeGit("applied")
       const resumed = yield* process((store) =>
@@ -745,7 +741,6 @@ it.effect("resume proof wakes the ordinary Run owner, while settled status invok
       )
       expect(resumed._tag).toBe("PublicationSucceeded")
       expect(yield* Ref.get(hints)).toEqual([RunReactivationHint.AcceptedFactPublication()])
-      expect(yield* Ref.get(sameCommitCalls)).toEqual([])
       expect(yield* Ref.get(resumedGit.calls)).toMatchObject({ preparations: [2], pushes: [2] })
 
       const records = yield* process((store) => store.read(runId))
@@ -763,7 +758,6 @@ it.effect("resume proof wakes the ordinary Run owner, while settled status invok
       expect(settled).toEqual(resumed)
       expect(yield* Ref.get(settledStatusGit.calls)).toEqual(emptyCalls())
       expect(yield* Ref.get(hints)).toEqual([RunReactivationHint.AcceptedFactPublication()])
-      expect(yield* Ref.get(sameCommitCalls)).toEqual([])
       const finalRecords = yield* process((store) => store.read(runId))
       expect(finalRecords.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(
         beginsBeforeSettledRequest

@@ -1381,6 +1381,52 @@ module acceptedResultIntegrationTest {
       })
   }
 
+  run resumePreExistingCompatibleHeadWakesOrdinaryFrontierWithoutMintingWorkTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observePublicationCompetingHead(1))
+      .then(recordPublicationResumeRequest(1, 1, 9000, 8001, 77))
+      .then(continueCompetingHeadThroughOrdinaryRunFrontier(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationResumeRecorded,
+        state.results.get(1).publicationResumePriorPhase == PublicationCompetingHead,
+        state.results.get(1).publicationResumeRequestRunIdentity == 9000,
+        state.results.get(1).publicationResumeRequestResponsibilityIdentity == 8001,
+        state.results.get(1).publicationResumeRequestIdentity == 77,
+        state.results.get(1).publicationResumeDispatchCount == 1,
+        state.results.get(1).publicationAttemptCount == 0,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        state.results.get(1).publicationAttemptCount < PROMOTION_ATTEMPT_LIMIT,
+        publicationResumeIdentityIsExact,
+        publicationResumeDoesNotMintWork,
+      })
+      .then(redeliverPublicationResumeRequest(1, 1, 9000, 8001, 77))
+      .expect(and {
+        state.results.get(1).publicationResumeDispatchCount == 1,
+        state.results.get(1).publicationAttemptCount == 0,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        publicationResumeIdentityIsExact,
+        publicationResumeDoesNotMintWork,
+      })
+  }
+
   run resumeDeniedPublicationOperatorMatchesTheProductionResumeEndpointTest = {
     init
       .then(admitDestination)

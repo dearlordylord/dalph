@@ -76,7 +76,6 @@ import {
   validateRemotePublicationState
 } from "../../workflow/protocols/direct-publication/transition-journal.js"
 import {
-  ExistingSameCommitRecoveryOwner,
   RemotePublicationResumeRuntimeUnavailable,
   resumeRemotePublicationInRuntime
 } from "../../workflow/protocols/direct-publication/resume-runtime.js"
@@ -458,8 +457,6 @@ const executeRemotePublication = Effect.fn("DeliveryAction.runRemotePublication"
             Effect.provideService(RemotePublicationGit, git)
           )
         }
-        const context = yield* Effect.context<never>()
-        const existingSameCommitOwner = Context.getOption(context, ExistingSameCommitRecoveryOwner)
         return yield* resumeRemotePublicationInRuntime(
           transition.candidate,
           transition.target,
@@ -468,18 +465,7 @@ const executeRemotePublication = Effect.fn("DeliveryAction.runRemotePublication"
           {
             // The live delivery runtime is already inside the ordinary Run selector. ActionCompleted feeds its next
             // evaluation; a hint here would enqueue a duplicate activation for the same Run.
-            ordinaryRun: { hint: (_hint: RunReactivationHint) => Effect.void },
-            sameCommitRecovery: (input) =>
-              Option.match(existingSameCommitOwner, {
-                onNone: () =>
-                  Effect.fail(
-                    new RemotePublicationResumeRuntimeUnavailable({
-                      detail: "compatible competing head requires the installed #385 recovery owner",
-                      runId: input.candidate.run.session.plannedAttempt.runId
-                    })
-                  ),
-                onSome: (owner) => owner.recover(input)
-              })
+            ordinaryRun: { hint: (_hint: RunReactivationHint) => Effect.void }
           }
         ).pipe(Effect.provideService(RemotePublicationGit, git))
       })

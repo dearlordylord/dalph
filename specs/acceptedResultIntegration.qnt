@@ -1578,7 +1578,7 @@ module acceptedResultIntegration {
         result.publicationIntegratorSession == result.integrationSession,
         result.integratorInvocationCount == 1,
         result.integrationResponsibilityCount == 1,
-        result.publicationAttemptCount >= 1,
+        result.publicationAttemptCount > 0 or result.publicationResumePriorPhase == PublicationCompetingHead,
         result.publicationAttemptCount <= PROMOTION_ATTEMPT_LIMIT,
       }
     })
@@ -3358,9 +3358,10 @@ module acceptedResultIntegration {
     },
   }
 
-  // Competing-head resume hands off to the existing same-commit recovery
-  // owner. This action is only the dispatch seam; it allocates no M or S.
-  action dispatchCompetingHeadResumeToExistingRecovery(id: int): bool = {
+  // Compatible-head resume wakes the ordinary Run frontier. That selector
+  // consumes the retained occurrence through #385's same-commit path; this
+  // dispatch allocates no candidate, session, or publication ordinal.
+  action continueCompetingHeadThroughOrdinaryRunFrontier(id: int): bool = {
     val result = state.results.get(id)
     all {
       RESULT_IDS.contains(id),
@@ -3369,6 +3370,7 @@ module acceptedResultIntegration {
       result.publicationResumePriorPhase == PublicationCompetingHead,
       not(state.runPaused),
       not(state.runExitAdmitted),
+      result.publicationAttemptCount < PROMOTION_ATTEMPT_LIMIT,
       state' = {
         ...state,
         results: state.results.put(id, {
@@ -4160,8 +4162,8 @@ module acceptedResultIntegration {
     redeliverPublicationResumeRequest(1, PUBLICATION_RESUME_SCHEMA_VERSION, 9000, 8001, 77)
   action activatePublicationResumeOne: bool = activatePublicationResume(1)
   action recordResumedPublicationAttemptIntentOne: bool = recordResumedPublicationAttemptIntent(1)
-  action dispatchCompetingHeadResumeToExistingRecoveryOne: bool =
-    dispatchCompetingHeadResumeToExistingRecovery(1)
+  action continueCompetingHeadThroughOrdinaryRunFrontierOne: bool =
+    continueCompetingHeadThroughOrdinaryRunFrontier(1)
   action chooseRetryOne: bool = chooseRetry(1, state.results.get(1).quarantinePosition)
   action chooseFullRerunOne: bool = chooseFullRerun(1, state.results.get(1).quarantinePosition)
   action redeliverRetryOne: bool = redeliverRetry(1, state.results.get(1).quarantineDirectionPosition)
@@ -4258,7 +4260,7 @@ module acceptedResultIntegration {
     redeliverPublicationResumeRequestOne,
     activatePublicationResumeOne,
     recordResumedPublicationAttemptIntentOne,
-    dispatchCompetingHeadResumeToExistingRecoveryOne,
+    continueCompetingHeadThroughOrdinaryRunFrontierOne,
     chooseRetryOne,
     chooseFullRerunOne,
     redeliverRetryOne,

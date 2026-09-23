@@ -1,5 +1,5 @@
-import { RunId, type GitCommitSha, type RemotePublicationTarget } from "@dalph/contracts"
-import { Context, Effect, Schema } from "effect"
+import { RunId, type RemotePublicationTarget } from "@dalph/contracts"
+import { Effect, Schema } from "effect"
 import type { RunReactivationOwnerService } from "../../../coordination/run/run-reactivation-owner.js"
 import { RunReactivationHint } from "../../../coordination/run/run-reactivation-owner.js"
 import type { IntegratorRunQualifiedCandidate } from "../integrator/events.js"
@@ -10,57 +10,33 @@ import {
 } from "./protocol-engine.js"
 import type { RemotePublicationResumeRequest } from "./events.js"
 
-/** Exact input accepted by the existing #385 same-commit successor owner. */
-export type ExistingSameCommitRecoveryInput = {
-  readonly candidate: IntegratorRunQualifiedCandidate
-  readonly target: RemotePublicationTarget
-  readonly mergeBase: GitCommitSha
-  readonly remoteHead: GitCommitSha
-}
-
-/** Narrow production port implemented by the existing #385 successor owner. */
-export interface ExistingSameCommitRecoveryOwnerService {
-  readonly recover: (input: ExistingSameCommitRecoveryInput) => Effect.Effect<void>
-}
-
-export class ExistingSameCommitRecoveryOwner extends Context.Service<
-  ExistingSameCommitRecoveryOwner,
-  ExistingSameCommitRecoveryOwnerService
->()("@dalph/ExistingSameCommitRecoveryOwner") {}
-
-/** Resume found a compatible competing head before the #385 owner was installed. */
+/** A retained result was activated without the ordinary Run owner installed. */
 export class RemotePublicationResumeRuntimeUnavailable extends Schema.TaggedError<RemotePublicationResumeRuntimeUnavailable>()(
   "RemotePublication.ResumeRuntimeUnavailable",
   { detail: Schema.String, runId: RunId }
 ) {}
 
 /**
- * The application’s existing recovery owners. This module only routes a
- * settled direct-publication result; it does not implement either owner.
+ * The ordinary Run selector owns continuation after a retained publication
+ * result. It rereads the exact retained facts before selecting the next action.
  */
-export interface RemotePublicationResumeRuntimeOwners<E = never, R = never> {
+export interface RemotePublicationResumeRuntimeOwners {
   readonly ordinaryRun: RunReactivationOwnerService
-  readonly sameCommitRecovery: (input: ExistingSameCommitRecoveryInput) => Effect.Effect<void, E, R>
 }
 
 /**
- * Converts the protocol handoff into the ordinary Run selector or the exact
- * existing #385 owner. A fresh Run activation rereads tracker premises before
- * selecting promotion/finality; no transition is constructed here.
+ * Wakes the ordinary Run selector. It rereads retained publication facts,
+ * tracker premises, and current allowance before selecting further work.
  */
-export const remotePublicationResumeDispatchBoundaryFor = <E, R>(
-  owners: RemotePublicationResumeRuntimeOwners<E, R>
-): RemotePublicationResumeDispatchBoundary<E, R> => ({
+export const remotePublicationResumeDispatchBoundaryFor = (
+  owners: RemotePublicationResumeRuntimeOwners
+): RemotePublicationResumeDispatchBoundary => ({
   dispatch: (dispatch) => {
-    if (dispatch._tag === "ExistingSameCommitRecovery") {
-      return owners.sameCommitRecovery({
-        candidate: dispatch.candidate,
-        mergeBase: dispatch.mergeBase,
-        remoteHead: dispatch.remoteHead,
-        target: dispatch.target
-      })
-    }
-    if (dispatch._tag === "ContinueDirectPublication" || dispatch._tag === "ContinueFinality") {
+    if (
+      dispatch._tag === "ContinueDirectPublication" ||
+      dispatch._tag === "ContinueFinality" ||
+      dispatch._tag === "ContinueRunFrontier"
+    ) {
       return owners.ordinaryRun.hint(RunReactivationHint.AcceptedFactPublication())
     }
     return Effect.void
@@ -68,12 +44,12 @@ export const remotePublicationResumeDispatchBoundaryFor = <E, R>(
 })
 
 /** Production-facing exact Run resume operation with the current runtime owners installed. */
-export const resumeRemotePublicationInRuntime = <E, R>(
+export const resumeRemotePublicationInRuntime = (
   candidate: IntegratorRunQualifiedCandidate,
   target: RemotePublicationTarget,
   request: RemotePublicationResumeRequest,
   phaseBoundary: RemotePublicationPhaseBoundary,
-  owners: RemotePublicationResumeRuntimeOwners<E, R>
+  owners: RemotePublicationResumeRuntimeOwners
 ) =>
   resumeRemotePublicationAndDispatch(
     candidate,
