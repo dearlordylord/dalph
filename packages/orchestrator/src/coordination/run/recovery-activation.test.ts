@@ -40,6 +40,7 @@ import { isSafeContinuationRevalidationEligibility } from "../frontier/fresh-fac
 import { UntrackedWorktreePath, PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { OperationId } from "../../workflow/identity.js"
@@ -208,6 +209,10 @@ import { prepareIntegratorAutomaticSuccessorSessionAppend } from "../../workflow
 
 const coverageRunId = RunId.make("recovery-activation-coverage-run")
 const coverageTarget = FixtureTarget.make("recovery-activation-coverage-target")
+const fixtureTargetFrom = (target: TrackerTarget): FixtureTarget => {
+  if (typeof target !== "string") throw new Error("automatic successor fixture must use a fixture tracker target")
+  return target
+}
 const coverageTaskId = TaskId.make("recovery-activation-coverage-task")
 const coverageSpecification = makeTaskWorkSpecification({
   body: "coverage body",
@@ -1014,7 +1019,7 @@ effectIt.effect("reuses exact H2 lineage after fresh activation and publishes th
         true
       ),
       fixture.runId,
-      fixture.accepted.trackerTarget,
+      fixtureTargetFrom(fixture.accepted.trackerTarget),
       runState,
       candidateRecords
     )
@@ -1078,7 +1083,7 @@ effectIt.effect("requires fresh lineage and blocks successor publication after a
         true
       ),
       fixture.runId,
-      fixture.accepted.trackerTarget,
+      fixtureTargetFrom(fixture.accepted.trackerTarget),
       extendedRunState,
       records
     )
@@ -1140,7 +1145,7 @@ effectIt.effect("requires fresh lineage and blocks successor publication after a
         true
       ),
       fixture.runId,
-      fixture.accepted.trackerTarget,
+      fixtureTargetFrom(fixture.accepted.trackerTarget),
       refreshedClaimReduction.runState,
       extendedRecords
     )
@@ -1190,7 +1195,7 @@ effectIt.effect("requires fresh lineage and blocks successor publication after a
         true
       ),
       fixture.runId,
-      fixture.accepted.trackerTarget,
+      fixtureTargetFrom(fixture.accepted.trackerTarget),
       completedReduction.runState,
       extendedRecords
     )

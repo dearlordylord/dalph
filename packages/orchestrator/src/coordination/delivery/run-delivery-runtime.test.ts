@@ -237,6 +237,7 @@ import {
   RemoteBaselineFailure,
   RemoteBaselineGit
 } from "../../workflow/protocols/direct-publication/baseline-events.js"
+import { RemotePublicationGit } from "../../workflow/protocols/direct-publication/events.js"
 
 const deliveryRuntimeResourceCapabilitiesOf = Effect.fn("RunDeliveryRuntimeTest.makeCapabilities")(function* (
   integrationTargets: Parameters<typeof makeCapabilitiesWithAdmission>[0]
@@ -5699,9 +5700,25 @@ it.effect("defers an ambiguous automatic baseline reconciliation to a fresh deli
       const relation = yield* dynamicEvaluationSignal(initial)
       const executorResults = yield* Ref.make<ReadonlyArray<string>>([])
       const pendingPublication = yield* Ref.make(false)
+      const journalContext = yield* Layer.build(
+        liveJournalTestLayer({ records: seedRecords, runId: fixture.runId, target: fixture.accepted.trackerTarget })
+      )
+      const journal = Context.get(journalContext, Journal)
+      const unusedRemotePublicationGit = RemotePublicationGit.of({
+        admit: () => Effect.die("the baseline reconciliation scenario does not publish remotely"),
+        observe: () => Effect.die("the baseline reconciliation scenario does not publish remotely"),
+        prepareSenderCustody: () => Effect.die("the baseline reconciliation scenario does not publish remotely"),
+        push: () => Effect.die("the baseline reconciliation scenario does not publish remotely"),
+        reconcileSenderCustody: () => Effect.die("the baseline reconciliation scenario does not publish remotely")
+      })
       const executor = DeliveryActionExecutor.of({
-        execute: (action, lease) =>
-          executeIntegrationAction(action, transition, lease, fixture.accepted.trackerTarget).pipe(
+        execute: (action, lease) => {
+          if (action._tag !== "IdentityFreeAction") {
+            return Effect.die("the automatic baseline proposal has no materialized operation identity")
+          }
+          return executeIntegrationAction(action, transition, lease, fixture.accepted.trackerTarget).pipe(
+            Effect.provideContext(journalContext),
+            Effect.provideService(RemotePublicationGit, unusedRemotePublicationGit),
             Effect.provideService(RemoteBaselineGit, git),
             Effect.tap((result) => Ref.update(executorResults, (tags) => [...tags, result._tag])),
             Effect.tap((result) =>
@@ -5719,6 +5736,7 @@ it.effect("defers an ambiguous automatic baseline reconciliation to a fresh deli
                 : Effect.void
             )
           )
+        }
       })
       const publication = DeliveryAcceptedFactPublication.of({
         awaitCurrent: Ref.get(acceptedThrough).pipe(
@@ -5739,10 +5757,6 @@ it.effect("defers an ambiguous automatic baseline reconciliation to a fresh deli
         emit: (event) =>
           event._tag === "ActionCompletionPublicationPending" ? Ref.set(pendingPublication, true) : Effect.void
       })
-      const journalContext = yield* Layer.build(
-        liveJournalTestLayer({ records: seedRecords, runId: fixture.runId, target: fixture.accepted.trackerTarget })
-      )
-      const journal = Context.get(journalContext, Journal)
       const runtimeResourceContext = yield* Layer.build(testDeliveryRuntimeResourcesLayer)
       const integrationTargets = Context.get(runtimeResourceContext, DeliveryRuntimeResources).integrationTargets
       yield* integrationTargets.acquire(fixture.accepted.responsibility)
