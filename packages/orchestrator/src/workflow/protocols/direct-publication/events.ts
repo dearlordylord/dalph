@@ -29,6 +29,13 @@ export const RemotePublicationResumeRequest = Schema.Struct({
 })
 export type RemotePublicationResumeRequest = typeof RemotePublicationResumeRequest.Type
 
+/** Distinguishes ordinary publication from a retry authorized by one exact retained-delivery receipt. */
+export const RemotePublicationAttemptAuthorization = Schema.TaggedUnion({
+  InitialAttempt: {},
+  ResumeRequest: { requestId: RemotePublicationResumeRequestId }
+})
+export type RemotePublicationAttemptAuthorization = typeof RemotePublicationAttemptAuthorization.Type
+
 /** Exact ordinary non-force push refspec derived from the candidate and pinned branch. */
 export const RemotePublicationRefspec = Schema.NonEmptyString.pipe(Schema.brand("RemotePublicationRefspec"))
 export type RemotePublicationRefspec = typeof RemotePublicationRefspec.Type
@@ -304,8 +311,8 @@ export const RemotePublicationRetainedEvent = Schema.TaggedStruct("RemotePublica
   cause: RemotePublicationRetainedCause,
   correlation: RemotePublicationCorrelation,
   occurrenceClassification: Schema.Literal("NonActionOccurrence"),
-  /** Links a retry's retained outcome to the exact durable receipt that authorized it. */
-  resumeRequestId: Schema.optionalKey(RemotePublicationResumeRequestId),
+  /** Identifies the ordinary initial attempt or the exact receipt-authorized retry. */
+  authorization: RemotePublicationAttemptAuthorization,
   version: Schema.Literal(workflowJournalEventVersion)
 })
 export type RemotePublicationRetainedEvent = typeof RemotePublicationRetainedEvent.Type

@@ -113,6 +113,7 @@ import {
   remoteBaselineCorrelationFor
 } from "../../workflow/protocols/direct-publication/baseline-events.js"
 import {
+  RemotePublicationAttemptAuthorization,
   RemotePublicationAttemptIntendedEvent,
   RemotePublicationAttemptOrdinal,
   RemotePublicationIntendedEvent,
@@ -1165,6 +1166,7 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
     workflowHistory: { evidence: journalEvidenceFrom([runBegan, ...qualifiedRecords]) }
   }
   const retained = RemotePublicationRetainedEvent.make({
+    authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
     correlation: publicationCorrelation,
     cause: RemotePublicationRetainedCause.cases.AttemptsExhausted.make({}),
     occurrenceClassification: "NonActionOccurrence",
@@ -1198,7 +1200,14 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
       }),
       remotePublicationAttemptIntendedRecordKey(publicationCorrelation.requestId, publicationAttemptOrdinal)
     ),
-    record(13, retained, remotePublicationRetainedRecordKey(publicationCorrelation.requestId))
+    record(
+      13,
+      retained,
+      remotePublicationRetainedRecordKey(
+        publicationCorrelation.requestId,
+        RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({})
+      )
+    )
   ]
   const publicationRuntimeFacts = {
     ...runtimeFacts,

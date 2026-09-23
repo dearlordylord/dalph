@@ -447,10 +447,13 @@ export { establishRemoteBaseline } from "./workflow/protocols/direct-publication
 export { RemoteBaselineHistoryContradiction } from "./workflow/protocols/direct-publication/baseline-transition-journal.js"
 export {
   remotePublicationResumeDispatchOf,
+  resumeRemotePublicationAndDispatch,
   resumeRemotePublication,
   runRemotePublication,
-  type RemotePublicationResumeDispatch
+  type RemotePublicationResumeDispatch,
+  type RemotePublicationResumeDispatchBoundary
 } from "./workflow/protocols/direct-publication/protocol-engine.js"
+export * from "./workflow/protocols/direct-publication/resume-runtime.js"
 export { RemotePublicationAdmissionRejected } from "./workflow/protocols/direct-publication/admission.js"
 export {
   RemotePublicationHistoryContradiction,

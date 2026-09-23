@@ -97,13 +97,13 @@ import {
   RunFinalityEvidence,
   RemotePublicationAdmissionId,
   RemotePublicationAdmissionObservation,
+  RemotePublicationAttemptAuthorization,
   RemotePublicationAttemptOrdinal,
   RemotePublicationCorrelation,
   RemotePublicationRefspec,
   RemotePublicationProofBasis,
   RemotePublicationRetainedCause,
   RemotePublicationResumeRequest,
-  RemotePublicationResumeRequestId,
   RemoteBaselineCorrelation,
   RemoteBaselineObservation,
   LocalTargetCatchUpResult
@@ -404,10 +404,10 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     occurrenceClassification: Schema.Literal("NonActionOccurrence")
   },
   RemotePublicationRetained: {
+    authorization: RemotePublicationAttemptAuthorization,
     cause: RemotePublicationRetainedCause,
     correlation: RemotePublicationCorrelation,
-    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
-    resumeRequestId: Schema.optionalKey(RemotePublicationResumeRequestId)
+    occurrenceClassification: Schema.Literal("NonActionOccurrence")
   },
   RemotePublicationResumeRequested: {
     correlation: RemotePublicationCorrelation,

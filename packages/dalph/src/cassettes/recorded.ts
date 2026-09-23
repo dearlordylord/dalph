@@ -346,10 +346,10 @@ const recordRemotePublicationEntry = (event: RemotePublicationEvent): RecordedRe
     }),
     RemotePublicationRetained: (value): RecordedRemotePublicationEntry => ({
       _tag: "RemotePublicationRetained",
+      authorization: value.authorization,
       cause: value.cause,
       correlation: value.correlation,
-      occurrenceClassification: value.occurrenceClassification,
-      ...(value.resumeRequestId === undefined ? {} : { resumeRequestId: value.resumeRequestId })
+      occurrenceClassification: value.occurrenceClassification
     }),
     RemotePublicationResumeRequested: (value): RecordedRemotePublicationEntry => ({
       _tag: "RemotePublicationResumeRequested",
@@ -513,7 +513,7 @@ const integrationFinalityTags = [
   "PostPromotionBlockerCandidateAncestryObserved",
   "CompletionTaskRequestLookupIntended",
   "CompletionTaskRequestLookupObserved"
-] as const satisfies ReadonlyArray<WorkflowJournalEvent["_tag"] & RecordedCassetteEntry["_tag"]>
+] as const satisfies ReadonlyArray<Extract<WorkflowJournalEvent["_tag"], RecordedCassetteEntry["_tag"]>>
 
 type IntegrationFinalityTag = (typeof integrationFinalityTags)[number]
 type IntegrationFinalityEvent = Extract<WorkflowJournalEvent, { readonly _tag: IntegrationFinalityTag }>
@@ -1446,10 +1446,10 @@ const eventForRemotePublicationEntry = (entry: RecordedRemotePublicationEntry): 
       }),
     RemotePublicationRetained: (value) =>
       RemotePublicationRetainedEvent.make({
+        authorization: value.authorization,
         cause: value.cause,
         correlation: value.correlation,
         occurrenceClassification: value.occurrenceClassification,
-        ...(value.resumeRequestId === undefined ? {} : { resumeRequestId: value.resumeRequestId }),
         version: workflowJournalEventVersion
       }),
     RemotePublicationResumeRequested: (value) =>

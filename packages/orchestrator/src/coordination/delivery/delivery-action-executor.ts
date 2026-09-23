@@ -70,6 +70,11 @@ import type { IntegratorBoundaryUnavailable } from "./integrator-boundary.js"
 import type { runTargetPromotion } from "../../workflow/protocols/target-promotion/protocol.js"
 import type { TargetPromotionRuntimeUnavailable } from "./target-promotion-boundary.js"
 import type { runRemotePublication } from "../../workflow/protocols/direct-publication/protocol-engine.js"
+import type { RemotePublicationResumeRuntimeUnavailable } from "../../workflow/protocols/direct-publication/resume-runtime.js"
+import type {
+  RemotePublicationResumeRequestConflict,
+  RemotePublicationResumeSubjectMismatch
+} from "../../workflow/protocols/direct-publication/errors.js"
 import type { establishRemoteBaseline } from "../../workflow/protocols/direct-publication/baseline-protocol-engine.js"
 import type {
   runCompletionClaimDeletionProtocol,
@@ -242,6 +247,9 @@ export type DeliveryActionExecutionError =
   | EffectFunctionFailure<typeof runTaskClaimReacquisition>
   | EffectFunctionFailure<typeof runTargetPromotion>
   | EffectFunctionFailure<typeof runRemotePublication>
+  | RemotePublicationResumeRuntimeUnavailable
+  | RemotePublicationResumeRequestConflict
+  | RemotePublicationResumeSubjectMismatch
   | EffectFunctionFailure<typeof establishRemoteBaseline>
   | EffectFunctionFailure<typeof runCompletionClaimReplacementProtocol>
   | EffectFunctionFailure<typeof runCompletionClaimDeletionProtocol>

@@ -9,6 +9,7 @@ import { expect, it } from "vitest"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
 import {
+  RemotePublicationAttemptAuthorization,
   RemotePublicationAttemptIntendedEvent,
   RemotePublicationAttemptRejectedNonFastForwardEvent,
   RemotePublicationAttemptOrdinal,
@@ -51,6 +52,7 @@ it("retains a conclusive rejection and rejects orphan, duplicate, wrong-ordinal,
   })
   expect(deriveRemotePublicationState([outerIntent, attempt, rejected])).toMatchObject({
     _tag: "PublicationPending",
+    authorization: { _tag: "InitialAttempt" },
     attemptOrdinals: [1]
   })
   for (const events of [
@@ -178,6 +180,7 @@ it("retains an exact competing head only as the terminal outcome", () => {
     remoteHead: GitCommitSha.make("8888888888888888888888888888888888888888")
   })
   const retained = RemotePublicationRetainedEvent.make({
+    authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
     cause,
     correlation,
     occurrenceClassification: "NonActionOccurrence",
@@ -190,7 +193,7 @@ it("retains an exact competing head only as the terminal outcome", () => {
   })
   expect(deriveRemotePublicationState([outerIntent, retained, attempt])).toEqual({
     _tag: "PublicationContradiction",
-    detail: "publication history contains an event after retained outcome"
+    detail: "publication attempt after retained outcome requires a new exact resume receipt"
   })
 })
 
@@ -200,6 +203,7 @@ it("rejects exhaustion before the exact publication attempt limit", () => {
       outerIntent,
       attempt,
       RemotePublicationRetainedEvent.make({
+        authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
         cause: RemotePublicationRetainedCause.cases.AttemptsExhausted.make({}),
         correlation,
         occurrenceClassification: "NonActionOccurrence",

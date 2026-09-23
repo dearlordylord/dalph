@@ -236,13 +236,6 @@ function completeFieldsWithOptionalRoot<Value extends { readonly rootTaskId?: Ta
 function completeFieldsWithOptionalRoot(value: unknown): unknown {
   return value
 }
-function completeFieldsWithOptionalResumeRequestId<
-  Value extends { readonly resumeRequestId?: RemotePublicationResumeRequestId }
->(value: CompleteFields<Omit<Value, "resumeRequestId">> & Pick<Value, "resumeRequestId">): Value
-function completeFieldsWithOptionalResumeRequestId(value: unknown): unknown {
-  return value
-}
-
 const preserveCassetteValue = <Value>(value: PreservableCassetteValue<Value>): Value => value
 
 const renamed = <Identity>(value: Identity, map: ReadonlyMap<Identity, Identity>): Identity => map.get(value) ?? value
@@ -1829,14 +1822,15 @@ const renameRecordedCassetteEntry = (
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
         }),
       RemotePublicationRetained: (entry) =>
-        completeFieldsWithOptionalResumeRequestId<typeof entry>({
+        completeFields<typeof entry>({
           _tag: "RemotePublicationRetained",
+          authorization:
+            entry.authorization._tag === "InitialAttempt"
+              ? preserveCassetteValue(entry.authorization)
+              : { _tag: "ResumeRequest", requestId: preserveCassetteValue(entry.authorization.requestId) },
           cause: preserveCassetteValue(entry.cause),
           correlation: renameRemotePublicationCorrelation(entry.correlation, maps),
-          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
-          ...(entry.resumeRequestId === undefined
-            ? {}
-            : { resumeRequestId: preserveCassetteValue(entry.resumeRequestId) })
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
         }),
       RemotePublicationResumeRequested: (entry) =>
         completeFields<typeof entry>({

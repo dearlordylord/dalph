@@ -1,13 +1,14 @@
 import { it } from "@effect/vitest"
 import { HashSet, Effect, Ref, Stream } from "effect"
 import { expect } from "vitest"
-import { TaskRevision } from "@dalph/contracts"
+import { GitCommitSha, TaskRevision } from "@dalph/contracts"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import { acceptedJournalPrefixFromValidatedHistory } from "../../workflow-journal/accepted-prefix.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
+import { IntegrationResponsibilityIdentity } from "../../workflow/protocols/integration-admission/responsibility.js"
 import {
   CompletionTaskBoundary,
   PostPromotionBlockerClearAuthorization,
@@ -24,21 +25,35 @@ import { deliveryProposalsOf } from "./delivery-proposal.js"
 import { executeIntegrationAction } from "./integration-delivery-action-adapter.js"
 import { Journal } from "./journal.js"
 import {
+  RemotePublicationAttemptAuthorization,
   RemotePublicationAttemptIntendedEvent,
   RemotePublicationAttemptOrdinal,
   RemotePublicationIntendedEvent,
   RemotePublicationProofBasis,
   RemotePublicationSucceededEvent,
+  RemotePublicationGitObservation,
+  RemotePublicationRetainedCause,
+  RemotePublicationRetainedEvent,
+  RemotePublicationResumeRequest,
+  RemotePublicationResumeRequestId,
+  RemotePublicationResumeRequestedEvent,
   RemotePublicationGit,
   remotePublicationCorrelationFor,
   remotePublicationRefspecFor
 } from "../../workflow/protocols/direct-publication/events.js"
+import {
+  ExistingSameCommitRecoveryOwner,
+  RemotePublicationResumeRuntimeUnavailable,
+  type ExistingSameCommitRecoveryInput
+} from "../../workflow/protocols/direct-publication/resume-runtime.js"
+import { type RunReactivationHint, RunReactivationOwner } from "../run/run-reactivation-owner.js"
 import { RemoteBaselineGit } from "../../workflow/protocols/direct-publication/baseline-events.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
+import { WorkflowActor } from "../../workflow/registry/actor.js"
 import { remotePublicationTargetForTest } from "../../../test/support/direct-publication.js"
 
 const target = FixtureTarget.make("integration-adapter-finality-target")
@@ -197,6 +212,239 @@ const publishedRecordsFor = (): ReadonlyArray<JournalRecord> => {
     }))
   ]
 }
+
+const retainedResumePrefix = () => {
+  const published = publishedRecordsFor()
+  const prefix = published.slice(0, -1)
+  const correlation = remotePublicationCorrelationFor(fixture.qualifiedCandidate, remotePublicationTargetForTest)
+  const request = RemotePublicationResumeRequest.make({
+    requestId: RemotePublicationResumeRequestId.make("integration-adapter-retained-resume"),
+    responsibility: IntegrationResponsibilityIdentity.make({
+      queuedAt: fixture.qualifiedCandidate.run.session.queuedAt,
+      runId: fixture.runId
+    }),
+    runId: fixture.runId,
+    schemaVersion: 1
+  })
+  const retained = RemotePublicationRetainedEvent.make({
+    authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
+    cause: RemotePublicationRetainedCause.cases.AuthenticationDenied.make({}),
+    correlation,
+    occurrenceClassification: "NonActionOccurrence",
+    version: workflowJournalEventVersion
+  })
+  const receipt = RemotePublicationResumeRequestedEvent.make({
+    correlation,
+    initiatedBy: WorkflowActor.cases.Operator.make({}),
+    occurrenceClassification: "InitiatedAction",
+    request,
+    version: workflowJournalEventVersion
+  })
+  const lastPosition = prefix.at(-1)?.position ?? JournalPosition.make(0)
+  const tail = [retained, receipt].map((event, index) => ({
+    event,
+    key: describeJournalEvent(event).expectedKey,
+    position: JournalPosition.make(Number(lastPosition) + index + 1),
+    runId: fixture.runId
+  }))
+  return { records: [...prefix, ...tail], request }
+}
+
+const retainedAfterDeniedResume = () => {
+  const { records, request } = retainedResumePrefix()
+  const correlation = remotePublicationCorrelationFor(fixture.qualifiedCandidate, remotePublicationTargetForTest)
+  const retry = RemotePublicationAttemptIntendedEvent.make({
+    attemptOrdinal: RemotePublicationAttemptOrdinal.make(2),
+    correlation,
+    initiatedBy: { _tag: "DalphCoordinator" },
+    occurrenceClassification: "InitiatedAction",
+    refspec: remotePublicationRefspecFor(fixture.qualifiedCandidate.candidateCommit, correlation.target.branch),
+    version: workflowJournalEventVersion
+  })
+  const retained = RemotePublicationRetainedEvent.make({
+    authorization: RemotePublicationAttemptAuthorization.cases.ResumeRequest.make({ requestId: request.requestId }),
+    cause: RemotePublicationRetainedCause.cases.AuthenticationDenied.make({}),
+    correlation,
+    occurrenceClassification: "NonActionOccurrence",
+    version: workflowJournalEventVersion
+  })
+  return appendJournalEvents(records, [retry, retained])
+}
+
+const appendJournalEvents = (
+  records: ReadonlyArray<JournalRecord>,
+  events: ReadonlyArray<JournalRecord["event"]>
+): ReadonlyArray<JournalRecord> => {
+  const lastPosition = records.at(-1)?.position ?? JournalPosition.make(0)
+  return [
+    ...records,
+    ...events.map((event, index) => ({
+      event,
+      key: describeJournalEvent(event).expectedKey,
+      position: JournalPosition.make(Number(lastPosition) + index + 1),
+      runId: fixture.runId
+    }))
+  ]
+}
+
+const remotePublicationTransition = () =>
+  RunnableFrontierTransition.RunRemotePublication({
+    candidate: fixture.qualifiedCandidate,
+    responsibility,
+    target: remotePublicationTargetForTest
+  })
+
+it.effect("ordinary Run replay hands the exact retained candidate to the existing same-commit owner", () =>
+  Effect.gen(function* () {
+    const { records: initialRecords, request } = retainedResumePrefix()
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(initialRecords)
+    const transition = remotePublicationTransition()
+    const proposal = proposalFor(transition)
+    expect(proposal).toBeDefined()
+    if (proposal === undefined) return yield* Effect.die("missing direct-publication proposal")
+    const action: IdentityFreeAction = { _tag: "IdentityFreeAction", proposal }
+    const boundaryCalls = yield* Ref.make<ReadonlyArray<string>>([])
+    const remoteHead = GitCommitSha.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    const git = RemotePublicationGit.of({
+      admit: () => Effect.die("resume does not re-admit the pinned target"),
+      observe: () =>
+        Ref.update(boundaryCalls, (calls) => [...calls, "observe"]).pipe(
+          Effect.as(
+            RemotePublicationGitObservation.cases.CompatibleCompetingHead.make({
+              mergeBase: fixture.qualifiedCandidate.run.session.expectedTargetHead,
+              remoteHead
+            })
+          )
+        ),
+      prepareSenderCustody: () => Ref.update(boundaryCalls, (calls) => [...calls, "prepare"]),
+      reconcileSenderCustody: () => Ref.update(boundaryCalls, (calls) => [...calls, "custody"]),
+      push: () =>
+        Ref.update(boundaryCalls, (calls) => [...calls, "push"]).pipe(Effect.andThen(Effect.die("unexpected push")))
+    })
+    const handoffs = yield* Ref.make<ReadonlyArray<ExistingSameCommitRecoveryInput>>([])
+    const recoveryOwner = ExistingSameCommitRecoveryOwner.of({
+      recover: (input) => Ref.update(handoffs, (current) => [...current, input])
+    })
+    const hints = yield* Ref.make<ReadonlyArray<RunReactivationHint>>([])
+    const result = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+      Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
+      Effect.provideService(RemotePublicationGit, git),
+      Effect.provideService(ExistingSameCommitRecoveryOwner, recoveryOwner),
+      Effect.provideService(RunReactivationOwner, {
+        hint: (hint) => Ref.update(hints, (current) => [...current, hint])
+      }),
+      Effect.provideService(InRunJournal, appendableJournal(records)),
+      Effect.provideService(Journal, unusedJournal),
+      Effect.provideService(RemoteBaselineGit, unusedRemoteBaselineGit)
+    )
+    expect(result).toMatchObject({ _tag: "ActionCompleted", proposalId: proposal.id })
+    expect(yield* Ref.get(handoffs)).toEqual([
+      {
+        candidate: fixture.qualifiedCandidate,
+        target: remotePublicationTargetForTest,
+        mergeBase: fixture.qualifiedCandidate.run.session.expectedTargetHead,
+        remoteHead
+      }
+    ])
+    expect(yield* Ref.get(hints)).toEqual([])
+    expect(yield* Ref.get(boundaryCalls)).toEqual(["custody", "observe"])
+    const finalRecords = yield* Ref.get(records)
+    expect(finalRecords.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+    expect(finalRecords.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(0)
+    expect(finalRecords.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended")).toHaveLength(1)
+    expect(finalRecords.filter(({ event }) => event._tag === "RemotePublicationResumeRequested")).toHaveLength(1)
+    expect(finalRecords.at(-1)?.event).toMatchObject({
+      _tag: "RemotePublicationRetained",
+      cause: { _tag: "CompatibleCompetingHead" },
+      authorization: { _tag: "ResumeRequest", requestId: request.requestId }
+    })
+  })
+)
+
+it.effect("fails closed on compatible competition when the existing same-commit owner is unavailable", () =>
+  Effect.gen(function* () {
+    const { records: initialRecords } = retainedResumePrefix()
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(initialRecords)
+    const transition = remotePublicationTransition()
+    const proposal = proposalFor(transition)
+    expect(proposal).toBeDefined()
+    if (proposal === undefined) return yield* Effect.die("missing direct-publication proposal")
+    const action: IdentityFreeAction = { _tag: "IdentityFreeAction", proposal }
+    const remoteHead = GitCommitSha.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    const git = RemotePublicationGit.of({
+      admit: () => Effect.die("resume does not re-admit the pinned target"),
+      observe: () =>
+        Effect.succeed(
+          RemotePublicationGitObservation.cases.CompatibleCompetingHead.make({
+            mergeBase: fixture.qualifiedCandidate.run.session.expectedTargetHead,
+            remoteHead
+          })
+        ),
+      prepareSenderCustody: () => Effect.void,
+      reconcileSenderCustody: () => Effect.void,
+      push: () => Effect.die("compatible competition must not push")
+    })
+    const failure = yield* Effect.flip(
+      executeIntegrationAction(action, transition, inertLease, target).pipe(
+        Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
+        Effect.provideService(RemotePublicationGit, git),
+        Effect.provideService(InRunJournal, appendableJournal(records)),
+        Effect.provideService(Journal, unusedJournal),
+        Effect.provideService(RemoteBaselineGit, unusedRemoteBaselineGit)
+      )
+    )
+    expect(failure).toBeInstanceOf(RemotePublicationResumeRuntimeUnavailable)
+    expect((yield* Ref.get(records)).at(-1)?.event).toMatchObject({
+      _tag: "RemotePublicationRetained",
+      cause: { _tag: "CompatibleCompetingHead" }
+    })
+    expect(
+      (yield* Ref.get(records)).filter(({ event }) => event._tag === "RemotePublicationAttemptIntended")
+    ).toHaveLength(1)
+  })
+)
+
+it.effect("ordinary publication replay preserves settled success and conclusive denial without provider work", () =>
+  Effect.gen(function* () {
+    const transition = remotePublicationTransition()
+    const proposal = proposalFor(transition)
+    expect(proposal).toBeDefined()
+    if (proposal === undefined) return yield* Effect.die("missing direct-publication proposal")
+    const action: IdentityFreeAction = { _tag: "IdentityFreeAction", proposal }
+    const git = unusedRemotePublicationGit
+    const runAction = (initial: ReadonlyArray<JournalRecord>) =>
+      Effect.gen(function* () {
+        const records = yield* Ref.make(initial)
+        const result = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+          Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
+          Effect.provideService(RemotePublicationGit, git),
+          Effect.provideService(InRunJournal, appendableJournal(records)),
+          Effect.provideService(Journal, unusedJournal),
+          Effect.provideService(RemoteBaselineGit, unusedRemoteBaselineGit)
+        )
+        return { records: yield* Ref.get(records), result }
+      })
+
+    const settledBefore = publishedRecordsFor()
+    const settled = yield* runAction(settledBefore)
+    expect(settled.result).toMatchObject({ _tag: "ActionCompleted", proposalId: proposal.id })
+    expect(settled.records).toEqual(settledBefore)
+    expect(settled.records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+    expect(settled.records.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(0)
+    expect(settled.records.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended")).toHaveLength(1)
+
+    const retainedBefore = retainedAfterDeniedResume()
+    const retained = yield* runAction(retainedBefore)
+    expect(retained.result).toMatchObject({ _tag: "ActionCompleted", proposalId: proposal.id })
+    expect(retained.records).toEqual(retainedBefore)
+    expect(retained.records.filter(({ event }) => event._tag === "RemotePublicationAttemptIntended")).toHaveLength(2)
+    expect(retained.records.filter(({ event }) => event._tag === "RemotePublicationResumeRequested")).toHaveLength(1)
+    expect(retained.records.at(-1)?.event).toMatchObject({
+      _tag: "RemotePublicationRetained",
+      cause: { _tag: "AuthenticationDenied" }
+    })
+  })
+)
 
 it.effect("defers blocker-clear ancestry without runtime and completes after the configured Git read", () =>
   Effect.gen(function* () {

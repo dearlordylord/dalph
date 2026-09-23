@@ -7542,6 +7542,7 @@ it.effect(
         },
         {
           _tag: "RemotePublicationRetained",
+          authorization: { _tag: "InitialAttempt" },
           cause: { _tag: "PolicyDenied" },
           correlation: publication.correlation,
           occurrenceClassification: "NonActionOccurrence"

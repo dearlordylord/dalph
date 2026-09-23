@@ -53,6 +53,7 @@ import { IntegrationFinalityRuntimeUnavailable } from "./integration-finality-bo
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { integrationExitBoundaryFamilyFor } from "./integration-exit-boundary.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
+import type { RunReactivationHint } from "../run/run-reactivation-owner.js"
 import {
   executeIntegratorAction,
   fixIntegratorSuccessorSession,
@@ -66,9 +67,20 @@ import { readPostPromotionBlockerCandidateAncestry } from "../../workflow/protoc
 import { pendingPromotionStaleIntegrationQuarantineFor } from "../../workflow/protocols/integration-quarantine/promotion-stale.js"
 import {
   PublishedIntegratorRunQualifiedCandidate,
+  remotePublicationCorrelationFor,
   RemotePublicationGit
 } from "../../workflow/protocols/direct-publication/events.js"
 import { runRemotePublication } from "../../workflow/protocols/direct-publication/protocol-engine.js"
+import {
+  remotePublicationEventsFor,
+  validateRemotePublicationState
+} from "../../workflow/protocols/direct-publication/transition-journal.js"
+import {
+  ExistingSameCommitRecoveryOwner,
+  RemotePublicationResumeRuntimeUnavailable,
+  resumeRemotePublicationInRuntime
+} from "../../workflow/protocols/direct-publication/resume-runtime.js"
+import type { RemotePublicationState } from "../../workflow/protocols/direct-publication/state.js"
 import { RemoteBaselineGit } from "../../workflow/protocols/direct-publication/baseline-events.js"
 import { establishRemoteBaseline } from "../../workflow/protocols/direct-publication/baseline-protocol-engine.js"
 
@@ -389,6 +401,22 @@ const executeRemotePublication = Effect.fn("DeliveryAction.runRemotePublication"
 ) {
   const git = yield* RemotePublicationGit
   const acceptedJournal = yield* AcceptedJournalReader
+  const activeResumeRequest = (records: JournalHistorySource) =>
+    Effect.gen(function* () {
+      const correlation = remotePublicationCorrelationFor(transition.candidate, transition.target)
+      const state: RemotePublicationState = yield* validateRemotePublicationState(records, correlation)
+      if (state._tag === "PublicationResumeReady") return state.request
+      if (state._tag !== "PublicationPending" || state.authorization._tag !== "ResumeRequest") return undefined
+      const resumeRequestId = state.authorization.requestId
+      const receipt = remotePublicationEventsFor(records, correlation).find(
+        (event) => event._tag === "RemotePublicationResumeRequested" && event.request.requestId === resumeRequestId
+      )
+      if (receipt?._tag === "RemotePublicationResumeRequested") return receipt.request
+      return yield* new RemotePublicationResumeRuntimeUnavailable({
+        detail: "active publication attempt refers to a missing exact resume receipt",
+        runId: transition.responsibility.plannedAttempt.runId
+      })
+    })
   const publicationSenderPhase = <A, E, R>(phase: Effect.Effect<A, E, R>) =>
     runAtomicDeliveryBoundary(
       lease,
@@ -412,10 +440,45 @@ const executeRemotePublication = Effect.fn("DeliveryAction.runRemotePublication"
   yield* lease.integrationTargets
     .withPermit(
       transition.responsibility,
-      runRemotePublication(transition.candidate, transition.target, {
-        runObservation: (phase) => runAtomicDeliveryBoundary(lease, phase),
-        runSender: publicationSenderPhase
-      }).pipe(Effect.provideService(RemotePublicationGit, git))
+      Effect.gen(function* () {
+        const records = yield* acceptedJournal
+          .readAccepted(transition.responsibility.plannedAttempt.runId)
+          .pipe(Effect.orDie)
+        const request = yield* activeResumeRequest(records)
+        const phaseBoundary = {
+          runObservation: <A, E, R>(phase: Effect.Effect<A, E, R>) => runAtomicDeliveryBoundary(lease, phase),
+          runSender: publicationSenderPhase
+        }
+        if (request === undefined) {
+          return yield* runRemotePublication(transition.candidate, transition.target, phaseBoundary).pipe(
+            Effect.provideService(RemotePublicationGit, git)
+          )
+        }
+        const context = yield* Effect.context<never>()
+        const existingSameCommitOwner = Context.getOption(context, ExistingSameCommitRecoveryOwner)
+        return yield* resumeRemotePublicationInRuntime(
+          transition.candidate,
+          transition.target,
+          request,
+          phaseBoundary,
+          {
+            // The live delivery runtime is already inside the ordinary Run selector. ActionCompleted feeds its next
+            // evaluation; a hint here would enqueue a duplicate activation for the same Run.
+            ordinaryRun: { hint: (_hint: RunReactivationHint) => Effect.void },
+            sameCommitRecovery: (input) =>
+              Option.match(existingSameCommitOwner, {
+                onNone: () =>
+                  Effect.fail(
+                    new RemotePublicationResumeRuntimeUnavailable({
+                      detail: "compatible competing head requires the installed #385 recovery owner",
+                      runId: input.candidate.run.session.plannedAttempt.runId
+                    })
+                  ),
+                onSome: (owner) => owner.recover(input)
+              })
+          }
+        ).pipe(Effect.provideService(RemotePublicationGit, git))
+      })
     )
     .pipe(Effect.ensuring(lease.integrationTargets.release(transition.responsibility).pipe(Effect.ignore)))
   return deliveryActionCompleted(action.proposal.id)
@@ -583,8 +646,10 @@ export const executeIntegrationAction = Effect.fn("DeliveryAction.executeIntegra
     yield* lease.integrationTargets.release(transition.responsibility)
     return deliveryActionCompleted(action.proposal.id)
   }
+  if (transition._tag === "RunRemotePublication") {
+    return yield* executeRemotePublication(action, transition, lease)
+  }
   const execution = executeAdvancedIntegrationAction(action, transition, lease, target)
-  if (transition._tag === "RunRemotePublication") return yield* execution
   return yield* integrationExitBoundaryFamilyFor(transition) === null
     ? execution
     : runAtomicDeliveryBoundary(lease, execution)

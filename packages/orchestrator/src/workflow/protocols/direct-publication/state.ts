@@ -2,12 +2,12 @@ import { Schema } from "effect"
 import {
   RemotePublicationAttemptLimit,
   RemotePublicationAttemptOrdinal,
+  RemotePublicationAttemptAuthorization,
   RemotePublicationCorrelation,
   type RemotePublicationJournalEvent,
   RemotePublicationProofBasis,
   RemotePublicationRetainedCause,
   RemotePublicationResumeRequest,
-  RemotePublicationResumeRequestId,
   remotePublicationAttemptLimit,
   remotePublicationCorrelationEquals,
   remotePublicationRefspecFor
@@ -17,9 +17,9 @@ export const RemotePublicationState = Schema.TaggedUnion({
   PublicationAbsent: {},
   PublicationContradiction: { detail: Schema.String },
   PublicationPending: {
+    authorization: RemotePublicationAttemptAuthorization,
     attemptOrdinals: Schema.Array(RemotePublicationAttemptOrdinal),
-    correlation: RemotePublicationCorrelation,
-    resumeRequestId: Schema.optionalKey(RemotePublicationResumeRequestId)
+    correlation: RemotePublicationCorrelation
   },
   PublicationResumeReady: {
     attemptOrdinals: Schema.Array(RemotePublicationAttemptOrdinal),
@@ -52,7 +52,7 @@ export const remotePublicationRetainedCauseIsResumable = (cause: RemotePublicati
   cause._tag === "TargetMissing"
 
 type ReductionPhase =
-  | { readonly _tag: "Pending"; readonly resumeRequestId?: RemotePublicationResumeRequestId }
+  | { readonly _tag: "Pending"; readonly authorization: RemotePublicationAttemptAuthorization }
   | {
       readonly _tag: "ResumeReady"
       readonly cause: RemotePublicationRetainedCause
@@ -115,7 +115,10 @@ export const deriveRemotePublicationState = (
   if (successes.length > 1) return contradiction("publication history has more than one terminal proof")
 
   const seenResumeRequestIds = new Set<string>()
-  let phase: ReductionPhase = { _tag: "Pending" }
+  let phase: ReductionPhase = {
+    _tag: "Pending",
+    authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({})
+  }
   for (const [index, event] of events.entries()) {
     if (index === 0) continue
     if (phase._tag === "Succeeded") {
@@ -128,9 +131,11 @@ export const deriveRemotePublicationState = (
       if (phase._tag !== "Pending" && phase._tag !== "ResumeReady") {
         return contradiction("publication attempt after retained outcome requires a new exact resume receipt")
       }
-      const resumeRequestId: RemotePublicationResumeRequestId | undefined =
-        phase._tag === "ResumeReady" ? phase.request.requestId : phase.resumeRequestId
-      phase = resumeRequestId === undefined ? { _tag: "Pending" } : { _tag: "Pending", resumeRequestId }
+      const authorization: RemotePublicationAttemptAuthorization =
+        phase._tag === "ResumeReady"
+          ? RemotePublicationAttemptAuthorization.cases.ResumeRequest.make({ requestId: phase.request.requestId })
+          : phase.authorization
+      phase = { _tag: "Pending", authorization }
       continue
     }
     if (event._tag === "RemotePublicationAttemptRejectedNonFastForward") {
@@ -149,8 +154,13 @@ export const deriveRemotePublicationState = (
     }
     if (event._tag === "RemotePublicationRetained") {
       if (phase._tag !== "Pending") return contradiction("publication retained outcome has no active delivery phase")
-      if (event.resumeRequestId !== phase.resumeRequestId) {
-        return contradiction("publication retained outcome must link to its exact active resume receipt")
+      if (
+        event.authorization._tag !== phase.authorization._tag ||
+        (event.authorization._tag === "ResumeRequest" &&
+          (phase.authorization._tag !== "ResumeRequest" ||
+            event.authorization.requestId !== phase.authorization.requestId))
+      ) {
+        return contradiction("publication retained outcome must identify its exact active authorization")
       }
       if (event.cause._tag === "AttemptsExhausted" && attempts.length !== remotePublicationAttemptLimit) {
         return contradiction("publication exhaustion requires the exact accepted attempt limit")
@@ -214,9 +224,9 @@ export const deriveRemotePublicationState = (
   switch (phase._tag) {
     case "Pending":
       return RemotePublicationState.cases.PublicationPending.make({
+        authorization: phase.authorization,
         attemptOrdinals: [...attempts],
-        correlation: intent.correlation,
-        ...(phase.resumeRequestId === undefined ? {} : { resumeRequestId: phase.resumeRequestId })
+        correlation: intent.correlation
       })
     case "ResumeReady":
       return RemotePublicationState.cases.PublicationResumeReady.make({

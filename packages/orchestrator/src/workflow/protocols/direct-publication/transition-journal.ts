@@ -19,10 +19,10 @@ import {
   type RemotePublicationAttemptOrdinal,
   type RemotePublicationCorrelation,
   RemotePublicationIntendedEvent,
+  type RemotePublicationAttemptAuthorization,
   RemotePublicationRetainedEvent,
   RemotePublicationResumeRequestedEvent,
   type RemotePublicationResumeRequest,
-  type RemotePublicationResumeRequestId,
   type RemotePublicationRetainedCause,
   type RemotePublicationProofBasis,
   RemotePublicationSucceededEvent,
@@ -156,16 +156,16 @@ export const appendRemotePublicationAttemptRejection = Effect.fn("RemotePublicat
 export const appendRemotePublicationRetained = Effect.fn("RemotePublication.appendRetained")(function* (
   correlation: RemotePublicationCorrelation,
   cause: RemotePublicationRetainedCause,
-  resumeRequestId?: RemotePublicationResumeRequestId
+  authorization: RemotePublicationAttemptAuthorization
 ) {
   yield* appendRemotePublicationEvent(
     correlation,
-    remotePublicationRetainedRecordKey(correlation.requestId, resumeRequestId),
+    remotePublicationRetainedRecordKey(correlation.requestId, authorization),
     RemotePublicationRetainedEvent.make({
+      authorization,
       cause,
       correlation,
       occurrenceClassification: "NonActionOccurrence",
-      ...(resumeRequestId === undefined ? {} : { resumeRequestId }),
       version: workflowJournalEventVersion
     })
   )

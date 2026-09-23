@@ -42,6 +42,7 @@ import type {
 import type { PlannedAttemptContinuationWitness } from "../workflow/protocols/planned-attempt-continuation/events.js"
 import type {
   RemotePublicationAttemptOrdinal,
+  RemotePublicationAttemptAuthorization,
   RemotePublicationAdmissionId,
   RemotePublicationRequestId,
   RemotePublicationResumeRequestId
@@ -399,12 +400,12 @@ export const remotePublicationSucceededRecordKey = (requestId: RemotePublication
 /** Stable journal key for a conclusive publication wait that preserves its exact candidate. */
 export const remotePublicationRetainedRecordKey = (
   requestId: RemotePublicationRequestId,
-  resumeRequestId?: RemotePublicationResumeRequestId
+  authorization: RemotePublicationAttemptAuthorization
 ): JournalRecordKey =>
   JournalRecordKey.make(
-    resumeRequestId === undefined
+    authorization._tag === "InitialAttempt"
       ? `remote-publication-retained:${requestId}`
-      : `remote-publication:${requestId}:retained-after-resume:${resumeRequestId}`
+      : `remote-publication:${requestId}:retained-after-resume:${authorization.requestId}`
   )
 
 /** Stable key for one exact operator resume receipt of one retained candidate publication. */
