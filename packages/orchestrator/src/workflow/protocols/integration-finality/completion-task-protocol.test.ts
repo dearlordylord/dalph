@@ -1346,7 +1346,9 @@ it.effect("reuses exact Q after positive non-application evidence and stops afte
     expect(
       new Set(
         result.records.flatMap(({ event }) =>
-          "request" in event && event._tag.startsWith("CompletionTask") ? [event.request.operationId] : []
+          event._tag === "CompletionTaskIntended" || event._tag === "CompletionTaskAttemptIntended"
+            ? [event.request.operationId]
+            : []
         )
       ).size
     ).toBe(1)

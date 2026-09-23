@@ -6,6 +6,8 @@ import {
   type RemotePublicationJournalEvent,
   RemotePublicationProofBasis,
   RemotePublicationRetainedCause,
+  RemotePublicationResumeRequest,
+  RemotePublicationResumeRequestId,
   remotePublicationAttemptLimit,
   remotePublicationCorrelationEquals,
   remotePublicationRefspecFor
@@ -16,7 +18,13 @@ export const RemotePublicationState = Schema.TaggedUnion({
   PublicationContradiction: { detail: Schema.String },
   PublicationPending: {
     attemptOrdinals: Schema.Array(RemotePublicationAttemptOrdinal),
-    correlation: RemotePublicationCorrelation
+    correlation: RemotePublicationCorrelation,
+    resumeRequestId: Schema.optionalKey(RemotePublicationResumeRequestId)
+  },
+  PublicationResumeReady: {
+    attemptOrdinals: Schema.Array(RemotePublicationAttemptOrdinal),
+    correlation: RemotePublicationCorrelation,
+    request: RemotePublicationResumeRequest
   },
   PublicationSucceeded: { correlation: RemotePublicationCorrelation, proof: RemotePublicationProofBasis },
   PublicationRetained: { cause: RemotePublicationRetainedCause, correlation: RemotePublicationCorrelation }
@@ -26,8 +34,6 @@ export type RemotePublicationState = typeof RemotePublicationState.Type
 const attemptOrdinalOfProof = (proof: RemotePublicationProofBasis): RemotePublicationAttemptOrdinal =>
   proof.attemptOrdinal
 
-const finalEventOffset = -1
-
 const contiguousAttemptsIssue = (attempts: ReadonlyArray<RemotePublicationAttemptOrdinal>): string | undefined => {
   if (attempts.length > remotePublicationAttemptLimit) return "publication history exceeds the accepted attempt limit"
   for (const [index, ordinal] of attempts.entries()) {
@@ -36,31 +42,48 @@ const contiguousAttemptsIssue = (attempts: ReadonlyArray<RemotePublicationAttemp
   return undefined
 }
 
-/** Reduces one request's durable events without inferring a result from a process exit or missing record. */
+export const remotePublicationRetainedCauseIsResumable = (cause: RemotePublicationRetainedCause): boolean =>
+  cause._tag === "AuthenticationDenied" ||
+  cause._tag === "ObservationUnavailable" ||
+  cause._tag === "PolicyDenied" ||
+  cause._tag === "PushCustodyUnproven" ||
+  cause._tag === "PushEndpointMappingChanged" ||
+  cause._tag === "RemoteDenied" ||
+  cause._tag === "TargetMissing"
+
+type ReductionPhase =
+  | { readonly _tag: "Pending"; readonly resumeRequestId?: RemotePublicationResumeRequestId }
+  | {
+      readonly _tag: "ResumeReady"
+      readonly cause: RemotePublicationRetainedCause
+      readonly request: RemotePublicationResumeRequest
+    }
+  | { readonly _tag: "Retained"; readonly cause: RemotePublicationRetainedCause }
+  | { readonly _tag: "Succeeded"; readonly proof: RemotePublicationProofBasis }
+
+const contradiction = (detail: string): RemotePublicationState =>
+  RemotePublicationState.cases.PublicationContradiction.make({ detail })
+
+/** Reduces one request's durable events without inferring a result from process loss or a missing record. */
 export const deriveRemotePublicationState = (
   events: ReadonlyArray<RemotePublicationJournalEvent>
 ): RemotePublicationState => {
   if (events.length === 0) return RemotePublicationState.cases.PublicationAbsent.make({})
   const intent = events[0]
   if (intent?._tag !== "RemotePublicationIntended") {
-    return RemotePublicationState.cases.PublicationContradiction.make({
-      detail: "publication history must begin with the outer intent"
-    })
+    return contradiction("publication history must begin with the outer intent")
   }
   if (events.filter(({ _tag }) => _tag === "RemotePublicationIntended").length !== 1) {
-    return RemotePublicationState.cases.PublicationContradiction.make({
-      detail: "publication history has more than one outer intent"
-    })
+    return contradiction("publication history has more than one outer intent")
   }
   if (
     events.some(
       (event) => "correlation" in event && !remotePublicationCorrelationEquals(event.correlation, intent.correlation)
     )
   ) {
-    return RemotePublicationState.cases.PublicationContradiction.make({
-      detail: "publication history mixes distinct request correlations"
-    })
+    return contradiction("publication history mixes distinct request correlations")
   }
+
   const attempts = events.flatMap((event) =>
     event._tag === "RemotePublicationAttemptIntended" ? [event.attemptOrdinal] : []
   )
@@ -75,111 +98,143 @@ export const deriveRemotePublicationState = (
           )
     )
   ) {
-    return RemotePublicationState.cases.PublicationContradiction.make({
-      detail: "publication attempt intent refspec must derive from the exact candidate and pinned branch"
-    })
+    return contradiction("publication attempt intent refspec must derive from the exact candidate and pinned branch")
   }
   const attemptIssue = contiguousAttemptsIssue(attempts)
-  if (attemptIssue !== undefined) {
-    return RemotePublicationState.cases.PublicationContradiction.make({ detail: attemptIssue })
-  }
+  if (attemptIssue !== undefined) return contradiction(attemptIssue)
+
   const rejectedOrdinals = new Set(
     events.flatMap((event) =>
       event._tag === "RemotePublicationAttemptRejectedNonFastForward" ? [event.attemptOrdinal] : []
     )
   )
-  for (const [index, event] of events.entries()) {
-    if (event._tag !== "RemotePublicationAttemptRejectedNonFastForward") continue
-    const previous = events[index - 1]
-    if (
-      previous?._tag !== "RemotePublicationAttemptIntended" ||
-      previous.attemptOrdinal !== event.attemptOrdinal ||
-      events.slice(0, index).some((prior) => prior._tag === event._tag && prior.attemptOrdinal === event.attemptOrdinal)
-    ) {
-      return RemotePublicationState.cases.PublicationContradiction.make({
-        detail: "publication rejection requires its exact unmatched preceding attempt intent"
-      })
-    }
-  }
   const successes = events.filter(
     (event): event is Extract<RemotePublicationJournalEvent, { readonly _tag: "RemotePublicationSucceeded" }> =>
       event._tag === "RemotePublicationSucceeded"
   )
-  if (successes.length > 1) {
-    return RemotePublicationState.cases.PublicationContradiction.make({
-      detail: "publication history has more than one terminal proof"
-    })
+  if (successes.length > 1) return contradiction("publication history has more than one terminal proof")
+
+  const seenResumeRequestIds = new Set<string>()
+  let phase: ReductionPhase = { _tag: "Pending" }
+  for (const [index, event] of events.entries()) {
+    if (index === 0) continue
+    if (phase._tag === "Succeeded") {
+      return contradiction("publication history contains an event after terminal proof")
+    }
+    if (event._tag === "RemotePublicationIntended") {
+      return contradiction("publication history has more than one outer intent")
+    }
+    if (event._tag === "RemotePublicationAttemptIntended") {
+      if (phase._tag !== "Pending" && phase._tag !== "ResumeReady") {
+        return contradiction("publication attempt after retained outcome requires a new exact resume receipt")
+      }
+      const resumeRequestId: RemotePublicationResumeRequestId | undefined =
+        phase._tag === "ResumeReady" ? phase.request.requestId : phase.resumeRequestId
+      phase = resumeRequestId === undefined ? { _tag: "Pending" } : { _tag: "Pending", resumeRequestId }
+      continue
+    }
+    if (event._tag === "RemotePublicationAttemptRejectedNonFastForward") {
+      const previous = events[index - 1]
+      if (
+        previous?._tag !== "RemotePublicationAttemptIntended" ||
+        previous.attemptOrdinal !== event.attemptOrdinal ||
+        events
+          .slice(0, index)
+          .some((prior) => prior._tag === event._tag && prior.attemptOrdinal === event.attemptOrdinal)
+      ) {
+        return contradiction("publication rejection requires its exact unmatched preceding attempt intent")
+      }
+      if (phase._tag !== "Pending") return contradiction("publication rejection has no active attempt")
+      continue
+    }
+    if (event._tag === "RemotePublicationRetained") {
+      if (phase._tag !== "Pending") return contradiction("publication retained outcome has no active delivery phase")
+      if (event.resumeRequestId !== phase.resumeRequestId) {
+        return contradiction("publication retained outcome must link to its exact active resume receipt")
+      }
+      if (event.cause._tag === "AttemptsExhausted" && attempts.length !== remotePublicationAttemptLimit) {
+        return contradiction("publication exhaustion requires the exact accepted attempt limit")
+      }
+      phase = { _tag: "Retained", cause: event.cause }
+      continue
+    }
+    if (event._tag === "RemotePublicationResumeRequested") {
+      const previous = events[index - 1]
+      if (phase._tag !== "Retained" || previous?._tag !== "RemotePublicationRetained") {
+        return contradiction("publication resume receipt must immediately follow an exact retained outcome")
+      }
+      const { correlation, request } = event
+      if (
+        request.runId !== correlation.qualifiedCandidate.run.session.plannedAttempt.runId ||
+        request.responsibility.runId !== request.runId ||
+        request.responsibility.queuedAt !== correlation.qualifiedCandidate.run.session.queuedAt
+      ) {
+        return contradiction("publication resume receipt does not identify the exact Run responsibility")
+      }
+      if (seenResumeRequestIds.has(request.requestId)) {
+        return contradiction("publication resume request identity is duplicated")
+      }
+      seenResumeRequestIds.add(request.requestId)
+      const attemptsBeforeReceipt = events
+        .slice(0, index)
+        .filter((prior) => prior._tag === "RemotePublicationAttemptIntended").length
+      phase =
+        remotePublicationRetainedCauseIsResumable(phase.cause) && attemptsBeforeReceipt < remotePublicationAttemptLimit
+          ? { _tag: "ResumeReady", cause: phase.cause, request }
+          : { _tag: "Retained", cause: phase.cause }
+      continue
+    }
+    if (event._tag === "RemotePublicationSucceeded") {
+      if (phase._tag !== "Pending") return contradiction("publication proof has no active delivery phase")
+      const proofOrdinal = attemptOrdinalOfProof(event.proof)
+      if (
+        (event.proof._tag === "PushApplied" || event.proof._tag === "PushUpToDate") &&
+        rejectedOrdinals.has(proofOrdinal)
+      ) {
+        return contradiction("one push attempt cannot both reject and succeed")
+      }
+      const intendedIndex = events.findIndex(
+        (prior) => prior._tag === "RemotePublicationAttemptIntended" && prior.attemptOrdinal === proofOrdinal
+      )
+      if (intendedIndex < 1 || intendedIndex >= index) {
+        return contradiction("publication proof has no exact earlier attempt intent")
+      }
+      if (
+        (event.proof._tag === "PushApplied" ||
+          event.proof._tag === "PushUpToDate" ||
+          event.proof._tag === "ReconciledCandidateCurrent") &&
+        event.proof.remoteHead !== intent.correlation.qualifiedCandidate.candidateCommit
+      ) {
+        return contradiction("current-head publication proof does not identify the exact candidate")
+      }
+      phase = { _tag: "Succeeded", proof: event.proof }
+    }
   }
-  const retained = events.filter(
-    (event): event is Extract<RemotePublicationJournalEvent, { readonly _tag: "RemotePublicationRetained" }> =>
-      event._tag === "RemotePublicationRetained"
-  )
-  if (retained.length > 1 || (retained.length === 1 && successes.length === 1)) {
-    return RemotePublicationState.cases.PublicationContradiction.make({
-      detail: "publication history has more than one terminal outcome"
-    })
+
+  switch (phase._tag) {
+    case "Pending":
+      return RemotePublicationState.cases.PublicationPending.make({
+        attemptOrdinals: [...attempts],
+        correlation: intent.correlation,
+        ...(phase.resumeRequestId === undefined ? {} : { resumeRequestId: phase.resumeRequestId })
+      })
+    case "ResumeReady":
+      return RemotePublicationState.cases.PublicationResumeReady.make({
+        attemptOrdinals: [...attempts],
+        correlation: intent.correlation,
+        request: phase.request
+      })
+    case "Retained":
+      return RemotePublicationState.cases.PublicationRetained.make({
+        cause: phase.cause,
+        correlation: intent.correlation
+      })
+    case "Succeeded":
+      return RemotePublicationState.cases.PublicationSucceeded.make({
+        correlation: intent.correlation,
+        proof: phase.proof
+      })
   }
-  const retainedOutcome = retained[0]
-  if (retainedOutcome !== undefined) {
-    if (events.at(finalEventOffset)?._tag !== "RemotePublicationRetained") {
-      return RemotePublicationState.cases.PublicationContradiction.make({
-        detail: "publication history contains an event after retained outcome"
-      })
-    }
-    if (retainedOutcome.cause._tag === "AttemptsExhausted" && attempts.length !== remotePublicationAttemptLimit) {
-      return RemotePublicationState.cases.PublicationContradiction.make({
-        detail: "publication exhaustion requires the exact accepted attempt limit"
-      })
-    }
-    return RemotePublicationState.cases.PublicationRetained.make({
-      cause: retainedOutcome.cause,
-      correlation: intent.correlation
-    })
-  }
-  const success = successes[0]
-  if (success !== undefined) {
-    if (events.at(finalEventOffset)?._tag !== "RemotePublicationSucceeded") {
-      return RemotePublicationState.cases.PublicationContradiction.make({
-        detail: "publication history contains an event after terminal proof"
-      })
-    }
-    const proofOrdinal = attemptOrdinalOfProof(success.proof)
-    if (
-      (success.proof._tag === "PushApplied" || success.proof._tag === "PushUpToDate") &&
-      rejectedOrdinals.has(proofOrdinal)
-    ) {
-      return RemotePublicationState.cases.PublicationContradiction.make({
-        detail: "one push attempt cannot both reject and succeed"
-      })
-    }
-    const successIndex = events.indexOf(success)
-    const intendedIndex = events.findIndex(
-      (event) => event._tag === "RemotePublicationAttemptIntended" && event.attemptOrdinal === proofOrdinal
-    )
-    if (intendedIndex < 1 || intendedIndex >= successIndex) {
-      return RemotePublicationState.cases.PublicationContradiction.make({
-        detail: "publication proof has no exact earlier attempt intent"
-      })
-    }
-    if (
-      (success.proof._tag === "PushApplied" ||
-        success.proof._tag === "PushUpToDate" ||
-        success.proof._tag === "ReconciledCandidateCurrent") &&
-      success.proof.remoteHead !== intent.correlation.qualifiedCandidate.candidateCommit
-    ) {
-      return RemotePublicationState.cases.PublicationContradiction.make({
-        detail: "current-head publication proof does not identify the exact candidate"
-      })
-    }
-    return RemotePublicationState.cases.PublicationSucceeded.make({
-      correlation: intent.correlation,
-      proof: success.proof
-    })
-  }
-  return RemotePublicationState.cases.PublicationPending.make({
-    attemptOrdinals: [...attempts],
-    correlation: intent.correlation
-  })
 }
 
 export const remotePublicationAttemptsExhausted = (state: RemotePublicationState): boolean =>

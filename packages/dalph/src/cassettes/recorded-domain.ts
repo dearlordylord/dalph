@@ -102,6 +102,8 @@ import {
   RemotePublicationRefspec,
   RemotePublicationProofBasis,
   RemotePublicationRetainedCause,
+  RemotePublicationResumeRequest,
+  RemotePublicationResumeRequestId,
   RemoteBaselineCorrelation,
   RemoteBaselineObservation,
   LocalTargetCatchUpResult
@@ -404,7 +406,14 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
   RemotePublicationRetained: {
     cause: RemotePublicationRetainedCause,
     correlation: RemotePublicationCorrelation,
-    occurrenceClassification: Schema.Literal("NonActionOccurrence")
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    resumeRequestId: Schema.optionalKey(RemotePublicationResumeRequestId)
+  },
+  RemotePublicationResumeRequested: {
+    correlation: RemotePublicationCorrelation,
+    initiatedBy: WorkflowActor.cases.Operator,
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    request: RemotePublicationResumeRequest
   },
   RemoteBaselineReadIntended: {
     correlation: RemoteBaselineCorrelation,

@@ -4,10 +4,30 @@ import type { CoordinatorOwnershipError } from "../../../authorities/coordinator
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { IntegratorRunQualifiedCandidate } from "../integrator/events.js"
 import { WorkflowActor } from "../../registry/actor.js"
+import { IntegrationResponsibilityIdentity } from "../integration-admission/responsibility.js"
 
 /** Stable identity for publication of one exact Integrator-qualified candidate. */
 export const RemotePublicationRequestId = Schema.NonEmptyString.pipe(Schema.brand("RemotePublicationRequestId"))
 export type RemotePublicationRequestId = typeof RemotePublicationRequestId.Type
+
+/** Caller identity for one explicit request to resume the exact retained responsibility. */
+export const RemotePublicationResumeRequestId = Schema.NonEmptyString.pipe(
+  Schema.brand("RemotePublicationResumeRequestId")
+)
+export type RemotePublicationResumeRequestId = typeof RemotePublicationResumeRequestId.Type
+
+export const remotePublicationResumeRequestSchemaVersion = 1 as const
+export const RemotePublicationResumeRequestSchemaVersion = Schema.Literal(remotePublicationResumeRequestSchemaVersion)
+export type RemotePublicationResumeRequestSchemaVersion = typeof RemotePublicationResumeRequestSchemaVersion.Type
+
+/** Exact transport-neutral subject and durable deduplication identity supplied by the resume caller. */
+export const RemotePublicationResumeRequest = Schema.Struct({
+  requestId: RemotePublicationResumeRequestId,
+  responsibility: IntegrationResponsibilityIdentity,
+  runId: RunId,
+  schemaVersion: RemotePublicationResumeRequestSchemaVersion
+})
+export type RemotePublicationResumeRequest = typeof RemotePublicationResumeRequest.Type
 
 /** Exact ordinary non-force push refspec derived from the candidate and pinned branch. */
 export const RemotePublicationRefspec = Schema.NonEmptyString.pipe(Schema.brand("RemotePublicationRefspec"))
@@ -284,9 +304,21 @@ export const RemotePublicationRetainedEvent = Schema.TaggedStruct("RemotePublica
   cause: RemotePublicationRetainedCause,
   correlation: RemotePublicationCorrelation,
   occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+  /** Links a retry's retained outcome to the exact durable receipt that authorized it. */
+  resumeRequestId: Schema.optionalKey(RemotePublicationResumeRequestId),
   version: Schema.Literal(workflowJournalEventVersion)
 })
 export type RemotePublicationRetainedEvent = typeof RemotePublicationRetainedEvent.Type
+
+/** Durable receipt precedes activation; replay of this exact identity cannot authorize another attempt. */
+export const RemotePublicationResumeRequestedEvent = Schema.TaggedStruct("RemotePublicationResumeRequested", {
+  correlation: RemotePublicationCorrelation,
+  initiatedBy: WorkflowActor.cases.Operator,
+  occurrenceClassification: Schema.Literal("InitiatedAction"),
+  request: RemotePublicationResumeRequest,
+  version: Schema.Literal(workflowJournalEventVersion)
+})
+export type RemotePublicationResumeRequestedEvent = typeof RemotePublicationResumeRequestedEvent.Type
 
 /** Exact qualified candidate paired with its durable receiving-branch proof. */
 export const PublishedIntegratorRunQualifiedCandidate = Schema.Struct({
@@ -312,7 +344,8 @@ export const RemotePublicationJournalEvent = Schema.Union([
   RemotePublicationAttemptIntendedEvent,
   RemotePublicationAttemptRejectedNonFastForwardEvent,
   RemotePublicationSucceededEvent,
-  RemotePublicationRetainedEvent
+  RemotePublicationRetainedEvent,
+  RemotePublicationResumeRequestedEvent
 ])
 export type RemotePublicationJournalEvent = typeof RemotePublicationJournalEvent.Type
 

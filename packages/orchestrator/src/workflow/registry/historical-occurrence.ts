@@ -67,6 +67,7 @@ import {
   RemotePublicationAttemptRejectedNonFastForward,
   RemotePublicationRequested,
   RemotePublicationRetained,
+  RemotePublicationResumeRequested,
   RemotePublicationSucceeded
 } from "../protocols/direct-publication/historical-occurrence.js"
 import {
@@ -88,6 +89,7 @@ export {
   RemotePublicationAttemptRejectedNonFastForward,
   RemotePublicationRequested,
   RemotePublicationRetained,
+  RemotePublicationResumeRequested,
   RemotePublicationSucceeded
 } from "../protocols/direct-publication/historical-occurrence.js"
 export {
@@ -413,6 +415,7 @@ export const HistoricalWorkflowOccurrence = Schema.Union([
   RemotePublicationAttemptRejectedNonFastForward,
   RemotePublicationRequested,
   RemotePublicationRetained,
+  RemotePublicationResumeRequested,
   RemotePublicationSucceeded,
   RemoteBaselineReadInitiated,
   RemoteBaselineObserved,

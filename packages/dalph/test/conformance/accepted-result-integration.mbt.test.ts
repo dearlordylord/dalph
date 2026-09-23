@@ -144,11 +144,20 @@ import {
   RemotePublicationObservationFailure,
   RemotePublicationPushFailure,
   RemotePublicationPushResult,
+  RemotePublicationResumeRequest,
+  RemotePublicationResumeRequestId,
   remotePublicationCorrelationFor
 } from "../../../orchestrator/src/workflow/protocols/direct-publication/events.js"
-import { validateRemotePublicationState } from "../../../orchestrator/src/workflow/protocols/direct-publication/transition-journal.js"
+import {
+  remotePublicationEventsFor,
+  validateRemotePublicationState
+} from "../../../orchestrator/src/workflow/protocols/direct-publication/transition-journal.js"
 import { admitRemotePublicationTarget } from "../../../orchestrator/src/workflow/protocols/direct-publication/admission.js"
-import { makeRemotePublicationEngine } from "../../../orchestrator/src/workflow/protocols/direct-publication/protocol-engine.js"
+import {
+  makeRemotePublicationEngine,
+  resumeRemotePublication
+} from "../../../orchestrator/src/workflow/protocols/direct-publication/protocol-engine.js"
+import { integrationResponsibilityIdentity } from "../../../orchestrator/src/workflow/protocols/integration-admission/responsibility.js"
 
 const runId = RunId.make("accepted-result-integration-model-run")
 const target = IntegrationTarget.make({
@@ -264,6 +273,9 @@ type Phase =
   | "PublicationCompetingHead"
   | "PublicationIncompatible"
   | "PublicationNonConvergence"
+  | "PublicationResumeRecorded"
+  | "PublicationResumeReady"
+  | "PublicationResumeReadPending"
   | "Quarantined"
   | "PromotionPremise"
   | "PromotionIntent"
@@ -277,6 +289,7 @@ type Phase =
   | "PromotionSucceeded"
   | "PromotionStale"
   | "PromotionExhausted"
+  | "DeliverySettled"
 
 type IntegratorOutcome = "NoIntegratorOutcome" | "NotPrepared" | "PreparedCandidate"
 
@@ -403,6 +416,18 @@ type ModelResult = {
   readonly publicationEqualContentAccepted: boolean
   readonly publicationProcessSuccessObserved: boolean
   readonly publicationSenderStopped: boolean
+  readonly runIdentity: bigint
+  readonly integrationResponsibilityIdentity: bigint
+  readonly publicationResumeRequestRecorded: boolean
+  readonly publicationResumeRequestRunIdentity: bigint
+  readonly publicationResumeRequestResponsibilityIdentity: bigint
+  readonly publicationResumeRequestIdentity: bigint
+  readonly publicationResumeSchemaVersion: bigint
+  readonly publicationResumePriorPhase: Phase
+  readonly publicationResumePriorObservation: PublicationObservation
+  readonly publicationResumeFactsRefreshed: boolean
+  readonly publicationResumeDispatchCount: bigint
+  readonly publicationResumeActive: boolean
   readonly quarantineRecorded: boolean
   readonly quarantineOccurrenceCount: bigint
   readonly quarantinePosition: bigint
@@ -511,6 +536,18 @@ const initialResult = (id: bigint): ModelResult => ({
   publicationEqualContentAccepted: false,
   publicationProcessSuccessObserved: false,
   publicationSenderStopped: false,
+  runIdentity: 9000n,
+  integrationResponsibilityIdentity: id + 8000n,
+  publicationResumeRequestRecorded: false,
+  publicationResumeRequestRunIdentity: 0n,
+  publicationResumeRequestResponsibilityIdentity: 0n,
+  publicationResumeRequestIdentity: 0n,
+  publicationResumeSchemaVersion: 0n,
+  publicationResumePriorPhase: "NoAcceptedResult",
+  publicationResumePriorObservation: "NoPublicationObservation",
+  publicationResumeFactsRefreshed: false,
+  publicationResumeDispatchCount: 0n,
+  publicationResumeActive: false,
   quarantineRecorded: false,
   quarantineOccurrenceCount: 0n,
   quarantinePosition: 0n,
@@ -611,6 +648,18 @@ const SpecResult = Schema.Struct({
   publicationEqualContentAccepted: Schema.Boolean,
   publicationProcessSuccessObserved: Schema.Boolean,
   publicationSenderStopped: Schema.Boolean,
+  runIdentity: ITFBigInt,
+  integrationResponsibilityIdentity: ITFBigInt,
+  publicationResumeRequestRecorded: Schema.Boolean,
+  publicationResumeRequestRunIdentity: ITFBigInt,
+  publicationResumeRequestResponsibilityIdentity: ITFBigInt,
+  publicationResumeRequestIdentity: ITFBigInt,
+  publicationResumeSchemaVersion: ITFBigInt,
+  publicationResumePriorPhase: Schema.Unknown,
+  publicationResumePriorObservation: Schema.Unknown,
+  publicationResumeFactsRefreshed: Schema.Boolean,
+  publicationResumeDispatchCount: ITFBigInt,
+  publicationResumeActive: Schema.Boolean,
   predecessorPreserved: Schema.Boolean,
   quarantineCause: Schema.Unknown,
   quarantineConflictCount: ITFBigInt,
@@ -666,7 +715,9 @@ const SpecProjection = Schema.Struct({
     targetFactsCurrent: Schema.Boolean,
     targetHeadProof: ITFBigInt,
     targetReacquisitionRequired: Schema.Boolean,
-    trackerFactsCurrent: Schema.Boolean
+    trackerFactsCurrent: Schema.Boolean,
+    runPaused: Schema.Boolean,
+    runExitAdmitted: Schema.Boolean
   })
 })
 
@@ -1566,6 +1617,7 @@ const acceptedResultIntegrationDriver = defineDriver(
     observePublicationUnreadableOne: {},
     observePublicationInsufficientOne: {},
     observePublicationDeniedOne: {},
+    resumeDeniedPublicationOne: {},
     observePublicationThrottledOne: {},
     observePublicationCompetingHeadOne: {},
     observePublicationIncompatibleOne: {},
@@ -1627,6 +1679,8 @@ const acceptedResultIntegrationDriver = defineDriver(
     let targetFactsCurrent = true
     let targetHeadProof = 0n
     let targetReacquisitionRequired = false
+    const runPaused = false
+    const runExitAdmitted = false
     let destinationAdmission = "DestinationUnvalidated"
     let destinationAdmissionIntentRecorded = false
     let destinationEndpoint = 0n
@@ -2224,6 +2278,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         publicationObservation: "NoPublicationObservation",
         publicationObservedRemoteHead: 0n,
         publicationOrdinaryRefspecRequested: false,
+        publicationResumeActive: false,
         publicationSenderStopped: false
       }))
 
@@ -2278,6 +2333,24 @@ const acceptedResultIntegrationDriver = defineDriver(
         publicationResponseAmbiguous: false,
         publicationSenderStopped: true
       }))
+
+    const modelResumeDeniedPublication = (id: bigint): void => {
+      updateModelResult(id, (result) => ({
+        ...result,
+        phase: "PublicationResumeReady",
+        targetHeld: true,
+        publicationResumeRequestRecorded: true,
+        publicationResumeRequestRunIdentity: result.runIdentity,
+        publicationResumeRequestResponsibilityIdentity: result.integrationResponsibilityIdentity,
+        publicationResumeRequestIdentity: 77n,
+        publicationResumeSchemaVersion: 1n,
+        publicationResumePriorPhase: result.phase,
+        publicationResumePriorObservation: result.publicationObservation,
+        publicationResumeFactsRefreshed: true,
+        publicationResumeDispatchCount: result.publicationResumeDispatchCount + 1n,
+        publicationResumeActive: true
+      }))
+    }
 
     const modelPublicationNonFastForward = (id: bigint): void =>
       updateModelResult(id, (result) => ({
@@ -2883,12 +2956,38 @@ const acceptedResultIntegrationDriver = defineDriver(
       const model = modelResultFor(id)
       if (id === 1n && model.phase.startsWith("Promotion")) runtime.assertPromotionAlignment(model)
       const records = runtime.readRecords()
+      const runtimeResumeProjection: Pick<
+        ModelResult,
+        | "publicationResumeRequestRecorded"
+        | "publicationResumeRequestRunIdentity"
+        | "publicationResumeRequestResponsibilityIdentity"
+        | "publicationResumeRequestIdentity"
+        | "publicationResumeSchemaVersion"
+        | "publicationResumePriorPhase"
+        | "publicationResumePriorObservation"
+        | "publicationResumeFactsRefreshed"
+        | "publicationResumeDispatchCount"
+        | "publicationResumeActive"
+      > = {
+        publicationResumeRequestRecorded: false,
+        publicationResumeRequestRunIdentity: 0n,
+        publicationResumeRequestResponsibilityIdentity: 0n,
+        publicationResumeRequestIdentity: 0n,
+        publicationResumeSchemaVersion: 0n,
+        publicationResumePriorPhase: "NoAcceptedResult",
+        publicationResumePriorObservation: "NoPublicationObservation",
+        publicationResumeFactsRefreshed: false,
+        publicationResumeDispatchCount: 0n,
+        publicationResumeActive: false
+      }
+      let projectedResume = runtimeResumeProjection
       if (id === 1n && model.publicationIntentRecorded) {
+        const publicationCorrelation = remotePublicationCorrelationFor(
+          promotionCandidateFor(id),
+          remotePublicationTarget
+        )
         const publication = Effect.runSync(
-          validateRemotePublicationState(
-            records,
-            remotePublicationCorrelationFor(promotionCandidateFor(id), remotePublicationTarget)
-          ).pipe(Effect.orDie)
+          validateRemotePublicationState(records, publicationCorrelation).pipe(Effect.orDie)
         )
         if (publication._tag === "PublicationAbsent") {
           return rejectImpossibleTransition("model publication intent lacks durable runtime intent")
@@ -2904,6 +3003,43 @@ const acceptedResultIntegrationDriver = defineDriver(
         }
         if ((publication._tag === "PublicationSucceeded") !== model.publicationProofRecorded) {
           return rejectImpossibleTransition("model/runtime publication proof mismatch")
+        }
+        const publicationEvents = remotePublicationEventsFor(records, publicationCorrelation)
+        const receipt = publicationEvents.findLast((event) => event._tag === "RemotePublicationResumeRequested")
+        if (receipt?._tag === "RemotePublicationResumeRequested") {
+          const responsibilityIdentity = integrationResponsibilityIdentity(responsibilityFor(id))
+          if (
+            receipt.request.runId !== runId ||
+            receipt.request.responsibility.runId !== responsibilityIdentity.runId ||
+            receipt.request.responsibility.queuedAt !== responsibilityIdentity.queuedAt
+          ) {
+            return rejectImpossibleTransition("runtime resume receipt does not bind the exact Run and responsibility")
+          }
+          const requestOffset = publicationEvents.indexOf(receipt)
+          const priorRetained = publicationEvents
+            .slice(0, requestOffset)
+            .findLast((event) => event._tag === "RemotePublicationRetained")
+          if (priorRetained?._tag !== "RemotePublicationRetained" || priorRetained.cause._tag !== "PolicyDenied") {
+            return rejectImpossibleTransition("resume projection lacks the exact prior policy-denial receipt")
+          }
+          if (!/^[0-9]+$/.test(receipt.request.requestId)) {
+            return rejectImpossibleTransition("model request identity must be numeric for the Quint projection")
+          }
+          const dispatchedAttempt = publicationEvents
+            .slice(requestOffset + 1)
+            .some((event) => event._tag === "RemotePublicationAttemptIntended")
+          projectedResume = {
+            publicationResumeRequestRecorded: true,
+            publicationResumeRequestRunIdentity: model.runIdentity,
+            publicationResumeRequestResponsibilityIdentity: model.integrationResponsibilityIdentity,
+            publicationResumeRequestIdentity: BigInt(receipt.request.requestId),
+            publicationResumeSchemaVersion: BigInt(receipt.request.schemaVersion),
+            publicationResumePriorPhase: "PublicationDenied",
+            publicationResumePriorObservation: "PublicationRemoteDenied",
+            publicationResumeFactsRefreshed: false,
+            publicationResumeDispatchCount: dispatchedAttempt ? 1n : 0n,
+            publicationResumeActive: publication._tag === "PublicationResumeReady"
+          }
         }
       }
       const responsibility = responsibilityFor(id)
@@ -3062,6 +3198,7 @@ const acceptedResultIntegrationDriver = defineDriver(
 
       return {
         ...model,
+        ...projectedResume,
         sessionFixed: actual._tag !== "Absent",
         integratorOutcome:
           resultState._tag === "NotPrepared"
@@ -3101,6 +3238,8 @@ const acceptedResultIntegrationDriver = defineDriver(
       readonly targetFactsCurrent: boolean
       readonly targetHeadProof: bigint
       readonly targetReacquisitionRequired: boolean
+      readonly runPaused: boolean
+      readonly runExitAdmitted: boolean
       readonly results: Map<bigint, ModelResult>
     } => ({
       destinationAdmission,
@@ -3115,6 +3254,8 @@ const acceptedResultIntegrationDriver = defineDriver(
       targetFactsCurrent,
       targetHeadProof,
       targetReacquisitionRequired,
+      runPaused,
+      runExitAdmitted,
       results: new Map([1n, 2n].map((id) => [id, modelStateFor(id)]))
     })
 
@@ -3406,6 +3547,115 @@ const acceptedResultIntegrationDriver = defineDriver(
         Effect.gen(function* () {
           yield* finishPublicationPush(RemotePublicationPushResult.cases.RejectedDefinite.make({ cause: "Policy" }))
           modelPublicationWait(1n, "PublicationDenied", "PublicationRemoteDenied")
+        }),
+      resumeDeniedPublicationOne: () =>
+        Effect.gen(function* () {
+          const model = modelResultFor(1n)
+          if (model.phase !== "PublicationDenied" || model.publicationResumeRequestRecorded) {
+            return rejectImpossibleTransition("resume conformance action requires a fresh policy-denied publication")
+          }
+          const candidate = promotionCandidateFor(1n)
+          const responsibility = responsibilityFor(1n)
+          const identity = integrationResponsibilityIdentity(responsibility)
+          const request = RemotePublicationResumeRequest.make({
+            requestId: RemotePublicationResumeRequestId.make("77"),
+            responsibility: identity,
+            runId,
+            schemaVersion: 1
+          })
+          const calls: Array<string> = []
+          const git = RemotePublicationGit.of({
+            admit: () => Effect.die("resume unexpectedly repeated destination admission"),
+            observe: (gitRequest) =>
+              Effect.sync(() => {
+                calls.push("observe")
+                if (
+                  gitRequest.candidateCommit !== candidate.candidateCommit ||
+                  gitRequest.requestId !==
+                    remotePublicationCorrelationFor(candidate, remotePublicationTarget).requestId ||
+                  gitRequest.target.endpoint !== remotePublicationTarget.endpoint ||
+                  gitRequest.target.branch !== remotePublicationTarget.branch
+                ) {
+                  throw new Error("resume observation escaped the original candidate or pinned target")
+                }
+                return RemotePublicationGitObservation.cases.RemoteAncestorOfCandidate.make({
+                  remoteHead: commitOf(model.expectedTargetHead)
+                })
+              }),
+            prepareSenderCustody: (_gitRequest, ordinal) =>
+              Effect.sync(() => {
+                calls.push(`prepare:${Number(ordinal)}`)
+              }),
+            reconcileSenderCustody: (_gitRequest, ordinal) =>
+              Effect.sync(() => {
+                calls.push(`reconcile:${Number(ordinal)}`)
+              }),
+            push: (gitRequest, ordinal) =>
+              Effect.sync(() => {
+                calls.push(`push:${Number(ordinal)}`)
+                if (
+                  gitRequest.candidateCommit !== candidate.candidateCommit ||
+                  gitRequest.requestId !==
+                    remotePublicationCorrelationFor(candidate, remotePublicationTarget).requestId ||
+                  Number(ordinal) !== Number(model.publicationAttemptCount + 1n)
+                ) {
+                  throw new Error("resume push changed the retained candidate, request, or remaining ordinal")
+                }
+                return RemotePublicationPushResult.cases.Applied.make({ remoteHead: candidate.candidateCommit })
+              })
+          })
+          const beforeIntegratorCalls = runtime.integratorCallCount()
+          const passthrough = <A, E, R>(phase: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> => phase
+          const boundary = { runObservation: passthrough, runSender: passthrough }
+          const execute = () =>
+            resumeRemotePublication(candidate, remotePublicationTarget, request, boundary).pipe(
+              runtime.provideJournal,
+              Effect.provideService(RemotePublicationGit, git)
+            )
+          const resumed = yield* execute()
+          if (
+            resumed._tag !== "PublicationSucceeded" ||
+            resumed.correlation.qualifiedCandidate.candidateCommit !== candidate.candidateCommit ||
+            Number(resumed.proof.attemptOrdinal) !== Number(model.publicationAttemptCount + 1n)
+          ) {
+            return rejectImpossibleTransition("production resume endpoint did not return the exact resumed proof")
+          }
+          const events = remotePublicationEventsFor(runtime.readRecords(), resumed.correlation)
+          const receiptOffset = events.findIndex(
+            (event) =>
+              event._tag === "RemotePublicationResumeRequested" && event.request.requestId === request.requestId
+          )
+          const resumedAttempt = events
+            .slice(receiptOffset + 1)
+            .find((event) => event._tag === "RemotePublicationAttemptIntended")
+          if (
+            receiptOffset < 0 ||
+            resumedAttempt?._tag !== "RemotePublicationAttemptIntended" ||
+            resumedAttempt.attemptOrdinal !== resumed.proof.attemptOrdinal
+          ) {
+            return rejectImpossibleTransition("production resume lacks a durable receipt before its resumed attempt")
+          }
+          const firstCallCount = calls.length
+          const replay = yield* execute()
+          if (calls.length !== firstCallCount || runtime.integratorCallCount() !== beforeIntegratorCalls) {
+            return rejectImpossibleTransition(
+              "exact resume replay dispatched another read, mutation, or Integrator call"
+            )
+          }
+          if (replay._tag !== "PublicationSucceeded") {
+            return rejectImpossibleTransition("exact resume replay did not return the original publication proof")
+          }
+          expect(replay).toEqual(resumed)
+          expect(calls).toEqual(["reconcile:1", "observe", "prepare:2", "push:2"])
+          modelResumeDeniedPublication(1n)
+          modelRecordPublicationAttemptIntent(1n)
+          modelSendPublicationAttempt(1n)
+          modelPublicationProof(1n, "PushApplied", "PublicationApplied", model.submittedCandidate)
+          updateModelResult(1n, (result) => ({
+            ...result,
+            publicationResumeFactsRefreshed: false,
+            publicationResumeActive: false
+          }))
         }),
       observePublicationThrottledOne: () =>
         Effect.gen(function* () {
@@ -4051,6 +4301,62 @@ it.effect(
   30_000
 )
 
+it.effect(
+  "maps the retained publication resume endpoint and exact replay into Quint fields",
+  () =>
+    Effect.gen(function* () {
+      const driver = yield* acceptedResultIntegrationDriver.create()
+      const getState = driver.getState
+      if (getState === undefined) return yield* Effect.die("accepted-result integration driver lacks getState")
+      for (const actionName of [
+        "init",
+        "admitDestinationStep",
+        "acceptResultOne",
+        "queueAcceptedResultOne",
+        "startIntegrationOne",
+        "fixIntegratorSessionOne",
+        "invokeIntegratorOne",
+        "reportIntegratorCandidateOne31",
+        "recordCandidateGitReadIntentOne",
+        "readCandidateGitOne",
+        "observeExactCandidateOne",
+        "offerPublicationPremiseOne",
+        "recordPublicationIntentOne",
+        "observeInitialPublicationRemoteAncestorOfCandidateOne",
+        "sendPublicationAttemptOne",
+        "observePublicationDeniedOne",
+        "resumeDeniedPublicationOne"
+      ] as const) {
+        const action = driver.actions[actionName]
+        if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
+        yield* action.handler({})
+        yield* getState()
+      }
+      const result = (yield* getState()).results.get(1n)
+      expect(result).toMatchObject({
+        phase: "PublicationProved",
+        publicationAttemptCount: 2n,
+        publicationProofRecorded: true,
+        publicationProofBasis: "PushApplied",
+        publicationResumeRequestRecorded: true,
+        publicationResumeRequestRunIdentity: 9000n,
+        publicationResumeRequestResponsibilityIdentity: 8001n,
+        publicationResumeRequestIdentity: 77n,
+        publicationResumeSchemaVersion: 1n,
+        publicationResumePriorPhase: "PublicationDenied",
+        publicationResumePriorObservation: "PublicationRemoteDenied",
+        publicationResumeFactsRefreshed: false,
+        publicationResumeDispatchCount: 1n,
+        publicationResumeActive: false,
+        publicationCandidate: 31n,
+        publicationIntegratorSession: 1n,
+        integratorInvocationCount: 1n,
+        integrationResponsibilityCount: 1n
+      })
+    }),
+  30_000
+)
+
 quintIt(
   it.effect,
   "replays accepted-result integration through the outer Integrator journal and direct Git qualification premise",
@@ -4078,6 +4384,8 @@ quintIt(
                   candidateGitObservation: variantTag(result.candidateGitObservation),
                   publicationProofBasis: variantTag(result.publicationProofBasis),
                   publicationObservation: variantTag(result.publicationObservation),
+                  publicationResumePriorPhase: variantTag(result.publicationResumePriorPhase),
+                  publicationResumePriorObservation: variantTag(result.publicationResumePriorObservation),
                   promotionGitObservation: variantTag(result.promotionGitObservation),
                   quarantineCause: variantTag(result.quarantineCause),
                   quarantineDirection: variantTag(result.quarantineDirection),
@@ -4101,7 +4409,9 @@ quintIt(
           spec.targetFactsCurrent !== implementation.targetFactsCurrent ||
           spec.targetHeadProof !== implementation.targetHeadProof ||
           spec.targetReacquisitionRequired !== implementation.targetReacquisitionRequired ||
-          spec.trackerFactsCurrent !== implementation.trackerFactsCurrent
+          spec.trackerFactsCurrent !== implementation.trackerFactsCurrent ||
+          spec.runPaused !== implementation.runPaused ||
+          spec.runExitAdmitted !== implementation.runExitAdmitted
         ) {
           return false
         }
@@ -4175,6 +4485,19 @@ quintIt(
             expected.publicationEqualContentAccepted === actual.publicationEqualContentAccepted &&
             expected.publicationProcessSuccessObserved === actual.publicationProcessSuccessObserved &&
             expected.publicationSenderStopped === actual.publicationSenderStopped &&
+            expected.runIdentity === actual.runIdentity &&
+            expected.integrationResponsibilityIdentity === actual.integrationResponsibilityIdentity &&
+            expected.publicationResumeRequestRecorded === actual.publicationResumeRequestRecorded &&
+            expected.publicationResumeRequestRunIdentity === actual.publicationResumeRequestRunIdentity &&
+            expected.publicationResumeRequestResponsibilityIdentity ===
+              actual.publicationResumeRequestResponsibilityIdentity &&
+            expected.publicationResumeRequestIdentity === actual.publicationResumeRequestIdentity &&
+            expected.publicationResumeSchemaVersion === actual.publicationResumeSchemaVersion &&
+            expected.publicationResumePriorPhase === actual.publicationResumePriorPhase &&
+            expected.publicationResumePriorObservation === actual.publicationResumePriorObservation &&
+            expected.publicationResumeFactsRefreshed === actual.publicationResumeFactsRefreshed &&
+            expected.publicationResumeDispatchCount === actual.publicationResumeDispatchCount &&
+            expected.publicationResumeActive === actual.publicationResumeActive &&
             expected.predecessorPreserved === actual.predecessorPreserved &&
             expected.quarantineCause === actual.quarantineCause &&
             expected.quarantineConflictCount === actual.quarantineConflictCount &&

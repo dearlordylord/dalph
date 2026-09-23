@@ -355,6 +355,30 @@ user-authorized new batches; #387 owns the retained-delivery resume request.
 seams; the later issues extend these rules without changing the initial
 publication order.
 
+**D28f Retained-delivery resume is exact, durable, and bounded.** A resume
+request names the exact Run, integration responsibility, and request identity.
+Schema or subject mismatch is rejected before journal mutation; exact redelivery
+returns the recorded result and dispatches no second action. A request creates no
+task attempt, Integrator invocation, Begin, or allowance. The ordinary owner
+reconciles unfinished intent and local writer custody, then resumes the same C,
+M, and remaining publication allowance. A conclusive authentication or policy
+denial needs an explicit request and fresh required facts; a repeated denial
+retains work and stops. Throttled mutation is never retried. Resume cannot
+override Pause, Exit, or exhaustion. Compatible competition dispatches to the
+existing same-commit recovery owner. A settled subject returns its actual
+status without work.
+→ `packages/orchestrator/src/workflow/protocols/direct-publication/resume.test.ts`:
+`recovers the same retained resume receipt after restart with memory and reopened SQLite journals`,
+`reconciles the active receipt after an ambiguous push before any later push`,
+`rejects resume schema and exact Run or responsibility mismatches before journal mutation`,
+`deduplicates one resume identity and allows a later distinct repair request within the same allowance`,
+`a persistent denial stops at the accepted attempt limit and cannot be resumed again`,
+`does not retry a throttled publication through a retained resume request`,
+`routes a compatible competing head to the existing same-commit recovery owner`,
+`Pause blocks resume activation until the ordinary owner allows work`,
+`application Exit interrupts resume before observation or a new publication attempt`,
+and `returns settled proof to finality for a new request without appending or dispatching work`.
+
 ## Process and durability
 
 **D29 Authority separation.** Derived frontiers, placements, positions, queues,

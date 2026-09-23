@@ -65,7 +65,9 @@ import {
   remotePublicationRunIdOf,
   type RemotePublicationAdmissionReadIntendedEvent,
   type RemotePublicationAttemptIntendedEvent,
-  type RemotePublicationIntendedEvent
+  type RemotePublicationIntendedEvent,
+  type RemotePublicationResumeRequestedEvent,
+  type RemotePublicationRetainedEvent
 } from "../protocols/direct-publication/events.js"
 import {
   RemoteBaselineCorrelation,
@@ -804,6 +806,7 @@ const nonProjectedJournalEventKinds = {
   RemotePublicationAttemptRejectedNonFastForward: true,
   RemotePublicationIntended: true,
   RemotePublicationRetained: true,
+  RemotePublicationResumeRequested: true,
   RemotePublicationSucceeded: true,
   IntegratorRunCandidateGitObserved: true,
   IntegratorRunCandidateGitReadIntended: true,
@@ -925,6 +928,7 @@ const historicalJournalEventKinds = {
   RemotePublicationAttemptRejectedNonFastForward: true,
   RemotePublicationIntended: true,
   RemotePublicationRetained: true,
+  RemotePublicationResumeRequested: true,
   RemotePublicationSucceeded: true,
   PostPromotionBlockerCandidateAncestryObserved: true,
   PostPromotionBlockerCandidateAncestryReadIntended: true,
@@ -1230,6 +1234,8 @@ type HistoricalProjectionContext = ProjectionContext & {
   readonly integratorCandidateIntents: Map<string, IntegratorCandidateIntentJournalEvent>
   readonly publicationIntents: Map<string, RemotePublicationIntendedEvent>
   readonly publicationAttemptIntents: Map<string, RemotePublicationAttemptIntendedEvent>
+  readonly publicationRetained: Map<string, RemotePublicationRetainedEvent>
+  readonly publicationResumeRequests: Map<string, RemotePublicationResumeRequestedEvent>
   readonly publicationAdmissionReadIntents: Map<string, RemotePublicationAdmissionReadIntendedEvent>
   readonly remoteBaselineReadIntents: Map<string, RemoteBaselineReadIntendedEvent>
   readonly remoteBaselineObservations: Map<string, RemoteBaselineObservedEvent>
@@ -1272,6 +1278,7 @@ const historicalPublicationEventKinds = {
   RemotePublicationAttemptRejectedNonFastForward: true,
   RemotePublicationIntended: true,
   RemotePublicationRetained: true,
+  RemotePublicationResumeRequested: true,
   RemotePublicationSucceeded: true
 } as const
 
@@ -1979,6 +1986,10 @@ type HistoricalPublicationRetainedEvent = Extract<
   HistoricalPublicationEvent,
   { readonly _tag: "RemotePublicationRetained" }
 >
+type HistoricalPublicationResumeRequestedEvent = Extract<
+  HistoricalPublicationEvent,
+  { readonly _tag: "RemotePublicationResumeRequested" }
+>
 
 const publicationAttemptKey = (requestId: string, ordinal: number): string => JSON.stringify([requestId, ordinal])
 
@@ -2140,12 +2151,59 @@ const projectHistoricalPublicationRetained = (
   if (intent === undefined || !remotePublicationCorrelationEquals(intent.correlation, event.correlation)) {
     return historicalFailure(record, "retained publication " + requestId + " has no exact publication intent")
   }
+  if (context.publicationRetained.has(requestId)) {
+    return historicalFailure(record, "publication " + requestId + " was retained twice without a resume receipt")
+  }
+  context.publicationRetained.set(requestId, event)
   return Effect.succeed(
     RemotePublicationRetained.make({
       cause: event.cause,
       correlation: event.correlation,
       occurrenceClassification: event.occurrenceClassification,
       recordedAt: record.position,
+      runId: record.runId
+    })
+  )
+}
+
+const projectHistoricalPublicationResumeRequested = (
+  record: JournalRecord,
+  event: HistoricalPublicationResumeRequestedEvent,
+  context: HistoricalProjectionContext
+): HistoricalProjectionResult => {
+  const publicationRequestId = event.correlation.requestId
+  const receiptId = event.request.requestId
+  const intent = context.publicationIntents.get(publicationRequestId)
+  const retained = context.publicationRetained.get(publicationRequestId)
+  const expectedRunId = remotePublicationRunIdOf(event.correlation)
+  if (
+    record.runId !== expectedRunId ||
+    event.request.runId !== expectedRunId ||
+    event.request.responsibility.runId !== expectedRunId ||
+    event.request.responsibility.queuedAt !== event.correlation.qualifiedCandidate.run.session.queuedAt
+  ) {
+    return historicalFailure(record, "publication resume receipt does not identify the exact Run responsibility")
+  }
+  if (
+    intent === undefined ||
+    retained === undefined ||
+    !remotePublicationCorrelationEquals(intent.correlation, event.correlation) ||
+    !remotePublicationCorrelationEquals(retained.correlation, event.correlation)
+  ) {
+    return historicalFailure(record, "publication resume receipt has no exact retained publication subject")
+  }
+  if (context.publicationResumeRequests.has(receiptId)) {
+    return historicalFailure(record, "duplicate publication resume request identity " + receiptId)
+  }
+  context.publicationResumeRequests.set(receiptId, event)
+  context.publicationRetained.delete(publicationRequestId)
+  return Effect.succeed(
+    HistoricalOccurrence.RemotePublicationResumeRequested.make({
+      correlation: event.correlation,
+      initiatedBy: event.initiatedBy,
+      occurrenceClassification: event.occurrenceClassification,
+      recordedAt: record.position,
+      request: event.request,
       runId: record.runId
     })
   )
@@ -2185,6 +2243,9 @@ const projectHistoricalPublication = (
   }
   if (event._tag === "RemotePublicationRetained") {
     return projectHistoricalPublicationRetained(record, event, context)
+  }
+  if (event._tag === "RemotePublicationResumeRequested") {
+    return projectHistoricalPublicationResumeRequested(record, event, context)
   }
   return projectHistoricalPublicationSucceeded(record, event, context)
 }
@@ -2929,6 +2990,8 @@ export const projectWorkflowOccurrences = Effect.fn("WorkflowOccurrence.project"
     publicationAdmissionReadIntents: new Map<string, RemotePublicationAdmissionReadIntendedEvent>(),
     publicationAttemptIntents: new Map<string, RemotePublicationAttemptIntendedEvent>(),
     publicationIntents: new Map<string, RemotePublicationIntendedEvent>(),
+    publicationRetained: new Map<string, RemotePublicationRetainedEvent>(),
+    publicationResumeRequests: new Map<string, RemotePublicationResumeRequestedEvent>(),
     remoteBaselineReadIntents: new Map<string, RemoteBaselineReadIntendedEvent>(),
     remoteBaselineObservations: new Map<string, RemoteBaselineObservedEvent>(),
     runPublicationTarget: runPublicationTargetFrom(records),

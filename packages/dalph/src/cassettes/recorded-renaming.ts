@@ -101,6 +101,9 @@ import {
   type RemotePublicationAttemptOrdinal,
   type RemotePublicationRefspec,
   type RemotePublicationCorrelation,
+  IntegrationResponsibilityIdentity,
+  RemotePublicationResumeRequest,
+  type RemotePublicationResumeRequestId,
   remotePublicationCorrelationFor,
   type RemotePublicationProofBasis,
   type RemoteBaselineCorrelation,
@@ -175,6 +178,7 @@ type PreservedCassetteBrand =
   | PlannedAttemptExecutorCommandOrdinal
   | PlannedAttemptExecutorCommandProjectionOrdinal
   | PlannedAttemptExecutorStateObservationOrdinal
+  | RemotePublicationResumeRequestId
   | IntegrationTargetRef
   | RemotePublicationAttemptOrdinal
   | RemotePublicationRefspec
@@ -230,6 +234,12 @@ function completeFieldsWithOptionalRoot<Value extends { readonly rootTaskId?: Ta
   value: CompleteFields<Omit<Value, "rootTaskId">> & Pick<Value, "rootTaskId">
 ): Value
 function completeFieldsWithOptionalRoot(value: unknown): unknown {
+  return value
+}
+function completeFieldsWithOptionalResumeRequestId<
+  Value extends { readonly resumeRequestId?: RemotePublicationResumeRequestId }
+>(value: CompleteFields<Omit<Value, "resumeRequestId">> & Pick<Value, "resumeRequestId">): Value
+function completeFieldsWithOptionalResumeRequestId(value: unknown): unknown {
   return value
 }
 
@@ -1819,11 +1829,29 @@ const renameRecordedCassetteEntry = (
           occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
         }),
       RemotePublicationRetained: (entry) =>
-        completeFields<typeof entry>({
+        completeFieldsWithOptionalResumeRequestId<typeof entry>({
           _tag: "RemotePublicationRetained",
           cause: preserveCassetteValue(entry.cause),
           correlation: renameRemotePublicationCorrelation(entry.correlation, maps),
-          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification)
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          ...(entry.resumeRequestId === undefined
+            ? {}
+            : { resumeRequestId: preserveCassetteValue(entry.resumeRequestId) })
+        }),
+      RemotePublicationResumeRequested: (entry) =>
+        completeFields<typeof entry>({
+          _tag: "RemotePublicationResumeRequested",
+          correlation: renameRemotePublicationCorrelation(entry.correlation, maps),
+          initiatedBy: preserveCassetteValue(entry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(entry.occurrenceClassification),
+          request: RemotePublicationResumeRequest.make({
+            ...entry.request,
+            responsibility: IntegrationResponsibilityIdentity.make({
+              queuedAt: entry.request.responsibility.queuedAt,
+              runId: renamed(entry.request.responsibility.runId, maps.runIds)
+            }),
+            runId: renamed(entry.request.runId, maps.runIds)
+          })
         }),
       CompletionClaimReplacementIntended: (entry) =>
         completeFields<typeof entry>({

@@ -15,6 +15,7 @@ import {
   RemotePublicationAttemptRejectedNonFastForwardEvent,
   RemotePublicationIntendedEvent,
   RemotePublicationRetainedEvent,
+  RemotePublicationResumeRequestedEvent,
   RemotePublicationSucceededEvent,
   LocalTargetCatchUpIntendedEvent,
   LocalTargetCatchUpObservedEvent,
@@ -260,6 +261,7 @@ type RemotePublicationEvent = Extract<
       | "RemotePublicationAttemptRejectedNonFastForward"
       | "RemotePublicationSucceeded"
       | "RemotePublicationRetained"
+      | "RemotePublicationResumeRequested"
   }
 >
 type RecordedRemotePublicationEntry = Extract<
@@ -273,6 +275,7 @@ type RecordedRemotePublicationEntry = Extract<
       | "RemotePublicationAttemptRejectedNonFastForward"
       | "RemotePublicationSucceeded"
       | "RemotePublicationRetained"
+      | "RemotePublicationResumeRequested"
   }
 >
 
@@ -283,7 +286,8 @@ const isRemotePublicationEvent = (event: WorkflowJournalEvent): event is RemoteP
   event._tag === "RemotePublicationAttemptIntended" ||
   event._tag === "RemotePublicationAttemptRejectedNonFastForward" ||
   event._tag === "RemotePublicationSucceeded" ||
-  event._tag === "RemotePublicationRetained"
+  event._tag === "RemotePublicationRetained" ||
+  event._tag === "RemotePublicationResumeRequested"
 
 const isRecordedRemotePublicationEntry = (entry: RecordedCassetteEntry): entry is RecordedRemotePublicationEntry =>
   entry._tag === "RemotePublicationAdmissionReadIntended" ||
@@ -292,7 +296,8 @@ const isRecordedRemotePublicationEntry = (entry: RecordedCassetteEntry): entry i
   entry._tag === "RemotePublicationAttemptIntended" ||
   entry._tag === "RemotePublicationAttemptRejectedNonFastForward" ||
   entry._tag === "RemotePublicationSucceeded" ||
-  entry._tag === "RemotePublicationRetained"
+  entry._tag === "RemotePublicationRetained" ||
+  entry._tag === "RemotePublicationResumeRequested"
 
 /** Direct publication facts retain their complete correlation, provenance, and exact proof. */
 const recordRemotePublicationEntry = (event: RemotePublicationEvent): RecordedRemotePublicationEntry =>
@@ -343,7 +348,15 @@ const recordRemotePublicationEntry = (event: RemotePublicationEvent): RecordedRe
       _tag: "RemotePublicationRetained",
       cause: value.cause,
       correlation: value.correlation,
-      occurrenceClassification: value.occurrenceClassification
+      occurrenceClassification: value.occurrenceClassification,
+      ...(value.resumeRequestId === undefined ? {} : { resumeRequestId: value.resumeRequestId })
+    }),
+    RemotePublicationResumeRequested: (value): RecordedRemotePublicationEntry => ({
+      _tag: "RemotePublicationResumeRequested",
+      correlation: value.correlation,
+      initiatedBy: value.initiatedBy,
+      occurrenceClassification: value.occurrenceClassification,
+      request: value.request
     })
   })
 
@@ -1436,6 +1449,15 @@ const eventForRemotePublicationEntry = (entry: RecordedRemotePublicationEntry): 
         cause: value.cause,
         correlation: value.correlation,
         occurrenceClassification: value.occurrenceClassification,
+        ...(value.resumeRequestId === undefined ? {} : { resumeRequestId: value.resumeRequestId }),
+        version: workflowJournalEventVersion
+      }),
+    RemotePublicationResumeRequested: (value) =>
+      RemotePublicationResumeRequestedEvent.make({
+        correlation: value.correlation,
+        initiatedBy: value.initiatedBy,
+        occurrenceClassification: value.occurrenceClassification,
+        request: value.request,
         version: workflowJournalEventVersion
       })
   })
@@ -2086,7 +2108,9 @@ const lyricForRemotePublicationEntry = (entry: RecordedRemotePublicationEntry): 
     RemotePublicationSucceeded: (value) =>
       `The pinned remote destination contains candidate ${value.correlation.qualifiedCandidate.candidateCommit} by ${value.proof._tag}.`,
     RemotePublicationRetained: (value) =>
-      `Dalph retained publication of candidate ${value.correlation.qualifiedCandidate.candidateCommit} after ${value.cause._tag}.`
+      `Dalph retained publication of candidate ${value.correlation.qualifiedCandidate.candidateCommit} after ${value.cause._tag}.`,
+    RemotePublicationResumeRequested: (value) =>
+      `The Operator requested delivery resumption for candidate ${value.correlation.qualifiedCandidate.candidateCommit}.`
   })
 
 const lyricForRemoteBaselineEntry = (entry: RecordedRemoteBaselineEntry): string =>

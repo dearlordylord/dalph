@@ -74,6 +74,92 @@ module acceptedResultIntegrationNegativeTest {
     }
   }
 
+  action forgeForeignPublicationResumeReceipt: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == PublicationDenied,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: PublicationResumeRecorded,
+          publicationResumeRequestRecorded: true,
+          publicationResumeRequestRunIdentity: result.runIdentity + 1,
+          publicationResumeRequestResponsibilityIdentity: result.integrationResponsibilityIdentity + 1,
+          publicationResumeRequestIdentity: 77,
+          publicationResumeSchemaVersion: 1,
+          publicationResumePriorPhase: PublicationDenied,
+          publicationResumePriorObservation: PublicationRemoteDenied,
+        }),
+      },
+    }
+  }
+
+  action forgeWrongSchemaPublicationResumeReceipt: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == PublicationDenied,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: PublicationResumeRecorded,
+          publicationResumeRequestRecorded: true,
+          publicationResumeRequestRunIdentity: result.runIdentity,
+          publicationResumeRequestResponsibilityIdentity: result.integrationResponsibilityIdentity,
+          publicationResumeRequestIdentity: 77,
+          publicationResumeSchemaVersion: PUBLICATION_RESUME_SCHEMA_VERSION + 1,
+          publicationResumePriorPhase: PublicationDenied,
+          publicationResumePriorObservation: PublicationRemoteDenied,
+        }),
+      },
+    }
+  }
+
+  action forceThrottledPublicationResume: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == PublicationResumeRecorded,
+      result.publicationResumePriorPhase == PublicationThrottled,
+      result.publicationResumeRequestRecorded,
+      not(state.runPaused),
+      not(state.runExitAdmitted),
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: PublicationResumeReady,
+          targetHeld: true,
+          publicationResumeFactsRefreshed: true,
+          publicationResumeDispatchCount: 1,
+          publicationResumeActive: true,
+          publicationAttemptCount: result.publicationAttemptCount + 1,
+          publicationLastAttempt: result.publicationLastAttempt + 1,
+        }),
+      },
+    }
+  }
+
+  action forcePublicationResumeWhilePaused: bool = {
+    val result = state.results.get(1)
+    all {
+      state.runPaused,
+      result.phase == PublicationResumeRecorded,
+      result.publicationResumeRequestRecorded,
+      result.publicationResumePriorPhase == PublicationDenied,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: PublicationResumeReady,
+          publicationResumeFactsRefreshed: true,
+          publicationResumeDispatchCount: 1,
+          publicationResumeActive: true,
+        }),
+      },
+    }
+  }
+
   action discardOrdinaryAcceptedResponsibility: bool = {
     val result = state.results.get(1)
     all {
@@ -1433,5 +1519,92 @@ module acceptedResultIntegrationNegativeTest {
       .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
       .then(sendPublicationAttempt(1))
       .then(observePublicationNonConvergence(1).fail())
+  }
+
+  run publicationResumeCannotChangeItsRunOrResponsibilityTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationDenied(1))
+      .then(forgeForeignPublicationResumeReceipt)
+      .expect(not(publicationResumeIdentityIsExact))
+  }
+
+  run publicationResumeCannotAcceptWrongSchemaTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationDenied(1))
+      .then(forgeWrongSchemaPublicationResumeReceipt)
+      .expect(not(publicationResumeIdentityIsExact))
+  }
+
+  run throttledPublicationCannotBeRetriedThroughResumeTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationThrottled(1))
+      .then(recordPublicationResumeRequest(1, 1, 9000, 8001, 78))
+      .then(forceThrottledPublicationResume)
+      .expect(not(publicationResumeRequiresRecoverableDenial))
+  }
+
+  run pausedRunCannotExecuteAcceptedPublicationResumeTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observeInitialPublicationRemoteAncestorOfCandidate(1))
+      .then(sendPublicationAttempt(1))
+      .then(observePublicationDenied(1))
+      .then(recordPublicationResumeRequest(1, 1, 9000, 8001, 79))
+      .then(pauseRun)
+      .then(forcePublicationResumeWhilePaused)
+      .expect(not(publicationResumeCannotOverridePauseOrExit))
   }
 }

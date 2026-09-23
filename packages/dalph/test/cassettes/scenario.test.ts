@@ -62,6 +62,8 @@ import {
   FixtureTarget,
   GitWorktreeReadFailure,
   IntegrationResponsibilityIdentity,
+  RemotePublicationResumeRequest,
+  RemotePublicationResumeRequestId,
   Journal,
   JournalPosition,
   makeFocusedTaskClaimFactsObserved,
@@ -7072,6 +7074,7 @@ it.effect(
         RemotePublicationAttemptRejectedNonFastForward: true,
         RemotePublicationIntended: true,
         RemotePublicationRetained: true,
+        RemotePublicationResumeRequested: true,
         RemotePublicationSucceeded: true,
         PlannedAttemptContinuationAuthorized: true,
         PlannedAttemptReplaced: true,
@@ -7503,6 +7506,16 @@ it.effect(
       ) {
         return yield* Effect.die("direct-publication alpha-renaming fixture requires exact baseline and publication")
       }
+      const publicationRunId = publication.correlation.qualifiedCandidate.run.session.plannedAttempt.runId
+      const resumeRequest = RemotePublicationResumeRequest.make({
+        requestId: RemotePublicationResumeRequestId.make("cassette-alpha-renaming-resume"),
+        responsibility: IntegrationResponsibilityIdentity.make({
+          queuedAt: publication.correlation.qualifiedCandidate.run.session.queuedAt,
+          runId: publicationRunId
+        }),
+        runId: publicationRunId,
+        schemaVersion: 1
+      })
       const directPublicationEntries: ReadonlyArray<RecordedCassetteEntry> = [
         ...directPublicationSeedEntries,
         {
@@ -7529,9 +7542,16 @@ it.effect(
         },
         {
           _tag: "RemotePublicationRetained",
-          cause: { _tag: "AttemptsExhausted" },
+          cause: { _tag: "PolicyDenied" },
           correlation: publication.correlation,
           occurrenceClassification: "NonActionOccurrence"
+        },
+        {
+          _tag: "RemotePublicationResumeRequested",
+          correlation: publication.correlation,
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          request: resumeRequest
         }
       ]
       const fixedSession = completionEntries.find((entry) => entry._tag === "IntegratorSessionFixed")

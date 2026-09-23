@@ -166,6 +166,17 @@ the exact responsibility with a typed safe detail. An ambiguous result is
 separate from a conclusive denial. No automatic denied or throttled retry is
 allowed; #387 owns the later retained-delivery request.
 
+The #387 resume request is transport-neutral and identifies the exact Run,
+integration responsibility, and request identity. Schema and subject mismatches
+stop before a journal append or provider call; exact redelivery returns the
+recorded result. After a conclusive recoverable denial, the ordinary publication
+owner reuses the same candidate and remaining allowance after the required
+intent and custody reconciliation. It does not create another task Begin or
+Integrator call. A compatible competing head is handed to the existing
+same-commit recovery owner; resume does not add another recovery engine.
+Throttling, Pause, Exit, and exhausted allowance remain blocking states, and a
+settled Run returns its recorded status without work.
+
 See [direct remote publication](../scenarios/direct-remote-publication.md) and
 [D28a–D28e](../DELIVERY-INVARIANTS.md#integration-and-promotion) for the
 chronology, bounds, and deferred issue boundaries.

@@ -78,6 +78,7 @@ import {
   remotePublicationAttemptRejectedRecordKey,
   remotePublicationIntendedRecordKey,
   remotePublicationRetainedRecordKey,
+  remotePublicationResumeRequestedRecordKey,
   remotePublicationSucceededRecordKey,
   remoteBaselineReadIntendedRecordKey,
   remoteBaselineObservedRecordKey,
@@ -481,7 +482,11 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
     }),
     RemotePublicationRetained: (event) => ({
       _tag: "GenericEventDescriptor",
-      expectedKey: remotePublicationRetainedRecordKey(event.correlation.requestId)
+      expectedKey: remotePublicationRetainedRecordKey(event.correlation.requestId, event.resumeRequestId)
+    }),
+    RemotePublicationResumeRequested: (event) => ({
+      _tag: "GenericEventDescriptor",
+      expectedKey: remotePublicationResumeRequestedRecordKey(event.correlation.requestId, event.request.requestId)
     }),
     WorktreeCleanupAuthorized: (event) => ({
       _tag: "GenericEventDescriptor",

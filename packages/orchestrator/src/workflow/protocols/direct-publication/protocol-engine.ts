@@ -1,27 +1,87 @@
-import type { RemotePublicationTarget } from "@dalph/contracts"
-import { Effect } from "effect"
+import type { GitCommitSha, RemotePublicationTarget } from "@dalph/contracts"
+import { Effect, Schema } from "effect"
+import { integrationResponsibilityIdentity } from "../integration-admission/responsibility.js"
 import type { IntegratorRunQualifiedCandidate } from "../integrator/events.js"
 import {
   RemotePublicationAttemptOrdinal,
   RemotePublicationGit,
   type RemotePublicationObservationFailure,
   RemotePublicationProofBasis,
+  RemotePublicationResumeRequest,
+  remotePublicationAttemptLimit,
   type RemotePublicationPushFailure,
   RemotePublicationRetainedCause,
   remotePublicationCorrelationFor,
   remotePublicationGitRequestFor
 } from "./events.js"
-import { remotePublicationAttemptsExhausted, RemotePublicationState } from "./state.js"
+import {
+  remotePublicationAttemptsExhausted,
+  remotePublicationRetainedCauseIsResumable,
+  RemotePublicationState,
+  type RemotePublicationState as RemotePublicationStateType
+} from "./state.js"
 import {
   appendRemotePublicationAttemptIntent,
   appendRemotePublicationAttemptRejection,
   appendRemotePublicationIntent,
   appendRemotePublicationRetained,
+  appendRemotePublicationResumeRequest,
   appendRemotePublicationSuccess,
   readAcceptedRemotePublicationEvidence,
+  remotePublicationEventsFor,
   validateRemotePublicationState,
   type CurrentRemotePublicationEvidence
 } from "./transition-journal.js"
+import { RemotePublicationResumeRequestConflict, RemotePublicationResumeSubjectMismatch } from "./errors.js"
+
+/** Post-resume handoff to the existing direct-delivery or same-commit integration owner. */
+export type RemotePublicationResumeDispatch =
+  | {
+      readonly _tag: "ContinueDirectPublication"
+      readonly state: Extract<
+        RemotePublicationStateType,
+        { readonly _tag: "PublicationAbsent" | "PublicationPending" | "PublicationResumeReady" }
+      >
+    }
+  | {
+      readonly _tag: "PublicationStatus"
+      readonly state: Extract<
+        RemotePublicationStateType,
+        { readonly _tag: "PublicationContradiction" | "PublicationRetained" | "PublicationSucceeded" }
+      >
+    }
+  | {
+      readonly _tag: "ExistingSameCommitRecovery"
+      readonly candidate: IntegratorRunQualifiedCandidate
+      readonly target: RemotePublicationTarget
+      readonly mergeBase: GitCommitSha
+      readonly remoteHead: GitCommitSha
+    }
+
+/** Route compatibility recovery to its existing owner without creating another recovery engine. */
+export const remotePublicationResumeDispatchOf = (
+  candidate: IntegratorRunQualifiedCandidate,
+  target: RemotePublicationTarget,
+  state: RemotePublicationStateType
+): RemotePublicationResumeDispatch => {
+  if (state._tag === "PublicationRetained" && state.cause._tag === "CompatibleCompetingHead") {
+    return {
+      _tag: "ExistingSameCommitRecovery",
+      candidate,
+      target,
+      mergeBase: state.cause.mergeBase,
+      remoteHead: state.cause.remoteHead
+    }
+  }
+  if (
+    state._tag === "PublicationAbsent" ||
+    state._tag === "PublicationPending" ||
+    state._tag === "PublicationResumeReady"
+  ) {
+    return { _tag: "ContinueDirectPublication", state }
+  }
+  return { _tag: "PublicationStatus", state }
+}
 
 const lastElementOffset = -1
 
@@ -53,12 +113,24 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
     )
     if (reconstructed._tag === "PublicationSucceeded") return reconstructed
     if (reconstructed._tag === "PublicationRetained") return reconstructed
-    let pendingState =
+    const resumeRequestId =
+      reconstructed._tag === "PublicationResumeReady"
+        ? reconstructed.request.requestId
+        : reconstructed._tag === "PublicationPending"
+          ? reconstructed.resumeRequestId
+          : undefined
+    let pendingState: Extract<RemotePublicationStateType, { readonly _tag: "PublicationPending" }> =
       reconstructed._tag === "PublicationAbsent"
         ? yield* appendRemotePublicationIntent(correlation).pipe(
             Effect.as(RemotePublicationState.cases.PublicationPending.make({ attemptOrdinals: [], correlation }))
           )
-        : reconstructed
+        : reconstructed._tag === "PublicationResumeReady"
+          ? RemotePublicationState.cases.PublicationPending.make({
+              attemptOrdinals: reconstructed.attemptOrdinals,
+              correlation: reconstructed.correlation,
+              resumeRequestId: reconstructed.request.requestId
+            })
+          : reconstructed
     const git = yield* RemotePublicationGit
     const request = remotePublicationGitRequestFor(correlation)
     const prepareAttemptIntent = Effect.fn("RemotePublication.prepareAttemptIntent")(function* (
@@ -69,7 +141,7 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
         .pipe(Effect.match({ onFailure: () => false, onSuccess: () => true }))
       if (!prepared) {
         const cause = RemotePublicationRetainedCause.cases.PushCustodyUnproven.make({})
-        yield* appendRemotePublicationRetained(correlation, cause)
+        yield* appendRemotePublicationRetained(correlation, cause, resumeRequestId)
         return RemotePublicationState.cases.PublicationRetained.make({ cause, correlation })
       }
       yield* appendRemotePublicationAttemptIntent(correlation, attemptOrdinal)
@@ -88,7 +160,7 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
             )
           if (custody._tag === "Unproven") {
             const cause = RemotePublicationRetainedCause.cases.PushCustodyUnproven.make({})
-            yield* appendRemotePublicationRetained(correlation, cause)
+            yield* appendRemotePublicationRetained(correlation, cause, resumeRequestId)
             return { _tag: "Retained" as const, cause }
           }
         }
@@ -100,7 +172,7 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
         )
         if (observationResult._tag === "Unavailable") {
           const cause = retainedCauseForObservationFailure(observationResult.failure)
-          yield* appendRemotePublicationRetained(correlation, cause)
+          yield* appendRemotePublicationRetained(correlation, cause, resumeRequestId)
           return { _tag: "Retained" as const, cause }
         }
         if (
@@ -154,12 +226,12 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
                 ? RemotePublicationRetainedCause.cases.TargetMissing.make({})
                 : undefined
         if (retainedCause !== undefined) {
-          yield* appendRemotePublicationRetained(correlation, retainedCause)
+          yield* appendRemotePublicationRetained(correlation, retainedCause, resumeRequestId)
           return RemotePublicationState.cases.PublicationRetained.make({ cause: retainedCause, correlation })
         }
         if (remotePublicationAttemptsExhausted(pendingState)) {
           const cause = RemotePublicationRetainedCause.cases.AttemptsExhausted.make({})
-          yield* appendRemotePublicationRetained(correlation, cause)
+          yield* appendRemotePublicationRetained(correlation, cause, resumeRequestId)
           return RemotePublicationState.cases.PublicationRetained.make({ cause, correlation })
         }
         const attemptOrdinal = RemotePublicationAttemptOrdinal.make(pendingState.attemptOrdinals.length + 1)
@@ -174,12 +246,13 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
         if (pushResult._tag === "Failure") {
           pendingState = RemotePublicationState.cases.PublicationPending.make({
             attemptOrdinals: [...pendingState.attemptOrdinals, attemptOrdinal],
-            correlation
+            correlation,
+            ...(resumeRequestId === undefined ? {} : { resumeRequestId })
           })
           if (pushResult.failure.reason === "ResponseDeadline" || pushResult.failure.reason === "TransportUnavailable")
             return pendingState
           const cause = retainedCauseForPushFailure(pushResult.failure)
-          yield* appendRemotePublicationRetained(correlation, cause)
+          yield* appendRemotePublicationRetained(correlation, cause, resumeRequestId)
           return RemotePublicationState.cases.PublicationRetained.make({ cause, correlation })
         }
         const { result } = pushResult
@@ -195,7 +268,8 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
           yield* appendRemotePublicationAttemptRejection(correlation, attemptOrdinal)
           pendingState = RemotePublicationState.cases.PublicationPending.make({
             attemptOrdinals: [...pendingState.attemptOrdinals, attemptOrdinal],
-            correlation
+            correlation,
+            ...(resumeRequestId === undefined ? {} : { resumeRequestId })
           })
           return pendingState
         }
@@ -207,13 +281,71 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
               : result.cause === "Policy"
                 ? RemotePublicationRetainedCause.cases.PolicyDenied.make({})
                 : RemotePublicationRetainedCause.cases.RemoteDenied.make({})
-        yield* appendRemotePublicationRetained(correlation, cause)
+        yield* appendRemotePublicationRetained(correlation, cause, resumeRequestId)
         return RemotePublicationState.cases.PublicationRetained.make({ cause, correlation })
       })
     )
   })
-  return { runRemotePublication }
+
+  const resumeRemotePublication = Effect.fn("RemotePublication.resumeRetained")(function* (
+    candidate: IntegratorRunQualifiedCandidate,
+    target: RemotePublicationTarget,
+    unknownRequest: unknown,
+    phaseBoundary: RemotePublicationPhaseBoundary
+  ) {
+    const request = yield* Schema.decodeUnknownEffect(RemotePublicationResumeRequest, { onExcessProperty: "error" })(
+      unknownRequest
+    )
+    const expectedRunId = candidate.run.session.plannedAttempt.runId
+    const expectedResponsibility = integrationResponsibilityIdentity({
+      plannedAttempt: candidate.run.session.plannedAttempt,
+      queuedAt: candidate.run.session.queuedAt
+    })
+    if (
+      request.runId !== expectedRunId ||
+      request.responsibility.runId !== expectedResponsibility.runId ||
+      request.responsibility.queuedAt !== expectedResponsibility.queuedAt
+    ) {
+      return yield* new RemotePublicationResumeSubjectMismatch({ requestId: request.requestId, runId: expectedRunId })
+    }
+
+    const correlation = remotePublicationCorrelationFor(candidate, target)
+    const source = yield* readEvidence(expectedRunId)
+    const state = yield* validateRemotePublicationState(source, correlation)
+    const events = remotePublicationEventsFor(source, correlation)
+    const recordedRequest = events.find(
+      (event) => event._tag === "RemotePublicationResumeRequested" && event.request.requestId === request.requestId
+    )
+    if (recordedRequest?._tag === "RemotePublicationResumeRequested") {
+      const sameRequest = Schema.toEquivalence(RemotePublicationResumeRequest)(recordedRequest.request, request)
+      if (!sameRequest) return yield* new RemotePublicationResumeRequestConflict({ requestId: request.requestId })
+      if (state._tag === "PublicationResumeReady" && state.request.requestId === request.requestId) {
+        return yield* runRemotePublication(candidate, target, phaseBoundary)
+      }
+      const latestEvent = events.at(events.length - 1)
+      if (
+        state._tag === "PublicationPending" &&
+        state.resumeRequestId === request.requestId &&
+        latestEvent?._tag === "RemotePublicationAttemptIntended" &&
+        latestEvent.attemptOrdinal === state.attemptOrdinals.at(state.attemptOrdinals.length - 1)
+      ) {
+        // An acknowledged attempt intent without an outcome is still ambiguous. Re-enter the ordinary
+        // owner so it proves sender custody and reads the pinned head before it can issue another push.
+        return yield* runRemotePublication(candidate, target, phaseBoundary)
+      }
+      return state
+    }
+    if (state._tag !== "PublicationRetained") return state
+    const priorAttemptCount = events.filter((event) => event._tag === "RemotePublicationAttemptIntended").length
+    if (!remotePublicationRetainedCauseIsResumable(state.cause) || priorAttemptCount >= remotePublicationAttemptLimit)
+      return state
+
+    yield* appendRemotePublicationResumeRequest(correlation, request)
+    return yield* runRemotePublication(candidate, target, phaseBoundary)
+  })
+  return { runRemotePublication, resumeRemotePublication }
 }
 
 const RemotePublicationEngine = makeRemotePublicationEngine(readAcceptedRemotePublicationEvidence)
 export const runRemotePublication = RemotePublicationEngine.runRemotePublication
+export const resumeRemotePublication = RemotePublicationEngine.resumeRemotePublication

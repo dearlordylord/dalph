@@ -7,6 +7,7 @@ import {
   remotePublicationAttemptRejectedRecordKey,
   remotePublicationIntendedRecordKey,
   remotePublicationRetainedRecordKey,
+  remotePublicationResumeRequestedRecordKey,
   remotePublicationSucceededRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { InRunJournal } from "../../../workflow-journal/store.js"
@@ -19,6 +20,9 @@ import {
   type RemotePublicationCorrelation,
   RemotePublicationIntendedEvent,
   RemotePublicationRetainedEvent,
+  RemotePublicationResumeRequestedEvent,
+  type RemotePublicationResumeRequest,
+  type RemotePublicationResumeRequestId,
   type RemotePublicationRetainedCause,
   type RemotePublicationProofBasis,
   RemotePublicationSucceededEvent,
@@ -37,6 +41,7 @@ type RemotePublicationTransitionEvent =
   | RemotePublicationAttemptRejectedNonFastForwardEvent
   | RemotePublicationSucceededEvent
   | RemotePublicationRetainedEvent
+  | RemotePublicationResumeRequestedEvent
 
 export const readAcceptedRemotePublicationEvidence = Effect.fn("RemotePublication.readAcceptedEvidence")(function* (
   runId: RunId
@@ -53,7 +58,8 @@ export const remotePublicationEventsFor = (
     ...journalRecordsOfKind(source, "RemotePublicationAttemptIntended"),
     ...journalRecordsOfKind(source, "RemotePublicationAttemptRejectedNonFastForward"),
     ...journalRecordsOfKind(source, "RemotePublicationRetained"),
-    ...journalRecordsOfKind(source, "RemotePublicationSucceeded")
+    ...journalRecordsOfKind(source, "RemotePublicationSucceeded"),
+    ...journalRecordsOfKind(source, "RemotePublicationResumeRequested")
   ]
     .sort((left, right) => Number(left.position) - Number(right.position))
     .flatMap(({ event }) => {
@@ -62,7 +68,8 @@ export const remotePublicationEventsFor = (
           event._tag === "RemotePublicationAttemptIntended" ||
           event._tag === "RemotePublicationAttemptRejectedNonFastForward" ||
           event._tag === "RemotePublicationRetained" ||
-          event._tag === "RemotePublicationSucceeded") &&
+          event._tag === "RemotePublicationSucceeded" ||
+          event._tag === "RemotePublicationResumeRequested") &&
         event.correlation.requestId === correlation.requestId
       ) {
         return [event]
@@ -148,18 +155,39 @@ export const appendRemotePublicationAttemptRejection = Effect.fn("RemotePublicat
 
 export const appendRemotePublicationRetained = Effect.fn("RemotePublication.appendRetained")(function* (
   correlation: RemotePublicationCorrelation,
-  cause: RemotePublicationRetainedCause
+  cause: RemotePublicationRetainedCause,
+  resumeRequestId?: RemotePublicationResumeRequestId
 ) {
   yield* appendRemotePublicationEvent(
     correlation,
-    remotePublicationRetainedRecordKey(correlation.requestId),
+    remotePublicationRetainedRecordKey(correlation.requestId, resumeRequestId),
     RemotePublicationRetainedEvent.make({
       cause,
       correlation,
       occurrenceClassification: "NonActionOccurrence",
+      ...(resumeRequestId === undefined ? {} : { resumeRequestId }),
       version: workflowJournalEventVersion
     })
   )
+})
+
+export const appendRemotePublicationResumeRequest = Effect.fn("RemotePublication.appendResumeRequest")(function* (
+  correlation: RemotePublicationCorrelation,
+  request: RemotePublicationResumeRequest
+) {
+  const event = RemotePublicationResumeRequestedEvent.make({
+    correlation,
+    initiatedBy: WorkflowActor.cases.Operator.make({}),
+    occurrenceClassification: "InitiatedAction",
+    request,
+    version: workflowJournalEventVersion
+  })
+  yield* appendRemotePublicationEvent(
+    correlation,
+    remotePublicationResumeRequestedRecordKey(correlation.requestId, request.requestId),
+    event
+  )
+  return event
 })
 
 export const appendRemotePublicationSuccess = Effect.fn("RemotePublication.appendSuccess")(function* (

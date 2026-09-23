@@ -43,7 +43,8 @@ import type { PlannedAttemptContinuationWitness } from "../workflow/protocols/pl
 import type {
   RemotePublicationAttemptOrdinal,
   RemotePublicationAdmissionId,
-  RemotePublicationRequestId
+  RemotePublicationRequestId,
+  RemotePublicationResumeRequestId
 } from "../workflow/protocols/direct-publication/events.js"
 
 export const workflowRunBeganRecordKey = JournalRecordKey.make("run:began")
@@ -396,8 +397,21 @@ export const remotePublicationSucceededRecordKey = (requestId: RemotePublication
   JournalRecordKey.make(`${remotePublicationRecordKeyPrefix(requestId)}:succeeded`)
 
 /** Stable journal key for a conclusive publication wait that preserves its exact candidate. */
-export const remotePublicationRetainedRecordKey = (requestId: RemotePublicationRequestId): JournalRecordKey =>
-  JournalRecordKey.make(`remote-publication-retained:${requestId}`)
+export const remotePublicationRetainedRecordKey = (
+  requestId: RemotePublicationRequestId,
+  resumeRequestId?: RemotePublicationResumeRequestId
+): JournalRecordKey =>
+  JournalRecordKey.make(
+    resumeRequestId === undefined
+      ? `remote-publication-retained:${requestId}`
+      : `remote-publication:${requestId}:retained-after-resume:${resumeRequestId}`
+  )
+
+/** Stable key for one exact operator resume receipt of one retained candidate publication. */
+export const remotePublicationResumeRequestedRecordKey = (
+  publicationRequestId: RemotePublicationRequestId,
+  resumeRequestId: RemotePublicationResumeRequestId
+): JournalRecordKey => JournalRecordKey.make(`remote-publication:${publicationRequestId}:resume:${resumeRequestId}`)
 
 const targetPromotionRecordKeyPrefix = (requestId: TargetPromotionRequestId): string => `target-promotion:${requestId}`
 
