@@ -52,6 +52,7 @@ import {
   CompletionTaskAcknowledgement,
   CompletionTaskBoundary,
   CompletionTaskClaim,
+  CompletionTaskRequestFailure,
   CompletionTaskRequestLookup,
   controlledTrackerMutationLayer,
   EvidenceStore,
@@ -3283,7 +3284,7 @@ it.effect("retains remote delivery across Pause and Exit", () =>
   )
 )
 
-it.effect("ordinary production Run promotes resumed publication proof and completes from fresh tracker facts", () =>
+it.effect("ordinary production Run retries resumed finality after a lost completion response", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem
@@ -3440,6 +3441,10 @@ it.effect("ordinary production Run promotes resumed publication proof and comple
       const completionRequest = published.completionRequest
       const completionRequestResult = yield* Ref.make<Option.Option<typeof completionRequest>>(Option.none())
       const completionCalls = yield* Ref.make<ReadonlyArray<typeof completionRequest>>([])
+      const completionAppliedCalls = yield* Ref.make(0)
+      const completionAttempts = yield* Ref.make(0)
+      const completionClaimReads = yield* Ref.make<ReadonlyArray<CompletionTaskClaim>>([])
+      const completionLookups = yield* Ref.make<ReadonlyArray<string>>([])
       const remoteCalls = yield* Ref.make<ReadonlyArray<string>>([])
       const integratorCalls = yield* Ref.make<ReadonlyArray<string>>([])
       const executorCommands = yield* Ref.make<ReadonlyArray<string>>([])
@@ -3457,12 +3462,12 @@ it.effect("ordinary production Run promotes resumed publication proof and comple
       const candidateProvider: IntegratorCandidateProviderAuthorityService = {
         readEvidenceRevision: (subject) =>
           Ref.update(candidateEvidenceReads, (count) => count + 1).pipe(
-            Effect.andThen(
-              subject.locator === candidateResource && sessionEquivalence(subject.predecessor, session)
-                ? Effect.succeed(candidateEvidenceRevision)
-                : Effect.die("candidate cleanup requested foreign provider evidence")
-            )
-          ),
+              Effect.andThen(
+                subject.locator === candidateResource && sessionEquivalence(subject.predecessor, session)
+                  ? Effect.succeed(candidateEvidenceRevision)
+                  : Effect.die("candidate cleanup requested foreign provider evidence")
+              )
+            ),
         observe: (authorization) =>
           Ref.update(candidateObservations, (count) => count + 1).pipe(
             Effect.andThen(
@@ -3576,33 +3581,51 @@ it.effect("ordinary production Run promotes resumed publication proof and comple
             Effect.andThen(Ref.get(completionMarker)),
             Effect.flatMap((current) =>
               Option.isSome(current)
-                ? Effect.map(Ref.get(lifecycle), (currentLifecycle) => ({
-                    currentClaim: current.value,
-                    lifecycle: currentLifecycle,
-                    operationId,
-                    target: requestedTarget,
-                    targetMembership: "Member" as const,
-                    taskId,
-                    taskRevision: specification.fingerprint,
-                    trackerRevision: TrackerRevision.make(`resumed-finality:${operationId}`),
-                    unfinishedPrerequisiteTaskIds: []
-                  }))
+                ? Ref.update(completionClaimReads, (claims) => [...claims, current.value]).pipe(
+                    Effect.andThen(
+                      Effect.map(Ref.get(lifecycle), (currentLifecycle) => ({
+                        currentClaim: current.value,
+                        lifecycle: currentLifecycle,
+                        operationId,
+                        target: requestedTarget,
+                        targetMembership: "Member" as const,
+                        taskId,
+                        taskRevision: specification.fingerprint,
+                        trackerRevision: TrackerRevision.make(`resumed-finality:${operationId}`),
+                        unfinishedPrerequisiteTaskIds: []
+                      }))
+                    )
+                  )
                 : Effect.die("fresh completion read requires the exact completion claim")
             )
           ),
         completeTask: (completeRequest) =>
-          Ref.update(completionCalls, (calls) => [...calls, completeRequest]).pipe(
-            Effect.andThen(Ref.set(lifecycle, "CompletedSuccessfully")),
-            Effect.andThen(Ref.set(completionRequestResult, Option.some(completeRequest))),
-            Effect.as(CompletionTaskAcknowledgement.make({ operationId: completeRequest.operationId, taskId }))
-          ),
+          Effect.gen(function* () {
+            yield* Ref.update(completionCalls, (calls) => [...calls, completeRequest])
+            const attempt = yield* Ref.getAndUpdate(completionAttempts, (count) => count + 1)
+            if (attempt === 0) {
+              return yield* Effect.fail(
+                new CompletionTaskRequestFailure({
+                  detail: "the first completion response was lost before application",
+                  outcome: "Unknown",
+                  request: completeRequest
+                })
+              )
+            }
+            yield* Ref.update(completionAppliedCalls, (count) => count + 1)
+            yield* Ref.set(lifecycle, "CompletedSuccessfully")
+            yield* Ref.set(completionRequestResult, Option.some(completeRequest))
+            return CompletionTaskAcknowledgement.make({ operationId: completeRequest.operationId, taskId })
+          }),
         readCompletionRequest: (readRequest) =>
           Ref.get(completionRequestResult).pipe(
-            Effect.map((recorded) =>
+            Effect.flatMap((recorded) => {
+              const lookup =
               Option.isSome(recorded) && recorded.value.operationId === readRequest.operationId
                 ? CompletionTaskRequestLookup.cases.Applied.make({ request: readRequest })
                 : CompletionTaskRequestLookup.cases.NotApplied.make({ request: readRequest })
-            )
+              return Ref.update(completionLookups, (lookups) => [...lookups, lookup._tag]).pipe(Effect.as(lookup))
+            })
           )
       })
       const targetPromotion: TargetPromotionGitService = {
@@ -3700,7 +3723,7 @@ it.effect("ordinary production Run promotes resumed publication proof and comple
           remotePublicationGitLayer: Layer.succeed(RemotePublicationGit, remoteGit),
           remotePublicationTarget: remotePublicationTargetForTest,
           targetPromotion: { git: targetPromotion },
-          workflowCleanupObserver: () => Effect.void
+          workflowCleanupObserver: () => Effect.void,
         }
       ).pipe(
         Layer.provide(Layer.succeed(TrackerGraphReader, TrackerGraphReader.of({
@@ -3735,7 +3758,7 @@ it.effect("ordinary production Run promotes resumed publication proof and comple
         })),
         Effect.provideService(PlannedTaskAttemptPlanner, PlannedTaskAttemptPlanner.of({
           plan: () => Effect.die("resumed finality must not plan another attempt")
-        }))
+        })),
       )
       yield* run.pipe(
         Effect.provide(application),
@@ -3746,6 +3769,8 @@ it.effect("ordinary production Run promotes resumed publication proof and comple
       }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
       const promotions = after.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")
       const completions = after.filter(({ event }) => event._tag === "CompletionTaskAcknowledged")
+      const lostResponses = after.filter(({ event }) => event._tag === "CompletionTaskResponseLost")
+      const requestLookups = after.filter(({ event }) => event._tag === "CompletionTaskRequestLookupObserved")
       const cleanupSettlements = after.filter(({ event }) => event._tag === "IntegratorCandidateCleanupSettled")
       const completeGraphObservations = after.flatMap(({ event }) =>
         event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "CompleteTaskTrackerFacts"
@@ -3757,6 +3782,13 @@ it.effect("ordinary production Run promotes resumed publication proof and comple
       expect(completions).toHaveLength(1)
       expect(completions[0]?.event).toMatchObject({
         acknowledgement: { operationId: completionRequest.operationId, taskId }
+      })
+      expect(lostResponses).toHaveLength(1)
+      expect(lostResponses[0]?.event).toMatchObject({ attemptOrdinal: 1, request: completionRequest })
+      expect(requestLookups).toHaveLength(1)
+      expect(requestLookups[0]?.event).toMatchObject({
+        lookup: { _tag: "NotApplied", request: completionRequest },
+        request: completionRequest
       })
       expect(cleanupSettlements).toHaveLength(1)
       expect(cleanupSettlements[0]?.event).toMatchObject({
@@ -3800,7 +3832,14 @@ it.effect("ordinary production Run promotes resumed publication proof and comple
       expect(yield* Ref.get(remoteCalls)).toEqual([])
       expect(yield* Ref.get(integratorCalls)).toEqual([])
       expect(yield* Ref.get(executorCommands)).toEqual([])
-      expect(yield* Ref.get(completionCalls)).toEqual([completionRequest])
+      expect(yield* Ref.get(completionCalls)).toEqual([completionRequest, completionRequest])
+      expect(yield* Ref.get(completionAppliedCalls)).toBe(1)
+      expect(yield* Ref.get(completionAttempts)).toBe(2)
+      const currentCompletionClaims = yield* Ref.get(completionClaimReads)
+      expect(currentCompletionClaims.length).toBeGreaterThanOrEqual(3)
+      expect(currentCompletionClaims.every((observed) => completionTaskClaimEquals(observed, completionRequest.claim))).toBe(
+        true
+      )
       expect(yield* Ref.get(completionReads)).toBeGreaterThan(0)
       expect(yield* Ref.get(trackerReads)).toBeGreaterThan(0)
       expect(yield* Ref.get(lifecycle)).toBe("CompletedSuccessfully")

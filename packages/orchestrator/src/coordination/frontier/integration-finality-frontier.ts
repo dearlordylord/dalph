@@ -259,10 +259,16 @@ const completionTaskTransitionsFor = (
   if (focusedSuccess !== undefined) return []
   const confirmation = latestCompletionConfirmationFor(records, request)
   const completeGraphAt = latestCompleteGraphPosition(records)
-  const lookupTransitions = decisiveLookupTransitionsFor(lookup, completeGraphAt, request, responsibility)
-  if (lookupTransitions !== undefined) return lookupTransitions
   const outcome = latestCompletionTaskOutcomeFor(records, request)
-  const confirmationRequiredAfter = confirmationRequiredAfterFor(lookup, outcome)
+  const lookupIsNewerThanOutcome = lookup !== undefined && (outcome === undefined || lookup.position > outcome.position)
+  const lookupTransitions = lookupIsNewerThanOutcome
+    ? decisiveLookupTransitionsFor(lookup, completeGraphAt, request, responsibility)
+    : undefined
+  if (lookupTransitions !== undefined) return lookupTransitions
+  const confirmationRequiredAfter = confirmationRequiredAfterFor(
+    lookupIsNewerThanOutcome ? lookup : undefined,
+    outcome
+  )
   if (confirmationRequiredAfter !== undefined) {
     return confirmationTransitionsAfter(
       confirmation,
