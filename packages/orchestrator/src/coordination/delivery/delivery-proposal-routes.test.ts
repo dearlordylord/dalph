@@ -1306,9 +1306,7 @@ const completionPromotionRuntime = TargetPromotionRuntime.of({
 
 type AutomaticS2ProviderQuarantineTransition = Extract<
   Transition,
-  {
-    readonly _tag: "RunIntegrator" | "RecordProviderRunFailureIntegrationQuarantine"
-  }
+  { readonly _tag: "RunIntegrator" | "RecordProviderRunFailureIntegrationQuarantine" }
 >
 
 describe("delivery proposal route matrix", () => {
