@@ -90,7 +90,10 @@ import {
   remotePublicationGitLayerForProductionTest,
   remotePublicationTargetForTest
 } from "../../../orchestrator/test/support/direct-publication.js"
-import { RemotePublicationGit } from "../../../orchestrator/src/workflow/protocols/direct-publication/events.js"
+import {
+  RemotePublicationGit,
+  RemotePublicationPushFailure
+} from "../../../orchestrator/src/workflow/protocols/direct-publication/events.js"
 
 type TrackerClaim = ActiveTaskClaim | UnclaimedTask
 const hasEventTag =
@@ -103,10 +106,12 @@ const maxActivationPasses = 64
 const runHermeticMvpJourney = (
   crashAfterPromotion: boolean,
   competingHeadBeforeDiscovery = false,
-  competingHeadBetweenDiscoveryAndPush = false
+  competingHeadBetweenDiscoveryAndPush = false,
+  competingHeadAfterLostPushResponse = false
 ) =>
   Effect.gen(function* () {
-    const competingHeadRace = competingHeadBeforeDiscovery || competingHeadBetweenDiscoveryAndPush
+    const competingHeadRace =
+      competingHeadBeforeDiscovery || competingHeadBetweenDiscoveryAndPush || competingHeadAfterLostPushResponse
     const fileSystem = yield* FileSystem.FileSystem
     const git = yield* GitCommand
     const childProcesses = yield* ChildProcessSpawner.ChildProcessSpawner
@@ -245,6 +250,8 @@ const runHermeticMvpJourney = (
       const publicationObserved = yield* Ref.make(false)
       const publicationPushed = yield* Ref.make(false)
       const outsideHeadPublished = yield* Ref.make(false)
+      const lostPushResponseReturned = yield* Ref.make(false)
+      const lostPushResponseCount = yield* Ref.make(0)
       const remotePublicationGitLayer = yield* Effect.gen(function* () {
         if (!competingHeadRace) return remotePublicationGitLayerForProductionTest
         const publicationGitCommand = yield* GitCommand.pipe(
@@ -280,11 +287,34 @@ const runHermeticMvpJourney = (
                   )
                   yield* Ref.set(outsideHeadPublished, true)
                 }
+                if (competingHeadAfterLostPushResponse && (yield* Ref.get(lostPushResponseReturned))) {
+                  const alreadyPublished = yield* Ref.get(outsideHeadPublished)
+                  if (!alreadyPublished) {
+                    if (competingHead === undefined) return yield* Effect.die("automatic S2 lacked outside H2")
+                    yield* runInWorktree(
+                      git,
+                      repository,
+                      ["push", "target", `${competingHead}:refs/heads/master`],
+                      "publish outside H2 after the lost publication response"
+                    )
+                    yield* Ref.set(outsideHeadPublished, true)
+                  }
+                }
                 return yield* gitAuthority.observe(request)
               }),
             push: (request, attemptOrdinal) =>
               Effect.gen(function* () {
                 const alreadyPushed = yield* Ref.getAndSet(publicationPushed, true)
+                if (!alreadyPushed && competingHeadAfterLostPushResponse) {
+                  if (!(yield* Ref.get(publicationObserved))) {
+                    return yield* Effect.die("lost-response S2 must follow the initial publication discovery read")
+                  }
+                  yield* Ref.update(lostPushResponseCount, (count) => count + 1)
+                  yield* Ref.set(lostPushResponseReturned, true)
+                  return yield* Effect.fail(
+                    new RemotePublicationPushFailure({ reason: "ResponseDeadline", target: request.target })
+                  )
+                }
                 if (!alreadyPushed && competingHeadBetweenDiscoveryAndPush) {
                   if (competingHead === undefined) return yield* Effect.die("automatic S2 lacked outside H2")
                   if (!(yield* Ref.get(publicationObserved))) {
@@ -908,8 +938,43 @@ const runHermeticMvpJourney = (
           _tag: "RemotePublicationRetained",
           cause: { _tag: "CompatibleCompetingHead", remoteHead: competingHead }
         })
+        const automaticAuthorization = records.find(hasEventTag("IntegratorCompetingHeadSuccessorAuthorized"))
+        const automaticSessionFixation = records.find(hasEventTag("IntegratorAutomaticSuccessorSessionFixed"))
+        if (
+          retained?.event._tag !== "RemotePublicationRetained" ||
+          automaticAuthorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
+          automaticSessionFixation?.event._tag !== "IntegratorAutomaticSuccessorSessionFixed"
+        ) {
+          return yield* Effect.die("automatic S2 must retain, authorize, and fix its exact successor")
+        }
+        expect(automaticAuthorization.event).toMatchObject({
+          _tag: "IntegratorCompetingHeadSuccessorAuthorized",
+          correlation: retained.event.correlation,
+          initiatedBy: { _tag: "DalphCoordinator" },
+          mergeBase: baseSha,
+          remoteHead: competingHead,
+          remotePublicationRetainedAt: retained.position
+        })
+        expect(automaticAuthorization.event.correlation.qualifiedCandidate.run.session).toMatchObject({
+          expectedTargetHead: baseSha,
+          acceptedResult: { commit: decodedEvidence.commit },
+          plannedAttempt
+        })
+        expect(automaticSessionFixation.event.authorizationAt).toBe(automaticAuthorization.position)
+        expect(automaticSessionFixation.event.predecessor).toMatchObject({
+          acceptedResult: { commit: decodedEvidence.commit },
+          expectedTargetHead: baseSha,
+          plannedAttempt
+        })
+        expect(automaticSessionFixation.event.successor).toMatchObject({
+          acceptedResult: { commit: decodedEvidence.commit },
+          expectedTargetHead: competingHead,
+          plannedAttempt,
+          queuedAt: automaticSessionFixation.event.predecessor.queuedAt,
+          startedAt: automaticSessionFixation.event.predecessor.startedAt
+        })
         const publicationAttemptIntents = records.filter(hasEventTag("RemotePublicationAttemptIntended"))
-        expect(publicationAttemptIntents).toHaveLength(competingHeadBetweenDiscoveryAndPush ? 2 : 1)
+        expect(publicationAttemptIntents).toHaveLength(competingHeadBeforeDiscovery ? 1 : 2)
         const rejectedNonFastForwardAttempts = records.filter(
           hasEventTag("RemotePublicationAttemptRejectedNonFastForward")
         )
@@ -952,6 +1017,11 @@ const runHermeticMvpJourney = (
       const promotionSuccess = Option.getOrThrow(Option.fromUndefinedOr(promotionSuccessRecords[0]))
       const qualifiedCandidate = promotionSuccess.event.correlation.qualifiedCandidate
       expect(yield* Ref.get(targetPromotionCompareAndSetCalls)).toBe(1)
+      if (competingHeadAfterLostPushResponse) {
+        expect(yield* Ref.get(lostPushResponseCount)).toBe(1)
+        expect(yield* Ref.get(lostPushResponseReturned)).toBe(true)
+        expect(yield* Ref.get(outsideHeadPublished)).toBe(true)
+      }
       if (competingHeadBetweenDiscoveryAndPush) {
         expect(yield* Ref.get(outsideHeadPublished)).toBe(true)
       }
@@ -1122,5 +1192,11 @@ it.effect(
 it.effect(
   "recovers a competing remote head advanced between publication discovery and update through the automatic S2 full suffix",
   () => runHermeticMvpJourney(false, false, true),
+  120_000
+)
+
+it.effect(
+  "recovers a competing remote head advanced after a lost publication response through the automatic S2 full suffix",
+  () => runHermeticMvpJourney(false, false, false, true),
   120_000
 )
