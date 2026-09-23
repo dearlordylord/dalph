@@ -538,6 +538,11 @@ it.effect(
             const journal = yield* InRunJournal
             if (seed) {
               for (const record of history.slice(1)) {
+                if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+                  throw new Error(
+                    "accepted automatic S2 fixture has an unexpected Run lifecycle record after its beginning"
+                  )
+                }
                 yield* journal.append(fixture.runId, record.key, record.event)
               }
             }

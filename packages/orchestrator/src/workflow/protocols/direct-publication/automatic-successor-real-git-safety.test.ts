@@ -14,7 +14,8 @@ import { reduceWorkflowJournalHistory } from "../../../coordination/reconstructi
 import { GitCommand, GitCommandInvocationFailure, type GitCommandResult } from "../../../authorities/git/command.js"
 import { nodeGitRemoteBaselineLayer } from "../../../authorities/git/remote-baseline.js"
 import { memoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
+import { JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
+import type { RemoteBaselineReadIntendedEvent } from "./baseline-events.js"
 import { establishRemoteBaseline } from "./baseline-protocol-engine.js"
 
 const acceptedEndpoint = "ssh://git@example.invalid/repository.git"
@@ -90,7 +91,9 @@ const commit = async (directory: string, contents: string, message: string): Pro
   return successfulGit(directory, "rev-parse", "HEAD")
 }
 
-const makeFixture = async (scenario: LocalStateCase): Promise<{ readonly fixture: GitFixture; readonly h: string; readonly h2: string }> => {
+const makeFixture = async (
+  scenario: LocalStateCase
+): Promise<{ readonly fixture: GitFixture; readonly h: string; readonly h2: string }> => {
   const root = await realpath(await mkdtemp(nodePath.join(nodeProcess.env["TMPDIR"] ?? "/tmp", "dalph-auto-s2-git-")))
   const sourceRepository = nodePath.join(root, "source")
   const remoteRepository = nodePath.join(root, "remote.git")
@@ -214,7 +217,10 @@ describe("automatic S2 real-Git catch-up safety", () => {
       })
       const records = prefix.records()
       const authorization = records.find(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")
-      const readIntent = records.find(({ event }) => event._tag === "RemoteBaselineReadIntended")
+      const readIntent = records.find(
+        (record): record is JournalRecord & { readonly event: RemoteBaselineReadIntendedEvent } =>
+          record.event._tag === "RemoteBaselineReadIntended"
+      )
       if (
         authorization?.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized" ||
         readIntent?.event._tag !== "RemoteBaselineReadIntended"
@@ -252,7 +258,9 @@ describe("automatic S2 real-Git catch-up safety", () => {
               const persisted = yield* store.read(prefix.runId)
               const history = reduceWorkflowJournalHistory(prefix.runId, persisted)
               if (history._tag === "InvalidWorkflowJournalHistory") {
-                return yield* Effect.die(`exact S2 authorization prefix was rejected: ${JSON.stringify(history.issues)}`)
+                return yield* Effect.die(
+                  `exact S2 authorization prefix was rejected: ${JSON.stringify(history.issues)}`
+                )
               }
               return yield* establishRemoteBaseline(readIntent.event.correlation).pipe(
                 Effect.provide(journalLayer(prefix.runId, prefix.accepted.trackerTarget, history, store))
@@ -262,7 +270,12 @@ describe("automatic S2 real-Git catch-up safety", () => {
         )
 
       const localRefBefore = await localGitText(fixture, "rev-parse", "--verify", `${targetRef}^{commit}`)
-      const remoteRefBefore = await successfulBareGit(fixture.remoteRepository, "rev-parse", "--verify", `${targetRef}^{commit}`)
+      const remoteRefBefore = await successfulBareGit(
+        fixture.remoteRepository,
+        "rev-parse",
+        "--verify",
+        `${targetRef}^{commit}`
+      )
       const worktreeBefore = await snapshot(fixture)
       const first = await activate()
       let finalState = first
@@ -282,7 +295,12 @@ describe("automatic S2 real-Git catch-up safety", () => {
       }
 
       const localRefAfter = await localGitText(fixture, "rev-parse", "--verify", `${targetRef}^{commit}`)
-      const remoteRefAfter = await successfulBareGit(fixture.remoteRepository, "rev-parse", "--verify", `${targetRef}^{commit}`)
+      const remoteRefAfter = await successfulBareGit(
+        fixture.remoteRepository,
+        "rev-parse",
+        "--verify",
+        `${targetRef}^{commit}`
+      )
       const worktreeAfter = await snapshot(fixture)
       expect(localRefAfter).toBe(localRefBefore)
       expect(remoteRefAfter).toBe(remoteRefBefore)
@@ -303,7 +321,11 @@ describe("automatic S2 real-Git catch-up safety", () => {
         observation:
           scenario.expectedObservation === undefined
             ? { _tag: "LocalAncestor", localHead: GitCommitSha.make(h), remoteHead: GitCommitSha.make(h2) }
-            : { _tag: scenario.expectedObservation, localHead: GitCommitSha.make(localRefBefore), remoteHead: GitCommitSha.make(h2) }
+            : {
+                _tag: scenario.expectedObservation,
+                localHead: GitCommitSha.make(localRefBefore),
+                remoteHead: GitCommitSha.make(h2)
+              }
       })
       const catchUpIntents = persisted.filter(({ event }) => event._tag === "LocalTargetCatchUpIntended")
       const catchUpObservations = persisted.filter(({ event }) => event._tag === "LocalTargetCatchUpObserved")

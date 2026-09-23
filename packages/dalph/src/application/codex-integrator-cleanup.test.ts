@@ -219,13 +219,13 @@ type CleanupCase = {
   readonly readSequence?: ReadonlyArray<CodexIntegratorPrivateRecord | null>
 }
 
-const runCase = <A>(
+const runCase = <A, E>(
   options: CleanupCase,
   operation: (
     authority: IntegratorCandidateProviderAuthority["Service"],
     authorization: IntegratorCandidateCleanupAuthorization,
     boundary: IntegratorCandidateCleanupBoundary["Service"]
-  ) => Effect.Effect<A>
+  ) => Effect.Effect<A, E>
 ) =>
   Effect.runPromise(
     Effect.scoped(
