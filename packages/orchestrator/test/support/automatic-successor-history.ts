@@ -56,10 +56,9 @@ import {
 const gitShaLength = 40
 const sha = (digit: string): GitCommitSha => GitCommitSha.make(digit.repeat(gitShaLength))
 
-export const makeSuccessorPrefix = (options: {
-  readonly competingHead?: GitCommitSha
-  readonly expectedTargetHead?: GitCommitSha
-} = {}) => {
+export const makeSuccessorPrefix = (
+  options: { readonly competingHead?: GitCommitSha; readonly expectedTargetHead?: GitCommitSha } = {}
+) => {
   const fixture = integrationFinalityFixture
   const specification = makeTaskWorkSpecification({
     body: "Recover one exact accepted task result after a competing remote update.",
