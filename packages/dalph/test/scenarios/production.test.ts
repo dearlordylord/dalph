@@ -142,6 +142,26 @@ import {
   TrackerMutation,
   TrackerRevision,
   WorkflowRunAlreadyTerminated,
+  describeJournalEvent,
+  IntegratorCompetingHeadSuccessorAuthorizedEvent,
+  integratorCompetingHeadSuccessorAuthorizationIdFor,
+  integratorCorrelationFor,
+  integratorRunCorrelationForSession,
+  IntegratorGitObservation,
+  IntegratorRunOrdinal,
+  IntegratorRunQualifiedCandidate,
+  IntegratorResult,
+  LocalTargetCatchUpResult,
+  RemoteBaselineGit,
+  RemoteBaselineObservation,
+  RemotePublicationAttemptIntendedEvent,
+  RemotePublicationAttemptOrdinal,
+  RemotePublicationGit,
+  RemotePublicationIntendedEvent,
+  RemotePublicationRetainedCause,
+  RemotePublicationRetainedEvent,
+  remotePublicationCorrelationFor,
+  remotePublicationRefspecFor,
   workflowJournalEventVersion,
   WorkflowTrace,
   unavailableIntegratorCandidateProviderAuthority
@@ -186,6 +206,13 @@ import {
   nodeCodexAttemptStoreLayer
 } from "../../src/application/codex-attempt-store.js"
 import { codexPlannedAttemptExecutorLayer } from "../../src/application/codex-planned-attempt-executor.js"
+import {
+  IntegratorRunCandidateGitObservedEvent,
+  IntegratorRunCandidateGitReadIntendedEvent,
+  IntegratorRunResultRecordedEvent,
+  IntegratorRunStartedEvent,
+  IntegratorSessionFixedEvent
+} from "../../../orchestrator/src/workflow/protocols/integrator/events.js"
 
 const productionControlledFakePlannedAttemptExecutorLayer = controlledSynchronousPlannedAttemptExecutorLayer(
   controlledFakePlannedAttemptExecutorLayer
@@ -3019,6 +3046,420 @@ it.effect("records an Operator capacity change through the production compositio
       ).toEqual(["Pause", "Unpause"])
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
   )
+)
+
+const exerciseProductionAutomaticSuccessorLifecycleCut = (cutoff: "Pause" | "Exit") =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const directory = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: `dalph-production-automatic-s2-${cutoff.toLowerCase()}-`
+      })
+      const git = yield* GitCommand
+      yield* git.runInWorktree(directory, ["init"])
+      yield* git.runInWorktree(directory, ["config", "user.email", "dalph@example.invalid"])
+      yield* git.runInWorktree(directory, ["config", "user.name", "Dalph Test"])
+      yield* fileSystem.writeFileString(`${directory}/README.md`, "automatic successor lifecycle cutoff\n")
+      yield* git.runInWorktree(directory, ["add", "README.md"])
+      yield* git.runInWorktree(directory, ["commit", "-m", "initial"])
+      yield* git.runInWorktree(directory, ["branch", "-M", "master"])
+      const baseSha = GitCommitSha.make((yield* git.runInWorktree(directory, ["rev-parse", "HEAD"])).stdout.trim())
+      const worktree = WorktreeLocator.make(`${directory}/worktree`)
+      const branch = TaskBranchRef.make(`refs/heads/dalph/automatic-s2-${cutoff.toLowerCase()}`)
+      yield* git.runInWorktree(directory, [
+        "worktree",
+        "add",
+        "-b",
+        branch.slice("refs/heads/".length),
+        worktree,
+        baseSha
+      ])
+      yield* fileSystem.writeFileString(`${worktree}/accepted.txt`, "accepted result\n")
+      yield* git.runInWorktree(worktree, ["add", "accepted.txt"])
+      yield* git.runInWorktree(worktree, ["commit", "-m", "accepted task result"])
+      const acceptedCommit = GitCommitSha.make(
+        (yield* git.runInWorktree(worktree, ["rev-parse", "HEAD"])).stdout.trim()
+      )
+      const candidateCommit = GitCommitSha.make(
+        (yield* git.runInWorktree(directory, [
+          "commit-tree",
+          `${acceptedCommit}^{tree}`,
+          "-p",
+          baseSha,
+          "-p",
+          acceptedCommit,
+          "-m",
+          "initial integrated candidate"
+        ])).stdout.trim()
+      )
+      const competingHead = GitCommitSha.make(
+        (yield* git.runInWorktree(directory, [
+          "commit-tree",
+          `${baseSha}^{tree}`,
+          "-p",
+          baseSha,
+          "-m",
+          "outside compatible remote advance"
+        ])).stdout.trim()
+      )
+
+      const taskId = TaskId.make(`automatic-s2-${cutoff.toLowerCase()}`)
+      const target = FixtureTarget.make(`automatic-s2-${cutoff.toLowerCase()}-target`)
+      const runId = RunId.make(`automatic-s2-${cutoff.toLowerCase()}-run`)
+      const specification = makeTaskWorkSpecification({
+        body: "Publish the accepted result after compatible remote work.",
+        taskId,
+        title: "Recover publication"
+      })
+      const attempt = PlannedTaskAttempt.make({
+        attemptId: AttemptId.make(`automatic-s2-${cutoff.toLowerCase()}-attempt`),
+        baseSha,
+        branch,
+        executor: TaskExecutorLocator.make("executor:production-controlled-automatic-s2"),
+        runId,
+        taskId,
+        taskRevision: specification.fingerprint,
+        worktree
+      })
+      const claim = ActiveTaskClaim.make({
+        operationId: OperationId.make(`automatic-s2-${cutoff.toLowerCase()}-claim`),
+        owner: ClaimOwner.make("dalph"),
+        taskId,
+        token: ClaimToken.make(`automatic-s2-${cutoff.toLowerCase()}-token`)
+      })
+      const acceptedResult = AcceptedResult.make({
+        commit: acceptedCommit,
+        evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("c".repeat(64)) })
+      })
+      const integrationTarget = productionIntegrationTarget(`${directory}/.git`)
+      const accepted = makeAcceptedIntegrationHistory({
+        acceptedResult,
+        activeClaim: claim,
+        integrationTarget,
+        plannedAttempt: attempt,
+        runId,
+        targetHeadSha: baseSha,
+        taskSpecification: specification,
+        trackerTarget: target
+      })
+      const predecessor = integratorCorrelationFor({
+        responsibility: accepted.responsibility,
+        targetLineage: accepted.targetLineage,
+        targetLineageObservedAt: accepted.targetLineageObservedAt
+      })
+      const predecessorRun = integratorRunCorrelationForSession(predecessor, IntegratorRunOrdinal.make(1))
+      const candidateText = IntegratorCandidateText.make(
+        `refs/heads/dalph/automatic-s2-candidate-${cutoff.toLowerCase()}`
+      )
+      let records = [...accepted.records]
+      const append = (event: JournalRecord["event"]): JournalRecord => {
+        const record: JournalRecord = {
+          event,
+          key: describeJournalEvent(event).expectedKey,
+          position: JournalPosition.make(records.length + 1),
+          runId
+        }
+        records = [...records, record]
+        return record
+      }
+      append(IntegratorSessionFixedEvent.make({ correlation: predecessor, version: workflowJournalEventVersion }))
+      append(IntegratorRunStartedEvent.make({ run: predecessorRun, version: workflowJournalEventVersion }))
+      append(
+        IntegratorRunResultRecordedEvent.make({
+          result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: predecessorRun }),
+          run: predecessorRun,
+          version: workflowJournalEventVersion
+        })
+      )
+      append(
+        IntegratorRunCandidateGitReadIntendedEvent.make({
+          candidateText,
+          run: predecessorRun,
+          version: workflowJournalEventVersion
+        })
+      )
+      const candidateObserved = append(
+        IntegratorRunCandidateGitObservedEvent.make({
+          candidateText,
+          observation: IntegratorGitObservation.cases.Commit.make({
+            candidateText,
+            commit: candidateCommit,
+            directParents: [baseSha, acceptedCommit]
+          }),
+          run: predecessorRun,
+          version: workflowJournalEventVersion
+        })
+      )
+      const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
+        candidateCommit,
+        candidateText,
+        directParents: [baseSha, acceptedCommit],
+        qualifiedAt: candidateObserved.position,
+        run: predecessorRun
+      })
+      const publication = remotePublicationCorrelationFor(qualifiedCandidate, remotePublicationTargetForTest)
+      append(
+        RemotePublicationIntendedEvent.make({
+          correlation: publication,
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          version: workflowJournalEventVersion
+        })
+      )
+      append(
+        RemotePublicationAttemptIntendedEvent.make({
+          attemptOrdinal: RemotePublicationAttemptOrdinal.make(1),
+          correlation: publication,
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          refspec: remotePublicationRefspecFor(candidateCommit, publication.target.branch),
+          version: workflowJournalEventVersion
+        })
+      )
+      const retained = append(
+        RemotePublicationRetainedEvent.make({
+          cause: RemotePublicationRetainedCause.cases.CompatibleCompetingHead.make({
+            mergeBase: baseSha,
+            remoteHead: competingHead
+          }),
+          correlation: publication,
+          occurrenceClassification: "NonActionOccurrence",
+          version: workflowJournalEventVersion
+        })
+      )
+      const authorization = append(
+        IntegratorCompetingHeadSuccessorAuthorizedEvent.make({
+          authorizationId: integratorCompetingHeadSuccessorAuthorizationIdFor(
+            publication.requestId,
+            retained.position,
+            baseSha,
+            competingHead
+          ),
+          correlation: publication,
+          initiatedBy: { _tag: "DalphCoordinator" },
+          mergeBase: baseSha,
+          occurrenceClassification: "InitiatedAction",
+          remoteHead: competingHead,
+          remotePublicationRetainedAt: retained.position,
+          version: workflowJournalEventVersion
+        })
+      )
+      const authorizedRecords = [...records]
+      const validPrefix = reduceWorkflowJournalHistory(runId, authorizedRecords)
+      if (validPrefix._tag === "InvalidWorkflowJournalHistory") {
+        return yield* Effect.die(
+          `automatic S2 lifecycle fixture must be reducer-accepted: ${JSON.stringify(validPrefix.issues)}`
+        )
+      }
+
+      const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
+      yield* Effect.gen(function* () {
+        const journal = yield* JournalStore
+        const began = authorizedRecords[0]
+        if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("automatic S2 fixture lacks Run begin")
+        yield* journal.beginRun(runId, target, began.event.initialControlPolicy, began.event.remotePublicationTarget)
+        for (const record of authorizedRecords.slice(1)) {
+          if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+            return yield* Effect.die("automatic S2 fixture contains an invalid Run lifecycle suffix")
+          }
+          yield* journal.append(runId, record.key, record.event)
+        }
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+
+      const graph = projectTrackerSnapshot({
+        revision: `automatic-s2-${cutoff.toLowerCase()}-current`,
+        tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+      })
+      if (graph._tag === "Invalid") return yield* Effect.die("automatic S2 lifecycle tracker graph must be valid")
+      const gitCalls = yield* Ref.make<ReadonlyArray<string>>([])
+      const baselineCalls = yield* Ref.make<ReadonlyArray<string>>([])
+      const remotePublicationCalls = yield* Ref.make<ReadonlyArray<string>>([])
+      const trackerMutationCalls = yield* Ref.make<ReadonlyArray<string>>([])
+      const integratorCalls = yield* Ref.make(0)
+      const baselineGitLayer = Layer.succeed(
+        RemoteBaselineGit,
+        RemoteBaselineGit.of({
+          observe: () =>
+            Ref.update(baselineCalls, (calls) => [...calls, "observe"]).pipe(
+              Effect.as(
+                RemoteBaselineObservation.cases.LocalAncestor.make({ localHead: baseSha, remoteHead: competingHead })
+              )
+            ),
+          catchUp: () =>
+            Ref.update(baselineCalls, (calls) => [...calls, "catchUp"]).pipe(
+              Effect.as(LocalTargetCatchUpResult.cases.Applied.make({ newHead: competingHead }))
+            ),
+          reconcileCatchUp: () =>
+            Ref.update(baselineCalls, (calls) => [...calls, "reconcileCatchUp"]).pipe(
+              Effect.as(LocalTargetCatchUpResult.cases.Applied.make({ newHead: competingHead }))
+            )
+        })
+      )
+      const forbiddenPublicationBoundary = (name: string) =>
+        Ref.update(remotePublicationCalls, (calls) => [...calls, name]).pipe(
+          Effect.andThen(Effect.die(`remote publication ${name} must not start after ${cutoff}`))
+        )
+      const publicationGitLayer = Layer.succeed(
+        RemotePublicationGit,
+        RemotePublicationGit.of({
+          admit: () => forbiddenPublicationBoundary("admit"),
+          observe: () => forbiddenPublicationBoundary("observe"),
+          prepareSenderCustody: () => forbiddenPublicationBoundary("prepareSenderCustody"),
+          reconcileSenderCustody: () => forbiddenPublicationBoundary("reconcileSenderCustody"),
+          push: () => forbiddenPublicationBoundary("push")
+        })
+      )
+      const trackerMutationLayer = Layer.succeed(
+        TrackerMutation,
+        TrackerMutation.of({
+          acquireTaskClaim: () =>
+            Ref.update(trackerMutationCalls, (calls) => [...calls, "acquireTaskClaim"]).pipe(
+              Effect.andThen(Effect.die(`claim mutation must not start after ${cutoff}`))
+            ),
+          readTaskClaim: () =>
+            Ref.update(trackerMutationCalls, (calls) => [...calls, "readTaskClaim"]).pipe(
+              Effect.andThen(Effect.die(`claim read must not start after ${cutoff}`))
+            ),
+          releaseTaskClaim: () =>
+            Ref.update(trackerMutationCalls, (calls) => [...calls, "releaseTaskClaim"]).pipe(
+              Effect.andThen(Effect.die(`claim release must not start after ${cutoff}`))
+            )
+        })
+      )
+      const application = productionWorkflowInterpreterLayer(
+        runId,
+        GitCommonDirectoryTarget.make(`${directory}/.git`),
+        GitRepositoryLocator.make(directory),
+        integrationTarget,
+        trackerMutationLayer,
+        productionControlledFakePlannedAttemptExecutorLayer,
+        unavailableIntegratorCandidateProviderAuthority,
+        {
+          remoteBaselineGitLayer: baselineGitLayer,
+          remotePublicationGitLayer: publicationGitLayer,
+          remotePublicationTarget: remotePublicationTargetForTest,
+          integrator: {
+            prepare: () =>
+              Ref.update(integratorCalls, (count) => count + 1).pipe(
+                Effect.andThen(Effect.die(`successor Integrator provider must not start after ${cutoff}`))
+              )
+          },
+          workflowGitCommandObserver: (boundary) => Ref.update(gitCalls, (calls) => [...calls, boundary])
+        }
+      ).pipe(
+        Layer.provide(
+          Layer.succeed(
+            TrackerGraphReader,
+            TrackerGraphReader.of({
+              read: () => Effect.succeed(graph.snapshot),
+              readTaskWorkSpecification: () => Effect.succeed(specification)
+            })
+          )
+        ),
+        Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
+      )
+      const nextOperation = yield* Ref.make(0)
+      const run = runWorkflow(
+        target,
+        Effect.die("retained history supplies the initial control policy"),
+        AllocatedWorkflowRunId.make(runId)
+      ).pipe(
+        Effect.provideService(
+          OperationIdAllocator,
+          OperationIdAllocator.of({
+            allocate: () =>
+              Ref.getAndUpdate(nextOperation, (value) => value + 1).pipe(
+                Effect.map((value) => OperationId.make(`automatic-s2-${cutoff.toLowerCase()}-${value}`))
+              )
+          })
+        ),
+        Effect.provideService(
+          TaskClaimAcquisitionPlanner,
+          TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die(`automatic S2 ${cutoff} must not claim fresh work`) })
+        ),
+        Effect.provideService(
+          PlannedTaskAttemptPlanner,
+          PlannedTaskAttemptPlanner.of({ plan: () => Effect.die(`automatic S2 ${cutoff} must not plan fresh work`) })
+        )
+      )
+      const activationExit = yield* Effect.gen(function* () {
+        const bootstrap = yield* JournaledRunBootstrap
+        const exitShell = yield* ApplicationExitShell
+        if (cutoff === "Pause") {
+          yield* bootstrap.operatorControl.applyControlDirection({
+            direction: "Pause",
+            subject: { _tag: "Run", runId }
+          })
+        } else {
+          expect(yield* exitShell.requestBoundary.requestExit).toMatchObject({ _tag: "Succeeded", requestedStatus: 0 })
+        }
+        return yield* Effect.exit(run)
+      }).pipe(
+        Effect.provide(application),
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
+      )
+
+      if (cutoff === "Pause") {
+        expect(activationExit._tag).toBe("Success")
+        if (activationExit._tag === "Success") expect(activationExit.value._tag).toBe("RunMustRemainActive")
+      } else {
+        expect(activationExit._tag).toBe("Failure")
+        if (activationExit._tag === "Failure") {
+          expect(Option.getOrUndefined(Cause.findErrorOption(activationExit.cause))).toMatchObject({
+            _tag: "ApplicationExiting"
+          })
+        }
+      }
+
+      const after = yield* Effect.gen(function* () {
+        return yield* (yield* JournalStore).read(runId)
+      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
+      expect(after.slice(0, authorizedRecords.length)).toEqual(authorizedRecords)
+      expect(after.filter(({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized")).toEqual([
+        authorization
+      ])
+      if (authorization.event._tag !== "IntegratorCompetingHeadSuccessorAuthorized") {
+        return yield* Effect.die("automatic S2 lifecycle fixture lost its exact authorization record")
+      }
+      expect(authorization.event.correlation.qualifiedCandidate.run.session).toMatchObject({
+        acceptedResult,
+        expectedTargetHead: baseSha,
+        plannedAttempt: attempt,
+        queuedAt: accepted.responsibility.queuedAt,
+        startedAt: accepted.responsibility.startedAt
+      })
+      if (cutoff === "Pause") {
+        expect(after.slice(authorizedRecords.length).map(({ event }) => event)).toEqual([
+          expect.objectContaining({
+            _tag: "ControlDirectionApplied",
+            direction: "Pause",
+            subject: { _tag: "Run", runId }
+          })
+        ])
+      } else {
+        expect(after).toEqual(authorizedRecords)
+      }
+      expect(after.filter(({ event }) => event._tag === "RemoteBaselineReadIntended")).toHaveLength(0)
+      expect(after.filter(({ event }) => event._tag === "LocalTargetCatchUpIntended")).toHaveLength(0)
+      expect(after.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")).toHaveLength(0)
+      expect(after.filter(({ event }) => event._tag === "RemotePublicationSucceeded")).toHaveLength(0)
+      expect(after.filter(({ event }) => event._tag.startsWith("TargetPromotion"))).toHaveLength(0)
+      expect(after.filter(({ event }) => event._tag.startsWith("CompletionClaim"))).toHaveLength(0)
+      expect(yield* Ref.get(baselineCalls), cutoff).toEqual([])
+      expect(yield* Ref.get(remotePublicationCalls), cutoff).toEqual([])
+      expect(yield* Ref.get(gitCalls), cutoff).toEqual([])
+      expect(yield* Ref.get(trackerMutationCalls), cutoff).toEqual([])
+      expect(yield* Ref.get(integratorCalls), cutoff).toBe(0)
+      expect(yield* fileSystem.exists(`${directory}/.git/dalph/git-senders`), cutoff).toBe(false)
+    }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+  )
+
+it.effect("Pause after automatic S2 authorization retains FIFO without baseline or successor effects", () =>
+  exerciseProductionAutomaticSuccessorLifecycleCut("Pause")
+)
+
+it.effect("Exit at automatic S2 authorization preserves the cutoff without starting a successor", () =>
+  exerciseProductionAutomaticSuccessorLifecycleCut("Exit")
 )
 
 it.effect("retains remote delivery across Pause and Exit", () =>
