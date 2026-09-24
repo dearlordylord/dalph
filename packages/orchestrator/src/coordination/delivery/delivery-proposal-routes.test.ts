@@ -201,7 +201,11 @@ import {
   IntegratorRunOrdinal,
   IntegratorResult
 } from "../../workflow/protocols/integrator/protocol.js"
-import { IntegratorRunResultRecordedEvent, IntegratorRunStartedEvent } from "../../workflow/protocols/integrator/events.js"
+import {
+  IntegratorAutomaticSuccessorGeneration,
+  IntegratorRunResultRecordedEvent,
+  IntegratorRunStartedEvent
+} from "../../workflow/protocols/integrator/events.js"
 import {
   IntegrationQuarantineDirectionAppliedEvent,
   IntegrationQuarantineDirectionFingerprint,
@@ -2603,171 +2607,181 @@ describe("delivery proposal route matrix", () => {
     })
   )
 
-  effectIt.effect("restarts into an explicitly authorized Retry route for automatic S2's own conclusive quarantine", () =>
-    Effect.gen(function* () {
-      const fixture = makeSuccessorPrefix()
-      const prepared = yield* prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, fixture.reduction.prefix)
-      if (prepared._tag !== "Append") return yield* Effect.die("Retry route requires exact automatic S2 fixation")
-      fixture.append(prepared.event)
+  effectIt.effect(
+    "restarts into an explicitly authorized Retry route for automatic S2's own conclusive quarantine",
+    () =>
+      Effect.gen(function* () {
+        const fixture = makeSuccessorPrefix()
+        const prepared = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+          fixture.input,
+          fixture.reduction.prefix
+        )
+        if (prepared._tag !== "Append") return yield* Effect.die("Retry route requires exact automatic S2 fixation")
+        fixture.append(prepared.event)
 
-      const responsibility = fixture.accepted.responsibility
-      const session = prepared.event.successor
-      const firstRun = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(1))
-      fixture.append(IntegratorRunStartedEvent.make({ run: firstRun, version: workflowJournalEventVersion }))
-      const resultDetail = IntegratorNotPreparedDetail.make("automatic S2 reports a conclusive no-candidate result")
-      const result = fixture.append(
-        IntegratorRunResultRecordedEvent.make({
-          result: IntegratorResult.cases.NotPrepared.make({ correlation: firstRun, detail: resultDetail }),
-          run: firstRun,
-          version: workflowJournalEventVersion
+        const responsibility = fixture.accepted.responsibility
+        const session = prepared.event.successor
+        const firstRun = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(1))
+        fixture.append(IntegratorRunStartedEvent.make({ run: firstRun, version: workflowJournalEventVersion }))
+        const resultDetail = IntegratorNotPreparedDetail.make("automatic S2 reports a conclusive no-candidate result")
+        const result = fixture.append(
+          IntegratorRunResultRecordedEvent.make({
+            result: IntegratorResult.cases.NotPrepared.make({ correlation: firstRun, detail: resultDetail }),
+            run: firstRun,
+            version: workflowJournalEventVersion
+          })
+        )
+        fixture.append(
+          IntegrationQuarantinedEvent.make({
+            basis: IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+              cause: IntegrationQuarantineCause.cases.NotPrepared.make({ detail: resultDetail }),
+              evidence: { resultRecordedAt: result.position }
+            }),
+            correlation: session,
+            occurrenceClassification: "NonActionOccurrence",
+            version: workflowJournalEventVersion
+          })
+        )
+        const beforeRetry = fixture.records()
+        const runTwo = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(2), session })
+        const operatorRetry = RunnableFrontierTransition.RunIntegrator({
+          lineage: fixture.input.targetLineage,
+          lineageObservedAt: fixture.input.targetLineageObservedAt,
+          responsibility,
+          run: runTwo
         })
-      )
-      fixture.append(
-        IntegrationQuarantinedEvent.make({
-          basis: IntegrationQuarantineBasis.cases.ConclusiveResult.make({
-            cause: IntegrationQuarantineCause.cases.NotPrepared.make({ detail: resultDetail }),
-            evidence: { resultRecordedAt: result.position }
-          }),
-          correlation: session,
-          occurrenceClassification: "NonActionOccurrence",
-          version: workflowJournalEventVersion
-        })
-      )
-      const beforeRetry = fixture.records()
-      const runTwo = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(2), session })
-      const operatorRetry = RunnableFrontierTransition.RunIntegrator({
-        lineage: fixture.input.targetLineage,
-        lineageObservedAt: fixture.input.targetLineageObservedAt,
-        responsibility,
-        run: runTwo
-      })
-      const routeFor = (transition: Transition) => {
-        const routed = deliveryProposalsOf({
-          acceptedOperationIds: HashSet.empty(),
-          fresh: [],
-          integrationResponsibilities: [responsibility],
-          responsibilities: [],
-          runId: fixture.runId,
-          transitions: [transition]
-        })
-        const proposal = [...routed.ticketDelivery, ...routed.deliverySettlement][0]
-        if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
-          throw new Error(`missing exact identity-free route for ${transition._tag}`)
+        const routeFor = (transition: Transition) => {
+          const routed = deliveryProposalsOf({
+            acceptedOperationIds: HashSet.empty(),
+            fresh: [],
+            integrationResponsibilities: [responsibility],
+            responsibilities: [],
+            runId: fixture.runId,
+            transitions: [transition]
+          })
+          const proposal = [...routed.ticketDelivery, ...routed.deliverySettlement][0]
+          if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+            throw new Error(`missing exact identity-free route for ${transition._tag}`)
+          }
+          return { _tag: "IdentityFreeAction" as const, proposal }
         }
-        return { _tag: "IdentityFreeAction" as const, proposal }
-      }
 
-      const unauthorizedRestart = yield* makeLiveJournalHarness(beforeRetry, fixture.runId, target)
-      const unauthorizedCalls = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
-      yield* Effect.exit(
-        executeIntegrationAction(routeFor(operatorRetry), operatorRetry, inertLease, target).pipe(
+        const unauthorizedRestart = yield* makeLiveJournalHarness(beforeRetry, fixture.runId, target)
+        const unauthorizedCalls = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
+        yield* Effect.exit(
+          executeIntegrationAction(routeFor(operatorRetry), operatorRetry, inertLease, target).pipe(
+            Effect.provideService(
+              Integrator,
+              Integrator.of({
+                prepare: (request) =>
+                  Ref.update(unauthorizedCalls, (calls) => [...calls, request.correlation]).pipe(
+                    Effect.as(
+                      IntegratorResult.cases.NotPrepared.make({
+                        correlation: request.correlation,
+                        detail: IntegratorNotPreparedDetail.make("must not be called without operator Retry")
+                      })
+                    )
+                  )
+              })
+            ),
+            Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
+            (effect) => provideLiveJournal(effect, unauthorizedRestart)
+          )
+        )
+        expect(yield* Ref.get(unauthorizedCalls)).toEqual([])
+        expect(
+          (yield* unauthorizedRestart.records).filter(
+            ({ event }) => event._tag === "IntegratorRunStarted" && event.run.ordinal === IntegratorRunOrdinal.make(2)
+          )
+        ).toHaveLength(0)
+
+        const quarantine = fixture
+          .records()
+          .findLast(
+            ({ event }) => event._tag === "IntegrationQuarantined" && event.correlation.sessionId === session.sessionId
+          )
+        if (quarantine?.event._tag !== "IntegrationQuarantined") {
+          return yield* Effect.die("automatic S2 Retry route requires its exact conclusive quarantine")
+        }
+        const fingerprint = IntegrationQuarantineDirectionFingerprint.make({
+          direction: "Retry",
+          quarantineAt: quarantine.position,
+          sessionId: session.sessionId
+        })
+        fixture.append(
+          IntegrationQuarantineDirectionAppliedEvent.make({
+            fingerprint,
+            initiatedBy: { _tag: "Operator" },
+            occurrenceClassification: "InitiatedAction",
+            requestId: IntegrationQuarantineDirectionRequestId.make({
+              nonce: "automatic-s2-retry-route",
+              runId: fixture.runId
+            }),
+            version: workflowJournalEventVersion
+          })
+        )
+        const operationId = OperationId.make("automatic-s2-retry-route-lineage")
+        const operation = makeTargetLineageObservationOperation({
+          integrationTarget: session.integrationTarget,
+          operationId,
+          plannedAttempt: session.plannedAttempt,
+          predecessorOperationIds: []
+        })
+        fixture.append(
+          GitReadIntentRecordedEvent.make({
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            operation,
+            version: workflowJournalEventVersion
+          })
+        )
+        const freshLineage = fixture.append(
+          TargetLineageObservedEvent.make({
+            observation: fixture.input.targetLineage,
+            occurrenceClassification: "NonActionOccurrence",
+            operationId,
+            plannedAttempt: session.plannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        )
+
+        const restarted = yield* makeLiveJournalHarness(fixture.records(), fixture.runId, target)
+        const retryTransition = RunnableFrontierTransition.RunIntegrator({
+          lineage: fixture.input.targetLineage,
+          lineageObservedAt: freshLineage.position,
+          responsibility,
+          run: runTwo
+        })
+        const retryAction = routeFor(retryTransition)
+        const retryCalls = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
+        const delivered = yield* executeIntegrationAction(retryAction, retryTransition, inertLease, target).pipe(
           Effect.provideService(
             Integrator,
             Integrator.of({
               prepare: (request) =>
-                Ref.update(unauthorizedCalls, (calls) => [...calls, request.correlation]).pipe(
+                Ref.update(retryCalls, (calls) => [...calls, request.correlation]).pipe(
                   Effect.as(
                     IntegratorResult.cases.NotPrepared.make({
                       correlation: request.correlation,
-                      detail: IntegratorNotPreparedDetail.make("must not be called without operator Retry")
+                      detail: IntegratorNotPreparedDetail.make("controlled automatic S2 Retry result")
                     })
                   )
                 )
             })
           ),
           Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
-          (effect) => provideLiveJournal(effect, unauthorizedRestart)
+          (effect) => provideLiveJournal(effect, restarted)
         )
-      )
-      expect(yield* Ref.get(unauthorizedCalls)).toEqual([])
-      expect(
-        (yield* unauthorizedRestart.records).filter(
-          ({ event }) => event._tag === "IntegratorRunStarted" && event.run.ordinal === IntegratorRunOrdinal.make(2)
-        )
-      ).toHaveLength(0)
-
-      const quarantine = fixture.records().findLast(
-        ({ event }) => event._tag === "IntegrationQuarantined" && event.correlation.sessionId === session.sessionId
-      )
-      if (quarantine?.event._tag !== "IntegrationQuarantined") {
-        return yield* Effect.die("automatic S2 Retry route requires its exact conclusive quarantine")
-      }
-      const fingerprint = IntegrationQuarantineDirectionFingerprint.make({
-        direction: "Retry",
-        quarantineAt: quarantine.position,
-        sessionId: session.sessionId
+        expect(delivered).toMatchObject({ _tag: "ActionCompleted", proposalId: retryAction.proposal.id })
+        expect(yield* Ref.get(retryCalls)).toEqual([runTwo])
+        const finalRecords = yield* restarted.records
+        expect(
+          finalRecords.filter(
+            ({ event }) => event._tag === "IntegratorRunStarted" && event.run.ordinal === IntegratorRunOrdinal.make(2)
+          )
+        ).toHaveLength(1)
+        expect(reduceWorkflowJournalHistory(fixture.runId, finalRecords)._tag).toBe("ValidWorkflowJournalHistory")
       })
-      fixture.append(
-        IntegrationQuarantineDirectionAppliedEvent.make({
-          fingerprint,
-          initiatedBy: { _tag: "Operator" },
-          occurrenceClassification: "InitiatedAction",
-          requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "automatic-s2-retry-route", runId: fixture.runId }),
-          version: workflowJournalEventVersion
-        })
-      )
-      const operationId = OperationId.make("automatic-s2-retry-route-lineage")
-      const operation = makeTargetLineageObservationOperation({
-        integrationTarget: session.integrationTarget,
-        operationId,
-        plannedAttempt: session.plannedAttempt,
-        predecessorOperationIds: []
-      })
-      fixture.append(
-        GitReadIntentRecordedEvent.make({
-          initiatedBy: { _tag: "DalphCoordinator" },
-          occurrenceClassification: "InitiatedAction",
-          operation,
-          version: workflowJournalEventVersion
-        })
-      )
-      const freshLineage = fixture.append(
-        TargetLineageObservedEvent.make({
-          observation: fixture.input.targetLineage,
-          occurrenceClassification: "NonActionOccurrence",
-          operationId,
-          plannedAttempt: session.plannedAttempt,
-          version: workflowJournalEventVersion
-        })
-      )
-
-      const restarted = yield* makeLiveJournalHarness(fixture.records(), fixture.runId, target)
-      const retryTransition = RunnableFrontierTransition.RunIntegrator({
-        lineage: fixture.input.targetLineage,
-        lineageObservedAt: freshLineage.position,
-        responsibility,
-        run: runTwo
-      })
-      const retryAction = routeFor(retryTransition)
-      const retryCalls = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
-      const delivered = yield* executeIntegrationAction(retryAction, retryTransition, inertLease, target).pipe(
-        Effect.provideService(
-          Integrator,
-          Integrator.of({
-            prepare: (request) =>
-              Ref.update(retryCalls, (calls) => [...calls, request.correlation]).pipe(
-                Effect.as(
-                  IntegratorResult.cases.NotPrepared.make({
-                    correlation: request.correlation,
-                    detail: IntegratorNotPreparedDetail.make("controlled automatic S2 Retry result")
-                  })
-                )
-              )
-          })
-        ),
-        Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
-        (effect) => provideLiveJournal(effect, restarted)
-      )
-      expect(delivered).toMatchObject({ _tag: "ActionCompleted", proposalId: retryAction.proposal.id })
-      expect(yield* Ref.get(retryCalls)).toEqual([runTwo])
-      const finalRecords = yield* restarted.records
-      expect(
-        finalRecords.filter(
-          ({ event }) => event._tag === "IntegratorRunStarted" && event.run.ordinal === IntegratorRunOrdinal.make(2)
-        )
-      ).toHaveLength(1)
-      expect(reduceWorkflowJournalHistory(fixture.runId, finalRecords)._tag).toBe("ValidWorkflowJournalHistory")
-    })
   )
 
   effectIt.effect("retries exact automatic S3 after its own quarantine without duplicating successor effects", () =>
@@ -2776,7 +2790,12 @@ describe("delivery proposal route matrix", () => {
       const s2 = yield* prepareIntegratorAutomaticSuccessorSessionAppend(fixture.input, fixture.reduction.prefix)
       if (s2._tag !== "Append") return yield* Effect.die("S3 Retry requires exact automatic S2 fixation")
       fixture.append(s2.event)
-      const s3Prefix = appendAutomaticSuccessorGeneration(fixture, s2.event.successor, GitCommitSha.make("8".repeat(40)), 2)
+      const s3Prefix = appendAutomaticSuccessorGeneration(
+        fixture,
+        s2.event.successor,
+        GitCommitSha.make("8".repeat(40)),
+        IntegratorAutomaticSuccessorGeneration.make(2)
+      )
       const s3 = yield* prepareIntegratorAutomaticSuccessorSessionAppend(s3Prefix.input, s3Prefix.reduction.prefix)
       if (s3._tag !== "Append") return yield* Effect.die("S3 Retry requires exact automatic S3 fixation")
       fixture.append(s3.event)
@@ -2786,50 +2805,63 @@ describe("delivery proposal route matrix", () => {
       const runOne = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(1))
       fixture.append(IntegratorRunStartedEvent.make({ run: runOne, version: workflowJournalEventVersion }))
       const detail = IntegratorNotPreparedDetail.make("automatic S3 reports a conclusive no-candidate result")
-      const result = fixture.append(IntegratorRunResultRecordedEvent.make({
-        result: IntegratorResult.cases.NotPrepared.make({ correlation: runOne, detail }),
-        run: runOne,
-        version: workflowJournalEventVersion
-      }))
-      const quarantine = fixture.append(IntegrationQuarantinedEvent.make({
-        basis: IntegrationQuarantineBasis.cases.ConclusiveResult.make({
-          cause: IntegrationQuarantineCause.cases.NotPrepared.make({ detail }),
-          evidence: { resultRecordedAt: result.position }
-        }),
-        correlation: session,
-        occurrenceClassification: "NonActionOccurrence",
-        version: workflowJournalEventVersion
-      }))
-      fixture.append(IntegrationQuarantineDirectionAppliedEvent.make({
-        fingerprint: IntegrationQuarantineDirectionFingerprint.make({
-          direction: "Retry",
-          quarantineAt: quarantine.position,
-          sessionId: session.sessionId
-        }),
-        initiatedBy: { _tag: "Operator" },
-        occurrenceClassification: "InitiatedAction",
-        requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "automatic-s3-retry-route", runId: fixture.runId }),
-        version: workflowJournalEventVersion
-      }))
+      const result = fixture.append(
+        IntegratorRunResultRecordedEvent.make({
+          result: IntegratorResult.cases.NotPrepared.make({ correlation: runOne, detail }),
+          run: runOne,
+          version: workflowJournalEventVersion
+        })
+      )
+      const quarantine = fixture.append(
+        IntegrationQuarantinedEvent.make({
+          basis: IntegrationQuarantineBasis.cases.ConclusiveResult.make({
+            cause: IntegrationQuarantineCause.cases.NotPrepared.make({ detail }),
+            evidence: { resultRecordedAt: result.position }
+          }),
+          correlation: session,
+          occurrenceClassification: "NonActionOccurrence",
+          version: workflowJournalEventVersion
+        })
+      )
+      fixture.append(
+        IntegrationQuarantineDirectionAppliedEvent.make({
+          fingerprint: IntegrationQuarantineDirectionFingerprint.make({
+            direction: "Retry",
+            quarantineAt: quarantine.position,
+            sessionId: session.sessionId
+          }),
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          requestId: IntegrationQuarantineDirectionRequestId.make({
+            nonce: "automatic-s3-retry-route",
+            runId: fixture.runId
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
       const operationId = OperationId.make("automatic-s3-retry-route-lineage")
-      fixture.append(GitReadIntentRecordedEvent.make({
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        operation: makeTargetLineageObservationOperation({
-          integrationTarget: session.integrationTarget,
+      fixture.append(
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operation: makeTargetLineageObservationOperation({
+            integrationTarget: session.integrationTarget,
+            operationId,
+            plannedAttempt: session.plannedAttempt,
+            predecessorOperationIds: []
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+      const lineage = fixture.append(
+        TargetLineageObservedEvent.make({
+          observation: s3Prefix.input.targetLineage,
+          occurrenceClassification: "NonActionOccurrence",
           operationId,
           plannedAttempt: session.plannedAttempt,
-          predecessorOperationIds: []
-        }),
-        version: workflowJournalEventVersion
-      }))
-      const lineage = fixture.append(TargetLineageObservedEvent.make({
-        observation: s3Prefix.input.targetLineage,
-        occurrenceClassification: "NonActionOccurrence",
-        operationId,
-        plannedAttempt: session.plannedAttempt,
-        version: workflowJournalEventVersion
-      }))
+          version: workflowJournalEventVersion
+        })
+      )
       const runTwo = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(2), session })
       const transition = RunnableFrontierTransition.RunIntegrator({
         lineage: s3Prefix.input.targetLineage,
@@ -2846,19 +2878,26 @@ describe("delivery proposal route matrix", () => {
         transitions: [transition]
       })
       const proposal = [...routed.ticketDelivery, ...routed.deliverySettlement][0]
-      if (proposal === undefined || !isIdentityFreeProposal(proposal)) return yield* Effect.die("S3 Retry route is missing")
+      if (proposal === undefined || !isIdentityFreeProposal(proposal))
+        return yield* Effect.die("S3 Retry route is missing")
       const action = { _tag: "IdentityFreeAction" as const, proposal }
       const journal = yield* makeLiveJournalHarness(fixture.records(), fixture.runId, target)
       const providerCalls = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
       const delivered = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
-        Effect.provideService(Integrator, Integrator.of({
-          prepare: (request) => Ref.update(providerCalls, (calls) => [...calls, request.correlation]).pipe(
-            Effect.as(IntegratorResult.cases.NotPrepared.make({
-              correlation: request.correlation,
-              detail: IntegratorNotPreparedDetail.make("controlled S3 Retry")
-            }))
-          )
-        })),
+        Effect.provideService(
+          Integrator,
+          Integrator.of({
+            prepare: (request) =>
+              Ref.update(providerCalls, (calls) => [...calls, request.correlation]).pipe(
+                Effect.as(
+                  IntegratorResult.cases.NotPrepared.make({
+                    correlation: request.correlation,
+                    detail: IntegratorNotPreparedDetail.make("controlled S3 Retry")
+                  })
+                )
+              )
+          })
+        ),
         Effect.provideService(IntegratorGit, IntegratorGit.of({ readCandidate: () => Effect.die("unused") })),
         (effect) => provideLiveJournal(effect, journal)
       )
@@ -2869,7 +2908,14 @@ describe("delivery proposal route matrix", () => {
       expect(records.filter(({ event }) => event._tag === "RemoteBaselineReadIntended")).toHaveLength(2)
       expect(records.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")).toHaveLength(2)
       expect(records.filter(({ event }) => event._tag === "IntegratorRunStarted")).toHaveLength(4)
-      expect(records.filter(({ event }) => event._tag === "IntegratorRunStarted" && event.run.ordinal === IntegratorRunOrdinal.make(2) && event.run.session.sessionId === session.sessionId)).toHaveLength(1)
+      expect(
+        records.filter(
+          ({ event }) =>
+            event._tag === "IntegratorRunStarted" &&
+            event.run.ordinal === IntegratorRunOrdinal.make(2) &&
+            event.run.session.sessionId === session.sessionId
+        )
+      ).toHaveLength(1)
       expect(reduceWorkflowJournalHistory(fixture.runId, records)._tag).toBe("ValidWorkflowJournalHistory")
     })
   )

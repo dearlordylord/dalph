@@ -1,16 +1,11 @@
-import { makeTaskWorkSpecification, GitCommitSha } from "@dalph/contracts"
+import { GitCommitSha } from "@dalph/contracts"
 import { TargetLineageObservation } from "../../src/authorities/git/target-lineage.js"
-import { integrationFinalityFixture } from "../../src/workflow/protocols/integration-finality/fixtures.js"
-import { makeAcceptedIntegrationHistory } from "./accepted-integration-history.js"
 import { remotePublicationTargetForTest } from "./direct-publication.js"
 import { OperationId } from "../../src/workflow/identity.js"
 import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../src/workflow/registry/event.js"
 import { makeTargetLineageObservationOperation } from "../../src/workflow/registry/operation.js"
-import { describeJournalEvent } from "../../src/workflow/registry/event-descriptor.js"
 import { workflowJournalEventVersion } from "../../src/workflow/kernel/event.js"
 import { reduceWorkflowJournalHistory } from "../../src/coordination/reconstruction/history.js"
-import { JournalPosition } from "../../src/workflow-journal/identity.js"
-import type { JournalRecord } from "../../src/workflow-journal/store.js"
 import {
   LocalTargetCatchUpIntendedEvent,
   LocalTargetCatchUpObservedEvent,
@@ -39,81 +34,53 @@ import {
   IntegratorRunResultRecordedEvent,
   IntegratorRunStartedEvent,
   IntegratorResult,
-  IntegratorSessionFixedEvent
+  maximumIntegratorSessionsPerResponsibility,
+  type IntegratorAutomaticSuccessorGeneration,
+  type IntegratorSessionCorrelation
 } from "../../src/workflow/protocols/integrator/events.js"
 import {
   IntegratorCompetingHeadSuccessorAuthorizedEvent,
   integratorCompetingHeadSuccessorAuthorizationIdFor
 } from "../../src/workflow/protocols/integrator/automatic-successor-events.js"
-import {
-  integratorCorrelationFor,
-  integratorRunCorrelationForSession
-} from "../../src/workflow/protocols/integrator/session.js"
+import { integratorRunCorrelationForSession } from "../../src/workflow/protocols/integrator/session.js"
 import {
   deriveCurrentIntegratorState,
   integratorResponsibilityFactsFor
 } from "../../src/workflow/protocols/integrator/state.js"
+import type { makeSuccessorPrefix } from "./automatic-successor-history.js"
 
 const gitShaLength = 40
+const automaticSuccessorCandidateCommitDigitOffset = 5
 const sha = (digit: string): GitCommitSha => GitCommitSha.make(digit.repeat(gitShaLength))
 
-export const makeSuccessorPrefix = (
-  options: { readonly competingHead?: GitCommitSha; readonly expectedTargetHead?: GitCommitSha } = {}
+/** Adds one exact competing-head publication and catch-up after an already-fixed automatic successor. */
+export const appendAutomaticSuccessorGeneration = (
+  fixture: ReturnType<typeof makeSuccessorPrefix>,
+  predecessor: IntegratorSessionCorrelation,
+  competingHead: GitCommitSha,
+  generation: IntegratorAutomaticSuccessorGeneration
 ) => {
-  const fixture = integrationFinalityFixture
-  const specification = makeTaskWorkSpecification({
-    body: "Recover one exact accepted task result after a competing remote update.",
-    taskId: fixture.taskId,
-    title: "Automatic competing-head successor"
-  })
-  const expectedTargetHead = options.expectedTargetHead ?? fixture.qualifiedCandidate.run.session.expectedTargetHead
-  const plannedAttempt = {
-    ...fixture.plannedAttempt,
-    baseSha: expectedTargetHead,
-    taskRevision: specification.fingerprint
+  const generationNumber = Number(generation)
+  if (generationNumber > maximumIntegratorSessionsPerResponsibility) {
+    throw new Error("automatic successor fixture cannot exceed the responsibility session capacity")
   }
-  const accepted = makeAcceptedIntegrationHistory({
-    acceptedResult: fixture.qualifiedCandidate.run.session.acceptedResult,
-    activeClaim: fixture.activeClaim,
-    integrationTarget: fixture.integrationTarget,
-    plannedAttempt,
-    runId: fixture.runId,
-    targetHeadSha: expectedTargetHead,
-    taskSpecification: specification,
-    trackerTarget: fixture.target
-  })
-  let records = [...accepted.records]
-  const append = (event: JournalRecord["event"]): JournalRecord => {
-    const descriptor = describeJournalEvent(event)
-    const record: JournalRecord = {
-      event,
-      key: descriptor.expectedKey,
-      position: JournalPosition.make(records.length + 1),
-      runId: fixture.runId
-    }
-    records = [...records, record]
-    return record
-  }
-  const predecessor = integratorCorrelationFor({
-    responsibility: accepted.responsibility,
-    targetLineage: accepted.targetLineage,
-    targetLineageObservedAt: accepted.targetLineageObservedAt
-  })
   const run = integratorRunCorrelationForSession(predecessor, IntegratorRunOrdinal.make(1))
-  const candidateText = IntegratorCandidateText.make("refs/heads/dalph/automatic-successor-candidate")
-  const candidateCommit = sha("5")
-  const competingHead = options.competingHead ?? sha("6")
-  append(IntegratorSessionFixedEvent.make({ correlation: predecessor, version: workflowJournalEventVersion }))
-  append(IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion }))
-  append(
+  const candidateText = IntegratorCandidateText.make(
+    `refs/heads/dalph/automatic-successor-candidate-${generationNumber}`
+  )
+  const candidateCommit = sha(String(automaticSuccessorCandidateCommitDigitOffset + generationNumber))
+  fixture.append(IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion }))
+  fixture.append(
     IntegratorRunResultRecordedEvent.make({
       result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: run }),
       run,
       version: workflowJournalEventVersion
     })
   )
-  append(IntegratorRunCandidateGitReadIntendedEvent.make({ candidateText, run, version: workflowJournalEventVersion }))
-  append(
+  fixture.append(
+    IntegratorRunCandidateGitReadIntendedEvent.make({ candidateText, run, version: workflowJournalEventVersion })
+  )
+  fixture.append(
     IntegratorRunCandidateGitObservedEvent.make({
       candidateText,
       observation: IntegratorGitObservation.cases.Commit.make({
@@ -125,8 +92,10 @@ export const makeSuccessorPrefix = (
       version: workflowJournalEventVersion
     })
   )
-  const state = deriveCurrentIntegratorState(records, accepted.responsibility)
-  if (state._tag !== "GitQualifiedPrepared") throw new Error("fixture candidate must qualify against exact [H, C]")
+  const state = deriveCurrentIntegratorState(fixture.records(), fixture.accepted.responsibility)
+  if (state._tag !== "GitQualifiedPrepared") {
+    throw new Error("next automatic successor candidate must qualify at its exact head")
+  }
   const candidate = {
     candidateCommit: state.candidateCommit,
     candidateText: state.candidateText,
@@ -135,7 +104,7 @@ export const makeSuccessorPrefix = (
     run: state.run
   }
   const publication = remotePublicationCorrelationFor(candidate, remotePublicationTargetForTest)
-  append(
+  fixture.append(
     RemotePublicationIntendedEvent.make({
       correlation: publication,
       initiatedBy: { _tag: "DalphCoordinator" },
@@ -143,7 +112,7 @@ export const makeSuccessorPrefix = (
       version: workflowJournalEventVersion
     })
   )
-  append(
+  fixture.append(
     RemotePublicationAttemptIntendedEvent.make({
       attemptOrdinal: RemotePublicationAttemptOrdinal.make(1),
       correlation: publication,
@@ -153,7 +122,7 @@ export const makeSuccessorPrefix = (
       version: workflowJournalEventVersion
     })
   )
-  const retainedAt = append(
+  const retained = fixture.append(
     RemotePublicationRetainedEvent.make({
       cause: RemotePublicationRetainedCause.cases.CompatibleCompetingHead.make({
         mergeBase: predecessor.expectedTargetHead,
@@ -164,11 +133,11 @@ export const makeSuccessorPrefix = (
       version: workflowJournalEventVersion
     })
   )
-  const authorization = append(
+  const authorization = fixture.append(
     IntegratorCompetingHeadSuccessorAuthorizedEvent.make({
       authorizationId: integratorCompetingHeadSuccessorAuthorizationIdFor(
         publication.requestId,
-        retainedAt.position,
+        retained.position,
         predecessor.expectedTargetHead,
         competingHead
       ),
@@ -177,19 +146,19 @@ export const makeSuccessorPrefix = (
       mergeBase: predecessor.expectedTargetHead,
       occurrenceClassification: "InitiatedAction",
       remoteHead: competingHead,
-      remotePublicationRetainedAt: retainedAt.position,
+      remotePublicationRetainedAt: retained.position,
       version: workflowJournalEventVersion
     })
   )
   const baseline = automaticCompetingHeadRemoteBaselineCorrelationFor(
     fixture.runId,
-    integratorResponsibilityFactsFor(accepted.responsibility),
-    accepted.integrationTarget,
+    integratorResponsibilityFactsFor(fixture.accepted.responsibility),
+    fixture.accepted.integrationTarget,
     remotePublicationTargetForTest,
     authorization.position,
     initialAutomaticCompetingHeadBaselineRound
   )
-  append(
+  fixture.append(
     RemoteBaselineReadIntendedEvent.make({
       correlation: baseline,
       initiatedBy: { _tag: "DalphCoordinator" },
@@ -197,7 +166,7 @@ export const makeSuccessorPrefix = (
       version: workflowJournalEventVersion
     })
   )
-  append(
+  fixture.append(
     RemoteBaselineObservedEvent.make({
       correlation: baseline,
       observation: RemoteBaselineObservation.cases.LocalAncestor.make({
@@ -208,7 +177,7 @@ export const makeSuccessorPrefix = (
       version: workflowJournalEventVersion
     })
   )
-  append(
+  fixture.append(
     LocalTargetCatchUpIntendedEvent.make({
       correlation: baseline,
       expectedLocalHead: predecessor.expectedTargetHead,
@@ -218,7 +187,7 @@ export const makeSuccessorPrefix = (
       version: workflowJournalEventVersion
     })
   )
-  append(
+  fixture.append(
     LocalTargetCatchUpObservedEvent.make({
       correlation: baseline,
       expectedLocalHead: predecessor.expectedTargetHead,
@@ -228,18 +197,22 @@ export const makeSuccessorPrefix = (
       version: workflowJournalEventVersion
     })
   )
+  const lineagePredecessor = fixture.records().find(({ position }) => position === predecessor.targetLineageObservedAt)
+  if (lineagePredecessor?.event._tag !== "TargetLineageObserved") {
+    throw new Error("automatic successor requires its exact predecessor target-lineage observation")
+  }
   const lineageOperation = makeTargetLineageObservationOperation({
-    integrationTarget: accepted.integrationTarget,
-    operationId: OperationId.make("automatic-successor-fresh-target-lineage"),
-    plannedAttempt,
-    predecessorOperationIds: [accepted.targetLineageOperation.operationId]
+    integrationTarget: fixture.accepted.integrationTarget,
+    operationId: OperationId.make(`automatic-successor-fresh-target-lineage-${generationNumber}`),
+    plannedAttempt: predecessor.plannedAttempt,
+    predecessorOperationIds: [lineagePredecessor.event.operationId]
   })
   const freshLineage = TargetLineageObservation.make({
     plannedBaseIsAncestorOfTargetHead: true,
-    plannedBaseSha: plannedAttempt.baseSha,
+    plannedBaseSha: predecessor.plannedAttempt.baseSha,
     targetHeadSha: competingHead
   })
-  append(
+  fixture.append(
     GitReadIntentRecordedEvent.make({
       initiatedBy: { _tag: "DalphCoordinator" },
       occurrenceClassification: "InitiatedAction",
@@ -247,12 +220,12 @@ export const makeSuccessorPrefix = (
       version: workflowJournalEventVersion
     })
   )
-  append(
+  const observed = fixture.append(
     TargetLineageObservedEvent.make({
       observation: freshLineage,
       occurrenceClassification: "NonActionOccurrence",
       operationId: lineageOperation.operationId,
-      plannedAttempt,
+      plannedAttempt: predecessor.plannedAttempt,
       version: workflowJournalEventVersion
     })
   )
@@ -260,13 +233,11 @@ export const makeSuccessorPrefix = (
     authorizationAt: authorization.position,
     predecessor,
     targetLineage: freshLineage,
-    targetLineageObservedAt: JournalPosition.make(records.length)
+    targetLineageObservedAt: observed.position
   }
-  const reduction = reduceWorkflowJournalHistory(fixture.runId, records)
+  const reduction = reduceWorkflowJournalHistory(fixture.runId, fixture.records())
   if (reduction._tag === "InvalidWorkflowJournalHistory") {
-    throw new Error(`fixture must be accepted before successor fixation: ${JSON.stringify(reduction.issues)}`)
+    throw new Error(`fixture must be accepted before next successor fixation: ${JSON.stringify(reduction.issues)}`)
   }
-  return { accepted, append, input, records: () => records, reduction, runId: fixture.runId }
+  return { input, reduction }
 }
-
-export { appendAutomaticSuccessorGeneration } from "./automatic-successor-generation.js"

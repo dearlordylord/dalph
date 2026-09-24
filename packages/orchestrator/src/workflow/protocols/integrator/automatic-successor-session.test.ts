@@ -8,12 +8,11 @@ import { makeTargetLineageObservationOperation } from "../../registry/operation.
 import { Journal, journalLayer, type JournalStorageBoundary } from "../../../coordination/delivery/journal.js"
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
-import { JournalDatabaseLocator } from "../../../workflow-journal/identity.js"
+import { JournalDatabaseLocator, JournalPosition } from "../../../workflow-journal/identity.js"
 import { JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
 import { memoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { sqliteJournalStoreLayer, sqliteJournalTestLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
 import { OperationId } from "../../identity.js"
-import { JournalPosition } from "../../../workflow-journal/identity.js"
 import {
   IntegrationQuarantineBasis,
   IntegrationQuarantineCause,

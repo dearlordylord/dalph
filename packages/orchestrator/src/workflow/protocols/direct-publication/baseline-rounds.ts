@@ -90,14 +90,7 @@ export const automaticRemoteBaselineRoundsFor = (
         authorizationAt,
         round
       )
-      const roundRecords = eventRecords.filter(
-        ({ event }) =>
-          (event._tag === "RemoteBaselineReadIntended" ||
-            event._tag === "RemoteBaselineObserved" ||
-            event._tag === "LocalTargetCatchUpIntended" ||
-            event._tag === "LocalTargetCatchUpObserved") &&
-          event.correlation.baselineId === correlation.baselineId
-      )
+      const roundRecords = eventRecords.filter(({ event }) => event.correlation.baselineId === correlation.baselineId)
       const exactRoundBinding = authorizedRoundRecords.every(({ event }) => {
         if (
           event.correlation._tag !== "AutomaticCompetingHead" ||
@@ -137,11 +130,7 @@ export const automaticRemoteBaselineRoundsFor = (
     })
     .map((evidence, index, allRounds) => {
       const priorRound = allRounds[index - 1]
-      if (
-        priorRound === undefined ||
-        evidence.state._tag === "Contradiction" ||
-        (Number(evidence.round) === 1 && evidence.readIntentAt === undefined)
-      ) {
+      if (priorRound === undefined || evidence.state._tag === "Contradiction") {
         return evidence
       }
       if (
