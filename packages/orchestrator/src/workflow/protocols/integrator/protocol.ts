@@ -299,7 +299,6 @@ const correlationForRequestedRun = Effect.fn("IntegratorProtocol.correlationForR
     for (const { event } of journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")) {
       if (
         event._tag === "IntegratorAutomaticSuccessorSessionFixed" &&
-        integratorCorrelationsEqual(event.predecessor, recordedSession.value) &&
         integratorCorrelationsEqual(event.successor, activeSession.value)
       ) {
         exactAutomaticSuccessorSession = activeSession.value
