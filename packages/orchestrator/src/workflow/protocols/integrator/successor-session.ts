@@ -38,10 +38,7 @@ import {
   integratorSuccessorCorrelationFor,
   readRecordedIntegratorSession
 } from "./session.js"
-import {
-  integratorCorrelationsEqual,
-  integratorResponsibilityFactsFromCorrelation
-} from "./state.js"
+import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./state.js"
 import { deriveIntegrationQuarantineState } from "../integration-quarantine/state.js"
 import { integrationQuarantineDirectionSubject } from "../integration-quarantine/events.js"
 import { integrationQuarantineDirectionTargetLineageOperationId } from "../integration-quarantine/direction-lineage-operation.js"

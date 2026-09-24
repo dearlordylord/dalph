@@ -23,7 +23,6 @@ import {
 } from "./baseline-events.js"
 import { deriveRemoteBaselineState } from "./baseline-state.js"
 import { remoteBaselineEventsFor } from "./baseline-rounds.js"
-export { automaticRemoteBaselineRoundsFor, remoteBaselineEventsFor } from "./baseline-rounds.js"
 
 export type CurrentRemoteBaselineEvidence<E, R> = (runId: RunId) => Effect.Effect<JournalHistorySource, E, R>
 

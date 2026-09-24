@@ -225,10 +225,7 @@ export const validateAutomaticSuccessorSessionFixedRecord = (
   const successor = integratorAutomaticSuccessorCorrelationFor(input)
   const capacity = integratorSessionCapacityForJournal(priorRecords, predecessor)
   if (capacity._tag === "Exhausted") {
-    return {
-      _tag: "Invalid",
-      detail: "automatic successor event exceeds the fixed-session capacity"
-    }
+    return { _tag: "Invalid", detail: "automatic successor event exceeds the fixed-session capacity" }
   }
   const expectedEvent = eventFor(input, successor, capacity.nextGeneration)
   const expectedKey = integratorAutomaticSuccessorSessionFixedRecordKey(predecessor, record.event.authorizationAt)

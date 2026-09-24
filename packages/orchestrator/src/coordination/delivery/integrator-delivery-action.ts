@@ -29,10 +29,7 @@ import {
 } from "../../workflow/protocols/integrator/session-capacity.js"
 import { IntegratorCompetingHeadSuccessorAuthorizedEvent } from "../../workflow/protocols/integrator/automatic-successor-events.js"
 import { remotePublicationCorrelationEquals } from "../../workflow/protocols/direct-publication/events.js"
-import {
-  journalRecordByKey,
-  journalRecordsOfKind
-} from "../../workflow-journal/record-evidence.js"
+import { journalRecordByKey, journalRecordsOfKind } from "../../workflow-journal/record-evidence.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { integratorCompetingHeadSuccessorAuthorizedRecordKey } from "../../workflow-journal/record-key.js"
 import {

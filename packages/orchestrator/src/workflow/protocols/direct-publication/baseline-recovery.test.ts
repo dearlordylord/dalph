@@ -367,33 +367,30 @@ const exerciseRecoveryCuts = Effect.fn("RemoteBaselineRecovery.exerciseCuts")(fu
       const firstState = yield* open((store) =>
         runProcess(store, first.git).pipe(
           Effect.tap(() =>
-            store.read(runId).pipe(
-              Effect.tap((records) =>
-                Effect.sync(() =>
-                  expect(
-                    records.some(
-                      (record) =>
-                        record.event._tag === "LocalTargetCatchUpObserved" &&
-                        record.event.result._tag === "Rejected" &&
-                        record.event.expectedLocalHead === localHead &&
-                        record.event.remoteHead === remoteHead &&
-                        record.event.result.observedHead === racedLocalHead
-                    )
-                  ).toBe(true)
+            store
+              .read(runId)
+              .pipe(
+                Effect.tap((records) =>
+                  Effect.sync(() =>
+                    expect(
+                      records.some(
+                        (record) =>
+                          record.event._tag === "LocalTargetCatchUpObserved" &&
+                          record.event.result._tag === "Rejected" &&
+                          record.event.expectedLocalHead === localHead &&
+                          record.event.remoteHead === remoteHead &&
+                          record.event.result.observedHead === racedLocalHead
+                      )
+                    ).toBe(true)
+                  )
                 )
               )
-            )
           )
         )
       )
       expect(firstState).toMatchObject({
         _tag: "Retained",
-        cause: {
-          _tag: "CatchUpChanged",
-          expectedLocalHead: localHead,
-          observedLocalHead: racedLocalHead,
-          remoteHead
-        }
+        cause: { _tag: "CatchUpChanged", expectedLocalHead: localHead, observedLocalHead: racedLocalHead, remoteHead }
       })
       expect(yield* Ref.get(local)).toBe(racedLocalHead)
       expect(yield* Ref.get(first.calls)).toMatchObject({
@@ -503,12 +500,7 @@ it.effect("retains a catch-up ref race and requires a fresh baseline before anot
 
       expect(firstState).toMatchObject({
         _tag: "Retained",
-        cause: {
-          _tag: "CatchUpChanged",
-          expectedLocalHead: localHead,
-          observedLocalHead: racedLocalHead,
-          remoteHead
-        }
+        cause: { _tag: "CatchUpChanged", expectedLocalHead: localHead, observedLocalHead: racedLocalHead, remoteHead }
       })
       expect(yield* Ref.get(local)).toBe(racedLocalHead)
       expect(yield* Ref.get(first.calls)).toMatchObject({

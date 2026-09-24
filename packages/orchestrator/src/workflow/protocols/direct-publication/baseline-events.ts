@@ -91,10 +91,7 @@ export type RemoteBaselineCorrelation =
   | AutomaticCompetingHeadRemoteBaselineCorrelation
 
 const RemoteBaselineCorrelationVariants = Schema.TaggedUnion({
-  Initial: {
-    ...remoteBaselineCorrelationFields,
-    baselineId: RemoteBaselineId
-  },
+  Initial: { ...remoteBaselineCorrelationFields, baselineId: RemoteBaselineId },
   AutomaticCompetingHead: {
     ...remoteBaselineCorrelationFields,
     authorizationAt: JournalPosition,

@@ -55,9 +55,7 @@ export const integratorSessionCapacityForJournal = (
   const initialFixations: ReadonlyArray<IntegratorSessionFixation> = [
     ...journalRecordsOfKind(records, "IntegratorSessionFixed")
   ].flatMap(({ event }) =>
-    event._tag === "IntegratorSessionFixed"
-      ? [{ _tag: "Initial" as const, correlation: event.correlation }]
-      : []
+    event._tag === "IntegratorSessionFixed" ? [{ _tag: "Initial" as const, correlation: event.correlation }] : []
   )
   const successorFixations: ReadonlyArray<IntegratorSessionFixation> = [
     ...journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed"),

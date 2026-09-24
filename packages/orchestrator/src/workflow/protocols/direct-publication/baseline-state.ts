@@ -20,11 +20,7 @@ export const RemoteBaselineState = Schema.TaggedUnion({
   Retained: {
     correlation: RemoteBaselineCorrelation,
     cause: Schema.TaggedUnion({
-      CatchUpChanged: {
-        expectedLocalHead: GitCommitSha,
-        observedLocalHead: GitCommitSha,
-        remoteHead: GitCommitSha
-      },
+      CatchUpChanged: { expectedLocalHead: GitCommitSha, observedLocalHead: GitCommitSha, remoteHead: GitCommitSha },
       CatchUpUnavailable: { reason: RemoteBaselineFailureReason },
       UnsafeObservation: { observation: RemoteBaselineObservation }
     })

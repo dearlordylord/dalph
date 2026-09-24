@@ -1779,9 +1779,7 @@ const projectHistoricalAutomaticSuccessorSession = (
     initialAutomaticCompetingHeadBaselineRound
   )
   const latestBaselineCorrelation = Array.from(context.remoteBaselineReadIntents.values())
-    .flatMap(({ correlation }) =>
-      correlation._tag === "AutomaticCompetingHead" ? [correlation] : []
-    )
+    .flatMap(({ correlation }) => (correlation._tag === "AutomaticCompetingHead" ? [correlation] : []))
     .filter((correlation) => correlation.authorizationAt === event.authorizationAt)
     .sort((left, right) => Number(left.baselineRound) - Number(right.baselineRound))
     .at(lastArrayElementOffset)
@@ -1820,8 +1818,8 @@ const projectHistoricalAutomaticSuccessorSession = (
         plannedTaskAttemptEquivalence(occurrence.operation.plannedAttempt, event.successor.plannedAttempt) &&
         integrationTargetEqual(occurrence.operation.integrationTarget, event.successor.integrationTarget)
     )
-  const sessionFixations: ReadonlyArray<IntegratorSessionFixation> = context.occurrences.flatMap<IntegratorSessionFixation>(
-    (occurrence) => {
+  const sessionFixations: ReadonlyArray<IntegratorSessionFixation> =
+    context.occurrences.flatMap<IntegratorSessionFixation>((occurrence) => {
       if (occurrence._tag === "IntegratorSessionFixed") {
         return [{ _tag: "Initial" as const, correlation: occurrence.correlation }]
       }
@@ -1832,8 +1830,7 @@ const projectHistoricalAutomaticSuccessorSession = (
         return [{ _tag: "Successor" as const, predecessor: occurrence.predecessor, successor: occurrence.successor }]
       }
       return []
-    }
-  )
+    })
   const capacity = integratorSessionCapacityFor(event.predecessor, sessionFixations)
   const expectedGeneration = capacity._tag === "Available" ? capacity.nextGeneration : undefined
   if (
@@ -2101,9 +2098,7 @@ const projectHistoricalRemoteBaselineReadIntended = (
       return historicalFailure(record, "automatic successor baseline refresh cannot follow successor fixation")
     }
     const priorIntents = Array.from(context.remoteBaselineReadIntents.values())
-      .flatMap(({ correlation }) =>
-        correlation._tag === "AutomaticCompetingHead" ? [correlation] : []
-      )
+      .flatMap(({ correlation }) => (correlation._tag === "AutomaticCompetingHead" ? [correlation] : []))
       .filter((correlation) => correlation.authorizationAt === authorizationAt)
       .sort((left, right) => Number(left.baselineRound) - Number(right.baselineRound))
     const prior = priorIntents.at(lastArrayElementOffset)

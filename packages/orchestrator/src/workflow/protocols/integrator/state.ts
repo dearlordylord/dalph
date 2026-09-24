@@ -123,7 +123,11 @@ const latestStartedRunFor = (
 ):
   | { readonly _tag: "Absent" }
   | { readonly _tag: "Invalid"; readonly detail: string }
-  | { readonly _tag: "Valid"; readonly run: IntegratorRunCorrelation; readonly position: JournalRecord["position"] } => {
+  | {
+      readonly _tag: "Valid"
+      readonly run: IntegratorRunCorrelation
+      readonly position: JournalRecord["position"]
+    } => {
   let ordinals = HashSet.empty<number>()
   let latest: { readonly run: IntegratorRunCorrelation; readonly position: JournalRecord["position"] } | undefined
   for (const record of journalRecordsOfKind(records, "IntegratorRunStarted")) {
