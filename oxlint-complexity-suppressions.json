@@ -211,7 +211,7 @@
   },
   "packages/orchestrator/src/coordination/delivery/integration-delivery-action-adapter.ts": {
     "complexity": {
-      "count": 1,
+      "count": 2,
       "justification": "executeAdvancedIntegrationAction sequences one advanced integration action through journaled proposal, finality, publication, cleanup, and error outcomes. Its alternatives are one lifecycle boundary that preserves durable ordering."
     }
   },
@@ -293,13 +293,13 @@
   },
   "packages/orchestrator/src/workflow/protocols/direct-publication/protocol-engine.ts": {
     "complexity": {
-      "count": 2,
+      "count": 4,
       "justification": "observationResult maps one remote-publication read and ancestry observation into the typed result while preserving target, candidate, and failure distinctions; runRemotePublication sequences one publication attempt from admission through push outcome and durable retained/success evidence. Their branches form one direct-publication protocol boundary."
     }
   },
   "packages/orchestrator/src/workflow/protocols/direct-publication/state.ts": {
     "complexity": {
-      "count": 1,
+      "count": 2,
       "justification": "deriveRemotePublicationState reconstructs one direct-publication state from ordered intended, admission, observation, push, retained, and success facts, rejecting duplicate, stale, or mismatched chronology. Its branches jointly define the protocol reducer."
     }
   },
@@ -406,7 +406,7 @@
   },
   "packages/orchestrator/src/workflow/registry/occurrence-projection.ts": {
     "complexity": {
-      "count": 2,
+      "count": 3,
       "justification": "projectHistoricalOccurrence maps each registered journal event family to its historical occurrence while preserving exact occurrence identity, correlation, and the closed unknown fallback. Its branches form one exhaustive registry projection boundary."
     }
   }

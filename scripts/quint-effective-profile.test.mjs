@@ -58,7 +58,7 @@ void test("hosted and local imports launch no checker", async () => {
   assert.equal(result.stderr, "")
 })
 
-void test("materializes the independent complete 105 obligations before any launch", () => {
+void test("materializes the independent complete 105-command profile before any launch", () => {
   const profile = createQuintEffectiveProfile()
   assertQuintEffectiveProfile(profile)
   const commandContract = profile.commands.map(({ args, kind, name, position, verdict }) => ({
@@ -68,9 +68,11 @@ void test("materializes the independent complete 105 obligations before any laun
     args,
     verdict
   }))
+  // This fingerprint covers exact CLI arguments, including the current model
+  // obligation lists, even when those additions do not change command count.
   assert.equal(
     createHash("sha256").update(JSON.stringify(commandContract)).digest("hex"),
-    "9d10caba9f38efaa13abb9a3fca880be07607c4e97a0a7e6690fcb248276c08b"
+    "1554d4ade77ef6357290aaed0548aad56c0b0c12a84f6892180f90003114704c"
   )
   const counts = Object.fromEntries(
     ["typecheck", "test", "sampled-run", "verify"].map((kind) => [
