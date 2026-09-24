@@ -162,6 +162,7 @@ import {
   RemotePublicationResumeRequest,
   RemotePublicationResumeRequestId,
   RemotePublicationResumeRequestedEvent,
+  resumeRemotePublicationAndDispatch,
   RemotePublicationRetainedCause,
   RemotePublicationRetainedEvent,
   RemotePublicationSucceededEvent,
@@ -199,6 +200,7 @@ import {
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../orchestrator/test/controlled-planned-attempt-executor.js"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
 import { describeJournalEvent } from "../../../orchestrator/src/workflow/registry/event-descriptor.js"
+import { unpublishedAcceptedJournalReaderTestLayer } from "../../../orchestrator/src/workflow-journal/test-accepted-reader.js"
 import type { AppendableWorkflowJournalEvent } from "../../../orchestrator/src/workflow-journal/store.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
 import {
@@ -3052,10 +3054,10 @@ it.effect("records an Operator capacity change through the production compositio
   )
 )
 
-it.effect("retains remote delivery across Pause and Exit", () =>
+it.effect("retains Pause and Exit delivery and quiesces on a compatible-head wait", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      for (const cutoff of ["Pause", "Exit"] as const) {
+      for (const cutoff of ["Pause", "Exit", "Wait"] as const) {
         const fileSystem = yield* FileSystem.FileSystem
         const directory = yield* fileSystem.makeTempDirectoryScoped({
           prefix: `dalph-production-retained-publication-${cutoff.toLowerCase()}-`
@@ -3160,7 +3162,74 @@ it.effect("retains remote delivery across Pause and Exit", () =>
           ({ event }) => event._tag === "RemotePublicationSucceeded"
         )
         if (publicationProofAt < 0) return yield* Effect.die("publication fixture lacks conclusive proof")
-        const publicationRecords = published.promotedRecords.slice(0, publicationProofAt + 1)
+        const publicationPrefix = published.promotedRecords.slice(0, publicationProofAt)
+        const appendPublicationRecord = (
+          records: ReadonlyArray<JournalRecord>,
+          event: AppendableWorkflowJournalEvent
+        ): JournalRecord => ({
+          event,
+          key: describeJournalEvent(event).expectedKey,
+          position: JournalPosition.make(records.length + 1),
+          runId
+        })
+        const publicationRecords =
+          cutoff !== "Wait"
+            ? published.promotedRecords.slice(0, publicationProofAt + 1)
+            : (() => {
+                const publicationProof = published.promotedRecords[publicationProofAt]?.event
+                if (publicationProof?._tag !== "RemotePublicationSucceeded") {
+                  return []
+                }
+                const request = RemotePublicationResumeRequest.make({
+                  requestId: RemotePublicationResumeRequestId.make("retained-publication-same-candidate-resume"),
+                  responsibility: IntegrationResponsibilityIdentity.make({
+                    queuedAt: published.qualifiedCandidate.run.session.queuedAt,
+                    runId
+                  }),
+                  runId,
+                  schemaVersion: 1
+                })
+                const firstRetained = RemotePublicationRetainedEvent.make({
+                  authorization: RemotePublicationAttemptAuthorization.cases.InitialAttempt.make({}),
+                  cause: RemotePublicationRetainedCause.cases.AuthenticationDenied.make({}),
+                  correlation: publicationProof.correlation,
+                  occurrenceClassification: "NonActionOccurrence",
+                  version: workflowJournalEventVersion
+                })
+                const firstRetainedRecord = appendPublicationRecord(publicationPrefix, firstRetained)
+                const resumeReceipt = RemotePublicationResumeRequestedEvent.make({
+                  correlation: publicationProof.correlation,
+                  initiatedBy: WorkflowActor.cases.Operator.make({}),
+                  occurrenceClassification: "InitiatedAction",
+                  request,
+                  version: workflowJournalEventVersion
+                })
+                const resumeReceiptRecord = appendPublicationRecord(
+                  [...publicationPrefix, firstRetainedRecord],
+                  resumeReceipt
+                )
+                const compatibleRetained = RemotePublicationRetainedEvent.make({
+                  authorization: RemotePublicationAttemptAuthorization.cases.ResumeRequest.make({
+                    requestId: request.requestId
+                  }),
+                  cause: RemotePublicationRetainedCause.cases.CompatibleCompetingHead.make({
+                    mergeBase: baseSha,
+                    remoteHead: GitCommitSha.make("d".repeat(40))
+                  }),
+                  correlation: publicationProof.correlation,
+                  occurrenceClassification: "NonActionOccurrence",
+                  version: workflowJournalEventVersion
+                })
+                return [
+                  ...publicationPrefix,
+                  firstRetainedRecord,
+                  resumeReceiptRecord,
+                  appendPublicationRecord(
+                    [...publicationPrefix, firstRetainedRecord, resumeReceiptRecord],
+                    compatibleRetained
+                  )
+                ]
+              })()
         const filename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
         yield* Effect.gen(function* () {
           const journal = yield* JournalStore
@@ -3186,7 +3255,7 @@ it.effect("retains remote delivery across Pause and Exit", () =>
           TrackerMutation,
           TrackerMutation.of({
             acquireTaskClaim: () => Effect.die("cutoff must not acquire a claim"),
-            readTaskClaim: () => Effect.die("cutoff must not reconcile completion"),
+            readTaskClaim: () => Effect.succeed(claim),
             releaseTaskClaim: () => Effect.die("cutoff must not release a claim")
           })
         )
@@ -3248,10 +3317,19 @@ it.effect("retains remote delivery across Pause and Exit", () =>
               direction: "Pause",
               subject: { _tag: "Run", runId }
             })
-          } else {
+          } else if (cutoff === "Exit") {
             expect(yield* exitShell.requestBoundary.requestExit).toMatchObject({ _tag: "Succeeded" })
           }
-          yield* run.pipe(Effect.exit)
+          const runExit = yield* run.pipe(Effect.exit)
+          if (cutoff === "Wait") {
+            if (runExit._tag === "Failure") return yield* Effect.failCause(runExit.cause)
+            expect(runExit._tag).toBe("Success")
+            if (runExit._tag === "Success") {
+              expect(runExit.value).toEqual(
+                RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+              )
+            }
+          }
         }).pipe(
           Effect.provide(application),
           Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: filename })))
@@ -3260,12 +3338,29 @@ it.effect("retains remote delivery across Pause and Exit", () =>
         const after = yield* Effect.gen(function* () {
           return yield* (yield* JournalStore).read(runId)
         }).pipe(Effect.provide(sqliteJournalTestLayer({ filename })))
-        const proofAfter = after.filter(({ event }) => event._tag === "RemotePublicationSucceeded")
-        expect(proofAfter).toHaveLength(1)
-        expect(proofAfter[0]?.event).toMatchObject({
-          _tag: "RemotePublicationSucceeded",
-          correlation: { qualifiedCandidate: { candidateCommit } }
-        })
+        const remoteHistoryAfter = after.filter(
+          ({ event }) =>
+            event._tag === "RemotePublicationAttemptIntended" ||
+            event._tag === "RemotePublicationRetained" ||
+            event._tag === "RemotePublicationResumeRequested" ||
+            event._tag === "RemotePublicationSucceeded"
+        )
+        const seededRemoteHistory = publicationRecords.filter(
+          ({ event }) =>
+            event._tag === "RemotePublicationAttemptIntended" ||
+            event._tag === "RemotePublicationRetained" ||
+            event._tag === "RemotePublicationResumeRequested" ||
+            event._tag === "RemotePublicationSucceeded"
+        )
+        expect(remoteHistoryAfter).toEqual(seededRemoteHistory)
+        if (cutoff !== "Wait") {
+          const proofAfter = after.filter(({ event }) => event._tag === "RemotePublicationSucceeded")
+          expect(proofAfter).toHaveLength(1)
+          expect(proofAfter[0]?.event).toMatchObject({
+            _tag: "RemotePublicationSucceeded",
+            correlation: { qualifiedCandidate: { candidateCommit } }
+          })
+        }
         if (cutoff === "Pause") {
           expect(after.slice(0, publicationRecords.length)).toEqual(publicationRecords)
           expect(after.slice(publicationRecords.length).map(({ event }) => event)).toEqual([
@@ -3275,7 +3370,7 @@ it.effect("retains remote delivery across Pause and Exit", () =>
               subject: { _tag: "Run", runId }
             })
           ])
-        } else {
+        } else if (cutoff === "Exit") {
           expect(after).toEqual(publicationRecords)
         }
         expect(yield* Ref.get(gitCalls), cutoff).toEqual([])
@@ -4004,6 +4099,27 @@ it.effect.each([
           expect((yield* Ref.get(currentSpecification)).fingerprint).toBe(changedSpecification.fingerprint)
         }
       }
+      const followupRequest = RemotePublicationResumeRequest.make({
+        ...request,
+        requestId: RemotePublicationResumeRequestId.make("resumed-finality-follow-up")
+      })
+      const dispatches = yield* Ref.make<ReadonlyArray<string>>([])
+      const remoteCallsBeforeFollowup = yield* Ref.get(remoteCalls)
+      const followupJournalLayer = sqliteJournalTestLayer({ filename })
+      const followupRuntimeLayer = Layer.provideMerge(unpublishedAcceptedJournalReaderTestLayer, followupJournalLayer)
+      const followupStatus = yield* resumeRemotePublicationAndDispatch(
+        published.qualifiedCandidate,
+        remotePublicationTargetForTest,
+        followupRequest,
+        {
+          runObservation: <A, E, R>(phase: Effect.Effect<A, E, R>) => phase,
+          runSender: <A, E, R>(phase: Effect.Effect<A, E, R>) => phase
+        },
+        { dispatch: (dispatch) => Ref.update(dispatches, (current) => [...current, dispatch._tag]) }
+      ).pipe(Effect.provide(Layer.merge(followupRuntimeLayer, Layer.succeed(RemotePublicationGit, remoteGit))))
+      expect(followupStatus._tag).toBe("PublicationSucceeded")
+      expect(yield* Ref.get(dispatches)).toEqual(premise === "unchanged" ? [] : ["ContinueFinality"])
+      expect(yield* Ref.get(remoteCalls)).toEqual(remoteCallsBeforeFollowup)
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
   )
 )
