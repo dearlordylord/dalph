@@ -212,7 +212,7 @@
   "packages/orchestrator/src/coordination/delivery/integration-delivery-action-adapter.ts": {
     "complexity": {
       "count": 2,
-      "justification": "executeAdvancedIntegrationAction sequences one advanced integration action through journaled proposal, finality, publication, cleanup, and error outcomes. Its alternatives are one lifecycle boundary that preserves durable ordering."
+      "justification": "activeResumeRequest validates the exact durable resume receipt before publication restarts, while executeAdvancedIntegrationAction routes each advanced integration transition through its journaled owner. Their alternatives preserve receipt identity and ordered delivery."
     }
   },
   "packages/orchestrator/src/coordination/delivery/reactive-delivery-relations.ts": {
@@ -294,13 +294,13 @@
   "packages/orchestrator/src/workflow/protocols/direct-publication/protocol-engine.ts": {
     "complexity": {
       "count": 4,
-      "justification": "observationResult maps one remote-publication read and ancestry observation into the typed result while preserving target, candidate, and failure distinctions; runRemotePublication sequences one publication attempt from admission through push outcome and durable retained/success evidence. Their branches form one direct-publication protocol boundary."
+      "justification": "runRemotePublication sequences direct publication through its observation-phase and sender-phase generators; resumeRemotePublicationOutcome validates the exact receipt and retained history before bounded retry or publication/finality continuation. These branches preserve the single durable retry policy."
     }
   },
   "packages/orchestrator/src/workflow/protocols/direct-publication/state.ts": {
     "complexity": {
       "count": 2,
-      "justification": "deriveRemotePublicationState reconstructs one direct-publication state from ordered intended, admission, observation, push, retained, and success facts, rejecting duplicate, stale, or mismatched chronology. Its branches jointly define the protocol reducer."
+      "justification": "remotePublicationRetainedCauseIsResumable classifies retained causes eligible for receipt-authorized retry, while deriveRemotePublicationState validates the exact intent, attempt, resume, and proof chronology. These alternatives define one fail-closed publication state reducer."
     }
   },
   "packages/orchestrator/src/workflow/protocols/disposition-cleanup/boundaries.ts": {
@@ -407,7 +407,7 @@
   "packages/orchestrator/src/workflow/registry/occurrence-projection.ts": {
     "complexity": {
       "count": 3,
-      "justification": "projectHistoricalOccurrence maps each registered journal event family to its historical occurrence while preserving exact occurrence identity, correlation, and the closed unknown fallback. Its branches form one exhaustive registry projection boundary."
+      "justification": "projectHistoricalPublicationResumeRequested validates the receipt against its exact Run responsibility and retained subject; projectHistoricalPublication projects publication events, and projectHistoricalOccurrence routes closed journal families to typed occurrences. Their branches preserve historical identity and correlation."
     }
   }
 }
