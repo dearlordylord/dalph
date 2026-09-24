@@ -3324,11 +3324,9 @@ it.effect("retains Pause and Exit delivery and quiesces on a compatible-head wai
           if (cutoff === "Wait") {
             if (runExit._tag === "Failure") return yield* Effect.failCause(runExit.cause)
             expect(runExit._tag).toBe("Success")
-            if (runExit._tag === "Success") {
-              expect(runExit.value).toEqual(
-                RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
-              )
-            }
+            expect(runExit.value).toEqual(
+              RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+            )
           }
         }).pipe(
           Effect.provide(application),

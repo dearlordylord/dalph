@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- The closed transition/explanation algebra and its exhaustive mapping share one owner. */
 import { Data, Match, Option, Schema } from "effect"
 import {
+  type GitCommitSha,
   type IntegrationTarget,
   type PlannedTaskAttempt,
   type TaskId,
@@ -10,7 +11,6 @@ import {
   type PlannedAttemptExecutorReport,
   type RemotePublicationTarget
 } from "@dalph/contracts"
-import type { GitCommitSha } from "@dalph/contracts"
 import type { RemotePublicationSucceededEvent } from "../../workflow/protocols/direct-publication/events.js"
 import type { RemoteBaselineCorrelation } from "../../workflow/protocols/direct-publication/baseline-events.js"
 import { type OperationId } from "../../workflow/identity.js"

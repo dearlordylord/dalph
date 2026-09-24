@@ -376,9 +376,8 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
     if (recordedRequest?._tag === "RemotePublicationResumeRequested") {
       const sameRequest = Schema.toEquivalence(RemotePublicationResumeRequest)(recordedRequest.request, request)
       if (!sameRequest) return yield* new RemotePublicationResumeRequestConflict({ requestId: request.requestId })
-      if (state._tag === "PublicationSucceeded") {
+      if (state._tag === "PublicationSucceeded")
         return { state, activated: !publicationFinalityIsSettledFor(source, candidate) }
-      }
       if (state._tag === "PublicationResumeReady" && state.request.requestId === request.requestId) {
         return { state: yield* runRemotePublication(candidate, target, phaseBoundary), activated: true }
       }
@@ -406,9 +405,8 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
       }
       return { state, activated: false }
     }
-    if (state._tag === "PublicationSucceeded") {
+    if (state._tag === "PublicationSucceeded")
       return { state, activated: !publicationFinalityIsSettledFor(source, candidate) }
-    }
     if (state._tag !== "PublicationRetained") return { state, activated: false }
     const priorAttemptCount = events.filter((event) => event._tag === "RemotePublicationAttemptIntended").length
     if (!remotePublicationRetainedCauseIsResumable(state.cause) || priorAttemptCount >= remotePublicationAttemptLimit)
@@ -438,9 +436,8 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
     dispatchBoundary: RemotePublicationResumeDispatchBoundary<EDispatch, RDispatch>
   ) {
     const outcome = yield* resumeRemotePublicationOutcome(candidate, target, unknownRequest, phaseBoundary)
-    if (outcome.activated && resumeOutcomeNeedsContinuation(outcome.state)) {
+    if (outcome.activated && resumeOutcomeNeedsContinuation(outcome.state))
       yield* dispatchBoundary.dispatch(remotePublicationResumeDispatchOf(outcome.state))
-    }
     return outcome.state
   })
   return { runRemotePublication, resumeRemotePublication, resumeRemotePublicationAndDispatch }
