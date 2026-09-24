@@ -24,6 +24,11 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     | AutomaticSuccessorSessionFixed
     | AutomaticSuccessorInFlight
     | AutomaticSuccessorResponseLost
+    | AutomaticSuccessorRetryResultRecorded
+    | AutomaticSuccessorRetryQuarantined
+    | AutomaticSuccessorRetryDirected
+    | AutomaticSuccessorRetryLineageProven
+    | AutomaticSuccessorRetryInFlight
     | AutomaticSuccessorCandidateRecorded
     | AutomaticSuccessorPublicationIntent
     | AutomaticSuccessorPushInFlight
@@ -177,6 +182,22 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
     successorRunOrdinal: int,
     successorInvocationCount: int,
     successorResumeCount: int,
+    successorResultPosition: int,
+    successorResultSession: int,
+    successorQuarantinePosition: int,
+    successorQuarantineSession: int,
+    successorRetryDirectionPosition: int,
+    successorRetryDirectionSession: int,
+    successorRetryDirectionIsOperator: bool,
+    successorRetryLineagePosition: int,
+    successorRetryLineageSession: int,
+    successorRetryLineageHead: int,
+    successorRetryLineageBaseCommit: int,
+    successorRetryRunStartPosition: int,
+    successorRetryRunSession: int,
+    successorRetryRunOrdinal: int,
+    successorRetryRunStartCount: int,
+    successorRetryInvocationCount: int,
     successorStoppedWriterReconciled: bool,
     successorWriterInFlight: bool,
     successorWriterStopped: bool,
@@ -346,6 +367,26 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       state.successorInvocationCount == 1,
       state.successorResumeCount <= 2,
       state.successorStoppedWriterReconciled,
+    }
+
+  val automaticSuccessorRetryRequiresExactOperatorChronology: bool =
+    state.successorRetryRunStartCount == 0 or and {
+      state.successorRetryRunStartCount == 1,
+      state.successorRetryRunOrdinal == 2,
+      state.successorRetryRunSession == state.successorSession,
+      state.successorResultPosition > 0,
+      state.successorResultSession == state.successorSession,
+      state.successorQuarantinePosition > state.successorResultPosition,
+      state.successorQuarantineSession == state.successorSession,
+      state.successorRetryDirectionPosition > state.successorQuarantinePosition,
+      state.successorRetryDirectionSession == state.successorSession,
+      state.successorRetryDirectionIsOperator,
+      state.successorRetryLineagePosition > state.successorRetryDirectionPosition,
+      state.successorRetryLineageSession == state.successorSession,
+      state.successorRetryLineageHead == state.successorExpectedHead,
+      state.successorRetryLineageBaseCommit == BASE_COMMIT,
+      state.successorRetryRunStartPosition > state.successorRetryLineagePosition,
+      state.successorRetryInvocationCount == 1,
     }
 
   val automaticSuccessorBoundsAreFinite: bool = and {
@@ -565,6 +606,22 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       successorRunOrdinal: 0,
       successorInvocationCount: 0,
       successorResumeCount: 0,
+      successorResultPosition: 0,
+      successorResultSession: 0,
+      successorQuarantinePosition: 0,
+      successorQuarantineSession: 0,
+      successorRetryDirectionPosition: 0,
+      successorRetryDirectionSession: 0,
+      successorRetryDirectionIsOperator: false,
+      successorRetryLineagePosition: 0,
+      successorRetryLineageSession: 0,
+      successorRetryLineageHead: 0,
+      successorRetryLineageBaseCommit: 0,
+      successorRetryRunStartPosition: 0,
+      successorRetryRunSession: 0,
+      successorRetryRunOrdinal: 0,
+      successorRetryRunStartCount: 0,
+      successorRetryInvocationCount: 0,
       successorStoppedWriterReconciled: false,
       successorWriterInFlight: false,
       successorWriterStopped: false,
@@ -1268,6 +1325,95 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       successorResumeCount: state.successorResumeCount + 1,
       successorWriterInFlight: true,
       successorWriterStopped: false,
+    },
+  }
+
+  action recordAutomaticSuccessorNotPrepared: bool = all {
+    isRunning(state),
+    state.phase == AutomaticSuccessorInFlight,
+    state.successorRunOrdinal == 1,
+    state.successorInvocationCount == 1,
+    state.successorWriterInFlight,
+    state' = {
+      ...state,
+      phase: AutomaticSuccessorRetryResultRecorded,
+      successorResultPosition: state.nextJournalPosition,
+      successorResultSession: state.successorSession,
+      successorWriterInFlight: false,
+      successorWriterStopped: true,
+      successorStoppedWriterReconciled: true,
+      nextJournalPosition: state.nextJournalPosition + 1,
+    },
+  }
+
+  action quarantineAutomaticSuccessorNotPrepared: bool = all {
+    isRunning(state),
+    state.phase == AutomaticSuccessorRetryResultRecorded,
+    state.successorResultPosition > 0,
+    state.successorResultSession == state.successorSession,
+    state' = {
+      ...state,
+      phase: AutomaticSuccessorRetryQuarantined,
+      successorQuarantinePosition: state.nextJournalPosition,
+      successorQuarantineSession: state.successorSession,
+      nextJournalPosition: state.nextJournalPosition + 1,
+    },
+  }
+
+  action applyOperatorRetryToAutomaticSuccessor: bool = all {
+    isRunning(state),
+    state.phase == AutomaticSuccessorRetryQuarantined,
+    state.successorQuarantinePosition > state.successorResultPosition,
+    state.successorQuarantineSession == state.successorSession,
+    state' = {
+      ...state,
+      phase: AutomaticSuccessorRetryDirected,
+      successorRetryDirectionPosition: state.nextJournalPosition,
+      successorRetryDirectionSession: state.successorSession,
+      successorRetryDirectionIsOperator: true,
+      nextJournalPosition: state.nextJournalPosition + 1,
+    },
+  }
+
+  action observeFreshLineageAfterAutomaticSuccessorRetry: bool = all {
+    isRunning(state),
+    state.phase == AutomaticSuccessorRetryDirected,
+    state.successorRetryDirectionPosition > state.successorQuarantinePosition,
+    state.successorRetryDirectionSession == state.successorSession,
+    state.successorRetryDirectionIsOperator,
+    state' = {
+      ...state,
+      phase: AutomaticSuccessorRetryLineageProven,
+      successorRetryLineagePosition: state.nextJournalPosition,
+      successorRetryLineageSession: state.successorSession,
+      successorRetryLineageHead: state.successorExpectedHead,
+      successorRetryLineageBaseCommit: BASE_COMMIT,
+      nextJournalPosition: state.nextJournalPosition + 1,
+    },
+  }
+
+  action startAuthorizedAutomaticSuccessorRetry: bool = all {
+    isRunning(state),
+    state.phase == AutomaticSuccessorRetryLineageProven,
+    state.successorRetryRunStartCount == 0,
+    state.successorRunOrdinal == 1,
+    state.successorResultSession == state.successorSession,
+    state.successorQuarantineSession == state.successorSession,
+    state.successorRetryDirectionSession == state.successorSession,
+    state.successorRetryDirectionIsOperator,
+    state.successorRetryLineageSession == state.successorSession,
+    state.successorRetryLineageHead == state.successorExpectedHead,
+    state.successorRetryLineageBaseCommit == BASE_COMMIT,
+    state' = {
+      ...state,
+      phase: AutomaticSuccessorRetryInFlight,
+      successorRetryRunStartPosition: state.nextJournalPosition,
+      successorRetryRunSession: state.successorSession,
+      successorRetryRunOrdinal: 2,
+      successorRetryRunStartCount: state.successorRetryRunStartCount + 1,
+      successorRetryInvocationCount: state.successorRetryInvocationCount + 1,
+      successorRunOrdinal: 2,
+      nextJournalPosition: state.nextJournalPosition + 1,
     },
   }
 

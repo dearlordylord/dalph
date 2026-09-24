@@ -18,6 +18,7 @@ import {
   RemoteBaselineObservation,
   RemoteBaselineObservedEvent,
   RemoteBaselineReadIntendedEvent,
+  initialAutomaticCompetingHeadBaselineRound,
   automaticCompetingHeadRemoteBaselineCorrelationFor
 } from "../../src/workflow/protocols/direct-publication/baseline-events.js"
 import {
@@ -185,7 +186,8 @@ export const makeSuccessorPrefix = (
     integratorResponsibilityFactsFor(accepted.responsibility),
     accepted.integrationTarget,
     remotePublicationTargetForTest,
-    authorization.position
+    authorization.position,
+    initialAutomaticCompetingHeadBaselineRound
   )
   append(
     RemoteBaselineReadIntendedEvent.make({

@@ -28,7 +28,8 @@ import {
   RemoteBaselineReadIntendedEvent,
   type RemoteBaselineCorrelation,
   type RemoteBaselineGitService,
-  automaticCompetingHeadRemoteBaselineCorrelationFor
+  automaticCompetingHeadRemoteBaselineCorrelationFor,
+  initialAutomaticCompetingHeadBaselineRound
 } from "./baseline-events.js"
 import { establishRemoteBaseline } from "./baseline-protocol-engine.js"
 import { validateRemoteBaselineState } from "./baseline-transition-journal.js"
@@ -111,7 +112,8 @@ it.effect("retains unsafe automatic S2 catch-up evidence without moving the targ
         }
         const correlation = baselineIntent.event.correlation
         if (
-          correlation.automaticCompetingHeadAuthorizationAt !== authorization.position ||
+          correlation._tag !== "AutomaticCompetingHead" ||
+          correlation.authorizationAt !== authorization.position ||
           Number(authorization.position) !== Number(successor.input.authorizationAt)
         ) {
           return yield* Effect.die("baseline correlation must bind the exact S2 authorization position")
@@ -261,7 +263,7 @@ it.effect("reconciles one applied automatic-successor catch-up CAS after memory 
         return yield* Effect.die("accepted successor fixture must bind one authorization-scoped baseline")
       }
       const correlation = baselineRead.event.correlation
-      if (correlation.automaticCompetingHeadAuthorizationAt !== authorization.position) {
+      if (correlation._tag !== "AutomaticCompetingHead" || correlation.authorizationAt !== authorization.position) {
         return yield* Effect.die("successor baseline must carry its exact authorization position")
       }
       const seed = records.filter(({ position }) => Number(position) < Number(baselineRead.position))
@@ -455,7 +457,10 @@ it.effect(
           return yield* Effect.die("accepted successor fixture must contain its exact H2 authorization")
         }
         const correlation = firstBaselineIntent.event.correlation
-        expect(correlation.automaticCompetingHeadAuthorizationAt).toBe(authorization.position)
+        if (correlation._tag !== "AutomaticCompetingHead") {
+          return yield* Effect.die("first successor baseline read must use its tagged automatic correlation")
+        }
+        expect(correlation.authorizationAt).toBe(authorization.position)
         const prefix = acceptedRecords.filter(({ position }) => Number(position) < Number(firstBaselineIntent.position))
         const h3 = GitCommitShaSchema.make("8".repeat(40))
         const localHead = fixture.input.predecessor.expectedTargetHead
@@ -674,7 +679,8 @@ it.effect(
             initialBaselineRead.event.correlation.responsibility,
             initialBaselineRead.event.correlation.localTarget,
             initialBaselineRead.event.correlation.remoteTarget,
-            authorization.position
+            authorization.position,
+            initialAutomaticCompetingHeadBaselineRound
           )
           const rounds = automaticRemoteBaselineRoundsFor(history.prefix, reconstructedFirstRound)
           expect(rounds.map(({ state }) => state._tag)).toEqual(["Ready", "Ready"])
@@ -728,7 +734,7 @@ it.effect(
           return yield* Effect.die("accepted successor fixture must contain the exact authorized baseline and catch-up")
         }
         const correlation = baselineRead.event.correlation
-        if (correlation.automaticCompetingHeadAuthorizationAt !== authorization.position) {
+        if (correlation._tag !== "AutomaticCompetingHead" || correlation.authorizationAt !== authorization.position) {
           return yield* Effect.die("successor baseline must carry its exact authorization position")
         }
         const seed = records.filter(({ position }) => Number(position) < Number(baselineRead.position))
@@ -1092,13 +1098,11 @@ it.effect("refreshes Ready H2 to H3 under one authorization and reopens the exac
         expect.objectContaining({ event: prepared.event })
       ])
       expect(
-        reopened
-          .filter(({ event }) => event._tag === "RemoteBaselineReadIntended")
-          .map(({ event }) =>
-            event._tag === "RemoteBaselineReadIntended"
-              ? (event.correlation.automaticCompetingHeadBaselineRound ?? 1)
-              : 0
-          )
+        reopened.flatMap(({ event }) =>
+          event._tag === "RemoteBaselineReadIntended" && event.correlation._tag === "AutomaticCompetingHead"
+            ? [Number(event.correlation.baselineRound)]
+            : []
+        )
       ).toEqual([1, 2])
     }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)))
   )
@@ -1399,7 +1403,7 @@ it.effect(
           return yield* Effect.die("accepted successor fixture must contain its exact auth-scoped baseline")
         }
         const correlation = baselineRead.event.correlation
-        if (correlation.automaticCompetingHeadAuthorizationAt !== authorization.position) {
+        if (correlation._tag !== "AutomaticCompetingHead" || correlation.authorizationAt !== authorization.position) {
           return yield* Effect.die("baseline read must carry the exact automatic authorization position")
         }
         const seed = records.filter(({ position }) => Number(position) < Number(baselineRead.position))
@@ -1611,7 +1615,7 @@ it.effect(
           return yield* Effect.die("accepted fixture must contain one complete automatic baseline and catch-up")
         }
         const correlation = baselineRead.event.correlation
-        if (correlation.automaticCompetingHeadAuthorizationAt !== authorization.position) {
+        if (correlation._tag !== "AutomaticCompetingHead" || correlation.authorizationAt !== authorization.position) {
           return yield* Effect.die("baseline and catch-up must bind the exact automatic authorization")
         }
         const seed = records.filter(({ position }) => Number(position) < Number(baselineRead.position))
@@ -1824,7 +1828,7 @@ it.effect(
           return yield* Effect.die("accepted fixture must contain the exact automatic baseline and catch-up")
         }
         const correlation = baselineRead.event.correlation
-        if (correlation.automaticCompetingHeadAuthorizationAt !== authorization.position) {
+        if (correlation._tag !== "AutomaticCompetingHead" || correlation.authorizationAt !== authorization.position) {
           return yield* Effect.die("catch-up intent must bind the exact automatic authorization")
         }
         const seed = records.filter(({ position }) => Number(position) < Number(expectedCatchUpIntent.position))
@@ -2025,7 +2029,7 @@ it.effect(
           )
         }
         const correlation = baselineRead.event.correlation
-        if (correlation.automaticCompetingHeadAuthorizationAt !== authorization.position) {
+        if (correlation._tag !== "AutomaticCompetingHead" || correlation.authorizationAt !== authorization.position) {
           return yield* Effect.die("catch-up result must remain bound to the exact automatic authorization")
         }
         const seed = records.filter(({ position }) => Number(position) < Number(expectedCatchUpObservation.position))

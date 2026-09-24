@@ -18,7 +18,10 @@ import {
 } from "../../../workflow-journal/record-evidence.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
-import { automaticCompetingHeadRemoteBaselineCorrelationFor } from "../direct-publication/baseline-events.js"
+import {
+  automaticCompetingHeadRemoteBaselineCorrelationFor,
+  initialAutomaticCompetingHeadBaselineRound
+} from "../direct-publication/baseline-events.js"
 import { automaticRemoteBaselineRoundsFor } from "../direct-publication/baseline-rounds.js"
 import { remotePublicationCorrelationEquals } from "../direct-publication/events.js"
 import {
@@ -26,10 +29,9 @@ import {
   IntegratorAutomaticSuccessorGeneration,
   IntegratorAutomaticSuccessorSessionFixedEvent,
   IntegratorSessionCorrelation,
-  IntegratorSessionId,
-  integratorSuccessorResponsibilityMatches,
-  maximumIntegratorSessionsPerResponsibility
+  IntegratorSessionId
 } from "./events.js"
+import { integratorSessionCapacityForJournal } from "./session-capacity.js"
 import type { IntegratorAutomaticSuccessorPreparationInput } from "./session.js"
 import { IntegratorJournalContradiction } from "./journal-errors.js"
 
@@ -118,7 +120,8 @@ export const integratorAutomaticSuccessorPreparationIsCurrent = (
     integratorResponsibilityFactsFromCorrelation(predecessor),
     predecessor.integrationTarget,
     authorization.correlation.target,
-    authRecord.position
+    authRecord.position,
+    initialAutomaticCompetingHeadBaselineRound
   )
   const latestBaselineRound = automaticRemoteBaselineRoundsFor(records, baselineCorrelation).at(lastElementOffset)
   if (latestBaselineRound === undefined || latestBaselineRound.state._tag !== "Ready") return false
@@ -146,38 +149,6 @@ export const integratorAutomaticSuccessorPreparationIsCurrent = (
     intent.event.operation.integrationTarget.repository === predecessor.integrationTarget.repository &&
     intent.event.operation.integrationTarget.ref === predecessor.integrationTarget.ref
   )
-}
-
-const fixedSessionIdsFor = (
-  records: JournalHistorySource,
-  responsibility: IntegratorSessionCorrelation
-): Set<string> => {
-  const ids = new Set<string>()
-  for (const { event } of journalRecordsOfKind(records, "IntegratorSessionFixed")) {
-    if (
-      event._tag === "IntegratorSessionFixed" &&
-      integratorSuccessorResponsibilityMatches(responsibility, event.correlation)
-    ) {
-      ids.add(event.correlation.sessionId)
-    }
-  }
-  for (const { event } of journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")) {
-    if (
-      event._tag === "IntegratorSuccessorSessionFixed" &&
-      integratorSuccessorResponsibilityMatches(responsibility, event.successor)
-    ) {
-      ids.add(event.successor.sessionId)
-    }
-  }
-  for (const { event } of journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")) {
-    if (
-      event._tag === "IntegratorAutomaticSuccessorSessionFixed" &&
-      integratorSuccessorResponsibilityMatches(responsibility, event.successor)
-    ) {
-      ids.add(event.successor.sessionId)
-    }
-  }
-  return ids
 }
 
 const eventFor = (
@@ -252,13 +223,18 @@ export const validateAutomaticSuccessorSessionFixedRecord = (
     targetLineageObservedAt: lineage.position
   }
   const successor = integratorAutomaticSuccessorCorrelationFor(input)
-  const sessionIds = fixedSessionIdsFor(priorRecords, predecessor)
-  const expectedEvent = eventFor(input, successor, sessionIds.size + 1)
+  const capacity = integratorSessionCapacityForJournal(priorRecords, predecessor)
+  if (capacity._tag === "Exhausted") {
+    return {
+      _tag: "Invalid",
+      detail: "automatic successor event exceeds the fixed-session capacity"
+    }
+  }
+  const expectedEvent = eventFor(input, successor, capacity.nextGeneration)
   const expectedKey = integratorAutomaticSuccessorSessionFixedRecordKey(predecessor, record.event.authorizationAt)
   if (
     !exactFixedSessionExists(priorRecords, predecessor) ||
     !integratorAutomaticSuccessorPreparationIsCurrent(priorRecords, input) ||
-    sessionIds.size >= maximumIntegratorSessionsPerResponsibility ||
     record.position <= lineage.position ||
     !integratorAutomaticSuccessorAppendRecordMatches(record, expectedKey, expectedEvent)
   ) {
@@ -289,17 +265,20 @@ export const prepareIntegratorAutomaticSuccessorSessionAppend = Effect.fn(
       "automatic successor requires its exact fixed predecessor, authorization, ready baseline, and fresh lineage"
     )
   }
-  const sessionIds = fixedSessionIdsFor(premiseRecords, predecessor)
+  const capacity = integratorSessionCapacityForJournal(premiseRecords, predecessor)
   if (existing._tag === "Found") {
-    const existingEvent = eventFor(input, successor, sessionIds.size + 1)
+    if (capacity._tag === "Exhausted") {
+      return yield* reject(predecessor, "Integrator responsibility has reached its three-session aggregate bound")
+    }
+    const existingEvent = eventFor(input, successor, capacity.nextGeneration)
     return integratorAutomaticSuccessorAppendRecordMatches(existing.record, key, existingEvent)
       ? ({ _tag: "Existing", record: existing.record } as const)
       : yield* reject(predecessor, "automatic successor key contains a foreign or contradictory fixed event")
   }
-  if (sessionIds.size >= maximumIntegratorSessionsPerResponsibility) {
+  if (capacity._tag === "Exhausted") {
     return yield* reject(predecessor, "Integrator responsibility has reached its three-session aggregate bound")
   }
-  const event = eventFor(input, successor, sessionIds.size + 1)
+  const event = eventFor(input, successor, capacity.nextGeneration)
   const predecessorAlreadyHasSuccessor = [
     ...journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed"),
     ...journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")

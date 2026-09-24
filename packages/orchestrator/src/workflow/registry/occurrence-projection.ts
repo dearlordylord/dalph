@@ -23,9 +23,12 @@ import {
 import {
   IntegratorRunCorrelation,
   IntegratorSessionCorrelation,
-  integratorSuccessorResponsibilityMatches,
-  maximumIntegratorSessionsPerResponsibility
+  integratorSuccessorResponsibilityMatches
 } from "../protocols/integrator/events.js"
+import {
+  integratorSessionCapacityFor,
+  type IntegratorSessionFixation
+} from "../protocols/integrator/session-capacity.js"
 import {
   integratorResponsibilityFactsEqual,
   integratorResponsibilityFactsFromCorrelation
@@ -79,8 +82,8 @@ import {
 import { type IntegratorCompetingHeadSuccessorAuthorizedEvent } from "../protocols/integrator/automatic-successor-events.js"
 import {
   automaticCompetingHeadRemoteBaselineCorrelationFor,
+  initialAutomaticCompetingHeadBaselineRound,
   RemoteBaselineCorrelation,
-  RemoteBaselineRound,
   remoteBaselineCorrelationFor,
   type LocalTargetCatchUpIntendedEvent,
   type LocalTargetCatchUpObservedEvent,
@@ -347,7 +350,26 @@ export const AppliedTaskWorkCapacity = Schema.TaggedStruct("AppliedTaskWorkCapac
 })
 export type AppliedTaskWorkCapacity = typeof AppliedTaskWorkCapacity.Type
 
-export const WorkflowOccurrence = Schema.Union([
+/** Closed decoded member type kept explicit at the public occurrence schema boundary. */
+export type WorkflowOccurrence =
+  | AppliedAttemptChoice
+  | AttemptRestartAuthorityReadFailed
+  | AppliedControlDirection
+  | AppliedTaskClaimReacquisitionDirection
+  | AppliedTaskWorkCapacity
+  | IntegrationResponsibilityBegan
+  | IntegrationStarted
+  | GitReadInitiated
+  | PlannedAttemptExecutorWorkReported
+  | PlannedAttemptExecutorWorkResponsibilityBegan
+  | PlannedAttemptReplaced
+  | PlannedAttemptWorktreeObserved
+  | TargetLineageObserved
+  | TaskTrackerReadInitiated
+  | TaskTrackerFactsObserved
+  | HistoricalWorkflowOccurrence
+
+export const WorkflowOccurrence: Schema.Codec<WorkflowOccurrence, unknown, never, never> = Schema.Union([
   AppliedAttemptChoice,
   AttemptRestartAuthorityReadFailed,
   AppliedControlDirection,
@@ -365,7 +387,6 @@ export const WorkflowOccurrence = Schema.Union([
   TaskTrackerFactsObserved,
   HistoricalWorkflowOccurrence
 ])
-export type WorkflowOccurrence = typeof WorkflowOccurrence.Type
 
 /** Rejects unsupported variants and extra attribution at the production boundary. */
 export const decodeWorkflowOccurrence = Schema.decodeUnknownEffect(WorkflowOccurrence, { onExcessProperty: "error" })
@@ -1754,17 +1775,17 @@ const projectHistoricalAutomaticSuccessorSession = (
     integratorResponsibilityFactsFromCorrelation(event.predecessor),
     event.predecessor.integrationTarget,
     authorization.correlation.target,
-    event.authorizationAt
+    event.authorizationAt,
+    initialAutomaticCompetingHeadBaselineRound
   )
-  const latestBaselineIntent = Array.from(context.remoteBaselineReadIntents.values())
-    .filter(({ correlation }) => correlation.automaticCompetingHeadAuthorizationAt === event.authorizationAt)
-    .sort(
-      (left, right) =>
-        Number(left.correlation.automaticCompetingHeadBaselineRound ?? 1) -
-        Number(right.correlation.automaticCompetingHeadBaselineRound ?? 1)
+  const latestBaselineCorrelation = Array.from(context.remoteBaselineReadIntents.values())
+    .flatMap(({ correlation }) =>
+      correlation._tag === "AutomaticCompetingHead" ? [correlation] : []
     )
+    .filter((correlation) => correlation.authorizationAt === event.authorizationAt)
+    .sort((left, right) => Number(left.baselineRound) - Number(right.baselineRound))
     .at(lastArrayElementOffset)
-  const baselineCorrelation = latestBaselineIntent?.correlation ?? firstBaselineCorrelation
+  const baselineCorrelation = latestBaselineCorrelation ?? firstBaselineCorrelation
   const baselineEvents: ReadonlyArray<RemoteBaselineJournalEvent> = [
     context.remoteBaselineReadIntents.get(baselineCorrelation.baselineId),
     context.remoteBaselineObservations.get(baselineCorrelation.baselineId),
@@ -1799,21 +1820,22 @@ const projectHistoricalAutomaticSuccessorSession = (
         plannedTaskAttemptEquivalence(occurrence.operation.plannedAttempt, event.successor.plannedAttempt) &&
         integrationTargetEqual(occurrence.operation.integrationTarget, event.successor.integrationTarget)
     )
-  const sessionIds = new Set<string>()
-  const addSession = (session: IntegratorSessionCorrelation) => {
-    if (integratorSuccessorResponsibilityMatches(event.predecessor, session)) sessionIds.add(session.sessionId)
-  }
-  for (const occurrence of context.occurrences) {
-    if (occurrence._tag === "IntegratorSessionFixed") addSession(occurrence.correlation)
-    if (occurrence._tag === "IntegratorSuccessorSessionFixed") {
-      addSession(occurrence.predecessor)
-      addSession(occurrence.successor)
+  const sessionFixations: ReadonlyArray<IntegratorSessionFixation> = context.occurrences.flatMap<IntegratorSessionFixation>(
+    (occurrence) => {
+      if (occurrence._tag === "IntegratorSessionFixed") {
+        return [{ _tag: "Initial" as const, correlation: occurrence.correlation }]
+      }
+      if (
+        occurrence._tag === "IntegratorSuccessorSessionFixed" ||
+        occurrence._tag === "IntegratorAutomaticSuccessorSessionFixed"
+      ) {
+        return [{ _tag: "Successor" as const, predecessor: occurrence.predecessor, successor: occurrence.successor }]
+      }
+      return []
     }
-    if (occurrence._tag === "IntegratorAutomaticSuccessorSessionFixed") {
-      addSession(occurrence.predecessor)
-      addSession(occurrence.successor)
-    }
-  }
+  )
+  const capacity = integratorSessionCapacityFor(event.predecessor, sessionFixations)
+  const expectedGeneration = capacity._tag === "Available" ? capacity.nextGeneration : undefined
   if (
     record.runId !== event.predecessor.plannedAttempt.runId ||
     fixedSession === undefined ||
@@ -1830,8 +1852,8 @@ const projectHistoricalAutomaticSuccessorSession = (
     event.successor.targetLineageObservedAt <= completedBaseline.recordedAt ||
     event.successor.targetLineageObservedAt >= record.position ||
     context.integratorSessions.has(integratorSessionKey(event.successor)) ||
-    event.successorGeneration !== sessionIds.size + 1 ||
-    sessionIds.size >= maximumIntegratorSessionsPerResponsibility
+    expectedGeneration === undefined ||
+    event.successorGeneration !== expectedGeneration
   ) {
     return historicalFailure(
       record,
@@ -2012,8 +2034,7 @@ const remoteBaselineMatchesRun = (
     !sameRemotePublicationTarget(context.runPublicationTarget, correlation.remoteTarget)
   )
     return false
-  const authorizationAt = correlation.automaticCompetingHeadAuthorizationAt
-  if (authorizationAt === undefined) {
+  if (correlation._tag === "Initial") {
     return remoteBaselineCorrelationEquals(
       correlation,
       remoteBaselineCorrelationFor(
@@ -2024,6 +2045,7 @@ const remoteBaselineMatchesRun = (
       )
     )
   }
+  const authorizationAt = correlation.authorizationAt
   const authorization = context.occurrences.find(
     (occurrence): occurrence is HistoricalOccurrence.IntegratorCompetingHeadSuccessorAuthorized =>
       occurrence._tag === "IntegratorCompetingHeadSuccessorAuthorized" &&
@@ -2048,7 +2070,7 @@ const remoteBaselineMatchesRun = (
       correlation.localTarget,
       correlation.remoteTarget,
       authorization.recordedAt,
-      RemoteBaselineRound.make(Number(correlation.automaticCompetingHeadBaselineRound ?? 1))
+      correlation.baselineRound
     )
   )
 }
@@ -2068,9 +2090,9 @@ const projectHistoricalRemoteBaselineReadIntended = (
   if (context.remoteBaselineReadIntents.has(baselineId)) {
     return historicalFailure(record, "duplicate remote baseline read " + baselineId)
   }
-  const authorizationAt = event.correlation.automaticCompetingHeadAuthorizationAt
-  const round = Number(event.correlation.automaticCompetingHeadBaselineRound ?? 1)
-  if (authorizationAt !== undefined) {
+  if (event.correlation._tag === "AutomaticCompetingHead") {
+    const { authorizationAt, baselineRound } = event.correlation
+    const round = Number(baselineRound)
     const fixedSuccessor = context.occurrences.find(
       (occurrence) =>
         occurrence._tag === "IntegratorAutomaticSuccessorSessionFixed" && occurrence.authorizationAt === authorizationAt
@@ -2079,28 +2101,27 @@ const projectHistoricalRemoteBaselineReadIntended = (
       return historicalFailure(record, "automatic successor baseline refresh cannot follow successor fixation")
     }
     const priorIntents = Array.from(context.remoteBaselineReadIntents.values())
-      .filter(({ correlation }) => correlation.automaticCompetingHeadAuthorizationAt === authorizationAt)
-      .sort(
-        (left, right) =>
-          Number(left.correlation.automaticCompetingHeadBaselineRound ?? 1) -
-          Number(right.correlation.automaticCompetingHeadBaselineRound ?? 1)
+      .flatMap(({ correlation }) =>
+        correlation._tag === "AutomaticCompetingHead" ? [correlation] : []
       )
+      .filter((correlation) => correlation.authorizationAt === authorizationAt)
+      .sort((left, right) => Number(left.baselineRound) - Number(right.baselineRound))
     const prior = priorIntents.at(lastArrayElementOffset)
     if (
-      round === 1
+      round === Number(initialAutomaticCompetingHeadBaselineRound)
         ? prior !== undefined
         : round === automaticSuccessorRefreshRoundNumber
-          ? prior === undefined || Number(prior.correlation.automaticCompetingHeadBaselineRound ?? 1) !== 1
+          ? prior === undefined || Number(prior.baselineRound) !== Number(initialAutomaticCompetingHeadBaselineRound)
           : true
     ) {
       return historicalFailure(record, "automatic successor baseline rounds must be contiguous and bounded to two")
     }
     if (round === automaticSuccessorRefreshRoundNumber && prior !== undefined) {
       const priorEvents: ReadonlyArray<RemoteBaselineJournalEvent> = [
-        context.remoteBaselineReadIntents.get(prior.correlation.baselineId),
-        context.remoteBaselineObservations.get(prior.correlation.baselineId),
-        context.localTargetCatchUpIntents.get(prior.correlation.baselineId),
-        context.localTargetCatchUpObservations.get(prior.correlation.baselineId)
+        context.remoteBaselineReadIntents.get(prior.baselineId),
+        context.remoteBaselineObservations.get(prior.baselineId),
+        context.localTargetCatchUpIntents.get(prior.baselineId),
+        context.localTargetCatchUpObservations.get(prior.baselineId)
       ].filter((baselineEvent): baselineEvent is RemoteBaselineJournalEvent => baselineEvent !== undefined)
       if (deriveRemoteBaselineState(priorEvents)._tag !== "Ready") {
         return historicalFailure(record, "automatic successor refresh must follow a ready prior round")
@@ -2109,7 +2130,7 @@ const projectHistoricalRemoteBaselineReadIntended = (
         .filter(
           (occurrence) =>
             (occurrence._tag === "RemoteBaselineObserved" || occurrence._tag === "LocalTargetCatchUpObserved") &&
-            occurrence.correlation.baselineId === prior.correlation.baselineId
+            occurrence.correlation.baselineId === prior.baselineId
         )
         .at(lastArrayElementOffset)
       if (priorCompletion === undefined || priorCompletion.recordedAt >= record.position) {

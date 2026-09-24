@@ -3,6 +3,22 @@
 module acceptedResultIntegrationAutomaticSuccessorProofNegativeTest {
   import acceptedResultIntegrationAutomaticSuccessorProof.* from "./acceptedResultIntegration_automaticSuccessor_proof"
 
+  action startAutomaticSuccessorRetryWithoutOperatorDirection: bool = all {
+    state.phase == AutomaticSuccessorRetryQuarantined,
+    state.successorRetryRunStartCount == 0,
+    state' = {
+      ...state,
+      phase: AutomaticSuccessorRetryInFlight,
+      successorRetryRunStartPosition: state.nextJournalPosition,
+      successorRetryRunSession: state.successorSession,
+      successorRetryRunOrdinal: 2,
+      successorRetryRunStartCount: 1,
+      successorRetryInvocationCount: 1,
+      successorRunOrdinal: 2,
+      nextJournalPosition: state.nextJournalPosition + 1,
+    },
+  }
+
   action secondGitReadBeforeFixation: bool = all {
     state.phase == BaselineObserved,
     state.gitBoundariesThisActivation == 1,
@@ -103,5 +119,31 @@ module acceptedResultIntegrationAutomaticSuccessorProofNegativeTest {
       .then(recordAutomaticSuccessorAuthorization)
       .then(duplicateAuthorizationOccurrence)
       .expect(not(automaticAuthorizationIsOccurrenceScoped))
+  }
+
+  run automaticSuccessorRunTwoCannotStartWithoutExactOperatorRetryTest = {
+    init
+      .then(recordInitialPublicationIntent)
+      .then(outsidePushBeforeInitialDiscovery)
+      .then(discoverCompatibleCompetingHead)
+      .then(recordAutomaticSuccessorAuthorization)
+      .then(beginNextActivation)
+      .then(rereadAuthorityFacts)
+      .then(recordRemoteBaselineReadIntent)
+      .then(observeAncestorLocalBaseline)
+      .then(recordCatchUpIntent)
+      .then(beginNextActivation)
+      .then(rereadAuthorityFacts)
+      .then(compareAndSetLocalTargetToRemoteHead)
+      .then(recordCatchUpResult)
+      .then(beginNextActivation)
+      .then(rereadAuthorityFacts)
+      .then(proveBaseAncestorOfSuccessorHead)
+      .then(fixAutomaticSuccessorSession)
+      .then(invokeAutomaticSuccessor)
+      .then(recordAutomaticSuccessorNotPrepared)
+      .then(quarantineAutomaticSuccessorNotPrepared)
+      .then(startAutomaticSuccessorRetryWithoutOperatorDirection)
+      .expect(not(automaticSuccessorRetryRequiresExactOperatorChronology))
   }
 }

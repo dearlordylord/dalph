@@ -2,8 +2,10 @@ import { Schema } from "effect"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import { journalRecordsOfKind, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import {
+  type AutomaticCompetingHeadRemoteBaselineCorrelation,
   RemoteBaselineCorrelation,
   RemoteBaselineRound,
+  initialAutomaticCompetingHeadBaselineRound,
   type RemoteBaselineJournalEvent,
   automaticCompetingHeadRemoteBaselineCorrelationFor
 } from "./baseline-events.js"
@@ -34,7 +36,7 @@ export const remoteBaselineEventsFor = (
     )
 
 export interface AutomaticRemoteBaselineRoundEvidence {
-  readonly correlation: RemoteBaselineCorrelation
+  readonly correlation: AutomaticCompetingHeadRemoteBaselineCorrelation
   readonly completedAt: JournalPosition | undefined
   readonly latestEvidenceAt: JournalPosition | undefined
   readonly readIntentAt: JournalPosition | undefined
@@ -45,10 +47,9 @@ export interface AutomaticRemoteBaselineRoundEvidence {
 /** Reconstructs automatic-successor rounds from their durable read-intent identities. */
 export const automaticRemoteBaselineRoundsFor = (
   source: JournalHistorySource,
-  firstRoundCorrelation: RemoteBaselineCorrelation
+  firstRoundCorrelation: AutomaticCompetingHeadRemoteBaselineCorrelation
 ): ReadonlyArray<AutomaticRemoteBaselineRoundEvidence> => {
-  const authorizationAt = firstRoundCorrelation.automaticCompetingHeadAuthorizationAt
-  if (authorizationAt === undefined) return []
+  const authorizationAt = firstRoundCorrelation.authorizationAt
   const eventRecords = [
     ...journalRecordsOfKind(source, "RemoteBaselineReadIntended"),
     ...journalRecordsOfKind(source, "RemoteBaselineObserved"),
@@ -65,18 +66,18 @@ export const automaticRemoteBaselineRoundsFor = (
     )
     .sort((left, right) => Number(left.position) - Number(right.position))
   const authorizedRoundRecords = eventRecords.filter(
-    ({ event }) => event.correlation.automaticCompetingHeadAuthorizationAt === authorizationAt
+    ({ event }) =>
+      event.correlation._tag === "AutomaticCompetingHead" && event.correlation.authorizationAt === authorizationAt
+  )
+  const observedRoundNumbers = authorizedRoundRecords.flatMap(({ event }) =>
+    event.correlation._tag === "AutomaticCompetingHead" ? [Number(event.correlation.baselineRound)] : []
   )
   const rounds = Array.from(
-    new Set([
-      1,
-      ...authorizedRoundRecords.map(({ event }) => Number(event.correlation.automaticCompetingHeadBaselineRound ?? 1))
-    ])
+    new Set([Number(initialAutomaticCompetingHeadBaselineRound), ...observedRoundNumbers])
   ).sort((left, right) => left - right)
   const contiguousOrdinals = rounds.every((roundNumber, index) => roundNumber === index + 1)
-  const withinBound =
-    rounds.at(lastRecordOffset) !== undefined &&
-    (rounds.at(lastRecordOffset) ?? 1) <= maximumAutomaticSuccessorBaselineRounds
+  const latestRoundNumber = rounds.at(lastRecordOffset)
+  const withinBound = latestRoundNumber !== undefined && latestRoundNumber <= maximumAutomaticSuccessorBaselineRounds
   const correlationEquivalence = Schema.toEquivalence(RemoteBaselineCorrelation)
   return rounds
     .map((roundNumber) => {
@@ -98,12 +99,19 @@ export const automaticRemoteBaselineRoundsFor = (
           event.correlation.baselineId === correlation.baselineId
       )
       const exactRoundBinding = authorizedRoundRecords.every(({ event }) => {
-        if (Number(event.correlation.automaticCompetingHeadBaselineRound ?? 1) !== roundNumber) return true
+        if (
+          event.correlation._tag !== "AutomaticCompetingHead" ||
+          Number(event.correlation.baselineRound) !== roundNumber
+        ) {
+          return true
+        }
         return correlationEquivalence(event.correlation, correlation)
       })
       const roundReadIntents = roundRecords.filter(({ event }) => event._tag === "RemoteBaselineReadIntended")
       const readIntentAt = roundReadIntents.at(0)?.position
-      const validIntentMultiplicity = (roundRecords.length === 0 && roundNumber === 1) || roundReadIntents.length === 1
+      const validIntentMultiplicity =
+        (roundRecords.length === 0 && roundNumber === Number(initialAutomaticCompetingHeadBaselineRound)) ||
+        roundReadIntents.length === 1
       let state = deriveRemoteBaselineState(remoteBaselineEventsFor(source, correlation))
       if (!contiguousOrdinals || !withinBound || !exactRoundBinding || !validIntentMultiplicity) {
         state = RemoteBaselineState.cases.Contradiction.make({

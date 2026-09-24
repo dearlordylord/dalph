@@ -1125,8 +1125,11 @@ it("schedules one bounded baseline refresh when Ready H2 predates activation ent
   expect(transitions).toEqual([
     RunnableFrontierTransition.EstablishRemoteBaseline({ correlation: automaticBaselineRoundTwo, responsibility })
   ])
-  expect(automaticBaselineRoundTwo.automaticCompetingHeadAuthorizationAt).toBe(authorization.position)
-  expect(automaticBaselineRoundTwo.automaticCompetingHeadBaselineRound).toBe(2)
+  expect(automaticBaselineRoundTwo).toMatchObject({
+    _tag: "AutomaticCompetingHead",
+    authorizationAt: authorization.position,
+    baselineRound: 2
+  })
 })
 
 it("retains the exact compatible-head wait after the third automatic successor", () => {
@@ -1273,7 +1276,8 @@ it("retains the exact compatible-head wait after the third automatic successor",
     integratorResponsibilityFactsFor(responsibility),
     target,
     remotePublicationTargetForTest,
-    authorizationAt
+    authorizationAt,
+    RemoteBaselineRound.make(1)
   )
   expect(automaticBaselineCorrelation.baselineId).not.toBe(
     remoteBaselineCorrelationFor(
@@ -1617,7 +1621,8 @@ it("retains the exact compatible-head wait after the third automatic successor",
     integratorResponsibilityFactsFor(responsibility),
     target,
     remotePublicationTargetForTest,
-    secondAuthorizationAt
+    secondAuthorizationAt,
+    RemoteBaselineRound.make(1)
   )
   const secondLineage = lineage(secondRemoteHead)
   const secondLineageRecords = lineageRecords(30, secondLineage, "automatic-successor-second-head")

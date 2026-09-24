@@ -13,6 +13,7 @@ import { JournalStore, type JournalRecord } from "../../../workflow-journal/stor
 import { memoryJournalStoreLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { sqliteJournalStoreLayer, sqliteJournalTestLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
 import { OperationId } from "../../identity.js"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
 import {
   IntegrationQuarantineBasis,
   IntegrationQuarantineCause,
@@ -23,14 +24,18 @@ import {
 } from "../integration-quarantine/events.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
+  IntegratorCandidateResourceLocator,
   IntegratorNotPreparedDetail,
   IntegratorResult,
-  IntegratorRunOrdinal,
+  IntegratorSessionCorrelation,
+  IntegratorSessionId,
   IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
   IntegratorRunStartedEvent,
   IntegratorRunResultRecordedEvent
 } from "./events.js"
 import { prepareIntegratorAutomaticSuccessorSessionAppend } from "./automatic-successor-session.js"
+import { integratorSessionCapacityFor } from "./session-capacity.js"
 import { evaluateIntegratorRetryAuthorization } from "./retry-authorization.js"
 import { deriveCurrentIntegratorState } from "./state.js"
 import { makeSuccessorPrefix } from "../../../../test/support/automatic-successor-history.js"
@@ -57,6 +62,43 @@ const seedStoreWithPrefix = Effect.fn("AutomaticSuccessorSessionTest.seedStoreWi
 
 const existingAutomaticSuccessorCount = (records: ReadonlyArray<JournalRecord>): number =>
   records.filter(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed").length
+
+it("counts predecessor and successor identities together against the shared session capacity", () => {
+  const predecessor = makeSuccessorPrefix().input.predecessor
+  const successor = IntegratorSessionCorrelation.make({
+    ...predecessor,
+    candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:capacity-successor"),
+    sessionId: IntegratorSessionId.make("integrator-session:capacity-successor")
+  })
+  const finalSuccessor = IntegratorSessionCorrelation.make({
+    ...successor,
+    candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:capacity-final-successor"),
+    sessionId: IntegratorSessionId.make("integrator-session:capacity-final-successor")
+  })
+  const capacity = integratorSessionCapacityFor(predecessor, [
+    { _tag: "Successor", predecessor, successor },
+    { _tag: "Successor", predecessor: successor, successor: finalSuccessor }
+  ])
+
+  expect(capacity._tag).toBe("Exhausted")
+  expect(Array.from(capacity.fixedSessionIds)).toEqual([
+    predecessor.sessionId,
+    successor.sessionId,
+    finalSuccessor.sessionId
+  ])
+
+  const foreignResponsibility = IntegratorSessionCorrelation.make({
+    ...predecessor,
+    candidateResource: IntegratorCandidateResourceLocator.make("integrator-resource:foreign-capacity"),
+    sessionId: IntegratorSessionId.make("integrator-session:foreign-capacity"),
+    startedAt: JournalPosition.make(Number(predecessor.startedAt) + 1)
+  })
+  const foreignCapacity = integratorSessionCapacityFor(predecessor, [
+    { _tag: "Initial", correlation: foreignResponsibility }
+  ])
+  expect(foreignCapacity._tag).toBe("Available")
+  expect(foreignCapacity.fixedSessionIds.size).toBe(0)
+})
 
 const proveFixedAppendRecovery = Effect.fn("AutomaticSuccessorSessionTest.proveFixedAppendRecovery")(function* (
   store: JournalStore["Service"],
@@ -375,6 +417,13 @@ it.effect("authorizes ordinary Retry only from the exact automatically fixed S2 
     expect(authorization).toMatchObject({
       _tag: "Authorized",
       authorization: { sessionRecord: { event: { _tag: "IntegratorAutomaticSuccessorSessionFixed" } }, session }
+    })
+
+    fixture.append(IntegratorRunStartedEvent.make({ run: retryRun, version: workflowJournalEventVersion }))
+    expect(reduceWorkflowJournalHistory(fixture.runId, fixture.records())._tag).toBe("ValidWorkflowJournalHistory")
+    expect(deriveCurrentIntegratorState(fixture.records(), fixture.accepted.responsibility)).toMatchObject({
+      _tag: "RunUnfinished",
+      run: retryRun
     })
 
     const foreignRetry = evaluateIntegratorRetryAuthorization(

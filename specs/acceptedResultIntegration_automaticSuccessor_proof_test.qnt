@@ -203,6 +203,51 @@ module acceptedResultIntegrationAutomaticSuccessorProofTest {
       })
   }
 
+  // S2's own conclusive Q does not authorize another Integrator call by
+  // itself. Run ordinal two starts only after exact Operator Retry D and a
+  // fresh unchanged-head lineage observation for the same automatic session.
+  run exactOperatorRetryOfAutomaticS2AfterConclusiveQTest = {
+    init
+      .then(recordInitialPublicationIntent)
+      .then(outsidePushBeforeInitialDiscovery)
+      .then(discoverCompatibleCompetingHead)
+      .then(recordAutomaticSuccessorAuthorization)
+      .then(beginNextActivation)
+      .then(rereadAuthorityFacts)
+      .then(recordRemoteBaselineReadIntent)
+      .then(observeAncestorLocalBaseline)
+      .then(recordCatchUpIntent)
+      .then(beginNextActivation)
+      .then(rereadAuthorityFacts)
+      .then(compareAndSetLocalTargetToRemoteHead)
+      .then(recordCatchUpResult)
+      .then(beginNextActivation)
+      .then(rereadAuthorityFacts)
+      .then(proveBaseAncestorOfSuccessorHead)
+      .then(fixAutomaticSuccessorSession)
+      .then(invokeAutomaticSuccessor)
+      .then(recordAutomaticSuccessorNotPrepared)
+      .then(quarantineAutomaticSuccessorNotPrepared)
+      .then(applyOperatorRetryToAutomaticSuccessor)
+      .then(observeFreshLineageAfterAutomaticSuccessorRetry)
+      .then(startAuthorizedAutomaticSuccessorRetry)
+      .expect(and {
+        state.phase == AutomaticSuccessorRetryInFlight,
+        state.successorSession == INITIAL_SESSION + 1,
+        state.successorRunOrdinal == 2,
+        state.successorRetryRunOrdinal == 2,
+        state.successorRetryRunStartCount == 1,
+        state.successorRetryInvocationCount == 1,
+        state.successorResultPosition < state.successorQuarantinePosition,
+        state.successorQuarantinePosition < state.successorRetryDirectionPosition,
+        state.successorRetryDirectionPosition < state.successorRetryLineagePosition,
+        state.successorRetryLineagePosition < state.successorRetryRunStartPosition,
+        automaticSuccessorRetryRequiresExactOperatorChronology,
+        exactTaskAndResponsibilityAreRetained,
+        automaticSuccessorBoundsAreFinite,
+      })
+  }
+
   // A compatible outside update at the third fixed session remains a typed
   // retained wait. There is no automatic authorization or fourth session.
   run thirdSessionAndThirdPushExhaustWithoutUnrequestedFourthSessionTest = {

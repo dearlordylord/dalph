@@ -2,7 +2,7 @@ import { Context, Effect, Option } from "effect"
 import type { IntegrationTarget } from "@dalph/contracts"
 import { InRunJournal } from "../../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
-import type { JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
+import { journalRecordsOfKind, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import {
   integratorRunCandidateGitObservedRecordKey,
   integratorRunResultRecordedRecordKey
@@ -289,9 +289,29 @@ const correlationForRequestedRun = Effect.fn("IntegratorProtocol.correlationForR
     return yield* new IntegratorJournalContradiction({ detail: "Integrator run ordinal exceeds Retry bound", runId })
   }
   const recordedSession = yield* readRecordedIntegratorSession(records, request.preparation.responsibility)
-  if (Option.isNone(recordedSession) || !integratorCorrelationsEqual(recordedSession.value, request.run.session)) {
+  if (Option.isNone(recordedSession)) {
     return yield* new IntegratorJournalContradiction({ detail: "Retry run has no exact earlier fixed session", runId })
   }
+  const activeSession = yield* readActiveIntegratorSession(records, request.preparation.responsibility)
+  const isOriginalSession = integratorCorrelationsEqual(recordedSession.value, request.run.session)
+  let exactAutomaticSuccessorSession: IntegratorSessionCorrelation | undefined
+  if (Option.isSome(activeSession) && integratorCorrelationsEqual(activeSession.value, request.run.session)) {
+    for (const { event } of journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")) {
+      if (
+        event._tag === "IntegratorAutomaticSuccessorSessionFixed" &&
+        integratorCorrelationsEqual(event.predecessor, recordedSession.value) &&
+        integratorCorrelationsEqual(event.successor, activeSession.value)
+      ) {
+        exactAutomaticSuccessorSession = activeSession.value
+        break
+      }
+    }
+  }
+  const isExactAutomaticSuccessor = exactAutomaticSuccessorSession !== undefined
+  if (!isOriginalSession && !isExactAutomaticSuccessor) {
+    return yield* new IntegratorJournalContradiction({ detail: "Retry run has no exact earlier fixed session", runId })
+  }
+  const retrySession = exactAutomaticSuccessorSession ?? recordedSession.value
   if (!integratorLineageIsCompatible(request.preparation)) {
     return yield* new IntegratorTargetLineageIncompatible({
       observation: request.preparation.targetLineage,
@@ -302,14 +322,14 @@ const correlationForRequestedRun = Effect.fn("IntegratorProtocol.correlationForR
   if (authorizationIssue !== undefined) {
     return yield* new IntegratorJournalContradiction({ detail: authorizationIssue, runId })
   }
-  if (recordedSession.value.expectedTargetHead !== request.preparation.targetLineage.targetHeadSha) {
+  if (retrySession.expectedTargetHead !== request.preparation.targetLineage.targetHeadSha) {
     return yield* new IntegratorTargetHeadChanged({
       observedTargetHead: request.preparation.targetLineage.targetHeadSha,
-      recordedTargetHead: recordedSession.value.expectedTargetHead,
+      recordedTargetHead: retrySession.expectedTargetHead,
       responsibility: request.preparation.responsibility
     })
   }
-  return recordedSession.value
+  return retrySession
 })
 
 /**

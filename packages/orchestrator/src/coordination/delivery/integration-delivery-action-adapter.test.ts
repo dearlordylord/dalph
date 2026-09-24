@@ -45,7 +45,8 @@ import {
   automaticCompetingHeadRemoteBaselineCorrelationFor,
   LocalTargetCatchUpResult,
   RemoteBaselineGit,
-  RemoteBaselineObservation
+  RemoteBaselineObservation,
+  RemoteBaselineRound
 } from "../../workflow/protocols/direct-publication/baseline-events.js"
 import { integratorCompetingHeadSuccessorAuthorizationIdFor } from "../../workflow/protocols/integrator/automatic-successor-events.js"
 import { IntegratorSessionFixedEvent } from "../../workflow/protocols/integrator/events.js"
@@ -449,7 +450,8 @@ it.effect(
         integratorResponsibilityFactsFor(responsibility),
         responsibility.integrationTarget,
         remotePublicationTargetForTest,
-        JournalPosition.make(4)
+        JournalPosition.make(4),
+        RemoteBaselineRound.make(1)
       )
       const baseline = RunnableFrontierTransition.EstablishRemoteBaseline({
         correlation: baselineCorrelation,

@@ -5,7 +5,7 @@ import { WorkflowActor } from "../../registry/actor.js"
 import { IntegratorResponsibilityFacts } from "../integrator/events.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 
-/** Stable identity for the initial remote-baseline read and optional local catch-up. */
+/** Stable identity for one remote-baseline read and its optional local catch-up. */
 export const RemoteBaselineId = Schema.NonEmptyString.pipe(Schema.brand("RemoteBaselineId"))
 export type RemoteBaselineId = typeof RemoteBaselineId.Type
 
@@ -14,74 +14,132 @@ export const RemoteBaselineRound = Schema.Int.check(Schema.isGreaterThanOrEqualT
   Schema.brand("RemoteBaselineRound")
 )
 export type RemoteBaselineRound = typeof RemoteBaselineRound.Type
+/** Explicit ordinal for the first read under one automatic-successor authorization. */
+export const initialAutomaticCompetingHeadBaselineRound = RemoteBaselineRound.make(1)
 
-const remoteBaselineIdFor = (
+const remoteBaselineIdParts = (
+  runId: RunId,
+  responsibility: IntegratorResponsibilityFacts,
+  localTarget: IntegrationTarget,
+  remoteTarget: RemotePublicationTarget
+): ReadonlyArray<string> => [
+  "remote-baseline",
+  runId,
+  responsibility.plannedAttempt.attemptId,
+  localTarget.repository,
+  localTarget.ref,
+  remoteTarget.endpoint,
+  remoteTarget.branch
+]
+
+const initialRemoteBaselineIdFor = (
+  runId: RunId,
+  responsibility: IntegratorResponsibilityFacts,
+  localTarget: IntegrationTarget,
+  remoteTarget: RemotePublicationTarget
+): RemoteBaselineId =>
+  RemoteBaselineId.make(
+    [...remoteBaselineIdParts(runId, responsibility, localTarget, remoteTarget), "initial"].join(":")
+  )
+
+const automaticCompetingHeadRemoteBaselineIdFor = (
   runId: RunId,
   responsibility: IntegratorResponsibilityFacts,
   localTarget: IntegrationTarget,
   remoteTarget: RemotePublicationTarget,
-  automaticCompetingHeadAuthorizationAt?: JournalPosition,
-  automaticCompetingHeadBaselineRound?: RemoteBaselineRound
+  authorizationAt: JournalPosition,
+  baselineRound: RemoteBaselineRound
 ): RemoteBaselineId =>
   RemoteBaselineId.make(
     [
-      "remote-baseline",
-      runId,
-      responsibility.plannedAttempt.attemptId,
-      localTarget.repository,
-      localTarget.ref,
-      remoteTarget.endpoint,
-      remoteTarget.branch,
-      ...(automaticCompetingHeadAuthorizationAt === undefined
-        ? []
-        : [
-            "automatic-competing-head",
-            automaticCompetingHeadAuthorizationAt,
-            ...(automaticCompetingHeadBaselineRound === undefined || automaticCompetingHeadBaselineRound === 1
-              ? []
-              : ["baseline-round", automaticCompetingHeadBaselineRound])
-          ])
+      ...remoteBaselineIdParts(runId, responsibility, localTarget, remoteTarget),
+      "automatic-competing-head",
+      authorizationAt,
+      "baseline-round",
+      baselineRound
     ].join(":")
   )
 
-export const RemoteBaselineCorrelation = Schema.Struct({
-  baselineId: RemoteBaselineId,
+const remoteBaselineCorrelationFields = {
   localTarget: IntegrationTarget,
   remoteTarget: RemotePublicationTarget,
   responsibility: IntegratorResponsibilityFacts,
-  automaticCompetingHeadAuthorizationAt: Schema.optionalKey(JournalPosition),
-  automaticCompetingHeadBaselineRound: Schema.optionalKey(RemoteBaselineRound),
   runId: RunId
-}).check(
-  Schema.makeFilter((correlation) =>
-    correlation.runId === correlation.responsibility.plannedAttempt.runId &&
-    correlation.localTarget.repository === correlation.responsibility.integrationTarget.repository &&
-    correlation.localTarget.ref === correlation.responsibility.integrationTarget.ref &&
-    (correlation.automaticCompetingHeadAuthorizationAt !== undefined ||
-      correlation.automaticCompetingHeadBaselineRound === undefined) &&
-    correlation.baselineId ===
-      remoteBaselineIdFor(
-        correlation.runId,
-        correlation.responsibility,
-        correlation.localTarget,
-        correlation.remoteTarget,
-        correlation.automaticCompetingHeadAuthorizationAt,
-        correlation.automaticCompetingHeadBaselineRound
-      )
-      ? undefined
-      : "remote baseline correlation must bind its responsibility, local target, Run, and deterministic identity"
+}
+
+type RemoteBaselineCorrelationFields = {
+  readonly localTarget: Schema.Schema.Type<typeof IntegrationTarget>
+  readonly remoteTarget: Schema.Schema.Type<typeof RemotePublicationTarget>
+  readonly responsibility: Schema.Schema.Type<typeof IntegratorResponsibilityFacts>
+  readonly runId: Schema.Schema.Type<typeof RunId>
+}
+
+export type InitialRemoteBaselineCorrelation = RemoteBaselineCorrelationFields & {
+  readonly _tag: "Initial"
+  readonly baselineId: RemoteBaselineId
+}
+
+export type AutomaticCompetingHeadRemoteBaselineCorrelation = RemoteBaselineCorrelationFields & {
+  readonly _tag: "AutomaticCompetingHead"
+  readonly authorizationAt: JournalPosition
+  readonly baselineId: RemoteBaselineId
+  readonly baselineRound: RemoteBaselineRound
+}
+
+export type RemoteBaselineCorrelation =
+  | InitialRemoteBaselineCorrelation
+  | AutomaticCompetingHeadRemoteBaselineCorrelation
+
+const RemoteBaselineCorrelationVariants = Schema.TaggedUnion({
+  Initial: {
+    ...remoteBaselineCorrelationFields,
+    baselineId: RemoteBaselineId
+  },
+  AutomaticCompetingHead: {
+    ...remoteBaselineCorrelationFields,
+    authorizationAt: JournalPosition,
+    baselineId: RemoteBaselineId,
+    baselineRound: RemoteBaselineRound
+  }
+})
+
+/** Compact public codec type keeps the tagged correlation from expanding every trace schema. */
+export const RemoteBaselineCorrelation: Schema.Codec<RemoteBaselineCorrelation, unknown, never, never> =
+  RemoteBaselineCorrelationVariants.check(
+    Schema.makeFilter((correlation) => {
+      const expectedBaselineId =
+        correlation._tag === "Initial"
+          ? initialRemoteBaselineIdFor(
+              correlation.runId,
+              correlation.responsibility,
+              correlation.localTarget,
+              correlation.remoteTarget
+            )
+          : automaticCompetingHeadRemoteBaselineIdFor(
+              correlation.runId,
+              correlation.responsibility,
+              correlation.localTarget,
+              correlation.remoteTarget,
+              correlation.authorizationAt,
+              correlation.baselineRound
+            )
+      return correlation.runId === correlation.responsibility.plannedAttempt.runId &&
+        correlation.localTarget.repository === correlation.responsibility.integrationTarget.repository &&
+        correlation.localTarget.ref === correlation.responsibility.integrationTarget.ref &&
+        correlation.baselineId === expectedBaselineId
+        ? undefined
+        : "remote baseline correlation must bind its responsibility, local target, Run, and deterministic identity"
+    })
   )
-)
-export type RemoteBaselineCorrelation = typeof RemoteBaselineCorrelation.Type
 
 export const remoteBaselineCorrelationFor = (
   runId: RunId,
   responsibility: IntegratorResponsibilityFacts,
   localTarget: IntegrationTarget,
   remoteTarget: RemotePublicationTarget
-): RemoteBaselineCorrelation =>
-  RemoteBaselineCorrelation.make({
-    baselineId: remoteBaselineIdFor(runId, responsibility, localTarget, remoteTarget),
+): InitialRemoteBaselineCorrelation =>
+  RemoteBaselineCorrelationVariants.cases.Initial.make({
+    baselineId: initialRemoteBaselineIdFor(runId, responsibility, localTarget, remoteTarget),
     localTarget,
     remoteTarget,
     responsibility,
@@ -95,12 +153,19 @@ export const automaticCompetingHeadRemoteBaselineCorrelationFor = (
   localTarget: IntegrationTarget,
   remoteTarget: RemotePublicationTarget,
   authorizationAt: JournalPosition,
-  baselineRound: RemoteBaselineRound = RemoteBaselineRound.make(1)
-): RemoteBaselineCorrelation =>
-  RemoteBaselineCorrelation.make({
-    automaticCompetingHeadAuthorizationAt: authorizationAt,
-    ...(baselineRound === 1 ? {} : { automaticCompetingHeadBaselineRound: baselineRound }),
-    baselineId: remoteBaselineIdFor(runId, responsibility, localTarget, remoteTarget, authorizationAt, baselineRound),
+  baselineRound: RemoteBaselineRound
+): AutomaticCompetingHeadRemoteBaselineCorrelation =>
+  RemoteBaselineCorrelationVariants.cases.AutomaticCompetingHead.make({
+    authorizationAt,
+    baselineRound,
+    baselineId: automaticCompetingHeadRemoteBaselineIdFor(
+      runId,
+      responsibility,
+      localTarget,
+      remoteTarget,
+      authorizationAt,
+      baselineRound
+    ),
     localTarget,
     remoteTarget,
     responsibility,

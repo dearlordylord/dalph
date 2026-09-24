@@ -227,7 +227,10 @@ describe("automatic S2 real-Git catch-up safety", () => {
       ) {
         throw new Error("accepted S2 prefix must include its exact authorization and authorization-scoped baseline")
       }
-      expect(readIntent.event.correlation.automaticCompetingHeadAuthorizationAt).toBe(authorization.position)
+      expect(readIntent.event.correlation).toMatchObject({
+        _tag: "AutomaticCompetingHead",
+        authorizationAt: authorization.position
+      })
       expect(authorization.event.remoteHead).toBe(GitCommitSha.make(h2))
       const seed = records.filter(({ position }) => Number(position) < Number(readIntent.position))
       const context = await Effect.runPromise(Effect.scoped(Layer.build(memoryJournalStoreLayer)))

@@ -361,7 +361,7 @@ export const integratorAutomaticSuccessorSessionFixedRecordKey = (
     `${integratorCorrelationRecordKeyPrefix(predecessor)}:successor:automatic-competing-head:${authorizationAt}:fixed`
   )
 
-/** Stable keys for one initial baseline read and its optional exact local catch-up. */
+/** Stable keys for one exact initial or authorization-scoped baseline read and catch-up. */
 export const remoteBaselineReadIntendedRecordKey = (baselineId: RemoteBaselineId): JournalRecordKey =>
   JournalRecordKey.make(`remote-baseline:${baselineId}:read-intended`)
 export const remoteBaselineObservedRecordKey = (baselineId: RemoteBaselineId): JournalRecordKey =>

@@ -1,5 +1,5 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
-import { makeTaskWorkSpecification, type GitCommitSha } from "@dalph/contracts"
+import { GitCommitSha, makeTaskWorkSpecification } from "@dalph/contracts"
 import { expect, it } from "@effect/vitest"
 import { Context, Effect, FileSystem, Layer, Path, Ref, type Scope } from "effect"
 import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
@@ -129,6 +129,7 @@ const makeGit = Effect.fn("RemoteBaselineRecovery.makeGit")(function* (
   options?: {
     readonly observation?: "aligned" | "ancestor" | "diverged" | "unavailable"
     readonly catchUp?: "applied" | "lost-applied" | "lost-unapplied" | "unavailable"
+    readonly raceAtCatchUp?: GitCommitSha
     readonly reconcile?: "unavailable" | "deadline"
   }
 ) {
@@ -164,6 +165,7 @@ const makeGit = Effect.fn("RemoteBaselineRecovery.makeGit")(function* (
       })).pipe(
         Effect.andThen(
           Effect.gen(function* () {
+            if (options?.raceAtCatchUp !== undefined) yield* Ref.set(currentLocalHead, options.raceAtCatchUp)
             const current = yield* Ref.get(currentLocalHead)
             if (current !== expectedLocalHead) {
               return LocalTargetCatchUpResult.cases.Rejected.make({ observedHead: current })
@@ -356,6 +358,58 @@ const exerciseRecoveryCuts = Effect.fn("RemoteBaselineRecovery.exerciseCuts")(fu
     })
   )
 
+  // A ref advance between ancestry proof and CAS is retained exactly; re-entry cannot reuse stale proof.
+  yield* fresh((open) =>
+    Effect.gen(function* () {
+      const racedLocalHead = GitCommitSha.make("9".repeat(40))
+      const local = yield* Ref.make(localHead)
+      const first = yield* makeGit(local, { raceAtCatchUp: racedLocalHead })
+      const firstState = yield* open((store) =>
+        runProcess(store, first.git).pipe(
+          Effect.tap(() =>
+            store.read(runId).pipe(
+              Effect.tap((records) =>
+                Effect.sync(() =>
+                  expect(
+                    records.some(
+                      (record) =>
+                        record.event._tag === "LocalTargetCatchUpObserved" &&
+                        record.event.result._tag === "Rejected" &&
+                        record.event.expectedLocalHead === localHead &&
+                        record.event.remoteHead === remoteHead &&
+                        record.event.result.observedHead === racedLocalHead
+                    )
+                  ).toBe(true)
+                )
+              )
+            )
+          )
+        )
+      )
+      expect(firstState).toMatchObject({
+        _tag: "Retained",
+        cause: {
+          _tag: "CatchUpChanged",
+          expectedLocalHead: localHead,
+          observedLocalHead: racedLocalHead,
+          remoteHead
+        }
+      })
+      expect(yield* Ref.get(local)).toBe(racedLocalHead)
+      expect(yield* Ref.get(first.calls)).toMatchObject({
+        catches: [casKey(localHead, remoteHead)],
+        observations: 1,
+        timeline: ["observe", "catch-up"]
+      })
+
+      const recovery = yield* makeGit(local)
+      const recovered = yield* open((store) => runProcess(store, recovery.git))
+      expect(recovered).toEqual(firstState)
+      yield* assertNoRemoteEffects(recovery.calls)
+      expect(yield* Ref.get(local)).toBe(racedLocalHead)
+    })
+  )
+
   yield* fresh((open) =>
     Effect.gen(function* () {
       const local = yield* Ref.make(localHead)
@@ -432,5 +486,54 @@ it.effect("recovers the initial remote baseline across memory and reopened SQLit
         })
       yield* exerciseRecoveryCuts("sqlite", sqliteFresh)
     }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)))
+  )
+)
+
+it.effect("retains a catch-up ref race and requires a fresh baseline before another attempt", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const context = yield* Layer.build(memoryJournalStoreLayer)
+      const store = Context.get(context, JournalStore)
+      yield* seedAcceptedHistory(store)
+
+      const racedLocalHead = GitCommitSha.make("9".repeat(40))
+      const local = yield* Ref.make(localHead)
+      const first = yield* makeGit(local, { raceAtCatchUp: racedLocalHead })
+      const firstState = yield* runProcess(store, first.git)
+
+      expect(firstState).toMatchObject({
+        _tag: "Retained",
+        cause: {
+          _tag: "CatchUpChanged",
+          expectedLocalHead: localHead,
+          observedLocalHead: racedLocalHead,
+          remoteHead
+        }
+      })
+      expect(yield* Ref.get(local)).toBe(racedLocalHead)
+      expect(yield* Ref.get(first.calls)).toMatchObject({
+        catches: [casKey(localHead, remoteHead)],
+        observations: 1,
+        timeline: ["observe", "catch-up"]
+      })
+
+      const records = yield* store.read(runId)
+      expect(
+        records.some(
+          (record) =>
+            record.event._tag === "LocalTargetCatchUpObserved" &&
+            record.event.result._tag === "Rejected" &&
+            record.event.expectedLocalHead === localHead &&
+            record.event.remoteHead === remoteHead &&
+            record.event.result.observedHead === racedLocalHead
+        )
+      ).toBe(true)
+
+      const recovery = yield* makeGit(local)
+      const recovered = yield* runProcess(store, recovery.git)
+      expect(recovered).toEqual(firstState)
+      yield* assertNoRemoteEffects(recovery.calls)
+      expect(yield* Ref.get(local)).toBe(racedLocalHead)
+    })
   )
 )

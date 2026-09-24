@@ -109,6 +109,7 @@ import {
 import { activeWorkAuthorityRefreshSubjectsContain, RunActivationOpportunity } from "./run-activation-opportunity.js"
 import {
   automaticCompetingHeadRemoteBaselineCorrelationFor,
+  initialAutomaticCompetingHeadBaselineRound,
   remoteBaselineCorrelationFor
 } from "../../workflow/protocols/direct-publication/baseline-events.js"
 import { deriveRemoteBaselineState } from "../../workflow/protocols/direct-publication/baseline-state.js"
@@ -4163,7 +4164,8 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           integratorResponsibilityFactsFor(responsibility),
           responsibility.integrationTarget,
           runBeginning.event.remotePublicationTarget,
-          position
+          position,
+          initialAutomaticCompetingHeadBaselineRound
         )
         for (const round of automaticRemoteBaselineRoundsFor(source, firstRound)) {
           if (round.latestEvidenceAt !== undefined) baselinePositions.push(round.latestEvidenceAt)

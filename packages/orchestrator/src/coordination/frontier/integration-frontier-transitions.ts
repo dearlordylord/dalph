@@ -33,10 +33,10 @@ import {
   IntegratorRunProtocolResult,
   integratorRetryRunOrdinal,
   integratorRunCorrelationsEqual,
-  integratorSuccessorResponsibilityMatches,
   maximumIntegratorSessionsPerResponsibility,
   type IntegratorRunCorrelation
 } from "../../workflow/protocols/integrator/events.js"
+import { integratorSessionCapacityForJournal } from "../../workflow/protocols/integrator/session-capacity.js"
 import { integratorCompetingHeadSuccessorAuthorizationIdFor } from "../../workflow/protocols/integrator/automatic-successor-events.js"
 import { integratorRunTwoAuthorizationIssue } from "../../workflow/protocols/integrator/retry-authorization.js"
 import {
@@ -792,7 +792,7 @@ const qualifiedIntegratorProgressTransitionsFor = (
       )
       if (
         conflictingAuthorization ||
-        automaticSuccessorSessionCountFor(source, state.run.session) >= maximumIntegratorSessionsPerResponsibility
+        integratorSessionCapacityForJournal(source, state.run.session)._tag === "Exhausted"
       )
         return []
       if (targetLineageRefreshRequired) return []
@@ -812,7 +812,8 @@ const qualifiedIntegratorProgressTransitionsFor = (
       integratorResponsibilityFactsFor(responsibility),
       responsibility.integrationTarget,
       began.event.remotePublicationTarget,
-      authorization.position
+      authorization.position,
+      RemoteBaselineRound.make(1)
     )
     const baselineRounds = automaticRemoteBaselineRoundsFor(source, firstBaselineCorrelation)
     let baselineRound = baselineRounds.at(lastRecordOffset)
@@ -881,33 +882,6 @@ const qualifiedIntegratorProgressTransitionsFor = (
   ]
 }
 
-/** Counts distinct fixed sessions for this exact responsibility before automatic authorization. */
-const automaticSuccessorSessionCountFor = (
-  source: ReconstructedRunState["workflowHistory"]["evidence"],
-  responsibilitySession: Parameters<typeof integratorSuccessorResponsibilityMatches>[0]
-): number => {
-  const sessionIds = new Set<string>()
-  const addIfSameResponsibility = (session: Parameters<typeof integratorSuccessorResponsibilityMatches>[0]) => {
-    if (integratorSuccessorResponsibilityMatches(responsibilitySession, session)) sessionIds.add(session.sessionId)
-  }
-  for (const { event } of journalRecordsOfKind(source, "IntegratorSessionFixed")) {
-    if (event._tag === "IntegratorSessionFixed") addIfSameResponsibility(event.correlation)
-  }
-  for (const { event } of journalRecordsOfKind(source, "IntegratorSuccessorSessionFixed")) {
-    if (event._tag === "IntegratorSuccessorSessionFixed") {
-      addIfSameResponsibility(event.predecessor)
-      addIfSameResponsibility(event.successor)
-    }
-  }
-  for (const { event } of journalRecordsOfKind(source, "IntegratorAutomaticSuccessorSessionFixed")) {
-    if (event._tag === "IntegratorAutomaticSuccessorSessionFixed") {
-      addIfSameResponsibility(event.predecessor)
-      addIfSameResponsibility(event.successor)
-    }
-  }
-  return sessionIds.size
-}
-
 /** Derives the accepted bounded retained wait from exact compatible-head and fixed-session Journal facts. */
 const boundedRetainedWaitFor = (
   runState: ReconstructedRunState,
@@ -941,12 +915,8 @@ const boundedRetainedWaitFor = (
       remotePublicationCorrelationEquals(event.correlation, correlation)
   )
   if (hasSuccessorAuthorization) return undefined
-  if (
-    automaticSuccessorSessionCountFor(source, integratorState.run.session) !==
-    maximumIntegratorSessionsPerResponsibility
-  ) {
-    return undefined
-  }
+  const capacity = integratorSessionCapacityForJournal(source, integratorState.run.session)
+  if (capacity._tag !== "Exhausted") return undefined
   return FrontierExplanation.BoundedRetainedWait({
     mergeBase: publicationCause.mergeBase,
     plannedAttempt: responsibility.plannedAttempt,

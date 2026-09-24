@@ -40,7 +40,6 @@ import {
 } from "./session.js"
 import {
   integratorCorrelationsEqual,
-  integratorResponsibilityFactsEqual,
   integratorResponsibilityFactsFromCorrelation
 } from "./state.js"
 import { deriveIntegrationQuarantineState } from "../integration-quarantine/state.js"
@@ -48,6 +47,7 @@ import { integrationQuarantineDirectionSubject } from "../integration-quarantine
 import { integrationQuarantineDirectionTargetLineageOperationId } from "../integration-quarantine/direction-lineage-operation.js"
 import { exactWorkflowRunTargetFor } from "../../../workflow-journal/run-target.js"
 import { validateAutomaticSuccessorSessionFixedRecord } from "./automatic-successor-session.js"
+import { integratorSessionCapacityForJournal } from "./session-capacity.js"
 
 /**
  * Whether a queued S2 fix still names the lineage read bound to the latest
@@ -377,36 +377,6 @@ const successorIdentityCollision = (
     return false
   })
 
-const distinctSessionCountForResponsibility = (
-  records: JournalHistorySource,
-  responsibility: ReturnType<typeof integratorResponsibilityFactsFromCorrelation>
-): number => {
-  const sessionIds = new Set<string>()
-  for (const record of journalRecordsOfKind(records, "IntegratorSessionFixed")) {
-    if (
-      record.event._tag === "IntegratorSessionFixed" &&
-      integratorResponsibilityFactsEqual(
-        integratorResponsibilityFactsFromCorrelation(record.event.correlation),
-        responsibility
-      )
-    ) {
-      sessionIds.add(record.event.correlation.sessionId)
-    }
-  }
-  for (const record of journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")) {
-    if (
-      record.event._tag === "IntegratorSuccessorSessionFixed" &&
-      integratorResponsibilityFactsEqual(
-        integratorResponsibilityFactsFromCorrelation(record.event.successor),
-        responsibility
-      )
-    ) {
-      sessionIds.add(record.event.successor.sessionId)
-    }
-  }
-  return sessionIds.size
-}
-
 const validateSuccessorUniqueness = (
   records: JournalHistorySource,
   input: IntegratorSuccessorPreparationInput,
@@ -416,8 +386,7 @@ const validateSuccessorUniqueness = (
   | { readonly _tag: "Available" }
   | { readonly _tag: "Existing"; readonly record: IntegratorSuccessorSessionFixedRecord }
   | { readonly _tag: "Invalid"; readonly detail: string } => {
-  const responsibility = integratorResponsibilityFactsFromCorrelation(input.predecessor)
-  if (distinctSessionCountForResponsibility(records, responsibility) >= maximumIntegratorSessionsPerResponsibility) {
+  if (integratorSessionCapacityForJournal(records, input.predecessor)._tag === "Exhausted") {
     return { _tag: "Invalid", detail: "Integrator responsibility has reached its three-session aggregate bound" }
   }
   const [existing, duplicate] = firstTwoSuccessorsFor(records, input.predecessor)
