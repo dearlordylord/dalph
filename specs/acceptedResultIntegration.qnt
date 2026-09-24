@@ -3368,6 +3368,7 @@ module acceptedResultIntegration {
       result.phase == PublicationResumeRecorded,
       result.publicationResumeRequestRecorded,
       result.publicationResumePriorPhase == PublicationCompetingHead,
+      result.publicationResumeDispatchCount == 0,
       not(state.runPaused),
       not(state.runExitAdmitted),
       result.publicationAttemptCount < PROMOTION_ATTEMPT_LIMIT,

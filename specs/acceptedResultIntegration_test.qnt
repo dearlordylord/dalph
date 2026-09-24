@@ -1524,6 +1524,7 @@ module acceptedResultIntegrationTest {
         publicationResumeIdentityIsExact,
         publicationResumeDoesNotMintWork,
       })
+      .then(continueCompetingHeadThroughOrdinaryRunFrontier(1).fail())
   }
 
   run resumeDeniedPublicationOperatorMatchesTheProductionResumeEndpointTest = {
