@@ -1452,6 +1452,7 @@ module acceptedResultIntegrationTest {
       .expect(and {
         state.results.get(1).phase == PublicationResumeRecorded,
         state.results.get(1).publicationResumeRequestRecorded,
+        not(state.results.get(1).targetHeld),
         state.results.get(1).publicationResumeDispatchCount == 0,
         state.results.get(1).publicationAttemptCount == 1,
         state.results.get(1).publicationCandidate == 31,
@@ -1463,6 +1464,22 @@ module acceptedResultIntegrationTest {
       .then(observeTrackerFacts)
       .then(observeTargetFacts(1))
       .then(activatePublicationResume(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationResumeReady,
+        state.results.get(1).targetHeld,
+        state.results.get(1).publicationResumeActive,
+        state.results.get(1).publicationResumeDispatchCount == 1,
+        state.results.get(1).publicationAttemptCount == 1,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == 1,
+        state.results.get(1).integrationResponsibilityIdentity == 8001,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        state.results.get(1).publicationResumeRequestRunIdentity == 9000,
+        state.results.get(1).publicationResumeRequestResponsibilityIdentity == 8001,
+        state.results.get(1).publicationResumeRequestIdentity == 77,
+        targetHeldOnlyForActiveIntegration,
+        publicationResumeIdentityIsExact,
+      })
       .then(recordResumedPublicationAttemptIntent(1))
       .then(sendPublicationAttempt(1))
       .then(observePublicationApplied(1))

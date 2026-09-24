@@ -787,6 +787,7 @@ module acceptedResultIntegration {
           PublicationAttemptIntended,
           PublicationInFlight,
           PublicationReconciliation,
+          PublicationResumeReady,
           PromotionPremise,
           PromotionIntent,
           PromotionAttemptIntended,
