@@ -1315,11 +1315,19 @@ it("reselects receipt-authorized compatible publication and reconciles unmatched
     appliedThrough: JournalPosition.make(15),
     workflowHistory: { evidence: journalEvidenceFrom(resumeAuthorizedRecords) }
   }
-  expect(
-    deriveStartedIntegrationFrontier(receiptAuthorizedCompatibleRunState, publicationRuntimeFacts, [
-      responsibility
-    ]).transitions()
-  ).toEqual([expect.objectContaining({ _tag: "RunRemotePublication", responsibility })])
+  const compatibleHeadAnalysis = deriveStartedIntegrationFrontier(
+    receiptAuthorizedCompatibleRunState,
+    publicationRuntimeFacts,
+    [responsibility]
+  )
+  expect(compatibleHeadAnalysis.transitions()).toEqual([])
+  expect(compatibleHeadAnalysis.explanationForStarted(responsibility)).toEqual({
+    _tag: "IntegrationPublicationCompatibleHeadWait",
+    mergeBase: candidate.run.session.expectedTargetHead,
+    plannedAttempt: responsibility.plannedAttempt,
+    remoteHead: changedHead,
+    wakeCondition: "SameCommitSuccessorPathAvailable"
+  })
   // Replay remains fail-closed when this exact receipt and retained handoff are
   // present but the current host has no configured publication authority.
   expect(

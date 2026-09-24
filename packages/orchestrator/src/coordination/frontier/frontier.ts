@@ -10,6 +10,7 @@ import {
   type PlannedAttemptExecutorReport,
   type RemotePublicationTarget
 } from "@dalph/contracts"
+import type { GitCommitSha } from "@dalph/contracts"
 import type { RemotePublicationSucceededEvent } from "../../workflow/protocols/direct-publication/events.js"
 import type { RemoteBaselineCorrelation } from "../../workflow/protocols/direct-publication/baseline-events.js"
 import { type OperationId } from "../../workflow/identity.js"
@@ -482,6 +483,12 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection" | "TaskClaimFactsObserved"
   }
   IntegrationInProgress: { readonly plannedAttempt: PlannedTaskAttempt }
+  IntegrationPublicationCompatibleHeadWait: {
+    readonly mergeBase: GitCommitSha
+    readonly plannedAttempt: PlannedTaskAttempt
+    readonly remoteHead: GitCommitSha
+    readonly wakeCondition: "SameCommitSuccessorPathAvailable"
+  }
   IntegrationTrackerFactsWait: {
     readonly plannedAttempt: PlannedTaskAttempt
     readonly wakeCondition: "TaskTrackerFactsObserved"

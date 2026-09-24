@@ -420,6 +420,24 @@ const explanationAfterPrerequisitesFor = (
     }
     return integrationFinalityExplanationFor(workflowHistorySource(runState), responsibility, promotion, runtimeFacts)
   }
+  if (integratorState._tag === "GitQualifiedPrepared") {
+    const began = Array.from(journalRecordsOfKind(workflowHistorySource(runState), "WorkflowRunBegan"))[0]
+    if (began?.event._tag === "WorkflowRunBegan") {
+      const candidate = integratorRunQualifiedCandidateFromState(integratorState)
+      const correlation = remotePublicationCorrelationFor(candidate, began.event.remotePublicationTarget)
+      const publication = deriveRemotePublicationState(
+        remotePublicationEventsFor(workflowHistorySource(runState), correlation)
+      )
+      if (publication._tag === "PublicationRetained" && publication.cause._tag === "CompatibleCompetingHead") {
+        return FrontierExplanation.IntegrationPublicationCompatibleHeadWait({
+          mergeBase: publication.cause.mergeBase,
+          plannedAttempt: responsibility.plannedAttempt,
+          remoteHead: publication.cause.remoteHead,
+          wakeCondition: "SameCommitSuccessorPathAvailable"
+        })
+      }
+    }
+  }
   if (integratorState._tag === "GitQualifiedPrepared" && runtimeFacts.targetPromotionConfigured !== true) {
     return FrontierExplanation.TargetPromotionConfigurationWait({
       plannedAttempt: responsibility.plannedAttempt,
@@ -687,22 +705,9 @@ const qualifiedIntegratorProgressTransitionsFor = (
       : []
   }
   if (publication._tag === "PublicationRetained") {
-    // A receipt-authorized compatible-head outcome may have been durably
-    // recorded just before the host died, before the existing #385 owner ran.
-    // Re-enter this same action so the adapter can replay that exact handoff.
-    if (
-      publication.cause._tag === "CompatibleCompetingHead" &&
-      publication.authorization._tag === "ResumeRequest" &&
-      runtimeFacts.remotePublicationConfigured === true
-    ) {
-      return [
-        RunnableFrontierTransition.RunRemotePublication({
-          candidate,
-          responsibility,
-          target: began.event.remotePublicationTarget
-        })
-      ]
-    }
+    // Compatible competition is an accepted retained wait until the existing
+    // same-candidate successor owner is available. Replaying publication here
+    // would be a no-op and keep ordinary Run selecting the same action.
     return []
   }
   if (publication._tag === "PublicationContradiction" || runtimeFacts.remotePublicationConfigured !== true) return []

@@ -2,6 +2,9 @@ import type { RemotePublicationTarget } from "@dalph/contracts"
 import { Effect, Schema } from "effect"
 import { integrationResponsibilityIdentity } from "../integration-admission/responsibility.js"
 import type { IntegratorRunQualifiedCandidate } from "../integrator/events.js"
+import { deriveIntegrationFinalityStateFor } from "../integration-finality/state.js"
+import { targetPromotionCorrelationFor } from "../target-promotion/events.js"
+import { journalRecordsOfKind } from "../../../workflow-journal/record-evidence.js"
 import {
   RemotePublicationAttemptOrdinal,
   RemotePublicationAttemptAuthorization,
@@ -94,6 +97,19 @@ const resumeOutcomeNeedsContinuation = (state: RemotePublicationStateType): bool
   (state._tag === "PublicationRetained" && state.cause._tag === "CompatibleCompetingHead")
 
 const lastElementOffset = -1
+
+const publicationFinalityIsSettledFor = (
+  source: Parameters<typeof deriveIntegrationFinalityStateFor>[0],
+  candidate: IntegratorRunQualifiedCandidate
+): boolean => {
+  const promotionRequestId = targetPromotionCorrelationFor(candidate).requestId
+  return Array.from(journalRecordsOfKind(source, "IntegrationFinalitySettled")).some(
+    ({ event }) =>
+      event._tag === "IntegrationFinalitySettled" &&
+      event.claim.promotionCorrelation.requestId === promotionRequestId &&
+      deriveIntegrationFinalityStateFor(source, event.claim)?._tag === "IntegrationFinalitySettled"
+  )
+}
 
 /** Exit authority around each publication phase that can start new Git work. */
 export interface RemotePublicationPhaseBoundary {
@@ -360,6 +376,9 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
     if (recordedRequest?._tag === "RemotePublicationResumeRequested") {
       const sameRequest = Schema.toEquivalence(RemotePublicationResumeRequest)(recordedRequest.request, request)
       if (!sameRequest) return yield* new RemotePublicationResumeRequestConflict({ requestId: request.requestId })
+      if (state._tag === "PublicationSucceeded") {
+        return { state, activated: !publicationFinalityIsSettledFor(source, candidate) }
+      }
       if (state._tag === "PublicationResumeReady" && state.request.requestId === request.requestId) {
         return { state: yield* runRemotePublication(candidate, target, phaseBoundary), activated: true }
       }
@@ -386,6 +405,9 @@ export const makeRemotePublicationEngine = <E, R>(readEvidence: CurrentRemotePub
         return { state: yield* runRemotePublication(candidate, target, phaseBoundary), activated: true }
       }
       return { state, activated: false }
+    }
+    if (state._tag === "PublicationSucceeded") {
+      return { state, activated: !publicationFinalityIsSettledFor(source, candidate) }
     }
     if (state._tag !== "PublicationRetained") return { state, activated: false }
     const priorAttemptCount = events.filter((event) => event._tag === "RemotePublicationAttemptIntended").length
