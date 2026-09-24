@@ -1380,8 +1380,6 @@ module acceptedResultIntegrationAutomaticSuccessorProof {
       authorizationFactsCurrentWhenRecorded: false,
       baselineReadIntentRecorded: false,
       baselineReadIntentPosition: 0,
-      baselineReadIntentCount: 0,
-      baselineReadCountForAuthorization: 0,
       baselineReadRemoteHead: 0,
       baselineReadLocalHead: 0,
       catchUpIntentRecorded: false,

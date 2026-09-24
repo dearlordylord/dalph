@@ -234,7 +234,29 @@ module acceptedResultIntegrationAutomaticSuccessorProofTest {
       .then(beginNextActivation)
       .then(rereadAuthorityFacts)
       .then(beginNextAutomaticCompetingHeadCycle)
+      .expect(and {
+        state.phase == PublicationCompetingHead,
+        not(state.publicationAuthorizationRecorded),
+        state.authorizationCount == 1,
+        state.baselineReadIntentCount == 1,
+        state.baselineReadCountForAuthorization == 1,
+        state.baselineReadIntentCount == state.baselineReadCountForAuthorization,
+        state.catchUpCasCountForAuthorization == 1,
+        state.catchUpCasCountForAuthorization <= state.baselineReadCountForAuthorization,
+        state.catchUpCasCountForBaselineRound == 1,
+        state.catchUpCasCount == 1,
+      })
       .then(recordAutomaticSuccessorAuthorization)
+      .expect(and {
+        state.publicationAuthorizationRecorded,
+        state.authorizationCount == 2,
+        state.authorizationPublicationOccurrence == state.competitionOccurrence,
+        state.baselineReadIntentCount == 0,
+        state.baselineReadCountForAuthorization == 0,
+        state.catchUpCasCountForAuthorization == 0,
+        state.catchUpCasCountForBaselineRound == 0,
+        state.catchUpCasCount == 1,
+      })
       .then(beginNextActivation)
       .then(rereadAuthorityFacts)
       .then(recordRemoteBaselineReadIntent)
