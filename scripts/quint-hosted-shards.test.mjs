@@ -46,7 +46,8 @@ void test("retains the independently reviewed model-family range oracle", () => 
     { name: "Git reconciliation", first: 86, last: 90, shard: 0 },
     { name: "accepted-result integration", first: 91, last: 99, shard: 1 },
     { name: "accepted-result automatic successor", first: 100, last: 104, shard: 1 },
-    { name: "integration finality", first: 105, last: 109, shard: 0 }
+    { name: "accepted-result automatic successor counter proof", first: 105, last: 109, shard: 1 },
+    { name: "integration finality", first: 110, last: 114, shard: 0 }
   ])
 })
 

@@ -232,8 +232,8 @@ const fixture = ({ omitObligation = false, publicationCrashes = false, realObser
     writeFileSync(join(root + "-tools", "overflow-peer.so"), "identified peer tool")
   } else put("scripts/formal-input-policy.mjs", inputAdapter)
   if (omitObligation) {
-    // Only the disposable installed execution boundary is altered. Canonical
-    // Expected 110-command profile and production evidence/publication stay unchanged.
+    // Only the disposable installed execution boundary is altered. The
+    // expected 115-command profile and production evidence/publication stay unchanged.
     put("scripts/controlled-original-bounded.mjs", readFileSync(join(rootScripts, "run-bounded-command.mjs"), "utf8"))
     put("scripts/run-bounded-command.mjs", omittedExecutionAdapter)
   }
@@ -489,10 +489,10 @@ void test(
       assert.match(first.stdout, /complete profile passed/)
       const original = f.saved()
       const report = readRecord(original.success.execution.reportPath)
-      assert.equal(report.profileResult.commands.length, 110)
+      assert.equal(report.profileResult.commands.length, 115)
       assert.deepEqual(report.profileResult.profile, createQuintEffectiveProfile({ purpose: "local-guarded" }))
       const firstEvents = f.events()
-      assert.equal(firstEvents.filter((event) => event.startsWith("checker ")).length, 110)
+      assert.equal(firstEvents.filter((event) => event.startsWith("checker ")).length, 115)
       assert.equal(firstEvents.filter((event) => event === "server-start").length, 1)
       assert.ok(firstEvents.indexOf("guard-start") < firstEvents.indexOf("server-start"))
       assert.ok(firstEvents.indexOf("server-stopped") < firstEvents.indexOf("guard-finish"))
@@ -505,7 +505,7 @@ void test(
       assert.equal(second.code, 0, second.stderr)
       assert.match(second.stdout, /zero checkers or servers started/)
       assert.deepEqual(f.saved(), original)
-      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 110)
+      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 115)
       assert.equal(f.events().filter((event) => event === "server-start").length, 1)
       assert.equal(f.saved().success.finishedAt, original.success.finishedAt)
     } finally {
@@ -524,7 +524,7 @@ void test(
       assert.equal(first.code, 0, first.stderr)
       const checkerCount = f.events().filter((event) => event.startsWith("checker ")).length
       const serverCount = f.events().filter((event) => event === "server-start").length
-      assert.equal(checkerCount, 110)
+      assert.equal(checkerCount, 115)
       assert.equal(serverCount, 1)
       const formalSources = f.saved().success.identity.sourceManifest.map((entry) => entry.path)
       for (const source of ["run-admitted-gate.mjs", "gate-run-identity.mjs", "gate-slot-policy.mjs"])
@@ -570,7 +570,7 @@ void test(
       assert.equal(secondResult.code, 0, secondResult.stderr)
       assert.match(secondResult.stdout, /zero checkers or servers started/)
       assert.doesNotMatch(secondResult.stdout, /Formal: start/u)
-      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 110)
+      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 115)
       assert.equal(f.events().filter((event) => event === "server-start").length, 1)
     } finally {
       f.cleanup()
@@ -596,12 +596,12 @@ void test(
       assert.notEqual(failed.pointer.attemptId, original.pointer.attemptId)
       assert.equal(readRecord(original.success.recordPath).state, "passed")
       const afterFailure = f.events().filter((event) => event.startsWith("checker ")).length
-      assert.equal(afterFailure, 111)
+      assert.equal(afterFailure, 116)
       f.controls({})
       const retry = await launch(f).completion
       assert.equal(retry.code, 0, retry.stderr)
       assert.match(retry.stdout, /running complete profile/)
-      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, afterFailure + 110)
+      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, afterFailure + 115)
       assert.notEqual(f.saved().pointer.attemptId, original.pointer.attemptId)
     } finally {
       f.cleanup()
@@ -691,13 +691,13 @@ void test(
       const warm = await launch(f).completion
       assert.equal(warm.code, 0, warm.stderr)
       assert.match(warm.stdout, /zero checkers or servers started/)
-      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 110)
+      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 115)
       assert.deepEqual(f.saved(), original)
       writeFileSync(original.success.execution.reportPath, "{")
       const fresh = await launch(f).completion
       assert.equal(fresh.code, 0, fresh.stderr)
       assert.match(fresh.stdout, /running complete profile/)
-      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 220)
+      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 230)
       assert.equal(f.events().filter((event) => event === "server-start").length, 2)
       assert.notEqual(f.saved().pointer.attemptId, original.pointer.attemptId)
     } finally {
@@ -742,14 +742,14 @@ void test(
       assert.equal(firstResult.code, 0, firstResult.stderr)
       assert.equal(secondResult.code, 0, secondResult.stderr)
       assert.match(secondResult.stdout, /reusing complete success; zero checkers or servers started/)
-      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 110)
+      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 115)
       assert.equal(linked.events().filter((event) => event.startsWith("checker ")).length, 0)
       assert.equal(linked.events().filter((event) => event === "server-start").length, 0)
       writeFileSync(join(linkedRoot, "formal-input"), "changed governed formal fixture")
       const changedResult = await launch(linked, { slots: 1 }).completion
       assert.equal(changedResult.code, 0, changedResult.stderr)
       assert.match(changedResult.stdout, /running complete profile/)
-      assert.equal(linked.events().filter((event) => event.startsWith("checker ")).length, 110)
+      assert.equal(linked.events().filter((event) => event.startsWith("checker ")).length, 115)
       assert.equal(linked.events().filter((event) => event === "server-start").length, 1)
       const pointers = readdirSync(join(f.location.custodyRoot, "formal")).map((file) =>
         readRecord(join(f.location.custodyRoot, "formal", file))
@@ -852,7 +852,7 @@ void test(
         await waitForFile(join(f.root, ".scratch", "crash-ready.json"), active)
         const barrier = readRecord(join(f.root, ".scratch", "crash-ready.json"))
         assert.equal(barrier.phase, phase)
-        assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, beforeCount + 110)
+        assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, beforeCount + 115)
         const atPublication = f.saved()
         assert.notEqual(atPublication.pointer.attemptId, previous.pointer.attemptId)
         assert.equal(atPublication.pointer.state, phase === "after" ? "passed" : "started")
@@ -870,7 +870,7 @@ void test(
         const rejected = await launch(f).completion
         assert.equal(rejected.code, 1)
         assert.match(rejected.stderr, /requires reconciliation/)
-        assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, beforeCount + 110)
+        assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, beforeCount + 115)
         const reconcile = spawnSync(
           process.execPath,
           [join(f.root, "scripts", "reconcile-gate-run.mjs"), crashed.run.runId],
@@ -891,11 +891,11 @@ void test(
         if (phase === "after") {
           assert.match(retried.stdout, /zero checkers or servers started/)
           assert.deepEqual(f.saved(), atPublication)
-          assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, beforeCount + 110)
+          assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, beforeCount + 115)
         } else {
           assert.match(retried.stdout, /running complete profile/)
           assert.notEqual(f.saved().pointer.attemptId, atPublication.pointer.attemptId)
-          assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, beforeCount + 220)
+          assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, beforeCount + 230)
         }
         previous = f.saved()
         crashed = undefined
@@ -943,13 +943,13 @@ runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.
     const original = qualityRecords()[0]
     assert.equal(original.resume.complete, true)
     assert.equal(original.resume.formal.disposition, "executed")
-    assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 110)
+    assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 115)
     assert.ok(f.events().indexOf("preflight") < f.events().indexOf("server-start"))
     assert.ok(f.events().indexOf("server-stopped") < f.events().indexOf("application-check"))
     f.put("unrelated-app", "ordinary application edit")
     const warm = await quality()
     assert.equal(warm.code, 0, warm.stderr)
-    assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 110)
+    assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 115)
     assert.equal(f.events().filter((event) => event === "application-check").length, 2)
     const resumed = await quality(original.runId)
     assert.equal(resumed.code, 0, resumed.stderr)
@@ -990,7 +990,7 @@ runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.
     const invalidatedResume = await quality(original.runId)
     assert.equal(invalidatedResume.code, 0, invalidatedResume.stderr)
     assert.equal(readRunEvidence({ runDirectory: original.runDirectory, runId: original.runId }).resume.complete, true)
-    assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 220)
+    assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 230)
     assert.equal(f.events().filter((event) => event === "application-check").length, 2)
     // S12: a real failed checker child at the mandatory formal boundary
     // rejects this handoff before any application check launch.
@@ -1000,7 +1000,7 @@ runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.
     const failedFormal = await quality()
     assert.equal(failedFormal.code, 1)
     assert.match(failedFormal.stderr, /controlled checker failure/u)
-    assert.ok(f.events().filter((event) => event.startsWith("checker ")).length > 220)
+    assert.ok(f.events().filter((event) => event.startsWith("checker ")).length > 230)
     assert.equal(f.events().filter((event) => event === "application-check").length, 2)
     f.controls({ fail: false })
     f.put(".scratch/mutate-formal", "trigger")
@@ -1013,7 +1013,7 @@ runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.
 })
 
 // S1/#362 omission: actual installed execution adapter leaves exactly one
-// command without a process/receipt. Complete canonical profile stays 110.
+// command without a process/receipt. Complete canonical profile stays 115.
 void test(
   "an omitted actual checker obligation cannot publish complete formal success",
   { timeout: 90000 },
@@ -1054,16 +1054,16 @@ void test(
       assert.match(changed.stdout, /running complete profile/u)
       assert.deepEqual(readFileSync(packageFile), packageBytes)
       assert.equal(JSON.parse(packageBytes).version, "0.32.0")
-      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 220)
+      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 230)
       assert.equal(f.events().filter((event) => event === "server-start").length, 2)
       const next = f.saved(original.pointer.attemptId)
       assert.notEqual(next.pointer.attemptId, original.pointer.attemptId)
       assert.notEqual(next.success.identity.inputDigest, original.success.identity.inputDigest)
-      assert.equal(readRecord(next.success.execution.reportPath).profileResult.commands.length, 110)
+      assert.equal(readRecord(next.success.execution.reportPath).profileResult.commands.length, 115)
       const warm = await launch(f).completion
       assert.equal(warm.code, 0, warm.stderr)
       assert.match(warm.stdout, /zero checkers or servers started/u)
-      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 220)
+      assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 230)
       assert.deepEqual(f.saved(original.pointer.attemptId), next)
     } finally {
       f.cleanup()
@@ -1083,13 +1083,13 @@ void test("native observer overflow refuses actual warm and fresh qualification"
     const warm = await launch(f).completion
     assert.equal(warm.code, 1, warm.stdout + warm.stderr)
     assert.match(warm.stderr, /IN_Q_OVERFLOW/u)
-    assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 110)
+    assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 115)
     assert.equal(f.events().filter((event) => event === "server-start").length, 1)
     assert.deepEqual(f.saved(), original)
     const forced = await launch(f, { force: true }).completion
     assert.equal(forced.code, 1, forced.stdout + forced.stderr)
     assert.match(forced.stderr, /IN_Q_OVERFLOW/u)
-    assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 220)
+    assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 230)
     assert.equal(f.events().filter((event) => event === "server-start").length, 2)
     assert.equal(f.events().filter((event) => event === "server-stopped").length, 2)
     assert.equal(f.events().filter((event) => event === "native-observer-paused").length, 2)
@@ -1140,7 +1140,7 @@ runStage:stage=>runBoundedCommand({executable:process.execPath,args:['-e',stage.
         const rejected = await quality()
         assert.equal(rejected.code, 1, rejected.stdout + rejected.stderr)
         assert.match(rejected.stderr, /dirty:.*runtime\.so/u)
-        assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 110)
+        assert.equal(f.events().filter((event) => event.startsWith("checker ")).length, 115)
         assert.equal(f.events().filter((event) => event === "server-start").length, 1)
         assert.deepEqual(readFileSync(tool), bytes)
         assert.deepEqual(f.saved(), original)

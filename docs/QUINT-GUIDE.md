@@ -30,8 +30,10 @@ and complete finite-state verification with no arbitrary depth token.
 
 The current proof projections are `taskFactReconciliation_proof.qnt`,
 `plannedAttemptExecutor_proof.qnt`, `applicationExit_proof.qnt`, and
-`acceptedResultIntegration_proof.qnt`. `freshTaskAdmission_proof.qnt` contains two
-more projections for one canonical subject. The capacity/order projection
+`acceptedResultIntegration_proof.qnt`; the automatic-successor counter
+projection is `acceptedResultIntegration_automaticSuccessor_counters_proof.qnt`.
+`freshTaskAdmission_proof.qnt` contains two more projections for one canonical
+subject. The capacity/order projection
 retains all five ordered task identities A through E; reducing it to counters
 would erase the D-before-E and task-local rejection properties it exists to
 prove. The continuity projection retains one exact selected task and one

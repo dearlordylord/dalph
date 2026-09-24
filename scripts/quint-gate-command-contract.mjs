@@ -3,11 +3,11 @@ import { acceptedAutomaticSuccessorQuintGateCommandKeys } from "./quint-gate-aut
 import { acceptedLegacyQuintGateCommandKeys } from "./quint-gate-legacy-command-oracle.mjs"
 
 export const quintGateExpectedCommandCounts = Object.freeze({
-  total: 110,
-  typecheck: 16,
-  test: 48,
-  "sampled-run": 24,
-  verify: 22
+  total: 115,
+  typecheck: 17,
+  test: 50,
+  "sampled-run": 25,
+  verify: 23
 })
 
 export const legacyQuintGateExpectedCommandCounts = Object.freeze({
@@ -51,7 +51,9 @@ export const assertAcceptedLegacyQuintGateCommands = (manifest) => {
   const retained = manifest
     .filter(
       ({ name }) =>
-        !name.startsWith("fresh-task admission") && !name.startsWith("accepted-result automatic successor proof")
+        !name.startsWith("fresh-task admission") &&
+        !name.startsWith("accepted-result automatic successor proof") &&
+        !name.startsWith("accepted-result automatic successor counter proof")
     )
     .map(commandKey)
   const mismatch = retained.findIndex((key, index) => key !== acceptedLegacyQuintGateCommandKeys[index])
@@ -86,8 +88,8 @@ const countManifestCommands = (manifest) => {
 
 /**
  * Keep the selected command count independent from the manifest and the
- * execution path. Both representations must retain the current 110-command
- * phase contract even when an omission changes them together.
+ * execution path. Both representations must retain the current 115-command
+ * command contract even when an omission changes them together.
  */
 export const assertQuintGateCommandContract = ({ executed, manifest }) => {
   assertAcceptedQuintGateCommands(manifest)

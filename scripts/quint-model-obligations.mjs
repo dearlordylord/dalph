@@ -737,3 +737,12 @@ export const acceptedResultIntegrationAutomaticSuccessorProofObligations = Objec
     "unsafeLocalWaitReached"
   ])
 })
+
+// This proof-only projection owns the accepted #385 authorization/read/CAS
+// counter bound and the one-refresh cap. Its source-transition map is
+// documented in the paired model; the canonical model remains the behavior and
+// sampled/conformance subject.
+export const acceptedResultIntegrationAutomaticSuccessorCountersProofObligations = Object.freeze({
+  invariants: Object.freeze(["successorRefreshRoundsAreBounded", "catchUpCasIsBoundedByBaselineRounds"]),
+  witnesses: Object.freeze(["catchUpAppliedReached", "secondRoundCatchUpReached"])
+})

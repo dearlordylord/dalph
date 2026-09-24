@@ -81,16 +81,16 @@ const fixture = () => {
   })
 }
 
-void test("accepts two out-of-order reports only as one exact 110-command profile", () => {
+void test("accepts two out-of-order reports only as one exact 115-command profile", () => {
   const envelopes = fixture().reverse()
   const aggregate = aggregateHostedFormalShards({ binding, envelopes })
   assert.equal(aggregate.version, 1)
   assert.deepEqual(aggregate.binding, binding)
   assert.equal(aggregate.profileDigest, envelopes[0].profileDigest)
-  assert.equal(aggregate.commands, 110)
+  assert.equal(aggregate.commands, 115)
   assert.deepEqual(
     aggregate.commandEvidence.map(({ position }) => position),
-    Array.from({ length: 110 }, (_value, position) => position)
+    Array.from({ length: 115 }, (_value, position) => position)
   )
   const first = aggregate.commandEvidence[0]
   assert.deepEqual(first.args, envelopes[1].report.commands[0].args)

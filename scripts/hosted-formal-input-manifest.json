@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "d3058588fcc4ce2df57b011832adff4dda9503b5c91fbadf48b17b0312cbb535",
+  "digest": "8a992858f17bd3b04effb0cd6053a20143ee304f857ecc5dadc49c7967164f29",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -283,6 +283,7 @@
     "packages/orchestrator/src/workflow/protocols/direct-publication/admission.ts",
     "packages/orchestrator/src/workflow/protocols/direct-publication/baseline-events.ts",
     "packages/orchestrator/src/workflow/protocols/direct-publication/baseline-protocol-engine.ts",
+    "packages/orchestrator/src/workflow/protocols/direct-publication/baseline-rounds.ts",
     "packages/orchestrator/src/workflow/protocols/direct-publication/baseline-state.ts",
     "packages/orchestrator/src/workflow/protocols/direct-publication/baseline-transition-journal.ts",
     "packages/orchestrator/src/workflow/protocols/direct-publication/errors.ts",
@@ -479,6 +480,9 @@
     "scripts/stabilize-verification-path.mjs",
     "scripts/verify-changed-coverage.mjs",
     "scripts/with-gate-slot.mjs",
+    "specs/acceptedResultIntegration_automaticSuccessor_counters_proof_negative_test.qnt",
+    "specs/acceptedResultIntegration_automaticSuccessor_counters_proof_test.qnt",
+    "specs/acceptedResultIntegration_automaticSuccessor_counters_proof.qnt",
     "specs/acceptedResultIntegration_automaticSuccessor_proof_negative_test.qnt",
     "specs/acceptedResultIntegration_automaticSuccessor_proof_test.qnt",
     "specs/acceptedResultIntegration_automaticSuccessor_proof.qnt",
