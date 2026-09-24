@@ -49,6 +49,7 @@ const contiguousAttemptsIssue = (attempts: ReadonlyArray<RemotePublicationAttemp
 export const remotePublicationRetainedCauseIsResumable = (cause: RemotePublicationRetainedCause): boolean =>
   cause._tag === "AuthenticationDenied" ||
   cause._tag === "CompatibleCompetingHead" ||
+  cause._tag === "IncompatibleLineage" ||
   cause._tag === "ObservationUnavailable" ||
   cause._tag === "PolicyDenied" ||
   cause._tag === "PushCustodyUnproven" ||

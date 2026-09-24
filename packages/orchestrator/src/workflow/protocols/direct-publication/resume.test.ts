@@ -128,7 +128,14 @@ const seedQualifiedHistory = Effect.fn("DirectPublicationResume.seedQualifiedHis
   }
 })
 
-type GitBehavior = "denied" | "applied" | "throttled" | "uncertain" | "competing" | "candidate-current"
+type GitBehavior =
+  | "denied"
+  | "applied"
+  | "throttled"
+  | "uncertain"
+  | "competing"
+  | "incompatible"
+  | "candidate-current"
 type GitCalls = Readonly<{
   readonly custody: number
   readonly observations: number
@@ -146,6 +153,8 @@ const makeGit = Effect.fn("DirectPublicationResume.makeGit")(function* (behavior
   const observedHead =
     behavior === "competing"
       ? GitCommitSha.make("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+      : behavior === "incompatible"
+        ? GitCommitSha.make("cccccccccccccccccccccccccccccccccccccccc")
       : behavior === "candidate-current"
         ? candidate.candidateCommit
         : candidate.run.session.expectedTargetHead
@@ -175,6 +184,8 @@ const makeGit = Effect.fn("DirectPublicationResume.makeGit")(function* (behavior
                 mergeBase: candidate.run.session.expectedTargetHead,
                 remoteHead: observedHead
               })
+            : behavior === "incompatible"
+              ? RemotePublicationGitObservation.cases.IncompatibleLineage.make({ remoteHead: observedHead })
             : behavior === "candidate-current"
               ? RemotePublicationGitObservation.cases.CandidateCurrent.make({ remoteHead: observedHead })
               : RemotePublicationGitObservation.cases.RemoteAncestorOfCandidate.make({ remoteHead: observedHead })
@@ -852,11 +863,141 @@ const exerciseDistinctResumeRequests = (process: StoreProcess): Effect.Effect<vo
     expect(yield* Ref.get(laterRepair.calls)).toMatchObject({ custody: 1, preparations: [3], pushes: [3] })
   })
 
+const exerciseUnchangedIncompatibleResume = (process: StoreProcess): Effect.Effect<void, unknown> =>
+  Effect.gen(function* () {
+    const initial = yield* makeGit("incompatible")
+    expect((yield* process((store) => invoke(store, initial.git, "run")))._tag).toBe("PublicationRetained")
+    expect(yield* Ref.get(initial.calls)).toMatchObject({
+      custody: 0,
+      observations: 1,
+      preparations: [],
+      pushes: []
+    })
+    const beforeResume = yield* process((store) => store.read(runId))
+    expect(publicationOrdinals(beforeResume)).toEqual([])
+
+    const request = requestFor("resume-incompatible-unchanged")
+    const unchanged = yield* makeGit("incompatible")
+    expect(
+      yield* process((store) => invoke(store, unchanged.git, { request }))
+    ).toMatchObject({ _tag: "PublicationRetained", cause: { _tag: "IncompatibleLineage" } })
+    expect(yield* Ref.get(unchanged.calls)).toMatchObject({
+      custody: 0,
+      observations: 1,
+      preparations: [],
+      pushes: []
+    })
+
+    const afterResume = yield* process((store) => store.read(runId))
+    const events = publicationEvents(afterResume)
+    expect(deriveRemotePublicationState(events)).toMatchObject({
+      _tag: "PublicationRetained",
+      cause: {
+        _tag: "IncompatibleLineage",
+        remoteHead: GitCommitSha.make("cccccccccccccccccccccccccccccccccccccccc")
+      },
+      authorization: { _tag: "ResumeRequest", requestId: request.requestId }
+    })
+    expect(publicationOrdinals(afterResume)).toEqual([])
+    expect(
+      afterResume.filter(({ event }) => event._tag === "RemotePublicationResumeRequested")
+    ).toEqual([expect.objectContaining({ event: expect.objectContaining({ request }) })])
+    const retained = afterResume.filter(({ event }) => event._tag === "RemotePublicationRetained")
+    expect(retained).toHaveLength(2)
+    expect(retained.map(({ event }) => (event._tag === "RemotePublicationRetained" ? event.cause._tag : ""))).toEqual([
+      "IncompatibleLineage",
+      "IncompatibleLineage"
+    ])
+    expect(retained.at(-1)?.event).toMatchObject({
+      authorization: { _tag: "ResumeRequest", requestId: request.requestId },
+      correlation: {
+        qualifiedCandidate: candidate,
+        target
+      }
+    })
+    expect(
+      afterResume.filter(({ event }) => event._tag === "IntegratorRunStarted").length
+    ).toBe(beforeResume.filter(({ event }) => event._tag === "IntegratorRunStarted").length)
+    expect(
+      afterResume.filter(({ event }) => event._tag === "IntegratorSessionFixed").length
+    ).toBe(beforeResume.filter(({ event }) => event._tag === "IntegratorSessionFixed").length)
+  })
+
+const exerciseRepairedIncompatibleResume = (process: StoreProcess): Effect.Effect<void, unknown> =>
+  Effect.gen(function* () {
+    const initial = yield* makeGit("incompatible")
+    expect((yield* process((store) => invoke(store, initial.git, "run")))._tag).toBe("PublicationRetained")
+    expect(publicationOrdinals(yield* process((store) => store.read(runId)))).toEqual([])
+
+    const request = requestFor("resume-incompatible-repaired-current")
+    const repaired = yield* makeGit("candidate-current")
+    const resumed = yield* process((store) => invoke(store, repaired.git, { request }))
+    expect(resumed).toMatchObject({
+      _tag: "PublicationSucceeded",
+      proof: {
+        _tag: "ReconciledCandidateCurrent",
+        attemptOrdinal: 1,
+        remoteHead: candidate.candidateCommit
+      }
+    })
+    expect(yield* Ref.get(repaired.calls)).toMatchObject({
+      custody: 0,
+      observations: 1,
+      preparations: [1],
+      pushes: []
+    })
+
+    const afterResume = yield* process((store) => store.read(runId))
+    const events = publicationEvents(afterResume)
+    expect(deriveRemotePublicationState(events)).toMatchObject({
+      _tag: "PublicationSucceeded",
+      proof: {
+        _tag: "ReconciledCandidateCurrent",
+        attemptOrdinal: 1,
+        remoteHead: candidate.candidateCommit
+      }
+    })
+    expect(publicationOrdinals(afterResume)).toEqual([1])
+    expect(
+      afterResume.filter(({ event }) => event._tag === "RemotePublicationResumeRequested")
+    ).toEqual([expect.objectContaining({ event: expect.objectContaining({ request }) })])
+    expect(afterResume.at(-1)?.event).toMatchObject({
+      _tag: "RemotePublicationSucceeded",
+      correlation: {
+        qualifiedCandidate: candidate,
+        target
+      },
+      proof: {
+        _tag: "ReconciledCandidateCurrent",
+        attemptOrdinal: 1,
+        remoteHead: candidate.candidateCommit
+      }
+    })
+  })
+
 it.effect("deduplicates one resume identity and allows a later distinct repair request within the same allowance", () =>
   Effect.scoped(
     Effect.gen(function* () {
       yield* memoryFresh(exerciseDistinctResumeRequests)
       yield* sqliteFresh(exerciseDistinctResumeRequests)
+    })
+  )
+)
+
+it.effect("keeps unchanged incompatible lineage retained with no push in memory and reopened SQLite", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* memoryFresh(exerciseUnchangedIncompatibleResume)
+      yield* sqliteFresh(exerciseUnchangedIncompatibleResume)
+    })
+  )
+)
+
+it.effect("uses repaired compatible facts to prove the same candidate in memory and reopened SQLite", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* memoryFresh(exerciseRepairedIncompatibleResume)
+      yield* sqliteFresh(exerciseRepairedIncompatibleResume)
     })
   )
 )

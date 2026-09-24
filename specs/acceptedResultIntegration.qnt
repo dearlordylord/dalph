@@ -1578,8 +1578,8 @@ module acceptedResultIntegration {
         result.publicationIntegratorSession == result.integrationSession,
         result.integratorInvocationCount == 1,
         result.integrationResponsibilityCount == 1,
-        result.publicationAttemptCount > 0 or result.publicationResumePriorPhase == PublicationCompetingHead,
         result.publicationAttemptCount <= PROMOTION_ATTEMPT_LIMIT,
+        result.publicationLastAttempt == result.publicationAttemptCount,
       }
     })
 
@@ -3379,6 +3379,79 @@ module acceptedResultIntegration {
           publicationResumeDispatchCount: result.publicationResumeDispatchCount + 1,
           publicationResumeActive: false,
         }),
+      },
+    }
+  }
+
+  // An incompatible retained wait may consume one exact receipt to refresh
+  // current Git facts. The same incompatible result remains a no-send wait
+  // under that receipt; it does not mint a publication ordinal or Integrator work.
+  action refreshIncompatiblePublicationWithoutRepair(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationResumeRecorded,
+      result.publicationResumeRequestRecorded,
+      result.publicationResumePriorPhase == PublicationIncompatible,
+      result.publicationResumePriorObservation == PublicationRemoteIncompatible,
+      result.publicationAttemptCount == 0,
+      result.publicationResumeDispatchCount == 0,
+      not(state.runPaused),
+      not(state.runExitAdmitted),
+      state' = {
+        ...state,
+        results: state.results.put(id, {
+          ...result,
+          phase: PublicationIncompatible,
+          targetHeld: false,
+          publicationResultRecorded: true,
+          publicationProofRecorded: false,
+          publicationProofBasis: NoPublicationProof,
+          publicationObservation: PublicationRemoteIncompatible,
+          publicationObservedRemoteHead: 0,
+          publicationResumeFactsRefreshed: true,
+          publicationResumeDispatchCount: result.publicationResumeDispatchCount + 1,
+          publicationResumeActive: false,
+        }),
+      },
+    }
+  }
+
+  // Only a fresh compatible observation can move the retained candidate to
+  // publication proof. With no earlier push, ordinal one identifies this
+  // read proof using the ordinary publication correlation and bound.
+  action refreshIncompatiblePublicationToCandidateCurrent(id: int): bool = {
+    val result = state.results.get(id)
+    all {
+      id == 1,
+      result.phase == PublicationResumeRecorded,
+      result.publicationResumeRequestRecorded,
+      result.publicationResumePriorPhase == PublicationIncompatible,
+      result.publicationResumePriorObservation == PublicationRemoteIncompatible,
+      result.publicationAttemptCount == 0,
+      result.publicationLastAttempt == 0,
+      result.publicationResumeDispatchCount == 0,
+      result.publicationCandidate == result.submittedCandidate,
+      result.publicationIntegratorSession == result.integrationSession,
+      result.publicationAttemptCount < PROMOTION_ATTEMPT_LIMIT,
+      not(state.runPaused),
+      not(state.runExitAdmitted),
+      state' = {
+        val proof = recordInitialPublicationProof(
+          state,
+          id,
+          ReconciledCandidateCurrent,
+          PublicationRemoteCandidateCurrent,
+          result.submittedCandidate,
+        )
+        {
+          ...proof,
+          results: proof.results.put(id, {
+            ...proof.results.get(id),
+            publicationResumeFactsRefreshed: true,
+            publicationResumeDispatchCount: result.publicationResumeDispatchCount + 1,
+          }),
+        }
       },
     }
   }

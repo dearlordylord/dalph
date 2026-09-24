@@ -1262,6 +1262,105 @@ module acceptedResultIntegrationTest {
       })
   }
 
+  run incompatiblePublicationResumeKeepsUnchangedFactsRetainedWithoutWorkTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observePublicationIncompatible(1))
+      .then(recordPublicationResumeRequest(1, 1, 9000, 8001, 77))
+      .expect(and {
+        state.results.get(1).phase == PublicationResumeRecorded,
+        state.results.get(1).publicationResumePriorPhase == PublicationIncompatible,
+        state.results.get(1).publicationResumePriorObservation == PublicationRemoteIncompatible,
+        state.results.get(1).publicationAttemptCount == 0,
+        state.results.get(1).publicationLastAttempt == 0,
+        state.results.get(1).publicationResumeRequestRunIdentity == 9000,
+        state.results.get(1).publicationResumeRequestResponsibilityIdentity == 8001,
+        state.results.get(1).publicationResumeRequestIdentity == 77,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        publicationResumeIdentityIsExact,
+        publicationResumeDoesNotMintWork,
+        publicationAttemptsAreBounded,
+      })
+      .then(refreshIncompatiblePublicationWithoutRepair(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationIncompatible,
+        state.results.get(1).publicationObservation == PublicationRemoteIncompatible,
+        state.results.get(1).publicationAttemptCount == 0,
+        state.results.get(1).publicationLastAttempt == 0,
+        not(state.results.get(1).publicationOrdinaryRefspecRequested),
+        not(state.results.get(1).publicationProofRecorded),
+        not(state.results.get(1).targetHeld),
+        state.results.get(1).publicationResumeFactsRefreshed,
+        state.results.get(1).publicationResumeDispatchCount == 1,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        publicationResumeIdentityIsExact,
+        publicationResumeDoesNotMintWork,
+        publicationAttemptsAreBounded,
+        publicationWaitRetainsResponsibility,
+      })
+  }
+
+  run incompatiblePublicationResumeUsesOnlyFreshCandidateCurrentProofTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observePublicationIncompatible(1))
+      .then(recordPublicationResumeRequest(1, 1, 9000, 8001, 78))
+      .then(refreshIncompatiblePublicationToCandidateCurrent(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationProved,
+        state.results.get(1).publicationProofRecorded,
+        state.results.get(1).publicationProofBasis == ReconciledCandidateCurrent,
+        state.results.get(1).publicationObservation == PublicationRemoteCandidateCurrent,
+        state.results.get(1).publicationObservedRemoteHead == 31,
+        state.results.get(1).publicationAttemptCount == 1,
+        state.results.get(1).publicationLastAttempt == 1,
+        not(state.results.get(1).publicationOrdinaryRefspecRequested),
+        not(state.results.get(1).publicationForceRequested),
+        state.results.get(1).publicationResumePriorObservation == PublicationRemoteIncompatible,
+        state.results.get(1).publicationResumeFactsRefreshed,
+        state.results.get(1).publicationResumeDispatchCount == 1,
+        state.results.get(1).publicationResumeRequestRunIdentity == 9000,
+        state.results.get(1).publicationResumeRequestResponsibilityIdentity == 8001,
+        state.results.get(1).publicationResumeRequestIdentity == 78,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == 1,
+        state.results.get(1).integratorInvocationCount == 1,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        publicationResumeIdentityIsExact,
+        publicationResumeDoesNotMintWork,
+        publicationAttemptsAreBounded,
+        publicationProofRequiresPerRefSuccess,
+      })
+  }
+
   run ambiguousPublicationReconcilesToRetainedAncestorProofTest = {
     init
       .then(admitDestination)
