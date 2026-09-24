@@ -1577,7 +1577,12 @@ module acceptedResultIntegration {
       not(result.publicationResumeRequestRecorded) or and {
         result.publicationCandidate == result.submittedCandidate,
         result.publicationIntegratorSession == result.integrationSession,
-        result.integratorInvocationCount == 1,
+        // A receipt may follow the one explicitly authorized Retry in the
+        // same session. The retry count is durable evidence of that prior
+        // invocation; resume itself must not add another one.
+        result.integratorInvocationCount == 1 + result.retryRunCount,
+        result.integratorRunOrdinal == 1 + result.retryRunCount,
+        result.integratorRunSession == result.integrationSession,
         result.integrationResponsibilityCount == 1,
         result.publicationAttemptCount <= PROMOTION_ATTEMPT_LIMIT,
         result.publicationLastAttempt == result.publicationAttemptCount,

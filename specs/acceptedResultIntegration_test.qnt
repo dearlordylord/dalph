@@ -1497,6 +1497,86 @@ module acceptedResultIntegrationTest {
       })
   }
 
+  // S6 composes the already-authorized same-session Retry with a later
+  // retained publication wait. Resume preserves that existing run-two history
+  // without treating it as work newly minted by the resume request.
+  run resumeAfterAuthorizedRetryPreservesExistingIntegratorHistoryTest = {
+    init
+      .then(admitDestination)
+      .then(acceptResult(1))
+      .then(queueAcceptedResult(1))
+      .then(startIntegration(1))
+      .then(fixIntegratorSession(1))
+      .then(invokeIntegrator(1))
+      .then(reportIntegratorCandidate(1, 30))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeWrongParentCandidate(1))
+      .then(recordQuarantine(1))
+      .then(chooseRetryOne)
+      .then(startRetryOne)
+      .expect(and {
+        state.results.get(1).phase == RetryInFlight,
+        state.results.get(1).retryRunCount == 1,
+        state.results.get(1).integratorInvocationCount == 2,
+        state.results.get(1).integratorRunOrdinal == 2,
+        state.results.get(1).integratorRunSession == state.results.get(1).integrationSession,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        retryRequiresOneExplicitChoice,
+        retryAdvancesSameSessionToOrdinalTwo,
+      })
+      .then(reportIntegratorCandidate(1, 31))
+      .then(recordCandidateGitReadIntent(1))
+      .then(readCandidateGit(1))
+      .then(observeExactCandidate(1))
+      .then(offerPublicationPremise(1))
+      .then(recordPublicationIntent(1))
+      .then(observePublicationIncompatible(1))
+      .then(recordPublicationResumeRequest(1, 1, 9000, 8001, 81))
+      .expect(and {
+        state.results.get(1).phase == PublicationResumeRecorded,
+        state.results.get(1).publicationResumePriorPhase == PublicationIncompatible,
+        state.results.get(1).publicationResumePriorObservation == PublicationRemoteIncompatible,
+        state.results.get(1).publicationResumeRequestRunIdentity == 9000,
+        state.results.get(1).publicationResumeRequestResponsibilityIdentity == 8001,
+        state.results.get(1).publicationResumeRequestIdentity == 81,
+        state.results.get(1).retryRunCount == 1,
+        state.results.get(1).integratorInvocationCount == 2,
+        state.results.get(1).integratorRunOrdinal == 2,
+        state.results.get(1).integratorRunSession == state.results.get(1).integrationSession,
+        state.results.get(1).integrationResponsibilityIdentity == 8001,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        state.results.get(1).submittedCandidate == 31,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == state.results.get(1).integrationSession,
+        state.results.get(1).publicationAttemptCount == 0,
+        state.results.get(1).publicationLastAttempt == 0,
+        state.results.get(1).publicationResumeDispatchCount == 0,
+        not(state.results.get(1).publicationResumeActive),
+        publicationResumeIdentityIsExact,
+        publicationResumeDoesNotMintWork,
+      })
+      .then(refreshIncompatiblePublicationWithoutRepair(1))
+      .expect(and {
+        state.results.get(1).phase == PublicationIncompatible,
+        state.results.get(1).publicationResumeDispatchCount == 1,
+        state.results.get(1).retryRunCount == 1,
+        state.results.get(1).integratorInvocationCount == 2,
+        state.results.get(1).integratorRunOrdinal == 2,
+        state.results.get(1).integratorRunSession == state.results.get(1).integrationSession,
+        state.results.get(1).integrationResponsibilityIdentity == 8001,
+        state.results.get(1).integrationResponsibilityCount == 1,
+        state.results.get(1).submittedCandidate == 31,
+        state.results.get(1).publicationCandidate == 31,
+        state.results.get(1).publicationIntegratorSession == state.results.get(1).integrationSession,
+        state.results.get(1).publicationAttemptCount == 0,
+        state.results.get(1).publicationLastAttempt == 0,
+        publicationResumeIdentityIsExact,
+        publicationResumeDoesNotMintWork,
+        publicationWaitRetainsResponsibility,
+      })
+  }
+
   run resumePreExistingCompatibleHeadWakesOrdinaryFrontierWithoutMintingWorkTest = {
     init
       .then(admitDestination)

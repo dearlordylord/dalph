@@ -160,6 +160,63 @@ module acceptedResultIntegrationNegativeTest {
     }
   }
 
+  // This valid receipt fixture represents a retained wait after the one
+  // explicitly authorized Retry. The mutation below adds a third invocation
+  // without changing that authorization history; the resume invariant must
+  // reject it.
+  action seedAuthorizedRetryPublicationResumeForMutation: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == NoAcceptedResult,
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          phase: PublicationResumeRecorded,
+          integrationResponsibilityRecorded: true,
+          integrationResponsibilityCount: 1,
+          integrationSession: 1,
+          integrationResponsibilityIdentity: 8001,
+          runIdentity: 9000,
+          integratorInvocationCount: 2,
+          retryRunCount: 1,
+          integratorRunOrdinal: 2,
+          integratorRunSession: 1,
+          submittedCandidate: 31,
+          publicationCandidate: 31,
+          publicationIntegratorSession: 1,
+          publicationResumeRequestRecorded: true,
+          publicationResumeRequestRunIdentity: 9000,
+          publicationResumeRequestResponsibilityIdentity: 8001,
+          publicationResumeRequestIdentity: 81,
+          publicationResumeSchemaVersion: PUBLICATION_RESUME_SCHEMA_VERSION,
+          publicationResumePriorPhase: PublicationIncompatible,
+          publicationResumePriorObservation: PublicationRemoteIncompatible,
+          publicationAttemptCount: 0,
+          publicationLastAttempt: 0,
+        }),
+      },
+    }
+  }
+
+  action mintAnotherIntegratorInvocationDuringPublicationResume: bool = {
+    val result = state.results.get(1)
+    all {
+      result.phase == PublicationResumeRecorded,
+      result.publicationResumeRequestRecorded,
+      result.retryRunCount == 1,
+      result.integratorInvocationCount == 2,
+      not(result.publicationResumeActive),
+      state' = {
+        ...state,
+        results: state.results.put(1, {
+          ...result,
+          integratorInvocationCount: result.integratorInvocationCount + 1,
+        }),
+      },
+    }
+  }
+
   action discardOrdinaryAcceptedResponsibility: bool = {
     val result = state.results.get(1)
     all {
@@ -1561,6 +1618,18 @@ module acceptedResultIntegrationNegativeTest {
       .then(observePublicationDenied(1))
       .then(forgeWrongSchemaPublicationResumeReceipt)
       .expect(not(publicationResumeIdentityIsExact))
+  }
+
+  run publicationResumeCannotMintIntegratorWorkAfterAuthorizedRetryTest = {
+    init
+      .then(seedAuthorizedRetryPublicationResumeForMutation)
+      .expect(and {
+        state.results.get(1).integratorInvocationCount == 2,
+        state.results.get(1).retryRunCount == 1,
+        publicationResumeDoesNotMintWork,
+      })
+      .then(mintAnotherIntegratorInvocationDuringPublicationResume)
+      .expect(not(publicationResumeDoesNotMintWork))
   }
 
   run throttledPublicationCannotBeRetriedThroughResumeTest = {
