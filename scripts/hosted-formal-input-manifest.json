@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "f7211dabda9c3b9eaa104e7456c84ed3ea3b70ad6e1379c169de2503b71e5c56",
+  "digest": "cbe682c7eaeb2dbdb0638df3293a10c0d37b17800afdca7a1dd6802377e138ab",
   "paths": [
     ".github/workflows/ci.yml",
     ".npmrc",
@@ -20,6 +20,7 @@
     "packages/dalph/test-support/vitest-mode.ts",
     "packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts",
     "packages/dalph/test/conformance/application-exit.mbt.test.ts",
+    "packages/dalph/test/conformance/automatic-successor.mbt.test.ts",
     "packages/dalph/test/conformance/control-direction-application.mbt.test.ts",
     "packages/dalph/test/conformance/fresh-task-admission.mbt.test.ts",
     "packages/dalph/test/conformance/gate-run-identity-adapter.ts",
@@ -426,6 +427,8 @@
     "packages/orchestrator/src/workflow/task-tracker-facts/reconfirmation.ts",
     "packages/orchestrator/test/journaled-graph-observation.ts",
     "packages/orchestrator/test/support/accepted-integration-history.ts",
+    "packages/orchestrator/test/support/automatic-successor-generation.ts",
+    "packages/orchestrator/test/support/automatic-successor-history.ts",
     "packages/orchestrator/test/support/direct-publication.ts",
     "packages/orchestrator/test/support/evidence.ts",
     "packages/orchestrator/test/support/executing-attempt-history.ts",

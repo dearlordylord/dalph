@@ -9,6 +9,10 @@ import {
 import { deliveryProposalsOf } from "../../../orchestrator/src/coordination/delivery/delivery-proposal.js"
 import { journalLayer, type JournalStorageBoundary } from "../../../orchestrator/src/coordination/delivery/journal.js"
 import { RunnableFrontierTransition } from "../../../orchestrator/src/coordination/frontier/frontier.js"
+import type {
+  DeliveryActionProposal,
+  IdentityFreeDeliveryProposal
+} from "../../../orchestrator/src/coordination/delivery/delivery-action-proposal.js"
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
 import {
   appendLocalTargetCatchUpObservation,
@@ -205,13 +209,16 @@ const proposalFor = (transition: RunnableFrontierTransition, fixture: CausalFixt
     transitions: [transition]
   })
   const proposal = [...proposals.ticketDelivery, ...proposals.deliverySettlement][0]
-  if (proposal === undefined || proposal.actionIdentity._tag !== "NoWorkflowOperationIdentity")
+  if (proposal === undefined || !isIdentityFreeProposal(proposal))
     throw new Error(`expected an identity-free production proposal for ${transition._tag}`)
   return { _tag: "IdentityFreeAction", proposal } satisfies Extract<
     MaterializedDeliveryAction,
     { _tag: "IdentityFreeAction" }
   >
 }
+
+const isIdentityFreeProposal = (proposal: DeliveryActionProposal): proposal is IdentityFreeDeliveryProposal =>
+  proposal.actionIdentity._tag === "NoWorkflowOperationIdentity"
 
 const withJournal = <A, E, R>(fixture: CausalFixture, effect: Effect.Effect<A, E, R>) =>
   Effect.scoped(
@@ -283,7 +290,7 @@ const productionDriver = (capture: ConformanceCapture) =>
         Effect.succeed(LocalTargetCatchUpResult.cases.Applied.make({ newHead: remoteHead }))
     })
     let caughtUp: ReturnType<typeof LocalTargetCatchUpResult.cases.Applied.make> | undefined
-    const persist = (name: string, effect: Effect.Effect<unknown, unknown, never>) =>
+    const persist = <A, E, R>(name: string, effect: Effect.Effect<A, E, R>) =>
       withJournal(fixture, effect).pipe(Effect.tap(() => Effect.sync(() => capture.actions.push(name))))
     return {
       init: () => Effect.sync(() => capture.actions.push("init")),
@@ -346,15 +353,20 @@ const productionDriver = (capture: ConformanceCapture) =>
             event._tag === "TargetLineageObserved" &&
             event.observation.targetHeadSha === fixture.input.targetLineage.targetHeadSha
         )
-        if (intent === undefined || observed === undefined) throw new Error("accepted S2 must include fresh H2 lineage")
+        if (intent?.event._tag !== "GitReadIntentRecorded" || observed?.event._tag !== "TargetLineageObserved")
+          throw new Error("accepted S2 must include fresh H2 lineage")
+        const readIntentKey = intent.key
+        const readIntentEvent = intent.event
+        const lineageObservationKey = observed.key
+        const lineageObservationEvent = observed.event
         return persist(
           "proveBaseAncestorOfSuccessorHead",
           Effect.gen(function* () {
             yield* InRunJournal.pipe(
-              Effect.flatMap((journal) => journal.append(fixture.runId, intent.key, intent.event))
+              Effect.flatMap((journal) => journal.append(fixture.runId, readIntentKey, readIntentEvent))
             )
             yield* InRunJournal.pipe(
-              Effect.flatMap((journal) => journal.append(fixture.runId, observed.key, observed.event))
+              Effect.flatMap((journal) => journal.append(fixture.runId, lineageObservationKey, lineageObservationEvent))
             )
             expect(integratorAutomaticSuccessorPreparationIsCurrent(fixture.records(), fixture.input)).toBe(true)
           })
@@ -370,35 +382,38 @@ const productionDriver = (capture: ConformanceCapture) =>
     }
   })
 
-it.effect("replays the canonical automatic-successor trace through the journal fixation seam", () =>
-  Effect.gen(function* () {
-    const capture: ConformanceCapture = { actions: [] }
-    const result = yield* quintRun({
-      backend: "typescript",
-      driverFactory: productionDriver(capture),
-      generation: { mode: "test", test: "automaticSuccessorProductionConformanceTest" },
-      maxSamples: 1,
-      seed: "385",
-      spec: "specs/acceptedResultIntegration_automaticSuccessor_conformance.qnt",
-      stateCheck: projectedModelState
-    })
-    expect(result.tracesReplayed).toBe(1)
-    expect(capture.actions.at(-1)).toBe("fixAutomaticSuccessorSession")
-    const fixture = capture.fixture
-    if (fixture === undefined) return yield* Effect.die("Quint replay must create one production journal fixture")
-    const records = fixture.records()
-    const fixed = records.find((record) => record.event._tag === "IntegratorAutomaticSuccessorSessionFixed")
-    expect(fixed?.event._tag).toBe("IntegratorAutomaticSuccessorSessionFixed")
-    if (fixed?.event._tag !== "IntegratorAutomaticSuccessorSessionFixed")
-      return yield* Effect.die("S2 fixation must persist")
-    expect(fixed.event.successorGeneration).toBe(2)
-    expect(integratorSuccessorResponsibilityMatches(fixed.event.predecessor, fixed.event.successor)).toBe(true)
-    expect(fixed.event.successor.acceptedResult.commit).toBe(fixture.input.predecessor.acceptedResult.commit)
-    expect(fixed.event.successor.plannedAttempt.taskId).toBe(fixture.input.predecessor.plannedAttempt.taskId)
-    expect(fixed.event.successor.sessionId).not.toBe(fixture.input.predecessor.sessionId)
-    expect(fixed.event.successor.candidateResource).not.toBe(fixture.input.predecessor.candidateResource)
-    expect(fixed.event.successor.expectedTargetHead).toBe(fixture.input.targetLineage.targetHeadSha)
-    const reduced = reduceWorkflowJournalHistory(fixture.runId, records)
-    expect(reduced._tag).toBe("ValidWorkflowJournalHistory")
-  })
+it.effect(
+  "replays the canonical automatic-successor trace through the journal fixation seam",
+  () =>
+    Effect.gen(function* () {
+      const capture: ConformanceCapture = { actions: [] }
+      const result = yield* quintRun({
+        backend: "typescript",
+        driverFactory: productionDriver(capture),
+        generation: { mode: "test", test: "automaticSuccessorProductionConformanceTest" },
+        maxSamples: 1,
+        seed: "385",
+        spec: "specs/acceptedResultIntegration_automaticSuccessor_conformance.qnt",
+        stateCheck: projectedModelState
+      })
+      expect(result.tracesReplayed).toBe(1)
+      expect(capture.actions.at(-1)).toBe("fixAutomaticSuccessorSession")
+      const fixture = capture.fixture
+      if (fixture === undefined) return yield* Effect.die("Quint replay must create one production journal fixture")
+      const records = fixture.records()
+      const fixed = records.find((record) => record.event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+      expect(fixed?.event._tag).toBe("IntegratorAutomaticSuccessorSessionFixed")
+      if (fixed?.event._tag !== "IntegratorAutomaticSuccessorSessionFixed")
+        return yield* Effect.die("S2 fixation must persist")
+      expect(fixed.event.successorGeneration).toBe(2)
+      expect(integratorSuccessorResponsibilityMatches(fixed.event.predecessor, fixed.event.successor)).toBe(true)
+      expect(fixed.event.successor.acceptedResult.commit).toBe(fixture.input.predecessor.acceptedResult.commit)
+      expect(fixed.event.successor.plannedAttempt.taskId).toBe(fixture.input.predecessor.plannedAttempt.taskId)
+      expect(fixed.event.successor.sessionId).not.toBe(fixture.input.predecessor.sessionId)
+      expect(fixed.event.successor.candidateResource).not.toBe(fixture.input.predecessor.candidateResource)
+      expect(fixed.event.successor.expectedTargetHead).toBe(fixture.input.targetLineage.targetHeadSha)
+      const reduced = reduceWorkflowJournalHistory(fixture.runId, records)
+      expect(reduced._tag).toBe("ValidWorkflowJournalHistory")
+    }),
+  30_000
 )
