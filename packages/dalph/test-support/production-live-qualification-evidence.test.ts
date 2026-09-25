@@ -48,7 +48,7 @@ const startedAt = "2026-09-13T14:00:00.000Z"
 const endedAt = "2026-09-13T14:05:00.000Z"
 
 const formalCommands = (custodyOffset: number) =>
-  Array.from({ length: 105 }, (_value, position) => ({
+  Array.from({ length: 115 }, (_value, position) => ({
     position,
     kind: "test" as const,
     name: `formal command ${position}`,
@@ -92,17 +92,17 @@ const formalProfileFields = (profileKind: "dedicated" | "stressed", jobId: numbe
       name: `${profileKind === "dedicated" ? "Dedicated" : "Stressed"} formal evidence shard ${shard}`
     },
     reportDigest: digest(String((jobId + shard) % 10)),
-    positions: Array.from({ length: 105 }, (_value, position) => position).filter((position) =>
+    positions: Array.from({ length: 115 }, (_value, position) => position).filter((position) =>
       shard === 0
         ? position <= 36 ||
           (position >= 42 && position <= 46) ||
           (position >= 60 && position <= 64) ||
           (position >= 86 && position <= 90) ||
-          position >= 100
+          position >= 110
         : (position >= 37 && position <= 41) ||
           (position >= 47 && position <= 59) ||
           (position >= 65 && position <= 85) ||
-          (position >= 91 && position <= 99)
+          (position >= 91 && position <= 109)
     ),
     setupInstallSeconds: 10,
     formalSeconds: 105 - shard,
