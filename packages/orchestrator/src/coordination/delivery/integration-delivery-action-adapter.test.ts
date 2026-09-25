@@ -396,7 +396,7 @@ it.effect(
             )
         })
 
-      const missingRetainedRecords = yield* Ref.make(
+      const missingRetainedRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>(
         initialRecords.filter(({ event }) => event._tag !== "RemotePublicationRetained")
       )
       const missingRetainedResult = yield* executeIntegrationAction(

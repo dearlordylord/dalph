@@ -80,6 +80,16 @@ type AutomaticSuccessorSessionRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorAutomaticSuccessorSessionFixed" }>
 }
 type ProviderSuccessorSessionRecord = SuccessorSessionRecord | AutomaticSuccessorSessionRecord
+type FixedSessionRecord = DirectSessionRecord | ProviderSuccessorSessionRecord
+
+const isDirectSessionRecord = (record: JournalRecord): record is DirectSessionRecord =>
+  record.event._tag === "IntegratorSessionFixed"
+
+const isFullRerunSuccessorSessionRecord = (record: JournalRecord): record is SuccessorSessionRecord =>
+  record.event._tag === "IntegratorSuccessorSessionFixed"
+
+const isAutomaticSuccessorSessionRecord = (record: JournalRecord): record is AutomaticSuccessorSessionRecord =>
+  record.event._tag === "IntegratorAutomaticSuccessorSessionFixed"
 
 const directSessionsFor = (
   history: ReadonlyArray<JournalRecord>,
@@ -138,50 +148,181 @@ const exactDirectSession = (
   return { _tag: "Valid", session: lookup.record }
 }
 
-const exactAutomaticSuccessorSession = (
+const fixedSessionRecordsFor = (
+  history: JournalHistorySource,
+  correlation: IntegratorSessionCorrelation
+): ReadonlyArray<FixedSessionRecord> => {
+  const candidates = [
+    ...journalRecordsOfKind(history, "IntegratorSessionFixed"),
+    ...journalRecordsOfKind(history, "IntegratorSuccessorSessionFixed"),
+    ...journalRecordsOfKind(history, "IntegratorAutomaticSuccessorSessionFixed")
+  ]
+  return candidates.filter((record): record is FixedSessionRecord => {
+    if (isDirectSessionRecord(record)) return integratorCorrelationsEqual(record.event.correlation, correlation)
+    if (isFullRerunSuccessorSessionRecord(record) || isAutomaticSuccessorSessionRecord(record)) {
+      return integratorCorrelationsEqual(record.event.successor, correlation)
+    }
+    return false
+  })
+}
+
+const uniqueFixedPredecessorBefore = (
+  history: JournalHistorySource,
+  correlation: IntegratorSessionCorrelation,
+  successor: AutomaticSuccessorSessionRecord
+): FixedSessionRecord | undefined => {
+  const predecessors = fixedSessionRecordsFor(history, correlation).filter(
+    (record) => record.position < successor.position
+  )
+  return predecessors.length === 1 ? predecessors[0] : undefined
+}
+
+const exactDirectPredecessorRecord = (
+  history: JournalHistorySource,
+  successorRun: IntegratorRunCorrelation,
+  predecessorRecord: DirectSessionRecord
+): DirectSessionRecord | undefined => {
+  const predecessor = predecessorRecord.event.correlation
+  const key = fixedSessionKey(predecessor)
+  const lookup = exactJournalRecordAtKey(history, key)
+  if (lookup._tag !== "Found" || !isDirectSessionRecord(lookup.record)) return undefined
+  const record = lookup.record
+  if (
+    record.position !== predecessorRecord.position ||
+    record.key !== key ||
+    record.runId !== runIdFor(successorRun) ||
+    !integratorCorrelationsEqual(record.event.correlation, predecessor)
+  ) {
+    return undefined
+  }
+  return record
+}
+
+const hasExactPredecessorLineageBefore = (
+  history: JournalHistorySource,
+  predecessor: IntegratorSessionCorrelation,
+  sessionPosition: JournalRecord["position"]
+): boolean => {
+  const lineage = exactTargetLineageRecord(history, {
+    expectedTargetHead: predecessor.expectedTargetHead,
+    integrationTarget: predecessor.integrationTarget,
+    plannedAttempt: predecessor.plannedAttempt,
+    targetLineageObservedAt: predecessor.targetLineageObservedAt
+  })
+  return lineage !== undefined && lineage.observation.position < sessionPosition
+}
+
+const directPredecessorEvidenceMatches = (
+  directPredecessor: DirectSessionRecord,
+  predecessorRecord: DirectSessionRecord,
+  predecessor: IntegratorSessionCorrelation
+): boolean =>
+  directPredecessor.position === predecessorRecord.position &&
+  integratorCorrelationsEqual(directPredecessor.event.correlation, predecessor)
+
+const exactDirectAutomaticPredecessor = (
+  history: JournalHistorySource,
+  successorRun: IntegratorRunCorrelation,
+  direct: ReadonlyArray<DirectSessionRecord>,
+  predecessorRecord: DirectSessionRecord
+): FixedSessionValidation => {
+  const predecessor = predecessorRecord.event.correlation
+  if (direct.length !== 1) return invalidDirectPredecessor()
+  const directPredecessor = direct[0]
+  if (directPredecessor === undefined) return invalidDirectPredecessor()
+  const record = exactDirectPredecessorRecord(history, successorRun, predecessorRecord)
+  if (record === undefined) return invalidDirectPredecessor()
+  if (!directPredecessorEvidenceMatches(directPredecessor, predecessorRecord, predecessor)) {
+    return invalidDirectPredecessor()
+  }
+  if (!hasExactPredecessorLineageBefore(history, predecessor, record.position)) return invalidDirectPredecessor()
+  return { _tag: "Valid", session: record }
+}
+
+const invalidDirectPredecessor = (): FixedSessionValidation => ({
+  _tag: "Invalid",
+  detail: "provider automatic successor has foreign or incomplete direct predecessor evidence"
+})
+
+const exactFullRerunAutomaticPredecessor = (
+  history: JournalHistorySource,
+  successorRun: IntegratorRunCorrelation,
+  direct: ReadonlyArray<DirectSessionRecord>,
+  predecessorRecord: SuccessorSessionRecord
+): FixedSessionValidation => {
+  if (direct.length !== 1) {
+    return { _tag: "Invalid", detail: "provider automatic successor has foreign FullRerun predecessor evidence" }
+  }
+  const directPredecessor = direct[0]
+  if (
+    directPredecessor === undefined ||
+    !integratorCorrelationsEqual(directPredecessor.event.correlation, predecessorRecord.event.predecessor)
+  ) {
+    return { _tag: "Invalid", detail: "provider automatic successor has foreign FullRerun predecessor evidence" }
+  }
+  const fullRerun = evaluateIntegratorFullRerunSuccessor(
+    history,
+    predecessorRecord,
+    predecessorRecord.event.predecessor
+  )
+  if (fullRerun._tag === "Invalid") return fullRerun
+  if (predecessorRecord.runId !== runIdFor(successorRun)) {
+    return { _tag: "Invalid", detail: "provider automatic successor has a foreign FullRerun predecessor run" }
+  }
+  return { _tag: "Valid", session: predecessorRecord }
+}
+
+const validAutomaticSuccessorFixRecord = (
+  history: JournalHistorySource,
+  run: IntegratorRunCorrelation,
+  successor: AutomaticSuccessorSessionRecord
+): boolean => {
+  const key = integratorAutomaticSuccessorSessionFixedRecordKey(
+    successor.event.predecessor,
+    successor.event.authorizationAt
+  )
+  const lookup = exactJournalRecordAtKey(history, key)
+  if (lookup._tag !== "Found") return false
+  if (lookup.record.position !== successor.position || successor.key !== key) return false
+  if (successor.runId !== runIdFor(run) || successor.position <= run.session.targetLineageObservedAt) return false
+  return integratorCorrelationsEqual(successor.event.successor, run.session)
+}
+
+const validateAutomaticPredecessor = (
+  history: JournalHistorySource,
+  successorRun: IntegratorRunCorrelation,
+  direct: ReadonlyArray<DirectSessionRecord>,
+  predecessorRecord: FixedSessionRecord
+): FixedSessionValidation => {
+  if (isDirectSessionRecord(predecessorRecord)) {
+    return exactDirectAutomaticPredecessor(history, successorRun, direct, predecessorRecord)
+  }
+  if (isAutomaticSuccessorSessionRecord(predecessorRecord)) {
+    return exactAutomaticSuccessorSession(history, successorRun, direct, predecessorRecord)
+  }
+  if (isFullRerunSuccessorSessionRecord(predecessorRecord)) {
+    return exactFullRerunAutomaticPredecessor(history, successorRun, direct, predecessorRecord)
+  }
+  return { _tag: "Invalid", detail: "provider automatic successor has an unknown predecessor record" }
+}
+
+function exactAutomaticSuccessorSession(
   history: JournalHistorySource,
   run: IntegratorRunCorrelation,
   direct: ReadonlyArray<DirectSessionRecord>,
   successor: AutomaticSuccessorSessionRecord
-): FixedSessionValidation => {
-  const predecessor = successor.event.predecessor
-  const predecessorKey = fixedSessionKey(predecessor)
-  const predecessorLookup = exactJournalRecordAtKey(history, predecessorKey)
-  const directPredecessor = direct[0]
-  if (
-    direct.length !== 1 ||
-    directPredecessor === undefined ||
-    predecessorLookup._tag !== "Found" ||
-    predecessorLookup.record.event._tag !== "IntegratorSessionFixed" ||
-    predecessorLookup.record.key !== predecessorKey ||
-    predecessorLookup.record.runId !== runIdFor(run) ||
-    !integratorCorrelationsEqual(predecessorLookup.record.event.correlation, predecessor) ||
-    directPredecessor.position !== predecessorLookup.record.position ||
-    !integratorCorrelationsEqual(directPredecessor.event.correlation, predecessor) ||
-    predecessorLookup.record.position <= predecessor.targetLineageObservedAt
-  ) {
-    return { _tag: "Invalid", detail: "provider automatic successor lacks its exact fixed predecessor session" }
+): FixedSessionValidation {
+  const successorRun = { ...run, session: successor.event.successor }
+  const predecessorRecord = uniqueFixedPredecessorBefore(history, successor.event.predecessor, successor)
+  if (predecessorRecord === undefined) {
+    return { _tag: "Invalid", detail: "provider automatic successor lacks one exact fixed predecessor session" }
   }
-
-  const key = integratorAutomaticSuccessorSessionFixedRecordKey(predecessor, successor.event.authorizationAt)
-  const lookup = exactJournalRecordAtKey(history, key)
-  const validation = validateAutomaticSuccessorSessionFixedRecord(history, successor, predecessor)
-  if (
-    lookup._tag !== "Found" ||
-    lookup.record.position !== successor.position ||
-    successor.runId !== runIdFor(run) ||
-    successor.key !== key ||
-    successor.position <= run.session.targetLineageObservedAt ||
-    !integratorCorrelationsEqual(successor.event.successor, run.session) ||
-    validation._tag === "Invalid"
-  ) {
-    return {
-      _tag: "Invalid",
-      detail:
-        validation._tag === "Invalid"
-          ? validation.detail
-          : "provider automatic successor has a foreign key or chronology"
-    }
+  const predecessorValidation = validateAutomaticPredecessor(history, successorRun, direct, predecessorRecord)
+  if (predecessorValidation._tag === "Invalid") return predecessorValidation
+  const validation = validateAutomaticSuccessorSessionFixedRecord(history, successor, successor.event.predecessor)
+  if (validation._tag === "Invalid") return validation
+  if (!validAutomaticSuccessorFixRecord(history, successorRun, successor)) {
+    return { _tag: "Invalid", detail: "provider automatic successor has a foreign key or chronology" }
   }
   return { _tag: "Valid", session: successor }
 }
@@ -197,8 +338,11 @@ const fixedSessionForRun = (
   }
   const successor = successors[0]
   if (successor === undefined) return exactDirectSession(history, run, direct)
-  if (successor.event._tag === "IntegratorAutomaticSuccessorSessionFixed") {
+  if (isAutomaticSuccessorSessionRecord(successor)) {
     return exactAutomaticSuccessorSession(history, run, direct, successor)
+  }
+  if (!isFullRerunSuccessorSessionRecord(successor)) {
+    return { _tag: "Invalid", detail: "provider run has unknown successor session evidence" }
   }
   if (direct.some((record) => !integratorCorrelationsEqual(record.event.correlation, successor.event.predecessor))) {
     return { _tag: "Invalid", detail: "provider successor has foreign fixed-session evidence" }
@@ -385,13 +529,13 @@ const indexedSuccessorSession = (
   }
   for (const candidate of journalRecordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed")) {
     if (
-      candidate.event._tag === "IntegratorAutomaticSuccessorSessionFixed" &&
+      isAutomaticSuccessorSessionRecord(candidate) &&
       integratorCorrelationsEqual(candidate.event.successor, run.session)
     ) {
       if (session !== undefined) return undefined
-      const direct = journalRecordsOfKind(records, "IntegratorSessionFixed").filter(
+      const direct = [...journalRecordsOfKind(records, "IntegratorSessionFixed")].filter(
         (record): record is DirectSessionRecord =>
-          record.event._tag === "IntegratorSessionFixed" && sameResponsibility(record.event.correlation, run.session)
+          isDirectSessionRecord(record) && sameResponsibility(record.event.correlation, run.session)
       )
       const relation = exactAutomaticSuccessorSession(records, run, direct, candidate)
       if (relation._tag === "Invalid") return undefined

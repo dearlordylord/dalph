@@ -339,38 +339,32 @@ it.effect("derives cleanup through exact S1-to-S2-to-S3 automatic fixation histo
     if (s2FixRecord === undefined || s2FixRecord.event._tag !== "IntegratorAutomaticSuccessorSessionFixed") {
       return yield* Effect.die("S2 requires its exact automatic-fix journal record")
     }
-    const withoutForeignFix = threeSessionPrefix
-      .records()
-      .map((record) =>
-        record === s2FixRecord
-          ? {
-              ...record,
-              event: {
-                ...record.event,
-                successor: {
-                  ...record.event.successor,
-                  sessionId: IntegratorSessionId.make("session:foreign-automatic-successor")
-                }
-              }
-            }
-          : record
-      )
-    const withoutInvalidFix = threeSessionPrefix
-      .records()
-      .map((record) =>
-        record === s2FixRecord
-          ? {
-              ...record,
-              event: {
-                ...record.event,
-                predecessor: {
-                  ...record.event.predecessor,
-                  sessionId: IntegratorSessionId.make("session:foreign-automatic-predecessor")
-                }
-              }
-            }
-          : record
-      )
+    const withoutForeignFix = threeSessionPrefix.records().map((record) => {
+      if (record !== s2FixRecord || record.event._tag !== "IntegratorAutomaticSuccessorSessionFixed") return record
+      return {
+        ...record,
+        event: {
+          ...record.event,
+          successor: {
+            ...record.event.successor,
+            sessionId: IntegratorSessionId.make("session:foreign-automatic-successor")
+          }
+        }
+      }
+    })
+    const withoutInvalidFix = threeSessionPrefix.records().map((record) => {
+      if (record !== s2FixRecord || record.event._tag !== "IntegratorAutomaticSuccessorSessionFixed") return record
+      return {
+        ...record,
+        event: {
+          ...record.event,
+          predecessor: {
+            ...record.event.predecessor,
+            sessionId: IntegratorSessionId.make("session:foreign-automatic-predecessor")
+          }
+        }
+      }
+    })
     for (const records of [withoutForeignFix, withoutInvalidFix]) {
       const candidateAuthorizations = deriveCleanupAuthorizations(records, () =>
         IntegratorCandidateCleanupEvidenceRevision.make(2)

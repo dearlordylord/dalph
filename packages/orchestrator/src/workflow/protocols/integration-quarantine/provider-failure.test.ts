@@ -17,7 +17,10 @@ import {
 import { Context, Effect, Layer } from "effect"
 import { expect } from "vitest"
 import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
-import { makeSuccessorPrefix } from "../../../../test/support/automatic-successor-history.js"
+import {
+  appendAutomaticSuccessorGeneration,
+  makeSuccessorPrefix
+} from "../../../../test/support/automatic-successor-history.js"
 import { acceptedResultFixture } from "../../../../test/support/evidence.js"
 import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
@@ -78,13 +81,14 @@ import {
   IntegratorRunResultRecordedEvent,
   IntegratorRunStartedEvent,
   integratorRetryRunOrdinal,
+  IntegratorAutomaticSuccessorGeneration,
   IntegratorSessionFixedEvent,
   IntegratorSessionId,
   IntegratorSuccessorSessionFixedEvent,
   firstFullRerunSuccessorGeneration
 } from "../integrator/events.js"
 import { IntegratorProviderActivityAbsent } from "../integrator/errors.js"
-import { integratorResponsibilityFactsFromCorrelation } from "../integrator/state.js"
+import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "../integrator/state.js"
 import { integratorSuccessorCorrelationFor } from "../integrator/session.js"
 import {
   evaluateIntegratorFullRerunAuthorization,
@@ -942,6 +946,9 @@ it.effect("covers exact fixed-session, run-start, and provider-evidence boundary
     expect(validateProviderRunActivityAbsent([...s2Records, s2Start, s2Absence], s2Absence)).toMatchObject({
       _tag: "Valid"
     })
+    expect(
+      validateProviderRunActivityAbsent(journalEvidenceFrom([...s2Records, s2Start, s2Absence]), s2Absence)
+    ).toMatchObject({ _tag: "Valid" })
 
     const withoutAutomaticFix = s2Records.filter(
       (record) => record.event._tag !== "IntegratorAutomaticSuccessorSessionFixed"
@@ -978,6 +985,54 @@ it.effect("covers exact fixed-session, run-start, and provider-evidence boundary
     expect(
       validateProviderRunActivityAbsent([...s2Records, foreignDirectFix, s2Start, s2Absence], s2Absence)._tag
     ).toBe("Invalid")
+
+    const s3Prefix = appendAutomaticSuccessorGeneration(
+      automaticPrefix,
+      fixedS2.event.successor,
+      GitCommitSha.make("9".repeat(40)),
+      IntegratorAutomaticSuccessorGeneration.make(2)
+    )
+    const fixedS3 = yield* prepareIntegratorAutomaticSuccessorSessionAppend(s3Prefix.input, s3Prefix.reduction.prefix)
+    if (fixedS3._tag !== "Append") return yield* Effect.die("provider scenario requires one exact automatic S3")
+    automaticPrefix.append(fixedS3.event)
+    const s3Run = IntegratorRunCorrelation.make({
+      ordinal: IntegratorRunOrdinal.make(1),
+      session: fixedS3.event.successor
+    })
+    const s3Records = automaticPrefix.records()
+    const s3Start: JournalRecord = {
+      event: IntegratorRunStartedEvent.make({ run: s3Run, version: workflowJournalEventVersion }),
+      key: integratorRunStartedRecordKey(s3Run),
+      position: JournalPosition.make(s3Records.length + 1),
+      runId: automaticPrefix.runId
+    }
+    const s3Absence = absenceRecordFor(s3Run, s3Records.length + 2)
+    expect(validateProviderRunActivityAbsent([...s3Records, s3Start, s3Absence], s3Absence)).toMatchObject({
+      _tag: "Valid"
+    })
+    expect(
+      validateProviderRunActivityAbsent(journalEvidenceFrom([...s3Records, s3Start, s3Absence]), s3Absence)
+    ).toMatchObject({ _tag: "Valid" })
+
+    const s2FixedRecord = s3Records.find(
+      (record) =>
+        record.event._tag === "IntegratorAutomaticSuccessorSessionFixed" &&
+        integratorCorrelationsEqual(record.event.successor, fixedS2.event.successor)
+    )
+    if (s2FixedRecord?.event._tag !== "IntegratorAutomaticSuccessorSessionFixed") {
+      return yield* Effect.die("provider S3 scenario lacks the exact automatic S2 predecessor")
+    }
+    const withoutS2 = s3Records.filter((record) => record !== s2FixedRecord)
+    expect(validateProviderRunActivityAbsent([...withoutS2, s3Start, s3Absence], s3Absence)._tag).toBe("Invalid")
+    const duplicateS2 = { ...s2FixedRecord, key: JournalRecordKey.make("duplicate-automatic-s2-predecessor") }
+    expect(validateProviderRunActivityAbsent([...s3Records, duplicateS2, s3Start, s3Absence], s3Absence)._tag).toBe(
+      "Invalid"
+    )
+    const malformedS2 = { ...s2FixedRecord, key: JournalRecordKey.make("malformed-automatic-s2-predecessor") }
+    const malformedS2Records = s3Records.map((record) => (record === s2FixedRecord ? malformedS2 : record))
+    expect(validateProviderRunActivityAbsent([...malformedS2Records, s3Start, s3Absence], s3Absence)._tag).toBe(
+      "Invalid"
+    )
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
