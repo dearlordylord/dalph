@@ -33,7 +33,10 @@ import {
   IntegratorRunStartedEvent,
   IntegratorRunResultRecordedEvent
 } from "./events.js"
-import { prepareIntegratorAutomaticSuccessorSessionAppend } from "./automatic-successor-session.js"
+import {
+  integratorAutomaticSuccessorPreparationIsCurrent,
+  prepareIntegratorAutomaticSuccessorSessionAppend
+} from "./automatic-successor-session.js"
 import { integratorSessionCapacityFor } from "./session-capacity.js"
 import { evaluateIntegratorRetryAuthorization } from "./retry-authorization.js"
 import { deriveCurrentIntegratorState } from "./state.js"
@@ -167,6 +170,37 @@ it.effect("projects and fixes one automatic successor after the exact competing-
       expect(state.run.session.queuedAt).toBe(fixture.input.predecessor.queuedAt)
       expect(state.run.session.startedAt).toBe(fixture.input.predecessor.startedAt)
     }
+
+    const records = fixture.records()
+    const expectNotCurrent = (candidate: ReadonlyArray<JournalRecord>, input = fixture.input) =>
+      expect(integratorAutomaticSuccessorPreparationIsCurrent(candidate, input)).toBe(false)
+    expect(integratorAutomaticSuccessorPreparationIsCurrent(records, fixture.input)).toBe(true)
+
+    const withoutAuthorization = records.filter(
+      (record) =>
+        !(
+          record.event._tag === "IntegratorCompetingHeadSuccessorAuthorized" &&
+          record.position === fixture.input.authorizationAt
+        )
+    )
+    expectNotCurrent(withoutAuthorization)
+
+    const withoutRetainedHead = records.filter((record) => record.event._tag !== "RemotePublicationRetained")
+    expectNotCurrent(withoutRetainedHead)
+
+    const withoutReadyBaseline = records.filter(
+      (record) => record.event._tag !== "RemoteBaselineObserved" && record.event._tag !== "LocalTargetCatchUpObserved"
+    )
+    expectNotCurrent(withoutReadyBaseline)
+
+    const beforeBaselineCompletion = {
+      ...fixture.input,
+      targetLineageObservedAt: JournalPosition.make(Number(fixture.input.targetLineageObservedAt) - 2)
+    }
+    expectNotCurrent(records, beforeBaselineCompletion)
+
+    const withoutLineageIntent = records.filter((record) => record.event._tag !== "GitReadIntentRecorded")
+    expectNotCurrent(withoutLineageIntent)
   })
 )
 

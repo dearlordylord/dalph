@@ -145,6 +145,10 @@ import {
 } from "../protocols/task-claim-reacquisition/events.js"
 import { integrationFinalityFixture } from "../protocols/integration-finality/fixtures.js"
 import {
+  appendAutomaticSuccessorGeneration,
+  makeSuccessorPrefix
+} from "../../../test/support/automatic-successor-history.js"
+import {
   CompletionClaimDeletionIntendedEvent,
   CompletionClaimReplacementIntendedEvent,
   CompletionTaskIntendedEvent,
@@ -172,11 +176,13 @@ import {
   IntegratorSessionCorrelation,
   IntegratorSessionFixedEvent,
   IntegratorSuccessorSessionFixedEvent,
+  IntegratorAutomaticSuccessorGeneration,
   IntegratorCandidateResourceLocator,
   IntegratorSessionId,
   IntegratorRunOrdinal,
   firstFullRerunSuccessorGeneration
 } from "../protocols/integrator/events.js"
+import { prepareIntegratorAutomaticSuccessorSessionAppend } from "../protocols/integrator/automatic-successor-session.js"
 import {
   TargetPromotionAttemptIntendedEvent,
   TargetPromotionAttemptOrdinal,
@@ -2257,6 +2263,65 @@ it.effect("projects the historical #81 preservation variants and the #82 success
       })
     )
     expect(successorProjection.occurrences.at(-1)).toMatchObject({ _tag: "IntegratorRunStarted", run: successorRun })
+
+    const automaticPrefix = makeSuccessorPrefix()
+    const fixedS2 = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+      automaticPrefix.input,
+      automaticPrefix.reduction.prefix
+    )
+    if (fixedS2._tag !== "Append") return yield* Effect.die("the accepted automatic prefix must fix S2")
+    automaticPrefix.append(fixedS2.event)
+    const projectedS2 = yield* projectWorkflowOccurrences(automaticPrefix.records())
+    expect(projectedS2.occurrences).toContainEqual(
+      expect.objectContaining({
+        _tag: "IntegratorAutomaticSuccessorSessionFixed",
+        predecessor: automaticPrefix.input.predecessor,
+        successor: fixedS2.event.successor
+      })
+    )
+
+    const generationThree = appendAutomaticSuccessorGeneration(
+      automaticPrefix,
+      fixedS2.event.successor,
+      GitCommitSha.make("8".repeat(40)),
+      IntegratorAutomaticSuccessorGeneration.make(2)
+    )
+    const fixedS3 = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+      generationThree.input,
+      generationThree.reduction.prefix
+    )
+    if (fixedS3._tag !== "Append") return yield* Effect.die("the accepted S2 prefix must fix S3")
+    automaticPrefix.append(fixedS3.event)
+    const projectedChain = yield* projectWorkflowOccurrences(automaticPrefix.records())
+    expect(
+      projectedChain.occurrences.filter(({ _tag }) => _tag === "IntegratorAutomaticSuccessorSessionFixed")
+    ).toHaveLength(2)
+
+    const withoutS1Authorization = automaticPrefix
+      .records()
+      .filter(
+        (record) =>
+          !(
+            record.event._tag === "IntegratorCompetingHeadSuccessorAuthorized" &&
+            record.event.correlation.qualifiedCandidate.run.session.sessionId ===
+              automaticPrefix.input.predecessor.sessionId
+          )
+      )
+    const missingAuthorizationFailure = yield* projectWorkflowOccurrences(withoutS1Authorization).pipe(Effect.flip)
+    expect(missingAuthorizationFailure._tag).toBe("HistoricalOutcomeWithoutInitiatingAction")
+
+    const withoutS1RetainedHead = automaticPrefix
+      .records()
+      .filter(
+        (record) =>
+          !(
+            record.event._tag === "RemotePublicationRetained" &&
+            record.event.correlation.qualifiedCandidate.run.session.sessionId ===
+              automaticPrefix.input.predecessor.sessionId
+          )
+      )
+    const missingRetainedFailure = yield* projectWorkflowOccurrences(withoutS1RetainedHead).pipe(Effect.flip)
+    expect(missingRetainedFailure._tag).toBe("HistoricalOutcomeWithoutInitiatingAction")
   })
 )
 

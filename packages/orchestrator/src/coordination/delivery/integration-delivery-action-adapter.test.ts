@@ -357,12 +357,12 @@ it.effect(
 
       const records = yield* Ref.make(initialRecords)
       const trace = yield* Ref.make<ReadonlyArray<string>>([])
-      const instrumentedJournal = (stalePrefix: boolean) =>
+      const instrumentedJournal = (stalePrefix: boolean, journalRecords = records) =>
         Journal.of({
           ...unusedJournal,
           appendIfAcceptedPrefixCurrent: (runId, expectedPosition, key, event) =>
             Ref.modify(
-              records,
+              journalRecords,
               (current): [Effect.Effect<ConditionalJournalAppendResult>, ReadonlyArray<JournalRecord>] => {
                 const last = current.at(-1)?.position ?? null
                 if (stalePrefix || last !== expectedPosition) {
@@ -391,8 +391,31 @@ it.effect(
               )
             ),
           readAccepted: (runId) =>
-            Ref.get(records).pipe(Effect.map((current) => acceptedJournalPrefixFromValidatedHistory(runId, current)))
+            Ref.get(journalRecords).pipe(
+              Effect.map((current) => acceptedJournalPrefixFromValidatedHistory(runId, current))
+            )
         })
+
+      const missingRetainedRecords = yield* Ref.make(
+        initialRecords.filter(({ event }) => event._tag !== "RemotePublicationRetained")
+      )
+      const missingRetainedResult = yield* executeIntegrationAction(
+        authorizationAction,
+        authorization,
+        inertLease,
+        target
+      ).pipe(
+        Effect.provideService(Journal, instrumentedJournal(false, missingRetainedRecords)),
+        Effect.provideService(InRunJournal, appendableJournal(missingRetainedRecords)),
+        Effect.provideService(AcceptedJournalReader, acceptedJournal(missingRetainedRecords)),
+        Effect.provideService(RemoteBaselineGit, unusedRemoteBaselineGit),
+        Effect.provideService(RemotePublicationGit, unusedRemotePublicationGit)
+      )
+      expect(missingRetainedResult).toMatchObject({
+        _tag: "ActionDeferred",
+        proposalId: authorizationProposal.id,
+        reason: "ContinuationAuthorizationStale"
+      })
 
       const baseInRunJournal = appendableJournal(records)
       const loggedInRunJournal = InRunJournal.of({
@@ -444,6 +467,19 @@ it.effect(
         ({ event }) => event._tag === "IntegratorCompetingHeadSuccessorAuthorized"
       )
       expect(authorizationRecord?.position).toBe(JournalPosition.make(4))
+      const replayedAuthorization = yield* executeIntegrationAction(
+        authorizationAction,
+        authorization,
+        inertLease,
+        target
+      ).pipe(
+        Effect.provideService(Journal, instrumentedJournal(false)),
+        Effect.provideService(InRunJournal, loggedInRunJournal),
+        Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
+        Effect.provideService(RemoteBaselineGit, unusedRemoteBaselineGit),
+        Effect.provideService(RemotePublicationGit, unusedRemotePublicationGit)
+      )
+      expect(replayedAuthorization).toMatchObject({ _tag: "ActionCompleted", proposalId: authorizationProposal.id })
 
       const baselineCorrelation = automaticCompetingHeadRemoteBaselineCorrelationFor(
         fixture.runId,

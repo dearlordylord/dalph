@@ -17,6 +17,7 @@ import {
 import { Context, Effect, Layer } from "effect"
 import { expect } from "vitest"
 import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
+import { makeSuccessorPrefix } from "../../../../test/support/automatic-successor-history.js"
 import { acceptedResultFixture } from "../../../../test/support/evidence.js"
 import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
@@ -91,6 +92,7 @@ import {
   integratorRunTwoAuthorizationIssue
 } from "../integrator/retry-authorization.js"
 import { evaluateIntegratorFullRerunSuccessor } from "../integrator/successor-history.js"
+import { prepareIntegratorAutomaticSuccessorSessionAppend } from "../integrator/automatic-successor-session.js"
 
 const runId = RunId.make("provider-failure-quarantine-run")
 const target = FixtureTarget.make("provider-failure-quarantine-target")
@@ -914,6 +916,67 @@ it.effect("covers exact fixed-session, run-start, and provider-evidence boundary
     }
     expect(
       validateProviderRunActivityAbsent([...records, candidateAbsence, resultAfterAbsence], candidateAbsence)._tag
+    ).toBe("Invalid")
+
+    const automaticPrefix = makeSuccessorPrefix()
+    const fixedS2 = yield* prepareIntegratorAutomaticSuccessorSessionAppend(
+      automaticPrefix.input,
+      automaticPrefix.reduction.prefix
+    )
+    if (fixedS2._tag !== "Append") return yield* Effect.die("provider scenario requires one exact automatic S2")
+    automaticPrefix.append(fixedS2.event)
+    const s2Run = IntegratorRunCorrelation.make({
+      ordinal: IntegratorRunOrdinal.make(1),
+      session: fixedS2.event.successor
+    })
+    const s2Records = automaticPrefix.records()
+    const s2Start: JournalRecord = {
+      event: IntegratorRunStartedEvent.make({ run: s2Run, version: workflowJournalEventVersion }),
+      key: integratorRunStartedRecordKey(s2Run),
+      position: JournalPosition.make(s2Records.length + 1),
+      runId: automaticPrefix.runId
+    }
+    const automaticS2Validation = validateProviderRunPredecessorsFromRecords([...s2Records, s2Start], s2Run)
+    if (automaticS2Validation._tag !== "Valid") return yield* Effect.die(automaticS2Validation.detail)
+    const s2Absence = absenceRecordFor(s2Run, s2Records.length + 2)
+    expect(validateProviderRunActivityAbsent([...s2Records, s2Start, s2Absence], s2Absence)).toMatchObject({
+      _tag: "Valid"
+    })
+
+    const withoutAutomaticFix = s2Records.filter(
+      (record) => record.event._tag !== "IntegratorAutomaticSuccessorSessionFixed"
+    )
+    expect(validateProviderRunPredecessorsFromRecords([...withoutAutomaticFix, s2Start], s2Run)._tag).toBe("Invalid")
+    expect(validateProviderRunActivityAbsent([...withoutAutomaticFix, s2Start, s2Absence], s2Absence)._tag).toBe(
+      "Invalid"
+    )
+
+    const automaticFix = s2Records.find(({ event }) => event._tag === "IntegratorAutomaticSuccessorSessionFixed")
+    if (automaticFix?.event._tag !== "IntegratorAutomaticSuccessorSessionFixed") {
+      return yield* Effect.die("provider scenario lacks the exact automatic S2 fixation")
+    }
+    const malformedAutomaticFix = { ...automaticFix, key: JournalRecordKey.make("foreign-automatic-s2-fix-key") }
+    const malformedRecords = s2Records.map((record) => (record === automaticFix ? malformedAutomaticFix : record))
+    expect(validateProviderRunActivityAbsent([...malformedRecords, s2Start, s2Absence], s2Absence)._tag).toBe("Invalid")
+
+    const initialFixedSession = s2Records.find(({ event }) => event._tag === "IntegratorSessionFixed")
+    if (initialFixedSession?.event._tag !== "IntegratorSessionFixed") {
+      return yield* Effect.die("provider automatic S2 history lacks its exact initial session")
+    }
+    const foreignDirectFix = {
+      ...initialFixedSession,
+      event: IntegratorSessionFixedEvent.make({
+        correlation: IntegratorSessionCorrelation.make({
+          ...fixedS2.event.predecessor,
+          sessionId: IntegratorSessionId.make("provider-foreign-automatic-predecessor")
+        }),
+        version: workflowJournalEventVersion
+      }),
+      key: JournalRecordKey.make("provider-foreign-automatic-predecessor-key"),
+      position: JournalPosition.make(s2Records.length + 1)
+    }
+    expect(
+      validateProviderRunActivityAbsent([...s2Records, foreignDirectFix, s2Start, s2Absence], s2Absence)._tag
     ).toBe("Invalid")
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )

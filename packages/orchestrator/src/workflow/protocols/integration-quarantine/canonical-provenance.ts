@@ -2,6 +2,7 @@
 import {
   integrationProviderRunActivityAbsentRecordKey,
   integrationQuarantinedRecordKey,
+  integratorAutomaticSuccessorSessionFixedRecordKey,
   integratorRunStartedRecordKey,
   integratorSessionFixedRecordKey
 } from "../../../workflow-journal/record-key.js"
@@ -75,6 +76,10 @@ type DirectSessionRecord = JournalRecord & {
 type SuccessorSessionRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorSuccessorSessionFixed" }>
 }
+type AutomaticSuccessorSessionRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorAutomaticSuccessorSessionFixed" }>
+}
+type ProviderSuccessorSessionRecord = SuccessorSessionRecord | AutomaticSuccessorSessionRecord
 
 const directSessionsFor = (
   history: ReadonlyArray<JournalRecord>,
@@ -88,10 +93,11 @@ const directSessionsFor = (
 const successorSessionsFor = (
   history: ReadonlyArray<JournalRecord>,
   run: IntegratorRunCorrelation
-): ReadonlyArray<SuccessorSessionRecord> =>
+): ReadonlyArray<ProviderSuccessorSessionRecord> =>
   history.filter(
-    (record): record is SuccessorSessionRecord =>
-      record.event._tag === "IntegratorSuccessorSessionFixed" &&
+    (record): record is ProviderSuccessorSessionRecord =>
+      (record.event._tag === "IntegratorSuccessorSessionFixed" ||
+        record.event._tag === "IntegratorAutomaticSuccessorSessionFixed") &&
       integratorCorrelationsEqual(record.event.successor, run.session)
   )
 
@@ -132,6 +138,54 @@ const exactDirectSession = (
   return { _tag: "Valid", session: lookup.record }
 }
 
+const exactAutomaticSuccessorSession = (
+  history: JournalHistorySource,
+  run: IntegratorRunCorrelation,
+  direct: ReadonlyArray<DirectSessionRecord>,
+  successor: AutomaticSuccessorSessionRecord
+): FixedSessionValidation => {
+  const predecessor = successor.event.predecessor
+  const predecessorKey = fixedSessionKey(predecessor)
+  const predecessorLookup = exactJournalRecordAtKey(history, predecessorKey)
+  const directPredecessor = direct[0]
+  if (
+    direct.length !== 1 ||
+    directPredecessor === undefined ||
+    predecessorLookup._tag !== "Found" ||
+    predecessorLookup.record.event._tag !== "IntegratorSessionFixed" ||
+    predecessorLookup.record.key !== predecessorKey ||
+    predecessorLookup.record.runId !== runIdFor(run) ||
+    !integratorCorrelationsEqual(predecessorLookup.record.event.correlation, predecessor) ||
+    directPredecessor.position !== predecessorLookup.record.position ||
+    !integratorCorrelationsEqual(directPredecessor.event.correlation, predecessor) ||
+    predecessorLookup.record.position <= predecessor.targetLineageObservedAt
+  ) {
+    return { _tag: "Invalid", detail: "provider automatic successor lacks its exact fixed predecessor session" }
+  }
+
+  const key = integratorAutomaticSuccessorSessionFixedRecordKey(predecessor, successor.event.authorizationAt)
+  const lookup = exactJournalRecordAtKey(history, key)
+  const validation = validateAutomaticSuccessorSessionFixedRecord(history, successor, predecessor)
+  if (
+    lookup._tag !== "Found" ||
+    lookup.record.position !== successor.position ||
+    successor.runId !== runIdFor(run) ||
+    successor.key !== key ||
+    successor.position <= run.session.targetLineageObservedAt ||
+    !integratorCorrelationsEqual(successor.event.successor, run.session) ||
+    validation._tag === "Invalid"
+  ) {
+    return {
+      _tag: "Invalid",
+      detail:
+        validation._tag === "Invalid"
+          ? validation.detail
+          : "provider automatic successor has a foreign key or chronology"
+    }
+  }
+  return { _tag: "Valid", session: successor }
+}
+
 const fixedSessionForRun = (
   history: ReadonlyArray<JournalRecord>,
   run: IntegratorRunCorrelation
@@ -139,10 +193,13 @@ const fixedSessionForRun = (
   const direct = directSessionsFor(history, run)
   const successors = successorSessionsFor(history, run)
   if (successors.length > 1) {
-    return { _tag: "Invalid", detail: "provider run has duplicate FullRerun successor session evidence" }
+    return { _tag: "Invalid", detail: "provider run has duplicate successor session evidence" }
   }
   const successor = successors[0]
   if (successor === undefined) return exactDirectSession(history, run, direct)
+  if (successor.event._tag === "IntegratorAutomaticSuccessorSessionFixed") {
+    return exactAutomaticSuccessorSession(history, run, direct, successor)
+  }
   if (direct.some((record) => !integratorCorrelationsEqual(record.event.correlation, successor.event.predecessor))) {
     return { _tag: "Invalid", detail: "provider successor has foreign fixed-session evidence" }
   }
@@ -332,9 +389,13 @@ const indexedSuccessorSession = (
       integratorCorrelationsEqual(candidate.event.successor, run.session)
     ) {
       if (session !== undefined) return undefined
-      const relation = validateAutomaticSuccessorSessionFixedRecord(records, candidate, candidate.event.predecessor)
+      const direct = journalRecordsOfKind(records, "IntegratorSessionFixed").filter(
+        (record): record is DirectSessionRecord =>
+          record.event._tag === "IntegratorSessionFixed" && sameResponsibility(record.event.correlation, run.session)
+      )
+      const relation = exactAutomaticSuccessorSession(records, run, direct, candidate)
       if (relation._tag === "Invalid") return undefined
-      session = candidate
+      session = relation.session
     }
   }
   return session
