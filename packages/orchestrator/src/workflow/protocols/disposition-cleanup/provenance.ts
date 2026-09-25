@@ -936,7 +936,7 @@ export const validateIntegratorCandidateCleanupProvenance = (
 
     const candidate = automaticAuthorization.event.correlation.qualifiedCandidate
     const run = candidate.run
-    const fixedSessionRecords = recordsOfKind(records, "IntegratorSessionFixed").filter(
+    const ordinaryFixedSessionRecords = recordsOfKind(records, "IntegratorSessionFixed").filter(
       (record) =>
         record.event._tag === "IntegratorSessionFixed" &&
         record.position < candidate.qualifiedAt &&
@@ -944,6 +944,20 @@ export const validateIntegratorCandidateCleanupProvenance = (
         record.key === integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(run.session)) &&
         integratorCorrelationsEqual(record.event.correlation, run.session)
     )
+    const automaticFixedSessionRecords = recordsOfKind(records, "IntegratorAutomaticSuccessorSessionFixed").filter(
+      (record) => {
+        if (
+          record.event._tag !== "IntegratorAutomaticSuccessorSessionFixed" ||
+          record.position >= candidate.qualifiedAt ||
+          record.runId !== run.session.plannedAttempt.runId ||
+          !integratorCorrelationsEqual(record.event.successor, run.session)
+        ) {
+          return false
+        }
+        return validateAutomaticSuccessorSessionFixedRecord(records, record, record.event.predecessor)._tag === "Valid"
+      }
+    )
+    const fixedSessionRecords = [...ordinaryFixedSessionRecords, ...automaticFixedSessionRecords]
     const started = journalRecordByKey(records, integratorRunStartedRecordKey(run))
     const result = journalRecordByKey(records, integratorRunResultRecordedRecordKey(run))
     const readIntent = journalRecordByKey(
